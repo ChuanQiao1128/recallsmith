@@ -1,0 +1,51 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Node / Web
+node_modules/
+dist/
+build/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store
+
+# Yarn v2+
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+!.yarn/sdks
+!.yarn/versions
+
+# Dotenv
+.env
+.env.*.local
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.dbmdl
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# React Native / Expo
+.expo/
+.expo-shared/
+ios/Pods/
+android/.gradle/
+android/app/build/
+*.keystore
+*.jks
+
+# Coverage
+coverage/
