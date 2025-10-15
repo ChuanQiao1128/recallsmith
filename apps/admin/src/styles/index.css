@@ -1,33 +1,89 @@
-/* Tailwind v3: use directives, not @import/@plugin/@reference */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Custom CSS classes */
 
-/* 仅在这里做组件级原子组合；不要 @apply 自定义类名 */
-@layer components {
-  /* Buttons */
-  .btn {
-    @apply inline-flex items-center justify-center rounded px-3 h-9 text-sm font-medium shadow-sm;
-  }
-  .btn-primary {
-    /* 直接展开，不 @apply .btn，避免 v4 报 unknown utility */
-    @apply inline-flex items-center justify-center rounded px-3 h-9 text-sm font-medium shadow-sm
-           bg-blue-600 text-white hover:bg-blue-700;
-  }
-  .btn-ghost {
-    @apply inline-flex items-center justify-center rounded px-3 h-9 text-sm font-medium shadow-sm
-           bg-transparent hover:bg-slate-100 text-slate-800;
-  }
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  padding: 0 12px;
+  height: 36px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
 
-  /* Inputs */
-  .input {
-    @apply h-9 rounded border border-slate-300 px-3 text-sm
-           focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white;
-  }
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  padding: 0 12px;
+  height: 36px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  background-color: #2563eb;
+  color: white;
+}
 
-  /* Misc */
-  .text-muted { @apply text-slate-500; }
-  .card { @apply bg-white rounded border border-slate-200 shadow-sm; }
-  .badge { @apply inline-flex items-center rounded-full border border-slate-200 px-2 h-6 text-xs
-                  text-slate-800 bg-slate-50; }
+.btn-primary:hover {
+  background-color: #1d4ed8;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  padding: 0 12px;
+  height: 36px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  background-color: transparent;
+  color: #1e293b;
+}
+
+.btn-ghost:hover {
+  background-color: #f1f5f9;
+}
+
+/* Inputs */
+.input {
+  height: 36px;
+  border-radius: 4px;
+  border: 1px solid #cbd5e1;
+  padding: 0 12px;
+  font-size: 14px;
+  background-color: white;
+}
+
+.input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px #3b82f6;
+}
+
+/* Misc */
+.text-muted {
+  color: #64748b;
+}
+
+.card {
+  background-color: white;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  border: 1px solid #e2e8f0;
+  padding: 0 8px;
+  height: 24px;
+  font-size: 12px;
+  color: #1e293b;
+  background-color: #f8fafc;
 }
