@@ -1,18 +1,16 @@
-// Admin — Create Deck
-export type CreateDeckRequest = { slug: string; title: string; locale?: string | null };
-export type CreateDeckResponse = { deckId: string };
-
-// Admin — Create Draft Card
+// 请求
+export type CreateDeckRequest = { slug: string; title: string; locale?: string };
 export type CreateDraftCardRequest = {
   stableUid: string;
   frontMd: string;
   backMd: string;
   keyPoint: string;
-  tags?: string[] | null;
-  difficulty?: string | null;
+  tags?: string[];
+  difficulty?: 'beginner' | 'intermediate' | 'advanced';
 };
-export type CreateDraftCardResponse = { cardId: string; stableUid: string };
+export type PublishDeckRequest = { version: string; changelog?: string };
 
-// Admin — Publish
-export type PublishDeckRequest = { version: string; changelog?: string | null };
+// 响应（全部 camelCase）
+export type CreateDeckResponse = { deckId: string };
+export type CreateDraftCardResponse = { cardId: string; stableUid: string };
 export type PublishDeckResponse = { version: string; totalCards: number; publishedAt: string };

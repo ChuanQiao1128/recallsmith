@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http.Json;
 using Catalog.Api;
 using Study.Api;
 using Infrastructure.Core;
+using System.Text.Json;
 var builder = WebApplication.CreateBuilder(args);
 
 // Serilog
@@ -12,7 +13,13 @@ builder.Host.UseSerilog((ctx, lc) => lc
     .Enrich.FromLogContext());
 
 // Services
-builder.Services.Configure<JsonOptions>(o => { o.SerializerOptions.PropertyNamingPolicy = null; });
+// builder.Services.Configure<JsonOptions>(o => { o.SerializerOptions.PropertyNamingPolicy = null; });
+builder.Services.Configure<JsonOptions>(o =>
+{
+    o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+    // 反序列化默认大小写不敏感，前端传 camelCase/ PascalCase 都能绑上；若要显式：
+    // o.SerializerOptions.PropertyNameCaseInsensitive = true;
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -32,14 +39,16 @@ var userGroup = "/api/user/v1";
 builder.Services.AddCatalogModule(builder.Configuration);
 builder.Services.AddStudyModule(builder.Configuration);
 builder.Services.AddCors(o =>
-    o.AddPolicy("dev", p => p
-        .WithOrigins("http://localhost:5173") // Vite 默认端口
-        .AllowAnyHeader()
-        .AllowAnyMethod()));
+{
+    o.AddPolicy("AdminDev", p =>
+        p.WithOrigins("http://localhost:5173", "http://localhost:3000")
+         .AllowAnyHeader()
+         .AllowAnyMethod());
+});
 var app = builder.Build();
 
 app.UseSerilogRequestLogging();
-app.UseCors("dev");
+app.UseCors("AdminDev");
 
 app.UseSwagger();
 app.UseSwaggerUI();

@@ -1,0 +1,33 @@
+/* Tailwind v3: use directives, not @import/@plugin/@reference */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 仅在这里做组件级原子组合；不要 @apply 自定义类名 */
+@layer components {
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center rounded px-3 h-9 text-sm font-medium shadow-sm;
+  }
+  .btn-primary {
+    /* 直接展开，不 @apply .btn，避免 v4 报 unknown utility */
+    @apply inline-flex items-center justify-center rounded px-3 h-9 text-sm font-medium shadow-sm
+           bg-blue-600 text-white hover:bg-blue-700;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center rounded px-3 h-9 text-sm font-medium shadow-sm
+           bg-transparent hover:bg-slate-100 text-slate-800;
+  }
+
+  /* Inputs */
+  .input {
+    @apply h-9 rounded border border-slate-300 px-3 text-sm
+           focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white;
+  }
+
+  /* Misc */
+  .text-muted { @apply text-slate-500; }
+  .card { @apply bg-white rounded border border-slate-200 shadow-sm; }
+  .badge { @apply inline-flex items-center rounded-full border border-slate-200 px-2 h-6 text-xs
+                  text-slate-800 bg-slate-50; }
+}
