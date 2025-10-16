@@ -1,115 +1,225 @@
-import Drawer from '../../components/Drawer'
-import Button from '../../components/Button'
-import { Input, Textarea } from '../../components/Input'
-import MarkdownPreview from '../../components/MarkdownPreview'
-import { useState, useEffect } from 'react'
-import { useStableUid } from '../../hooks/useStableUid'
+import { Modal, Button, Group, Stack, TextInput, Textarea, TagsInput, Select, Grid, Paper, Title, Text, ActionIcon, CopyButton, Tooltip, Divider } from '@mantine/core';
+import { useForm } from '@mantine/form';
+import { z } from 'zod';
+import { useEffect, useMemo } from 'react';
+import MarkdownPreview from '../../components/MarkdownPreview';
+import { createDraftCard } from '../../api/admin';
+import { notifications } from '@mantine/notifications';
+import type { Card as CardType } from '../../types';
+import { IconCheck, IconCopy } from '@tabler/icons-react';
 
-export type CardDraft = {
-  id?: string
-  stableUid: string
-  keyPoint: string
-  tagsCsv: string
-  difficulty: 'beginner'|'intermediate'|'advanced'
-  frontMd: string
-  backMd: string
+// ---------------- helpers ----------------
+function slugify(s: string) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+function buildBaseUid(deckSlug: string | undefined, frontMd: string, version = 'v1') {
+  const base = slugify(frontMd.split(/\s+/).slice(0, 6).join(' ')) || 'item';
+  const head = deckSlug ? `${slugify(deckSlug)}.${base}` : base;
+  return `${head}.${version}`;
+}
+function ensureUnique(base: string, taken: Set<string>) {
+  if (!taken.has(base)) return base;
+  let i = 2;
+  while (taken.has(`${base}-${i}`)) i++;
+  return `${base}-${i}`;
 }
 
+// ---------------- schema ----------------
+const schema = z.object({
+  stableUid: z.string().min(3),
+  keyPoint: z.string().min(1).max(200),
+  tags: z.array(z.string()).default([]),
+  difficulty: z.enum(['beginner', 'intermediate', 'advanced']).optional(),
+  frontMd: z.string().min(1),
+  backMd: z.string().min(1),
+});
+
 export default function CardEditorDrawer({
-  open, onClose, onSave, deckSlug, initial
-}:{
-  open: boolean
-  onClose: ()=>void
-  onSave: (card: CardDraft)=>void
-  deckSlug: string
-  initial?: Partial<CardDraft>
+  deckId,
+  deckSlug,
+  opened,
+  onClose,
+  onSaved,
+  editing,
+  existingUids = [],
+}: {
+  deckId: string;
+  deckSlug?: string;
+  opened: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+  editing?: CardType;
+  /** 当前 deck 已存在的 stableUid 列表，用于去重 */
+  existingUids?: string[];
 }) {
-  const [state, setState] = useState<CardDraft>({
-    stableUid: initial?.stableUid ?? '',
-    keyPoint: initial?.keyPoint ?? '',
-    tagsCsv: initial?.tagsCsv ?? '',
-    difficulty: initial?.difficulty ?? 'intermediate',
-    frontMd: initial?.frontMd ?? '',
-    backMd: initial?.backMd ?? '',
-    id: initial?.id
-  })
-  const gen = useStableUid()
+  const form = useForm({
+    initialValues: {
+      stableUid: editing?.stableUid ?? '',
+      keyPoint: editing?.keyPoint ?? '',
+      tags: editing?.tags ?? [],
+      difficulty: editing?.difficulty ?? 'intermediate',
+      frontMd: editing?.frontMd ?? '',
+      backMd: editing?.backMd ?? '',
+    },
+  });
 
-  useEffect(()=>{
-    if (!state.stableUid) {
-      const uid = gen(deckSlug, state.keyPoint, state.frontMd)
-      setState(s => ({...s, stableUid: uid}))
+  const taken = useMemo(() => new Set(existingUids.filter(Boolean)), [existingUids]);
+
+  // 自动生成且唯一（新建时生效；编辑时保持原值）
+  useEffect(() => {
+    if (editing) return; // 编辑不改 UID
+    const base = buildBaseUid(deckSlug, form.values.frontMd, 'v1');
+    if (!form.values.frontMd) {
+      form.setFieldValue('stableUid', '');
+      return;
     }
+    const unique = ensureUnique(base, taken);
+    form.setFieldValue('stableUid', unique);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deckSlug])
+  }, [deckSlug, form.values.frontMd, taken, editing]);
 
-  function regenerate() {
-    const uid = gen(deckSlug, state.keyPoint, state.frontMd)
-    setState(s => ({...s, stableUid: uid}))
+  async function handleSubmit(v: typeof form.values) {
+    const result = schema.safeParse(v);
+    if (!result.success) {
+      notifications.show({ 
+        color: 'red', 
+        title: 'Validation Error', 
+        message: result.error.issues[0]?.message ?? 'Invalid form data' 
+      });
+      return;
+    }
+    
+    await createDraftCard(deckId, {
+      stableUid: result.data.stableUid,
+      keyPoint: result.data.keyPoint,
+      tags: result.data.tags,
+      difficulty: result.data.difficulty,
+      frontMd: result.data.frontMd,
+      backMd: result.data.backMd,
+    });
+    notifications.show({ title: editing ? 'Card saved' : 'Card created', message: result.data.stableUid });
+    onSaved();
+    onClose();
   }
 
-  function save() {
-    if (!state.keyPoint || !state.frontMd || !state.backMd) return
-    onSave(state)
-  }
+  const keyPointLen = form.values.keyPoint.length;
 
   return (
-    <Drawer open={open} onClose={onClose} title="Card Editor"
-      footer={<>
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button onClick={save}>Save</Button>
-      </>}
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title={<Title order={4}>{editing ? 'Edit card' : 'New card'}</Title>}
+      size="90%"
+      centered
+      closeOnClickOutside={false}
+      withCloseButton
     >
-      <div className="flex flex-col md:flex-row">
-        <div className="md:w-1/2 p-4 border-r space-y-3">
-          <div>
-            <div className="text-sm text-muted mb-1">Stable UID</div>
-            <div className="flex gap-2">
-              <Input value={state.stableUid} onChange={e=> setState(s=> ({...s, stableUid: e.target.value}))} className="flex-1" />
-              <Button variant="ghost" onClick={regenerate}>Regenerate</Button>
-            </div>
-          </div>
+      <form onSubmit={form.onSubmit(handleSubmit)}>
+        <Stack gap="md">
+          <Paper withBorder p="md">
+            <Grid gutter="md" align="end">
+              <Grid.Col span={{ base: 12, md: 6 }}>
+                <Group align="end">
+                  <TextInput
+                    label="Stable UID"
+                    placeholder="auto-generated"
+                    {...form.getInputProps('stableUid')}
+                    readOnly
+                    disabled
+                    style={{ flex: 1 }}
+                  />
+                  <CopyButton value={form.values.stableUid} timeout={1200}>
+                    {({ copied, copy }) => (
+                      <Tooltip label={copied ? 'Copied' : 'Copy UID'}>
+                        <ActionIcon variant="light" onClick={copy} aria-label="copy uid">
+                          {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+                        </ActionIcon>
+                      </Tooltip>
+                    )}
+                  </CopyButton>
+                </Group>
+              </Grid.Col>
 
-          <div>
-            <div className="text-sm text-muted mb-1">Key Point</div>
-            <Input value={state.keyPoint} onChange={e=> setState(s=> ({...s, keyPoint: e.target.value}))} />
-          </div>
+              <Grid.Col span={{ base: 12, md: 3 }}>
+                <Select
+                  label="Difficulty"
+                  data={['beginner', 'intermediate', 'advanced']}
+                  value={form.values.difficulty ?? null}
+                  onChange={(v) => form.setFieldValue('difficulty', (v ?? 'intermediate') as 'beginner' | 'intermediate' | 'advanced')}
+                  allowDeselect={false}
+                />
+              </Grid.Col>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <div className="text-sm text-muted mb-1">Tags (CSV)</div>
-              <Input value={state.tagsCsv} onChange={e=> setState(s=> ({...s, tagsCsv: e.target.value}))} placeholder="JavaScript,event-loop" />
-            </div>
-            <div>
-              <div className="text-sm text-muted mb-1">Difficulty</div>
-              <select value={state.difficulty} onChange={e=> setState(s=> ({...s, difficulty: e.target.value as any}))}
-                className="input w-full">
-                <option value="beginner">beginner</option>
-                <option value="intermediate">intermediate</option>
-                <option value="advanced">advanced</option>
-              </select>
-            </div>
-          </div>
+              <Grid.Col span={{ base: 12, md: 3 }}>
+                <div>
+                  <TextInput
+                    label={
+                      <Group justify="space-between">
+                        <Text>Key Point</Text>
+                        <Text size="xs" c={keyPointLen > 200 ? 'red' : 'dimmed'}>
+                          {keyPointLen}/200
+                        </Text>
+                      </Group>
+                    }
+                    placeholder="One-sentence takeaway"
+                    {...form.getInputProps('keyPoint')}
+                  />
+                </div>
+              </Grid.Col>
 
-          <div>
-            <div className="text-sm text-muted mb-1">Front (Markdown)</div>
-            <Textarea rows={6} value={state.frontMd} onChange={e=> setState(s=> ({...s, frontMd: e.target.value}))} />
-          </div>
+              <Grid.Col span={12}>
+                <TagsInput
+                  label="Tags"
+                  placeholder="Add tag and press Enter"
+                  value={form.values.tags}
+                  onChange={(v) => form.setFieldValue('tags', v)}
+                />
+              </Grid.Col>
+            </Grid>
+          </Paper>
 
-          <div>
-            <div className="text-sm text-muted mb-1">Back (Markdown)</div>
-            <Textarea rows={10} value={state.backMd} onChange={e=> setState(s=> ({...s, backMd: e.target.value}))} />
-          </div>
-        </div>
+          <Grid gutter="md" align="stretch">
+            <Grid.Col span={{ base: 12, md: 6 }}>
+              <Paper withBorder p="md" mb="sm">
+                <Title order={6} mb="xs">Front (Question, Markdown)</Title>
+                <Textarea
+                  autosize
+                  minRows={10}
+                  placeholder="Write the question in Markdown..."
+                  {...form.getInputProps('frontMd')}
+                />
+              </Paper>
+              <Paper withBorder p="md">
+                <Title order={6} mb="xs">Front Preview</Title>
+                <MarkdownPreview value={form.values.frontMd} />
+              </Paper>
+            </Grid.Col>
 
-        <div className="md:w-1/2 p-4">
-          <div className="text-sm text-muted mb-2">Preview</div>
-          <MarkdownPreview markdown={`# ${state.keyPoint || 'Title'}
-${state.frontMd ? '---\n' + state.frontMd : '_No front_'}
-\n\n${state.backMd ? state.backMd : '_No back_'}
-`} />
-        </div>
-      </div>
-    </Drawer>
-  )
+            <Grid.Col span={{ base: 12, md: 6 }}>
+              <Paper withBorder p="md" mb="sm">
+                <Title order={6} mb="xs">Back (Explanation & Code, Markdown)</Title>
+                <Textarea
+                  autosize
+                  minRows={10}
+                  placeholder="Explain the answer with code snippets..."
+                  {...form.getInputProps('backMd')}
+                />
+              </Paper>
+              <Paper withBorder p="md">
+                <Title order={6} mb="xs">Back Preview</Title>
+                <MarkdownPreview value={form.values.backMd} splitCode title="Back Preview" />
+              </Paper>
+            </Grid.Col>
+          </Grid>
+
+          <Divider />
+
+          <Group justify="end">
+            <Button variant="default" onClick={onClose}>Cancel</Button>
+            <Button type="submit">{editing ? 'Save' : 'Create'}</Button>
+          </Group>
+        </Stack>
+      </form>
+    </Modal>
+  );
 }

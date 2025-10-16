@@ -1,70 +1,95 @@
-import { useNavigate } from 'react-router-dom'
-import PageHeader from '../../components/PageHeader'
-import Toolbar from '../../components/Toolbar'
-import Button from '../../components/Button'
-import Table from '../../components/Table'
-import type { Column } from '../../components/Table'
-import Badge from '../../components/Badge'
-import { mock } from '../../app/AppShell'
-import type { Deck } from '../../app/AppShell'
+import PageHeader from '../../components/PageHeader';
+import Toolbar from '../../components/Toolbar';
+
+import Table from '../../components/Table';
+import type { Column } from '../../components/Table';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { createDeck, listDecks } from '../../api/admin';
+import type { Deck } from '../../types';
+import { useNavigate } from 'react-router-dom';
+import { Group, TextInput, Modal, Stack, Select } from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
+import { useState } from 'react';
+import { notifications } from '@mantine/notifications';
+import { z } from 'zod';
+
+const schema = z.object({
+  slug: z.string().regex(/^[a-z0-9-]{3,32}$/i, '3-32 chars, letters/digits/dash'),
+  title: z.string().min(1).max(100),
+  locale: z.string().optional(),
+});
 
 export default function AllDecks() {
-  const nav = useNavigate()
-  const decks = mock.getDecks().sort((a,b)=> (b.updatedAt.localeCompare(a.updatedAt)))
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const { data: decks = [] } = useQuery({ queryKey: ['decks'], queryFn: listDecks });
 
-  const columns: Column<Deck>[] = [
-    { header: 'Name', render: d => <div className="font-medium">{d.title}</div> },
-    { header: 'Slug', render: d => <div className="text-muted">{d.slug}</div> },
-    { header: 'Latest', render: d => <div>{d.latestVersion ?? '-'}</div> },
-    { header: 'Draft', render: d => <div>{d.draftCount}</div> },
-    { header: 'Total', render: d => <div>{d.totalCards}</div> },
-    { header: 'Last Published', render: d => <div className="text-muted">{d.lastPublishedAt?.slice(0,10) ?? '-'}</div> },
-    { header: 'Updated', render: d => <div className="text-muted">{d.updatedAt.slice(0,10)}</div> },
-    {
-      header: 'Status',
-      render: d => {
-        const changed = d.draftCount !== d.totalCards
-        return <Badge color={changed ? 'blue':'gray'}>{changed?'draft changed':'up-to-date'}</Badge>
-      }
+  const [open, { open: openModal, close: closeModal }] = useDisclosure(false);
+  const [form, setForm] = useState<{ slug: string; title: string; locale?: string }>({ slug: '', title: '', locale: 'en-US' });
+  const [byId, setById] = useState('');
+
+  const m = useMutation({
+    mutationFn: createDeck,
+    onSuccess: (res) => {
+      notifications.show({ title: 'Created deck', message: res.deckId });
+      qc.invalidateQueries({ queryKey: ['decks'] });
+      closeModal();
+      navigate(`/decks/${res.deckId}`);
     },
-    {
-      header: 'Actions', className: 'text-right',
-      render: d => (
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={()=> nav(`/decks/${d.id}`)}>View</Button>
-          <Button onClick={()=> nav(`/decks/${d.id}/publish`)}>Publish</Button>
-        </div>
-      )
-    }
-  ]
+    onError: (e: Error) => notifications.show({ color: 'red', title: 'Error', message: String(e?.message ?? e) }),
+  });
 
-  function createDeckQuick() {
-    const now = new Date().toISOString()
-    const deck: Deck = {
-      id: crypto.randomUUID(),
-      slug: `deck-${Math.random().toString(36).slice(2,7)}`,
-      title: 'New Deck',
-      latestVersion: undefined,
-      totalCards: 0,
-      draftCount: 0,
-      updatedAt: now,
-      createdAt: now,
-      lastPublishedAt: undefined
-    }
-    mock.upsertDeck(deck)
-    localStorage.setItem('lastDeckId', deck.id)
-    nav(`/decks/${deck.id}`)
-  }
+  const cols: Column<Deck>[] = [
+    { header: 'Title', cell: (r) => <span>{r.title}</span> },
+    { header: 'Slug', cell: (r) => <span>{r.slug}</span> },
+    { header: 'Locale', cell: (r) => <span>{r.locale ?? '-'}</span>, width: 120 },
+    { header: 'Created', cell: (r) => new Date(r.createdAt).toLocaleString(), width: 220 },
+    {
+      header: '',
+      width: 120,
+      cell: (r) => <button onClick={() => navigate(`/decks/${r.id}`)} className="btn btn-primary">Open</button>,
+    },
+  ];
 
   return (
-    <div>
-      <PageHeader title="Decks">
-        <Button onClick={createDeckQuick}>New Deck</Button>
-      </PageHeader>
+    <>
+      <PageHeader title="Decks" right={
+        <Group>
+          <TextInput placeholder="Open by ID…" value={byId} onChange={(e) => setById(e.currentTarget.value)} />
+          <button onClick={() => byId && navigate(`/decks/${byId}`)} className="btn">Open</button>
+          <button onClick={openModal} className="btn btn-primary">New Deck</button>
+        </Group>
+      }/>
+
       <Toolbar>
-        <input className="input w-64" placeholder="Search (mock - not wired)" />
+        <div />
       </Toolbar>
-      <Table columns={columns} data={decks} />
-    </div>
-  )
+
+      <Table data={decks} columns={cols} />
+
+      <Modal opened={open} onClose={closeModal} title="Create deck" centered>
+        <Stack>
+          <TextInput label="Slug" placeholder="js-core" value={form.slug}
+            onChange={(e) => setForm({ ...form, slug: e.currentTarget.value })} />
+          <TextInput label="Title" placeholder="JavaScript Core" value={form.title}
+            onChange={(e) => setForm({ ...form, title: e.currentTarget.value })} />
+          <Select label="Locale" allowDeselect data={['en-US', 'zh-CN', 'ja-JP']}
+            value={form.locale} onChange={(v) => setForm({ ...form, locale: v ?? undefined })} />
+          <button
+            onClick={() => {
+              const v = schema.safeParse(form);
+              if (!v.success) {
+                notifications.show({ color: 'red', title: 'Invalid', message: v.error.issues[0]?.message ?? 'Invalid' });
+                return;
+              }
+              m.mutate(v.data);
+            }}
+            className="btn btn-primary"
+          >
+            Create
+          </button>
+        </Stack>
+      </Modal>
+    </>
+  );
 }

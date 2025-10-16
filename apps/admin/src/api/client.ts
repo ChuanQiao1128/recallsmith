@@ -1,38 +1,25 @@
-const BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5121';
+const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:5121';
+const MOCK = (import.meta.env.VITE_MOCK ?? '0') === '1';
 
-export class ApiError extends Error {
-  status: number;
-  code?: string;
-  constructor(status: number, code?: string, message?: string) {
-    super(message ?? `HTTP ${status}`);
-    this.status = status;
-    this.code = code;
-  }
-}
+export type ApiError = { code: string; message: string };
 
-export async function http<TRes>(path: string, init?: RequestInit): Promise<TRes> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const resp = await fetch(`${API_BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     ...init,
   });
-  if (!res.ok) {
-    let code: string | undefined;
-    let msg: string | undefined;
+  if (!resp.ok) {
+    let msg = `${resp.status} ${resp.statusText}`;
     try {
-      const data = await res.json();
-      code = data?.error?.code;
-      msg = data?.error?.message;
-    } catch { /* ignore */ }
-    throw new ApiError(res.status, code, msg);
+      const j = await resp.json();
+      if (j?.error?.message) msg = j.error.message;
+    } catch {
+      // Failed to parse JSON error response, use default message
+    }
+    throw new Error(msg);
   }
-  // 有些 204/空响应
-  if (res.status === 204) return undefined as unknown as TRes;
-  return res.json() as Promise<TRes>;
+  if (resp.status === 204) return undefined as unknown as T;
+  return (await resp.json()) as T;
 }
 
-export async function parseApiError(e: unknown) {
-  if (e instanceof ApiError) {
-    return e.code ? `${e.code}: ${e.message}` : e.message;
-  }
-  return (e as Error)?.message ?? 'Unexpected error';
-}
+export const http = { request, API_BASE, MOCK };

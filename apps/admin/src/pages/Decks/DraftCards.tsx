@@ -1,111 +1,85 @@
-import { useParams } from 'react-router-dom'
-import PageHeader from '../../components/PageHeader'
-import Toolbar from '../../components/Toolbar'
-import Button from '../../components/Button'
-import Table from '../../components/Table'
-import type { Column } from '../../components/Table'
-import Badge from '../../components/Badge'
-import { mock } from '../../app/AppShell'
-import type { Card } from '../../app/AppShell'
-import CardEditorDrawer from './CardEditorDrawer'
-import type { CardDraft } from './CardEditorDrawer'
-import { useMemo, useState } from 'react'
-import { toast } from 'sonner'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { listCards, deleteCard } from '../../api/admin';
+import type { Card as CardType } from '../../types';
+import { ActionIcon, Group, Paper, Text } from '@mantine/core';
+import { IconPlus, IconTrash, IconPencil } from '@tabler/icons-react';
+import { Button } from '@mantine/core';
+import CardEditorDrawer from './CardEditorDrawer';
+import { useDisclosure } from '@mantine/hooks';
+import { useMemo, useState } from 'react';
+import MarkdownPreview from '../../components/MarkdownPreview';
+import { notifications } from '@mantine/notifications';
+import './DraftCards.css';
 
-export default function DraftCards() {
-  const { deckId } = useParams()
-  const deck = deckId ? mock.getDeck(deckId) : undefined
-  const [open, setOpen] = useState(false)
-  const [editing, setEditing] = useState<Card | null>(null)
+export default function DraftCards({ deckId, deckSlug }: { deckId: string; deckSlug?: string }) {
+  const qc = useQueryClient();
+  const { data: cards = [] } = useQuery({ queryKey: ['cards', deckId], queryFn: () => listCards(deckId) });
 
-  const cards = useMemo(() => deckId ? mock.getCards(deckId) : [], [deckId])
+  const [opened, { open, close }] = useDisclosure(false);
+  const [editing, setEditing] = useState<CardType | null>(null);
 
-  if (!deck || !deckId) return <div className="text-rose-600">Deck not found</div>
+  const mDel = useMutation({
+    mutationFn: async (cardId: string) => deleteCard(deckId, cardId),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['cards', deckId] }); },
+  });
 
-  const columns: Column<Card>[] = [
-    { header: '#', render: (_c, i) => i+1, className: 'w-10' },
-    { header: 'KeyPoint', render: c => <div className="font-medium">{c.keyPoint}</div> },
-    { header: 'Stable UID', render: c => <div className="text-muted">{c.stableUid}</div> },
-    { header: 'Tags', render: c => <div className="flex flex-wrap gap-1">{c.tags.map(t=> <Badge key={t}>{t}</Badge>)}</div> },
-    { header: 'Difficulty', render: c => {
-      const color = c.difficulty==='beginner' ? 'green' : c.difficulty==='advanced' ? 'violet' : 'blue'
-      return <Badge color={color as 'green' | 'violet' | 'blue'}>{c.difficulty}</Badge>
-    }},
-    { header: 'Updated', render: c => <div className="text-muted">{c.updatedAt.slice(0,19)}</div> },
-    { header: 'Actions', className: 'text-right', render: c => (
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" onClick={()=> { setEditing(c); setOpen(true) }}>Edit</Button>
-        <Button variant="danger" onClick={()=> del(c.id)}>Delete</Button>
-      </div>
-    )},
-  ]
-
-  function del(cardId: string) {
-    if (!deckId) return
-    const arr = cards.filter(x => x.id !== cardId)
-    mock.setCards(deckId, arr)
-    toast.success('Deleted')
-  }
-
-  function onSave(d: CardDraft) {
-    if (!deckId) return
-    if (editing) {
-      const arr = cards.map(x => x.id===editing.id ? {
-        ...x,
-        stableUid: d.stableUid,
-        keyPoint: d.keyPoint,
-        tags: d.tagsCsv.split(',').map(s=>s.trim()).filter(Boolean),
-        difficulty: d.difficulty,
-        frontMd: d.frontMd,
-        backMd: d.backMd,
-        updatedAt: new Date().toISOString()
-      } : x)
-      mock.setCards(deckId, arr)
-      toast.success('Updated card')
-    } else {
-      const now = new Date().toISOString()
-      const c: Card = {
-        id: crypto.randomUUID(),
-        stableUid: d.stableUid,
-        keyPoint: d.keyPoint,
-        tags: d.tagsCsv.split(',').map(s=>s.trim()).filter(Boolean),
-        difficulty: d.difficulty,
-        frontMd: d.frontMd,
-        backMd: d.backMd,
-        createdAt: now,
-        updatedAt: now
-      }
-      mock.setCards(deckId, [...cards, c])
-      toast.success('Created card')
-    }
-    setOpen(false)
-    setEditing(null)
-  }
+  const existingUids = useMemo(() => cards.map(c => c.stableUid), [cards]);
 
   return (
-    <div>
-      <PageHeader title="Draft Cards">
-        <Button onClick={()=> { setEditing(null); setOpen(true) }}>New Card</Button>
-      </PageHeader>
-      <Toolbar>
-        <input className="input w-64" placeholder="Search (mock)" />
-      </Toolbar>
-      <Table columns={columns} data={cards} rowKey={(r)=> r.id} />
-      <CardEditorDrawer
-        open={open}
-        onClose={()=> { setOpen(false); setEditing(null) }}
-        onSave={onSave}
-        deckSlug={deck.slug}
-        initial={editing ? {
-          id: editing.id,
-          stableUid: editing.stableUid,
-          keyPoint: editing.keyPoint,
-          tagsCsv: editing.tags.join(','),
-          difficulty: editing.difficulty,
-          frontMd: editing.frontMd,
-          backMd: editing.backMd
-        } : {}}
-      />
-    </div>
-  )
+    <>
+      <Group justify="space-between" mt="md" mb="sm">
+        <Text fw={600}>Draft cards ({cards.length})</Text>
+        <Button leftSection={<IconPlus size={16} />} onClick={() => { setEditing(null); open(); }}>
+          New Card
+        </Button>
+      </Group>
+
+      <div className="cards-grid">
+        {cards.map((c) => (
+          <Paper key={c.id} withBorder p="sm">
+            <Group justify="space-between" align="flex-start">
+              <div className="card-content">
+                <Text fw={600} mb={6}>{c.keyPoint}</Text>
+                <Text size="xs" c="dimmed" mb={6}>uid: {c.stableUid} • tags: {c.tags.join(', ') || '-'}</Text>
+                <Group grow align="flex-start">
+                  <div className="card-section">
+                    <Text size="sm" c="dimmed" mb={4}>Front (Question)</Text>
+                    <MarkdownPreview value={c.frontMd} />
+                  </div>
+                  <div className="card-section">
+                    <Text size="sm" c="dimmed" mb={4}>Back (Explanation & Code)</Text>
+                    <MarkdownPreview value={c.backMd} />
+                  </div>
+                </Group>
+              </div>
+              <Group align="flex-start">
+                <ActionIcon variant="light" onClick={() => { setEditing(c); open(); }}>
+                  <IconPencil size={16} />
+                </ActionIcon>
+                <ActionIcon color="red" variant="light" onClick={() => {
+                  mDel.mutate(c.id);
+                  notifications.show({ title: 'Deleted', message: c.stableUid });
+                }}>
+                  <IconTrash size={16} />
+                </ActionIcon>
+              </Group>
+            </Group>
+          </Paper>
+        ))}
+        {cards.length === 0 && <Text c="dimmed">No draft cards yet.</Text>}
+      </div>
+
+      {opened && (
+        <CardEditorDrawer
+          deckId={deckId}
+          deckSlug={deckSlug}
+          opened={opened}
+          onClose={() => { close(); setEditing(null); }}
+          editing={editing ?? undefined}
+          onSaved={() => qc.invalidateQueries({ queryKey: ['cards', deckId] })}
+          existingUids={existingUids}
+        />
+      )}
+    </>
+  );
 }

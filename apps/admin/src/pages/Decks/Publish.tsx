@@ -1,80 +1,59 @@
-import { useParams } from 'react-router-dom'
-import PageHeader from '../../components/PageHeader'
-import Button from '../../components/Button'
-import { Textarea, Input } from '../../components/Input'
-import { mock } from '../../app/AppShell'
-import { useMemo, useState } from 'react'
-import Badge from '../../components/Badge'
-import { toast } from 'sonner'
+import { useState } from 'react';
+import { publishDeck, listCards, listPublishes } from '../../api/admin';
+import { useQuery } from '@tanstack/react-query';
+import { Button, Group, Paper, Stack, Text, TextInput, Textarea, Timeline } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
+import { z } from 'zod';
 
-function nextPatch(v?: string) {
-  if (!v) return '1.0.0'
-  const m = v.match(/^(\d+)\.(\d+)\.(\d+)$/)
-  if (!m) return '1.0.0'
-  const [_, a,b,c] = m
-  return `${a}.${b}.${Number(c)+1}`
-}
+const schema = z.object({
+  version: z.string().regex(/^\d+\.\d+\.\d+$/, 'SemVer: x.y.z'),
+  changelog: z.string().optional(),
+});
 
-export default function Publish() {
-  const { deckId } = useParams()
-  const deck = deckId ? mock.getDeck(deckId) : undefined
-  const cards = deckId ? mock.getCards(deckId) : []
-  const [version, setVersion] = useState(nextPatch(deck?.latestVersion))
-  const [changelog, setChangelog] = useState('')
+export default function Publish({ deckId }: { deckId: string }) {
+  const { data: cards = [] } = useQuery({ queryKey: ['cards', deckId], queryFn: () => listCards(deckId) });
+  const { data: publishes = [] , refetch } = useQuery({ queryKey: ['publishes', deckId], queryFn: () => listPublishes(deckId) });
 
-  const diff = useMemo(()=>{
-    const added = Math.max(0, cards.length - (deck?.totalCards ?? 0))
-    const modified = added>0 ? 0 : (cards.length>0 ? 1 : 0) // mock: 简化
-    const deleted = Math.max(0, (deck?.totalCards ?? 0) - cards.length)
-    return { added, modified, deleted }
-  }, [cards.length, deck?.totalCards])
-
-  if (!deck || !deckId) return <div className="text-rose-600">Deck not found</div>
-
-  function publish() {
-    // mock：发布 = 把 draft 计数变为正式
-    deck.latestVersion = version
-    deck.totalCards = cards.length
-    deck.lastPublishedAt = new Date().toISOString()
-    mock.upsertDeck(deck)
-    toast.success(`Published ${version}`)
-  }
+  const [ver, setVer] = useState('1.0.0');
+  const [log, setLog] = useState('');
 
   return (
-    <div>
-      <PageHeader title="Publish & Versions">
-        <Button onClick={publish}>Publish</Button>
-      </PageHeader>
+    <Group align="start" mt="md" grow>
+      <Paper withBorder p="md">
+        <Stack>
+          <Text fw={600}>Publish new version</Text>
+          <TextInput label="Version (x.y.z)" value={ver} onChange={(e) => setVer(e.currentTarget.value)} />
+          <Textarea label="Changelog" minRows={4} value={log} onChange={(e) => setLog(e.currentTarget.value)} />
+          <Text size="sm" c="dimmed">Cards to publish: {cards.length}</Text>
+          <Group>
+            <Button onClick={async () => {
+              const v = schema.safeParse({ version: ver, changelog: log });
+              if (!v.success) {
+                notifications.show({ color: 'red', title: 'Invalid', message: v.error.issues[0]?.message ?? 'Invalid' });
+                return;
+              }
+              const res = await publishDeck(deckId, v.data);
+              notifications.show({ title: `Published ${res.version}`, message: `Cards: ${res.totalCards}` });
+              refetch();
+            }}>Publish</Button>
+          </Group>
+        </Stack>
+      </Paper>
 
-      {/* 摘要 */}
-      <div className="grid md:grid-cols-3 gap-4 mb-4">
-        <div className="card p-4">
-          <div className="text-sm text-muted mb-1">Added</div>
-          <div className="text-xl font-semibold"><Badge color="green">{diff.added}</Badge></div>
-        </div>
-        <div className="card p-4">
-          <div className="text-sm text-muted mb-1">Modified</div>
-          <div className="text-xl font-semibold"><Badge color="blue">{diff.modified}</Badge></div>
-        </div>
-        <div className="card p-4">
-          <div className="text-sm text-muted mb-1">Deleted</div>
-          <div className="text-xl font-semibold"><Badge color="rose">{diff.deleted}</Badge></div>
-        </div>
-      </div>
-
-      <div className="card p-4 space-y-3">
-        <div>
-          <div className="text-sm text-muted mb-1">Version</div>
-          <Input value={version} onChange={e=> setVersion(e.target.value)} placeholder="x.y.z" />
-        </div>
-        <div>
-          <div className="text-sm text-muted mb-1">Changelog</div>
-          <Textarea rows={6} value={changelog} onChange={e=> setChangelog(e.target.value)} />
-        </div>
-        <div className="text-sm text-muted">
-          Current latest: <span className="font-mono">{deck.latestVersion ?? '-'}</span>
-        </div>
-      </div>
-    </div>
-  )
+      <Paper withBorder p="md">
+        <Text fw={600} mb="sm">History</Text>
+        {publishes.length === 0 && <Text c="dimmed">No publish history.</Text>}
+        {publishes.length > 0 && (
+          <Timeline active={publishes.length - 1}>
+            {publishes.map(p => (
+              <Timeline.Item key={p.version} title={`v${p.version}`}>
+                <Text size="sm" c="dimmed">{new Date(p.publishedAt).toLocaleString()}</Text>
+                <Text size="sm">Total cards: {p.totalCards}</Text>
+              </Timeline.Item>
+            ))}
+          </Timeline>
+        )}
+      </Paper>
+    </Group>
+  );
 }

@@ -1,0 +1,1 @@
+// This file is no longer needed since we removed react-syntax-highlighter dependency

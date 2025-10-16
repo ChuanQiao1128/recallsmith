@@ -1,5 +1,10 @@
-import type { ReactNode } from 'react'
+import { Group } from '@mantine/core';
+import type { ReactNode } from 'react';
 
-export default function Toolbar({ children }: { children?: ReactNode }) {
-  return <div className="mb-3 flex items-center gap-2">{children}</div>
+export default function Toolbar({ children }: { children: ReactNode }) {
+  return (
+    <Group justify="space-between" mb="sm">
+      {children}
+    </Group>
+  );
 }

@@ -1,40 +1,41 @@
-import { useParams } from 'react-router-dom'
-import PageHeader from '../../components/PageHeader'
-import { Input } from '../../components/Input'
-import Button from '../../components/Button'
-import { mock } from '../../app/AppShell'
-import { useState } from 'react'
-import { toast } from 'sonner'
+import { useEffect, useState } from 'react';
+import { getDeck, updateDeckMeta } from '../../api/admin';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Button, Group, Paper, Select, Stack, Text, TextInput } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
 
-export default function Settings() {
-  const { deckId } = useParams()
-  const deck = deckId ? mock.getDeck(deckId) : undefined
-  const [slug, setSlug] = useState(deck?.slug ?? '')
-  const [title, setTitle] = useState(deck?.title ?? '')
+export default function Settings({ deckId }: { deckId: string }) {
+  const { data: deck } = useQuery({ queryKey: ['deck', deckId], queryFn: () => getDeck(deckId) });
+  const qc = useQueryClient();
+  const [title, setTitle] = useState('');
+  const [slug, setSlug] = useState('');
+  const [locale, setLocale] = useState<string | null>('en-US');
 
-  if (!deck) return <div className="text-rose-600">Deck not found</div>
-
-  function save() {
-    mock.upsertDeck({...deck, slug, title })
-    toast.success('Saved')
-  }
+  useEffect(() => {
+    if (deck) {
+      setTitle(deck.title);
+      setSlug(deck.slug);
+      setLocale(deck.locale ?? null);
+    }
+  }, [deck]);
 
   return (
-    <div>
-      <PageHeader title="Settings" />
-      <div className="card p-4 space-y-3 max-w-xl">
-        <div>
-          <div className="text-sm text-muted mb-1">Slug</div>
-          <Input value={slug} onChange={e=> setSlug(e.target.value)} />
-        </div>
-        <div>
-          <div className="text-sm text-muted mb-1">Title</div>
-          <Input value={title} onChange={e=> setTitle(e.target.value)} />
-        </div>
-        <div className="flex justify-end">
-          <Button onClick={save}>Save</Button>
-        </div>
-      </div>
-    </div>
-  )
+    <Paper withBorder p="md" mt="md">
+      <Stack>
+        <Text fw={600}>Deck metadata</Text>
+        <Group grow>
+          <TextInput label="Title" value={title} onChange={(e) => setTitle(e.currentTarget.value)} />
+          <TextInput label="Slug" value={slug} onChange={(e) => setSlug(e.currentTarget.value)} />
+          <Select label="Locale" allowDeselect data={['en-US', 'zh-CN', 'ja-JP']} value={locale} onChange={setLocale} />
+        </Group>
+        <Group>
+          <Button onClick={async () => {
+            await updateDeckMeta(deckId, { title, slug, locale: locale ?? undefined });
+            notifications.show({ title: 'Saved', message: 'Deck metadata updated' });
+            qc.invalidateQueries({ queryKey: ['deck', deckId] });
+          }}>Save</Button>
+        </Group>
+      </Stack>
+    </Paper>
+  );
 }

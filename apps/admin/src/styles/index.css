@@ -1,89 +1,23 @@
-/* Custom CSS classes */
+/* apps/admin/src/styles/index.css */
 
-/* Buttons */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  padding: 0 12px;
-  height: 36px;
-  font-size: 14px;
-  font-weight: 500;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+/* 不要在这里写任何会重置 pre, code, .token 的颜色的规则 */
+html, body, #root {
+  height: 100%;
 }
 
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  padding: 0 12px;
-  height: 36px;
-  font-size: 14px;
-  font-weight: 500;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  background-color: #2563eb;
-  color: white;
+* {
+  box-sizing: border-box;
 }
 
-.btn-primary:hover {
-  background-color: #1d4ed8;
-}
+/* 让 Markdown 的基础排版舒服一点 */
+.mdx p { margin: 0.5rem 0; }
+.mdx pre { margin: 0.75rem 0; }
 
-.btn-ghost {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  padding: 0 12px;
-  height: 36px;
-  font-size: 14px;
-  font-weight: 500;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  background-color: transparent;
-  color: #1e293b;
+/* 仅限定字体，不设颜色，避免覆盖 Prism token 的颜色 */
+:root {
+  --app-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
 }
-
-.btn-ghost:hover {
-  background-color: #f1f5f9;
-}
-
-/* Inputs */
-.input {
-  height: 36px;
-  border-radius: 4px;
-  border: 1px solid #cbd5e1;
-  padding: 0 12px;
-  font-size: 14px;
-  background-color: white;
-}
-
-.input:focus {
-  outline: none;
-  box-shadow: 0 0 0 2px #3b82f6;
-}
-
-/* Misc */
-.text-muted {
-  color: #64748b;
-}
-
-.card {
-  background-color: white;
-  border-radius: 4px;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 9999px;
-  border: 1px solid #e2e8f0;
-  padding: 0 8px;
-  height: 24px;
-  font-size: 12px;
-  color: #1e293b;
-  background-color: #f8fafc;
+.mdx code, .mantine-CodeHighlight-root code, .mantine-CodeHighlight-root pre {
+  font-family: var(--app-font-mono);
 }

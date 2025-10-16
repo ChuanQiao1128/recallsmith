@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { createDraftCard } from '../api/admin';
-import { parseApiError } from '../api/client';
+
 import type { CreateDraftCardResponse } from '../types/dto';
 import './CardCreate.css';
 
@@ -64,7 +64,7 @@ export default function CardCreate() {
         difficulty: 'intermediate'
       });
     },
-    onError: async (e) => alert(await parseApiError(e))
+    onError: (e) => alert(e.message || 'An error occurred')
   });
 
   return (

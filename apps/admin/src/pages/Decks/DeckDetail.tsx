@@ -1,40 +1,47 @@
-import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom'
-import PageHeader from '../../components/PageHeader'
-import Button from '../../components/Button'
-import { mock } from '../../app/AppShell'
+import PageHeader from '../../components/PageHeader';
+import { useParams, Navigate, Routes, Route, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { getDeck } from '../../api/admin';
+import DraftCards from './DraftCards';
+import Publish from './Publish';
+import Settings from './Settings';
+import { Tabs } from '@mantine/core';
+
 
 export default function DeckDetail() {
-  const { deckId } = useParams()
-  const nav = useNavigate()
-  const deck = deckId ? mock.getDeck(deckId) : undefined
+  const { deckId } = useParams();
+  const navigate = useNavigate();
+  const { data: deck } = useQuery({ 
+    queryKey: ['deck', deckId], 
+    queryFn: () => getDeck(deckId!),
+    enabled: !!deckId
+  });
 
-  if (!deck) {
-    return <div className="text-rose-600">Deck not found</div>
-  }
+  if (!deckId) return <Navigate to="/decks" replace />;
 
   return (
-    <div>
-      <PageHeader title={deck.title}>
-        <Button variant="ghost" onClick={()=> nav('/decks')}>Back</Button>
-        <Button onClick={()=> nav('publish')}>Publish</Button>
-      </PageHeader>
+    <>
+      <PageHeader
+        title={deck?.title ?? 'Deck'}
+        crumbs={[{ label: 'Decks', href: '/decks' }, { label: deck?.slug ?? deckId }]}
+        right={<button onClick={() => navigate('/decks')} className="btn">Back</button>}
+      />
 
-      <div className="mb-4 border-b">
-        <nav className="flex gap-4">
-          {[
-            { to: 'draft', label: 'Draft Cards' },
-            { to: 'publish', label: 'Publish & Versions' },
-            { to: 'settings', label: 'Settings' },
-          ].map(t => (
-            <NavLink key={t.to} to={t.to}
-              className={({isActive})=>`h-10 inline-flex items-center border-b-2 ${isActive?'border-blue-600 text-blue-700':'border-transparent text-muted'} px-1`}>
-              {t.label}
-            </NavLink>
-          ))}
-        </nav>
-      </div>
+      <Tabs defaultValue="draft" keepMounted={false}>
+        <Tabs.List>
+          <Tabs.Tab value="draft">Draft Cards</Tabs.Tab>
+          <Tabs.Tab value="publish">Publish</Tabs.Tab>
+          <Tabs.Tab value="settings">Settings</Tabs.Tab>
+        </Tabs.List>
 
-      <Outlet />
-    </div>
-  )
+        <Routes>
+          <Route path="/" element={<DraftCards deckId={deckId} deckSlug={deck?.slug} />} />
+          <Route path="draft" element={<DraftCards deckId={deckId} deckSlug={deck?.slug} />} />
+          <Route path="publish" element={<Publish deckId={deckId} />} />
+          <Route path="settings" element={<Settings deckId={deckId} />} />
+          <Route path="*" element={<DraftCards deckId={deckId} deckSlug={deck?.slug} />} />
+        </Routes>
+      </Tabs>
+    </>
+  );
 }
