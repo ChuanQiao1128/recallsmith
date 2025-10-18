@@ -4,6 +4,17 @@
     <ProjectReference Include="..\Study.Application\Study.Application.csproj" />
     <ProjectReference Include="..\Study.Domain\Study.Domain.csproj" />
     <ProjectReference Include="..\..\..\building-blocks\Infrastructure.Core\Infrastructure.Core.csproj" />
+    <ProjectReference Include="..\..\catalog\Catalog.Infrastructure\Catalog.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\contracts\Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.10" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.10">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
   </ItemGroup>
 
   <PropertyGroup>
