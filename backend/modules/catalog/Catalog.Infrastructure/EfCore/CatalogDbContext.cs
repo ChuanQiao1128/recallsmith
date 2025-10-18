@@ -24,7 +24,7 @@ public class CatalogDbContext : DbContext
             b.Property(x => x.Title).HasMaxLength(200).IsRequired();
             b.HasIndex(x => x.Slug).IsUnique();
             b.Property(x => x.CreatedAt).HasDefaultValueSql("now() at time zone 'utc'");
-            b.UseXminAsConcurrencyToken(); // Postgres 并发控制
+            b.Property<uint>("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
         });
 
         modelBuilder.Entity<CardRecord>(b =>
@@ -39,7 +39,7 @@ public class CatalogDbContext : DbContext
             b.Property(x => x.Difficulty).HasMaxLength(32);
             b.Property(x => x.CreatedAt).HasDefaultValueSql("now() at time zone 'utc'");
             b.HasIndex(x => new { x.DeckId, x.StableUid }).IsUnique();
-            b.UseXminAsConcurrencyToken();
+            b.Property<uint>("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
         });
 
         modelBuilder.Entity<DeckVersionRecord>(b =>
@@ -49,7 +49,7 @@ public class CatalogDbContext : DbContext
             b.Property(x => x.Version).HasMaxLength(32).IsRequired();
             b.Property(x => x.PublishedAt).HasDefaultValueSql("now() at time zone 'utc'");
             b.HasIndex(x => new { x.DeckId, x.Version }).IsUnique();
-            b.UseXminAsConcurrencyToken();
+            b.Property<uint>("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
         });
     }
 

@@ -22,7 +22,7 @@ public class StudyDbContext : DbContext
             b.HasIndex(x => new { x.UserId, x.CatalogDeckId }).IsUnique();
             b.Property(x => x.Version).HasMaxLength(32).IsRequired();
             b.Property(x => x.AppliedAt).HasDefaultValueSql("now() at time zone 'utc'");
-            b.UseXminAsConcurrencyToken();
+            b.Property<uint>("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
         });
 
         modelBuilder.Entity<UserCardRecord>(b =>
@@ -31,7 +31,7 @@ public class StudyDbContext : DbContext
             b.HasKey(x => x.Id);
             b.HasIndex(x => new { x.UserDeckId, x.SourceCardId }).IsUnique();
             b.Property(x => x.ContentHash).HasMaxLength(128).IsRequired();
-            b.UseXminAsConcurrencyToken();
+            b.Property<uint>("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
         });
     }
 }
