@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { publishDeck } from '../api/admin';
-import { parseApiError } from '../api/client';
+
 import type { PublishDeckResponse } from '../types/dto';
 import './Publish.css';
 
@@ -30,7 +30,7 @@ export default function Publish() {
       changelog: v.changelog ?? ''
     }),
     onSuccess: (res) => alert(`Published ${res.version}\nCards: ${res.totalCards}\nAt: ${res.publishedAt}`),
-    onError: async (e) => alert(await parseApiError(e))
+    onError: (e) => alert(e.message || 'An error occurred')
   });
 
   return (

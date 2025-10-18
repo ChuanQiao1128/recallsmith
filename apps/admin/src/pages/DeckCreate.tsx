@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { createDeck } from '../api/admin';
-import { parseApiError } from '../api/client';
+
 import type { CreateDeckResponse } from '../types/dto';
 import './DeckCreate.css';
 
@@ -36,7 +36,7 @@ export default function DeckCreate() {
       alert(`Created deck: ${res.deckId}`);
       reset({ slug: '', title: '', locale: 'en-US' });
     },
-    onError: async (e) => alert(await parseApiError(e))
+    onError: (e) => alert(e.message || 'An error occurred')
   });
 
   return (

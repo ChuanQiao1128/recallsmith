@@ -64,6 +64,15 @@ app.UseExceptionHandler(appErr =>
         // 默认 500；如果是 AppException，映射到具体状态码
         var feat = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
         var ex = feat?.Error;
+
+        // 新增：把参数/绑定错误映射为 400
+        if (ex is BadHttpRequestException badReq)
+        {
+            ctx.Response.StatusCode = badReq.StatusCode; // 通常是 400
+            await ctx.Response.WriteAsJsonAsync(new { error = new { code = "BadRequest", message = ex.Message } });
+            return;
+        }
+
         int status = ex is SharedKernel.AppException aex
             ? aex.Code switch
             {
@@ -86,6 +95,7 @@ app.MapGet($"{userGroup}/ping", () => Results.Ok(new { area = "user", status = "
 
 // Module-specific endpoints register here
 app.MapCatalogAdminEndpoints(adminGroup);
+app.MapCatalogAdminQueryEndpoints(adminGroup);   // <- 加上这一行
 app.MapCatalogPublicEndpoints(catalogGroup);
 app.MapStudyUserEndpoints(userGroup);
 
