@@ -3,7 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Catalog.Application\Catalog.Application.csproj" />
     <ProjectReference Include="..\Catalog.Infrastructure\Catalog.Infrastructure.csproj" />
-    <ProjectReference Include="..\..\..\contracts\Contracts.csproj" />
+    <ProjectReference Include="..\..\..\building-blocks\Contracts\Contracts.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -14,5 +14,9 @@
     <!-- 关键：让 classlib 拿到 ASP.NET Core 的类型（Minimal API/Http/Builder/Route 等） -->
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.10" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
   </ItemGroup>
 </Project>

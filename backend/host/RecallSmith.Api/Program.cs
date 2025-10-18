@@ -3,8 +3,6 @@ using HealthChecks.NpgSql;
 using Microsoft.AspNetCore.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Diagnostics;
-using Catalog.Api; // AddCatalogModule (Controller 版)
-using Study.Api;   // AddStudyModule (Controller 版)
 using Infrastructure.Core;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -48,8 +46,7 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions(o =>
 });
 
 // === 注册模块（Controller 版本）===
-builder.Services.AddCatalogModule(builder.Configuration);
-builder.Services.AddStudyModule(builder.Configuration);
+// TODO: Add module registrations when modules are implemented
 
 var app = builder.Build();
 
@@ -74,9 +71,9 @@ app.UseExceptionHandler(appErr =>
             ? aex.Code switch
             {
                 SharedKernel.ErrorCode.Validation => StatusCodes.Status422UnprocessableEntity,
-                SharedKernel.ErrorCode.NotFound   => StatusCodes.Status404NotFound,
-                SharedKernel.ErrorCode.Conflict   => StatusCodes.Status409Conflict,
-                _                                 => StatusCodes.Status500InternalServerError
+                SharedKernel.ErrorCode.NotFound => StatusCodes.Status404NotFound,
+                SharedKernel.ErrorCode.Conflict => StatusCodes.Status409Conflict,
+                _ => StatusCodes.Status500InternalServerError
             }
             : StatusCodes.Status500InternalServerError;
 
