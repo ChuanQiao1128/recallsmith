@@ -1,3 +1,4 @@
+using Catalog.Api;
 using Serilog;
 using HealthChecks.NpgSql;
 using Microsoft.AspNetCore.Http.Json;
@@ -6,6 +7,7 @@ using Microsoft.AspNetCore.Diagnostics;
 using Infrastructure.Core;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddCatalogModule(builder.Configuration);
 
 // Serilog
 builder.Host.UseSerilog((ctx, lc) => lc

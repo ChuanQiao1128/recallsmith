@@ -9,16 +9,25 @@ namespace Catalog.Api;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddCatalogModule(this IServiceCollection services, IConfiguration cfg)
+    public static IServiceCollection AddCatalogModule(this IServiceCollection services, IConfiguration configuration)
     {
-        var cs = cfg.GetConnectionString("Postgres")
-                 ?? throw new InvalidOperationException("ConnectionStrings:Postgres missing");
+        // 连接串：优先 Postgres，其次 Default
+        var conn =
+            configuration.GetConnectionString("Postgres")
+            ?? configuration.GetConnectionString("Default")
+            ?? throw new InvalidOperationException("Missing connection string 'Postgres' or 'Default'.");
 
-        services.AddDbContext<CatalogDbContext>(opt =>
-            opt.UseNpgsql(cs, b => b.MigrationsHistoryTable("__EFMigrationsHistory", CatalogDbContext.Schema)));
+        // DbContext（Npgsql）
+        services.AddDbContext<CatalogDbContext>(opts => opts.UseNpgsql(conn));
+
+        // 读配置决定是否用 Mock 查询
+        var mockQueries = configuration.GetSection("Features").GetValue<bool>("MockQueries");
 
         services.AddScoped<ICatalogAdminService, CatalogAdminService>();
-        services.AddScoped<ICatalogQueryService, CatalogQueryService>();
+        if (mockQueries)
+            services.AddScoped<ICatalogQueryService, MockCatalogQueryService>();
+        else
+            services.AddScoped<ICatalogQueryService, CatalogQueryService>();
 
         return services;
     }
