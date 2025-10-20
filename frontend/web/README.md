@@ -1,3 +1,0 @@
-# Browser
-
-Future Function.
