@@ -26,7 +26,7 @@ public class AuthoringDecksController : ControllerBase
         }
 
         // if id exists;
-        Deck deck = null;
+        Deck? deck = null;
         foreach (var d in _decks)
         {
             if (d.Id == id.Value)
@@ -42,5 +42,42 @@ public class AuthoringDecksController : ControllerBase
         }
 
         return Ok(deck);
+    }
+
+    // 3 Post new Deck 
+    // POST /api/authoring/decks
+    [HttpPost]
+    public ActionResult Post([FromBody] Deck deck)
+    {
+        //1. deck is not null
+        if (deck is null)
+        {
+            return BadRequest();
+        }
+        //2. deck.title and author is not null
+        if (string.IsNullOrWhiteSpace(deck.Title))
+        {
+            return BadRequest("Title is required.");
+        }
+        if (string.IsNullOrWhiteSpace(deck.Author))
+        {
+            return BadRequest("Author is required.");
+        }
+        //3. create new deck
+        int newId = _decks.Any() ? _decks.Max(d => d.Id) + 1 : 1;
+
+        var newDeck = new Deck
+        {
+            Id = newId,
+            Title = deck.Title,
+            Author = deck.Author
+        };
+
+        //4. Add newDeck to Database
+        _decks.Add(newDeck);
+
+        //5. Return 201 Created
+        string location = $"api/authoring/decks?id={newDeck.Id}";
+        return Created(location, newDeck);
     }
 }
