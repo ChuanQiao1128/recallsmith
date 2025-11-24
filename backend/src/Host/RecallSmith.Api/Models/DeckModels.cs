@@ -7,6 +7,11 @@ public class Deck
 
     public string Author { get; set; } = null!;
 
-    public int IsDeleted { get; set; } = 0;
+    // 0 = 未删除，1 = 已软删
+    public int IsDeleted { get; set; }
+
+    public long CreatedAt { get; set; }
+
+    public long UpdatedAt { get; set; }
 
 }
