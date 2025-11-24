@@ -24,12 +24,12 @@ public class AuthoringDecksController : ControllerBase
     // 2 Get /api/authoring/decks
     //       /api/authoring/decks?id=1
     [HttpGet]
-    public ActionResult<object> Get([FromQuery] int? id)
+    public ActionResult<object> Get([FromQuery] int? id, [FromQuery] string sortbyCreatedAt)
     {
         // show the list 
         if (id is null)
         {
-            // just show all IsDeleted = 0 
+            // 1. just show all IsDeleted = 0 
             List<Deck> deckList = new List<Deck>();
             foreach (var eachDeck in _decks)
             {
@@ -38,7 +38,54 @@ public class AuthoringDecksController : ControllerBase
                     deckList.Add(eachDeck);
                 }
             }
+            // 2. default normalized desc
+            bool sortByDefaultCreatedAtDesc = true;
+            if (!string.IsNullOrWhiteSpace(sortbyCreatedAt))
+            {
+                string normalized = sortbyCreatedAt.Trim().ToLowerInvariant();
+                if (normalized == "createdAtAsc")
+                {
+                    sortByDefaultCreatedAtDesc = false;
+                }
+                else if (normalized == "createdAtDesc")
+                {
+                    sortByDefaultCreatedAtDesc = true;
+                }
+                else
+                {
+                    return BadRequest("Invalid sortbyCreatedAt parameter.");
+                }
+            }
 
+            // 3. sort by createdAt
+            for (int i = 0; i < deckList.Count - 1; i++)
+            {
+                for (int j = i + 1; j < deckList.Count; j++)
+                {
+                    bool doSwap = false;
+                    if (sortByDefaultCreatedAtDesc) // desc = true
+                    {
+                        if (deckList[i].CreatedAt < deckList[j].CreatedAt)
+                        {
+                            doSwap = true;
+                        }
+                    }
+                    else // asc = true
+                    {
+                        if (deckList[i].CreatedAt > deckList[j].CreatedAt)
+                        {
+                            doSwap = true;
+                        }
+                    }
+                    if (doSwap)
+                    {
+                        Deck temp = deckList[i];
+                        deckList[i] = deckList[j];
+                        deckList[j] = temp;
+                    }
+
+                }
+            }
             return Ok(deckList);
         }
 
