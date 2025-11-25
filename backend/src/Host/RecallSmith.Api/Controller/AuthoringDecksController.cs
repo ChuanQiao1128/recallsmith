@@ -7,13 +7,17 @@ namespace RecallSmith.Api.Controllers;
 [Route("api/authoring/decks")]
 public class AuthoringDecksController : ControllerBase
 {
-    // 1 List simulate Database 
+    // 1. List simulate Database 
     private static readonly List<Deck> _decks = new()
     {
-        new Deck { Id = 1, Title  = "Deck 1", Author = "Chuan 1", IsDeleted=0,CreatedAt=0,UpdatedAt=0},
-        new Deck { Id = 2, Title  = "Deck 2", Author = "Chuan 2", IsDeleted=0,CreatedAt=0,UpdatedAt=0},
-        new Deck { Id = 3, Title  = "Java", Author = "Chuan 3" ,IsDeleted=1,CreatedAt=0,UpdatedAt=0}
+        new Deck { Id = 1, Title  = "Deck 1",       Author = "Chuan 1", IsDeleted = 0, CreatedAt = 1,    UpdatedAt = 0 },
+        new Deck { Id = 2, Title  = "Deck 2",       Author = "Chuan 2", IsDeleted = 1, CreatedAt = 22,   UpdatedAt = 0 },
+        new Deck { Id = 3, Title  = "Java",         Author = "Chuan 3", IsDeleted = 0, CreatedAt = 333,  UpdatedAt = 0 },
+        new Deck { Id = 4, Title  = "JavaScript",   Author = "Chuan 4", IsDeleted = 0, CreatedAt = 4444, UpdatedAt = 0 }
     };
+
+    // 10 items on each page 
+    private const int PageSize = 10;
 
     // 1.5 Get the current EpochMs
     private static long NowEpochMs()
@@ -21,75 +25,119 @@ public class AuthoringDecksController : ControllerBase
         return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     }
 
-    // 2 Get /api/authoring/decks
-    //       /api/authoring/decks?id=1
+    // GET /api/authoring/decks
+    // GET /api/authoring/decks?id=1
+    // GET /api/authoring/decks?sortbyCreatedAt=asc or desc
+    // GET /api/authoring/decks?title=java
     [HttpGet]
-    public ActionResult<object> Get([FromQuery] int? id, [FromQuery] string sortbyCreatedAt)
+    public ActionResult<object> Get(
+        [FromQuery] int? id,
+        [FromQuery] string? title,
+        [FromQuery] string? sortbyCreatedAt,
+        [FromQuery] int? currentPage)
     {
-        // show the list 
+        // ========= 列表 =========
         if (id is null)
         {
-            // 1. just show all IsDeleted = 0 
+            // 1. 过滤未删除 + title 模糊匹配
             List<Deck> deckList = new List<Deck>();
+
+            string? keyword = null;
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                keyword = title.Trim();
+            }
+            bool hasKeyword = !string.IsNullOrWhiteSpace(keyword);
+
             foreach (var eachDeck in _decks)
             {
-                if (eachDeck.IsDeleted == 0)
+                if (eachDeck.IsDeleted != 0)
+                {
+                    continue;
+                }
+
+                if (!hasKeyword)
                 {
                     deckList.Add(eachDeck);
                 }
-            }
-            // 2. default normalized desc
-            bool sortByDefaultCreatedAtDesc = true;
-            if (!string.IsNullOrWhiteSpace(sortbyCreatedAt))
-            {
-                string normalized = sortbyCreatedAt.Trim().ToLowerInvariant();
-                if (normalized == "createdAtAsc")
-                {
-                    sortByDefaultCreatedAtDesc = false;
-                }
-                else if (normalized == "createdAtDesc")
-                {
-                    sortByDefaultCreatedAtDesc = true;
-                }
                 else
                 {
-                    return BadRequest("Invalid sortbyCreatedAt parameter.");
+                    if (eachDeck.Title.Contains(keyword!, StringComparison.OrdinalIgnoreCase))
+                    {
+                        deckList.Add(eachDeck);
+                    }
                 }
             }
 
-            // 3. sort by createdAt
+            // 2. 排序
+            bool sortByCreatedAtDesc = true; // 默认 desc
+
+            if (!string.IsNullOrWhiteSpace(sortbyCreatedAt))
+            {
+                string normalized = sortbyCreatedAt.Trim().ToLowerInvariant();
+                if (normalized == "asc")
+                {
+                    sortByCreatedAtDesc = false;
+                }
+                else if (normalized == "desc")
+                {
+                    sortByCreatedAtDesc = true;
+                }
+            }
+
             for (int i = 0; i < deckList.Count - 1; i++)
             {
                 for (int j = i + 1; j < deckList.Count; j++)
                 {
                     bool doSwap = false;
-                    if (sortByDefaultCreatedAtDesc) // desc = true
+
+                    if (sortByCreatedAtDesc)
                     {
                         if (deckList[i].CreatedAt < deckList[j].CreatedAt)
                         {
                             doSwap = true;
                         }
                     }
-                    else // asc = true
+                    else
                     {
                         if (deckList[i].CreatedAt > deckList[j].CreatedAt)
                         {
                             doSwap = true;
                         }
                     }
+
                     if (doSwap)
                     {
                         Deck temp = deckList[i];
                         deckList[i] = deckList[j];
                         deckList[j] = temp;
                     }
-
                 }
             }
-            return Ok(deckList);
+
+            // 3. 分页
+            if (currentPage == null || currentPage <= 0)
+            {
+                currentPage = 1;
+            }
+
+            int startIndex = (currentPage.Value - 1) * PageSize;
+            int endIndex = startIndex + PageSize;
+
+            List<Deck> pageList = new List<Deck>();
+            for (int i = startIndex; i < endIndex; i++)
+            {
+                if (i >= deckList.Count)
+                {
+                    break;
+                }
+                pageList.Add(deckList[i]);
+            }
+
+            return Ok(pageList);
         }
 
-        // if id exists;
+        // ========= 单个 =========
         Deck? deck = null;
         foreach (var d in _decks)
         {
@@ -108,17 +156,14 @@ public class AuthoringDecksController : ControllerBase
         return Ok(deck);
     }
 
-    // 3 Post new Deck 
-    // POST /api/authoring/decks
+    // 3. POST /api/authoring/decks
     [HttpPost]
     public ActionResult Post([FromBody] Deck deck)
     {
-        //1. deck is not null
         if (deck is null)
         {
             return BadRequest();
         }
-        //2. deck.title and author is not null
         if (string.IsNullOrWhiteSpace(deck.Title))
         {
             return BadRequest("Title is required.");
@@ -128,7 +173,6 @@ public class AuthoringDecksController : ControllerBase
             return BadRequest("Author is required.");
         }
 
-        //2.5 Before creating, need to check whehther there is the same title of deck
         foreach (Deck existing in _decks)
         {
             if (existing.IsDeleted == 0 && existing.Title == deck.Title)
@@ -136,10 +180,8 @@ public class AuthoringDecksController : ControllerBase
                 return Conflict($"Deck with the title '{deck.Title}' already exists.");
             }
         }
-        //3. create new deck
-        // newId is the maximum ID + 1
-        int newId = _decks.Any() ? _decks.Max(d => d.Id) + 1 : 1;
 
+        int newId = _decks.Any() ? _decks.Max(d => d.Id) + 1 : 1;
         long now = NowEpochMs();
 
         var newDeck = new Deck
@@ -152,39 +194,30 @@ public class AuthoringDecksController : ControllerBase
             UpdatedAt = now,
         };
 
-        //4. Add newDeck to Database
         _decks.Add(newDeck);
 
-        //5. Return 201 Created
         string location = $"api/authoring/decks?id={newDeck.Id}";
         return Created(location, newDeck);
     }
 
-    //4. Delete Deck
-    // DELETE /api/authoring/decks?id=1
+    // 4. DELETE /api/authoring/decks?id=1
     [HttpDelete]
     public ActionResult Delete([FromQuery] int id)
     {
-        //1. Find the deck
         Deck? deck = null;
         foreach (var d in _decks)
         {
-            if (d.Id == id && d.IsDeleted == 0)
+            if (d.Id == id)
             {
                 deck = d;
                 break;
             }
         }
 
-        //2. If not found, return 404
         if (deck is null)
         {
             return NotFound();
         }
-
-        // 3. 有这条记录：
-        //    - 如果还没软删，就软删 + 更新 UpdatedAt
-        //    - 如果已经软删了，就什么也不做（幂等）
 
         if (deck.IsDeleted == 0)
         {
@@ -192,30 +225,29 @@ public class AuthoringDecksController : ControllerBase
             deck.UpdatedAt = NowEpochMs();
         }
 
-
-        //4. Return 204 No Content
         return NoContent();
     }
 
-    //5 Update the Deck
+    // 5. PUT /api/authoring/decks?id=1&title=xxx&author=yyy
     [HttpPut]
     public ActionResult Update([FromQuery] int id, [FromQuery] string? title, [FromQuery] string? author)
     {
-        //1 Judge request
         if (id <= 0)
         {
-            return Conflict("id should be greater than 0");
+            return BadRequest("id should be greater than 0");
         }
-        string newTitle = title?.Trim();
-        string newAuthor = author?.Trim();
+
+        string? newTitle = title?.Trim();
+        string? newAuthor = author?.Trim();
+
         bool hasTitle = !string.IsNullOrWhiteSpace(newTitle);
         bool hasAuthor = !string.IsNullOrWhiteSpace(newAuthor);
+
         if (!hasTitle && !hasAuthor)
         {
             return BadRequest("At least one of title or author must be provided.");
         }
 
-        //2 find the deck based on id
         Deck? target = null;
         foreach (var deck in _decks)
         {
@@ -225,57 +257,42 @@ public class AuthoringDecksController : ControllerBase
                 break;
             }
         }
-        if (target is null | target.IsDeleted == 1)
+
+        if (target is null || target.IsDeleted == 1)
         {
             return NotFound();
         }
 
-        //3 update the title, but before that should check whether it exists or not
-        for (var i = 0; i < _decks.Count; i++)
-        {
-            if (_decks[i].Title == newTitle)
-            {
-                return Conflict($"Deck with the title '{newTitle}' already exists.");
-            }
-        }
         if (hasTitle)
         {
-            //4.1 if title is empty or space
-            if (newTitle.Length == 0)
-            {
-                return BadRequest("Title cannot be empty!");
-            }
-
-            //4.2 check the title doest not exist 
+            // 这里 newTitle 一定非 null/空白，其实不用再判 Length == 0
             foreach (var other in _decks)
             {
                 if (other.Id == target.Id)
                 {
                     continue;
                 }
-                if (other.Title == newTitle && other.IsDeleted == 0)
+
+                if (other.IsDeleted == 0 && other.Title == newTitle)
                 {
                     return Conflict($"Deck with the title '{newTitle}' already exists.");
                 }
             }
 
-            target.Title = newTitle;
+            target.Title = newTitle!;
         }
 
-        //4 update the author
         if (hasAuthor)
         {
-            if (newAuthor.Length == 0)
+            if (newAuthor!.Length == 0)
             {
                 return BadRequest("Author cannot be empty!");
             }
             target.Author = newAuthor;
         }
 
-        //5 update the UpdatedAt time
         target.UpdatedAt = NowEpochMs();
 
-        //6 return the update object 
         return Ok(target);
     }
 }
