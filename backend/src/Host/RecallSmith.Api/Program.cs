@@ -1,22 +1,32 @@
+using RecallSmith.Api.Application.Decks;
+using RecallSmith.Api.Infrastructure.Decks;
+
 var builder = WebApplication.CreateBuilder(args);
 
-//1 Service /DI
+// 注册 MVC Controller
 builder.Services.AddControllers();
+
+// Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-//2 App
+// ⭐ 注册 Repository 和 Service（关键）
+builder.Services.AddScoped<IDeckRepository, DeckRepository>();
+builder.Services.AddScoped<IDeckService, DeckService>();
+
 var app = builder.Build();
 
-//3 Swagger
 if (app.Environment.IsDevelopment())
 {
+    app.UseDeveloperExceptionPage();
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-//4 Controllers
+app.UseHttpsRedirection();
+
+app.UseAuthorization();
+
 app.MapControllers();
 
-//5 Run
 app.Run();
