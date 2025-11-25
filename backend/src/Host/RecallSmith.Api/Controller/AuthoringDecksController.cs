@@ -8,13 +8,30 @@ namespace RecallSmith.Api.Controllers;
 public class AuthoringDecksController : ControllerBase
 {
     // 1. List simulate Database 
+    // 1. List simulate Database 
     private static readonly List<Deck> _decks = new()
-    {
-        new Deck { Id = 1, Title  = "Deck 1",       Author = "Chuan 1", IsDeleted = 0, CreatedAt = 1,    UpdatedAt = 0 },
-        new Deck { Id = 2, Title  = "Deck 2",       Author = "Chuan 2", IsDeleted = 1, CreatedAt = 22,   UpdatedAt = 0 },
-        new Deck { Id = 3, Title  = "Java",         Author = "Chuan 3", IsDeleted = 0, CreatedAt = 333,  UpdatedAt = 0 },
-        new Deck { Id = 4, Title  = "JavaScript",   Author = "Chuan 4", IsDeleted = 0, CreatedAt = 4444, UpdatedAt = 0 }
-    };
+{
+    new Deck { Id = 1,  Title = "Introduction to C#",              Author = "Alice Johnson",     IsDeleted = 0, CreatedAt = 1710000010, UpdatedAt = 0 },
+    new Deck { Id = 2,  Title = "ASP.NET Core Fundamentals",        Author = "Brian Walker",      IsDeleted = 0, CreatedAt = 1710000500, UpdatedAt = 0 },
+    new Deck { Id = 3,  Title = "Java Interview Questions",         Author = "Kevin Smith",       IsDeleted = 0, CreatedAt = 1710001200, UpdatedAt = 0 },
+    new Deck { Id = 4,  Title = "Advanced JavaScript Techniques",   Author = "Linda Davis",       IsDeleted = 0, CreatedAt = 1710001500, UpdatedAt = 0 },
+    new Deck { Id = 5,  Title = "TypeScript Best Practices",        Author = "Michael Brown",     IsDeleted = 0, CreatedAt = 1710001800, UpdatedAt = 0 },
+    new Deck { Id = 6,  Title = "React vs Vue: A Comparison",       Author = "Sarah Wilson",      IsDeleted = 0, CreatedAt = 1710002100, UpdatedAt = 0 },
+    new Deck { Id = 7,  Title = "SQL Basics for Beginners",         Author = "Tom Harris",        IsDeleted = 0, CreatedAt = 1710002400, UpdatedAt = 0 },
+    new Deck { Id = 8,  Title = "PostgreSQL Practical Guide",       Author = "Ivy Thompson",      IsDeleted = 1, CreatedAt = 1710002600, UpdatedAt = 1710003600 },
+    new Deck { Id = 9,  Title = "Linux Command Line Essentials",    Author = "Jason Miller",      IsDeleted = 0, CreatedAt = 1710003000, UpdatedAt = 0 },
+    new Deck { Id = 10, Title = "Docker for Developers",            Author = "Emily Clark",       IsDeleted = 0, CreatedAt = 1710003300, UpdatedAt = 0 },
+    new Deck { Id = 11, Title = "Kubernetes Crash Course",          Author = "Chris Robinson",    IsDeleted = 0, CreatedAt = 1710003600, UpdatedAt = 0 },
+    new Deck { Id = 12, Title = "Python Data Analysis",             Author = "Olivia Martinez",   IsDeleted = 0, CreatedAt = 1710003900, UpdatedAt = 0 },
+    new Deck { Id = 13, Title = "Machine Learning Basics",          Author = "Daniel Garcia",     IsDeleted = 0, CreatedAt = 1710004200, UpdatedAt = 0 },
+    new Deck { Id = 14, Title = "REST API Design Principles",       Author = "Sophia Rodriguez",  IsDeleted = 0, CreatedAt = 1710004500, UpdatedAt = 0 },
+    new Deck { Id = 15, Title = "Git and GitHub Workflow",          Author = "Matthew Lee",       IsDeleted = 0, CreatedAt = 1710004800, UpdatedAt = 0 },
+    new Deck { Id = 16, Title = "Agile Software Development",       Author = "Chloe Walker",      IsDeleted = 0, CreatedAt = 1710005100, UpdatedAt = 0 },
+    new Deck { Id = 17, Title = "Cloud Computing Overview",         Author = "Ethan Hall",        IsDeleted = 0, CreatedAt = 1710005400, UpdatedAt = 0 },
+    new Deck { Id = 18, Title = "Cybersecurity Fundamentals",       Author = "Grace Allen",       IsDeleted = 1, CreatedAt = 1710005700, UpdatedAt = 1710006800 },
+    new Deck { Id = 19, Title = "DevOps Best Practices",            Author = "Nathan Scott",      IsDeleted = 0, CreatedAt = 1710006000, UpdatedAt = 0 },
+    new Deck { Id = 20, Title = "Clean Code Principles",            Author = "Hannah King",       IsDeleted = 0, CreatedAt = 1710006300, UpdatedAt = 0 }
+};
 
     // 10 items on each page 
     private const int PageSize = 10;
@@ -70,18 +87,18 @@ public class AuthoringDecksController : ControllerBase
             }
 
             // 2. 排序
-            bool sortByCreatedAtDesc = true; // 默认 desc
+            bool sortByCreatedAtAsc = true; // 默认 asc
 
             if (!string.IsNullOrWhiteSpace(sortbyCreatedAt))
             {
                 string normalized = sortbyCreatedAt.Trim().ToLowerInvariant();
                 if (normalized == "asc")
                 {
-                    sortByCreatedAtDesc = false;
+                    sortByCreatedAtAsc = true;
                 }
                 else if (normalized == "desc")
                 {
-                    sortByCreatedAtDesc = true;
+                    sortByCreatedAtAsc = false;
                 }
             }
 
@@ -91,16 +108,16 @@ public class AuthoringDecksController : ControllerBase
                 {
                     bool doSwap = false;
 
-                    if (sortByCreatedAtDesc)
+                    if (sortByCreatedAtAsc)
                     {
-                        if (deckList[i].CreatedAt < deckList[j].CreatedAt)
+                        if (deckList[i].CreatedAt > deckList[j].CreatedAt)
                         {
                             doSwap = true;
                         }
                     }
                     else
                     {
-                        if (deckList[i].CreatedAt > deckList[j].CreatedAt)
+                        if (deckList[i].CreatedAt < deckList[j].CreatedAt)
                         {
                             doSwap = true;
                         }
