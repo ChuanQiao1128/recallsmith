@@ -131,17 +131,28 @@ public class AuthoringDecksController : ControllerBase
     // PUT /api/authoring/decks?id=1&title=xxx&author=yyy
     [HttpPut]
     public ActionResult<ApiResult<object>> Update(
-        [FromQuery] int id,
-        [FromQuery] string? title,
-        [FromQuery] string? author)
+    [FromQuery] int id,
+    [FromQuery] string? title,
+    [FromQuery] string? author,
+    [FromQuery] int? expectedVersion)
     {
         string traceId = GetTraceId();
 
+        // 1. 基本参数校验
         if (id <= 0)
         {
             var error = ApiResult<object>.Fail(
                 "BadRequest",
                 "id should be greater than 0",
+                traceId);
+            return BadRequest(error);
+        }
+
+        if (expectedVersion is null || expectedVersion <= 0)
+        {
+            var error = ApiResult<object>.Fail(
+                "BadRequest",
+                "expectedVersion is required and must be greater than 0.",
                 traceId);
             return BadRequest(error);
         }
@@ -161,7 +172,7 @@ public class AuthoringDecksController : ControllerBase
             return BadRequest(error);
         }
 
-        // 如果要改标题，先检查是否和其他未删 Deck 冲突
+        // 2. 如果要改标题，先检查是否和其他未删 Deck 冲突
         if (hasTitle && _deckService.TitleExists(newTitle!, excludeId: id))
         {
             var error = ApiResult<object>.Fail(
@@ -171,7 +182,24 @@ public class AuthoringDecksController : ControllerBase
             return Conflict(error);
         }
 
-        var updated = _deckService.UpdateDeck(id, newTitle, newAuthor);
+        // 3. 调用 Service 做乐观并发更新
+        bool versionConflict;
+        var updated = _deckService.UpdateDeck(
+            id,
+            expectedVersion.Value,
+            newTitle,
+            newAuthor,
+            out versionConflict);
+
+        if (versionConflict)
+        {
+            var error = ApiResult<object>.Fail(
+                "VersionConflict",
+                "Deck has been modified by another request. Please refresh and retry.",
+                traceId);
+            return Conflict(error); // HTTP 409
+        }
+
         if (updated is null)
         {
             var error = ApiResult<object>.Fail(

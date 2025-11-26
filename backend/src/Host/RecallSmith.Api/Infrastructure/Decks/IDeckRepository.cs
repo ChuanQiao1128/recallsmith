@@ -20,5 +20,11 @@ public interface IDeckRepository
     /// <summary>
     /// 更新：成功返回更新后的 Deck；id 不存在或已软删时返回 null
     /// </summary>
-    Deck? UpdateDeck(int id, string? newTitle, string? newAuthor, long updatedAt);
+    Deck? UpdateDeck(
+         int id,
+         int expectedVersion,
+         string? newTitle,
+         string? newAuthor,
+         long updatedAt,
+         out bool versionConflict);
 }

@@ -63,9 +63,14 @@ public class DeckService : IDeckService
         return _repository.SoftDeleteDeck(id, now);
     }
 
-    public Deck? UpdateDeck(int id, string? newTitle, string? newAuthor)
+    public Deck? UpdateDeck(
+    int id,
+    int expectedVersion,
+    string? newTitle,
+    string? newAuthor,
+    out bool versionConflict)
     {
         long now = NowEpochMs();
-        return _repository.UpdateDeck(id, newTitle, newAuthor, now);
+        return _repository.UpdateDeck(id, expectedVersion, newTitle, newAuthor, now, out versionConflict);
     }
 }

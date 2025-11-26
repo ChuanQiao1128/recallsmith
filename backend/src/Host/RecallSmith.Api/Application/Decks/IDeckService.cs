@@ -15,5 +15,10 @@ public interface IDeckService
 
     bool SoftDeleteDeck(int id);
 
-    Deck? UpdateDeck(int id, string? newTitle, string? newAuthor);
+    Deck? UpdateDeck(
+        int id,
+        int expectedVersion,
+        string? newTitle,
+        string? newAuthor,
+        out bool versionConflict);
 }
