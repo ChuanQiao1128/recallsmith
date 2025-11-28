@@ -1,215 +1,227 @@
+// backend/src/Host/RecallSmith.Api/Controllers/AuthoringDecksController.cs
 using System;
+using System.Collections.Generic;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using RecallSmith.Api.Application.Decks;
 using RecallSmith.Api.Models;
 
-namespace RecallSmith.Api.Controllers;
-
-[ApiController]
-[Route("api/authoring/decks")]
-public class AuthoringDecksController : ControllerBase
+namespace RecallSmith.Api.Controllers
 {
-    private readonly IDeckService _deckService;
-
-    public AuthoringDecksController(IDeckService deckService)
+    [ApiController]
+    [Route("api/authoring/decks")]
+    public class AuthoringDecksController : ControllerBase
     {
-        _deckService = deckService;
-    }
+        private readonly IDeckService _deckService;
+        private readonly ILogger<AuthoringDecksController> _logger;
 
-    private string GetTraceId()
-    {
-        return HttpContext?.TraceIdentifier ?? Guid.NewGuid().ToString("N");
-    }
+        private const int PageSize = 10;
 
-    // GET /api/authoring/decks
-    // GET /api/authoring/decks?id=1
-    // GET /api/authoring/decks?title=xxx&sortbyCreatedAt=asc/desc&currentPage=1
-    [HttpGet]
-    public ActionResult<ApiResult<object>> Get(
-        [FromQuery] int? id,
-        [FromQuery] string? title,
-        [FromQuery] string? sortbyCreatedAt,
-        [FromQuery] int? currentPage)
-    {
-        string traceId = GetTraceId();
-
-        // 列表
-        if (id is null)
+        public AuthoringDecksController(IDeckService deckService, ILogger<AuthoringDecksController> logger)
         {
-            var decks = _deckService.GetDecks(title, sortbyCreatedAt, currentPage);
-            var result = ApiResult<object>.Ok(decks, traceId);
+            _deckService = deckService;
+            _logger = logger;
+        }
+
+        private string GetTraceId()
+        {
+            return HttpContext?.TraceIdentifier ?? Guid.NewGuid().ToString("N");
+        }
+
+        // GET /api/authoring/decks
+        // GET /api/authoring/decks?id=1
+        // GET /api/authoring/decks?title=js&sortByCreatedAt=asc|desc&currentPage=1
+        [HttpGet]
+        public ActionResult<ApiResult<object>> Get(
+            [FromQuery] int? id,
+            [FromQuery] string? title,
+            [FromQuery(Name = "sortbyCreatedAt")] string? sortByCreatedAt,
+            [FromQuery] int? currentPage)
+        {
+            string traceId = GetTraceId();
+
+            if (id is null)
+            {
+                int page = (currentPage.HasValue && currentPage.Value > 0) ? currentPage.Value : 1;
+
+                bool sortCreatedAtAsc = true; // 默认升序
+                if (!string.IsNullOrWhiteSpace(sortByCreatedAt))
+                {
+                    string normalized = sortByCreatedAt.Trim().ToLowerInvariant();
+                    if (normalized == "desc")
+                    {
+                        sortCreatedAtAsc = false;
+                    }
+                    else
+                    {
+                        sortCreatedAtAsc = true;
+                    }
+                }
+
+                List<Deck> decks = _deckService.GetDecks(title, sortCreatedAtAsc, page, PageSize);
+
+                var result = ApiResult<object>.Ok(decks, traceId);
+                return Ok(result);
+            }
+
+            // id 不为空，查询单个
+            Deck? deck = _deckService.GetDeckById(id.Value);
+            if (deck == null || deck.IsDeleted != 0)
+            {
+                var notFoundResult = ApiResult<object>.Fail(
+                    code: "NotFound",
+                    message: $"Deck with id {id.Value} not found.",
+                    traceId: traceId
+                );
+                return NotFound(notFoundResult);
+            }
+
+            var okResult = ApiResult<object>.Ok(deck, traceId);
+            return Ok(okResult);
+        }
+
+        // POST /api/authoring/decks?title=...&author=...&slug=...&description=...&locale=...&deckType=1|2
+        [HttpPost]
+        public ActionResult<ApiResult<object>> Create(
+            [FromQuery] string? title,
+            [FromQuery] string? author,
+            [FromQuery] string? slug,
+            [FromQuery] string? description,
+            [FromQuery] string? locale,
+            [FromQuery] short? deckType)
+        {
+            string traceId = GetTraceId();
+
+            try
+            {
+                Deck deck = _deckService.CreateDeck(
+                    slug,
+                    title ?? string.Empty,
+                    author ?? string.Empty,
+                    description,
+                    locale,
+                    deckType);
+
+                string location = $"api/authoring/decks?id={deck.Id}";
+                var result = ApiResult<object>.Ok(deck, traceId);
+                return Created(location, result);
+            }
+            catch (ArgumentException ex)
+            {
+                var bad = ApiResult<object>.Fail("BadRequest", ex.Message, traceId);
+                return BadRequest(bad);
+            }
+            catch (InvalidOperationException ex)
+            {
+                var conflict = ApiResult<object>.Fail("Conflict", ex.Message, traceId);
+                return Conflict(conflict);
+            }
+        }
+
+        // DELETE /api/authoring/decks?id=1
+        [HttpDelete]
+        public ActionResult<ApiResult<object>> Delete([FromQuery] int id)
+        {
+            string traceId = GetTraceId();
+
+            if (id <= 0)
+            {
+                var bad = ApiResult<object>.Fail("BadRequest", "id must be greater than 0.", traceId);
+                return BadRequest(bad);
+            }
+
+            bool found = _deckService.SoftDeleteDeck(id);
+
+            if (!found)
+            {
+                var notFound = ApiResult<object>.Fail("NotFound", $"Deck with id {id} not found.", traceId);
+                return NotFound(notFound);
+            }
+
+            var result = ApiResult<object>.Ok(null, traceId);
             return Ok(result);
         }
 
-        // 单条
-        var deck = _deckService.GetDeckById(id.Value);
-        if (deck is null)
+        // PUT /api/authoring/decks?id=1&expectedVersion=1&title=...&author=...&description=...&locale=...
+        [HttpPut]
+        public ActionResult<ApiResult<object>> Update(
+            [FromQuery] int id,
+            [FromQuery] int expectedVersion,
+            [FromQuery] string? title,
+            [FromQuery] string? author,
+            [FromQuery] string? description,
+            [FromQuery] string? locale)
         {
-            var error = ApiResult<object>.Fail(
-                "NotFound",
-                $"Deck with id {id.Value} not found.",
-                traceId);
-            return NotFound(error);
+            string traceId = GetTraceId();
+
+            if (id <= 0)
+            {
+                var bad = ApiResult<object>.Fail("BadRequest", "id must be greater than 0.", traceId);
+                return BadRequest(bad);
+            }
+
+            if (expectedVersion <= 0)
+            {
+                var bad = ApiResult<object>.Fail("BadRequest", "expectedVersion must be greater than 0.", traceId);
+                return BadRequest(bad);
+            }
+
+            if (string.IsNullOrWhiteSpace(title)
+                && string.IsNullOrWhiteSpace(author)
+                && description is null
+                && string.IsNullOrWhiteSpace(locale))
+            {
+                var bad = ApiResult<object>.Fail("BadRequest",
+                    "At least one of title, author, description, or locale must be provided.",
+                    traceId);
+                return BadRequest(bad);
+            }
+
+            try
+            {
+                bool versionConflict;
+                Deck? updated = _deckService.UpdateDeck(
+                    id,
+                    expectedVersion,
+                    title,
+                    author,
+                    description,
+                    locale,
+                    out versionConflict);
+
+                if (updated == null)
+                {
+                    if (versionConflict)
+                    {
+                        var conflict = ApiResult<object>.Fail(
+                            "VersionConflict",
+                            "Deck has been modified by another request.",
+                            traceId);
+                        return Conflict(conflict);
+                    }
+                    else
+                    {
+                        var notFound = ApiResult<object>.Fail(
+                            "NotFound",
+                            $"Deck with id {id} not found.",
+                            traceId);
+                        return NotFound(notFound);
+                    }
+                }
+
+                var ok = ApiResult<object>.Ok(updated, traceId);
+                return Ok(ok);
+            }
+            catch (ArgumentException ex)
+            {
+                var bad = ApiResult<object>.Fail("BadRequest", ex.Message, traceId);
+                return BadRequest(bad);
+            }
+            catch (InvalidOperationException ex)
+            {
+                var conflict = ApiResult<object>.Fail("Conflict", ex.Message, traceId);
+                return Conflict(conflict);
+            }
         }
-
-        var okResult = ApiResult<object>.Ok(deck, traceId);
-        return Ok(okResult);
-    }
-
-    // POST /api/authoring/decks?title=xxx&author=yyy
-    [HttpPost]
-    public ActionResult<ApiResult<object>> Post(
-        [FromQuery] string? title,
-        [FromQuery] string? author)
-    {
-        string traceId = GetTraceId();
-
-        // 1. 校验参数
-        if (string.IsNullOrWhiteSpace(title))
-        {
-            var error = ApiResult<object>.Fail("BadRequest", "Title is required.", traceId);
-            return BadRequest(error);
-        }
-        if (string.IsNullOrWhiteSpace(author))
-        {
-            var error = ApiResult<object>.Fail("BadRequest", "Author is required.", traceId);
-            return BadRequest(error);
-        }
-
-        string normalizedTitle = title.Trim();
-        string normalizedAuthor = author.Trim();
-
-        // 2. 检查重复标题（只看未软删的）
-        if (_deckService.TitleExists(normalizedTitle, excludeId: null))
-        {
-            var error = ApiResult<object>.Fail(
-                "Conflict",
-                $"Deck with the title '{normalizedTitle}' already exists.",
-                traceId);
-            return Conflict(error);
-        }
-
-        // 3. 创建由 Service + Repository 完成（数据库生成 id）
-        var newDeck = _deckService.CreateDeck(normalizedTitle, normalizedAuthor);
-
-        // 4. 返回 201 Created + 统一响应
-        string location = $"api/authoring/decks?id={newDeck.Id}";
-        var ok = ApiResult<object>.Ok(newDeck, traceId);
-        return Created(location, ok);
-    }
-
-    // DELETE /api/authoring/decks?id=1
-    [HttpDelete]
-    public ActionResult<ApiResult<object>> Delete([FromQuery] int id)
-    {
-        string traceId = GetTraceId();
-
-        if (id <= 0)
-        {
-            var error = ApiResult<object>.Fail(
-                "BadRequest",
-                "id should be greater than 0",
-                traceId);
-            return BadRequest(error);
-        }
-
-        bool found = _deckService.SoftDeleteDeck(id);
-        if (!found)
-        {
-            var error = ApiResult<object>.Fail(
-                "NotFound",
-                $"Deck with id {id} not found.",
-                traceId);
-            return NotFound(error);
-        }
-
-        // 幂等：已经软删的情况下，也视为成功
-        var ok = ApiResult<object>.Ok(null, traceId);
-        return Ok(ok);
-    }
-
-    // PUT /api/authoring/decks?id=1&title=xxx&author=yyy
-    [HttpPut]
-    public ActionResult<ApiResult<object>> Update(
-    [FromQuery] int id,
-    [FromQuery] string? title,
-    [FromQuery] string? author,
-    [FromQuery] int? expectedVersion)
-    {
-        string traceId = GetTraceId();
-
-        // 1. 基本参数校验
-        if (id <= 0)
-        {
-            var error = ApiResult<object>.Fail(
-                "BadRequest",
-                "id should be greater than 0",
-                traceId);
-            return BadRequest(error);
-        }
-
-        if (expectedVersion is null || expectedVersion <= 0)
-        {
-            var error = ApiResult<object>.Fail(
-                "BadRequest",
-                "expectedVersion is required and must be greater than 0.",
-                traceId);
-            return BadRequest(error);
-        }
-
-        string? newTitle = title?.Trim();
-        string? newAuthor = author?.Trim();
-
-        bool hasTitle = !string.IsNullOrWhiteSpace(newTitle);
-        bool hasAuthor = !string.IsNullOrWhiteSpace(newAuthor);
-
-        if (!hasTitle && !hasAuthor)
-        {
-            var error = ApiResult<object>.Fail(
-                "BadRequest",
-                "At least one of title or author must be provided.",
-                traceId);
-            return BadRequest(error);
-        }
-
-        // 2. 如果要改标题，先检查是否和其他未删 Deck 冲突
-        if (hasTitle && _deckService.TitleExists(newTitle!, excludeId: id))
-        {
-            var error = ApiResult<object>.Fail(
-                "Conflict",
-                $"Deck with the title '{newTitle}' already exists.",
-                traceId);
-            return Conflict(error);
-        }
-
-        // 3. 调用 Service 做乐观并发更新
-        bool versionConflict;
-        var updated = _deckService.UpdateDeck(
-            id,
-            expectedVersion.Value,
-            newTitle,
-            newAuthor,
-            out versionConflict);
-
-        if (versionConflict)
-        {
-            var error = ApiResult<object>.Fail(
-                "VersionConflict",
-                "Deck has been modified by another request. Please refresh and retry.",
-                traceId);
-            return Conflict(error); // HTTP 409
-        }
-
-        if (updated is null)
-        {
-            var error = ApiResult<object>.Fail(
-                "NotFound",
-                $"Deck with id {id} not found.",
-                traceId);
-            return NotFound(error);
-        }
-
-        var ok = ApiResult<object>.Ok(updated, traceId);
-        return Ok(ok);
     }
 }
