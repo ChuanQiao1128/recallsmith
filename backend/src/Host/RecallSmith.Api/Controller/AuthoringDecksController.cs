@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using RecallSmith.Api.Application.Decks;
 using RecallSmith.Api.Models;
+using RecallSmith.Api.Application.Publishing;
 
 namespace RecallSmith.Api.Controllers
 {
@@ -13,13 +14,18 @@ namespace RecallSmith.Api.Controllers
     public class AuthoringDecksController : ControllerBase
     {
         private readonly IDeckService _deckService;
+        private readonly IDeckPublishingService _deckPublishingService;
         private readonly ILogger<AuthoringDecksController> _logger;
 
         private const int PageSize = 10;
 
-        public AuthoringDecksController(IDeckService deckService, ILogger<AuthoringDecksController> logger)
+        public AuthoringDecksController(
+            IDeckService deckService,
+            IDeckPublishingService deckPublishingService,
+            ILogger<AuthoringDecksController> logger)
         {
             _deckService = deckService;
+            _deckPublishingService = deckPublishingService;
             _logger = logger;
         }
 
@@ -216,6 +222,52 @@ namespace RecallSmith.Api.Controllers
             {
                 var bad = ApiResult<object>.Fail("BadRequest", ex.Message, traceId);
                 return BadRequest(bad);
+            }
+            catch (InvalidOperationException ex)
+            {
+                var conflict = ApiResult<object>.Fail("Conflict", ex.Message, traceId);
+                return Conflict(conflict);
+            }
+        }
+
+        // POST /api/authoring/decks/publish?deckId=1&version=v2&force=false
+        [HttpPost("publish")]
+        public ActionResult<ApiResult<object>> Publish(
+            [FromQuery] int deckId,
+            [FromQuery] string? version,
+            [FromQuery] bool? force)
+        {
+            string traceId = GetTraceId();
+
+            if (deckId <= 0)
+            {
+                var bad = ApiResult<object>.Fail("BadRequest", "deckId must be greater than 0.", traceId);
+                return BadRequest(bad);
+            }
+
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                var bad = ApiResult<object>.Fail("BadRequest", "version is required.", traceId);
+                return BadRequest(bad);
+            }
+
+            bool forceOverwrite = force ?? false;
+
+            try
+            {
+                CatalogDeck catalogDeck = _deckPublishingService.PublishDeck(deckId, version!, forceOverwrite);
+                var ok = ApiResult<object>.Ok(catalogDeck, traceId);
+                return Ok(ok);
+            }
+            catch (ArgumentException ex)
+            {
+                var bad = ApiResult<object>.Fail("BadRequest", ex.Message, traceId);
+                return BadRequest(bad);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                var notFound = ApiResult<object>.Fail("NotFound", ex.Message, traceId);
+                return NotFound(notFound);
             }
             catch (InvalidOperationException ex)
             {

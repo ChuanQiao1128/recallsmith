@@ -3,6 +3,11 @@ using RecallSmith.Api.Application.Decks;
 using RecallSmith.Api.Infrastructure.Cards;
 using RecallSmith.Api.Infrastructure.Decks;
 using RecallSmith.Api.Infrastructure.Errors;
+using RecallSmith.Api.Application.Catalog;
+using RecallSmith.Api.Infrastructure.Catalog;
+using RecallSmith.Api.Application.Publishing;
+using RecallSmith.Api.Application.Catalog;
+using RecallSmith.Api.Infrastructure.Catalog;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,10 +19,27 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 // ⭐ 注册 Repository 和 Service（关键）
+// Authoring - Decks
 builder.Services.AddScoped<IDeckRepository, DeckRepository>();
 builder.Services.AddScoped<IDeckService, DeckService>();
+
+// Authoring - Cards
 builder.Services.AddScoped<ICardRepository, CardRepository>();
 builder.Services.AddScoped<ICardService, CardService>();
+
+// Catalog - Decks
+builder.Services.AddScoped<ICatalogDeckRepository, CatalogDeckRepository>();
+builder.Services.AddScoped<ICatalogDeckService, CatalogDeckService>();
+
+// Catalog - Cards ★ 新增的两行
+builder.Services.AddScoped<ICatalogCardRepository, CatalogCardRepository>();
+builder.Services.AddScoped<ICatalogCardService, RecallSmith.Api.Application.Catalog.CatalogCardService>();
+
+// Catalog - Export ★ 新增
+builder.Services.AddScoped<ICatalogExportService, CatalogExportService>();
+
+// Publishing
+builder.Services.AddScoped<IDeckPublishingService, DeckPublishingService>();
 
 var app = builder.Build();
 
