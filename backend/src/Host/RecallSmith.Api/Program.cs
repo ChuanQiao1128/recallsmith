@@ -11,6 +11,19 @@ using RecallSmith.Api.Infrastructure.Catalog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// CORS 配置：允许前端本地开发地址
+var allowedOrigins = new[] { "http://localhost:5173" };
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("FrontendDevCors", policy =>
+    {
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
+
 // 注册 MVC Controller
 builder.Services.AddControllers();
 
@@ -42,6 +55,9 @@ builder.Services.AddScoped<ICatalogExportService, CatalogExportService>();
 builder.Services.AddScoped<IDeckPublishingService, DeckPublishingService>();
 
 var app = builder.Build();
+
+// 使用 CORS（要在映射 endpoints 之前）
+app.UseCors("FrontendDevCors");
 
 if (app.Environment.IsDevelopment())
 {
