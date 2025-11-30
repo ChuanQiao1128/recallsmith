@@ -50,8 +50,10 @@ builder.Services.AddScoped<ICatalogCardService, RecallSmith.Api.Application.Cata
 // Catalog - Export ★ 新增
 builder.Services.AddScoped<ICatalogExportService, CatalogExportService>();
 
+
 // Publishing
 builder.Services.AddScoped<IDeckPublishingService, DeckPublishingService>();
+builder.Services.AddScoped<IDeckExportService, DeckExportService>();
 
 var app = builder.Build();
 
