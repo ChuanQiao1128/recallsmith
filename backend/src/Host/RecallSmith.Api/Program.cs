@@ -6,8 +6,7 @@ using RecallSmith.Api.Infrastructure.Errors;
 using RecallSmith.Api.Application.Catalog;
 using RecallSmith.Api.Infrastructure.Catalog;
 using RecallSmith.Api.Application.Publishing;
-using RecallSmith.Api.Application.Catalog;
-using RecallSmith.Api.Infrastructure.Catalog;
+
 
 var builder = WebApplication.CreateBuilder(args);
 

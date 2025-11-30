@@ -120,6 +120,7 @@ export function DeckListPage() {
                   <th className="px-4 py-2 text-left font-semibold text-slate-600">Locale</th>
                   <th className="px-4 py-2 text-left font-semibold text-slate-600">Type</th>
                   <th className="px-4 py-2 text-left font-semibold text-slate-600">Created</th>
+                  <th className="px-4 py-2 text-left font-semibold text-slate-600">Cards</th>
                 </tr>
               </thead>
               <tbody>
@@ -158,6 +159,17 @@ export function DeckListPage() {
                       <td className="px-4 py-2 text-slate-500 text-xs">
                         {new Date(deck.createdAt).toLocaleString()}
                       </td>
+                      {/* 新增：Cards 操作列 */}
+                        <td className="px-4 py-2">
+                        <button
+                            type="button"
+                            onClick={() => navigate(`/decks/${deck.id}/cards`)}
+                            className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700
+                                    hover:bg-slate-50"
+                        >
+                            View Cards
+                        </button>
+                        </td>
                     </tr>
                   ))
                 )}

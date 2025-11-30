@@ -1,12 +1,14 @@
-/* stylelint-disable-next-line at-rule-no-unknown */
+/* @tailwind directives for Tailwind CSS */
+/* postcss-disable-next-line */
 @tailwind base;
-/* stylelint-disable-next-line at-rule-no-unknown */
+/* postcss-disable-next-line */
 @tailwind components;
-/* stylelint-disable-next-line at-rule-no-unknown */
+/* postcss-disable-next-line */
 @tailwind utilities;
 
 /* 你可以顺便加一点全局自定义样式 */
 body {
+  /* postcss-disable-next-line */
   @apply bg-slate-100 text-slate-900;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
