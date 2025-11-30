@@ -1,14 +1,11 @@
-/* @tailwind directives for Tailwind CSS */
-/* postcss-disable-next-line */
-@tailwind base;
-/* postcss-disable-next-line */
-@tailwind components;
-/* postcss-disable-next-line */
-@tailwind utilities;
+/* Tailwind CSS directives - processed by PostCSS build system */
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
 
 /* 你可以顺便加一点全局自定义样式 */
 body {
-  /* postcss-disable-next-line */
-  @apply bg-slate-100 text-slate-900;
+  background-color: #f1f5f9; /* bg-slate-100 */
+  color: #0f172a; /* text-slate-900 */
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }

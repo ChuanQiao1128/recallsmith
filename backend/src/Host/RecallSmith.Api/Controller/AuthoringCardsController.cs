@@ -224,7 +224,7 @@ namespace RecallSmith.Api.Controllers
                 return NotFound(notFound);
             }
 
-            var ok = ApiResult<object>.Ok(null, traceId);
+            var ok = ApiResult<object?>.Ok(null, traceId);
             return Ok(ok);
         }
     }
