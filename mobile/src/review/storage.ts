@@ -2,14 +2,21 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { DeckExport } from '../types/deckExport';
-import type { CardProgress } from './model.ts';
+import type { CardProgress } from './model';
+import { formatDateKey } from './model';
 
 /**
  * 根据 Deck（Slug + Version）生成唯一的 Storage key。
  */
-function getStorageKey(deck: DeckExport): string {
+function getProgressKey(deck: DeckExport): string {
   return `deck-progress:${deck.Slug}:${deck.Version}`;
 }
+
+/**
+ * 单张卡片的复习进度。
+ * 我们不保存整张卡的内容，只保存和记忆相关的信息。
+ * （CardProgress 类型在 model.ts 里）
+ */
 
 /**
  * 初始化某个 Deck 的进度（第一次运行，或数据损坏时）。
@@ -32,7 +39,7 @@ function createInitialProgress(deck: DeckExport, now: Date): CardProgress[] {
 export async function loadDeckProgress(
   deck: DeckExport,
 ): Promise<CardProgress[]> {
-  const key = getStorageKey(deck);
+  const key = getProgressKey(deck);
   const now = new Date();
 
   try {
@@ -48,7 +55,6 @@ export async function loadDeckProgress(
     try {
       parsed = JSON.parse(raw);
     } catch {
-      // 数据坏掉了，重新初始化
       const initial = createInitialProgress(deck, now);
       await AsyncStorage.setItem(key, JSON.stringify(initial));
       return initial;
@@ -60,7 +66,6 @@ export async function loadDeckProgress(
       return initial;
     }
 
-    // 尝试把 parsed 视为 CardProgress[]
     const existing = (parsed as CardProgress[]).filter(
       p =>
         typeof p === 'object' &&
@@ -91,7 +96,6 @@ export async function loadDeckProgress(
 
     return merged;
   } catch {
-    // 任何异常都回退到初始化状态
     const initial = createInitialProgress(deck, now);
     await AsyncStorage.setItem(key, JSON.stringify(initial));
     return initial;
@@ -105,6 +109,62 @@ export async function saveDeckProgress(
   deck: DeckExport,
   progress: CardProgress[],
 ): Promise<void> {
-  const key = getStorageKey(deck);
+  const key = getProgressKey(deck);
   await AsyncStorage.setItem(key, JSON.stringify(progress));
+}
+
+/**
+ * 每日统计：今天有多少张卡“原计划应该在今天复习”（用于进度条的总数）。
+ */
+export interface DailyStats {
+  dateKey: string;      // yyyy-MM-dd
+  plannedCount: number; // 当天计划卡片总数
+}
+
+function getDailyStatsKey(deck: DeckExport): string {
+  return `deck-daily-stats:${deck.Slug}:${deck.Version}`;
+}
+
+/**
+ * 读取或初始化当日的计划总数：
+ *  - 如果已有并且 dateKey 是今天，直接返回；
+ *  - 否则：根据 progress 统计「nextReviewAt 的日期 == 今天」的数量，写入并返回。
+ */
+export async function loadOrInitDailyStats(
+  deck: DeckExport,
+  progress: CardProgress[],
+): Promise<DailyStats> {
+  const key = getDailyStatsKey(deck);
+  const now = new Date();
+  const todayKey = formatDateKey(now);
+
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw) as DailyStats;
+      if (parsed && parsed.dateKey === todayKey) {
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore and recalc
+  }
+
+  // 重新计算今天的 plannedCount
+  let planned = 0;
+  for (const p of progress) {
+    const d = new Date(p.nextReviewAt);
+    const key2 = formatDateKey(d);
+    if (key2 === todayKey) {
+      planned++;
+    }
+  }
+
+  const stats: DailyStats = {
+    dateKey: todayKey,
+    plannedCount: planned,
+  };
+
+  await AsyncStorage.setItem(key, JSON.stringify(stats));
+  return stats;
 }
