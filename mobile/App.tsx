@@ -5,8 +5,9 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from './src/navigation/types';
-import { HomeScreen } from './src/screens/HomeScreen';
-import { ReviewScreen } from './src/screens/ReviewScreen';
+import HomeScreen from './src/screens/HomeScreen';
+import DeckScreen from './src/screens/DeckScreen';
+import ReviewScreen from './src/screens/ReviewScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -16,11 +17,11 @@ export default function App() {
       <Stack.Navigator
         initialRouteName="Home"
         screenOptions={{
-          // 一定是 boolean，不要写成 'false'
           headerShown: false,
         }}
       >
         <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="Deck" component={DeckScreen} />
         <Stack.Screen name="Review" component={ReviewScreen} />
       </Stack.Navigator>
     </NavigationContainer>
