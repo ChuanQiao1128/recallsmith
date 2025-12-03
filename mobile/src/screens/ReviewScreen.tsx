@@ -9,6 +9,7 @@ import {
   Pressable,
   ScrollView,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
@@ -25,7 +26,6 @@ import {
 } from '../review/storage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Review'>;
-
 type UiRating = 'again' | 'hard' | 'good' | 'easy';
 
 interface CurrentCard {
@@ -41,7 +41,6 @@ function buildCardMap(deck: DeckExport): Map<string, CardExport> {
   return map;
 }
 
-// 目前只按“应复习”选下一张，mode 先不区分
 function pickNextDueCard(
   deck: DeckExport,
   progress: CardProgress[],
@@ -62,11 +61,9 @@ function pickNextDueCard(
   return null;
 }
 
-// UI rating -> 模型 rating 的简单映射
-function mapUiRatingToModel(rating: UiRating): ReviewRating {
-  if (rating === 'again') return 'again';
-  if (rating === 'easy') return 'easy';
-  // 'hard' 和 'good' 现在都走 'good' 分支
+function mapUiRatingToModel(r: UiRating): ReviewRating {
+  if (r === 'again') return 'again';
+  if (r === 'easy') return 'easy';
   return 'good';
 }
 
@@ -118,24 +115,28 @@ export function ReviewScreen({ navigation, route }: Props) {
 
   const now = new Date();
 
-  async function handleRating(rating: UiRating) {
+  async function handleRating(uiRating: UiRating) {
     if (!current || !dailyStats) return;
     if (reviewing) return;
 
-    // session 配额用完就不再处理
-    if (sessionLimit > 0 && sessionDone >= sessionLimit) {
-      return;
-    }
+    if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
 
     setReviewing(true);
     try {
-      const modelRating = mapUiRatingToModel(rating);
+      const modelRating = mapUiRatingToModel(uiRating);
+      const { scheduleNextReview } = require('../review/model') as {
+        scheduleNextReview: (
+          p: CardProgress,
+          r: ReviewRating,
+          now: Date,
+        ) => CardProgress;
+      };
 
-      const updatedOne = require('../review/model').scheduleNextReview(
+      const updatedOne = scheduleNextReview(
         current.progress,
         modelRating,
         new Date(),
-      ) as CardProgress;
+      );
 
       const newProgress = progress.map(p =>
         p.stableUid === updatedOne.stableUid ? updatedOne : p,
@@ -148,7 +149,6 @@ export function ReviewScreen({ navigation, route }: Props) {
 
       const remaining =
         sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
-
       const next =
         remaining > 0
           ? pickNextDueCard(deck, newProgress, new Date())
@@ -165,10 +165,17 @@ export function ReviewScreen({ navigation, route }: Props) {
   if (loading || !dailyStats) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color="#6366F1" />
-          <Text style={styles.loadingText}>Loading cards...</Text>
-        </View>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.center}>
+            <ActivityIndicator size="large" color="#6366F1" />
+            <Text style={styles.loadingText}>Loading cards...</Text>
+          </View>
+        </LinearGradient>
       </SafeAreaView>
     );
   }
@@ -179,217 +186,229 @@ export function ReviewScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        {/* 自定义 header */}
-        <View style={styles.headerRow}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.backButton,
-              pressed && styles.backButtonPressed,
-            ]}
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={styles.backText}>← Deck</Text>
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title} numberOfLines={1}>
-              {deck.Title}
-            </Text>
-            <Text style={styles.subtitle}>
-              Session {sessionDone}/{sessionLimit || '∞'} · Mode {mode}
-            </Text>
-          </View>
-        </View>
-
-        {/* 今日进度条（针对本 session） */}
-        <View style={styles.sessionBarCard}>
-          <View style={styles.sessionHeaderRow}>
-            <Text style={styles.sessionLabel}>Session progress</Text>
-            <Text style={styles.sessionValue}>
-              {sessionDone} / {sessionLimit || '∞'}
-            </Text>
-          </View>
-          <View style={styles.progressBarBg}>
-            <View
-              style={[
-                styles.progressBarFill,
-                { flex: sessionPercent, opacity: sessionPercent === 0 ? 0 : 1 },
+      <LinearGradient
+        colors={['#F5F3FF', '#E0F2FE']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradient}
+      >
+        <View style={styles.container}>
+          {/* header */}
+          <View style={styles.headerRow}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.backButton,
+                pressed && styles.backButtonPressed,
               ]}
-            />
-            <View style={{ flex: 1 - sessionPercent }} />
-          </View>
-          <Text style={styles.sessionHint}>
-            {dueNowCount} card
-            {dueNowCount === 1 ? '' : 's'} still due in total today.
-          </Text>
-        </View>
-
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-        >
-          <Text style={styles.sectionTitle}>Now reviewing</Text>
-
-          {!current ? (
-            <View style={styles.doneBox}>
-              <Text style={styles.doneTitle}>Nice work 🎉</Text>
-              <Text style={styles.doneBody}>
-                This session is complete. You can go back to the deck screen to
-                start another run later today.
+              onPress={() => navigation.goBack()}
+            >
+              <Text style={styles.backText}>← Deck</Text>
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.title} numberOfLines={1}>
+                {deck.Title}
+              </Text>
+              <Text style={styles.subtitle}>
+                Session {sessionDone}/{sessionLimit || '∞'} · Mode {mode}
               </Text>
             </View>
-          ) : (
-            <View style={styles.cardBox}>
-              <View style={styles.cardHeaderRow}>
-                <Text style={styles.cardOrder}>
-                  #{current.card.OrderInDeck}
-                </Text>
-                <Text style={styles.cardTag}>
-                  {current.card.Difficulty === 1
-                    ? 'Easy'
-                    : current.card.Difficulty === 2
-                    ? 'Medium'
-                    : 'Hard'}
-                </Text>
-                {current.card.CodeLanguage ? (
-                  <Text style={styles.cardTagSecondary}>
-                    {current.card.CodeLanguage}
-                  </Text>
-                ) : null}
-              </View>
+          </View>
 
-              <Text style={styles.cardQuestion}>
-                {current.card.Question}
+          {/* session bar */}
+          <View style={styles.sessionCard}>
+            <View style={styles.sessionHeaderRow}>
+              <Text style={styles.sessionLabel}>Session progress</Text>
+              <Text style={styles.sessionValue}>
+                {sessionDone} / {sessionLimit || '∞'}
               </Text>
+            </View>
+            <View style={styles.progressBarBg}>
+              <View
+                style={[
+                  styles.progressBarFill,
+                  { flex: sessionPercent, opacity: sessionPercent === 0 ? 0 : 1 },
+                ]}
+              />
+              <View style={{ flex: 1 - sessionPercent }} />
+            </View>
+            <Text style={styles.sessionHint}>
+              {dueNowCount} card
+              {dueNowCount === 1 ? '' : 's'} still due in total today.
+            </Text>
+          </View>
 
-              {!showAnswer ? (
-                <View style={styles.answerHiddenBox}>
-                  <Text style={styles.answerHiddenText}>
-                    Take a moment to recall the answer, then tap when you&apos;re
-                    ready.
+          <ScrollView
+            style={styles.scroll}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            <Text style={styles.sectionTitle}>Now reviewing</Text>
+
+            {!current ? (
+              <View style={styles.doneCard}>
+                <Text style={styles.doneTitle}>You are done for now 🎉</Text>
+                <Text style={styles.doneBody}>
+                  This session is complete. You can go back to the deck screen
+                  and start another run later today.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.cardCard}>
+                <View style={styles.cardHeaderRow}>
+                  <Text style={styles.cardOrder}>
+                    #{current.card.OrderInDeck}
                   </Text>
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.showButton,
-                      pressed && styles.showButtonPressed,
-                    ]}
-                    onPress={() => setShowAnswer(true)}
-                  >
-                    <Text style={styles.showButtonText}>Show answer</Text>
-                  </Pressable>
-                </View>
-              ) : (
-                <>
-                  {current.card.Explanation ? (
-                    <Text style={styles.cardExplanation}>
-                      {current.card.Explanation}
+                  <Text style={styles.cardChip}>
+                    {current.card.Difficulty === 1
+                      ? 'Easy'
+                      : current.card.Difficulty === 2
+                      ? 'Medium'
+                      : 'Hard'}
+                  </Text>
+                  {current.card.CodeLanguage ? (
+                    <Text style={styles.cardChipSecondary}>
+                      {current.card.CodeLanguage}
                     </Text>
                   ) : null}
+                </View>
 
-                  {current.card.CodeSnippet ? (
-                    <ScrollView
-                      style={styles.codeContainer}
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                    >
-                      <Text style={styles.codeText}>
-                        {current.card.CodeSnippet}
-                      </Text>
-                    </ScrollView>
-                  ) : null}
+                <Text style={styles.cardQuestion}>
+                  {current.card.Question}
+                </Text>
 
-                  <Text style={styles.ratingHint}>
-                    How well did you remember this card?
-                  </Text>
-
-                  {/* 四个按钮：Again / Hard / Good / Easy */}
-                  <View style={styles.ratingGrid}>
+                {!showAnswer ? (
+                  <View style={styles.answerHiddenBox}>
+                    <Text style={styles.answerHiddenText}>
+                      Try to recall the answer from memory. When you are ready,
+                      flip the card.
+                    </Text>
                     <Pressable
                       style={({ pressed }) => [
-                        styles.ratingButton,
-                        styles.ratingAgain,
-                        pressed && styles.ratingPressed,
-                        reviewing && styles.ratingDisabled,
+                        styles.showButton,
+                        pressed && styles.showButtonPressed,
                       ]}
-                      disabled={reviewing}
-                      onPress={() => handleRating('again')}
+                      onPress={() => setShowAnswer(true)}
                     >
-                      <Text style={styles.ratingTitle}>Again</Text>
-                      <Text style={styles.ratingSub}>See very soon</Text>
-                    </Pressable>
-
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.ratingButton,
-                        styles.ratingHard,
-                        pressed && styles.ratingPressed,
-                        reviewing && styles.ratingDisabled,
-                      ]}
-                      disabled={reviewing}
-                      onPress={() => handleRating('hard')}
-                    >
-                      <Text style={styles.ratingTitle}>Hard</Text>
-                      <Text style={styles.ratingSub}>Short interval</Text>
-                    </Pressable>
-
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.ratingButton,
-                        styles.ratingGood,
-                        pressed && styles.ratingPressed,
-                        reviewing && styles.ratingDisabled,
-                      ]}
-                      disabled={reviewing}
-                      onPress={() => handleRating('good')}
-                    >
-                      <Text style={styles.ratingTitle}>Good</Text>
-                      <Text style={styles.ratingSub}>Normal interval</Text>
-                    </Pressable>
-
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.ratingButton,
-                        styles.ratingEasy,
-                        pressed && styles.ratingPressed,
-                        reviewing && styles.ratingDisabled,
-                      ]}
-                      disabled={reviewing}
-                      onPress={() => handleRating('easy')}
-                    >
-                      <Text style={styles.ratingTitle}>Easy</Text>
-                      <Text style={styles.ratingSub}>Longer interval</Text>
+                      <Text style={styles.showButtonText}>Show answer</Text>
                     </Pressable>
                   </View>
-                </>
-              )}
-            </View>
-          )}
-        </ScrollView>
-      </View>
+                ) : (
+                  <>
+                    {current.card.Explanation ? (
+                      <Text style={styles.cardExplanation}>
+                        {current.card.Explanation}
+                      </Text>
+                    ) : null}
+
+                    {current.card.CodeSnippet ? (
+                      <ScrollView
+                        style={styles.codeContainer}
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                      >
+                        <Text style={styles.codeText}>
+                          {current.card.CodeSnippet}
+                        </Text>
+                      </ScrollView>
+                    ) : null}
+
+                    <Text style={styles.ratingHint}>
+                      How well did you remember this card?
+                    </Text>
+
+                    <View style={styles.ratingGrid}>
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.ratingButton,
+                          styles.ratingAgain,
+                          pressed && styles.ratingPressed,
+                          reviewing && styles.ratingDisabled,
+                        ]}
+                        disabled={reviewing}
+                        onPress={() => handleRating('again')}
+                      >
+                        <Text style={styles.ratingTitle}>Again</Text>
+                        <Text style={styles.ratingSub}>Show very soon</Text>
+                      </Pressable>
+
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.ratingButton,
+                          styles.ratingHard,
+                          pressed && styles.ratingPressed,
+                          reviewing && styles.ratingDisabled,
+                        ]}
+                        disabled={reviewing}
+                        onPress={() => handleRating('hard')}
+                      >
+                        <Text style={styles.ratingTitle}>Hard</Text>
+                        <Text style={styles.ratingSub}>Short interval</Text>
+                      </Pressable>
+
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.ratingButton,
+                          styles.ratingGood,
+                          pressed && styles.ratingPressed,
+                          reviewing && styles.ratingDisabled,
+                        ]}
+                        disabled={reviewing}
+                        onPress={() => handleRating('good')}
+                      >
+                        <Text style={styles.ratingTitle}>Good</Text>
+                        <Text style={styles.ratingSub}>Normal interval</Text>
+                      </Pressable>
+
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.ratingButton,
+                          styles.ratingEasy,
+                          pressed && styles.ratingPressed,
+                          reviewing && styles.ratingDisabled,
+                        ]}
+                        disabled={reviewing}
+                        onPress={() => handleRating('easy')}
+                      >
+                        <Text style={styles.ratingTitle}>Easy</Text>
+                        <Text style={styles.ratingSub}>Much later</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                )}
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </LinearGradient>
     </SafeAreaView>
   );
 }
 
 export default ReviewScreen;
 
+const CARD_GLASS = 'rgba(255,255,255,0.18)';
+const CARD_BORDER = 'rgba(255,255,255,0.5)';
+
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#F5F3FF',
+  },
+  gradient: {
+    flex: 1,
   },
   container: {
     flex: 1,
+    paddingHorizontal: 18,
     paddingTop: 16,
-    paddingHorizontal: 16,
   },
   center: {
     flex: 1,
-    backgroundColor: '#F3F4F6',
     alignItems: 'center',
     justifyContent: 'center',
   },
   loadingText: {
-    marginTop: 12,
+    marginTop: 10,
     color: '#6B7280',
   },
   headerRow: {
@@ -401,11 +420,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: 'rgba(255,255,255,0.8)',
     marginRight: 10,
   },
   backButtonPressed: {
-    opacity: 0.8,
+    opacity: 0.9,
   },
   backText: {
     fontSize: 13,
@@ -420,16 +439,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6B7280',
   },
-  sessionBarCard: {
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    marginBottom: 12,
+  sessionCard: {
+    borderRadius: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: CARD_GLASS,
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
     shadowColor: '#000',
-    shadowOpacity: 0.03,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 10 },
+    marginBottom: 14,
   },
   sessionHeaderRow: {
     flexDirection: 'row',
@@ -447,11 +468,11 @@ const styles = StyleSheet.create({
   },
   progressBarBg: {
     marginTop: 6,
-    marginBottom: 4,
-    flexDirection: 'row',
+    marginBottom: 6,
     height: 6,
     borderRadius: 999,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    flexDirection: 'row',
     overflow: 'hidden',
   },
   progressBarFill: {
@@ -469,33 +490,32 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
   },
   sectionTitle: {
-    marginTop: 12,
-    marginBottom: 8,
     fontSize: 15,
     fontWeight: '600',
     color: '#111827',
+    marginBottom: 8,
   },
-  cardBox: {
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    padding: 14,
+  cardCard: {
+    borderRadius: 22,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(255,255,255,0.96)',
     shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
   },
   cardHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 6,
+    marginBottom: 8,
   },
   cardOrder: {
     fontSize: 12,
     color: '#6B7280',
     marginRight: 6,
   },
-  cardTag: {
+  cardChip: {
     fontSize: 11,
     color: '#111827',
     backgroundColor: '#FEF3C7',
@@ -504,7 +524,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     marginRight: 4,
   },
-  cardTagSecondary: {
+  cardChipSecondary: {
     fontSize: 11,
     color: '#4B5563',
     backgroundColor: '#E5E7EB',
@@ -516,11 +536,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#111827',
-    marginTop: 4,
     marginBottom: 8,
   },
   answerHiddenBox: {
-    marginTop: 10,
+    marginTop: 8,
     alignItems: 'center',
   },
   answerHiddenText: {
@@ -544,23 +563,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   cardExplanation: {
+    marginTop: 4,
     fontSize: 14,
     color: '#374151',
-    marginTop: 4,
     marginBottom: 8,
   },
   codeContainer: {
-    marginTop: 4,
-    marginBottom: 10,
-    borderRadius: 8,
+    borderRadius: 10,
     backgroundColor: '#111827',
     paddingVertical: 8,
     paddingHorizontal: 10,
+    marginBottom: 10,
   },
   codeText: {
     fontFamily: 'Menlo',
-    color: '#E5E7EB',
     fontSize: 12,
+    color: '#E5E7EB',
   },
   ratingHint: {
     fontSize: 13,
@@ -574,7 +592,7 @@ const styles = StyleSheet.create({
   },
   ratingButton: {
     width: '48%',
-    borderRadius: 12,
+    borderRadius: 14,
     paddingVertical: 10,
     paddingHorizontal: 10,
     marginBottom: 8,
@@ -607,10 +625,11 @@ const styles = StyleSheet.create({
     color: '#4B5563',
     marginTop: 2,
   },
-  doneBox: {
-    borderRadius: 16,
+  doneCard: {
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
     backgroundColor: '#ECFDF5',
-    padding: 16,
   },
   doneTitle: {
     fontSize: 16,
