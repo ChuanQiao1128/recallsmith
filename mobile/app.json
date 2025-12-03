@@ -1,19 +1,24 @@
 {
   "expo": {
     "name": "RecallSmith",
-    "slug": "RecallSmith",
+    "slug": "recallsmith",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled":false,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.timeawake.recallsmith",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+       "buildNumber": "1"
     },
     "android": {
       "adaptiveIcon": {
@@ -25,6 +30,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "7fa3a504-b9b6-4e49-8b16-f738332cc198"
+      }
+    },
+    "owner": "timeawakes-organization"
   }
 }

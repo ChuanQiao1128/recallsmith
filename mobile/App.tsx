@@ -1,288 +1,353 @@
 // mobile/App.tsx
 import 'react-native-gesture-handler';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
   ActivityIndicator,
-  Pressable,
+  Alert,
   Linking,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import { LinearGradient } from 'expo-linear-gradient';
+
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import Constants from 'expo-constants';
 
 import type { RootStackParamList } from './src/navigation/types';
-import { HomeScreen } from './src/screens/HomeScreen';
-import { DeckScreen } from './src/screens/DeckScreen';
-import { ReviewScreen } from './src/screens/ReviewScreen';
+import HomeScreen from './src/screens/HomeScreen';
+import DeckScreen from './src/screens/DeckScreen';
+import ReviewScreen from './src/screens/ReviewScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
 
-// TODO: 换成你真实的 S3 / 静态网站地址
-// 例如： https://your-bucket.s3.us-east-1.amazonaws.com/recallsmith-config.json
 const REMOTE_CONFIG_URL =
   'https://raw.githubusercontent.com/ChuanQiao1128/recallsmith-mobile-config/refs/heads/main/recallsmith-config.json';
 
-const Stack = createNativeStackNavigator<RootStackParamList>();
+type RemoteConfig = {
+  minimumSupportedVersion: string;
+  latestVersion: string;
+  iosUpdateUrl?: string;
+  message?: string;
+};
 
-interface RemoteConfig {
-  latestVersion?: string;
-  minSupportedVersion?: string;
-  iosAppStoreUrl?: string;
+type GateState =
+  | { status: 'checking' }
+  | { status: 'ready' }
+  | { status: 'blocked'; config: RemoteConfig; currentVersion: string };
+
+const REMOTE_CONFIG_CACHE_KEY = '@rs_remote_config_cache_v1';
+const LAST_PROMPT_VERSION_KEY = '@rs_last_prompt_latest_version_v1';
+
+const DEFAULT_CONFIG: RemoteConfig = {
+  minimumSupportedVersion: '0.0.0',
+  latestVersion: '0.0.0',
+  iosUpdateUrl: undefined,
+  message: undefined,
+};
+
+function getAppVersion(): string {
+  // Expo: version 通常在 app.json / app.config.js
+  const v =
+    Constants.expoConfig?.version ??
+    (Constants.expoConfig as any)?.runtimeVersion ??
+    '0.0.0';
+  return typeof v === 'string' ? v : '0.0.0';
 }
 
-function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(x => parseInt(x, 10) || 0);
-  const pb = b.split('.').map(x => parseInt(x, 10) || 0);
-  const len = Math.max(pa.length, pb.length);
+function parseSemver(v: string): [number, number, number] {
+  const clean = v.trim().replace(/^v/i, '');
+  const parts = clean.split('.').map(x => Number(x));
+  const a = Number.isFinite(parts[0]) ? parts[0] : 0;
+  const b = Number.isFinite(parts[1]) ? parts[1] : 0;
+  const c = Number.isFinite(parts[2]) ? parts[2] : 0;
+  return [a, b, c];
+}
 
-  for (let i = 0; i < len; i += 1) {
-    const av = pa[i] ?? 0;
-    const bv = pb[i] ?? 0;
-    if (av > bv) return 1;
-    if (av < bv) return -1;
-  }
+function compareSemver(a: string, b: string): number {
+  const [a1, a2, a3] = parseSemver(a);
+  const [b1, b2, b3] = parseSemver(b);
+  if (a1 !== b1) return a1 < b1 ? -1 : 1;
+  if (a2 !== b2) return a2 < b2 ? -1 : 1;
+  if (a3 !== b3) return a3 < b3 ? -1 : 1;
   return 0;
 }
 
-export default function App() {
-  const [checkingUpdate, setCheckingUpdate] = useState(true);
-  const [mustUpdate, setMustUpdate] = useState(false);
-  const [storeUrl, setStoreUrl] = useState<string | null>(null);
-  const [softUpdateAvailable, setSoftUpdateAvailable] = useState(false);
+async function fetchRemoteConfig(url: string, timeoutMs = 3500): Promise<RemoteConfig | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  // 从 expo 的配置中读当前 app 版本（app.json 里的 expo.version）
-  const appVersion: string =
-    (Constants.expoConfig as any)?.version ?? '1.0.0';
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'Cache-Control': 'no-cache' },
+      signal: controller.signal,
+    });
+
+    if (!res.ok) return null;
+
+    const json = (await res.json()) as Partial<RemoteConfig>;
+
+    if (
+      !json ||
+      typeof json.minimumSupportedVersion !== 'string' ||
+      typeof json.latestVersion !== 'string'
+    ) {
+      return null;
+    }
+
+    return {
+      minimumSupportedVersion: json.minimumSupportedVersion,
+      latestVersion: json.latestVersion,
+      iosUpdateUrl: typeof json.iosUpdateUrl === 'string' ? json.iosUpdateUrl : undefined,
+      message: typeof json.message === 'string' ? json.message : undefined,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadCachedConfig(): Promise<RemoteConfig | null> {
+  try {
+    const raw = await AsyncStorage.getItem(REMOTE_CONFIG_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as RemoteConfig;
+    if (
+      parsed &&
+      typeof parsed.minimumSupportedVersion === 'string' &&
+      typeof parsed.latestVersion === 'string'
+    ) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function cacheConfig(cfg: RemoteConfig) {
+  try {
+    await AsyncStorage.setItem(REMOTE_CONFIG_CACHE_KEY, JSON.stringify(cfg));
+  } catch {
+    // ignore
+  }
+}
+
+function UpdateRequiredScreen({
+  message,
+  onUpdate,
+}: {
+  message: string;
+  onUpdate: () => void;
+}) {
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <LinearGradient
+        colors={['#F5F3FF', '#E0F2FE']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradient}
+      >
+        <View style={styles.blockContainer}>
+          <View style={styles.blockCard}>
+            <Text style={styles.blockTitle}>Update Required</Text>
+            <Text style={styles.blockBody}>{message}</Text>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.blockButton,
+                pressed && styles.blockButtonPressed,
+              ]}
+              onPress={onUpdate}
+            >
+              <Text style={styles.blockButtonText}>Open App Store</Text>
+            </Pressable>
+
+            <Text style={styles.blockHint}>
+              To keep your data and reviews safe, this version is no longer supported.
+            </Text>
+          </View>
+        </View>
+      </LinearGradient>
+    </SafeAreaView>
+  );
+}
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
+
+export default function App() {
+  const [gate, setGate] = useState<GateState>({ status: 'checking' });
+
+  const currentVersion = useMemo(() => getAppVersion(), []);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function checkUpdate() {
-      try {
-        const res = await fetch(REMOTE_CONFIG_URL, {
-          // 尽量不要缓存
-          cache: 'no-store' as any,
-        });
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
+    async function checkConfig() {
+      // 1) remote first
+      const remote = await fetchRemoteConfig(REMOTE_CONFIG_URL);
+      if (cancelled) return;
 
-        const json = (await res.json()) as RemoteConfig;
+      // 2) cache fallback
+      const cached = await loadCachedConfig();
+      if (cancelled) return;
 
-        if (cancelled) return;
+      const config = remote ?? cached ?? DEFAULT_CONFIG;
 
-        const minSupported = json.minSupportedVersion;
-        const latest = json.latestVersion;
-        const url = json.iosAppStoreUrl ?? null;
+      if (remote) {
+        cacheConfig(remote);
+      }
 
-        if (minSupported && compareVersions(appVersion, minSupported) < 0) {
-          // 当前版本 < 最低支持版本 → 必须更新
-          setMustUpdate(true);
-          setStoreUrl(url);
-        } else if (latest && compareVersions(appVersion, latest) < 0) {
-          // 当前版本 < 最新版本 → 有可选更新（只提示，不强制）
-          setSoftUpdateAvailable(true);
-          setStoreUrl(url);
-        }
-      } catch (e) {
-        // 拉配置失败：静默忽略，不打断使用
-        console.log('Update check failed:', e);
-      } finally {
-        if (!cancelled) {
-          setCheckingUpdate(false);
+      const mustUpdate =
+        compareSemver(currentVersion, config.minimumSupportedVersion) < 0;
+
+      if (mustUpdate) {
+        setGate({ status: 'blocked', config, currentVersion });
+        return;
+      }
+
+      // optional update prompt (once per latestVersion)
+      const hasNewer =
+        compareSemver(currentVersion, config.latestVersion) < 0;
+
+      if (hasNewer) {
+        try {
+          const lastPrompt = await AsyncStorage.getItem(LAST_PROMPT_VERSION_KEY);
+          if (!lastPrompt || lastPrompt !== config.latestVersion) {
+            Alert.alert(
+              'Update available',
+              `A newer version (${config.latestVersion}) is available.`,
+              [
+                { text: 'Later', style: 'cancel' },
+                {
+                  text: 'Update',
+                  onPress: () => {
+                    const url = config.iosUpdateUrl;
+                    if (url) Linking.openURL(url);
+                  },
+                },
+              ],
+            );
+            await AsyncStorage.setItem(LAST_PROMPT_VERSION_KEY, config.latestVersion);
+          }
+        } catch {
+          // ignore
         }
       }
+
+      setGate({ status: 'ready' });
     }
 
-    checkUpdate();
+    checkConfig();
 
     return () => {
       cancelled = true;
     };
-  }, [appVersion]);
+  }, [currentVersion]);
 
-  return (
-    <View style={{ flex: 1 }}>
-      <NavigationContainer>
-        <Stack.Navigator
-          initialRouteName="Home"
-          screenOptions={{
-            headerShown: false, // 一定是 boolean
-          }}
+  if (gate.status === 'checking') {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
         >
-          <Stack.Screen name="Home" component={HomeScreen} />
-          <Stack.Screen name="Deck" component={DeckScreen} />
-          <Stack.Screen name="Review" component={ReviewScreen} />
-        </Stack.Navigator>
-      </NavigationContainer>
+          <View style={styles.loadingCenter}>
+            <ActivityIndicator size="large" color="#6366F1" />
+            <Text style={styles.loadingText}>Starting RecallSmith…</Text>
+            <Text style={styles.loadingSubText}>Checking updates & preparing your deck.</Text>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
 
-      {/* 强制更新遮罩 */}
-      {mustUpdate && (
-        <UpdateRequiredOverlay
-          appVersion={appVersion}
-          storeUrl={storeUrl}
-        />
-      )}
+  if (gate.status === 'blocked') {
+    const msg =
+      gate.config.message ??
+      `Please update to continue. (Current: ${gate.currentVersion}, Required: ${gate.config.minimumSupportedVersion})`;
 
-      {/* 可选更新的小提示（页底的小条，非必须） */}
-      {!mustUpdate && softUpdateAvailable && (
-        <SoftUpdateBanner
-          storeUrl={storeUrl}
-          onClose={() => setSoftUpdateAvailable(false)}
-        />
-      )}
-    </View>
-  );
-}
+    const url =
+      Platform.OS === 'ios'
+        ? gate.config.iosUpdateUrl
+        : undefined;
 
-interface UpdateRequiredProps {
-  appVersion: string;
-  storeUrl: string | null;
-}
-
-function UpdateRequiredOverlay({ appVersion, storeUrl }: UpdateRequiredProps) {
-  const handlePress = () => {
-    if (storeUrl) {
-      Linking.openURL(storeUrl).catch(() => {});
-    }
-  };
-
-  return (
-    <View style={[StyleSheet.absoluteFill, styles.overlayRoot]}>
-      <View style={styles.overlayCard}>
-        <Text style={styles.overlayTitle}>Update required</Text>
-        <Text style={styles.overlayBody}>
-          A newer version of RecallSmith is now available. To keep using
-          this app, please update to the latest version in the App Store.
-        </Text>
-        <Text style={styles.overlayMeta}>Current version: {appVersion}</Text>
-
-        <Pressable
-          style={({ pressed }) => [
-            styles.overlayButton,
-            pressed && styles.overlayButtonPressed,
-          ]}
-          onPress={handlePress}
-        >
-          <Text style={styles.overlayButtonText}>Update in App Store</Text>
-        </Pressable>
-      </View>
-    </View>
-  );
-}
-
-interface SoftUpdateBannerProps {
-  storeUrl: string | null;
-  onClose: () => void;
-}
-
-function SoftUpdateBanner({ storeUrl, onClose }: SoftUpdateBannerProps) {
-  const handlePress = () => {
-    if (storeUrl) {
-      Linking.openURL(storeUrl).catch(() => {});
-    }
-  };
+    return (
+      <UpdateRequiredScreen
+        message={msg}
+        onUpdate={() => {
+          if (url) {
+            Linking.openURL(url);
+          } else {
+            Alert.alert(
+              'Update link not ready',
+              'The App Store link is not configured yet in remote config.',
+            );
+          }
+        }}
+      />
+    );
+  }
 
   return (
-    <View style={styles.bannerWrapper} pointerEvents="box-none">
-      <View style={styles.bannerCard}>
-        <Text style={styles.bannerText}>
-          A newer version is available. Enjoy the latest improvements.
-        </Text>
-        <View style={styles.bannerActions}>
-          <Pressable onPress={onClose}>
-            <Text style={styles.bannerSkip}>Later</Text>
-          </Pressable>
-          <Pressable onPress={handlePress}>
-            <Text style={styles.bannerUpdate}>Update</Text>
-          </Pressable>
-        </View>
-      </View>
-    </View>
+    <NavigationContainer>
+      <Stack.Navigator
+        initialRouteName="Home"
+        screenOptions={{
+          headerShown: false, // ✅ boolean
+        }}
+      >
+        <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="Deck" component={DeckScreen} />
+        <Stack.Screen name="Review" component={ReviewScreen} />
+        <Stack.Screen name="Settings" component={SettingsScreen} />
+      </Stack.Navigator>
+    </NavigationContainer>
   );
 }
 
 const styles = StyleSheet.create({
-  overlayRoot: {
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  gradient: { flex: 1 },
+
+  loadingCenter: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  overlayCard: {
-    width: '82%',
-    borderRadius: 24,
-    paddingVertical: 18,
     paddingHorizontal: 18,
-    backgroundColor: 'rgba(255,255,255,0.96)',
+  },
+  loadingText: { marginTop: 12, fontSize: 14, color: '#111827', fontWeight: '600' },
+  loadingSubText: { marginTop: 6, fontSize: 12, color: '#6B7280', textAlign: 'center' },
+
+  blockContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
+  blockCard: {
+    width: '100%',
+    borderRadius: 24,
+    padding: 18,
+    backgroundColor: 'rgba(255,255,255,0.9)',
     shadowColor: '#000',
-    shadowOpacity: 0.18,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
   },
-  overlayTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 8,
-  },
-  overlayBody: {
-    fontSize: 13,
-    color: '#4B5563',
-    marginBottom: 10,
-  },
-  overlayMeta: {
-    fontSize: 11,
-    color: '#9CA3AF',
-    marginBottom: 16,
-  },
-  overlayButton: {
+  blockTitle: { fontSize: 18, fontWeight: '700', color: '#111827' },
+  blockBody: { marginTop: 8, fontSize: 13, color: '#374151', lineHeight: 18 },
+  blockButton: {
+    marginTop: 14,
     borderRadius: 999,
     backgroundColor: '#4F46E5',
-    paddingVertical: 10,
+    paddingVertical: 12,
     alignItems: 'center',
   },
-  overlayButtonPressed: {
-    opacity: 0.9,
-  },
-  overlayButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  bannerWrapper: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-  },
-  bannerCard: {
-    marginBottom: 10,
-    marginHorizontal: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: 'rgba(15,23,42,0.9)',
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  bannerText: {
-    flex: 1,
-    fontSize: 12,
-    color: '#E5E7EB',
-    marginRight: 8,
-  },
-  bannerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  bannerSkip: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    marginRight: 8,
-  },
-  bannerUpdate: {
-    fontSize: 12,
-    color: '#A5B4FC',
-    fontWeight: '600',
-  },
+  blockButtonPressed: { opacity: 0.92 },
+  blockButtonText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  blockHint: { marginTop: 10, fontSize: 11, color: '#6B7280' },
 });

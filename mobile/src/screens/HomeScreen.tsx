@@ -157,12 +157,24 @@ export function HomeScreen({ navigation }: Props) {
           showsVerticalScrollIndicator={false}
         >
           {/* 顶部标题 */}
-          <View style={styles.headingBlock}>
-            <Text style={styles.appTitle}>RecallSmith</Text>
-            <Text style={styles.appSubtitle}>
-              Smart spaced‑repetition for full‑stack interviews.
-            </Text>
-          </View>
+         <View style={styles.headingRow}>
+                <View style={{ flex: 1 }}>
+                    <Text style={styles.appTitle}>RecallSmith</Text>
+                    <Text style={styles.appSubtitle}>
+                    Smart spaced‑repetition for full‑stack interviews.
+                    </Text>
+                </View>
+
+                <Pressable
+                    style={({ pressed }) => [
+                    styles.settingsButton,
+                    pressed && styles.settingsButtonPressed,
+                    ]}
+                    onPress={() => navigation.navigate('Settings')}
+                >
+                    <Text style={styles.settingsButtonText}>Settings</Text>
+                </Pressable>
+                </View>
 
           {/* 主 Deck 概览玻璃卡片 */}
           <View style={styles.deckCard}>
@@ -495,4 +507,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#111827',
   },
+  headingRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingTop: 6,
+  paddingBottom: 16,
+},
+settingsButton: {
+  paddingHorizontal: 12,
+  paddingVertical: 6,
+  borderRadius: 999,
+  backgroundColor: 'rgba(255,255,255,0.85)',
+  marginLeft: 8,
+},
+settingsButtonPressed: {
+  opacity: 0.9,
+},
+settingsButtonText: {
+  fontSize: 12,
+  fontWeight: '500',
+  color: '#111827',
+},
 });

@@ -1,5 +1,6 @@
 {
-  "latestVersion": "1.0.0",
   "minSupportedVersion": "1.0.0",
-  "iosAppStoreUrl": "https://example.com/placeholder"
+  "latestVersion": "1.0.0",
+  "appStoreUrl": "",
+  "forceUpdateMessage": "A new version of RecallSmith is available. Please update from the App Store to continue."
 }

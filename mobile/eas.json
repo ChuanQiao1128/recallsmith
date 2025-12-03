@@ -1,0 +1,21 @@
+{
+  "cli": {
+    "version": ">= 6.0.0"
+  },
+  "build": {
+    "production": {
+      "distribution": "store",
+      "ios": {
+        "buildConfiguration": "Release",
+        "image": "latest",
+        "env": {
+          "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+          "CLANG_CXX_LIBRARY": "libc++"
+        }
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
