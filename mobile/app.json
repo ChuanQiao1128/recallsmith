@@ -13,12 +13,13 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
+      "icon": "./assets/icon.png",
       "supportsTablet": true,
       "bundleIdentifier": "com.timeawake.recallsmith",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
-       "buildNumber": "1"
+       "buildNumber": "2"
     },
     "android": {
       "adaptiveIcon": {
