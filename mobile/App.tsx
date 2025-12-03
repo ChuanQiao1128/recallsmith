@@ -21,7 +21,7 @@ import { ReviewScreen } from './src/screens/ReviewScreen';
 // TODO: 换成你真实的 S3 / 静态网站地址
 // 例如： https://your-bucket.s3.us-east-1.amazonaws.com/recallsmith-config.json
 const REMOTE_CONFIG_URL =
-  'https://example.com/recallsmith-config.json';
+  'https://raw.githubusercontent.com/ChuanQiao1128/recallsmith-mobile-config/refs/heads/main/recallsmith-config.json';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
