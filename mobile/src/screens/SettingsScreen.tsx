@@ -20,10 +20,10 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 const APP_VERSION = '1.0.0';
 
 const SUPPORT_URL =
-  'https://tartan-tortoise-e81.notion.site/Support-2bea758eb545803aa3b8d7e6664042b1';
+  'https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Support-Help-2bfa758eb545809ead04d8f8321a40dc?pvs=74';
 
 const PRIVACY_URL =
-  'https://tartan-tortoise-e81.notion.site/Privacy-2bea758eb5458016b797fc411008c457';
+  'https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Privacy-Policy-2bfa758eb54580db99a3ed89369f9a13?pvs=74';
 
 async function openExternalLink(url: string) {
   try {
