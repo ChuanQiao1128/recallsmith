@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "RecallSmith",
+    "name": "DevCards: Spaced Recall",
     "slug": "recallsmith",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -19,7 +19,7 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
-       "buildNumber": "2"
+       "buildNumber": "6"
     },
     "android": {
       "adaptiveIcon": {
