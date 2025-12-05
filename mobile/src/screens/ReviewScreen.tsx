@@ -153,6 +153,9 @@ export function ReviewScreen({ navigation, route }: Props) {
         : null;
 
     setProgress(newProgress);
+    const now = new Date();
+    const remainingDueCount = newProgress.filter(p => isDue(p, now)).length;
+    syncDailyReminders({ remainingDueCount, now });
     setCurrent(next);
     setShowAnswer(false);
     } finally {

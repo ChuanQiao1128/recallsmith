@@ -25,6 +25,7 @@ import {
 import { syncDailyReminders } from '../notifications/reminders';
 
 
+
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
 interface CalendarDay {
@@ -95,6 +96,9 @@ export function HomeScreen({ navigation }: Props) {
         setState(prev => ({ ...prev, loading: true }));
         const now = new Date();
         const progress = await loadDeckProgress(deck);
+        const remainingDueCount = progress.filter(p => isDue(p, now)).length;
+        // 不要 await 也行（你函数内部已经 try/catch 了）
+        syncDailyReminders({ remainingDueCount, now });
         if (cancelled) return;
 
         const dailyStats = await loadOrInitDailyStats(deck, progress);
