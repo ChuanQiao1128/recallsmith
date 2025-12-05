@@ -109,6 +109,10 @@ export function ReviewScreen({ navigation, route }: Props) {
         setDailyStats(stats);
         setCurrent(next);
         setLoading(false);
+
+        // ✅ 补：进入复习页也同步一次当天的 20:00 状态
+        const remainingDueCount = p.filter(x => isDue(x, now)).length;
+        syncDailyReminders({ remainingDueCount, now });
       }
 
       load();

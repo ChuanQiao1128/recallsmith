@@ -87,42 +87,44 @@ export function HomeScreen({ navigation }: Props) {
     calendar: [],
   });
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
+  // HomeScreen.tsx - 只改 useFocusEffect 里的 load()
 
-      async function load() {
-        
-        setState(prev => ({ ...prev, loading: true }));
-        const now = new Date();
-        const progress = await loadDeckProgress(deck);
-        const remainingDueCount = progress.filter(p => isDue(p, now)).length;
-        // 不要 await 也行（你函数内部已经 try/catch 了）
-        syncDailyReminders({ remainingDueCount, now });
-        if (cancelled) return;
+useFocusEffect(
+  useCallback(() => {
+    let cancelled = false;
 
-        const dailyStats = await loadOrInitDailyStats(deck, progress);
-        if (cancelled) return;
+    async function load() {
+      setState(prev => ({ ...prev, loading: true }));
 
-        const { todayDueCount, calendar } = buildCalendar(progress, now);
-        // ✅ 同步 9:00(固定) + 20:00(有剩余才安排/没剩余就取消)
-        await syncDailyReminders({ remainingDueCount: todayDueCount, now });
-        setState({
-          loading: false,
-          progress,
-          dailyStats,
-          todayDueCount,
-          calendar,
-        });
-      }
+      const now = new Date();
+      const progress = await loadDeckProgress(deck);
+      if (cancelled) return;
 
-      load();
+      const dailyStats = await loadOrInitDailyStats(deck, progress);
+      if (cancelled) return;
 
-      return () => {
-        cancelled = true;
-      };
-    }, [deck]),
-  );
+      const { todayDueCount, calendar } = buildCalendar(progress, now);
+
+      // ✅ 只同步一次：9:00 固定 + 20:00(仅当还有剩余)
+      // 不 await，避免阻塞 UI；reminders.ts 内部已经 try/catch
+      syncDailyReminders({ remainingDueCount: todayDueCount, now });
+
+      setState({
+        loading: false,
+        progress,
+        dailyStats,
+        todayDueCount,
+        calendar,
+      });
+    }
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [deck]),
+);
 
   const { loading, dailyStats, todayDueCount, calendar } = state;
   const totalCards = deck.TotalCards;
