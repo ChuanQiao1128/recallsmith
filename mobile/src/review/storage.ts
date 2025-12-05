@@ -20,14 +20,14 @@ function getProgressKey(deck: DeckExport): string {
 
 /**
  * 初始化某个 Deck 的进度（第一次运行，或数据损坏时）。
- * 所有卡片的 stageIndex=0，nextReviewAt = now。
+ * 所有卡片的 stage=0，nextReviewAt = now。
  */
 function createInitialProgress(deck: DeckExport, now: Date): CardProgress[] {
-  const iso = now.toISOString();
+  const nowMs = now.getTime();
   return deck.Cards.map(card => ({
     stableUid: card.StableUid,
-    stageIndex: 0,
-    nextReviewAt: iso,
+    stage: 0,
+    nextReviewAt: nowMs,
   }));
 }
 
@@ -66,14 +66,47 @@ export async function loadDeckProgress(
       return initial;
     }
 
-    const existing = (parsed as CardProgress[]).filter(
-      p =>
-        typeof p === 'object' &&
-        p !== null &&
-        typeof p.stableUid === 'string' &&
-        typeof p.stageIndex === 'number' &&
-        typeof p.nextReviewAt === 'string',
-    );
+    const existing: CardProgress[] = [];
+    for (const item of parsed as unknown[]) {
+      if (typeof item !== 'object' || item === null) {
+        continue;
+      }
+      const maybe = item as Record<string, unknown>;
+      if (typeof maybe.stableUid !== 'string') {
+        continue;
+      }
+
+      const stage =
+        typeof maybe.stage === 'number'
+          ? maybe.stage
+          : typeof maybe.stageIndex === 'number'
+            ? maybe.stageIndex
+            : undefined;
+
+      let nextReviewAt: number | undefined;
+      if (typeof maybe.nextReviewAt === 'number') {
+        nextReviewAt = maybe.nextReviewAt;
+      } else if (typeof maybe.nextReviewAt === 'string') {
+        const parsedDate = Date.parse(maybe.nextReviewAt);
+        if (!Number.isNaN(parsedDate)) {
+          nextReviewAt = parsedDate;
+        }
+      }
+
+      const lastReviewedAt =
+        typeof maybe.lastReviewedAt === 'number'
+          ? maybe.lastReviewedAt
+          : undefined;
+
+      if (typeof stage === 'number' && typeof nextReviewAt === 'number') {
+        existing.push({
+          stableUid: maybe.stableUid,
+          stage,
+          nextReviewAt,
+          ...(lastReviewedAt !== undefined ? { lastReviewedAt } : {}),
+        });
+      }
+    }
 
     // 检查是否有新增的卡片（StableUid 还没进度）
     const knownUids = new Set(existing.map(p => p.stableUid));
@@ -83,8 +116,8 @@ export async function loadDeckProgress(
       if (!knownUids.has(card.StableUid)) {
         additions.push({
           stableUid: card.StableUid,
-          stageIndex: 0,
-          nextReviewAt: now.toISOString(),
+          stage: 0,
+          nextReviewAt: now.getTime(),
         });
       }
     }
