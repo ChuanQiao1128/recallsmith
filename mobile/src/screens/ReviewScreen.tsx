@@ -24,6 +24,7 @@ import {
   loadOrInitDailyStats,
   type DailyStats,
 } from '../review/storage';
+import { syncDailyReminders } from '../notifications/reminders';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Review'>;
 type UiRating = 'again' | 'hard' | 'good' | 'easy';
@@ -143,6 +144,9 @@ export function ReviewScreen({ navigation, route }: Props) {
       );
 
       await saveDeckProgress(deck, newProgress);
+
+      const remainingDue = newProgress.filter(p => isDue(p, new Date())).length;
+      await syncDailyReminders({ remainingDueCount: remainingDue });
 
       const nextDone = sessionDone + 1;
       setSessionDone(nextDone);

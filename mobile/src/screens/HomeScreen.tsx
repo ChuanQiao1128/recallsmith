@@ -22,6 +22,8 @@ import {
   loadOrInitDailyStats,
   type DailyStats,
 } from '../review/storage';
+import { syncDailyReminders } from '../notifications/reminders';
+
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -89,6 +91,7 @@ export function HomeScreen({ navigation }: Props) {
       let cancelled = false;
 
       async function load() {
+        
         setState(prev => ({ ...prev, loading: true }));
         const now = new Date();
         const progress = await loadDeckProgress(deck);
@@ -98,7 +101,8 @@ export function HomeScreen({ navigation }: Props) {
         if (cancelled) return;
 
         const { todayDueCount, calendar } = buildCalendar(progress, now);
-
+        // ✅ 同步 9:00(固定) + 20:00(有剩余才安排/没剩余就取消)
+        await syncDailyReminders({ remainingDueCount: todayDueCount, now });
         setState({
           loading: false,
           progress,

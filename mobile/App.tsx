@@ -24,6 +24,16 @@ import HomeScreen from './src/screens/HomeScreen';
 import DeckScreen from './src/screens/DeckScreen';
 import ReviewScreen from './src/screens/ReviewScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import * as Notifications from 'expo-notifications';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 const REMOTE_CONFIG_URL =
   'https://raw.githubusercontent.com/ChuanQiao1128/recallsmith-mobile-config/refs/heads/main/recallsmith-config.json';
