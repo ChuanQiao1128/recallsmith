@@ -16,8 +16,12 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { jsCoreStarterMock } from '../mock/jsCoreStarterMock';
 import type { DeckExport, CardExport } from '../types/deckExport';
-import type { CardProgress, ReviewRating } from '../review/model';
-import { isDue } from '../review/model';
+import type { CardProgress} from '../review/model';
+import {
+  isDue,
+  scheduleNextReview,
+  type ReviewRating,
+} from '../review/model';
 import {
   loadDeckProgress,
   saveDeckProgress,
@@ -26,8 +30,9 @@ import {
 } from '../review/storage';
 import { syncDailyReminders } from '../notifications/reminders';
 
+
 type Props = NativeStackScreenProps<RootStackParamList, 'Review'>;
-type UiRating = 'again' | 'hard' | 'good' | 'easy';
+type UiRating =ReviewRating;
 
 interface CurrentCard {
   card: CardExport;
@@ -117,50 +122,39 @@ export function ReviewScreen({ navigation, route }: Props) {
   const now = new Date();
 
   async function handleRating(uiRating: UiRating) {
-    if (!current || !dailyStats) return;
-    if (reviewing) return;
+  if (!current || !dailyStats) return;
+  if (reviewing) return;
 
-    if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
+  if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
 
-    setReviewing(true);
-    try {
-      const modelRating = mapUiRatingToModel(uiRating);
-      const { scheduleNextReview } = require('../review/model') as {
-        scheduleNextReview: (
-          p: CardProgress,
-          r: ReviewRating,
-          now: Date,
-        ) => CardProgress;
-      };
+  setReviewing(true);
+  try {
+    const updatedOne = scheduleNextReview(
+      current.progress,
+      uiRating,          // now 'hard' really works
+      new Date(),
+    );
 
-      const updatedOne = scheduleNextReview(
-        current.progress,
-        modelRating,
-        new Date(),
-      );
+    const newProgress = progress.map(p =>
+      p.stableUid === updatedOne.stableUid ? updatedOne : p,
+    );
 
-      const newProgress = progress.map(p =>
-        p.stableUid === updatedOne.stableUid ? updatedOne : p,
-      );
+    await saveDeckProgress(deck, newProgress);
 
-      await saveDeckProgress(deck, newProgress);
+    const nextDone = sessionDone + 1;
+    setSessionDone(nextDone);
 
-      const remainingDue = newProgress.filter(p => isDue(p, new Date())).length;
-      await syncDailyReminders({ remainingDueCount: remainingDue });
+    const remaining =
+      sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
 
-      const nextDone = sessionDone + 1;
-      setSessionDone(nextDone);
+    const next =
+      remaining > 0
+        ? pickNextDueCard(deck, newProgress, new Date())
+        : null;
 
-      const remaining =
-        sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
-      const next =
-        remaining > 0
-          ? pickNextDueCard(deck, newProgress, new Date())
-          : null;
-
-      setProgress(newProgress);
-      setCurrent(next);
-      setShowAnswer(false);
+    setProgress(newProgress);
+    setCurrent(next);
+    setShowAnswer(false);
     } finally {
       setReviewing(false);
     }
