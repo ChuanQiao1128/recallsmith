@@ -1,16 +1,15 @@
 // mobile/src/screens/HomeScreen.tsx
-// Home dashboard:
-// - Top: compact week calendar preview (fixed height) + month modal calendar
-// - Middle: selected deck overview + start button
-// - Bottom: ONE deck list card with ALL / Free / Premium filter (vertical list)
+// Plan A (Home):
+// 1) Calendar card (fixed height): Week preview (tap-to-toast) + Month modal calendar
+// 2) Selected deck overview + start button
+// 3) ONE deck list card with ALL / Free / Premium filter
 //
-// Calendar design goals (per your feedback):
-// 1) Fixed height card (no layout jump when deck title is long)
-// 2) Week preview: show DATE on top, BAR in middle, LABEL (Today/Mon/...) below
-// 3) Remove "View 30-day plan" button; keep only top-right Week/Month
-// 4) Month opens a modal showing the current calendar month grid
+// Calendar UX changes:
+// - Week: Top shows date, bottom shows Today/weekday. Tap a day -> lightweight toast ("Aug 12 · 6 cards").
+// - Month: Full current-month grid in a modal. "0" doesn't show dot/count, but spacing stays consistent.
+// - Removed the old "View 30-day plan" button; only Week/Month segment remains.
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   SafeAreaView,
   View,
@@ -20,6 +19,8 @@ import {
   ActivityIndicator,
   Pressable,
   Modal,
+  Animated,
+  Easing,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -64,11 +65,8 @@ type DeckSummary = {
   masteredApprox: number;
   percent: number; // 0..1
 
-  // Used for week preview (first 7 items), and as fallback for month if needed.
+  // Precomputed: today -> today+29 buckets
   upcoming30: CalendarDay[];
-
-  // Current month counts by YYYY-MM-DD (overdue counted into today).
-  monthCounts: Record<string, number>;
 };
 
 type HomeState = {
@@ -83,31 +81,33 @@ function clamp01(v: number) {
   return Math.max(0, Math.min(1, v));
 }
 
-function startOfToday(now: Date) {
-  const d = new Date(now.getTime());
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function formatMD(d: Date) {
-  // ex: 8/3 (short and stable even when month changes within the week)
-  return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
+function startOfToday(d: Date) {
+  const x = new Date(d.getTime());
+  x.setHours(0, 0, 0, 0);
+  return x;
 }
 
 function weekdayShort(d: Date) {
   return d.toLocaleDateString('en-US', { weekday: 'short' });
 }
 
+function formatMonthYear(d: Date) {
+  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function formatTooltipDate(d: Date) {
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 const WEEKDAYS_MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /**
  * Build upcoming schedule buckets (today -> today+(days-1)).
- * UX: overdue cards (nextReviewAt < today) are counted into “today”.
+ * UX: overdue cards are counted into “today” so backlog isn't hidden.
  */
 function buildUpcoming(progress: CardProgress[], now: Date, days: number): CalendarDay[] {
   const out: CalendarDay[] = [];
   const index = new Map<string, number>();
-
   const today0 = startOfToday(now);
 
   for (let i = 0; i < days; i++) {
@@ -121,17 +121,17 @@ function buildUpcoming(progress: CardProgress[], now: Date, days: number): Calen
   for (const p of progress) {
     if (!p.nextReviewAt) continue;
     const next = new Date(p.nextReviewAt);
-    if (Number.isNaN(next.getTime())) continue;
 
     const key = formatDateKey(next);
     const idx = index.get(key);
 
+    // In-range date
     if (idx !== undefined) {
       out[idx].count += 1;
       continue;
     }
 
-    // Overdue -> count into today
+    // Overdue -> today
     if (next.getTime() < today0.getTime() && out.length > 0) {
       out[0].count += 1;
     }
@@ -140,56 +140,60 @@ function buildUpcoming(progress: CardProgress[], now: Date, days: number): Calen
   return out;
 }
 
-/**
- * Build counts for the CURRENT calendar month (YYYY-MM-DD -> count).
- * UX: overdue cards are counted into TODAY.
- */
-function buildMonthCounts(progress: CardProgress[], now: Date): Record<string, number> {
-  const today0 = startOfToday(now);
-  const year = today0.getFullYear();
-  const month = today0.getMonth(); // 0-based
-
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const map: Record<string, number> = {};
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    const d = new Date(year, month, day);
-    map[formatDateKey(d)] = 0;
-  }
-
-  const todayKey = formatDateKey(today0);
-
-  for (const p of progress) {
-    if (!p.nextReviewAt) continue;
-    const next = new Date(p.nextReviewAt);
-    if (Number.isNaN(next.getTime())) continue;
-
-    if (next.getTime() < today0.getTime()) {
-      map[todayKey] = (map[todayKey] ?? 0) + 1;
-      continue;
-    }
-
-    if (next.getFullYear() === year && next.getMonth() === month) {
-      const key = formatDateKey(next);
-      map[key] = (map[key] ?? 0) + 1;
-    }
-  }
-
-  return map;
-}
-
 export function HomeScreen({ navigation }: Props) {
-  // Selection state: try the stored active deck slug first
+  // Selection state: prefer stored active deck slug
   const [selectedSlug, setSelectedSlug] = useState(() => {
     const stored = getActiveDeckSlug();
     return getMockDeckBySlug(stored)?.Slug ?? MOCK_DECKS[0]?.Slug;
   });
 
-  // Deck filter for the deck list card
   const [deckFilter, setDeckFilter] = useState<DeckFilter>('all');
 
-  // Month modal state (Calendar: Month view)
+  // Month modal state
   const [isMonthOpen, setIsMonthOpen] = useState(false);
+
+  // Lightweight toast state (for week taps)
+  const [toastText, setToastText] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback(
+    (text: string) => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+
+      setToastText(text);
+      setToastVisible(true);
+
+      toastAnim.stopAnimation();
+      toastAnim.setValue(0);
+
+      Animated.timing(toastAnim, {
+        toValue: 1,
+        duration: 140,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+
+      toastTimer.current = setTimeout(() => {
+        Animated.timing(toastAnim, {
+          toValue: 0,
+          duration: 180,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }).start(({ finished }) => {
+          if (finished) setToastVisible(false);
+        });
+      }, 1400);
+    },
+    [toastAnim],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, []);
 
   // Home data state
   const [state, setState] = useState<HomeState>({
@@ -233,7 +237,6 @@ export function HomeScreen({ navigation }: Props) {
               masteredApprox: 0,
               percent: 0,
               upcoming30: buildUpcoming([], now, 30),
-              monthCounts: buildMonthCounts([], now),
             });
             continue;
           }
@@ -266,11 +269,10 @@ export function HomeScreen({ navigation }: Props) {
             masteredApprox,
             percent,
             upcoming30: buildUpcoming(progress, now, 30),
-            monthCounts: buildMonthCounts(progress, now),
           });
         }
 
-        // Reminders: if ANY deck has due cards, schedule/cancel the 20:00 reminder correctly.
+        // Reminders: if ANY deck has due cards, schedule/cancel 20:00 reminder
         void syncDailyReminders({ remainingDueCount: totalDueAllDecks, now });
 
         if (cancelled) return;
@@ -292,10 +294,13 @@ export function HomeScreen({ navigation }: Props) {
     return deckSummaries.find(d => d.slug === activeDeck.Slug) ?? deckSummaries[0] ?? null;
   }, [deckSummaries, activeDeck.Slug]);
 
-  const calendar7 = useMemo(() => {
-    const list = activeSummary?.upcoming30 ?? buildUpcoming([], asOf, 30);
-    return list.slice(0, 7);
+  // 30-day buckets for the selected deck
+  const calendar30 = useMemo(() => {
+    return activeSummary?.upcoming30 ?? buildUpcoming([], asOf, 30);
   }, [activeSummary, asOf]);
+
+  // Week preview is always the first 7 buckets
+  const calendar7 = useMemo(() => calendar30.slice(0, 7), [calendar30]);
 
   const maxUpcoming7 = useMemo(() => {
     let m = 0;
@@ -303,57 +308,49 @@ export function HomeScreen({ navigation }: Props) {
     return m;
   }, [calendar7]);
 
-  const monthCounts = useMemo(() => activeSummary?.monthCounts ?? {}, [activeSummary]);
-
-  const maxMonthCount = useMemo(() => {
+  const maxUpcoming30 = useMemo(() => {
     let m = 0;
-    for (const v of Object.values(monthCounts)) m = Math.max(m, v);
+    for (const d of calendar30) m = Math.max(m, d.count);
     return m;
-  }, [monthCounts]);
+  }, [calendar30]);
 
-  const monthLabel = useMemo(() => {
-    return today0.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  }, [today0]);
+  const countsByDateKey = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const d of calendar30) map.set(d.dateKey, d.count);
+    return map;
+  }, [calendar30]);
 
-  // Month grid cells (Mon-start week)
+  // Full current month grid (Mon-start), always 6 rows (42 cells) for stable height
   const monthGrid = useMemo(() => {
     const year = today0.getFullYear();
     const month = today0.getMonth();
 
-    const first = new Date(year, month, 1);
+    const monthStart = new Date(year, month, 1);
     const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-    const lead = (first.getDay() + 6) % 7; // Mon=0 ... Sun=6
-    const totalCells = Math.ceil((lead + daysInMonth) / 7) * 7;
+    // Monday-start lead padding: Mon=0..Sun=6
+    const lead = (monthStart.getDay() + 6) % 7;
 
-    const cells: Array<
-      | null
-      | { date: Date; dateKey: string; count: number; isToday: boolean; isPast: boolean }
-    > = Array(totalCells).fill(null);
+    const cells = Array.from({ length: 42 }, (_, i) => {
+      const dayNum = i - lead + 1; // 1..daysInMonth, others out-of-month
+      const date = new Date(year, month, dayNum);
+      const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
+      const dateKey = formatDateKey(date);
+      const count = countsByDateKey.get(dateKey) ?? 0;
 
-    for (let day = 1; day <= daysInMonth; day++) {
-      const date = new Date(year, month, day);
-      const key = formatDateKey(date);
-      const idx = lead + (day - 1);
+      const isToday =
+        date.getFullYear() === today0.getFullYear() &&
+        date.getMonth() === today0.getMonth() &&
+        date.getDate() === today0.getDate();
 
-      const isToday = key === formatDateKey(today0);
-      const isPast = date.getTime() < today0.getTime();
+      return { date, dateKey, inMonth, count, isToday };
+    });
 
-      cells[idx] = {
-        date,
-        dateKey: key,
-        count: monthCounts[key] ?? 0,
-        isToday,
-        isPast,
-      };
-    }
-
-    return { lead, totalCells, cells };
-  }, [today0, monthCounts]);
+    return { cells, lead, daysInMonth };
+  }, [today0, countsByDateKey]);
 
   const filteredDecks = useMemo(() => {
     const sorted = [...deckSummaries].sort((a, b) => {
-      // Free first, premium after; then by title
       const ta = a.deckType === 1 ? 0 : 1;
       const tb = b.deckType === 1 ? 0 : 1;
       return ta !== tb ? ta - tb : a.title.localeCompare(b.title);
@@ -369,17 +366,25 @@ export function HomeScreen({ navigation }: Props) {
     setSelectedSlug(slug);
   }
 
+  function openMonth() {
+    setIsMonthOpen(true);
+  }
+  function closeMonth() {
+    setIsMonthOpen(false);
+  }
+
+  function toastForDay(date: Date, count: number) {
+    const d = formatTooltipDate(date);
+    const noun = count === 1 ? 'card' : 'cards';
+    showToast(`${d} · ${count} ${noun}`);
+  }
+
   const canStudy = activeSummary?.canStudy ?? false;
 
   if (loading || !activeSummary) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
+        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
           <View style={styles.center}>
             <ActivityIndicator size="large" color="#6366F1" />
             <Text style={styles.loadingText}>Loading home…</Text>
@@ -389,361 +394,375 @@ export function HomeScreen({ navigation }: Props) {
     );
   }
 
+  const monthTitle = formatMonthYear(today0);
+
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient
-        colors={['#F5F3FF', '#E0F2FE']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.gradient}
-      >
-        {/* Month modal */}
-        <Modal
-          animationType="fade"
-          transparent
-          visible={isMonthOpen}
-          onRequestClose={() => setIsMonthOpen(false)}
-        >
-          <View style={styles.modalOverlay}>
-            <Pressable style={styles.modalBackdrop} onPress={() => setIsMonthOpen(false)} />
+      <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+        <View style={styles.screen}>
+          {/* Month modal */}
+          <Modal animationType="fade" transparent visible={isMonthOpen} onRequestClose={closeMonth}>
+            <View style={styles.modalOverlay}>
+              <Pressable style={styles.modalBackdrop} onPress={closeMonth} />
 
-            <View style={styles.modalCard}>
-              <View style={styles.modalHeaderRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.modalTitle}>{monthLabel}</Text>
-                  <Text style={styles.modalSubtitle} numberOfLines={1} ellipsizeMode="tail">
-                    {activeSummary.title}
-                  </Text>
+              <View style={styles.modalCard}>
+                <View style={styles.modalHeaderRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalTitle}>{monthTitle}</Text>
+                    <Text style={styles.modalSubtitle} numberOfLines={1} ellipsizeMode="tail">
+                      {activeSummary.title}
+                    </Text>
+                  </View>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.modalCloseBtn, pressed && { opacity: 0.9 }]}
+                    onPress={closeMonth}
+                    accessibilityLabel="Close month calendar"
+                  >
+                    <Text style={styles.modalCloseText}>✕</Text>
+                  </Pressable>
                 </View>
 
-                <Pressable
-                  style={({ pressed }) => [styles.modalCloseBtn, pressed && { opacity: 0.9 }]}
-                  onPress={() => setIsMonthOpen(false)}
-                  accessibilityLabel="Close month view"
-                >
-                  <Text style={styles.modalCloseText}>✕</Text>
-                </Pressable>
-              </View>
+                <View style={styles.weekdayRow}>
+                  {WEEKDAYS_MON.map(w => (
+                    <Text key={w} style={styles.weekdayText}>
+                      {w}
+                    </Text>
+                  ))}
+                </View>
 
-              <View style={styles.weekdayRow}>
-                {WEEKDAYS_MON.map(w => (
-                  <Text key={w} style={styles.weekdayText}>
-                    {w}
-                  </Text>
-                ))}
-              </View>
-
-              <ScrollView
-                style={styles.modalScroll}
-                contentContainerStyle={styles.modalScrollContent}
-                showsVerticalScrollIndicator={false}
-              >
                 <View style={styles.monthGrid}>
-                  {monthGrid.cells.map((cell, i) => {
-                    if (!cell) return <View key={`empty-${i}`} style={styles.dayCell} />;
-
+                  {monthGrid.cells.map(cell => {
                     const intensity =
-                      maxMonthCount <= 0
-                        ? 0.10
-                        : 0.12 + 0.88 * clamp01(cell.count / maxMonthCount);
+                      maxUpcoming30 <= 0 ? 0 : clamp01(cell.count / maxUpcoming30);
 
+                    const dotOpacity = cell.count > 0 ? 0.25 + 0.75 * intensity : 0;
+                    const countOpacity = cell.count > 0 ? 1 : 0;
+
+                    // Make cells tappable (optional, but useful)
                     return (
-                      <View
+                      <Pressable
                         key={cell.dateKey}
-                        style={[
+                        style={({ pressed }) => [
                           styles.dayCell,
                           cell.isToday && styles.dayCellToday,
-                          cell.isPast && styles.dayCellPast,
+                          pressed && styles.dayCellPressed,
+                          !cell.inMonth && styles.dayCellOutMonth,
                         ]}
+                        onPress={() => toastForDay(cell.date, cell.count)}
+                        hitSlop={6}
                       >
                         <Text
                           style={[
                             styles.dayNumber,
                             cell.isToday && styles.dayNumberToday,
-                            cell.isPast && { opacity: 0.45 },
+                            !cell.inMonth && styles.dayNumberOutMonth,
                           ]}
                         >
                           {cell.date.getDate()}
                         </Text>
 
-                        <View
-                          style={[
-                            styles.dayDot,
-                            { opacity: cell.count === 0 ? 0.10 : intensity },
-                          ]}
-                        />
-
-                        <Text
-                          style={[
-                            styles.dayCount,
-                            cell.count === 0 && { opacity: 0.35 },
-                            cell.isPast && { opacity: 0.35 },
-                          ]}
-                        >
-                          {cell.count}
-                        </Text>
-                      </View>
+                        {/* iOS-like: 0 shows nothing (but we keep layout via opacity placeholders) */}
+                        <View style={styles.dayMetaBox}>
+                          <View style={[styles.dayDot, { opacity: dotOpacity }]} />
+                          <Text style={[styles.dayCount, { opacity: countOpacity }]}>
+                            {cell.count}
+                          </Text>
+                        </View>
+                      </Pressable>
                     );
                   })}
                 </View>
 
                 <Text style={styles.modalLegend}>
-                  Counts = cards scheduled for that day (overdue is counted into “today”).
+                  Dot + count appear only when cards are scheduled (&gt; 0). Overdue cards are counted into “today”.
                 </Text>
-              </ScrollView>
-            </View>
-          </View>
-        </Modal>
-
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-          {/* Header */}
-          <View style={styles.headingRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.appTitle}>DevCards</Text>
-              <Text style={styles.appSubtitle}>Make fundamentals feel automatic.</Text>
-            </View>
-
-            <Pressable
-              style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
-              onPress={() => navigation.navigate('Settings')}
-            >
-              <Text style={styles.iconButtonText}>⚙︎</Text>
-            </Pressable>
-          </View>
-
-          {/* Calendar (fixed height card) */}
-          <View style={[styles.cardGlass, styles.calendarCardFixed]}>
-            <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardTitle}>Calendar</Text>
-
-              {/* Week/Month: Month opens modal */}
-              <View style={styles.segment}>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.segmentItem,
-                    !isMonthOpen && styles.segmentItemActive,
-                    pressed && styles.segmentPressed,
-                  ]}
-                  onPress={() => setIsMonthOpen(false)}
-                >
-                  <Text style={[styles.segmentText, !isMonthOpen && styles.segmentTextActive]}>
-                    Week
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.segmentItem,
-                    isMonthOpen && styles.segmentItemActive,
-                    pressed && styles.segmentPressed,
-                  ]}
-                  onPress={() => setIsMonthOpen(true)}
-                >
-                  <Text style={[styles.segmentText, isMonthOpen && styles.segmentTextActive]}>
-                    Month
-                  </Text>
-                </Pressable>
               </View>
             </View>
+          </Modal>
 
-            {/* Deck name row (single line, ellipsis → height never changes) */}
-            <View style={styles.calendarDeckRow}>
-              <Text style={styles.calendarDeckLabel}>Deck</Text>
-              <Text style={styles.calendarDeckValue} numberOfLines={1} ellipsizeMode="tail">
-                {activeSummary.title}
-              </Text>
-            </View>
-
-            {/* Week preview: DATE (top) -> BAR -> Today/Mon/... (bottom) */}
-            <View style={styles.calendarGrid7}>
-              {calendar7.map((day, idx) => {
-                const date = new Date(today0.getTime());
-                date.setDate(date.getDate() + idx);
-
-                const dateText = formatMD(date);
-                const label = idx === 0 ? 'Today' : weekdayShort(date);
-
-                const barH = 28; // must match styles.calBarBg7.height
-                const ratio = maxUpcoming7 <= 0 ? 0 : clamp01(day.count / maxUpcoming7);
-                const fillHeight =
-                  day.count <= 0 ? 0 : Math.max(4, Math.round(barH * ratio));
-
-                const isToday = idx === 0;
-
-                return (
-                  <View key={day.dateKey} style={styles.calCell7}>
-                    <Text style={[styles.calDate7, isToday && styles.calDate7Today]}>
-                      {dateText}
-                    </Text>
-
-                    <View style={styles.calBarBg7}>
-                      <View
-                        style={[
-                          styles.calBarFill7,
-                          {
-                            height: fillHeight,
-                            opacity: day.count === 0 ? 0.14 : 1,
-                          },
-                        ]}
-                      />
-                    </View>
-
-                    <Text style={[styles.calLabel7, isToday && styles.calLabel7Today]} numberOfLines={1}>
-                      {label}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-
-          {/* Active deck overview */}
-          <View style={styles.cardGlass}>
-            <View style={styles.deckHeaderRow}>
+          <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+            {/* Header */}
+            <View style={styles.headingRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.deckTitle} numberOfLines={1}>
+                <Text style={styles.appTitle}>DevCards</Text>
+                <Text style={styles.appSubtitle}>Make fundamentals feel automatic.</Text>
+              </View>
+
+              <Pressable
+                style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
+                onPress={() => navigation.navigate('Settings')}
+              >
+                <Text style={styles.iconButtonText}>⚙︎</Text>
+              </Pressable>
+            </View>
+
+            {/* Calendar card (fixed height, no jumping) */}
+            <View style={[styles.cardGlass, styles.calendarCardFixed]}>
+              <View style={styles.cardHeaderRow}>
+                <Text style={styles.cardTitle}>Calendar</Text>
+
+                {/* Week / Month */}
+                <View style={styles.segment}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.segmentItem,
+                      !isMonthOpen && styles.segmentItemActive,
+                      pressed && styles.segmentPressed,
+                    ]}
+                    onPress={() => {
+                      // Week preview is always shown in-card.
+                      if (isMonthOpen) closeMonth();
+                    }}
+                  >
+                    <Text style={[styles.segmentText, !isMonthOpen && styles.segmentTextActive]}>
+                      Week
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.segmentItem,
+                      isMonthOpen && styles.segmentItemActive,
+                      pressed && styles.segmentPressed,
+                    ]}
+                    onPress={openMonth}
+                  >
+                    <Text style={[styles.segmentText, isMonthOpen && styles.segmentTextActive]}>
+                      Month
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              {/* Deck row: single line ellipsis so height stays stable */}
+              <View style={styles.calendarDeckRow}>
+                <Text style={styles.calendarDeckLabel}>Deck</Text>
+                <Text style={styles.calendarDeckValue} numberOfLines={1} ellipsizeMode="tail">
                   {activeSummary.title}
                 </Text>
-                <Text style={styles.deckMeta} numberOfLines={1}>
-                  {activeSummary.locale} · {activeSummary.totalCards} cards · v{activeSummary.version}
-                </Text>
               </View>
 
-              <View style={[styles.badge, activeSummary.deckType !== 1 && styles.badgePremium]}>
-                <Text style={[styles.badgeText, activeSummary.deckType !== 1 && styles.badgeTextPremium]}>
-                  {activeSummary.deckType === 1 ? 'Free' : 'Premium'}
-                </Text>
-              </View>
-            </View>
+              {/* Week preview: date on top, label at bottom, tap-to-toast */}
+              <View style={styles.calendarGrid7}>
+                {calendar7.map((day, idx) => {
+                  const date = new Date(today0.getTime());
+                  date.setDate(date.getDate() + idx);
 
-            {!activeSummary.canStudy ? (
-              <Text style={styles.placeholderText}>
-                This deck is a placeholder in this build. Content will be available later.
+                  const topDate = formatTooltipDate(date); // e.g. "Aug 12"
+                  const bottomLabel = idx === 0 ? 'Today' : weekdayShort(date);
+
+                  const ratio = maxUpcoming7 <= 0 ? 0 : day.count / maxUpcoming7;
+                  const fill = day.count === 0 ? 0 : Math.max(0.1, clamp01(ratio));
+                  const rest = 1 - fill;
+
+                  return (
+                    <Pressable
+                      key={day.dateKey}
+                      style={({ pressed }) => [styles.calCell7, pressed && styles.calCell7Pressed]}
+                      onPress={() => toastForDay(date, day.count)}
+                      hitSlop={8}
+                    >
+                      <Text style={styles.calDate7} numberOfLines={1}>
+                        {topDate}
+                      </Text>
+
+                      <View style={styles.calBarBg7}>
+                        {/* spacer first => fill grows from bottom */}
+                        <View style={{ flex: rest }} />
+                        <View
+                          style={[
+                            styles.calBarFill7,
+                            {
+                              flex: fill,
+                              opacity: day.count === 0 ? 0.18 : 1,
+                            },
+                          ]}
+                        />
+                      </View>
+
+                      <Text style={styles.calLabel7} numberOfLines={1}>
+                        {bottomLabel}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.hintText}>
+                Tip: Select a deck below to switch what this calendar represents.
               </Text>
-            ) : (
-              <>
-                <View style={styles.statsRow}>
-                  <View style={styles.statPill}>
-                    <Text style={styles.statNumber}>{activeSummary.dueToday}</Text>
-                    <Text style={styles.statLabel}>due</Text>
-                  </View>
-                  <View style={styles.statPill}>
-                    <Text style={styles.statNumber}>{activeSummary.newToday}</Text>
-                    <Text style={styles.statLabel}>new</Text>
-                  </View>
-                  <View style={styles.statPill}>
-                    <Text style={styles.statNumber}>{activeSummary.masteredApprox}</Text>
-                    <Text style={styles.statLabel}>mastered</Text>
-                  </View>
-                </View>
-
-                <View style={styles.progressBarBg}>
-                  <View
-                    style={[
-                      styles.progressBarFill,
-                      {
-                        flex: activeSummary.percent,
-                        opacity: activeSummary.percent === 0 ? 0 : 1,
-                      },
-                    ]}
-                  />
-                  <View style={{ flex: 1 - activeSummary.percent }} />
-                </View>
-
-                <Text style={styles.progressText}>
-                  {Math.round(activeSummary.percent * 100)}% overall · {activeSummary.dueToday} due today
-                </Text>
-              </>
-            )}
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.primaryButton,
-                !canStudy && styles.primaryButtonDisabled,
-                pressed && styles.primaryButtonPressed,
-              ]}
-              disabled={!canStudy}
-              onPress={() => navigation.navigate('Review', {})}
-            >
-              <Text style={styles.primaryButtonText}>{canStudy ? 'Start review' : 'Coming soon'}</Text>
-            </Pressable>
-          </View>
-
-          {/* Deck list (ONE card) with ALL / Free / Premium filter */}
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitle}>Decks</Text>
-              <Text style={styles.sectionMeta}>{deckSummaries.length}</Text>
             </View>
 
-            <View style={styles.segmentThree}>
-              {(['all', 'free', 'premium'] as const).map(key => {
-                const active = deckFilter === key;
-                const label = key === 'all' ? 'ALL' : key === 'free' ? 'Free' : 'Premium';
+            {/* Selected deck overview */}
+            <View style={styles.cardGlass}>
+              <View style={styles.deckHeaderRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.deckTitle} numberOfLines={1}>
+                    {activeSummary.title}
+                  </Text>
+                  <Text style={styles.deckMeta} numberOfLines={1}>
+                    {activeSummary.locale} · {activeSummary.totalCards} cards · v{activeSummary.version}
+                  </Text>
+                </View>
+
+                <View style={[styles.badge, activeSummary.deckType !== 1 && styles.badgePremium]}>
+                  <Text style={[styles.badgeText, activeSummary.deckType !== 1 && styles.badgeTextPremium]}>
+                    {activeSummary.deckType === 1 ? 'Free' : 'Premium'}
+                  </Text>
+                </View>
+              </View>
+
+              {!activeSummary.canStudy ? (
+                <Text style={styles.placeholderText}>
+                  This deck is a placeholder in this build. Content will be available later.
+                </Text>
+              ) : (
+                <>
+                  <View style={styles.statsRow}>
+                    <View style={styles.statPill}>
+                      <Text style={styles.statNumber}>{activeSummary.dueToday}</Text>
+                      <Text style={styles.statLabel}>due</Text>
+                    </View>
+                    <View style={styles.statPill}>
+                      <Text style={styles.statNumber}>{activeSummary.newToday}</Text>
+                      <Text style={styles.statLabel}>new</Text>
+                    </View>
+                    <View style={styles.statPill}>
+                      <Text style={styles.statNumber}>{activeSummary.masteredApprox}</Text>
+                      <Text style={styles.statLabel}>mastered</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.progressBarBg}>
+                    <View
+                      style={[
+                        styles.progressBarFill,
+                        { flex: activeSummary.percent, opacity: activeSummary.percent === 0 ? 0 : 1 },
+                      ]}
+                    />
+                    <View style={{ flex: 1 - activeSummary.percent }} />
+                  </View>
+
+                  <Text style={styles.progressText}>
+                    {Math.round(activeSummary.percent * 100)}% overall · {activeSummary.dueToday} due today
+                  </Text>
+                </>
+              )}
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  !canStudy && styles.primaryButtonDisabled,
+                  pressed && styles.primaryButtonPressed,
+                ]}
+                disabled={!canStudy}
+                onPress={() => navigation.navigate('Review', {})}
+              >
+                <Text style={styles.primaryButtonText}>{canStudy ? 'Start review' : 'Coming soon'}</Text>
+              </Pressable>
+            </View>
+
+            {/* Deck list (ONE card) with ALL / Free / Premium filter */}
+            <View style={styles.sectionCard}>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Decks</Text>
+                <Text style={styles.sectionMeta}>{deckSummaries.length}</Text>
+              </View>
+
+              <View style={styles.segmentThree}>
+                {(['all', 'free', 'premium'] as const).map(key => {
+                  const active = deckFilter === key;
+                  const label = key === 'all' ? 'ALL' : key === 'free' ? 'Free' : 'Premium';
+
+                  return (
+                    <Pressable
+                      key={key}
+                      style={({ pressed }) => [
+                        styles.segmentThreeItem,
+                        active && styles.segmentThreeItemActive,
+                        pressed && styles.segmentPressed,
+                      ]}
+                      onPress={() => setDeckFilter(key)}
+                    >
+                      <Text style={[styles.segmentThreeText, active && styles.segmentThreeTextActive]}>
+                        {label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.sectionHint}>
+                Tap a deck to switch what you study (calendar + start button).
+              </Text>
+
+              {filteredDecks.map(d => {
+                const active = d.slug === selectedSlug;
+                const isPremium = d.deckType !== 1;
 
                 return (
                   <Pressable
-                    key={key}
+                    key={d.slug}
                     style={({ pressed }) => [
-                      styles.segmentThreeItem,
-                      active && styles.segmentThreeItemActive,
-                      pressed && styles.segmentPressed,
+                      styles.deckRow,
+                      active && styles.deckRowActive,
+                      pressed && styles.deckRowPressed,
                     ]}
-                    onPress={() => setDeckFilter(key)}
+                    onPress={() => selectDeck(d.slug)}
                   >
-                    <Text style={[styles.segmentThreeText, active && styles.segmentThreeTextActive]}>
-                      {label}
-                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.deckRowTitle, active && styles.deckRowTitleActive]} numberOfLines={1}>
+                        {d.title}
+                      </Text>
+                      <Text style={styles.deckRowSub} numberOfLines={1}>
+                        {isPremium ? 'Premium' : 'Free'} · {d.totalCards} cards
+                      </Text>
+                    </View>
+
+                    {d.canStudy ? (
+                      <View style={styles.deckRowRight}>
+                        <Text style={styles.duePill}>{d.dueToday} due</Text>
+                        <View style={styles.rowBarBg}>
+                          <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
+                          <View style={{ flex: 1 - d.percent }} />
+                        </View>
+                      </View>
+                    ) : (
+                      <Text style={styles.lockedPill}>Locked</Text>
+                    )}
                   </Pressable>
                 );
               })}
             </View>
 
-            <Text style={styles.sectionHint}>
-              Tap a deck to switch what you study (calendar + start button).
-            </Text>
+            <View style={{ height: 24 }} />
+          </ScrollView>
 
-            {filteredDecks.map(d => {
-              const active = d.slug === selectedSlug;
-              const isPremium = d.deckType !== 1;
-
-              return (
-                <Pressable
-                  key={d.slug}
-                  style={({ pressed }) => [
-                    styles.deckRow,
-                    active && styles.deckRowActive,
-                    pressed && styles.deckRowPressed,
-                  ]}
-                  onPress={() => selectDeck(d.slug)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.deckRowTitle, active && styles.deckRowTitleActive]} numberOfLines={1}>
-                      {d.title}
-                    </Text>
-                    <Text style={styles.deckRowSub} numberOfLines={1}>
-                      {isPremium ? 'Premium' : 'Free'} · {d.totalCards} cards
-                    </Text>
-                  </View>
-
-                  {d.canStudy ? (
-                    <View style={styles.deckRowRight}>
-                      <Text style={styles.duePill}>{d.dueToday} due</Text>
-                      <View style={styles.rowBarBg}>
-                        <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
-                        <View style={{ flex: 1 - d.percent }} />
-                      </View>
-                    </View>
-                  ) : (
-                    <Text style={styles.lockedPill}>Locked</Text>
-                  )}
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <View style={{ height: 24 }} />
-        </ScrollView>
+          {/* Toast overlay (week taps, month taps) */}
+          {toastVisible && (
+            <View pointerEvents="none" style={styles.toastWrap}>
+              <Animated.View
+                style={[
+                  styles.toastCard,
+                  {
+                    opacity: toastAnim,
+                    transform: [
+                      {
+                        translateY: toastAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [8, 0],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <Text style={styles.toastText}>{toastText}</Text>
+              </Animated.View>
+            </View>
+          )}
+        </View>
       </LinearGradient>
     </SafeAreaView>
   );
@@ -757,6 +776,7 @@ const BORDER = 'rgba(255,255,255,0.45)';
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
   gradient: { flex: 1 },
+  screen: { flex: 1 },
   container: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 30 },
 
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
@@ -795,16 +815,10 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
 
-  // Calendar card fixed sizing to prevent “jumping” when deck names vary
-  calendarCardFixed: {
-    minHeight: 200,
-  },
+  // Calendar fixed sizing to prevent “jumping” when deck names vary
+  calendarCardFixed: { minHeight: 220 },
 
-  cardHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   cardTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
 
   segment: {
@@ -821,52 +835,30 @@ const styles = StyleSheet.create({
   segmentText: { fontSize: 12, fontWeight: '700', color: '#111827' },
   segmentTextActive: { color: '#4F46E5' },
 
-  calendarDeckRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  calendarDeckLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginRight: 10,
-  },
-  calendarDeckValue: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#111827',
-  },
+  calendarDeckRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
+  calendarDeckLabel: { fontSize: 12, color: '#6B7280', marginRight: 10 },
+  calendarDeckValue: { flex: 1, fontSize: 12, fontWeight: '800', color: '#111827' },
 
-  // Week preview grid: DATE -> BAR -> LABEL
-  calendarGrid7: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 14,
-  },
-  calCell7: { flex: 1, alignItems: 'center' },
+  // Week preview grid
+  calendarGrid7: { flexDirection: 'row', marginTop: 12 },
+  calCell7: { flex: 1, alignItems: 'center', paddingVertical: 4 },
+  calCell7Pressed: { opacity: 0.9 },
   calDate7: { fontSize: 10, fontWeight: '800', color: '#111827' },
-  calDate7Today: { color: '#4F46E5' },
-
+  calLabel7: { marginTop: 6, fontSize: 10, color: '#6B7280', fontWeight: '700' },
   calBarBg7: {
     marginTop: 8,
-    height: 28,
+    height: 30,
     width: 10,
     borderRadius: 999,
     backgroundColor: 'rgba(17,24,39,0.08)',
     overflow: 'hidden',
-    justifyContent: 'flex-end',
+    flexDirection: 'column',
   },
-  calBarFill7: {
-    width: 10,
-    borderRadius: 999,
-    backgroundColor: '#4F46E5',
-  },
+  calBarFill7: { width: 10, borderRadius: 999, backgroundColor: '#4F46E5' },
 
-  calLabel7: { marginTop: 8, fontSize: 10, color: '#6B7280' },
-  calLabel7Today: { color: '#4F46E5', fontWeight: '800' },
+  hintText: { marginTop: 10, fontSize: 11, color: '#6B7280' },
 
-  // Active deck overview
+  // Selected deck overview
   deckHeaderRow: { flexDirection: 'row', alignItems: 'center' },
   deckTitle: { fontSize: 18, fontWeight: '800', color: '#111827' },
   deckMeta: { marginTop: 4, color: '#6B7280', fontSize: 12 },
@@ -879,10 +871,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(79,70,229,0.25)',
   },
-  badgePremium: {
-    backgroundColor: 'rgba(17,24,39,0.06)',
-    borderColor: 'rgba(17,24,39,0.10)',
-  },
+  badgePremium: { backgroundColor: 'rgba(17,24,39,0.06)', borderColor: 'rgba(17,24,39,0.10)' },
   badgeText: { fontSize: 12, fontWeight: '800', color: '#4F46E5' },
   badgeTextPremium: { color: '#111827' },
 
@@ -923,7 +912,7 @@ const styles = StyleSheet.create({
   primaryButtonPressed: { opacity: 0.92 },
   primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
 
-  // Deck list (one card)
+  // Deck list card
   sectionCard: {
     borderRadius: 22,
     paddingVertical: 14,
@@ -935,11 +924,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     marginBottom: 14,
   },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-  },
+  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   sectionTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
   sectionMeta: { fontSize: 12, color: '#6B7280' },
   sectionHint: { marginTop: 8, fontSize: 12, color: '#6B7280' },
@@ -951,12 +936,7 @@ const styles = StyleSheet.create({
     padding: 4,
     backgroundColor: 'rgba(17,24,39,0.05)',
   },
-  segmentThreeItem: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 999,
-    alignItems: 'center',
-  },
+  segmentThreeItem: { flex: 1, paddingVertical: 8, borderRadius: 999, alignItems: 'center' },
   segmentThreeItemActive: { backgroundColor: 'rgba(79,70,229,0.14)' },
   segmentThreeText: { fontSize: 12, fontWeight: '800', color: '#111827' },
   segmentThreeTextActive: { color: '#4F46E5' },
@@ -976,7 +956,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(79,70,229,0.18)',
   },
   deckRowPressed: { opacity: 0.92 },
-
   deckRowTitle: { fontSize: 13, fontWeight: '800', color: '#111827' },
   deckRowTitleActive: { color: '#4F46E5' },
   deckRowSub: { marginTop: 3, fontSize: 11, color: '#6B7280' },
@@ -1001,7 +980,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   rowBarFill: { backgroundColor: '#4F46E5', borderRadius: 999 },
-
   lockedPill: {
     marginLeft: 10,
     fontSize: 11,
@@ -1013,28 +991,25 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(17,24,39,0.06)',
   },
 
-  // Modal styles
+  // Month modal (opaque background)
   modalOverlay: {
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 16,
     backgroundColor: 'rgba(17,24,39,0.25)',
   },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
   modalCard: {
     borderRadius: 22,
     paddingVertical: 14,
     paddingHorizontal: 14,
-    backgroundColor: 'rgba(255,255,255,0.92)',
+    backgroundColor: '#FFFFFF', // opaque (requested)
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.55)',
+    borderColor: 'rgba(17,24,39,0.06)',
     shadowColor: '#000',
-    shadowOpacity: 0.16,
+    shadowOpacity: 0.18,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 12 },
-    maxHeight: '82%',
   },
   modalHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   modalTitle: { fontSize: 16, fontWeight: '900', color: '#111827' },
@@ -1059,9 +1034,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  modalScroll: { flex: 1 },
-  modalScrollContent: { paddingBottom: 10 },
-
   monthGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   dayCell: {
     width: '14.2857%',
@@ -1070,18 +1042,39 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 6,
   },
+  dayCellPressed: { opacity: 0.92 },
   dayCellToday: { backgroundColor: 'rgba(79,70,229,0.10)' },
-  dayCellPast: { opacity: 0.75 },
+  dayCellOutMonth: { opacity: 0.65 },
+
   dayNumber: { fontSize: 12, fontWeight: '900', color: '#111827' },
   dayNumberToday: { color: '#4F46E5' },
+  dayNumberOutMonth: { color: '#6B7280' },
+
+  // Fixed meta box so row height stays identical even if count is 0
+  dayMetaBox: { marginTop: 6, alignItems: 'center', height: 26, justifyContent: 'center' },
   dayDot: {
-    marginTop: 6,
     width: 10,
     height: 10,
     borderRadius: 999,
     backgroundColor: '#4F46E5',
   },
-  dayCount: { marginTop: 6, fontSize: 11, fontWeight: '800', color: '#111827' },
+  dayCount: { marginTop: 4, fontSize: 11, fontWeight: '800', color: '#111827' },
 
-  modalLegend: { marginTop: 10, fontSize: 11, color: '#6B7280' },
+  modalLegend: { marginTop: 8, fontSize: 11, color: '#6B7280' },
+
+  // Toast
+  toastWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 22,
+    alignItems: 'center',
+  },
+  toastCard: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.88)',
+  },
+  toastText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
 });
