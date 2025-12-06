@@ -1,5 +1,13 @@
 // mobile/src/screens/HomeScreen.tsx
-import React, { useState, useCallback, useMemo } from 'react';
+// Home dashboard: calendar (7/30 toggle) + active deck overview + Free/Premium vertical deck list.
+//
+// Layout goals:
+// 1) Top: Calendar (7d/30d switch) for the currently selected deck.
+// 2) Middle: Selected deck overview (due/new/mastered + progress + start button).
+// 3) Bottom: Vertical deck list split into Free and Premium sections.
+// 4) Keep existing style: light gradient background + glass cards.
+
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   SafeAreaView,
   View,
@@ -14,128 +22,258 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+
+// Deck data + helpers (you already use these in your project)
 import {
   MOCK_DECKS,
   getMockDeckBySlug,
   getActiveDeckSlug,
   setActiveDeckSlug,
 } from '../mock/jsCoreStarterMock';
+
 import type { CardProgress } from '../review/model';
-import { isDue, formatDateKey, INTERVALS_DAYS } from '../review/model';
+import { isDue, formatDateKey } from '../review/model';
+
 import {
   loadDeckProgress,
   loadOrInitDailyStats,
   type DailyStats,
 } from '../review/storage';
+
 import { syncDailyReminders } from '../notifications/reminders';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
-interface CalendarDay {
-  dateKey: string;
+type CalendarRange = 7 | 30;
+
+type CalendarDay = {
+  dateKey: string; // YYYY-MM-DD
   count: number;
-}
+};
 
-interface HomeState {
+type DeckSummary = {
+  slug: string;
+  title: string;
+  locale: string;
+  version: string;
+  deckType: number; // 1 = free starter, else premium
+  totalCards: number;
+  canStudy: boolean;
+
+  dueToday: number;
+  plannedToday: number;
+  newToday: number;
+  masteredApprox: number;
+  percent: number; // 0..1
+
+  // Precomputed upcoming schedule for the next 30 days (used for both 7/30 views).
+  upcoming30: CalendarDay[];
+};
+
+type HomeState = {
   loading: boolean;
-  progress: CardProgress[];
-  dailyStats: DailyStats | null;
-  todayDueCount: number;
-  calendar: CalendarDay[];
+  asOfISO: string;
+  deckSummaries: DeckSummary[];
+};
+
+function clamp01(v: number) {
+  return Math.max(0, Math.min(1, v));
 }
 
-function buildCalendar(
+/**
+ * Build a fixed-length (days) calendar array for upcoming reviews.
+ * - Keeps order stable (today ... today+days-1)
+ * - Counts how many cards have nextReviewAt on each day
+ */
+function buildUpcoming(
   progress: CardProgress[],
   now: Date,
-): { todayDueCount: number; calendar: CalendarDay[] } {
-  const calendar: CalendarDay[] = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(now);
-    d.setDate(now.getDate() + i);
-    calendar.push({ dateKey: formatDateKey(d), count: 0 });
+  days: number,
+): CalendarDay[] {
+  const out: CalendarDay[] = [];
+  const index = new Map<string, number>();
+
+  for (let i = 0; i < days; i++) {
+    const d = new Date(now.getTime());
+    d.setDate(d.getDate() + i);
+    const key = formatDateKey(d);
+    index.set(key, i);
+    out.push({ dateKey: key, count: 0 });
   }
 
   for (const p of progress) {
     if (!p.nextReviewAt) continue;
     const key = formatDateKey(new Date(p.nextReviewAt));
-    const day = calendar.find(c => c.dateKey === key);
-    if (day) day.count += 1;
+    const idx = index.get(key);
+    if (idx === undefined) continue;
+    out[idx].count += 1;
   }
 
-  const todayDueCount = progress.filter(p => isDue(p, now)).length;
-  return { todayDueCount, calendar };
+  return out;
+}
+
+function formatMMDD(dateKey: string) {
+  // YYYY-MM-DD -> MM-DD
+  return dateKey.slice(5);
+}
+
+function weekdayShort(d: Date) {
+  // Force English weekday labels for consistency.
+  return d.toLocaleDateString('en-US', { weekday: 'short' });
 }
 
 export function HomeScreen({ navigation }: Props) {
-  const [selectedSlug, setSelectedSlug] = useState(() => getActiveDeckSlug());
-  const deck = useMemo(() => {
+  /**
+   * Persist the last selected deck so:
+   * - Review screen can use the same deck without extra params
+   * - Next app launch stays on your last deck
+   */
+  const [selectedSlug, setSelectedSlug] = useState(() => {
+    const stored = getActiveDeckSlug();
+    return getMockDeckBySlug(stored)?.Slug ?? MOCK_DECKS[0]?.Slug;
+  });
+
+  // Calendar display range toggle
+  const [calendarRange, setCalendarRange] = useState<CalendarRange>(7);
+
+  // Home data state
+  const [state, setState] = useState<HomeState>({
+    loading: true,
+    asOfISO: new Date().toISOString(),
+    deckSummaries: [],
+  });
+
+  // Deck object for the active selection.
+  const activeDeck = useMemo(() => {
     return getMockDeckBySlug(selectedSlug) ?? MOCK_DECKS[0];
   }, [selectedSlug]);
 
-  const [state, setState] = useState<HomeState>({
-    loading: true,
-    progress: [],
-    dailyStats: null,
-    todayDueCount: 0,
-    calendar: [],
-  });
-
+  /**
+   * Load summaries when entering Home (focus).
+   * We compute per-deck due/progress so the vertical list is actually useful.
+   */
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
 
       async function load() {
         setState(prev => ({ ...prev, loading: true }));
+
         const now = new Date();
+        const deckSummaries: DeckSummary[] = [];
+        let totalDueAllDecks = 0;
 
-        if (!deck.Cards || deck.Cards.length === 0) {
-          const { todayDueCount, calendar } = buildCalendar([], now);
-          void syncDailyReminders({ remainingDueCount: 0, now });
+        for (const deck of MOCK_DECKS) {
+          const totalCards = deck.TotalCards ?? deck.Cards?.length ?? 0;
+          const canStudy = (deck.Cards?.length ?? 0) > 0;
 
+          // Premium placeholder (no cards shipped yet)
+          if (!canStudy) {
+            deckSummaries.push({
+              slug: deck.Slug,
+              title: deck.Title,
+              locale: deck.Locale,
+              version: deck.Version,
+              deckType: deck.DeckType,
+              totalCards,
+              canStudy,
+              dueToday: 0,
+              plannedToday: 0,
+              newToday: 0,
+              masteredApprox: 0,
+              percent: 0,
+              upcoming30: buildUpcoming([], now, 30),
+            });
+            continue;
+          }
+
+          // Load progress and daily stats for this deck
+          const progress = await loadDeckProgress(deck);
           if (cancelled) return;
-          setState({
-            loading: false,
-            progress: [],
-            dailyStats: ({ plannedCount: 0 } as DailyStats),
-            todayDueCount,
-            calendar,
+
+          const dailyStats: DailyStats = await loadOrInitDailyStats(
+            deck,
+            progress,
+          );
+          if (cancelled) return;
+
+          const dueToday = progress.filter(p => isDue(p, now)).length;
+          const plannedToday = dailyStats.plannedCount;
+          const newToday = Math.max(plannedToday - dueToday, 0);
+          const masteredApprox = Math.max(totalCards - (dueToday + newToday), 0);
+          const percent = totalCards > 0 ? clamp01(masteredApprox / totalCards) : 0;
+
+          totalDueAllDecks += dueToday;
+
+          deckSummaries.push({
+            slug: deck.Slug,
+            title: deck.Title,
+            locale: deck.Locale,
+            version: deck.Version,
+            deckType: deck.DeckType,
+            totalCards,
+            canStudy,
+            dueToday,
+            plannedToday,
+            newToday,
+            masteredApprox,
+            percent,
+            upcoming30: buildUpcoming(progress, now, 30),
           });
-          return;
         }
 
-        const progress = await loadDeckProgress(deck);
+        // App-level reminders: if ANY deck has due cards, remind at 20:00.
+        void syncDailyReminders({ remainingDueCount: totalDueAllDecks, now });
+
         if (cancelled) return;
-
-        const dailyStats = await loadOrInitDailyStats(deck, progress);
-        if (cancelled) return;
-
-        const { todayDueCount, calendar } = buildCalendar(progress, now);
-
-        // ✅ only one sync
-        void syncDailyReminders({ remainingDueCount: todayDueCount, now });
-
-        setState({
-          loading: false,
-          progress,
-          dailyStats,
-          todayDueCount,
-          calendar,
-        });
+        setState({ loading: false, asOfISO: now.toISOString(), deckSummaries });
       }
 
-      load();
+      void load();
 
       return () => {
         cancelled = true;
       };
-    }, [deck.Slug]),
+    }, []),
   );
 
-  const { loading, dailyStats, todayDueCount, calendar } = state;
-  const totalCards = deck.TotalCards ?? deck.Cards?.length ?? 0;
-  const canStudy = (deck.Cards?.length ?? 0) > 0;
+  const { loading, asOfISO, deckSummaries } = state;
+  const asOf = useMemo(() => new Date(asOfISO), [asOfISO]);
 
-  if (loading || !dailyStats) {
+  // Split deck list into Free / Premium sections
+  const freeDecks = useMemo(
+    () => deckSummaries.filter(d => d.deckType === 1),
+    [deckSummaries],
+  );
+  const premiumDecks = useMemo(
+    () => deckSummaries.filter(d => d.deckType !== 1),
+    [deckSummaries],
+  );
+
+  const activeSummary = useMemo(() => {
+    return (
+      deckSummaries.find(d => d.slug === activeDeck.Slug) ??
+      deckSummaries[0] ??
+      null
+    );
+  }, [deckSummaries, activeDeck.Slug]);
+
+  // Calendar for selected deck: slice from precomputed 30-day list
+  const calendar = useMemo(() => {
+    const list = activeSummary?.upcoming30 ?? buildUpcoming([], asOf, 30);
+    return calendarRange === 7 ? list.slice(0, 7) : list;
+  }, [activeSummary, asOf, calendarRange]);
+
+  // For visual scaling (bars)
+  const maxUpcoming = useMemo(() => {
+    let max = 0;
+    for (const d of calendar) max = Math.max(max, d.count);
+    return max;
+  }, [calendar]);
+
+  const canStudy = activeSummary?.canStudy ?? false;
+
+  if (loading || !activeSummary) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient
@@ -146,29 +284,27 @@ export function HomeScreen({ navigation }: Props) {
         >
           <View style={styles.center}>
             <ActivityIndicator size="large" color="#6366F1" />
-            <Text style={styles.loadingText}>Loading home...</Text>
+            <Text style={styles.loadingText}>Loading home…</Text>
           </View>
         </LinearGradient>
       </SafeAreaView>
     );
   }
 
-  const plannedToday = dailyStats.plannedCount;
-  const newToday = Math.max(plannedToday - todayDueCount, 0);
-  const masteredApprox = Math.max(totalCards - (todayDueCount + newToday), 0);
-  const overallPercent = totalCards > 0 ? masteredApprox / totalCards : 0;
+  function selectDeck(slug: string) {
+    // Persist selection (Review screen + next app launch use the same deck).
+    setActiveDeckSlug(slug);
+    setSelectedSlug(slug);
+  }
 
-  const nextReviewMs = (() => {
-    const now = new Date();
-    const next = new Date(now);
-    next.setHours(20, 0, 0, 0);
-    if (next <= now) next.setDate(next.getDate() + 1);
-    return next.getTime() - now.getTime();
-  })();
-
-  const hours = Math.floor(nextReviewMs / (1000 * 60 * 60));
-  const minutes = Math.floor((nextReviewMs % (1000 * 60 * 60)) / (1000 * 60));
-  const nextReviewText = `${hours}h ${minutes}m`;
+  function dayLabelForIndex(i: number) {
+    // Use index relative to "asOf" to avoid date parsing issues.
+    if (i === 0) return 'Today';
+    if (i === 1) return calendarRange === 7 ? 'Tomorrow' : 'Next';
+    const d = new Date(asOf.getTime());
+    d.setDate(d.getDate() + i);
+    return weekdayShort(d);
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -182,105 +318,215 @@ export function HomeScreen({ navigation }: Props) {
           contentContainerStyle={styles.container}
           showsVerticalScrollIndicator={false}
         >
+          {/* Header */}
           <View style={styles.headingRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.appTitle}>DevCards</Text>
-              <Text style={styles.appSubtitle}>
-                Daily practice — personalized schedule.
-              </Text>
+              <Text style={styles.appSubtitle}>Make fundamentals feel automatic.</Text>
             </View>
+
             <Pressable
               style={({ pressed }) => [
-                styles.settingsButton,
-                pressed && styles.settingsButtonPressed,
+                styles.iconButton,
+                pressed && styles.iconButtonPressed,
               ]}
               onPress={() => navigation.navigate('Settings')}
             >
-              <Text style={styles.settingsText}>⚙︎</Text>
+              <Text style={styles.iconButtonText}>⚙︎</Text>
             </Pressable>
           </View>
 
-          {/* Deck switcher */}
-          <View style={styles.deckSwitcherCard}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.deckSwitcherScroll}
-            >
-              {MOCK_DECKS.map(d => {
-                const active = d.Slug === selectedSlug;
-                const isPremium = d.DeckType !== 1;
-                return (
-                  <Pressable
-                    key={d.Slug}
-                    style={({ pressed }) => [
-                      styles.deckChip,
-                      active && styles.deckChipActive,
-                      pressed && styles.deckChipPressed,
+          {/* Calendar (top) */}
+          <View style={styles.cardGlass}>
+            <View style={styles.cardHeaderRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>Calendar</Text>
+                <Text style={styles.cardSubtitle}>
+                  Upcoming reviews for{' '}
+                  <Text style={styles.cardSubtitleStrong}>{activeSummary.title}</Text>
+                </Text>
+              </View>
+
+              {/* 7 / 30 toggle */}
+              <View style={styles.segment}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.segmentItem,
+                    calendarRange === 7 && styles.segmentItemActive,
+                    pressed && styles.segmentPressed,
+                  ]}
+                  onPress={() => setCalendarRange(7)}
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      calendarRange === 7 && styles.segmentTextActive,
                     ]}
-                    onPress={() => {
-                      setActiveDeckSlug(d.Slug);
-                      setSelectedSlug(d.Slug);
-                    }}
                   >
-                    <Text
-                      style={[
-                        styles.deckChipTitle,
-                        active && styles.deckChipTitleActive,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {d.Title}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.deckChipMeta,
-                        active && styles.deckChipMetaActive,
-                      ]}
-                    >
-                      {isPremium ? 'Premium' : 'Starter'}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+                    7d
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.segmentItem,
+                    calendarRange === 30 && styles.segmentItemActive,
+                    pressed && styles.segmentPressed,
+                  ]}
+                  onPress={() => setCalendarRange(30)}
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      calendarRange === 30 && styles.segmentTextActive,
+                    ]}
+                  >
+                    30d
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {/* 7-day compact bar grid */}
+            {calendarRange === 7 ? (
+              <View style={styles.calendarGrid7}>
+                {calendar.map((day, idx) => {
+                  // Minimum non-zero bar height for readability, kept subtle by opacity when count=0.
+                  const pct =
+                    maxUpcoming <= 0 ? 0 : Math.max(0.1, day.count / maxUpcoming);
+
+                  return (
+                    <View key={day.dateKey} style={styles.calCell7}>
+                      <Text style={styles.calLabel7} numberOfLines={1}>
+                        {dayLabelForIndex(idx)}
+                      </Text>
+
+                      {/* Vertical “thermometer” bar (compact) */}
+                      <View style={styles.calBarBg7}>
+                        <View
+                          style={[
+                            styles.calBarFill7,
+                            {
+                              flex: pct,
+                              opacity: day.count === 0 ? 0.18 : 1,
+                            },
+                          ]}
+                        />
+                        <View style={{ flex: 1 - pct }} />
+                      </View>
+
+                      <Text style={styles.calCount7}>{day.count}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : (
+              // 30-day horizontal scroll cards
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.calendarScroll30}
+              >
+                {calendar.map((day, idx) => {
+                  const pct =
+                    maxUpcoming <= 0 ? 0 : clamp01(day.count / maxUpcoming);
+
+                  return (
+                    <View key={day.dateKey} style={styles.dayCard30}>
+                      <Text style={styles.dayLabel30}>
+                        {idx === 0 ? 'Today' : formatMMDD(day.dateKey)}
+                      </Text>
+                      <View style={styles.dayBarBg30}>
+                        <View
+                          style={[
+                            styles.dayBarFill30,
+                            {
+                              width: `${pct * 100}%`,
+                              opacity: day.count === 0 ? 0.18 : 1,
+                            },
+                          ]}
+                        />
+                      </View>
+                      <Text style={styles.dayCount30}>{day.count} cards</Text>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            <Text style={styles.hintText}>
+              Tip: Tap a deck below to switch the calendar and study dashboard.
+            </Text>
           </View>
 
-          <View style={styles.deckCard}>
-            <Text style={styles.deckTitle}>{deck.Title}</Text>
-            <Text style={styles.deckMeta}>
-              {deck.Locale} · v{deck.Version}
-            </Text>
+          {/* Active deck overview */}
+          <View style={styles.cardGlass}>
+            <View style={styles.deckHeaderRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.deckTitle}>{activeSummary.title}</Text>
+                <Text style={styles.deckMeta}>
+                  {activeSummary.locale} · {activeSummary.totalCards} cards
+                </Text>
+              </View>
 
-            <View style={styles.deckCountsRow}>
-              <View style={styles.countPill}>
-                <Text style={styles.countNumber}>{todayDueCount}</Text>
-                <Text style={styles.countLabel}>due</Text>
-              </View>
-              <View style={styles.countPill}>
-                <Text style={styles.countNumber}>{newToday}</Text>
-                <Text style={styles.countLabel}>new</Text>
-              </View>
-              <View style={styles.countPill}>
-                <Text style={styles.countNumber}>{masteredApprox}</Text>
-                <Text style={styles.countLabel}>mastered</Text>
-              </View>
-            </View>
-
-            <View style={styles.progressBarBg}>
               <View
                 style={[
-                  styles.progressBarFill,
-                  { flex: overallPercent, opacity: overallPercent === 0 ? 0 : 1 },
+                  styles.badge,
+                  activeSummary.deckType !== 1 && styles.badgePremium,
                 ]}
-              />
-              <View style={{ flex: 1 - overallPercent }} />
+              >
+                <Text
+                  style={[
+                    styles.badgeText,
+                    activeSummary.deckType !== 1 && styles.badgeTextPremium,
+                  ]}
+                >
+                  {activeSummary.deckType === 1 ? 'Free' : 'Premium'}
+                </Text>
+              </View>
             </View>
 
-            <Text style={styles.progressText}>
-              {Math.round(overallPercent * 100)}% overall • Next review in{' '}
-              {nextReviewText}
-            </Text>
+            {!activeSummary.canStudy ? (
+              <Text style={styles.placeholderText}>
+                This deck is a placeholder in this build. Content will be available later.
+              </Text>
+            ) : (
+              <>
+                <View style={styles.statsRow}>
+                  <View style={styles.statPill}>
+                    <Text style={styles.statNumber}>{activeSummary.dueToday}</Text>
+                    <Text style={styles.statLabel}>due</Text>
+                  </View>
+                  <View style={styles.statPill}>
+                    <Text style={styles.statNumber}>{activeSummary.newToday}</Text>
+                    <Text style={styles.statLabel}>new</Text>
+                  </View>
+                  <View style={styles.statPill}>
+                    <Text style={styles.statNumber}>
+                      {activeSummary.masteredApprox}
+                    </Text>
+                    <Text style={styles.statLabel}>mastered</Text>
+                  </View>
+                </View>
+
+                <View style={styles.progressBarBg}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      {
+                        flex: activeSummary.percent,
+                        opacity: activeSummary.percent === 0 ? 0 : 1,
+                      },
+                    ]}
+                  />
+                  <View style={{ flex: 1 - activeSummary.percent }} />
+                </View>
+
+                <Text style={styles.progressText}>
+                  {Math.round(activeSummary.percent * 100)}% overall · {activeSummary.dueToday} due today
+                </Text>
+              </>
+            )}
 
             <Pressable
               style={({ pressed }) => [
@@ -297,28 +543,101 @@ export function HomeScreen({ navigation }: Props) {
             </Pressable>
           </View>
 
-          <View style={styles.calendarCard}>
-            <Text style={styles.sectionTitle}>Next 7 days</Text>
-            <View style={styles.calendarRow}>
-              {calendar.map(day => (
-                <View key={day.dateKey} style={styles.calendarCell}>
-                  <Text style={styles.calendarDay}>{day.dateKey.slice(5)}</Text>
-                  <View style={styles.calendarDotWrap}>
-                    <View
-                      style={[
-                        styles.calendarDot,
-                        { opacity: day.count === 0 ? 0.18 : 1 },
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.calendarCount}>{day.count}</Text>
-                </View>
-              ))}
+          {/* Free decks */}
+          <View style={styles.sectionCard}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionTitle}>Free decks</Text>
+              <Text style={styles.sectionMeta}>{freeDecks.length}</Text>
             </View>
-            <Text style={styles.calendarHint}>
-              Next intervals: {INTERVALS_DAYS.join(', ')} days.
-            </Text>
+
+            {freeDecks.map(d => {
+              const active = d.slug === selectedSlug;
+              return (
+                <Pressable
+                  key={d.slug}
+                  style={({ pressed }) => [
+                    styles.deckRow,
+                    active && styles.deckRowActive,
+                    pressed && styles.deckRowPressed,
+                  ]}
+                  onPress={() => selectDeck(d.slug)}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[
+                        styles.deckRowTitle,
+                        active && styles.deckRowTitleActive,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {d.title}
+                    </Text>
+                    <Text style={styles.deckRowSub} numberOfLines={1}>
+                      {d.totalCards} cards · v{d.version}
+                    </Text>
+                  </View>
+
+                  <View style={styles.deckRowRight}>
+                    <Text style={styles.duePill}>{d.dueToday} due</Text>
+                    <View style={styles.rowBarBg}>
+                      <View
+                        style={[
+                          styles.rowBarFill,
+                          { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 },
+                        ]}
+                      />
+                      <View style={{ flex: 1 - d.percent }} />
+                    </View>
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
+
+          {/* Premium decks */}
+          <View style={styles.sectionCard}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionTitle}>Premium decks</Text>
+              <Text style={styles.sectionMeta}>{premiumDecks.length}</Text>
+            </View>
+
+            <Text style={styles.sectionHint}>
+              Premium decks will be unlocked in a future update.
+            </Text>
+
+            {premiumDecks.map(d => {
+              const active = d.slug === selectedSlug;
+              return (
+                <Pressable
+                  key={d.slug}
+                  style={({ pressed }) => [
+                    styles.deckRow,
+                    active && styles.deckRowActive,
+                    pressed && styles.deckRowPressed,
+                  ]}
+                  onPress={() => selectDeck(d.slug)}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[
+                        styles.deckRowTitle,
+                        active && styles.deckRowTitleActive,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {d.title}
+                    </Text>
+                    <Text style={styles.deckRowSub} numberOfLines={1}>
+                      {d.totalCards} cards · v{d.version}
+                    </Text>
+                  </View>
+                  <Text style={styles.premiumPill}>Premium</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <View style={{ height: 24 }} />
         </ScrollView>
       </LinearGradient>
     </SafeAreaView>
@@ -334,14 +653,15 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
   gradient: { flex: 1 },
   container: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 30 },
+
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   loadingText: { marginTop: 10, color: '#6B7280' },
 
   headingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   appTitle: { fontSize: 22, fontWeight: '800', color: '#111827' },
-  appSubtitle: { marginTop: 4, color: '#6B7280' },
+  appSubtitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
 
-  settingsButton: {
+  iconButton: {
     width: 42,
     height: 42,
     borderRadius: 14,
@@ -353,36 +673,10 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
   },
-  settingsButtonPressed: { opacity: 0.92 },
-  settingsText: { fontSize: 18, color: '#111827' },
+  iconButtonPressed: { opacity: 0.92 },
+  iconButtonText: { fontSize: 18, color: '#111827' },
 
-  deckSwitcherCard: { marginBottom: 14 },
-  deckSwitcherScroll: { paddingRight: 6 },
-  deckChip: {
-    width: 170,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 18,
-    marginRight: 10,
-    backgroundColor: 'rgba(255,255,255,0.86)',
-    borderWidth: 1,
-    borderColor: 'rgba(17,24,39,0.08)',
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-  },
-  deckChipActive: {
-    backgroundColor: 'rgba(79,70,229,0.10)',
-    borderColor: 'rgba(79,70,229,0.28)',
-  },
-  deckChipPressed: { opacity: 0.92 },
-  deckChipTitle: { fontSize: 13, fontWeight: '700', color: '#111827' },
-  deckChipTitleActive: { color: '#4F46E5' },
-  deckChipMeta: { marginTop: 4, fontSize: 11, color: '#6B7280' },
-  deckChipMetaActive: { color: '#4F46E5', fontWeight: '600' },
-
-  deckCard: {
+  cardGlass: {
     borderRadius: 22,
     paddingVertical: 14,
     paddingHorizontal: 14,
@@ -390,20 +684,137 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
     shadowColor: '#000',
-    shadowOpacity: 0.14,
+    shadowOpacity: 0.12,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 10 },
     marginBottom: 14,
   },
+
+  cardHeaderRow: { flexDirection: 'row', alignItems: 'center' },
+  cardTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
+  cardSubtitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
+  cardSubtitleStrong: { fontWeight: '800', color: '#111827' },
+
+  segment: {
+    flexDirection: 'row',
+    borderRadius: 999,
+    padding: 4,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.08)',
+  },
+  segmentItem: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+  },
+  segmentItemActive: {
+    backgroundColor: 'rgba(79,70,229,0.14)',
+  },
+  segmentPressed: { opacity: 0.92 },
+  segmentText: { fontSize: 12, fontWeight: '700', color: '#111827' },
+  segmentTextActive: { color: '#4F46E5' },
+
+  // --- Calendar 7d grid ---
+  calendarGrid7: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  calCell7: {
+    alignItems: 'center',
+    width: '13%',
+  },
+  calLabel7: {
+    fontSize: 10,
+    color: '#6B7280',
+  },
+  calBarBg7: {
+    marginTop: 6,
+    height: 28,
+    width: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.08)',
+    overflow: 'hidden',
+    flexDirection: 'column',
+  },
+  calBarFill7: {
+    width: 10,
+    borderRadius: 999,
+    backgroundColor: '#4F46E5',
+  },
+  calCount7: {
+    marginTop: 6,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+  // --- Calendar 30d scroll ---
+  calendarScroll30: { paddingTop: 12, paddingBottom: 2 },
+  dayCard30: {
+    width: 118,
+    padding: 12,
+    borderRadius: 18,
+    marginRight: 10,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.06)',
+  },
+  dayLabel30: { fontSize: 12, fontWeight: '800', color: '#111827' },
+  dayBarBg30: {
+    marginTop: 10,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.08)',
+    overflow: 'hidden',
+  },
+  dayBarFill30: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#4F46E5',
+  },
+  dayCount30: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#111827',
+    fontWeight: '700',
+  },
+
+  hintText: { marginTop: 10, fontSize: 11, color: '#6B7280' },
+
+  // --- Active deck overview ---
+  deckHeaderRow: { flexDirection: 'row', alignItems: 'center' },
   deckTitle: { fontSize: 18, fontWeight: '800', color: '#111827' },
   deckMeta: { marginTop: 4, color: '#6B7280', fontSize: 12 },
 
-  deckCountsRow: {
+  badge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(79,70,229,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(79,70,229,0.25)',
+  },
+  badgePremium: {
+    backgroundColor: 'rgba(17,24,39,0.06)',
+    borderColor: 'rgba(17,24,39,0.10)',
+  },
+  badgeText: { fontSize: 12, fontWeight: '800', color: '#4F46E5' },
+  badgeTextPremium: { color: '#111827' },
+
+  placeholderText: {
+    marginTop: 10,
+    fontSize: 12,
+    color: '#6B7280',
+  },
+
+  statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 14,
   },
-  countPill: {
+  statPill: {
     width: '31%',
     borderRadius: 16,
     paddingVertical: 10,
@@ -412,8 +823,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.5)',
     alignItems: 'center',
   },
-  countNumber: { fontSize: 18, fontWeight: '800', color: '#111827' },
-  countLabel: { fontSize: 11, color: '#6B7280', marginTop: 2 },
+  statNumber: { fontSize: 18, fontWeight: '800', color: '#111827' },
+  statLabel: { fontSize: 11, color: '#6B7280', marginTop: 2 },
 
   progressBarBg: {
     marginTop: 12,
@@ -437,31 +848,77 @@ const styles = StyleSheet.create({
   primaryButtonPressed: { opacity: 0.92 },
   primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
 
-  calendarCard: {
+  // --- Deck list sections ---
+  sectionCard: {
     borderRadius: 22,
     paddingVertical: 14,
     paddingHorizontal: 14,
     backgroundColor: 'rgba(255,255,255,0.86)',
     shadowColor: '#000',
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.10,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 10 },
+    marginBottom: 14,
   },
-  sectionTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
-  calendarRow: {
+  sectionHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 12,
+    alignItems: 'flex-end',
   },
-  calendarCell: { alignItems: 'center', width: '13%' },
-  calendarDay: { fontSize: 11, color: '#6B7280' },
-  calendarDotWrap: { marginTop: 6, marginBottom: 4 },
-  calendarDot: {
-    width: 10,
-    height: 10,
+  sectionTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
+  sectionMeta: { fontSize: 12, color: '#6B7280' },
+  sectionHint: { marginTop: 6, fontSize: 12, color: '#6B7280' },
+
+  deckRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(17,24,39,0.04)',
+    marginTop: 10,
+  },
+  deckRowActive: {
+    backgroundColor: 'rgba(79,70,229,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(79,70,229,0.18)',
+  },
+  deckRowPressed: { opacity: 0.92 },
+
+  deckRowTitle: { fontSize: 13, fontWeight: '800', color: '#111827' },
+  deckRowTitleActive: { color: '#4F46E5' },
+  deckRowSub: { marginTop: 3, fontSize: 11, color: '#6B7280' },
+
+  deckRowRight: { alignItems: 'flex-end', marginLeft: 10 },
+  duePill: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#4F46E5',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: '#4F46E5',
+    backgroundColor: 'rgba(79,70,229,0.10)',
   },
-  calendarCount: { fontSize: 11, color: '#111827', fontWeight: '600' },
-  calendarHint: { marginTop: 10, fontSize: 11, color: '#6B7280' },
+
+  rowBarBg: {
+    width: 90,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.08)',
+    overflow: 'hidden',
+    flexDirection: 'row',
+    marginTop: 8,
+  },
+  rowBarFill: { backgroundColor: '#4F46E5', borderRadius: 999 },
+
+  premiumPill: {
+    marginLeft: 10,
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#111827',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.06)',
+  },
 });
