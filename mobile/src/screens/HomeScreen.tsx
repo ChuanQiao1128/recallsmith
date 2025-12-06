@@ -1,10 +1,10 @@
 // mobile/src/screens/HomeScreen.tsx
-// Home dashboard: calendar (7/30 toggle) + active deck overview + Free/Premium vertical deck list.
+// Home dashboard: calendar (7/30 toggle) + active deck overview + deck list with ALL/FREE/PREMIUM filter.
 //
 // Layout goals:
 // 1) Top: Calendar (7d/30d switch) for the currently selected deck.
 // 2) Middle: Selected deck overview (due/new/mastered + progress + start button).
-// 3) Bottom: Vertical deck list split into Free and Premium sections.
+// 3) Bottom: One vertical deck list card with a segmented filter (All / Free / Premium).
 // 4) Keep existing style: light gradient background + glass cards.
 
 import React, { useCallback, useMemo, useState } from 'react';
@@ -45,6 +45,8 @@ import { syncDailyReminders } from '../notifications/reminders';
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
 type CalendarRange = 7 | 30;
+
+type DeckFilter = 'all' | 'free' | 'premium';
 
 type CalendarDay = {
   dateKey: string; // YYYY-MM-DD
@@ -136,6 +138,8 @@ export function HomeScreen({ navigation }: Props) {
   // Calendar display range toggle
   const [calendarRange, setCalendarRange] = useState<CalendarRange>(7);
 
+  const [deckFilter, setDeckFilter] = useState<DeckFilter>('all');
+
   // Home data state
   const [state, setState] = useState<HomeState>({
     loading: true,
@@ -201,7 +205,8 @@ export function HomeScreen({ navigation }: Props) {
           const plannedToday = dailyStats.plannedCount;
           const newToday = Math.max(plannedToday - dueToday, 0);
           const masteredApprox = Math.max(totalCards - (dueToday + newToday), 0);
-          const percent = totalCards > 0 ? clamp01(masteredApprox / totalCards) : 0;
+          const percent =
+            totalCards > 0 ? clamp01(masteredApprox / totalCards) : 0;
 
           totalDueAllDecks += dueToday;
 
@@ -341,7 +346,13 @@ export function HomeScreen({ navigation }: Props) {
             <View style={styles.cardHeaderRow}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.cardTitle}>Calendar</Text>
-                <Text style={styles.cardSubtitle}>
+
+                {/* Fixed height: force the subtitle to ONE line with ellipsis */}
+                <Text
+                  style={styles.cardSubtitle}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
                   Upcoming reviews for{' '}
                   <Text style={styles.cardSubtitleStrong}>{activeSummary.title}</Text>
                 </Text>
@@ -543,98 +554,242 @@ export function HomeScreen({ navigation }: Props) {
             </Pressable>
           </View>
 
-          {/* Free decks */}
+          {/* Deck list (ALL / Free / Premium in one card) */}
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitle}>Free decks</Text>
-              <Text style={styles.sectionMeta}>{freeDecks.length}</Text>
+              <Text style={styles.sectionTitle}>Decks</Text>
+              <Text style={styles.sectionMeta}>{deckSummaries.length}</Text>
             </View>
 
-            {freeDecks.map(d => {
-              const active = d.slug === selectedSlug;
-              return (
+            <View style={styles.deckFilterRow}>
+              <View style={styles.segment}>
                 <Pressable
-                  key={d.slug}
                   style={({ pressed }) => [
-                    styles.deckRow,
-                    active && styles.deckRowActive,
-                    pressed && styles.deckRowPressed,
+                    styles.segmentItem,
+                    deckFilter === 'all' && styles.segmentItemActive,
+                    pressed && styles.segmentPressed,
                   ]}
-                  onPress={() => selectDeck(d.slug)}
+                  onPress={() => setDeckFilter('all')}
                 >
-                  <View style={{ flex: 1 }}>
-                    <Text
-                      style={[
-                        styles.deckRowTitle,
-                        active && styles.deckRowTitleActive,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {d.title}
-                    </Text>
-                    <Text style={styles.deckRowSub} numberOfLines={1}>
-                      {d.totalCards} cards · v{d.version}
-                    </Text>
-                  </View>
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      deckFilter === 'all' && styles.segmentTextActive,
+                    ]}
+                  >
+                    All
+                  </Text>
+                </Pressable>
 
-                  <View style={styles.deckRowRight}>
-                    <Text style={styles.duePill}>{d.dueToday} due</Text>
-                    <View style={styles.rowBarBg}>
-                      <View
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.segmentItem,
+                    deckFilter === 'free' && styles.segmentItemActive,
+                    pressed && styles.segmentPressed,
+                  ]}
+                  onPress={() => setDeckFilter('free')}
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      deckFilter === 'free' && styles.segmentTextActive,
+                    ]}
+                  >
+                    Free
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.segmentItem,
+                    deckFilter === 'premium' && styles.segmentItemActive,
+                    pressed && styles.segmentPressed,
+                  ]}
+                  onPress={() => setDeckFilter('premium')}
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      deckFilter === 'premium' && styles.segmentTextActive,
+                    ]}
+                  >
+                    Premium
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {deckFilter !== 'premium' ? null : (
+              <Text style={styles.sectionHint}>
+                Premium decks are placeholders in this build.
+              </Text>
+            )}
+
+            {deckFilter === 'all' ? (
+              <>
+                <Text style={styles.groupLabel}>Free</Text>
+                {freeDecks.map(d => {
+                  const active = d.slug === selectedSlug;
+                  return (
+                    <Pressable
+                      key={d.slug}
+                      style={({ pressed }) => [
+                        styles.deckRow,
+                        active && styles.deckRowActive,
+                        pressed && styles.deckRowPressed,
+                      ]}
+                      onPress={() => selectDeck(d.slug)}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.deckRowTitle,
+                            active && styles.deckRowTitleActive,
+                          ]}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {d.title}
+                        </Text>
+                        <Text style={styles.deckRowSub} numberOfLines={1}>
+                          {d.totalCards} cards · v{d.version}
+                        </Text>
+                      </View>
+
+                      <View style={styles.deckRowRight}>
+                        <Text style={styles.duePill}>{d.dueToday} due</Text>
+                        <View style={styles.rowBarBg}>
+                          <View
+                            style={[
+                              styles.rowBarFill,
+                              {
+                                flex: d.percent,
+                                opacity: d.percent === 0 ? 0 : 1,
+                              },
+                            ]}
+                          />
+                          <View style={{ flex: 1 - d.percent }} />
+                        </View>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+
+                <View style={styles.groupDivider} />
+
+                <Text style={styles.groupLabel}>Premium</Text>
+                {premiumDecks.map(d => {
+                  const active = d.slug === selectedSlug;
+                  return (
+                    <Pressable
+                      key={d.slug}
+                      style={({ pressed }) => [
+                        styles.deckRow,
+                        active && styles.deckRowActive,
+                        pressed && styles.deckRowPressed,
+                      ]}
+                      onPress={() => selectDeck(d.slug)}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.deckRowTitle,
+                            active && styles.deckRowTitleActive,
+                          ]}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {d.title}
+                        </Text>
+                        <Text style={styles.deckRowSub} numberOfLines={1}>
+                          {d.totalCards} cards · v{d.version}
+                        </Text>
+                      </View>
+                      <Text style={styles.premiumPill}>Premium</Text>
+                    </Pressable>
+                  );
+                })}
+              </>
+            ) : deckFilter === 'free' ? (
+              freeDecks.map(d => {
+                const active = d.slug === selectedSlug;
+                return (
+                  <Pressable
+                    key={d.slug}
+                    style={({ pressed }) => [
+                      styles.deckRow,
+                      active && styles.deckRowActive,
+                      pressed && styles.deckRowPressed,
+                    ]}
+                    onPress={() => selectDeck(d.slug)}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text
                         style={[
-                          styles.rowBarFill,
-                          { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 },
+                          styles.deckRowTitle,
+                          active && styles.deckRowTitleActive,
                         ]}
-                      />
-                      <View style={{ flex: 1 - d.percent }} />
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                      >
+                        {d.title}
+                      </Text>
+                      <Text style={styles.deckRowSub} numberOfLines={1}>
+                        {d.totalCards} cards · v{d.version}
+                      </Text>
                     </View>
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
 
-          {/* Premium decks */}
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitle}>Premium decks</Text>
-              <Text style={styles.sectionMeta}>{premiumDecks.length}</Text>
-            </View>
-
-            <Text style={styles.sectionHint}>
-              Premium decks will be unlocked in a future update.
-            </Text>
-
-            {premiumDecks.map(d => {
-              const active = d.slug === selectedSlug;
-              return (
-                <Pressable
-                  key={d.slug}
-                  style={({ pressed }) => [
-                    styles.deckRow,
-                    active && styles.deckRowActive,
-                    pressed && styles.deckRowPressed,
-                  ]}
-                  onPress={() => selectDeck(d.slug)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text
-                      style={[
-                        styles.deckRowTitle,
-                        active && styles.deckRowTitleActive,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {d.title}
-                    </Text>
-                    <Text style={styles.deckRowSub} numberOfLines={1}>
-                      {d.totalCards} cards · v{d.version}
-                    </Text>
-                  </View>
-                  <Text style={styles.premiumPill}>Premium</Text>
-                </Pressable>
-              );
-            })}
+                    <View style={styles.deckRowRight}>
+                      <Text style={styles.duePill}>{d.dueToday} due</Text>
+                      <View style={styles.rowBarBg}>
+                        <View
+                          style={[
+                            styles.rowBarFill,
+                            {
+                              flex: d.percent,
+                              opacity: d.percent === 0 ? 0 : 1,
+                            },
+                          ]}
+                        />
+                        <View style={{ flex: 1 - d.percent }} />
+                      </View>
+                    </View>
+                  </Pressable>
+                );
+              })
+            ) : (
+              premiumDecks.map(d => {
+                const active = d.slug === selectedSlug;
+                return (
+                  <Pressable
+                    key={d.slug}
+                    style={({ pressed }) => [
+                      styles.deckRow,
+                      active && styles.deckRowActive,
+                      pressed && styles.deckRowPressed,
+                    ]}
+                    onPress={() => selectDeck(d.slug)}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={[
+                          styles.deckRowTitle,
+                          active && styles.deckRowTitleActive,
+                        ]}
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                      >
+                        {d.title}
+                      </Text>
+                      <Text style={styles.deckRowSub} numberOfLines={1}>
+                        {d.totalCards} cards · v{d.version}
+                      </Text>
+                    </View>
+                    <Text style={styles.premiumPill}>Premium</Text>
+                  </Pressable>
+                );
+              })
+            )}
           </View>
 
           <View style={{ height: 24 }} />
@@ -868,6 +1023,25 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
   sectionMeta: { fontSize: 12, color: '#6B7280' },
   sectionHint: { marginTop: 6, fontSize: 12, color: '#6B7280' },
+
+  deckFilterRow: {
+    marginTop: 10,
+    marginBottom: 6,
+    alignItems: 'flex-start',
+  },
+
+  groupLabel: {
+    marginTop: 10,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#111827',
+  },
+
+  groupDivider: {
+    marginTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(17,24,39,0.10)',
+  },
 
   deckRow: {
     flexDirection: 'row',
