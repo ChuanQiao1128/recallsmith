@@ -1,5 +1,5 @@
 // mobile/src/screens/ReviewScreen.tsx
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   SafeAreaView,
   View,
@@ -14,9 +14,17 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
-import { getActiveDeck } from '../mock/jsCoreStarterMock';
+
+// ✅ 用 slug 方式拿 deck（避免 activeSlug 异步竞争）
+import {
+  MOCK_DECKS,
+  getMockDeckBySlug,
+  getActiveDeckSlug,
+  setActiveDeckSlug,
+} from '../mock/jsCoreStarterMock';
+
 import type { DeckExport, CardExport } from '../types/deckExport';
-import type { CardProgress} from '../review/model';
+import type { CardProgress } from '../review/model';
 import {
   isDue,
   scheduleNextReview,
@@ -30,21 +38,12 @@ import {
 } from '../review/storage';
 import { syncDailyReminders } from '../notifications/reminders';
 
-
 type Props = NativeStackScreenProps<RootStackParamList, 'Review'>;
-type UiRating =ReviewRating;
+type UiRating = ReviewRating;
 
 interface CurrentCard {
   card: CardExport;
   progress: CardProgress;
-}
-
-function buildCardMap(deck: DeckExport): Map<string, CardExport> {
-  const map = new Map<string, CardExport>();
-  for (const c of deck.Cards) {
-    map.set(c.StableUid, c);
-  }
-  return map;
 }
 
 function pickNextDueCard(
@@ -52,30 +51,60 @@ function pickNextDueCard(
   progress: CardProgress[],
   now: Date,
 ): CurrentCard | null {
-  const cardMap = buildCardMap(deck);
-  const sorted = [...deck.Cards].sort(
-    (a, b) => a.OrderInDeck - b.OrderInDeck,
-  );
+  const sorted = [...deck.Cards].sort((a, b) => a.OrderInDeck - b.OrderInDeck);
 
   for (const card of sorted) {
     const p = progress.find(x => x.stableUid === card.StableUid);
     if (!p) continue;
-    if (isDue(p, now)) {
-      return { card, progress: p };
-    }
+    if (isDue(p, now)) return { card, progress: p };
   }
   return null;
 }
 
-function mapUiRatingToModel(r: UiRating): ReviewRating {
-  if (r === 'again') return 'again';
-  if (r === 'easy') return 'easy';
-  return 'good';
+/**
+ * 计算“所有 deck 的 due 总数”，用于 20:00提醒（全局任务）。
+ * - 可复用当前 deck 的 progress，避免重复读存储。
+ */
+async function computeTotalDueAllDecks(args: {
+  now: Date;
+  currentDeckSlug?: string;
+  currentProgress?: CardProgress[];
+}): Promise<number> {
+  const { now, currentDeckSlug, currentProgress } = args;
+
+  let total = 0;
+  for (const d of MOCK_DECKS) {
+    const canStudy = (d.Cards?.length ?? 0) > 0;
+    if (!canStudy) continue;
+
+    if (currentDeckSlug && currentProgress && d.Slug === currentDeckSlug) {
+      total += currentProgress.filter(p => isDue(p, now)).length;
+    } else {
+      const p = await loadDeckProgress(d);
+      total += p.filter(x => isDue(x, now)).length;
+    }
+  }
+  return total;
 }
 
 export function ReviewScreen({ navigation, route }: Props) {
-  const deck = getActiveDeck();
-  const { mode = 'mixed', limit = 20 } = route.params ?? {};
+  const params = route.params;
+
+  const slugFromRoute = params?.slug;
+  const mode = params?.mode ?? 'mixed';
+  const limit = params?.limit ?? 20;
+
+  const fallbackSlug = getActiveDeckSlug() ?? MOCK_DECKS[0]?.Slug;
+  const slug = slugFromRoute ?? fallbackSlug;
+
+  const deck = useMemo(() => {
+    return (slug ? getMockDeckBySlug(slug) : undefined) ?? MOCK_DECKS[0];
+  }, [slug]);
+
+  // 进入复习页也把它设为 active（给 Home/Deck 等同步用）
+  useEffect(() => {
+    if (deck?.Slug) setActiveDeckSlug(deck.Slug);
+  }, [deck?.Slug]);
 
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState<CardProgress[]>([]);
@@ -87,6 +116,9 @@ export function ReviewScreen({ navigation, route }: Props) {
   const [sessionLimit] = useState(limit);
   const [sessionDone, setSessionDone] = useState(0);
 
+  // 全局 due 总数（用于提醒）
+  const totalDueAllDecksRef = useRef(0);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -97,6 +129,7 @@ export function ReviewScreen({ navigation, route }: Props) {
         setSessionDone(0);
 
         const now = new Date();
+
         const p = await loadDeckProgress(deck);
         if (cancelled) return;
 
@@ -105,64 +138,77 @@ export function ReviewScreen({ navigation, route }: Props) {
 
         const next = pickNextDueCard(deck, p, now);
 
+        // ✅ 先写 state
         setProgress(p);
         setDailyStats(stats);
         setCurrent(next);
         setLoading(false);
 
-        // ✅ 补：进入复习页也同步一次当天的 20:00 状态
-        const remainingDueCount = p.filter(x => isDue(x, now)).length;
-        syncDailyReminders({ remainingDueCount, now });
+        // ✅ 再同步全局提醒（避免 active slug 写入竞争）
+        const totalDueAllDecks = await computeTotalDueAllDecks({
+          now,
+          currentDeckSlug: deck.Slug,
+          currentProgress: p,
+        });
+        totalDueAllDecksRef.current = totalDueAllDecks;
+        void syncDailyReminders({ remainingDueCount: totalDueAllDecks, now });
       }
 
-      load();
+      void load();
 
       return () => {
         cancelled = true;
       };
-    }, [deck, mode, limit]),
+    }, [deck?.Slug, mode, limit]),
   );
 
   const now = new Date();
 
   async function handleRating(uiRating: UiRating) {
-  if (!current || !dailyStats) return;
-  if (reviewing) return;
-  if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
+    if (!current || !dailyStats) return;
+    if (reviewing) return;
+    if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
 
-  setReviewing(true);
-  try {
-    const updatedOne = scheduleNextReview(current.progress, uiRating, new Date());
+    setReviewing(true);
+    try {
+      const now = new Date();
 
-    const newProgress = progress.map(p =>
-      p.stableUid === updatedOne.stableUid ? updatedOne : p,
-    );
+      // 当前 deck：更新前 due
+      const dueBefore = progress.filter(p => isDue(p, now)).length;
 
-    await saveDeckProgress(deck, newProgress);
+      const updatedOne = scheduleNextReview(current.progress, uiRating, now);
+      const newProgress = progress.map(p =>
+        p.stableUid === updatedOne.stableUid ? updatedOne : p,
+      );
 
-    const nextDone = sessionDone + 1;
-    setSessionDone(nextDone);
+      await saveDeckProgress(deck, newProgress);
 
-    const remaining =
-      sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
+      const nextDone = sessionDone + 1;
+      setSessionDone(nextDone);
 
-    const next =
-      remaining > 0
-        ? pickNextDueCard(deck, newProgress, new Date())
-        : null;
+      const remaining =
+        sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
 
-    setProgress(newProgress);
-    setCurrent(next);
-    setShowAnswer(false);
+      const next =
+        remaining > 0 ? pickNextDueCard(deck, newProgress, new Date()) : null;
 
-    // ✅ 关键：更新 “剩余 due”，有剩余才安排 20:00；没剩余就取消 20:00
-    const now = new Date();
-    const remainingDueCount = newProgress.filter(p => isDue(p, now)).length;
-    void syncDailyReminders({ remainingDueCount, now });
-  } finally {
-    setReviewing(false);
+      setProgress(newProgress);
+      setCurrent(next);
+      setShowAnswer(false);
+
+      // 当前 deck：更新后 due
+      const dueAfter = newProgress.filter(p => isDue(p, now)).length;
+
+      // ✅ 全局 due：用 delta 更新（避免每题都遍历所有 deck）
+      const prevGlobal = totalDueAllDecksRef.current;
+      const nextGlobal = Math.max(0, prevGlobal - dueBefore + dueAfter);
+      totalDueAllDecksRef.current = nextGlobal;
+
+      void syncDailyReminders({ remainingDueCount: nextGlobal, now });
+    } finally {
+      setReviewing(false);
+    }
   }
-}
 
   if (loading || !dailyStats) {
     return (
@@ -234,8 +280,7 @@ export function ReviewScreen({ navigation, route }: Props) {
               <View style={{ flex: 1 - sessionPercent }} />
             </View>
             <Text style={styles.sessionHint}>
-              {dueNowCount} card
-              {dueNowCount === 1 ? '' : 's'} still due in total today.
+              {dueNowCount} card{dueNowCount === 1 ? '' : 's'} still due in this deck today.
             </Text>
           </View>
 
@@ -257,9 +302,7 @@ export function ReviewScreen({ navigation, route }: Props) {
             ) : (
               <View style={styles.cardCard}>
                 <View style={styles.cardHeaderRow}>
-                  <Text style={styles.cardOrder}>
-                    #{current.card.OrderInDeck}
-                  </Text>
+                  <Text style={styles.cardOrder}>#{current.card.OrderInDeck}</Text>
                   <Text style={styles.cardChip}>
                     {current.card.Difficulty === 1
                       ? 'Easy'
@@ -274,9 +317,7 @@ export function ReviewScreen({ navigation, route }: Props) {
                   ) : null}
                 </View>
 
-                <Text style={styles.cardQuestion}>
-                  {current.card.Question}
-                </Text>
+                <Text style={styles.cardQuestion}>{current.card.Question}</Text>
 
                 {!showAnswer ? (
                   <View style={styles.answerHiddenBox}>
@@ -317,7 +358,9 @@ export function ReviewScreen({ navigation, route }: Props) {
                     {current.card.RealWorldUsage ? (
                       <View style={styles.realWorldBox}>
                         <Text style={styles.realWorldTitle}>Real‑world usage</Text>
-                        <Text style={styles.realWorldBody}>{current.card.RealWorldUsage}</Text>
+                        <Text style={styles.realWorldBody}>
+                          {current.card.RealWorldUsage}
+                        </Text>
                       </View>
                     ) : null}
 
@@ -651,23 +694,23 @@ const styles = StyleSheet.create({
     color: '#166534',
   },
   realWorldBox: {
-  borderRadius: 14,
-  paddingVertical: 12,
-  paddingHorizontal: 12,
-  backgroundColor: 'rgba(79,70,229,0.06)',
-  borderWidth: 1,
-  borderColor: 'rgba(79,70,229,0.18)',
-  marginBottom: 10,
-},
-realWorldTitle: {
-  fontSize: 12,
-  fontWeight: '700',
-  color: '#4F46E5',
-  marginBottom: 6,
-},
-realWorldBody: {
-  fontSize: 13,
-  color: '#374151',
-  lineHeight: 18,
-},
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(79,70,229,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(79,70,229,0.18)',
+    marginBottom: 10,
+  },
+  realWorldTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4F46E5',
+    marginBottom: 6,
+  },
+  realWorldBody: {
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 18,
+  },
 });
