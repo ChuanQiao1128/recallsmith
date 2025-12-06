@@ -24,8 +24,6 @@ import {
 } from '../review/storage';
 import { syncDailyReminders } from '../notifications/reminders';
 
-
-
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
 interface CalendarDay {
@@ -72,7 +70,6 @@ function buildCalendar(
   }
 
   const dueNow = progress.filter(p => isDue(p, now)).length;
-
   return { todayDueCount: dueNow, calendar };
 }
 
@@ -87,44 +84,40 @@ export function HomeScreen({ navigation }: Props) {
     calendar: [],
   });
 
-  // HomeScreen.tsx - 只改 useFocusEffect 里的 load()
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
 
-useFocusEffect(
-  useCallback(() => {
-    let cancelled = false;
+      async function load() {
+        setState(prev => ({ ...prev, loading: true }));
 
-    async function load() {
-      setState(prev => ({ ...prev, loading: true }));
+        const now = new Date();
+        const progress = await loadDeckProgress(deck);
+        if (cancelled) return;
 
-      const now = new Date();
-      const progress = await loadDeckProgress(deck);
-      if (cancelled) return;
+        const dailyStats = await loadOrInitDailyStats(deck, progress);
+        if (cancelled) return;
 
-      const dailyStats = await loadOrInitDailyStats(deck, progress);
-      if (cancelled) return;
+        const { todayDueCount, calendar } = buildCalendar(progress, now);
 
-      const { todayDueCount, calendar } = buildCalendar(progress, now);
+        // ✅ 唯一调用点：拿到“今日剩余 due”后同步 9:00 + 20:00
+        void syncDailyReminders({ remainingDueCount: todayDueCount, now });
 
-      // ✅ 只同步一次：9:00 固定 + 20:00(仅当还有剩余)
-      // 不 await，避免阻塞 UI；reminders.ts 内部已经 try/catch
-      syncDailyReminders({ remainingDueCount: todayDueCount, now });
+        setState({
+          loading: false,
+          progress,
+          dailyStats,
+          todayDueCount,
+          calendar,
+        });
+      }
 
-      setState({
-        loading: false,
-        progress,
-        dailyStats,
-        todayDueCount,
-        calendar,
-      });
-    }
-
-    load();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [deck]),
-);
+      load();
+      return () => {
+        cancelled = true;
+      };
+    }, [deck]),
+  );
 
   const { loading, dailyStats, todayDueCount, calendar } = state;
   const totalCards = deck.TotalCards;
@@ -150,8 +143,7 @@ useFocusEffect(
   const plannedToday = dailyStats.plannedCount;
   const newToday = Math.max(plannedToday - todayDueCount, 0);
   const masteredApprox = Math.max(totalCards - (todayDueCount + newToday), 0);
-  const overallPercent =
-    totalCards > 0 ? masteredApprox / totalCards : 0;
+  const overallPercent = totalCards > 0 ? masteredApprox / totalCards : 0;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -167,33 +159,31 @@ useFocusEffect(
           showsVerticalScrollIndicator={false}
         >
           {/* 顶部标题 */}
-         <View style={styles.headingRow}>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.appTitle}>RecallSmith</Text>
-                    <Text style={styles.appSubtitle}>
-                    Smart spaced‑repetition for full‑stack interviews.
-                    </Text>
-                </View>
+          <View style={styles.headingRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.appTitle}>DevCards</Text>
+              <Text style={styles.appSubtitle}>
+                Spaced recall for programming fundamentals.
+              </Text>
+            </View>
 
-                <Pressable
-                    style={({ pressed }) => [
-                    styles.settingsButton,
-                    pressed && styles.settingsButtonPressed,
-                    ]}
-                    onPress={() => navigation.navigate('Settings')}
-                >
-                    <Text style={styles.settingsButtonText}>Settings</Text>
-                </Pressable>
-                </View>
+            <Pressable
+              style={({ pressed }) => [
+                styles.settingsButton,
+                pressed && styles.settingsButtonPressed,
+              ]}
+              onPress={() => navigation.navigate('Settings')}
+            >
+              <Text style={styles.settingsButtonText}>Settings</Text>
+            </Pressable>
+          </View>
 
           {/* 主 Deck 概览玻璃卡片 */}
           <View style={styles.deckCard}>
             <View style={styles.deckHeaderRow}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.deckTitle}>{deck.Title}</Text>
-                <Text style={styles.deckMeta}>
-                  Starter deck · {deck.Locale}
-                </Text>
+                <Text style={styles.deckMeta}>Starter deck · {deck.Locale}</Text>
               </View>
               <View style={styles.deckBadge}>
                 <Text style={styles.deckBadgeText}>{deck.Version}</Text>
@@ -206,6 +196,7 @@ useFocusEffect(
                 {masteredApprox} / {totalCards}
               </Text>
             </View>
+
             <View style={styles.progressBarBg}>
               <View
                 style={[
@@ -256,6 +247,7 @@ useFocusEffect(
                 Interval stages: {INTERVALS_DAYS.join(' / ')} days
               </Text>
             </View>
+
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -263,12 +255,9 @@ useFocusEffect(
             >
               {calendar.map((day, index) => {
                 const label =
-                  index === 0
-                    ? 'Today'
-                    : index === 1
-                    ? 'Tomorrow'
-                    : `+${index}d`;
+                  index === 0 ? 'Today' : index === 1 ? 'Tomorrow' : `+${index}d`;
                 const active = index === 0;
+
                 return (
                   <View key={day.dateKey} style={styles.calendarItem}>
                     <Text
@@ -308,30 +297,16 @@ const CARD_BG = 'rgba(255,255,255,0.18)';
 const CARD_BORDER = 'rgba(255,255,255,0.55)';
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#F5F3FF',
-  },
-  gradient: {
-    flex: 1,
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 18,
-    paddingBottom: 28,
-  },
-  center: {
-    flex: 1,
+  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  gradient: { flex: 1 },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 18, paddingBottom: 28 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  loadingText: { marginTop: 10, color: '#6B7280' },
+
+  headingRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingText: {
-    marginTop: 10,
-    color: '#6B7280',
-  },
-  headingBlock: {
     paddingTop: 6,
     paddingBottom: 16,
   },
@@ -341,11 +316,17 @@ const styles = StyleSheet.create({
     color: '#111827',
     letterSpacing: 0.4,
   },
-  appSubtitle: {
-    marginTop: 6,
-    fontSize: 13,
-    color: '#6B7280',
+  appSubtitle: { marginTop: 6, fontSize: 13, color: '#6B7280' },
+  settingsButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    marginLeft: 8,
   },
+  settingsButtonPressed: { opacity: 0.9 },
+  settingsButtonText: { fontSize: 12, fontWeight: '500', color: '#111827' },
+
   deckCard: {
     borderRadius: 24,
     padding: 18,
@@ -359,21 +340,9 @@ const styles = StyleSheet.create({
     elevation: 4,
     marginBottom: 16,
   },
-  deckHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  deckTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  deckMeta: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 2,
-  },
+  deckHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  deckTitle: { fontSize: 18, fontWeight: '600', color: '#111827' },
+  deckMeta: { fontSize: 12, color: '#6B7280', marginTop: 2 },
   deckBadge: {
     paddingHorizontal: 10,
     paddingVertical: 5,
@@ -383,25 +352,16 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(79,70,229,0.45)',
     marginLeft: 10,
   },
-  deckBadgeText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#4F46E5',
-  },
+  deckBadgeText: { fontSize: 11, fontWeight: '600', color: '#4F46E5' },
+
   deckProgressRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
   },
-  deckProgressLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  deckProgressValue: {
-    fontSize: 12,
-    color: '#111827',
-    fontWeight: '500',
-  },
+  deckProgressLabel: { fontSize: 12, color: '#6B7280' },
+  deckProgressValue: { fontSize: 12, color: '#111827', fontWeight: '500' },
+
   progressBarBg: {
     marginTop: 8,
     marginBottom: 10,
@@ -411,26 +371,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     overflow: 'hidden',
   },
-  progressBarFill: {
-    backgroundColor: '#6366F1',
-    borderRadius: 999,
-  },
-  deckStatsRow: {
-    flexDirection: 'row',
-    marginBottom: 10,
-  },
-  deckStat: {
-    flex: 1,
-  },
-  deckStatLabel: {
-    fontSize: 11,
-    color: '#9CA3AF',
-  },
-  deckStatValue: {
-    marginTop: 2,
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  progressBarFill: { backgroundColor: '#6366F1', borderRadius: 999 },
+
+  deckStatsRow: { flexDirection: 'row', marginBottom: 10 },
+  deckStat: { flex: 1 },
+  deckStatLabel: { fontSize: 11, color: '#9CA3AF' },
+  deckStatValue: { marginTop: 2, fontSize: 16, fontWeight: '600' },
+
   primaryButton: {
     marginTop: 2,
     borderRadius: 999,
@@ -438,14 +385,9 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     alignItems: 'center',
   },
-  primaryButtonPressed: {
-    opacity: 0.92,
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
+  primaryButtonPressed: { opacity: 0.92 },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+
   calendarCard: {
     borderRadius: 24,
     paddingVertical: 14,
@@ -464,18 +406,9 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     marginBottom: 8,
   },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  sectionSubTitle: {
-    fontSize: 11,
-    color: '#6B7280',
-  },
-  calendarScroll: {
-    marginTop: 6,
-  },
+  sectionTitle: { fontSize: 15, fontWeight: '600', color: '#111827' },
+  sectionSubTitle: { fontSize: 11, color: '#6B7280' },
+  calendarScroll: { marginTop: 6 },
   calendarItem: {
     width: 110,
     marginRight: 10,
@@ -488,24 +421,10 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
   },
-  calendarLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  calendarLabelActive: {
-    color: '#4F46E5',
-    fontWeight: '600',
-  },
-  calendarDate: {
-    fontSize: 11,
-    color: '#9CA3AF',
-    marginTop: 2,
-  },
-  calendarDotRow: {
-    marginTop: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  calendarLabel: { fontSize: 12, color: '#6B7280' },
+  calendarLabelActive: { color: '#4F46E5', fontWeight: '600' },
+  calendarDate: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
+  calendarDotRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center' },
   calendarDot: {
     width: 10,
     height: 10,
@@ -513,29 +432,5 @@ const styles = StyleSheet.create({
     backgroundColor: '#6366F1',
     marginRight: 6,
   },
-  calendarCount: {
-    fontSize: 13,
-    color: '#111827',
-  },
-  headingRow: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  paddingTop: 6,
-  paddingBottom: 16,
-},
-settingsButton: {
-  paddingHorizontal: 12,
-  paddingVertical: 6,
-  borderRadius: 999,
-  backgroundColor: 'rgba(255,255,255,0.85)',
-  marginLeft: 8,
-},
-settingsButtonPressed: {
-  opacity: 0.9,
-},
-settingsButtonText: {
-  fontSize: 12,
-  fontWeight: '500',
-  color: '#111827',
-},
+  calendarCount: { fontSize: 13, color: '#111827' },
 });

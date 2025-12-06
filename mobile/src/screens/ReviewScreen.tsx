@@ -128,16 +128,11 @@ export function ReviewScreen({ navigation, route }: Props) {
   async function handleRating(uiRating: UiRating) {
   if (!current || !dailyStats) return;
   if (reviewing) return;
-
   if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
 
   setReviewing(true);
   try {
-    const updatedOne = scheduleNextReview(
-      current.progress,
-      uiRating,          // now 'hard' really works
-      new Date(),
-    );
+    const updatedOne = scheduleNextReview(current.progress, uiRating, new Date());
 
     const newProgress = progress.map(p =>
       p.stableUid === updatedOne.stableUid ? updatedOne : p,
@@ -157,15 +152,17 @@ export function ReviewScreen({ navigation, route }: Props) {
         : null;
 
     setProgress(newProgress);
-    const now = new Date();
-    const remainingDueCount = newProgress.filter(p => isDue(p, now)).length;
-    syncDailyReminders({ remainingDueCount, now });
     setCurrent(next);
     setShowAnswer(false);
-    } finally {
-      setReviewing(false);
-    }
+
+    // ✅ 关键：更新 “剩余 due”，有剩余才安排 20:00；没剩余就取消 20:00
+    const now = new Date();
+    const remainingDueCount = newProgress.filter(p => isDue(p, now)).length;
+    void syncDailyReminders({ remainingDueCount, now });
+  } finally {
+    setReviewing(false);
   }
+}
 
   if (loading || !dailyStats) {
     return (
