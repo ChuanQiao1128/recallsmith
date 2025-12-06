@@ -14,7 +14,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
-import { jsCoreStarterMock } from '../mock/jsCoreStarterMock';
+import { getActiveDeck } from '../mock/jsCoreStarterMock';
 import type { DeckExport, CardExport } from '../types/deckExport';
 import type { CardProgress} from '../review/model';
 import {
@@ -74,7 +74,7 @@ function mapUiRatingToModel(r: UiRating): ReviewRating {
 }
 
 export function ReviewScreen({ navigation, route }: Props) {
-  const deck = jsCoreStarterMock;
+  const deck = getActiveDeck();
   const { mode = 'mixed', limit = 20 } = route.params ?? {};
 
   const [loading, setLoading] = useState(true);
@@ -312,6 +312,13 @@ export function ReviewScreen({ navigation, route }: Props) {
                           {current.card.CodeSnippet}
                         </Text>
                       </ScrollView>
+                    ) : null}
+
+                    {current.card.RealWorldUsage ? (
+                      <View style={styles.realWorldBox}>
+                        <Text style={styles.realWorldTitle}>Real‑world usage</Text>
+                        <Text style={styles.realWorldBody}>{current.card.RealWorldUsage}</Text>
+                      </View>
                     ) : null}
 
                     <Text style={styles.ratingHint}>
@@ -643,4 +650,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#166534',
   },
+  realWorldBox: {
+  borderRadius: 14,
+  paddingVertical: 12,
+  paddingHorizontal: 12,
+  backgroundColor: 'rgba(79,70,229,0.06)',
+  borderWidth: 1,
+  borderColor: 'rgba(79,70,229,0.18)',
+  marginBottom: 10,
+},
+realWorldTitle: {
+  fontSize: 12,
+  fontWeight: '700',
+  color: '#4F46E5',
+  marginBottom: 6,
+},
+realWorldBody: {
+  fontSize: 13,
+  color: '#374151',
+  lineHeight: 18,
+},
 });

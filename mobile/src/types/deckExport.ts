@@ -17,6 +17,7 @@ export interface CardExport {
   Question: string;
   Explanation?: string | null;
   CodeSnippet?: string | null;
+  RealWorldUsage?: string;
   CodeLanguage?: string | null; // 'js' | 'ts' | 'cs' | 'sql' | ...
   Difficulty: number;           // 1 / 2 / 3
   OrderInDeck: number;

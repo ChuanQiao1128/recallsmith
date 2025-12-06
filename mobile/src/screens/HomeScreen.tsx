@@ -1,5 +1,5 @@
 // mobile/src/screens/HomeScreen.tsx
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   SafeAreaView,
   View,
@@ -14,7 +14,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
-import { jsCoreStarterMock } from '../mock/jsCoreStarterMock';
+import {
+  MOCK_DECKS,
+  getMockDeckBySlug,
+  getActiveDeckSlug,
+  setActiveDeckSlug,
+} from '../mock/jsCoreStarterMock';
 import type { CardProgress } from '../review/model';
 import { isDue, formatDateKey, INTERVALS_DAYS } from '../review/model';
 import {
@@ -43,38 +48,29 @@ function buildCalendar(
   progress: CardProgress[],
   now: Date,
 ): { todayDueCount: number; calendar: CalendarDay[] } {
-  const days = 7;
-  const map: Record<string, number> = {};
-
-  for (let i = 0; i < days; i++) {
-    const d = new Date(now.getTime());
-    d.setDate(d.getDate() + i);
-    const key = formatDateKey(d);
-    map[key] = 0;
+  const calendar: CalendarDay[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() + i);
+    calendar.push({ dateKey: formatDateKey(d), count: 0 });
   }
 
   for (const p of progress) {
-    const next = new Date(p.nextReviewAt);
-    const key = formatDateKey(next);
-    if (Object.prototype.hasOwnProperty.call(map, key)) {
-      map[key] += 1;
-    }
+    if (!p.nextReviewAt) continue;
+    const key = formatDateKey(new Date(p.nextReviewAt));
+    const day = calendar.find(c => c.dateKey === key);
+    if (day) day.count += 1;
   }
 
-  const calendar: CalendarDay[] = [];
-  for (let i = 0; i < days; i++) {
-    const d = new Date(now.getTime());
-    d.setDate(d.getDate() + i);
-    const key = formatDateKey(d);
-    calendar.push({ dateKey: key, count: map[key] ?? 0 });
-  }
-
-  const dueNow = progress.filter(p => isDue(p, now)).length;
-  return { todayDueCount: dueNow, calendar };
+  const todayDueCount = progress.filter(p => isDue(p, now)).length;
+  return { todayDueCount, calendar };
 }
 
 export function HomeScreen({ navigation }: Props) {
-  const deck = jsCoreStarterMock;
+  const [selectedSlug, setSelectedSlug] = useState(() => getActiveDeckSlug());
+  const deck = useMemo(() => {
+    return getMockDeckBySlug(selectedSlug) ?? MOCK_DECKS[0];
+  }, [selectedSlug]);
 
   const [state, setState] = useState<HomeState>({
     loading: true,
@@ -90,8 +86,23 @@ export function HomeScreen({ navigation }: Props) {
 
       async function load() {
         setState(prev => ({ ...prev, loading: true }));
-
         const now = new Date();
+
+        if (!deck.Cards || deck.Cards.length === 0) {
+          const { todayDueCount, calendar } = buildCalendar([], now);
+          void syncDailyReminders({ remainingDueCount: 0, now });
+
+          if (cancelled) return;
+          setState({
+            loading: false,
+            progress: [],
+            dailyStats: ({ plannedCount: 0 } as DailyStats),
+            todayDueCount,
+            calendar,
+          });
+          return;
+        }
+
         const progress = await loadDeckProgress(deck);
         if (cancelled) return;
 
@@ -100,7 +111,7 @@ export function HomeScreen({ navigation }: Props) {
 
         const { todayDueCount, calendar } = buildCalendar(progress, now);
 
-        // ✅ 唯一调用点：拿到“今日剩余 due”后同步 9:00 + 20:00
+        // ✅ only one sync
         void syncDailyReminders({ remainingDueCount: todayDueCount, now });
 
         setState({
@@ -113,14 +124,16 @@ export function HomeScreen({ navigation }: Props) {
       }
 
       load();
+
       return () => {
         cancelled = true;
       };
-    }, [deck]),
+    }, [deck.Slug]),
   );
 
   const { loading, dailyStats, todayDueCount, calendar } = state;
-  const totalCards = deck.TotalCards;
+  const totalCards = deck.TotalCards ?? deck.Cards?.length ?? 0;
+  const canStudy = (deck.Cards?.length ?? 0) > 0;
 
   if (loading || !dailyStats) {
     return (
@@ -133,7 +146,7 @@ export function HomeScreen({ navigation }: Props) {
         >
           <View style={styles.center}>
             <ActivityIndicator size="large" color="#6366F1" />
-            <Text style={styles.loadingText}>Preparing your study plan...</Text>
+            <Text style={styles.loadingText}>Loading home...</Text>
           </View>
         </LinearGradient>
       </SafeAreaView>
@@ -145,6 +158,18 @@ export function HomeScreen({ navigation }: Props) {
   const masteredApprox = Math.max(totalCards - (todayDueCount + newToday), 0);
   const overallPercent = totalCards > 0 ? masteredApprox / totalCards : 0;
 
+  const nextReviewMs = (() => {
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(20, 0, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    return next.getTime() - now.getTime();
+  })();
+
+  const hours = Math.floor(nextReviewMs / (1000 * 60 * 60));
+  const minutes = Math.floor((nextReviewMs % (1000 * 60 * 60)) / (1000 * 60));
+  const nextReviewText = `${hours}h ${minutes}m`;
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient
@@ -154,19 +179,16 @@ export function HomeScreen({ navigation }: Props) {
         style={styles.gradient}
       >
         <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={styles.container}
           showsVerticalScrollIndicator={false}
         >
-          {/* 顶部标题 */}
           <View style={styles.headingRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.appTitle}>DevCards</Text>
               <Text style={styles.appSubtitle}>
-                Spaced recall for programming fundamentals.
+                Daily practice — personalized schedule.
               </Text>
             </View>
-
             <Pressable
               style={({ pressed }) => [
                 styles.settingsButton,
@@ -174,27 +196,75 @@ export function HomeScreen({ navigation }: Props) {
               ]}
               onPress={() => navigation.navigate('Settings')}
             >
-              <Text style={styles.settingsButtonText}>Settings</Text>
+              <Text style={styles.settingsText}>⚙︎</Text>
             </Pressable>
           </View>
 
-          {/* 主 Deck 概览玻璃卡片 */}
-          <View style={styles.deckCard}>
-            <View style={styles.deckHeaderRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.deckTitle}>{deck.Title}</Text>
-                <Text style={styles.deckMeta}>Starter deck · {deck.Locale}</Text>
-              </View>
-              <View style={styles.deckBadge}>
-                <Text style={styles.deckBadgeText}>{deck.Version}</Text>
-              </View>
-            </View>
+          {/* Deck switcher */}
+          <View style={styles.deckSwitcherCard}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.deckSwitcherScroll}
+            >
+              {MOCK_DECKS.map(d => {
+                const active = d.Slug === selectedSlug;
+                const isPremium = d.DeckType !== 1;
+                return (
+                  <Pressable
+                    key={d.Slug}
+                    style={({ pressed }) => [
+                      styles.deckChip,
+                      active && styles.deckChipActive,
+                      pressed && styles.deckChipPressed,
+                    ]}
+                    onPress={() => {
+                      setActiveDeckSlug(d.Slug);
+                      setSelectedSlug(d.Slug);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.deckChipTitle,
+                        active && styles.deckChipTitleActive,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {d.Title}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.deckChipMeta,
+                        active && styles.deckChipMetaActive,
+                      ]}
+                    >
+                      {isPremium ? 'Premium' : 'Starter'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
 
-            <View style={styles.deckProgressRow}>
-              <Text style={styles.deckProgressLabel}>Overall progress</Text>
-              <Text style={styles.deckProgressValue}>
-                {masteredApprox} / {totalCards}
-              </Text>
+          <View style={styles.deckCard}>
+            <Text style={styles.deckTitle}>{deck.Title}</Text>
+            <Text style={styles.deckMeta}>
+              {deck.Locale} · v{deck.Version}
+            </Text>
+
+            <View style={styles.deckCountsRow}>
+              <View style={styles.countPill}>
+                <Text style={styles.countNumber}>{todayDueCount}</Text>
+                <Text style={styles.countLabel}>due</Text>
+              </View>
+              <View style={styles.countPill}>
+                <Text style={styles.countNumber}>{newToday}</Text>
+                <Text style={styles.countLabel}>new</Text>
+              </View>
+              <View style={styles.countPill}>
+                <Text style={styles.countNumber}>{masteredApprox}</Text>
+                <Text style={styles.countLabel}>mastered</Text>
+              </View>
             </View>
 
             <View style={styles.progressBarBg}>
@@ -207,83 +277,47 @@ export function HomeScreen({ navigation }: Props) {
               <View style={{ flex: 1 - overallPercent }} />
             </View>
 
-            <View style={styles.deckStatsRow}>
-              <View style={styles.deckStat}>
-                <Text style={styles.deckStatLabel}>Due today</Text>
-                <Text style={[styles.deckStatValue, { color: '#EF4444' }]}>
-                  {todayDueCount}
-                </Text>
-              </View>
-              <View style={styles.deckStat}>
-                <Text style={styles.deckStatLabel}>New today</Text>
-                <Text style={[styles.deckStatValue, { color: '#0EA5E9' }]}>
-                  {newToday}
-                </Text>
-              </View>
-              <View style={styles.deckStat}>
-                <Text style={styles.deckStatLabel}>Mastered (approx)</Text>
-                <Text style={[styles.deckStatValue, { color: '#22C55E' }]}>
-                  {masteredApprox}
-                </Text>
-              </View>
-            </View>
+            <Text style={styles.progressText}>
+              {Math.round(overallPercent * 100)}% overall • Next review in{' '}
+              {nextReviewText}
+            </Text>
 
             <Pressable
               style={({ pressed }) => [
                 styles.primaryButton,
+                !canStudy && styles.primaryButtonDisabled,
                 pressed && styles.primaryButtonPressed,
               ]}
-              onPress={() => navigation.navigate('Deck')}
+              disabled={!canStudy}
+              onPress={() => navigation.navigate('Review', {})}
             >
-              <Text style={styles.primaryButtonText}>Open deck</Text>
+              <Text style={styles.primaryButtonText}>
+                {canStudy ? 'Start review' : 'Coming soon'}
+              </Text>
             </Pressable>
           </View>
 
-          {/* 日历玻璃卡片 */}
           <View style={styles.calendarCard}>
-            <View style={styles.calendarHeaderRow}>
-              <Text style={styles.sectionTitle}>Next 7 days</Text>
-              <Text style={styles.sectionSubTitle}>
-                Interval stages: {INTERVALS_DAYS.join(' / ')} days
-              </Text>
-            </View>
-
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.calendarScroll}
-            >
-              {calendar.map((day, index) => {
-                const label =
-                  index === 0 ? 'Today' : index === 1 ? 'Tomorrow' : `+${index}d`;
-                const active = index === 0;
-
-                return (
-                  <View key={day.dateKey} style={styles.calendarItem}>
-                    <Text
+            <Text style={styles.sectionTitle}>Next 7 days</Text>
+            <View style={styles.calendarRow}>
+              {calendar.map(day => (
+                <View key={day.dateKey} style={styles.calendarCell}>
+                  <Text style={styles.calendarDay}>{day.dateKey.slice(5)}</Text>
+                  <View style={styles.calendarDotWrap}>
+                    <View
                       style={[
-                        styles.calendarLabel,
-                        active && styles.calendarLabelActive,
+                        styles.calendarDot,
+                        { opacity: day.count === 0 ? 0.18 : 1 },
                       ]}
-                    >
-                      {label}
-                    </Text>
-                    <Text style={styles.calendarDate}>{day.dateKey}</Text>
-                    <View style={styles.calendarDotRow}>
-                      <View
-                        style={[
-                          styles.calendarDot,
-                          day.count === 0 && { opacity: 0.25 },
-                        ]}
-                      />
-                      <Text style={styles.calendarCount}>
-                        {day.count} card{day.count === 1 ? '' : 's'}
-                      </Text>
-                    </View>
+                    />
                   </View>
-                );
-              })}
-            </ScrollView>
+                  <Text style={styles.calendarCount}>{day.count}</Text>
+                </View>
+              ))}
+            </View>
+            <Text style={styles.calendarHint}>
+              Next intervals: {INTERVALS_DAYS.join(', ')} days.
+            </Text>
           </View>
         </ScrollView>
       </LinearGradient>
@@ -293,144 +327,141 @@ export function HomeScreen({ navigation }: Props) {
 
 export default HomeScreen;
 
-const CARD_BG = 'rgba(255,255,255,0.18)';
-const CARD_BORDER = 'rgba(255,255,255,0.55)';
+const GLASS = 'rgba(255,255,255,0.16)';
+const BORDER = 'rgba(255,255,255,0.45)';
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
   gradient: { flex: 1 },
-  scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 18, paddingBottom: 28 },
+  container: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 30 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   loadingText: { marginTop: 10, color: '#6B7280' },
 
-  headingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: 6,
-    paddingBottom: 16,
-  },
-  appTitle: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: '#111827',
-    letterSpacing: 0.4,
-  },
-  appSubtitle: { marginTop: 6, fontSize: 13, color: '#6B7280' },
+  headingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  appTitle: { fontSize: 22, fontWeight: '800', color: '#111827' },
+  appSubtitle: { marginTop: 4, color: '#6B7280' },
+
   settingsButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.85)',
-    marginLeft: 8,
-  },
-  settingsButtonPressed: { opacity: 0.9 },
-  settingsButtonText: { fontSize: 12, fontWeight: '500', color: '#111827' },
-
-  deckCard: {
-    borderRadius: 24,
-    padding: 18,
-    backgroundColor: CARD_BG,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    shadowColor: '#000',
-    shadowOpacity: 0.14,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 4,
-    marginBottom: 16,
-  },
-  deckHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  deckTitle: { fontSize: 18, fontWeight: '600', color: '#111827' },
-  deckMeta: { fontSize: 12, color: '#6B7280', marginTop: 2 },
-  deckBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: 'rgba(79,70,229,0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(79,70,229,0.45)',
-    marginLeft: 10,
-  },
-  deckBadgeText: { fontSize: 11, fontWeight: '600', color: '#4F46E5' },
-
-  deckProgressRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-  },
-  deckProgressLabel: { fontSize: 12, color: '#6B7280' },
-  deckProgressValue: { fontSize: 12, color: '#111827', fontWeight: '500' },
-
-  progressBarBg: {
-    marginTop: 8,
-    marginBottom: 10,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    flexDirection: 'row',
-    overflow: 'hidden',
-  },
-  progressBarFill: { backgroundColor: '#6366F1', borderRadius: 999 },
-
-  deckStatsRow: { flexDirection: 'row', marginBottom: 10 },
-  deckStat: { flex: 1 },
-  deckStatLabel: { fontSize: 11, color: '#9CA3AF' },
-  deckStatValue: { marginTop: 2, fontSize: 16, fontWeight: '600' },
-
-  primaryButton: {
-    marginTop: 2,
-    borderRadius: 999,
-    backgroundColor: '#4F46E5',
-    paddingVertical: 11,
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.86)',
     alignItems: 'center',
-  },
-  primaryButtonPressed: { opacity: 0.92 },
-  primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
-
-  calendarCard: {
-    borderRadius: 24,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.4)',
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
-  },
-  calendarHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 8,
-  },
-  sectionTitle: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  sectionSubTitle: { fontSize: 11, color: '#6B7280' },
-  calendarScroll: { marginTop: 6 },
-  calendarItem: {
-    width: 110,
-    marginRight: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    justifyContent: 'center',
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
   },
-  calendarLabel: { fontSize: 12, color: '#6B7280' },
-  calendarLabelActive: { color: '#4F46E5', fontWeight: '600' },
-  calendarDate: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
-  calendarDotRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center' },
+  settingsButtonPressed: { opacity: 0.92 },
+  settingsText: { fontSize: 18, color: '#111827' },
+
+  deckSwitcherCard: { marginBottom: 14 },
+  deckSwitcherScroll: { paddingRight: 6 },
+  deckChip: {
+    width: 170,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    marginRight: 10,
+    backgroundColor: 'rgba(255,255,255,0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.08)',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  deckChipActive: {
+    backgroundColor: 'rgba(79,70,229,0.10)',
+    borderColor: 'rgba(79,70,229,0.28)',
+  },
+  deckChipPressed: { opacity: 0.92 },
+  deckChipTitle: { fontSize: 13, fontWeight: '700', color: '#111827' },
+  deckChipTitleActive: { color: '#4F46E5' },
+  deckChipMeta: { marginTop: 4, fontSize: 11, color: '#6B7280' },
+  deckChipMetaActive: { color: '#4F46E5', fontWeight: '600' },
+
+  deckCard: {
+    borderRadius: 22,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: GLASS,
+    borderWidth: 1,
+    borderColor: BORDER,
+    shadowColor: '#000',
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 10 },
+    marginBottom: 14,
+  },
+  deckTitle: { fontSize: 18, fontWeight: '800', color: '#111827' },
+  deckMeta: { marginTop: 4, color: '#6B7280', fontSize: 12 },
+
+  deckCountsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 14,
+  },
+  countPill: {
+    width: '31%',
+    borderRadius: 16,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.5)',
+    alignItems: 'center',
+  },
+  countNumber: { fontSize: 18, fontWeight: '800', color: '#111827' },
+  countLabel: { fontSize: 11, color: '#6B7280', marginTop: 2 },
+
+  progressBarBg: {
+    marginTop: 12,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    flexDirection: 'row',
+    overflow: 'hidden',
+  },
+  progressBarFill: { backgroundColor: '#4F46E5', borderRadius: 999 },
+  progressText: { marginTop: 10, fontSize: 12, color: '#374151' },
+
+  primaryButton: {
+    marginTop: 12,
+    paddingVertical: 12,
+    borderRadius: 999,
+    alignItems: 'center',
+    backgroundColor: '#4F46E5',
+  },
+  primaryButtonDisabled: { opacity: 0.5 },
+  primaryButtonPressed: { opacity: 0.92 },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+
+  calendarCard: {
+    borderRadius: 22,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(255,255,255,0.86)',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 10 },
+  },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  calendarRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  calendarCell: { alignItems: 'center', width: '13%' },
+  calendarDay: { fontSize: 11, color: '#6B7280' },
+  calendarDotWrap: { marginTop: 6, marginBottom: 4 },
   calendarDot: {
     width: 10,
     height: 10,
     borderRadius: 999,
-    backgroundColor: '#6366F1',
-    marginRight: 6,
+    backgroundColor: '#4F46E5',
   },
-  calendarCount: { fontSize: 13, color: '#111827' },
+  calendarCount: { fontSize: 11, color: '#111827', fontWeight: '600' },
+  calendarHint: { marginTop: 10, fontSize: 11, color: '#6B7280' },
 });
