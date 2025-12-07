@@ -1,0 +1,61 @@
+{
+  "SchemaVersion": 1,
+  "PublishedAt": "2025-12-07T00:00:00.000Z",
+  "Decks": [
+    {
+      "Title": "JavaScript Core Basics",
+      "Slug": "js-core-basics",
+      "Locale": "en-US",
+      "DeckType": 1,
+      "IsFreeStarter": true,
+      "Version": "1.0",
+      "TotalCards": 50,
+      "FreeCardCount": 50,
+      "Path": "decks/js-core-basics/deck.json"
+    },
+    {
+      "Title": "TypeScript + React Essentials",
+      "Slug": "ts-react-essentials",
+      "Locale": "en-US",
+      "DeckType": 1,
+      "IsFreeStarter": true,
+      "Version": "1.0",
+      "TotalCards": 50,
+      "FreeCardCount": 50,
+      "Path": "decks/ts-react-essentials/deck.json"
+    },
+    {
+      "Title": "Web & API Fundamentals",
+      "Slug": "web-api-fundamentals",
+      "Locale": "en-US",
+      "DeckType": 1,
+      "IsFreeStarter": true,
+      "Version": "1.0",
+      "TotalCards": 50,
+      "FreeCardCount": 50,
+      "Path": "decks/web-api-fundamentals/deck.json"
+    },
+    {
+      "Title": "System Design (Pro)",
+      "Slug": "system-design-pro",
+      "Locale": "en-US",
+      "DeckType": 2,
+      "IsFreeStarter": false,
+      "Version": "1.0",
+      "TotalCards": 0,
+      "FreeCardCount": 0,
+      "Path": "decks/system-design-pro/deck.json"
+    },
+    {
+      "Title": "Cloud Engineering (Pro)",
+      "Slug": "cloud-pro",
+      "Locale": "en-US",
+      "DeckType": 2,
+      "IsFreeStarter": false,
+      "Version": "1.0",
+      "TotalCards": 0,
+      "FreeCardCount": 0,
+      "Path": "decks/cloud-pro/deck.json"
+    }
+  ]
+}

@@ -1,0 +1,512 @@
+{
+  "Title": "TypeScript + React Essentials",
+  "Slug": "ts-react-essentials",
+  "Locale": "en-US",
+  "DeckType": 1,
+  "IsFreeStarter": true,
+  "Version": "1.0",
+  "TotalCards": 50,
+  "FreeCardCount": 50,
+  "Cards": [
+    {
+      "StableUid": "ts-react-essentials-1",
+      "OrderInDeck": 1,
+      "Difficulty": 1,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #1: type vs interface: when do you use each?",
+      "Explanation": "Both can describe object shapes. interface is common for public object contracts and can be merged (declaration merging). type is more flexible (unions, intersections, mapped/conditional types).",
+      "CodeSnippet": "interface User { id: string; name: string }\ntype UserId = User['id'] | number;",
+      "RealWorldUsage": "Use interface for component props and domain models; use type for advanced compositions like unions of API states."
+    },
+    {
+      "StableUid": "ts-react-essentials-2",
+      "OrderInDeck": 2,
+      "Difficulty": 1,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #2: Union vs intersection types: what do they mean?",
+      "Explanation": "A union (A | B) means a value can be either type. An intersection (A & B) means a value must satisfy both types.",
+      "CodeSnippet": "type Loading = { state: 'loading' };\ntype Ready = { state: 'ready'; data: string[] };\ntype ViewState = Loading | Ready;\n\ntype WithId = { id: string };\ntype WithName = { name: string };\ntype Person = WithId & WithName;",
+      "RealWorldUsage": "Unions are perfect for UI state machines. Intersections help build reusable “mixins” like WithId, WithTimestamps."
+    },
+    {
+      "StableUid": "ts-react-essentials-3",
+      "OrderInDeck": 3,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #3: What are generics and why are they useful?",
+      "Explanation": "Generics let you write reusable functions/components while preserving type information of inputs and outputs.",
+      "CodeSnippet": "function first<T>(arr: T[]): T | undefined {\n  return arr[0];\n}\nconst x = first([1, 2, 3]); // number | undefined",
+      "RealWorldUsage": "Generics make helpers like fetchJson<T>() type-safe so you can avoid “any” and catch mismatches at compile time."
+    },
+    {
+      "StableUid": "ts-react-essentials-4",
+      "OrderInDeck": 4,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #4: What is a discriminated union?",
+      "Explanation": "A union of object types that share a common literal field (the discriminant). TypeScript can narrow based on that field.",
+      "CodeSnippet": "type Ok = { ok: true; value: string };\ntype Err = { ok: false; message: string };\ntype Result = Ok | Err;\n\nfunction handle(r: Result) {\n  if (r.ok) return r.value;\n  return r.message;\n}",
+      "RealWorldUsage": "Great for API results, async states, and reducers—keeps logic explicit and prevents undefined access."
+    },
+    {
+      "StableUid": "ts-react-essentials-5",
+      "OrderInDeck": 5,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #5: unknown vs any: what is the difference?",
+      "Explanation": "any turns off type checking. unknown forces you to narrow before using the value, making it safer for untrusted data.",
+      "CodeSnippet": "function parse(input: unknown) {\n  if (typeof input === 'string') return input.toUpperCase();\n  return 'N/A';\n}",
+      "RealWorldUsage": "Use unknown for JSON.parse results and external inputs; then validate/narrow before using."
+    },
+    {
+      "StableUid": "ts-react-essentials-6",
+      "OrderInDeck": 6,
+      "Difficulty": 1,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #6: What are common utility types (Partial, Pick, Omit, Record)?",
+      "Explanation": "Utility types help build new types from existing ones. Partial makes fields optional, Pick selects keys, Omit removes keys, Record maps keys to a type.",
+      "CodeSnippet": "type User = { id: string; name: string; email: string };\ntype UserPreview = Pick<User, 'id' | 'name'>;\ntype UserUpdate = Partial<Omit<User, 'id'>>;\ntype ErrorMap = Record<string, string>;",
+      "RealWorldUsage": "You’ll use these constantly when defining API DTOs, update payloads, and derived props."
+    },
+    {
+      "StableUid": "ts-react-essentials-7",
+      "OrderInDeck": 7,
+      "Difficulty": 2,
+      "CodeLanguage": "React",
+      "Question": "TS #7: How do you type React component props?",
+      "Explanation": "Define a props type/interface and use it on the component. Prefer explicit props typing; it keeps autocomplete and refactors safe.",
+      "CodeSnippet": "type ButtonProps = {\n  label: string;\n  onPress: () => void;\n  disabled?: boolean;\n};\n\nexport function PrimaryButton(props: ButtonProps) {\n  return null;\n}",
+      "RealWorldUsage": "Well-typed components prevent UI wiring bugs (wrong callback shape, missing required fields) and improve teammate velocity."
+    },
+    {
+      "StableUid": "ts-react-essentials-8",
+      "OrderInDeck": 8,
+      "Difficulty": 2,
+      "CodeLanguage": "React",
+      "Question": "TS #8: useState typing: when do you need generics?",
+      "Explanation": "TypeScript infers from the initial value. Use a generic when the initial state is null/undefined or when you need a union type.",
+      "CodeSnippet": "type User = { id: string; name: string };\nconst [user, setUser] = React.useState<User | null>(null);\nsetUser({ id: '1', name: 'Ava' });",
+      "RealWorldUsage": "Common in apps with async data: state starts null, then becomes a typed object once loaded."
+    },
+    {
+      "StableUid": "ts-react-essentials-9",
+      "OrderInDeck": 9,
+      "Difficulty": 2,
+      "CodeLanguage": "React",
+      "Question": "TS #9: useEffect dependencies: what is the safe mental model?",
+      "Explanation": "Put every reactive value you read inside the effect into the dependency array. If you want stability, memoize with useCallback/useMemo.",
+      "CodeSnippet": "React.useEffect(() => {\n  loadUser(userId);\n}, [userId]);",
+      "RealWorldUsage": "Correct dependencies prevent stale data bugs and infinite loops. It’s one of the most common sources of React app issues."
+    },
+    {
+      "StableUid": "ts-react-essentials-10",
+      "OrderInDeck": 10,
+      "Difficulty": 2,
+      "CodeLanguage": "React",
+      "Question": "TS #10: useMemo vs useCallback: what is the difference?",
+      "Explanation": "useMemo memoizes a computed value. useCallback memoizes a function reference. Both are optimization tools and should be justified.",
+      "CodeSnippet": "const expensive = React.useMemo(() => compute(items), [items]);\nconst onClick = React.useCallback(() => doThing(id), [id]);",
+      "RealWorldUsage": "Use them to avoid re-computing heavy work or re-render cascades, especially when passing props into memoized children."
+    },
+    {
+      "StableUid": "ts-react-essentials-11",
+      "OrderInDeck": 11,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #11: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder11 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-12",
+      "OrderInDeck": 12,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #12: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder12 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-13",
+      "OrderInDeck": 13,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #13: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder13 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-14",
+      "OrderInDeck": 14,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #14: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder14 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-15",
+      "OrderInDeck": 15,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #15: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder15 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-16",
+      "OrderInDeck": 16,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #16: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder16 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-17",
+      "OrderInDeck": 17,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #17: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder17 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-18",
+      "OrderInDeck": 18,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #18: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder18 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-19",
+      "OrderInDeck": 19,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #19: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder19 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-20",
+      "OrderInDeck": 20,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #20: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder20 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-21",
+      "OrderInDeck": 21,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #21: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder21 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-22",
+      "OrderInDeck": 22,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #22: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder22 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-23",
+      "OrderInDeck": 23,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #23: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder23 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-24",
+      "OrderInDeck": 24,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #24: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder24 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-25",
+      "OrderInDeck": 25,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #25: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder25 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-26",
+      "OrderInDeck": 26,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #26: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder26 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-27",
+      "OrderInDeck": 27,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #27: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder27 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-28",
+      "OrderInDeck": 28,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #28: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder28 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-29",
+      "OrderInDeck": 29,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #29: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder29 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-30",
+      "OrderInDeck": 30,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #30: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder30 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-31",
+      "OrderInDeck": 31,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #31: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder31 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-32",
+      "OrderInDeck": 32,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #32: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder32 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-33",
+      "OrderInDeck": 33,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #33: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder33 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-34",
+      "OrderInDeck": 34,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #34: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder34 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-35",
+      "OrderInDeck": 35,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #35: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder35 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-36",
+      "OrderInDeck": 36,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #36: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder36 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-37",
+      "OrderInDeck": 37,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #37: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder37 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-38",
+      "OrderInDeck": 38,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #38: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder38 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-39",
+      "OrderInDeck": 39,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #39: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder39 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-40",
+      "OrderInDeck": 40,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #40: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder40 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-41",
+      "OrderInDeck": 41,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #41: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder41 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-42",
+      "OrderInDeck": 42,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #42: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder42 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-43",
+      "OrderInDeck": 43,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #43: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder43 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-44",
+      "OrderInDeck": 44,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #44: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder44 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-45",
+      "OrderInDeck": 45,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #45: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder45 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-46",
+      "OrderInDeck": 46,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #46: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder46 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-47",
+      "OrderInDeck": 47,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #47: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder47 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-48",
+      "OrderInDeck": 48,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #48: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder48 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-49",
+      "OrderInDeck": 49,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #49: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder49 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    },
+    {
+      "StableUid": "ts-react-essentials-50",
+      "OrderInDeck": 50,
+      "Difficulty": 2,
+      "CodeLanguage": "TypeScript",
+      "Question": "TS #50: Type-safe pattern drill (placeholder).",
+      "Explanation": "Placeholder card to keep the deck size at 50 for early builds. Replace with authored content.",
+      "CodeSnippet": "// Placeholder snippet\nexport type Placeholder50 = { ok: true };",
+      "RealWorldUsage": "- Replace placeholders with real prompts.\n- Focus on narrowing, generics, hooks typing, and navigation params."
+    }
+  ]
+}
