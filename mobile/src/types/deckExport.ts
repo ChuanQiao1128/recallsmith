@@ -14,6 +14,7 @@ export interface DeckExport {
 
 export interface CardExport {
   StableUid: string;
+  Revision?: number; // ✅ Phase 0: 内容版本号（整数递增），改题/修订时+1
   Question: string;
   Explanation?: string | null;
   CodeSnippet?: string | null;

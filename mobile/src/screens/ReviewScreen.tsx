@@ -292,7 +292,15 @@ export function ReviewScreen({ navigation, route }: Props) {
 
     setReviewing(true);
     try {
-      const updatedOne = scheduleNextReview(current.progress, uiRating, new Date());
+         // ✅ Phase 0: 记录“用户最后确认过的卡片内容版本”
+      // deck.json 里没填 Revision 时默认按 1 处理，避免旧题库崩
+      const seenRev =
+        typeof (current.card as any).Revision === 'number' ? (current.card as any).Revision : 1;
+
+      const updatedOne: CardProgress = {
+        ...scheduleNextReview(current.progress, uiRating, new Date()),
+        lastSeenRevision: seenRev,
+      };
 
       const newProgress = progress.map(p =>
         p.stableUid === updatedOne.stableUid ? updatedOne : p,
