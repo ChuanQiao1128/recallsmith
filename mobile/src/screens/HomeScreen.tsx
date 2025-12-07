@@ -32,13 +32,9 @@ import {
 } from '../mock/jsCoreStarterMock';
 
 import type { CardProgress } from '../review/model';
-import { isDue, formatDateKey } from '../review/model';
+import { formatDateKey } from '../review/model';
 
-import {
-  loadDeckProgress,
-  loadOrInitDailyStats,
-  type DailyStats,
-} from '../review/storage';
+import { loadDeckProgress } from '../review/storage';
 
 import { syncDailyReminders } from '../notifications/reminders';
 
@@ -96,9 +92,18 @@ function formatMonthDay(d: Date) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+function isLearned(p: CardProgress): boolean {
+  return typeof p.lastReviewedAt === 'number' && p.lastReviewedAt > 0;
+}
+
+function isScheduled(p: CardProgress): boolean {
+  return isLearned(p) && typeof p.nextReviewAt === 'number' && p.nextReviewAt > 0;
+}
+
 /**
  * Build upcoming schedule buckets (today -> today+(days-1)).
  * UX rule: overdue (nextReviewAt < today) counts into “today” so backlog is visible.
+ * IMPORTANT: only learned cards are included.
  */
 function buildUpcoming(progress: CardProgress[], now: Date, days: number): CalendarDay[] {
   const out: CalendarDay[] = [];
@@ -114,7 +119,8 @@ function buildUpcoming(progress: CardProgress[], now: Date, days: number): Calen
   }
 
   for (const p of progress) {
-    if (!p.nextReviewAt) continue;
+    if (!isScheduled(p)) continue;
+
     const next = new Date(p.nextReviewAt);
     const effective = next.getTime() < today0.getTime() ? today0 : next;
     const key = formatDateKey(effective);
@@ -217,17 +223,16 @@ export function HomeScreen({ navigation }: Props) {
           const progress = await loadDeckProgress(deck);
           if (cancelled) return;
 
-          const dailyStats: DailyStats = await loadOrInitDailyStats(deck, progress);
-          if (cancelled) return;
+          const learnedCount = progress.filter(isLearned).length;
+          const newRemaining = Math.max(totalCards - learnedCount, 0);
 
-          const dueToday = progress.filter(p => isDue(p, now)).length;
+          const upcoming30 = buildUpcoming(progress, now, 30);
+          const dueToday = upcoming30[0]?.count ?? 0;
+
           totalDueAllDecks += dueToday;
 
-          const plannedToday = dailyStats.plannedCount;
-          const newToday = Math.max(plannedToday - dueToday, 0);
-
-          const masteredApprox = Math.max(totalCards - (dueToday + newToday), 0);
-          const percent = totalCards > 0 ? clamp01(masteredApprox / totalCards) : 0;
+          // For Home list: keep fields but make them consistent with new semantics.
+          const percent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
 
           deckSummaries.push({
             slug: deck.Slug,
@@ -238,21 +243,21 @@ export function HomeScreen({ navigation }: Props) {
             totalCards,
             canStudy,
             dueToday,
-            plannedToday,
-            newToday,
-            masteredApprox,
+            plannedToday: dueToday, // "planned today" = reviews due today (simple + consistent)
+            newToday: newRemaining, // "new cards" remaining
+            masteredApprox: learnedCount, // learned count
             percent,
           });
 
           // Aggregate next-30 schedule
-          const upcoming30 = buildUpcoming(progress, now, 30);
           for (let i = 0; i < allUpcoming30.length; i++) {
             allUpcoming30[i].count += upcoming30[i]?.count ?? 0;
           }
 
           // Aggregate CURRENT MONTH counts (overdue -> today)
           for (const p of progress) {
-            if (!p.nextReviewAt) continue;
+            if (!isScheduled(p)) continue;
+
             const next = new Date(p.nextReviewAt);
             const effective = next.getTime() < today0.getTime() ? today0 : next;
 
@@ -265,7 +270,7 @@ export function HomeScreen({ navigation }: Props) {
           }
         }
 
-        // Reminder logic uses total due across all decks
+        // Reminder logic uses total due across all decks (today bucket)
         void syncDailyReminders({ remainingDueCount: totalDueAllDecks, now });
 
         if (cancelled) return;
@@ -326,7 +331,7 @@ export function HomeScreen({ navigation }: Props) {
   function openDeck(slug: string) {
     setActiveDeckSlug(slug);
     setSelectedSlug(slug);
-     navigation.navigate('Deck', { slug });
+    navigation.navigate('Deck', { slug });
   }
 
   // Build month grid (full current month)
@@ -650,7 +655,7 @@ export function HomeScreen({ navigation }: Props) {
 
                   {d.canStudy ? (
                     <View style={styles.deckRowRight}>
-                      <Text style={styles.duePill}>{d.dueToday} due</Text>
+                      <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
                       <View style={styles.rowBarBg}>
                         <View
                           style={[

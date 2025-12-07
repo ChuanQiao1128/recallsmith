@@ -24,7 +24,7 @@ import {
 } from '../mock/jsCoreStarterMock';
 
 import type { CardProgress } from '../review/model';
-import { isDue } from '../review/model';
+import { formatDateKey } from '../review/model';
 import {
   loadDeckProgress,
   loadOrInitDailyStats,
@@ -38,6 +38,40 @@ interface DeckState {
   progress: CardProgress[];
   dailyStats: DailyStats | null;
   error: string | null;
+}
+
+function startOfToday(now: Date) {
+  const d = new Date(now.getTime());
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function isLearned(p: CardProgress): boolean {
+  return typeof p.lastReviewedAt === 'number' && p.lastReviewedAt > 0;
+}
+
+function isScheduled(p: CardProgress): boolean {
+  return isLearned(p) && typeof p.nextReviewAt === 'number' && p.nextReviewAt > 0;
+}
+
+function countDueToday(progress: CardProgress[], now: Date): number {
+  const today0 = startOfToday(now);
+  const todayKey = formatDateKey(today0);
+  let count = 0;
+
+  for (const p of progress) {
+    if (!isScheduled(p)) continue;
+
+    const next = new Date(p.nextReviewAt);
+    const effective = next.getTime() < today0.getTime() ? today0 : next;
+    if (formatDateKey(effective) === todayKey) count += 1;
+  }
+
+  return count;
+}
+
+function clamp01(n: number): number {
+  return Math.max(0, Math.min(1, n));
 }
 
 export function DeckScreen({ navigation, route }: Props) {
@@ -88,22 +122,25 @@ export function DeckScreen({ navigation, route }: Props) {
         setState({ loading: false, progress, dailyStats, error: null });
       }
 
-      load();
+      void load();
       return () => {
         cancelled = true;
       };
-    }, [deck?.Slug]),
+    }, [deck?.Slug, deck?.Version]),
   );
 
   const { loading, progress, dailyStats, error } = state;
 
-  // 统计（你原来的逻辑不变，只把展示文案调整为 Due/New/Learned）
   const now = new Date();
-  const dueToday = progress.filter(p => isDue(p, now)).length;
-  const plannedToday = dailyStats?.plannedCount ?? 0;
-  const newToday = Math.max(plannedToday - dueToday, 0);
-  const learnedApprox = Math.max(totalCards - (dueToday + newToday), 0);
-  const overallPercent = totalCards > 0 ? learnedApprox / totalCards : 0;
+
+  // ✅ 统一口径：Due = 只统计已学过(lastReviewedAt)且安排在“今天桶”的卡
+  const dueToday = countDueToday(progress, now);
+
+  // ✅ New = 没学过的数量（lastReviewedAt 缺失）
+  const learnedCount = progress.filter(isLearned).length;
+  const newRemaining = Math.max(totalCards - learnedCount, 0);
+
+  const overallPercent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
 
   const minSession = 5;
   const maxSession = 50;
@@ -171,8 +208,8 @@ export function DeckScreen({ navigation, route }: Props) {
   const deckTypeLabel = deck.DeckType === 1 ? 'Starter deck' : 'Premium deck';
 
   const disableReviewDue = !canStudy || dueToday === 0;
-  const disableLearn = !canStudy || newToday === 0;
-  const disableMixed = !canStudy;
+  const disableLearn = !canStudy || newRemaining === 0;
+  const disableMixed = !canStudy || (dueToday === 0 && newRemaining === 0);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -219,7 +256,7 @@ export function DeckScreen({ navigation, route }: Props) {
               <>
                 <View style={styles.heroTopRow}>
                   <Text style={styles.heroTotal}>
-                    {learnedApprox}/{totalCards}
+                    {learnedCount}/{totalCards}
                   </Text>
                   <Text style={styles.heroTotalLabel}>learned (approx)</Text>
                 </View>
@@ -244,13 +281,13 @@ export function DeckScreen({ navigation, route }: Props) {
                   <View style={styles.heroStat}>
                     <Text style={styles.heroStatLabel}>New cards</Text>
                     <Text style={[styles.heroStatValue, { color: '#0EA5E9' }]}>
-                      {newToday}
+                      {newRemaining}
                     </Text>
                   </View>
                   <View style={styles.heroStat}>
                     <Text style={styles.heroStatLabel}>Have learned</Text>
                     <Text style={[styles.heroStatValue, { color: '#22C55E' }]}>
-                      {learnedApprox}
+                      {learnedCount}
                     </Text>
                   </View>
                 </View>
@@ -303,7 +340,7 @@ export function DeckScreen({ navigation, route }: Props) {
             </View>
           </View>
 
-          {/* 模式选择（优化文案 + Learn / Review Due / Mixed） */}
+          {/* 模式选择（Learn / Review Due / Mixed） */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Choose a mode</Text>
             <Text style={styles.sectionSubTitle}>
@@ -322,9 +359,7 @@ export function DeckScreen({ navigation, route }: Props) {
             >
               <View style={{ flex: 1 }}>
                 <Text style={styles.modeTitle}>Review Due</Text>
-                <Text style={styles.modeSubtitle}>
-                  Clear your backlog first.
-                </Text>
+                <Text style={styles.modeSubtitle}>Clear today&apos;s reviews first.</Text>
               </View>
               <Text style={styles.modeCount}>
                 {dueToday} due
@@ -343,12 +378,10 @@ export function DeckScreen({ navigation, route }: Props) {
             >
               <View style={{ flex: 1 }}>
                 <Text style={styles.modeTitle}>Learn</Text>
-                <Text style={styles.modeSubtitle}>
-                  Add new concepts for today.
-                </Text>
+                <Text style={styles.modeSubtitle}>Add new concepts for today.</Text>
               </View>
               <Text style={styles.modeCount}>
-                {newToday} new
+                {newRemaining} new
               </Text>
             </Pressable>
 
@@ -364,9 +397,7 @@ export function DeckScreen({ navigation, route }: Props) {
             >
               <View style={{ flex: 1 }}>
                 <Text style={styles.modeTitle}>Mixed</Text>
-                <Text style={styles.modeSubtitle}>
-                  Balanced run (due + a few new).
-                </Text>
+                <Text style={styles.modeSubtitle}>Balanced run (due + a few new).</Text>
               </View>
               <Text style={styles.modeCount}>
                 up to {sessionCount}

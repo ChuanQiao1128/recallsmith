@@ -1,5 +1,5 @@
 // mobile/src/screens/ReviewScreen.tsx
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   SafeAreaView,
   View,
@@ -8,34 +8,27 @@ import {
   ActivityIndicator,
   Pressable,
   ScrollView,
+  Animated,
+  useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
-
-// ✅ 用 slug 方式拿 deck（避免 activeSlug 异步竞争）
-import {
-  MOCK_DECKS,
-  getMockDeckBySlug,
-  getActiveDeckSlug,
-  setActiveDeckSlug,
-} from '../mock/jsCoreStarterMock';
-
+import { getActiveDeckSlug, getMockDeckBySlug } from '../mock/jsCoreStarterMock';
 import type { DeckExport, CardExport } from '../types/deckExport';
-import type { CardProgress } from '../review/model';
-import {
-  isDue,
-  scheduleNextReview,
-  type ReviewRating,
-} from '../review/model';
+
+import type { CardProgress, ReviewRating } from '../review/model';
+import { scheduleNextReview, formatDateKey } from '../review/model';
+
 import {
   loadDeckProgress,
   saveDeckProgress,
   loadOrInitDailyStats,
   type DailyStats,
 } from '../review/storage';
+
 import { syncDailyReminders } from '../notifications/reminders';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Review'>;
@@ -46,78 +39,211 @@ interface CurrentCard {
   progress: CardProgress;
 }
 
-function pickNextDueCard(
-  deck: DeckExport,
-  progress: CardProgress[],
-  now: Date,
-): CurrentCard | null {
-  const sorted = [...deck.Cards].sort((a, b) => a.OrderInDeck - b.OrderInDeck);
+function buildCardMap(deck: DeckExport): Map<string, CardExport> {
+  const map = new Map<string, CardExport>();
+  for (const c of deck.Cards) map.set(c.StableUid, c);
+  return map;
+}
 
-  for (const card of sorted) {
-    const p = progress.find(x => x.stableUid === card.StableUid);
-    if (!p) continue;
-    if (isDue(p, now)) return { card, progress: p };
-  }
-  return null;
+function sortCards(deck: DeckExport): CardExport[] {
+  return [...deck.Cards].sort((a, b) => a.OrderInDeck - b.OrderInDeck);
+}
+
+function startOfToday(now: Date) {
+  const d = new Date(now.getTime());
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function isLearned(p: CardProgress): boolean {
+  return typeof p.lastReviewedAt === 'number' && p.lastReviewedAt > 0;
+}
+
+function isNewCard(p: CardProgress): boolean {
+  return !isLearned(p);
+}
+
+function isScheduled(p: CardProgress): boolean {
+  return isLearned(p) && typeof p.nextReviewAt === 'number' && p.nextReviewAt > 0;
 }
 
 /**
- * 计算“所有 deck 的 due 总数”，用于 20:00提醒（全局任务）。
- * - 可复用当前 deck 的 progress，避免重复读存储。
+ * Due-today bucket (overdue -> today). IMPORTANT: only learned cards.
+ * This matches Home/Deck "Due today".
  */
-async function computeTotalDueAllDecks(args: {
-  now: Date;
-  currentDeckSlug?: string;
-  currentProgress?: CardProgress[];
-}): Promise<number> {
-  const { now, currentDeckSlug, currentProgress } = args;
+function isDueTodayBucket(p: CardProgress, now: Date): boolean {
+  if (!isScheduled(p)) return false;
 
-  let total = 0;
-  for (const d of MOCK_DECKS) {
-    const canStudy = (d.Cards?.length ?? 0) > 0;
-    if (!canStudy) continue;
+  const today0 = startOfToday(now);
+  const todayKey = formatDateKey(today0);
 
-    if (currentDeckSlug && currentProgress && d.Slug === currentDeckSlug) {
-      total += currentProgress.filter(p => isDue(p, now)).length;
-    } else {
-      const p = await loadDeckProgress(d);
-      total += p.filter(x => isDue(x, now)).length;
-    }
+  const next = new Date(p.nextReviewAt);
+  const effective = next.getTime() < today0.getTime() ? today0 : next;
+
+  return formatDateKey(effective) === todayKey;
+}
+
+function countDueToday(progress: CardProgress[], now: Date): number {
+  let c = 0;
+  for (const p of progress) {
+    if (isDueTodayBucket(p, now)) c += 1;
   }
-  return total;
+  return c;
+}
+
+function pickNextCard(
+  deck: DeckExport,
+  progress: CardProgress[],
+  now: Date,
+  mode: 'review-due' | 'learn-new' | 'mixed',
+  avoidUid?: string | null,
+): CurrentCard | null {
+  const cardMap = buildCardMap(deck);
+  const cards = sortCards(deck);
+  const pMap = new Map(progress.map(p => [p.stableUid, p]));
+
+  const pickWith = (predicate: (p: CardProgress) => boolean) => {
+    // pass 1: avoid immediate repeat
+    for (const card of cards) {
+      if (avoidUid && card.StableUid === avoidUid) continue;
+      const p = pMap.get(card.StableUid);
+      if (!p) continue;
+      if (predicate(p)) return { card: cardMap.get(card.StableUid)!, progress: p };
+    }
+
+    // pass 2: allow repeat if nothing else
+    if (avoidUid) {
+      for (const card of cards) {
+        const p = pMap.get(card.StableUid);
+        if (!p) continue;
+        if (predicate(p)) return { card: cardMap.get(card.StableUid)!, progress: p };
+      }
+    }
+
+    return null;
+  };
+
+  const pickDue = () => pickWith(p => isDueTodayBucket(p, now));
+  const pickNew = () => pickWith(p => isNewCard(p));
+
+  if (mode === 'review-due') return pickDue();
+  if (mode === 'learn-new') return pickNew();
+
+  // mixed: due first, then new
+  return pickDue() ?? pickNew();
+}
+
+function modeLabel(mode: string) {
+  if (mode === 'review-due') return 'Review Due';
+  if (mode === 'learn-new') return 'Learn';
+  return 'Mixed';
+}
+
+/** tiny markdown-ish renderer: supports "- " bullets and paragraphs */
+function renderSimpleMarkdown(text: string, stylesObj: any) {
+  const lines = text.split('\n');
+  const nodes: React.ReactNode[] = [];
+
+  lines.forEach((line, idx) => {
+    const raw = line.trimEnd();
+    if (raw.trim().length === 0) {
+      nodes.push(<View key={`sp-${idx}`} style={{ height: 8 }} />);
+      return;
+    }
+
+    const bullet =
+      raw.startsWith('- ') || raw.startsWith('* ')
+        ? raw.slice(2).trim()
+        : null;
+
+    if (bullet !== null) {
+      nodes.push(
+        <View key={`b-${idx}`} style={stylesObj.mdBulletRow}>
+          <Text style={stylesObj.mdBullet}>•</Text>
+          <Text style={stylesObj.mdText}>{bullet}</Text>
+        </View>,
+      );
+      return;
+    }
+
+    nodes.push(
+      <Text key={`p-${idx}`} style={stylesObj.mdText}>
+        {raw}
+      </Text>,
+    );
+  });
+
+  return nodes;
 }
 
 export function ReviewScreen({ navigation, route }: Props) {
-  const params = route.params;
-
-  const slugFromRoute = params?.slug;
-  const mode = params?.mode ?? 'mixed';
-  const limit = params?.limit ?? 20;
-
-  const fallbackSlug = getActiveDeckSlug() ?? MOCK_DECKS[0]?.Slug;
-  const slug = slugFromRoute ?? fallbackSlug;
-
+  const slug = route.params?.slug ?? getActiveDeckSlug();
   const deck = useMemo(() => {
-    return (slug ? getMockDeckBySlug(slug) : undefined) ?? MOCK_DECKS[0];
+    return getMockDeckBySlug(slug) ?? getMockDeckBySlug(getActiveDeckSlug())!;
   }, [slug]);
 
-  // 进入复习页也把它设为 active（给 Home/Deck 等同步用）
-  useEffect(() => {
-    if (deck?.Slug) setActiveDeckSlug(deck.Slug);
-  }, [deck?.Slug]);
+  const { mode = 'mixed', limit = 20 } = route.params ?? {};
 
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   const [dailyStats, setDailyStats] = useState<DailyStats | null>(null);
   const [current, setCurrent] = useState<CurrentCard | null>(null);
-  const [showAnswer, setShowAnswer] = useState(false);
+
+  // flip state
+  const [showBack, setShowBack] = useState(false);
+  const flipAnim = useRef(new Animated.Value(0)).current; // 0 front, 180 back
+
   const [reviewing, setReviewing] = useState(false);
-
-  const [sessionLimit] = useState(limit);
   const [sessionDone, setSessionDone] = useState(0);
+  const sessionLimit = limit;
 
-  // 全局 due 总数（用于提醒）
-  const totalDueAllDecksRef = useRef(0);
+  // avoid immediate repeat (especially for "again")
+  const avoidUidRef = useRef<string | null>(null);
+
+  const { height: winH } = useWindowDimensions();
+  const flipHeight = useMemo(() => {
+    const h = Math.round(winH * 0.52);
+    return Math.min(560, Math.max(360, h));
+  }, [winH]);
+
+  const frontRotate = flipAnim.interpolate({
+    inputRange: [0, 180],
+    outputRange: ['0deg', '180deg'],
+  });
+  const backRotate = flipAnim.interpolate({
+    inputRange: [0, 180],
+    outputRange: ['180deg', '360deg'],
+  });
+
+  // Extra safety on Android: swap opacity around 90deg
+  const frontOpacity = flipAnim.interpolate({
+    inputRange: [0, 89.9, 90, 180],
+    outputRange: [1, 1, 0, 0],
+  });
+  const backOpacity = flipAnim.interpolate({
+    inputRange: [0, 89.9, 90, 180],
+    outputRange: [0, 0, 1, 1],
+  });
+
+  function animateFlip(toBack: boolean) {
+    Animated.spring(flipAnim, {
+      toValue: toBack ? 180 : 0,
+      useNativeDriver: true,
+      friction: 9,
+      tension: 90,
+    }).start();
+  }
+
+  useEffect(() => {
+    animateFlip(showBack);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showBack]);
+
+  function resetToFront() {
+    setShowBack(false);
+    flipAnim.stopAnimation();
+    flipAnim.setValue(0);
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -125,8 +251,9 @@ export function ReviewScreen({ navigation, route }: Props) {
 
       async function load() {
         setLoading(true);
-        setShowAnswer(false);
+        resetToFront();
         setSessionDone(0);
+        avoidUidRef.current = null;
 
         const now = new Date();
 
@@ -136,22 +263,16 @@ export function ReviewScreen({ navigation, route }: Props) {
         const stats = await loadOrInitDailyStats(deck, p);
         if (cancelled) return;
 
-        const next = pickNextDueCard(deck, p, now);
+        const next = pickNextCard(deck, p, now, mode);
 
-        // ✅ 先写 state
         setProgress(p);
         setDailyStats(stats);
         setCurrent(next);
         setLoading(false);
 
-        // ✅ 再同步全局提醒（避免 active slug 写入竞争）
-        const totalDueAllDecks = await computeTotalDueAllDecks({
-          now,
-          currentDeckSlug: deck.Slug,
-          currentProgress: p,
-        });
-        totalDueAllDecksRef.current = totalDueAllDecks;
-        void syncDailyReminders({ remainingDueCount: totalDueAllDecks, now });
+        // Sync reminder based on remaining due TODAY bucket (matches Home/Deck)
+        const remainingDueCount = countDueToday(p, now);
+        void syncDailyReminders({ remainingDueCount, now });
       }
 
       void load();
@@ -159,7 +280,7 @@ export function ReviewScreen({ navigation, route }: Props) {
       return () => {
         cancelled = true;
       };
-    }, [deck?.Slug, mode, limit]),
+    }, [deck.Slug, deck.Version, mode, limit]),
   );
 
   const now = new Date();
@@ -171,12 +292,8 @@ export function ReviewScreen({ navigation, route }: Props) {
 
     setReviewing(true);
     try {
-      const now = new Date();
+      const updatedOne = scheduleNextReview(current.progress, uiRating, new Date());
 
-      // 当前 deck：更新前 due
-      const dueBefore = progress.filter(p => isDue(p, now)).length;
-
-      const updatedOne = scheduleNextReview(current.progress, uiRating, now);
       const newProgress = progress.map(p =>
         p.stableUid === updatedOne.stableUid ? updatedOne : p,
       );
@@ -189,22 +306,24 @@ export function ReviewScreen({ navigation, route }: Props) {
       const remaining =
         sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
 
+      // avoid immediate repeat of the card you just answered
+      avoidUidRef.current = updatedOne.stableUid;
+
       const next =
-        remaining > 0 ? pickNextDueCard(deck, newProgress, new Date()) : null;
+        remaining > 0
+          ? pickNextCard(deck, newProgress, new Date(), mode, avoidUidRef.current)
+          : null;
 
       setProgress(newProgress);
       setCurrent(next);
-      setShowAnswer(false);
 
-      // 当前 deck：更新后 due
-      const dueAfter = newProgress.filter(p => isDue(p, now)).length;
+      // reset to front for next card
+      resetToFront();
 
-      // ✅ 全局 due：用 delta 更新（避免每题都遍历所有 deck）
-      const prevGlobal = totalDueAllDecksRef.current;
-      const nextGlobal = Math.max(0, prevGlobal - dueBefore + dueAfter);
-      totalDueAllDecksRef.current = nextGlobal;
-
-      void syncDailyReminders({ remainingDueCount: nextGlobal, now });
+      // update reminders (today bucket)
+      const now2 = new Date();
+      const remainingDueCount = countDueToday(newProgress, now2);
+      void syncDailyReminders({ remainingDueCount, now: now2 });
     } finally {
       setReviewing(false);
     }
@@ -228,9 +347,11 @@ export function ReviewScreen({ navigation, route }: Props) {
     );
   }
 
-  const dueNowCount = progress.filter(p => isDue(p, now)).length;
+  const dueTodayCount = countDueToday(progress, now);
   const sessionPercent =
     sessionLimit > 0 ? Math.min(sessionDone / sessionLimit, 1) : 0;
+
+  const PERSPECTIVE = 1000;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -252,12 +373,13 @@ export function ReviewScreen({ navigation, route }: Props) {
             >
               <Text style={styles.backText}>← Deck</Text>
             </Pressable>
+
             <View style={{ flex: 1 }}>
               <Text style={styles.title} numberOfLines={1}>
                 {deck.Title}
               </Text>
               <Text style={styles.subtitle}>
-                Session {sessionDone}/{sessionLimit || '∞'} · Mode {mode}
+                Session {sessionDone}/{sessionLimit || '∞'} · {modeLabel(mode)}
               </Text>
             </View>
           </View>
@@ -270,6 +392,7 @@ export function ReviewScreen({ navigation, route }: Props) {
                 {sessionDone} / {sessionLimit || '∞'}
               </Text>
             </View>
+
             <View style={styles.progressBarBg}>
               <View
                 style={[
@@ -279,8 +402,9 @@ export function ReviewScreen({ navigation, route }: Props) {
               />
               <View style={{ flex: 1 - sessionPercent }} />
             </View>
+
             <Text style={styles.sessionHint}>
-              {dueNowCount} card{dueNowCount === 1 ? '' : 's'} still due in this deck today.
+              {dueTodayCount} card{dueTodayCount === 1 ? '' : 's'} due today in this deck.
             </Text>
           </View>
 
@@ -295,138 +419,192 @@ export function ReviewScreen({ navigation, route }: Props) {
               <View style={styles.doneCard}>
                 <Text style={styles.doneTitle}>You are done for now 🎉</Text>
                 <Text style={styles.doneBody}>
-                  This session is complete. You can go back to the deck screen
-                  and start another run later today.
+                  This session is complete. You can go back to the deck screen and start another run later.
                 </Text>
               </View>
             ) : (
               <View style={styles.cardCard}>
-                <View style={styles.cardHeaderRow}>
-                  <Text style={styles.cardOrder}>#{current.card.OrderInDeck}</Text>
-                  <Text style={styles.cardChip}>
-                    {current.card.Difficulty === 1
-                      ? 'Easy'
-                      : current.card.Difficulty === 2
-                      ? 'Medium'
-                      : 'Hard'}
-                  </Text>
-                  {current.card.CodeLanguage ? (
-                    <Text style={styles.cardChipSecondary}>
-                      {current.card.CodeLanguage}
-                    </Text>
-                  ) : null}
-                </View>
-
-                <Text style={styles.cardQuestion}>{current.card.Question}</Text>
-
-                {!showAnswer ? (
-                  <View style={styles.answerHiddenBox}>
-                    <Text style={styles.answerHiddenText}>
-                      Try to recall the answer from memory. When you are ready,
-                      flip the card.
-                    </Text>
+                {/* Flip container */}
+                <View style={[styles.flipWrap, { height: flipHeight }]}>
+                  {/* FRONT */}
+                  <Animated.View
+                    pointerEvents={showBack ? 'none' : 'auto'}
+                    style={[
+                      styles.flipFace,
+                      {
+                        opacity: frontOpacity,
+                        zIndex: showBack ? 0 : 2,
+                        transform: [{ perspective: PERSPECTIVE }, { rotateY: frontRotate }],
+                      },
+                    ]}
+                  >
                     <Pressable
-                      style={({ pressed }) => [
-                        styles.showButton,
-                        pressed && styles.showButtonPressed,
-                      ]}
-                      onPress={() => setShowAnswer(true)}
+                      style={styles.facePressable}
+                      onPress={() => setShowBack(true)}
+                      accessibilityLabel="Flip to see answer"
                     >
-                      <Text style={styles.showButtonText}>Show answer</Text>
-                    </Pressable>
-                  </View>
-                ) : (
-                  <>
-                    {current.card.Explanation ? (
-                      <Text style={styles.cardExplanation}>
-                        {current.card.Explanation}
-                      </Text>
-                    ) : null}
-
-                    {current.card.CodeSnippet ? (
-                      <ScrollView
-                        style={styles.codeContainer}
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                      >
-                        <Text style={styles.codeText}>
-                          {current.card.CodeSnippet}
+                      <View style={styles.cardHeaderRow}>
+                        <Text style={styles.cardOrder}>#{current.card.OrderInDeck}</Text>
+                        <Text style={styles.cardChip}>
+                          {current.card.Difficulty === 1
+                            ? 'Easy'
+                            : current.card.Difficulty === 2
+                              ? 'Medium'
+                              : 'Hard'}
                         </Text>
-                      </ScrollView>
-                    ) : null}
+                        {current.card.CodeLanguage ? (
+                          <Text style={styles.cardChipSecondary}>
+                            {current.card.CodeLanguage}
+                          </Text>
+                        ) : null}
+                      </View>
 
-                    {current.card.RealWorldUsage ? (
-                      <View style={styles.realWorldBox}>
-                        <Text style={styles.realWorldTitle}>Real‑world usage</Text>
-                        <Text style={styles.realWorldBody}>
-                          {current.card.RealWorldUsage}
+                      <Text style={styles.cardQuestion}>
+                        {current.card.Question}
+                      </Text>
+
+                      <View style={styles.flipHintBox}>
+                        <Text style={styles.flipHintText}>
+                          Tap the card to reveal the back.
                         </Text>
                       </View>
-                    ) : null}
+                    </Pressable>
+                  </Animated.View>
 
-                    <Text style={styles.ratingHint}>
-                      How well did you remember this card?
-                    </Text>
-
-                    <View style={styles.ratingGrid}>
-                      <Pressable
-                        style={({ pressed }) => [
-                          styles.ratingButton,
-                          styles.ratingAgain,
-                          pressed && styles.ratingPressed,
-                          reviewing && styles.ratingDisabled,
-                        ]}
-                        disabled={reviewing}
-                        onPress={() => handleRating('again')}
-                      >
-                        <Text style={styles.ratingTitle}>Again</Text>
-                        <Text style={styles.ratingSub}>Show very soon</Text>
-                      </Pressable>
+                  {/* BACK */}
+                  <Animated.View
+                    pointerEvents={showBack ? 'auto' : 'none'}
+                    style={[
+                      styles.flipFace,
+                      {
+                        opacity: backOpacity,
+                        zIndex: showBack ? 2 : 0,
+                        transform: [{ perspective: PERSPECTIVE }, { rotateY: backRotate }],
+                      },
+                    ]}
+                  >
+                    <View style={styles.backTopRow}>
+                      <Text style={styles.backTitle}>Answer</Text>
 
                       <Pressable
                         style={({ pressed }) => [
-                          styles.ratingButton,
-                          styles.ratingHard,
-                          pressed && styles.ratingPressed,
-                          reviewing && styles.ratingDisabled,
+                          styles.flipBackBtn,
+                          pressed && { opacity: 0.9 },
                         ]}
-                        disabled={reviewing}
-                        onPress={() => handleRating('hard')}
+                        onPress={() => setShowBack(false)}
+                        accessibilityLabel="Flip back to question"
                       >
-                        <Text style={styles.ratingTitle}>Hard</Text>
-                        <Text style={styles.ratingSub}>Short interval</Text>
-                      </Pressable>
-
-                      <Pressable
-                        style={({ pressed }) => [
-                          styles.ratingButton,
-                          styles.ratingGood,
-                          pressed && styles.ratingPressed,
-                          reviewing && styles.ratingDisabled,
-                        ]}
-                        disabled={reviewing}
-                        onPress={() => handleRating('good')}
-                      >
-                        <Text style={styles.ratingTitle}>Good</Text>
-                        <Text style={styles.ratingSub}>Normal interval</Text>
-                      </Pressable>
-
-                      <Pressable
-                        style={({ pressed }) => [
-                          styles.ratingButton,
-                          styles.ratingEasy,
-                          pressed && styles.ratingPressed,
-                          reviewing && styles.ratingDisabled,
-                        ]}
-                        disabled={reviewing}
-                        onPress={() => handleRating('easy')}
-                      >
-                        <Text style={styles.ratingTitle}>Easy</Text>
-                        <Text style={styles.ratingSub}>Much later</Text>
+                        <Text style={styles.flipBackBtnText}>↩︎</Text>
                       </Pressable>
                     </View>
-                  </>
-                )}
+
+                    <View style={{ flex: 1 }}>
+                      <ScrollView
+                        style={{ flex: 1 }}
+                        contentContainerStyle={{ paddingBottom: 10 }}
+                        showsVerticalScrollIndicator={false}
+                      >
+                        {/* Explanation */}
+                        {current.card.Explanation ? (
+                          <View style={styles.sectionBlock}>
+                            <Text style={styles.sectionHeader}>Explanation</Text>
+                            <Text style={styles.sectionBody}>
+                              {current.card.Explanation}
+                            </Text>
+                          </View>
+                        ) : null}
+
+                        {/* Coding Sample */}
+                        {current.card.CodeSnippet ? (
+                          <View style={styles.sectionBlock}>
+                            <Text style={styles.sectionHeader}>Coding Sample</Text>
+                            <ScrollView
+                              style={styles.codeContainer}
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                            >
+                              <Text style={styles.codeText}>
+                                {current.card.CodeSnippet}
+                              </Text>
+                            </ScrollView>
+                          </View>
+                        ) : null}
+
+                        {/* Real Usage (markdown-ish) */}
+                        {current.card.RealWorldUsage ? (
+                          <View style={styles.sectionBlock}>
+                            <Text style={styles.sectionHeader}>Real Usage</Text>
+                            <View style={styles.mdContainer}>
+                              {renderSimpleMarkdown(current.card.RealWorldUsage, styles)}
+                            </View>
+                          </View>
+                        ) : null}
+                      </ScrollView>
+
+                      <Text style={styles.ratingHint}>
+                        How well did you remember this card?
+                      </Text>
+
+                      <View style={styles.ratingGrid}>
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.ratingButton,
+                            styles.ratingAgain,
+                            pressed && styles.ratingPressed,
+                            reviewing && styles.ratingDisabled,
+                          ]}
+                          disabled={reviewing}
+                          onPress={() => handleRating('again')}
+                        >
+                          <Text style={styles.ratingTitle}>Again</Text>
+                          <Text style={styles.ratingSub}>Show very soon</Text>
+                        </Pressable>
+
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.ratingButton,
+                            styles.ratingHard,
+                            pressed && styles.ratingPressed,
+                            reviewing && styles.ratingDisabled,
+                          ]}
+                          disabled={reviewing}
+                          onPress={() => handleRating('hard')}
+                        >
+                          <Text style={styles.ratingTitle}>Hard</Text>
+                          <Text style={styles.ratingSub}>Short interval</Text>
+                        </Pressable>
+
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.ratingButton,
+                            styles.ratingGood,
+                            pressed && styles.ratingPressed,
+                            reviewing && styles.ratingDisabled,
+                          ]}
+                          disabled={reviewing}
+                          onPress={() => handleRating('good')}
+                        >
+                          <Text style={styles.ratingTitle}>Good</Text>
+                          <Text style={styles.ratingSub}>Normal interval</Text>
+                        </Pressable>
+
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.ratingButton,
+                            styles.ratingEasy,
+                            pressed && styles.ratingPressed,
+                            reviewing && styles.ratingDisabled,
+                          ]}
+                          disabled={reviewing}
+                          onPress={() => handleRating('easy')}
+                        >
+                          <Text style={styles.ratingTitle}>Easy</Text>
+                          <Text style={styles.ratingSub}>Much later</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </Animated.View>
+                </View>
               </View>
             )}
           </ScrollView>
@@ -442,32 +620,14 @@ const CARD_GLASS = 'rgba(255,255,255,0.18)';
 const CARD_BORDER = 'rgba(255,255,255,0.5)';
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#F5F3FF',
-  },
-  gradient: {
-    flex: 1,
-  },
-  container: {
-    flex: 1,
-    paddingHorizontal: 18,
-    paddingTop: 16,
-  },
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingText: {
-    marginTop: 10,
-    color: '#6B7280',
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
+  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  gradient: { flex: 1 },
+  container: { flex: 1, paddingHorizontal: 18, paddingTop: 16 },
+
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  loadingText: { marginTop: 10, color: '#6B7280' },
+
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   backButton: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -475,22 +635,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.8)',
     marginRight: 10,
   },
-  backButtonPressed: {
-    opacity: 0.9,
-  },
-  backText: {
-    fontSize: 13,
-    color: '#111827',
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  subtitle: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
+  backButtonPressed: { opacity: 0.9 },
+  backText: { fontSize: 13, color: '#111827' },
+
+  title: { fontSize: 18, fontWeight: '700', color: '#111827' },
+  subtitle: { fontSize: 12, color: '#6B7280' },
+
   sessionCard: {
     borderRadius: 20,
     paddingVertical: 12,
@@ -504,20 +654,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     marginBottom: 14,
   },
-  sessionHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  sessionLabel: {
-    fontSize: 13,
-    color: '#111827',
-    fontWeight: '500',
-  },
-  sessionValue: {
-    fontSize: 13,
-    color: '#4F46E5',
-    fontWeight: '600',
-  },
+  sessionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  sessionLabel: { fontSize: 13, color: '#111827', fontWeight: '500' },
+  sessionValue: { fontSize: 13, color: '#4F46E5', fontWeight: '600' },
+
   progressBarBg: {
     marginTop: 6,
     marginBottom: 6,
@@ -527,26 +667,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     overflow: 'hidden',
   },
-  progressBarFill: {
-    backgroundColor: '#4F46E5',
-    borderRadius: 999,
-  },
-  sessionHint: {
-    fontSize: 11,
-    color: '#6B7280',
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 24,
-  },
+  progressBarFill: { backgroundColor: '#4F46E5', borderRadius: 999 },
+
+  sessionHint: { fontSize: 11, color: '#6B7280' },
+
+  scroll: { flex: 1 },
+  scrollContent: { paddingBottom: 24 },
+
   sectionTitle: {
     fontSize: 15,
     fontWeight: '600',
     color: '#111827',
     marginBottom: 8,
   },
+
   cardCard: {
     borderRadius: 22,
     paddingVertical: 14,
@@ -557,16 +691,27 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 10 },
   },
-  cardHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
+
+  // Flip
+  flipWrap: {
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    overflow: 'hidden',
   },
-  cardOrder: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginRight: 6,
+  flipFace: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backfaceVisibility: 'hidden',
   },
+
+  facePressable: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+  },
+
+  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  cardOrder: { fontSize: 12, color: '#6B7280', marginRight: 6 },
   cardChip: {
     fontSize: 11,
     color: '#111827',
@@ -584,63 +729,80 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 999,
   },
+
   cardQuestion: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
     color: '#111827',
-    marginBottom: 8,
+    marginTop: 6,
   },
-  answerHiddenBox: {
-    marginTop: 8,
+
+  flipHintBox: {
+    marginTop: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(79,70,229,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(79,70,229,0.14)',
+  },
+  flipHintText: { fontSize: 12, color: '#6B7280' },
+
+  // Back
+  backTopRow: {
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    paddingBottom: 6,
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  answerHiddenText: {
-    fontSize: 13,
-    color: '#6B7280',
-    textAlign: 'center',
-    marginBottom: 8,
+  backTitle: { fontSize: 13, fontWeight: '800', color: '#111827', flex: 1 },
+  flipBackBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: 'rgba(17,24,39,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  showButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: '#4F46E5',
-  },
-  showButtonPressed: {
-    opacity: 0.9,
-  },
-  showButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  cardExplanation: {
-    marginTop: 4,
-    fontSize: 14,
-    color: '#374151',
-    marginBottom: 8,
-  },
+  flipBackBtnText: { fontSize: 16, fontWeight: '900', color: '#111827' },
+
+  sectionBlock: { paddingHorizontal: 10, paddingTop: 8, paddingBottom: 6 },
+  sectionHeader: { fontSize: 12, fontWeight: '900', color: '#4F46E5', marginBottom: 6 },
+  sectionBody: { fontSize: 13, color: '#374151', lineHeight: 18 },
+
   codeContainer: {
     borderRadius: 10,
     backgroundColor: '#111827',
     paddingVertical: 8,
     paddingHorizontal: 10,
-    marginBottom: 10,
   },
   codeText: {
     fontFamily: 'Menlo',
     fontSize: 12,
     color: '#E5E7EB',
   },
+
+  mdContainer: { paddingTop: 2 },
+  mdBulletRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 },
+  mdBullet: { width: 18, fontSize: 14, color: '#374151', lineHeight: 18 },
+  mdText: { flex: 1, fontSize: 13, color: '#374151', lineHeight: 18 },
+
   ratingHint: {
+    marginTop: 6,
+    paddingHorizontal: 10,
     fontSize: 13,
     color: '#6B7280',
     marginBottom: 8,
   },
+
   ratingGrid: {
+    paddingHorizontal: 10,
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
+    paddingBottom: 10,
   },
   ratingButton: {
     width: '48%',
@@ -649,68 +811,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     marginBottom: 8,
   },
-  ratingAgain: {
-    backgroundColor: '#FEE2E2',
-  },
-  ratingHard: {
-    backgroundColor: '#FFEDD5',
-  },
-  ratingGood: {
-    backgroundColor: '#DCFCE7',
-  },
-  ratingEasy: {
-    backgroundColor: '#DBEAFE',
-  },
-  ratingPressed: {
-    opacity: 0.9,
-  },
-  ratingDisabled: {
-    opacity: 0.5,
-  },
-  ratingTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  ratingSub: {
-    fontSize: 11,
-    color: '#4B5563',
-    marginTop: 2,
-  },
-  doneCard: {
-    borderRadius: 20,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    backgroundColor: '#ECFDF5',
-  },
-  doneTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#166534',
-    marginBottom: 4,
-  },
-  doneBody: {
-    fontSize: 13,
-    color: '#166534',
-  },
-  realWorldBox: {
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    backgroundColor: 'rgba(79,70,229,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(79,70,229,0.18)',
-    marginBottom: 10,
-  },
-  realWorldTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#4F46E5',
-    marginBottom: 6,
-  },
-  realWorldBody: {
-    fontSize: 13,
-    color: '#374151',
-    lineHeight: 18,
-  },
+  ratingAgain: { backgroundColor: '#FEE2E2' },
+  ratingHard: { backgroundColor: '#FFEDD5' },
+  ratingGood: { backgroundColor: '#DCFCE7' },
+  ratingEasy: { backgroundColor: '#DBEAFE' },
+  ratingPressed: { opacity: 0.9 },
+  ratingDisabled: { opacity: 0.5 },
+  ratingTitle: { fontSize: 14, fontWeight: '600', color: '#111827' },
+  ratingSub: { fontSize: 11, color: '#4B5563', marginTop: 2 },
+
+  doneCard: { borderRadius: 20, paddingVertical: 14, paddingHorizontal: 14, backgroundColor: '#ECFDF5' },
+  doneTitle: { fontSize: 16, fontWeight: '600', color: '#166534', marginBottom: 4 },
+  doneBody: { fontSize: 13, color: '#166534' },
 });
