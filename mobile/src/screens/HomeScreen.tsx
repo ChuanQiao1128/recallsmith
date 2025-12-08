@@ -154,6 +154,14 @@ export function HomeScreen({ navigation }: Props) {
   const [weekHint, setWeekHint] = useState<string | null>(null);
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     return () => {
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
@@ -161,15 +169,15 @@ export function HomeScreen({ navigation }: Props) {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    let cancel = false;
     async function initSelected() {
       const stored = await loadActiveDeckSlug();
-      if (cancelled) return;
+      if (cancel) return;
       if (stored) setSelectedSlug(stored);
     }
     void initSelected();
     return () => {
-      cancelled = true;
+      cancel = true;
     };
   }, []);
 
@@ -188,179 +196,171 @@ export function HomeScreen({ navigation }: Props) {
     monthCounts: {},
   });
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
+  const computeHomeState = useCallback(async (): Promise<HomeState> => {
+    const now = new Date();
+    const today0 = startOfToday(now);
 
-      async function load() {
-        setState(prev => ({ ...prev, loading: true }));
+    // ✅ Step 2/3: 检查 manifest；仅在本地还没有任何 deck 时自动安装（首次启动）
+    // 如果已经安装过（哪怕只有一个），则只提示更新，让用户去 Settings 手动更新。
+    let updates: Record<string, UpdateInfo> = {};
+    let manifestDecks: ManifestDeckEntry[] = [];
+    try {
+      updates = await checkManifestForUpdates();
+      manifestDecks = await listManifestDecks();
 
-        const now = new Date();
-        const today0 = startOfToday(now);
+      const hasAnyInstalledDeck = Object.values(updates).some(
+        u => typeof u.installedVersion === 'string' && u.installedVersion.trim().length > 0,
+      );
 
-        // ✅ Step 2/3: 检查 manifest；仅在本地还没有任何 deck 时自动安装（首次启动）
-        // 如果已经安装过（哪怕只有一个），则只提示更新，让用户去 Settings 手动更新。
-        let updates: Record<string, UpdateInfo> = {};
-        let manifestDecks: ManifestDeckEntry[] = [];
-        try {
-          updates = await checkManifestForUpdates();
-          manifestDecks = await listManifestDecks();
-
-          const hasAnyInstalledDeck = Object.values(updates).some(
-            u => typeof u.installedVersion === 'string' && u.installedVersion.trim().length > 0,
-          );
-
-          // ✅ 仅首次安装/本地无任何 deck 时：自动安装（缺失 or 有更新）以保证可用
-          if (!hasAnyInstalledDeck) {
-            // 自动安装（缺失 or 有更新）
-            let installedAny = false;
-            for (const entry of manifestDecks) {
-              if (cancelled) return;
-              const info = updates[entry.slug];
-              if (info?.remoteUrl && info.hasUpdate) {
-                try {
-                  const ok = await installDeckFromUrl(
-                    entry.slug,
-                    info.remoteUrl,
-                    info.remoteVersion,
-                    info.remoteSha256,
-                  );
-                  if (ok) installedAny = true;
-                } catch {
-                  // 单个失败忽略，继续后续 deck
-                }
-              }
-            }
-
-            // 安装后再刷新一次更新状态（避免已安装仍提示更新）
-            if (installedAny) {
-              try {
-                updates = await checkManifestForUpdates();
-              } catch {
-                // ignore
-              }
-            }
-          }
-        } catch {
-          updates = {};
-          manifestDecks = [];
-        }
-
-        // Month range (current month)
-        const year = now.getFullYear();
-        const month = now.getMonth();
-        const monthStart = new Date(year, month, 1, 0, 0, 0, 0);
-        const monthEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
-        const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-        const monthCounts: Record<string, number> = {};
-        for (let day = 1; day <= daysInMonth; day++) {
-          const d = new Date(year, month, day, 0, 0, 0, 0);
-          monthCounts[formatDateKey(d)] = 0;
-        }
-
-        const allUpcoming30 = buildUpcoming([], now, 30);
-        const deckSummaries: DeckSummary[] = [];
-
-        let totalDueAllDecks = 0;
-
+      // ✅ 仅首次安装/本地无任何 deck 时：自动安装（缺失 or 有更新）以保证可用
+      if (!hasAnyInstalledDeck) {
+        // 自动安装（缺失 or 有更新）
+        let installedAny = false;
         for (const entry of manifestDecks) {
-          if (cancelled) return;
-
-          // ✅ 优先使用本地下载版 deck-content:${slug}，没有就标记为未安装
-          const deck = await resolveDeckBySlug(entry.slug);
-          if (cancelled) return;
-
-          const totalCards = deck?.TotalCards ?? deck?.Cards?.length ?? entry.totalCards ?? 0;
-          const canStudy = !!deck && (deck.Cards?.length ?? 0) > 0;
-
-          if (!canStudy) {
-            // 未安装或占位 deck：不可学习，但在列表里展示
-            deckSummaries.push({
-              slug: deck?.Slug ?? entry.slug,
-              title: deck?.Title ?? entry.title ?? entry.slug,
-              locale: deck?.Locale ?? entry.locale ?? 'en-US',
-              version: deck?.Version ?? entry.version,
-              deckType: deck?.DeckType ?? entry.deckType ?? 1,
-              totalCards,
-              canStudy,
-              dueToday: 0,
-              plannedToday: 0,
-              newToday: 0,
-              masteredApprox: 0,
-              percent: 0,
-            });
-            continue;
-          }
-
-          const progress = await loadDeckProgress(deck);
-          if (cancelled) return;
-
-          const learnedCount = progress.filter(isLearned).length;
-          const newRemaining = Math.max(totalCards - learnedCount, 0);
-
-          const upcoming30 = buildUpcoming(progress, now, 30);
-          const dueToday = upcoming30[0]?.count ?? 0;
-
-          totalDueAllDecks += dueToday;
-
-          // For Home list: keep fields but make them consistent with new semantics.
-          const percent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
-
-          deckSummaries.push({
-            slug: deck.Slug,
-            title: deck.Title,
-            locale: deck.Locale,
-            version: deck.Version, // ✅ 显示已安装版本（来自下载版或 mock）
-            deckType: deck.DeckType,
-            totalCards,
-            canStudy,
-            dueToday,
-            plannedToday: dueToday, // "planned today" = reviews due today
-            newToday: newRemaining, // "new cards" remaining
-            masteredApprox: learnedCount, // learned count
-            percent,
-          });
-
-          // Aggregate next-30 schedule
-          for (let i = 0; i < allUpcoming30.length; i++) {
-            allUpcoming30[i].count += upcoming30[i]?.count ?? 0;
-          }
-
-          // Aggregate CURRENT MONTH counts (overdue -> today)
-          for (const p of progress) {
-            if (!isScheduled(p)) continue;
-
-            const next = new Date(p.nextReviewAt);
-            const effective = next.getTime() < today0.getTime() ? today0 : next;
-
-            if (effective.getTime() < monthStart.getTime() || effective.getTime() > monthEnd.getTime()) {
-              continue;
+          const info = updates[entry.slug];
+          if (info?.remoteUrl && info.hasUpdate) {
+            try {
+              const ok = await installDeckFromUrl(
+                entry.slug,
+                info.remoteUrl,
+                info.remoteVersion,
+                info.remoteSha256,
+              );
+              if (ok) installedAny = true;
+            } catch {
+              // 单个失败忽略，继续后续 deck
             }
-
-            const key = formatDateKey(effective);
-            if (key in monthCounts) monthCounts[key] += 1;
           }
         }
 
-        // Reminder logic uses total due across all decks (today bucket)
-        void syncDailyReminders({ remainingDueCount: totalDueAllDecks, now });
+        // 安装后再刷新一次更新状态（避免已安装仍提示更新）
+        if (installedAny) {
+          try {
+            updates = await checkManifestForUpdates();
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      updates = {};
+      manifestDecks = [];
+    }
 
-        if (cancelled) return;
-        setState({
-          loading: false,
-          asOfISO: now.toISOString(),
-          deckSummaries,
-          updates,
-          allUpcoming30,
-          monthCounts,
+    // Month range (current month)
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const monthStart = new Date(year, month, 1, 0, 0, 0, 0);
+    const monthEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const monthCounts: Record<string, number> = {};
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(year, month, day, 0, 0, 0, 0);
+      monthCounts[formatDateKey(d)] = 0;
+    }
+
+    const allUpcoming30 = buildUpcoming([], now, 30);
+    const deckSummaries: DeckSummary[] = [];
+
+    let totalDueAllDecks = 0;
+
+    for (const entry of manifestDecks) {
+      // ✅ 优先使用本地下载版 deck-content:${slug}，没有就标记为未安装
+      const deck = await resolveDeckBySlug(entry.slug);
+
+      const totalCards = deck?.TotalCards ?? deck?.Cards?.length ?? entry.totalCards ?? 0;
+      const canStudy = !!deck && (deck.Cards?.length ?? 0) > 0;
+
+      if (!canStudy) {
+        // 未安装或占位 deck：不可学习，但在列表里展示
+        deckSummaries.push({
+          slug: deck?.Slug ?? entry.slug,
+          title: deck?.Title ?? entry.title ?? entry.slug,
+          locale: deck?.Locale ?? entry.locale ?? 'en-US',
+          version: deck?.Version ?? entry.version,
+          deckType: deck?.DeckType ?? entry.deckType ?? 1,
+          totalCards,
+          canStudy,
+          dueToday: 0,
+          plannedToday: 0,
+          newToday: 0,
+          masteredApprox: 0,
+          percent: 0,
         });
+        continue;
       }
 
-      void load();
-      return () => {
-        cancelled = true;
-      };
+      const progress = await loadDeckProgress(deck);
+
+      const learnedCount = progress.filter(isLearned).length;
+      const newRemaining = Math.max(totalCards - learnedCount, 0);
+
+      const upcoming30 = buildUpcoming(progress, now, 30);
+      const dueToday = upcoming30[0]?.count ?? 0;
+
+      totalDueAllDecks += dueToday;
+
+      // For Home list: keep fields but make them consistent with new semantics.
+      const percent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
+
+      deckSummaries.push({
+        slug: deck.Slug,
+        title: deck.Title,
+        locale: deck.Locale,
+        version: deck.Version, // ✅ 显示已安装版本（来自下载版或 mock）
+        deckType: deck.DeckType,
+        totalCards,
+        canStudy,
+        dueToday,
+        plannedToday: dueToday, // "planned today" = reviews due today
+        newToday: newRemaining, // "new cards" remaining
+        masteredApprox: learnedCount, // learned count
+        percent,
+      });
+
+      // Aggregate next-30 schedule
+      for (let i = 0; i < allUpcoming30.length; i++) {
+        allUpcoming30[i].count += upcoming30[i]?.count ?? 0;
+      }
+
+      // Aggregate CURRENT MONTH counts (overdue -> today)
+      for (const p of progress) {
+        if (!isScheduled(p)) continue;
+
+        const next = new Date(p.nextReviewAt);
+        const effective = next.getTime() < today0.getTime() ? today0 : next;
+
+        if (effective.getTime() < monthStart.getTime() || effective.getTime() > monthEnd.getTime()) {
+          continue;
+        }
+
+        const key = formatDateKey(effective);
+        if (key in monthCounts) monthCounts[key] += 1;
+      }
+    }
+
+    // Reminder logic uses total due across all decks (today bucket)
+    void syncDailyReminders({ remainingDueCount: totalDueAllDecks, now });
+
+    return {
+      loading: false,
+      asOfISO: now.toISOString(),
+      deckSummaries,
+      updates,
+      allUpcoming30,
+      monthCounts,
+    };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      setState(prev => ({ ...prev, loading: true }));
+      computeHomeState().then(newState => {
+        if (isMounted.current) {
+          setState(newState);
+        }
+      });
     }, []),
   );
 
@@ -692,7 +692,13 @@ export function HomeScreen({ navigation }: Props) {
                 const active = d.slug === selectedSlug;
                 const isPremium = d.deckType !== 1;
                 const deckUpdate = updates?.[d.slug];
-                const hasUpdate = !!(deckUpdate?.hasUpdate && deckUpdate.remoteUrl);
+                const hasInstalledVersion =
+                  typeof deckUpdate?.installedVersion === 'string' &&
+                  deckUpdate.installedVersion.trim().length > 0;
+
+                // ⭐ 只有“已经安装过”的 deck 才显示 Update available
+                const hasUpdate =
+                  hasInstalledVersion && !!(deckUpdate?.hasUpdate && deckUpdate.remoteUrl);
 
                 return (
                   <Pressable
@@ -702,8 +708,40 @@ export function HomeScreen({ navigation }: Props) {
                       active && styles.deckRowActive,
                       pressed && styles.deckRowPressed,
                     ]}
-                    onPress={() => {
-                      if (!d.canStudy) return;
+                    onPress={async () => {
+                      const needsInstall = !d.canStudy;        // 本地没有内容
+                      const needsUpdate = d.canStudy && hasUpdate;  // 已安装且有更新
+                      if (needsInstall || needsUpdate) {
+                        if (!deckUpdate?.remoteUrl) {
+                          // No remote URL available to install/update — perhaps show a toast/error
+                          return;
+                        }
+                        setState(prev => ({ ...prev, loading: true }));
+                        try {
+                          const ok = await installDeckFromUrl(
+                            d.slug,
+                            deckUpdate.remoteUrl,
+                            deckUpdate.remoteVersion,
+                            deckUpdate.remoteSha256,
+                          );
+                          if (ok) {
+                            // Refresh the entire home state to reflect the update (removes prompt)
+                            const newState = await computeHomeState();
+                            if (isMounted.current) {
+                              setState(newState);
+                            }
+                            openDeck(d.slug);
+                          } else {
+                            // Install failed — perhaps show a toast
+                            setState(prev => ({ ...prev, loading: false }));
+                          }
+                        } catch (e) {
+                          console.error('Deck install/update failed:', e);
+                          setState(prev => ({ ...prev, loading: false }));
+                        }
+                        return;
+                      }
+
                       openDeck(d.slug);
                     }}
                   >

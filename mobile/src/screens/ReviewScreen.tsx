@@ -12,6 +12,8 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import CodeBlock from '../components/CodeBlock'; // 路径按你放的位置改
+
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
@@ -160,6 +162,25 @@ function modeLabel(mode: string) {
   return 'Mixed';
 }
 
+function normalizeCodeLanguage(lang?: string | null): string {
+  const l = (lang ?? '').trim().toLowerCase();
+  if (!l) return 'text';
+
+  // common aliases
+  if (l === 'ts') return 'typescript';
+  if (l === 'tsx') return 'tsx';
+  if (l === 'js') return 'javascript';
+  if (l === 'jsx') return 'jsx';
+  if (l === 'py') return 'python';
+  if (l === 'rb') return 'ruby';
+  if (l === 'sh' || l === 'shell') return 'bash';
+  if (l === 'yml') return 'yaml';
+  if (l === 'c++') return 'cpp';
+  if (l === 'c#' || l === 'cs' || l === 'csharp') return 'csharp';
+
+  return l;
+}
+
 /** tiny markdown-ish renderer: supports "- " bullets and paragraphs */
 function renderSimpleMarkdown(text: string, stylesObj: any) {
   const lines = text.split('\n');
@@ -249,10 +270,16 @@ export function ReviewScreen({ navigation, route }: Props) {
   const avoidUidRef = useRef<string | null>(null);
 
   const { height: winH } = useWindowDimensions();
-  const flipHeight = useMemo(() => {
-    const h = Math.round(winH * 0.52);
-    return Math.min(560, Math.max(360, h));
-  }, [winH]);
+const flipHeight = useMemo(() => {
+  // 预估头部（header + sessionCard + 上下间距）占掉的高度
+  const reserved = 280;
+
+  // 可用高度 = 整个窗口高度 - 头部
+  const usable = winH - reserved;
+
+  // 在一个合理范围里取值，避免太小或太夸张
+  return Math.max(350, Math.min(usable, winH - 50));
+}, [winH]);
 
   const frontRotate = flipAnim.interpolate({
     inputRange: [0, 180],
@@ -555,119 +582,137 @@ export function ReviewScreen({ navigation, route }: Props) {
                   </Animated.View>
 
                   {/* BACK */}
-                  <Animated.View
-                    pointerEvents={showBack ? 'auto' : 'none'}
-                    style={[
-                      styles.flipFace,
-                      {
-                        opacity: backOpacity,
-                        zIndex: showBack ? 2 : 0,
-                        transform: [{ perspective: PERSPECTIVE }, { rotateY: backRotate }],
-                      },
-                    ]}
-                  >
-                    <View style={styles.backTopRow}>
-                      <Text style={styles.backTitle}>Answer</Text>
+                        {/* BACK */}
+<Animated.View
+  pointerEvents={showBack ? 'auto' : 'none'}
+  style={[
+    styles.flipFace,
+    {
+      opacity: backOpacity,
+      zIndex: showBack ? 2 : 0,
+      transform: [{ perspective: PERSPECTIVE }, { rotateY: backRotate }],
+    },
+  ]}
+>
+  <View style={styles.backFaceContainer}>
+    {/* 顶部：标题 + 翻回去 */}
+    <View style={styles.backTopRow}>
+      <Text style={styles.backTitle}>Answer</Text>
 
-                      <Pressable
-                        style={({ pressed }) => [styles.flipBackBtn, pressed && { opacity: 0.9 }]}
-                        onPress={() => setShowBack(false)}
-                        accessibilityLabel="Flip back to question"
-                      >
-                        <Text style={styles.flipBackBtnText}>↩︎</Text>
-                      </Pressable>
-                    </View>
+      <Pressable
+        style={({ pressed }) => [styles.flipBackBtn, pressed && { opacity: 0.9 }]}
+        onPress={() => setShowBack(false)}
+        accessibilityLabel="Flip back to question"
+      >
+        <Text style={styles.flipBackBtnText}>↩︎</Text>
+      </Pressable>
+    </View>
 
-                    <View style={{ flex: 1 }}>
-                      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false}>
-                        {/* Explanation */}
-                        {current.card.Explanation ? (
-                          <View style={styles.sectionBlock}>
-                            <Text style={styles.sectionHeader}>Explanation</Text>
-                            <Text style={styles.sectionBody}>{current.card.Explanation}</Text>
-                          </View>
-                        ) : null}
+    {/* 中间：可滚动内容区域 */}
+    <View style={styles.backBody}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 12 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Explanation */}
+        {current.card.Explanation ? (
+          <View style={styles.sectionBlock}>
+            <Text style={styles.sectionHeader}>Explanation</Text>
+            <Text style={styles.sectionBody}>{current.card.Explanation}</Text>
+          </View>
+        ) : null}
 
-                        {/* Coding Sample */}
-                        {current.card.CodeSnippet ? (
-                          <View style={styles.sectionBlock}>
-                            <Text style={styles.sectionHeader}>Coding Sample</Text>
-                            <ScrollView style={styles.codeContainer} horizontal showsHorizontalScrollIndicator={false}>
-                              <Text style={styles.codeText}>{current.card.CodeSnippet}</Text>
-                            </ScrollView>
-                          </View>
-                        ) : null}
+        {/* Coding Sample */}
+        {current.card.CodeSnippet ? (
+          <View style={styles.sectionBlock}>
+            <Text style={styles.sectionHeader}>Coding Sample</Text>
 
-                        {/* Real Usage (markdown-ish) */}
-                        {current.card.RealWorldUsage ? (
-                          <View style={styles.sectionBlock}>
-                            <Text style={styles.sectionHeader}>Real Usage</Text>
-                            <View style={styles.mdContainer}>{renderSimpleMarkdown(current.card.RealWorldUsage, styles)}</View>
-                          </View>
-                        ) : null}
-                      </ScrollView>
+            <View style={styles.codeContainer}>
+              <CodeBlock
+                code={current.card.CodeSnippet}
+                language={(current.card.CodeLanguage || 'javascript').toLowerCase()}
+              />
+            </View>
+          </View>
+        ) : null}
 
-                      <Text style={styles.ratingHint}>How well did you remember this card?</Text>
+        {/* Real Usage (markdown-ish) */}
+        {current.card.RealWorldUsage ? (
+          <View style={styles.sectionBlock}>
+            <Text style={styles.sectionHeader}>Real Usage</Text>
+            <View style={styles.mdContainer}>
+              {renderSimpleMarkdown(current.card.RealWorldUsage, styles)}
+            </View>
+          </View>
+        ) : null}
+      </ScrollView>
+    </View>
 
-                      <View style={styles.ratingGrid}>
-                        <Pressable
-                          style={({ pressed }) => [
-                            styles.ratingButton,
-                            styles.ratingAgain,
-                            pressed && styles.ratingPressed,
-                            reviewing && styles.ratingDisabled,
-                          ]}
-                          disabled={reviewing}
-                          onPress={() => handleRating('again')}
-                        >
-                          <Text style={styles.ratingTitle}>Again</Text>
-                          <Text style={styles.ratingSub}>Show very soon</Text>
-                        </Pressable>
+    {/* 底部：固定评分区域 */}
+    <View style={styles.backRatingSection}>
+      <Text style={styles.ratingHint}>How well did you remember this card?</Text>
 
-                        <Pressable
-                          style={({ pressed }) => [
-                            styles.ratingButton,
-                            styles.ratingHard,
-                            pressed && styles.ratingPressed,
-                            reviewing && styles.ratingDisabled,
-                          ]}
-                          disabled={reviewing}
-                          onPress={() => handleRating('hard')}
-                        >
-                          <Text style={styles.ratingTitle}>Hard</Text>
-                          <Text style={styles.ratingSub}>Short interval</Text>
-                        </Pressable>
+      <View style={styles.ratingGrid}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.ratingButton,
+            styles.ratingAgain,
+            pressed && styles.ratingPressed,
+            reviewing && styles.ratingDisabled,
+          ]}
+          disabled={reviewing}
+          onPress={() => handleRating('again')}
+        >
+          <Text style={styles.ratingTitle}>Again</Text>
+          <Text style={styles.ratingSub}>Show very soon</Text>
+        </Pressable>
 
-                        <Pressable
-                          style={({ pressed }) => [
-                            styles.ratingButton,
-                            styles.ratingGood,
-                            pressed && styles.ratingPressed,
-                            reviewing && styles.ratingDisabled,
-                          ]}
-                          disabled={reviewing}
-                          onPress={() => handleRating('good')}
-                        >
-                          <Text style={styles.ratingTitle}>Good</Text>
-                          <Text style={styles.ratingSub}>Normal interval</Text>
-                        </Pressable>
+        <Pressable
+          style={({ pressed }) => [
+            styles.ratingButton,
+            styles.ratingHard,
+            pressed && styles.ratingPressed,
+            reviewing && styles.ratingDisabled,
+          ]}
+          disabled={reviewing}
+          onPress={() => handleRating('hard')}
+        >
+          <Text style={styles.ratingTitle}>Hard</Text>
+          <Text style={styles.ratingSub}>Short interval</Text>
+        </Pressable>
 
-                        <Pressable
-                          style={({ pressed }) => [
-                            styles.ratingButton,
-                            styles.ratingEasy,
-                            pressed && styles.ratingPressed,
-                            reviewing && styles.ratingDisabled,
-                          ]}
-                          disabled={reviewing}
-                          onPress={() => handleRating('easy')}
-                        >
-                          <Text style={styles.ratingTitle}>Easy</Text>
-                          <Text style={styles.ratingSub}>Much later</Text>
-                        </Pressable>
-                      </View>
-                    </View>
-                  </Animated.View>
+        <Pressable
+          style={({ pressed }) => [
+            styles.ratingButton,
+            styles.ratingGood,
+            pressed && styles.ratingPressed,
+            reviewing && styles.ratingDisabled,
+          ]}
+          disabled={reviewing}
+          onPress={() => handleRating('good')}
+        >
+          <Text style={styles.ratingTitle}>Good</Text>
+          <Text style={styles.ratingSub}>Normal interval</Text>
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.ratingButton,
+            styles.ratingEasy,
+            pressed && styles.ratingPressed,
+            reviewing && styles.ratingDisabled,
+          ]}
+          disabled={reviewing}
+          onPress={() => handleRating('easy')}
+        >
+          <Text style={styles.ratingTitle}>Easy</Text>
+          <Text style={styles.ratingSub}>Much later</Text>
+        </Pressable>
+      </View>
+    </View>
+  </View>
+</Animated.View>
                 </View>
               </View>
             )}
@@ -831,6 +876,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   flipBackBtnText: { fontSize: 16, fontWeight: '900', color: '#111827' },
+    backFaceContainer: {
+    flex: 1,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    paddingBottom: 8,
+  },
+  backBody: {
+    flex: 1,
+    marginTop: 4,
+  },
+  backRatingSection: {
+    paddingTop: 4,
+    paddingHorizontal: 0,
+  },
 
   sectionBlock: { paddingHorizontal: 10, paddingTop: 8, paddingBottom: 6 },
   sectionHeader: { fontSize: 12, fontWeight: '900', color: '#4F46E5', marginBottom: 6 },
@@ -838,14 +897,20 @@ const styles = StyleSheet.create({
 
   codeContainer: {
     borderRadius: 10,
-    backgroundColor: '#111827',
+    backgroundColor: '#1E1E1E',
     paddingVertical: 8,
     paddingHorizontal: 10,
+    overflow: 'hidden',
   },
-  codeText: {
+  syntaxHighlighter: {
+    backgroundColor: 'transparent',
+    padding: 0,
+    margin: 0,
+  },
+  syntaxCode: {
     fontFamily: 'Menlo',
     fontSize: 12,
-    color: '#E5E7EB',
+    lineHeight: 18,
   },
 
   mdContainer: { paddingTop: 2 },
@@ -887,4 +952,5 @@ const styles = StyleSheet.create({
   doneCard: { borderRadius: 20, paddingVertical: 14, paddingHorizontal: 14, backgroundColor: '#ECFDF5' },
   doneTitle: { fontSize: 16, fontWeight: '600', color: '#166534', marginBottom: 4 },
   doneBody: { fontSize: 13, color: '#166534' },
+  
 });
