@@ -13,7 +13,7 @@
       "OrderInDeck": 1,
       "Difficulty": 1,
       "CodeLanguage": "HTTP",
-      "Question": "Web/API #1: What does “idempotent” mean for HTTP methods?",
+      "Question": "Web/API #1: What does “idempotent” test 999 ?",
       "Explanation": "An idempotent request can be repeated multiple times with the same effect. GET/PUT/DELETE should be idempotent; POST is typically not.",
       "CodeSnippet": "// PUT /users/123\n// repeating the same PUT should result in the resource being in the same final state",
       "RealWorldUsage": "Idempotency enables safe retries on flaky networks and prevents duplicated writes when clients retry requests."
@@ -93,7 +93,7 @@
       "OrderInDeck": 9,
       "Difficulty": 2,
       "CodeLanguage": "HTTP",
-      "Question": "Web/API #9: What are ETags and how do they help caching?",
+      "Question": "Web/API #9: What are ETags and how do they help caching xxxxxxxx?",
       "Explanation": "An ETag is a version identifier for a representation. Clients can send If-None-Match; server replies 304 if unchanged.",
       "CodeSnippet": "// Response: ETag: \"v3\"\n// Request: If-None-Match: \"v3\" -> 304 Not Modified",
       "RealWorldUsage": "ETags save bandwidth, speed up list/detail screens, and reduce backend load for frequently-read resources."

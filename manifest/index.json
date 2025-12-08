@@ -1,6 +1,6 @@
 {
   "SchemaVersion": 1,
-  "PublishedAt": "2025-12-07T00:00:00.000Z",
+  "PublishedAt": "2025-12-08T07:02:22.444Z",
   "Decks": [
     {
       "Title": "JavaScript Core Basics",
@@ -11,7 +11,9 @@
       "Version": "1.0.1",
       "TotalCards": 50,
       "FreeCardCount": 50,
-      "Path": "decks/js-core-basics/deck.json"
+      "Path": "decks/js-core-basics/deck.json",
+      "Sha256": "18546097523afcd779612187494dd1258f345f9106a1f60bfcdc24784ac4c4e7",
+      "SizeBytes": 18995
     },
     {
       "Title": "TypeScript + React Essentials",
@@ -22,7 +24,9 @@
       "Version": "1.0",
       "TotalCards": 50,
       "FreeCardCount": 50,
-      "Path": "decks/ts-react-essentials/deck.json"
+      "Path": "decks/ts-react-essentials/deck.json",
+      "Sha256": "bb026a503e9d806dd8e14a0877aba95d92ee0d065d8879d2564245e1239450f0",
+      "SizeBytes": 29151
     },
     {
       "Title": "Web & API Fundamentals",
@@ -33,7 +37,9 @@
       "Version": "1.0",
       "TotalCards": 50,
       "FreeCardCount": 50,
-      "Path": "decks/web-api-fundamentals/deck.json"
+      "Path": "decks/web-api-fundamentals/deck.json",
+      "Sha256": "5603b2a758f9a889a0d604e9a6c18a321f6be04b7ea85a09f4f54a9fdee9f3df",
+      "SizeBytes": 32637
     },
     {
       "Title": "System Design (Pro)",
@@ -44,7 +50,9 @@
       "Version": "1.0",
       "TotalCards": 0,
       "FreeCardCount": 0,
-      "Path": "decks/system-design-pro/deck.json"
+      "Path": "decks/system-design-pro/deck.json",
+      "Sha256": "fc12621b51b44e27d186ac1df6338aeb831cba88aa5d10134051017fed8e34ac",
+      "SizeBytes": 207
     },
     {
       "Title": "Cloud Engineering (Pro)",
@@ -55,7 +63,9 @@
       "Version": "1.0",
       "TotalCards": 0,
       "FreeCardCount": 0,
-      "Path": "decks/cloud-pro/deck.json"
+      "Path": "decks/cloud-pro/deck.json",
+      "Sha256": "16f8ecf0f700b7a40cb757ce984367e5d4d0231cb64fac2af712f32b1fcef9b6",
+      "SizeBytes": 203
     }
   ]
 }

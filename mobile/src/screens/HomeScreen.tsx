@@ -198,39 +198,47 @@ export function HomeScreen({ navigation }: Props) {
         const now = new Date();
         const today0 = startOfToday(now);
 
-        // ✅ Step 2/3: 检查 manifest；启动时自动安装缺失或有更新的 deck
+        // ✅ Step 2/3: 检查 manifest；仅在本地还没有任何 deck 时自动安装（首次启动）
+        // 如果已经安装过（哪怕只有一个），则只提示更新，让用户去 Settings 手动更新。
         let updates: Record<string, UpdateInfo> = {};
         let manifestDecks: ManifestDeckEntry[] = [];
         try {
           updates = await checkManifestForUpdates();
           manifestDecks = await listManifestDecks();
 
-          // 自动安装（缺失 or 有更新）
-          let installedAny = false;
-          for (const entry of manifestDecks) {
-            if (cancelled) return;
-            const info = updates[entry.slug];
-            if (info?.remoteUrl && info.hasUpdate) {
-              try {
-                const ok = await installDeckFromUrl(
-                  entry.slug,
-                  info.remoteUrl,
-                  info.remoteVersion,
-                  info.remoteSha256,
-                );
-                if (ok) installedAny = true;
-              } catch {
-                // 单个失败忽略，继续后续 deck
+          const hasAnyInstalledDeck = Object.values(updates).some(
+            u => typeof u.installedVersion === 'string' && u.installedVersion.trim().length > 0,
+          );
+
+          // ✅ 仅首次安装/本地无任何 deck 时：自动安装（缺失 or 有更新）以保证可用
+          if (!hasAnyInstalledDeck) {
+            // 自动安装（缺失 or 有更新）
+            let installedAny = false;
+            for (const entry of manifestDecks) {
+              if (cancelled) return;
+              const info = updates[entry.slug];
+              if (info?.remoteUrl && info.hasUpdate) {
+                try {
+                  const ok = await installDeckFromUrl(
+                    entry.slug,
+                    info.remoteUrl,
+                    info.remoteVersion,
+                    info.remoteSha256,
+                  );
+                  if (ok) installedAny = true;
+                } catch {
+                  // 单个失败忽略，继续后续 deck
+                }
               }
             }
-          }
 
-          // 安装后再刷新一次更新状态（避免已安装仍提示更新）
-          if (installedAny) {
-            try {
-              updates = await checkManifestForUpdates();
-            } catch {
-              // ignore
+            // 安装后再刷新一次更新状态（避免已安装仍提示更新）
+            if (installedAny) {
+              try {
+                updates = await checkManifestForUpdates();
+              } catch {
+                // ignore
+              }
             }
           }
         } catch {
