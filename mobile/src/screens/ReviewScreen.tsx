@@ -16,8 +16,11 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
-import { getActiveDeckSlug, getMockDeckBySlug } from '../mock/jsCoreStarterMock';
 import type { DeckExport, CardExport } from '../types/deckExport';
+
+// ✅ Step 4: async resolver (prefer downloaded deck)
+import { resolveDeckBySlug, listManifestDecks } from '../content/deckRepository';
+import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 
 import type { CardProgress, ReviewRating } from '../review/model';
 import { scheduleNextReview, formatDateKey } from '../review/model';
@@ -91,6 +94,23 @@ function countDueToday(progress: CardProgress[], now: Date): number {
   return c;
 }
 
+// ✅ Phase 3 helpers: updated card detection (Revision > lastSeenRevision)
+function getCardRevision(card: any): number {
+  const r = card?.Revision;
+  return typeof r === 'number' && r > 0 ? r : 1;
+}
+
+function getSeenRevision(p: CardProgress): number {
+  const seen = (p as any).lastSeenRevision;
+  if (typeof seen === 'number') return seen;
+  return isLearned(p) ? 1 : 0;
+}
+
+function isUpdatedCard(card: any, p: CardProgress): boolean {
+  if (!isLearned(p)) return false;
+  return getCardRevision(card) > getSeenRevision(p);
+}
+
 function pickNextCard(
   deck: DeckExport,
   progress: CardProgress[],
@@ -102,13 +122,13 @@ function pickNextCard(
   const cards = sortCards(deck);
   const pMap = new Map(progress.map(p => [p.stableUid, p]));
 
-  const pickWith = (predicate: (p: CardProgress) => boolean) => {
+  const pickWith = (predicate: (card: CardExport, p: CardProgress) => boolean) => {
     // pass 1: avoid immediate repeat
     for (const card of cards) {
       if (avoidUid && card.StableUid === avoidUid) continue;
       const p = pMap.get(card.StableUid);
       if (!p) continue;
-      if (predicate(p)) return { card: cardMap.get(card.StableUid)!, progress: p };
+      if (predicate(card, p)) return { card: cardMap.get(card.StableUid)!, progress: p };
     }
 
     // pass 2: allow repeat if nothing else
@@ -116,21 +136,22 @@ function pickNextCard(
       for (const card of cards) {
         const p = pMap.get(card.StableUid);
         if (!p) continue;
-        if (predicate(p)) return { card: cardMap.get(card.StableUid)!, progress: p };
+        if (predicate(card, p)) return { card: cardMap.get(card.StableUid)!, progress: p };
       }
     }
 
     return null;
   };
 
-  const pickDue = () => pickWith(p => isDueTodayBucket(p, now));
-  const pickNew = () => pickWith(p => isNewCard(p));
+  const pickDue = () => pickWith((_card, p) => isDueTodayBucket(p, now));
+  const pickUpdated = () => pickWith((card, p) => isUpdatedCard(card, p));
+  const pickNew = () => pickWith((_card, p) => isNewCard(p));
 
   if (mode === 'review-due') return pickDue();
   if (mode === 'learn-new') return pickNew();
 
-  // mixed: due first, then new
-  return pickDue() ?? pickNew();
+  // ✅ mixed: due first, then updated, then new
+  return pickDue() ?? pickUpdated() ?? pickNew();
 }
 
 function modeLabel(mode: string) {
@@ -151,10 +172,7 @@ function renderSimpleMarkdown(text: string, stylesObj: any) {
       return;
     }
 
-    const bullet =
-      raw.startsWith('- ') || raw.startsWith('* ')
-        ? raw.slice(2).trim()
-        : null;
+    const bullet = raw.startsWith('- ') || raw.startsWith('* ') ? raw.slice(2).trim() : null;
 
     if (bullet !== null) {
       nodes.push(
@@ -177,17 +195,47 @@ function renderSimpleMarkdown(text: string, stylesObj: any) {
 }
 
 export function ReviewScreen({ navigation, route }: Props) {
-  const slug = route.params?.slug ?? getActiveDeckSlug();
-  const deck = useMemo(() => {
-    return getMockDeckBySlug(slug) ?? getMockDeckBySlug(getActiveDeckSlug())!;
-  }, [slug]);
-
+  const slugFromRoute = route.params?.slug ?? null;
   const { mode = 'mixed', limit = 20 } = route.params ?? {};
 
+  const [slug, setSlug] = useState<string | null>(slugFromRoute);
+  const [deck, setDeck] = useState<DeckExport | null>(null);
+
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   const [dailyStats, setDailyStats] = useState<DailyStats | null>(null);
   const [current, setCurrent] = useState<CurrentCard | null>(null);
+
+  // 初始化 slug：优先 route，其次上次活跃 deck，再退到 manifest 首项
+  useFocusEffect(
+    useCallback(() => {
+      if (slugFromRoute) {
+        setSlug(slugFromRoute);
+        void setActiveDeckSlug(slugFromRoute);
+        return;
+      }
+
+      let cancelled = false;
+      async function initSlug() {
+        const stored = await loadActiveDeckSlug();
+        if (cancelled) return;
+        if (stored) {
+          setSlug(stored);
+          return;
+        }
+
+        const manifest = await listManifestDecks();
+        if (cancelled) return;
+        if (manifest[0]?.slug) setSlug(manifest[0].slug);
+      }
+      void initSlug();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [slugFromRoute]),
+  );
 
   // flip state
   const [showBack, setShowBack] = useState(false);
@@ -247,32 +295,62 @@ export function ReviewScreen({ navigation, route }: Props) {
 
   useFocusEffect(
     useCallback(() => {
+      if (!slug) {
+        setLoading(false);
+        setLoadError('No deck available. Please install a deck from Settings.');
+        setDeck(null);
+        setProgress([]);
+        setDailyStats(null);
+        setCurrent(null);
+        return;
+      }
+
       let cancelled = false;
 
       async function load() {
         setLoading(true);
+        setLoadError(null);
         resetToFront();
         setSessionDone(0);
         avoidUidRef.current = null;
 
         const now = new Date();
 
-        const p = await loadDeckProgress(deck);
-        if (cancelled) return;
+        try {
+          // ✅ Step 4: resolve deck（本地下载版优先）
+          if (!slug) throw new Error('No deck selected');
+          const resolved = await resolveDeckBySlug(slug);
+          if (!resolved) throw new Error('Deck not found');
+          if (cancelled) return;
 
-        const stats = await loadOrInitDailyStats(deck, p);
-        if (cancelled) return;
+          setDeck(resolved);
+          void setActiveDeckSlug(resolved.Slug); // ✅ 同步 active slug
 
-        const next = pickNextCard(deck, p, now, mode);
+          const p = await loadDeckProgress(resolved);
+          if (cancelled) return;
 
-        setProgress(p);
-        setDailyStats(stats);
-        setCurrent(next);
-        setLoading(false);
+          const stats = await loadOrInitDailyStats(resolved, p);
+          if (cancelled) return;
 
-        // Sync reminder based on remaining due TODAY bucket (matches Home/Deck)
-        const remainingDueCount = countDueToday(p, now);
-        void syncDailyReminders({ remainingDueCount, now });
+          const next = pickNextCard(resolved, p, now, mode);
+
+          setProgress(p);
+          setDailyStats(stats);
+          setCurrent(next);
+          setLoading(false);
+
+          // Sync reminder based on remaining due TODAY bucket (matches Home/Deck)
+          const remainingDueCount = countDueToday(p, now);
+          void syncDailyReminders({ remainingDueCount, now });
+        } catch (e: any) {
+          if (cancelled) return;
+          setDeck(null);
+          setProgress([]);
+          setDailyStats(null);
+          setCurrent(null);
+          setLoadError(e?.message ?? 'Failed to load deck.');
+          setLoading(false);
+        }
       }
 
       void load();
@@ -280,19 +358,65 @@ export function ReviewScreen({ navigation, route }: Props) {
       return () => {
         cancelled = true;
       };
-    }, [deck.Slug, deck.Version, mode, limit]),
+    }, [slug, mode, limit]),
   );
 
+  if (loadError) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.center}>
+            <Text style={styles.title}>Deck not available</Text>
+            <Text style={styles.subtitle}>{loadError}</Text>
+            <Pressable
+              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed, { marginTop: 10 }]}
+              onPress={() => navigation.goBack()}
+            >
+              <Text style={styles.backText}>← Back</Text>
+            </Pressable>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
+  if (loading || !dailyStats || !deck) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.center}>
+            <ActivityIndicator size="large" color="#6366F1" />
+            <Text style={styles.loadingText}>Loading cards...</Text>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
   const now = new Date();
+  const dueTodayCount = countDueToday(progress, now);
+  const sessionPercent = sessionLimit > 0 ? Math.min(sessionDone / sessionLimit, 1) : 0;
+
+  const PERSPECTIVE = 1000;
 
   async function handleRating(uiRating: UiRating) {
-    if (!current || !dailyStats) return;
+    if (!current || !dailyStats || !deck) return;
     if (reviewing) return;
     if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
 
     setReviewing(true);
     try {
-         // ✅ Phase 0: 记录“用户最后确认过的卡片内容版本”
+      // ✅ Phase 0: 记录“用户最后确认过的卡片内容版本”
       // deck.json 里没填 Revision 时默认按 1 处理，避免旧题库崩
       const seenRev =
         typeof (current.card as any).Revision === 'number' ? (current.card as any).Revision : 1;
@@ -302,17 +426,14 @@ export function ReviewScreen({ navigation, route }: Props) {
         lastSeenRevision: seenRev,
       };
 
-      const newProgress = progress.map(p =>
-        p.stableUid === updatedOne.stableUid ? updatedOne : p,
-      );
+      const newProgress = progress.map(p => (p.stableUid === updatedOne.stableUid ? updatedOne : p));
 
       await saveDeckProgress(deck, newProgress);
 
       const nextDone = sessionDone + 1;
       setSessionDone(nextDone);
 
-      const remaining =
-        sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
+      const remaining = sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
 
       // avoid immediate repeat of the card you just answered
       avoidUidRef.current = updatedOne.stableUid;
@@ -337,30 +458,6 @@ export function ReviewScreen({ navigation, route }: Props) {
     }
   }
 
-  if (loading || !dailyStats) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
-          <View style={styles.center}>
-            <ActivityIndicator size="large" color="#6366F1" />
-            <Text style={styles.loadingText}>Loading cards...</Text>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  }
-
-  const dueTodayCount = countDueToday(progress, now);
-  const sessionPercent =
-    sessionLimit > 0 ? Math.min(sessionDone / sessionLimit, 1) : 0;
-
-  const PERSPECTIVE = 1000;
-
   return (
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient
@@ -373,10 +470,7 @@ export function ReviewScreen({ navigation, route }: Props) {
           {/* header */}
           <View style={styles.headerRow}>
             <Pressable
-              style={({ pressed }) => [
-                styles.backButton,
-                pressed && styles.backButtonPressed,
-              ]}
+              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
               onPress={() => navigation.goBack()}
             >
               <Text style={styles.backText}>← Deck</Text>
@@ -402,12 +496,7 @@ export function ReviewScreen({ navigation, route }: Props) {
             </View>
 
             <View style={styles.progressBarBg}>
-              <View
-                style={[
-                  styles.progressBarFill,
-                  { flex: sessionPercent, opacity: sessionPercent === 0 ? 0 : 1 },
-                ]}
-              />
+              <View style={[styles.progressBarFill, { flex: sessionPercent, opacity: sessionPercent === 0 ? 0 : 1 }]} />
               <View style={{ flex: 1 - sessionPercent }} />
             </View>
 
@@ -416,11 +505,7 @@ export function ReviewScreen({ navigation, route }: Props) {
             </Text>
           </View>
 
-          <ScrollView
-            style={styles.scroll}
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
-          >
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
             <Text style={styles.sectionTitle}>Now reviewing</Text>
 
             {!current ? (
@@ -454,27 +539,17 @@ export function ReviewScreen({ navigation, route }: Props) {
                       <View style={styles.cardHeaderRow}>
                         <Text style={styles.cardOrder}>#{current.card.OrderInDeck}</Text>
                         <Text style={styles.cardChip}>
-                          {current.card.Difficulty === 1
-                            ? 'Easy'
-                            : current.card.Difficulty === 2
-                              ? 'Medium'
-                              : 'Hard'}
+                          {current.card.Difficulty === 1 ? 'Easy' : current.card.Difficulty === 2 ? 'Medium' : 'Hard'}
                         </Text>
                         {current.card.CodeLanguage ? (
-                          <Text style={styles.cardChipSecondary}>
-                            {current.card.CodeLanguage}
-                          </Text>
+                          <Text style={styles.cardChipSecondary}>{current.card.CodeLanguage}</Text>
                         ) : null}
                       </View>
 
-                      <Text style={styles.cardQuestion}>
-                        {current.card.Question}
-                      </Text>
+                      <Text style={styles.cardQuestion}>{current.card.Question}</Text>
 
                       <View style={styles.flipHintBox}>
-                        <Text style={styles.flipHintText}>
-                          Tap the card to reveal the back.
-                        </Text>
+                        <Text style={styles.flipHintText}>Tap the card to reveal the back.</Text>
                       </View>
                     </Pressable>
                   </Animated.View>
@@ -495,10 +570,7 @@ export function ReviewScreen({ navigation, route }: Props) {
                       <Text style={styles.backTitle}>Answer</Text>
 
                       <Pressable
-                        style={({ pressed }) => [
-                          styles.flipBackBtn,
-                          pressed && { opacity: 0.9 },
-                        ]}
+                        style={({ pressed }) => [styles.flipBackBtn, pressed && { opacity: 0.9 }]}
                         onPress={() => setShowBack(false)}
                         accessibilityLabel="Flip back to question"
                       >
@@ -507,18 +579,12 @@ export function ReviewScreen({ navigation, route }: Props) {
                     </View>
 
                     <View style={{ flex: 1 }}>
-                      <ScrollView
-                        style={{ flex: 1 }}
-                        contentContainerStyle={{ paddingBottom: 10 }}
-                        showsVerticalScrollIndicator={false}
-                      >
+                      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false}>
                         {/* Explanation */}
                         {current.card.Explanation ? (
                           <View style={styles.sectionBlock}>
                             <Text style={styles.sectionHeader}>Explanation</Text>
-                            <Text style={styles.sectionBody}>
-                              {current.card.Explanation}
-                            </Text>
+                            <Text style={styles.sectionBody}>{current.card.Explanation}</Text>
                           </View>
                         ) : null}
 
@@ -526,14 +592,8 @@ export function ReviewScreen({ navigation, route }: Props) {
                         {current.card.CodeSnippet ? (
                           <View style={styles.sectionBlock}>
                             <Text style={styles.sectionHeader}>Coding Sample</Text>
-                            <ScrollView
-                              style={styles.codeContainer}
-                              horizontal
-                              showsHorizontalScrollIndicator={false}
-                            >
-                              <Text style={styles.codeText}>
-                                {current.card.CodeSnippet}
-                              </Text>
+                            <ScrollView style={styles.codeContainer} horizontal showsHorizontalScrollIndicator={false}>
+                              <Text style={styles.codeText}>{current.card.CodeSnippet}</Text>
                             </ScrollView>
                           </View>
                         ) : null}
@@ -542,16 +602,12 @@ export function ReviewScreen({ navigation, route }: Props) {
                         {current.card.RealWorldUsage ? (
                           <View style={styles.sectionBlock}>
                             <Text style={styles.sectionHeader}>Real Usage</Text>
-                            <View style={styles.mdContainer}>
-                              {renderSimpleMarkdown(current.card.RealWorldUsage, styles)}
-                            </View>
+                            <View style={styles.mdContainer}>{renderSimpleMarkdown(current.card.RealWorldUsage, styles)}</View>
                           </View>
                         ) : null}
                       </ScrollView>
 
-                      <Text style={styles.ratingHint}>
-                        How well did you remember this card?
-                      </Text>
+                      <Text style={styles.ratingHint}>How well did you remember this card?</Text>
 
                       <View style={styles.ratingGrid}>
                         <Pressable

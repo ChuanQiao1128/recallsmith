@@ -8,7 +8,7 @@
       "Locale": "en-US",
       "DeckType": 1,
       "IsFreeStarter": true,
-      "Version": "1.0",
+      "Version": "1.0.1",
       "TotalCards": 50,
       "FreeCardCount": 50,
       "Path": "decks/js-core-basics/deck.json"

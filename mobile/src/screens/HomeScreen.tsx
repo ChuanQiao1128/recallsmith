@@ -4,6 +4,9 @@
 // - Bottom: ONE deck list card with ALL / Free / Premium filter
 // - Tap a deck => setActiveDeckSlug(slug) and navigate to Deck (deck-specific modes live there)
 //
+// ✅ Step 2/3: Home 聚合时顺便做 manifest update check + install（先打通链路）
+// ✅ Step 4: Home 统计/展示使用 resolveDeckBySlug（优先本地下载版）
+//
 // Style: keep light gradient + glass card.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -23,13 +26,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 
-// Deck data + helpers (as in your project)
-import {
-  MOCK_DECKS,
-  getMockDeckBySlug,
-  getActiveDeckSlug,
-  setActiveDeckSlug,
-} from '../mock/jsCoreStarterMock';
+import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 
 import type { CardProgress } from '../review/model';
 import { formatDateKey } from '../review/model';
@@ -37,6 +34,16 @@ import { formatDateKey } from '../review/model';
 import { loadDeckProgress } from '../review/storage';
 
 import { syncDailyReminders } from '../notifications/reminders';
+
+// ✅ Step 2/3/4 entry points
+import {
+  checkManifestForUpdates,
+  resolveDeckBySlug,
+  listManifestDecks,
+  installDeckFromUrl,
+  type ManifestDeckEntry,
+  type UpdateInfo,
+} from '../content/deckRepository';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -65,6 +72,7 @@ type HomeState = {
   asOfISO: string;
 
   deckSummaries: DeckSummary[];
+  updates: Record<string, UpdateInfo>;
 
   // Aggregated schedule buckets for next 30 days (today..today+29) across all decks
   allUpcoming30: CalendarDay[];
@@ -135,10 +143,7 @@ const WEEKDAYS_MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export function HomeScreen({ navigation }: Props) {
   // Keep a “last active deck” (used when user taps into Deck screen)
-  const [selectedSlug, setSelectedSlug] = useState(() => {
-    const stored = getActiveDeckSlug();
-    return getMockDeckBySlug(stored)?.Slug ?? MOCK_DECKS[0]?.Slug;
-  });
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
 
   const [deckFilter, setDeckFilter] = useState<DeckFilter>('all');
 
@@ -155,6 +160,19 @@ export function HomeScreen({ navigation }: Props) {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function initSelected() {
+      const stored = await loadActiveDeckSlug();
+      if (cancelled) return;
+      if (stored) setSelectedSlug(stored);
+    }
+    void initSelected();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function showWeekHint(msg: string) {
     setWeekHint(msg);
     if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
@@ -165,6 +183,7 @@ export function HomeScreen({ navigation }: Props) {
     loading: true,
     asOfISO: new Date().toISOString(),
     deckSummaries: [],
+    updates: {},
     allUpcoming30: buildUpcoming([], new Date(), 30),
     monthCounts: {},
   });
@@ -178,6 +197,46 @@ export function HomeScreen({ navigation }: Props) {
 
         const now = new Date();
         const today0 = startOfToday(now);
+
+        // ✅ Step 2/3: 检查 manifest；启动时自动安装缺失或有更新的 deck
+        let updates: Record<string, UpdateInfo> = {};
+        let manifestDecks: ManifestDeckEntry[] = [];
+        try {
+          updates = await checkManifestForUpdates();
+          manifestDecks = await listManifestDecks();
+
+          // 自动安装（缺失 or 有更新）
+          let installedAny = false;
+          for (const entry of manifestDecks) {
+            if (cancelled) return;
+            const info = updates[entry.slug];
+            if (info?.remoteUrl && info.hasUpdate) {
+              try {
+                const ok = await installDeckFromUrl(
+                  entry.slug,
+                  info.remoteUrl,
+                  info.remoteVersion,
+                  info.remoteSha256,
+                );
+                if (ok) installedAny = true;
+              } catch {
+                // 单个失败忽略，继续后续 deck
+              }
+            }
+          }
+
+          // 安装后再刷新一次更新状态（避免已安装仍提示更新）
+          if (installedAny) {
+            try {
+              updates = await checkManifestForUpdates();
+            } catch {
+              // ignore
+            }
+          }
+        } catch {
+          updates = {};
+          manifestDecks = [];
+        }
 
         // Month range (current month)
         const year = now.getFullYear();
@@ -197,18 +256,24 @@ export function HomeScreen({ navigation }: Props) {
 
         let totalDueAllDecks = 0;
 
-        for (const deck of MOCK_DECKS) {
-          const totalCards = deck.TotalCards ?? deck.Cards?.length ?? 0;
-          const canStudy = (deck.Cards?.length ?? 0) > 0;
+        for (const entry of manifestDecks) {
+          if (cancelled) return;
+
+          // ✅ 优先使用本地下载版 deck-content:${slug}，没有就标记为未安装
+          const deck = await resolveDeckBySlug(entry.slug);
+          if (cancelled) return;
+
+          const totalCards = deck?.TotalCards ?? deck?.Cards?.length ?? entry.totalCards ?? 0;
+          const canStudy = !!deck && (deck.Cards?.length ?? 0) > 0;
 
           if (!canStudy) {
-            // premium placeholder (no cards shipped in this build)
+            // 未安装或占位 deck：不可学习，但在列表里展示
             deckSummaries.push({
-              slug: deck.Slug,
-              title: deck.Title,
-              locale: deck.Locale,
-              version: deck.Version,
-              deckType: deck.DeckType,
+              slug: deck?.Slug ?? entry.slug,
+              title: deck?.Title ?? entry.title ?? entry.slug,
+              locale: deck?.Locale ?? entry.locale ?? 'en-US',
+              version: deck?.Version ?? entry.version,
+              deckType: deck?.DeckType ?? entry.deckType ?? 1,
               totalCards,
               canStudy,
               dueToday: 0,
@@ -238,12 +303,12 @@ export function HomeScreen({ navigation }: Props) {
             slug: deck.Slug,
             title: deck.Title,
             locale: deck.Locale,
-            version: deck.Version,
+            version: deck.Version, // ✅ 显示已安装版本（来自下载版或 mock）
             deckType: deck.DeckType,
             totalCards,
             canStudy,
             dueToday,
-            plannedToday: dueToday, // "planned today" = reviews due today (simple + consistent)
+            plannedToday: dueToday, // "planned today" = reviews due today
             newToday: newRemaining, // "new cards" remaining
             masteredApprox: learnedCount, // learned count
             percent,
@@ -278,6 +343,7 @@ export function HomeScreen({ navigation }: Props) {
           loading: false,
           asOfISO: now.toISOString(),
           deckSummaries,
+          updates,
           allUpcoming30,
           monthCounts,
         });
@@ -290,8 +356,14 @@ export function HomeScreen({ navigation }: Props) {
     }, []),
   );
 
-  const { loading, asOfISO, deckSummaries, allUpcoming30, monthCounts } = state;
+  const { loading, asOfISO, deckSummaries, updates, allUpcoming30, monthCounts } = state;
   const asOf = useMemo(() => new Date(asOfISO), [asOfISO]);
+
+  useEffect(() => {
+    if (!selectedSlug && deckSummaries.length > 0) {
+      setSelectedSlug(deckSummaries[0].slug);
+    }
+  }, [selectedSlug, deckSummaries]);
 
   const week7 = useMemo(() => allUpcoming30.slice(0, 7), [allUpcoming30]);
 
@@ -329,7 +401,7 @@ export function HomeScreen({ navigation }: Props) {
   }
 
   function openDeck(slug: string) {
-    setActiveDeckSlug(slug);
+    void setActiveDeckSlug(slug);
     setSelectedSlug(slug);
     navigation.navigate('Deck', { slug });
   }
@@ -398,12 +470,7 @@ export function HomeScreen({ navigation }: Props) {
         style={styles.gradient}
       >
         {/* Month modal */}
-        <Modal
-          animationType="fade"
-          transparent
-          visible={isMonthOpen}
-          onRequestClose={closeMonth}
-        >
+        <Modal animationType="fade" transparent visible={isMonthOpen} onRequestClose={closeMonth}>
           <View style={styles.modalOverlay}>
             <Pressable style={styles.modalBackdrop} onPress={closeMonth} />
 
@@ -411,9 +478,7 @@ export function HomeScreen({ navigation }: Props) {
               <View style={styles.modalHeaderRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.modalTitle}>{monthGrid.monthLabel}</Text>
-                  <Text style={styles.modalSubtitle}>
-                    {totalDueAllDecks} due today across all decks
-                  </Text>
+                  <Text style={styles.modalSubtitle}>{totalDueAllDecks} due today across all decks</Text>
                 </View>
 
                 <Pressable
@@ -437,32 +502,27 @@ export function HomeScreen({ navigation }: Props) {
                 {monthGrid.cells.map((cell, idx) => {
                   if (!cell) return <View key={`empty-${idx}`} style={styles.monthCell} />;
 
-                  const intensity =
-                    maxMonth <= 0 ? 1 : 0.55 + 0.45 * clamp01(cell.count / maxMonth);
-
+                  const intensity = maxMonth <= 0 ? 1 : 0.55 + 0.45 * clamp01(cell.count / maxMonth);
                   const hidden = cell.count === 0;
 
                   return (
-                    <View key={cell.dateKey} style={[styles.monthCell, cell.isToday && styles.monthCellToday]}>
-                      <Text style={[styles.monthDayNumber, cell.isToday && styles.monthDayNumberToday]}>
+                    <View
+                      key={cell.dateKey}
+                      style={[styles.monthCell, cell.isToday && styles.monthCellToday]}
+                    >
+                      <Text
+                        style={[
+                          styles.monthDayNumber,
+                          cell.isToday && styles.monthDayNumberToday,
+                        ]}
+                      >
                         {cell.date.getDate()}
                       </Text>
 
                       {/* Meta keeps height consistent; 0 is visually hidden */}
                       <View style={styles.monthMeta}>
-                        <View
-                          style={[
-                            styles.monthDot,
-                            { opacity: hidden ? 0 : intensity },
-                          ]}
-                        />
-                        <Text
-                          style={[
-                            styles.monthCount,
-                            { opacity: hidden ? 0 : 1 },
-                          ]}
-                          numberOfLines={1}
-                        >
+                        <View style={[styles.monthDot, { opacity: hidden ? 0 : intensity }]} />
+                        <Text style={[styles.monthCount, { opacity: hidden ? 0 : 1 }]} numberOfLines={1}>
                           {cell.count}
                         </Text>
                       </View>
@@ -528,7 +588,7 @@ export function HomeScreen({ navigation }: Props) {
               </View>
             </View>
 
-            {/* Week 7-day bars: top = date, bottom = Today/Sun/...; bar is tapable */}
+            {/* Week 7-day bars */}
             <View style={styles.weekGrid}>
               {week7.map((day, idx) => {
                 const date = new Date(asOf.getTime());
@@ -540,21 +600,13 @@ export function HomeScreen({ navigation }: Props) {
                 const count = day.count;
 
                 const pct =
-                  maxWeek <= 0
-                    ? 0
-                    : count === 0
-                      ? 0
-                      : Math.max(0.12, count / maxWeek);
+                  maxWeek <= 0 ? 0 : count === 0 ? 0 : Math.max(0.12, count / maxWeek);
 
                 return (
                   <Pressable
                     key={day.dateKey}
                     style={({ pressed }) => [styles.weekCell, pressed && styles.pressed]}
-                    onPress={() => {
-                      showWeekHint(
-                        `${dateText} · ${count} card${count === 1 ? '' : 's'}`
-                      );
-                    }}
+                    onPress={() => showWeekHint(`${dateText} · ${count} card${count === 1 ? '' : 's'}`)}
                     accessibilityLabel={`${dateText}, ${count} cards`}
                   >
                     <Text style={styles.weekDate} numberOfLines={1}>
@@ -562,7 +614,6 @@ export function HomeScreen({ navigation }: Props) {
                     </Text>
 
                     <View style={styles.weekBarBg}>
-                      {/* spacer then fill => fill grows from bottom */}
                       <View style={{ flex: 1 - pct }} />
                       <View
                         style={[
@@ -580,7 +631,7 @@ export function HomeScreen({ navigation }: Props) {
               })}
             </View>
 
-            {/* Week tap hint slot (fixed height, no layout jump) */}
+            {/* Week tap hint slot */}
             <View style={styles.weekHintSlot}>
               <Text style={styles.weekHintText} numberOfLines={1} ellipsizeMode="tail">
                 {weekHint ?? 'Tap a day bar to see the exact count.'}
@@ -588,7 +639,7 @@ export function HomeScreen({ navigation }: Props) {
             </View>
           </View>
 
-          {/* Deck list card (ONE card) with ALL / Free / Premium filter */}
+          {/* Deck list card */}
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionTitle}>Decks</Text>
@@ -609,12 +660,7 @@ export function HomeScreen({ navigation }: Props) {
                     ]}
                     onPress={() => setDeckFilter(key)}
                   >
-                    <Text
-                      style={[
-                        styles.segmentThreeText,
-                        active && styles.segmentThreeTextActive,
-                      ]}
-                    >
+                    <Text style={[styles.segmentThreeText, active && styles.segmentThreeTextActive]}>
                       {label}
                     </Text>
                   </Pressable>
@@ -626,52 +672,67 @@ export function HomeScreen({ navigation }: Props) {
               Tap a deck to open it (modes + deck‑specific plan live inside).
             </Text>
 
-            {filteredDecks.map(d => {
-              const active = d.slug === selectedSlug;
-              const isPremium = d.deckType !== 1;
+            {deckSummaries.length === 0 ? (
+              <View style={styles.emptyBox}>
+                <Text style={styles.emptyTitle}>No decks installed yet</Text>
+                <Text style={styles.emptySubtitle}>
+                  We will try to download decks automatically. You can also tap “Check & update decks” in Settings.
+                </Text>
+              </View>
+            ) : (
+              filteredDecks.map(d => {
+                const active = d.slug === selectedSlug;
+                const isPremium = d.deckType !== 1;
+                const deckUpdate = updates?.[d.slug];
+                const hasUpdate = !!(deckUpdate?.hasUpdate && deckUpdate.remoteUrl);
 
-              return (
-                <Pressable
-                  key={d.slug}
-                  style={({ pressed }) => [
-                    styles.deckRow,
-                    active && styles.deckRowActive,
-                    pressed && styles.deckRowPressed,
-                  ]}
-                  onPress={() => openDeck(d.slug)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text
-                      style={[styles.deckRowTitle, active && styles.deckRowTitleActive]}
-                      numberOfLines={1}
-                    >
-                      {d.title}
-                    </Text>
+                return (
+                  <Pressable
+                    key={d.slug}
+                    style={({ pressed }) => [
+                      styles.deckRow,
+                      active && styles.deckRowActive,
+                      pressed && styles.deckRowPressed,
+                    ]}
+                    onPress={() => {
+                      if (!d.canStudy) return;
+                      openDeck(d.slug);
+                    }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.deckRowTitle, active && styles.deckRowTitleActive]} numberOfLines={1}>
+                        {d.title}
+                      </Text>
 
-                    <Text style={styles.deckRowSub} numberOfLines={1}>
-                      {isPremium ? 'Premium' : 'Free'} · {d.totalCards} cards
-                    </Text>
-                  </View>
-
-                  {d.canStudy ? (
-                    <View style={styles.deckRowRight}>
-                      <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
-                      <View style={styles.rowBarBg}>
-                        <View
-                          style={[
-                            styles.rowBarFill,
-                            { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 },
-                          ]}
-                        />
-                        <View style={{ flex: 1 - d.percent }} />
-                      </View>
+                      <Text style={styles.deckRowSub} numberOfLines={1}>
+                        {isPremium ? 'Premium' : 'Free'} · {d.totalCards} cards
+                      </Text>
                     </View>
-                  ) : (
-                    <Text style={styles.lockedPill}>Locked</Text>
-                  )}
-                </Pressable>
-              );
-            })}
+
+                    {d.canStudy ? (
+                      <View style={styles.deckRowRight}>
+                        {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
+                        <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
+                        <View style={styles.rowBarBg}>
+                          <View
+                            style={[
+                              styles.rowBarFill,
+                              { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 },
+                            ]}
+                          />
+                          <View style={{ flex: 1 - d.percent }} />
+                        </View>
+                      </View>
+                    ) : (
+                      <View style={styles.deckRowRight}>
+                        {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
+                        <Text style={styles.lockedPill}>Not installed</Text>
+                      </View>
+                    )}
+                  </Pressable>
+                );
+              })
+            )}
           </View>
 
           <View style={{ height: 24 }} />
@@ -833,6 +894,16 @@ const styles = StyleSheet.create({
   deckRowSub: { marginTop: 3, fontSize: 11, color: '#6B7280' },
 
   deckRowRight: { alignItems: 'flex-end', marginLeft: 10 },
+  updatePill: {
+    marginBottom: 6,
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#92400E',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(234,179,8,0.18)',
+  },
   duePill: {
     fontSize: 11,
     fontWeight: '900',
@@ -863,6 +934,14 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: 'rgba(17,24,39,0.06)',
   },
+  emptyBox: {
+    marginTop: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(17,24,39,0.04)',
+    padding: 12,
+  },
+  emptyTitle: { fontSize: 13, fontWeight: '700', color: '#111827' },
+  emptySubtitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
 
   // Modal styles (opaque month background)
   modalOverlay: {

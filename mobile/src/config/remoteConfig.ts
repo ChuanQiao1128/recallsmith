@@ -33,14 +33,19 @@ export function compareSemver(a: string, b: string): number {
 }
 
 export function getCurrentAppVersion(): string {
-  // iOS/Android native version first
-  const native = Application.nativeApplicationVersion;
-  if (native && typeof native === 'string') return native;
-
-  // Expo config fallback
   const expoV = Constants.expoConfig?.version;
-  if (expoV && typeof expoV === 'string') return expoV;
+  const native = Application.nativeApplicationVersion;
 
+  // 在 Expo Go / dev client 环境，nativeApplicationVersion 是 Expo 的版本（如 2.x），所以优先用项目 version
+  if (Constants.appOwnership === 'expo') {
+    if (expoV && typeof expoV === 'string') return expoV;
+    if (native && typeof native === 'string') return native;
+    return '0.0.0';
+  }
+
+  // 独立包：先看原生版本，再兜底 Expo 配置
+  if (native && typeof native === 'string') return native;
+  if (expoV && typeof expoV === 'string') return expoV;
   return '0.0.0';
 }
 
@@ -48,11 +53,12 @@ export async function fetchRemoteConfig(
   url: string,
   timeoutMs: number = 4500,
 ): Promise<RemoteConfig | null> {
+  const cacheBustedUrl = url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const resp = await fetch(url, {
+    const resp = await fetch(cacheBustedUrl, {
       method: 'GET',
       headers: { 'cache-control': 'no-cache' },
       signal: controller.signal,

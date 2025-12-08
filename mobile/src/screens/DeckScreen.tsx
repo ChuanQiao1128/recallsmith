@@ -1,5 +1,5 @@
 // mobile/src/screens/DeckScreen.tsx
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   SafeAreaView,
   View,
@@ -15,26 +15,21 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList, StudyMode } from '../navigation/types';
 
-// ✅ 使用 deck catalog（你 HomeScreen 已经在用这些）
-import {
-  MOCK_DECKS,
-  getMockDeckBySlug,
-  getActiveDeckSlug,
-  setActiveDeckSlug,
-} from '../mock/jsCoreStarterMock';
+import type { DeckExport } from '../types/deckExport';
+import { setActiveDeckSlug, loadActiveDeckSlug } from '../content/activeDeck';
+
+// ✅ Step 4: async resolver (prefer downloaded deck)
+import { resolveDeckBySlug, listManifestDecks } from '../content/deckRepository';
 
 import type { CardProgress } from '../review/model';
 import { formatDateKey } from '../review/model';
-import {
-  loadDeckProgress,
-  loadOrInitDailyStats,
-  type DailyStats,
-} from '../review/storage';
+import { loadDeckProgress, loadOrInitDailyStats, type DailyStats } from '../review/storage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Deck'>;
 
 interface DeckState {
   loading: boolean;
+  deck: DeckExport | null;
   progress: CardProgress[];
   dailyStats: DailyStats | null;
   error: string | null;
@@ -70,30 +65,74 @@ function countDueToday(progress: CardProgress[], now: Date): number {
   return count;
 }
 
+// ✅ Phase 3: detect “updated” cards (card.Revision > progress.lastSeenRevision)
+// Fallbacks keep old decks/progress safe.
+function getCardRevision(card: any): number {
+  const r = card?.Revision;
+  return typeof r === 'number' && r > 0 ? r : 1;
+}
+
+function getSeenRevision(p: CardProgress): number {
+  const seen = (p as any).lastSeenRevision;
+  if (typeof seen === 'number') return seen;
+  return isLearned(p) ? 1 : 0;
+}
+
+function countUpdatedCards(cards: any[], progress: CardProgress[]): number {
+  const pMap = new Map(progress.map(p => [p.stableUid, p]));
+  let count = 0;
+
+  for (const card of cards) {
+    const p = pMap.get(card?.StableUid);
+    if (!p) continue;
+    if (!isLearned(p)) continue; // 只有学过的才可能“更新”
+    if (getCardRevision(card) > getSeenRevision(p)) count += 1;
+  }
+
+  return count;
+}
+
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
 export function DeckScreen({ navigation, route }: Props) {
-  // 1) slug 来源：优先 route 参数，其次 activeSlug，再其次第一个 deck
   const slugFromRoute = route.params?.slug;
-  const fallbackSlug = getActiveDeckSlug() ?? MOCK_DECKS[0]?.Slug;
-  const slug = slugFromRoute ?? fallbackSlug;
+  const [slug, setSlug] = useState<string | null>(slugFromRoute ?? null);
 
-  const deck = useMemo(() => {
-    return (slug ? getMockDeckBySlug(slug) : undefined) ?? MOCK_DECKS[0];
-  }, [slug]);
+  // 初始化 slug：优先 route，其次上次活跃 deck，再退到 manifest 首项
+  useFocusEffect(
+    useCallback(() => {
+      if (slugFromRoute) {
+        setSlug(slugFromRoute);
+        void setActiveDeckSlug(slugFromRoute);
+        return;
+      }
 
-  // 进入本页后，把它设为 active（保证 Review/Home 等同步）
-  useEffect(() => {
-    if (deck?.Slug) setActiveDeckSlug(deck.Slug);
-  }, [deck?.Slug]);
+      let cancelled = false;
+      async function initSlug() {
+        const stored = await loadActiveDeckSlug();
+        if (cancelled) return;
+        if (stored) {
+          setSlug(stored);
+          return;
+        }
 
-  const canStudy = (deck?.Cards?.length ?? 0) > 0;
-  const totalCards = (deck?.TotalCards ?? deck?.Cards?.length ?? 0) || 0;
+        const manifest = await listManifestDecks();
+        if (cancelled) return;
+        if (manifest[0]?.slug) setSlug(manifest[0].slug);
+      }
+      void initSlug();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [slugFromRoute]),
+  );
 
   const [state, setState] = useState<DeckState>({
     loading: true,
+    deck: null,
     progress: [],
     dailyStats: null,
     error: null,
@@ -103,70 +142,81 @@ export function DeckScreen({ navigation, route }: Props) {
 
   useFocusEffect(
     useCallback(() => {
+      if (!slug) {
+        setState({
+          loading: false,
+          deck: null,
+          progress: [],
+          dailyStats: null,
+          error: 'No deck available. Please install a deck from Settings.',
+        });
+        return;
+      }
+
       let cancelled = false;
 
       async function load() {
-        if (!deck) {
-          setState({ loading: false, progress: [], dailyStats: null, error: 'Deck not found.' });
-          return;
-        }
-
         setState(prev => ({ ...prev, loading: true, error: null }));
 
-        const progress = await loadDeckProgress(deck);
-        if (cancelled) return;
+        try {
+          // ✅ Step 4: 先 resolve deck（本地下载版优先）
+          const deck = await resolveDeckBySlug(slug);
+          if (!deck) throw new Error('Deck not found');
+          if (cancelled) return;
 
-        const dailyStats = await loadOrInitDailyStats(deck, progress);
-        if (cancelled) return;
+          // 进入本页后，把它设为 active（保证 Review/Home 等同步）
+          void setActiveDeckSlug(deck.Slug);
 
-        setState({ loading: false, progress, dailyStats, error: null });
+          const progress = await loadDeckProgress(deck);
+          if (cancelled) return;
+
+          const dailyStats = await loadOrInitDailyStats(deck, progress);
+          if (cancelled) return;
+
+          setState({ loading: false, deck, progress, dailyStats, error: null });
+        } catch (e: any) {
+          if (cancelled) return;
+          setState({
+            loading: false,
+            deck: null,
+            progress: [],
+            dailyStats: null,
+            error: e?.message ?? 'Failed to load deck.',
+          });
+        }
       }
 
       void load();
       return () => {
         cancelled = true;
       };
-    }, [deck?.Slug, deck?.Version]),
+    }, [slug]),
   );
 
-  const { loading, progress, dailyStats, error } = state;
+  const { loading, deck, progress, dailyStats, error } = state;
 
-  const now = new Date();
-
-  // ✅ 统一口径：Due = 只统计已学过(lastReviewedAt)且安排在“今天桶”的卡
-  const dueToday = countDueToday(progress, now);
-
-  // ✅ New = 没学过的数量（lastReviewedAt 缺失）
-  const learnedCount = progress.filter(isLearned).length;
-  const newRemaining = Math.max(totalCards - learnedCount, 0);
-
-  const overallPercent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
-
-  const minSession = 5;
-  const maxSession = 50;
-
-  function changeSession(delta: number) {
-    setSessionCount(prev => Math.min(maxSession, Math.max(minSession, prev + delta)));
-  }
-  function setPreset(count: number) {
-    setSessionCount(count);
-  }
-
-  function startMode(mode: StudyMode) {
-    if (!deck) return;
-    if (!canStudy) return;
-
-    // ✅ 确保 Review 用同一个 deck
-    setActiveDeckSlug(deck.Slug);
-
-    navigation.navigate('Review', {
-      slug: deck.Slug,
-      mode,
-      limit: sessionCount,
-    });
+  if (error) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.center}>
+            <Text style={styles.title}>Deck not found</Text>
+            <Text style={styles.subtitle}>{error}</Text>
+            <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
+              <Text style={styles.backText}>← Back</Text>
+            </Pressable>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
   }
 
-  if (loading || !dailyStats) {
+  if (loading || !dailyStats || !deck) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient
@@ -184,32 +234,52 @@ export function DeckScreen({ navigation, route }: Props) {
     );
   }
 
-  if (!deck || error) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
-          <View style={styles.center}>
-            <Text style={styles.title}>Deck not found</Text>
-            <Text style={styles.subtitle}>{error ?? 'Unknown error'}</Text>
-            <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
-              <Text style={styles.backText}>← Back</Text>
-            </Pressable>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
+  const canStudy = (deck.Cards?.length ?? 0) > 0;
+  const totalCards = (deck.TotalCards ?? deck.Cards?.length ?? 0) || 0;
+
+  const now = new Date();
+
+  // ✅ Due = 只统计已学过且安排在“今天桶”的卡
+  const dueToday = countDueToday(progress, now);
+
+  // ✅ New = 没学过的数量
+  const learnedCount = progress.filter(isLearned).length;
+  const newRemaining = Math.max(totalCards - learnedCount, 0);
+
+  const updatedCount = canStudy ? countUpdatedCards(deck.Cards ?? [], progress) : 0;
+
+  const overallPercent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
+
+  const minSession = 5;
+  const maxSession = 50;
+
+  function changeSession(delta: number) {
+    setSessionCount(prev => Math.min(maxSession, Math.max(minSession, prev + delta)));
+  }
+  function setPreset(count: number) {
+    setSessionCount(count);
+  }
+
+  function startMode(mode: StudyMode) {
+    if (!canStudy || !deck) return;
+
+    // ✅ 确保 Review 用同一个 deck
+    void setActiveDeckSlug(deck.Slug);
+
+    navigation.navigate('Review', {
+      slug: deck.Slug,
+      mode,
+      limit: sessionCount,
+    });
   }
 
   const deckTypeLabel = deck.DeckType === 1 ? 'Starter deck' : 'Premium deck';
 
   const disableReviewDue = !canStudy || dueToday === 0;
   const disableLearn = !canStudy || newRemaining === 0;
-  const disableMixed = !canStudy || (dueToday === 0 && newRemaining === 0);
+
+  // ✅ mixed：允许 “updated cards” 也能开跑（ReviewScreen 里 mixed 会包含 updated）
+  const disableMixed = !canStudy || (dueToday === 0 && newRemaining === 0 && updatedCount === 0);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -227,17 +297,16 @@ export function DeckScreen({ navigation, route }: Props) {
           {/* 顶部 header */}
           <View style={styles.headerRow}>
             <Pressable
-              style={({ pressed }) => [
-                styles.backButton,
-                pressed && styles.backButtonPressed,
-              ]}
+              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
               onPress={() => navigation.goBack()}
             >
               <Text style={styles.backText}>← Home</Text>
             </Pressable>
 
             <View style={{ flex: 1 }}>
-              <Text style={styles.title} numberOfLines={1}>{deck.Title}</Text>
+              <Text style={styles.title} numberOfLines={1}>
+                {deck.Title}
+              </Text>
               <Text style={styles.subtitle} numberOfLines={1}>
                 {deck.Locale} · {deckTypeLabel}
               </Text>
@@ -274,28 +343,32 @@ export function DeckScreen({ navigation, route }: Props) {
                 <View style={styles.heroStatsRow}>
                   <View style={styles.heroStat}>
                     <Text style={styles.heroStatLabel}>Due today</Text>
-                    <Text style={[styles.heroStatValue, { color: '#EF4444' }]}>
-                      {dueToday}
-                    </Text>
+                    <Text style={[styles.heroStatValue, { color: '#EF4444' }]}>{dueToday}</Text>
                   </View>
+
                   <View style={styles.heroStat}>
                     <Text style={styles.heroStatLabel}>New cards</Text>
-                    <Text style={[styles.heroStatValue, { color: '#0EA5E9' }]}>
-                      {newRemaining}
-                    </Text>
+                    <Text style={[styles.heroStatValue, { color: '#0EA5E9' }]}>{newRemaining}</Text>
                   </View>
+
                   <View style={styles.heroStat}>
                     <Text style={styles.heroStatLabel}>Have learned</Text>
-                    <Text style={[styles.heroStatValue, { color: '#22C55E' }]}>
-                      {learnedCount}
-                    </Text>
+                    <Text style={[styles.heroStatValue, { color: '#22C55E' }]}>{learnedCount}</Text>
                   </View>
                 </View>
+
+                {updatedCount > 0 ? (
+                  <View style={styles.updatePill}>
+                    <Text style={styles.updatePillText}>
+                      ✨ {updatedCount} card{updatedCount === 1 ? '' : 's'} updated since you last reviewed.
+                    </Text>
+                  </View>
+                ) : null}
               </>
             )}
           </View>
 
-          {/* 本次学习张数（保留原卡片） */}
+          {/* 本次学习张数 */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Cards for this session</Text>
             <Text style={styles.sectionSubTitle}>
@@ -321,18 +394,10 @@ export function DeckScreen({ navigation, route }: Props) {
               {[10, 20, 30, 50].map(v => (
                 <Pressable
                   key={v}
-                  style={[
-                    styles.presetChip,
-                    sessionCount === v && styles.presetChipActive,
-                  ]}
+                  style={[styles.presetChip, sessionCount === v && styles.presetChipActive]}
                   onPress={() => setPreset(v)}
                 >
-                  <Text
-                    style={[
-                      styles.presetChipText,
-                      sessionCount === v && styles.presetChipTextActive,
-                    ]}
-                  >
+                  <Text style={[styles.presetChipText, sessionCount === v && styles.presetChipTextActive]}>
                     {v}
                   </Text>
                 </Pressable>
@@ -340,12 +405,10 @@ export function DeckScreen({ navigation, route }: Props) {
             </View>
           </View>
 
-          {/* 模式选择（Learn / Review Due / Mixed） */}
+          {/* 模式选择 */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Choose a mode</Text>
-            <Text style={styles.sectionSubTitle}>
-              Quick pick based on what you want to achieve today.
-            </Text>
+            <Text style={styles.sectionSubTitle}>Quick pick based on what you want to achieve today.</Text>
 
             <Pressable
               style={({ pressed }) => [
@@ -361,9 +424,7 @@ export function DeckScreen({ navigation, route }: Props) {
                 <Text style={styles.modeTitle}>Review Due</Text>
                 <Text style={styles.modeSubtitle}>Clear today&apos;s reviews first.</Text>
               </View>
-              <Text style={styles.modeCount}>
-                {dueToday} due
-              </Text>
+              <Text style={styles.modeCount}>{dueToday} due</Text>
             </Pressable>
 
             <Pressable
@@ -380,9 +441,7 @@ export function DeckScreen({ navigation, route }: Props) {
                 <Text style={styles.modeTitle}>Learn</Text>
                 <Text style={styles.modeSubtitle}>Add new concepts for today.</Text>
               </View>
-              <Text style={styles.modeCount}>
-                {newRemaining} new
-              </Text>
+              <Text style={styles.modeCount}>{newRemaining} new</Text>
             </Pressable>
 
             <Pressable
@@ -397,11 +456,9 @@ export function DeckScreen({ navigation, route }: Props) {
             >
               <View style={{ flex: 1 }}>
                 <Text style={styles.modeTitle}>Mixed</Text>
-                <Text style={styles.modeSubtitle}>Balanced run (due + a few new).</Text>
+                <Text style={styles.modeSubtitle}>Balanced run (due + updated + a few new).</Text>
               </View>
-              <Text style={styles.modeCount}>
-                up to {sessionCount}
-              </Text>
+              <Text style={styles.modeCount}>up to {sessionCount}</Text>
             </Pressable>
 
             <View style={styles.tipBox}>
@@ -551,4 +608,15 @@ const styles = StyleSheet.create({
   tipBox: { marginTop: 12, borderRadius: 14, backgroundColor: '#F5F3FF', padding: 10 },
   tipTitle: { fontSize: 13, fontWeight: '600', color: '#4F46E5', marginBottom: 4 },
   tipBody: { fontSize: 12, color: '#4B5563' },
+
+  updatePill: {
+    marginTop: 10,
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(79,70,229,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(79,70,229,0.18)',
+  },
+  updatePillText: { fontSize: 12, color: '#4F46E5', fontWeight: '600' },
 });

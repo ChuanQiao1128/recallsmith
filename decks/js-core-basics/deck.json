@@ -4,7 +4,7 @@
   "Locale": "en-US",
   "DeckType": 1,
   "IsFreeStarter": true,
-  "Version": "1.0",
+  "Version": "1.0.1",
   "TotalCards": 50,
   "FreeCardCount": 50,
   "Cards": [
@@ -13,7 +13,7 @@
       "OrderInDeck": 1,
       "Difficulty": 1,
       "CodeLanguage": "JavaScript",
-      "Question": "What is the difference between var, let, and const?",
+      "Question": "What is the the the difference between var, let, and const?",
       "Explanation": "var is function-scoped and hoisted (initialized as undefined). let/const are block-scoped and exist in the temporal dead zone until initialized. const prevents reassignment (but objects can still be mutated).",
       "CodeSnippet": "function demo() {\n  if (true) {\n    var a = 1;\n    let b = 2;\n    const c = { x: 3 };\n    c.x = 4; // allowed\n  }\n  console.log(a); // 1\n  // console.log(b); // ReferenceError (TDZ)\n}\n",
       "RealWorldUsage": "Prefer const by default; use let for state that changes. Avoid var in modern codebases to reduce hoisting/scope surprises."
