@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Deck } from '../types/deck';
 
-// highlight.js 核心 + 手动语言注册
+// highlight.js core + languages
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -13,7 +13,6 @@ import sql from 'highlight.js/lib/languages/sql';
 import bash from 'highlight.js/lib/languages/bash';
 import 'highlight.js/styles/atom-one-dark.css';
 
-// 注册语言
 hljs.registerLanguage('javascript', javascript);
 hljs.registerLanguage('js', javascript);
 hljs.registerLanguage('typescript', typescript);
@@ -27,19 +26,19 @@ export interface CardFormValues {
   question: string;
   stableUid: string;
   explanation: string;
+  realWorldUsage: string;
   codeSnippet: string;
   codeLanguage: string;
   difficulty: number;
   orderInDeck: number;
+  revision: number;
 }
 
 interface CardFormProps {
   mode: 'create' | 'edit';
   deck: Deck;
   initialValues: CardFormValues;
-  onSubmit: (
-    values: CardFormValues,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  onSubmit: (values: CardFormValues) => Promise<{ ok: boolean; error?: string }>;
   onCancel: () => void;
 }
 
@@ -95,10 +94,7 @@ export function CardForm(props: CardFormProps) {
   function handleQuestionBlur() {
     if (!values.stableUid.trim() && values.question.trim()) {
       const auto = slugifyForStableUid(values.question);
-      setValues(prev => ({
-        ...prev,
-        stableUid: auto,
-      }));
+      setValues(prev => ({ ...prev, stableUid: auto }));
     }
   }
 
@@ -112,18 +108,18 @@ export function CardForm(props: CardFormProps) {
       setState(prev => ({ ...prev, error: 'Question is required.' }));
       return;
     }
-
     if (!trimmedUid) {
       setState(prev => ({ ...prev, error: 'StableUid is required.' }));
       return;
     }
 
     if (!Number.isFinite(values.orderInDeck) || values.orderInDeck <= 0) {
-      setState(prev => ({
-        ...prev,
-        error:
-          'orderInDeck must be a positive number (e.g. 10, 20, 30).',
-      }));
+      setState(prev => ({ ...prev, error: 'orderInDeck must be a positive number (e.g. 10, 20, 30).' }));
+      return;
+    }
+
+    if (!Number.isFinite(values.revision) || values.revision <= 0) {
+      setState(prev => ({ ...prev, error: 'revision must be a positive number (e.g. 1).' }));
       return;
     }
 
@@ -134,50 +130,34 @@ export function CardForm(props: CardFormProps) {
         ...values,
         question: trimmedQuestion,
         stableUid: trimmedUid,
+        explanation: values.explanation ?? '',
+        realWorldUsage: values.realWorldUsage ?? '',
       });
 
       if (!result.ok) {
-        setState({
-          submitting: false,
-          error: result.error ?? 'Submit failed.',
-        });
+        setState({ submitting: false, error: result.error ?? 'Submit failed.' });
         return;
       }
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Network error.';
-      setState({
-        submitting: false,
-        error: message,
-      });
+      const message = err instanceof Error ? err.message : 'Network error.';
+      setState({ submitting: false, error: message });
     }
   }
 
   const hlLanguage = mapToHlLanguage(values.codeLanguage);
 
-  // ⭐ 核心：每次 codeSnippet / codeLanguage 改变，重新计算高亮 HTML
   const highlightedHtml = useMemo(() => {
     const code = values.codeSnippet;
 
     if (!code) {
-      // 这里也返回高亮后的 HTML，避免在 dangerouslySetInnerHTML 混字符串
-      return hljs
-        .highlight('// No code snippet.', { language: 'javascript' })
-        .value;
+      return hljs.highlight('// No code snippet.', { language: 'javascript' }).value;
     }
 
     try {
-      if (hlLanguage) {
-        return hljs.highlight(code, { language: hlLanguage }).value;
-      }
-      // 没指定语言时自动猜
+      if (hlLanguage) return hljs.highlight(code, { language: hlLanguage }).value;
       return hljs.highlightAuto(code).value;
     } catch {
-      // 高亮失败就直接原样返回（会没有颜色，但至少不报错）
-      return code
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+      return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
   }, [values.codeSnippet, hlLanguage]);
 
@@ -192,10 +172,9 @@ export function CardForm(props: CardFormProps) {
         </div>
       )}
 
-      {/* Deck info */}
       <div className="text-xs text-slate-500 border-b border-slate-100 pb-2 mb-2">
-        <span className="font-semibold text-slate-700">{deck.title}</span>{' '}
-        · <span className="font-mono">{deck.slug}</span> · {deck.locale}
+        <span className="font-semibold text-slate-700">{deck.title}</span> ·{' '}
+        <span className="font-mono">{deck.slug}</span> · {deck.locale}
       </div>
 
       {/* Question */}
@@ -224,12 +203,7 @@ export function CardForm(props: CardFormProps) {
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
           value={values.stableUid}
-          onChange={e =>
-            handleChange(
-              'stableUid',
-              slugifyForStableUid(e.target.value),
-            )
-          }
+          onChange={e => handleChange('stableUid', slugifyForStableUid(e.target.value))}
           placeholder="js-basics-let-const-var"
         />
         <p className="mt-1 text-xs text-slate-500">
@@ -239,9 +213,7 @@ export function CardForm(props: CardFormProps) {
 
       {/* Explanation */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">
-          Explanation
-        </label>
+        <label className="block text-sm font-medium text-slate-700 mb-1">Explanation</label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
@@ -252,19 +224,28 @@ export function CardForm(props: CardFormProps) {
         />
       </div>
 
-      {/* Language + Difficulty + Order */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* RealWorldUsage */}
+      <div>
+        <label className="block text-sm font-medium text-slate-700 mb-1">RealWorldUsage</label>
+        <textarea
+          className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+                     min-h-[90px]"
+          value={values.realWorldUsage}
+          onChange={e => handleChange('realWorldUsage', e.target.value)}
+          placeholder="Where would you use this in real projects? Any pitfalls?"
+        />
+      </div>
+
+      {/* Language + Difficulty + Order + Revision */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">
-            Code Language
-          </label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Code Language</label>
           <select
             className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm bg-white
                        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             value={values.codeLanguage}
-            onChange={e =>
-              handleChange('codeLanguage', e.target.value)
-            }
+            onChange={e => handleChange('codeLanguage', e.target.value)}
           >
             {CODE_LANG_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>
@@ -275,16 +256,12 @@ export function CardForm(props: CardFormProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">
-            Difficulty
-          </label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Difficulty</label>
           <select
             className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm bg-white
                        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             value={values.difficulty}
-            onChange={e =>
-              handleChange('difficulty', Number(e.target.value))
-            }
+            onChange={e => handleChange('difficulty', Number(e.target.value))}
           >
             <option value={1}>Easy</option>
             <option value={2}>Medium</option>
@@ -293,59 +270,52 @@ export function CardForm(props: CardFormProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">
-            Order in Deck
-          </label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Order in Deck</label>
           <input
             type="number"
             className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             value={values.orderInDeck}
-            onChange={e =>
-              handleChange('orderInDeck', Number(e.target.value))
-            }
+            onChange={e => handleChange('orderInDeck', Number(e.target.value))}
           />
-          <p className="mt-1 text-xs text-slate-500">
-            建议用 10, 20, 30 这种间隔，方便以后在中间插题。
-          </p>
+          <p className="mt-1 text-xs text-slate-500">建议用 10, 20, 30 间隔，方便插题。</p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Revision</label>
+          <input
+            type="number"
+            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            value={values.revision}
+            onChange={e => handleChange('revision', Number(e.target.value))}
+          />
+          <p className="mt-1 text-xs text-slate-500">内容修订号（可选但建议保持）。</p>
         </div>
       </div>
 
       {/* Code Snippet + Preview */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">
-          Code Snippet
-        </label>
+        <label className="block text-sm font-medium text-slate-700 mb-1">Code Snippet</label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      min-h-[140px]"
           value={values.codeSnippet}
-          onChange={e =>
-            handleChange('codeSnippet', e.target.value)
-          }
+          onChange={e => handleChange('codeSnippet', e.target.value)}
           placeholder={`function makeCounter() {\n  let count = 0;\n  return function () {\n    count++;\n    return count;\n  };\n}`}
         />
 
         <div className="mt-3">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-slate-600">
-              Preview
-            </span>
-            <span className="text-[10px] text-slate-400">
-              {values.codeLanguage || 'auto'}
-            </span>
+            <span className="text-xs font-medium text-slate-600">Preview</span>
+            <span className="text-[10px] text-slate-400">{values.codeLanguage || 'auto'}</span>
           </div>
 
           <div className="border border-slate-200 rounded text-xs overflow-auto">
             <pre className="m-0">
               <code
-                className={
-                  hlLanguage
-                    ? `hljs language-${hlLanguage}`
-                    : 'hljs'
-                }
-                // ⭐ 每次 render 都根据 highlightedHtml 来渲染，有颜色
+                className={hlLanguage ? `hljs language-${hlLanguage}` : 'hljs'}
                 dangerouslySetInnerHTML={{ __html: highlightedHtml }}
               />
             </pre>
@@ -353,13 +323,8 @@ export function CardForm(props: CardFormProps) {
         </div>
       </div>
 
-      {/* Buttons */}
       <div className="pt-2 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-sm text-slate-600 hover:text-slate-800"
-        >
+        <button type="button" onClick={onCancel} className="text-sm text-slate-600 hover:text-slate-800">
           Cancel
         </button>
 
@@ -376,8 +341,8 @@ export function CardForm(props: CardFormProps) {
               ? 'Creating...'
               : 'Saving...'
             : mode === 'create'
-            ? 'Create Card'
-            : 'Save Changes'}
+              ? 'Create Card'
+              : 'Save Changes'}
         </button>
       </div>
     </form>

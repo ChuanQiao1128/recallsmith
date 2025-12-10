@@ -1,103 +1,82 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { clearStoredTokens, getStoredTokens, isExpired, setStoredTokens } from './tokenStore';
-import { buildLogoutUrl, consumePostLoginRedirect, exchangeCodeForTokens, startLogin } from './cognito';
-import { userFromIdToken, type AuthUser } from './jwt';
+/* eslint-disable react-refresh/only-export-components */
+// src/auth/AuthContext.tsx
+import { createContext, useContext, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
+import { AUTH_CONFIGURED } from './authConfig';
+import { buildLogoutUrl, startLogin, type OAuthTokenResponse } from './cognito';
+import {
+  clearTokens,
+  getSessionUser,
+  getTokens,
+  saveTokens,
+  type SessionUser,
+  type StoredTokens,
+} from './tokenStore';
 
-type AuthState = {
-  loading: boolean;
-  isAuthed: boolean;
-  user: AuthUser | null;
-  idToken: string | null;
-  accessToken: string | null;
+export type AuthStatus = 'authenticated' | 'unauthenticated';
+
+export type AuthContextValue = {
+  status: AuthStatus;
+  tokens: StoredTokens | null;
+  user: SessionUser | null;
+  isAuthenticated: boolean;
 
   signIn: (nextUrl: string) => Promise<void>;
+  completeSignIn: (tokenResponse: OAuthTokenResponse) => void;
   signOut: () => void;
-
-  completeRedirect: (search: URLSearchParams) => Promise<string>; // returns nextUrl
 };
 
-const Ctx = createContext<AuthState | null>(null);
+const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [loading, setLoading] = useState(true);
-  const [idToken, setIdToken] = useState<string | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [user, setUser] = useState<AuthUser | null>(null);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [tokens, setTokens] = useState<StoredTokens | null>(() => getTokens());
+  const user = useMemo(() => getSessionUser(tokens), [tokens]);
 
-  useEffect(() => {
-    const t = getStoredTokens();
-    if (!t || isExpired(t)) {
-      clearStoredTokens();
-      setIdToken(null);
-      setAccessToken(null);
-      setUser(null);
-      setLoading(false);
-      return;
-    }
+  // ✅ 如果没配置 Cognito，默认当作“本地模式已登录”，不阻塞页面
+  const status: AuthStatus =
+    AUTH_CONFIGURED ? (tokens ? 'authenticated' : 'unauthenticated') : 'authenticated';
 
-    setIdToken(t.idToken);
-    setAccessToken(t.accessToken);
-    setUser(userFromIdToken(t.idToken));
-    setLoading(false);
-  }, []);
+  async function signIn(nextUrl: string) {
+    if (!AUTH_CONFIGURED) return;
+    await startLogin(nextUrl);
+  }
 
-  const api: AuthState = useMemo(
-    () => ({
-      loading,
-      isAuthed: !!accessToken && !!idToken,
-      user,
-      idToken,
-      accessToken,
+  function completeSignIn(tokenResponse: OAuthTokenResponse) {
+    const stored = saveTokens({
+      accessToken: tokenResponse.access_token,
+      idToken: tokenResponse.id_token,
+      refreshToken: tokenResponse.refresh_token,
+      tokenType: tokenResponse.token_type,
+      expiresIn: tokenResponse.expires_in,
+    });
+    setTokens(stored);
+  }
 
-      async signIn(nextUrl: string) {
-        await startLogin(nextUrl);
-      },
+  function signOut() {
+    clearTokens();
+    setTokens(null);
+    if (AUTH_CONFIGURED) window.location.assign(buildLogoutUrl());
+  }
 
-      signOut() {
-        clearStoredTokens();
-        setIdToken(null);
-        setAccessToken(null);
-        setUser(null);
-        window.location.assign(buildLogoutUrl());
-      },
-
-      async completeRedirect(search: URLSearchParams) {
-        const err = search.get('error');
-        if (err) {
-          const desc = search.get('error_description') ?? '';
-          throw new Error(`${err}${desc ? `: ${desc}` : ''}`);
-        }
-
-        const code = search.get('code');
-        const state = search.get('state');
-
-        if (!code || !state) throw new Error('Missing code/state in callback.');
-
-        const tokens = await exchangeCodeForTokens(code, state);
-
-        const expiresAt = Date.now() + tokens.expires_in * 1000;
-        setStoredTokens({
-          accessToken: tokens.access_token,
-          idToken: tokens.id_token,
-          refreshToken: tokens.refresh_token,
-          expiresAt,
-        });
-
-        setIdToken(tokens.id_token);
-        setAccessToken(tokens.access_token);
-        setUser(userFromIdToken(tokens.id_token));
-
-        return consumePostLoginRedirect();
-      },
-    }),
-    [accessToken, idToken, loading, user],
+  return (
+    <AuthContext.Provider
+      value={{
+        status,
+        tokens,
+        user,
+        isAuthenticated: status === 'authenticated',
+        signIn,
+        completeSignIn,
+        signOut,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
   );
-
-  return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
 }
 
-export function useAuth() {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within <AuthProvider>.');
   return ctx;
 }

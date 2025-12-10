@@ -1,5 +1,3 @@
-// src/types/deck.ts
-
 export interface Deck {
   id: number;
   slug: string;
@@ -12,4 +10,9 @@ export interface Deck {
   version: number;
   createdAt: number;  // epoch ms
   updatedAt: number;
+
+  // ✅ optional publish fields
+  contentVersion?: string | null;
+  isFreeStarter?: boolean;
+  freeCardCount?: number | null;
 }

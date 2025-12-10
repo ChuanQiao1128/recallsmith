@@ -1,7 +1,6 @@
 // src/pages/EditCardPage.tsx
-
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchDeckById, fetchCardsByDeck, updateCard } from '../api/authoring';
 import type { Deck } from '../types/deck';
 import type { Card } from '../types/card';
@@ -15,11 +14,14 @@ interface PageState {
 }
 
 export function EditCardPage() {
-  const { deckId, cardId } = useParams<{ deckId: string; cardId: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const numericDeckId = Number(deckId);
-  const numericCardId = Number(cardId);
+  const deckIdRaw = searchParams.get('deckId') ?? '';
+  const cardIdRaw = searchParams.get('cardId') ?? '';
+
+  const numericDeckId = Number(deckIdRaw);
+  const numericCardId = Number(cardIdRaw);
 
   const invalidId =
     !numericDeckId ||
@@ -31,7 +33,7 @@ export function EditCardPage() {
     loading: !invalidId,
     deck: null,
     card: null,
-    error: invalidId ? 'Invalid deck or card id.' : null,
+    error: invalidId ? 'Missing or invalid deckId/cardId.' : null,
   });
 
   useEffect(() => {
@@ -43,8 +45,6 @@ export function EditCardPage() {
       try {
         setState(prev => ({ ...prev, loading: true, error: null }));
 
-        // 1. 拉 Deck 信息
-        // 2. 拉该 Deck 下所有 Card（后端只支持 deckId 列表）
         const [deckResult, cardsResult] = await Promise.all([
           fetchDeckById(numericDeckId),
           fetchCardsByDeck(numericDeckId),
@@ -93,18 +93,16 @@ export function EditCardPage() {
         });
       } catch (err: unknown) {
         if (cancelled) return;
-        const message =
-          err instanceof Error ? err.message : 'Network error.';
         setState({
           loading: false,
           deck: null,
           card: null,
-          error: message,
+          error: err instanceof Error ? err.message : 'Network error.',
         });
       }
     }
 
-    load();
+    void load();
 
     return () => {
       cancelled = true;
@@ -116,13 +114,8 @@ export function EditCardPage() {
       <div className="min-h-screen bg-slate-100">
         <header className="bg-white border-b border-slate-200">
           <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">
-              Edit Card
-            </h1>
-            <Link
-              to="/"
-              className="text-sm text-indigo-600 hover:text-indigo-800"
-            >
+            <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
+            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
               ← Back to Decks
             </Link>
           </div>
@@ -130,7 +123,7 @@ export function EditCardPage() {
 
         <main className="max-w-3xl mx-auto px-4 py-6">
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
-            {state.error ?? 'Invalid deck or card id.'}
+            {state.error ?? 'Missing or invalid deckId/cardId.'}
           </div>
         </main>
       </div>
@@ -150,13 +143,8 @@ export function EditCardPage() {
       <div className="min-h-screen bg-slate-100">
         <header className="bg-white border-b border-slate-200">
           <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">
-              Edit Card
-            </h1>
-            <Link
-              to="/"
-              className="text-sm text-indigo-600 hover:text-indigo-800"
-            >
+            <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
+            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
               ← Back to Decks
             </Link>
           </div>
@@ -178,16 +166,15 @@ export function EditCardPage() {
     question: card.question,
     stableUid: card.stableUid,
     explanation: card.explanation ?? '',
+    realWorldUsage: (card as unknown as { realWorldUsage?: string | null }).realWorldUsage ?? '',
     codeSnippet: card.codeSnippet ?? '',
     codeLanguage: card.codeLanguage ?? '',
     difficulty: card.difficulty,
     orderInDeck: card.orderInDeck,
+    revision: (card as unknown as { revision?: number | null }).revision ?? 1,
   };
 
-  async function handleSubmit(
-    values: CardFormValues,
-  ): Promise<{ ok: boolean; error?: string }> {
-    // 关键：把后端 Card 的 version 当作 expectedVersion 传回去
+  async function handleSubmit(values: CardFormValues): Promise<{ ok: boolean; error?: string }> {
     const result = await updateCard({
       id: card.id,
       expectedVersion: card.version,
@@ -202,13 +189,11 @@ export function EditCardPage() {
     if (!result.success) {
       return {
         ok: false,
-        error:
-          result.error?.message ??
-          'Update card failed (possible version conflict).',
+        error: result.error?.message ?? 'Update card failed (possible version conflict).',
       };
     }
 
-    navigate(`/decks/${deck.id}/cards`, { replace: true });
+    navigate(`/decks/cards?deckId=${deck.id}`, { replace: true });
     return { ok: true };
   }
 
@@ -217,15 +202,13 @@ export function EditCardPage() {
       <header className="bg-white border-b border-slate-200">
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-slate-800">
-              Edit Card
-            </h1>
+            <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
             <p className="text-xs text-slate-500 mt-1">
               {deck.title} · <span className="font-mono">{deck.slug}</span>
             </p>
           </div>
           <Link
-            to={`/decks/${deck.id}/cards`}
+            to={`/decks/cards?deckId=${deck.id}`}
             className="text-sm text-indigo-600 hover:text-indigo-800"
           >
             ← Back to Cards

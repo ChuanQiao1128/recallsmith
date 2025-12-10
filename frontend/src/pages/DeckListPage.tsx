@@ -1,6 +1,6 @@
 // src/pages/DeckListPage.tsx
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchDecks } from '../api/authoring';
 import type { Deck } from '../types/deck';
@@ -11,6 +11,53 @@ interface DeckListState {
   decks: Deck[];
 }
 
+type SessionUser = {
+  email?: string;
+  username?: string;
+  groups: string[];
+};
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const b64url = parts[1];
+
+    const pad = '='.repeat((4 - (b64url.length % 4)) % 4);
+    const b64 = (b64url + pad).replace(/-/g, '+').replace(/_/g, '/');
+
+    const json = atob(b64);
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function readSessionUser(): SessionUser | null {
+  try {
+    const raw = sessionStorage.getItem('devcards:tokens');
+    if (!raw) return null;
+
+    const j = JSON.parse(raw) as { idToken?: string } | null;
+    const idToken = j?.idToken;
+    if (!idToken) return null;
+
+    const p = decodeJwtPayload(idToken);
+    if (!p) return null;
+
+    const groupsRaw = p['cognito:groups'] ?? p['groups'] ?? [];
+    const groups = Array.isArray(groupsRaw) ? groupsRaw : [];
+
+    return {
+      email: typeof p.email === 'string' ? p.email : undefined,
+      username: typeof p['cognito:username'] === 'string' ? p['cognito:username'] : typeof p.username === 'string' ? p.username : undefined,
+      groups,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function DeckListPage() {
   const [state, setState] = useState<DeckListState>({
     loading: true,
@@ -19,6 +66,10 @@ export function DeckListPage() {
   });
 
   const navigate = useNavigate();
+
+  // ⚠️ 你现在还没弄 Cognito：这里不会阻塞页面，只是“有 token 才显示用户/退出/管理员入口”
+  const user = useMemo(() => readSessionUser(), []);
+  const isSuperAdmin = (user?.groups ?? []).includes('super_admin');
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +114,13 @@ export function DeckListPage() {
     };
   }, []);
 
+  function handleSignOut() {
+    // 先做“本地退出”即可：清 token + 回首页
+    sessionStorage.removeItem('devcards:tokens');
+    navigate('/', { replace: true });
+    // 如果你后面接 Cognito，再把这里升级成：跳转 Cognito /logout 即可
+  }
+
   if (state.loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -89,9 +147,38 @@ export function DeckListPage() {
           <h1 className="text-xl font-semibold text-slate-800">
             RecallSmith Authoring Console
           </h1>
-          <span className="text-xs text-slate-500">
-            P3-mini · Deck 列表
-          </span>
+
+          {/* Right header actions */}
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500">P3-mini · Deck 列表</span>
+
+            <span className="text-xs px-2 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-600">
+              {user
+                ? `${user.email ?? user.username ?? 'Signed in'}${isSuperAdmin ? ' · super_admin' : ''}`
+                : 'Local mode (no auth)'}
+            </span>
+
+            {isSuperAdmin ? (
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                onClick={() => navigate('/admin/users')}
+                title="Admin: manage console users (requires Cognito backend later)"
+              >
+                Admin
+              </button>
+            ) : null}
+
+            {user ? (
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                onClick={handleSignOut}
+              >
+                Sign out
+              </button>
+            ) : null}
+          </div>
         </div>
       </header>
 
@@ -99,12 +186,14 @@ export function DeckListPage() {
         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-800">Decks</h2>
+
             <button
               type="button"
               className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium
                          bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800
                          focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                         onClick={() => navigate('/decks/new')}
+              // ✅ 修复：New Deck 应该去 /decks/new
+              onClick={() => navigate('/decks/new')}
             >
               + New Deck
             </button>
@@ -120,16 +209,14 @@ export function DeckListPage() {
                   <th className="px-4 py-2 text-left font-semibold text-slate-600">Locale</th>
                   <th className="px-4 py-2 text-left font-semibold text-slate-600">Type</th>
                   <th className="px-4 py-2 text-left font-semibold text-slate-600">Created</th>
-                  <th className="px-4 py-2 text-left font-semibold text-slate-600">Cards</th>
+                  <th className="px-4 py-2 text-left font-semibold text-slate-600">Actions</th>
                 </tr>
               </thead>
+
               <tbody>
                 {state.decks.length === 0 ? (
                   <tr>
-                    <td
-                      colSpan={6}
-                      className="px-4 py-6 text-center text-slate-500 text-sm"
-                    >
+                    <td colSpan={7} className="px-4 py-6 text-center text-slate-500 text-sm">
                       No decks found. You can create the first JS Starter deck later.
                     </td>
                   </tr>
@@ -140,11 +227,13 @@ export function DeckListPage() {
                       className="border-b border-slate-100 hover:bg-slate-50 transition-colors"
                     >
                       <td className="px-4 py-2 text-slate-700">{deck.id}</td>
-                      <td className="px-4 py-2 text-slate-700 font-mono text-xs">
-                        {deck.slug}
-                      </td>
+
+                      <td className="px-4 py-2 text-slate-700 font-mono text-xs">{deck.slug}</td>
+
                       <td className="px-4 py-2 text-slate-800">{deck.title}</td>
+
                       <td className="px-4 py-2 text-slate-600">{deck.locale}</td>
+
                       <td className="px-4 py-2 text-slate-600">
                         {deck.deckType === 1 ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
@@ -156,20 +245,27 @@ export function DeckListPage() {
                           </span>
                         )}
                       </td>
+
                       <td className="px-4 py-2 text-slate-500 text-xs">
                         {new Date(deck.createdAt).toLocaleString()}
                       </td>
-                      {/* 新增：Cards 操作列 */}
-                        <td className="px-4 py-2">
-                        <button
+
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => navigate(`/decks/cards?deckId=${deck.id}`)}>View Cards</button>
+
+
+                          <button
                             type="button"
-                            onClick={() => navigate(`/decks/${deck.id}/cards`)}
-                            className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700
-                                    hover:bg-slate-50"
-                        >
-                            View Cards
-                        </button>
-                        </td>
+                            // ✅ 修复：Preview 必须是 /decks/preview?deckId=xxx
+                            onClick={() => navigate(`/decks/preview?deckId=${deck.id}`)}
+                            className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                            title="Preview mobile DeckExport JSON"
+                          >
+                            Preview
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))
                 )}

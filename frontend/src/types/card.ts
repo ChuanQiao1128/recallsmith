@@ -1,5 +1,3 @@
-// src/types/card.ts
-
 export interface Card {
   id: number;
   deckId: number;
@@ -8,10 +6,14 @@ export interface Card {
   explanation: string | null;
   codeSnippet: string | null;
   codeLanguage: string | null;
-  difficulty: number;   // 1=Easy,2=Medium,3=Hard
+  difficulty: number;
   orderInDeck: number;
-  isDeleted: number;    // 0 / 1
+  isDeleted: number;
   version: number;
-  createdAt: number;    // epoch ms
+  createdAt: number;
   updatedAt: number;
+
+  // ✅ optional mobile fields
+  realWorldUsage?: string | null;
+  revision?: number | null;
 }

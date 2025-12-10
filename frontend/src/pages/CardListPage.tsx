@@ -1,7 +1,6 @@
 // src/pages/CardListPage.tsx
-
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchDeckById, fetchCardsByDeck, deleteCard } from '../api/authoring';
 import type { Deck } from '../types/deck';
 import type { Card } from '../types/card';
@@ -14,32 +13,22 @@ interface CardListState {
 }
 
 export function CardListPage() {
-  const { deckId } = useParams<{ deckId: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const numericDeckId = Number(deckId);
+  const deckIdRaw = searchParams.get('deckId') ?? '';
+  const numericDeckId = Number(deckIdRaw);
+  const invalidDeckId = !numericDeckId || Number.isNaN(numericDeckId);
 
   const [state, setState] = useState<CardListState>(() => {
-    if (!numericDeckId || Number.isNaN(numericDeckId)) {
-      return {
-        loading: false,
-        error: 'Invalid deck id.',
-        deck: null,
-        cards: [],
-      };
+    if (invalidDeckId) {
+      return { loading: false, error: 'Missing or invalid deckId.', deck: null, cards: [] };
     }
-    return {
-      loading: true,
-      error: null,
-      deck: null,
-      cards: [],
-    };
+    return { loading: true, error: null, deck: null, cards: [] };
   });
 
   useEffect(() => {
-    if (!numericDeckId || Number.isNaN(numericDeckId)) {
-      return;
-    }
+    if (invalidDeckId) return;
 
     let cancelled = false;
 
@@ -85,20 +74,19 @@ export function CardListPage() {
 
         setState({
           loading: false,
-          error:
-            err instanceof Error ? err.message : 'Network error.',
+          error: err instanceof Error ? err.message : 'Network error.',
           deck: null,
           cards: [],
         });
       }
     }
 
-    load();
+    void load();
 
     return () => {
       cancelled = true;
     };
-  }, [numericDeckId]);
+  }, [invalidDeckId, numericDeckId]);
 
   async function handleDelete(cardId: number) {
     const ok = window.confirm('Are you sure you want to delete this card?');
@@ -116,9 +104,7 @@ export function CardListPage() {
         cards: prev.cards.filter(c => c.id !== cardId),
       }));
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Network error.';
-      alert(message);
+      alert(err instanceof Error ? err.message : 'Network error.');
     }
   }
 
@@ -135,13 +121,8 @@ export function CardListPage() {
       <div className="min-h-screen bg-slate-100">
         <header className="bg-white border-b border-slate-200">
           <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">
-              Deck Cards
-            </h1>
-            <Link
-              to="/"
-              className="text-sm text-indigo-600 hover:text-indigo-800"
-            >
+            <h1 className="text-xl font-semibold text-slate-800">Deck Cards</h1>
+            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
               ← Back to Decks
             </Link>
           </div>
@@ -169,23 +150,30 @@ export function CardListPage() {
               Cards · <span className="font-mono text-base">{deck.slug}</span>
             </h1>
             <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · {deck.locale} ·{' '}
-              {deck.deckType === 1 ? 'Starter Deck' : 'Paid Deck'}
+              {deck.title} · {deck.locale} · {deck.deckType === 1 ? 'Starter Deck' : 'Paid Deck'}
             </p>
           </div>
+
           <div className="flex items-center gap-3">
-            <Link
-              to="/"
-              className="text-sm text-slate-600 hover:text-slate-800"
-            >
+            <Link to="/" className="text-sm text-slate-600 hover:text-slate-800">
               ← Back to Decks
             </Link>
+
+            <button
+              type="button"
+              className="text-sm px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+              onClick={() => navigate(`/decks/preview?deckId=${deck.id}`)}
+              title="Preview mobile DeckExport JSON"
+            >
+              Preview JSON
+            </button>
+
             <button
               type="button"
               className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium
                          bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800
                          focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-              onClick={() => navigate(`/decks/${deck.id}/cards/new`)}
+              onClick={() => navigate(`/decks/cards/new?deckId=${deck.id}`)}
             >
               + New Card
             </button>
@@ -197,94 +185,49 @@ export function CardListPage() {
         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-800">Card List</h2>
-            <span className="text-xs text-slate-500">
-              {cards.length} cards (第一页)
-            </span>
+            <span className="text-xs text-slate-500">{cards.length} cards (第一页)</span>
           </div>
 
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
-                    <th className="px-3 py-2 text-left font-semibold text-slate-600">
-                    Id
-                  </th>
-                  
-                  <th className="px-3 py-2 text-left font-semibold text-slate-600">
-                    StableUid
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-600">
-                    Question
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-600">
-                    Diff
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-600">
-                    Created
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-600">
-                    Updated
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-600">
-                    Order
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-600">
-                    Actions
-                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Id</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">StableUid</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Question</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Diff</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Created</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Updated</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Order</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Actions</th>
                 </tr>
               </thead>
+
               <tbody>
                 {cards.length === 0 ? (
                   <tr>
-                    <td
-                      colSpan={7}
-                      className="px-4 py-6 text-center text-slate-500 text-sm"
-                    >
+                    <td colSpan={8} className="px-4 py-6 text-center text-slate-500 text-sm">
                       No cards yet. Click &quot;New Card&quot; to add the first one.
                     </td>
                   </tr>
                 ) : (
                   cards.map(card => (
-                    <tr
-                      key={card.id}
-                      className="border-b border-slate-100 hover:bg-slate-50 transition-colors"
-                    >
-                        <td className="px-3 py-2 text-slate-700 font-mono text-xs">
-                        {card.id}
-                      </td>
-                      
-                      <td className="px-3 py-2 text-slate-700 font-mono text-xs">
-                        {card.stableUid}
-                      </td>
-                      <td className="px-3 py-2 text-slate-800">
-                        {card.question}
-                      </td>
+                    <tr key={card.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                      <td className="px-3 py-2 text-slate-700 font-mono text-xs">{card.id}</td>
+                      <td className="px-3 py-2 text-slate-700 font-mono text-xs">{card.stableUid}</td>
+                      <td className="px-3 py-2 text-slate-800">{card.question}</td>
                       <td className="px-3 py-2 text-slate-600">
-                        {card.difficulty === 1
-                          ? 'Easy'
-                          : card.difficulty === 2
-                          ? 'Medium'
-                          : 'Hard'}
+                        {card.difficulty === 1 ? 'Easy' : card.difficulty === 2 ? 'Medium' : 'Hard'}
                       </td>
-                      <td className="px-3 py-2 text-slate-500 text-xs">
-                        {new Date(card.createdAt).toLocaleString()}
-                      </td>
-                      <td className="px-3 py-2 text-slate-500 text-xs">
-                        {new Date(card.updatedAt).toLocaleString()}
-                      </td>
-                      <td className="px-3 py-2 text-slate-700">
-                        {card.orderInDeck}
-                      </td>
+                      <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.createdAt).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.updatedAt).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-slate-700">{card.orderInDeck}</td>
                       <td className="px-3 py-2 text-slate-700 text-xs">
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
                             className="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50"
-                            onClick={() =>
-                              navigate(
-                                `/decks/${deck.id}/cards/${card.id}/edit`,
-                              )
-                            }
+                            onClick={() => navigate(`/decks/cards/edit?deckId=${deck.id}&cardId=${card.id}`)}
                           >
                             Edit
                           </button>
@@ -301,6 +244,7 @@ export function CardListPage() {
                   ))
                 )}
               </tbody>
+
             </table>
           </div>
         </div>

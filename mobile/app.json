@@ -40,6 +40,6 @@
     // ⬇️ 新增：runtimeVersion 建议绑定 appVersion
     "runtimeVersion": {
       "policy": "appVersion"
-    },
+    }
   }
 }

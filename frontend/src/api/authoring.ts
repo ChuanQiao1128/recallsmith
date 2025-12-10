@@ -1,42 +1,42 @@
 // src/api/authoring.ts
-
 import type { ApiResult } from '../types/api';
 import type { Deck } from '../types/deck';
 import type { Card } from '../types/card';
 import axios from 'axios';
+import { http } from './http';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-const client = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? 'http://localhost:5071',
-});
+function toApiErrorMessage(err: unknown): string {
+  if (axios.isAxiosError(err)) {
+    const status = err.response?.status;
+    const data = err.response?.data;
+    if (data && typeof data === 'object' && 'error' in data) {
+      const errorData = data as { error?: { message?: string } };
+      return errorData?.error?.message ?? `Request failed (HTTP ${status})`;
+    }
+    return `Request failed${status ? ` (HTTP ${status})` : ''}`;
+  }
+  return err instanceof Error ? err.message : 'Network error.';
+}
 
-if (!API_BASE_URL) {
-  console.warn('VITE_API_BASE_URL is not set. Please check your .env.development file.');
+function fail<T>(message: string, code = 'NETWORK_ERROR'): ApiResult<T> {
+  return {
+    success: false,
+    data: null,
+    error: { code, message },
+    traceId: '',
+  };
 }
 
 export async function fetchDecks(): Promise<ApiResult<Deck[]>> {
-  const url = `${API_BASE_URL}/api/authoring/decks`;
-
-  const res = await fetch(url);
-
-  if (!res.ok) {
-    const text = await res.text();
-    return {
-      success: false,
-      data: null,
-      error: {
-        code: `HTTP_${res.status}`,
-        message: `Request failed with status ${res.status}: ${text}`,
-      },
-      traceId: '',
-    };
+  try {
+    const resp = await http.get<ApiResult<Deck[]>>('/api/authoring/decks');
+    return resp.data;
+  } catch (err) {
+    return fail<Deck[]>(toApiErrorMessage(err));
   }
-
-  const json = await res.json();
-  return json as ApiResult<Deck[]>;
 }
 
-// ---------------------- 新增：创建 Deck ----------------------
+// ---------------------- 创建 Deck ----------------------
 
 export interface CreateDeckParams {
   slug: string;
@@ -45,114 +45,92 @@ export interface CreateDeckParams {
   description?: string;
   locale: string;
   deckType: number; // 1 = Starter, 2 = Paid
+
+  // ✅ 可选：为了和 mobile/publish 对齐（后端暂时没实现也没关系）
+  contentVersion?: string;
+  isFreeStarter?: boolean;
+  freeCardCount?: number;
 }
 
-/**
- * 创建一个新的 Deck。
- * 对应后端：POST /api/authoring/decks?slug=...&title=...&author=...&...
- */
 export async function createDeck(params: CreateDeckParams): Promise<ApiResult<Deck>> {
-  const qs = new URLSearchParams();
+  try {
+    const resp = await http.post<ApiResult<Deck>>('/api/authoring/decks', null, {
+      params: {
+        slug: params.slug,
+        title: params.title,
+        author: params.author,
+        description: params.description,
+        locale: params.locale,
+        deckType: params.deckType,
 
-  qs.append('slug', params.slug);
-  qs.append('title', params.title);
-  qs.append('author', params.author);
-  qs.append('locale', params.locale);
-  qs.append('deckType', String(params.deckType));
-
-  if (params.description && params.description.trim().length > 0) {
-    qs.append('description', params.description.trim());
-  }
-
-  const url = `${API_BASE_URL}/api/authoring/decks?${qs.toString()}`;
-
-  const res = await fetch(url, {
-    method: 'POST',
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    return {
-      success: false,
-      data: null,
-      error: {
-        code: `HTTP_${res.status}`,
-        message: `Request failed with status ${res.status}: ${text}`,
+        contentVersion: params.contentVersion,
+        isFreeStarter: params.isFreeStarter,
+        freeCardCount: params.freeCardCount,
       },
-      traceId: '',
-    };
+    });
+    return resp.data;
+  } catch (err) {
+    return fail<Deck>(toApiErrorMessage(err));
   }
-
-  const json = await res.json();
-  return json as ApiResult<Deck>;
 }
 
-// ============ 1) 根据 id 获取单个 Deck ============
+// ============ 根据 id 获取单个 Deck ============
 
 export async function fetchDeckById(id: number): Promise<ApiResult<Deck>> {
-  const url = `${API_BASE_URL}/api/authoring/decks?id=${id}`;
-
-  const res = await fetch(url);
-
-  if (!res.ok) {
-    const text = await res.text();
-    return {
-      success: false,
-      data: null,
-      error: {
-        code: `HTTP_${res.status}`,
-        message: `Request failed with status ${res.status}: ${text}`,
-      },
-      traceId: '',
-    };
+  try {
+    const resp = await http.get<ApiResult<Deck>>('/api/authoring/decks', {
+      params: { id },
+    });
+    return resp.data;
+  } catch (err) {
+    return fail<Deck>(toApiErrorMessage(err));
   }
-
-  const json = await res.json();
-  return json as ApiResult<Deck>;
 }
 
-// ============ 2) 按 Deck 获取 Card 列表 ============
+// ============ 按 Deck 获取 Card 列表 ============
 
-export async function fetchCardsByDeck(
-  deckId: number,
-): Promise<ApiResult<Card[]>> {
-  const resp = await client.get<ApiResult<Card[]>>(
-    '/api/authoring/cards',
-    {
+export async function fetchCardsByDeck(deckId: number): Promise<ApiResult<Card[]>> {
+  try {
+    const resp = await http.get<ApiResult<Card[]>>('/api/authoring/cards', {
       params: { deckId },
-    },
-  );
-  return resp.data;
+    });
+    return resp.data;
+  } catch (err) {
+    return fail<Card[]>(toApiErrorMessage(err));
+  }
 }
 
 export async function createCard(input: {
   deckId: number;
   question: string;
   explanation?: string;
+  realWorldUsage?: string;
   codeSnippet?: string;
   codeLanguage?: string;
   difficulty?: number;
   orderInDeck?: number;
   stableUid?: string;
+  revision?: number;
 }): Promise<ApiResult<Card>> {
-  const params: Record<string, unknown> = {
-    deckId: input.deckId,
-    question: input.question,
-  };
-
-  if (input.explanation !== undefined) params.explanation = input.explanation;
-  if (input.codeSnippet !== undefined) params.codeSnippet = input.codeSnippet;
-  if (input.codeLanguage !== undefined) params.codeLanguage = input.codeLanguage;
-  if (input.difficulty !== undefined) params.difficulty = input.difficulty;
-  if (input.orderInDeck !== undefined) params.orderInDeck = input.orderInDeck;
-  if (input.stableUid !== undefined) params.stableUid = input.stableUid;
-
-  const resp = await client.post<ApiResult<Card>>(
-    '/api/authoring/cards',
-    null,
-    { params },
-  );
-  return resp.data;
+  try {
+    const resp = await http.post<ApiResult<Card>>('/api/authoring/cards', null, {
+      params: {
+        deckId: input.deckId,
+        question: input.question,
+        explanation: input.explanation,
+        realWorldUsage: input.realWorldUsage,
+        codeSnippet: input.codeSnippet,
+        codeLanguage: input.codeLanguage,
+        difficulty: input.difficulty,
+        orderInDeck: input.orderInDeck,
+        stableUid: input.stableUid,
+        revision: input.revision,
+      },
+    });
+    return resp.data;
+  } catch (err) {
+    return fail<Card>(toApiErrorMessage(err));
+  }
 }
 
 export async function updateCard(input: {
@@ -160,37 +138,41 @@ export async function updateCard(input: {
   expectedVersion: number;
   question?: string;
   explanation?: string;
+  realWorldUsage?: string;
   codeSnippet?: string;
   codeLanguage?: string;
   difficulty?: number;
   orderInDeck?: number;
+  revision?: number;
 }): Promise<ApiResult<Card>> {
-  const params: Record<string, unknown> = {
-    id: input.id,
-    expectedVersion: input.expectedVersion,
-  };
-
-  if (input.question !== undefined) params.question = input.question;
-  if (input.explanation !== undefined) params.explanation = input.explanation;
-  if (input.codeSnippet !== undefined) params.codeSnippet = input.codeSnippet;
-  if (input.codeLanguage !== undefined) params.codeLanguage = input.codeLanguage;
-  if (input.difficulty !== undefined) params.difficulty = input.difficulty;
-  if (input.orderInDeck !== undefined) params.orderInDeck = input.orderInDeck;
-
-  const resp = await client.put<ApiResult<Card>>(
-    '/api/authoring/cards',
-    null,
-    { params },
-  );
-  return resp.data;
+  try {
+    const resp = await http.put<ApiResult<Card>>('/api/authoring/cards', null, {
+      params: {
+        id: input.id,
+        expectedVersion: input.expectedVersion,
+        question: input.question,
+        explanation: input.explanation,
+        realWorldUsage: input.realWorldUsage,
+        codeSnippet: input.codeSnippet,
+        codeLanguage: input.codeLanguage,
+        difficulty: input.difficulty,
+        orderInDeck: input.orderInDeck,
+        revision: input.revision,
+      },
+    });
+    return resp.data;
+  } catch (err) {
+    return fail<Card>(toApiErrorMessage(err));
+  }
 }
 
 export async function deleteCard(id: number): Promise<ApiResult<null>> {
-  const resp = await client.delete<ApiResult<null>>(
-    '/api/authoring/cards',
-    {
+  try {
+    const resp = await http.delete<ApiResult<null>>('/api/authoring/cards', {
       params: { id },
-    },
-  );
-  return resp.data;
+    });
+    return resp.data;
+  } catch (err) {
+    return fail<null>(toApiErrorMessage(err));
+  }
 }
