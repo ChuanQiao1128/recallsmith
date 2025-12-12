@@ -1,11 +1,12 @@
-// src/pages/CardListPage.tsx
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { fetchDeckById, fetchCardsByDeck, deleteCard } from '../api/authoring';
+import { deleteCard, fetchCardsByDeck, fetchDeckById } from '../api/authoring';
 import type { Deck } from '../types/deck';
 import type { Card } from '../types/card';
+import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 
 interface CardListState {
+  deckId: number;
   loading: boolean;
   error: string | null;
   deck: Deck | null;
@@ -17,34 +18,36 @@ export function CardListPage() {
   const navigate = useNavigate();
 
   const deckIdRaw = searchParams.get('deckId') ?? '';
-  const numericDeckId = Number(deckIdRaw);
-  const invalidDeckId = !numericDeckId || Number.isNaN(numericDeckId);
+  const deckId = Number(deckIdRaw);
+  const invalidDeckId = !deckId || Number.isNaN(deckId);
 
-  const [state, setState] = useState<CardListState>(() => {
-    if (invalidDeckId) {
-      return { loading: false, error: 'Missing or invalid deckId.', deck: null, cards: [] };
-    }
-    return { loading: true, error: null, deck: null, cards: [] };
-  });
+  const user = useMemo(() => readSessionUser(), []);
+  const superAdmin = useMemo(() => isSuperAdmin(user), [user]);
+
+  const [state, setState] = useState<CardListState>(() => ({
+    deckId,
+    loading: !invalidDeckId,
+    error: invalidDeckId ? 'Missing or invalid deckId.' : null,
+    deck: null,
+    cards: [],
+  }));
 
   useEffect(() => {
     if (invalidDeckId) return;
 
     let cancelled = false;
 
-    async function load() {
+    (async () => {
       try {
-        setState(prev => ({ ...prev, loading: true, error: null }));
-
         const [deckResult, cardsResult] = await Promise.all([
-          fetchDeckById(numericDeckId),
-          fetchCardsByDeck(numericDeckId),
+          fetchDeckById(deckId),
+          fetchCardsByDeck(deckId),
         ]);
-
         if (cancelled) return;
 
         if (!deckResult.success || !deckResult.data) {
           setState({
+            deckId,
             loading: false,
             error: deckResult.error?.message ?? 'Deck not found.',
             deck: null,
@@ -55,6 +58,7 @@ export function CardListPage() {
 
         if (!cardsResult.success) {
           setState({
+            deckId,
             loading: false,
             error: cardsResult.error?.message ?? 'Failed to load cards.',
             deck: deckResult.data,
@@ -64,6 +68,7 @@ export function CardListPage() {
         }
 
         setState({
+          deckId,
           loading: false,
           error: null,
           deck: deckResult.data,
@@ -73,22 +78,25 @@ export function CardListPage() {
         if (cancelled) return;
 
         setState({
+          deckId,
           loading: false,
           error: err instanceof Error ? err.message : 'Network error.',
           deck: null,
           cards: [],
         });
       }
-    }
-
-    void load();
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [invalidDeckId, numericDeckId]);
+  }, [deckId, invalidDeckId]);
+
+  const effectiveLoading = state.loading || state.deckId !== deckId;
 
   async function handleDelete(cardId: number) {
+    if (!superAdmin) return;
+
     const ok = window.confirm('Are you sure you want to delete this card?');
     if (!ok) return;
 
@@ -108,7 +116,7 @@ export function CardListPage() {
     }
   }
 
-  if (state.loading) {
+  if (effectiveLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-slate-600 text-lg">Loading cards...</div>
@@ -116,7 +124,7 @@ export function CardListPage() {
     );
   }
 
-  if (state.error) {
+  if (state.error || !state.deck) {
     return (
       <div className="min-h-screen bg-slate-100">
         <header className="bg-white border-b border-slate-200">
@@ -131,14 +139,14 @@ export function CardListPage() {
         <main className="max-w-4xl mx-auto px-4 py-6">
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
             <div className="font-semibold mb-1">Failed to load cards</div>
-            <div className="text-sm">{state.error}</div>
+            <div className="text-sm">{state.error ?? 'Unknown error'}</div>
           </div>
         </main>
       </div>
     );
   }
 
-  const deck = state.deck!;
+  const deck = state.deck;
   const cards = state.cards;
 
   return (
@@ -185,7 +193,7 @@ export function CardListPage() {
         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-800">Card List</h2>
-            <span className="text-xs text-slate-500">{cards.length} cards (第一页)</span>
+            <span className="text-xs text-slate-500">{cards.length} cards</span>
           </div>
 
           <div className="overflow-x-auto">
@@ -212,7 +220,10 @@ export function CardListPage() {
                   </tr>
                 ) : (
                   cards.map(card => (
-                    <tr key={card.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                    <tr
+                      key={card.id}
+                      className="border-b border-slate-100 hover:bg-slate-50 transition-colors"
+                    >
                       <td className="px-3 py-2 text-slate-700 font-mono text-xs">{card.id}</td>
                       <td className="px-3 py-2 text-slate-700 font-mono text-xs">{card.stableUid}</td>
                       <td className="px-3 py-2 text-slate-800">{card.question}</td>
@@ -222,6 +233,7 @@ export function CardListPage() {
                       <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.createdAt).toLocaleString()}</td>
                       <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.updatedAt).toLocaleString()}</td>
                       <td className="px-3 py-2 text-slate-700">{card.orderInDeck}</td>
+
                       <td className="px-3 py-2 text-slate-700 text-xs">
                         <div className="flex items-center gap-2">
                           <button
@@ -231,22 +243,35 @@ export function CardListPage() {
                           >
                             Edit
                           </button>
-                          <button
-                            type="button"
-                            className="px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50"
-                            onClick={() => handleDelete(card.id)}
-                          >
-                            Delete
-                          </button>
+
+                          {superAdmin ? (
+                            <button
+                              type="button"
+                              className="px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50"
+                              onClick={() => void handleDelete(card.id)}
+                              title="super_admin only"
+                            >
+                              Delete
+                            </button>
+                          ) : (
+                            <span className="text-slate-400" title="Delete requires super_admin">
+                              —
+                            </span>
+                          )}
                         </div>
                       </td>
                     </tr>
                   ))
                 )}
               </tbody>
-
             </table>
           </div>
+
+          {!superAdmin ? (
+            <div className="px-4 py-3 text-xs text-slate-500 border-t border-slate-100">
+              Delete actions are restricted to <span className="font-mono">super_admin</span>.
+            </div>
+          ) : null}
         </div>
       </main>
     </div>

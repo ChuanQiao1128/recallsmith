@@ -5,14 +5,14 @@ export interface Deck {
   author: string;
   description?: string | null;
   locale: string;
-  deckType: number;   // 1 = Starter, 2 = Paid
-  isDeleted: number;  // 0 / 1
-  version: number;
-  createdAt: number;  // epoch ms
-  updatedAt: number;
+  deckType: number;
 
-  // ✅ optional publish fields
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  isDeleted?: number;
+
   contentVersion?: string | null;
-  isFreeStarter?: boolean;
+  isFreeStarter?: boolean | null;
   freeCardCount?: number | null;
 }

@@ -3,17 +3,19 @@ export interface Card {
   deckId: number;
   stableUid: string;
   question: string;
-  explanation: string | null;
-  codeSnippet: string | null;
-  codeLanguage: string | null;
+
   difficulty: number;
   orderInDeck: number;
-  isDeleted: number;
-  version: number;
-  createdAt: number;
-  updatedAt: number;
 
-  // ✅ optional mobile fields
+  explanation?: string | null;
   realWorldUsage?: string | null;
+  codeSnippet?: string | null;
+  codeLanguage?: string | null;
   revision?: number | null;
+
+  version: number;
+  isDeleted?: number;
+
+  createdAt: string;
+  updatedAt: string;
 }

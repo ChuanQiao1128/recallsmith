@@ -1,6 +1,9 @@
-// src/App.tsx
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+
 import { RequireAuth } from './auth/RequireAuth';
+
+import { LoginPage } from './pages/LoginPage';
+import { AuthCallbackPage } from './pages/AuthCallbackPage';
 
 import { DeckListPage } from './pages/DeckListPage';
 import { NewDeckPage } from './pages/NewDeckPage';
@@ -9,77 +12,32 @@ import { NewCardPage } from './pages/NewCardPage';
 import { EditCardPage } from './pages/EditCardPage';
 import { DeckPreviewPage } from './pages/DeckPreviewPage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
-import { LoginPage } from './pages/LoginPage';
-import { AuthCallbackPage } from './pages/AuthCallbackPage';
 
-export default function App() {
+function App() {
   return (
     <Routes>
+      {/* Public */}
       <Route path="/login" element={<LoginPage />} />
       <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
-      <Route
-        path="/"
-        element={
-          <RequireAuth>
-            <DeckListPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/decks/new"
-        element={
-          <RequireAuth>
-            <NewDeckPage />
-          </RequireAuth>
-        }
-      />
+      {/* Protected */}
+      <Route element={<RequireAuth><Outlet /></RequireAuth>}>
+        <Route path="/" element={<DeckListPage />} />
+        <Route path="/decks/new" element={<NewDeckPage />} />
 
-      {/* ✅ 全部用 query：/decks/cards?deckId=xxx */}
-      <Route
-        path="/decks/cards"
-        element={
-          <RequireAuth>
-            <CardListPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/decks/cards/new"
-        element={
-          <RequireAuth>
-            <NewCardPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/decks/cards/edit"
-        element={
-          <RequireAuth>
-            <EditCardPage />
-          </RequireAuth>
-        }
-      />
+        {/* ✅ Query-param routes */}
+        <Route path="/decks/cards" element={<CardListPage />} />
+        <Route path="/decks/cards/new" element={<NewCardPage />} />
+        <Route path="/decks/cards/edit" element={<EditCardPage />} />
 
-      <Route
-        path="/decks/preview"
-        element={
-          <RequireAuth>
-            <DeckPreviewPage />
-          </RequireAuth>
-        }
-      />
+        <Route path="/decks/preview" element={<DeckPreviewPage />} />
 
-      <Route
-        path="/admin/users"
-        element={
-          <RequireAuth>
-            <AdminUsersPage />
-          </RequireAuth>
-        }
-      />
+        <Route path="/admin/users" element={<AdminUsersPage />} />
+      </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
+
+export default App;

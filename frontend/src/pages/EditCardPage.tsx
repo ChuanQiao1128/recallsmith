@@ -24,10 +24,10 @@ export function EditCardPage() {
   const numericCardId = Number(cardIdRaw);
 
   const invalidId =
-    !numericDeckId ||
     Number.isNaN(numericDeckId) ||
-    !numericCardId ||
-    Number.isNaN(numericCardId);
+    numericDeckId <= 0 ||
+    Number.isNaN(numericCardId) ||
+    numericCardId <= 0;
 
   const [state, setState] = useState<PageState>({
     loading: !invalidId,
@@ -73,7 +73,8 @@ export function EditCardPage() {
         }
 
         const cards = cardsResult.data as Card[];
-        const target = cards.find(c => c.id === numericCardId);
+        // ⚠️ 后端 id 可能是字符串，这里统一转成 number 再比较
+        const target = cards.find(c => Number(c.id) === numericCardId);
 
         if (!target) {
           setState({
@@ -166,30 +167,57 @@ export function EditCardPage() {
     question: card.question,
     stableUid: card.stableUid,
     explanation: card.explanation ?? '',
-    realWorldUsage: (card as unknown as { realWorldUsage?: string | null }).realWorldUsage ?? '',
+    realWorldUsage:
+      (card as unknown as { realWorldUsage?: string | null }).realWorldUsage ?? '',
     codeSnippet: card.codeSnippet ?? '',
     codeLanguage: card.codeLanguage ?? '',
-    difficulty: card.difficulty,
-    orderInDeck: card.orderInDeck,
-    revision: (card as unknown as { revision?: number | null }).revision ?? 1,
+    difficulty:
+      typeof card.difficulty === 'number'
+        ? card.difficulty
+        : Number(card.difficulty) || 2,
+    orderInDeck:
+      typeof card.orderInDeck === 'number'
+        ? card.orderInDeck
+        : Number(card.orderInDeck) || 1,
+    revision:
+      (card as unknown as { revision?: number | null }).revision ?? 1,
   };
 
-  async function handleSubmit(values: CardFormValues): Promise<{ ok: boolean; error?: string }> {
+  async function handleSubmit(
+    values: CardFormValues,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const difficulty =
+      typeof values.difficulty === 'number'
+        ? values.difficulty
+        : Number(values.difficulty) || 2;
+    const orderInDeck =
+      typeof values.orderInDeck === 'number'
+        ? values.orderInDeck
+        : Number(values.orderInDeck) || 1;
+    const revision =
+      typeof values.revision === 'number'
+        ? values.revision
+        : Number(values.revision) || 1;
+
     const result = await updateCard({
-      id: card.id,
-      expectedVersion: card.version,
-      question: values.question,
-      explanation: values.explanation,
-      codeSnippet: values.codeSnippet,
-      codeLanguage: values.codeLanguage,
-      difficulty: values.difficulty,
-      orderInDeck: values.orderInDeck,
+      id: Number(card.id),
+      expectedVersion: (card as unknown as { version?: number }).version ?? 1,
+      question: values.question.trim(),
+      explanation: values.explanation?.trim() || undefined,
+      realWorldUsage: values.realWorldUsage?.trim() || undefined,
+      codeSnippet: values.codeSnippet || undefined,
+      codeLanguage: values.codeLanguage || undefined,
+      difficulty,
+      orderInDeck,
+      revision,
     });
 
     if (!result.success) {
       return {
         ok: false,
-        error: result.error?.message ?? 'Update card failed (possible version conflict).',
+        error:
+          result.error?.message ??
+          'Update card failed (possible version conflict).',
       };
     }
 

@@ -224,18 +224,7 @@ export function CardForm(props: CardFormProps) {
         />
       </div>
 
-      {/* RealWorldUsage */}
-      <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">RealWorldUsage</label>
-        <textarea
-          className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
-                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
-                     min-h-[90px]"
-          value={values.realWorldUsage}
-          onChange={e => handleChange('realWorldUsage', e.target.value)}
-          placeholder="Where would you use this in real projects? Any pitfalls?"
-        />
-      </div>
+    
 
       {/* Language + Difficulty + Order + Revision */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -323,6 +312,19 @@ export function CardForm(props: CardFormProps) {
         </div>
       </div>
 
+        {/* RealWorldUsage */}
+      <div>
+        <label className="block text-sm font-medium text-slate-700 mb-1">RealWorldUsage</label>
+        <textarea
+          className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+                     min-h-[90px]"
+          value={values.realWorldUsage}
+          onChange={e => handleChange('realWorldUsage', e.target.value)}
+          placeholder="Where would you use this in real projects? Any pitfalls?"
+        />
+      </div>
+
       <div className="pt-2 flex items-center justify-between">
         <button type="button" onClick={onCancel} className="text-sm text-slate-600 hover:text-slate-800">
           Cancel
@@ -345,6 +347,8 @@ export function CardForm(props: CardFormProps) {
               : 'Save Changes'}
         </button>
       </div>
+
+      
     </form>
   );
 }

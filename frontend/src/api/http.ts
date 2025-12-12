@@ -2,13 +2,17 @@
 import axios from 'axios';
 import { getAccessToken, clearStoredTokens } from '../auth/tokenStore';
 
-const baseURL =
+const rawBase =
   import.meta.env.VITE_API_BASE_URL ??
   import.meta.env.VITE_API_BASE ??
-  'http://localhost:5071';
+  '';
+
+// Use absolute base URLs when provided; otherwise rely on same-origin (works with Vite dev proxy)
+const baseURL = typeof rawBase === 'string' ? rawBase.trim() : '';
+const axiosBaseURL = /^https?:\/\//i.test(baseURL) ? baseURL : '';
 
 export const http = axios.create({
-  baseURL,
+  baseURL: axiosBaseURL,
   timeout: 15_000,
 });
 

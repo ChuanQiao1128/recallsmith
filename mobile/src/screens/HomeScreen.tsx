@@ -676,9 +676,9 @@ export function HomeScreen({ navigation }: Props) {
               })}
             </View>
 
-            <Text style={styles.sectionHint}>
+            {/* <Text style={styles.sectionHint}>
               Tap a deck to open it (modes + deck‑specific plan live inside).
-            </Text>
+            </Text> */}
 
             {deckSummaries.length === 0 ? (
               <View style={styles.emptyBox}>

@@ -17,7 +17,7 @@ export function NewCardPage() {
 
   const deckIdRaw = searchParams.get('deckId') ?? '';
   const numericDeckId = Number(deckIdRaw);
-  const invalidDeckId = !numericDeckId || Number.isNaN(numericDeckId);
+  const invalidDeckId = Number.isNaN(numericDeckId) || numericDeckId <= 0;
 
   const [state, setState] = useState<PageState>({
     loadingDeck: !invalidDeckId,
@@ -126,25 +126,45 @@ export function NewCardPage() {
     codeSnippet: '',
     codeLanguage: 'js',
     difficulty: 2,
-    orderInDeck: 10,
+    orderInDeck: 1, // ✅ 默认用 1，更安全
     revision: 1,
   };
 
-  async function handleSubmit(values: CardFormValues): Promise<{ ok: boolean; error?: string }> {
+  async function handleSubmit(
+    values: CardFormValues,
+  ): Promise<{ ok: boolean; error?: string }> {
+    // ✅ 前端确保这些是 number，避免字符串导致奇怪的校验问题
+    const difficulty =
+      typeof values.difficulty === 'number'
+        ? values.difficulty
+        : Number(values.difficulty) || 2;
+    const orderInDeck =
+      typeof values.orderInDeck === 'number'
+        ? values.orderInDeck
+        : Number(values.orderInDeck) || 1;
+    const revision =
+      typeof values.revision === 'number'
+        ? values.revision
+        : Number(values.revision) || 1;
+
     const result = await createCard({
-      deckId: deck.id,
+      deckId: Number(deck.id), // ✅ deck.id 可能是 string，这里强制转成 number
       stableUid: values.stableUid,
-      question: values.question,
-      explanation: values.explanation,
-      realWorldUsage: values.realWorldUsage,
-      codeSnippet: values.codeSnippet,
-      codeLanguage: values.codeLanguage,
-      difficulty: values.difficulty,
-      orderInDeck: values.orderInDeck,
+      question: values.question.trim(),
+      explanation: values.explanation?.trim() || undefined,
+      realWorldUsage: values.realWorldUsage?.trim() || undefined,
+      codeSnippet: values.codeSnippet || undefined,
+      codeLanguage: values.codeLanguage || undefined,
+      difficulty,
+      orderInDeck,
+      revision,
     });
 
     if (!result.success) {
-      return { ok: false, error: result.error?.message ?? 'Create card failed.' };
+      return {
+        ok: false,
+        error: result.error?.message ?? 'Create card failed.',
+      };
     }
 
     navigate(`/decks/cards?deckId=${deck.id}`, { replace: true });
