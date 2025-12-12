@@ -6,6 +6,8 @@ export interface Deck {
   description?: string | null;
   locale: string;
   deckType: number;
+  canRead?: boolean;
+  canWrite?: boolean;
 
   version: number;
   createdAt: string;

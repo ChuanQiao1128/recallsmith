@@ -12,6 +12,7 @@ import { NewCardPage } from './pages/NewCardPage';
 import { EditCardPage } from './pages/EditCardPage';
 import { DeckPreviewPage } from './pages/DeckPreviewPage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
+import { DeckEditPage } from './pages/DeckEditPage';
 
 function App() {
   return (
@@ -33,6 +34,7 @@ function App() {
         <Route path="/decks/preview" element={<DeckPreviewPage />} />
 
         <Route path="/admin/users" element={<AdminUsersPage />} />
+        <Route path="/decks/edit" element={<DeckEditPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,5 +1,5 @@
 // src/pages/DeckListPage.tsx
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { fetchDecks, deleteDeck } from '../api/authoring';
@@ -45,15 +45,27 @@ function safeDateTime(value: unknown): string {
  * normalize version for comparison:
  * - "12" vs 12 => "12"
  * - "v12" => "12"
- * - "2025-12-12" => "2025-12-12" (fallback)
+ * - "1.2.3" / "v1.2" => "1.2.3" / "1.2"
+ * - "2025-12-12" => "2025-12-12"
  */
 function normalizeVersion(v: unknown): string {
   if (v === undefined || v === null) return '';
   const s = String(v).trim();
   if (!s) return '';
-  // match first number token (v12 -> 12)
-  const m = s.match(/\d+/);
-  return m ? m[0] : s;
+
+  // date-like: 2025-12-12
+  const dateLike = s.match(/(\d{4}-\d{2}-\d{2})/);
+  if (dateLike) return dateLike[1];
+
+  // semver-like: 1.2 or 1.2.3 (also works for v1.2.3)
+  const semverLike = s.match(/(\d+(?:\.\d+)+)/);
+  if (semverLike) return semverLike[1];
+
+  // fallback: first number token: v12 -> 12
+  const num = s.match(/(\d+)/);
+  if (num) return num[1];
+
+  return s;
 }
 
 function getDeckStatus(deck: Deck, publishedVersionRaw: string | undefined): DeckStatus {
@@ -64,10 +76,18 @@ function getDeckStatus(deck: Deck, publishedVersionRaw: string | undefined): Dec
   const draftV = normalizeVersion(deckWithVersion.version);
   const pubV = normalizeVersion(published);
 
-  // if we can normalize to numbers, compare those; otherwise compare raw string
+  // If both are pure numbers, compare numerically
+  const dn = /^\d+$/.test(draftV) ? Number(draftV) : NaN;
+  const pn = /^\d+$/.test(pubV) ? Number(pubV) : NaN;
+  if (!Number.isNaN(dn) && !Number.isNaN(pn)) {
+    return dn === pn ? 'published' : 'needs_publish';
+  }
+
+  // Otherwise compare normalized strings
   if (draftV && pubV) {
     return draftV === pubV ? 'published' : 'needs_publish';
   }
+
   return String(deckWithVersion.version ?? '') === published ? 'published' : 'needs_publish';
 }
 
@@ -116,6 +136,14 @@ export function DeckListPage() {
   const [localeFilter, setLocaleFilter] = useState<'all' | string>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'starter' | 'paid'>('all');
 
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   async function loadAll(showSpinner = false) {
     if (showSpinner) {
       setDeckState(prev => ({ ...prev, loading: true, error: null }));
@@ -131,6 +159,8 @@ export function DeckListPage() {
         fetchDecks(),
         fetchContentManifest({ bustCache: true }),
       ]);
+
+      if (!mountedRef.current) return;
 
       // decks
       if (!decksRes.success) {
@@ -156,6 +186,7 @@ export function DeckListPage() {
         });
       }
     } catch (err: unknown) {
+      if (!mountedRef.current) return;
       const message = err instanceof Error ? err.message : 'Network error.';
       setDeckState({ loading: false, error: message, decks: [] });
       setManifestState({ loading: false, error: message, publishedAt: undefined, bySlug: {} });
@@ -163,49 +194,7 @@ export function DeckListPage() {
   }
 
   useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      setDeckState(prev => ({ ...prev, loading: true, error: null }));
-      setManifestState(prev => ({ ...prev, loading: true, error: null }));
-
-      try {
-        const [decksRes, manifestRes] = await Promise.all([
-          fetchDecks(),
-          fetchContentManifest({ bustCache: true }),
-        ]);
-        if (cancelled) return;
-
-        if (!decksRes.success) {
-          setDeckState({ loading: false, error: decksRes.error?.message ?? 'Failed to load decks.', decks: [] });
-        } else {
-          setDeckState({ loading: false, error: null, decks: decksRes.data ?? [] });
-        }
-
-        if (!manifestRes.ok) {
-          setManifestState({ loading: false, error: manifestRes.error, publishedAt: undefined, bySlug: {} });
-        } else {
-          const bySlug: Record<string, ManifestDeckLite> = {};
-          for (const d of manifestRes.data.decks) bySlug[d.slug] = { slug: d.slug, version: d.version, locale: d.locale };
-
-          setManifestState({
-            loading: false,
-            error: null,
-            publishedAt: manifestRes.data.publishedAt ?? manifestRes.data.generatedAt,
-            bySlug,
-          });
-        }
-      } catch (err: unknown) {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : 'Network error.';
-        setDeckState({ loading: false, error: message, decks: [] });
-        setManifestState({ loading: false, error: message, publishedAt: undefined, bySlug: {} });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    void loadAll(true);
   }, []);
 
   async function handleDeleteDeck(deckId: number) {
@@ -517,6 +506,12 @@ export function DeckListPage() {
                   const deckWithDates = deck as Deck & { updatedAt?: unknown; createdAt?: unknown };
                   const updatedAt = deckWithDates.updatedAt ?? deckWithDates.createdAt;
 
+                  // ✅ 可以编辑吗？
+                  // - super_admin: 一定可以
+                  // - editor: 依赖后端返回 canWrite；没返回时默认不可写（避免误开放）
+                  const canWrite =
+                    superAdmin || (typeof deck.canWrite === 'boolean' ? deck.canWrite : false);
+
                   return (
                     <tr key={deck.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
                       <td className="px-4 py-3">
@@ -528,7 +523,9 @@ export function DeckListPage() {
 
                       <td className="px-4 py-3">{typeBadge(deck.deckType)}</td>
 
-                      <td className="px-4 py-3 text-slate-700 font-mono text-xs">{String((deck as Deck & { version?: unknown }).version ?? '—')}</td>
+                      <td className="px-4 py-3 text-slate-700 font-mono text-xs">
+                        {String((deck as Deck & { version?: unknown }).version ?? '—')}
+                      </td>
 
                       <td className="px-4 py-3 text-slate-700 font-mono text-xs">
                         {hasPublished ? published : <span className="text-slate-400">—</span>}
@@ -546,6 +543,16 @@ export function DeckListPage() {
                             className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
                           >
                             View Cards
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/decks/edit?deckId=${deck.id}`)}
+                            disabled={!canWrite}
+                            className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                            title={canWrite ? 'Edit deck metadata' : 'You do not have write permission for this deck'}
+                          >
+                            Edit
                           </button>
 
                           <button

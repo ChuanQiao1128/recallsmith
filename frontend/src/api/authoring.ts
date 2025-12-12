@@ -87,6 +87,24 @@ export async function createDeck(params: CreateDeckParams): Promise<ApiResult<De
   }
 }
 
+export async function updateDeck(payload: {
+  id: number;
+  slug?: string;
+  title?: string;
+  author?: string;
+  description?: string | null;
+  locale?: string | null;
+  deckType?: number | null;
+  version?: number | null;
+}): Promise<ApiResult<Deck>> {
+  try {
+    const resp = await http.put<ApiResult<Deck>>('/api/authoring/decks', payload);
+    return resp.data;
+  } catch (err) {
+    return fail<Deck>(toApiErrorMessage(err));
+  }
+}
+
 // ✅ 注意：后端始终返回 Deck[]，这里做了一层转换
 export async function fetchDeckById(id: number): Promise<ApiResult<Deck>> {
   try {

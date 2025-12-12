@@ -8,6 +8,8 @@ const { Pool } = require("pg");
  * - Authoring: decks/cards (admin + deck-permission guarded)
  * - Sync: content + progress
  * - AI: explain-card stub + logs
+ *
+ * ✅ Option A: 只有 super_admin 才能移动 card 到别的 deck（PUT /api/authoring/cards 的 deckId 变更）
  */
 
 /** ========== Global config ========== */
@@ -195,7 +197,13 @@ function makeRes(traceId) {
       return base(400, { success: false, data: null, error: { code, message }, traceId, version: API_VERSION });
     },
     forbidden(message) {
-      return base(403, { success: false, data: null, error: { code: "FORBIDDEN", message }, traceId, version: API_VERSION });
+      return base(403, {
+        success: false,
+        data: null,
+        error: { code: "FORBIDDEN", message },
+        traceId,
+        version: API_VERSION,
+      });
     },
     notFound(message) {
       return base(404, { success: false, data: null, error: { code: "NOT_FOUND", message }, traceId, version: API_VERSION });
@@ -235,6 +243,7 @@ function pool() {
 function handlePgError(err, res) {
   if (!err || !err.code) return null;
 
+  // 23505: unique_violation
   if (err.code === "23505") {
     const constraint = err.constraint || "";
     const detail = err.detail || "";
@@ -791,6 +800,11 @@ async function handleAuthoringDecks({ method, query, event, res, isAdmin, isSupe
         if (okRes !== true) return okRes;
       }
 
+      // ✅ 关键修复：先构造 updateBody，再 buildUpdateSet
+      // editor 不允许碰 isDeleted（避免“复活/取消删除”被误写）
+      const updateBody = { slug, title, author, description, locale, deckType, version, isDeleted };
+      if (!isSuperAdmin) delete updateBody.isDeleted;
+
       const spec = [
         ["slug", "slug", (v) => String(v).trim()],
         ["title", "title", (v) => String(v).trim()],
@@ -799,10 +813,10 @@ async function handleAuthoringDecks({ method, query, event, res, isAdmin, isSupe
         ["locale", "locale", (v) => (v === null ? null : String(v).trim())],
         ["deckType", "deck_type", (v) => (v === null ? null : ensureInteger(v, "deckType"))],
         ["version", "version", (v) => (v === null ? null : ensureInteger(v, "version"))],
-        ["isDeleted", "is_deleted", (v) => (isSuperAdmin && v ? 1 : 0)],
+        ["isDeleted", "is_deleted", (v) => (parseBoolean(v, false) ? 1 : 0)],
       ];
 
-      const { fields, params } = buildUpdateSet({ slug, title, author, description, locale, deckType, version, isDeleted }, spec);
+      const { fields, params } = buildUpdateSet(updateBody, spec);
       if (fields.length === 1) return res.badRequest("VALIDATION_ERROR", "No fields to update");
 
       const sql = `
@@ -1012,9 +1026,28 @@ async function handleAuthoringCards({ method, query, event, res, isAdmin, isSupe
       const deckIdFromDb = await getDeckIdByCardId(db, idInt);
       if (!deckIdFromDb) return res.notFound("Card not found");
 
+      // ✅ editor / super_admin：先按“当前 card 所属 deck”做写权限校验
       {
         const okRes = await requireDeckWrite({ db, adminSub, deckId: deckIdFromDb, isSuperAdmin, res });
         if (okRes !== true) return okRes;
+      }
+
+      // ✅ Option A：只有 super_admin 才能移动 card 到别的 deck
+      // 如果 body.deckId 存在且 != 当前 deckId，则要求 super_admin
+      const nextDeckId =
+        deckId !== undefined && deckId !== null && deckId !== ""
+          ? ensureInteger(deckId, "deckId")
+          : null;
+
+      if (!isSuperAdmin && nextDeckId !== null && nextDeckId !== deckIdFromDb) {
+        return res.forbidden("Moving cards between decks requires super_admin");
+      }
+
+      // ✅ 关键修复：editor 不允许触碰 deckId / isDeleted（避免“移动/复活”）
+      const updateBody = { deckId, stableUid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, revision, isDeleted };
+      if (!isSuperAdmin) {
+        delete updateBody.deckId;
+        delete updateBody.isDeleted;
       }
 
       const spec = [
@@ -1028,15 +1061,13 @@ async function handleAuthoringCards({ method, query, event, res, isAdmin, isSupe
         ["difficulty", "difficulty", (v) => (v === null ? null : ensureInteger(v, "difficulty"))],
         ["orderInDeck", "order_in_deck", (v) => (v === null ? null : ensureInteger(v, "orderInDeck"))],
         ["revision", "revision", (v) => (v === null ? null : ensureInteger(v, "revision"))],
-        ["isDeleted", "is_deleted", (v) => (isSuperAdmin && v ? 1 : 0)],
+        ["isDeleted", "is_deleted", (v) => (parseBoolean(v, false) ? 1 : 0)],
       ];
 
-      const { fields, params } = buildUpdateSet(
-        { deckId, stableUid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, revision, isDeleted },
-        spec
-      );
+      const { fields, params } = buildUpdateSet(updateBody, spec);
       if (fields.length === 1) return res.badRequest("VALIDATION_ERROR", "No fields to update");
 
+      // version 自增（放在 updated_at 之前）
       const updatedAtIndex = fields.length - 1;
       fields.splice(updatedAtIndex, 0, "version = version + 1");
 
