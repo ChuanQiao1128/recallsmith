@@ -1,14 +1,3 @@
-// mobile/src/screens/HomeScreen.tsx
-// Plan A Home:
-// - Top: Calendar = aggregated (all decks) week preview + month modal (full month)
-// - Bottom: ONE deck list card with ALL / Free / Premium filter
-// - Tap a deck => setActiveDeckSlug(slug) and navigate to Deck (deck-specific modes live there)
-//
-// ✅ Step 2/3: Home 聚合时顺便做 manifest update check + install（先打通链路）
-// ✅ Step 4: Home 统计/展示使用 resolveDeckBySlug（优先本地下载版）
-//
-// Style: keep light gradient + glass card.
-
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   SafeAreaView,
@@ -35,7 +24,6 @@ import { loadDeckProgress } from '../review/storage';
 
 import { syncDailyReminders } from '../notifications/reminders';
 
-// ✅ Step 2/3/4 entry points
 import {
   checkManifestForUpdates,
   resolveDeckBySlug,
@@ -74,10 +62,7 @@ type HomeState = {
   deckSummaries: DeckSummary[];
   updates: Record<string, UpdateInfo>;
 
-  // Aggregated schedule buckets for next 30 days (today..today+29) across all decks
   allUpcoming30: CalendarDay[];
-
-  // Aggregated counts for the current month: YYYY-MM-DD -> count
   monthCounts: Record<string, number>;
 };
 
@@ -96,7 +81,6 @@ function weekdayShort(d: Date) {
 }
 
 function formatMonthDay(d: Date) {
-  // "Aug 12"
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
@@ -142,15 +126,11 @@ function buildUpcoming(progress: CardProgress[], now: Date, days: number): Calen
 const WEEKDAYS_MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export function HomeScreen({ navigation }: Props) {
-  // Keep a “last active deck” (used when user taps into Deck screen)
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
-
   const [deckFilter, setDeckFilter] = useState<DeckFilter>('all');
 
-  // Month modal
   const [isMonthOpen, setIsMonthOpen] = useState(false);
 
-  // Lightweight “toast” for week-tap
   const [weekHint, setWeekHint] = useState<string | null>(null);
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -200,8 +180,7 @@ export function HomeScreen({ navigation }: Props) {
     const now = new Date();
     const today0 = startOfToday(now);
 
-    // ✅ Step 2/3: 检查 manifest；仅在本地还没有任何 deck 时自动安装（首次启动）
-    // 如果已经安装过（哪怕只有一个），则只提示更新，让用户去 Settings 手动更新。
+    // Step 2/3: check manifest + maybe auto install (first launch)
     let updates: Record<string, UpdateInfo> = {};
     let manifestDecks: ManifestDeckEntry[] = [];
     try {
@@ -209,14 +188,16 @@ export function HomeScreen({ navigation }: Props) {
       manifestDecks = await listManifestDecks();
 
       const hasAnyInstalledDeck = Object.values(updates).some(
-        u => typeof u.installedVersion === 'string' && u.installedVersion.trim().length > 0,
+        (u) => typeof u.installedVersion === 'string' && u.installedVersion.trim().length > 0,
       );
 
-      // ✅ 仅首次安装/本地无任何 deck 时：自动安装（缺失 or 有更新）以保证可用
-      if (!hasAnyInstalledDeck) {
-        // 自动安装（缺失 or 有更新）
+      // ✅ 仅首次（本地无任何 deck）自动安装：v1 只装 free deck（deckType=1）
+      if (!hasAnyInstalledDeck && manifestDecks.length > 0) {
         let installedAny = false;
+
         for (const entry of manifestDecks) {
+          if ((entry.deckType ?? 1) !== 1) continue; // v1: only free
+
           const info = updates[entry.slug];
           if (info?.remoteUrl && info.hasUpdate) {
             try {
@@ -228,12 +209,11 @@ export function HomeScreen({ navigation }: Props) {
               );
               if (ok) installedAny = true;
             } catch {
-              // 单个失败忽略，继续后续 deck
+              // ignore single failure
             }
           }
         }
 
-        // 安装后再刷新一次更新状态（避免已安装仍提示更新）
         if (installedAny) {
           try {
             updates = await checkManifestForUpdates();
@@ -247,7 +227,7 @@ export function HomeScreen({ navigation }: Props) {
       manifestDecks = [];
     }
 
-    // Month range (current month)
+    // Current month buckets
     const year = now.getFullYear();
     const month = now.getMonth();
     const monthStart = new Date(year, month, 1, 0, 0, 0, 0);
@@ -266,14 +246,12 @@ export function HomeScreen({ navigation }: Props) {
     let totalDueAllDecks = 0;
 
     for (const entry of manifestDecks) {
-      // ✅ 优先使用本地下载版 deck-content:${slug}，没有就标记为未安装
       const deck = await resolveDeckBySlug(entry.slug);
 
       const totalCards = deck?.TotalCards ?? deck?.Cards?.length ?? entry.totalCards ?? 0;
       const canStudy = !!deck && (deck.Cards?.length ?? 0) > 0;
 
       if (!canStudy) {
-        // 未安装或占位 deck：不可学习，但在列表里展示
         deckSummaries.push({
           slug: deck?.Slug ?? entry.slug,
           title: deck?.Title ?? entry.title ?? entry.slug,
@@ -301,46 +279,42 @@ export function HomeScreen({ navigation }: Props) {
 
       totalDueAllDecks += dueToday;
 
-      // For Home list: keep fields but make them consistent with new semantics.
       const percent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
 
       deckSummaries.push({
         slug: deck.Slug,
         title: deck.Title,
         locale: deck.Locale,
-        version: deck.Version, // ✅ 显示已安装版本（来自下载版或 mock）
+        version: deck.Version,
         deckType: deck.DeckType,
         totalCards,
         canStudy,
         dueToday,
-        plannedToday: dueToday, // "planned today" = reviews due today
-        newToday: newRemaining, // "new cards" remaining
-        masteredApprox: learnedCount, // learned count
+        plannedToday: dueToday,
+        newToday: newRemaining,
+        masteredApprox: learnedCount,
         percent,
       });
 
-      // Aggregate next-30 schedule
+      // Aggregate next-30
       for (let i = 0; i < allUpcoming30.length; i++) {
         allUpcoming30[i].count += upcoming30[i]?.count ?? 0;
       }
 
-      // Aggregate CURRENT MONTH counts (overdue -> today)
+      // Aggregate current month
       for (const p of progress) {
         if (!isScheduled(p)) continue;
 
         const next = new Date(p.nextReviewAt);
         const effective = next.getTime() < today0.getTime() ? today0 : next;
 
-        if (effective.getTime() < monthStart.getTime() || effective.getTime() > monthEnd.getTime()) {
-          continue;
-        }
+        if (effective.getTime() < monthStart.getTime() || effective.getTime() > monthEnd.getTime()) continue;
 
         const key = formatDateKey(effective);
         if (key in monthCounts) monthCounts[key] += 1;
       }
     }
 
-    // Reminder logic uses total due across all decks (today bucket)
     void syncDailyReminders({ remainingDueCount: totalDueAllDecks, now });
 
     return {
@@ -355,13 +329,11 @@ export function HomeScreen({ navigation }: Props) {
 
   useFocusEffect(
     useCallback(() => {
-      setState(prev => ({ ...prev, loading: true }));
-      computeHomeState().then(newState => {
-        if (isMounted.current) {
-          setState(newState);
-        }
+      setState((prev) => ({ ...prev, loading: true }));
+      computeHomeState().then((newState) => {
+        if (isMounted.current) setState(newState);
       });
-    }, []),
+    }, [computeHomeState]),
   );
 
   const { loading, asOfISO, deckSummaries, updates, allUpcoming30, monthCounts } = state;
@@ -389,15 +361,14 @@ export function HomeScreen({ navigation }: Props) {
 
   const filteredDecks = useMemo(() => {
     const sorted = [...deckSummaries].sort((a, b) => {
-      // Free first, then Premium; then title
       const ta = a.deckType === 1 ? 0 : 1;
       const tb = b.deckType === 1 ? 0 : 1;
       if (ta !== tb) return ta - tb;
       return a.title.localeCompare(b.title);
     });
 
-    if (deckFilter === 'free') return sorted.filter(d => d.deckType === 1);
-    if (deckFilter === 'premium') return sorted.filter(d => d.deckType !== 1);
+    if (deckFilter === 'free') return sorted.filter((d) => d.deckType === 1);
+    if (deckFilter === 'premium') return sorted.filter((d) => d.deckType !== 1);
     return sorted;
   }, [deckSummaries, deckFilter]);
 
@@ -414,15 +385,13 @@ export function HomeScreen({ navigation }: Props) {
     navigation.navigate('Deck', { slug });
   }
 
-  // Build month grid (full current month)
   const monthGrid = useMemo(() => {
     const y = asOf.getFullYear();
     const m = asOf.getMonth();
     const monthStart = new Date(y, m, 1, 0, 0, 0, 0);
     const daysInMonth = new Date(y, m + 1, 0).getDate();
 
-    // Monday start
-    const lead = (monthStart.getDay() + 6) % 7;
+    const lead = (monthStart.getDay() + 6) % 7; // Monday start
     const rows = Math.ceil((lead + daysInMonth) / 7);
     const totalCells = rows * 7;
 
@@ -477,7 +446,6 @@ export function HomeScreen({ navigation }: Props) {
         end={{ x: 1, y: 1 }}
         style={styles.gradient}
       >
-        {/* Month modal */}
         <Modal animationType="fade" transparent visible={isMonthOpen} onRequestClose={closeMonth}>
           <View style={styles.modalOverlay}>
             <Pressable style={styles.modalBackdrop} onPress={closeMonth} />
@@ -499,7 +467,7 @@ export function HomeScreen({ navigation }: Props) {
               </View>
 
               <View style={styles.weekdayRow}>
-                {WEEKDAYS_MON.map(w => (
+                {WEEKDAYS_MON.map((w) => (
                   <Text key={w} style={styles.weekdayText}>
                     {w}
                   </Text>
@@ -514,20 +482,11 @@ export function HomeScreen({ navigation }: Props) {
                   const hidden = cell.count === 0;
 
                   return (
-                    <View
-                      key={cell.dateKey}
-                      style={[styles.monthCell, cell.isToday && styles.monthCellToday]}
-                    >
-                      <Text
-                        style={[
-                          styles.monthDayNumber,
-                          cell.isToday && styles.monthDayNumberToday,
-                        ]}
-                      >
+                    <View key={cell.dateKey} style={[styles.monthCell, cell.isToday && styles.monthCellToday]}>
+                      <Text style={[styles.monthDayNumber, cell.isToday && styles.monthDayNumberToday]}>
                         {cell.date.getDate()}
                       </Text>
 
-                      {/* Meta keeps height consistent; 0 is visually hidden */}
                       <View style={styles.monthMeta}>
                         <View style={[styles.monthDot, { opacity: hidden ? 0 : intensity }]} />
                         <Text style={[styles.monthCount, { opacity: hidden ? 0 : 1 }]} numberOfLines={1}>
@@ -547,7 +506,6 @@ export function HomeScreen({ navigation }: Props) {
         </Modal>
 
         <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-          {/* Header */}
           <View style={styles.headingRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.appTitle}>DevCards</Text>
@@ -562,7 +520,6 @@ export function HomeScreen({ navigation }: Props) {
             </Pressable>
           </View>
 
-          {/* Calendar card (fixed height) */}
           <View style={[styles.cardGlass, styles.calendarCardFixed]}>
             <View style={styles.cardHeaderRow}>
               <View style={{ flex: 1 }}>
@@ -572,7 +529,6 @@ export function HomeScreen({ navigation }: Props) {
                 </Text>
               </View>
 
-              {/* Week / Month toggle (Month opens modal) */}
               <View style={styles.segment}>
                 <Pressable
                   style={({ pressed }) => [
@@ -580,9 +536,7 @@ export function HomeScreen({ navigation }: Props) {
                     styles.segmentItemActive,
                     pressed && styles.pressed,
                   ]}
-                  onPress={() => {
-                    // Week is in-card preview (no-op)
-                  }}
+                  onPress={() => {}}
                 >
                   <Text style={[styles.segmentText, styles.segmentTextActive]}>Week</Text>
                 </Pressable>
@@ -596,7 +550,6 @@ export function HomeScreen({ navigation }: Props) {
               </View>
             </View>
 
-            {/* Week 7-day bars */}
             <View style={styles.weekGrid}>
               {week7.map((day, idx) => {
                 const date = new Date(asOf.getTime());
@@ -606,9 +559,7 @@ export function HomeScreen({ navigation }: Props) {
                 const label = idx === 0 ? 'Today' : weekdayShort(date);
 
                 const count = day.count;
-
-                const pct =
-                  maxWeek <= 0 ? 0 : count === 0 ? 0 : Math.max(0.12, count / maxWeek);
+                const pct = maxWeek <= 0 ? 0 : count === 0 ? 0 : Math.max(0.12, count / maxWeek);
 
                 return (
                   <Pressable
@@ -623,12 +574,7 @@ export function HomeScreen({ navigation }: Props) {
 
                     <View style={styles.weekBarBg}>
                       <View style={{ flex: 1 - pct }} />
-                      <View
-                        style={[
-                          styles.weekBarFill,
-                          { flex: pct, opacity: count === 0 ? 0 : 1 },
-                        ]}
-                      />
+                      <View style={[styles.weekBarFill, { flex: pct, opacity: count === 0 ? 0 : 1 }]} />
                     </View>
 
                     <Text style={styles.weekLabel} numberOfLines={1}>
@@ -639,7 +585,6 @@ export function HomeScreen({ navigation }: Props) {
               })}
             </View>
 
-            {/* Week tap hint slot */}
             <View style={styles.weekHintSlot}>
               <Text style={styles.weekHintText} numberOfLines={1} ellipsizeMode="tail">
                 {weekHint ?? 'Tap a day bar to see the exact count.'}
@@ -647,7 +592,6 @@ export function HomeScreen({ navigation }: Props) {
             </View>
           </View>
 
-          {/* Deck list card */}
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionTitle}>Decks</Text>
@@ -655,7 +599,7 @@ export function HomeScreen({ navigation }: Props) {
             </View>
 
             <View style={styles.segmentThree}>
-              {(['all', 'free', 'premium'] as const).map(key => {
+              {(['all', 'free', 'premium'] as const).map((key) => {
                 const active = deckFilter === key;
                 const label = key === 'all' ? 'ALL' : key === 'free' ? 'Free' : 'Premium';
                 return (
@@ -676,10 +620,6 @@ export function HomeScreen({ navigation }: Props) {
               })}
             </View>
 
-            {/* <Text style={styles.sectionHint}>
-              Tap a deck to open it (modes + deck‑specific plan live inside).
-            </Text> */}
-
             {deckSummaries.length === 0 ? (
               <View style={styles.emptyBox}>
                 <Text style={styles.emptyTitle}>No decks installed yet</Text>
@@ -688,17 +628,15 @@ export function HomeScreen({ navigation }: Props) {
                 </Text>
               </View>
             ) : (
-              filteredDecks.map(d => {
+              filteredDecks.map((d) => {
                 const active = d.slug === selectedSlug;
                 const isPremium = d.deckType !== 1;
                 const deckUpdate = updates?.[d.slug];
-                const hasInstalledVersion =
-                  typeof deckUpdate?.installedVersion === 'string' &&
-                  deckUpdate.installedVersion.trim().length > 0;
 
-                // ⭐ 只有“已经安装过”的 deck 才显示 Update available
-                const hasUpdate =
-                  hasInstalledVersion && !!(deckUpdate?.hasUpdate && deckUpdate.remoteUrl);
+                const hasInstalledVersion =
+                  typeof deckUpdate?.installedVersion === 'string' && deckUpdate.installedVersion.trim().length > 0;
+
+                const hasUpdate = hasInstalledVersion && !!(deckUpdate?.hasUpdate && deckUpdate.remoteUrl);
 
                 return (
                   <Pressable
@@ -709,14 +647,13 @@ export function HomeScreen({ navigation }: Props) {
                       pressed && styles.deckRowPressed,
                     ]}
                     onPress={async () => {
-                      const needsInstall = !d.canStudy;        // 本地没有内容
-                      const needsUpdate = d.canStudy && hasUpdate;  // 已安装且有更新
+                      const needsInstall = !d.canStudy;
+                      const needsUpdate = d.canStudy && hasUpdate;
+
                       if (needsInstall || needsUpdate) {
-                        if (!deckUpdate?.remoteUrl) {
-                          // No remote URL available to install/update — perhaps show a toast/error
-                          return;
-                        }
-                        setState(prev => ({ ...prev, loading: true }));
+                        if (!deckUpdate?.remoteUrl) return;
+
+                        setState((prev) => ({ ...prev, loading: true }));
                         try {
                           const ok = await installDeckFromUrl(
                             d.slug,
@@ -724,20 +661,17 @@ export function HomeScreen({ navigation }: Props) {
                             deckUpdate.remoteVersion,
                             deckUpdate.remoteSha256,
                           );
+
                           if (ok) {
-                            // Refresh the entire home state to reflect the update (removes prompt)
                             const newState = await computeHomeState();
-                            if (isMounted.current) {
-                              setState(newState);
-                            }
+                            if (isMounted.current) setState(newState);
                             openDeck(d.slug);
                           } else {
-                            // Install failed — perhaps show a toast
-                            setState(prev => ({ ...prev, loading: false }));
+                            setState((prev) => ({ ...prev, loading: false }));
                           }
                         } catch (e) {
                           console.error('Deck install/update failed:', e);
-                          setState(prev => ({ ...prev, loading: false }));
+                          setState((prev) => ({ ...prev, loading: false }));
                         }
                         return;
                       }
@@ -760,12 +694,7 @@ export function HomeScreen({ navigation }: Props) {
                         {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
                         <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
                         <View style={styles.rowBarBg}>
-                          <View
-                            style={[
-                              styles.rowBarFill,
-                              { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 },
-                            ]}
-                          />
+                          <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
                           <View style={{ flex: 1 - d.percent }} />
                         </View>
                       </View>
@@ -836,7 +765,6 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
 
-  // Calendar fixed sizing: no layout jump
   calendarCardFixed: { minHeight: 220 },
 
   cardHeaderRow: { flexDirection: 'row', alignItems: 'center' },
@@ -857,7 +785,6 @@ const styles = StyleSheet.create({
   segmentText: { fontSize: 12, fontWeight: '700', color: '#111827' },
   segmentTextActive: { color: '#4F46E5' },
 
-  // Week view
   weekGrid: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
   weekCell: { flex: 1, alignItems: 'center' },
   weekDate: { fontSize: 10, color: '#6B7280' },
@@ -879,13 +806,12 @@ const styles = StyleSheet.create({
 
   weekHintSlot: {
     marginTop: 12,
-    height: 18, // fixed height => no jump
+    height: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
   weekHintText: { fontSize: 11, color: '#6B7280' },
 
-  // Deck list (one card)
   sectionCard: {
     borderRadius: 22,
     paddingVertical: 14,
@@ -900,7 +826,6 @@ const styles = StyleSheet.create({
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   sectionTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
   sectionMeta: { fontSize: 12, color: '#6B7280' },
-  sectionHint: { marginTop: 8, fontSize: 12, color: '#6B7280' },
 
   segmentThree: {
     marginTop: 10,
@@ -989,7 +914,6 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 13, fontWeight: '700', color: '#111827' },
   emptySubtitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
 
-  // Modal styles (opaque month background)
   modalOverlay: {
     flex: 1,
     justifyContent: 'center',
@@ -1002,7 +926,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     paddingVertical: 14,
     paddingHorizontal: 14,
-    backgroundColor: '#FFFFFF', // opaque
+    backgroundColor: '#FFFFFF',
     shadowColor: '#000',
     shadowOpacity: 0.18,
     shadowRadius: 18,
@@ -1044,7 +968,6 @@ const styles = StyleSheet.create({
   monthDayNumber: { fontSize: 12, fontWeight: '900', color: '#111827' },
   monthDayNumberToday: { color: '#4F46E5' },
 
-  // Keep consistent cell height while hiding 0s
   monthMeta: { marginTop: 6, height: 24, alignItems: 'center', justifyContent: 'center' },
   monthDot: {
     width: 10,

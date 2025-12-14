@@ -1,4 +1,3 @@
-// mobile/src/screens/ReviewScreen.tsx
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   SafeAreaView,
@@ -12,7 +11,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import CodeBlock from '../components/CodeBlock'; // 路径按你放的位置改
+import CodeBlock from '../components/CodeBlock';
 
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -20,7 +19,6 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { DeckExport, CardExport } from '../types/deckExport';
 
-// ✅ Step 4: async resolver (prefer downloaded deck)
 import { resolveDeckBySlug, listManifestDecks } from '../content/deckRepository';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 
@@ -96,7 +94,6 @@ function countDueToday(progress: CardProgress[], now: Date): number {
   return c;
 }
 
-// ✅ Phase 3 helpers: updated card detection (Revision > lastSeenRevision)
 function getCardRevision(card: any): number {
   const r = card?.Revision;
   return typeof r === 'number' && r > 0 ? r : 1;
@@ -122,7 +119,7 @@ function pickNextCard(
 ): CurrentCard | null {
   const cardMap = buildCardMap(deck);
   const cards = sortCards(deck);
-  const pMap = new Map(progress.map(p => [p.stableUid, p]));
+  const pMap = new Map(progress.map((p) => [p.stableUid, p]));
 
   const pickWith = (predicate: (card: CardExport, p: CardProgress) => boolean) => {
     // pass 1: avoid immediate repeat
@@ -152,7 +149,6 @@ function pickNextCard(
   if (mode === 'review-due') return pickDue();
   if (mode === 'learn-new') return pickNew();
 
-  // ✅ mixed: due first, then updated, then new
   return pickDue() ?? pickUpdated() ?? pickNew();
 }
 
@@ -166,7 +162,6 @@ function normalizeCodeLanguage(lang?: string | null): string {
   const l = (lang ?? '').trim().toLowerCase();
   if (!l) return 'text';
 
-  // common aliases
   if (l === 'ts') return 'typescript';
   if (l === 'tsx') return 'tsx';
   if (l === 'js') return 'javascript';
@@ -181,7 +176,6 @@ function normalizeCodeLanguage(lang?: string | null): string {
   return l;
 }
 
-/** tiny markdown-ish renderer: supports "- " bullets and paragraphs */
 function renderSimpleMarkdown(text: string, stylesObj: any) {
   const lines = text.split('\n');
   const nodes: React.ReactNode[] = [];
@@ -228,7 +222,6 @@ export function ReviewScreen({ navigation, route }: Props) {
   const [dailyStats, setDailyStats] = useState<DailyStats | null>(null);
   const [current, setCurrent] = useState<CurrentCard | null>(null);
 
-  // 初始化 slug：优先 route，其次上次活跃 deck，再退到 manifest 首项
   useFocusEffect(
     useCallback(() => {
       if (slugFromRoute) {
@@ -258,39 +251,25 @@ export function ReviewScreen({ navigation, route }: Props) {
     }, [slugFromRoute]),
   );
 
-  // flip state
   const [showBack, setShowBack] = useState(false);
-  const flipAnim = useRef(new Animated.Value(0)).current; // 0 front, 180 back
+  const flipAnim = useRef(new Animated.Value(0)).current;
 
   const [reviewing, setReviewing] = useState(false);
   const [sessionDone, setSessionDone] = useState(0);
   const sessionLimit = limit;
 
-  // avoid immediate repeat (especially for "again")
   const avoidUidRef = useRef<string | null>(null);
 
   const { height: winH } = useWindowDimensions();
   const flipHeight = useMemo(() => {
-    // 预估头部（header + sessionCard + 上下间距）占掉的高度
     const reserved = 280;
-
-    // 可用高度 = 整个窗口高度 - 头部
     const usable = winH - reserved;
-
-    // 在一个合理范围里取值，避免太小或太夸张
     return Math.max(350, Math.min(usable, winH - 50));
   }, [winH]);
 
-  const frontRotate = flipAnim.interpolate({
-    inputRange: [0, 180],
-    outputRange: ['0deg', '180deg'],
-  });
-  const backRotate = flipAnim.interpolate({
-    inputRange: [0, 180],
-    outputRange: ['180deg', '360deg'],
-  });
+  const frontRotate = flipAnim.interpolate({ inputRange: [0, 180], outputRange: ['0deg', '180deg'] });
+  const backRotate = flipAnim.interpolate({ inputRange: [0, 180], outputRange: ['180deg', '360deg'] });
 
-  // Extra safety on Android: swap opacity around 90deg
   const frontOpacity = flipAnim.interpolate({
     inputRange: [0, 89.9, 90, 180],
     outputRange: [1, 1, 0, 0],
@@ -344,14 +323,13 @@ export function ReviewScreen({ navigation, route }: Props) {
         const now = new Date();
 
         try {
-          // ✅ Step 4: resolve deck（本地下载版优先）
-          if (!slug) throw new Error('No deck selected');
-          const resolved = await resolveDeckBySlug(slug);
+          const resolved = await resolveDeckBySlug(slug!);
           if (!resolved) throw new Error('Deck not found');
           if (cancelled) return;
 
+          // ✅ resolved 现在满足 DeckExport 了
           setDeck(resolved);
-          void setActiveDeckSlug(resolved.Slug); // ✅ 同步 active slug
+          void setActiveDeckSlug(resolved.Slug);
 
           const p = await loadDeckProgress(resolved);
           if (cancelled) return;
@@ -366,7 +344,6 @@ export function ReviewScreen({ navigation, route }: Props) {
           setCurrent(next);
           setLoading(false);
 
-          // Sync reminder based on remaining due TODAY bucket (matches Home/Deck)
           const remainingDueCount = countDueToday(p, now);
           void syncDailyReminders({ remainingDueCount, now });
         } catch (e: any) {
@@ -391,19 +368,11 @@ export function ReviewScreen({ navigation, route }: Props) {
   if (loadError) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
+        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
           <View style={styles.center}>
             <Text style={styles.title}>Deck not available</Text>
             <Text style={styles.subtitle}>{loadError}</Text>
-            <Pressable
-              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed, { marginTop: 10 }]}
-              onPress={() => navigation.goBack()}
-            >
+            <Pressable style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed, { marginTop: 10 }]} onPress={() => navigation.goBack()}>
               <Text style={styles.backText}>← Back</Text>
             </Pressable>
           </View>
@@ -415,12 +384,7 @@ export function ReviewScreen({ navigation, route }: Props) {
   if (loading || !dailyStats || !deck) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
+        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
           <View style={styles.center}>
             <ActivityIndicator size="large" color="#6366F1" />
             <Text style={styles.loadingText}>Loading cards...</Text>
@@ -443,18 +407,14 @@ export function ReviewScreen({ navigation, route }: Props) {
 
     setReviewing(true);
     try {
-      // ✅ Phase 0: 记录“用户最后确认过的卡片内容版本”
-      // deck.json 里没填 Revision 时默认按 1 处理，避免旧题库崩
-      const seenRev =
-        typeof (current.card as any).Revision === 'number' ? (current.card as any).Revision : 1;
+      const seenRev = typeof (current.card as any).Revision === 'number' ? (current.card as any).Revision : 1;
 
       const updatedOne: CardProgress = {
         ...scheduleNextReview(current.progress, uiRating, new Date()),
         lastSeenRevision: seenRev,
       };
 
-      const newProgress = progress.map(p => (p.stableUid === updatedOne.stableUid ? updatedOne : p));
-
+      const newProgress = progress.map((p) => (p.stableUid === updatedOne.stableUid ? updatedOne : p));
       await saveDeckProgress(deck, newProgress);
 
       const nextDone = sessionDone + 1;
@@ -462,21 +422,16 @@ export function ReviewScreen({ navigation, route }: Props) {
 
       const remaining = sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
 
-      // avoid immediate repeat of the card you just answered
       avoidUidRef.current = updatedOne.stableUid;
 
       const next =
-        remaining > 0
-          ? pickNextCard(deck, newProgress, new Date(), mode, avoidUidRef.current)
-          : null;
+        remaining > 0 ? pickNextCard(deck, newProgress, new Date(), mode, avoidUidRef.current) : null;
 
       setProgress(newProgress);
       setCurrent(next);
 
-      // reset to front for next card
       resetToFront();
 
-      // update reminders (today bucket)
       const now2 = new Date();
       const remainingDueCount = countDueToday(newProgress, now2);
       void syncDailyReminders({ remainingDueCount, now: now2 });
@@ -487,19 +442,10 @@ export function ReviewScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient
-        colors={['#F5F3FF', '#E0F2FE']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.gradient}
-      >
+      <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
         <View style={styles.container}>
-          {/* header */}
           <View style={styles.headerRow}>
-            <Pressable
-              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
-              onPress={() => navigation.goBack()}
-            >
+            <Pressable style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]} onPress={() => navigation.goBack()}>
               <Text style={styles.backText}>← Deck</Text>
             </Pressable>
 
@@ -513,7 +459,6 @@ export function ReviewScreen({ navigation, route }: Props) {
             </View>
           </View>
 
-          {/* session bar */}
           <View style={styles.sessionCard}>
             <View style={styles.sessionHeaderRow}>
               <Text style={styles.sessionLabel}>Session progress</Text>
@@ -532,11 +477,7 @@ export function ReviewScreen({ navigation, route }: Props) {
             </Text>
           </View>
 
-          <ScrollView
-            style={styles.scroll}
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
-          >
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
             <Text style={styles.sectionTitle}>Now reviewing</Text>
 
             {!current ? (
@@ -548,9 +489,7 @@ export function ReviewScreen({ navigation, route }: Props) {
               </View>
             ) : (
               <View style={styles.cardCard}>
-                {/* Flip container */}
                 <View style={[styles.flipWrap, { height: flipHeight }]}>
-                  {/* FRONT */}
                   <Animated.View
                     pointerEvents={showBack ? 'none' : 'auto'}
                     style={[
@@ -562,23 +501,13 @@ export function ReviewScreen({ navigation, route }: Props) {
                       },
                     ]}
                   >
-                    <Pressable
-                      style={styles.facePressable}
-                      onPress={() => setShowBack(true)}
-                      accessibilityLabel="Flip to see answer"
-                    >
+                    <Pressable style={styles.facePressable} onPress={() => setShowBack(true)} accessibilityLabel="Flip to see answer">
                       <View style={styles.cardHeaderRow}>
                         <Text style={styles.cardOrder}>#{current.card.OrderInDeck}</Text>
                         <Text style={styles.cardChip}>
-                          {current.card.Difficulty === 1
-                            ? 'Easy'
-                            : current.card.Difficulty === 2
-                            ? 'Medium'
-                            : 'Hard'}
+                          {current.card.Difficulty === 1 ? 'Easy' : current.card.Difficulty === 2 ? 'Medium' : 'Hard'}
                         </Text>
-                        {current.card.CodeLanguage ? (
-                          <Text style={styles.cardChipSecondary}>{current.card.CodeLanguage}</Text>
-                        ) : null}
+                        {current.card.CodeLanguage ? <Text style={styles.cardChipSecondary}>{current.card.CodeLanguage}</Text> : null}
                       </View>
 
                       <Text style={styles.cardQuestion}>{current.card.Question}</Text>
@@ -589,7 +518,6 @@ export function ReviewScreen({ navigation, route }: Props) {
                     </Pressable>
                   </Animated.View>
 
-                  {/* BACK */}
                   <Animated.View
                     pointerEvents={showBack ? 'auto' : 'none'}
                     style={[
@@ -602,27 +530,16 @@ export function ReviewScreen({ navigation, route }: Props) {
                     ]}
                   >
                     <View style={styles.backFaceContainer}>
-                      {/* 顶部：标题 + 翻回去 */}
                       <View style={styles.backTopRow}>
                         <Text style={styles.backTitle}>Answer</Text>
 
-                        <Pressable
-                          style={({ pressed }) => [styles.flipBackBtn, pressed && { opacity: 0.9 }]}
-                          onPress={() => setShowBack(false)}
-                          accessibilityLabel="Flip back to question"
-                        >
+                        <Pressable style={({ pressed }) => [styles.flipBackBtn, pressed && { opacity: 0.9 }]} onPress={() => setShowBack(false)} accessibilityLabel="Flip back to question">
                           <Text style={styles.flipBackBtnText}>↩︎</Text>
                         </Pressable>
                       </View>
 
-                      {/* 中间：可滚动内容区域 */}
                       <View style={styles.backBody}>
-                        <ScrollView
-                          style={{ flex: 1 }}
-                          contentContainerStyle={{ paddingBottom: 12 }}
-                          showsVerticalScrollIndicator={false}
-                        >
-                          {/* Explanation */}
+                        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 12 }} showsVerticalScrollIndicator={false}>
                           {current.card.Explanation ? (
                             <View style={styles.sectionBlock}>
                               <Text style={styles.sectionHeader}>Explanation</Text>
@@ -630,7 +547,6 @@ export function ReviewScreen({ navigation, route }: Props) {
                             </View>
                           ) : null}
 
-                          {/* Coding Sample */}
                           {current.card.CodeSnippet ? (
                             <View style={styles.sectionBlock}>
                               <Text style={styles.sectionHeader}>Coding Sample</Text>
@@ -638,15 +554,12 @@ export function ReviewScreen({ navigation, route }: Props) {
                               <View style={styles.codeContainer}>
                                 <CodeBlock
                                   code={current.card.CodeSnippet}
-                                  language={normalizeCodeLanguage(
-                                    current.card.CodeLanguage || 'javascript',
-                                  )}
+                                  language={normalizeCodeLanguage(current.card.CodeLanguage || 'javascript')}
                                 />
                               </View>
                             </View>
                           ) : null}
 
-                          {/* Real Usage (markdown-ish) */}
                           {current.card.RealWorldUsage ? (
                             <View style={styles.sectionBlock}>
                               <Text style={styles.sectionHeader}>Real Usage</Text>
@@ -658,7 +571,6 @@ export function ReviewScreen({ navigation, route }: Props) {
                         </ScrollView>
                       </View>
 
-                      {/* 底部：固定评分区域 */}
                       <View style={styles.backRatingSection}>
                         <Text style={styles.ratingHint}>
                           Think about how well you recalled this before seeing the answer.
@@ -723,11 +635,8 @@ export function ReviewScreen({ navigation, route }: Props) {
                         </View>
                       </View>
 
-                      {/* AI coming soon notice（位置不变，只是文案更自然一点） */}
                       <View style={styles.aiNoticeBox}>
-                        <Text style={styles.aiNoticeTitle}>
-                          Need Help? AI assistance is coming soon.
-                        </Text>
+                        <Text style={styles.aiNoticeTitle}>Need Help? AI assistance is coming soon.</Text>
                       </View>
                     </View>
                   </Animated.View>
@@ -819,7 +728,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
   },
 
-  // Flip
   flipWrap: {
     borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.96)',
@@ -834,11 +742,7 @@ const styles = StyleSheet.create({
     backfaceVisibility: 'hidden',
   },
 
-  facePressable: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-  },
+  facePressable: { flex: 1, paddingVertical: 10, paddingHorizontal: 10 },
 
   cardHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   cardOrder: { fontSize: 12, color: '#6B7280', marginRight: 6 },
@@ -879,7 +783,6 @@ const styles = StyleSheet.create({
   },
   flipHintText: { fontSize: 12, color: '#6B7280' },
 
-  // Back
   backTopRow: {
     paddingHorizontal: 10,
     paddingTop: 10,
@@ -897,20 +800,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   flipBackBtnText: { fontSize: 16, fontWeight: '900', color: '#111827' },
+
   backFaceContainer: {
     flex: 1,
     paddingHorizontal: 10,
     paddingTop: 10,
     paddingBottom: 8,
   },
-  backBody: {
-    flex: 1,
-    marginTop: 4,
-  },
-  backRatingSection: {
-    paddingTop: 4,
-    paddingHorizontal: 0,
-  },
+  backBody: { flex: 1, marginTop: 4 },
+  backRatingSection: { paddingTop: 4, paddingHorizontal: 0 },
 
   sectionBlock: { paddingHorizontal: 10, paddingTop: 8, paddingBottom: 6 },
   sectionHeader: { fontSize: 12, fontWeight: '900', color: '#4F46E5', marginBottom: 6 },
@@ -923,46 +821,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     overflow: 'hidden',
   },
-  syntaxHighlighter: {
-    backgroundColor: 'transparent',
-    padding: 0,
-    margin: 0,
-  },
-  syntaxCode: {
-    fontFamily: 'Menlo',
-    fontSize: 12,
-    lineHeight: 18,
-  },
 
   mdContainer: {
     paddingTop: 2,
     paddingBottom: 4,
     paddingHorizontal: 8,
     borderRadius: 8,
-    backgroundColor: 'rgba(243,244,246,0.95)', // 类 gray-100
+    backgroundColor: 'rgba(243,244,246,0.95)',
   },
   mdBulletRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 },
   mdBullet: { width: 18, fontSize: 14, color: '#374151', lineHeight: 18 },
   mdText: { flex: 1, fontSize: 13, color: '#374151', lineHeight: 18 },
 
-  // AI notice（位置保持在评分区下面，只做左对齐+小字提示）
   aiNoticeBox: {
     paddingHorizontal: 10,
     marginTop: 4,
     marginBottom: 4,
     alignItems: 'flex-start',
   },
-  aiNoticeTitle: {
-    fontSize: 12,
-    color: '#6B7280', // slate-500
-    textAlign: 'left',
-  },
-  aiNoticeSub: {
-    marginTop: 2,
-    fontSize: 11,
-    color: '#9CA3AF', // gray-400
-    textAlign: 'left',
-  },
+  aiNoticeTitle: { fontSize: 12, color: '#6B7280', textAlign: 'left' },
 
   ratingHint: {
     marginTop: 6,

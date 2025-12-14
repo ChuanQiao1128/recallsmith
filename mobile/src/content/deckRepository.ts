@@ -1,367 +1,423 @@
-// mobile/src/content/deckRepository.ts
-// Step 2~4: manifest 读取 + 更新对比 + 下载校验 + 本地缓存 + deck resolver
-
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { DeckExport, CardExport } from '../types/deckExport';
-import { CONTENT_BASE_URL, MANIFEST_URL } from './contentConfig';
+import * as FileSystem from 'expo-file-system/legacy';
+
+import type { DeckExport } from '../types/deckExport';
+
+/**
+ * v1 Content repository (CloudFront -> manifest.json -> deck.json)
+ *
+ * Remote:
+ *  - manifest:  { prefix:"content/", decks:[{ slug, buildId, path, cardCount, deckType, ... }] }
+ *  - deck.json: { buildId, deck:{ slug,title,locale,deckType,version... }, cards:[{stableUid,...}] }
+ *
+ * Local:
+ *  - AsyncStorage: manifest cache + per-deck meta (installed buildId)
+ *  - FileSystem: one deck file per slug (overwrite on update)
+ */
+
+/** =========================
+ *  Config
+ *  ========================= */
+const CONTENT_BASE_URL =
+  (process.env.EXPO_PUBLIC_CONTENT_BASE_URL || '').trim() ||
+  'https://d1ditdi9jqpy6n.cloudfront.net';
+
+const MANIFEST_URL = joinUrl(CONTENT_BASE_URL, 'content', 'manifest.json');
+const MANIFEST_CACHE_KEY = 'devcards:content:manifest:v1';
+const DECK_META_PREFIX = 'devcards:content:deckmeta:v1:'; // + slug
+
+// Runtime-safe "utf8" encoding without relying on FileSystem.EncodingType types
+const UTF8_ENCODING: any = (FileSystem as any)?.EncodingType?.UTF8 ?? 'utf8';
+
+function getDeckDir(): string {
+  const base = (FileSystem as any).documentDirectory ?? (FileSystem as any).cacheDirectory;
+  // 在 Expo/React Native 正常都有；这里防御一下，避免生成 "undefinedxxx"
+  if (!base || typeof base !== 'string') {
+    throw new Error('expo-file-system: no writable directory (documentDirectory/cacheDirectory)');
+  }
+  return `${base}devcards-decks-v1/`;
+}
+
+/** =========================
+ *  Types
+ *  ========================= */
+
+type RawManifest = {
+  schemaVersion: number;
+  generatedAtMs: number;
+  prefix: string; // e.g. "content/"
+  decks: Array<{
+    slug: string;
+    title?: string;
+    locale?: string;
+    deckType?: number;
+    buildId: string;
+    path: string; // e.g. "decks/xxx/builds/<buildId>/deck.json"
+    cardCount?: number;
+    publishedAtMs?: number;
+  }>;
+};
 
 export type ManifestDeckEntry = {
   slug: string;
-  version: string;
-  url: string; // can be absolute or relative
-  sha256?: string;
-  updatedAt?: string;
   title?: string;
   locale?: string;
   deckType?: number;
-  isFreeStarter?: boolean;
+
+  // v1: version = buildId（用于更新判断/显示）
+  version: string;
+
+  // 兼容 Home：totalCards
   totalCards?: number;
-  freeCardCount?: number;
-};
 
-export type ManifestIndex = {
-  generatedAt?: string;
-  decks: ManifestDeckEntry[];
-};
-
-export type DeckMeta = {
-  installedVersion: string;
-  installedAt: number;
-  sourceUrl: string;
-  sha256?: string;
+  buildId: string;
+  path: string;
+  cardCount?: number;
+  publishedAtMs?: number;
 };
 
 export type UpdateInfo = {
+  slug: string;
+
+  installedVersion: string | null; // local buildId
+  remoteVersion: string | null; // manifest buildId
   hasUpdate: boolean;
-  installedVersion?: string;
-  remoteVersion?: string;
-  remoteUrl?: string;
-  remoteSha256?: string;
+
+  remoteUrl: string | null; // full URL for deck.json
+  remoteSha256: string | null; // v1 暂不使用（manifest 里也没给）
 };
 
-const keyContent = (slug: string) => `deck-content:${slug}`;
-const keyMeta = (slug: string) => `deck-meta:${slug}`;
+type DeckInstallMeta = {
+  slug: string;
+  buildId: string;
+  installedAtMs: number;
+  fileUri: string;
+  cardCount: number;
+};
 
-function isObject(v: unknown): v is Record<string, any> {
-  return typeof v === 'object' && v !== null;
-}
-function isNonEmptyString(v: unknown): v is string {
-  return typeof v === 'string' && v.trim().length > 0;
-}
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v);
-}
+type RawDeckJson = {
+  schemaVersion: number;
+  buildId: string;
+  generatedAtMs?: number;
+  deck: {
+    slug: string;
+    title: string;
+    author?: string | null;
+    description?: string | null;
+    locale: string;
+    deckType: number;
+    version?: number;
+    updatedAt?: string;
+  };
+  cards: Array<{
+    stableUid: string;
+    question: string;
+    explanation?: string | null;
+    codeSnippet?: string | null;
+    codeLanguage?: string | null;
+    realWorldUsage?: string | null;
+    difficulty?: number | null;
+    orderInDeck?: number | null;
+    revision?: number | null;
+    version?: number | null;
+    updatedAt?: string | null;
+  }>;
+};
 
-function absolutizeUrl(url: string): string {
-  if (/^https?:\/\//i.test(url)) return url;
-  return `${CONTENT_BASE_URL}${url.replace(/^\/+/, '')}`;
-}
+// ✅ 兼容你项目里之前的命名：DeckContent 就是 DeckExport（结构一致）
+export type DeckContent = DeckExport;
 
-function withCacheBuster(url: string): string {
-  const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}t=${Date.now()}`;
-}
+/** =========================
+ *  Public API
+ *  ========================= */
 
-function normalizeManifest(raw: unknown): ManifestIndex | null {
-  if (!isObject(raw)) return null;
+/**
+ * Step 2: fetch remote manifest (best effort) and build "updates" map.
+ * - On network failure: fallback to cached manifest.
+ */
+export async function checkManifestForUpdates(): Promise<Record<string, UpdateInfo>> {
+  const manifest = await loadManifestPreferRemote();
+  if (!manifest) return {};
 
-  const decksRaw = (raw as any).decks ?? (raw as any).Decks;
-  if (!Array.isArray(decksRaw)) return null;
+  const out: Record<string, UpdateInfo> = {};
 
-  const decks: ManifestDeckEntry[] = [];
-  for (const it of decksRaw) {
-    if (!isObject(it)) continue;
+  for (const d of manifest.decks) {
+    const meta = await getDeckMeta(d.slug);
+    const installed = meta?.buildId || null;
 
-    const slug = (it as any).slug ?? (it as any).Slug;
-    const version = (it as any).version ?? (it as any).Version;
-    const url =
-      (it as any).url ??
-      (it as any).Url ??
-      (it as any).path ??
-      (it as any).Path; // S3 manifest uses Path
+    const remote = d.buildId || null;
+    const hasUpdate = !installed || installed !== remote;
 
-    if (!isNonEmptyString(slug) || !isNonEmptyString(version) || !isNonEmptyString(url)) continue;
+    const remoteUrl = remote ? joinUrl(CONTENT_BASE_URL, manifest.prefix, d.path) : null;
 
-    decks.push({
-      slug,
-      version,
-      url,
-      sha256: (it as any).sha256 ?? (it as any).Sha256,
-      updatedAt: (it as any).updatedAt ?? (it as any).UpdatedAt,
-      title: (it as any).title ?? (it as any).Title,
-      locale: (it as any).locale ?? (it as any).Locale,
-      deckType: (it as any).deckType ?? (it as any).DeckType,
-      isFreeStarter: (it as any).isFreeStarter ?? (it as any).IsFreeStarter,
-      totalCards: (it as any).totalCards ?? (it as any).TotalCards,
-      freeCardCount: (it as any).freeCardCount ?? (it as any).FreeCardCount,
-    });
+    out[d.slug] = {
+      slug: d.slug,
+      installedVersion: installed,
+      remoteVersion: remote,
+      hasUpdate,
+      remoteUrl,
+      remoteSha256: null,
+    };
   }
 
-  return {
-    generatedAt: (raw as any).generatedAt ?? (raw as any).GeneratedAt,
-    decks,
-  };
+  return out;
 }
 
 /**
- * Step 3: 最基本校验（Slug/Version/Cards[].StableUid/OrderInDeck）+ 兼容大小写字段
+ * Step 3: list decks from cached manifest (Home uses this).
+ * - If no cached manifest: returns []
  */
-export function validateDeckExport(raw: unknown): DeckExport | null {
-  if (!isObject(raw)) return null;
+export async function listManifestDecks(): Promise<ManifestDeckEntry[]> {
+  const manifest = await loadManifestCached();
+  if (!manifest) return [];
 
-  const slug = (raw as any).Slug ?? (raw as any).slug;
-  const version = (raw as any).Version ?? (raw as any).version;
-  const title = (raw as any).Title ?? (raw as any).title;
-  const locale = (raw as any).Locale ?? (raw as any).locale;
-  const deckType = (raw as any).DeckType ?? (raw as any).deckType;
-  const isFreeStarter = (raw as any).IsFreeStarter ?? (raw as any).isFreeStarter;
-  const totalCards = (raw as any).TotalCards ?? (raw as any).totalCards;
-  const freeCardCount = (raw as any).FreeCardCount ?? (raw as any).freeCardCount;
-  const cardsRaw = (raw as any).Cards ?? (raw as any).cards;
+  return (manifest.decks || []).map((d) => ({
+    slug: d.slug,
+    title: d.title,
+    locale: d.locale,
+    deckType: d.deckType ?? 1,
 
-  if (!isNonEmptyString(slug) || !isNonEmptyString(version) || !Array.isArray(cardsRaw)) return null;
+    buildId: d.buildId,
+    path: d.path,
+    cardCount: d.cardCount,
+    publishedAtMs: d.publishedAtMs,
 
-  const seenUid = new Set<string>();
-  const seenOrder = new Set<number>();
-  const cards: CardExport[] = [];
-
-  for (const c of cardsRaw) {
-    if (!isObject(c)) return null;
-
-    const uid = (c as any).StableUid ?? (c as any).stableUid;
-    const order = (c as any).OrderInDeck ?? (c as any).orderInDeck;
-
-    if (!isNonEmptyString(uid) || !isFiniteNumber(order)) return null;
-    if (seenUid.has(uid)) return null;
-    if (seenOrder.has(order)) return null;
-
-    seenUid.add(uid);
-    seenOrder.add(order);
-
-    const revision = (c as any).Revision ?? (c as any).revision;
-    const difficulty = (c as any).Difficulty ?? (c as any).difficulty;
-
-    cards.push({
-      StableUid: uid,
-      OrderInDeck: order,
-      Difficulty: isFiniteNumber(difficulty) ? difficulty : 2,
-      Question: isNonEmptyString((c as any).Question ?? (c as any).question)
-        ? ((c as any).Question ?? (c as any).question)
-        : '',
-      Explanation: ((c as any).Explanation ?? (c as any).explanation) ?? null,
-      CodeSnippet: ((c as any).CodeSnippet ?? (c as any).codeSnippet) ?? null,
-      RealWorldUsage: (c as any).RealWorldUsage ?? (c as any).realWorldUsage,
-      CodeLanguage: ((c as any).CodeLanguage ?? (c as any).codeLanguage) ?? null,
-      Revision: isFiniteNumber(revision) ? revision : undefined,
-    });
-  }
-
-  const normalizedDeckType = isFiniteNumber(deckType) ? deckType : 1;
-
-  return {
-    Slug: slug,
-    Version: version,
-    Title: isNonEmptyString(title) ? title : slug,
-    Locale: isNonEmptyString(locale) ? locale : 'en-US',
-    DeckType: normalizedDeckType,
-    IsFreeStarter: typeof isFreeStarter === 'boolean' ? isFreeStarter : normalizedDeckType === 1,
-    TotalCards: isFiniteNumber(totalCards) ? totalCards : cards.length,
-    FreeCardCount: isFiniteNumber(freeCardCount) ? freeCardCount : cards.length,
-    Cards: cards,
-  };
+    // ✅ HomeScreen 兼容字段
+    version: d.buildId,
+    totalCards: d.cardCount ?? 0,
+  }));
 }
 
-export async function readDeckMeta(slug: string): Promise<DeckMeta | null> {
+/**
+ * Step 4: prefer installed deck on device. If not installed, return null.
+ */
+export async function resolveDeckBySlug(slug: string): Promise<DeckContent | null> {
+  const meta = await getDeckMeta(slug);
+  if (!meta?.fileUri || !meta?.buildId) return null;
+
+  const info = await FileSystem.getInfoAsync(meta.fileUri);
+  if (!info.exists) {
+    await removeDeckMeta(slug);
+    return null;
+  }
+
   try {
-    const raw = await AsyncStorage.getItem(keyMeta(slug));
-    if (!raw) return null;
-    const j = JSON.parse(raw);
-    if (!isObject(j)) return null;
-    if (!isNonEmptyString((j as any).installedVersion)) return null;
-    if (!isFiniteNumber((j as any).installedAt)) return null;
-    if (!isNonEmptyString((j as any).sourceUrl)) return null;
-    return j as DeckMeta;
+    const rawText = await FileSystem.readAsStringAsync(meta.fileUri, {
+      encoding: UTF8_ENCODING,
+    });
+
+    const raw = JSON.parse(rawText) as RawDeckJson;
+
+    if (!raw || typeof raw.buildId !== 'string') return null;
+    if (!raw.deck || raw.deck.slug !== slug) return null;
+    if (!Array.isArray(raw.cards)) return null;
+
+    return mapRawDeckToDeckExport(raw);
   } catch {
     return null;
   }
 }
 
-export async function getInstalledDeckVersion(
-  slug: string,
-  fallbackVersion?: string,
-): Promise<string | null> {
-  const meta = await readDeckMeta(slug);
-  if (meta?.installedVersion) return meta.installedVersion;
-  return fallbackVersion ?? null;
-}
-
-/** Step 2: 读取 manifest（多路径兜底，以便 bucket 里文件名不同也能读到） */
-export async function fetchManifestIndex(): Promise<ManifestIndex | null> {
-  const candidates = Array.from(
-    new Set([
-      MANIFEST_URL,
-      `${CONTENT_BASE_URL}manifest.json`,
-      `${CONTENT_BASE_URL}manifest/index.json`,
-    ]),
-  );
-
-  for (const url of candidates) {
-    try {
-      const res = await fetch(withCacheBuster(url), {
-        headers: { 'Cache-Control': 'no-cache' },
-      });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const normalized = normalizeManifest(json);
-      if (normalized) return normalized;
-    } catch {
-      // try next candidate
-    }
-  }
-
-  return null;
-}
-
-/** 读取 manifest 的 deck 列表（无则空数组） */
-export async function listManifestDecks(): Promise<ManifestDeckEntry[]> {
-  const manifest = await fetchManifestIndex();
-  return manifest?.decks ?? [];
-}
-
-/** Step 2: 对比 remote.version !== localInstalledVersion */
-export async function checkForDeckUpdates(
-  localDecks: Array<{ Slug: string; Version: string }>,
-): Promise<Record<string, UpdateInfo>> {
-  const out: Record<string, UpdateInfo> = {};
-
-  const manifest = await fetchManifestIndex();
-  if (!manifest) return out;
-
-  const remoteBySlug = new Map(manifest.decks.map(d => [d.slug, d]));
-
-  await Promise.all(
-    localDecks.map(async d => {
-      const installedVersion = await getInstalledDeckVersion(d.Slug, d.Version);
-      const remote = remoteBySlug.get(d.Slug);
-
-      if (!remote) {
-        out[d.Slug] = { hasUpdate: false, installedVersion: installedVersion ?? d.Version };
-        return;
-      }
-
-      const remoteUrl = absolutizeUrl(remote.url);
-      const hasUpdate = isNonEmptyString(installedVersion)
-        ? remote.version !== installedVersion
-        : remote.version !== d.Version;
-
-      out[d.Slug] = {
-        hasUpdate,
-        installedVersion: installedVersion ?? d.Version,
-        remoteVersion: remote.version,
-        remoteUrl,
-        remoteSha256: remote.sha256,
-      };
-    }),
-  );
-
-  return out;
-}
-
-/** 基于 manifest 列表对比（即使本地没有 stub 也会返回 hasUpdate=true 以便首次安装） */
-export async function checkManifestForUpdates(): Promise<Record<string, UpdateInfo>> {
-  const out: Record<string, UpdateInfo> = {};
-
-  const manifest = await fetchManifestIndex();
-  if (!manifest) return out;
-
-  await Promise.all(
-    manifest.decks.map(async d => {
-      const installedVersion = await getInstalledDeckVersion(d.slug);
-      const remoteUrl = absolutizeUrl(d.url);
-      const hasUpdate = installedVersion ? d.version !== installedVersion : true; // 未安装视作需要安装
-
-      out[d.slug] = {
-        hasUpdate,
-        installedVersion: installedVersion ?? undefined,
-        remoteVersion: d.version,
-        remoteUrl,
-        remoteSha256: d.sha256,
-      };
-    }),
-  );
-
-  return out;
-}
-
 /**
- * Step 3: 下载 deck.json → 校验 → 写入本地缓存
- * 失败不覆盖旧内容
+ * Download & install deck.json to local storage.
+ *
+ * remoteVersion = manifest buildId (expected)
+ * remoteSha256 = v1 ignore (manifest doesn't include)
  */
 export async function installDeckFromUrl(
   slug: string,
-  remoteUrl: string,
-  expectedVersion?: string,
-  remoteSha256?: string,
+  url: string,
+  remoteVersion: string | null,
+  _remoteSha256: string | null,
 ): Promise<boolean> {
+  const safeSlug = String(slug).trim();
+  if (!safeSlug) return false;
+
+  const existing = await getDeckMeta(safeSlug);
+  if (existing?.buildId && remoteVersion && existing.buildId === remoteVersion) {
+    // already installed this build
+    return true;
+  }
+
+  const dir = getDeckDir();
+  await ensureDir(dir);
+
+  const finalPath = `${dir}${slugToFileName(safeSlug)}.json`;
+  const tmpPath = `${dir}${slugToFileName(safeSlug)}.tmp.json`;
+
   try {
-    const abs = absolutizeUrl(remoteUrl);
-    const res = await fetch(withCacheBuster(abs), {
-      headers: { 'Cache-Control': 'no-cache' },
+    // Download to tmp first
+    await FileSystem.deleteAsync(tmpPath, { idempotent: true });
+    await FileSystem.downloadAsync(url, tmpPath);
+
+    const rawText = await FileSystem.readAsStringAsync(tmpPath, {
+      encoding: UTF8_ENCODING,
     });
-    if (!res.ok) return false;
 
-    const text = await res.text();
+    const raw = JSON.parse(rawText) as RawDeckJson;
 
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch {
-      return false;
-    }
+    // Validate schema
+    if (!raw || typeof raw.buildId !== 'string') return false;
+    if (!raw.deck || typeof raw.deck.slug !== 'string') return false;
+    if (raw.deck.slug !== safeSlug) return false;
+    if (!Array.isArray(raw.cards)) return false;
+    if (raw.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim())) return false;
 
-    const deck = validateDeckExport(raw);
-    if (!deck) return false;
-    if (deck.Slug !== slug) return false;
-    if (expectedVersion && deck.Version !== expectedVersion) return false;
+    // Expected buildId check (remoteVersion = buildId from manifest)
+    if (remoteVersion && raw.buildId !== remoteVersion) return false;
 
-    // ✅ 校验通过再写入（保证失败不动旧内容）
-    await AsyncStorage.setItem(keyContent(slug), text);
+    // Move into place (atomic-ish)
+    await FileSystem.deleteAsync(finalPath, { idempotent: true });
+    await FileSystem.moveAsync({ from: tmpPath, to: finalPath });
 
-    const meta: DeckMeta = {
-      installedVersion: deck.Version,
-      installedAt: Date.now(),
-      sourceUrl: abs,
-      sha256: remoteSha256,
+    const meta: DeckInstallMeta = {
+      slug: safeSlug,
+      buildId: raw.buildId,
+      installedAtMs: Date.now(),
+      fileUri: finalPath,
+      cardCount: raw.cards.length,
     };
-    await AsyncStorage.setItem(keyMeta(slug), JSON.stringify(meta));
 
+    await AsyncStorage.setItem(deckMetaKey(safeSlug), JSON.stringify(meta));
     return true;
   } catch {
+    try {
+      await FileSystem.deleteAsync(tmpPath, { idempotent: true });
+    } catch {}
     return false;
   }
 }
 
-/**
- * Step 4: Deck/Review 数据源：优先本地下载版（AsyncStorage），没有就 fallback mock
- */
-export async function resolveDeckBySlug(
-  slug: string | undefined | null,
-): Promise<DeckExport | undefined> {
-  if (!slug) return undefined;
+/** =========================
+ *  Internals
+ *  ========================= */
 
-  const cached = await AsyncStorage.getItem(keyContent(slug));
-  if (cached) {
-    try {
-      const parsed = JSON.parse(cached);
-      const deck = validateDeckExport(parsed);
-      if (deck && deck.Slug === slug) return deck;
-
-      // 缓存坏了就清掉（避免每次都 parse 崩）
-      await AsyncStorage.multiRemove([keyContent(slug), keyMeta(slug)]);
-    } catch {
-      await AsyncStorage.multiRemove([keyContent(slug), keyMeta(slug)]);
-    }
+function joinUrl(base: string, ...parts: Array<string | null | undefined>): string {
+  let out = String(base || '').trim();
+  out = out.replace(/\/+$/, '');
+  for (const p of parts) {
+    if (!p) continue;
+    let s = String(p).trim();
+    if (!s) continue;
+    s = s.replace(/^\/+/, '');
+    s = s.replace(/\/+$/, '');
+    if (!s) continue;
+    out += '/' + s;
   }
+  return out;
+}
 
-  return undefined;
+function slugToFileName(slug: string): string {
+  return slug.replace(/[^a-zA-Z0-9._-]+/g, '_');
+}
+
+async function ensureDir(dir: string) {
+  const info = await FileSystem.getInfoAsync(dir);
+  if (info.exists && info.isDirectory) return;
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+}
+
+function deckMetaKey(slug: string) {
+  return `${DECK_META_PREFIX}${slug}`;
+}
+
+async function getDeckMeta(slug: string): Promise<DeckInstallMeta | null> {
+  try {
+    const raw = await AsyncStorage.getItem(deckMetaKey(slug));
+    if (!raw) return null;
+    const meta = JSON.parse(raw) as DeckInstallMeta;
+    if (!meta?.buildId || !meta?.fileUri) return null;
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
+async function removeDeckMeta(slug: string) {
+  try {
+    await AsyncStorage.removeItem(deckMetaKey(slug));
+  } catch {}
+}
+
+async function loadManifestPreferRemote(): Promise<RawManifest | null> {
+  const remote = await fetchRemoteManifest();
+  if (remote) return remote;
+  return await loadManifestCached();
+}
+
+async function loadManifestCached(): Promise<RawManifest | null> {
+  try {
+    const raw = await AsyncStorage.getItem(MANIFEST_CACHE_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw) as RawManifest;
+    if (!obj || !Array.isArray(obj.decks)) return null;
+    if (typeof obj.prefix !== 'string') obj.prefix = 'content/';
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchRemoteManifest(): Promise<RawManifest | null> {
+  try {
+    const resp = await fetch(MANIFEST_URL, {
+      method: 'GET',
+      headers: { 'cache-control': 'no-cache' },
+    });
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as RawManifest;
+
+    if (!json || !Array.isArray(json.decks)) return null;
+    if (typeof json.prefix !== 'string') json.prefix = 'content/';
+
+    await AsyncStorage.setItem(MANIFEST_CACHE_KEY, JSON.stringify(json));
+    return json;
+  } catch {
+    return null;
+  }
+}
+
+function mapRawDeckToDeckExport(raw: RawDeckJson): DeckExport {
+  const d = raw.deck;
+  const cards = Array.isArray(raw.cards) ? raw.cards : [];
+
+  const deckType = d.deckType ?? 1;
+  const isFreeStarter = deckType === 1;
+
+  // ✅ 这里最关键：补齐 DeckExport 需要的字段
+  // - v1 规则：free deck 全卡免费；premium deck 先不做试看 => FreeCardCount=0
+  const deck: DeckExport = {
+    Slug: d.slug,
+    Title: d.title,
+    Locale: d.locale,
+    DeckType: deckType,
+
+    Version: raw.buildId, // ✅ buildId 作为版本（更新判断一致）
+
+    IsFreeStarter: isFreeStarter,
+    FreeCardCount: isFreeStarter ? cards.length : 0,
+
+    TotalCards: cards.length,
+
+    Cards: cards.map((c) => ({
+      StableUid: c.stableUid,
+      Question: c.question,
+      Explanation: c.explanation ?? null,
+      CodeSnippet: c.codeSnippet ?? null,
+      CodeLanguage: c.codeLanguage ?? null,
+      RealWorldUsage: c.realWorldUsage ?? null,
+      Difficulty: typeof c.difficulty === 'number' ? c.difficulty : 2,
+      OrderInDeck: typeof c.orderInDeck === 'number' ? c.orderInDeck : 0,
+
+      // ⚠️ 只有当你的 CardExport 定义里包含这些字段时才需要：
+      // Revision: typeof c.revision === 'number' ? c.revision : 1,
+      // Version: typeof c.version === 'number' ? c.version : 1,
+    })) as any,
+  };
+
+  // 如果 DeckExport 里还有 Author/Description（很多项目会有），你可以解开：
+  // (deck as any).Author = d.author ?? null;
+  // (deck as any).Description = d.description ?? null;
+
+  return deck;
 }
