@@ -1,6 +1,6 @@
+// mobile/src/screens/HomeScreen.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -9,6 +9,8 @@ import {
   Pressable,
   Modal,
 } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -21,8 +23,10 @@ import type { CardProgress } from '../review/model';
 import { formatDateKey } from '../review/model';
 
 import { loadDeckProgress } from '../review/storage';
-
 import { syncDailyReminders } from '../notifications/reminders';
+
+// ✅ NEW: progress sync trigger
+import { forceProgressSync, applyCachedRemoteProgress } from '../sync/progressSync';
 
 import {
   checkManifestForUpdates,
@@ -36,7 +40,6 @@ import {
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
 type DeckFilter = 'all' | 'free' | 'premium';
-
 type CalendarDay = { dateKey: string; count: number };
 
 type DeckSummary = {
@@ -92,11 +95,6 @@ function isScheduled(p: CardProgress): boolean {
   return isLearned(p) && typeof p.nextReviewAt === 'number' && p.nextReviewAt > 0;
 }
 
-/**
- * Build upcoming schedule buckets (today -> today+(days-1)).
- * UX rule: overdue (nextReviewAt < today) counts into “today” so backlog is visible.
- * IMPORTANT: only learned cards are included.
- */
 function buildUpcoming(progress: CardProgress[], now: Date, days: number): CalendarDay[] {
   const out: CalendarDay[] = [];
   const index = new Map<string, number>();
@@ -180,7 +178,6 @@ export function HomeScreen({ navigation }: Props) {
     const now = new Date();
     const today0 = startOfToday(now);
 
-    // Step 2/3: check manifest + maybe auto install (first launch)
     let updates: Record<string, UpdateInfo> = {};
     let manifestDecks: ManifestDeckEntry[] = [];
     try {
@@ -191,12 +188,12 @@ export function HomeScreen({ navigation }: Props) {
         (u) => typeof u.installedVersion === 'string' && u.installedVersion.trim().length > 0,
       );
 
-      // ✅ 仅首次（本地无任何 deck）自动安装：v1 只装 free deck（deckType=1）
+      // ✅ first launch auto-install only FREE decks
       if (!hasAnyInstalledDeck && manifestDecks.length > 0) {
         let installedAny = false;
-
+        const installedSlugs: string[] = [];
         for (const entry of manifestDecks) {
-          if ((entry.deckType ?? 1) !== 1) continue; // v1: only free
+          if ((entry.deckType ?? 1) !== 1) continue;
 
           const info = updates[entry.slug];
           if (info?.remoteUrl && info.hasUpdate) {
@@ -208,18 +205,24 @@ export function HomeScreen({ navigation }: Props) {
                 info.remoteSha256,
               );
               if (ok) installedAny = true;
-            } catch {
-              // ignore single failure
-            }
+            } catch {}
+          }
+        }
+
+        // ✅ 安装完成后立刻 apply cached remote progress（解决：pull 在 install 前发生导致 applied=0 的坑）
+        // 这一步必须在 cursor 已推进的情况下也能“补上”历史进度
+        if (installedSlugs.length > 0) {
+          for (const slug of installedSlugs) {
+            try {
+              await applyCachedRemoteProgress(slug);
+            } catch {}
           }
         }
 
         if (installedAny) {
           try {
             updates = await checkManifestForUpdates();
-          } catch {
-            // ignore
-          }
+          } catch {}
         }
       }
     } catch {
@@ -227,7 +230,7 @@ export function HomeScreen({ navigation }: Props) {
       manifestDecks = [];
     }
 
-    // Current month buckets
+    // Month buckets
     const year = now.getFullYear();
     const month = now.getMonth();
     const monthStart = new Date(year, month, 1, 0, 0, 0, 0);
@@ -268,7 +271,7 @@ export function HomeScreen({ navigation }: Props) {
         });
         continue;
       }
-
+      try { await applyCachedRemoteProgress(deck.Slug); } catch {}
       const progress = await loadDeckProgress(deck);
 
       const learnedCount = progress.filter(isLearned).length;
@@ -296,12 +299,10 @@ export function HomeScreen({ navigation }: Props) {
         percent,
       });
 
-      // Aggregate next-30
       for (let i = 0; i < allUpcoming30.length; i++) {
         allUpcoming30[i].count += upcoming30[i]?.count ?? 0;
       }
 
-      // Aggregate current month
       for (const p of progress) {
         if (!isScheduled(p)) continue;
 
@@ -326,15 +327,34 @@ export function HomeScreen({ navigation }: Props) {
       monthCounts,
     };
   }, []);
+    const loadHomeFromLocal = useCallback(async () => {
+    const next = await computeHomeState();
+    if (isMounted.current) setState(next);
+  }, [computeHomeState]);
 
-  useFocusEffect(
-    useCallback(() => {
-      setState((prev) => ({ ...prev, loading: true }));
-      computeHomeState().then((newState) => {
-        if (isMounted.current) setState(newState);
-      });
-    }, [computeHomeState]),
-  );
+useFocusEffect(
+  useCallback(() => {
+    let cancelled = false;
+
+    async function run() {
+      // 1) 先用本地数据渲染（快）
+      await loadHomeFromLocal();
+      if (cancelled) return;
+
+      // 2) 强制同步一次（会 push + 可能 pull）
+      await forceProgressSync('home_focus');
+      if (cancelled) return;
+
+      // 3) 同步完再读一次本地（让 UI 看到 applied 的结果）
+      await loadHomeFromLocal();
+    }
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadHomeFromLocal, forceProgressSync]),
+);
 
   const { loading, asOfISO, deckSummaries, updates, allUpcoming30, monthCounts } = state;
   const asOf = useMemo(() => new Date(asOfISO), [asOfISO]);
@@ -391,7 +411,7 @@ export function HomeScreen({ navigation }: Props) {
     const monthStart = new Date(y, m, 1, 0, 0, 0, 0);
     const daysInMonth = new Date(y, m + 1, 0).getDate();
 
-    const lead = (monthStart.getDay() + 6) % 7; // Monday start
+    const lead = (monthStart.getDay() + 6) % 7;
     const rows = Math.ceil((lead + daysInMonth) / 7);
     const totalCells = rows * 7;
 
@@ -439,6 +459,7 @@ export function HomeScreen({ navigation }: Props) {
   const totalDueAllDecks = deckSummaries.reduce((sum, d) => sum + (d.canStudy ? d.dueToday : 0), 0);
 
   return (
+    <SafeAreaProvider>
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient
         colors={['#F5F3FF', '#E0F2FE']}
@@ -663,9 +684,14 @@ export function HomeScreen({ navigation }: Props) {
                           );
 
                           if (ok) {
-                            const newState = await computeHomeState();
-                            if (isMounted.current) setState(newState);
-                            openDeck(d.slug);
+                           // ✅ apply cached remote progress for this deck (fix multi-deck cursor/cache case)
+                          try {
+                            await applyCachedRemoteProgress(d.slug);
+                          } catch {}
+
+                          const newState = await computeHomeState();
+                          if (isMounted.current) setState(newState);
+                          openDeck(d.slug);
                           } else {
                             setState((prev) => ({ ...prev, loading: false }));
                           }
@@ -714,6 +740,7 @@ export function HomeScreen({ navigation }: Props) {
         </ScrollView>
       </LinearGradient>
     </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

@@ -2,7 +2,6 @@
 
 import React, { useMemo, useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -10,6 +9,8 @@ import {
   Alert,
   Linking,
 } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
@@ -208,6 +209,7 @@ export function SettingsScreen({ navigation }: Props) {
       : 'You are up to date.';
 
   return (
+    <SafeAreaProvider>
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient
         colors={['#F5F3FF', '#E0F2FE']}
@@ -351,6 +353,7 @@ export function SettingsScreen({ navigation }: Props) {
         </View>
       </LinearGradient>
     </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

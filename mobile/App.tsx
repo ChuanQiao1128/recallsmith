@@ -10,6 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -28,6 +29,7 @@ import {
 } from './src/config/remoteConfig';
 
 import * as Notifications from 'expo-notifications';
+import { setSyncAccessToken, scheduleProgressSync } from './src/sync/progressSync';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -62,6 +64,7 @@ function ForceUpdateScreen(props: {
   }
 
   return (
+    <SafeAreaProvider>
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient
         colors={['#F5F3FF', '#E0F2FE']}
@@ -101,11 +104,23 @@ function ForceUpdateScreen(props: {
         </View>
       </LinearGradient>
     </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
 export default function App() {
   const [gate, setGate] = useState<GateState>({ status: 'checking' });
+
+  useEffect(() => {
+  if (!__DEV__) return;
+  const t = (process.env.EXPO_PUBLIC_DEV_ACCESS_TOKEN || '').trim();
+  if (!t) return;
+
+  void (async () => {
+    await setSyncAccessToken(t);
+    scheduleProgressSync({ delayMs: 0, reason: 'app_start' });
+  })();
+}, []);
 
   useEffect(() => {
     let cancelled = false;

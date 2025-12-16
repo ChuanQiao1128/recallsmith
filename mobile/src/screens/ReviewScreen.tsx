@@ -1,6 +1,6 @@
+// mobile/src/screens/ReviewScreen.tsx
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -10,6 +10,8 @@ import {
   Animated,
   useWindowDimensions,
 } from 'react-native';
+
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import CodeBlock from '../components/CodeBlock';
 
@@ -33,6 +35,14 @@ import {
 } from '../review/storage';
 
 import { syncDailyReminders } from '../notifications/reminders';
+
+// ✅ progress sync
+import {
+  recordReviewEvent,
+  scheduleProgressSync,
+  forceProgressSync,
+  applyCachedRemoteProgress,
+} from '../sync/progressSync';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Review'>;
 type UiRating = ReviewRating;
@@ -70,10 +80,6 @@ function isScheduled(p: CardProgress): boolean {
   return isLearned(p) && typeof p.nextReviewAt === 'number' && p.nextReviewAt > 0;
 }
 
-/**
- * Due-today bucket (overdue -> today). IMPORTANT: only learned cards.
- * This matches Home/Deck "Due today".
- */
 function isDueTodayBucket(p: CardProgress, now: Date): boolean {
   if (!isScheduled(p)) return false;
 
@@ -122,7 +128,6 @@ function pickNextCard(
   const pMap = new Map(progress.map((p) => [p.stableUid, p]));
 
   const pickWith = (predicate: (card: CardExport, p: CardProgress) => boolean) => {
-    // pass 1: avoid immediate repeat
     for (const card of cards) {
       if (avoidUid && card.StableUid === avoidUid) continue;
       const p = pMap.get(card.StableUid);
@@ -130,7 +135,6 @@ function pickNextCard(
       if (predicate(card, p)) return { card: cardMap.get(card.StableUid)!, progress: p };
     }
 
-    // pass 2: allow repeat if nothing else
     if (avoidUid) {
       for (const card of cards) {
         const p = pMap.get(card.StableUid);
@@ -327,9 +331,16 @@ export function ReviewScreen({ navigation, route }: Props) {
           if (!resolved) throw new Error('Deck not found');
           if (cancelled) return;
 
-          // ✅ resolved 现在满足 DeckExport 了
           setDeck(resolved);
           void setActiveDeckSlug(resolved.Slug);
+
+          // ✅ 关键：进入 Review 时，先同步（拿到别的设备变化 & 填充 remote cache）
+          await forceProgressSync('review_focus');
+
+          // ✅ 再把 remote cache 落到本地（解决“cursor 已推进但 deck 后安装”的坑）
+          try {
+            await applyCachedRemoteProgress(resolved.Slug);
+          } catch {}
 
           const p = await loadDeckProgress(resolved);
           if (cancelled) return;
@@ -368,11 +379,19 @@ export function ReviewScreen({ navigation, route }: Props) {
   if (loadError) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
           <View style={styles.center}>
             <Text style={styles.title}>Deck not available</Text>
             <Text style={styles.subtitle}>{loadError}</Text>
-            <Pressable style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed, { marginTop: 10 }]} onPress={() => navigation.goBack()}>
+            <Pressable
+              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed, { marginTop: 10 }]}
+              onPress={() => navigation.goBack()}
+            >
               <Text style={styles.backText}>← Back</Text>
             </Pressable>
           </View>
@@ -384,7 +403,12 @@ export function ReviewScreen({ navigation, route }: Props) {
   if (loading || !dailyStats || !deck) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
           <View style={styles.center}>
             <ActivityIndicator size="large" color="#6366F1" />
             <Text style={styles.loadingText}>Loading cards...</Text>
@@ -407,15 +431,32 @@ export function ReviewScreen({ navigation, route }: Props) {
 
     setReviewing(true);
     try {
+      const nowMs = Date.now();
+
       const seenRev = typeof (current.card as any).Revision === 'number' ? (current.card as any).Revision : 1;
 
       const updatedOne: CardProgress = {
-        ...scheduleNextReview(current.progress, uiRating, new Date()),
+        ...scheduleNextReview(current.progress, uiRating, new Date(nowMs)),
         lastSeenRevision: seenRev,
       };
 
       const newProgress = progress.map((p) => (p.stableUid === updatedOne.stableUid ? updatedOne : p));
+
       await saveDeckProgress(deck, newProgress);
+
+      // ✅ enqueue sync event
+      void recordReviewEvent({
+        deckSlug: deck.Slug,
+        deckVersion: deck.Version,
+        stableUid: updatedOne.stableUid,
+        rating: uiRating,
+        reviewedAtMs: nowMs,
+        progressAfter: updatedOne,
+        lastSeenRevision: seenRev,
+      });
+
+      // ✅ trigger sync soon (debounced)
+      scheduleProgressSync('rating');
 
       const nextDone = sessionDone + 1;
       setSessionDone(nextDone);
@@ -442,10 +483,18 @@ export function ReviewScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+      <LinearGradient
+        colors={['#F5F3FF', '#E0F2FE']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradient}
+      >
         <View style={styles.container}>
           <View style={styles.headerRow}>
-            <Pressable style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]} onPress={() => navigation.goBack()}>
+            <Pressable
+              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
+              onPress={() => navigation.goBack()}
+            >
               <Text style={styles.backText}>← Deck</Text>
             </Pressable>
 
@@ -501,7 +550,11 @@ export function ReviewScreen({ navigation, route }: Props) {
                       },
                     ]}
                   >
-                    <Pressable style={styles.facePressable} onPress={() => setShowBack(true)} accessibilityLabel="Flip to see answer">
+                    <Pressable
+                      style={styles.facePressable}
+                      onPress={() => setShowBack(true)}
+                      accessibilityLabel="Flip to see answer"
+                    >
                       <View style={styles.cardHeaderRow}>
                         <Text style={styles.cardOrder}>#{current.card.OrderInDeck}</Text>
                         <Text style={styles.cardChip}>
@@ -533,7 +586,11 @@ export function ReviewScreen({ navigation, route }: Props) {
                       <View style={styles.backTopRow}>
                         <Text style={styles.backTitle}>Answer</Text>
 
-                        <Pressable style={({ pressed }) => [styles.flipBackBtn, pressed && { opacity: 0.9 }]} onPress={() => setShowBack(false)} accessibilityLabel="Flip back to question">
+                        <Pressable
+                          style={({ pressed }) => [styles.flipBackBtn, pressed && { opacity: 0.9 }]}
+                          onPress={() => setShowBack(false)}
+                          accessibilityLabel="Flip back to question"
+                        >
                           <Text style={styles.flipBackBtnText}>↩︎</Text>
                         </Pressable>
                       </View>

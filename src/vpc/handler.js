@@ -116,11 +116,27 @@ exports.handler = async (event) => {
     if (path === "/api/v1/entitlements" && method === "GET") {
       return handleEntitlements({ event, method, path, query, res, auth });
     }
-    if (path === "/api/v1/sync/progress/events") {
-      return handleProgressEvents({ event, method, path, query, res, auth });
+    // ✅ Sync (aliases for mobile v1)
+    if (path === "/api/v1/sync/progress/events" || path === "/api/v1/sync/push") {
+      // 这里把 path 传成 canonical，避免 handler 内部如果做了 path 判断会出问题
+      return handleProgressEvents({
+        event,
+        method,
+        path: "/api/v1/sync/progress/events",
+        query,
+        res,
+        auth,
+      });
     }
-    if (path === "/api/v1/sync/progress") {
-      return handleProgressGet({ event, method, path, query, res, auth });
+    if (path === "/api/v1/sync/progress" || path === "/api/v1/sync/pull") {
+      return handleProgressGet({
+        event,
+        method,
+        path: "/api/v1/sync/progress",
+        query,
+        res,
+        auth,
+      });
     }
 
     // Admin users (v1 冻结：先占位，后面实现)

@@ -28,6 +28,8 @@ async function handleProgressGet({ method, query, res, auth }) {
       review_count as "reviewCount",
       last_rating as "lastRating",
       (extract(epoch from last_reviewed_at) * 1000)::bigint as "lastReviewedAtMs",
+      (extract(epoch from due_at) * 1000)::bigint as "nextReviewAtMs",
+      last_seen_revision as "lastSeenRevision",
       (extract(epoch from updated_at) * 1000)::bigint as "updatedAtMs"
     from user_progress
     where user_sub = $1
@@ -41,7 +43,9 @@ async function handleProgressGet({ method, query, res, auth }) {
   }
 
   if (sinceMs != null) {
-    sql += ` and updated_at > to_timestamp($${idx++}/1000.0)`;
+    // ✅ 关键：updated_at 有微秒，返回却是毫秒 bigint（截断）
+    // 为了 cursor 稳定不重复，过滤也必须用同样的“截断到毫秒”的值比较
+    sql += ` and (extract(epoch from updated_at) * 1000)::bigint > $${idx++}`;
     params.push(Number(sinceMs));
   }
 

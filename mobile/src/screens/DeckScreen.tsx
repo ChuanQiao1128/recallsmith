@@ -1,7 +1,6 @@
 // mobile/src/screens/DeckScreen.tsx
 import React, { useState, useCallback } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -9,6 +8,8 @@ import {
   Pressable,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -160,7 +161,7 @@ export function DeckScreen({ navigation, route }: Props) {
 
         try {
           // ✅ Step 4: 先 resolve deck（本地下载版优先）
-          const deck = await resolveDeckBySlug(slug);
+          const deck = await resolveDeckBySlug(slug!);
           if (!deck) throw new Error('Deck not found');
           if (cancelled) return;
 
@@ -282,6 +283,7 @@ export function DeckScreen({ navigation, route }: Props) {
   const disableMixed = !canStudy || (dueToday === 0 && newRemaining === 0 && updatedCount === 0);
 
   return (
+    <SafeAreaProvider>
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient
         colors={['#F5F3FF', '#E0F2FE']}
@@ -471,6 +473,7 @@ export function DeckScreen({ navigation, route }: Props) {
         </ScrollView>
       </LinearGradient>
     </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
