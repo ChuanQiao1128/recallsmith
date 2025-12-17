@@ -2,7 +2,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from './model';
-import { formatDateKey } from './model';
+import { formatDateKey, clampStage, inferStageFromIntervalMs } from './model';
 
 export type DailyStats = {
   dateKey: string;
@@ -15,11 +15,10 @@ const DAILY_PREFIX = 'deck-daily-stats:';
 const META_PREFIX = 'deck-meta:';
 
 function progressKey(slug: string) {
-  // ✅ Phase 0: 进度只跟 slug 绑定（不再跟 Version 绑定）
+  // Phase 0: progress only binds to slug (not Version)
   return `${PROGRESS_PREFIX}${slug}`;
 }
 function legacyProgressKey(slug: string, version: string) {
-  // legacy: deck-progress:${slug}:${version}
   return `${PROGRESS_PREFIX}${slug}:${version}`;
 }
 
@@ -52,7 +51,7 @@ function normalizeProgressEntry(raw: any): CardProgress | null {
   const stableUid = raw?.stableUid;
   if (typeof stableUid !== 'string' || stableUid.length === 0) return null;
 
-  const stage = normalizeNumber(raw.stage, 0);
+  const stage = clampStage(normalizeNumber(raw.stage, 0));
 
   const lastReviewedAt =
     typeof raw.lastReviewedAt === 'number' && Number.isFinite(raw.lastReviewedAt) && raw.lastReviewedAt > 0
@@ -71,49 +70,67 @@ function normalizeProgressEntry(raw: any): CardProgress | null {
 
 function cardRevision(card: any): number {
   const r = card?.Revision;
-  return typeof r === 'number' && Number.isFinite(r) ? r : 1; // default = 1
+  return typeof r === 'number' && Number.isFinite(r) ? r : 1;
 }
 
 function createInitialProgress(deck: DeckExport): CardProgress[] {
   const cards = deck.Cards ?? [];
-  return cards.map(c => ({
+  return cards.map((c) => ({
     stableUid: c.StableUid,
     stage: 0,
     lastReviewedAt: undefined,
-    nextReviewAt: 0,      // ✅ 未学过：不安排复习
-    lastSeenRevision: 0,  // ✅ 未看过任何 revision
+    nextReviewAt: 0,
+    lastSeenRevision: 0,
   }));
 }
 
 function mergeProgressSets(sets: CardProgress[][]): CardProgress[] {
   const map = new Map<string, CardProgress>();
+
   for (const set of sets) {
     for (const p of set) {
       const uid = p.stableUid;
       const existing = map.get(uid);
+
       if (!existing) {
         map.set(uid, p);
         continue;
       }
+
       const a = existing.lastReviewedAt ?? 0;
       const b = p.lastReviewedAt ?? 0;
+
       if (b > a) {
         map.set(uid, p);
-      } else if (b === a) {
-        if ((p.nextReviewAt ?? 0) > (existing.nextReviewAt ?? 0)) map.set(uid, p);
-        else if ((p.stage ?? 0) > (existing.stage ?? 0)) map.set(uid, p);
+        continue;
+      }
+
+      if (b === a) {
+        const an = existing.nextReviewAt ?? 0;
+        const bn = p.nextReviewAt ?? 0;
+        if (bn > an) {
+          map.set(uid, p);
+          continue;
+        }
+        if (bn === an && (p.stage ?? 0) > (existing.stage ?? 0)) {
+          map.set(uid, p);
+          continue;
+        }
       }
     }
   }
+
   return Array.from(map.values());
 }
 
 /**
- * ✅ Phase 0:
- * - 只保留当前 deck 里存在的 stableUid（避免删卡后 learnedCount/due 统计错）
- * - 补齐缺失卡（新增卡）
- * - 补齐 lastSeenRevision（老 schema 迁移）
- * - 如果 deck 卡 Revision 变大：把它“拉回今天复习”，但不清空历史
+ * Phase 0 reconcile:
+ * - keep only uids existing in deck
+ * - add missing cards
+ * - learned but nextReviewAt missing => fill nextReviewAt = lastReviewedAt
+ * - learned but lastSeenRevision missing/0 => set to deckRev (avoid endless "updated" loop)
+ * - infer stage (conservative) to avoid new device stage all 0
+ * - if deck revision increased => pull nextReviewAt to now (only if it was in future)
  */
 function reconcileProgressWithDeck(
   deck: DeckExport,
@@ -121,21 +138,34 @@ function reconcileProgressWithDeck(
   now: Date,
 ): { progress: CardProgress[]; changed: boolean } {
   const cards = deck.Cards ?? [];
-  const deckUidSet = new Set(cards.map(c => c.StableUid));
+  const deckUidSet = new Set(cards.map((c) => c.StableUid));
   const nowMs = now.getTime();
 
+  // dedupe by uid (keep best)
   const map = new Map<string, CardProgress>();
+
   for (const raw of rawProgress) {
     if (!deckUidSet.has(raw.stableUid)) continue;
-    const p = normalizeProgressEntry(raw);
-    if (!p) continue;
 
-    const existing = map.get(p.stableUid);
-    if (!existing) map.set(p.stableUid, p);
-    else {
-      const a = existing.lastReviewedAt ?? 0;
-      const b = p.lastReviewedAt ?? 0;
-      if (b > a) map.set(p.stableUid, p);
+    const p0 = normalizeProgressEntry(raw);
+    if (!p0) continue;
+
+    const existing = map.get(p0.stableUid);
+    if (!existing) {
+      map.set(p0.stableUid, p0);
+      continue;
+    }
+
+    const a = existing.lastReviewedAt ?? 0;
+    const b = p0.lastReviewedAt ?? 0;
+
+    if (b > a) {
+      map.set(p0.stableUid, p0);
+    } else if (b === a) {
+      const an = existing.nextReviewAt ?? 0;
+      const bn = p0.nextReviewAt ?? 0;
+      if (bn > an) map.set(p0.stableUid, p0);
+      else if (bn === an && (p0.stage ?? 0) > (existing.stage ?? 0)) map.set(p0.stableUid, p0);
     }
   }
 
@@ -158,24 +188,61 @@ function reconcileProgressWithDeck(
       changed = true;
     }
 
-    // 补齐 lastSeenRevision（从老 schema 升级）
-    const hasLSR = typeof p.lastSeenRevision === 'number' && Number.isFinite(p.lastSeenRevision);
-    if (!hasLSR) {
-      p = {
-        ...p,
-        // ✅ 已学过的卡：默认认为“已经看过当前版本”，避免升级后全被当成更新卡
-        lastSeenRevision: isLearned(p) ? deckRev : 0,
-      };
+    // stage clamp (defensive)
+    const clampedStage = clampStage(p.stage ?? 0);
+    if (clampedStage !== (p.stage ?? 0)) {
+      p = { ...p, stage: clampedStage };
       changed = true;
     }
 
-    // 内容更新：Revision 变大 => 提前安排复习（仅当它原本排在未来，避免反复降级）
+    // learned must have nextReviewAt
+    if (isLearned(p)) {
+      const okNext = typeof p.nextReviewAt === 'number' && Number.isFinite(p.nextReviewAt) && p.nextReviewAt > 0;
+      if (!okNext) {
+        p = { ...p, nextReviewAt: p.lastReviewedAt! };
+        changed = true;
+      }
+    }
+
+    // learned lastSeenRevision should not be 0
+    {
+      const lsr =
+        typeof p.lastSeenRevision === 'number' && Number.isFinite(p.lastSeenRevision) ? p.lastSeenRevision : null;
+
+      const needFix = lsr == null || (isLearned(p) && lsr <= 0) || (!isLearned(p) && lsr < 0);
+
+      if (needFix) {
+        p = {
+          ...p,
+          // learned: assume user has seen current revision to avoid all learned marked "updated"
+          lastSeenRevision: isLearned(p) ? deckRev : 0,
+        };
+        changed = true;
+      }
+    }
+
+    // ✅ infer stage (conservative: only bump stage upward when stage==0 but interval implies bigger)
+    if (isLearned(p) && typeof p.lastReviewedAt === 'number' && p.lastReviewedAt > 0) {
+      const intervalMs = (p.nextReviewAt ?? 0) - p.lastReviewedAt;
+      const inferred = inferStageFromIntervalMs(intervalMs);
+
+      const cur = clampStage(p.stage ?? 0);
+
+      // Only fix the most common broken case:
+      // new device created initial progress with stage=0, then remote merge only wrote times.
+      if (cur === 0 && inferred != null && inferred > cur) {
+        p = { ...p, stage: inferred };
+        changed = true;
+      }
+    }
+
+    // content updated: revision increased => pull nextReviewAt to now (only if it was in future)
     if (isLearned(p) && (p.lastSeenRevision ?? 0) < deckRev) {
       if (typeof p.nextReviewAt === 'number' && p.nextReviewAt > nowMs) {
         p = {
           ...p,
           nextReviewAt: nowMs,
-          stage: Math.max((p.stage ?? 0) - 1, 0),
+          stage: Math.max(clampStage(p.stage ?? 0) - 1, 0),
         };
         changed = true;
       }
@@ -211,14 +278,14 @@ async function upsertDeckMeta(deck: DeckExport, now: Date): Promise<void> {
 }
 
 async function tryLoadLegacyProgress(deck: DeckExport): Promise<CardProgress[] | null> {
-  // 1) 先试 “旧 schema + 当前 version”
+  // 1) old schema + current version
   const direct = await readJson<CardProgress[]>(legacyProgressKey(deck.Slug, deck.Version));
   if (direct && Array.isArray(direct)) return direct;
 
-  // 2) 再扫所有旧 key：deck-progress:${slug}:*
+  // 2) scan all legacy keys
   const allKeys = await AsyncStorage.getAllKeys();
   const prefix = `${PROGRESS_PREFIX}${deck.Slug}:`;
-  const legacyKeys = allKeys.filter(k => k.startsWith(prefix));
+  const legacyKeys = allKeys.filter((k) => k.startsWith(prefix));
   if (legacyKeys.length === 0) return null;
 
   const pairs = await AsyncStorage.multiGet(legacyKeys);
@@ -232,9 +299,7 @@ async function tryLoadLegacyProgress(deck: DeckExport): Promise<CardProgress[] |
         const normalized = parsed.map(normalizeProgressEntry).filter(Boolean) as CardProgress[];
         if (normalized.length) sets.push(normalized);
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   if (sets.length === 0) return null;
@@ -247,7 +312,7 @@ export async function loadDeckProgress(deck: DeckExport): Promise<CardProgress[]
 
   let progress = await readJson<CardProgress[]>(key);
 
-  // ✅ Phase 0 migration：新 key 不存在 => 从旧 key 迁移
+  // migration: new key missing => move from legacy or init
   if (!progress || !Array.isArray(progress)) {
     const legacy = await tryLoadLegacyProgress(deck);
     progress = legacy && Array.isArray(legacy) ? legacy : createInitialProgress(deck);
@@ -262,6 +327,7 @@ export async function loadDeckProgress(deck: DeckExport): Promise<CardProgress[]
 }
 
 export async function saveDeckProgress(deck: DeckExport, progress: CardProgress[]): Promise<void> {
+  // do not reconcile here (avoid side-effects while writing)
   await writeJson(progressKey(deck.Slug), progress);
   await upsertDeckMeta(deck, new Date());
 }
@@ -269,10 +335,10 @@ export async function saveDeckProgress(deck: DeckExport, progress: CardProgress[
 export async function resetDeckProgress(deck: DeckExport): Promise<void> {
   await AsyncStorage.removeItem(progressKey(deck.Slug));
 
-  // 可选：顺手清掉旧 schema key，避免未来误读
+  // remove legacy keys too
   const allKeys = await AsyncStorage.getAllKeys();
   const prefix = `${PROGRESS_PREFIX}${deck.Slug}:`;
-  const legacyKeys = allKeys.filter(k => k.startsWith(prefix));
+  const legacyKeys = allKeys.filter((k) => k.startsWith(prefix));
   if (legacyKeys.length) await AsyncStorage.multiRemove(legacyKeys);
 }
 
@@ -293,7 +359,7 @@ export async function loadOrInitDailyStats(deck: DeckExport, progress: CardProgr
 
   let stats = await readJson<DailyStats>(key);
 
-  // ✅ Phase 0 migration：daily stats 也从旧 schema 迁移
+  // daily migration
   if (!stats) {
     const legacy = await readJson<DailyStats>(legacyDailyKey(deck.Slug, deck.Version));
     if (legacy) {
@@ -308,7 +374,7 @@ export async function loadOrInitDailyStats(deck: DeckExport, progress: CardProgr
     return stats;
   }
 
-  // 新的一天：清 doneCount
+  // new day => reset doneCount
   if (stats.dateKey !== todayKey) {
     stats = { ...stats, dateKey: todayKey, doneCount: 0 };
     await writeJson(key, stats);
@@ -324,9 +390,9 @@ export async function saveDailyStats(deck: DeckExport, stats: DailyStats): Promi
 export async function loadAllProgress(): Promise<Record<string, CardProgress[]>> {
   const allKeys = await AsyncStorage.getAllKeys();
 
-  // 新 schema：deck-progress:{slug}（slug 后面不再有 ":"）
+  // new schema: deck-progress:{slug} (no ':' inside slug part)
   const keys = allKeys.filter(
-    k => k.startsWith(PROGRESS_PREFIX) && !k.slice(PROGRESS_PREFIX.length).includes(':'),
+    (k) => k.startsWith(PROGRESS_PREFIX) && !k.slice(PROGRESS_PREFIX.length).includes(':'),
   );
 
   if (keys.length === 0) return {};
@@ -336,12 +402,11 @@ export async function loadAllProgress(): Promise<Record<string, CardProgress[]>>
 
   for (const [k, raw] of pairs) {
     if (!raw) continue;
+    const slug = k.slice(PROGRESS_PREFIX.length);
     try {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) out[k] = parsed;
-    } catch {
-      // ignore
-    }
+      if (Array.isArray(parsed)) out[slug] = parsed;
+    } catch {}
   }
 
   return out;

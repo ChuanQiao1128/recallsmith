@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "generatedAtMs": 1765930087544,
+  "prefix": "content/",
+  "decks": [
+    {
+      "slug": "js-basics",
+      "title": "JavaScript Basics",
+      "locale": "en-US",
+      "deckType": 1,
+      "buildId": "1765930087544",
+      "path": "decks/js-basics/builds/1765930087544/deck.json",
+      "cardCount": 14,
+      "publishedAtMs": 1765930087544
+    }
+  ]
+}

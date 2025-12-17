@@ -334,10 +334,10 @@ export function ReviewScreen({ navigation, route }: Props) {
           setDeck(resolved);
           void setActiveDeckSlug(resolved.Slug);
 
-          // ✅ 关键：进入 Review 时，先同步（拿到别的设备变化 & 填充 remote cache）
+          // ✅ enter Review => sync first (pull other devices + fill remote cache)
           await forceProgressSync('review_focus');
 
-          // ✅ 再把 remote cache 落到本地（解决“cursor 已推进但 deck 后安装”的坑）
+          // ✅ then apply cache (covers: cursor advanced but deck installed later)
           try {
             await applyCachedRemoteProgress(resolved.Slug);
           } catch {}
@@ -444,7 +444,7 @@ export function ReviewScreen({ navigation, route }: Props) {
 
       await saveDeckProgress(deck, newProgress);
 
-      // ✅ enqueue sync event
+      // ✅ enqueue sync event (best effort)
       void recordReviewEvent({
         deckSlug: deck.Slug,
         deckVersion: deck.Version,

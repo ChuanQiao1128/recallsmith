@@ -25,7 +25,7 @@ import { formatDateKey } from '../review/model';
 import { loadDeckProgress } from '../review/storage';
 import { syncDailyReminders } from '../notifications/reminders';
 
-// ✅ NEW: progress sync trigger
+// ✅ progress sync
 import { forceProgressSync, applyCachedRemoteProgress } from '../sync/progressSync';
 
 import {
@@ -180,6 +180,7 @@ export function HomeScreen({ navigation }: Props) {
 
     let updates: Record<string, UpdateInfo> = {};
     let manifestDecks: ManifestDeckEntry[] = [];
+
     try {
       updates = await checkManifestForUpdates();
       manifestDecks = await listManifestDecks();
@@ -190,36 +191,44 @@ export function HomeScreen({ navigation }: Props) {
 
       // ✅ first launch auto-install only FREE decks
       if (!hasAnyInstalledDeck && manifestDecks.length > 0) {
-        let installedAny = false;
         const installedSlugs: string[] = [];
+
         for (const entry of manifestDecks) {
           if ((entry.deckType ?? 1) !== 1) continue;
 
           const info = updates[entry.slug];
-          if (info?.remoteUrl && info.hasUpdate) {
-            try {
-              const ok = await installDeckFromUrl(
-                entry.slug,
-                info.remoteUrl,
-                info.remoteVersion,
-                info.remoteSha256,
-              );
-              if (ok) installedAny = true;
-            } catch {}
+          if (!info?.remoteUrl || !info.hasUpdate) continue;
+
+          try {
+            const ok = await installDeckFromUrl(
+              entry.slug,
+              info.remoteUrl,
+              info.remoteVersion,
+              info.remoteSha256,
+            );
+            if (ok) {
+              installedSlugs.push(entry.slug); // ✅ FIX: 你原来没 push
+            }
+          } catch {
+            // ignore
           }
         }
 
-        // ✅ 安装完成后立刻 apply cached remote progress（解决：pull 在 install 前发生导致 applied=0 的坑）
-        // 这一步必须在 cursor 已推进的情况下也能“补上”历史进度
+        // ✅ 如果装了任何 deck：补一个 active deck（避免 selectedSlug 长期是 null）
         if (installedSlugs.length > 0) {
+          try {
+            const stored = await loadActiveDeckSlug();
+            if (!stored) await setActiveDeckSlug(installedSlugs[0]);
+          } catch {}
+
+          // ✅ 安装后立刻 apply cached remote progress（如果之前已经 pull 过，会立刻落本地）
           for (const slug of installedSlugs) {
             try {
               await applyCachedRemoteProgress(slug);
             } catch {}
           }
-        }
 
-        if (installedAny) {
+          // refresh updates so UI pills are correct
           try {
             updates = await checkManifestForUpdates();
           } catch {}
@@ -271,7 +280,12 @@ export function HomeScreen({ navigation }: Props) {
         });
         continue;
       }
-      try { await applyCachedRemoteProgress(deck.Slug); } catch {}
+
+      // ✅ apply remote cache -> local（只影响本地 AsyncStorage；安全重复调用）
+      try {
+        await applyCachedRemoteProgress(deck.Slug);
+      } catch {}
+
       const progress = await loadDeckProgress(deck);
 
       const learnedCount = progress.filter(isLearned).length;
@@ -327,34 +341,35 @@ export function HomeScreen({ navigation }: Props) {
       monthCounts,
     };
   }, []);
-    const loadHomeFromLocal = useCallback(async () => {
+
+  const loadHomeFromLocal = useCallback(async () => {
     const next = await computeHomeState();
     if (isMounted.current) setState(next);
   }, [computeHomeState]);
 
-useFocusEffect(
-  useCallback(() => {
-    let cancelled = false;
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
 
-    async function run() {
-      // 1) 先用本地数据渲染（快）
-      await loadHomeFromLocal();
-      if (cancelled) return;
+      async function run() {
+        // 1) 先读本地渲染（尽量快）
+        await loadHomeFromLocal();
+        if (cancelled) return;
 
-      // 2) 强制同步一次（会 push + 可能 pull）
-      await forceProgressSync('home_focus');
-      if (cancelled) return;
+        // 2) 强制同步一次（push + 可能 pull）
+        await forceProgressSync('home_focus');
+        if (cancelled) return;
 
-      // 3) 同步完再读一次本地（让 UI 看到 applied 的结果）
-      await loadHomeFromLocal();
-    }
+        // 3) 同步完再读一次本地（让 UI 看到 apply 的结果）
+        await loadHomeFromLocal();
+      }
 
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [loadHomeFromLocal, forceProgressSync]),
-);
+      void run();
+      return () => {
+        cancelled = true;
+      };
+    }, [loadHomeFromLocal]),
+  );
 
   const { loading, asOfISO, deckSummaries, updates, allUpcoming30, monthCounts } = state;
   const asOf = useMemo(() => new Date(asOfISO), [asOfISO]);
@@ -460,286 +475,285 @@ useFocusEffect(
 
   return (
     <SafeAreaProvider>
-    <SafeAreaView style={styles.safeArea}>
-      <LinearGradient
-        colors={['#F5F3FF', '#E0F2FE']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.gradient}
-      >
-        <Modal animationType="fade" transparent visible={isMonthOpen} onRequestClose={closeMonth}>
-          <View style={styles.modalOverlay}>
-            <Pressable style={styles.modalBackdrop} onPress={closeMonth} />
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <Modal animationType="fade" transparent visible={isMonthOpen} onRequestClose={closeMonth}>
+            <View style={styles.modalOverlay}>
+              <Pressable style={styles.modalBackdrop} onPress={closeMonth} />
 
-            <View style={styles.modalCardOpaque}>
-              <View style={styles.modalHeaderRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.modalTitle}>{monthGrid.monthLabel}</Text>
-                  <Text style={styles.modalSubtitle}>{totalDueAllDecks} due today across all decks</Text>
+              <View style={styles.modalCardOpaque}>
+                <View style={styles.modalHeaderRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalTitle}>{monthGrid.monthLabel}</Text>
+                    <Text style={styles.modalSubtitle}>{totalDueAllDecks} due today across all decks</Text>
+                  </View>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]}
+                    onPress={closeMonth}
+                    accessibilityLabel="Close month view"
+                  >
+                    <Text style={styles.modalCloseText}>✕</Text>
+                  </Pressable>
                 </View>
 
-                <Pressable
-                  style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]}
-                  onPress={closeMonth}
-                  accessibilityLabel="Close month view"
-                >
-                  <Text style={styles.modalCloseText}>✕</Text>
-                </Pressable>
+                <View style={styles.weekdayRow}>
+                  {WEEKDAYS_MON.map((w) => (
+                    <Text key={w} style={styles.weekdayText}>
+                      {w}
+                    </Text>
+                  ))}
+                </View>
+
+                <View style={styles.monthGrid}>
+                  {monthGrid.cells.map((cell, idx) => {
+                    if (!cell) return <View key={`empty-${idx}`} style={styles.monthCell} />;
+
+                    const intensity = maxMonth <= 0 ? 1 : 0.55 + 0.45 * clamp01(cell.count / maxMonth);
+                    const hidden = cell.count === 0;
+
+                    return (
+                      <View key={cell.dateKey} style={[styles.monthCell, cell.isToday && styles.monthCellToday]}>
+                        <Text style={[styles.monthDayNumber, cell.isToday && styles.monthDayNumberToday]}>
+                          {cell.date.getDate()}
+                        </Text>
+
+                        <View style={styles.monthMeta}>
+                          <View style={[styles.monthDot, { opacity: hidden ? 0 : intensity }]} />
+                          <Text style={[styles.monthCount, { opacity: hidden ? 0 : 1 }]} numberOfLines={1}>
+                            {cell.count}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                <Text style={styles.modalLegend}>
+                  Only days with &gt;0 show dots/counts (0 is hidden, layout stays aligned).
+                </Text>
+              </View>
+            </View>
+          </Modal>
+
+          <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+            <View style={styles.headingRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.appTitle}>DevCards</Text>
+                <Text style={styles.appSubtitle}>A clean way to stay consistent.</Text>
               </View>
 
-              <View style={styles.weekdayRow}>
-                {WEEKDAYS_MON.map((w) => (
-                  <Text key={w} style={styles.weekdayText}>
-                    {w}
+              <Pressable
+                style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
+                onPress={() => navigation.navigate('Settings')}
+              >
+                <Text style={styles.iconButtonText}>⚙︎</Text>
+              </Pressable>
+            </View>
+
+            <View style={[styles.cardGlass, styles.calendarCardFixed]}>
+              <View style={styles.cardHeaderRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>Calendar</Text>
+                  <Text style={styles.cardSubtitle} numberOfLines={1}>
+                    All decks · {totalDueAllDecks} due today
                   </Text>
-                ))}
+                </View>
+
+                <View style={styles.segment}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.segmentItem,
+                      styles.segmentItemActive,
+                      pressed && styles.pressed,
+                    ]}
+                    onPress={() => {}}
+                  >
+                    <Text style={[styles.segmentText, styles.segmentTextActive]}>Week</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.segmentItem, pressed && styles.pressed]}
+                    onPress={openMonth}
+                  >
+                    <Text style={styles.segmentText}>Month</Text>
+                  </Pressable>
+                </View>
               </View>
 
-              <View style={styles.monthGrid}>
-                {monthGrid.cells.map((cell, idx) => {
-                  if (!cell) return <View key={`empty-${idx}`} style={styles.monthCell} />;
+              <View style={styles.weekGrid}>
+                {week7.map((day, idx) => {
+                  const date = new Date(asOf.getTime());
+                  date.setDate(date.getDate() + idx);
 
-                  const intensity = maxMonth <= 0 ? 1 : 0.55 + 0.45 * clamp01(cell.count / maxMonth);
-                  const hidden = cell.count === 0;
+                  const dateText = formatMonthDay(date);
+                  const label = idx === 0 ? 'Today' : weekdayShort(date);
+
+                  const count = day.count;
+                  const pct = maxWeek <= 0 ? 0 : count === 0 ? 0 : Math.max(0.12, count / maxWeek);
 
                   return (
-                    <View key={cell.dateKey} style={[styles.monthCell, cell.isToday && styles.monthCellToday]}>
-                      <Text style={[styles.monthDayNumber, cell.isToday && styles.monthDayNumberToday]}>
-                        {cell.date.getDate()}
+                    <Pressable
+                      key={day.dateKey}
+                      style={({ pressed }) => [styles.weekCell, pressed && styles.pressed]}
+                      onPress={() => showWeekHint(`${dateText} · ${count} card${count === 1 ? '' : 's'}`)}
+                      accessibilityLabel={`${dateText}, ${count} cards`}
+                    >
+                      <Text style={styles.weekDate} numberOfLines={1}>
+                        {dateText}
                       </Text>
 
-                      <View style={styles.monthMeta}>
-                        <View style={[styles.monthDot, { opacity: hidden ? 0 : intensity }]} />
-                        <Text style={[styles.monthCount, { opacity: hidden ? 0 : 1 }]} numberOfLines={1}>
-                          {cell.count}
-                        </Text>
+                      <View style={styles.weekBarBg}>
+                        <View style={{ flex: 1 - pct }} />
+                        <View style={[styles.weekBarFill, { flex: pct, opacity: count === 0 ? 0 : 1 }]} />
                       </View>
-                    </View>
+
+                      <Text style={styles.weekLabel} numberOfLines={1}>
+                        {label}
+                      </Text>
+                    </Pressable>
                   );
                 })}
               </View>
 
-              <Text style={styles.modalLegend}>
-                Only days with &gt;0 show dots/counts (0 is hidden, layout stays aligned).
-              </Text>
-            </View>
-          </View>
-        </Modal>
-
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-          <View style={styles.headingRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.appTitle}>DevCards</Text>
-              <Text style={styles.appSubtitle}>A clean way to stay consistent.</Text>
-            </View>
-
-            <Pressable
-              style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
-              onPress={() => navigation.navigate('Settings')}
-            >
-              <Text style={styles.iconButtonText}>⚙︎</Text>
-            </Pressable>
-          </View>
-
-          <View style={[styles.cardGlass, styles.calendarCardFixed]}>
-            <View style={styles.cardHeaderRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>Calendar</Text>
-                <Text style={styles.cardSubtitle} numberOfLines={1}>
-                  All decks · {totalDueAllDecks} due today
+              <View style={styles.weekHintSlot}>
+                <Text style={styles.weekHintText} numberOfLines={1} ellipsizeMode="tail">
+                  {weekHint ?? 'Tap a day bar to see the exact count.'}
                 </Text>
               </View>
+            </View>
 
-              <View style={styles.segment}>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.segmentItem,
-                    styles.segmentItemActive,
-                    pressed && styles.pressed,
-                  ]}
-                  onPress={() => {}}
-                >
-                  <Text style={[styles.segmentText, styles.segmentTextActive]}>Week</Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [styles.segmentItem, pressed && styles.pressed]}
-                  onPress={openMonth}
-                >
-                  <Text style={styles.segmentText}>Month</Text>
-                </Pressable>
+            <View style={styles.sectionCard}>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Decks</Text>
+                <Text style={styles.sectionMeta}>{deckSummaries.length}</Text>
               </View>
-            </View>
 
-            <View style={styles.weekGrid}>
-              {week7.map((day, idx) => {
-                const date = new Date(asOf.getTime());
-                date.setDate(date.getDate() + idx);
-
-                const dateText = formatMonthDay(date);
-                const label = idx === 0 ? 'Today' : weekdayShort(date);
-
-                const count = day.count;
-                const pct = maxWeek <= 0 ? 0 : count === 0 ? 0 : Math.max(0.12, count / maxWeek);
-
-                return (
-                  <Pressable
-                    key={day.dateKey}
-                    style={({ pressed }) => [styles.weekCell, pressed && styles.pressed]}
-                    onPress={() => showWeekHint(`${dateText} · ${count} card${count === 1 ? '' : 's'}`)}
-                    accessibilityLabel={`${dateText}, ${count} cards`}
-                  >
-                    <Text style={styles.weekDate} numberOfLines={1}>
-                      {dateText}
-                    </Text>
-
-                    <View style={styles.weekBarBg}>
-                      <View style={{ flex: 1 - pct }} />
-                      <View style={[styles.weekBarFill, { flex: pct, opacity: count === 0 ? 0 : 1 }]} />
-                    </View>
-
-                    <Text style={styles.weekLabel} numberOfLines={1}>
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <View style={styles.weekHintSlot}>
-              <Text style={styles.weekHintText} numberOfLines={1} ellipsizeMode="tail">
-                {weekHint ?? 'Tap a day bar to see the exact count.'}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitle}>Decks</Text>
-              <Text style={styles.sectionMeta}>{deckSummaries.length}</Text>
-            </View>
-
-            <View style={styles.segmentThree}>
-              {(['all', 'free', 'premium'] as const).map((key) => {
-                const active = deckFilter === key;
-                const label = key === 'all' ? 'ALL' : key === 'free' ? 'Free' : 'Premium';
-                return (
-                  <Pressable
-                    key={key}
-                    style={({ pressed }) => [
-                      styles.segmentThreeItem,
-                      active && styles.segmentThreeItemActive,
-                      pressed && styles.pressed,
-                    ]}
-                    onPress={() => setDeckFilter(key)}
-                  >
-                    <Text style={[styles.segmentThreeText, active && styles.segmentThreeTextActive]}>
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            {deckSummaries.length === 0 ? (
-              <View style={styles.emptyBox}>
-                <Text style={styles.emptyTitle}>No decks installed yet</Text>
-                <Text style={styles.emptySubtitle}>
-                  We will try to download decks automatically. You can also tap “Check & update decks” in Settings.
-                </Text>
+              <View style={styles.segmentThree}>
+                {(['all', 'free', 'premium'] as const).map((key) => {
+                  const active = deckFilter === key;
+                  const label = key === 'all' ? 'ALL' : key === 'free' ? 'Free' : 'Premium';
+                  return (
+                    <Pressable
+                      key={key}
+                      style={({ pressed }) => [
+                        styles.segmentThreeItem,
+                        active && styles.segmentThreeItemActive,
+                        pressed && styles.pressed,
+                      ]}
+                      onPress={() => setDeckFilter(key)}
+                    >
+                      <Text style={[styles.segmentThreeText, active && styles.segmentThreeTextActive]}>
+                        {label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
               </View>
-            ) : (
-              filteredDecks.map((d) => {
-                const active = d.slug === selectedSlug;
-                const isPremium = d.deckType !== 1;
-                const deckUpdate = updates?.[d.slug];
 
-                const hasInstalledVersion =
-                  typeof deckUpdate?.installedVersion === 'string' && deckUpdate.installedVersion.trim().length > 0;
+              {deckSummaries.length === 0 ? (
+                <View style={styles.emptyBox}>
+                  <Text style={styles.emptyTitle}>No decks installed yet</Text>
+                  <Text style={styles.emptySubtitle}>
+                    We will try to download decks automatically. You can also tap “Check & update decks” in Settings.
+                  </Text>
+                </View>
+              ) : (
+                filteredDecks.map((d) => {
+                  const active = d.slug === selectedSlug;
+                  const isPremium = d.deckType !== 1;
+                  const deckUpdate = updates?.[d.slug];
 
-                const hasUpdate = hasInstalledVersion && !!(deckUpdate?.hasUpdate && deckUpdate.remoteUrl);
+                  const hasInstalledVersion =
+                    typeof deckUpdate?.installedVersion === 'string' && deckUpdate.installedVersion.trim().length > 0;
 
-                return (
-                  <Pressable
-                    key={d.slug}
-                    style={({ pressed }) => [
-                      styles.deckRow,
-                      active && styles.deckRowActive,
-                      pressed && styles.deckRowPressed,
-                    ]}
-                    onPress={async () => {
-                      const needsInstall = !d.canStudy;
-                      const needsUpdate = d.canStudy && hasUpdate;
+                  const hasUpdate = hasInstalledVersion && !!(deckUpdate?.hasUpdate && deckUpdate.remoteUrl);
 
-                      if (needsInstall || needsUpdate) {
-                        if (!deckUpdate?.remoteUrl) return;
+                  return (
+                    <Pressable
+                      key={d.slug}
+                      style={({ pressed }) => [
+                        styles.deckRow,
+                        active && styles.deckRowActive,
+                        pressed && styles.deckRowPressed,
+                      ]}
+                      onPress={async () => {
+                        const needsInstall = !d.canStudy;
+                        const needsUpdate = d.canStudy && hasUpdate;
 
-                        setState((prev) => ({ ...prev, loading: true }));
-                        try {
-                          const ok = await installDeckFromUrl(
-                            d.slug,
-                            deckUpdate.remoteUrl,
-                            deckUpdate.remoteVersion,
-                            deckUpdate.remoteSha256,
-                          );
+                        if (needsInstall || needsUpdate) {
+                          if (!deckUpdate?.remoteUrl) return;
 
-                          if (ok) {
-                           // ✅ apply cached remote progress for this deck (fix multi-deck cursor/cache case)
+                          setState((prev) => ({ ...prev, loading: true }));
                           try {
-                            await applyCachedRemoteProgress(d.slug);
-                          } catch {}
+                            const ok = await installDeckFromUrl(
+                              d.slug,
+                              deckUpdate.remoteUrl,
+                              deckUpdate.remoteVersion,
+                              deckUpdate.remoteSha256,
+                            );
 
-                          const newState = await computeHomeState();
-                          if (isMounted.current) setState(newState);
-                          openDeck(d.slug);
-                          } else {
+                            if (ok) {
+                              try {
+                                await applyCachedRemoteProgress(d.slug);
+                              } catch {}
+
+                              const newState = await computeHomeState();
+                              if (isMounted.current) setState(newState);
+                              openDeck(d.slug);
+                            } else {
+                              setState((prev) => ({ ...prev, loading: false }));
+                            }
+                          } catch (e) {
+                            console.error('Deck install/update failed:', e);
                             setState((prev) => ({ ...prev, loading: false }));
                           }
-                        } catch (e) {
-                          console.error('Deck install/update failed:', e);
-                          setState((prev) => ({ ...prev, loading: false }));
+                          return;
                         }
-                        return;
-                      }
 
-                      openDeck(d.slug);
-                    }}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.deckRowTitle, active && styles.deckRowTitleActive]} numberOfLines={1}>
-                        {d.title}
-                      </Text>
+                        openDeck(d.slug);
+                      }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.deckRowTitle, active && styles.deckRowTitleActive]} numberOfLines={1}>
+                          {d.title}
+                        </Text>
 
-                      <Text style={styles.deckRowSub} numberOfLines={1}>
-                        {isPremium ? 'Premium' : 'Free'} · {d.totalCards} cards
-                      </Text>
-                    </View>
+                        <Text style={styles.deckRowSub} numberOfLines={1}>
+                          {isPremium ? 'Premium' : 'Free'} · {d.totalCards} cards
+                        </Text>
+                      </View>
 
-                    {d.canStudy ? (
-                      <View style={styles.deckRowRight}>
-                        {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
-                        <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
-                        <View style={styles.rowBarBg}>
-                          <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
-                          <View style={{ flex: 1 - d.percent }} />
+                      {d.canStudy ? (
+                        <View style={styles.deckRowRight}>
+                          {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
+                          <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
+                          <View style={styles.rowBarBg}>
+                            <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
+                            <View style={{ flex: 1 - d.percent }} />
+                          </View>
                         </View>
-                      </View>
-                    ) : (
-                      <View style={styles.deckRowRight}>
-                        {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
-                        <Text style={styles.lockedPill}>Not installed</Text>
-                      </View>
-                    )}
-                  </Pressable>
-                );
-              })
-            )}
-          </View>
+                      ) : (
+                        <View style={styles.deckRowRight}>
+                          {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
+                          <Text style={styles.lockedPill}>Not installed</Text>
+                        </View>
+                      )}
+                    </Pressable>
+                  );
+                })
+              )}
+            </View>
 
-          <View style={{ height: 24 }} />
-        </ScrollView>
-      </LinearGradient>
-    </SafeAreaView>
+            <View style={{ height: 24 }} />
+          </ScrollView>
+        </LinearGradient>
+      </SafeAreaView>
     </SafeAreaProvider>
   );
 }

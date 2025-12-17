@@ -5,14 +5,6 @@ import type { DeckExport } from '../types/deckExport';
 
 /**
  * v1 Content repository (CloudFront -> manifest.json -> deck.json)
- *
- * Remote:
- *  - manifest:  { prefix:"content/", decks:[{ slug, buildId, path, cardCount, deckType, ... }] }
- *  - deck.json: { buildId, deck:{ slug,title,locale,deckType,version... }, cards:[{stableUid,...}] }
- *
- * Local:
- *  - AsyncStorage: manifest cache + per-deck meta (installed buildId)
- *  - FileSystem: one deck file per slug (overwrite on update)
  */
 
 /** =========================
@@ -31,7 +23,6 @@ const UTF8_ENCODING: any = (FileSystem as any)?.EncodingType?.UTF8 ?? 'utf8';
 
 function getDeckDir(): string {
   const base = (FileSystem as any).documentDirectory ?? (FileSystem as any).cacheDirectory;
-  // 在 Expo/React Native 正常都有；这里防御一下，避免生成 "undefinedxxx"
   if (!base || typeof base !== 'string') {
     throw new Error('expo-file-system: no writable directory (documentDirectory/cacheDirectory)');
   }
@@ -84,7 +75,7 @@ export type UpdateInfo = {
   hasUpdate: boolean;
 
   remoteUrl: string | null; // full URL for deck.json
-  remoteSha256: string | null; // v1 暂不使用（manifest 里也没给）
+  remoteSha256: string | null; // v1 暂不使用
 };
 
 type DeckInstallMeta = {
@@ -124,17 +115,12 @@ type RawDeckJson = {
   }>;
 };
 
-// ✅ 兼容你项目里之前的命名：DeckContent 就是 DeckExport（结构一致）
 export type DeckContent = DeckExport;
 
 /** =========================
  *  Public API
  *  ========================= */
 
-/**
- * Step 2: fetch remote manifest (best effort) and build "updates" map.
- * - On network failure: fallback to cached manifest.
- */
 export async function checkManifestForUpdates(): Promise<Record<string, UpdateInfo>> {
   const manifest = await loadManifestPreferRemote();
   if (!manifest) return {};
@@ -148,7 +134,13 @@ export async function checkManifestForUpdates(): Promise<Record<string, UpdateIn
     const remote = d.buildId || null;
     const hasUpdate = !installed || installed !== remote;
 
-    const remoteUrl = remote ? joinUrl(CONTENT_BASE_URL, manifest.prefix, d.path) : null;
+    // ✅ 更健壮：未来如果 manifest 直接给 full url，也能工作
+    const remoteUrl =
+      typeof d.path === 'string' && /^https?:\/\//i.test(d.path)
+        ? d.path
+        : remote
+          ? joinUrl(CONTENT_BASE_URL, manifest.prefix, d.path)
+          : null;
 
     out[d.slug] = {
       slug: d.slug,
@@ -163,10 +155,6 @@ export async function checkManifestForUpdates(): Promise<Record<string, UpdateIn
   return out;
 }
 
-/**
- * Step 3: list decks from cached manifest (Home uses this).
- * - If no cached manifest: returns []
- */
 export async function listManifestDecks(): Promise<ManifestDeckEntry[]> {
   const manifest = await loadManifestCached();
   if (!manifest) return [];
@@ -182,15 +170,11 @@ export async function listManifestDecks(): Promise<ManifestDeckEntry[]> {
     cardCount: d.cardCount,
     publishedAtMs: d.publishedAtMs,
 
-    // ✅ HomeScreen 兼容字段
     version: d.buildId,
     totalCards: d.cardCount ?? 0,
   }));
 }
 
-/**
- * Step 4: prefer installed deck on device. If not installed, return null.
- */
 export async function resolveDeckBySlug(slug: string): Promise<DeckContent | null> {
   const meta = await getDeckMeta(slug);
   if (!meta?.fileUri || !meta?.buildId) return null;
@@ -202,10 +186,7 @@ export async function resolveDeckBySlug(slug: string): Promise<DeckContent | nul
   }
 
   try {
-    const rawText = await FileSystem.readAsStringAsync(meta.fileUri, {
-      encoding: UTF8_ENCODING,
-    });
-
+    const rawText = await FileSystem.readAsStringAsync(meta.fileUri, { encoding: UTF8_ENCODING });
     const raw = JSON.parse(rawText) as RawDeckJson;
 
     if (!raw || typeof raw.buildId !== 'string') return null;
@@ -218,12 +199,6 @@ export async function resolveDeckBySlug(slug: string): Promise<DeckContent | nul
   }
 }
 
-/**
- * Download & install deck.json to local storage.
- *
- * remoteVersion = manifest buildId (expected)
- * remoteSha256 = v1 ignore (manifest doesn't include)
- */
 export async function installDeckFromUrl(
   slug: string,
   url: string,
@@ -235,7 +210,6 @@ export async function installDeckFromUrl(
 
   const existing = await getDeckMeta(safeSlug);
   if (existing?.buildId && remoteVersion && existing.buildId === remoteVersion) {
-    // already installed this build
     return true;
   }
 
@@ -246,14 +220,10 @@ export async function installDeckFromUrl(
   const tmpPath = `${dir}${slugToFileName(safeSlug)}.tmp.json`;
 
   try {
-    // Download to tmp first
     await FileSystem.deleteAsync(tmpPath, { idempotent: true });
     await FileSystem.downloadAsync(url, tmpPath);
 
-    const rawText = await FileSystem.readAsStringAsync(tmpPath, {
-      encoding: UTF8_ENCODING,
-    });
-
+    const rawText = await FileSystem.readAsStringAsync(tmpPath, { encoding: UTF8_ENCODING });
     const raw = JSON.parse(rawText) as RawDeckJson;
 
     // Validate schema
@@ -263,10 +233,9 @@ export async function installDeckFromUrl(
     if (!Array.isArray(raw.cards)) return false;
     if (raw.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim())) return false;
 
-    // Expected buildId check (remoteVersion = buildId from manifest)
+    // Expected buildId check
     if (remoteVersion && raw.buildId !== remoteVersion) return false;
 
-    // Move into place (atomic-ish)
     await FileSystem.deleteAsync(finalPath, { idempotent: true });
     await FileSystem.moveAsync({ from: tmpPath, to: finalPath });
 
@@ -365,8 +334,8 @@ async function fetchRemoteManifest(): Promise<RawManifest | null> {
       headers: { 'cache-control': 'no-cache' },
     });
     if (!resp.ok) return null;
-    const json = (await resp.json()) as RawManifest;
 
+    const json = (await resp.json()) as RawManifest;
     if (!json || !Array.isArray(json.decks)) return null;
     if (typeof json.prefix !== 'string') json.prefix = 'content/';
 
@@ -384,38 +353,60 @@ function mapRawDeckToDeckExport(raw: RawDeckJson): DeckExport {
   const deckType = d.deckType ?? 1;
   const isFreeStarter = deckType === 1;
 
-  // ✅ 这里最关键：补齐 DeckExport 需要的字段
-  // - v1 规则：free deck 全卡免费；premium deck 先不做试看 => FreeCardCount=0
-  const deck: DeckExport = {
-    Slug: d.slug,
-    Title: d.title,
-    Locale: d.locale,
-    DeckType: deckType,
+  const mappedCards = cards.map((c, idx) => {
+    const order =
+      typeof c.orderInDeck === 'number' && Number.isFinite(c.orderInDeck) && c.orderInDeck > 0
+        ? c.orderInDeck
+        : idx + 1;
 
-    Version: raw.buildId, // ✅ buildId 作为版本（更新判断一致）
+    const difficulty =
+      typeof c.difficulty === 'number' && Number.isFinite(c.difficulty) && c.difficulty > 0
+        ? c.difficulty
+        : 2;
 
-    IsFreeStarter: isFreeStarter,
-    FreeCardCount: isFreeStarter ? cards.length : 0,
+    const revision =
+      typeof c.revision === 'number' && Number.isFinite(c.revision) && c.revision > 0
+        ? c.revision
+        : 1;
 
-    TotalCards: cards.length,
+    const version =
+      typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0
+        ? c.version
+        : 1;
 
-    Cards: cards.map((c) => ({
+    return {
       StableUid: c.stableUid,
       Question: c.question,
       Explanation: c.explanation ?? null,
       CodeSnippet: c.codeSnippet ?? null,
       CodeLanguage: c.codeLanguage ?? null,
       RealWorldUsage: c.realWorldUsage ?? null,
-      Difficulty: typeof c.difficulty === 'number' ? c.difficulty : 2,
-      OrderInDeck: typeof c.orderInDeck === 'number' ? c.orderInDeck : 0,
+      Difficulty: difficulty,
+      OrderInDeck: order,
 
-      // ⚠️ 只有当你的 CardExport 定义里包含这些字段时才需要：
-      // Revision: typeof c.revision === 'number' ? c.revision : 1,
-      // Version: typeof c.version === 'number' ? c.version : 1,
-    })) as any,
+      // ✅ 给 “更新卡片提示” / lastSeenRevision 用
+      Revision: revision,
+      Version: version,
+      UpdatedAt: c.updatedAt ?? null,
+    } as any;
+  });
+
+  const deck: DeckExport = {
+    Slug: d.slug,
+    Title: d.title,
+    Locale: d.locale,
+    DeckType: deckType,
+
+    Version: raw.buildId, // ✅ buildId 作为版本
+
+    IsFreeStarter: isFreeStarter,
+    FreeCardCount: isFreeStarter ? mappedCards.length : 0,
+
+    TotalCards: mappedCards.length,
+    Cards: mappedCards as any,
   };
 
-  // 如果 DeckExport 里还有 Author/Description（很多项目会有），你可以解开：
+  // 可选字段（如果你的 DeckExport 支持）
   // (deck as any).Author = d.author ?? null;
   // (deck as any).Description = d.description ?? null;
 
