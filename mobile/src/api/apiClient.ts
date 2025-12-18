@@ -8,11 +8,21 @@ function joinUrl(base: string, path: string) {
   return `${base}${p}`;
 }
 
+function safeJsonParse(text: string): any | null {
+  const t = (text ?? '').trim();
+  if (!t) return null;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return null;
+  }
+}
+
 export async function apiJson<T>(
   path: string,
   opts: {
     method?: ApiMethod;
-    accessToken: string;
+    accessToken?: string | null; // ✅ now optional
     body?: any;
     timeoutMs?: number;
     headers?: Record<string, string>;
@@ -26,29 +36,38 @@ export async function apiJson<T>(
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 12000);
 
   try {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      ...(opts.headers || {}),
+    };
+
+    const token = (opts.accessToken ?? '').trim();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
     const resp = await fetch(url, {
       method: opts.method ?? 'GET',
-      headers: {
-        'content-type': 'application/json',
-        Authorization: `Bearer ${opts.accessToken}`,
-        ...(opts.headers || {}),
-      },
+      headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       signal: controller.signal,
     });
 
     const text = await resp.text();
-    const json = text ? JSON.parse(text) : null;
+    const json = safeJsonParse(text);
 
     if (!resp.ok) {
       const msg =
         json?.error?.message ||
+        json?.error ||
         json?.message ||
+        (typeof text === 'string' && text.trim() ? text.trim() : null) ||
         `HTTP ${resp.status} ${resp.statusText}`;
       throw new Error(msg);
     }
 
-    return json as T;
+    // 有些接口可能返回空 body，这里保持和之前一致：空就返回 null
+    return (json as T) ?? (null as any);
   } finally {
     clearTimeout(timeout);
   }

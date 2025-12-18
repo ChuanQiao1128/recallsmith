@@ -206,4 +206,107 @@ async function handleDbMigrationsList({ res, auth }) {
   }
 }
 
-module.exports = { handleDbPing, handleDbMigrate, handleDbMigrationsList };
+async function handleDbListDatabases({ res, auth }) {
+  const okRes = requireSuperAdmin({ auth, res });
+  if (okRes !== true) return okRes;
+
+  const p = pool();
+  if (!p) return res.badRequest("CONFIG_ERROR", "Missing PG env vars");
+
+  const r = await p.query(`
+    SELECT datname
+    FROM pg_database
+    WHERE datistemplate = false
+    ORDER BY datname;
+  `);
+
+  return res.ok({ databases: r.rows.map(x => x.datname) });
+}
+function isValidDbName(name) {
+  return /^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(name);
+}
+
+async function handleDbCreateDatabase({ event, res, auth, query }) {
+  const okRes = requireSuperAdmin({ auth, res });
+  if (okRes !== true) return okRes;
+
+  // 额外保护：必须带 migrate secret（建议）
+  const required = process.env.MIGRATE_SECRET || "";
+  if (required) {
+    const got = String(getHeader(event, "x-migrate-secret") || "");
+    if (got !== required) return res.forbidden("Bad migrate secret");
+  }
+
+  // 强制要求当前连接在 postgres 维护库上
+  if (String(process.env.PGDATABASE || "") !== "postgres") {
+    return res.badRequest("CONFIG_ERROR", "PGDATABASE must be 'postgres' for CREATE DATABASE");
+  }
+
+  const name = String(query.name || "").trim();
+  if (!name) return res.badRequest("BAD_REQUEST", "Missing query param: ?name=");
+  if (!isValidDbName(name)) return res.badRequest("BAD_REQUEST", "Bad database name");
+
+  // CREATE DATABASE 不能放事务里——这里直接执行即可
+  const exists = await pool().query("SELECT 1 FROM pg_database WHERE datname=$1", [name]);
+  if (exists.rowCount === 0) {
+    await pool().query(`CREATE DATABASE ${name};`);
+    return res.ok({ ok: true, created: name });
+  }
+
+  return res.ok({ ok: true, existed: name });
+}
+async function handleDbDropAndRecreate({ event, res, auth, query }) {
+  const okRes = requireSuperAdmin({ auth, res });
+  if (okRes !== true) return okRes;
+
+  // extra manual guard (same as migrate)
+  const required = process.env.MIGRATE_SECRET || "";
+  if (required) {
+    const got = String(getHeader(event, "x-migrate-secret") || "");
+    if (got !== required) return res.forbidden("Bad migrate secret");
+  }
+
+  // MUST run on maintenance DB
+  if (String(process.env.PGDATABASE || "") !== "postgres") {
+    return res.badRequest("CONFIG_ERROR", "PGDATABASE must be 'postgres' to drop/create databases");
+  }
+
+  const name = String(query.name || "").trim();
+  if (!name) return res.badRequest("BAD_REQUEST", "Missing query param: ?name=");
+  if (!isValidDbName(name)) return res.badRequest("BAD_REQUEST", "Bad database name");
+  if (name === "postgres" || name === "rdsadmin") {
+    return res.badRequest("BAD_REQUEST", "Refusing to drop system database");
+  }
+
+  const p = pool();
+  if (!p) return res.badRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+
+  // 1) terminate existing connections
+  //    (RDS master can do this; ignore if none)
+  await p.query(
+    `
+    SELECT pg_terminate_backend(pid)
+    FROM pg_stat_activity
+    WHERE datname = $1
+      AND pid <> pg_backend_pid();
+  `,
+    [name]
+  );
+
+    try {
+      await p.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE);`);
+      await p.query(`CREATE DATABASE ${name};`);
+      return res.ok({ ok: true, recreated: name });
+    } catch (e) {
+      // 把 PG 原始错误 message 返回，方便你定位
+      return res.badRequest("DB_RECREATE_FAILED", String(e?.message || e));
+    }
+}
+module.exports = {
+  handleDbPing,
+  handleDbMigrate,
+  handleDbMigrationsList,
+  handleDbCreateDatabase,
+  handleDbListDatabases,
+  handleDbDropAndRecreate
+};

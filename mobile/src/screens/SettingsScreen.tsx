@@ -1,5 +1,4 @@
 // mobile/src/screens/SettingsScreen.tsx
-
 import React, { useMemo, useState } from 'react';
 import {
   View,
@@ -25,6 +24,9 @@ import {
   compareSemver,
   type RemoteConfig,
 } from '../config/remoteConfig';
+
+// ✅ NEW: auth
+import { useAuthState, signOutAndWipeLocal } from '../auth/authStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
@@ -57,13 +59,6 @@ async function openExternalLink(url: string) {
   }
 }
 
-/**
- * Extract a plain semver like "1.2.3" from a version string.
- * Examples:
- *  - "1.1.0" -> "1.1.0"
- *  - "v1.1.0 (12)" -> "1.1.0"
- *  - "1.1.0+12" -> "1.1.0"
- */
 function extractSemver(input: string | null | undefined): string | null {
   if (!input) return null;
   const m = input.trim().match(/\d+\.\d+\.\d+/);
@@ -80,6 +75,9 @@ function safeSemverCompare(aRaw: string | null | undefined, bRaw: string | null 
 export function SettingsScreen({ navigation }: Props) {
   const appVersionRaw = getCurrentAppVersion();
 
+  // ✅ auth state
+  const { ready: authReady, accessToken } = useAuthState();
+
   const [updating, setUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
 
@@ -95,7 +93,6 @@ export function SettingsScreen({ navigation }: Props) {
     iosCfg?.updateUrl ??
     (iosCfg?.appStoreId ? `https://apps.apple.com/app/id${iosCfg.appStoreId}` : null);
 
-  // ✅ Fix: only force update when current < min (NOT <=)
   const { forceUpdate, hasOptionalUpdate } = useMemo(() => {
     if (remoteStatus !== 'loaded' || !iosCfg) {
       return { forceUpdate: false, hasOptionalUpdate: false };
@@ -208,151 +205,211 @@ export function SettingsScreen({ navigation }: Props) {
       ? 'Update available (optional).'
       : 'You are up to date.';
 
+  const tokenPreview =
+    accessToken && accessToken.length > 10
+      ? `${accessToken.slice(0, 6)}…${accessToken.slice(-4)}`
+      : accessToken;
+
+  async function handleSignOut() {
+    Alert.alert(
+      'Sign out',
+      'This will sign you out and wipe local progress on this device (safe for multi-account). Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await signOutAndWipeLocal();
+            } catch {
+              // ignore
+            }
+          },
+        },
+      ],
+    );
+  }
+
   return (
     <SafeAreaProvider>
-    <SafeAreaView style={styles.safeArea}>
-      <LinearGradient
-        colors={['#F5F3FF', '#E0F2FE']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.gradient}
-      >
-        <View style={styles.container}>
-          {/* 顶部 header */}
-          <View style={styles.headerRow}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.backButton,
-                pressed && styles.backButtonPressed,
-              ]}
-              onPress={() => navigation.goBack()}
-            >
-              <Text style={styles.backText}>← Back</Text>
-            </Pressable>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.title}>Settings</Text>
-              <Text style={styles.subtitle}>
-                Support, privacy and app information.
-              </Text>
-            </View>
-          </View>
-
-          {/* App 信息 + 更新（合并卡片） */}
-          <View style={styles.appCard}>
-            <Text style={styles.appName}>DevCards</Text>
-            <Text style={styles.appTagline}>
-              Full‑stack concept with spaced repetition.
-            </Text>
-
-            <View style={styles.versionRow}>
-              <Text style={styles.versionLabel}>Current app</Text>
-              <Text style={styles.versionValue}>{extractSemver(appVersionRaw) ?? appVersionRaw}</Text>
-            </View>
-
-            <View style={styles.versionRow}>
-              <Text style={styles.versionLabel}>Latest (store)</Text>
-              <Text style={styles.versionValue}>{latestDisplay}</Text>
-            </View>
-
-            <View style={styles.versionRow}>
-              <Text style={styles.versionLabel}>Minimum required</Text>
-              <Text style={styles.versionValue}>{minDisplay}</Text>
-            </View>
-
-            <View style={{ marginTop: 8 }}>
-              <Text style={styles.updateStatusText}>{statusText}</Text>
-            </View>
-
-            {updateUrl ? (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.container}>
+            {/* 顶部 header */}
+            <View style={styles.headerRow}>
               <Pressable
                 style={({ pressed }) => [
-                  styles.storeButton,
-                  pressed && styles.storeButtonPressed,
-                  forceUpdate && { backgroundColor: '#DC2626' },
+                  styles.backButton,
+                  pressed && styles.backButtonPressed,
                 ]}
-                onPress={() => openExternalLink(updateUrl)}
+                onPress={() => navigation.goBack()}
               >
-                <Text style={styles.storeButtonText}>
-                  {forceUpdate
-                    ? 'Update now (required)'
-                    : hasOptionalUpdate
-                    ? 'Update on App Store'
-                    : 'Open App Store'}
+                <Text style={styles.backText}>← Back</Text>
+              </Pressable>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.title}>Settings</Text>
+                <Text style={styles.subtitle}>
+                  Support, privacy and app information.
+                </Text>
+              </View>
+            </View>
+
+            {/* ✅ Account */}
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Account</Text>
+              <Text style={styles.sectionSubtitle}>
+                {authReady
+                  ? accessToken
+                    ? `Signed in · token ${tokenPreview}`
+                    : 'Signed out · please sign in to sync progress'
+                  : 'Loading account…'}
+              </Text>
+
+              {!accessToken ? (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.updateButton,
+                    pressed && styles.updateButtonPressed,
+                  ]}
+                  onPress={() => navigation.navigate('Auth')}
+                  disabled={!authReady}
+                >
+                  <Text style={styles.updateButtonText}>Sign in / Register</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.dangerButton,
+                    pressed && styles.updateButtonPressed,
+                  ]}
+                  onPress={handleSignOut}
+                >
+                  <Text style={styles.updateButtonText}>Sign out (wipe local)</Text>
+                </Pressable>
+              )}
+            </View>
+
+            {/* App 信息 + 更新 */}
+            <View style={styles.appCard}>
+              <Text style={styles.appName}>DevCards</Text>
+              <Text style={styles.appTagline}>
+                Full‑stack concept with spaced repetition.
+              </Text>
+
+              <View style={styles.versionRow}>
+                <Text style={styles.versionLabel}>Current app</Text>
+                <Text style={styles.versionValue}>{extractSemver(appVersionRaw) ?? appVersionRaw}</Text>
+              </View>
+
+              <View style={styles.versionRow}>
+                <Text style={styles.versionLabel}>Latest (store)</Text>
+                <Text style={styles.versionValue}>{latestDisplay}</Text>
+              </View>
+
+              <View style={styles.versionRow}>
+                <Text style={styles.versionLabel}>Minimum required</Text>
+                <Text style={styles.versionValue}>{minDisplay}</Text>
+              </View>
+
+              <View style={{ marginTop: 8 }}>
+                <Text style={styles.updateStatusText}>{statusText}</Text>
+              </View>
+
+              {updateUrl ? (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.storeButton,
+                    pressed && styles.storeButtonPressed,
+                    forceUpdate && { backgroundColor: '#DC2626' },
+                  ]}
+                  onPress={() => openExternalLink(updateUrl)}
+                >
+                  <Text style={styles.storeButtonText}>
+                    {forceUpdate
+                      ? 'Update now (required)'
+                      : hasOptionalUpdate
+                      ? 'Update on App Store'
+                      : 'Open App Store'}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+
+            {/* Deck updates */}
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Deck updates</Text>
+              <Text style={styles.sectionSubtitle}>
+                The app checks for updates on launch. Tap below to force a refresh or
+                install missing decks now.
+              </Text>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.updateButton,
+                  pressed && !updating && styles.updateButtonPressed,
+                  updating && styles.updateButtonDisabled,
+                ]}
+                onPress={handleUpdateDecks}
+                disabled={updating}
+              >
+                <Text style={styles.updateButtonText}>
+                  {updating ? 'Checking…' : 'Check & update decks'}
                 </Text>
               </Pressable>
-            ) : null}
-          </View>
 
-          {/* Deck updates */}
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Deck updates</Text>
-            <Text style={styles.sectionSubtitle}>
-              The app checks for updates on launch. Tap below to force a refresh or
-              install missing decks now.
-            </Text>
+              {updateMessage ? (
+                <Text style={styles.updateStatus}>{updateMessage}</Text>
+              ) : null}
+            </View>
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.updateButton,
-                pressed && !updating && styles.updateButtonPressed,
-                updating && styles.updateButtonDisabled,
-              ]}
-              onPress={handleUpdateDecks}
-              disabled={updating}
-            >
-              <Text style={styles.updateButtonText}>
-                {updating ? 'Checking…' : 'Check & update decks'}
+            {/* Links */}
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Help & Legal</Text>
+              <Text style={styles.sectionSubtitle}>
+                These pages open in your browser so you can read them comfortably.
               </Text>
-            </Pressable>
 
-            {updateMessage ? (
-              <Text style={styles.updateStatus}>{updateMessage}</Text>
-            ) : null}
+              <Pressable
+                style={({ pressed }) => [styles.linkRow, pressed && styles.linkRowPressed]}
+                onPress={() => openExternalLink(SUPPORT_URL)}
+              >
+                <View>
+                  <Text style={styles.linkTitle}>Support & FAQ</Text>
+                  <Text style={styles.linkSubtitle}>
+                    Common questions, troubleshooting and contact info.
+                  </Text>
+                </View>
+                <Text style={styles.linkChevron}>›</Text>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [styles.linkRow, pressed && styles.linkRowPressed]}
+                onPress={() => openExternalLink(PRIVACY_URL)}
+              >
+                <View>
+                  <Text style={styles.linkTitle}>Privacy Policy</Text>
+                  <Text style={styles.linkSubtitle}>
+                    How we handle your data and what we store.
+                  </Text>
+                </View>
+                <Text style={styles.linkChevron}>›</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.footerBox}>
+              <Text style={styles.footerText}>
+                Made with focus for developers preparing full‑stack interviews.
+              </Text>
+            </View>
           </View>
-
-          {/* 链接卡片 */}
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Help & Legal</Text>
-            <Text style={styles.sectionSubtitle}>
-              These pages open in your browser so you can read them comfortably.
-            </Text>
-
-            <Pressable
-              style={({ pressed }) => [styles.linkRow, pressed && styles.linkRowPressed]}
-              onPress={() => openExternalLink(SUPPORT_URL)}
-            >
-              <View>
-                <Text style={styles.linkTitle}>Support & FAQ</Text>
-                <Text style={styles.linkSubtitle}>
-                  Common questions, troubleshooting and contact info.
-                </Text>
-              </View>
-              <Text style={styles.linkChevron}>›</Text>
-            </Pressable>
-
-            <Pressable
-              style={({ pressed }) => [styles.linkRow, pressed && styles.linkRowPressed]}
-              onPress={() => openExternalLink(PRIVACY_URL)}
-            >
-              <View>
-                <Text style={styles.linkTitle}>Privacy Policy</Text>
-                <Text style={styles.linkSubtitle}>
-                  How we handle your data and what we store.
-                </Text>
-              </View>
-              <Text style={styles.linkChevron}>›</Text>
-            </Pressable>
-          </View>
-
-          {/* 最底下小字 */}
-          <View style={styles.footerBox}>
-            <Text style={styles.footerText}>
-              Made with focus for developers preparing full‑stack interviews.
-            </Text>
-          </View>
-        </View>
-      </LinearGradient>
-    </SafeAreaView>
+        </LinearGradient>
+      </SafeAreaView>
     </SafeAreaProvider>
   );
 }
@@ -468,6 +525,13 @@ const styles = StyleSheet.create({
     marginTop: 6,
     borderRadius: 14,
     backgroundColor: '#4F46E5',
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  dangerButton: {
+    marginTop: 6,
+    borderRadius: 14,
+    backgroundColor: '#DC2626',
     paddingVertical: 12,
     alignItems: 'center',
   },

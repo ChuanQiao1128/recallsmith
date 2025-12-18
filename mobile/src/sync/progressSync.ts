@@ -513,14 +513,14 @@ async function pullProgressAndApply(accessToken: string): Promise<{ pulled: numb
 
   _lastPullAtMs = Date.now();
 
-  console.log('[progressSync] pull ok', {
-    pulled: items.length,
-    applied,
-    cursorBefore,
-    cursorAfter: maxUpdatedAt,
-    deckCount: byDeck.size,
-    cacheAllOk,
-  });
+//   console.log('[progressSync] pull ok', {
+//     pulled: items.length,
+//     applied,
+//     cursorBefore,
+//     cursorAfter: maxUpdatedAt,
+//     deckCount: byDeck.size,
+//     cacheAllOk,
+//   });
 
   return { pulled: items.length, applied };
 }
@@ -608,14 +608,14 @@ async function syncProgressOnce(
       console.warn('[progressSync] pull failed:', (e as any)?.message ?? e);
     }
   } else if (wantPull && !pullAllowed) {
-    console.log('[progressSync] pull skipped (throttled)', {
-      reason,
-      pushed,
-      msSinceLastPull,
-      minInterval: MIN_PULL_INTERVAL_MS,
-      lastPullAtMs: _lastPullAtMs,
-      now,
-    });
+    // console.log('[progressSync] pull skipped (throttled)', {
+    //   reason,
+    //   pushed,
+    //   msSinceLastPull,
+    //   minInterval: MIN_PULL_INTERVAL_MS,
+    //   lastPullAtMs: _lastPullAtMs,
+    //   now,
+    // });
   }
 
   const remaining = await progressQueueSize();
@@ -623,7 +623,7 @@ async function syncProgressOnce(
   await writeLastSync({ atMs: Date.now(), reason, pushed, pulled, applied, remaining });
   await writeLastError(null);
 
-  console.log('[progressSync] done', { reason, pushed, pulled, applied, remaining });
+//   console.log('[progressSync] done', { reason, pushed, pulled, applied, remaining });
 
   return { pushed, pulled, applied, remaining };
 }
@@ -750,7 +750,7 @@ export async function applyCachedRemoteProgress(deckSlug: string): Promise<numbe
     await saveDeckProgress(deck, merged);
   }
 
-  console.log('[progressSync] applied cached remote', { deckSlug, appliedCount, cacheSize: rowsAll.length });
+//   console.log('[progressSync] applied cached remote', { deckSlug, appliedCount, cacheSize: rowsAll.length });
   return appliedCount;
 }
 

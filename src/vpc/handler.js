@@ -6,7 +6,14 @@ const { getAuthContext } = require("../common/auth");
 const { logInfo, logError } = require("../common/log");
 
 // DB
-const { handleDbPing, handleDbMigrate, handleDbMigrationsList } = require("./db/migrate");
+const {
+  handleDbPing,
+  handleDbMigrate,
+  handleDbMigrationsList,
+  handleDbCreateDatabase,
+  handleDbListDatabases,
+  handleDbDropAndRecreate
+} = require("./db/migrate");
 
 // Authoring
 const { handleAuthoringDecks } = require("./authoring/decks");
@@ -91,7 +98,16 @@ exports.handler = async (event) => {
     if (path === "/api/v1/admin/db/migrations" && method === "GET") {
       return handleDbMigrationsList({ event, method, path, query, res, auth });
     }
-
+    if (path === "/api/v1/admin/db/create" && method === "POST") {
+      return handleDbCreateDatabase({ event, method, path, query, res, auth });
+    }
+    if (path === "/api/v1/admin/db/databases" && method === "GET") {
+      return handleDbListDatabases({ event, method, path, query, res, auth });
+    }
+    if (path === "/api/v1/admin/db/recreate" && method === "POST") {
+      return handleDbDropAndRecreate({ event, method, path, query, res, auth });
+    }
+    
     // Authoring
     if (path === "/api/v1/authoring/decks") {
       return handleAuthoringDecks({ event, method, path, query, res, auth });

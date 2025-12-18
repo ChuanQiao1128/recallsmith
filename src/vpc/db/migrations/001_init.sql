@@ -1,5 +1,7 @@
 -- =========================
--- 001_init.sql (v1 frozen)
+-- 001_init_all.sql (consolidated)
+-- Includes: 001_init + 002_publishing + 003_progress_phase3
+-- For a fresh database (no prior schema).
 -- =========================
 
 -- Migrations table (runner will also ensure it exists)
@@ -147,6 +149,10 @@ create table if not exists user_progress_events (
   event_time timestamptz not null,
   device_id text null,
   client_version text null,
+  -- phase3 additions
+  next_review_at timestamptz null,
+  last_seen_revision int null,
+  deck_version text null,
   created_at timestamptz not null default now()
 );
 
@@ -169,6 +175,8 @@ create table if not exists user_progress (
   review_count int not null default 0,
   easiness real null,
   due_at timestamptz null,
+  -- phase3 additions
+  last_seen_revision int null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint uq_user_progress_uid unique (user_sub, deck_slug, stable_uid)
@@ -197,3 +205,24 @@ create table if not exists analytics_deck_daily (
   reviews int not null default 0,
   primary key (day, deck_slug)
 );
+
+-- =========================
+-- Publishing history
+-- =========================
+
+create table if not exists deck_publishes (
+  id bigserial primary key,
+  deck_id bigint not null references decks(id) on delete cascade,
+  deck_slug text not null,
+  build_id text not null,
+  s3_key text not null,
+  published_by_admin_sub text null,
+  note text null,
+  created_at timestamptz not null default now(),
+  constraint uq_deck_publishes unique (deck_id, build_id)
+);
+
+create index if not exists idx_deck_publishes_deck on deck_publishes(deck_id, created_at desc);
+create index if not exists idx_deck_publishes_slug on deck_publishes(deck_slug, created_at desc);
+
+-- End of consolidated init.
