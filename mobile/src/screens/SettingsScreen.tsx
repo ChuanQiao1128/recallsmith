@@ -242,7 +242,7 @@ export function SettingsScreen({ navigation }: Props) {
   }
 
   return (
-    <SafeAreaProvider>
+
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient
           colors={['#F5F3FF', '#E0F2FE']}
@@ -423,7 +423,6 @@ export function SettingsScreen({ navigation }: Props) {
           </View>
         </LinearGradient>
       </SafeAreaView>
-    </SafeAreaProvider>
   );
 }
 

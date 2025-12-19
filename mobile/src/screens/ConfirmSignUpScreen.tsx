@@ -1,4 +1,3 @@
-// mobile/src/screens/ConfirmSignUpScreen.tsx
 import React, { useMemo, useState } from 'react';
 import {
   View,
@@ -10,8 +9,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  ScrollView,
+  SafeAreaView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
@@ -26,9 +26,7 @@ function maskEmail(email: string) {
   if (at <= 1) return e;
   const name = e.slice(0, at);
   const dom = e.slice(at + 1);
-  const head = name.slice(0, 2);
-  const tail = name.length > 2 ? name.slice(-1) : '';
-  return `${head}***${tail}@${dom}`;
+  return `${name.slice(0, 2)}***${name.slice(-1)}@${dom}`;
 }
 
 export default function ConfirmSignUpScreen({ navigation, route }: Props) {
@@ -39,7 +37,6 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
   const resendConfirmCode = useAuthStore((s) => s.resendConfirmCode);
 
   const [code, setCode] = useState('');
-  const [focus, setFocus] = useState<'code' | null>(null);
 
   const canSubmit = useMemo(() => {
     const c = String(code || '').trim();
@@ -52,10 +49,7 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
     try {
       await confirmSignUpCode(email, code);
       Alert.alert('Verified', 'Your email is verified. Please sign in.', [
-        {
-          text: 'Continue',
-          onPress: () => navigation.replace('SignIn', { email }),
-        },
+        { text: 'Continue', onPress: () => navigation.replace('SignIn', { email }) },
       ]);
     } catch (e: any) {
       Alert.alert('Confirm failed', e?.message ?? 'Please try again.');
@@ -74,22 +68,26 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
   return (
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient
+        pointerEvents="none"
         colors={['#F5F3FF', '#E0F2FE']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={styles.gradient}
+        style={StyleSheet.absoluteFill}
+      />
+
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
       >
-        <KeyboardAvoidingView
-          style={styles.container}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         >
-          {/* Header */}
           <View style={styles.headerRow}>
             <Pressable
-              style={({ pressed }) => [
-                styles.backButton,
-                pressed && styles.backButtonPressed,
-              ]}
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
               onPress={() => navigation.goBack()}
               disabled={loading}
             >
@@ -98,36 +96,24 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
 
             <View style={{ flex: 1 }}>
               <Text style={styles.title}>Verify your email</Text>
-              <Text style={styles.subtitle}>
-                Enter the code we sent to {maskEmail(email)}.
-              </Text>
+              <Text style={styles.subtitle}>Code sent to {maskEmail(email)}.</Text>
             </View>
           </View>
 
-          {/* Card */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Confirmation code</Text>
-            <Text style={styles.cardHint}>
-              Check your inbox (and spam). Codes usually arrive within a minute.
-            </Text>
+            <Text style={styles.cardHint}>Use the latest code you received.</Text>
 
-            <Text style={styles.fieldLabel}>Code</Text>
-            <View
-              style={[
-                styles.inputWrap,
-                focus === 'code' && styles.inputWrapFocused,
-              ]}
-            >
+            <Text style={styles.label}>Code</Text>
+            <View style={styles.inputWrap}>
               <TextInput
                 value={code}
                 onChangeText={(v) => setCode(v.replace(/\s/g, ''))}
                 keyboardType="number-pad"
                 placeholder="123456"
                 placeholderTextColor="#9CA3AF"
-                style={styles.input}
+                style={styles.codeInput}
                 editable={!loading}
-                onFocus={() => setFocus('code')}
-                onBlur={() => setFocus(null)}
                 returnKeyType="done"
                 onSubmitEditing={onConfirm}
                 maxLength={12}
@@ -137,7 +123,7 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
             <Pressable
               style={({ pressed }) => [
                 styles.primaryBtn,
-                (!canSubmit || loading) && styles.primaryBtnDisabled,
+                (!canSubmit || loading) && styles.disabled,
                 pressed && canSubmit && styles.pressed,
               ]}
               disabled={!canSubmit || loading}
@@ -146,12 +132,10 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
               {loading ? (
                 <View style={styles.rowCenter}>
                   <ActivityIndicator />
-                  <Text style={[styles.primaryBtnText, { marginLeft: 8 }]}>
-                    Verifying…
-                  </Text>
+                  <Text style={[styles.primaryText, { marginLeft: 8 }]}>Verifying…</Text>
                 </View>
               ) : (
-                <Text style={styles.primaryBtnText}>Verify</Text>
+                <Text style={styles.primaryText}>Verify</Text>
               )}
             </Pressable>
 
@@ -162,23 +146,19 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
             </View>
 
             <Pressable
-              style={({ pressed }) => [
-                styles.secondaryBtn,
-                pressed && styles.pressed,
-                loading && styles.secondaryBtnDisabled,
-              ]}
+              style={({ pressed }) => [styles.secondaryBtn, pressed && styles.pressed, loading && styles.disabled]}
               onPress={onResend}
               disabled={loading}
             >
-              <Text style={styles.secondaryBtnText}>Resend code</Text>
+              <Text style={styles.secondaryText}>Resend code</Text>
             </Pressable>
 
-            <Text style={styles.legalText}>
-              Tip: if you requested multiple codes, only the latest one will work.
-            </Text>
+            <Text style={styles.footnote}>Tip: only the latest code works.</Text>
           </View>
-        </KeyboardAvoidingView>
-      </LinearGradient>
+
+          <View style={{ height: 28 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -188,10 +168,11 @@ const CARD_BORDER = 'rgba(255,255,255,0.55)';
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
-  gradient: { flex: 1 },
-  container: { flex: 1, paddingHorizontal: 18, paddingTop: 16 },
+  flex: { flex: 1 },
+  scrollContent: { paddingHorizontal: 18, paddingTop: 16, paddingBottom: 24 },
 
-  pressed: { opacity: 0.92 },
+  pressed: { opacity: 0.9 },
+  disabled: { opacity: 0.6 },
 
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
   backButton: {
@@ -201,14 +182,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.8)',
     marginRight: 10,
   },
-  backButtonPressed: { opacity: 0.9 },
-  backText: { fontSize: 13, color: '#111827' },
+  backText: { fontSize: 13, color: '#111827', fontWeight: '700' },
 
   title: { fontSize: 20, fontWeight: '800', color: '#111827' },
   subtitle: { marginTop: 2, fontSize: 12, color: '#6B7280' },
 
   card: {
-    marginTop: 8,
     borderRadius: 24,
     paddingVertical: 18,
     paddingHorizontal: 16,
@@ -223,28 +202,18 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 18, fontWeight: '800', color: '#111827' },
   cardHint: { marginTop: 4, fontSize: 12, color: '#6B7280' },
 
-  fieldLabel: { marginTop: 14, fontSize: 12, fontWeight: '800', color: '#374151' },
+  label: { marginTop: 14, fontSize: 12, fontWeight: '800', color: '#374151' },
 
   inputWrap: {
     marginTop: 8,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: 'rgba(17,24,39,0.10)',
-    backgroundColor: 'rgba(255,255,255,1)',
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 12,
     paddingVertical: 2,
-    flexDirection: 'row',
-    alignItems: 'center',
   },
-  inputWrapFocused: {
-    borderColor: 'rgba(79,70,229,0.55)',
-    shadowColor: '#4F46E5',
-    shadowOpacity: 0.10,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-  },
-  input: {
-    flex: 1,
+  codeInput: {
     paddingVertical: 10,
     fontSize: 16,
     letterSpacing: 2,
@@ -259,17 +228,10 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     alignItems: 'center',
   },
-  primaryBtnDisabled: { opacity: 0.6 },
-  primaryBtnText: { fontSize: 14, fontWeight: '900', color: '#FFFFFF' },
-
+  primaryText: { fontSize: 14, fontWeight: '900', color: '#FFFFFF' },
   rowCenter: { flexDirection: 'row', alignItems: 'center' },
 
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 14,
-    marginBottom: 10,
-  },
+  dividerRow: { flexDirection: 'row', alignItems: 'center', marginTop: 14, marginBottom: 10 },
   dividerLine: { flex: 1, height: 1, backgroundColor: 'rgba(17,24,39,0.10)' },
   dividerText: { marginHorizontal: 10, fontSize: 12, color: '#6B7280', fontWeight: '700' },
 
@@ -281,8 +243,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
   },
-  secondaryBtnDisabled: { opacity: 0.6 },
-  secondaryBtnText: { fontSize: 14, fontWeight: '800', color: '#111827' },
+  secondaryText: { fontSize: 14, fontWeight: '800', color: '#111827' },
 
-  legalText: { marginTop: 12, fontSize: 11, color: '#6B7280', lineHeight: 16 },
+  footnote: { marginTop: 12, fontSize: 11, color: '#6B7280', lineHeight: 16 },
 });

@@ -6,12 +6,13 @@ import {
   ActivityIndicator,
   Linking,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   View,
   AppState, // ✅ NEW: listen app foreground/background
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NavigationContainer } from '@react-navigation/native';
@@ -82,6 +83,7 @@ function ForceUpdateScreen(props: {
   }
 
   return (
+     <GestureHandlerRootView style={{ flex: 1 }}>
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient
@@ -121,6 +123,7 @@ function ForceUpdateScreen(props: {
         </LinearGradient>
       </SafeAreaView>
     </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
