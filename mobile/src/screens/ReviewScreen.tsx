@@ -21,7 +21,13 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { DeckExport, CardExport } from '../types/deckExport';
 
-import { resolveDeckBySlug, listManifestDecks } from '../content/deckRepository';
+import {
+  resolveDeckBySlug,
+  listManifestDecks,
+  checkManifestForUpdates,
+  installDeckFromUrl,
+} from '../content/deckRepository';
+
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 
 import type { CardProgress, ReviewRating } from '../review/model';
@@ -43,6 +49,9 @@ import {
   forceProgressSync,
   applyCachedRemoteProgress,
 } from '../sync/progressSync';
+
+// ✅ premium entitlement
+import { usePremiumUser } from '../premium/premiumStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Review'>;
 type UiRating = ReviewRating;
@@ -226,6 +235,9 @@ export function ReviewScreen({ navigation, route }: Props) {
   const [dailyStats, setDailyStats] = useState<DailyStats | null>(null);
   const [current, setCurrent] = useState<CurrentCard | null>(null);
 
+  // ✅ premium entitlement
+  const isPremiumUser = usePremiumUser();
+
   useFocusEffect(
     useCallback(() => {
       if (slugFromRoute) {
@@ -318,6 +330,10 @@ export function ReviewScreen({ navigation, route }: Props) {
       let cancelled = false;
 
       async function load() {
+        // ✅ TS: snapshot non-null slug
+        const slugStr = slug;
+        if (!slugStr) return;
+
         setLoading(true);
         setLoadError(null);
         resetToFront();
@@ -327,7 +343,46 @@ export function ReviewScreen({ navigation, route }: Props) {
         const now = new Date();
 
         try {
-          const resolved = await resolveDeckBySlug(slug!);
+          // 1) manifest gate: coming / premium
+          const manifest = await listManifestDecks();
+          const entry = manifest.find(x => x.slug === slugStr) ?? null;
+
+          const availability = String(entry?.availability ?? '').toLowerCase();
+          if (availability === 'coming') {
+            throw new Error(entry?.eta ? `Coming soon. ETA: ${entry.eta}` : 'Coming soon.');
+          }
+
+          const premiumByManifest =
+            entry
+              ? String(entry.tier ?? '').toLowerCase() === 'premium' ||
+                String(entry.downloadMode ?? '').toLowerCase() === 'auth'
+              : false;
+
+          if (premiumByManifest && !isPremiumUser) {
+            navigation.navigate('Paywall' as any);
+            return;
+          }
+
+          // 2) resolve local
+          let resolved = await resolveDeckBySlug(slugStr);
+
+          // 3) auto-install if public deck not installed
+          if (!resolved) {
+            const updates = await checkManifestForUpdates();
+            const info = updates[slugStr];
+            if (info?.remoteUrl && info?.remoteVersion) {
+              const ok = await installDeckFromUrl(
+                slugStr,
+                info.remoteUrl,
+                info.remoteVersion,
+                info.remoteSha256 ?? null,
+              );
+              if (ok) {
+                resolved = await resolveDeckBySlug(slugStr);
+              }
+            }
+          }
+
           if (!resolved) throw new Error('Deck not found');
           if (cancelled) return;
 
@@ -335,9 +390,10 @@ export function ReviewScreen({ navigation, route }: Props) {
           void setActiveDeckSlug(resolved.Slug);
 
           // ✅ enter Review => sync first (pull other devices + fill remote cache)
-          await forceProgressSync('review_focus');
+          // ✅ 暂时禁用 progress sync（避免进入 Review 卡住 + 控制台刷 500）
+          // forceProgressSync('review_focus').catch(() => {});
 
-          // ✅ then apply cache (covers: cursor advanced but deck installed later)
+          // ✅ then apply cache
           try {
             await applyCachedRemoteProgress(resolved.Slug);
           } catch {}
@@ -373,7 +429,7 @@ export function ReviewScreen({ navigation, route }: Props) {
       return () => {
         cancelled = true;
       };
-    }, [slug, mode, limit]),
+    }, [slug, mode, limit, isPremiumUser, navigation]),
   );
 
   if (loadError) {
@@ -444,19 +500,24 @@ export function ReviewScreen({ navigation, route }: Props) {
 
       await saveDeckProgress(deck, newProgress);
 
-      // ✅ enqueue sync event (best effort)
-      void recordReviewEvent({
-        deckSlug: deck.Slug,
-        deckVersion: deck.Version,
-        stableUid: updatedOne.stableUid,
-        rating: uiRating,
-        reviewedAtMs: nowMs,
-        progressAfter: updatedOne,
-        lastSeenRevision: seenRev,
-      });
+      // ✅ enqueue sync event (crash-safe)
+      try {
+        const eventId = await recordReviewEvent({
+          deckSlug: deck.Slug,
+          deckVersion: deck.Version,
+          stableUid: updatedOne.stableUid,
+          rating: uiRating,
+          reviewedAtMs: nowMs,
+          progressAfter: updatedOne,
+          lastSeenRevision: seenRev,
+        });
 
-      // ✅ trigger sync soon (debounced)
-      scheduleProgressSync('rating');
+        if (eventId) {
+          scheduleProgressSync('rating');
+        }
+      } catch (e) {
+        console.warn('[Review] recordReviewEvent failed:', (e as any)?.message ?? e);
+      }
 
       const nextDone = sessionDone + 1;
       setSessionDone(nextDone);
@@ -560,7 +621,9 @@ export function ReviewScreen({ navigation, route }: Props) {
                         <Text style={styles.cardChip}>
                           {current.card.Difficulty === 1 ? 'Easy' : current.card.Difficulty === 2 ? 'Medium' : 'Hard'}
                         </Text>
-                        {current.card.CodeLanguage ? <Text style={styles.cardChipSecondary}>{current.card.CodeLanguage}</Text> : null}
+                        {current.card.CodeLanguage ? (
+                          <Text style={styles.cardChipSecondary}>{current.card.CodeLanguage}</Text>
+                        ) : null}
                       </View>
 
                       <Text style={styles.cardQuestion}>{current.card.Question}</Text>
@@ -717,7 +780,7 @@ const styles = StyleSheet.create({
   gradient: { flex: 1 },
   container: { flex: 1, paddingHorizontal: 18, paddingTop: 16 },
 
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
   loadingText: { marginTop: 10, color: '#6B7280' },
 
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },

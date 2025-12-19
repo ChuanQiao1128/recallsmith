@@ -25,8 +25,8 @@ import {
   type RemoteConfig,
 } from '../config/remoteConfig';
 
-// ✅ NEW: auth
-import { useAuthState, signOutAndWipeLocal } from '../auth/authStore';
+// ✅ Auth: only use useAuthStore (avoid object selector infinite loop)
+import { useAuthStore } from '../auth/authStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
@@ -65,7 +65,10 @@ function extractSemver(input: string | null | undefined): string | null {
   return m ? m[0] : null;
 }
 
-function safeSemverCompare(aRaw: string | null | undefined, bRaw: string | null | undefined): number | null {
+function safeSemverCompare(
+  aRaw: string | null | undefined,
+  bRaw: string | null | undefined
+): number | null {
   const a = extractSemver(aRaw);
   const b = extractSemver(bRaw);
   if (!a || !b) return null;
@@ -75,8 +78,15 @@ function safeSemverCompare(aRaw: string | null | undefined, bRaw: string | null 
 export function SettingsScreen({ navigation }: Props) {
   const appVersionRaw = getCurrentAppVersion();
 
-  // ✅ auth state
-  const { ready: authReady, accessToken } = useAuthState();
+  // ✅ auth state (primitive selectors only)
+  const status = useAuthStore((s) => s.status);
+  const email = useAuthStore((s) => s.email);
+  const authLoading = useAuthStore((s) => s.loading);
+  const isSignedIn = useAuthStore((s) => s.status === 'signed_in');
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const signOutNow = useAuthStore((s) => s.signOutNow);
+
+  const authReady = status !== 'unknown' && !authLoading;
 
   const [updating, setUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
@@ -213,7 +223,7 @@ export function SettingsScreen({ navigation }: Props) {
   async function handleSignOut() {
     Alert.alert(
       'Sign out',
-      'This will sign you out and wipe local progress on this device (safe for multi-account). Continue?',
+      'This will sign you out on this device and stop cloud sync. Continue?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -221,7 +231,7 @@ export function SettingsScreen({ navigation }: Props) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await signOutAndWipeLocal();
+              await signOutNow();
             } catch {
               // ignore
             }
@@ -264,20 +274,21 @@ export function SettingsScreen({ navigation }: Props) {
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Account</Text>
               <Text style={styles.sectionSubtitle}>
-                {authReady
-                  ? accessToken
-                    ? `Signed in · token ${tokenPreview}`
-                    : 'Signed out · please sign in to sync progress'
-                  : 'Loading account…'}
+                {!authReady
+                  ? 'Loading account…'
+                  : isSignedIn
+                  ? `Signed in · ${email ?? '—'} · Sync enabled`
+                  : 'Signed out · please sign in to sync progress'}
               </Text>
 
-              {!accessToken ? (
+              {!isSignedIn ? (
                 <Pressable
                   style={({ pressed }) => [
                     styles.updateButton,
                     pressed && styles.updateButtonPressed,
+                    !authReady && styles.updateButtonDisabled,
                   ]}
-                  onPress={() => navigation.navigate('Auth')}
+                  onPress={() => navigation.navigate('SignIn')}
                   disabled={!authReady}
                 >
                   <Text style={styles.updateButtonText}>Sign in / Register</Text>
@@ -290,21 +301,23 @@ export function SettingsScreen({ navigation }: Props) {
                   ]}
                   onPress={handleSignOut}
                 >
-                  <Text style={styles.updateButtonText}>Sign out (wipe local)</Text>
+                  <Text style={styles.updateButtonText}>Sign out</Text>
                 </Pressable>
               )}
             </View>
 
             {/* App 信息 + 更新 */}
             <View style={styles.appCard}>
-              <Text style={styles.appName}>DevCards</Text>
+              <Text style={styles.appName}>DeveloperCards</Text>
               <Text style={styles.appTagline}>
-                Full‑stack concept with spaced repetition.
+                Coding concept with spaced repetition.
               </Text>
 
               <View style={styles.versionRow}>
                 <Text style={styles.versionLabel}>Current app</Text>
-                <Text style={styles.versionValue}>{extractSemver(appVersionRaw) ?? appVersionRaw}</Text>
+                <Text style={styles.versionValue}>
+                  {extractSemver(appVersionRaw) ?? appVersionRaw}
+                </Text>
               </View>
 
               <View style={styles.versionRow}>
@@ -404,7 +417,7 @@ export function SettingsScreen({ navigation }: Props) {
 
             <View style={styles.footerBox}>
               <Text style={styles.footerText}>
-                Made with focus for developers preparing full‑stack interviews.
+                Made with focus for developers preparing full-stack interviews.
               </Text>
             </View>
           </View>

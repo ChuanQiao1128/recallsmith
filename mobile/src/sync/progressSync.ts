@@ -15,6 +15,36 @@ import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, saveDeckProgress } from '../review/storage';
 import type { CardProgress } from '../review/model';
 
+/**
+ * ============================
+ *  Progress Sync 设计（面试讲法）
+ * ============================
+ *
+ * 核心目标：Offline-first + Eventual Consistency
+ *
+ * 1) UI 只依赖本地进度（AsyncStorage）
+ *    - 打分后立刻 saveDeckProgress() -> UI 马上正确
+ *
+ * 2) “同步”用事件队列（event queue），而不是“每次都直接写数据库”
+ *    - recordReviewEvent() 把一次打分写入 devcards:sync:progressQueue:v1（AsyncStorage）
+ *    - eventId(UUID) 做幂等：服务端返回 duplicateEventIds，客户端可以安全删除
+ *
+ * 3) 同步循环 = Push + Pull
+ *    - Push: /api/v1/sync/push 发送队列事件（最多 25 条/批，最多 20 轮）
+ *    - Pull: /api/v1/sync/progress?sinceMs=cursor 拉取增量
+ *            拉到的数据先写 remoteCache（即使 deck 还没安装也缓存）
+ *            如果 deck 已安装：merge 到本地 progress
+ *
+ * 4) 触发策略（省流量的关键）
+ *    - rating：debounce（默认 10s），把连续刷题合成一次 push
+ *    - home_focus/review_focus/app_start/manual/token_set：立即同步（0ms）
+ *    - 注意：MIN_PULL_INTERVAL_MS 只是“防抖”，不是“2s 定时任务”
+ *
+ * 5) Crash-safety
+ *    - ReviewScreen 要 await recordReviewEvent()，确保事件先落盘
+ *    - app 被杀/无网：队列仍在，下次打开会继续 push
+ */
+
 type ApiOk<T> = {
   success: boolean;
   data: T;
@@ -79,6 +109,11 @@ let _pending = false;
 let _scheduledReason: string = 'unknown';
 
 let _lastPullAtMs = 0;
+
+/**
+ * 这个不是“每 2s 拉一次”，只是防止短时间内重复 pull
+ * （比如 app_start 触发一次 pull，紧接着 home_focus 又触发 pull）
+ */
 const MIN_PULL_INTERVAL_MS = 2_000;
 
 // one-time heal guard
@@ -170,12 +205,17 @@ export async function setSyncAccessToken(token: string | null): Promise<void> {
     else await AsyncStorage.removeItem(ACCESS_TOKEN_KEY);
   } catch {}
 
-  // ✅ 关键：token 一旦可用，立刻触发一次 sync（新设备最常见“没进度”的根因就是没拉到）
+  // token 一旦可用，立刻触发 sync
   if (t) {
     scheduleProgressSync({ delayMs: 0, reason: 'token_set' });
   }
 }
 
+/**
+ * ReviewScreen 调用这个入队：
+ * - IMPORTANT: ReviewScreen 里应该 await 它（你已经这么做了）
+ *   => 确保 event 已经写入 AsyncStorage queue，crash 也不丢
+ */
 export async function recordReviewEvent(...args: any[]): Promise<string | null> {
   let deckSlug: string | null = null;
   let stableUid: string | null = null;
@@ -285,8 +325,8 @@ async function writeLastError(msg: string | null) {
 }
 
 /**
- * ✅ 自愈：如果 cursor 有值，但 remote cache 完全没有（通常是“清缓存但没清 cursor”）
- * 这会导致未来永远拉不到旧进度，所以直接把 cursor 清掉 -> 下一次 pull 自动全量
+ * 自愈：cursor 有值，但 remoteCache 全没了（常见：清缓存但没清 cursor）
+ * => 清 cursor，下次 pull 会全量拉回历史
  */
 async function healCursorIfCacheMissing(): Promise<void> {
   if (_healedOnce) return;
@@ -321,6 +361,10 @@ function getDeckUidSet(deck: any): Set<string> {
 
 /**
  * Merge remote progress items into local CardProgress[].
+ * 规则：
+ * - remote.updatedAtMs 越大越新
+ * - remoteLastReviewedAt > localLastReviewedAt => remote 覆盖本地
+ * - lastReviewedAt 相同：只有 remote.hasNext=true 才允许覆盖 nextReviewAt（防 Phase2 fallback 抖动）
  */
 function mergeRemoteIntoLocalProgress(
   local: CardProgress[],
@@ -384,8 +428,7 @@ function mergeRemoteIntoLocalProgress(
       } as any;
     }
 
-    // ✅ Case B: lastReviewedAt 相同，但远端带了 nextReviewAtMs（Phase3）
-    // 只有在 hasNext=true 才允许覆盖（避免 Phase2 fallback 抖动）
+    // Case B: lastReviewedAt 相同，但远端带 nextReviewAtMs（Phase3）
     if (remote.hasNext && remoteLast === localLast && remoteNext > 0 && remoteNext !== localNext) {
       changed = true;
       appliedCount += 1;
@@ -398,8 +441,7 @@ function mergeRemoteIntoLocalProgress(
     return p;
   });
 
-  // 如果你确信 local progress 总是包含 deck 的全部卡片，可以不做 “add missing uids”
-  // 这里保留，但它只会补 local 没有的 uid
+  // 兜底：补 local 不存在的 uid（一般不会发生，因为 loadDeckProgress 会按 deck 补齐）
   for (const [uid, remote] of bestRemote.entries()) {
     if (localByUid.has(uid)) continue;
 
@@ -419,7 +461,6 @@ function mergeRemoteIntoLocalProgress(
 }
 
 async function pullProgressAndApply(accessToken: string): Promise<{ pulled: number; applied: number }> {
-  // ✅ heal once
   await healCursorIfCacheMissing();
 
   const cursorBefore = await getCursorMs();
@@ -454,7 +495,7 @@ async function pullProgressAndApply(accessToken: string): Promise<{ pulled: numb
     byDeck.set(slug, arr);
   }
 
-  // 1) cache ALL decks
+  // 1) cache ALL decks (even not installed)
   let cacheAllOk = true;
 
   for (const [deckSlug, rows] of byDeck.entries()) {
@@ -490,12 +531,10 @@ async function pullProgressAndApply(accessToken: string): Promise<{ pulled: numb
     const deck: any = await resolveDeckBySlug(deckSlug);
     if (!deck) continue;
 
-    // ✅ 关键：过滤掉 deck 不存在的 stableUid（防脏数据污染统计）
+    // 过滤 deck 不存在的 stableUid
     const uidSet = getDeckUidSet(deck);
     const filteredRows =
-      uidSet.size > 0
-        ? rows.filter((r) => uidSet.has(String(r?.stableUid ?? '').trim()))
-        : rows;
+      uidSet.size > 0 ? rows.filter((r) => uidSet.has(String(r?.stableUid ?? '').trim())) : rows;
 
     const local = await loadDeckProgress(deck);
     const { merged, changed, appliedCount } = mergeRemoteIntoLocalProgress(local, filteredRows);
@@ -512,16 +551,6 @@ async function pullProgressAndApply(accessToken: string): Promise<{ pulled: numb
   }
 
   _lastPullAtMs = Date.now();
-
-//   console.log('[progressSync] pull ok', {
-//     pulled: items.length,
-//     applied,
-//     cursorBefore,
-//     cursorAfter: maxUpdatedAt,
-//     deckCount: byDeck.size,
-//     cacheAllOk,
-//   });
-
   return { pulled: items.length, applied };
 }
 
@@ -529,6 +558,7 @@ async function syncProgressOnce(
   accessToken: string,
   reason: string,
 ): Promise<{ pushed: number; pulled: number; applied: number; remaining: number }> {
+  // best-effort bootstrap
   try {
     await apiJson<ApiOk<BootstrapResp>>('/api/v1/user/bootstrap', {
       method: 'POST',
@@ -561,11 +591,10 @@ async function syncProgressOnce(
           stableUid: ev.stableUid,
           rating: ev.rating,
 
-          // ✅ 兼容字段
           reviewedAtMs: ev.reviewedAtMs,
           eventTimeMs: ev.reviewedAtMs,
 
-          // ✅ Phase3：直接发 nextReviewAtMs
+          // Phase3：直接发 nextReviewAtMs（避免新设备把 future 卡当 due）
           nextReviewAtMs: toMs(ev.progressAfter?.nextReviewAt) ?? null,
 
           progressAfter: ev.progressAfter ?? null,
@@ -592,6 +621,10 @@ async function syncProgressOnce(
   const msSinceLastPull = _lastPullAtMs > 0 ? now - _lastPullAtMs : Number.POSITIVE_INFINITY;
   const pullAllowed = msSinceLastPull >= MIN_PULL_INTERVAL_MS;
 
+  /**
+   * Pull 的目的：拿到别的设备的更新 + 填 remote cache
+   * 但我们不希望每次 rating 都 pull（省流量）
+   */
   const wantPull =
     reason === 'home_focus' ||
     reason === 'review_focus' ||
@@ -607,23 +640,12 @@ async function syncProgressOnce(
     } catch (e) {
       console.warn('[progressSync] pull failed:', (e as any)?.message ?? e);
     }
-  } else if (wantPull && !pullAllowed) {
-    // console.log('[progressSync] pull skipped (throttled)', {
-    //   reason,
-    //   pushed,
-    //   msSinceLastPull,
-    //   minInterval: MIN_PULL_INTERVAL_MS,
-    //   lastPullAtMs: _lastPullAtMs,
-    //   now,
-    // });
   }
 
   const remaining = await progressQueueSize();
 
   await writeLastSync({ atMs: Date.now(), reason, pushed, pulled, applied, remaining });
   await writeLastError(null);
-
-//   console.log('[progressSync] done', { reason, pushed, pulled, applied, remaining });
 
   return { pushed, pulled, applied, remaining };
 }
@@ -652,6 +674,7 @@ async function runSyncNow(reason: string): Promise<void> {
   } finally {
     _inFlight = false;
 
+    // 如果 sync 过程中又被触发了一次，做一次短延迟 flush
     if (_pending) {
       _pending = false;
       scheduleProgressSync({ delayMs: 300, reason: 'pending_flush' });
@@ -659,8 +682,20 @@ async function runSyncNow(reason: string): Promise<void> {
   }
 }
 
+/**
+ * ✅ 省流量策略：
+ * - rating 默认 10s debounce（连续打分合并成一次 push）
+ * - home_focus/review_focus/app_start/manual/token_set 默认立即 sync
+ *
+ * 你也可以继续显式传 delayMs 来覆盖默认策略。
+ */
 export function scheduleProgressSync(arg?: any): void {
-  let delayMs = 650;
+  // ✅ No token -> skip scheduling (avoid noisy warnings in Home before login)
+  if (!_accessTokenMem || !_accessTokenMem.trim()) {
+    return;
+  }
+
+  let delayMs: number | null = null;
   let reason = 'scheduled';
 
   if (typeof arg === 'number' && Number.isFinite(arg)) {
@@ -671,6 +706,22 @@ export function scheduleProgressSync(arg?: any): void {
     const d = (arg as any).delayMs;
     if (Number.isFinite(Number(d))) delayMs = Math.max(0, Math.floor(Number(d)));
     if (typeof (arg as any).reason === 'string') reason = (arg as any).reason;
+  }
+
+  if (delayMs == null) {
+    if (reason === 'rating') delayMs = 10_000;
+    else if (reason === 'pending_flush') delayMs = 300;
+    else if (
+      reason === 'home_focus' ||
+      reason === 'review_focus' ||
+      reason === 'app_start' ||
+      reason === 'manual' ||
+      reason === 'token_set'
+    ) {
+      delayMs = 0;
+    } else {
+      delayMs = 650;
+    }
   }
 
   _scheduledReason = reason;
@@ -687,6 +738,10 @@ function sleep(ms: number) {
 }
 
 export async function forceProgressSync(reason: string = 'manual'): Promise<void> {
+  // ✅ No token -> skip force sync entirely (avoid 20s timeout)
+  const token = await getSyncAccessToken();
+  if (!token || !token.trim()) return;
+
   scheduleProgressSync({ delayMs: 0, reason });
 
   const start = Date.now();
@@ -727,6 +782,10 @@ export async function getProgressSyncDebugState(): Promise<any> {
   };
 }
 
+/**
+ * 应用 remote cache 到本地（deck 安装后补进度用）
+ * - 解决：cursor 已推进，但 deck 是后来才安装 => pull 时没法 apply 到本地
+ */
 export async function applyCachedRemoteProgress(deckSlug: string): Promise<number> {
   const deck: any = await resolveDeckBySlug(deckSlug);
   if (!deck) return 0;
@@ -735,11 +794,9 @@ export async function applyCachedRemoteProgress(deckSlug: string): Promise<numbe
   const rowsAll = Object.values(cache || {});
   if (rowsAll.length === 0) return 0;
 
-  // ✅ 过滤 deck 不存在的 uid
   const uidSet = getDeckUidSet(deck);
-  const rows = uidSet.size > 0
-    ? rowsAll.filter((r) => uidSet.has(String(r?.stableUid ?? '').trim()))
-    : rowsAll;
+  const rows =
+    uidSet.size > 0 ? rowsAll.filter((r) => uidSet.has(String(r?.stableUid ?? '').trim())) : rowsAll;
 
   if (rows.length === 0) return 0;
 
@@ -750,12 +807,11 @@ export async function applyCachedRemoteProgress(deckSlug: string): Promise<numbe
     await saveDeckProgress(deck, merged);
   }
 
-//   console.log('[progressSync] applied cached remote', { deckSlug, appliedCount, cacheSize: rowsAll.length });
   return appliedCount;
 }
 
 /**
- * ✅ 可选：debug 用，一键清 sync 状态（注意：会把 cursor 清掉，下次会全量 pull）
+ * debug：一键清 sync 状态（下次会全量 pull）
  */
 export async function resetProgressSyncState(): Promise<void> {
   try {

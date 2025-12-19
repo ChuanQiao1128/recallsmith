@@ -19,12 +19,21 @@ import type { RootStackParamList, StudyMode } from '../navigation/types';
 import type { DeckExport } from '../types/deckExport';
 import { setActiveDeckSlug, loadActiveDeckSlug } from '../content/activeDeck';
 
-// ✅ Step 4: async resolver (prefer downloaded deck)
-import { resolveDeckBySlug, listManifestDecks } from '../content/deckRepository';
+// ✅ resolver + manifest + installer
+import {
+  resolveDeckBySlug,
+  listManifestDecks,
+  checkManifestForUpdates,
+  installDeckFromUrl,
+  type ManifestDeckEntry,
+} from '../content/deckRepository';
 
 import type { CardProgress } from '../review/model';
 import { formatDateKey } from '../review/model';
 import { loadDeckProgress, loadOrInitDailyStats, type DailyStats } from '../review/storage';
+
+// ✅ premium entitlement
+import { usePremiumUser } from '../premium/premiumStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Deck'>;
 
@@ -34,6 +43,9 @@ interface DeckState {
   progress: CardProgress[];
   dailyStats: DailyStats | null;
   error: string | null;
+
+  manifestEntry?: ManifestDeckEntry | null;
+  lockedReason?: 'coming' | 'premium' | null;
 }
 
 function startOfToday(now: Date) {
@@ -66,8 +78,6 @@ function countDueToday(progress: CardProgress[], now: Date): number {
   return count;
 }
 
-// ✅ Phase 3: detect “updated” cards (card.Revision > progress.lastSeenRevision)
-// Fallbacks keep old decks/progress safe.
 function getCardRevision(card: any): number {
   const r = card?.Revision;
   return typeof r === 'number' && r > 0 ? r : 1;
@@ -86,7 +96,7 @@ function countUpdatedCards(cards: any[], progress: CardProgress[]): number {
   for (const card of cards) {
     const p = pMap.get(card?.StableUid);
     if (!p) continue;
-    if (!isLearned(p)) continue; // 只有学过的才可能“更新”
+    if (!isLearned(p)) continue;
     if (getCardRevision(card) > getSeenRevision(p)) count += 1;
   }
 
@@ -97,11 +107,16 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
+function lower(s: any): string {
+  return String(s ?? '').toLowerCase();
+}
+
 export function DeckScreen({ navigation, route }: Props) {
   const slugFromRoute = route.params?.slug;
   const [slug, setSlug] = useState<string | null>(slugFromRoute ?? null);
 
-  // 初始化 slug：优先 route，其次上次活跃 deck，再退到 manifest 首项
+  const isPremiumUser = usePremiumUser();
+
   useFocusEffect(
     useCallback(() => {
       if (slugFromRoute) {
@@ -137,6 +152,8 @@ export function DeckScreen({ navigation, route }: Props) {
     progress: [],
     dailyStats: null,
     error: null,
+    manifestEntry: null,
+    lockedReason: null,
   });
 
   const [sessionCount, setSessionCount] = useState(20);
@@ -150,6 +167,8 @@ export function DeckScreen({ navigation, route }: Props) {
           progress: [],
           dailyStats: null,
           error: 'No deck available. Please install a deck from Settings.',
+          manifestEntry: null,
+          lockedReason: null,
         });
         return;
       }
@@ -157,16 +176,93 @@ export function DeckScreen({ navigation, route }: Props) {
       let cancelled = false;
 
       async function load() {
-        setState(prev => ({ ...prev, loading: true, error: null }));
+        const slugStr = slug;
+        if (!slugStr) return;
+
+        setState(prev => ({ ...prev, loading: true, error: null, lockedReason: null }));
 
         try {
-          // ✅ Step 4: 先 resolve deck（本地下载版优先）
-          const deck = await resolveDeckBySlug(slug!);
-          if (!deck) throw new Error('Deck not found');
+          const manifest = await listManifestDecks();
+          const entry = manifest.find(x => x.slug === slugStr) ?? null;
+
           if (cancelled) return;
 
-          // 进入本页后，把它设为 active（保证 Review/Home 等同步）
+          // coming -> block
+          if (entry && lower(entry.availability) === 'coming') {
+            setState({
+              loading: false,
+              deck: null,
+              progress: [],
+              dailyStats: null,
+              error: null,
+              manifestEntry: entry,
+              lockedReason: 'coming',
+            });
+            return;
+          }
+
+          // premium/auth -> block before resolve
+          const premiumByManifest =
+            entry ? lower(entry.tier) === 'premium' || lower(entry.downloadMode) === 'auth' : false;
+
+          if (entry && premiumByManifest && !isPremiumUser) {
+            setState({
+              loading: false,
+              deck: null,
+              progress: [],
+              dailyStats: null,
+              error: null,
+              manifestEntry: entry,
+              lockedReason: 'premium',
+            });
+            return;
+          }
+
+          // 1) local resolve
+          let deck = await resolveDeckBySlug(slugStr);
+          if (cancelled) return;
+
+          // 2) if not installed, try auto-install if public
+          if (!deck) {
+            const updates = await checkManifestForUpdates();
+            if (cancelled) return;
+
+            const info = updates[slugStr];
+            const canDownload = !!info?.remoteUrl && !!info?.remoteVersion;
+
+            if (canDownload) {
+              const ok = await installDeckFromUrl(
+                slugStr,
+                info.remoteUrl!,
+                info.remoteVersion!,
+                info.remoteSha256 ?? null,
+              );
+              if (cancelled) return;
+
+              if (ok) {
+                deck = await resolveDeckBySlug(slugStr);
+                if (cancelled) return;
+              }
+            }
+          }
+
+          if (!deck) throw new Error('Deck not found');
+
           void setActiveDeckSlug(deck.Slug);
+
+          // defensive premium check
+          if (deck.DeckType !== 1 && !isPremiumUser) {
+            setState({
+              loading: false,
+              deck,
+              progress: [],
+              dailyStats: null,
+              error: null,
+              manifestEntry: entry,
+              lockedReason: 'premium',
+            });
+            return;
+          }
 
           const progress = await loadDeckProgress(deck);
           if (cancelled) return;
@@ -174,7 +270,15 @@ export function DeckScreen({ navigation, route }: Props) {
           const dailyStats = await loadOrInitDailyStats(deck, progress);
           if (cancelled) return;
 
-          setState({ loading: false, deck, progress, dailyStats, error: null });
+          setState({
+            loading: false,
+            deck,
+            progress,
+            dailyStats,
+            error: null,
+            manifestEntry: entry,
+            lockedReason: null,
+          });
         } catch (e: any) {
           if (cancelled) return;
           setState({
@@ -183,6 +287,8 @@ export function DeckScreen({ navigation, route }: Props) {
             progress: [],
             dailyStats: null,
             error: e?.message ?? 'Failed to load deck.',
+            manifestEntry: null,
+            lockedReason: null,
           });
         }
       }
@@ -191,20 +297,15 @@ export function DeckScreen({ navigation, route }: Props) {
       return () => {
         cancelled = true;
       };
-    }, [slug]),
+    }, [slug, isPremiumUser]),
   );
 
-  const { loading, deck, progress, dailyStats, error } = state;
+  const { loading, deck, progress, dailyStats, error, manifestEntry, lockedReason } = state;
 
   if (error) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
+        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
           <View style={styles.center}>
             <Text style={styles.title}>Deck not found</Text>
             <Text style={styles.subtitle}>{error}</Text>
@@ -217,15 +318,10 @@ export function DeckScreen({ navigation, route }: Props) {
     );
   }
 
-  if (loading || !dailyStats || !deck) {
+  if (loading) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
+        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
           <View style={styles.center}>
             <ActivityIndicator size="large" color="#6366F1" />
             <Text style={styles.loadingText}>Loading deck...</Text>
@@ -235,111 +331,145 @@ export function DeckScreen({ navigation, route }: Props) {
     );
   }
 
-  const canStudy = (deck.Cards?.length ?? 0) > 0;
-  const totalCards = (deck.TotalCards ?? deck.Cards?.length ?? 0) || 0;
+  if (lockedReason === 'coming' && manifestEntry) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+          <View style={styles.center}>
+            <Text style={styles.title}>⏳ Coming soon</Text>
+            <Text style={styles.subtitle} numberOfLines={3}>
+              “{manifestEntry.title ?? manifestEntry.slug}” is not available yet.
+              {manifestEntry.eta ? `\nETA: ${manifestEntry.eta}` : ''}
+            </Text>
 
-  const now = new Date();
-
-  // ✅ Due = 只统计已学过且安排在“今天桶”的卡
-  const dueToday = countDueToday(progress, now);
-
-  // ✅ New = 没学过的数量
-  const learnedCount = progress.filter(isLearned).length;
-  const newRemaining = Math.max(totalCards - learnedCount, 0);
-
-  const updatedCount = canStudy ? countUpdatedCards(deck.Cards ?? [], progress) : 0;
-
-  const overallPercent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
-
-  const minSession = 5;
-  const maxSession = 50;
-
-  function changeSession(delta: number) {
-    setSessionCount(prev => Math.min(maxSession, Math.max(minSession, prev + delta)));
-  }
-  function setPreset(count: number) {
-    setSessionCount(count);
-  }
-
-  function startMode(mode: StudyMode) {
-    if (!canStudy || !deck) return;
-
-    // ✅ 确保 Review 用同一个 deck
-    void setActiveDeckSlug(deck.Slug);
-
-    navigation.navigate('Review', {
-      slug: deck.Slug,
-      mode,
-      limit: sessionCount,
-    });
-  }
-
-  const deckTypeLabel = deck.DeckType === 1 ? 'Starter deck' : 'Premium deck';
-
-  const disableReviewDue = !canStudy || dueToday === 0;
-  const disableLearn = !canStudy || newRemaining === 0;
-
-  // ✅ mixed：允许 “updated cards” 也能开跑（ReviewScreen 里 mixed 会包含 updated）
-  const disableMixed = !canStudy || (dueToday === 0 && newRemaining === 0 && updatedCount === 0);
-
-  return (
-    <SafeAreaProvider>
-    <SafeAreaView style={styles.safeArea}>
-      <LinearGradient
-        colors={['#F5F3FF', '#E0F2FE']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.gradient}
-      >
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* 顶部 header */}
-          <View style={styles.headerRow}>
             <Pressable
-              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
+              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed, { marginTop: 10 }]}
               onPress={() => navigation.goBack()}
             >
-              <Text style={styles.backText}>← Home</Text>
+              <Text style={styles.backText}>← Back</Text>
             </Pressable>
-
-            <View style={{ flex: 1 }}>
-              <Text style={styles.title} numberOfLines={1}>
-                {deck.Title}
-              </Text>
-              <Text style={styles.subtitle} numberOfLines={1}>
-                {deck.Locale} · {deckTypeLabel}
-              </Text>
-            </View>
           </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
 
-          {/* 玻璃进度卡片（Due / New / Learned） */}
-          <View style={styles.heroCard}>
-            <Text style={styles.heroLabel}>Study overview</Text>
+  // ✅ Premium preview page (banner on top)
+  // ✅ Premium preview page (better conversion UX)
+  if (lockedReason === 'premium') {
+    const title = deck?.Title ?? manifestEntry?.title ?? manifestEntry?.slug ?? 'Premium deck';
+    const locale = deck?.Locale ?? manifestEntry?.locale ?? 'en-US';
 
-            {!canStudy ? (
-              <Text style={styles.sectionSubTitle}>
-                This deck is a placeholder in this build. Content will be available later.
-              </Text>
-            ) : (
-              <>
+    const totalCards = Number.isFinite(manifestEntry?.totalCards as any)
+      ? Number(manifestEntry?.totalCards)
+      : 0;
+
+    const deckTypeLabel = 'Premium Deck · Preview';
+
+    // preview-only metrics
+    const dueToday = 0;
+    const learnedCount = 0;
+    const newRemaining = totalCards;
+    const overallPercent = 0;
+
+    const disableReviewDue = true;
+    const disableLearn = true;
+    const disableMixed = true;
+
+    // simple local "outline" (later: move to manifest.previewText)
+    const whatYouLearn = [
+      'A structured learning path (not random flashcards)',
+      'Real-world patterns + common mistakes',
+      'Interview-style questions with explanations',
+      'Updated content drops over time',
+    ];
+
+    // one sample card (hardcoded preview)
+    const sampleQ =
+      title.toLowerCase().includes('react')
+        ? 'Why is the useEffect dependency array important?'
+        : title.toLowerCase().includes('c#') || title.toLowerCase().includes('csharp')
+          ? 'What is the difference between IEnumerable and IQueryable?'
+          : 'What does “idempotent” mean in API design?';
+
+    const sampleA =
+      'Preview locked. Create an account and unlock Premium to see full explanations and start studying.';
+
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.safeArea}>
+          <LinearGradient
+            colors={['#F5F3FF', '#E0F2FE']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.gradient}
+          >
+            <ScrollView
+              style={styles.scroll}
+              contentContainerStyle={styles.scrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* header */}
+              <View style={styles.headerRow}>
+                <Pressable
+                  style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
+                  onPress={() => navigation.goBack()}
+                >
+                  <Text style={styles.backText}>← Home</Text>
+                </Pressable>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.title} numberOfLines={1}>
+                    {title}
+                  </Text>
+                  <Text style={styles.subtitle} numberOfLines={1}>
+                    {locale} · {deckTypeLabel} · {totalCards} cards
+                  </Text>
+                </View>
+              </View>
+
+              {/* premium banner (conversion) */}
+              <View style={styles.premiumBanner}>
+                <Text style={styles.premiumBannerTitle}>🔒 Premium Preview</Text>
+                <Text style={styles.premiumBannerBody}>
+                  You can preview the deck now. To start studying, create a free account and unlock Premium.
+                </Text>
+
+                <View style={styles.premiumCtaRow}>
+                  <Pressable
+                    style={({ pressed }) => [styles.secondaryCtaBtn, pressed && { opacity: 0.9 }]}
+                    onPress={() => navigation.navigate('Paywall')}
+                  >
+                    <Text style={styles.secondaryCtaText}>Create free account</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.upgradeButton, pressed && { opacity: 0.9 }]}
+                    onPress={() => navigation.navigate('Paywall')}
+                  >
+                    <Text style={styles.upgradeButtonText}>Upgrade</Text>
+                  </Pressable>
+                </View>
+
+                <Text style={styles.premiumFootnote}>
+                  Tip: Free decks work without an account. Accounts are for backup + Premium access.
+                </Text>
+              </View>
+
+              {/* overview card */}
+              <View style={styles.heroCard}>
+                <Text style={styles.heroLabel}>Study overview (preview)</Text>
+
                 <View style={styles.heroTopRow}>
                   <Text style={styles.heroTotal}>
                     {learnedCount}/{totalCards}
                   </Text>
-                  <Text style={styles.heroTotalLabel}>learned (approx)</Text>
+                  <Text style={styles.heroTotalLabel}>learned</Text>
                 </View>
 
                 <View style={styles.progressBarBg}>
-                  <View
-                    style={[
-                      styles.progressBarFill,
-                      { flex: overallPercent, opacity: overallPercent === 0 ? 0 : 1 },
-                    ]}
-                  />
-                  <View style={{ flex: 1 - overallPercent }} />
+                  <View style={[styles.progressBarFill, { flex: overallPercent, opacity: 0 }]} />
+                  <View style={{ flex: 1 }} />
                 </View>
 
                 <View style={styles.heroStatsRow}>
@@ -358,121 +488,336 @@ export function DeckScreen({ navigation, route }: Props) {
                     <Text style={[styles.heroStatValue, { color: '#22C55E' }]}>{learnedCount}</Text>
                   </View>
                 </View>
-
-                {updatedCount > 0 ? (
-                  <View style={styles.updatePill}>
-                    <Text style={styles.updatePillText}>
-                      ✨ {updatedCount} card{updatedCount === 1 ? '' : 's'} updated since you last reviewed.
-                    </Text>
-                  </View>
-                ) : null}
-              </>
-            )}
-          </View>
-
-          {/* 本次学习张数 */}
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Cards for this session</Text>
-            <Text style={styles.sectionSubTitle}>
-              Start small and keep consistency. 20–30 cards per run is a good default.
-            </Text>
-
-            <View style={styles.sessionRow}>
-              <Pressable style={styles.sessionButton} onPress={() => changeSession(-5)}>
-                <Text style={styles.sessionButtonText}>−</Text>
-              </Pressable>
-
-              <View style={styles.sessionCenter}>
-                <Text style={styles.sessionNumber}>{sessionCount}</Text>
-                <Text style={styles.sessionLabel}>cards</Text>
               </View>
 
-              <Pressable style={styles.sessionButton} onPress={() => changeSession(+5)}>
-                <Text style={styles.sessionButtonText}>+</Text>
-              </Pressable>
-            </View>
+              {/* what you'll learn */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>What you’ll learn</Text>
+                <Text style={styles.sectionSubTitle}>
+                  This deck is designed as a structured path—ideal if you want real momentum.
+                </Text>
 
-            <View style={styles.sessionPresetRow}>
-              {[10, 20, 30, 50].map(v => (
+                <View style={{ marginTop: 10 }}>
+                  {whatYouLearn.map((t, idx) => (
+                    <View key={`wy-${idx}`} style={styles.bulletRow}>
+                      <Text style={styles.bulletDot}>•</Text>
+                      <Text style={styles.bulletText}>{t}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
+              {/* sample card */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Sample card</Text>
+                <Text style={styles.sectionSubTitle}>A quick example of the style and depth.</Text>
+
+                <View style={styles.sampleCard}>
+                  <Text style={styles.sampleQLabel}>Q</Text>
+                  <Text style={styles.sampleQText}>{sampleQ}</Text>
+
+                  <View style={{ height: 10 }} />
+
+                  <Text style={styles.sampleALabel}>A</Text>
+                  <Text style={styles.sampleAText}>{sampleA}</Text>
+                </View>
+              </View>
+
+              {/* modes (disabled) */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Choose a mode</Text>
+                <Text style={styles.sectionSubTitle}>Modes are locked until you unlock Premium.</Text>
+
                 <Pressable
-                  key={v}
-                  style={[styles.presetChip, sessionCount === v && styles.presetChipActive]}
-                  onPress={() => setPreset(v)}
+                  style={({ pressed }) => [
+                    styles.modeCard,
+                    styles.modeCardReview,
+                    pressed && styles.modeCardPressed,
+                    disableReviewDue && styles.modeCardDisabled,
+                  ]}
+                  disabled={disableReviewDue}
                 >
-                  <Text style={[styles.presetChipText, sessionCount === v && styles.presetChipTextActive]}>
-                    {v}
-                  </Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modeTitle}>Review Due</Text>
+                    <Text style={styles.modeSubtitle}>Locked</Text>
+                  </View>
+                  <Text style={styles.modeCount}>🔒</Text>
                 </Pressable>
-              ))}
-            </View>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.modeCard,
+                    styles.modeCardNew,
+                    pressed && styles.modeCardPressed,
+                    disableLearn && styles.modeCardDisabled,
+                  ]}
+                  disabled={disableLearn}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modeTitle}>Learn</Text>
+                    <Text style={styles.modeSubtitle}>Locked</Text>
+                  </View>
+                  <Text style={styles.modeCount}>🔒</Text>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.modeCard,
+                    styles.modeCardMixed,
+                    pressed && styles.modeCardPressed,
+                    disableMixed && styles.modeCardDisabled,
+                  ]}
+                  disabled={disableMixed}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modeTitle}>Mixed</Text>
+                    <Text style={styles.modeSubtitle}>Locked</Text>
+                  </View>
+                  <Text style={styles.modeCount}>🔒</Text>
+                </Pressable>
+
+                <View style={{ height: 10 }} />
+
+                <Pressable
+                  style={({ pressed }) => [styles.upgradeButton, pressed && { opacity: 0.9 }]}
+                  onPress={() => navigation.navigate('Paywall')}
+                >
+                  <Text style={styles.upgradeButtonText}>Unlock Premium</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </LinearGradient>
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
+  }
+
+  if (!deck || !dailyStats) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+          <View style={styles.center}>
+            <Text style={styles.title}>Deck not ready</Text>
+            <Text style={styles.subtitle}>Please try again.</Text>
+            <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
+              <Text style={styles.backText}>← Back</Text>
+            </Pressable>
           </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
 
-          {/* 模式选择 */}
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Choose a mode</Text>
-            <Text style={styles.sectionSubTitle}>Quick pick based on what you want to achieve today.</Text>
+  const canStudy = (deck.Cards?.length ?? 0) > 0;
+  const totalCards = (deck.TotalCards ?? deck.Cards?.length ?? 0) || 0;
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.modeCard,
-                styles.modeCardReview,
-                pressed && styles.modeCardPressed,
-                disableReviewDue && styles.modeCardDisabled,
-              ]}
-              disabled={disableReviewDue}
-              onPress={() => startMode('review-due')}
-            >
+  const now = new Date();
+  const dueToday = countDueToday(progress, now);
+  const learnedCount = progress.filter(isLearned).length;
+  const newRemaining = Math.max(totalCards - learnedCount, 0);
+
+  const updatedCount = canStudy ? countUpdatedCards(deck.Cards ?? [], progress) : 0;
+  const overallPercent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
+
+  const minSession = 5;
+  const maxSession = 50;
+
+  function changeSession(delta: number) {
+    setSessionCount(prev => Math.min(maxSession, Math.max(minSession, prev + delta)));
+  }
+  function setPreset(count: number) {
+    setSessionCount(count);
+  }
+
+  function startMode(mode: StudyMode) {
+    if (!canStudy || !deck) return;
+
+    void setActiveDeckSlug(deck.Slug);
+
+    navigation.navigate('Review', {
+      slug: deck.Slug,
+      mode,
+      limit: sessionCount,
+    });
+  }
+
+  const deckTypeLabel = deck.DeckType === 1 ? 'Starter deck' : 'Premium deck';
+
+  const disableReviewDue = !canStudy || dueToday === 0;
+  const disableLearn = !canStudy || newRemaining === 0;
+  const disableMixed = !canStudy || (dueToday === 0 && newRemaining === 0 && updatedCount === 0);
+
+  return (
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+            <View style={styles.headerRow}>
+              <Pressable
+                style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
+                onPress={() => navigation.goBack()}
+              >
+                <Text style={styles.backText}>← Home</Text>
+              </Pressable>
+
               <View style={{ flex: 1 }}>
-                <Text style={styles.modeTitle}>Review Due</Text>
-                <Text style={styles.modeSubtitle}>Clear today&apos;s reviews first.</Text>
+                <Text style={styles.title} numberOfLines={1}>
+                  {deck.Title}
+                </Text>
+                <Text style={styles.subtitle} numberOfLines={1}>
+                  {deck.Locale} · {deckTypeLabel}
+                </Text>
               </View>
-              <Text style={styles.modeCount}>{dueToday} due</Text>
-            </Pressable>
+            </View>
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.modeCard,
-                styles.modeCardNew,
-                pressed && styles.modeCardPressed,
-                disableLearn && styles.modeCardDisabled,
-              ]}
-              disabled={disableLearn}
-              onPress={() => startMode('learn-new')}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.modeTitle}>Learn</Text>
-                <Text style={styles.modeSubtitle}>Add new concepts for today.</Text>
-              </View>
-              <Text style={styles.modeCount}>{newRemaining} new</Text>
-            </Pressable>
+            <View style={styles.heroCard}>
+              <Text style={styles.heroLabel}>Study overview</Text>
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.modeCard,
-                styles.modeCardMixed,
-                pressed && styles.modeCardPressed,
-                disableMixed && styles.modeCardDisabled,
-              ]}
-              disabled={disableMixed}
-              onPress={() => startMode('mixed')}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.modeTitle}>Mixed</Text>
-                <Text style={styles.modeSubtitle}>Balanced run (due + updated + a few new).</Text>
-              </View>
-              <Text style={styles.modeCount}>up to {sessionCount}</Text>
-            </Pressable>
+              {!canStudy ? (
+                <Text style={styles.sectionSubTitle}>
+                  This deck is a placeholder in this build. Content will be available later.
+                </Text>
+              ) : (
+                <>
+                  <View style={styles.heroTopRow}>
+                    <Text style={styles.heroTotal}>
+                      {learnedCount}/{totalCards}
+                    </Text>
+                    <Text style={styles.heroTotalLabel}>learned (approx)</Text>
+                  </View>
 
-            <View style={styles.tipBox}>
-              <Text style={styles.tipTitle}>Tip</Text>
-              <Text style={styles.tipBody}>
-                Review due cards first, then learn new ones. This keeps the calendar manageable.
+                  <View style={styles.progressBarBg}>
+                    <View style={[styles.progressBarFill, { flex: overallPercent, opacity: overallPercent === 0 ? 0 : 1 }]} />
+                    <View style={{ flex: Math.max(0, 1 - overallPercent) }} />
+                  </View>
+
+                  <View style={styles.heroStatsRow}>
+                    <View style={styles.heroStat}>
+                      <Text style={styles.heroStatLabel}>Due today</Text>
+                      <Text style={[styles.heroStatValue, { color: '#EF4444' }]}>{dueToday}</Text>
+                    </View>
+
+                    <View style={styles.heroStat}>
+                      <Text style={styles.heroStatLabel}>New cards</Text>
+                      <Text style={[styles.heroStatValue, { color: '#0EA5E9' }]}>{newRemaining}</Text>
+                    </View>
+
+                    <View style={styles.heroStat}>
+                      <Text style={styles.heroStatLabel}>Have learned</Text>
+                      <Text style={[styles.heroStatValue, { color: '#22C55E' }]}>{learnedCount}</Text>
+                    </View>
+                  </View>
+
+                  {updatedCount > 0 ? (
+                    <View style={styles.updatePill}>
+                      <Text style={styles.updatePillText}>
+                        ✨ {updatedCount} card{updatedCount === 1 ? '' : 's'} updated since you last reviewed.
+                      </Text>
+                    </View>
+                  ) : null}
+                </>
+              )}
+            </View>
+
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Cards for this session</Text>
+              <Text style={styles.sectionSubTitle}>
+                Start small and keep consistency. 20–30 cards per run is a good default.
               </Text>
+
+              <View style={styles.sessionRow}>
+                <Pressable style={styles.sessionButton} onPress={() => changeSession(-5)}>
+                  <Text style={styles.sessionButtonText}>−</Text>
+                </Pressable>
+
+                <View style={styles.sessionCenter}>
+                  <Text style={styles.sessionNumber}>{sessionCount}</Text>
+                  <Text style={styles.sessionLabel}>cards</Text>
+                </View>
+
+                <Pressable style={styles.sessionButton} onPress={() => changeSession(+5)}>
+                  <Text style={styles.sessionButtonText}>+</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.sessionPresetRow}>
+                {[10, 20, 30, 50].map(v => (
+                  <Pressable
+                    key={v}
+                    style={[styles.presetChip, sessionCount === v && styles.presetChipActive]}
+                    onPress={() => setPreset(v)}
+                  >
+                    <Text style={[styles.presetChipText, sessionCount === v && styles.presetChipTextActive]}>{v}</Text>
+                  </Pressable>
+                ))}
+              </View>
             </View>
-          </View>
-        </ScrollView>
-      </LinearGradient>
-    </SafeAreaView>
+
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Choose a mode</Text>
+              <Text style={styles.sectionSubTitle}>Quick pick based on what you want to achieve today.</Text>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.modeCard,
+                  styles.modeCardReview,
+                  pressed && styles.modeCardPressed,
+                  disableReviewDue && styles.modeCardDisabled,
+                ]}
+                disabled={disableReviewDue}
+                onPress={() => startMode('review-due')}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modeTitle}>Review Due</Text>
+                  <Text style={styles.modeSubtitle}>Clear today&apos;s reviews first.</Text>
+                </View>
+                <Text style={styles.modeCount}>{dueToday} due</Text>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.modeCard,
+                  styles.modeCardNew,
+                  pressed && styles.modeCardPressed,
+                  disableLearn && styles.modeCardDisabled,
+                ]}
+                disabled={disableLearn}
+                onPress={() => startMode('learn-new')}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modeTitle}>Learn</Text>
+                  <Text style={styles.modeSubtitle}>Add new concepts for today.</Text>
+                </View>
+                <Text style={styles.modeCount}>{newRemaining} new</Text>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.modeCard,
+                  styles.modeCardMixed,
+                  pressed && styles.modeCardPressed,
+                  disableMixed && styles.modeCardDisabled,
+                ]}
+                disabled={disableMixed}
+                onPress={() => startMode('mixed')}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modeTitle}>Mixed</Text>
+                  <Text style={styles.modeSubtitle}>Balanced run (due + updated + a few new).</Text>
+                </View>
+                <Text style={styles.modeCount}>up to {sessionCount}</Text>
+              </Pressable>
+
+              <View style={styles.tipBox}>
+                <Text style={styles.tipTitle}>Tip</Text>
+                <Text style={styles.tipBody}>
+                  Review due cards first, then learn new ones. This keeps the calendar manageable.
+                </Text>
+              </View>
+            </View>
+          </ScrollView>
+        </LinearGradient>
+      </SafeAreaView>
     </SafeAreaProvider>
   );
 }
@@ -488,15 +833,10 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 18, paddingBottom: 24 },
 
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
   loadingText: { marginTop: 10, color: '#6B7280' },
 
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 16,
-  },
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10, marginBottom: 16 },
   backButton: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -622,4 +962,108 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(79,70,229,0.18)',
   },
   updatePillText: { fontSize: 12, color: '#4F46E5', fontWeight: '600' },
+
+  premiumBanner: {
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: 'rgba(79,70,229,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(79,70,229,0.18)',
+    marginBottom: 14,
+  },
+  premiumBannerTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#4F46E5',
+  },
+  premiumBannerBody: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#4B5563',
+  },
+
+  upgradeButton: {
+    marginTop: 12,
+    borderRadius: 999,
+    backgroundColor: '#4F46E5',
+    paddingVertical: 12,
+    paddingHorizontal: 22,
+    alignItems: 'center',
+  },
+  upgradeButtonText: { color: '#FFFFFF', fontWeight: '800', fontSize: 14 },
+    premiumCtaRow: {
+    flexDirection: 'row',
+    marginTop: 10,
+  },
+  secondaryCtaBtn: {
+    flex: 1,
+    marginRight: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.06)',
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.10)',
+  },
+  secondaryCtaText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  premiumFootnote: {
+    marginTop: 10,
+    fontSize: 11,
+    color: '#6B7280',
+    lineHeight: 16,
+  },
+
+  bulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  bulletDot: {
+    width: 18,
+    fontSize: 14,
+    color: '#374151',
+    lineHeight: 18,
+  },
+  bulletText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 18,
+  },
+
+  sampleCard: {
+    marginTop: 10,
+    borderRadius: 16,
+    padding: 14,
+    backgroundColor: 'rgba(17,24,39,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.08)',
+  },
+  sampleQLabel: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#4F46E5',
+  },
+  sampleQText: {
+    marginTop: 6,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#111827',
+    lineHeight: 20,
+  },
+  sampleALabel: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#0F766E',
+  },
+  sampleAText: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 18,
+  },
 });

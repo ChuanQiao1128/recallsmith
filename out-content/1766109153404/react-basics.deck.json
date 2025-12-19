@@ -1,0 +1,15 @@
+{
+  "slug": "react-basics",
+  "title": "React",
+  "locale": "en-US",
+  "deckType": 2,
+  "version": "1766109153404",
+  "totalCards": 5,
+  "cards": [
+    { "stableUid": "react-001", "orderInDeck": 1, "difficulty": 1, "question": "What is a React component?", "explanation": "A reusable UI unit that returns elements to render (function or class).", "codeLanguage": "tsx", "codeSnippet": "function Hello(){\\n  return <div>Hello</div>\\n}", "realWorldUsage": "- Build UI from small pieces", "revision": 1 },
+    { "stableUid": "react-002", "orderInDeck": 2, "difficulty": 1, "question": "What does useState do?", "explanation": "It declares state inside function components and triggers re-render on update.", "codeLanguage": "tsx", "codeSnippet": "const [n,setN]=useState(0);", "realWorldUsage": "- UI state (tabs, inputs, toggles)", "revision": 1 },
+    { "stableUid": "react-003", "orderInDeck": 3, "difficulty": 2, "question": "What is a dependency array in useEffect?", "explanation": "It controls when the effect runs based on dependencies; empty runs once on mount.", "codeLanguage": "tsx", "codeSnippet": "useEffect(()=>{\\n  // side effect\\n}, [userId]);", "realWorldUsage": "- Fetch on param change\\n- Subscribe/unsubscribe", "revision": 1 },
+    { "stableUid": "react-004", "orderInDeck": 4, "difficulty": 2, "question": "What is prop drilling?", "explanation": "Passing props through many layers; often solved by context or state libs.", "codeLanguage": "text", "codeSnippet": "", "realWorldUsage": "- Consider Context for shared data", "revision": 1 },
+    { "stableUid": "react-005", "orderInDeck": 5, "difficulty": 3, "question": "Why keys in list rendering matter?", "explanation": "Keys help React identify items and update efficiently; stable keys prevent UI bugs.", "codeLanguage": "tsx", "codeSnippet": "{items.map(x => <Row key={x.id} item={x} />)}", "realWorldUsage": "- Prevent wrong item state reuse", "revision": 1 }
+  ]
+}

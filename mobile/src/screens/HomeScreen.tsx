@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Pressable,
   Modal,
+  Alert,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -37,6 +38,9 @@ import {
   type UpdateInfo,
 } from '../content/deckRepository';
 
+// ✅ NEW: premium entitlement
+import { usePremiumUser } from '../premium/premiumStore';
+
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
 type DeckFilter = 'all' | 'free' | 'premium';
@@ -50,6 +54,13 @@ type DeckSummary = {
   deckType: number; // 1 = free, else premium
   totalCards: number;
   canStudy: boolean;
+
+  // ✅ from manifest v2
+  tier?: string | null;
+  availability?: string | null;
+  eta?: string | null;
+  downloadMode?: string | null;
+  order?: number;
 
   dueToday: number;
   plannedToday: number;
@@ -123,6 +134,46 @@ function buildUpcoming(progress: CardProgress[], now: Date, days: number): Calen
 
 const WEEKDAYS_MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+/** =========================
+ *  ✅ Premium download helper (Home)
+ *  ========================= */
+
+// API base (adjust if you already use another env var name)
+const API_BASE_URL =
+  (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() ||
+  (process.env.EXPO_PUBLIC_API_BASE || '').trim() ||
+  'https://ktbq1sie2c.execute-api.ap-southeast-2.amazonaws.com';
+
+// GET /api/v1/content/premium-url?slug=react-basics&dev=1
+async function fetchPremiumDeckUrl(slug: string): Promise<{ url: string; buildId: string } | null> {
+  const s = String(slug || '').trim();
+  if (!s) return null;
+
+  const u = new URL('/api/v1/content/premium-url', API_BASE_URL);
+  u.searchParams.set('slug', s);
+
+  // ✅ DEV-only bypass (because you don't have login yet)
+  if (__DEV__) u.searchParams.set('dev', '1');
+
+  const resp = await fetch(u.toString(), {
+    method: 'GET',
+    headers: {
+      'cache-control': 'no-cache',
+    },
+  });
+
+  const json = await resp.json().catch(() => null);
+
+  // Your API wrapper returns: { success, data, error, traceId, version }
+  const ok = !!json?.success && !!json?.data?.url && !!json?.data?.buildId;
+  if (!ok) {
+    const msg = json?.error?.message || `Failed to get premium url (HTTP ${resp.status})`;
+    throw new Error(msg);
+  }
+
+  return { url: String(json.data.url), buildId: String(json.data.buildId) };
+}
+
 export function HomeScreen({ navigation }: Props) {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [deckFilter, setDeckFilter] = useState<DeckFilter>('all');
@@ -133,6 +184,9 @@ export function HomeScreen({ navigation }: Props) {
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isMounted = useRef(true);
+
+  // ✅ premium entitlement
+  const isPremiumUser = usePremiumUser();
 
   useEffect(() => {
     return () => {
@@ -182,14 +236,14 @@ export function HomeScreen({ navigation }: Props) {
     let manifestDecks: ManifestDeckEntry[] = [];
 
     try {
-      updates = await checkManifestForUpdates();
+      updates = await checkManifestForUpdates(isPremiumUser);
       manifestDecks = await listManifestDecks();
 
       const hasAnyInstalledDeck = Object.values(updates).some(
         (u) => typeof u.installedVersion === 'string' && u.installedVersion.trim().length > 0,
       );
 
-      // ✅ first launch auto-install only FREE decks
+      // ✅ first launch auto-install only FREE + PUBLIC decks
       if (!hasAnyInstalledDeck && manifestDecks.length > 0) {
         const installedSlugs: string[] = [];
 
@@ -206,31 +260,26 @@ export function HomeScreen({ navigation }: Props) {
               info.remoteVersion,
               info.remoteSha256,
             );
-            if (ok) {
-              installedSlugs.push(entry.slug); // ✅ FIX: 你原来没 push
-            }
+            if (ok) installedSlugs.push(entry.slug);
           } catch {
             // ignore
           }
         }
 
-        // ✅ 如果装了任何 deck：补一个 active deck（避免 selectedSlug 长期是 null）
         if (installedSlugs.length > 0) {
           try {
             const stored = await loadActiveDeckSlug();
             if (!stored) await setActiveDeckSlug(installedSlugs[0]);
           } catch {}
 
-          // ✅ 安装后立刻 apply cached remote progress（如果之前已经 pull 过，会立刻落本地）
           for (const slug of installedSlugs) {
             try {
               await applyCachedRemoteProgress(slug);
             } catch {}
           }
 
-          // refresh updates so UI pills are correct
           try {
-            updates = await checkManifestForUpdates();
+            updates = await checkManifestForUpdates(isPremiumUser);
           } catch {}
         }
       }
@@ -258,6 +307,34 @@ export function HomeScreen({ navigation }: Props) {
     let totalDueAllDecks = 0;
 
     for (const entry of manifestDecks) {
+      const availability = (entry.availability ?? '').toLowerCase();
+      const isComing = availability === 'coming';
+
+      if (isComing) {
+        deckSummaries.push({
+          slug: entry.slug,
+          title: entry.title ?? entry.slug,
+          locale: entry.locale ?? 'en-US',
+          version: entry.version,
+          deckType: entry.deckType ?? 1,
+          totalCards: entry.totalCards ?? 0,
+          canStudy: false,
+
+          tier: entry.tier ?? null,
+          availability: entry.availability ?? null,
+          eta: entry.eta ?? null,
+          downloadMode: entry.downloadMode ?? null,
+          order: (entry as any).order,
+
+          dueToday: 0,
+          plannedToday: 0,
+          newToday: 0,
+          masteredApprox: 0,
+          percent: 0,
+        });
+        continue;
+      }
+
       const deck = await resolveDeckBySlug(entry.slug);
 
       const totalCards = deck?.TotalCards ?? deck?.Cards?.length ?? entry.totalCards ?? 0;
@@ -272,6 +349,13 @@ export function HomeScreen({ navigation }: Props) {
           deckType: deck?.DeckType ?? entry.deckType ?? 1,
           totalCards,
           canStudy,
+
+          tier: entry.tier ?? null,
+          availability: entry.availability ?? null,
+          eta: entry.eta ?? null,
+          downloadMode: entry.downloadMode ?? null,
+          order: (entry as any).order,
+
           dueToday: 0,
           plannedToday: 0,
           newToday: 0,
@@ -281,7 +365,6 @@ export function HomeScreen({ navigation }: Props) {
         continue;
       }
 
-      // ✅ apply remote cache -> local（只影响本地 AsyncStorage；安全重复调用）
       try {
         await applyCachedRemoteProgress(deck.Slug);
       } catch {}
@@ -306,6 +389,13 @@ export function HomeScreen({ navigation }: Props) {
         deckType: deck.DeckType,
         totalCards,
         canStudy,
+
+        tier: entry.tier ?? null,
+        availability: entry.availability ?? null,
+        eta: entry.eta ?? null,
+        downloadMode: entry.downloadMode ?? null,
+        order: (entry as any).order,
+
         dueToday,
         plannedToday: dueToday,
         newToday: newRemaining,
@@ -340,7 +430,7 @@ export function HomeScreen({ navigation }: Props) {
       allUpcoming30,
       monthCounts,
     };
-  }, []);
+  }, [isPremiumUser]);
 
   const loadHomeFromLocal = useCallback(async () => {
     const next = await computeHomeState();
@@ -352,18 +442,16 @@ export function HomeScreen({ navigation }: Props) {
       let cancelled = false;
 
       async function run() {
-        // 1) 先读本地渲染（尽量快）
-        await loadHomeFromLocal();
-        if (cancelled) return;
+      // 1) 先读本地渲染（快）
+      await loadHomeFromLocal();
+      if (cancelled) return;
 
-        // 2) 强制同步一次（push + 可能 pull）
-        await forceProgressSync('home_focus');
-        if (cancelled) return;
+      // ✅ 2) 暂时禁用 progress sync（避免 UI 卡住 + 控制台刷 500）
+      // forceProgressSync('home_focus').catch(() => {});
+      // ✅ 如果你未来想恢复，只需取消注释上面这一行，并且别 await
 
-        // 3) 同步完再读一次本地（让 UI 看到 apply 的结果）
-        await loadHomeFromLocal();
-      }
-
+      // 3) 不再做第二次 load（否则还会被 sync 节奏影响）
+    }
       void run();
       return () => {
         cancelled = true;
@@ -395,16 +483,24 @@ export function HomeScreen({ navigation }: Props) {
   }, [monthCounts]);
 
   const filteredDecks = useMemo(() => {
-    const sorted = [...deckSummaries].sort((a, b) => {
-      const ta = a.deckType === 1 ? 0 : 1;
-      const tb = b.deckType === 1 ? 0 : 1;
-      if (ta !== tb) return ta - tb;
+    const base =
+      deckFilter === 'free'
+        ? deckSummaries.filter((d) => d.deckType === 1)
+        : deckFilter === 'premium'
+          ? deckSummaries.filter((d) => d.deckType !== 1)
+          : deckSummaries;
+
+    return [...base].sort((a, b) => {
+      const aLive = String(a.availability ?? 'live').toLowerCase() !== 'coming';
+      const bLive = String(b.availability ?? 'live').toLowerCase() !== 'coming';
+      if (aLive !== bLive) return aLive ? -1 : 1;
+
+      const oa = typeof a.order === 'number' ? a.order : 9999;
+      const ob = typeof b.order === 'number' ? b.order : 9999;
+      if (oa !== ob) return oa - ob;
+
       return a.title.localeCompare(b.title);
     });
-
-    if (deckFilter === 'free') return sorted.filter((d) => d.deckType === 1);
-    if (deckFilter === 'premium') return sorted.filter((d) => d.deckType !== 1);
-    return sorted;
   }, [deckSummaries, deckFilter]);
 
   function openMonth() {
@@ -567,20 +663,13 @@ export function HomeScreen({ navigation }: Props) {
 
                 <View style={styles.segment}>
                   <Pressable
-                    style={({ pressed }) => [
-                      styles.segmentItem,
-                      styles.segmentItemActive,
-                      pressed && styles.pressed,
-                    ]}
+                    style={({ pressed }) => [styles.segmentItem, styles.segmentItemActive, pressed && styles.pressed]}
                     onPress={() => {}}
                   >
                     <Text style={[styles.segmentText, styles.segmentTextActive]}>Week</Text>
                   </Pressable>
 
-                  <Pressable
-                    style={({ pressed }) => [styles.segmentItem, pressed && styles.pressed]}
-                    onPress={openMonth}
-                  >
+                  <Pressable style={({ pressed }) => [styles.segmentItem, pressed && styles.pressed]} onPress={openMonth}>
                     <Text style={styles.segmentText}>Month</Text>
                   </Pressable>
                 </View>
@@ -648,9 +737,7 @@ export function HomeScreen({ navigation }: Props) {
                       ]}
                       onPress={() => setDeckFilter(key)}
                     >
-                      <Text style={[styles.segmentThreeText, active && styles.segmentThreeTextActive]}>
-                        {label}
-                      </Text>
+                      <Text style={[styles.segmentThreeText, active && styles.segmentThreeTextActive]}>{label}</Text>
                     </Pressable>
                   );
                 })}
@@ -667,8 +754,13 @@ export function HomeScreen({ navigation }: Props) {
                 filteredDecks.map((d) => {
                   const active = d.slug === selectedSlug;
                   const isPremium = d.deckType !== 1;
-                  const deckUpdate = updates?.[d.slug];
 
+                  const availability = (d.availability ?? '').toLowerCase();
+                  const isComing = availability === 'coming';
+
+                  const lockedPremium = isPremium && !isPremiumUser;
+
+                  const deckUpdate = updates?.[d.slug];
                   const hasInstalledVersion =
                     typeof deckUpdate?.installedVersion === 'string' && deckUpdate.installedVersion.trim().length > 0;
 
@@ -683,20 +775,51 @@ export function HomeScreen({ navigation }: Props) {
                         pressed && styles.deckRowPressed,
                       ]}
                       onPress={async () => {
+                        // ✅ coming
+                        if (isComing) {
+                          Alert.alert(
+                            'Coming soon',
+                            d.eta ? `ETA: ${d.eta}` : 'This deck is not available yet.',
+                            [{ text: 'OK' }],
+                          );
+                          return;
+                        }
+
+                        // ✅ premium locked -> go preview (DeckScreen)
+                        if (lockedPremium) {
+                          openDeck(d.slug);
+                          return;
+                        }
+
                         const needsInstall = !d.canStudy;
                         const needsUpdate = d.canStudy && hasUpdate;
 
                         if (needsInstall || needsUpdate) {
-                          if (!deckUpdate?.remoteUrl) return;
-
                           setState((prev) => ({ ...prev, loading: true }));
+
                           try {
-                            const ok = await installDeckFromUrl(
-                              d.slug,
-                              deckUpdate.remoteUrl,
-                              deckUpdate.remoteVersion,
-                              deckUpdate.remoteSha256,
-                            );
+                            let ok = false;
+
+                            // ✅ PUBLIC (free) path: use manifest-derived remoteUrl
+                            if (deckUpdate?.remoteUrl) {
+                              ok = await installDeckFromUrl(
+                                d.slug,
+                                deckUpdate.remoteUrl,
+                                deckUpdate.remoteVersion,
+                                deckUpdate.remoteSha256,
+                              );
+                            } else {
+                              // ✅ PREMIUM (auth) path: call API to get presigned URL, then install
+                              const mode = String(d.downloadMode ?? '').toLowerCase();
+                              if (isPremiumUser && mode === 'auth') {
+                                const data = await fetchPremiumDeckUrl(d.slug);
+                                if (!data?.url || !data?.buildId) throw new Error('Failed to get premium download url');
+                                ok = await installDeckFromUrl(d.slug, data.url, data.buildId, null);
+                              } else {
+                                // no url available (should not happen for free; premium requires auth)
+                                ok = false;
+                              }
+                            }
 
                             if (ok) {
                               try {
@@ -709,8 +832,9 @@ export function HomeScreen({ navigation }: Props) {
                             } else {
                               setState((prev) => ({ ...prev, loading: false }));
                             }
-                          } catch (e) {
+                          } catch (e: any) {
                             console.error('Deck install/update failed:', e);
+                            Alert.alert('Download failed', e?.message ?? 'Failed to download this deck.');
                             setState((prev) => ({ ...prev, loading: false }));
                           }
                           return;
@@ -725,11 +849,25 @@ export function HomeScreen({ navigation }: Props) {
                         </Text>
 
                         <Text style={styles.deckRowSub} numberOfLines={1}>
-                          {isPremium ? 'Premium' : 'Free'} · {d.totalCards} cards
+                          {isComing
+                            ? `Coming${d.eta ? ` · ${d.eta}` : ''}`
+                            : isPremium
+                              ? 'Premium'
+                              : 'Free'}{' '}
+                          · {d.totalCards} cards
                         </Text>
                       </View>
 
-                      {d.canStudy ? (
+                      {/* Right side pills */}
+                      {isComing ? (
+                        <View style={styles.deckRowRight}>
+                          <Text style={styles.comingPill}>Coming</Text>
+                        </View>
+                      ) : lockedPremium ? (
+                        <View style={styles.deckRowRight}>
+                          <Text style={styles.lockedPill}>🔒 Premium</Text>
+                        </View>
+                      ) : d.canStudy ? (
                         <View style={styles.deckRowRight}>
                           {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
                           <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
@@ -946,6 +1084,18 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: 'rgba(17,24,39,0.06)',
   },
+
+  comingPill: {
+    marginLeft: 10,
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#0F766E',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(20,184,166,0.12)',
+  },
+
   emptyBox: {
     marginTop: 12,
     borderRadius: 14,

@@ -27,6 +27,7 @@ const { handleBootstrap } = require("./runtime/bootstrap");
 const { handleEntitlements } = require("./runtime/entitlements");
 const { handleProgressEvents } = require("./runtime/progressEvents");
 const { handleProgressGet } = require("./runtime/progressGet");
+const { handlePremiumDeckUrl } = require("./runtime/premiumDeckUrl");
 
 // Internal
 const { handleInternalEntitlementsApply } = require("./internal/entitlementsApply");
@@ -107,7 +108,7 @@ exports.handler = async (event) => {
     if (path === "/api/v1/admin/db/recreate" && method === "POST") {
       return handleDbDropAndRecreate({ event, method, path, query, res, auth });
     }
-    
+
     // Authoring
     if (path === "/api/v1/authoring/decks") {
       return handleAuthoringDecks({ event, method, path, query, res, auth });
@@ -131,6 +132,9 @@ exports.handler = async (event) => {
     }
     if (path === "/api/v1/entitlements" && method === "GET") {
       return handleEntitlements({ event, method, path, query, res, auth });
+    }
+    if (path === "/api/v1/content/premium-url" && method === "GET") {
+      return handlePremiumDeckUrl({ event, method, path, query, res, auth });
     }
     // ✅ Sync (aliases for mobile v1)
     if (path === "/api/v1/sync/progress/events" || path === "/api/v1/sync/push") {

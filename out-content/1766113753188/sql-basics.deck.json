@@ -1,0 +1,15 @@
+{
+  "slug": "sql-basics",
+  "title": "SQL",
+  "locale": "en-US",
+  "deckType": 1,
+  "version": "1766113753188",
+  "totalCards": 5,
+  "cards": [
+    { "stableUid": "sql-001", "orderInDeck": 1, "difficulty": 1, "question": "What does SELECT do?", "explanation": "SELECT reads data from one or more tables/views.", "codeLanguage": "sql", "codeSnippet": "SELECT * FROM users;", "realWorldUsage": "- Fetch data for reports\\n- Backend query building", "revision": 1 },
+    { "stableUid": "sql-002", "orderInDeck": 2, "difficulty": 1, "question": "INNER JOIN vs LEFT JOIN?", "explanation": "INNER JOIN keeps only matching rows; LEFT JOIN keeps all left rows plus matches (null if no match).", "codeLanguage": "sql", "codeSnippet": "SELECT * FROM a\\nLEFT JOIN b ON b.a_id = a.id;", "realWorldUsage": "- Optional relationships\\n- Analytics joins", "revision": 1 },
+    { "stableUid": "sql-003", "orderInDeck": 3, "difficulty": 2, "question": "What is GROUP BY used for?", "explanation": "It groups rows so aggregate functions (COUNT/SUM/AVG) run per group.", "codeLanguage": "sql", "codeSnippet": "SELECT country, COUNT(*)\\nFROM users\\nGROUP BY country;", "realWorldUsage": "- Dashboards\\n- Metrics", "revision": 1 },
+    { "stableUid": "sql-004", "orderInDeck": 4, "difficulty": 2, "question": "HAVING vs WHERE?", "explanation": "WHERE filters rows before grouping; HAVING filters groups after aggregation.", "codeLanguage": "sql", "codeSnippet": "SELECT country, COUNT(*) c\\nFROM users\\nGROUP BY country\\nHAVING COUNT(*) > 10;", "realWorldUsage": "- Filter aggregated results", "revision": 1 },
+    { "stableUid": "sql-005", "orderInDeck": 5, "difficulty": 3, "question": "What is an index?", "explanation": "A data structure that speeds up lookups at the cost of extra write/storage.", "codeLanguage": "sql", "codeSnippet": "CREATE INDEX idx_users_email ON users(email);", "realWorldUsage": "- Fix slow queries\\n- Support unique constraints", "revision": 1 }
+  ]
+}

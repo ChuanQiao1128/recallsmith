@@ -1,115 +1,270 @@
 // mobile/src/auth/authStore.ts
-import { useEffect, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { create } from 'zustand';
 
-import { setSyncAccessToken, resetProgressSyncState } from '../sync/progressSync';
-import { clearProgressQueue } from '../sync/progressQueue';
+import {
+  signUp,
+  confirmSignUp,
+  resendSignUpCode,
+  signIn,
+  signOut,
+  fetchAuthSession,
+  getCurrentUser,
+} from 'aws-amplify/auth';
 
-const ACCESS_TOKEN_KEY = 'devcards:auth:accessToken:v1';
+import { setSyncAccessToken, forceProgressSync } from '../sync/progressSync';
 
-// 这些是“用户相关本地数据”，登出后建议清掉避免串号
-const LOCAL_USER_PREFIXES = [
-  'deck-progress:',
-  'deck-daily-stats:',
-  'deck-meta:',
-];
+type AuthStatus = 'unknown' | 'anonymous' | 'signed_in';
 
-export type AuthState = {
-  ready: boolean;
+type AuthState = {
+  status: AuthStatus;
+  email: string | null;
+  userSub: string | null;
+
   accessToken: string | null;
+  idToken: string | null;
+
+  loading: boolean;
+  lastError: string | null;
+
+  init: () => Promise<void>;
+
+  signUpWithEmail: (email: string, password: string) => Promise<void>;
+  confirmSignUpCode: (email: string, code: string) => Promise<void>;
+  resendConfirmCode: (email: string) => Promise<void>;
+
+  signInWithEmail: (email: string, password: string) => Promise<void>;
+  signOutNow: () => Promise<void>;
 };
 
-let _state: AuthState = { ready: false, accessToken: null };
-const _listeners = new Set<(s: AuthState) => void>();
-let _initPromise: Promise<AuthState> | null = null;
-
-function emit(next: AuthState) {
-  _state = next;
-  for (const fn of _listeners) fn(_state);
+function normEmail(v: string) {
+  return String(v || '').trim().toLowerCase();
 }
 
-export function getAuthState(): AuthState {
-  return _state;
+function tokenToString(t: any): string | null {
+  if (!t) return null;
+  if (typeof t === 'string') return t;
+  if (typeof t?.toString === 'function') return String(t.toString());
+  return null;
 }
 
-export function subscribeAuth(fn: (s: AuthState) => void): () => void {
-  _listeners.add(fn);
-  return () => _listeners.delete(fn);
+function safeStr(v: any): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s ? s : null;
 }
 
-/**
- * 初始化：从 AsyncStorage 读 token，并同步给 progressSync（内存缓存）
- */
-export async function initAuthOnce(): Promise<AuthState> {
-  if (_state.ready) return _state;
-  if (_initPromise) return _initPromise;
+async function applySessionToState(set: any) {
+  const session: any = await fetchAuthSession();
 
-  _initPromise = (async () => {
-    let token: string | null = null;
+  const accessTokObj = session.tokens?.accessToken;
+  const idTokObj = session.tokens?.idToken;
 
-    try {
-      const raw = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
-      token = raw && raw.trim() ? raw.trim() : null;
-    } catch {
-      token = null;
-    }
+  const at = tokenToString(accessTokObj) ?? null;
+  const it = tokenToString(idTokObj) ?? null;
 
-    // ✅ 让 progressSync 的内存 token 与存储保持一致
-    await setSyncAccessToken(token);
+  // ✅ Prefer claims from idToken (real email attribute)
+  const claims: any =
+    idTokObj && typeof idTokObj === 'object' && 'payload' in idTokObj
+      ? (idTokObj as any).payload
+      : null;
 
-    const next: AuthState = { ready: true, accessToken: token };
-    emit(next);
-    return next;
-  })();
+  let email: string | null =
+    safeStr(claims?.email) ??
+    safeStr(claims?.['cognito:username']) ??
+    null;
 
-  return _initPromise;
-}
+  let userSub: string | null = safeStr(claims?.sub) ?? null;
 
-export async function setAuthToken(token: string | null): Promise<void> {
-  const t = token && token.trim() ? token.trim() : null;
-
-  // ✅ 仍然使用 progressSync 的 setSyncAccessToken 来写入同一个 storage key
-  await setSyncAccessToken(t);
-
-  emit({ ready: true, accessToken: t });
-}
-
-export async function signOutBasic(): Promise<void> {
-  await setAuthToken(null);
-}
-
-/**
- * 登出并清除本地“用户相关”数据，防止换号后看到旧进度
- */
-export async function signOutAndWipeLocal(): Promise<void> {
-  // 1) 先清 token（避免后续误 push）
-  await setAuthToken(null);
-
-  // 2) 清 sync 队列 & sync 状态（cursor/cache/lastError 等）
-  try { await clearProgressQueue(); } catch {}
-  try { await resetProgressSyncState(); } catch {}
-
-  // 3) 清本地 deck progress/daily/meta
+  // ✅ Optional fallback: getCurrentUser for userSub if needed (do NOT override email)
   try {
-    const keys = await AsyncStorage.getAllKeys();
-    const toRemove = keys.filter((k) => LOCAL_USER_PREFIXES.some((p) => k.startsWith(p)));
-    if (toRemove.length > 0) {
-      await AsyncStorage.multiRemove(toRemove);
-    }
-  } catch {}
+    const user = await getCurrentUser();
+    userSub = userSub ?? safeStr(user?.userId);
+  } catch {
+    // ignore
+  }
+
+  set({
+    status: at ? 'signed_in' : 'anonymous',
+    email,
+    userSub,
+    accessToken: at,
+    idToken: it,
+    lastError: null,
+  });
+
+  // ✅ Inject token into progress sync layer
+  await setSyncAccessToken(at);
+
+  // ✅ Best-effort sync, never block UI
+  if (at) void forceProgressSync('token_set');
 }
 
-/**
- * React hook：给导航层使用
- */
-export function useAuthState(): AuthState {
-  const [st, setSt] = useState<AuthState>(getAuthState());
+export const useAuthStore = create<AuthState>((set) => ({
+  status: 'unknown',
+  email: null,
+  userSub: null,
+  accessToken: null,
+  idToken: null,
+  loading: false,
+  lastError: null,
 
-  useEffect(() => {
-    const unsub = subscribeAuth(setSt);
-    void initAuthOnce();
-    return unsub;
-  }, []);
+  init: async () => {
+    set({ loading: true, lastError: null });
+    try {
+      await applySessionToState(set);
+    } catch {
+      set({
+        status: 'anonymous',
+        email: null,
+        userSub: null,
+        accessToken: null,
+        idToken: null,
+        lastError: null,
+      });
+      // ✅ critical: ensure unsigned-in => no sync token
+      await setSyncAccessToken(null);
+    } finally {
+      set({ loading: false });
+    }
+  },
 
-  return st;
+  signUpWithEmail: async (email: string, password: string) => {
+    const e = normEmail(email);
+    if (!e) throw new Error('Email required');
+    if (!password || password.length < 8) {
+      throw new Error('Password must be at least 8 characters');
+    }
+
+    set({ loading: true, lastError: null });
+    try {
+      await signUp({
+        username: e,
+        password,
+        options: {
+          userAttributes: { email: e },
+        },
+      });
+    } catch (err: any) {
+      const msg = err?.message ?? 'Sign up failed';
+      set({ lastError: msg });
+      throw new Error(msg);
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  confirmSignUpCode: async (email: string, code: string) => {
+    const e = normEmail(email);
+    const c = String(code || '').trim();
+    if (!e) throw new Error('Email required');
+    if (!c) throw new Error('Code required');
+
+    set({ loading: true, lastError: null });
+    try {
+      await confirmSignUp({ username: e, confirmationCode: c });
+    } catch (err: any) {
+      const msg = err?.message ?? 'Confirm failed';
+      set({ lastError: msg });
+      throw new Error(msg);
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  resendConfirmCode: async (email: string) => {
+    const e = normEmail(email);
+    if (!e) throw new Error('Email required');
+
+    set({ loading: true, lastError: null });
+    try {
+      await resendSignUpCode({ username: e });
+    } catch (err: any) {
+      const msg = err?.message ?? 'Resend failed';
+      set({ lastError: msg });
+      throw new Error(msg);
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  signInWithEmail: async (email: string, password: string) => {
+    const e = normEmail(email);
+    if (!e) throw new Error('Email required');
+    if (!password) throw new Error('Password required');
+
+    set({ loading: true, lastError: null });
+    try {
+      const r: any = await signIn({
+        username: e,
+        password,
+        options: { authFlowType: 'USER_PASSWORD_AUTH' },
+      });
+
+      if (r?.isSignedIn) {
+        await applySessionToState(set);
+        return;
+      }
+
+      const step = r?.nextStep?.signInStep || r?.nextStep?.step;
+
+      if (step === 'CONFIRM_SIGN_UP') {
+        throw new Error(
+          'Email not verified yet. Please confirm the code sent to your email, then sign in again.'
+        );
+      }
+      if (step === 'RESET_PASSWORD') {
+        throw new Error('Password reset required. Please reset your password and try again.');
+      }
+      if (step === 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED') {
+        throw new Error(
+          'A new password is required for this account. Please complete the password update flow.'
+        );
+      }
+
+      throw new Error(`Sign in not completed (${step ?? 'unknown step'}).`);
+    } catch (err: any) {
+      // ✅ debug logs
+      console.log('[auth] signIn error raw:', err);
+      console.log('[auth] name:', err?.name);
+      console.log('[auth] message:', err?.message);
+      console.log('[auth] cause:', err?.cause);
+      try {
+        console.log('[auth] full:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
+      } catch {}
+
+      const msg = err?.message ?? err?.name ?? 'Sign in failed';
+      set({ lastError: msg });
+      throw new Error(msg);
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  signOutNow: async () => {
+    set({ loading: true, lastError: null });
+    try {
+      await signOut();
+    } finally {
+      set({
+        status: 'anonymous',
+        email: null,
+        userSub: null,
+        accessToken: null,
+        idToken: null,
+        loading: false,
+        lastError: null,
+      });
+      await setSyncAccessToken(null);
+    }
+  },
+}));
+
+// ✅ helper: no object selector (avoid infinite loop in React 18 + zustand)
+export function useAuthUser() {
+  const status = useAuthStore((s) => s.status);
+  const email = useAuthStore((s) => s.email);
+  const loading = useAuthStore((s) => s.loading);
+  const isSignedIn = useAuthStore((s) => s.status === 'signed_in');
+
+  return { status, email, loading, isSignedIn };
 }

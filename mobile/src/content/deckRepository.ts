@@ -4,7 +4,9 @@ import * as FileSystem from 'expo-file-system/legacy';
 import type { DeckExport } from '../types/deckExport';
 
 /**
- * v1 Content repository (CloudFront -> manifest.json -> deck.json)
+ * v2 Content repository (CloudFront -> manifest.json -> deck.json)
+ * - Supports manifest schemaVersion=2
+ * - Backward compatible with v1-ish deck json shape
  */
 
 /** =========================
@@ -15,8 +17,8 @@ const CONTENT_BASE_URL =
   'https://d1ditdi9jqpy6n.cloudfront.net';
 
 const MANIFEST_URL = joinUrl(CONTENT_BASE_URL, 'content', 'manifest.json');
-const MANIFEST_CACHE_KEY = 'devcards:content:manifest:v1';
-const DECK_META_PREFIX = 'devcards:content:deckmeta:v1:'; // + slug
+const MANIFEST_CACHE_KEY = 'devcards:content:manifest:v2';
+const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:'; // + slug
 
 // Runtime-safe "utf8" encoding without relying on FileSystem.EncodingType types
 const UTF8_ENCODING: any = (FileSystem as any)?.EncodingType?.UTF8 ?? 'utf8';
@@ -26,56 +28,78 @@ function getDeckDir(): string {
   if (!base || typeof base !== 'string') {
     throw new Error('expo-file-system: no writable directory (documentDirectory/cacheDirectory)');
   }
-  return `${base}devcards-decks-v1/`;
+  return `${base}devcards-decks-v2/`;
 }
 
 /** =========================
  *  Types
  *  ========================= */
 
+// Manifest v2 shape (your current publish_mock_content.sh)
 type RawManifest = {
   schemaVersion: number;
   generatedAtMs: number;
-  prefix: string; // e.g. "content/"
+  prefix: string; // e.g. "content"
   decks: Array<{
+    // ✅ NEW: order for Home sorting
+    order?: number;
+
     slug: string;
     title?: string;
     locale?: string;
     deckType?: number;
-    buildId: string;
-    path: string; // e.g. "decks/xxx/builds/<buildId>/deck.json"
-    cardCount?: number;
-    publishedAtMs?: number;
+
+    tier?: 'free' | 'premium' | string | null;
+    availability?: 'live' | 'coming' | string | null;
+    eta?: string | null;
+    downloadMode?: 'public' | 'auth' | 'none' | string | null;
+
+    totalCards?: number;
+    version?: string | number | null;
+
+    buildId?: number | string | null;
+
+    // public decks: path is set
+    // premium/auth or coming: path is null
+    path?: string | null;
+
+    sha256?: string | null;
   }>;
 };
 
 export type ManifestDeckEntry = {
+  // ✅ NEW: order for Home sorting
+  order?: number;
+
   slug: string;
   title?: string;
   locale?: string;
   deckType?: number;
 
-  // v1: version = buildId（用于更新判断/显示）
+  tier?: string | null;
+  availability?: string | null;
+  eta?: string | null;
+  downloadMode?: string | null;
+
+  // v2: version from manifest (usually buildId string), used for display/update check
   version: string;
 
-  // 兼容 Home：totalCards
   totalCards?: number;
 
-  buildId: string;
-  path: string;
-  cardCount?: number;
-  publishedAtMs?: number;
+  buildId: string | null;
+  path: string | null;
+  sha256: string | null;
 };
 
 export type UpdateInfo = {
   slug: string;
 
-  installedVersion: string | null; // local buildId
-  remoteVersion: string | null; // manifest buildId
+  installedVersion: string | null; // local buildId/version
+  remoteVersion: string | null; // manifest version/buildId
   hasUpdate: boolean;
 
-  remoteUrl: string | null; // full URL for deck.json
-  remoteSha256: string | null; // v1 暂不使用
+  remoteUrl: string | null; // full URL for deck.json (only for public decks)
+  remoteSha256: string | null;
 };
 
 type DeckInstallMeta = {
@@ -86,8 +110,9 @@ type DeckInstallMeta = {
   cardCount: number;
 };
 
-type RawDeckJson = {
-  schemaVersion: number;
+// Old deck-json format (v1-ish): { buildId, deck:{}, cards:[] }
+type RawDeckJsonV1 = {
+  schemaVersion?: number;
   buildId: string;
   generatedAtMs?: number;
   deck: {
@@ -115,40 +140,77 @@ type RawDeckJson = {
   }>;
 };
 
+// New deck-json format (your publish script): { slug,title,locale,deckType,version,totalCards,cards[] }
+type RawDeckJsonFlat = {
+  slug: string;
+  title: string;
+  locale: string;
+  deckType: number;
+  version: string | number;
+  totalCards?: number;
+  cards: Array<{
+    stableUid: string;
+    question: string;
+    explanation?: string | null;
+    codeSnippet?: string | null;
+    codeLanguage?: string | null;
+    realWorldUsage?: string | null;
+    difficulty?: number | null;
+    orderInDeck?: number | null;
+    revision?: number | null;
+    version?: number | null;
+    updatedAt?: string | null;
+  }>;
+};
+
 export type DeckContent = DeckExport;
 
 /** =========================
  *  Public API
  *  ========================= */
 
-export async function checkManifestForUpdates(): Promise<Record<string, UpdateInfo>> {
+/**
+ * ✅ NEW signature:
+ * We accept isPremiumUser so Home can call checkManifestForUpdates(isPremiumUser)
+ * (Right now we still only provide remoteUrl for public decks to keep premium protected.)
+ */
+export async function checkManifestForUpdates(
+  _isPremiumUser: boolean = false,
+): Promise<Record<string, UpdateInfo>> {
   const manifest = await loadManifestPreferRemote();
   if (!manifest) return {};
 
   const out: Record<string, UpdateInfo> = {};
 
   for (const d of manifest.decks) {
-    const meta = await getDeckMeta(d.slug);
+    const slug = String(d.slug || '').trim();
+    if (!slug) continue;
+
+    const meta = await getDeckMeta(slug);
     const installed = meta?.buildId || null;
 
-    const remote = d.buildId || null;
-    const hasUpdate = !installed || installed !== remote;
+    const remoteVersion = normalizeVersion(d.version ?? d.buildId) ?? null;
 
-    // ✅ 更健壮：未来如果 manifest 直接给 full url，也能工作
+    // Only public + path can be downloaded directly
+    const isPublic = String(d.downloadMode || '').toLowerCase() === 'public';
+    const path = typeof d.path === 'string' && d.path.trim().length > 0 ? d.path.trim() : null;
+
     const remoteUrl =
-      typeof d.path === 'string' && /^https?:\/\//i.test(d.path)
-        ? d.path
-        : remote
-          ? joinUrl(CONTENT_BASE_URL, manifest.prefix, d.path)
-          : null;
+      isPublic && path
+        ? /^https?:\/\//i.test(path)
+          ? path
+          : joinUrl(CONTENT_BASE_URL, manifest.prefix, path)
+        : null;
 
-    out[d.slug] = {
-      slug: d.slug,
+    const hasUpdate = !!remoteUrl && !!remoteVersion && installed !== remoteVersion;
+
+    out[slug] = {
+      slug,
       installedVersion: installed,
-      remoteVersion: remote,
+      remoteVersion,
       hasUpdate,
       remoteUrl,
-      remoteSha256: null,
+      remoteSha256: (d.sha256 ?? null) ? String(d.sha256) : null,
     };
   }
 
@@ -159,41 +221,66 @@ export async function listManifestDecks(): Promise<ManifestDeckEntry[]> {
   const manifest = await loadManifestCached();
   if (!manifest) return [];
 
-  return (manifest.decks || []).map((d) => ({
-    slug: d.slug,
-    title: d.title,
-    locale: d.locale,
-    deckType: d.deckType ?? 1,
+  return (manifest.decks || []).map((d) => {
+    const buildId = normalizeVersion(d.buildId) ?? null;
+    const version = normalizeVersion(d.version ?? d.buildId) ?? (buildId ?? 'unknown');
 
-    buildId: d.buildId,
-    path: d.path,
-    cardCount: d.cardCount,
-    publishedAtMs: d.publishedAtMs,
+    return {
+      // ✅ NEW: order pass-through
+      order: typeof (d as any).order === 'number' ? (d as any).order : undefined,
 
-    version: d.buildId,
-    totalCards: d.cardCount ?? 0,
-  }));
+      slug: String(d.slug),
+      title: d.title,
+      locale: d.locale,
+      deckType: d.deckType ?? 1,
+
+      tier: (d.tier ?? null) as any,
+      availability: (d.availability ?? null) as any,
+      eta: (d.eta ?? null) as any,
+      downloadMode: (d.downloadMode ?? null) as any,
+
+      version,
+      totalCards: typeof d.totalCards === 'number' ? d.totalCards : undefined,
+
+      buildId,
+      path: typeof d.path === 'string' ? d.path : null,
+      sha256: (d.sha256 ?? null) ? String(d.sha256) : null,
+    };
+  });
 }
 
 export async function resolveDeckBySlug(slug: string): Promise<DeckContent | null> {
-  const meta = await getDeckMeta(slug);
+  const safeSlug = String(slug).trim();
+  if (!safeSlug) return null;
+
+  const meta = await getDeckMeta(safeSlug);
   if (!meta?.fileUri || !meta?.buildId) return null;
 
   const info = await FileSystem.getInfoAsync(meta.fileUri);
   if (!info.exists) {
-    await removeDeckMeta(slug);
+    await removeDeckMeta(safeSlug);
     return null;
   }
 
   try {
     const rawText = await FileSystem.readAsStringAsync(meta.fileUri, { encoding: UTF8_ENCODING });
-    const raw = JSON.parse(rawText) as RawDeckJson;
+    const parsed = JSON.parse(rawText);
 
-    if (!raw || typeof raw.buildId !== 'string') return null;
-    if (!raw.deck || raw.deck.slug !== slug) return null;
-    if (!Array.isArray(raw.cards)) return null;
+    // v1-ish
+    if (isRawDeckV1(parsed)) {
+      if (parsed.deck?.slug !== safeSlug) return null;
+      if (!Array.isArray(parsed.cards)) return null;
+      return mapRawDeckV1ToDeckExport(parsed);
+    }
 
-    return mapRawDeckToDeckExport(raw);
+    // flat v2
+    if (isRawDeckFlat(parsed)) {
+      if (parsed.slug !== safeSlug) return null;
+      if (!Array.isArray(parsed.cards)) return null;
+      return mapRawDeckFlatToDeckExport(parsed);
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -206,7 +293,8 @@ export async function installDeckFromUrl(
   _remoteSha256: string | null,
 ): Promise<boolean> {
   const safeSlug = String(slug).trim();
-  if (!safeSlug) return false;
+  const safeUrl = String(url || '').trim();
+  if (!safeSlug || !safeUrl) return false;
 
   const existing = await getDeckMeta(safeSlug);
   if (existing?.buildId && remoteVersion && existing.buildId === remoteVersion) {
@@ -221,30 +309,49 @@ export async function installDeckFromUrl(
 
   try {
     await FileSystem.deleteAsync(tmpPath, { idempotent: true });
-    await FileSystem.downloadAsync(url, tmpPath);
+    await FileSystem.downloadAsync(safeUrl, tmpPath);
 
     const rawText = await FileSystem.readAsStringAsync(tmpPath, { encoding: UTF8_ENCODING });
-    const raw = JSON.parse(rawText) as RawDeckJson;
+    const parsed = JSON.parse(rawText);
 
-    // Validate schema
-    if (!raw || typeof raw.buildId !== 'string') return false;
-    if (!raw.deck || typeof raw.deck.slug !== 'string') return false;
-    if (raw.deck.slug !== safeSlug) return false;
-    if (!Array.isArray(raw.cards)) return false;
-    if (raw.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim())) return false;
+    // Accept both shapes
+    let resolvedBuildId: string | null = null;
+    let cardCount = 0;
 
-    // Expected buildId check
-    if (remoteVersion && raw.buildId !== remoteVersion) return false;
+    if (isRawDeckV1(parsed)) {
+      if (!parsed.deck || parsed.deck.slug !== safeSlug) return false;
+      if (!Array.isArray(parsed.cards)) return false;
+      if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim())) return false;
+
+      resolvedBuildId = String(parsed.buildId || '').trim() || null;
+      cardCount = parsed.cards.length;
+
+      if (remoteVersion && resolvedBuildId && resolvedBuildId !== remoteVersion) return false;
+    } else if (isRawDeckFlat(parsed)) {
+      if (parsed.slug !== safeSlug) return false;
+      if (!Array.isArray(parsed.cards)) return false;
+      if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim())) return false;
+
+      resolvedBuildId = normalizeVersion(parsed.version) ?? null;
+      cardCount = parsed.cards.length;
+
+      if (remoteVersion && resolvedBuildId && resolvedBuildId !== remoteVersion) return false;
+    } else {
+      return false;
+    }
+
+    const finalBuildId = (remoteVersion && remoteVersion.trim()) || resolvedBuildId;
+    if (!finalBuildId) return false;
 
     await FileSystem.deleteAsync(finalPath, { idempotent: true });
     await FileSystem.moveAsync({ from: tmpPath, to: finalPath });
 
     const meta: DeckInstallMeta = {
       slug: safeSlug,
-      buildId: raw.buildId,
+      buildId: finalBuildId,
       installedAtMs: Date.now(),
       fileUri: finalPath,
-      cardCount: raw.cards.length,
+      cardCount,
     };
 
     await AsyncStorage.setItem(deckMetaKey(safeSlug), JSON.stringify(meta));
@@ -260,6 +367,12 @@ export async function installDeckFromUrl(
 /** =========================
  *  Internals
  *  ========================= */
+
+function normalizeVersion(v: any): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s ? s : null;
+}
 
 function joinUrl(base: string, ...parts: Array<string | null | undefined>): string {
   let out = String(base || '').trim();
@@ -320,7 +433,10 @@ async function loadManifestCached(): Promise<RawManifest | null> {
     if (!raw) return null;
     const obj = JSON.parse(raw) as RawManifest;
     if (!obj || !Array.isArray(obj.decks)) return null;
-    if (typeof obj.prefix !== 'string') obj.prefix = 'content/';
+
+    if (typeof obj.prefix !== 'string' || !obj.prefix.trim()) obj.prefix = 'content';
+    obj.prefix = obj.prefix.replace(/^\/+/, '').replace(/\/+$/, '');
+
     return obj;
   } catch {
     return null;
@@ -337,7 +453,9 @@ async function fetchRemoteManifest(): Promise<RawManifest | null> {
 
     const json = (await resp.json()) as RawManifest;
     if (!json || !Array.isArray(json.decks)) return null;
-    if (typeof json.prefix !== 'string') json.prefix = 'content/';
+
+    if (typeof json.prefix !== 'string' || !json.prefix.trim()) json.prefix = 'content';
+    json.prefix = json.prefix.replace(/^\/+/, '').replace(/\/+$/, '');
 
     await AsyncStorage.setItem(MANIFEST_CACHE_KEY, JSON.stringify(json));
     return json;
@@ -346,7 +464,32 @@ async function fetchRemoteManifest(): Promise<RawManifest | null> {
   }
 }
 
-function mapRawDeckToDeckExport(raw: RawDeckJson): DeckExport {
+function isRawDeckV1(x: any): x is RawDeckJsonV1 {
+  return (
+    !!x &&
+    typeof x === 'object' &&
+    typeof x.buildId === 'string' &&
+    !!x.deck &&
+    typeof x.deck === 'object' &&
+    typeof x.deck.slug === 'string' &&
+    Array.isArray(x.cards)
+  );
+}
+
+function isRawDeckFlat(x: any): x is RawDeckJsonFlat {
+  return (
+    !!x &&
+    typeof x === 'object' &&
+    typeof x.slug === 'string' &&
+    typeof x.title === 'string' &&
+    typeof x.locale === 'string' &&
+    typeof x.deckType === 'number' &&
+    (typeof x.version === 'string' || typeof x.version === 'number') &&
+    Array.isArray(x.cards)
+  );
+}
+
+function mapRawDeckV1ToDeckExport(raw: RawDeckJsonV1): DeckExport {
   const d = raw.deck;
   const cards = Array.isArray(raw.cards) ? raw.cards : [];
 
@@ -384,7 +527,6 @@ function mapRawDeckToDeckExport(raw: RawDeckJson): DeckExport {
       Difficulty: difficulty,
       OrderInDeck: order,
 
-      // ✅ 给 “更新卡片提示” / lastSeenRevision 用
       Revision: revision,
       Version: version,
       UpdatedAt: c.updatedAt ?? null,
@@ -397,7 +539,7 @@ function mapRawDeckToDeckExport(raw: RawDeckJson): DeckExport {
     Locale: d.locale,
     DeckType: deckType,
 
-    Version: raw.buildId, // ✅ buildId 作为版本
+    Version: raw.buildId,
 
     IsFreeStarter: isFreeStarter,
     FreeCardCount: isFreeStarter ? mappedCards.length : 0,
@@ -406,9 +548,66 @@ function mapRawDeckToDeckExport(raw: RawDeckJson): DeckExport {
     Cards: mappedCards as any,
   };
 
-  // 可选字段（如果你的 DeckExport 支持）
-  // (deck as any).Author = d.author ?? null;
-  // (deck as any).Description = d.description ?? null;
+  return deck;
+}
+
+function mapRawDeckFlatToDeckExport(raw: RawDeckJsonFlat): DeckExport {
+  const cards = Array.isArray(raw.cards) ? raw.cards : [];
+
+  const deckType = raw.deckType ?? 1;
+  const isFreeStarter = deckType === 1;
+
+  const mappedCards = cards.map((c, idx) => {
+    const order =
+      typeof c.orderInDeck === 'number' && Number.isFinite(c.orderInDeck) && c.orderInDeck > 0
+        ? c.orderInDeck
+        : idx + 1;
+
+    const difficulty =
+      typeof c.difficulty === 'number' && Number.isFinite(c.difficulty) && c.difficulty > 0
+        ? c.difficulty
+        : 2;
+
+    const revision =
+      typeof c.revision === 'number' && Number.isFinite(c.revision) && c.revision > 0
+        ? c.revision
+        : 1;
+
+    const version =
+      typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0
+        ? c.version
+        : 1;
+
+    return {
+      StableUid: c.stableUid,
+      Question: c.question,
+      Explanation: c.explanation ?? null,
+      CodeSnippet: c.codeSnippet ?? null,
+      CodeLanguage: c.codeLanguage ?? null,
+      RealWorldUsage: c.realWorldUsage ?? null,
+      Difficulty: difficulty,
+      OrderInDeck: order,
+
+      Revision: revision,
+      Version: version,
+      UpdatedAt: c.updatedAt ?? null,
+    } as any;
+  });
+
+  const deck: DeckExport = {
+    Slug: raw.slug,
+    Title: raw.title,
+    Locale: raw.locale,
+    DeckType: deckType,
+
+    Version: normalizeVersion(raw.version) ?? 'unknown',
+
+    IsFreeStarter: isFreeStarter,
+    FreeCardCount: isFreeStarter ? mappedCards.length : 0,
+
+    TotalCards: mappedCards.length,
+    Cards: mappedCards as any,
+  };
 
   return deck;
 }
