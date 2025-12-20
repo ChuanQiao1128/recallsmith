@@ -12,7 +12,13 @@ export type RootStackParamList = {
   Deck: { slug?: string } | undefined;
 
   // ✅ Review 也带上 slug（可选），否则还是会用当前 active deck
-  Review: { slug?: string; mode?: StudyMode; limit?: number } | undefined;
+  Review: {
+  slug: string;
+  mode: StudyMode;
+  limit: number;
+  previewLimit?: number; // ✅ trial 用：只允许前 N 张
+  
+};
 
   // ✅ Auth
   SignIn: { email?: string } | undefined;

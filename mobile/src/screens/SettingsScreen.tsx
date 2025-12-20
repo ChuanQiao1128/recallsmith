@@ -1,5 +1,5 @@
 // mobile/src/screens/SettingsScreen.tsx
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,9 @@ import {
   Pressable,
   Alert,
   Linking,
+  ScrollView,
+  Modal,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,10 +17,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
-import {
-  checkManifestForUpdates,
-  installDeckFromUrl,
-} from '../content/deckRepository';
+import { checkManifestForUpdates, installDeckFromUrl } from '../content/deckRepository';
 import {
   getCurrentAppVersion,
   fetchRemoteConfig,
@@ -25,8 +25,16 @@ import {
   type RemoteConfig,
 } from '../config/remoteConfig';
 
-// ✅ Auth: only use useAuthStore (avoid object selector infinite loop)
+// ✅ Auth (primitive selectors only)
 import { useAuthStore } from '../auth/authStore';
+
+// ✅ Reminders prefs (see reminders.ts patch below)
+import {
+  getReminderPrefs,
+  setReminderPrefs as saveReminderPrefs,
+  refreshDailyRemindersFromCache,
+  type ReminderPrefs,
+} from '../notifications/reminders';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
@@ -67,13 +75,16 @@ function extractSemver(input: string | null | undefined): string | null {
 
 function safeSemverCompare(
   aRaw: string | null | undefined,
-  bRaw: string | null | undefined
+  bRaw: string | null | undefined,
 ): number | null {
   const a = extractSemver(aRaw);
   const b = extractSemver(bRaw);
   if (!a || !b) return null;
   return compareSemver(a, b);
 }
+
+const MORNING_OPTIONS = ['07:00', '08:00', '09:00', '10:00', '11:00'] as const;
+const EVENING_OPTIONS = ['18:00', '19:00', '20:00', '21:00', '22:00'] as const;
 
 export function SettingsScreen({ navigation }: Props) {
   const appVersionRaw = getCurrentAppVersion();
@@ -83,39 +94,15 @@ export function SettingsScreen({ navigation }: Props) {
   const email = useAuthStore((s) => s.email);
   const authLoading = useAuthStore((s) => s.loading);
   const isSignedIn = useAuthStore((s) => s.status === 'signed_in');
-  const accessToken = useAuthStore((s) => s.accessToken);
   const signOutNow = useAuthStore((s) => s.signOutNow);
 
   const authReady = status !== 'unknown' && !authLoading;
 
+  // =========================
+  // Deck updates
+  // =========================
   const [updating, setUpdating] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
-
-  const [remoteConfig, setRemoteConfig] = useState<RemoteConfig | null>(null);
-  const [remoteStatus, setRemoteStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
-
-  const iosCfg = remoteConfig?.ios ?? null;
-
-  const latestStoreVersion = iosCfg?.latestVersion ?? iosCfg?.minSupportedVersion ?? null;
-  const minSupportedVersion = iosCfg?.minSupportedVersion ?? null;
-
-  const updateUrl =
-    iosCfg?.updateUrl ??
-    (iosCfg?.appStoreId ? `https://apps.apple.com/app/id${iosCfg.appStoreId}` : null);
-
-  const { forceUpdate, hasOptionalUpdate } = useMemo(() => {
-    if (remoteStatus !== 'loaded' || !iosCfg) {
-      return { forceUpdate: false, hasOptionalUpdate: false };
-    }
-
-    const cmpMin = safeSemverCompare(appVersionRaw, minSupportedVersion);
-    const cmpLatest = safeSemverCompare(appVersionRaw, latestStoreVersion);
-
-    const belowMin = cmpMin !== null && cmpMin < 0;
-    const optional = !belowMin && cmpLatest !== null && cmpLatest < 0;
-
-    return { forceUpdate: belowMin, hasOptionalUpdate: optional };
-  }, [remoteStatus, iosCfg, appVersionRaw, minSupportedVersion, latestStoreVersion]);
 
   async function handleUpdateDecks() {
     if (updating) return;
@@ -145,12 +132,7 @@ export function SettingsScreen({ navigation }: Props) {
       let successCount = 0;
       for (const u of updatesToInstall) {
         try {
-          const ok = await installDeckFromUrl(
-            u.slug,
-            u.remoteUrl,
-            u.expectedVersion,
-            u.remoteSha256
-          );
+          const ok = await installDeckFromUrl(u.slug, u.remoteUrl, u.expectedVersion, u.remoteSha256);
           if (ok) successCount += 1;
         } catch {
           // ignore single failure; proceed with others
@@ -169,7 +151,13 @@ export function SettingsScreen({ navigation }: Props) {
     }
   }
 
-  React.useEffect(() => {
+  // =========================
+  // App store info
+  // =========================
+  const [remoteConfig, setRemoteConfig] = useState<RemoteConfig | null>(null);
+  const [remoteStatus, setRemoteStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadRemoteVersion() {
@@ -193,32 +181,120 @@ export function SettingsScreen({ navigation }: Props) {
     }
 
     void loadRemoteVersion();
-
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const latestDisplay =
-    latestStoreVersion ?? (remoteStatus === 'loading' ? '…' : '—');
-  const minDisplay =
-    minSupportedVersion ?? (remoteStatus === 'loading' ? '…' : '—');
+  const iosCfg = remoteConfig?.ios ?? null;
+  const latestStoreVersion = iosCfg?.latestVersion ?? iosCfg?.minSupportedVersion ?? null;
+  const minSupportedVersion = iosCfg?.minSupportedVersion ?? null;
+
+  const updateUrl =
+    iosCfg?.updateUrl ??
+    (iosCfg?.appStoreId ? `https://apps.apple.com/app/id${iosCfg.appStoreId}` : null);
+
+  const { forceUpdate, hasOptionalUpdate } = useMemo(() => {
+    if (remoteStatus !== 'loaded' || !iosCfg) return { forceUpdate: false, hasOptionalUpdate: false };
+
+    const cmpMin = safeSemverCompare(appVersionRaw, minSupportedVersion);
+    const cmpLatest = safeSemverCompare(appVersionRaw, latestStoreVersion);
+
+    const belowMin = cmpMin !== null && cmpMin < 0;
+    const optional = !belowMin && cmpLatest !== null && cmpLatest < 0;
+
+    return { forceUpdate: belowMin, hasOptionalUpdate: optional };
+  }, [remoteStatus, iosCfg, appVersionRaw, minSupportedVersion, latestStoreVersion]);
+
+  const latestDisplay = latestStoreVersion ?? (remoteStatus === 'loading' ? '…' : '—');
+  const minDisplay = minSupportedVersion ?? (remoteStatus === 'loading' ? '…' : '—');
 
   const statusText =
     remoteStatus === 'loading'
       ? 'Fetching store info…'
       : remoteStatus === 'error'
-      ? 'Unable to fetch store info.'
-      : forceUpdate
-      ? 'Below minimum required · please update to continue.'
-      : hasOptionalUpdate
-      ? 'Update available (optional).'
-      : 'You are up to date.';
+        ? 'Unable to fetch store info.'
+        : forceUpdate
+          ? 'Below minimum required · please update to continue.'
+          : hasOptionalUpdate
+            ? 'Update available (optional).'
+            : 'You are up to date.';
 
-  const tokenPreview =
-    accessToken && accessToken.length > 10
-      ? `${accessToken.slice(0, 6)}…${accessToken.slice(-4)}`
-      : accessToken;
+  // =========================
+  // Reminders (prefs)
+  // =========================
+  const [prefsLoading, setPrefsLoading] = useState(true);
+  const [prefsSaving, setPrefsSaving] = useState(false);
+  const [prefsHint, setPrefsHint] = useState<string | null>(null);
+
+  const [prefs, setPrefs] = useState<ReminderPrefs>({
+    morningEnabled: true,
+    morningTime: '09:00',
+    eveningEnabled: true,
+    eveningTime: '20:00',
+  });
+
+  const [timePicker, setTimePicker] = useState<null | 'morning' | 'evening'>(null);
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+    };
+  }, []);
+
+  function showPrefsHint(msg: string) {
+    setPrefsHint(msg);
+    if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+    hintTimerRef.current = setTimeout(() => setPrefsHint(null), 1600);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPrefs() {
+      setPrefsLoading(true);
+      try {
+        const p = await getReminderPrefs();
+        if (cancelled) return;
+        setPrefs(p);
+      } catch {
+        // ignore; keep defaults
+      } finally {
+        if (!cancelled) setPrefsLoading(false);
+      }
+    }
+
+    void loadPrefs();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function updatePrefs(patch: Partial<ReminderPrefs>) {
+    if (!isSignedIn) {
+      Alert.alert('Sign in required', 'Sign in to customize reminders.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
+      ]);
+      return;
+    }
+
+    setPrefsSaving(true);
+    try {
+      const next = await saveReminderPrefs(patch);
+      setPrefs(next);
+
+      // Apply immediately (best effort). If we don't have cached due count yet, evening may update on next Home refresh.
+      await refreshDailyRemindersFromCache();
+
+      showPrefsHint('Saved · reminders updated');
+    } catch (e: any) {
+      Alert.alert('Update failed', e?.message ?? 'Failed to update reminders.');
+    } finally {
+      setPrefsSaving(false);
+    }
+  }
 
   async function handleSignOut() {
     Alert.alert(
@@ -241,147 +317,272 @@ export function SettingsScreen({ navigation }: Props) {
     );
   }
 
-  return (
+  const timeOptions = timePicker === 'morning' ? MORNING_OPTIONS : EVENING_OPTIONS;
 
+  return (
+    <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
-          <View style={styles.container}>
-            {/* 顶部 header */}
+        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+          {/* Time picker modal */}
+          <Modal transparent animationType="fade" visible={!!timePicker} onRequestClose={() => setTimePicker(null)}>
+            <View style={styles.modalOverlay}>
+              <Pressable style={styles.modalBackdrop} onPress={() => setTimePicker(null)} />
+              <View style={styles.modalCardOpaque}>
+                <View style={styles.modalHeaderRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalTitle}>
+                      {timePicker === 'morning' ? 'Morning reminder' : 'Evening check‑in'}
+                    </Text>
+                    <Text style={styles.modalSubtitle}>
+                      {timePicker === 'morning'
+                        ? 'Pick a daily time.'
+                        : 'Only triggers if you still have cards due today.'}
+                    </Text>
+                  </View>
+
+                  <Pressable style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]} onPress={() => setTimePicker(null)}>
+                    <Text style={styles.modalCloseText}>✕</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.timeGrid}>
+                  {timeOptions.map((t) => {
+                    const active = timePicker === 'morning' ? prefs.morningTime === t : prefs.eveningTime === t;
+
+                    return (
+                      <Pressable
+                        key={t}
+                        style={({ pressed }) => [
+                          styles.timeChip,
+                          active && styles.timeChipActive,
+                          pressed && styles.pressed,
+                        ]}
+                        onPress={async () => {
+                          const isMorning = timePicker === 'morning';
+                          setTimePicker(null);
+                          await updatePrefs(isMorning ? { morningTime: t } : { eveningTime: t });
+                        }}
+                      >
+                        <Text style={[styles.timeChipText, active && styles.timeChipTextActive]}>{t}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+
+                <Text style={styles.modalLegend}>
+                  You can disable each reminder with the toggle. Times sync after sign‑in.
+                </Text>
+              </View>
+            </View>
+          </Modal>
+
+          <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+            {/* Header */}
             <View style={styles.headerRow}>
               <Pressable
-                style={({ pressed }) => [
-                  styles.backButton,
-                  pressed && styles.backButtonPressed,
-                ]}
+                style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
                 onPress={() => navigation.goBack()}
               >
                 <Text style={styles.backText}>← Back</Text>
               </Pressable>
+
               <View style={{ flex: 1 }}>
                 <Text style={styles.title}>Settings</Text>
-                <Text style={styles.subtitle}>
-                  Support, privacy and app information.
-                </Text>
+                <Text style={styles.subtitle}>Account, reminders, updates and legal.</Text>
               </View>
             </View>
 
-            {/* ✅ Account */}
+            {/* Account */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Account</Text>
               <Text style={styles.sectionSubtitle}>
                 {!authReady
                   ? 'Loading account…'
                   : isSignedIn
-                  ? `Signed in · ${email ?? '—'} · Sync enabled`
-                  : 'Signed out · please sign in to sync progress'}
+                    ? `Signed in · ${email ?? '—'} · Backup enabled`
+                    : 'Signed out · sign in to enable backup and unlock Month view'}
               </Text>
 
               {!isSignedIn ? (
                 <Pressable
                   style={({ pressed }) => [
-                    styles.updateButton,
-                    pressed && styles.updateButtonPressed,
-                    !authReady && styles.updateButtonDisabled,
+                    styles.primaryButton,
+                    pressed && styles.buttonPressed,
+                    (!authReady || authLoading) && styles.buttonDisabled,
                   ]}
                   onPress={() => navigation.navigate('SignIn')}
-                  disabled={!authReady}
+                  disabled={!authReady || authLoading}
                 >
-                  <Text style={styles.updateButtonText}>Sign in / Register</Text>
+                  <Text style={styles.primaryButtonText}>Sign in / Register</Text>
                 </Pressable>
               ) : (
                 <Pressable
-                  style={({ pressed }) => [
-                    styles.dangerButton,
-                    pressed && styles.updateButtonPressed,
-                  ]}
+                  style={({ pressed }) => [styles.dangerButton, pressed && styles.buttonPressed]}
                   onPress={handleSignOut}
                 >
-                  <Text style={styles.updateButtonText}>Sign out</Text>
+                  <Text style={styles.primaryButtonText}>Sign out</Text>
                 </Pressable>
               )}
             </View>
 
-            {/* App 信息 + 更新 */}
-            <View style={styles.appCard}>
-              <Text style={styles.appName}>DeveloperCards</Text>
-              <Text style={styles.appTagline}>
-                Coding concept with spaced repetition.
+            {/* Reminders */}
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Reminders</Text>
+              <Text style={styles.sectionSubtitle}>
+                Keep consistency with a morning reminder and a smart evening check‑in.
               </Text>
 
-              <View style={styles.versionRow}>
-                <Text style={styles.versionLabel}>Current app</Text>
-                <Text style={styles.versionValue}>
-                  {extractSemver(appVersionRaw) ?? appVersionRaw}
-                </Text>
-              </View>
-
-              <View style={styles.versionRow}>
-                <Text style={styles.versionLabel}>Latest (store)</Text>
-                <Text style={styles.versionValue}>{latestDisplay}</Text>
-              </View>
-
-              <View style={styles.versionRow}>
-                <Text style={styles.versionLabel}>Minimum required</Text>
-                <Text style={styles.versionValue}>{minDisplay}</Text>
-              </View>
-
-              <View style={{ marginTop: 8 }}>
-                <Text style={styles.updateStatusText}>{statusText}</Text>
-              </View>
-
-              {updateUrl ? (
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.storeButton,
-                    pressed && styles.storeButtonPressed,
-                    forceUpdate && { backgroundColor: '#DC2626' },
-                  ]}
-                  onPress={() => openExternalLink(updateUrl)}
-                >
-                  <Text style={styles.storeButtonText}>
-                    {forceUpdate
-                      ? 'Update now (required)'
-                      : hasOptionalUpdate
-                      ? 'Update on App Store'
-                      : 'Open App Store'}
+              {!isSignedIn ? (
+                <View style={styles.gateBox}>
+                  <Text style={styles.gateTitle}>Customize reminders</Text>
+                  <Text style={styles.gateSubtitle}>
+                    Sign in to set your preferred reminder times (and sync them across devices).
                   </Text>
-                </Pressable>
-              ) : null}
+
+                  <Pressable
+                    style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
+                    onPress={() => navigation.navigate('SignIn')}
+                  >
+                    <Text style={styles.primaryButtonText}>Sign in to customize</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <>
+                  {prefsLoading ? (
+                    <View style={{ paddingVertical: 8 }}>
+                      <ActivityIndicator />
+                      <Text style={[styles.muted, { marginTop: 6 }]}>Loading reminder settings…</Text>
+                    </View>
+                  ) : (
+                    <>
+                      {/* Morning row */}
+                      <View style={[styles.settingRow, (prefsSaving || prefsLoading) && styles.rowDisabled]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.rowTitle}>Morning reminder</Text>
+                          <Text style={styles.rowSubtitle}>A gentle nudge to do a quick run.</Text>
+                        </View>
+
+                        <Pressable
+                          style={({ pressed }) => [styles.rowChip, pressed && styles.pressed]}
+                          onPress={() => setTimePicker('morning')}
+                          disabled={prefsSaving || prefsLoading}
+                        >
+                          <Text style={styles.rowChipText}>{prefs.morningTime}</Text>
+                        </Pressable>
+
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.toggle,
+                            prefs.morningEnabled && styles.toggleOn,
+                            pressed && styles.pressed,
+                          ]}
+                          onPress={() => updatePrefs({ morningEnabled: !prefs.morningEnabled })}
+                          disabled={prefsSaving || prefsLoading}
+                        >
+                          <View style={[styles.toggleKnob, prefs.morningEnabled && styles.toggleKnobOn]} />
+                        </Pressable>
+                      </View>
+
+                      {/* Evening row */}
+                      <View style={[styles.settingRow, (prefsSaving || prefsLoading) && styles.rowDisabled]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.rowTitle}>Evening check‑in</Text>
+                          <Text style={styles.rowSubtitle}>Only if you still have due cards today.</Text>
+                        </View>
+
+                        <Pressable
+                          style={({ pressed }) => [styles.rowChip, pressed && styles.pressed]}
+                          onPress={() => setTimePicker('evening')}
+                          disabled={prefsSaving || prefsLoading}
+                        >
+                          <Text style={styles.rowChipText}>{prefs.eveningTime}</Text>
+                        </Pressable>
+
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.toggle,
+                            prefs.eveningEnabled && styles.toggleOn,
+                            pressed && styles.pressed,
+                          ]}
+                          onPress={() => updatePrefs({ eveningEnabled: !prefs.eveningEnabled })}
+                          disabled={prefsSaving || prefsLoading}
+                        >
+                          <View style={[styles.toggleKnob, prefs.eveningEnabled && styles.toggleKnobOn]} />
+                        </Pressable>
+                      </View>
+
+                      <View style={styles.hintSlot}>
+                        <Text style={styles.hintText} numberOfLines={1}>
+                          {prefsHint ?? 'Tip: evening check‑in helps you keep the due calendar manageable.'}
+                        </Text>
+                      </View>
+                    </>
+                  )}
+                </>
+              )}
             </View>
 
             {/* Deck updates */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Deck updates</Text>
               <Text style={styles.sectionSubtitle}>
-                The app checks for updates on launch. Tap below to force a refresh or
-                install missing decks now.
+                The app checks for updates on launch. Use this to force a refresh.
               </Text>
 
               <Pressable
                 style={({ pressed }) => [
-                  styles.updateButton,
-                  pressed && !updating && styles.updateButtonPressed,
-                  updating && styles.updateButtonDisabled,
+                  styles.primaryButton,
+                  pressed && !updating && styles.buttonPressed,
+                  updating && styles.buttonDisabled,
                 ]}
                 onPress={handleUpdateDecks}
                 disabled={updating}
               >
-                <Text style={styles.updateButtonText}>
-                  {updating ? 'Checking…' : 'Check & update decks'}
-                </Text>
+                <Text style={styles.primaryButtonText}>{updating ? 'Checking…' : 'Check & update decks'}</Text>
               </Pressable>
 
-              {updateMessage ? (
-                <Text style={styles.updateStatus}>{updateMessage}</Text>
+              {updateMessage ? <Text style={styles.mutedStatus}>{updateMessage}</Text> : null}
+            </View>
+
+            {/* App info */}
+            <View style={styles.cardGlass}>
+              <Text style={styles.appName}>DevCards</Text>
+              <Text style={styles.appTagline}>Full-stack concept with spaced repetition.</Text>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Current app</Text>
+                <Text style={styles.kValue}>{extractSemver(appVersionRaw) ?? appVersionRaw}</Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Latest (store)</Text>
+                <Text style={styles.kValue}>{latestDisplay}</Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Minimum required</Text>
+                <Text style={styles.kValue}>{minDisplay}</Text>
+              </View>
+
+              <Text style={[styles.muted, { marginTop: 10 }]}>{statusText}</Text>
+
+              {updateUrl ? (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    pressed && styles.buttonPressed,
+                    forceUpdate && { backgroundColor: '#DC2626' },
+                  ]}
+                  onPress={() => openExternalLink(updateUrl)}
+                >
+                  <Text style={styles.primaryButtonText}>
+                    {forceUpdate ? 'Update now (required)' : hasOptionalUpdate ? 'Update on App Store' : 'Open App Store'}
+                  </Text>
+                </Pressable>
               ) : null}
             </View>
 
-            {/* Links */}
+            {/* Help & Legal */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Help & Legal</Text>
               <Text style={styles.sectionSubtitle}>
@@ -389,208 +590,260 @@ export function SettingsScreen({ navigation }: Props) {
               </Text>
 
               <Pressable
-                style={({ pressed }) => [styles.linkRow, pressed && styles.linkRowPressed]}
+                style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
                 onPress={() => openExternalLink(SUPPORT_URL)}
               >
-                <View>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.linkTitle}>Support & FAQ</Text>
-                  <Text style={styles.linkSubtitle}>
-                    Common questions, troubleshooting and contact info.
-                  </Text>
+                  <Text style={styles.linkSubtitle}>Troubleshooting and contact info.</Text>
                 </View>
                 <Text style={styles.linkChevron}>›</Text>
               </Pressable>
 
               <Pressable
-                style={({ pressed }) => [styles.linkRow, pressed && styles.linkRowPressed]}
+                style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
                 onPress={() => openExternalLink(PRIVACY_URL)}
               >
-                <View>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.linkTitle}>Privacy Policy</Text>
-                  <Text style={styles.linkSubtitle}>
-                    How we handle your data and what we store.
-                  </Text>
+                  <Text style={styles.linkSubtitle}>What we store and how we handle data.</Text>
                 </View>
                 <Text style={styles.linkChevron}>›</Text>
               </Pressable>
             </View>
 
             <View style={styles.footerBox}>
-              <Text style={styles.footerText}>
-                Made with focus for developers preparing full-stack interviews.
-              </Text>
+              <Text style={styles.footerText}>Made with focus for developers preparing full‑stack interviews.</Text>
             </View>
-          </View>
+
+            <View style={{ height: 8 }} />
+          </ScrollView>
         </LinearGradient>
       </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
 export default SettingsScreen;
 
-const CARD_GLASS = 'rgba(255,255,255,0.18)';
-const CARD_BORDER = 'rgba(255,255,255,0.55)';
+const GLASS = 'rgba(255,255,255,0.16)';
+const BORDER = 'rgba(255,255,255,0.45)';
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#F5F3FF',
-  },
-  gradient: {
-    flex: 1,
-  },
+  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  gradient: { flex: 1 },
+
   container: {
-    flex: 1,
     paddingHorizontal: 18,
-    paddingTop: 16,
-    paddingBottom: 24,
+    paddingTop: 18,
+    paddingBottom: 30,
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 18,
-  },
+
+  pressed: { opacity: 0.92 },
+
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   backButton: {
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.8)',
+    backgroundColor: 'rgba(255,255,255,0.86)',
     marginRight: 10,
-  },
-  backButtonPressed: {
-    opacity: 0.9,
-  },
-  backText: {
-    fontSize: 13,
-    color: '#111827',
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  subtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  appCard: {
-    borderRadius: 24,
-    paddingVertical: 18,
-    paddingHorizontal: 18,
-    backgroundColor: CARD_GLASS,
     borderWidth: 1,
-    borderColor: CARD_BORDER,
+    borderColor: 'rgba(17,24,39,0.08)',
+  },
+  backButtonPressed: { opacity: 0.9 },
+  backText: { fontSize: 13, color: '#111827', fontWeight: '800' },
+
+  title: { fontSize: 22, fontWeight: '900', color: '#111827' },
+  subtitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
+
+  // cards
+  cardGlass: {
+    borderRadius: 22,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: GLASS,
+    borderWidth: 1,
+    borderColor: BORDER,
     shadowColor: '#000',
-    shadowOpacity: 0.14,
-    shadowRadius: 16,
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
     shadowOffset: { width: 0, height: 10 },
-    marginBottom: 16,
-  },
-  appName: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  appTagline: {
-    marginTop: 4,
-    fontSize: 13,
-    color: '#4B5563',
-  },
-  versionRow: {
-    marginTop: 10,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  versionLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  versionValue: {
-    fontSize: 13,
-    color: '#111827',
-    fontWeight: '500',
+    marginBottom: 14,
   },
   sectionCard: {
-    borderRadius: 20,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderRadius: 22,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(255,255,255,0.86)',
     shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    marginBottom: 16,
+    shadowOpacity: 0.10,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 10 },
+    marginBottom: 14,
   },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  sectionSubtitle: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#6B7280',
-    marginBottom: 10,
-  },
-  updateButton: {
-    marginTop: 6,
-    borderRadius: 14,
+  sectionTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
+  sectionSubtitle: { marginTop: 6, fontSize: 12, color: '#6B7280', lineHeight: 16 },
+
+  // buttons
+  primaryButton: {
+    marginTop: 12,
+    borderRadius: 999,
     backgroundColor: '#4F46E5',
     paddingVertical: 12,
     alignItems: 'center',
   },
   dangerButton: {
-    marginTop: 6,
-    borderRadius: 14,
+    marginTop: 12,
+    borderRadius: 999,
     backgroundColor: '#DC2626',
     paddingVertical: 12,
     alignItems: 'center',
   },
-  updateButtonPressed: { opacity: 0.9 },
-  updateButtonDisabled: { opacity: 0.6 },
-  updateButtonText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
-  updateStatus: { marginTop: 8, fontSize: 12, color: '#6B7280' },
-  updateStatusText: { fontSize: 12, color: '#4B5563' },
-  storeButton: {
-    marginTop: 10,
-    borderRadius: 14,
-    backgroundColor: '#4F46E5',
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  storeButtonPressed: { opacity: 0.9 },
-  storeButtonText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  primaryButtonText: { fontSize: 14, fontWeight: '900', color: '#FFFFFF' },
+  buttonPressed: { opacity: 0.9 },
+  buttonDisabled: { opacity: 0.6 },
+
+  muted: { fontSize: 12, color: '#6B7280' },
+  mutedStatus: { marginTop: 10, fontSize: 12, color: '#6B7280' },
+
+  // app info
+  appName: { fontSize: 18, fontWeight: '900', color: '#111827' },
+  appTagline: { marginTop: 4, fontSize: 12, color: '#4B5563' },
+
+  kvRow: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between' },
+  kLabel: { fontSize: 12, color: '#6B7280' },
+  kValue: { fontSize: 13, color: '#111827', fontWeight: '700' },
+
+  // links
   linkRow: {
+    marginTop: 10,
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(17,24,39,0.04)',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
   },
-  linkRowPressed: {
-    opacity: 0.9,
-  },
-  linkTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  linkSubtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  linkChevron: {
-    marginLeft: 'auto',
-    fontSize: 20,
-    color: '#9CA3AF',
-  },
-  footerBox: {
-    marginTop: 'auto',
+  linkTitle: { fontSize: 13, fontWeight: '900', color: '#111827' },
+  linkSubtitle: { marginTop: 3, fontSize: 12, color: '#6B7280' },
+  linkChevron: { marginLeft: 10, fontSize: 20, color: '#9CA3AF', fontWeight: '900' },
+
+  // reminders rows
+  settingRow: {
+    marginTop: 10,
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(17,24,39,0.04)',
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  footerText: {
-    fontSize: 11,
-    color: '#9CA3AF',
-    textAlign: 'center',
+  rowDisabled: { opacity: 0.6 },
+  rowTitle: { fontSize: 13, fontWeight: '900', color: '#111827' },
+  rowSubtitle: { marginTop: 3, fontSize: 12, color: '#6B7280', maxWidth: 220 },
+
+  rowChip: {
+    marginLeft: 10,
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(79,70,229,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(79,70,229,0.18)',
   },
+  rowChipText: { fontSize: 12, fontWeight: '900', color: '#4F46E5' },
+
+  toggle: {
+    marginLeft: 10,
+    width: 44,
+    height: 26,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.12)',
+    padding: 3,
+    justifyContent: 'center',
+  },
+  toggleOn: { backgroundColor: 'rgba(79,70,229,0.28)' },
+  toggleKnob: {
+    width: 20,
+    height: 20,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 4 },
+    alignSelf: 'flex-start',
+  },
+  toggleKnobOn: { alignSelf: 'flex-end' },
+
+  hintSlot: { marginTop: 10, paddingVertical: 2 },
+  hintText: { fontSize: 11, color: '#6B7280' },
+
+  gateBox: {
+    marginTop: 10,
+    borderRadius: 16,
+    padding: 12,
+    backgroundColor: 'rgba(79,70,229,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(79,70,229,0.14)',
+  },
+  gateTitle: { fontSize: 13, fontWeight: '900', color: '#4F46E5' },
+  gateSubtitle: { marginTop: 6, fontSize: 12, color: '#4B5563', lineHeight: 16 },
+
+  // modal
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(17,24,39,0.25)',
+  },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject },
+  modalCardOpaque: {
+    borderRadius: 22,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 12 },
+  },
+  modalHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  modalTitle: { fontSize: 16, fontWeight: '900', color: '#111827' },
+  modalSubtitle: { marginTop: 4, fontSize: 12, color: '#6B7280', fontWeight: '700' },
+  modalCloseBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: 'rgba(17,24,39,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
+  },
+  modalCloseText: { fontSize: 16, fontWeight: '900', color: '#111827' },
+
+  timeGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 },
+  timeChip: {
+    width: '31%',
+    marginRight: '3.5%',
+    marginBottom: 10,
+    borderRadius: 999,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: 'rgba(17,24,39,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.08)',
+  },
+  timeChipActive: {
+    backgroundColor: 'rgba(79,70,229,0.12)',
+    borderColor: 'rgba(79,70,229,0.22)',
+  },
+  timeChipText: { fontSize: 12, fontWeight: '900', color: '#111827' },
+  timeChipTextActive: { color: '#4F46E5' },
+
+  modalLegend: { marginTop: 4, fontSize: 11, color: '#6B7280' },
+
+  footerBox: { marginTop: 8, alignItems: 'center' },
+  footerText: { fontSize: 11, color: '#9CA3AF', textAlign: 'center' },
 });

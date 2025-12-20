@@ -38,8 +38,11 @@ import {
   type UpdateInfo,
 } from '../content/deckRepository';
 
-// ✅ NEW: premium entitlement
+// ✅ premium entitlement
 import { usePremiumUser } from '../premium/premiumStore';
+
+// ✅ auth state (for Month view gate)
+import { useAuthStore } from '../auth/authStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -52,7 +55,16 @@ type DeckSummary = {
   locale: string;
   version: string;
   deckType: number; // 1 = free, else premium
+
+  // ✅ Display total (full deck total from manifest)
   totalCards: number;
+
+  // ✅ Installed total (preview may be 15)
+  localCards: number;
+
+  // ✅ For study stats (use local cards if installed)
+  studyCards: number;
+
   canStudy: boolean;
 
   // ✅ from manifest v2
@@ -66,6 +78,8 @@ type DeckSummary = {
   plannedToday: number;
   newToday: number;
   masteredApprox: number;
+
+  // percent is relative to studyCards (preview=15), NOT full totalCards (30)
   percent: number; // 0..1
 };
 
@@ -188,6 +202,23 @@ export function HomeScreen({ navigation }: Props) {
   // ✅ premium entitlement
   const isPremiumUser = usePremiumUser();
 
+  // ✅ auth state (Month requires sign-in)
+  const authStatus = useAuthStore((s) => s.status);
+  const authInit = useAuthStore((s) => s.init);
+  const isSignedIn = authStatus === 'signed_in';
+
+  const [isMonthGateOpen, setIsMonthGateOpen] = useState(false);
+  const pendingOpenMonthRef = useRef(false);
+const didInitAuthRef = useRef(false);
+
+useEffect(() => {
+  if (didInitAuthRef.current) return;
+  if (authStatus === 'unknown') {
+    didInitAuthRef.current = true;
+    void authInit();
+  }
+}, [authStatus, authInit]);
+
   useEffect(() => {
     return () => {
       isMounted.current = false;
@@ -212,6 +243,14 @@ export function HomeScreen({ navigation }: Props) {
       cancel = true;
     };
   }, []);
+
+  // ✅ after sign-in, if user came from Month gate, auto open Month
+  useEffect(() => {
+    if (isSignedIn && pendingOpenMonthRef.current) {
+      pendingOpenMonthRef.current = false;
+      setIsMonthOpen(true);
+    }
+  }, [isSignedIn]);
 
   function showWeekHint(msg: string) {
     setWeekHint(msg);
@@ -317,7 +356,11 @@ export function HomeScreen({ navigation }: Props) {
           locale: entry.locale ?? 'en-US',
           version: entry.version,
           deckType: entry.deckType ?? 1,
+
           totalCards: entry.totalCards ?? 0,
+          localCards: 0,
+          studyCards: 0,
+
           canStudy: false,
 
           tier: entry.tier ?? null,
@@ -337,8 +380,15 @@ export function HomeScreen({ navigation }: Props) {
 
       const deck = await resolveDeckBySlug(entry.slug);
 
-      const totalCards = deck?.TotalCards ?? deck?.Cards?.length ?? entry.totalCards ?? 0;
-      const canStudy = !!deck && (deck.Cards?.length ?? 0) > 0;
+      const localCards = deck?.Cards?.length ?? deck?.TotalCards ?? 0;
+
+      // Display total should reflect full deck total from manifest
+      const displayTotalCards =
+        typeof entry.totalCards === 'number' && Number.isFinite(entry.totalCards)
+          ? entry.totalCards
+          : localCards;
+
+      const canStudy = !!deck && localCards > 0;
 
       if (!canStudy) {
         deckSummaries.push({
@@ -347,7 +397,11 @@ export function HomeScreen({ navigation }: Props) {
           locale: deck?.Locale ?? entry.locale ?? 'en-US',
           version: deck?.Version ?? entry.version,
           deckType: deck?.DeckType ?? entry.deckType ?? 1,
-          totalCards,
+
+          totalCards: displayTotalCards,
+          localCards,
+          studyCards: localCards,
+
           canStudy,
 
           tier: entry.tier ?? null,
@@ -370,16 +424,20 @@ export function HomeScreen({ navigation }: Props) {
       } catch {}
 
       const progress = await loadDeckProgress(deck);
-
       const learnedCount = progress.filter(isLearned).length;
-      const newRemaining = Math.max(totalCards - learnedCount, 0);
+
+      // Study stats should use localCards (preview=15)
+      const studyCards = Math.max(localCards, 0);
+      const denom = Math.max(studyCards, 1);
+
+      const newRemaining = Math.max(denom - learnedCount, 0);
 
       const upcoming30 = buildUpcoming(progress, now, 30);
       const dueToday = upcoming30[0]?.count ?? 0;
 
       totalDueAllDecks += dueToday;
 
-      const percent = totalCards > 0 ? clamp01(learnedCount / totalCards) : 0;
+      const percent = denom > 0 ? clamp01(learnedCount / denom) : 0;
 
       deckSummaries.push({
         slug: deck.Slug,
@@ -387,7 +445,11 @@ export function HomeScreen({ navigation }: Props) {
         locale: deck.Locale,
         version: deck.Version,
         deckType: deck.DeckType,
-        totalCards,
+
+        totalCards: displayTotalCards,
+        localCards,
+        studyCards,
+
         canStudy,
 
         tier: entry.tier ?? null,
@@ -442,22 +504,31 @@ export function HomeScreen({ navigation }: Props) {
       let cancelled = false;
 
       async function run() {
-      // 1) 先读本地渲染（快）
-      await loadHomeFromLocal();
-      if (cancelled) return;
+        await loadHomeFromLocal();
+        if (cancelled) return;
 
-      // ✅ 2) 暂时禁用 progress sync（避免 UI 卡住 + 控制台刷 500）
-      // forceProgressSync('home_focus').catch(() => {});
-      // ✅ 如果你未来想恢复，只需取消注释上面这一行，并且别 await
+        // forceProgressSync('home_focus').catch(() => {});
+      }
 
-      // 3) 不再做第二次 load（否则还会被 sync 节奏影响）
-    }
       void run();
       return () => {
         cancelled = true;
       };
     }, [loadHomeFromLocal]),
   );
+
+  // ✅ Refresh Home immediately after sign-in or premium status changes
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (authStatus === 'unknown') return;
+      await loadHomeFromLocal();
+      if (cancelled) return;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus, isSignedIn, isPremiumUser, loadHomeFromLocal]);
 
   const { loading, asOfISO, deckSummaries, updates, allUpcoming30, monthCounts } = state;
   const asOf = useMemo(() => new Date(asOfISO), [asOfISO]);
@@ -504,6 +575,13 @@ export function HomeScreen({ navigation }: Props) {
   }, [deckSummaries, deckFilter]);
 
   function openMonth() {
+  
+
+    if (!isSignedIn) {
+      setIsMonthGateOpen(true);
+      return;
+    }
+
     setIsMonthOpen(true);
   }
   function closeMonth() {
@@ -578,6 +656,7 @@ export function HomeScreen({ navigation }: Props) {
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
         >
+          {/* Month View (requires sign-in; unchanged) */}
           <Modal animationType="fade" transparent visible={isMonthOpen} onRequestClose={closeMonth}>
             <View style={styles.modalOverlay}>
               <Pressable style={styles.modalBackdrop} onPress={closeMonth} />
@@ -637,6 +716,76 @@ export function HomeScreen({ navigation }: Props) {
             </View>
           </Modal>
 
+          {/* Month Gate (unchanged) */}
+          <Modal
+            animationType="fade"
+            transparent
+            visible={isMonthGateOpen}
+            onRequestClose={() => setIsMonthGateOpen(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <Pressable style={styles.modalBackdrop} onPress={() => setIsMonthGateOpen(false)} />
+
+              <View style={styles.gateCard}>
+                <View style={styles.modalHeaderRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalTitle}>Unlock Month View</Text>
+                    <Text style={styles.modalSubtitle}>30-day calendar + consistency insights</Text>
+                  </View>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]}
+                    onPress={() => setIsMonthGateOpen(false)}
+                    accessibilityLabel="Close sign-in gate"
+                  >
+                    <Text style={styles.modalCloseText}>✕</Text>
+                  </Pressable>
+                </View>
+
+                <View style={{ marginTop: 10 }}>
+                  {[
+                    'See your next 30 days across all decks',
+                    'Spot gaps and stay consistent with trends',
+                    'Enable cloud backup after sign-in (shown immediately)',
+                  ].map((t, idx) => (
+                    <View key={`b-${idx}`} style={styles.bulletRow}>
+                      <Text style={styles.bulletDot}>•</Text>
+                      <Text style={styles.bulletText}>{t}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                <View style={styles.gateCtaRow}>
+                  <Pressable
+                    style={({ pressed }) => [styles.gateSecondaryBtn, pressed && styles.pressed]}
+                    onPress={() => {
+                      setIsMonthGateOpen(false);
+                      pendingOpenMonthRef.current = true;
+                      navigation.navigate('SignUp');
+                    }}
+                  >
+                    <Text style={styles.gateSecondaryText}>Create account</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.gatePrimaryBtn, pressed && styles.pressed]}
+                    onPress={() => {
+                      setIsMonthGateOpen(false);
+                      pendingOpenMonthRef.current = true;
+                      navigation.navigate('SignIn');
+                    }}
+                  >
+                    <Text style={styles.gatePrimaryText}>Sign in</Text>
+                  </Pressable>
+                </View>
+
+                <Text style={styles.gateFootnote}>
+                  Week view stays free. Sign in unlocks Month view and enables backup.
+                </Text>
+              </View>
+            </View>
+          </Modal>
+
           <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
             <View style={styles.headingRow}>
               <View style={{ flex: 1 }}>
@@ -669,8 +818,11 @@ export function HomeScreen({ navigation }: Props) {
                     <Text style={[styles.segmentText, styles.segmentTextActive]}>Week</Text>
                   </Pressable>
 
-                  <Pressable style={({ pressed }) => [styles.segmentItem, pressed && styles.pressed]} onPress={openMonth}>
-                    <Text style={styles.segmentText}>Month</Text>
+                  <Pressable
+                    style={({ pressed }) => [styles.segmentItem, pressed && styles.pressed]}
+                    onPress={openMonth}
+                  >
+                    <Text style={styles.segmentText}>{isSignedIn ? 'Month' : 'Month 🔒'}</Text>
                   </Pressable>
                 </View>
               </View>
@@ -720,7 +872,6 @@ export function HomeScreen({ navigation }: Props) {
             <View style={styles.sectionCard}>
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.sectionTitle}>Decks</Text>
-                <Text style={styles.sectionMeta}>{deckSummaries.length}</Text>
               </View>
 
               <View style={styles.segmentThree}>
@@ -760,11 +911,19 @@ export function HomeScreen({ navigation }: Props) {
 
                   const lockedPremium = isPremium && !isPremiumUser;
 
+                  // ✅ premium user but still has preview installed (15/30) -> should download full
+                  const needsFull =
+                    isPremiumUser && isPremium && d.localCards > 0 && d.localCards < d.totalCards;
+                  const needsFullInstall = isPremiumUser && isPremium && !d.canStudy;
                   const deckUpdate = updates?.[d.slug];
                   const hasInstalledVersion =
                     typeof deckUpdate?.installedVersion === 'string' && deckUpdate.installedVersion.trim().length > 0;
 
-                  const hasUpdate = hasInstalledVersion && !!(deckUpdate?.hasUpdate && deckUpdate.remoteUrl);
+                  // ✅ IMPORTANT: do NOT require remoteUrl here (premium full update uses presigned url)
+                  const hasUpdate = hasInstalledVersion && !!deckUpdate?.hasUpdate;
+
+                  // trial installed: locked premium but user is signed in and preview is installed (canStudy)
+                  const isTrialInstalled = lockedPremium && isSignedIn && d.canStudy;
 
                   return (
                     <Pressable
@@ -775,7 +934,7 @@ export function HomeScreen({ navigation }: Props) {
                         pressed && styles.deckRowPressed,
                       ]}
                       onPress={async () => {
-                        // ✅ coming
+                        // coming
                         if (isComing) {
                           Alert.alert(
                             'Coming soon',
@@ -784,15 +943,100 @@ export function HomeScreen({ navigation }: Props) {
                           );
                           return;
                         }
+                        // ✅ premium user: not installed on this device yet -> install full first
+if (needsFullInstall) {
+  setState((prev) => ({ ...prev, loading: true }));
+  try {
+    const data = await fetchPremiumDeckUrl(d.slug);
+    if (!data?.url || !data?.buildId) throw new Error('Failed to get premium download url');
 
-                        // ✅ premium locked -> go preview (DeckScreen)
+    const ok = await installDeckFromUrl(d.slug, data.url, data.buildId, null);
+    if (!ok) throw new Error('Failed to install full deck');
+
+    try {
+      await applyCachedRemoteProgress(d.slug);
+    } catch {}
+
+    const newState = await computeHomeState();
+    if (isMounted.current) setState(newState);
+
+    openDeck(d.slug);
+  } catch (e: any) {
+    console.error('Full install failed:', e);
+    Alert.alert('Download failed', e?.message ?? 'Failed to download full deck.');
+    setState((prev) => ({ ...prev, loading: false }));
+  }
+  return;
+}
+                        // ✅ premium user: if still on preview, download full first
+                        if (needsFull) {
+                          setState((prev) => ({ ...prev, loading: true }));
+                          try {
+                            const data = await fetchPremiumDeckUrl(d.slug);
+                            if (!data?.url || !data?.buildId) throw new Error('Failed to get premium download url');
+
+                            const ok = await installDeckFromUrl(d.slug, data.url, data.buildId, null);
+                            if (!ok) throw new Error('Failed to install full deck');
+
+                            try {
+                              await applyCachedRemoteProgress(d.slug);
+                            } catch {}
+
+                            const newState = await computeHomeState();
+                            if (isMounted.current) setState(newState);
+
+                            openDeck(d.slug);
+                          } catch (e: any) {
+                            console.error('Full download failed:', e);
+                            Alert.alert('Download failed', e?.message ?? 'Failed to download full deck.');
+                            setState((prev) => ({ ...prev, loading: false }));
+                          }
+                          return;
+                        }
+
                         if (lockedPremium) {
+                          // Signed-in free user: install preview first (remoteUrl is previewUrl after repo fix)
+                          if (isSignedIn) {
+                            const info = updates?.[d.slug];
+
+                            if (info?.remoteUrl && info.remoteVersion) {
+                              setState((prev) => ({ ...prev, loading: true }));
+
+                              try {
+                                const ok = await installDeckFromUrl(
+                                  d.slug,
+                                  info.remoteUrl,
+                                  info.remoteVersion,
+                                  info.remoteSha256,
+                                );
+
+                                if (ok) {
+                                  try {
+                                    await applyCachedRemoteProgress(d.slug);
+                                  } catch {}
+
+                                  const newState = await computeHomeState();
+                                  if (isMounted.current) setState(newState);
+
+                                  openDeck(d.slug);
+                                  return;
+                                }
+                              } catch (e: any) {
+                                console.error('Preview install failed:', e);
+                                Alert.alert('Download failed', e?.message ?? 'Failed to download preview.');
+                              } finally {
+                                setState((prev) => ({ ...prev, loading: false }));
+                              }
+                            }
+                          }
+
+                          // Not signed in (or preview missing) -> open deck screen (it will show login gate)
                           openDeck(d.slug);
                           return;
                         }
 
                         const needsInstall = !d.canStudy;
-                        const needsUpdate = d.canStudy && hasUpdate;
+                        const needsUpdate = d.canStudy && hasUpdate && !needsFull;
 
                         if (needsInstall || needsUpdate) {
                           setState((prev) => ({ ...prev, loading: true }));
@@ -800,7 +1044,7 @@ export function HomeScreen({ navigation }: Props) {
                           try {
                             let ok = false;
 
-                            // ✅ PUBLIC (free) path: use manifest-derived remoteUrl
+                            // PUBLIC path: use manifest-derived remoteUrl
                             if (deckUpdate?.remoteUrl) {
                               ok = await installDeckFromUrl(
                                 d.slug,
@@ -809,14 +1053,13 @@ export function HomeScreen({ navigation }: Props) {
                                 deckUpdate.remoteSha256,
                               );
                             } else {
-                              // ✅ PREMIUM (auth) path: call API to get presigned URL, then install
+                              // PREMIUM (auth) path: call API to get presigned URL, then install
                               const mode = String(d.downloadMode ?? '').toLowerCase();
                               if (isPremiumUser && mode === 'auth') {
                                 const data = await fetchPremiumDeckUrl(d.slug);
                                 if (!data?.url || !data?.buildId) throw new Error('Failed to get premium download url');
                                 ok = await installDeckFromUrl(d.slug, data.url, data.buildId, null);
                               } else {
-                                // no url available (should not happen for free; premium requires auth)
                                 ok = false;
                               }
                             }
@@ -852,7 +1095,7 @@ export function HomeScreen({ navigation }: Props) {
                           {isComing
                             ? `Coming${d.eta ? ` · ${d.eta}` : ''}`
                             : isPremium
-                              ? 'Premium'
+                              ? (lockedPremium && isSignedIn ? 'Premium · Free trial' : 'Premium')
                               : 'Free'}{' '}
                           · {d.totalCards} cards
                         </Text>
@@ -865,11 +1108,24 @@ export function HomeScreen({ navigation }: Props) {
                         </View>
                       ) : lockedPremium ? (
                         <View style={styles.deckRowRight}>
-                          <Text style={styles.lockedPill}>🔒 Premium</Text>
+                          <Text style={styles.lockedPill}>{isSignedIn ? 'Free Trial' : '🔒 Premium'}</Text>
+
+                          {/* trial installed => show only progress bar (no 15/15 text) */}
+                          {isTrialInstalled ? (
+                            <View style={styles.rowBarBg}>
+                              <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
+                              <View style={{ flex: 1 - d.percent }} />
+                            </View>
+                          ) : null}
                         </View>
                       ) : d.canStudy ? (
                         <View style={styles.deckRowRight}>
-                          {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
+                          {/* premium user still on preview => prompt full download */}
+                          {needsFull ? <Text style={styles.updatePill}>Download full</Text> : null}
+
+                          {/* updates (including premium full updates) */}
+                          {hasUpdate && !needsFull ? <Text style={styles.updatePill}>Update available</Text> : null}
+
                           <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
                           <View style={styles.rowBarBg}>
                             <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
@@ -878,8 +1134,10 @@ export function HomeScreen({ navigation }: Props) {
                         </View>
                       ) : (
                         <View style={styles.deckRowRight}>
-                          {hasUpdate ? <Text style={styles.updatePill}>Update available</Text> : null}
-                          <Text style={styles.lockedPill}>Not installed</Text>
+                          {hasUpdate && !needsFull ? <Text style={styles.updatePill}>Update available</Text> : null}
+                         <Text style={styles.lockedPill}>
+                          {isPremiumUser && isPremium ? 'Download full' : 'Not installed'}
+                        </Text>
                         </View>
                       )}
                     </Pressable>
@@ -944,7 +1202,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
 
-  calendarCardFixed: { minHeight: 220 },
+  calendarCardFixed: { minHeight: 200 },
 
   cardHeaderRow: { flexDirection: 'row', alignItems: 'center' },
   cardTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
@@ -984,8 +1242,8 @@ const styles = StyleSheet.create({
   },
 
   weekHintSlot: {
-    marginTop: 12,
-    height: 18,
+    marginTop: 8,
+    paddingVertical: 4,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1169,4 +1427,42 @@ const styles = StyleSheet.create({
   monthCount: { marginTop: 4, fontSize: 11, fontWeight: '800', color: '#111827' },
 
   modalLegend: { marginTop: 8, fontSize: 11, color: '#6B7280' },
+
+  gateCard: {
+    borderRadius: 22,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 12 },
+  },
+  bulletRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
+  bulletDot: { width: 18, fontSize: 14, color: '#374151', lineHeight: 18 },
+  bulletText: { flex: 1, fontSize: 13, color: '#374151', lineHeight: 18 },
+
+  gateCtaRow: { flexDirection: 'row', marginTop: 12 },
+  gateSecondaryBtn: {
+    flex: 1,
+    marginRight: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.06)',
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.10)',
+  },
+  gateSecondaryText: { fontSize: 13, fontWeight: '900', color: '#111827' },
+
+  gatePrimaryBtn: {
+    flex: 1,
+    borderRadius: 999,
+    backgroundColor: '#4F46E5',
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  gatePrimaryText: { fontSize: 13, fontWeight: '900', color: '#FFFFFF' },
+
+  gateFootnote: { marginTop: 10, fontSize: 11, color: '#6B7280', lineHeight: 16 },
 });

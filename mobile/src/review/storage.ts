@@ -54,7 +54,9 @@ function normalizeProgressEntry(raw: any): CardProgress | null {
   const stage = clampStage(normalizeNumber(raw.stage, 0));
 
   const lastReviewedAt =
-    typeof raw.lastReviewedAt === 'number' && Number.isFinite(raw.lastReviewedAt) && raw.lastReviewedAt > 0
+    typeof raw.lastReviewedAt === 'number' &&
+    Number.isFinite(raw.lastReviewedAt) &&
+    raw.lastReviewedAt > 0
       ? raw.lastReviewedAt
       : undefined;
 
@@ -197,7 +199,8 @@ function reconcileProgressWithDeck(
 
     // learned must have nextReviewAt
     if (isLearned(p)) {
-      const okNext = typeof p.nextReviewAt === 'number' && Number.isFinite(p.nextReviewAt) && p.nextReviewAt > 0;
+      const okNext =
+        typeof p.nextReviewAt === 'number' && Number.isFinite(p.nextReviewAt) && p.nextReviewAt > 0;
       if (!okNext) {
         p = { ...p, nextReviewAt: p.lastReviewedAt! };
         changed = true;
@@ -207,7 +210,9 @@ function reconcileProgressWithDeck(
     // learned lastSeenRevision should not be 0
     {
       const lsr =
-        typeof p.lastSeenRevision === 'number' && Number.isFinite(p.lastSeenRevision) ? p.lastSeenRevision : null;
+        typeof p.lastSeenRevision === 'number' && Number.isFinite(p.lastSeenRevision)
+          ? p.lastSeenRevision
+          : null;
 
       const needFix = lsr == null || (isLearned(p) && lsr <= 0) || (!isLearned(p) && lsr < 0);
 
@@ -320,15 +325,24 @@ export async function loadDeckProgress(deck: DeckExport): Promise<CardProgress[]
   }
 
   const { progress: reconciled, changed } = reconcileProgressWithDeck(deck, progress, now);
-  if (changed) await writeJson(key, reconciled);
+
+  // ✅ 防御：只保留 deck 当前 Cards 内的 progress（trial 用 preview deck 时会自动裁剪）
+  const allowed = new Set((deck.Cards ?? []).map((c: any) => String(c?.StableUid)));
+  const filtered = reconciled.filter((p) => allowed.has(p.stableUid));
+
+  const needWrite = changed || filtered.length !== reconciled.length;
+  if (needWrite) await writeJson(key, filtered);
 
   await upsertDeckMeta(deck, now);
-  return reconciled;
+  return filtered;
 }
 
 export async function saveDeckProgress(deck: DeckExport, progress: CardProgress[]): Promise<void> {
   // do not reconcile here (avoid side-effects while writing)
-  await writeJson(progressKey(deck.Slug), progress);
+  const allowed = new Set((deck.Cards ?? []).map((c: any) => String(c?.StableUid)));
+  const filtered = progress.filter((p) => allowed.has(p.stableUid));
+
+  await writeJson(progressKey(deck.Slug), filtered);
   await upsertDeckMeta(deck, new Date());
 }
 

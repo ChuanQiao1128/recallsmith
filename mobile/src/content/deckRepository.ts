@@ -1,3 +1,4 @@
+// mobile/src/content/deckRepository.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -64,6 +65,13 @@ type RawManifest = {
     path?: string | null;
 
     sha256?: string | null;
+
+    // ✅ premium preview fields (optional)
+    previewCards?: number | null;
+    previewVersion?: string | number | null;
+    previewBuildId?: number | string | null;
+    previewPath?: string | null;
+    previewSha256?: string | null;
   }>;
 };
 
@@ -95,10 +103,10 @@ export type UpdateInfo = {
   slug: string;
 
   installedVersion: string | null; // local buildId/version
-  remoteVersion: string | null; // manifest version/buildId
+  remoteVersion: string | null; // manifest version/buildId (or previewVersion for premium preview)
   hasUpdate: boolean;
 
-  remoteUrl: string | null; // full URL for deck.json (only for public decks)
+  remoteUrl: string | null; // full URL for deck.json (public or premium preview for non-premium)
   remoteSha256: string | null;
 };
 
@@ -172,7 +180,11 @@ export type DeckContent = DeckExport;
 /**
  * ✅ NEW signature:
  * We accept isPremiumUser so Home can call checkManifestForUpdates(isPremiumUser)
- * (Right now we still only provide remoteUrl for public decks to keep premium protected.)
+ * For premium decks:
+ *  - premium users: no direct url (full requires presigned URL later)
+ *  - non-premium users: expose previewPath as remoteUrl if present
+ * Also:
+ *  - premium users should still get hasUpdate=true when versions differ (even if remoteUrl=null)
  */
 export async function checkManifestForUpdates(
   _isPremiumUser: boolean = false,
@@ -189,28 +201,70 @@ export async function checkManifestForUpdates(
     const meta = await getDeckMeta(slug);
     const installed = meta?.buildId || null;
 
-    const remoteVersion = normalizeVersion(d.version ?? d.buildId) ?? null;
+    // full version/buildId from manifest
+    const fullRemoteVersion = normalizeVersion(d.version ?? d.buildId) ?? null;
 
-    // Only public + path can be downloaded directly
-    const isPublic = String(d.downloadMode || '').toLowerCase() === 'public';
+    const mode = String(d.downloadMode || '').toLowerCase();
+    const tier = String((d as any).tier || '').toLowerCase();
+
+    // public path
     const path = typeof d.path === 'string' && d.path.trim().length > 0 ? d.path.trim() : null;
 
-    const remoteUrl =
-      isPublic && path
-        ? /^https?:\/\//i.test(path)
-          ? path
-          : joinUrl(CONTENT_BASE_URL, manifest.prefix, path)
+    // premium preview fields
+    const previewPath =
+      typeof (d as any).previewPath === 'string' && String((d as any).previewPath).trim()
+        ? String((d as any).previewPath).trim()
         : null;
 
-    const hasUpdate = !!remoteUrl && !!remoteVersion && installed !== remoteVersion;
+    const previewVersion =
+      normalizeVersion((d as any).previewVersion ?? (d as any).previewBuildId) ?? null;
+
+    const previewSha256 =
+      (d as any).previewSha256 ? String((d as any).previewSha256) : null;
+
+    // Decide which URL/version/sha to expose
+    let remoteUrl: string | null = null;
+    let effectiveRemoteVersion: string | null = fullRemoteVersion;
+    let effectiveRemoteSha256: string | null = (d.sha256 ?? null) ? String(d.sha256) : null;
+
+    // Public deck: direct download
+    if (mode === 'public' && path) {
+      remoteUrl =
+        /^https?:\/\//i.test(path)
+          ? path
+          : joinUrl(CONTENT_BASE_URL, manifest.prefix, path);
+    }
+
+    // Premium deck (non-premium user): allow preview download from CloudFront
+    if (!_isPremiumUser && tier === 'premium' && previewPath) {
+      remoteUrl =
+        /^https?:\/\//i.test(previewPath)
+          ? previewPath
+          : joinUrl(CONTENT_BASE_URL, manifest.prefix, previewPath);
+
+      effectiveRemoteVersion = previewVersion ?? effectiveRemoteVersion;
+      effectiveRemoteSha256 = previewSha256 ?? effectiveRemoteSha256;
+    }
+
+    // ✅ hasUpdate rules:
+    // - if remoteUrl exists: normal compare
+    // - if premium user + premium deck: compare versions even though remoteUrl is null (download uses presigned URL)
+    let hasUpdate = false;
+
+    if (remoteUrl && effectiveRemoteVersion) {
+      hasUpdate = installed !== effectiveRemoteVersion;
+    } else if (_isPremiumUser && tier === 'premium' && effectiveRemoteVersion) {
+      // full updates for premium users (remoteUrl intentionally null)
+      hasUpdate = installed !== effectiveRemoteVersion;
+    }
 
     out[slug] = {
       slug,
       installedVersion: installed,
-      remoteVersion,
+      remoteVersion: effectiveRemoteVersion,
       hasUpdate,
       remoteUrl,
-      remoteSha256: (d.sha256 ?? null) ? String(d.sha256) : null,
+      remoteSha256: effectiveRemoteSha256,
     };
   }
 

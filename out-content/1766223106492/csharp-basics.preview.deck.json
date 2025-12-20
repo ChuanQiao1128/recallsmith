@@ -1,0 +1,175 @@
+{
+  "slug": "csharp-basics",
+  "title": "C# / .NET",
+  "locale": "en-US",
+  "deckType": 2,
+  "version": "1766223106492",
+  "totalCards": 15,
+  "cards": [
+    {
+      "stableUid": "csharp-001",
+      "orderInDeck": 1,
+      "difficulty": 1,
+      "question": "CSHARP: Card #1 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #1. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-002",
+      "orderInDeck": 2,
+      "difficulty": 1,
+      "question": "CSHARP: Card #2 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #2. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-003",
+      "orderInDeck": 3,
+      "difficulty": 1,
+      "question": "CSHARP: Card #3 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #3. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "// Example 3\npublic class Demo {\n  public int Value => 3;\n}",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-004",
+      "orderInDeck": 4,
+      "difficulty": 1,
+      "question": "CSHARP: Card #4 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #4. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-005",
+      "orderInDeck": 5,
+      "difficulty": 1,
+      "question": "CSHARP: Card #5 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #5. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-006",
+      "orderInDeck": 6,
+      "difficulty": 1,
+      "question": "CSHARP: Card #6 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #6. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "// Example 6\npublic class Demo {\n  public int Value => 6;\n}",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-007",
+      "orderInDeck": 7,
+      "difficulty": 1,
+      "question": "CSHARP: Card #7 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #7. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-008",
+      "orderInDeck": 8,
+      "difficulty": 1,
+      "question": "CSHARP: Card #8 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #8. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-009",
+      "orderInDeck": 9,
+      "difficulty": 1,
+      "question": "CSHARP: Card #9 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #9. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "// Example 9\npublic class Demo {\n  public int Value => 9;\n}",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-010",
+      "orderInDeck": 10,
+      "difficulty": 1,
+      "question": "CSHARP: Card #10 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #10. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-011",
+      "orderInDeck": 11,
+      "difficulty": 2,
+      "question": "CSHARP: Card #11 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #11. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-012",
+      "orderInDeck": 12,
+      "difficulty": 2,
+      "question": "CSHARP: Card #12 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #12. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "// Example 12\npublic class Demo {\n  public int Value => 12;\n}",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-013",
+      "orderInDeck": 13,
+      "difficulty": 2,
+      "question": "CSHARP: Card #13 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #13. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-014",
+      "orderInDeck": 14,
+      "difficulty": 2,
+      "question": "CSHARP: Card #14 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #14. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    },
+    {
+      "stableUid": "csharp-015",
+      "orderInDeck": 15,
+      "difficulty": 2,
+      "question": "CSHARP: Card #15 — Explain the core idea and when to use it.",
+      "explanation": "Mock explanation for CSHARP card #15. Keep it concise and actionable.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "// Example 15\npublic class Demo {\n  public int Value => 15;\n}",
+      "realWorldUsage": "- Practical use case for csharp\n- Common pitfall to avoid\n- What to remember under pressure",
+      "revision": 1
+    }
+  ]
+}

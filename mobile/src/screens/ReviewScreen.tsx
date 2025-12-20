@@ -9,6 +9,7 @@ import {
   ScrollView,
   Animated,
   useWindowDimensions,
+  Alert,
 } from 'react-native';
 
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -46,7 +47,6 @@ import { syncDailyReminders } from '../notifications/reminders';
 import {
   recordReviewEvent,
   scheduleProgressSync,
-  forceProgressSync,
   applyCachedRemoteProgress,
 } from '../sync/progressSync';
 
@@ -61,14 +61,46 @@ interface CurrentCard {
   progress: CardProgress;
 }
 
+type TrialInfo = {
+  isTrial: boolean;
+  previewCount: number; // e.g. 30
+  totalCards: number;   // full deck total for dialog copy
+};
+
+function showTrialUpsellDialog(
+  navigation: any,
+  opts: { deckTitle: string; previewCount: number; totalCards: number },
+) {
+  const { deckTitle, previewCount, totalCards } = opts;
+
+  Alert.alert(
+    '免费试学已完成',
+    `你已学完「${deckTitle}」可免费学习的前 ${previewCount} 张卡片（共 ${totalCards} 张）。\n\n你仍可无限复习这 ${previewCount} 张。\n升级 Premium 解锁剩余内容并继续进度。`,
+    [
+      { text: '继续复习', style: 'cancel' },
+      { text: '升级 Premium', onPress: () => navigation.navigate('Paywall' as any) },
+    ],
+  );
+}
+
+function buildPreviewDeck(deck: DeckExport, previewLimit: number): DeckExport {
+  const cards = deck.Cards ?? [];
+  const take = Math.max(0, Math.min(previewLimit, cards.length));
+  return {
+    ...deck,
+    Cards: cards.slice(0, take),
+    TotalCards: Math.min(deck.TotalCards ?? cards.length, take),
+  };
+}
+
 function buildCardMap(deck: DeckExport): Map<string, CardExport> {
   const map = new Map<string, CardExport>();
-  for (const c of deck.Cards) map.set(c.StableUid, c);
+  for (const c of deck.Cards ?? []) map.set(c.StableUid, c);
   return map;
 }
 
 function sortCards(deck: DeckExport): CardExport[] {
-  return [...deck.Cards].sort((a, b) => a.OrderInDeck - b.OrderInDeck);
+  return [...(deck.Cards ?? [])].sort((a, b) => a.OrderInDeck - b.OrderInDeck);
 }
 
 function startOfToday(now: Date) {
@@ -226,6 +258,9 @@ export function ReviewScreen({ navigation, route }: Props) {
   const slugFromRoute = route.params?.slug ?? null;
   const { mode = 'mixed', limit = 20 } = route.params ?? {};
 
+  // ✅ trial: DeckScreen 会传 previewLimit（例如 30）
+  const previewLimitParam = Number((route.params as any)?.previewLimit ?? 0);
+
   const [slug, setSlug] = useState<string | null>(slugFromRoute);
   const [deck, setDeck] = useState<DeckExport | null>(null);
 
@@ -237,6 +272,9 @@ export function ReviewScreen({ navigation, route }: Props) {
 
   // ✅ premium entitlement
   const isPremiumUser = usePremiumUser();
+
+  // ✅ trial info (for dialog copy)
+  const trialRef = useRef<TrialInfo>({ isTrial: false, previewCount: 0, totalCards: 0 });
 
   useFocusEffect(
     useCallback(() => {
@@ -330,7 +368,6 @@ export function ReviewScreen({ navigation, route }: Props) {
       let cancelled = false;
 
       async function load() {
-        // ✅ TS: snapshot non-null slug
         const slugStr = slug;
         if (!slugStr) return;
 
@@ -343,9 +380,12 @@ export function ReviewScreen({ navigation, route }: Props) {
         const now = new Date();
 
         try {
+          // ✅ trial session?
+          const isTrial = !isPremiumUser && previewLimitParam > 0;
+
           // 1) manifest gate: coming / premium
           const manifest = await listManifestDecks();
-          const entry = manifest.find(x => x.slug === slugStr) ?? null;
+          const entry = manifest.find((x) => x.slug === slugStr) ?? null;
 
           const availability = String(entry?.availability ?? '').toLowerCase();
           if (availability === 'coming') {
@@ -358,7 +398,8 @@ export function ReviewScreen({ navigation, route }: Props) {
                 String(entry.downloadMode ?? '').toLowerCase() === 'auth'
               : false;
 
-          if (premiumByManifest && !isPremiumUser) {
+          // ✅ 非会员：只有在 trial（previewLimitParam > 0）时才允许进 Review
+          if (premiumByManifest && !isPremiumUser && !isTrial) {
             navigation.navigate('Paywall' as any);
             return;
           }
@@ -386,25 +427,62 @@ export function ReviewScreen({ navigation, route }: Props) {
           if (!resolved) throw new Error('Deck not found');
           if (cancelled) return;
 
-          setDeck(resolved);
+          // ✅ defensive: deckType premium
+          const premiumByDeck = resolved.DeckType !== 1;
+          const isPremiumDeck = premiumByManifest || premiumByDeck;
+
+          if (isPremiumDeck && !isPremiumUser && !isTrial) {
+            navigation.navigate('Paywall' as any);
+            return;
+          }
+
+          // ✅ build deckForStudy: trial uses preview deck
+          const fullCardsLen = (resolved.Cards ?? []).length;
+          const totalCardsFull = ((resolved.TotalCards ?? fullCardsLen) || fullCardsLen) as number;
+
+          const previewCount = isTrial
+            ? Math.max(0, Math.min(previewLimitParam, fullCardsLen || previewLimitParam))
+            : 0;
+
+          const deckForStudy = isTrial ? buildPreviewDeck(resolved, previewCount) : resolved;
+
+          trialRef.current = {
+            isTrial,
+            previewCount: isTrial ? (deckForStudy.Cards?.length ?? previewCount) : 0,
+            totalCards: totalCardsFull,
+          };
+
+          setDeck(deckForStudy);
           void setActiveDeckSlug(resolved.Slug);
 
-          // ✅ enter Review => sync first (pull other devices + fill remote cache)
-          // ✅ 暂时禁用 progress sync（避免进入 Review 卡住 + 控制台刷 500）
-          // forceProgressSync('review_focus').catch(() => {});
-
-          // ✅ then apply cache
+          // ✅ apply cached remote progress (then load local)
           try {
             await applyCachedRemoteProgress(resolved.Slug);
           } catch {}
 
-          const p = await loadDeckProgress(resolved);
+          const p = await loadDeckProgress(deckForStudy);
           if (cancelled) return;
 
-          const stats = await loadOrInitDailyStats(resolved, p);
+          // ✅ trial finished guard: if user tries to open learn/mixed after preview done, show dialog
+          if (isTrial && trialRef.current.previewCount > 0) {
+            const learnedCount = p.filter(isLearned).length;
+            const previewDone = learnedCount >= trialRef.current.previewCount;
+
+            if (previewDone && (mode === 'learn-new' || mode === 'mixed')) {
+              showTrialUpsellDialog(navigation, {
+                deckTitle: resolved.Title,
+                previewCount: trialRef.current.previewCount,
+                totalCards: trialRef.current.totalCards,
+              });
+              navigation.goBack();
+              return;
+            }
+          }
+
+          const stats = await loadOrInitDailyStats(deckForStudy, p);
           if (cancelled) return;
 
-          const next = pickNextCard(resolved, p, now, mode);
+          const next = pickNextCard(deckForStudy, p, now, mode);
 
           setProgress(p);
           setDailyStats(stats);
@@ -429,7 +507,7 @@ export function ReviewScreen({ navigation, route }: Props) {
       return () => {
         cancelled = true;
       };
-    }, [slug, mode, limit, isPremiumUser, navigation]),
+    }, [slug, mode, limit, previewLimitParam, isPremiumUser, navigation]),
   );
 
   if (loadError) {
@@ -496,8 +574,11 @@ export function ReviewScreen({ navigation, route }: Props) {
         lastSeenRevision: seenRev,
       };
 
+      const prevLearnedCount = progress.filter(isLearned).length;
+
       const newProgress = progress.map((p) => (p.stableUid === updatedOne.stableUid ? updatedOne : p));
 
+      // ✅ persist progress (trial uses preview deck => only preview cards are saved)
       await saveDeckProgress(deck, newProgress);
 
       // ✅ enqueue sync event (crash-safe)
@@ -517,6 +598,22 @@ export function ReviewScreen({ navigation, route }: Props) {
         }
       } catch (e) {
         console.warn('[Review] recordReviewEvent failed:', (e as any)?.message ?? e);
+      }
+
+      // ✅ trial completion popup: crossing N learned in learn/mixed
+      {
+        const t = trialRef.current;
+        if (t.isTrial && (mode === 'learn-new' || mode === 'mixed') && t.previewCount > 0) {
+          const nextLearnedCount = newProgress.filter(isLearned).length;
+          const crossed = prevLearnedCount < t.previewCount && nextLearnedCount >= t.previewCount;
+          if (crossed) {
+            showTrialUpsellDialog(navigation, {
+              deckTitle: deck.Title,
+              previewCount: t.previewCount,
+              totalCards: t.totalCards,
+            });
+          }
+        }
       }
 
       const nextDone = sessionDone + 1;
@@ -754,10 +851,6 @@ export function ReviewScreen({ navigation, route }: Props) {
                           </Pressable>
                         </View>
                       </View>
-
-                      <View style={styles.aiNoticeBox}>
-                        <Text style={styles.aiNoticeTitle}>Need Help? AI assistance is coming soon.</Text>
-                      </View>
                     </View>
                   </Animated.View>
                 </View>
@@ -952,14 +1045,6 @@ const styles = StyleSheet.create({
   mdBulletRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 },
   mdBullet: { width: 18, fontSize: 14, color: '#374151', lineHeight: 18 },
   mdText: { flex: 1, fontSize: 13, color: '#374151', lineHeight: 18 },
-
-  aiNoticeBox: {
-    paddingHorizontal: 10,
-    marginTop: 4,
-    marginBottom: 4,
-    alignItems: 'flex-start',
-  },
-  aiNoticeTitle: { fontSize: 12, color: '#6B7280', textAlign: 'left' },
 
   ratingHint: {
     marginTop: 6,

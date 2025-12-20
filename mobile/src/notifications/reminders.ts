@@ -1,21 +1,38 @@
+// mobile/src/notifications/reminders.ts
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 
-const MORNING_HOUR = 9;
-const MORNING_MINUTE = 0;
-
-const EVENING_HOUR = 20;
-const EVENING_MINUTE = 0;
-
 const ANDROID_CHANNEL_ID = 'reminders';
 
-const KEY_MORNING_ID = 'notifications:morning:daily9:id';
-const KEY_EVENING_STATE = 'notifications:evening:20:state';
+// ====== storage keys (keep old ones for backward compat) ======
+const KEY_MORNING_ID = 'notifications:morning:daily9:id'; // legacy key (we still use it)
+const KEY_MORNING_TIME = 'notifications:morning:daily:time:v1';
 
-type EveningState = {
+const KEY_EVENING_STATE = 'notifications:evening:state:v2'; // upgrade from old KEY_EVENING_STATE
+
+const KEY_PREFS = 'notifications:reminders:prefs:v1';
+const KEY_LAST_DUE = 'notifications:reminders:last_due_count:v1';
+
+export type ReminderPrefs = {
+  morningEnabled: boolean;
+  morningTime: string; // "09:00"
+  eveningEnabled: boolean;
+  eveningTime: string; // "20:00"
+};
+
+const DEFAULT_PREFS: ReminderPrefs = {
+  morningEnabled: true,
+  morningTime: '09:00',
+  eveningEnabled: true,
+  eveningTime: '20:00',
+};
+
+type EveningStateV2 = {
   id: string;
   dateKey: string; // YYYY-MM-DD
+  hour: number;
+  minute: number;
 };
 
 function toDateKey(d: Date): string {
@@ -29,6 +46,63 @@ function todayAt(now: Date, hour: number, minute: number): Date {
   const d = new Date(now.getTime());
   d.setHours(hour, minute, 0, 0);
   return d;
+}
+
+function pad2(n: number) {
+  return `${n}`.padStart(2, '0');
+}
+
+function parseTimeHHMM(v: string | null | undefined): { hour: number; minute: number } | null {
+  const s = String(v ?? '').trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  if (hour < 0 || hour > 23) return null;
+  if (minute < 0 || minute > 59) return null;
+  return { hour, minute };
+}
+
+function normalizeTime(v: string, fallback: string) {
+  const t = parseTimeHHMM(v) ?? parseTimeHHMM(fallback);
+  if (!t) return fallback;
+  return `${pad2(t.hour)}:${pad2(t.minute)}`;
+}
+
+async function readPrefs(): Promise<ReminderPrefs> {
+  const raw = await AsyncStorage.getItem(KEY_PREFS);
+  if (!raw) return DEFAULT_PREFS;
+
+  try {
+    const obj = JSON.parse(raw);
+    const morningEnabled = typeof obj?.morningEnabled === 'boolean' ? obj.morningEnabled : DEFAULT_PREFS.morningEnabled;
+    const eveningEnabled = typeof obj?.eveningEnabled === 'boolean' ? obj.eveningEnabled : DEFAULT_PREFS.eveningEnabled;
+
+    const morningTime = normalizeTime(String(obj?.morningTime ?? DEFAULT_PREFS.morningTime), DEFAULT_PREFS.morningTime);
+    const eveningTime = normalizeTime(String(obj?.eveningTime ?? DEFAULT_PREFS.eveningTime), DEFAULT_PREFS.eveningTime);
+
+    return { morningEnabled, morningTime, eveningEnabled, eveningTime };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
+
+export async function getReminderPrefs(): Promise<ReminderPrefs> {
+  return readPrefs();
+}
+
+export async function setReminderPrefs(patch: Partial<ReminderPrefs>): Promise<ReminderPrefs> {
+  const cur = await readPrefs();
+  const next: ReminderPrefs = {
+    morningEnabled: typeof patch.morningEnabled === 'boolean' ? patch.morningEnabled : cur.morningEnabled,
+    eveningEnabled: typeof patch.eveningEnabled === 'boolean' ? patch.eveningEnabled : cur.eveningEnabled,
+    morningTime: patch.morningTime ? normalizeTime(patch.morningTime, cur.morningTime) : cur.morningTime,
+    eveningTime: patch.eveningTime ? normalizeTime(patch.eveningTime, cur.eveningTime) : cur.eveningTime,
+  };
+
+  await AsyncStorage.setItem(KEY_PREFS, JSON.stringify(next));
+  return next;
 }
 
 async function ensurePermission(): Promise<boolean> {
@@ -48,9 +122,39 @@ async function ensureAndroidChannel(): Promise<void> {
   });
 }
 
-async function ensureMorning9am(): Promise<void> {
+async function cancelMorningIfAny(): Promise<void> {
   const existingId = await AsyncStorage.getItem(KEY_MORNING_ID);
-  if (existingId) return;
+  if (existingId) {
+    try {
+      await Notifications.cancelScheduledNotificationAsync(existingId);
+    } catch {}
+  }
+  await AsyncStorage.removeItem(KEY_MORNING_ID);
+  await AsyncStorage.removeItem(KEY_MORNING_TIME);
+}
+
+async function ensureMorningDaily(prefs: ReminderPrefs): Promise<void> {
+  // disabled -> cancel
+  if (!prefs.morningEnabled) {
+    await cancelMorningIfAny();
+    return;
+  }
+
+  const desired = parseTimeHHMM(prefs.morningTime) ?? { hour: 9, minute: 0 };
+  const desiredKey = `${pad2(desired.hour)}:${pad2(desired.minute)}`;
+
+  const existingId = await AsyncStorage.getItem(KEY_MORNING_ID);
+  const existingTime = await AsyncStorage.getItem(KEY_MORNING_TIME);
+
+  // already scheduled with same time
+  if (existingId && existingTime === desiredKey) return;
+
+  // time changed or missing -> cancel old then reschedule
+  if (existingId) {
+    try {
+      await Notifications.cancelScheduledNotificationAsync(existingId);
+    } catch {}
+  }
 
   const id = await Notifications.scheduleNotificationAsync({
     content: {
@@ -60,25 +164,32 @@ async function ensureMorning9am(): Promise<void> {
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.DAILY,
-      hour: MORNING_HOUR,
-      minute: MORNING_MINUTE,
+      hour: desired.hour,
+      minute: desired.minute,
     },
   });
 
   await AsyncStorage.setItem(KEY_MORNING_ID, id);
+  await AsyncStorage.setItem(KEY_MORNING_TIME, desiredKey);
 }
 
-async function readEveningState(): Promise<EveningState | null> {
+async function readEveningState(): Promise<EveningStateV2 | null> {
   const raw = await AsyncStorage.getItem(KEY_EVENING_STATE);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as EveningState;
+    const obj = JSON.parse(raw);
+    if (!obj?.id || !obj?.dateKey) return null;
+
+    const hour = typeof obj.hour === 'number' ? obj.hour : 20;
+    const minute = typeof obj.minute === 'number' ? obj.minute : 0;
+
+    return { id: String(obj.id), dateKey: String(obj.dateKey), hour, minute };
   } catch {
     return null;
   }
 }
 
-async function writeEveningState(state: EveningState | null): Promise<void> {
+async function writeEveningState(state: EveningStateV2 | null): Promise<void> {
   if (!state) {
     await AsyncStorage.removeItem(KEY_EVENING_STATE);
     return;
@@ -86,47 +197,54 @@ async function writeEveningState(state: EveningState | null): Promise<void> {
   await AsyncStorage.setItem(KEY_EVENING_STATE, JSON.stringify(state));
 }
 
-async function cancelEveningIfAny(state: EveningState | null): Promise<void> {
+async function cancelEveningIfAny(state: EveningStateV2 | null): Promise<void> {
   if (!state) return;
   try {
     await Notifications.cancelScheduledNotificationAsync(state.id);
-  } catch {
-    // 已触发/已取消都无所谓
-  }
+  } catch {}
   await writeEveningState(null);
 }
 
-/**
- * 同步“20:00 仅当仍有剩余任务才提醒”：
- * - remainingDueCount <= 0：取消当天 20:00（若存在）
- * - remainingDueCount > 0 且 now < 20:00：确保当天 20:00 有一个 one-shot
- */
-async function syncEvening20(remainingDueCount: number, now: Date): Promise<void> {
+async function syncEveningSmart(prefs: ReminderPrefs, remainingDueCount: number, now: Date): Promise<void> {
   const todayKey = toDateKey(now);
-  const target = todayAt(now, EVENING_HOUR, EVENING_MINUTE);
+
+  // disabled -> cancel
+  if (!prefs.eveningEnabled) {
+    const existing = await readEveningState();
+    if (existing) await cancelEveningIfAny(existing);
+    return;
+  }
+
+  const desired = parseTimeHHMM(prefs.eveningTime) ?? { hour: 20, minute: 0 };
+  const target = todayAt(now, desired.hour, desired.minute);
 
   const existing = await readEveningState();
 
-  // 清理“前一天遗留”的 state
+  // cleanup old date
   if (existing && existing.dateKey !== todayKey) {
     await cancelEveningIfAny(existing);
   }
 
-  // 如果今天没剩余任务：取消今天的 20:00
+  // no due -> cancel today's
   if (remainingDueCount <= 0) {
-    const current = await readEveningState();
-    if (current?.dateKey === todayKey) {
-      await cancelEveningIfAny(current);
-    }
+    const cur = await readEveningState();
+    if (cur?.dateKey === todayKey) await cancelEveningIfAny(cur);
     return;
   }
 
-  // 如果已经过了 20:00：不再补发
+  // already past time -> do nothing
   if (now.getTime() >= target.getTime()) return;
 
-  // 如果今天已经安排过 20:00：保持即可
   const refreshed = await readEveningState();
-  if (refreshed?.dateKey === todayKey) return;
+  const alreadyTodaySameTime =
+    refreshed?.dateKey === todayKey && refreshed.hour === desired.hour && refreshed.minute === desired.minute;
+
+  if (alreadyTodaySameTime) return;
+
+  // if exists but wrong time, cancel then schedule
+  if (refreshed?.dateKey === todayKey) {
+    await cancelEveningIfAny(refreshed);
+  }
 
   const id = await Notifications.scheduleNotificationAsync({
     content: {
@@ -140,26 +258,44 @@ async function syncEvening20(remainingDueCount: number, now: Date): Promise<void
     },
   });
 
-  await writeEveningState({ id, dateKey: todayKey });
+  await writeEveningState({ id, dateKey: todayKey, hour: desired.hour, minute: desired.minute });
 }
 
 /**
  * 对外入口：每次你拿到“今日剩余 due 数”后调用即可。
  */
-export async function syncDailyReminders(args: {
-  remainingDueCount: number;
-  now?: Date;
-}): Promise<void> {
+export async function syncDailyReminders(args: { remainingDueCount: number; now?: Date }): Promise<void> {
   try {
     const now = args.now ?? new Date();
+    const remainingDueCount = Number.isFinite(args.remainingDueCount) ? Math.max(0, args.remainingDueCount) : 0;
+
+    // cache last due for "apply now" use
+    await AsyncStorage.setItem(KEY_LAST_DUE, String(remainingDueCount));
 
     const ok = await ensurePermission();
     if (!ok) return;
 
     await ensureAndroidChannel();
-    await ensureMorning9am();
-    await syncEvening20(args.remainingDueCount, now);
+
+    const prefs = await readPrefs();
+    await ensureMorningDaily(prefs);
+    await syncEveningSmart(prefs, remainingDueCount, now);
   } catch {
-    // 不让通知问题影响主流程
+    // don't block main flow
+  }
+}
+
+/**
+ * Settings 改完 prefs 后调用：尽量立刻应用。
+ * 如果缓存里还没有 due count，会以 0 处理（晚间提醒可能在下次 Home 刷新时更新）。
+ */
+export async function refreshDailyRemindersFromCache(): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(KEY_LAST_DUE);
+    const n = raw ? Number(raw) : 0;
+    const remainingDueCount = Number.isFinite(n) ? Math.max(0, n) : 0;
+    await syncDailyReminders({ remainingDueCount, now: new Date() });
+  } catch {
+    // ignore
   }
 }

@@ -1,0 +1,176 @@
+{
+  "Slug": "react-basics",
+  "Title": "React",
+  "Locale": "en-US",
+  "DeckType": 2,
+  "Version": "1766222528383",
+  "TotalCards": 15,
+  "Cards": [
+    {
+      "StableUid": "react-001",
+      "OrderInDeck": 1,
+      "Difficulty": 1,
+      "Question": "REACT: Card #1 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #1. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-002",
+      "OrderInDeck": 2,
+      "Difficulty": 1,
+      "Question": "REACT: Card #2 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #2. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-003",
+      "OrderInDeck": 3,
+      "Difficulty": 1,
+      "Question": "REACT: Card #3 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #3. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "// Example 3\nfunction Demo(){\n  return <div>Demo 3</div>\n}",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-004",
+      "OrderInDeck": 4,
+      "Difficulty": 1,
+      "Question": "REACT: Card #4 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #4. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-005",
+      "OrderInDeck": 5,
+      "Difficulty": 1,
+      "Question": "REACT: Card #5 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #5. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-006",
+      "OrderInDeck": 6,
+      "Difficulty": 1,
+      "Question": "REACT: Card #6 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #6. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "// Example 6\nfunction Demo(){\n  return <div>Demo 6</div>\n}",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-007",
+      "OrderInDeck": 7,
+      "Difficulty": 1,
+      "Question": "REACT: Card #7 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #7. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-008",
+      "OrderInDeck": 8,
+      "Difficulty": 1,
+      "Question": "REACT: Card #8 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #8. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-009",
+      "OrderInDeck": 9,
+      "Difficulty": 1,
+      "Question": "REACT: Card #9 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #9. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "// Example 9\nfunction Demo(){\n  return <div>Demo 9</div>\n}",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-010",
+      "OrderInDeck": 10,
+      "Difficulty": 1,
+      "Question": "REACT: Card #10 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #10. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-011",
+      "OrderInDeck": 11,
+      "Difficulty": 2,
+      "Question": "REACT: Card #11 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #11. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-012",
+      "OrderInDeck": 12,
+      "Difficulty": 2,
+      "Question": "REACT: Card #12 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #12. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "// Example 12\nfunction Demo(){\n  return <div>Demo 12</div>\n}",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-013",
+      "OrderInDeck": 13,
+      "Difficulty": 2,
+      "Question": "REACT: Card #13 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #13. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-014",
+      "OrderInDeck": 14,
+      "Difficulty": 2,
+      "Question": "REACT: Card #14 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #14. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    },
+    {
+      "StableUid": "react-015",
+      "OrderInDeck": 15,
+      "Difficulty": 2,
+      "Question": "REACT: Card #15 — Explain the core idea and when to use it.",
+      "Explanation": "Mock explanation for REACT card #15. Keep it concise and actionable.",
+      "CodeLanguage": "tsx",
+      "CodeSnippet": "// Example 15\nfunction Demo(){\n  return <div>Demo 15</div>\n}",
+      "RealWorldUsage": "- Practical use case for react\n- Common pitfall to avoid\n- What to remember under pressure",
+      "Revision": 1
+    }
+  ],
+  "PreviewCards": 15
+}
