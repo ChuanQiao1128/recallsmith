@@ -1,22 +1,13 @@
 // mobile/src/premium/premiumStore.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
+import { fetchAuthSession } from 'aws-amplify/auth';
 
-/**
- * Premium entitlement (LOCAL stub)
- *
- * Why a store?
- * - Home / Deck / Paywall 都要读同一个 "是否订阅" 状态
- * - Paywall 改状态后，其他页面可以立即响应（订阅者能打开 premium deck）
- * - 目前先本地存一个布尔值，未来接 IAP 或后端 entitlement 时替换 set/get 即可
- */
+const KEY_PREFIX = 'devcards:entitlements:isPremium:v1:';
 
-const KEY = 'devcards:entitlements:isPremium:v1';
+// 内存缓存：按 userKey 分开存，避免串号
+const memByUser = new Map<string, boolean>();
 
-// 内存缓存：减少 AsyncStorage 读次数（性能更好）
-let _mem: boolean | null = null;
-
-// 简单订阅机制：Paywall 改状态后，Home/Deck 能实时更新
 const listeners = new Set<(v: boolean) => void>();
 
 function parseBool(raw: string | null): boolean {
@@ -25,29 +16,60 @@ function parseBool(raw: string | null): boolean {
   return s === '1' || s === 'true' || s === 'yes';
 }
 
+function sanitizeUserKey(s: string): string {
+  return String(s || 'anon')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .slice(0, 80) || 'anon';
+}
+
+async function getUserKey(): Promise<string> {
+  try {
+    const session: any = await fetchAuthSession();
+    const sub =
+      session?.userSub ??
+      session?.tokens?.idToken?.payload?.sub ??
+      session?.tokens?.accessToken?.payload?.sub ??
+      null;
+    return sanitizeUserKey(sub || 'anon');
+  } catch {
+    return 'anon';
+  }
+}
+
+function keyForUser(userKey: string) {
+  return `${KEY_PREFIX}${sanitizeUserKey(userKey)}`;
+}
+
 export async function getIsPremiumUser(): Promise<boolean> {
-  if (_mem !== null) return _mem;
+  const userKey = await getUserKey();
+
+  if (memByUser.has(userKey)) return memByUser.get(userKey)!;
 
   try {
-    const raw = await AsyncStorage.getItem(KEY);
-    _mem = parseBool(raw);
-    return _mem;
+    const raw = await AsyncStorage.getItem(keyForUser(userKey));
+    const v = parseBool(raw);
+    memByUser.set(userKey, v);
+    return v;
   } catch {
-    _mem = false;
+    memByUser.set(userKey, false);
     return false;
   }
 }
 
 export async function setIsPremiumUser(v: boolean): Promise<void> {
-  _mem = !!v;
+  const userKey = await getUserKey();
+  const value = !!v;
+
+  memByUser.set(userKey, value);
 
   try {
-    await AsyncStorage.setItem(KEY, v ? '1' : '0');
+    await AsyncStorage.setItem(keyForUser(userKey), value ? '1' : '0');
   } catch {
-    // ignore: 即使写失败，也不应该崩溃；只是下次启动可能丢失这个 stub 状态
+    // ignore
   }
 
-  for (const fn of listeners) fn(_mem);
+  for (const fn of listeners) fn(value);
 }
 
 export function subscribePremiumUser(fn: (v: boolean) => void): () => void {
@@ -55,23 +77,18 @@ export function subscribePremiumUser(fn: (v: boolean) => void): () => void {
   return () => listeners.delete(fn);
 }
 
-/**
- * React hook：页面里直接用 const isPremium = usePremiumUser()
- * - 首次渲染先 false，然后异步读取 AsyncStorage 后再更新
- * - 同时订阅变化（Paywall 解锁/重置后立即更新）
- */
 export function usePremiumUser(): boolean {
-  const [isPremium, setIsPremium] = React.useState(false);
+  const [isPremium, setIsPremiumState] = React.useState(false);
 
   React.useEffect(() => {
     let mounted = true;
 
     void (async () => {
       const v = await getIsPremiumUser();
-      if (mounted) setIsPremium(v);
+      if (mounted) setIsPremiumState(v);
     })();
 
-    const unsub = subscribePremiumUser((v) => setIsPremium(v));
+    const unsub = subscribePremiumUser((v) => setIsPremiumState(v));
     return () => {
       mounted = false;
       unsub();

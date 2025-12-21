@@ -1,8 +1,34 @@
 {
   "cli": {
-    "version": ">= 6.0.0"
+    "version": ">= 6.0.0",
+    "appVersionSource": "local"
   },
   "build": {
+    "development": {
+      "distribution": "internal",
+      "developmentClient": true,
+      "ios": {
+        "buildConfiguration": "Debug",
+        "image": "latest",
+        "env": {
+          "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+          "CLANG_CXX_LIBRARY": "libc++"
+        }
+      }
+    },
+    "development-simulator": {
+      "distribution": "internal",
+      "developmentClient": true,
+      "ios": {
+        "simulator": true,
+        "buildConfiguration": "Debug",
+        "image": "latest",
+        "env": {
+          "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+          "CLANG_CXX_LIBRARY": "libc++"
+        }
+      }
+    },
     "production": {
       "distribution": "store",
       "ios": {

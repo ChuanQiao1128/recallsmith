@@ -1,9 +1,10 @@
 {
   "schemaVersion": 2,
   "prefix": "content",
-  "generatedAtMs": 1766109153404,
+  "generatedAtMs": 1766273311935,
   "decks": [
     {
+      "order": 10,
       "slug": "js-basics",
       "title": "JavaScript",
       "locale": "en-US",
@@ -12,28 +13,14 @@
       "availability": "live",
       "eta": null,
       "downloadMode": "public",
-      "totalCards": 5,
-      "version": "1766109153404",
-      "buildId": 1766109153404,
-      "path": "decks/js-basics/builds/1766109153404/deck.json",
-      "sha256": "76fcb8765b2cbd3245e471dcfc15ca6de19192fd619e328e52bbdb479b2829d4"
+      "totalCards": 30,
+      "version": "1766273311935",
+      "buildId": 1766273311935,
+      "path": "decks/js-basics/builds/1766273311935/deck.json",
+      "sha256": "f34dca1ccb7810c9f3ec788f2bab9f3594306d48972df023d766e33b99080027"
     },
     {
-      "slug": "sql-basics",
-      "title": "SQL",
-      "locale": "en-US",
-      "deckType": 1,
-      "tier": "free",
-      "availability": "live",
-      "eta": null,
-      "downloadMode": "public",
-      "totalCards": 5,
-      "version": "1766109153404",
-      "buildId": 1766109153404,
-      "path": "decks/sql-basics/builds/1766109153404/deck.json",
-      "sha256": "7d294e5e8ebc2ac8f682a830b92f5a8bd4f3e6d37ba380a7e0448fe2da3dbbdc"
-    },
-    {
+      "order": 30,
       "slug": "aws-cloud-practitioner",
       "title": "AWS Cloud Practitioner",
       "locale": "en-US",
@@ -49,6 +36,7 @@
       "sha256": null
     },
     {
+      "order": 40,
       "slug": "react-basics",
       "title": "React",
       "locale": "en-US",
@@ -57,28 +45,40 @@
       "availability": "live",
       "eta": null,
       "downloadMode": "auth",
-      "totalCards": 5,
-      "version": "1766109153404",
-      "buildId": 1766109153404,
+      "totalCards": 30,
+      "version": "1766273311935",
+      "buildId": 1766273311935,
       "path": null,
-      "sha256": "ea0d11c0275cacab55acffd2811c38ee4f7834031f643bf0b590748025bb9250"
+      "sha256": "8925e5d290b797780794aee721f05d34e0fa72313f972f8c2ff07bb7e5eb675c",
+      "previewCards": 15,
+      "previewVersion": "1766273311935-preview",
+      "previewBuildId": "1766273311935-preview",
+      "previewPath": "decks/react-basics/previews/1766273311935/deck.json",
+      "previewSha256": "f04d31c81ec5b2634529724df4a2036c7abc23e09d49b0cda5600767fc45fa36"
     },
     {
+      "order": 50,
       "slug": "csharp-basics",
-      "title": "C#",
+      "title": "C# / .NET",
       "locale": "en-US",
       "deckType": 2,
       "tier": "premium",
       "availability": "live",
       "eta": null,
       "downloadMode": "auth",
-      "totalCards": 5,
-      "version": "1766109153404",
-      "buildId": 1766109153404,
+      "totalCards": 30,
+      "version": "1766273311935",
+      "buildId": 1766273311935,
       "path": null,
-      "sha256": "e78f59c77fc3a1d90267f1703f6b7a9b78676738b1af1f9f78f4b8c747c58228"
+      "sha256": "821599171e484dcf9c99061f7ead71a8a3aeb59a269d74822b8996f4a8f0c8d5",
+      "previewCards": 15,
+      "previewVersion": "1766273311935-preview",
+      "previewBuildId": "1766273311935-preview",
+      "previewPath": "decks/csharp-basics/previews/1766273311935/deck.json",
+      "previewSha256": "f3f178d585b91b17d59c11090e841e03737333abd74cc90e200d8791cbae3d0a"
     },
     {
+      "order": 60,
       "slug": "java-basics",
       "title": "Java",
       "locale": "en-US",
@@ -94,6 +94,7 @@
       "sha256": null
     },
     {
+      "order": 70,
       "slug": "python-basics",
       "title": "Python",
       "locale": "en-US",
@@ -109,6 +110,7 @@
       "sha256": null
     },
     {
+      "order": 80,
       "slug": "aws-solution-architect",
       "title": "AWS Solution Architect",
       "locale": "en-US",

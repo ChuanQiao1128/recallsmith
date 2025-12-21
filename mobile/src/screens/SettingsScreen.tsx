@@ -28,7 +28,7 @@ import {
 // ✅ Auth (primitive selectors only)
 import { useAuthStore } from '../auth/authStore';
 
-// ✅ Reminders prefs (see reminders.ts patch below)
+// ✅ Reminders prefs
 import {
   getReminderPrefs,
   setReminderPrefs as saveReminderPrefs,
@@ -89,7 +89,7 @@ const EVENING_OPTIONS = ['18:00', '19:00', '20:00', '21:00', '22:00'] as const;
 export function SettingsScreen({ navigation }: Props) {
   const appVersionRaw = getCurrentAppVersion();
 
-  // ✅ auth state (primitive selectors only)
+  // ✅ auth state
   const status = useAuthStore((s) => s.status);
   const email = useAuthStore((s) => s.email);
   const authLoading = useAuthStore((s) => s.loading);
@@ -285,9 +285,7 @@ export function SettingsScreen({ navigation }: Props) {
       const next = await saveReminderPrefs(patch);
       setPrefs(next);
 
-      // Apply immediately (best effort). If we don't have cached due count yet, evening may update on next Home refresh.
       await refreshDailyRemindersFromCache();
-
       showPrefsHint('Saved · reminders updated');
     } catch (e: any) {
       Alert.alert('Update failed', e?.message ?? 'Failed to update reminders.');
@@ -322,7 +320,12 @@ export function SettingsScreen({ navigation }: Props) {
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
-        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+        <LinearGradient
+          colors={['#F5F3FF', '#E0F2FE']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
           {/* Time picker modal */}
           <Modal transparent animationType="fade" visible={!!timePicker} onRequestClose={() => setTimePicker(null)}>
             <View style={styles.modalOverlay}>
@@ -331,7 +334,7 @@ export function SettingsScreen({ navigation }: Props) {
                 <View style={styles.modalHeaderRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.modalTitle}>
-                      {timePicker === 'morning' ? 'Morning reminder' : 'Evening check‑in'}
+                      {timePicker === 'morning' ? 'Morning reminder' : 'Evening check-in'}
                     </Text>
                     <Text style={styles.modalSubtitle}>
                       {timePicker === 'morning'
@@ -340,7 +343,10 @@ export function SettingsScreen({ navigation }: Props) {
                     </Text>
                   </View>
 
-                  <Pressable style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]} onPress={() => setTimePicker(null)}>
+                  <Pressable
+                    style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]}
+                    onPress={() => setTimePicker(null)}
+                  >
                     <Text style={styles.modalCloseText}>✕</Text>
                   </Pressable>
                 </View>
@@ -370,7 +376,7 @@ export function SettingsScreen({ navigation }: Props) {
                 </View>
 
                 <Text style={styles.modalLegend}>
-                  You can disable each reminder with the toggle. Times sync after sign‑in.
+                  You can disable each reminder with the toggle. Times sync after sign-in.
                 </Text>
               </View>
             </View>
@@ -390,6 +396,21 @@ export function SettingsScreen({ navigation }: Props) {
                 <Text style={styles.title}>Settings</Text>
                 <Text style={styles.subtitle}>Account, reminders, updates and legal.</Text>
               </View>
+            </View>
+
+            {/* Premium (button with style) */}
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Premium</Text>
+              <Text style={styles.sectionSubtitle}>
+                Unlock premium decks and advanced learning features.
+              </Text>
+
+              <Pressable
+                style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
+                onPress={() => navigation.navigate('Paywall')}
+              >
+                <Text style={styles.primaryButtonText}>Upgrade to Premium</Text>
+              </Pressable>
             </View>
 
             {/* Account */}
@@ -429,7 +450,7 @@ export function SettingsScreen({ navigation }: Props) {
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Reminders</Text>
               <Text style={styles.sectionSubtitle}>
-                Keep consistency with a morning reminder and a smart evening check‑in.
+                Keep consistency with a morning reminder and a smart evening check-in.
               </Text>
 
               {!isSignedIn ? (
@@ -486,7 +507,7 @@ export function SettingsScreen({ navigation }: Props) {
                       {/* Evening row */}
                       <View style={[styles.settingRow, (prefsSaving || prefsLoading) && styles.rowDisabled]}>
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.rowTitle}>Evening check‑in</Text>
+                          <Text style={styles.rowTitle}>Evening check-in</Text>
                           <Text style={styles.rowSubtitle}>Only if you still have due cards today.</Text>
                         </View>
 
@@ -513,7 +534,7 @@ export function SettingsScreen({ navigation }: Props) {
 
                       <View style={styles.hintSlot}>
                         <Text style={styles.hintText} numberOfLines={1}>
-                          {prefsHint ?? 'Tip: evening check‑in helps you keep the due calendar manageable.'}
+                          {prefsHint ?? 'Tip: evening check-in helps you keep the due calendar manageable.'}
                         </Text>
                       </View>
                     </>
@@ -613,7 +634,7 @@ export function SettingsScreen({ navigation }: Props) {
             </View>
 
             <View style={styles.footerBox}>
-              <Text style={styles.footerText}>Made with focus for developers preparing full‑stack interviews.</Text>
+              <Text style={styles.footerText}>Made with focus for developers preparing full-stack interviews.</Text>
             </View>
 
             <View style={{ height: 8 }} />

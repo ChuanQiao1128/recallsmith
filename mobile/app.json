@@ -2,7 +2,7 @@
   "expo": {
     "name": "DeveloperCards",
     "slug": "recallsmith",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -18,7 +18,7 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
-       "buildNumber": "9"
+       "buildNumber": "10"
     },
     "android": {
       "adaptiveIcon": {

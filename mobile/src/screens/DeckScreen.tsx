@@ -20,7 +20,7 @@ import type { RootStackParamList, StudyMode } from '../navigation/types';
 
 import type { DeckExport } from '../types/deckExport';
 import { setActiveDeckSlug, loadActiveDeckSlug } from '../content/activeDeck';
-
+import { fetchPremiumDeckUrl } from '../content/premiumDeckApi';
 // resolver + manifest + installer
 import {
   resolveDeckBySlug,
@@ -39,7 +39,6 @@ import { usePremiumUser } from '../premium/premiumStore';
 
 // auth (Amplify + Zustand)
 import { useAuthUser, useAuthStore } from '../auth/authStore';
-
 type Props = NativeStackScreenProps<RootStackParamList, 'Deck'>;
 
 interface DeckState {
@@ -292,7 +291,34 @@ export function DeckScreen({ navigation, route }: Props) {
           // resolve local deck (preview URL / signed URL flow to be added later)
           let deck = await resolveDeckBySlug(slugStr);
           if (cancelled) return;
+          // ✅ DEV: premium 用户优先安装 full deck（private bucket presigned url）
+          if (__DEV__ && entry && premiumByManifest && isLoggedIn && isPremiumUser) {
+          const fullVersion = entry.version; // manifest full version（比如 1766273311935）
+          const needFull = !deck || deck.Version !== fullVersion;
 
+          if (needFull) {
+            try {
+              const r = await fetchPremiumDeckUrl(slugStr);
+              if (cancelled) return;
+
+              const ok = await installDeckFromUrl(
+                slugStr,
+                r.url,
+                r.buildId,          // ✅ 用后端返回的 buildId 当 remoteVersion
+                entry.sha256 ?? null
+              );
+              if (cancelled) return;
+
+              if (ok) {
+                deck = await resolveDeckBySlug(slugStr);
+                if (cancelled) return;
+              }
+            } catch (e: any) {
+              console.warn('[premium] fetch/upgrade full deck failed:', e?.message ?? e);
+            }
+          }
+        }
+          
           // if not installed, try auto-install (only works for public URLs)
           if (!deck) {
             const updates = await checkManifestForUpdates();

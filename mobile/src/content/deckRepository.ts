@@ -1,9 +1,10 @@
 // mobile/src/content/deckRepository.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import { fetchAuthSession } from 'aws-amplify/auth';
 
 import type { DeckExport } from '../types/deckExport';
-
+import { getIsPremiumUser } from '../premium/premiumStore';
 /**
  * v2 Content repository (CloudFront -> manifest.json -> deck.json)
  * - Supports manifest schemaVersion=2
@@ -19,17 +20,48 @@ const CONTENT_BASE_URL =
 
 const MANIFEST_URL = joinUrl(CONTENT_BASE_URL, 'content', 'manifest.json');
 const MANIFEST_CACHE_KEY = 'devcards:content:manifest:v2';
-const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:'; // + slug
+const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:'; // + userKey + ":" + slug
 
 // Runtime-safe "utf8" encoding without relying on FileSystem.EncodingType types
 const UTF8_ENCODING: any = (FileSystem as any)?.EncodingType?.UTF8 ?? 'utf8';
 
-function getDeckDir(): string {
+/**
+ * User isolation:
+ * - deck files stored under: <docDir>/devcards-decks-v2/<userKey>/<slug>.json
+ * - meta stored under: devcards:content:deckmeta:v2:<userKey>:<slug>
+ */
+function sanitizeUserKey(s: string): string {
+  const x = String(s || 'anon').trim();
+  if (!x) return 'anon';
+  return x.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'anon';
+}
+
+async function getCurrentUserKey(): Promise<string> {
+  try {
+    const session: any = await fetchAuthSession();
+    const sub =
+      session?.userSub ??
+      session?.tokens?.idToken?.payload?.sub ??
+      session?.tokens?.accessToken?.payload?.sub ??
+      null;
+    return sanitizeUserKey(sub || 'anon');
+  } catch {
+    return 'anon';
+  }
+}
+
+function getDeckDirForUser(userKey: string): string {
   const base = (FileSystem as any).documentDirectory ?? (FileSystem as any).cacheDirectory;
   if (!base || typeof base !== 'string') {
     throw new Error('expo-file-system: no writable directory (documentDirectory/cacheDirectory)');
   }
-  return `${base}devcards-decks-v2/`;
+  const u = sanitizeUserKey(userKey);
+  return `${base}devcards-decks-v2/${u}/`;
+}
+
+async function getDeckDir(): Promise<string> {
+  const userKey = await getCurrentUserKey();
+  return getDeckDirForUser(userKey);
 }
 
 /** =========================
@@ -192,13 +224,14 @@ export async function checkManifestForUpdates(
   const manifest = await loadManifestPreferRemote();
   if (!manifest) return {};
 
+  const userKey = await getCurrentUserKey();
   const out: Record<string, UpdateInfo> = {};
 
   for (const d of manifest.decks) {
     const slug = String(d.slug || '').trim();
     if (!slug) continue;
 
-    const meta = await getDeckMeta(slug);
+    const meta = await getDeckMeta(slug, userKey);
     const installed = meta?.buildId || null;
 
     // full version/buildId from manifest
@@ -307,12 +340,39 @@ export async function resolveDeckBySlug(slug: string): Promise<DeckContent | nul
   const safeSlug = String(slug).trim();
   if (!safeSlug) return null;
 
-  const meta = await getDeckMeta(safeSlug);
+  // ✅ 你之前那版“按用户隔离”的文件里是有 getCurrentUserKey 的
+  const userKey = await getCurrentUserKey();
+
+  const meta = await getDeckMeta(safeSlug, userKey);
   if (!meta?.fileUri || !meta?.buildId) return null;
+
+  // ✅ NEW: premium 硬拦截（即使缓存存在也不允许打开）
+  // 依据：manifest.cached 里的 tier/previewVersion
+  const isPremiumUser = await getIsPremiumUser();
+
+  const manifest = await loadManifestCached();
+  const entry = (manifest?.decks || []).find((d) => String(d.slug || '').trim() === safeSlug) as any;
+
+  const tier = String(entry?.tier || '').toLowerCase();
+
+  if (tier === 'premium' && !isPremiumUser) {
+    // 非 premium 用户：只允许打开“previewVersion”对应的本地文件（如果你有做 preview）
+    const previewVersion =
+      normalizeVersion(entry?.previewVersion ?? entry?.previewBuildId) ?? null;
+
+    // 没有 previewVersion：直接锁死（并清理缓存）
+    if (!previewVersion || meta.buildId !== previewVersion) {
+      try {
+        await FileSystem.deleteAsync(meta.fileUri, { idempotent: true });
+      } catch {}
+      await removeDeckMeta(safeSlug, userKey);
+      return null;
+    }
+  }
 
   const info = await FileSystem.getInfoAsync(meta.fileUri);
   if (!info.exists) {
-    await removeDeckMeta(safeSlug);
+    await removeDeckMeta(safeSlug, userKey);
     return null;
   }
 
@@ -350,12 +410,19 @@ export async function installDeckFromUrl(
   const safeUrl = String(url || '').trim();
   if (!safeSlug || !safeUrl) return false;
 
-  const existing = await getDeckMeta(safeSlug);
+  const userKey = await getCurrentUserKey();
+  const isPremiumUser = await getIsPremiumUser();
+  const manifest = await loadManifestCached();
+  const entry = (manifest?.decks || []).find((d) => String(d.slug || '').trim() === safeSlug) as any;
+  const tier = String(entry?.tier || '').toLowerCase();
+
+  const previewVersion = normalizeVersion(entry?.previewVersion ?? entry?.previewBuildId) ?? null;
+  const existing = await getDeckMeta(safeSlug, userKey);
   if (existing?.buildId && remoteVersion && existing.buildId === remoteVersion) {
     return true;
   }
 
-  const dir = getDeckDir();
+  const dir = getDeckDirForUser(userKey);
   await ensureDir(dir);
 
   const finalPath = `${dir}${slugToFileName(safeSlug)}.json`;
@@ -396,7 +463,12 @@ export async function installDeckFromUrl(
 
     const finalBuildId = (remoteVersion && remoteVersion.trim()) || resolvedBuildId;
     if (!finalBuildId) return false;
-
+    // ✅ FINAL gate: 非会员 premium 只能安装 previewVersion（不依赖 remoteVersion 是否传入）
+    if (tier === 'premium' && !isPremiumUser) {
+      if (!previewVersion || finalBuildId !== previewVersion) {
+        return false;
+      }
+    }
     await FileSystem.deleteAsync(finalPath, { idempotent: true });
     await FileSystem.moveAsync({ from: tmpPath, to: finalPath });
 
@@ -408,7 +480,7 @@ export async function installDeckFromUrl(
       cardCount,
     };
 
-    await AsyncStorage.setItem(deckMetaKey(safeSlug), JSON.stringify(meta));
+    await AsyncStorage.setItem(deckMetaKey(safeSlug, userKey), JSON.stringify(meta));
     return true;
   } catch {
     try {
@@ -453,13 +525,15 @@ async function ensureDir(dir: string) {
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
 }
 
-function deckMetaKey(slug: string) {
-  return `${DECK_META_PREFIX}${slug}`;
+function deckMetaKey(slug: string, userKey: string) {
+  const u = sanitizeUserKey(userKey);
+  return `${DECK_META_PREFIX}${u}:${slug}`;
 }
 
-async function getDeckMeta(slug: string): Promise<DeckInstallMeta | null> {
+async function getDeckMeta(slug: string, userKey?: string): Promise<DeckInstallMeta | null> {
+  const u = userKey ?? (await getCurrentUserKey());
   try {
-    const raw = await AsyncStorage.getItem(deckMetaKey(slug));
+    const raw = await AsyncStorage.getItem(deckMetaKey(slug, u));
     if (!raw) return null;
     const meta = JSON.parse(raw) as DeckInstallMeta;
     if (!meta?.buildId || !meta?.fileUri) return null;
@@ -469,9 +543,10 @@ async function getDeckMeta(slug: string): Promise<DeckInstallMeta | null> {
   }
 }
 
-async function removeDeckMeta(slug: string) {
+async function removeDeckMeta(slug: string, userKey?: string) {
+  const u = userKey ?? (await getCurrentUserKey());
   try {
-    await AsyncStorage.removeItem(deckMetaKey(slug));
+    await AsyncStorage.removeItem(deckMetaKey(slug, u));
   } catch {}
 }
 
