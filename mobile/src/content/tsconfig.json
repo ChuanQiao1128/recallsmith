@@ -5,14 +5,15 @@ import { fetchAuthSession } from 'aws-amplify/auth';
 
 import type { DeckExport } from '../types/deckExport';
 import { getIsPremiumUser } from '../premium/premiumStore';
-
 /**
  * v2 Content repository (CloudFront -> manifest.json -> deck.json)
  * - Supports manifest schemaVersion=2
- * - Supports incremental updates via delta patch chain:
- *    - public decks: `patches`
- *    - ✅ premium preview decks: `previewPatches`
  * - Backward compatible with v1-ish deck json shape
+ *
+ * ✅ v2.1 additions (retired decks):
+ * - manifest availability supports: live | coming | retired
+ * - retired decks are hidden and local data is purged (content + best-effort per-deck AsyncStorage keys)
+ * - safety rule: only purge when manifest explicitly says availability=="retired"
  */
 
 /** =========================
@@ -29,8 +30,12 @@ const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:'; // + userKey + ":" + s
 // Runtime-safe "utf8" encoding without relying on FileSystem.EncodingType types
 const UTF8_ENCODING: any = (FileSystem as any)?.EncodingType?.UTF8 ?? 'utf8';
 
-// Patch constraints (client-side safety)
-const MAX_PATCH_HOPS = 4;
+const DEVCARDS_KEY_PREFIX = 'devcards:';
+
+// Review/storage.ts keys (used for retired deck purge)
+const REVIEW_PROGRESS_PREFIX = 'deck-progress:';
+const REVIEW_DAILY_PREFIX = 'deck-daily-stats:';
+const REVIEW_META_PREFIX = 'deck-meta:';
 
 /**
  * User isolation:
@@ -66,22 +71,22 @@ function getDeckDirForUser(userKey: string): string {
   return `${base}devcards-decks-v2/${u}/`;
 }
 
+async function getDeckDir(): Promise<string> {
+  const userKey = await getCurrentUserKey();
+  return getDeckDirForUser(userKey);
+}
+
 /** =========================
  *  Types
  *  ========================= */
 
-export type PatchEdge = {
-  fromVersion: string;
-  toVersion: string;
-  path: string; // relative to prefix OR absolute URL
-  sha256?: string | null;
-};
-
+// Manifest v2 shape (your current publish_mock_content.sh)
 type RawManifest = {
   schemaVersion: number;
   generatedAtMs: number;
   prefix: string; // e.g. "content"
   decks: Array<{
+    // ✅ NEW: order for Home sorting
     order?: number;
 
     slug: string;
@@ -91,7 +96,10 @@ type RawManifest = {
 
     tier?: 'free' | 'premium' | string | null;
     availability?: 'live' | 'coming' | 'retired' | string | null;
+
+    // ✅ NEW: retired decks tombstone field
     retiredAtMs?: number | null;
+
     eta?: string | null;
     downloadMode?: 'public' | 'auth' | 'none' | string | null;
 
@@ -101,13 +109,10 @@ type RawManifest = {
     buildId?: number | string | null;
 
     // public decks: path is set
-    // premium/auth or coming: path is null
+    // premium/auth or coming/retired: path is null
     path?: string | null;
 
     sha256?: string | null;
-
-    // ✅ v2 incremental patches for public decks
-    patches?: PatchEdge[] | null;
 
     // ✅ premium preview fields (optional)
     previewCards?: number | null;
@@ -116,12 +121,21 @@ type RawManifest = {
     previewPath?: string | null;
     previewSha256?: string | null;
 
-    // ✅ v2 incremental patches for premium previews
-    previewPatches?: PatchEdge[] | null;
+    // ✅ optional incremental patch edges (public via CloudFront)
+    // Each edge describes a delta.json that upgrades fromVersion -> toVersion.
+    patches?:
+      | Array<{
+          fromVersion?: string | number | null;
+          toVersion?: string | number | null;
+          path?: string | null;
+          sha256?: string | null;
+        }>
+      | null;
   }>;
 };
 
 export type ManifestDeckEntry = {
+  // ✅ NEW: order for Home sorting
   order?: number;
 
   slug: string;
@@ -131,11 +145,12 @@ export type ManifestDeckEntry = {
 
   tier?: string | null;
   availability?: string | null;
-  retiredAtMs?: number | null;
   eta?: string | null;
   downloadMode?: string | null;
 
+  // v2: version from manifest (usually buildId string), used for display/update check
   version: string;
+
   totalCards?: number;
 
   buildId: string | null;
@@ -192,7 +207,7 @@ type RawDeckJsonV1 = {
   }>;
 };
 
-// New deck-json format (publish script): { slug,title,locale,deckType,version,totalCards,cards[] }
+// New deck-json format (your publish script): { slug,title,locale,deckType,version,totalCards,cards[] }
 type RawDeckJsonFlat = {
   slug: string;
   title: string;
@@ -215,21 +230,18 @@ type RawDeckJsonFlat = {
   }>;
 };
 
-// Delta patch shape (from publish script)
-type DeckDelta = {
-  schemaVersion: number;
+type ManifestPatchEdge = {
+  fromVersion: string;
+  toVersion: string;
+  path: string;
+  sha256: string | null;
+};
+
+type DeckDeltaJson = {
+  schemaVersion?: number;
   slug: string;
   fromVersion: string;
   toVersion: string;
-  generatedAtMs?: number;
-  deck?: {
-    slug: string;
-    title: string;
-    locale: string;
-    deckType: number;
-    version: string | number;
-    totalCards?: number;
-  };
   added?: RawDeckJsonFlat['cards'];
   updated?: RawDeckJsonFlat['cards'];
   deleted?: string[];
@@ -242,10 +254,13 @@ export type DeckContent = DeckExport;
  *  ========================= */
 
 /**
- * Home screen will call this:
- * - For public decks: remoteUrl is deck.json
- * - For premium decks (non-premium user): remoteUrl is preview deck.json
- * - For premium decks (premium user): remoteUrl stays null (full download uses presigned URL later)
+ * ✅ NEW signature:
+ * We accept isPremiumUser so Home can call checkManifestForUpdates(isPremiumUser)
+ * For premium decks:
+ *  - premium users: no direct url (full requires presigned URL later)
+ *  - non-premium users: expose previewPath as remoteUrl if present
+ * Also:
+ *  - premium users should still get hasUpdate=true when versions differ (even if remoteUrl=null)
  */
 export async function checkManifestForUpdates(
   _isPremiumUser: boolean = false,
@@ -253,10 +268,12 @@ export async function checkManifestForUpdates(
   const manifest = await loadManifestPreferRemote();
   if (!manifest) return {};
 
-  // ✅ important: apply retired purges ASAP (before building update list)
-  await reconcileRetiredDecks(manifest);
-
   const userKey = await getCurrentUserKey();
+
+  // ✅ Retired reconcile: if manifest explicitly marks a deck as retired,
+  // purge local content (and best-effort per-deck keys). This runs before computing updates.
+  await reconcileRetiredDecks(manifest, userKey);
+
   const out: Record<string, UpdateInfo> = {};
 
   for (const d of manifest.decks) {
@@ -265,7 +282,7 @@ export async function checkManifestForUpdates(
 
     const availability = String(d.availability || '').toLowerCase();
     if (availability === 'retired') {
-      // Home should hide it; update info not needed.
+      // Tombstone decks are hidden & already purged above.
       continue;
     }
 
@@ -290,7 +307,8 @@ export async function checkManifestForUpdates(
     const previewVersion =
       normalizeVersion((d as any).previewVersion ?? (d as any).previewBuildId) ?? null;
 
-    const previewSha256 = (d as any).previewSha256 ? String((d as any).previewSha256) : null;
+    const previewSha256 =
+      (d as any).previewSha256 ? String((d as any).previewSha256) : null;
 
     // Decide which URL/version/sha to expose
     let remoteUrl: string | null = null;
@@ -300,7 +318,9 @@ export async function checkManifestForUpdates(
     // Public deck: direct download
     if (mode === 'public' && path) {
       remoteUrl =
-        /^https?:\/\//i.test(path) ? path : joinUrl(CONTENT_BASE_URL, manifest.prefix, path);
+        /^https?:\/\//i.test(path)
+          ? path
+          : joinUrl(CONTENT_BASE_URL, manifest.prefix, path);
     }
 
     // Premium deck (non-premium user): allow preview download from CloudFront
@@ -343,64 +363,74 @@ export async function listManifestDecks(): Promise<ManifestDeckEntry[]> {
   const manifest = await loadManifestCached();
   if (!manifest) return [];
 
-  await reconcileRetiredDecks(manifest);
+  // ✅ Hide retired decks in UI lists (Home/Library)
+  const decks = (manifest.decks || []).filter((d) => {
+    const availability = String((d as any)?.availability || '').toLowerCase();
+    return availability !== 'retired';
+  });
 
-  return (manifest.decks || [])
-    .filter((d) => String(d.availability || '').toLowerCase() !== 'retired')
-    .map((d) => {
-      const buildId = normalizeVersion(d.buildId) ?? null;
-      const version = normalizeVersion(d.version ?? d.buildId) ?? (buildId ?? 'unknown');
+  return decks.map((d) => {
+    const buildId = normalizeVersion(d.buildId) ?? null;
+    const version = normalizeVersion(d.version ?? d.buildId) ?? (buildId ?? 'unknown');
 
-      return {
-        order: typeof (d as any).order === 'number' ? (d as any).order : undefined,
+    return {
+      // ✅ NEW: order pass-through
+      order: typeof (d as any).order === 'number' ? (d as any).order : undefined,
 
-        slug: String(d.slug),
-        title: d.title,
-        locale: d.locale,
-        deckType: d.deckType ?? 1,
+      slug: String(d.slug),
+      title: d.title,
+      locale: d.locale,
+      deckType: d.deckType ?? 1,
 
-        tier: (d.tier ?? null) as any,
-        availability: (d.availability ?? null) as any,
-        retiredAtMs: typeof (d as any).retiredAtMs === 'number' ? (d as any).retiredAtMs : null,
-        eta: (d.eta ?? null) as any,
-        downloadMode: (d.downloadMode ?? null) as any,
+      tier: (d.tier ?? null) as any,
+      availability: (d.availability ?? null) as any,
+      eta: (d.eta ?? null) as any,
+      downloadMode: (d.downloadMode ?? null) as any,
 
-        version,
-        totalCards: typeof d.totalCards === 'number' ? d.totalCards : undefined,
+      version,
+      totalCards: typeof d.totalCards === 'number' ? d.totalCards : undefined,
 
-        buildId,
-        path: typeof d.path === 'string' ? d.path : null,
-        sha256: (d.sha256 ?? null) ? String(d.sha256) : null,
-      };
-    });
+      buildId,
+      path: typeof d.path === 'string' ? d.path : null,
+      sha256: (d.sha256 ?? null) ? String(d.sha256) : null,
+    };
+  });
 }
 
 export async function resolveDeckBySlug(slug: string): Promise<DeckContent | null> {
   const safeSlug = String(slug).trim();
   if (!safeSlug) return null;
 
+  // ✅ 你之前那版“按用户隔离”的文件里是有 getCurrentUserKey 的
   const userKey = await getCurrentUserKey();
+
   const meta = await getDeckMeta(safeSlug, userKey);
   if (!meta?.fileUri || !meta?.buildId) return null;
 
-  // Use manifest to enforce premium preview gate + retired purge
   const manifest = await loadManifestCached();
   const entry = (manifest?.decks || []).find((d) => String(d.slug || '').trim() === safeSlug) as any;
 
+  // ✅ NEW: retired hard block + purge (only when explicitly retired)
   const availability = String(entry?.availability || '').toLowerCase();
   if (availability === 'retired') {
-    await purgeLocalDeckForRetired(safeSlug, userKey, entry?.retiredAtMs ?? null);
+    await purgeLocalDeckForRetired(safeSlug, userKey);
     return null;
   }
 
+  // ✅ NEW: premium 硬拦截（即使缓存存在也不允许打开）
+  // 依据：manifest.cached 里的 tier/previewVersion
   const isPremiumUser = await getIsPremiumUser();
+
   const tier = String(entry?.tier || '').toLowerCase();
-  const previewVersion = normalizeVersion(entry?.previewVersion ?? entry?.previewBuildId) ?? null;
 
   if (tier === 'premium' && !isPremiumUser) {
-    // non-premium: only allow previewVersion locally (if present)
+    // 非 premium 用户：只允许打开“previewVersion”对应的本地文件（如果你有做 preview）
+    const previewVersion =
+      normalizeVersion(entry?.previewVersion ?? entry?.previewBuildId) ?? null;
+
+    // 没有 previewVersion：直接锁死（并清理缓存）
     if (!previewVersion || meta.buildId !== previewVersion) {
-      await purgeLocalDeckForRetired(safeSlug, userKey, null);
+      await purgeLocalDeckForRetired(safeSlug, userKey);
       return null;
     }
   }
@@ -435,11 +465,6 @@ export async function resolveDeckBySlug(slug: string): Promise<DeckContent | nul
   }
 }
 
-/**
- * Install/update a deck:
- * - Prefer incremental patch chain when possible
- * - Fall back to full download (existing behavior)
- */
 export async function installDeckFromUrl(
   slug: string,
   url: string,
@@ -453,25 +478,28 @@ export async function installDeckFromUrl(
   const userKey = await getCurrentUserKey();
   const isPremiumUser = await getIsPremiumUser();
   const manifest = await loadManifestCached();
-
   const entry = (manifest?.decks || []).find((d) => String(d.slug || '').trim() === safeSlug) as any;
 
+  // ✅ NEW: retired decks cannot be installed/updated; purge if somehow present
   const availability = String(entry?.availability || '').toLowerCase();
   if (availability === 'retired') {
-    await purgeLocalDeckForRetired(safeSlug, userKey, entry?.retiredAtMs ?? null);
+    await purgeLocalDeckForRetired(safeSlug, userKey);
     return false;
   }
 
   const tier = String(entry?.tier || '').toLowerCase();
-  const isPreviewInstall = tier === 'premium' && !isPremiumUser;
 
   const previewVersion = normalizeVersion(entry?.previewVersion ?? entry?.previewBuildId) ?? null;
-
   const existing = await getDeckMeta(safeSlug, userKey);
-
-  // If already up-to-date, no work.
   if (existing?.buildId && remoteVersion && existing.buildId === remoteVersion) {
     return true;
+  }
+
+  // ✅ Safety: non-premium users must never install full premium content.
+  // (Even if a caller accidentally passes the full version.)
+  if (tier === 'premium' && !isPremiumUser) {
+    if (!previewVersion) return false;
+    if (remoteVersion && remoteVersion !== previewVersion) return false;
   }
 
   const dir = getDeckDirForUser(userKey);
@@ -480,42 +508,36 @@ export async function installDeckFromUrl(
   const finalPath = `${dir}${slugToFileName(safeSlug)}.json`;
   const tmpPath = `${dir}${slugToFileName(safeSlug)}.tmp.json`;
 
-  // ✅ Attempt patch update (only if we have existing content + patch graph)
-  if (existing?.buildId && existing?.fileUri && remoteVersion && manifest) {
-    const patchEdges: PatchEdge[] =
-      (isPreviewInstall ? entry?.previewPatches : entry?.patches) || [];
-
-    if (Array.isArray(patchEdges) && patchEdges.length > 0) {
-      const patchRes = await tryPatchUpdate({
+  // ✅ Incremental update (patch-chain) — best effort.
+  // If it fails for any reason, we fall back to full download.
+  if (
+    manifest &&
+    existing?.buildId &&
+    remoteVersion &&
+    existing.buildId !== remoteVersion &&
+    Array.isArray(entry?.patches) &&
+    existing?.fileUri
+  ) {
+    try {
+      const patched = await tryApplyPatchChainToInstalledDeck({
         slug: safeSlug,
-        fromVersion: existing.buildId,
-        toVersion: remoteVersion,
-        fileUri: existing.fileUri,
-        outFileUri: finalPath,
-        prefix: String(manifest.prefix || 'content'),
-        edges: patchEdges,
         userKey,
+        existing,
+        targetVersion: remoteVersion,
+        manifest,
+        entry,
       });
-
-      if (patchRes.ok) {
-        console.log('[content] patchUpdateApplied', {
-          slug: safeSlug,
-          fromVersion: existing.buildId,
-          toVersion: remoteVersion,
-          hops: patchRes.hops,
-        });
-        return true;
-      }
-
+      if (patched) return true;
       console.log('[content] patchUpdateFallbackToFull', {
         slug: safeSlug,
         fromVersion: existing.buildId,
         toVersion: remoteVersion,
       });
+    } catch {
+      // ignore and fall through to full download
     }
   }
 
-  // ====== Full download (existing behavior) ======
   try {
     await FileSystem.deleteAsync(tmpPath, { idempotent: true });
     await FileSystem.downloadAsync(safeUrl, tmpPath);
@@ -530,8 +552,7 @@ export async function installDeckFromUrl(
     if (isRawDeckV1(parsed)) {
       if (!parsed.deck || parsed.deck.slug !== safeSlug) return false;
       if (!Array.isArray(parsed.cards)) return false;
-      if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim()))
-        return false;
+      if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim())) return false;
 
       resolvedBuildId = String(parsed.buildId || '').trim() || null;
       cardCount = parsed.cards.length;
@@ -540,8 +561,7 @@ export async function installDeckFromUrl(
     } else if (isRawDeckFlat(parsed)) {
       if (parsed.slug !== safeSlug) return false;
       if (!Array.isArray(parsed.cards)) return false;
-      if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim()))
-        return false;
+      if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim())) return false;
 
       resolvedBuildId = normalizeVersion(parsed.version) ?? null;
       cardCount = parsed.cards.length;
@@ -553,14 +573,12 @@ export async function installDeckFromUrl(
 
     const finalBuildId = (remoteVersion && remoteVersion.trim()) || resolvedBuildId;
     if (!finalBuildId) return false;
-
-    // ✅ FINAL gate: non-premium premium can only install previewVersion (even if remoteVersion is missing)
+    // ✅ FINAL gate: 非会员 premium 只能安装 previewVersion（不依赖 remoteVersion 是否传入）
     if (tier === 'premium' && !isPremiumUser) {
       if (!previewVersion || finalBuildId !== previewVersion) {
         return false;
       }
     }
-
     await FileSystem.deleteAsync(finalPath, { idempotent: true });
     await FileSystem.moveAsync({ from: tmpPath, to: finalPath });
 
@@ -583,317 +601,7 @@ export async function installDeckFromUrl(
 }
 
 /** =========================
- *  Patch update internals
- *  ========================= */
-
-async function tryPatchUpdate(args: {
-  slug: string;
-  fromVersion: string;
-  toVersion: string;
-  fileUri: string;
-  outFileUri: string;
-  prefix: string;
-  edges: PatchEdge[];
-  userKey: string;
-}): Promise<{ ok: boolean; hops: number }> {
-  const { slug, fromVersion, toVersion, fileUri, outFileUri, prefix, edges, userKey } = args;
-
-  if (!slug || !fromVersion || !toVersion) return { ok: false, hops: 0 };
-  if (fromVersion === toVersion) return { ok: true, hops: 0 };
-
-  // Resolve a chain (BFS) from fromVersion -> toVersion
-  const chain = resolvePatchChain(edges, fromVersion, toVersion, MAX_PATCH_HOPS);
-  if (!chain) return { ok: false, hops: 0 };
-
-  console.log('[content] patchUpdateAttempt', {
-    slug,
-    fromVersion,
-    toVersion,
-    hops: chain.length,
-  });
-
-  // Load local deck (must be flat v2 for patch apply)
-  let deck: RawDeckJsonFlat | null = null;
-  try {
-    const info = await FileSystem.getInfoAsync(fileUri);
-    if (!info.exists) return { ok: false, hops: 0 };
-
-    const rawText = await FileSystem.readAsStringAsync(fileUri, { encoding: UTF8_ENCODING });
-    const parsed = JSON.parse(rawText);
-
-    if (!isRawDeckFlat(parsed)) {
-      // We only patch-update flat v2; v1 falls back to full.
-      return { ok: false, hops: 0 };
-    }
-
-    if (String(parsed.slug).trim() !== slug) return { ok: false, hops: 0 };
-
-    deck = parsed;
-  } catch {
-    return { ok: false, hops: 0 };
-  }
-
-  // Apply deltas sequentially
-  try {
-    let cur = fromVersion;
-
-    for (const edge of chain) {
-      const deltaUrl =
-        /^https?:\/\//i.test(edge.path) ? edge.path : joinUrl(CONTENT_BASE_URL, prefix, edge.path);
-
-      const resp = await fetch(deltaUrl, {
-        method: 'GET',
-        headers: { 'cache-control': 'no-cache' },
-      });
-
-      if (!resp.ok) return { ok: false, hops: 0 };
-
-      const delta = (await resp.json()) as DeckDelta;
-      if (!isDeckDelta(delta)) return { ok: false, hops: 0 };
-
-      if (String(delta.slug).trim() !== slug) return { ok: false, hops: 0 };
-      if (String(delta.fromVersion).trim() !== cur) return { ok: false, hops: 0 };
-      if (String(delta.toVersion).trim() !== String(edge.toVersion).trim()) return { ok: false, hops: 0 };
-
-      deck = applyDelta(deck!, delta);
-      cur = delta.toVersion;
-    }
-
-    if (String(cur).trim() !== String(toVersion).trim()) return { ok: false, hops: 0 };
-
-    // Write atomically: write tmp then replace final file
-    const dir = getDeckDirForUser(userKey);
-    const patchTmp = `${dir}${slugToFileName(slug)}.patch.tmp.json`;
-
-    await FileSystem.deleteAsync(patchTmp, { idempotent: true });
-    await FileSystem.writeAsStringAsync(patchTmp, JSON.stringify(deck, null, 2), {
-      encoding: UTF8_ENCODING,
-    });
-
-    await FileSystem.deleteAsync(outFileUri, { idempotent: true });
-    await FileSystem.moveAsync({ from: patchTmp, to: outFileUri });
-
-    const meta: DeckInstallMeta = {
-      slug,
-      buildId: String(toVersion),
-      installedAtMs: Date.now(),
-      fileUri: outFileUri,
-      cardCount: Array.isArray(deck.cards) ? deck.cards.length : 0,
-    };
-    await AsyncStorage.setItem(deckMetaKey(slug, userKey), JSON.stringify(meta));
-    return { ok: true, hops: chain.length };
-  } catch {
-    return { ok: false, hops: 0 };
-  }
-}
-
-function resolvePatchChain(
-  edges: PatchEdge[],
-  fromVersion: string,
-  toVersion: string,
-  maxHops: number,
-): PatchEdge[] | null {
-  const from = String(fromVersion).trim();
-  const to = String(toVersion).trim();
-  if (!from || !to) return null;
-  if (from === to) return [];
-
-  const adj = new Map<string, PatchEdge[]>();
-  for (const e of edges || []) {
-    const fv = String(e?.fromVersion || '').trim();
-    const tv = String(e?.toVersion || '').trim();
-    const p = String(e?.path || '').trim();
-    if (!fv || !tv || !p) continue;
-
-    const list = adj.get(fv) || [];
-    list.push({ fromVersion: fv, toVersion: tv, path: p, sha256: e.sha256 ?? null });
-    adj.set(fv, list);
-  }
-
-  // BFS
-  const q: string[] = [];
-  const visited = new Set<string>();
-  const prev = new Map<string, { v: string; edge: PatchEdge }>();
-
-  q.push(from);
-  visited.add(from);
-
-  while (q.length) {
-    const v = q.shift()!;
-    if (v === to) break;
-
-    const outs = adj.get(v) || [];
-    for (const e of outs) {
-      const next = e.toVersion;
-      if (visited.has(next)) continue;
-      visited.add(next);
-      prev.set(next, { v, edge: e });
-      q.push(next);
-    }
-  }
-
-  if (!visited.has(to)) return null;
-
-  // Reconstruct path
-  const chain: PatchEdge[] = [];
-  let cur = to;
-  while (cur !== from) {
-    const p = prev.get(cur);
-    if (!p) return null;
-    chain.push(p.edge);
-    cur = p.v;
-  }
-  chain.reverse();
-
-  if (chain.length <= 0) return null;
-  if (chain.length > maxHops) return null;
-  return chain;
-}
-
-function isDeckDelta(x: any): x is DeckDelta {
-  return (
-    !!x &&
-    typeof x === 'object' &&
-    typeof x.slug === 'string' &&
-    typeof x.fromVersion === 'string' &&
-    typeof x.toVersion === 'string' &&
-    (typeof x.schemaVersion === 'number' || typeof x.schemaVersion === 'string')
-  );
-}
-
-function applyDelta(deck: RawDeckJsonFlat, delta: DeckDelta): RawDeckJsonFlat {
-  const map = new Map<string, RawDeckJsonFlat['cards'][number]>();
-
-  for (const c of deck.cards || []) {
-    if (!c || typeof c.stableUid !== 'string' || !c.stableUid.trim()) continue;
-    map.set(c.stableUid, c);
-  }
-
-  const del = Array.isArray(delta.deleted) ? delta.deleted : [];
-  for (const uid of del) {
-    const u = String(uid || '').trim();
-    if (!u) continue;
-    map.delete(u);
-  }
-
-  const up = Array.isArray(delta.updated) ? delta.updated : [];
-  for (const c of up) {
-    if (!c || typeof c.stableUid !== 'string' || !c.stableUid.trim()) continue;
-    map.set(c.stableUid, c as any);
-  }
-
-  const add = Array.isArray(delta.added) ? delta.added : [];
-  for (const c of add) {
-    if (!c || typeof c.stableUid !== 'string' || !c.stableUid.trim()) continue;
-    map.set(c.stableUid, c as any);
-  }
-
-  const cards = Array.from(map.values()).sort((a, b) => {
-    const ao = typeof a.orderInDeck === 'number' ? a.orderInDeck : 999999;
-    const bo = typeof b.orderInDeck === 'number' ? b.orderInDeck : 999999;
-    return ao - bo;
-  });
-
-  const newMeta = delta.deck;
-  const next: RawDeckJsonFlat = {
-    slug: newMeta?.slug || deck.slug,
-    title: newMeta?.title || deck.title,
-    locale: newMeta?.locale || deck.locale,
-    deckType: typeof newMeta?.deckType === 'number' ? newMeta!.deckType : deck.deckType,
-    version: delta.toVersion,
-    totalCards: typeof newMeta?.totalCards === 'number' ? newMeta!.totalCards : cards.length,
-    cards,
-  };
-
-  return next;
-}
-
-/** =========================
- *  Retired reconcile / purge
- *  ========================= */
-
-// review/storage.ts keys (must be purged when a deck is retired)
-const REVIEW_PROGRESS_PREFIX = 'deck-progress:';
-const REVIEW_DAILY_PREFIX = 'deck-daily-stats:';
-const REVIEW_META_PREFIX = 'deck-meta:';
-
-async function reconcileRetiredDecks(manifest: RawManifest): Promise<void> {
-  try {
-    const userKey = await getCurrentUserKey();
-    const retired = (manifest.decks || []).filter(
-      (d) => String(d.availability || '').toLowerCase() === 'retired',
-    );
-
-    for (const d of retired) {
-      const slug = String(d.slug || '').trim();
-      if (!slug) continue;
-      await purgeLocalDeckForRetired(slug, userKey, (d as any).retiredAtMs ?? null);
-    }
-  } catch {
-    // best-effort only
-  }
-}
-
-async function purgeLocalDeckForRetired(
-  slug: string,
-  userKey: string,
-  retiredAtMs: number | null,
-): Promise<void> {
-  try {
-    // 1) delete deck file
-    const meta = await getDeckMeta(slug, userKey);
-    if (meta?.fileUri) {
-      try {
-        await FileSystem.deleteAsync(meta.fileUri, { idempotent: true });
-      } catch {}
-    }
-
-    // 2) delete our deck meta key
-    await removeDeckMeta(slug, userKey);
-
-    // 3) delete review progress keys (slug-bound)
-    const exactKeys = [
-      `${REVIEW_PROGRESS_PREFIX}${slug}`,
-      `${REVIEW_DAILY_PREFIX}${slug}`,
-      `${REVIEW_META_PREFIX}${slug}`,
-    ];
-
-    const allKeys = await AsyncStorage.getAllKeys();
-
-    const legacyProgressPrefix = `${REVIEW_PROGRESS_PREFIX}${slug}:`;
-    const legacyDailyPrefix = `${REVIEW_DAILY_PREFIX}${slug}:`;
-
-    const legacyProgressKeys = allKeys.filter((k) => k.startsWith(legacyProgressPrefix));
-    const legacyDailyKeys = allKeys.filter((k) => k.startsWith(legacyDailyPrefix));
-
-    const purgeKeys = [...exactKeys, ...legacyProgressKeys, ...legacyDailyKeys];
-
-    // also purge any devcards content keys that mention slug (defensive)
-    const devcardsKeys = allKeys.filter(
-      (k) =>
-        k.startsWith('devcards:') &&
-        (k.includes(`:${slug}`) || k.endsWith(`/${slug}`) || k.includes(`/${slug}:`)),
-    );
-
-    const allPurge = Array.from(new Set([...purgeKeys, ...devcardsKeys]));
-    if (allPurge.length) {
-      await AsyncStorage.multiRemove(allPurge);
-    }
-
-    console.log('[content] retiredDeckLocalState', {
-      slug,
-      retiredAtMs: retiredAtMs ?? null,
-      expectedPath: meta?.fileUri ?? null,
-      expectedFileExistsAfter: false,
-      metaExistsAfter: false,
-    });
-  } catch {
-    // ignore
-  }
-}
-
-/** =========================
- *  Storage helpers
+ *  Internals
  *  ========================= */
 
 function normalizeVersion(v: any): string | null {
@@ -995,6 +703,448 @@ async function fetchRemoteManifest(): Promise<RawManifest | null> {
   }
 }
 
+/** =========================
+ *  Incremental updates (patch-chain)
+ *  ========================= */
+
+function normalizePatchEdges(raw: any): ManifestPatchEdge[] {
+  const arr: any[] = Array.isArray(raw) ? raw : [];
+  const out: ManifestPatchEdge[] = [];
+
+  for (const p of arr) {
+    const fromVersion = normalizeVersion(p?.fromVersion);
+    const toVersion = normalizeVersion(p?.toVersion);
+    const path = typeof p?.path === 'string' && p.path.trim() ? String(p.path).trim() : null;
+    const sha256 = p?.sha256 ? String(p.sha256) : null;
+
+    if (!fromVersion || !toVersion || !path) continue;
+    out.push({ fromVersion, toVersion, path, sha256 });
+  }
+
+  return out;
+}
+
+function findPatchChain(
+  edges: ManifestPatchEdge[],
+  fromVersion: string,
+  toVersion: string,
+  maxHops: number,
+): ManifestPatchEdge[] | null {
+  const from = normalizeVersion(fromVersion);
+  const to = normalizeVersion(toVersion);
+  if (!from || !to) return null;
+  if (from === to) return [];
+
+  const adj = new Map<string, ManifestPatchEdge[]>();
+  for (const e of edges) {
+    const list = adj.get(e.fromVersion) ?? [];
+    list.push(e);
+    adj.set(e.fromVersion, list);
+  }
+
+  const queue: string[] = [from];
+  const visited = new Set<string>([from]);
+  const prev = new Map<string, { prev: string; edge: ManifestPatchEdge }>();
+
+  while (queue.length > 0) {
+    const v = queue.shift()!;
+    if (v === to) break;
+
+    const nextEdges = adj.get(v) ?? [];
+    for (const e of nextEdges) {
+      const nxt = e.toVersion;
+      if (visited.has(nxt)) continue;
+      visited.add(nxt);
+      prev.set(nxt, { prev: v, edge: e });
+      queue.push(nxt);
+    }
+  }
+
+  if (!visited.has(to)) return null;
+
+  const chain: ManifestPatchEdge[] = [];
+  let cur = to;
+  while (cur !== from) {
+    const rec = prev.get(cur);
+    if (!rec) return null;
+    chain.push(rec.edge);
+    cur = rec.prev;
+    if (chain.length > maxHops) return null;
+  }
+  chain.reverse();
+  return chain;
+}
+
+async function fetchDeltaJson(url: string): Promise<DeckDeltaJson | null> {
+  const safeUrl = String(url || '').trim();
+  if (!safeUrl) return null;
+
+  try {
+    const resp = await fetch(safeUrl, {
+      method: 'GET',
+      headers: { 'cache-control': 'no-cache' },
+    });
+    if (!resp.ok) return null;
+
+    const json: any = await resp.json();
+    if (!json || typeof json !== 'object') return null;
+
+    const slug = String(json.slug || '').trim();
+    const fromVersion = normalizeVersion(json.fromVersion);
+    const toVersion = normalizeVersion(json.toVersion);
+    if (!slug || !fromVersion || !toVersion) return null;
+
+    const added = Array.isArray(json.added) ? json.added : [];
+    const updated = Array.isArray(json.updated) ? json.updated : [];
+    const deleted = Array.isArray(json.deleted) ? json.deleted : [];
+
+    // only keep cards with stableUid
+    const cleanCards = (arr: any[]): RawDeckJsonFlat['cards'] =>
+      arr
+        .filter((c) => c && typeof c === 'object' && typeof c.stableUid === 'string' && c.stableUid.trim())
+        .map((c) => ({
+          stableUid: String(c.stableUid).trim(),
+          question: c.question,
+          explanation: c.explanation,
+          codeSnippet: c.codeSnippet,
+          codeLanguage: c.codeLanguage,
+          realWorldUsage: c.realWorldUsage,
+          difficulty: c.difficulty,
+          orderInDeck: c.orderInDeck,
+          revision: c.revision,
+          version: c.version,
+          updatedAt: c.updatedAt,
+        })) as any;
+
+    const cleanUids = deleted
+      .map((x: any) => (x == null ? '' : String(x).trim()))
+      .filter((x: string) => !!x);
+
+    return {
+      schemaVersion: typeof json.schemaVersion === 'number' ? json.schemaVersion : undefined,
+      slug,
+      fromVersion,
+      toVersion,
+      added: cleanCards(added),
+      updated: cleanCards(updated),
+      deleted: cleanUids,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDeckJsonToFlat(parsed: any, expectedSlug: string): RawDeckJsonFlat | null {
+  const safeSlug = String(expectedSlug || '').trim();
+  if (!safeSlug) return null;
+
+  if (isRawDeckFlat(parsed)) {
+    if (String(parsed.slug || '').trim() !== safeSlug) return null;
+    return parsed;
+  }
+
+  if (isRawDeckV1(parsed)) {
+    const d = parsed.deck;
+    if (!d || String(d.slug || '').trim() !== safeSlug) return null;
+
+    const cards = Array.isArray(parsed.cards) ? parsed.cards : [];
+
+    return {
+      slug: d.slug,
+      title: d.title,
+      locale: d.locale,
+      deckType: d.deckType,
+      version: parsed.buildId,
+      totalCards: cards.length,
+      cards: cards.map((c: any) => ({
+        stableUid: String(c.stableUid || '').trim(),
+        question: c.question,
+        explanation: c.explanation ?? null,
+        codeSnippet: c.codeSnippet ?? null,
+        codeLanguage: c.codeLanguage ?? null,
+        realWorldUsage: c.realWorldUsage ?? null,
+        difficulty: c.difficulty ?? null,
+        orderInDeck: c.orderInDeck ?? null,
+        revision: c.revision ?? null,
+        version: c.version ?? null,
+        updatedAt: c.updatedAt ?? null,
+      })),
+    };
+  }
+
+  return null;
+}
+
+function applyDeltaToDeckFlat(deck: RawDeckJsonFlat, delta: DeckDeltaJson): RawDeckJsonFlat | null {
+  if (!deck || !delta) return null;
+  if (String(delta.slug || '').trim() !== String(deck.slug || '').trim()) return null;
+
+  const cur = normalizeVersion(deck.version);
+  if (!cur || cur !== delta.fromVersion) return null;
+
+  const map = new Map<string, any>();
+  const existingCards = Array.isArray(deck.cards) ? deck.cards : [];
+
+  for (const c of existingCards) {
+    if (!c || typeof c !== 'object') continue;
+    const uid = typeof c.stableUid === 'string' ? c.stableUid.trim() : '';
+    if (!uid) continue;
+    map.set(uid, c);
+  }
+
+  const deleted = Array.isArray(delta.deleted) ? delta.deleted : [];
+  for (const uidRaw of deleted) {
+    const uid = String(uidRaw || '').trim();
+    if (uid) map.delete(uid);
+  }
+
+  const upserts = [...(delta.updated || []), ...(delta.added || [])];
+  for (const c of upserts) {
+    if (!c || typeof c !== 'object') continue;
+    const uid = typeof (c as any).stableUid === 'string' ? String((c as any).stableUid).trim() : '';
+    if (!uid) continue;
+    map.set(uid, c);
+  }
+
+  const cards = Array.from(map.values());
+
+  // stable ordering
+  cards.sort((a: any, b: any) => {
+    const ao = typeof a?.orderInDeck === 'number' && Number.isFinite(a.orderInDeck) ? a.orderInDeck : 1e15;
+    const bo = typeof b?.orderInDeck === 'number' && Number.isFinite(b.orderInDeck) ? b.orderInDeck : 1e15;
+    if (ao !== bo) return ao - bo;
+    const au = String(a?.stableUid || '');
+    const bu = String(b?.stableUid || '');
+    return au.localeCompare(bu);
+  });
+
+  return {
+    ...deck,
+    version: delta.toVersion,
+    totalCards: cards.length,
+    cards,
+  };
+}
+
+async function tryApplyPatchChainToInstalledDeck(args: {
+  slug: string;
+  userKey: string;
+  existing: DeckInstallMeta;
+  targetVersion: string;
+  manifest: RawManifest;
+  entry: any;
+}): Promise<boolean> {
+  const slug = String(args.slug || '').trim();
+  if (!slug) return false;
+
+  const userKey = args.userKey;
+  const existing = args.existing;
+  const manifest = args.manifest;
+  const entry = args.entry;
+
+  const fromVersion = normalizeVersion(existing?.buildId);
+  const toVersion = normalizeVersion(args.targetVersion);
+  if (!fromVersion || !toVersion) return false;
+  if (fromVersion === toVersion) return true;
+
+  const edges = normalizePatchEdges(entry?.patches);
+  if (edges.length === 0) return false;
+
+  const chain = findPatchChain(edges, fromVersion, toVersion, 8);
+  if (!chain) return false;
+
+  console.log('[content] patchUpdateAttempt', {
+    slug,
+    fromVersion,
+    toVersion,
+    hops: chain.length,
+  });
+
+  const fileUri = String(existing.fileUri || '').trim();
+  if (!fileUri) return false;
+
+  const info = await FileSystem.getInfoAsync(fileUri);
+  if (!info.exists) return false;
+
+  // Load local deck
+  const localText = await FileSystem.readAsStringAsync(fileUri, { encoding: UTF8_ENCODING });
+  const localParsed = JSON.parse(localText);
+  let deck = normalizeDeckJsonToFlat(localParsed, slug);
+  if (!deck) return false;
+
+  const deckVer = normalizeVersion(deck.version);
+  if (!deckVer || deckVer !== fromVersion) {
+    // Meta/file mismatch -> safest fallback to full download
+    return false;
+  }
+
+  let curVersion = fromVersion;
+  for (const edge of chain) {
+    const patchUrl = /^https?:\/\//i.test(edge.path)
+      ? edge.path
+      : joinUrl(CONTENT_BASE_URL, manifest.prefix, edge.path);
+
+    const delta = await fetchDeltaJson(patchUrl);
+    if (!delta) return false;
+
+    if (String(delta.slug || '').trim() !== slug) return false;
+    if (delta.fromVersion !== curVersion) return false;
+    if (delta.toVersion !== edge.toVersion) {
+      // defensive: ensure manifest edge and delta content agree
+      return false;
+    }
+
+    const next = applyDeltaToDeckFlat(deck, delta);
+    if (!next) return false;
+    deck = next;
+    curVersion = delta.toVersion;
+  }
+
+  if (curVersion !== toVersion) return false;
+
+  // Write patched deck atomically
+  const base = fileUri.replace(/\.json$/i, '');
+  const patchTmp = `${base}.patch.tmp.json`;
+
+  try {
+    await FileSystem.deleteAsync(patchTmp, { idempotent: true });
+  } catch {}
+
+  try {
+    await FileSystem.writeAsStringAsync(patchTmp, JSON.stringify(deck, null, 2), {
+      encoding: UTF8_ENCODING,
+    });
+    await FileSystem.deleteAsync(fileUri, { idempotent: true });
+    await FileSystem.moveAsync({ from: patchTmp, to: fileUri });
+
+    const meta: DeckInstallMeta = {
+      slug,
+      buildId: toVersion,
+      installedAtMs: Date.now(),
+      fileUri,
+      cardCount: Array.isArray(deck.cards) ? deck.cards.length : 0,
+    };
+
+    await AsyncStorage.setItem(deckMetaKey(slug, userKey), JSON.stringify(meta));
+
+    console.log('[content] patchUpdateApplied', {
+      slug,
+      fromVersion,
+      toVersion,
+      hops: chain.length,
+    });
+
+    return true;
+  } catch {
+    try {
+      await FileSystem.deleteAsync(patchTmp, { idempotent: true });
+    } catch {}
+    return false;
+  }
+}
+
+/**
+ * ✅ Retired reconcile:
+ * If a deck is explicitly marked as retired in manifest, purge local content + best-effort
+ * remove per-deck keys (including progress if stored in AsyncStorage).
+ *
+ * Safety: we do nothing unless manifest explicitly says "retired".
+ */
+async function reconcileRetiredDecks(manifest: RawManifest, userKey: string): Promise<void> {
+  const decks = Array.isArray(manifest?.decks) ? manifest.decks : [];
+  const retired = decks
+    .map((d) => ({
+      slug: String(d?.slug || '').trim(),
+      availability: String(d?.availability || '').toLowerCase(),
+    }))
+    .filter((x) => !!x.slug && x.availability === 'retired');
+
+  if (retired.length === 0) return;
+
+  for (const r of retired) {
+    await purgeLocalDeckForRetired(r.slug, userKey);
+  }
+}
+
+/**
+ * Purge local deck content and best-effort related AsyncStorage keys.
+ * We intentionally DO NOT purge unless manifest explicitly says retired.
+ */
+async function purgeLocalDeckForRetired(slug: string, userKey: string): Promise<void> {
+  const safeSlug = String(slug || '').trim();
+  if (!safeSlug) return;
+
+  // 1) Remove deck file(s)
+  try {
+    const meta = await getDeckMeta(safeSlug, userKey);
+    if (meta?.fileUri) {
+      await FileSystem.deleteAsync(meta.fileUri, { idempotent: true });
+    }
+  } catch {}
+
+  // Also remove deterministic paths (in case meta is missing/outdated)
+  try {
+    const dir = getDeckDirForUser(userKey);
+    const base = `${dir}${slugToFileName(safeSlug)}`;
+    await FileSystem.deleteAsync(`${base}.json`, { idempotent: true });
+    await FileSystem.deleteAsync(`${base}.tmp.json`, { idempotent: true });
+  } catch {}
+
+  // 2) Remove deck meta
+  try {
+    await removeDeckMeta(safeSlug, userKey);
+  } catch {}
+
+  // 3) Remove learning progress + daily stats + review meta for this slug
+  // (Phase 0 binds progress to slug, not version.)
+  try {
+    await AsyncStorage.multiRemove([
+      `${REVIEW_PROGRESS_PREFIX}${safeSlug}`,
+      `${REVIEW_DAILY_PREFIX}${safeSlug}`,
+      `${REVIEW_META_PREFIX}${safeSlug}`,
+    ]);
+  } catch {}
+
+  // Legacy per-version keys (deck-progress:slug:version, deck-daily-stats:slug:version)
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    if (Array.isArray(keys) && keys.length > 0) {
+      const legacyProgressPrefix = `${REVIEW_PROGRESS_PREFIX}${safeSlug}:`;
+      const legacyDailyPrefix = `${REVIEW_DAILY_PREFIX}${safeSlug}:`;
+
+      const legacy = keys.filter(
+        (k) =>
+          typeof k === 'string' &&
+          (k.startsWith(legacyProgressPrefix) || k.startsWith(legacyDailyPrefix)),
+      );
+
+      if (legacy.length > 0) await AsyncStorage.multiRemove(legacy);
+    }
+  } catch {}
+
+  // 4) Best-effort: remove any other devcards keys that reference this slug
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    if (!Array.isArray(keys) || keys.length === 0) return;
+
+    const u = sanitizeUserKey(userKey);
+    const needles = [
+      `:${safeSlug}`,
+      `${u}:${safeSlug}`,
+    ];
+
+    const toRemove = keys.filter((k) => {
+      if (!k || typeof k !== 'string') return false;
+      if (!k.startsWith(DEVCARDS_KEY_PREFIX)) return false;
+      return needles.some((n) => k.includes(n));
+    });
+
+    if (toRemove.length > 0) {
+      await AsyncStorage.multiRemove(toRemove);
+    }
+  } catch {}
+}
+
 function isRawDeckV1(x: any): x is RawDeckJsonV1 {
   return (
     !!x &&
@@ -1044,7 +1194,9 @@ function mapRawDeckV1ToDeckExport(raw: RawDeckJsonV1): DeckExport {
         : 1;
 
     const version =
-      typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0 ? c.version : 1;
+      typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0
+        ? c.version
+        : 1;
 
     return {
       StableUid: c.stableUid,
@@ -1103,7 +1255,9 @@ function mapRawDeckFlatToDeckExport(raw: RawDeckJsonFlat): DeckExport {
         : 1;
 
     const version =
-      typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0 ? c.version : 1;
+      typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0
+        ? c.version
+        : 1;
 
     return {
       StableUid: c.stableUid,

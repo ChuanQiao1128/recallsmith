@@ -3,16 +3,8 @@ import * as Crypto from 'expo-crypto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { apiJson } from '../api/apiClient';
-import {
-  enqueueProgressEvent,
-  peekProgressEvents,
-  removeProgressEventsById,
-  progressQueueSize,
-  type ProgressEvent,
-} from './progressQueue';
-
 import { resolveDeckBySlug } from '../content/deckRepository';
-import { loadDeckProgress, saveDeckProgress } from '../review/storage';
+import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../review/storage';
 import type { CardProgress } from '../review/model';
 
 /**
@@ -26,7 +18,7 @@ import type { CardProgress } from '../review/model';
  *    - 打分后立刻 saveDeckProgress() -> UI 马上正确
  *
  * 2) “同步”用事件队列（event queue），而不是“每次都直接写数据库”
- *    - recordReviewEvent() 把一次打分写入 devcards:sync:progressQueue:v1（AsyncStorage）
+ *    - recordReviewEvent() 把一次打分写入 queue（AsyncStorage）
  *    - eventId(UUID) 做幂等：服务端返回 duplicateEventIds，客户端可以安全删除
  *
  * 3) 同步循环 = Push + Pull
@@ -43,6 +35,10 @@ import type { CardProgress } from '../review/model';
  * 5) Crash-safety
  *    - ReviewScreen 要 await recordReviewEvent()，确保事件先落盘
  *    - app 被杀/无网：队列仍在，下次打开会继续 push
+ *
+ * ✅ 额外：多账号隔离
+ * - sync 的队列 / cursor / remote cache 全部按 userSub 分区（不会串号）
+ * - 且在 userSub 变化时，同步刷新 review/storage.ts 的内存缓存（避免 TTL 内读旧 scope）
  */
 
 type ApiOk<T> = {
@@ -87,36 +83,73 @@ type ProgressGetResp = {
   items: ProgressItem[];
 };
 
+export type ProgressEvent = {
+  eventId: string;
+  deckSlug: string;
+  deckVersion: string | null;
+  stableUid: string;
+  rating: number;
+  reviewedAtMs: number;
+  progressAfter?: any;
+  lastSeenRevision: number | null;
+};
+
+/**
+ * ----------------------------
+ * Auth / user scope
+ * ----------------------------
+ */
 const ACCESS_TOKEN_KEY = 'devcards:auth:accessToken:v1';
+const ACTIVE_USER_SUB_KEY = 'devcards:auth:activeUserSub:v1';
 
-// cursor + remote cache
-const SYNC_CURSOR_KEY = 'devcards:sync:cursorMs:v1';
-const DEVICE_ID_KEY = 'devcards:deviceId:v1';
+/**
+ * ✅ 全部 sync 状态按 userSub 分区
+ * 这样同一台设备切换账号不会互相污染 sync cursor / remote cache / queue
+ */
+function userPrefix(userSub: string) {
+  return `devcards:u:${userSub}:`;
+}
 
-// debug
-const LAST_SYNC_KEY = 'devcards:sync:last:v1';
-const LAST_ERROR_KEY = 'devcards:sync:lastError:v1';
-
-// cache remote progress even if deck not installed
-const REMOTE_CACHE_PREFIX = 'devcards:sync:remoteCache:v1:'; // + deckSlug
-
+let _userSubMem: string | null = null;
 let _accessTokenMem: string | null = null;
+
+/**
+ * ----------------------------
+ * Cursor + remote cache (per user)
+ * ----------------------------
+ */
+function kCursor(userSub: string) {
+  return `${userPrefix(userSub)}sync:cursorMs:v1`;
+}
+function kLastSync(userSub: string) {
+  return `${userPrefix(userSub)}sync:last:v1`;
+}
+function kLastError(userSub: string) {
+  return `${userPrefix(userSub)}sync:lastError:v1`;
+}
+function remoteCachePrefix(userSub: string) {
+  return `${userPrefix(userSub)}sync:remoteCache:v1:`; // + deckSlug
+}
+
+/**
+ * ----------------------------
+ * Device id (global per install)
+ * ----------------------------
+ */
+const DEVICE_ID_KEY = 'devcards:deviceId:v1';
 
 let _timer: ReturnType<typeof setTimeout> | null = null;
 let _inFlight = false;
 let _pending = false;
-
 let _scheduledReason: string = 'unknown';
-
 let _lastPullAtMs = 0;
 
 /**
  * 这个不是“每 2s 拉一次”，只是防止短时间内重复 pull
- * （比如 app_start 触发一次 pull，紧接着 home_focus 又触发 pull）
  */
 const MIN_PULL_INTERVAL_MS = 2_000;
 
-// one-time heal guard
+// one-time heal guard (per user, but in-memory guard即可)
 let _healedOnce = false;
 
 function toMs(v: any): number | null {
@@ -179,6 +212,120 @@ function pickStableUidFromAny(obj: any): string | null {
   return v ? String(v).trim() : null;
 }
 
+/**
+ * ----------------------------
+ * JWT decode (best-effort)
+ * ----------------------------
+ */
+function b64UrlToUtf8(s: string): string | null {
+  try {
+    const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    const full = b64 + pad;
+
+    // Expo / RN 通常有 atob（但不保证），Buffer 也不保证，所以都做兜底
+    // @ts-ignore
+    if (typeof globalThis.atob === 'function') {
+      // atob 返回 binary string；JWT payload 基本都是 ASCII JSON，直接用即可
+      // @ts-ignore
+      return globalThis.atob(full);
+    }
+    // @ts-ignore
+    if (typeof Buffer !== 'undefined') {
+      // @ts-ignore
+      return Buffer.from(full, 'base64').toString('utf8');
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function tryGetUserSubFromAccessToken(token: string): string | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const jsonStr = b64UrlToUtf8(parts[1]);
+    if (!jsonStr) return null;
+    const payload = JSON.parse(jsonStr);
+
+    const sub =
+      payload?.sub ??
+      payload?.username ??
+      payload?.['cognito:username'] ??
+      payload?.user_id ??
+      payload?.uid ??
+      null;
+
+    return sub ? String(sub).trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ----------------------------
+ * Namespaced queue (per user)
+ * ----------------------------
+ */
+function kQueue(userSub: string) {
+  return `${userPrefix(userSub)}sync:progressQueue:v1`;
+}
+
+async function readQueue(userSub: string): Promise<ProgressEvent[]> {
+  try {
+    const raw = await AsyncStorage.getItem(kQueue(userSub));
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr as ProgressEvent[];
+  } catch {
+    return [];
+  }
+}
+
+async function writeQueue(userSub: string, arr: ProgressEvent[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(kQueue(userSub), JSON.stringify(arr));
+  } catch {}
+}
+
+async function enqueueProgressEvent(userSub: string, ev: ProgressEvent): Promise<void> {
+  const q = await readQueue(userSub);
+  q.push(ev);
+
+  // 保护上限：最多保留 3000 条（避免极端情况下 AsyncStorage 膨胀）
+  const MAX = 3000;
+  const out = q.length > MAX ? q.slice(q.length - MAX) : q;
+
+  await writeQueue(userSub, out);
+}
+
+async function peekProgressEvents(userSub: string, limit: number): Promise<ProgressEvent[]> {
+  const q = await readQueue(userSub);
+  return q.slice(0, Math.max(0, limit));
+}
+
+async function removeProgressEventsById(userSub: string, ids: string[]): Promise<void> {
+  if (!ids || ids.length === 0) return;
+  const idSet = new Set(ids.map(String));
+  const q = await readQueue(userSub);
+  const out = q.filter((ev) => !idSet.has(String(ev?.eventId)));
+  if (out.length !== q.length) {
+    await writeQueue(userSub, out);
+  }
+}
+
+async function progressQueueSize(userSub: string): Promise<number> {
+  const q = await readQueue(userSub);
+  return q.length;
+}
+
+/**
+ * ----------------------------
+ * Sync access token
+ * ----------------------------
+ */
 async function getSyncAccessToken(): Promise<string | null> {
   if (_accessTokenMem && _accessTokenMem.trim()) return _accessTokenMem;
 
@@ -195,6 +342,7 @@ async function getSyncAccessToken(): Promise<string | null> {
 
 /**
  * dev 模式注入 token
+ * ✅ 这里同时会尝试解析 userSub，用来做 “按用户分区”
  */
 export async function setSyncAccessToken(token: string | null): Promise<void> {
   const t = token && token.trim() ? token.trim() : null;
@@ -205,18 +353,153 @@ export async function setSyncAccessToken(token: string | null): Promise<void> {
     else await AsyncStorage.removeItem(ACCESS_TOKEN_KEY);
   } catch {}
 
+  if (!t) {
+    await setActiveUserSub(null);
+    // token 被清除 -> 取消任何 pending 的 sync
+    if (_timer) clearTimeout(_timer);
+    _timer = null;
+    return;
+  }
+
   // token 一旦可用，立刻触发 sync
-  if (t) {
-    scheduleProgressSync({ delayMs: 0, reason: 'token_set' });
+  scheduleProgressSync({ delayMs: 0, reason: 'token_set' });
+}
+
+/**
+ * ✅ 主动设置当前 userSub（推荐你在登录成功后调用一次，最稳）
+ * - 如果你不调用，这里也会从 accessToken 尽力解析 sub
+ */
+export async function setActiveUserSub(userSub: string | null): Promise<void> {
+  const next = userSub && userSub.trim() ? userSub.trim() : null;
+
+  const prev = _userSubMem ?? (await AsyncStorage.getItem(ACTIVE_USER_SUB_KEY).catch(() => null));
+  const prevNorm = prev && prev.trim() ? prev.trim() : null;
+
+  if (next === prevNorm) {
+    _userSubMem = next;
+
+    // ✅ 关键：同步刷新 review/storage.ts 的内存缓存（绕过 TTL）
+    setActiveUserSubForStorage(next);
+    return;
+  }
+
+  _userSubMem = next;
+
+  try {
+    if (next) await AsyncStorage.setItem(ACTIVE_USER_SUB_KEY, next);
+    else await AsyncStorage.removeItem(ACTIVE_USER_SUB_KEY);
+  } catch {}
+
+  // ✅ 关键：同步刷新 review/storage.ts 的内存缓存（绕过 TTL）
+  setActiveUserSubForStorage(next);
+
+  // user 发生变化：重置 in-memory sync 状态（不再 wipe 本地进度）
+  await onUserChanged(prevNorm, next);
+
+  // user 切换后立即做一次同步
+  if (next) scheduleProgressSync({ delayMs: 0, reason: 'user_changed' });
+}
+
+/**
+ * 如果你没有显式调用 setActiveUserSub，这里会在第一次 sync 时自动解析 token 来设置
+ */
+async function ensureUserSubReady(accessToken: string): Promise<string | null> {
+  if (_userSubMem && _userSubMem.trim()) return _userSubMem.trim();
+
+  try {
+    const stored = await AsyncStorage.getItem(ACTIVE_USER_SUB_KEY);
+    if (stored && stored.trim()) {
+      _userSubMem = stored.trim();
+      return _userSubMem;
+    }
+  } catch {}
+
+  const sub = tryGetUserSubFromAccessToken(accessToken);
+  if (sub) {
+    await setActiveUserSub(sub);
+    return sub;
+  }
+
+  return null;
+}
+
+/**
+ * ----------------------------
+ * Local wipe on user change (fallback)
+ * ----------------------------
+ *
+ * ✅ 现在 review/storage.ts 已经按 ACTIVE_USER_SUB_KEY 做了分区，因此默认不需要 wipe。
+ * 但保留一键兜底开关，方便调试。
+ */
+const ENABLE_WIPE_ON_USER_CHANGE = false;
+
+const WIPE_PREFIX_CANDIDATES: string[] = [
+  // 你现在这份 progressSync 旧 key（未分 user）：
+  'devcards:sync:',
+  // 很多项目会用这些前缀存 progress（你把 review/storage.ts 贴我，我可以精确化）
+  'devcards:review:',
+  'devcards:progress:',
+];
+
+function shouldWipeKey(k: string): boolean {
+  if (!k) return false;
+
+  // 不要动 auth / content / deck files 元数据
+  if (k.startsWith('devcards:auth:')) return false;
+
+  // 命中强前缀
+  if (WIPE_PREFIX_CANDIDATES.some((p) => k.startsWith(p))) return true;
+
+  // 兜底：只清和 progress 强相关的 key
+  const low = k.toLowerCase();
+  if (low.includes('progress') || low.includes('review') || low.includes('cursor')) return true;
+
+  return false;
+}
+
+/**
+ * ⚠️ 兜底清理（默认关闭）
+ */
+async function wipeLocalStudyStateBestEffort(): Promise<void> {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const toRemove = keys.filter(shouldWipeKey);
+    if (toRemove.length > 0) {
+      await AsyncStorage.multiRemove(toRemove);
+    }
+  } catch {}
+}
+
+async function onUserChanged(prevSub: string | null, nextSub: string | null): Promise<void> {
+  // 清掉内存状态
+  _lastPullAtMs = 0;
+  _healedOnce = false;
+
+  // 清掉 pending timer
+  if (_timer) clearTimeout(_timer);
+  _timer = null;
+
+  // 如果正在 inFlight，允许它结束；但之后会触发 pending_flush
+  _pending = false;
+
+  // ✅ 默认不 wipe（多账号共存）
+  if (ENABLE_WIPE_ON_USER_CHANGE) {
+    await wipeLocalStudyStateBestEffort();
   }
 }
 
 /**
- * ReviewScreen 调用这个入队：
- * - IMPORTANT: ReviewScreen 里应该 await 它（你已经这么做了）
- *   => 确保 event 已经写入 AsyncStorage queue，crash 也不丢
+ * ----------------------------
+ * Record review event
+ * ----------------------------
  */
 export async function recordReviewEvent(...args: any[]): Promise<string | null> {
+  const accessToken = await getSyncAccessToken();
+  if (!accessToken) return null;
+
+  const userSub = await ensureUserSubReady(accessToken);
+  if (!userSub) return null;
+
   let deckSlug: string | null = null;
   let stableUid: string | null = null;
   let rating: any = null;
@@ -262,38 +545,43 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
     lastSeenRevision: lastSeenRevision ?? null,
   };
 
-  await enqueueProgressEvent(ev);
+  await enqueueProgressEvent(userSub, ev);
   return ev.eventId;
 }
 
-async function getCursorMs(): Promise<number | null> {
+/**
+ * ----------------------------
+ * Cursor / remote cache (per user)
+ * ----------------------------
+ */
+async function getCursorMs(userSub: string): Promise<number | null> {
   try {
-    const raw = await AsyncStorage.getItem(SYNC_CURSOR_KEY);
+    const raw = await AsyncStorage.getItem(kCursor(userSub));
     return toMs(raw);
   } catch {
     return null;
   }
 }
 
-async function setCursorMs(ms: number): Promise<void> {
+async function setCursorMs(userSub: string, ms: number): Promise<void> {
   try {
-    await AsyncStorage.setItem(SYNC_CURSOR_KEY, String(Math.floor(ms)));
+    await AsyncStorage.setItem(kCursor(userSub), String(Math.floor(ms)));
   } catch {}
 }
 
-async function clearCursorMs(): Promise<void> {
+async function clearCursorMs(userSub: string): Promise<void> {
   try {
-    await AsyncStorage.removeItem(SYNC_CURSOR_KEY);
+    await AsyncStorage.removeItem(kCursor(userSub));
   } catch {}
 }
 
-function remoteCacheKey(deckSlug: string) {
-  return `${REMOTE_CACHE_PREFIX}${deckSlug}`;
+function remoteCacheKey(userSub: string, deckSlug: string) {
+  return `${remoteCachePrefix(userSub)}${deckSlug}`;
 }
 
-async function getRemoteCache(deckSlug: string): Promise<Record<string, ProgressItem>> {
+async function getRemoteCache(userSub: string, deckSlug: string): Promise<Record<string, ProgressItem>> {
   try {
-    const raw = await AsyncStorage.getItem(remoteCacheKey(deckSlug));
+    const raw = await AsyncStorage.getItem(remoteCacheKey(userSub, deckSlug));
     if (!raw) return {};
     const obj = JSON.parse(raw);
     if (!obj || typeof obj !== 'object') return {};
@@ -303,44 +591,48 @@ async function getRemoteCache(deckSlug: string): Promise<Record<string, Progress
   }
 }
 
-async function setRemoteCache(deckSlug: string, cache: Record<string, ProgressItem>): Promise<void> {
+async function setRemoteCache(
+  userSub: string,
+  deckSlug: string,
+  cache: Record<string, ProgressItem>,
+): Promise<void> {
   try {
-    await AsyncStorage.setItem(remoteCacheKey(deckSlug), JSON.stringify(cache));
+    await AsyncStorage.setItem(remoteCacheKey(userSub, deckSlug), JSON.stringify(cache));
   } catch {
     // ignore
   }
 }
 
-async function writeLastSync(payload: any) {
+async function writeLastSync(userSub: string, payload: any) {
   try {
-    await AsyncStorage.setItem(LAST_SYNC_KEY, JSON.stringify(payload));
+    await AsyncStorage.setItem(kLastSync(userSub), JSON.stringify(payload));
   } catch {}
 }
 
-async function writeLastError(msg: string | null) {
+async function writeLastError(userSub: string, msg: string | null) {
   try {
-    if (!msg) await AsyncStorage.removeItem(LAST_ERROR_KEY);
-    else await AsyncStorage.setItem(LAST_ERROR_KEY, msg);
+    if (!msg) await AsyncStorage.removeItem(kLastError(userSub));
+    else await AsyncStorage.setItem(kLastError(userSub), msg);
   } catch {}
 }
 
 /**
  * 自愈：cursor 有值，但 remoteCache 全没了（常见：清缓存但没清 cursor）
- * => 清 cursor，下次 pull 会全量拉回历史
  */
-async function healCursorIfCacheMissing(): Promise<void> {
+async function healCursorIfCacheMissing(userSub: string): Promise<void> {
   if (_healedOnce) return;
   _healedOnce = true;
 
-  const cursor = await getCursorMs();
+  const cursor = await getCursorMs(userSub);
   if (cursor == null) return;
 
   try {
     const keys = await AsyncStorage.getAllKeys();
-    const hasAnyCache = keys.some((k) => k.startsWith(REMOTE_CACHE_PREFIX));
+    const prefix = remoteCachePrefix(userSub);
+    const hasAnyCache = keys.some((k) => k.startsWith(prefix));
     if (!hasAnyCache) {
-      console.warn('[progressSync] heal: cursor exists but no remote cache keys; reset cursor', { cursor });
-      await clearCursorMs();
+      console.warn('[progressSync] heal: cursor exists but no remote cache keys; reset cursor', { cursor, userSub });
+      await clearCursorMs(userSub);
     }
   } catch {
     // ignore
@@ -361,16 +653,12 @@ function getDeckUidSet(deck: any): Set<string> {
 
 /**
  * Merge remote progress items into local CardProgress[].
- * 规则：
- * - remote.updatedAtMs 越大越新
- * - remoteLastReviewedAt > localLastReviewedAt => remote 覆盖本地
- * - lastReviewedAt 相同：只有 remote.hasNext=true 才允许覆盖 nextReviewAt（防 Phase2 fallback 抖动）
  */
 function mergeRemoteIntoLocalProgress(
   local: CardProgress[],
   remoteRows: ProgressItem[],
 ): { merged: CardProgress[]; changed: boolean; appliedCount: number } {
-  const localByUid = new Map(local.map((p) => [p.stableUid, p]));
+  const localByUid = new Map(local.map((p: any) => [p.stableUid, p]));
 
   type RemoteBest = {
     lastReviewedAt: number;
@@ -441,7 +729,7 @@ function mergeRemoteIntoLocalProgress(
     return p;
   });
 
-  // 兜底：补 local 不存在的 uid（一般不会发生，因为 loadDeckProgress 会按 deck 补齐）
+  // 兜底：补 local 不存在的 uid
   for (const [uid, remote] of bestRemote.entries()) {
     if (localByUid.has(uid)) continue;
 
@@ -460,10 +748,18 @@ function mergeRemoteIntoLocalProgress(
   return { merged: out, changed, appliedCount };
 }
 
-async function pullProgressAndApply(accessToken: string): Promise<{ pulled: number; applied: number }> {
-  await healCursorIfCacheMissing();
+/**
+ * ----------------------------
+ * Pull
+ * ----------------------------
+ */
+async function pullProgressAndApply(
+  userSub: string,
+  accessToken: string,
+): Promise<{ pulled: number; applied: number }> {
+  await healCursorIfCacheMissing(userSub);
 
-  const cursorBefore = await getCursorMs();
+  const cursorBefore = await getCursorMs(userSub);
 
   const qs: string[] = ['limit=5000'];
   if (cursorBefore != null) qs.push(`sinceMs=${encodeURIComponent(String(cursorBefore))}`);
@@ -500,7 +796,7 @@ async function pullProgressAndApply(accessToken: string): Promise<{ pulled: numb
 
   for (const [deckSlug, rows] of byDeck.entries()) {
     try {
-      const cache = await getRemoteCache(deckSlug);
+      const cache = await getRemoteCache(userSub, deckSlug);
       let cacheChanged = false;
 
       for (const r of rows) {
@@ -517,7 +813,7 @@ async function pullProgressAndApply(accessToken: string): Promise<{ pulled: numb
       }
 
       if (cacheChanged) {
-        await setRemoteCache(deckSlug, cache);
+        await setRemoteCache(userSub, deckSlug, cache);
       }
     } catch {
       cacheAllOk = false;
@@ -547,25 +843,38 @@ async function pullProgressAndApply(accessToken: string): Promise<{ pulled: numb
 
   // 3) advance cursor only if caching succeeded
   if (cacheAllOk && maxUpdatedAt > (cursorBefore ?? 0)) {
-    await setCursorMs(maxUpdatedAt);
+    await setCursorMs(userSub, maxUpdatedAt);
   }
 
   _lastPullAtMs = Date.now();
   return { pulled: items.length, applied };
 }
 
+/**
+ * ----------------------------
+ * Sync once (push + pull)
+ * ----------------------------
+ */
 async function syncProgressOnce(
+  userSub: string,
   accessToken: string,
   reason: string,
 ): Promise<{ pushed: number; pulled: number; applied: number; remaining: number }> {
-  // best-effort bootstrap
+  // best-effort bootstrap（也可以顺便用它来拿 userSub）
   try {
-    await apiJson<ApiOk<BootstrapResp>>('/api/v1/user/bootstrap', {
+    const boot = await apiJson<ApiOk<BootstrapResp>>('/api/v1/user/bootstrap', {
       method: 'POST',
       accessToken,
       body: {},
       timeoutMs: 12000,
     });
+
+    const serverSub = boot?.data?.userSub ? String(boot.data.userSub).trim() : null;
+    if (serverSub && serverSub !== userSub) {
+      // token 解析不到 / 解析错时，bootstrap 是最终真相
+      await setActiveUserSub(serverSub);
+      userSub = serverSub;
+    }
   } catch {}
 
   // 1) push
@@ -575,7 +884,7 @@ async function syncProgressOnce(
   const deviceId = await getDeviceId();
 
   for (let round = 0; round < 20; round++) {
-    const batch = await peekProgressEvents(BATCH);
+    const batch = await peekProgressEvents(userSub, BATCH);
     if (batch.length === 0) break;
 
     const resp = await apiJson<ApiOk<PushResp>>('/api/v1/sync/push', {
@@ -607,7 +916,7 @@ async function syncProgressOnce(
     const ackIds = [...(resp.data.acceptedEventIds || []), ...(resp.data.duplicateEventIds || [])];
     if (ackIds.length === 0) break;
 
-    await removeProgressEventsById(ackIds);
+    await removeProgressEventsById(userSub, ackIds);
     pushed += ackIds.length;
 
     if (batch.length < BATCH) break;
@@ -621,20 +930,18 @@ async function syncProgressOnce(
   const msSinceLastPull = _lastPullAtMs > 0 ? now - _lastPullAtMs : Number.POSITIVE_INFINITY;
   const pullAllowed = msSinceLastPull >= MIN_PULL_INTERVAL_MS;
 
-  /**
-   * Pull 的目的：拿到别的设备的更新 + 填 remote cache
-   * 但我们不希望每次 rating 都 pull（省流量）
-   */
   const wantPull =
     reason === 'home_focus' ||
     reason === 'review_focus' ||
     reason === 'app_start' ||
     reason === 'manual' ||
+    reason === 'token_set' ||
+    reason === 'user_changed' ||
     pushed === 0;
 
   if (wantPull && pullAllowed) {
     try {
-      const r = await pullProgressAndApply(accessToken);
+      const r = await pullProgressAndApply(userSub, accessToken);
       pulled = r.pulled;
       applied = r.applied;
     } catch (e) {
@@ -642,14 +949,19 @@ async function syncProgressOnce(
     }
   }
 
-  const remaining = await progressQueueSize();
+  const remaining = await progressQueueSize(userSub);
 
-  await writeLastSync({ atMs: Date.now(), reason, pushed, pulled, applied, remaining });
-  await writeLastError(null);
+  await writeLastSync(userSub, { atMs: Date.now(), reason, pushed, pulled, applied, remaining });
+  await writeLastError(userSub, null);
 
   return { pushed, pulled, applied, remaining };
 }
 
+/**
+ * ----------------------------
+ * Scheduler / runner
+ * ----------------------------
+ */
 async function runSyncNow(reason: string): Promise<void> {
   if (_inFlight) {
     _pending = true;
@@ -662,14 +974,28 @@ async function runSyncNow(reason: string): Promise<void> {
   try {
     const token = await getSyncAccessToken();
     if (!token) {
-      await writeLastError('NO_TOKEN');
+      // 没 token 就不报 noisy error
       return;
     }
 
-    await syncProgressOnce(token, reason);
+    const userSub = await ensureUserSubReady(token);
+    if (!userSub) {
+      console.warn('[progressSync] NO_USER_SUB (cannot namespace sync keys). Call setActiveUserSub() after login.');
+      return;
+    }
+
+    await syncProgressOnce(userSub, token, reason);
   } catch (e) {
     const msg = (e as any)?.message ?? String(e);
-    await writeLastError(msg);
+
+    try {
+      const token = await getSyncAccessToken();
+      if (token) {
+        const userSub = await ensureUserSubReady(token);
+        if (userSub) await writeLastError(userSub, msg);
+      }
+    } catch {}
+
     console.warn('[progressSync] failed:', msg);
   } finally {
     _inFlight = false;
@@ -686,11 +1012,9 @@ async function runSyncNow(reason: string): Promise<void> {
  * ✅ 省流量策略：
  * - rating 默认 10s debounce（连续打分合并成一次 push）
  * - home_focus/review_focus/app_start/manual/token_set 默认立即 sync
- *
- * 你也可以继续显式传 delayMs 来覆盖默认策略。
  */
 export function scheduleProgressSync(arg?: any): void {
-  // ✅ No token -> skip scheduling (avoid noisy warnings in Home before login)
+  // ✅ No token -> skip scheduling
   if (!_accessTokenMem || !_accessTokenMem.trim()) {
     return;
   }
@@ -716,7 +1040,8 @@ export function scheduleProgressSync(arg?: any): void {
       reason === 'review_focus' ||
       reason === 'app_start' ||
       reason === 'manual' ||
-      reason === 'token_set'
+      reason === 'token_set' ||
+      reason === 'user_changed'
     ) {
       delayMs = 0;
     } else {
@@ -738,7 +1063,6 @@ function sleep(ms: number) {
 }
 
 export async function forceProgressSync(reason: string = 'manual'): Promise<void> {
-  // ✅ No token -> skip force sync entirely (avoid 20s timeout)
   const token = await getSyncAccessToken();
   if (!token || !token.trim()) return;
 
@@ -760,12 +1084,15 @@ export async function forceProgressSync(reason: string = 'manual'): Promise<void
 }
 
 export async function getProgressSyncDebugState(): Promise<any> {
-  const [cursorMs, qSize, lastRaw, err, deviceId] = await Promise.all([
-    getCursorMs(),
-    progressQueueSize(),
-    AsyncStorage.getItem(LAST_SYNC_KEY),
-    AsyncStorage.getItem(LAST_ERROR_KEY),
+  const token = await getSyncAccessToken();
+  const userSub = token ? await ensureUserSubReady(token) : null;
+
+  const [cursorMs, lastRaw, err, deviceId, qSize] = await Promise.all([
+    userSub ? getCursorMs(userSub) : Promise.resolve(null),
+    userSub ? AsyncStorage.getItem(kLastSync(userSub)) : Promise.resolve(null),
+    userSub ? AsyncStorage.getItem(kLastError(userSub)) : Promise.resolve(null),
     getDeviceId(),
+    userSub ? progressQueueSize(userSub) : Promise.resolve(0),
   ]);
 
   let last = null;
@@ -775,6 +1102,7 @@ export async function getProgressSyncDebugState(): Promise<any> {
 
   return {
     deviceId,
+    userSub: userSub ?? null,
     cursorMs,
     queueSize: qSize,
     last,
@@ -784,13 +1112,18 @@ export async function getProgressSyncDebugState(): Promise<any> {
 
 /**
  * 应用 remote cache 到本地（deck 安装后补进度用）
- * - 解决：cursor 已推进，但 deck 是后来才安装 => pull 时没法 apply 到本地
  */
 export async function applyCachedRemoteProgress(deckSlug: string): Promise<number> {
+  const token = await getSyncAccessToken();
+  if (!token) return 0;
+
+  const userSub = await ensureUserSubReady(token);
+  if (!userSub) return 0;
+
   const deck: any = await resolveDeckBySlug(deckSlug);
   if (!deck) return 0;
 
-  const cache = await getRemoteCache(deckSlug);
+  const cache = await getRemoteCache(userSub, deckSlug);
   const rowsAll = Object.values(cache || {});
   if (rowsAll.length === 0) return 0;
 
@@ -811,14 +1144,20 @@ export async function applyCachedRemoteProgress(deckSlug: string): Promise<numbe
 }
 
 /**
- * debug：一键清 sync 状态（下次会全量 pull）
+ * debug：一键清 sync 状态（只清当前用户）
  */
 export async function resetProgressSyncState(): Promise<void> {
+  const token = await getSyncAccessToken();
+  if (!token) return;
+
+  const userSub = await ensureUserSubReady(token);
+  if (!userSub) return;
+
   try {
     const keys = await AsyncStorage.getAllKeys();
-    const toRemove = keys.filter(
-      (k) => k === SYNC_CURSOR_KEY || k === LAST_SYNC_KEY || k === LAST_ERROR_KEY || k.startsWith(REMOTE_CACHE_PREFIX),
-    );
+    const prefix = userPrefix(userSub);
+
+    const toRemove = keys.filter((k) => k.startsWith(prefix));
     if (toRemove.length > 0) {
       await AsyncStorage.multiRemove(toRemove);
     }

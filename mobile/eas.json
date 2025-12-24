@@ -31,6 +31,7 @@
     },
     "production": {
       "distribution": "store",
+      "channel": "production",
       "ios": {
         "buildConfiguration": "Release",
         "image": "latest",

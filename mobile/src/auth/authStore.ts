@@ -11,12 +11,14 @@ import {
   getCurrentUser,
 } from 'aws-amplify/auth';
 
-import { setSyncAccessToken, forceProgressSync } from '../sync/progressSync';
+import { setSyncAccessToken, forceProgressSync, setActiveUserSub } from '../sync/progressSync';
 
 type AuthStatus = 'unknown' | 'anonymous' | 'signed_in';
 
 type AuthState = {
   status: AuthStatus;
+  userId: string | null; // ✅ 稳定用户标识（sub / userId）
+
   email: string | null;
   userSub: string | null;
 
@@ -83,8 +85,12 @@ async function applySessionToState(set: any) {
     // ignore
   }
 
+  // ✅ 关键：立刻设置 activeUserSub（让 Home 读取正确的 user-scoped progress）
+  await setActiveUserSub(userSub);
+
   set({
     status: at ? 'signed_in' : 'anonymous',
+    userId: userSub,
     email,
     userSub,
     accessToken: at,
@@ -101,10 +107,14 @@ async function applySessionToState(set: any) {
 
 export const useAuthStore = create<AuthState>((set) => ({
   status: 'unknown',
+  userId: null,
+
   email: null,
   userSub: null,
+
   accessToken: null,
   idToken: null,
+
   loading: false,
   lastError: null,
 
@@ -113,16 +123,18 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await applySessionToState(set);
     } catch {
+      // ✅ critical: ensure unsigned-in => no sync token (also clears activeUserSub)
+      await setSyncAccessToken(null);
+
       set({
         status: 'anonymous',
+        userId: null,
         email: null,
         userSub: null,
         accessToken: null,
         idToken: null,
         lastError: null,
       });
-      // ✅ critical: ensure unsigned-in => no sync token
-      await setSyncAccessToken(null);
     } finally {
       set({ loading: false });
     }
@@ -209,7 +221,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
       if (step === 'CONFIRM_SIGN_UP') {
         throw new Error(
-          'Email not verified yet. Please confirm the code sent to your email, then sign in again.'
+          'Email not verified yet. Please confirm the code sent to your email, then sign in again.',
         );
       }
       if (step === 'RESET_PASSWORD') {
@@ -217,7 +229,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       }
       if (step === 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED') {
         throw new Error(
-          'A new password is required for this account. Please complete the password update flow.'
+          'A new password is required for this account. Please complete the password update flow.',
         );
       }
 
@@ -245,8 +257,12 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await signOut();
     } finally {
+      // ✅ 关键：先清 sync token / activeUserSub，再更新 UI（避免 Home reload 还读旧 scope）
+      await setSyncAccessToken(null);
+
       set({
         status: 'anonymous',
+        userId: null,
         email: null,
         userSub: null,
         accessToken: null,
@@ -254,7 +270,6 @@ export const useAuthStore = create<AuthState>((set) => ({
         loading: false,
         lastError: null,
       });
-      await setSyncAccessToken(null);
     }
   },
 }));

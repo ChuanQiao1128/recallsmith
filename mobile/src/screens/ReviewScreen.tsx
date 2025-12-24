@@ -51,7 +51,8 @@ import {
 } from '../sync/progressSync';
 
 // ✅ premium entitlement
-import { usePremiumUser } from '../premium/premiumStore';
+import { usePremiumUser, setIsPremiumUser } from '../premium/premiumStore';
+import { rcGetCustomerInfoSafe, isPremiumActive } from '../premium/revenuecat';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Review'>;
 type UiRating = ReviewRating;
@@ -64,7 +65,7 @@ interface CurrentCard {
 type TrialInfo = {
   isTrial: boolean;
   previewCount: number; // e.g. 30
-  totalCards: number;   // full deck total for dialog copy
+  totalCards: number; // full deck total for dialog copy
 };
 
 function showTrialUpsellDialog(
@@ -157,15 +158,45 @@ function isUpdatedCard(card: any, p: CardProgress): boolean {
   return getCardRevision(card) > getSeenRevision(p);
 }
 
+/**
+ * ✅ Robust premium check:
+ * - First try your helper isPremiumActive()
+ * - If it’s wrong/mismatched, fallback to RC CustomerInfo structure
+ */
+function computePremiumActive(customerInfo: any): boolean {
+  try {
+    if (isPremiumActive(customerInfo)) return true;
+  } catch {
+    // ignore
+  }
+
+  const activeEnt = (customerInfo as any)?.entitlements?.active;
+  if (activeEnt && typeof activeEnt === 'object') {
+    const keys = Object.keys(activeEnt);
+    if (keys.length > 0) {
+      for (const k of keys) {
+        if ((activeEnt as any)[k]?.isActive === true) return true;
+      }
+      return true;
+    }
+  }
+
+  const subs = (customerInfo as any)?.activeSubscriptions;
+  if (Array.isArray(subs) && subs.length > 0) return true;
+
+  return false;
+}
+
 function pickNextCard(
   deck: DeckExport,
   progress: CardProgress[],
   now: Date,
   mode: 'review-due' | 'learn-new' | 'mixed',
   avoidUid?: string | null,
+  index?: { cards: CardExport[]; cardMap: Map<string, CardExport> } | null,
 ): CurrentCard | null {
-  const cardMap = buildCardMap(deck);
-  const cards = sortCards(deck);
+  const cardMap = index?.cardMap ?? buildCardMap(deck);
+  const cards = index?.cards ?? sortCards(deck);
   const pMap = new Map(progress.map((p) => [p.stableUid, p]));
 
   const pickWith = (predicate: (card: CardExport, p: CardProgress) => boolean) => {
@@ -259,7 +290,8 @@ export function ReviewScreen({ navigation, route }: Props) {
   const { mode = 'mixed', limit = 20 } = route.params ?? {};
 
   // ✅ trial: DeckScreen 会传 previewLimit（例如 30）
-  const previewLimitParam = Number((route.params as any)?.previewLimit ?? 0);
+  const previewLimitParamRaw = Number((route.params as any)?.previewLimit ?? 0);
+  const previewLimitParam = Number.isFinite(previewLimitParamRaw) ? previewLimitParamRaw : 0;
 
   const [slug, setSlug] = useState<string | null>(slugFromRoute);
   const [deck, setDeck] = useState<DeckExport | null>(null);
@@ -275,6 +307,9 @@ export function ReviewScreen({ navigation, route }: Props) {
 
   // ✅ trial info (for dialog copy)
   const trialRef = useRef<TrialInfo>({ isTrial: false, previewCount: 0, totalCards: 0 });
+
+  // ✅ cache cards index to avoid sort/map repeatedly
+  const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport> } | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -353,6 +388,23 @@ export function ReviewScreen({ navigation, route }: Props) {
     flipAnim.setValue(0);
   }
 
+  function goPaywall(reason?: string) {
+    const navAny = navigation as any;
+    if (typeof navAny.replace === 'function') {
+      navAny.replace('Paywall', reason ? { reason } : undefined);
+      return;
+    }
+
+    navAny.navigate('Paywall' as any);
+
+    // fallback: if user comes back, show a clear message instead of spinner
+    setLoadError(reason ?? '需要 Premium 才能继续。');
+    setLoading(false);
+    setDeck(null);
+    setDailyStats(null);
+    setCurrent(null);
+  }
+
   useFocusEffect(
     useCallback(() => {
       if (!slug) {
@@ -379,9 +431,28 @@ export function ReviewScreen({ navigation, route }: Props) {
 
         const now = new Date();
 
+        // local vars to avoid store race
+        let premiumActive = isPremiumUser;
+        let verifiedPremium = false;
+
+        const ensurePremiumOnce = async () => {
+          if (premiumActive) return true;
+          if (verifiedPremium) return premiumActive;
+
+          verifiedPremium = true;
+          try {
+            const info = await rcGetCustomerInfoSafe();
+            const active = computePremiumActive(info);
+            premiumActive = active;
+            if (active) setIsPremiumUser(true);
+            return premiumActive;
+          } catch {
+            return false;
+          }
+        };
+
         try {
-          // ✅ trial session?
-          const isTrial = !isPremiumUser && previewLimitParam > 0;
+          const wantsTrial = previewLimitParam > 0;
 
           // 1) manifest gate: coming / premium
           const manifest = await listManifestDecks();
@@ -398,10 +469,9 @@ export function ReviewScreen({ navigation, route }: Props) {
                 String(entry.downloadMode ?? '').toLowerCase() === 'auth'
               : false;
 
-          // ✅ 非会员：只有在 trial（previewLimitParam > 0）时才允许进 Review
-          if (premiumByManifest && !isPremiumUser && !isTrial) {
-            navigation.navigate('Paywall' as any);
-            return;
+          // ✅ If manifest says premium but store says not, verify once with RevenueCat.
+          if (premiumByManifest && !premiumActive) {
+            await ensurePremiumOnce();
           }
 
           // 2) resolve local
@@ -410,7 +480,7 @@ export function ReviewScreen({ navigation, route }: Props) {
           // 3) auto-install if public deck not installed
           if (!resolved) {
             const updates = await checkManifestForUpdates();
-            const info = updates[slugStr];
+            const info = (updates as any)[slugStr];
             if (info?.remoteUrl && info?.remoteVersion) {
               const ok = await installDeckFromUrl(
                 slugStr,
@@ -431,8 +501,17 @@ export function ReviewScreen({ navigation, route }: Props) {
           const premiumByDeck = resolved.DeckType !== 1;
           const isPremiumDeck = premiumByManifest || premiumByDeck;
 
-          if (isPremiumDeck && !isPremiumUser && !isTrial) {
-            navigation.navigate('Paywall' as any);
+          // ✅ If deck is premium and still not premiumActive, verify once with RevenueCat
+          if (isPremiumDeck && !premiumActive) {
+            await ensurePremiumOnce();
+          }
+
+          // ✅ Decide trial AFTER verification (prevents premium user being treated as trial)
+          const isTrial = isPremiumDeck && !premiumActive && wantsTrial;
+
+          // ✅ If premium deck, not premium, and no trial => paywall
+          if (isPremiumDeck && !premiumActive && !isTrial) {
+            goPaywall('需要 Premium 才能开始该卡组。');
             return;
           }
 
@@ -445,6 +524,12 @@ export function ReviewScreen({ navigation, route }: Props) {
             : 0;
 
           const deckForStudy = isTrial ? buildPreviewDeck(resolved, previewCount) : resolved;
+
+          // ✅ update index cache
+          cardIndexRef.current = {
+            cards: sortCards(deckForStudy),
+            cardMap: buildCardMap(deckForStudy),
+          };
 
           trialRef.current = {
             isTrial,
@@ -482,7 +567,7 @@ export function ReviewScreen({ navigation, route }: Props) {
           const stats = await loadOrInitDailyStats(deckForStudy, p);
           if (cancelled) return;
 
-          const next = pickNextCard(deckForStudy, p, now, mode);
+          const next = pickNextCard(deckForStudy, p, now, mode, null, cardIndexRef.current);
 
           setProgress(p);
           setDailyStats(stats);
@@ -567,7 +652,7 @@ export function ReviewScreen({ navigation, route }: Props) {
     try {
       const nowMs = Date.now();
 
-      const seenRev = typeof (current.card as any).Revision === 'number' ? (current.card as any).Revision : 1;
+      const seenRev = getCardRevision(current.card);
 
       const updatedOne: CardProgress = {
         ...scheduleNextReview(current.progress, uiRating, new Date(nowMs)),
@@ -624,7 +709,9 @@ export function ReviewScreen({ navigation, route }: Props) {
       avoidUidRef.current = updatedOne.stableUid;
 
       const next =
-        remaining > 0 ? pickNextCard(deck, newProgress, new Date(), mode, avoidUidRef.current) : null;
+        remaining > 0
+          ? pickNextCard(deck, newProgress, new Date(), mode, avoidUidRef.current, cardIndexRef.current)
+          : null;
 
       setProgress(newProgress);
       setCurrent(next);

@@ -12,8 +12,9 @@ export function configureAmplifyOnce() {
   const userPoolClientId = (process.env.EXPO_PUBLIC_COGNITO_USER_POOL_CLIENT_ID || '').trim();
 
   if (!region || !userPoolId || !userPoolClientId) {
-    console.warn('[amplify] missing env vars for Cognito', { region, userPoolId, userPoolClientId });
-  }
+  console.warn('[amplify] missing env vars for Cognito', { region, userPoolId, userPoolClientId });
+  return; // ✅ 不要用空配置初始化
+}
 
   Amplify.configure({
     Auth: {

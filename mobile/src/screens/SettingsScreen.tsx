@@ -567,8 +567,8 @@ export function SettingsScreen({ navigation }: Props) {
 
             {/* App info */}
             <View style={styles.cardGlass}>
-              <Text style={styles.appName}>DevCards</Text>
-              <Text style={styles.appTagline}>Full-stack concept with spaced repetition.</Text>
+              <Text style={styles.appName}>DeveloperCards</Text>
+              <Text style={styles.appTagline}>Full-stack concept.</Text>
 
               <View style={styles.kvRow}>
                 <Text style={styles.kLabel}>Current app</Text>

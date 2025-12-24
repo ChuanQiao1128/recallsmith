@@ -205,6 +205,7 @@ export function HomeScreen({ navigation }: Props) {
   // ✅ auth state (Month requires sign-in)
   const authStatus = useAuthStore((s) => s.status);
   const authInit = useAuthStore((s) => s.init);
+  const authUserSub = useAuthStore((s) => s.userSub);
   const isSignedIn = authStatus === 'signed_in';
 
   const [isMonthGateOpen, setIsMonthGateOpen] = useState(false);
@@ -517,18 +518,36 @@ useEffect(() => {
     }, [loadHomeFromLocal]),
   );
 
-  // ✅ Refresh Home immediately after sign-in or premium status changes
+  // ✅ Refresh Home immediately after:
+  // - sign-in / sign-out
+  // - account switch (userSub changes while still signed_in)
+  // - premium status changes
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
       if (authStatus === 'unknown') return;
-      await loadHomeFromLocal();
+
+      // show spinner while switching account / syncing
+      setState((prev) => ({ ...prev, loading: true }));
+
+      // ✅ ensure local progress reflects the *current* signed-in user
+      if (isSignedIn) {
+        try {
+          await forceProgressSync('home_auth_changed');
+        } catch {
+          // ignore (offline etc.)
+        }
+      }
+
       if (cancelled) return;
+      await loadHomeFromLocal();
     })();
+
     return () => {
       cancelled = true;
     };
-  }, [authStatus, isSignedIn, isPremiumUser, loadHomeFromLocal]);
+  }, [authStatus, authUserSub, isSignedIn, isPremiumUser, loadHomeFromLocal]);
 
   const { loading, asOfISO, deckSummaries, updates, allUpcoming30, monthCounts } = state;
   const asOf = useMemo(() => new Date(asOfISO), [asOfISO]);
@@ -789,7 +808,7 @@ useEffect(() => {
           <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
             <View style={styles.headingRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.appTitle}>DevCards</Text>
+                <Text style={styles.appTitle}>DeveloperCards</Text>
                 <Text style={styles.appSubtitle}>A clean way to stay consistent.</Text>
               </View>
 

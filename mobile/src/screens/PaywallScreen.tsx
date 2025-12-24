@@ -1,5 +1,5 @@
 // mobile/src/screens/PaywallScreen.tsx
-import React from 'react';
+import React, { useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,10 +12,16 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 
 import type { RootStackParamList } from '../navigation/types';
 import { usePremiumUser, setIsPremiumUser } from '../premium/premiumStore';
-import { rcPurchaseMonthly, rcRestore, rcGetCustomerInfo, isPremiumActive } from '../premium/revenuecat';
+import {
+  rcPurchaseMonthly,
+  rcRestore,
+  rcGetCustomerInfoSafe,
+  isPremiumActive,
+} from '../premium/revenuecat';
 import { useAuthStore } from '../auth/authStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Paywall'>;
@@ -25,38 +31,94 @@ export function PaywallScreen({ navigation }: Props) {
   const isSignedIn = useAuthStore((s) => s.status === 'signed_in');
   const [busy, setBusy] = React.useState(false);
 
+  // ✅ 更鲁棒：Paywall 打开时自动刷新一次订阅状态，避免“其实已经 Premium 但 UI 还显示未订阅”
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      async function refresh() {
+        if (!isSignedIn) return;
+        try {
+          const info = await rcGetCustomerInfoSafe();
+          if (cancelled) return;
+
+          const active = isPremiumActive(info);
+          setIsPremiumUser(active);
+        } catch {
+          // ignore
+        }
+      }
+
+      void refresh();
+      return () => {
+        cancelled = true;
+      };
+    }, [isSignedIn]),
+  );
+
+  const navHas = (name: string) => {
+    const s = (navigation as any).getState?.();
+    if (s?.routeNames?.includes(name)) return true;
+
+    const p1 = (navigation as any).getParent?.();
+    const s1 = p1?.getState?.();
+    if (s1?.routeNames?.includes(name)) return true;
+
+    const p2 = p1?.getParent?.();
+    const s2 = p2?.getState?.();
+    if (s2?.routeNames?.includes(name)) return true;
+
+    return false;
+  };
+
+  const goSignIn = () => {
+    if (navHas('SignIn')) return (navigation as any).navigate('SignIn');
+    if (navHas('Login')) return (navigation as any).navigate('Login');
+    if (navHas('Auth')) return (navigation as any).navigate('Auth', { screen: 'SignIn' });
+    // 最后兜底：还是回到上一页
+    navigation.goBack();
+  };
+
   async function handleSubscribe() {
     if (busy) return;
 
     if (!isSignedIn) {
       Alert.alert('Sign in required', 'Please sign in before purchasing Premium.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
+        { text: 'Sign in', onPress: goSignIn },
       ]);
       return;
     }
 
     setBusy(true);
     try {
-      // 防止已订阅用户重复购买
-      const existing = await rcGetCustomerInfo();
-      if (isPremiumActive(existing)) {
-        await setIsPremiumUser(true);
-        Alert.alert('Premium active', 'Your subscription is already active.');
-        navigation.goBack();
-        return;
+      // ✅ 防止已订阅用户重复购买（并顺便刷新一次状态）
+      try {
+        const existing = await rcGetCustomerInfoSafe();
+        const activeExisting = isPremiumActive(existing);
+        setIsPremiumUser(activeExisting);
+
+        if (activeExisting) {
+          Alert.alert('Premium active', 'Your subscription is already active.');
+          navigation.goBack();
+          return;
+        }
+      } catch {
+        // ignore，继续尝试购买
       }
 
       const info = await rcPurchaseMonthly();
       const active = isPremiumActive(info);
-
-      await setIsPremiumUser(active);
+      setIsPremiumUser(active);
 
       if (active) {
         Alert.alert('Success', 'Premium is now active 🎉');
         navigation.goBack();
       } else {
-        Alert.alert('Purchased', 'Purchase completed, but entitlement not active yet.');
+        Alert.alert(
+          'Purchased',
+          'Purchase completed, but entitlement not active yet. Try “Restore Purchases” or reopen the app.',
+        );
       }
     } catch (e: any) {
       if (e?.userCancelled) return;
@@ -72,7 +134,7 @@ export function PaywallScreen({ navigation }: Props) {
     if (!isSignedIn) {
       Alert.alert('Sign in required', 'Please sign in before restoring purchases.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
+        { text: 'Sign in', onPress: goSignIn },
       ]);
       return;
     }
@@ -81,7 +143,7 @@ export function PaywallScreen({ navigation }: Props) {
     try {
       const info = await rcRestore();
       const active = isPremiumActive(info);
-      await setIsPremiumUser(active);
+      setIsPremiumUser(active);
 
       Alert.alert('Restore complete', active ? 'Premium is active.' : 'No active subscription found.');
       if (active) navigation.goBack();
@@ -125,8 +187,8 @@ export function PaywallScreen({ navigation }: Props) {
                 {!isSignedIn
                   ? '🔒 Sign in required to purchase / restore'
                   : isPremium
-                    ? '✅ Premium active on this account'
-                    : '🔒 Not subscribed'}
+                  ? '✅ Premium active on this account'
+                  : '🔒 Not subscribed'}
               </Text>
 
               <View style={styles.divider} />
@@ -166,9 +228,7 @@ export function PaywallScreen({ navigation }: Props) {
             {/* Actions */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Upgrade</Text>
-              <Text style={styles.sectionSubtitle}>
-                Purchase uses Apple In-App Purchase via RevenueCat.
-              </Text>
+              <Text style={styles.sectionSubtitle}>Purchase uses Apple In-App Purchase via RevenueCat.</Text>
 
               <Pressable
                 style={({ pressed }) => [
@@ -179,7 +239,7 @@ export function PaywallScreen({ navigation }: Props) {
                 disabled={busy || isPremium}
                 onPress={() => {
                   if (!isSignedIn) {
-                    navigation.navigate('SignIn');
+                    goSignIn();
                     return;
                   }
                   void handleSubscribe();
@@ -198,15 +258,11 @@ export function PaywallScreen({ navigation }: Props) {
               </Pressable>
 
               <Pressable
-                style={({ pressed }) => [
-                  styles.linkBtn,
-                  pressed && styles.pressed,
-                  busy && styles.buttonDisabled,
-                ]}
+                style={({ pressed }) => [styles.linkBtn, pressed && styles.pressed, busy && styles.buttonDisabled]}
                 disabled={busy}
                 onPress={() => {
                   if (!isSignedIn) {
-                    navigation.navigate('SignIn');
+                    goSignIn();
                     return;
                   }
                   void handleRestore();
@@ -215,15 +271,11 @@ export function PaywallScreen({ navigation }: Props) {
                 <Text style={styles.linkBtnText}>Restore Purchases</Text>
               </Pressable>
 
-              <Text style={styles.mutedNote}>
-                Tip: if you changed devices or reinstalled the app, tap “Restore Purchases”.
-              </Text>
+              <Text style={styles.mutedNote}>Tip: if you changed devices or reinstalled the app, tap “Restore Purchases”.</Text>
             </View>
 
             <View style={styles.footerBox}>
-              <Text style={styles.footerText}>
-                You can keep studying free decks without subscribing.
-              </Text>
+              <Text style={styles.footerText}>You can keep studying free decks without subscribing.</Text>
             </View>
 
             <View style={{ height: 10 }} />
@@ -278,7 +330,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     backgroundColor: 'rgba(255,255,255,0.86)',
     shadowColor: '#000',
-    shadowOpacity: 0.10,
+    shadowOpacity: 0.1,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 10 },
     marginBottom: 14,

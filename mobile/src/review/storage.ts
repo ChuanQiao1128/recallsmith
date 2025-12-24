@@ -10,26 +10,101 @@ export type DailyStats = {
   doneCount: number;
 };
 
-const PROGRESS_PREFIX = 'deck-progress:';
+const PROGRESS_PREFIX = 'deck-progress:'; // base (non-user) prefix
 const DAILY_PREFIX = 'deck-daily-stats:';
 const META_PREFIX = 'deck-meta:';
 
-function progressKey(slug: string) {
-  // Phase 0: progress only binds to slug (not Version)
+/**
+ * ✅ 关键：按 userSub 分区（解决“换账号还是旧进度”）
+ * 这个 userSub 来自 progressSync 里 setActiveUserSub() 写入的 key。
+ *
+ * - 如果没有 userSub（未登录），我们用 "anon" 作为隔离空间，避免串号。
+ */
+const ACTIVE_USER_SUB_KEY = 'devcards:auth:activeUserSub:v1';
+const USER_SCOPE_PREFIX = 'devcards:u:'; // devcards:u:{sub}:
+
+let _cachedUserSub: string | null = null;
+let _cachedUserSubAt = 0;
+const USER_SUB_CACHE_TTL_MS = 1500;
+
+function normalizeSub(v: any): string | null {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s ? s : null;
+}
+
+/**
+ * ✅ 给 auth/sync 层调用：当 activeUserSub 变化时，立即更新内存缓存。
+ * 解决 TTL 期间 Home 还在用旧 scope（sign out / switch account 后仍显示旧进度）。
+ */
+export function setActiveUserSubForStorage(userSub: string | null): void {
+  _cachedUserSub = normalizeSub(userSub);
+  _cachedUserSubAt = Date.now();
+}
+
+export function invalidateActiveUserSubCache(): void {
+  _cachedUserSubAt = 0;
+}
+
+async function getActiveUserSub(): Promise<string | null> {
+  const now = Date.now();
+  if (now - _cachedUserSubAt < USER_SUB_CACHE_TTL_MS) return _cachedUserSub;
+
+  try {
+    const raw = await AsyncStorage.getItem(ACTIVE_USER_SUB_KEY);
+    _cachedUserSub = normalizeSub(raw);
+    _cachedUserSubAt = now;
+    return _cachedUserSub;
+  } catch {
+    _cachedUserSub = null;
+    _cachedUserSubAt = now;
+    return null;
+  }
+}
+
+async function getUserScopePrefix(): Promise<string> {
+  const sub = (await getActiveUserSub()) ?? 'anon';
+  return `${USER_SCOPE_PREFIX}${sub}:`;
+}
+
+/**
+ * ---- Key builders (user-scoped) ----
+ */
+async function progressKey(slug: string): Promise<string> {
+  // Phase 0: progress binds to slug (not Version)
+  return `${await getUserScopePrefix()}${PROGRESS_PREFIX}${slug}`;
+}
+async function legacyProgressKey(slug: string, version: string): Promise<string> {
+  return `${await getUserScopePrefix()}${PROGRESS_PREFIX}${slug}:${version}`;
+}
+
+async function dailyKey(slug: string): Promise<string> {
+  return `${await getUserScopePrefix()}${DAILY_PREFIX}${slug}`;
+}
+async function legacyDailyKey(slug: string, version: string): Promise<string> {
+  return `${await getUserScopePrefix()}${DAILY_PREFIX}${slug}:${version}`;
+}
+
+async function deckMetaKey(slug: string): Promise<string> {
+  return `${await getUserScopePrefix()}${META_PREFIX}${slug}`;
+}
+
+/**
+ * ---- Legacy/global (unscoped) keys (migration only) ----
+ * 旧版本没有 user 分区，会导致串号；现在只在“第一次迁移到新 schema”时读取一次。
+ */
+function globalProgressKey(slug: string) {
   return `${PROGRESS_PREFIX}${slug}`;
 }
-function legacyProgressKey(slug: string, version: string) {
+function globalLegacyProgressKey(slug: string, version: string) {
   return `${PROGRESS_PREFIX}${slug}:${version}`;
 }
-
-function dailyKey(slug: string) {
+function globalDailyKey(slug: string) {
   return `${DAILY_PREFIX}${slug}`;
 }
-function legacyDailyKey(slug: string, version: string) {
+function globalLegacyDailyKey(slug: string, version: string) {
   return `${DAILY_PREFIX}${slug}:${version}`;
 }
-
-function deckMetaKey(slug: string) {
+function globalDeckMetaKey(slug: string) {
   return `${META_PREFIX}${slug}`;
 }
 
@@ -226,7 +301,7 @@ function reconcileProgressWithDeck(
       }
     }
 
-    // ✅ infer stage (conservative: only bump stage upward when stage==0 but interval implies bigger)
+    // ✅ infer stage (conservative)
     if (isLearned(p) && typeof p.lastReviewedAt === 'number' && p.lastReviewedAt > 0) {
       const intervalMs = (p.nextReviewAt ?? 0) - p.lastReviewedAt;
       const inferred = inferStageFromIntervalMs(intervalMs);
@@ -234,7 +309,6 @@ function reconcileProgressWithDeck(
       const cur = clampStage(p.stage ?? 0);
 
       // Only fix the most common broken case:
-      // new device created initial progress with stage=0, then remote merge only wrote times.
       if (cur === 0 && inferred != null && inferred > cur) {
         p = { ...p, stage: inferred };
         changed = true;
@@ -279,54 +353,153 @@ async function upsertDeckMeta(deck: DeckExport, now: Date): Promise<void> {
     contentVersion: deck.Version,
     lastSeenAtISO: now.toISOString(),
   };
-  await writeJson(deckMetaKey(deck.Slug), meta);
+  await writeJson(await deckMetaKey(deck.Slug), meta);
 }
 
-async function tryLoadLegacyProgress(deck: DeckExport): Promise<CardProgress[] | null> {
-  // 1) old schema + current version
-  const direct = await readJson<CardProgress[]>(legacyProgressKey(deck.Slug, deck.Version));
-  if (direct && Array.isArray(direct)) return direct;
+/**
+ * ✅ 迁移策略（非常重要）：
+ * - 新版本：先读 user-scoped key
+ * - 如果 user-scoped 不存在：只在“第一次”尝试从 old global keys 迁移一次
+ *   然后把 global keys 删除（避免未来其他账号误迁移进来）
+ */
+async function tryLoadLegacyProgress(
+  deck: DeckExport,
+): Promise<{ progress: CardProgress[] | null; usedGlobal: boolean }> {
+  let usedGlobal = false;
 
-  // 2) scan all legacy keys
-  const allKeys = await AsyncStorage.getAllKeys();
-  const prefix = `${PROGRESS_PREFIX}${deck.Slug}:`;
-  const legacyKeys = allKeys.filter((k) => k.startsWith(prefix));
-  if (legacyKeys.length === 0) return null;
-
-  const pairs = await AsyncStorage.multiGet(legacyKeys);
-  const sets: CardProgress[][] = [];
-
-  for (const [, raw] of pairs) {
-    if (!raw) continue;
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        const normalized = parsed.map(normalizeProgressEntry).filter(Boolean) as CardProgress[];
-        if (normalized.length) sets.push(normalized);
-      }
-    } catch {}
+  // 1) old schema + current version (user-scoped legacy)
+  {
+    const direct = await readJson<CardProgress[]>(await legacyProgressKey(deck.Slug, deck.Version));
+    if (direct && Array.isArray(direct)) return { progress: direct, usedGlobal };
   }
 
-  if (sets.length === 0) return null;
-  return mergeProgressSets(sets);
+  // 2) scan all user-scoped legacy keys
+  {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const userScopedPrefix = `${await getUserScopePrefix()}${PROGRESS_PREFIX}${deck.Slug}:`;
+    const legacyKeys = allKeys.filter((k) => k.startsWith(userScopedPrefix));
+    if (legacyKeys.length > 0) {
+      const pairs = await AsyncStorage.multiGet(legacyKeys);
+      const sets: CardProgress[][] = [];
+
+      for (const [, raw] of pairs) {
+        if (!raw) continue;
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            const normalized = parsed.map(normalizeProgressEntry).filter(Boolean) as CardProgress[];
+            if (normalized.length) sets.push(normalized);
+          }
+        } catch {}
+      }
+
+      if (sets.length) return { progress: mergeProgressSets(sets), usedGlobal };
+    }
+  }
+
+  // 3) global legacy migration (unscoped) — only if scoped not found
+  // 3.1 direct global legacy current version
+  {
+    const direct = await readJson<CardProgress[]>(globalLegacyProgressKey(deck.Slug, deck.Version));
+    if (direct && Array.isArray(direct)) {
+      usedGlobal = true;
+      return { progress: direct, usedGlobal };
+    }
+  }
+
+  // 3.2 scan all global legacy keys
+  {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const prefix = `${PROGRESS_PREFIX}${deck.Slug}:`;
+    const legacyKeys = allKeys.filter((k) => k.startsWith(prefix));
+    if (legacyKeys.length === 0) return { progress: null, usedGlobal };
+
+    const pairs = await AsyncStorage.multiGet(legacyKeys);
+    const sets: CardProgress[][] = [];
+
+    for (const [, raw] of pairs) {
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const normalized = parsed.map(normalizeProgressEntry).filter(Boolean) as CardProgress[];
+          if (normalized.length) sets.push(normalized);
+        }
+      } catch {}
+    }
+
+    if (sets.length === 0) return { progress: null, usedGlobal };
+    usedGlobal = true;
+    return { progress: mergeProgressSets(sets), usedGlobal };
+  }
+}
+
+/**
+ * 删除 old global keys（避免未来其他账号误迁移）
+ */
+async function removeGlobalProgressKeysForDeck(deck: DeckExport): Promise<void> {
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+
+    const toRemove: string[] = [];
+
+    // new schema global (Phase0) key
+    toRemove.push(globalProgressKey(deck.Slug));
+
+    // legacy global keys
+    const legacyPrefix = `${PROGRESS_PREFIX}${deck.Slug}:`;
+    for (const k of allKeys) {
+      if (k.startsWith(legacyPrefix)) toRemove.push(k);
+    }
+
+    // daily/global
+    toRemove.push(globalDailyKey(deck.Slug));
+    const legacyDailyPrefix = `${DAILY_PREFIX}${deck.Slug}:`;
+    for (const k of allKeys) {
+      if (k.startsWith(legacyDailyPrefix)) toRemove.push(k);
+    }
+
+    // meta/global
+    toRemove.push(globalDeckMetaKey(deck.Slug));
+
+    const uniq = Array.from(new Set(toRemove));
+    if (uniq.length) await AsyncStorage.multiRemove(uniq);
+  } catch {
+    // ignore
+  }
 }
 
 export async function loadDeckProgress(deck: DeckExport): Promise<CardProgress[]> {
   const now = new Date();
-  const key = progressKey(deck.Slug);
+  const key = await progressKey(deck.Slug);
 
   let progress = await readJson<CardProgress[]>(key);
 
-  // migration: new key missing => move from legacy or init
+  // migration: new key missing => move from legacy/global or init
   if (!progress || !Array.isArray(progress)) {
-    const legacy = await tryLoadLegacyProgress(deck);
-    progress = legacy && Array.isArray(legacy) ? legacy : createInitialProgress(deck);
+    // 0) try global Phase0 key (unscoped) — only for migration
+    const globalPhase0 = await readJson<CardProgress[]>(globalProgressKey(deck.Slug));
+
+    // 1) try legacy (scoped first, then global)
+    const { progress: legacy, usedGlobal } = await tryLoadLegacyProgress(deck);
+
+    const chosen =
+      (legacy && Array.isArray(legacy) ? legacy : null) ??
+      (globalPhase0 && Array.isArray(globalPhase0) ? globalPhase0 : null) ??
+      createInitialProgress(deck);
+
+    progress = chosen;
     await writeJson(key, progress);
+
+    // ✅ 如果本次迁移用到了任何 global 数据，把 global keys 清掉，避免未来账号误迁移
+    if (usedGlobal || (globalPhase0 && Array.isArray(globalPhase0))) {
+      await removeGlobalProgressKeysForDeck(deck);
+    }
   }
 
   const { progress: reconciled, changed } = reconcileProgressWithDeck(deck, progress, now);
 
-  // ✅ 防御：只保留 deck 当前 Cards 内的 progress（trial 用 preview deck 时会自动裁剪）
+  // ✅ 防御：只保留 deck 当前 Cards 内的 progress
   const allowed = new Set((deck.Cards ?? []).map((c: any) => String(c?.StableUid)));
   const filtered = reconciled.filter((p) => allowed.has(p.stableUid));
 
@@ -342,18 +515,23 @@ export async function saveDeckProgress(deck: DeckExport, progress: CardProgress[
   const allowed = new Set((deck.Cards ?? []).map((c: any) => String(c?.StableUid)));
   const filtered = progress.filter((p) => allowed.has(p.stableUid));
 
-  await writeJson(progressKey(deck.Slug), filtered);
+  await writeJson(await progressKey(deck.Slug), filtered);
   await upsertDeckMeta(deck, new Date());
 }
 
 export async function resetDeckProgress(deck: DeckExport): Promise<void> {
-  await AsyncStorage.removeItem(progressKey(deck.Slug));
+  await AsyncStorage.removeItem(await progressKey(deck.Slug));
 
-  // remove legacy keys too
-  const allKeys = await AsyncStorage.getAllKeys();
-  const prefix = `${PROGRESS_PREFIX}${deck.Slug}:`;
-  const legacyKeys = allKeys.filter((k) => k.startsWith(prefix));
-  if (legacyKeys.length) await AsyncStorage.multiRemove(legacyKeys);
+  // remove user-scoped legacy keys too
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const scopedPrefix = `${await getUserScopePrefix()}${PROGRESS_PREFIX}${deck.Slug}:`;
+    const legacyKeys = allKeys.filter((k) => k.startsWith(scopedPrefix));
+    if (legacyKeys.length) await AsyncStorage.multiRemove(legacyKeys);
+  } catch {}
+
+  // remove global keys too (safety)
+  await removeGlobalProgressKeysForDeck(deck);
 }
 
 function createDefaultDailyStats(deck: DeckExport, progress: CardProgress[], now: Date): DailyStats {
@@ -369,16 +547,26 @@ function createDefaultDailyStats(deck: DeckExport, progress: CardProgress[], now
 export async function loadOrInitDailyStats(deck: DeckExport, progress: CardProgress[]): Promise<DailyStats> {
   const now = new Date();
   const todayKey = formatDateKey(now);
-  const key = dailyKey(deck.Slug);
+  const key = await dailyKey(deck.Slug);
 
   let stats = await readJson<DailyStats>(key);
 
-  // daily migration
+  // daily migration (scoped legacy)
   if (!stats) {
-    const legacy = await readJson<DailyStats>(legacyDailyKey(deck.Slug, deck.Version));
+    const legacy = await readJson<DailyStats>(await legacyDailyKey(deck.Slug, deck.Version));
     if (legacy) {
       stats = legacy;
       await writeJson(key, legacy);
+    }
+  }
+
+  // global daily migration (unscoped) — only if scoped not found
+  if (!stats) {
+    const global = await readJson<DailyStats>(globalDailyKey(deck.Slug));
+    if (global) {
+      stats = global;
+      await writeJson(key, global);
+      await removeGlobalProgressKeysForDeck(deck);
     }
   }
 
@@ -398,15 +586,18 @@ export async function loadOrInitDailyStats(deck: DeckExport, progress: CardProgr
 }
 
 export async function saveDailyStats(deck: DeckExport, stats: DailyStats): Promise<void> {
-  await writeJson(dailyKey(deck.Slug), stats);
+  await writeJson(await dailyKey(deck.Slug), stats);
 }
 
 export async function loadAllProgress(): Promise<Record<string, CardProgress[]>> {
   const allKeys = await AsyncStorage.getAllKeys();
+  const scope = await getUserScopePrefix();
 
-  // new schema: deck-progress:{slug} (no ':' inside slug part)
+  // new schema: {scope}deck-progress:{slug} (no ':' inside slug part)
   const keys = allKeys.filter(
-    (k) => k.startsWith(PROGRESS_PREFIX) && !k.slice(PROGRESS_PREFIX.length).includes(':'),
+    (k) =>
+      k.startsWith(`${scope}${PROGRESS_PREFIX}`) &&
+      !k.slice((`${scope}${PROGRESS_PREFIX}`).length).includes(':'),
   );
 
   if (keys.length === 0) return {};
@@ -416,7 +607,8 @@ export async function loadAllProgress(): Promise<Record<string, CardProgress[]>>
 
   for (const [k, raw] of pairs) {
     if (!raw) continue;
-    const slug = k.slice(PROGRESS_PREFIX.length);
+
+    const slug = k.slice((`${scope}${PROGRESS_PREFIX}`).length);
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) out[slug] = parsed;
