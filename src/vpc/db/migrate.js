@@ -15,16 +15,21 @@ function pool() {
   if (!PGHOST || !PGDATABASE || !PGUSER || !PGPASSWORD) return null;
 
   _pool = new Pool({
-    host: PGHOST,
-    port: Number(PGPORT || 5432),
-    database: PGDATABASE,
-    user: PGUSER,
-    password: PGPASSWORD,
-    ssl: (PGSSLMODE || "").toLowerCase() === "disable" ? false : { rejectUnauthorized: false },
-    max: Number(process.env.PG_MAX || 1), // ✅ Lambda 推荐 1
-    connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT || 5000),
-    idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT || 30000),
-  });
+  host: PGHOST,
+  port: Number(PGPORT || 5432),
+  database: PGDATABASE,
+  user: PGUSER,
+  password: PGPASSWORD,
+
+  // ✅ 关键修复：强制 SSL（RDS PostgreSQL 必须）
+  ssl: {
+    rejectUnauthorized: false,
+  },
+
+  max: Number(process.env.PG_MAX || 1), // Lambda 推荐 1
+  connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT || 5000),
+  idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT || 30000),
+});
 
   return _pool;
 }

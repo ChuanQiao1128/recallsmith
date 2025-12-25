@@ -10,8 +10,47 @@ async function handleEntitlements({ res, auth }) {
   const p = pool();
   if (!p) return res.badRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
-  const userSub = auth.userSub;
+  const userSub = String(auth.userSub || "").trim();
+  if (!userSub) return res.unauthorized("Missing user");
 
+  // ---------------------------------------
+  // v2: RevenueCat-backed premium state first
+  // ---------------------------------------
+  try {
+    const s = await p.query(
+      `
+      select premium_active, premium_env, product_id, expires_at_ms
+      from user_premium_state
+      where app_user_id = $1
+      limit 1;
+      `,
+      [userSub],
+    );
+
+    const row = s.rows?.[0] || null;
+    const active = !!row?.premium_active;
+    const expiresAtMs = row?.expires_at_ms != null ? Number(row.expires_at_ms) : null;
+
+    if (active) {
+      return res.ok({
+        userSub,
+        tier: "premium",
+        expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : null,
+        unlockedDeckSlugs: [], // premium = full unlock
+        premiumSource: "revenuecat",
+        premiumEnv: row?.premium_env || null, // sandbox/production/none
+        productId: row?.product_id || null,
+        serverTimeMs: Date.now(),
+      });
+    }
+  } catch (e) {
+    // If table missing or query fails, silently fall back to legacy entitlements
+    // (keeps system resilient during rollout)
+  }
+
+  // ---------------------------------------
+  // v1 legacy: user_entitlements (deck-based)
+  // ---------------------------------------
   const r = await p.query(
     `
     select entitlement_key as "entitlementKey",
@@ -25,7 +64,7 @@ async function handleEntitlements({ res, auth }) {
       expires_at desc nulls first,
       entitlement_key asc
     `,
-    [String(userSub)]
+    [userSub],
   );
 
   let tier = "free";
@@ -38,7 +77,7 @@ async function handleEntitlements({ res, auth }) {
   if (premiumAll) {
     tier = "premium";
     expiresAtMs = premiumAll.expiresAt ? new Date(premiumAll.expiresAt).getTime() : null;
-    unlockedDeckSlugs = []; // premium_all 表示全解锁，不需要列 slug
+    unlockedDeckSlugs = [];
   } else {
     const deckEnts = rows.filter((x) => String(x.entitlementKey || "").startsWith("deck:") && x.tier === "premium");
     if (deckEnts.length > 0) {
@@ -47,7 +86,6 @@ async function handleEntitlements({ res, auth }) {
         .map((x) => String(x.entitlementKey).slice("deck:".length))
         .filter(Boolean);
 
-      // expires 取最晚的那个（也可取最早的，看你策略；v1 先取最晚）
       const maxExpire = deckEnts
         .map((x) => (x.expiresAt ? new Date(x.expiresAt).getTime() : null))
         .filter((x) => typeof x === "number")
@@ -61,6 +99,9 @@ async function handleEntitlements({ res, auth }) {
     tier,
     expiresAtMs,
     unlockedDeckSlugs,
+    premiumSource: "legacy",
+    premiumEnv: null,
+    productId: null,
     serverTimeMs: Date.now(),
   });
 }

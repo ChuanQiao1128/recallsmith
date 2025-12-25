@@ -49,7 +49,21 @@ exports.handler = async (event) => {
   const path = getPath(event);
   const traceId = event.requestContext?.requestId || null;
   const res = makeRes(traceId);
-  const auth = getAuthContext(event);
+
+  // ✅ SAFE auth parsing (webhooks / custom Authorization header may NOT be JWT)
+  let auth = {
+    userSub: null,
+    username: null,
+    groups: [],
+    isAdmin: false,
+    isSuperAdmin: false,
+  };
+  try {
+    auth = getAuthContext(event);
+  } catch {
+    // ignore (public webhooks may carry non-JWT auth header)
+  }
+
   const query = event.queryStringParameters || {};
 
   if (method === "OPTIONS") return res.raw(200, { ok: true });

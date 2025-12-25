@@ -4,7 +4,9 @@ const { makeRes } = require("../common/res");
 const { normalizePath } = require("../common/validate");
 const { getAuthContext } = require("../common/auth");
 const { logInfo, logError } = require("../common/log");
-
+const { handleDbNetcheck } = require("./db/netcheck");
+const { handleDbRcEvents } = require("./db/queryRcEvents");
+const { handleDbPremiumState } = require("./db/queryPremiumState");
 // DB
 const {
   handleDbPing,
@@ -32,6 +34,9 @@ const { handlePremiumDeckUrl } = require("./runtime/premiumDeckUrl");
 // Internal
 const { handleInternalEntitlementsApply } = require("./internal/entitlementsApply");
 const { handleInternalSubscriptionsUpsert } = require("./internal/subscriptionsUpsert");
+
+// ✅ Webhooks
+const { handleRevenuecatWebhook } = require("./webhooks/revenuecatWebhook");
 
 function getMethod(event) {
   return event.requestContext?.http?.method || event.httpMethod || "GET";
@@ -65,7 +70,21 @@ exports.handler = async (event) => {
   const path = getPath(event);
   const traceId = event.requestContext?.requestId || null;
   const res = makeRes(traceId);
-  const auth = getAuthContext(event);
+
+  // ✅ SAFE auth parsing (webhook uses Authorization header but NOT JWT)
+  let auth = {
+    userSub: null,
+    username: null,
+    groups: [],
+    isAdmin: false,
+    isSuperAdmin: false,
+  };
+  try {
+    auth = getAuthContext(event);
+  } catch {
+    // ignore (webhooks / public routes may carry non-JWT auth header)
+  }
+
   const query = event.queryStringParameters || {};
 
   if (method === "OPTIONS") return res.raw(200, { ok: true });
@@ -89,6 +108,24 @@ exports.handler = async (event) => {
     // Simple fixed routes
     if (path === "/health" && method === "GET") return res.ok({ ok: true });
 
+    // ✅ RevenueCat webhooks (NO DB version)
+    // New canonical routes:
+    // - /webhooks/revenuecat/development
+    // - /webhooks/revenuecat/production
+    //
+    // Optional legacy aliases:
+    // - /rc/webhook
+    // - /webhooks/revenuecat
+    if (
+      (path === "/webhooks/revenuecat/development" ||
+        path === "/webhooks/revenuecat/production" ||
+        path === "/rc/webhook" ||
+        path === "/webhooks/revenuecat") &&
+      method === "POST"
+    ) {
+      return handleRevenuecatWebhook({ event, method, path, query, res, auth });
+    }
+
     // DB
     if (path === "/api/v1/db/ping" && method === "GET") {
       return handleDbPing({ event, method, path, query, res, auth });
@@ -108,7 +145,12 @@ exports.handler = async (event) => {
     if (path === "/api/v1/admin/db/recreate" && method === "POST") {
       return handleDbDropAndRecreate({ event, method, path, query, res, auth });
     }
-
+    if (path === "/api/v1/admin/db/netcheck" && method === "GET") {
+      return handleDbNetcheck({ event, method, path, query, res, auth });
+    }
+    if (path === "/api/v1/admin/db/premium-state" && method === "GET") {
+      return handleDbPremiumState({ event, method, path, query, res, auth });
+    }
     // Authoring
     if (path === "/api/v1/authoring/decks") {
       return handleAuthoringDecks({ event, method, path, query, res, auth });
@@ -122,7 +164,9 @@ exports.handler = async (event) => {
     if (path === "/api/v1/authoring/publish") {
       return handleAuthoringPublish({ event, method, path, query, res, auth });
     }
-
+    if (path === "/api/v1/admin/db/rc-events" && method === "GET") {
+      return handleDbRcEvents({ event, method, path, query, res, auth });
+    }
     // Runtime
     if (path === "/api/v1/me" && method === "GET") {
       return handleMe({ event, method, path, query, res, auth });
