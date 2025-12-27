@@ -14,7 +14,8 @@
         "image": "latest",
         "env": {
           "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
-          "CLANG_CXX_LIBRARY": "libc++"
+          "CLANG_CXX_LIBRARY": "libc++",
+          "EXPO_PUBLIC_ENV": "development"
         }
       }
     },
@@ -29,7 +30,36 @@
         "image": "latest",
         "env": {
           "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
-          "CLANG_CXX_LIBRARY": "libc++"
+          "CLANG_CXX_LIBRARY": "libc++",
+          "EXPO_PUBLIC_ENV": "development"
+        }
+      }
+    },
+    "staging": {
+      "distribution": "internal",
+      "channel": "development",
+      "environment": "development",
+      "ios": {
+        "buildConfiguration": "Release",
+        "image": "latest",
+        "env": {
+          "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+          "CLANG_CXX_LIBRARY": "libc++",
+          "EXPO_PUBLIC_ENV": "development"
+        }
+      }
+    },
+    "staging-internal-release": {
+      "distribution": "internal",
+      "channel": "production",
+      "environment": "production",
+      "ios": {
+        "buildConfiguration": "Release",
+        "image": "latest",
+        "env": {
+          "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+          "CLANG_CXX_LIBRARY": "libc++",
+          "EXPO_PUBLIC_ENV": "production"
         }
       }
     },
@@ -42,7 +72,8 @@
         "image": "latest",
         "env": {
           "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
-          "CLANG_CXX_LIBRARY": "libc++"
+          "CLANG_CXX_LIBRARY": "libc++",
+          "EXPO_PUBLIC_ENV": "production"
         }
       }
     }

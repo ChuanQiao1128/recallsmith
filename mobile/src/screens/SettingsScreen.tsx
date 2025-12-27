@@ -1,5 +1,5 @@
 // mobile/src/screens/SettingsScreen.tsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,14 @@ import {
   ScrollView,
   Modal,
   ActivityIndicator,
+  Platform,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
@@ -42,6 +45,9 @@ import {
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
+// =========================
+// Links
+// =========================
 const SUPPORT_URL =
   'https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Support-Help-2bfa758eb545809ead04d8f8321a40dc?pvs=74';
 
@@ -51,6 +57,16 @@ const PRIVACY_URL =
 const REMOTE_CONFIG_URL =
   'https://raw.githubusercontent.com/ChuanQiao1128/recallsmith-mobile-config/refs/heads/main/recallsmith-config.json';
 
+// ✅ RevenueCat entitlement id (confirmed)
+const ENTITLEMENT_ID = 'DeveloperCards Pro';
+
+// System subscription pages (fallback)
+const IOS_MANAGE_SUBS_URL = 'https://apps.apple.com/account/subscriptions';
+const ANDROID_MANAGE_SUBS_URL = 'https://play.google.com/store/account/subscriptions';
+
+// =========================
+// Utils
+// =========================
 function normalizeUrl(url: string): string {
   const trimmed = url.trim();
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
@@ -87,6 +103,27 @@ function safeSemverCompare(
   return compareSemver(a, b);
 }
 
+function toDateMaybe(v: any): Date | null {
+  if (!v) return null;
+  if (v instanceof Date) return v;
+  const d = new Date(v);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+// ✅ "27 Dec 2025" format (local date)
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+function formatDateLocalDDMonYYYY(d: Date | null | undefined): string {
+  if (!d) return '—';
+  try {
+    const day = String(d.getDate()); // no leading zero → "7 Dec 2025"
+    const mon = MONTHS_SHORT[d.getMonth()] ?? '—';
+    const year = d.getFullYear();
+    return `${day} ${mon} ${year}`;
+  } catch {
+    return '—';
+  }
+}
+
 const MORNING_OPTIONS = ['07:00', '08:00', '09:00', '10:00', '11:00'] as const;
 const EVENING_OPTIONS = ['18:00', '19:00', '20:00', '21:00', '22:00'] as const;
 
@@ -101,6 +138,209 @@ export function SettingsScreen({ navigation }: Props) {
   const signOutNow = useAuthStore((s) => s.signOutNow);
 
   const authReady = status !== 'unknown' && !authLoading;
+
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // =========================
+  // Premium (RevenueCat)
+  // =========================
+  const rcReqIdRef = useRef(0);
+
+  // ✅ Track whether we have ever successfully loaded subscription info
+  const rcHasLoadedOnceRef = useRef(false);
+
+  // ✅ Soft "unavailable" flag (network / SDK / transient failure)
+  const [rcUnavailable, setRcUnavailable] = useState(false);
+
+  const [rcLoading, setRcLoading] = useState(true);
+  const [rcRefreshing, setRcRefreshing] = useState(false);
+
+  // Keep error only for dev debugging — never drive scary UI with it
+  const [rcError, setRcError] = useState<string | null>(null);
+
+  const [premiumActive, setPremiumActive] = useState(false);
+  const [willRenew, setWillRenew] = useState<boolean | null>(null);
+  const [premiumIsSandbox, setPremiumIsSandbox] = useState<boolean | null>(null);
+  const [billingIssueDetected, setBillingIssueDetected] = useState(false);
+
+  const [expirationDate, setExpirationDate] = useState<Date | null>(null);
+  const [latestPurchaseDate, setLatestPurchaseDate] = useState<Date | null>(null);
+
+  const loadRevenueCatInfo = useCallback(async (opts?: { forceRefresh?: boolean }) => {
+    const forceRefresh = !!opts?.forceRefresh;
+    const reqId = ++rcReqIdRef.current;
+
+    // ✅ Only show blocking loading on first-ever load (avoid flicker on focus)
+    if (forceRefresh) {
+      setRcRefreshing(true);
+    } else if (!rcHasLoadedOnceRef.current) {
+      setRcLoading(true);
+    }
+
+    try {
+      setRcError(null);
+
+      // Best-effort: refresh cache only when forced (pull-to-refresh / manual refresh)
+      if (forceRefresh) {
+        try {
+          // @ts-ignore
+          if (typeof Purchases.invalidateCustomerInfoCache === 'function') {
+            // @ts-ignore
+            await Purchases.invalidateCustomerInfoCache();
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const info = await Purchases.getCustomerInfo();
+      if (!mountedRef.current || reqId !== rcReqIdRef.current) return;
+
+      const entAll = (info as any)?.entitlements?.all?.[ENTITLEMENT_ID] ?? null;
+      const entActive = (info as any)?.entitlements?.active?.[ENTITLEMENT_ID] ?? null;
+      const ent = entActive ?? entAll;
+
+      const isActive = !!ent?.isActive;
+
+      setPremiumActive(isActive);
+      setWillRenew(typeof ent?.willRenew === 'boolean' ? ent.willRenew : null);
+      setPremiumIsSandbox(typeof ent?.isSandbox === 'boolean' ? ent.isSandbox : null);
+
+      const billingAt = toDateMaybe(ent?.billingIssueDetectedAt);
+      setBillingIssueDetected(!!billingAt);
+
+      setExpirationDate(toDateMaybe(ent?.expirationDate));
+      setLatestPurchaseDate(toDateMaybe(ent?.latestPurchaseDate));
+
+      // ✅ Mark as successfully loaded & clear unavailable
+      rcHasLoadedOnceRef.current = true;
+      setRcUnavailable(false);
+    } catch (e: any) {
+      if (!mountedRef.current || reqId !== rcReqIdRef.current) return;
+
+      // ✅ Soft-fail:
+      // - do NOT reset premiumActive / expirationDate etc. Keep last known values.
+      // - do NOT show red error badge in UI.
+      setRcUnavailable(true);
+
+      // keep raw error only for dev
+      setRcError(e?.message ?? 'Unable to refresh subscription status.');
+    } finally {
+      if (!mountedRef.current || reqId !== rcReqIdRef.current) return;
+      setRcLoading(false);
+      setRcRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRevenueCatInfo({ forceRefresh: false });
+  }, [loadRevenueCatInfo]);
+
+  // ✅ When returning from Paywall / navigating back, auto-refresh (cache-based)
+  useFocusEffect(
+    useCallback(() => {
+      void loadRevenueCatInfo({ forceRefresh: false });
+    }, [loadRevenueCatInfo]),
+  );
+
+  const handleManageSubscription = useCallback(async () => {
+    // Prefer SDK helper if available; fallback to system URL.
+    try {
+      // @ts-ignore
+      if (typeof Purchases.showManageSubscriptions === 'function') {
+        // @ts-ignore
+        await Purchases.showManageSubscriptions();
+        return;
+      }
+    } catch {
+      // ignore; fallback below
+    }
+
+    const url = Platform.OS === 'ios' ? IOS_MANAGE_SUBS_URL : ANDROID_MANAGE_SUBS_URL;
+    await openExternalLink(url);
+  }, []);
+
+  const handleRestorePurchases = useCallback(async () => {
+    try {
+      setRcRefreshing(true);
+      await Purchases.restorePurchases();
+      await loadRevenueCatInfo({ forceRefresh: true });
+      Alert.alert('Restored', 'Your purchases have been restored.');
+    } catch (e: any) {
+      Alert.alert('Restore failed', e?.message ?? 'Unable to restore purchases.');
+    } finally {
+      setRcRefreshing(false);
+    }
+  }, [loadRevenueCatInfo]);
+
+  const premiumBadge = useMemo(() => {
+    // Only truly "red" state is billing issue
+    if (billingIssueDetected) return { text: 'Billing issue', tone: 'danger' as const };
+
+    // If we don't have any successful load yet, show Loading/Unknown softly
+    if (!rcHasLoadedOnceRef.current) {
+      if (rcLoading) return { text: 'Loading', tone: 'muted' as const };
+      if (rcUnavailable) return { text: 'Unknown', tone: 'muted' as const };
+      // If somehow neither, fall through to Free
+    }
+
+    // Prefer last known status
+    if (premiumActive) {
+      if (willRenew === false) return { text: 'Active (canceled)', tone: 'success' as const };
+      return { text: 'Active', tone: 'success' as const };
+    }
+
+    if (expirationDate) return { text: 'Expired', tone: 'muted' as const };
+
+    return { text: 'Free', tone: 'muted' as const };
+  }, [billingIssueDetected, rcLoading, rcUnavailable, premiumActive, willRenew, expirationDate]);
+
+  const premiumStatusText = useMemo(() => {
+    // First load and no success yet
+    if (!rcHasLoadedOnceRef.current) {
+      if (rcLoading) return 'Checking subscription status…';
+      if (rcUnavailable) return 'Subscription status unavailable right now. Pull to refresh or try again later.';
+    }
+
+    if (billingIssueDetected) return 'Billing issue detected · action required.';
+
+    if (premiumActive) {
+      const base =
+        willRenew === false
+          ? 'Premium active · auto-renew is off.'
+          : 'Premium active · auto-renews unless canceled.';
+      return rcUnavailable ? `${base} (Unable to refresh right now.)` : base;
+    }
+
+    if (!premiumActive && expirationDate) {
+      const base = 'Premium expired.';
+      return rcUnavailable ? `${base} (Unable to refresh right now.)` : base;
+    }
+
+    // Free state (or last known free)
+    if (rcUnavailable) return 'Free plan (last known) · Pull to refresh to re-check subscription status.';
+    return 'Unlock premium decks and advanced learning features.';
+  }, [rcLoading, rcUnavailable, billingIssueDetected, premiumActive, willRenew, expirationDate]);
+
+  const renewalOrExpiryLabel = useMemo(() => {
+    if (!expirationDate) return null;
+
+    if (premiumActive) {
+      // If user canceled but still has access, RC willRenew may be false.
+      return willRenew === false ? 'Expires on' : 'Renews on';
+    }
+    return 'Expired on';
+  }, [expirationDate, premiumActive, willRenew]);
+
+  const renewalOrExpiryValue = useMemo(() => {
+    if (!expirationDate) return null;
+    return formatDateLocalDDMonYYYY(expirationDate);
+  }, [expirationDate]);
 
   // =========================
   // Deck updates
@@ -156,39 +396,38 @@ export function SettingsScreen({ navigation }: Props) {
   }
 
   // =========================
-  // App store info
+  // App store info (remote config)
   // =========================
+  const remoteReqIdRef = useRef(0);
+
   const [remoteConfig, setRemoteConfig] = useState<RemoteConfig | null>(null);
   const [remoteStatus, setRemoteStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadRemoteStoreInfo = useCallback(async () => {
+    const reqId = ++remoteReqIdRef.current;
 
-    async function loadRemoteVersion() {
-      setRemoteStatus('loading');
-      try {
-        const cfg = await fetchRemoteConfig(REMOTE_CONFIG_URL, 5000);
-        if (cancelled) return;
+    setRemoteStatus('loading');
+    try {
+      const cfg = await fetchRemoteConfig(REMOTE_CONFIG_URL, 5000);
+      if (!mountedRef.current || reqId !== remoteReqIdRef.current) return;
 
-        if (cfg?.ios) {
-          setRemoteConfig(cfg);
-          setRemoteStatus('loaded');
-        } else {
-          setRemoteConfig(null);
-          setRemoteStatus('error');
-        }
-      } catch {
-        if (cancelled) return;
+      if (cfg?.ios) {
+        setRemoteConfig(cfg);
+        setRemoteStatus('loaded');
+      } else {
         setRemoteConfig(null);
         setRemoteStatus('error');
       }
+    } catch {
+      if (!mountedRef.current || reqId !== remoteReqIdRef.current) return;
+      setRemoteConfig(null);
+      setRemoteStatus('error');
     }
-
-    void loadRemoteVersion();
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    void loadRemoteStoreInfo();
+  }, [loadRemoteStoreInfo]);
 
   const iosCfg = remoteConfig?.ios ?? null;
   const latestStoreVersion = iosCfg?.latestVersion ?? iosCfg?.minSupportedVersion ?? null;
@@ -213,7 +452,7 @@ export function SettingsScreen({ navigation }: Props) {
   const latestDisplay = latestStoreVersion ?? (remoteStatus === 'loading' ? '…' : '—');
   const minDisplay = minSupportedVersion ?? (remoteStatus === 'loading' ? '…' : '—');
 
-  const statusText =
+  const appStoreStatusText =
     remoteStatus === 'loading'
       ? 'Fetching store info…'
       : remoteStatus === 'error'
@@ -227,7 +466,9 @@ export function SettingsScreen({ navigation }: Props) {
   // =========================
   // Reminders (prefs)
   // =========================
-  const [prefsLoading, setPrefsLoading] = useState(true);
+  const prefsReqIdRef = useRef(0);
+
+  const [prefsLoading, setPrefsLoading] = useState(false);
   const [prefsSaving, setPrefsSaving] = useState(false);
   const [prefsHint, setPrefsHint] = useState<string | null>(null);
 
@@ -253,27 +494,29 @@ export function SettingsScreen({ navigation }: Props) {
     hintTimerRef.current = setTimeout(() => setPrefsHint(null), 1600);
   }
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPrefs() {
-      setPrefsLoading(true);
-      try {
-        const p = await getReminderPrefs();
-        if (cancelled) return;
-        setPrefs(p);
-      } catch {
-        // ignore; keep defaults
-      } finally {
-        if (!cancelled) setPrefsLoading(false);
-      }
+  const loadPrefs = useCallback(async () => {
+    const reqId = ++prefsReqIdRef.current;
+    setPrefsLoading(true);
+    try {
+      const p = await getReminderPrefs();
+      if (!mountedRef.current || reqId !== prefsReqIdRef.current) return;
+      setPrefs(p);
+    } catch {
+      // ignore; keep defaults
+    } finally {
+      if (!mountedRef.current || reqId !== prefsReqIdRef.current) return;
+      setPrefsLoading(false);
     }
-
-    void loadPrefs();
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  // ✅ Only load reminders prefs when signed in (since editing requires sign-in)
+  useEffect(() => {
+    if (!isSignedIn) {
+      setPrefsLoading(false);
+      return;
+    }
+    void loadPrefs();
+  }, [isSignedIn, loadPrefs]);
 
   async function updatePrefs(patch: Partial<ReminderPrefs>) {
     if (!isSignedIn) {
@@ -309,7 +552,17 @@ export function SettingsScreen({ navigation }: Props) {
           style: 'destructive',
           onPress: async () => {
             try {
+              // Best-effort: log out RC user if your app logs in RC on auth
+              try {
+                await Purchases.logOut();
+              } catch {
+                // ignore
+              }
+
               await signOutNow();
+
+              // Refresh premium status (anonymous user)
+              await loadRevenueCatInfo({ forceRefresh: false });
             } catch {
               // ignore
             }
@@ -362,11 +615,11 @@ export function SettingsScreen({ navigation }: Props) {
 
       // 4) Delete local deck caches (idempotent)
       const base =
-  // ✅ Expo SDK 新写法（typed）
-  (FileSystem as any)?.Paths?.document ??
-  // ✅ 兼容老版本（runtime 可能有，但 TS 不一定有）
-  (FileSystem as any)?.documentDirectory ??
-  '';
+        // ✅ Expo SDK 新写法（typed）
+        (FileSystem as any)?.Paths?.document ??
+        // ✅ 兼容老版本（runtime 可能有，但 TS 不一定有）
+        (FileSystem as any)?.documentDirectory ??
+        '';
       const pathsToDelete = [
         `${base}devcards-decks-v2`,
         `${base}devcards-decks`,
@@ -384,7 +637,7 @@ export function SettingsScreen({ navigation }: Props) {
         }
       }
 
-      // 5) Reset in-memory UI bits (so Settings reflects it immediately)
+      // 5) Reset in-memory UI bits
       setUpdateMessage(null);
       setPrefs({
         morningEnabled: true,
@@ -393,14 +646,34 @@ export function SettingsScreen({ navigation }: Props) {
         eveningTime: '20:00',
       });
 
+      await loadRevenueCatInfo({ forceRefresh: true });
+
       Alert.alert(
         'Reset complete',
-        'Local cache cleared (auth, RC, AsyncStorage, deck files). Close the app and reopen it to start fresh.',
+        'Local cache cleared (auth, RevenueCat, AsyncStorage, deck files). Close the app and reopen it to start fresh.',
       );
     } finally {
       setResettingLocal(false);
     }
   }
+
+  // =========================
+  // Pull-to-refresh (optimized)
+  // =========================
+  const [pullRefreshing, setPullRefreshing] = useState(false);
+
+  const onPullRefresh = useCallback(async () => {
+    setPullRefreshing(true);
+    try {
+      await Promise.all([
+        loadRevenueCatInfo({ forceRefresh: true }),
+        loadRemoteStoreInfo(),
+        isSignedIn ? loadPrefs() : Promise.resolve(),
+      ]);
+    } finally {
+      setPullRefreshing(false);
+    }
+  }, [loadRevenueCatInfo, loadRemoteStoreInfo, isSignedIn, loadPrefs]);
 
   return (
     <SafeAreaProvider>
@@ -412,7 +685,12 @@ export function SettingsScreen({ navigation }: Props) {
           style={styles.gradient}
         >
           {/* Time picker modal */}
-          <Modal transparent animationType="fade" visible={!!timePicker} onRequestClose={() => setTimePicker(null)}>
+          <Modal
+            transparent
+            animationType="fade"
+            visible={!!timePicker}
+            onRequestClose={() => setTimePicker(null)}
+          >
             <View style={styles.modalOverlay}>
               <Pressable style={styles.modalBackdrop} onPress={() => setTimePicker(null)} />
               <View style={styles.modalCardOpaque}>
@@ -438,7 +716,8 @@ export function SettingsScreen({ navigation }: Props) {
 
                 <View style={styles.timeGrid}>
                   {timeOptions.map((t) => {
-                    const active = timePicker === 'morning' ? prefs.morningTime === t : prefs.eveningTime === t;
+                    const active =
+                      timePicker === 'morning' ? prefs.morningTime === t : prefs.eveningTime === t;
 
                     return (
                       <Pressable
@@ -467,7 +746,11 @@ export function SettingsScreen({ navigation }: Props) {
             </View>
           </Modal>
 
-          <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            contentContainerStyle={styles.container}
+            showsVerticalScrollIndicator={false}
+            refreshControl={<RefreshControl refreshing={pullRefreshing} onRefresh={onPullRefresh} />}
+          >
             {/* Header */}
             <View style={styles.headerRow}>
               <Pressable
@@ -479,21 +762,139 @@ export function SettingsScreen({ navigation }: Props) {
 
               <View style={{ flex: 1 }}>
                 <Text style={styles.title}>Settings</Text>
-                <Text style={styles.subtitle}>Account, reminders, updates and legal.</Text>
+                <Text style={styles.subtitle}>Account, premium, reminders, updates and legal.</Text>
               </View>
             </View>
 
             {/* Premium */}
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Premium</Text>
-              <Text style={styles.sectionSubtitle}>Unlock premium decks and advanced learning features.</Text>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Premium</Text>
 
-              <Pressable
-                style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
-                onPress={() => navigation.navigate('Paywall')}
-              >
-                <Text style={styles.primaryButtonText}>Upgrade to Premium</Text>
-              </Pressable>
+                <View style={styles.sectionHeaderRight}>
+                  <View
+                    style={[
+                      styles.badge,
+                      premiumBadge.tone === 'success' && styles.badgeSuccess,
+                      premiumBadge.tone === 'danger' && styles.badgeDanger,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.badgeText,
+                        premiumBadge.tone === 'success' && styles.badgeTextSuccess,
+                        premiumBadge.tone === 'danger' && styles.badgeTextDanger,
+                      ]}
+                    >
+                      {premiumBadge.text}
+                    </Text>
+                  </View>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.smallGhostBtn, pressed && styles.pressed]}
+                    onPress={() => loadRevenueCatInfo({ forceRefresh: true })}
+                    disabled={rcRefreshing}
+                  >
+                    {rcRefreshing ? (
+                      <ActivityIndicator />
+                    ) : (
+                      <Text style={styles.smallGhostText}>Refresh</Text>
+                    )}
+                  </Pressable>
+                </View>
+              </View>
+
+              <Text style={styles.sectionSubtitle}>{premiumStatusText}</Text>
+
+              {/* detail rows */}
+              {renewalOrExpiryLabel && renewalOrExpiryValue ? (
+                <View style={styles.kvRow}>
+                  <Text style={styles.kLabel}>{renewalOrExpiryLabel}</Text>
+                  <Text style={styles.kValue}>{renewalOrExpiryValue}</Text>
+                </View>
+              ) : null}
+
+              {premiumActive && willRenew === false ? (
+                <View style={styles.kvRow}>
+                  <Text style={styles.kLabel}>Auto-renew</Text>
+                  <Text style={styles.kValue}>Off</Text>
+                </View>
+              ) : premiumActive && willRenew === true ? (
+                <View style={styles.kvRow}>
+                  <Text style={styles.kLabel}>Auto-renew</Text>
+                  <Text style={styles.kValue}>On</Text>
+                </View>
+              ) : null}
+
+              {latestPurchaseDate ? (
+                <View style={styles.kvRow}>
+                  <Text style={styles.kLabel}>Last purchase</Text>
+                  <Text style={styles.kValue}>{formatDateLocalDDMonYYYY(latestPurchaseDate)}</Text>
+                </View>
+              ) : null}
+
+              {billingIssueDetected ? (
+                <Text style={[styles.muted, { marginTop: 10 }]}>
+                  Apple/Google reported a billing issue. Please update payment info to keep access.
+                </Text>
+              ) : (
+                <Text style={[styles.muted, { marginTop: 10 }]}>
+                  Billing and cancellation are handled by {Platform.OS === 'ios' ? 'Apple' : 'Google'}.
+                </Text>
+              )}
+
+              {/* actions */}
+              {premiumActive ? (
+                <>
+                  <Pressable
+                    style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+                    onPress={handleManageSubscription}
+                  >
+                    <Text style={styles.secondaryButtonText}>Manage subscription</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.linkLite, pressed && styles.pressed]}
+                    onPress={handleRestorePurchases}
+                  >
+                    <Text style={styles.linkLiteText}>Restore purchases</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <Pressable
+                    style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
+                    onPress={() => navigation.navigate('Paywall')}
+                  >
+                    <Text style={styles.primaryButtonText}>Upgrade to Premium</Text>
+                  </Pressable>
+
+                  <View style={{ marginTop: 8 }}>
+                    <Pressable
+                      style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+                      onPress={handleManageSubscription}
+                    >
+                      <Text style={styles.secondaryButtonText}>Manage subscriptions</Text>
+                    </Pressable>
+                  </View>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.linkLite, pressed && styles.pressed]}
+                    onPress={handleRestorePurchases}
+                  >
+                    <Text style={styles.linkLiteText}>Restore purchases</Text>
+                  </Pressable>
+                </>
+              )}
+
+              {premiumIsSandbox ? (
+                <Text style={[styles.muted, { marginTop: 10 }]}>Sandbox purchase environment.</Text>
+              ) : null}
+
+              {/* ✅ Dev only error visibility */}
+              {__DEV__ && rcError ? (
+                <Text style={[styles.muted, { marginTop: 10 }]}>[dev] {rcError}</Text>
+              ) : null}
             </View>
 
             {/* Account */}
@@ -556,8 +957,9 @@ export function SettingsScreen({ navigation }: Props) {
                   }}
                 >
                   {resettingLocal ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                       <ActivityIndicator />
+                      <View style={{ width: 10 }} />
                       <Text style={styles.primaryButtonText}>Resetting…</Text>
                     </View>
                   ) : (
@@ -710,7 +1112,7 @@ export function SettingsScreen({ navigation }: Props) {
                 <Text style={styles.kValue}>{minDisplay}</Text>
               </View>
 
-              <Text style={[styles.muted, { marginTop: 10 }]}>{statusText}</Text>
+              <Text style={[styles.muted, { marginTop: 10 }]}>{appStoreStatusText}</Text>
 
               {updateUrl ? (
                 <Pressable
@@ -823,13 +1225,48 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     backgroundColor: 'rgba(255,255,255,0.86)',
     shadowColor: '#000',
-    shadowOpacity: 0.10,
+    shadowOpacity: 0.1,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 10 },
     marginBottom: 14,
   },
+
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sectionHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
   sectionTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
   sectionSubtitle: { marginTop: 6, fontSize: 12, color: '#6B7280', lineHeight: 16 },
+
+  // badges
+  badge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: 'rgba(17,24,39,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.10)',
+    marginRight: 10,
+  },
+  badgeText: { fontSize: 12, fontWeight: '900', color: '#111827' },
+
+  badgeSuccess: {
+    backgroundColor: 'rgba(16,185,129,0.12)',
+    borderColor: 'rgba(16,185,129,0.20)',
+  },
+  badgeTextSuccess: { color: '#065F46' },
+
+  badgeDanger: {
+    backgroundColor: 'rgba(220,38,38,0.10)',
+    borderColor: 'rgba(220,38,38,0.18)',
+  },
+  badgeTextDanger: { color: '#991B1B' },
 
   // buttons
   primaryButton: {
@@ -839,6 +1276,17 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
   },
+  secondaryButton: {
+    marginTop: 12,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.06)',
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.10)',
+  },
+  secondaryButtonText: { fontSize: 14, fontWeight: '900', color: '#111827' },
+
   dangerButton: {
     marginTop: 12,
     borderRadius: 999,
@@ -849,6 +1297,22 @@ const styles = StyleSheet.create({
   primaryButtonText: { fontSize: 14, fontWeight: '900', color: '#FFFFFF' },
   buttonPressed: { opacity: 0.9 },
   buttonDisabled: { opacity: 0.6 },
+
+  // small refresh
+  smallGhostBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.10)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  smallGhostText: { fontSize: 12, fontWeight: '900', color: '#111827' },
+
+  linkLite: { marginTop: 10, alignSelf: 'center' },
+  linkLiteText: { fontSize: 12, fontWeight: '900', color: '#4F46E5' },
 
   muted: { fontSize: 12, color: '#6B7280' },
   mutedStatus: { marginTop: 10, fontSize: 12, color: '#6B7280' },
@@ -969,10 +1433,14 @@ const styles = StyleSheet.create({
   },
   modalCloseText: { fontSize: 16, fontWeight: '900', color: '#111827' },
 
-  timeGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 },
+  timeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
   timeChip: {
-    width: '31%',
-    marginRight: '3.5%',
+    width: '32%',
     marginBottom: 10,
     borderRadius: 999,
     paddingVertical: 10,

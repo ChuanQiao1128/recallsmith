@@ -170,39 +170,36 @@ async function fetchPremiumDeckUrl(
   const u = new URL('/api/v1/content/premium-url', API_BASE_URL);
   u.searchParams.set('slug', s);
 
-// ✅ dev bypass for sandbox premium -> full download
-const appEnv = String(process.env.EXPO_PUBLIC_ENV || '').trim().toLowerCase();
+  // ✅ dev bypass for sandbox premium -> full download
+  const appEnv = String(process.env.EXPO_PUBLIC_ENV || '').trim().toLowerCase();
 
-// 允许 sandbox 的总开关：
-// - development 环境默认允许（为了 dev client / EAS Update 测试）
-// - 其他环境必须显式设置 EXPO_PUBLIC_RC_ALLOW_SANDBOX=1
-const allowSandbox =
-  appEnv === 'development' || isTruthyEnv(process.env.EXPO_PUBLIC_RC_ALLOW_SANDBOX);
+  // 允许 sandbox 的总开关：
+  // - development 环境默认允许（为了 dev client / EAS Update 测试）
+  // - 其他环境必须显式设置 EXPO_PUBLIC_RC_ALLOW_SANDBOX=1
+  const allowSandbox =
+    appEnv === 'development' || isTruthyEnv(process.env.EXPO_PUBLIC_RC_ALLOW_SANDBOX);
 
-// dev=1 的开关：
-// - development 环境：默认 true（不需要你额外配变量）
-//   如果你想在 dev 里禁用：EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=0
-// - 非 development：必须显式 EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=1 才会启用
-const bypassRaw = process.env.EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL;
-let allowDevBypass = false;
+  // dev=1 的开关：
+  // - development 环境：默认 true（不需要你额外配变量）
+  //   如果你想在 dev 里禁用：EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=0
+  // - 非 development：必须显式 EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=1 才会启用
+  const bypassRaw = process.env.EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL;
+  let allowDevBypass = false;
 
-if (allowSandbox) {
-  if (appEnv === 'development') {
-    allowDevBypass = bypassRaw ? isTruthyEnv(bypassRaw) : true; // ✅ dev 默认开
-  } else {
-    allowDevBypass = isTruthyEnv(bypassRaw); // ✅ 非 dev 必须显式开
+  if (allowSandbox) {
+    if (appEnv === 'development') {
+      allowDevBypass = bypassRaw ? isTruthyEnv(bypassRaw) : true; // ✅ dev 默认开
+    } else {
+      allowDevBypass = isTruthyEnv(bypassRaw); // ✅ 非 dev 必须显式开
+    }
   }
-}
+
+  if (allowDevBypass) u.searchParams.set('dev', '1');
 
   const headers: Record<string, string> = {
     'cache-control': 'no-cache',
     accept: 'application/json',
   };
-
-if (allowDevBypass) {
-  u.searchParams.set('dev', '1');
-  headers['x-dev-bypass'] = '1';   // ✅ 再加一层保险
-}
 
   if (accessToken && accessToken.trim()) {
     headers.Authorization = `Bearer ${accessToken.trim()}`;
@@ -277,23 +274,7 @@ export function HomeScreen({ navigation }: Props) {
   const authInit = useAuthStore((s) => s.init);
   const authUserSub = useAuthStore((s) => s.userSub);
   const isSignedIn = authStatus === 'signed_in';
-useEffect(() => {
-  console.log('[debug] useEffect fired, accessToken =', accessToken);
 
-  if (!accessToken) {
-    console.log('[debug] accessToken is empty');
-    return;
-  }
-
-  const t = String(accessToken);
-
-  console.log('[debug][ACCESS_TOKEN]', JSON.stringify({
-    len: t.length,
-    head: t.slice(0, 18),
-    tail: t.slice(-18),
-    hasDots: t.includes('.'),
-  }));
-}, [accessToken]);
   /**
    * ✅ Premium truth model
    * - serverPremium: 唯一“放行 premium 下载/安装”的真相
@@ -422,9 +403,66 @@ useEffect(() => {
     monthCounts: {},
   });
 
+  // =========================
+  // First launch bootstrap (auto download decks)
+  // =========================
+  const bootstrapAttemptedKeyRef = useRef<string | null>(null);
+  const [bootstrapOpen, setBootstrapOpen] = useState(false);
+  const [bootstrapText, setBootstrapText] = useState('自动下载题库中…');
+  const [bootstrapProgress, setBootstrapProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
+
   const computeHomeState = useCallback(async (): Promise<HomeState> => {
     const now = new Date();
     const today0 = startOfToday(now);
+
+    // If manifest isn't available yet (fresh install), fall back to the updates map so we can
+    // still show a deck list and bootstrap-install public decks.
+    const buildFallbackDeckEntries = (m: Record<string, UpdateInfo>): any[] => {
+      try {
+        const rows = Object.entries(m ?? {}).map(([slug, info]) => {
+          const deckType = Number((info as any)?.deckType ?? 2);
+          const downloadMode = (info as any)?.downloadMode ?? (deckType === 1 ? 'public' : 'auth');
+          const title = (info as any)?.title ?? slug.replace(/[-_]+/g, ' ');
+          const locale = (info as any)?.locale ?? 'en-US';
+          const totalCards =
+            (info as any)?.remoteCardCount ??
+            (info as any)?.remoteTotalCards ??
+            (info as any)?.totalCards ??
+            null;
+
+          const requiresPremium =
+            (info as any)?.requiresPremium ?? ((info as any)?.lockedPremium ?? deckType !== 1);
+
+          return {
+            slug,
+            title,
+            locale,
+            deckType,
+            downloadMode,
+            totalCards,
+            requiresPremium,
+            availability: (info as any)?.availability ?? null,
+            tier: (info as any)?.tier ?? null,
+            eta: (info as any)?.eta ?? null,
+            order: (info as any)?.order,
+          };
+        });
+
+        // stable order
+        rows.sort((a, b) => {
+          const ao = Number.isFinite(Number(a.order)) ? Number(a.order) : 9999;
+          const bo = Number.isFinite(Number(b.order)) ? Number(b.order) : 9999;
+          if (ao !== bo) return ao - bo;
+          return String(a.title).localeCompare(String(b.title));
+        });
+
+        return rows;
+      } catch {
+        return [];
+      }
+    };
 
     let updates: Record<string, UpdateInfo> = {};
     let manifestDecks: ManifestDeckEntry[] = [];
@@ -433,54 +471,162 @@ useEffect(() => {
       updates = await checkManifestForUpdates(isPremiumUser);
       manifestDecks = await listManifestDecks();
 
-      const hasAnyInstalledDeck = Object.values(updates).some(
-        (u) => typeof u.installedVersion === 'string' && u.installedVersion.trim().length > 0,
+      // ✅ 原来只靠 updates.installedVersion 判定 “是否安装过”
+      // 这里加一个“本地 deck 是否真实存在”的二次校验：
+      // - 避免 updates 异常/为空时误判，导致反复 bootstrap 或漏 bootstrap
+      let hasAnyInstalledDeck = Object.values(updates).some(
+        (u) => typeof (u as any)?.installedVersion === 'string' && String((u as any).installedVersion).trim().length > 0,
       );
 
-      // first launch auto-install only FREE + PUBLIC decks
-      if (!hasAnyInstalledDeck && manifestDecks.length > 0) {
-        const installedSlugs: string[] = [];
+      if (!hasAnyInstalledDeck) {
+        const probeEntries: any[] =
+          manifestDecks.length > 0 ? (manifestDecks as any[]) : buildFallbackDeckEntries(updates);
 
-        for (const entry of manifestDecks) {
-          if ((entry.deckType ?? 1) !== 1) continue;
-
-          const info = updates[entry.slug];
-          if (!info?.remoteUrl || !info.hasUpdate) continue;
-
+        for (const e of probeEntries) {
           try {
-            const ok = await installDeckFromUrl(
-              entry.slug,
-              info.remoteUrl,
-              info.remoteVersion,
-              info.remoteSha256,
-            );
-            if (ok) installedSlugs.push(entry.slug);
+            const deck = await resolveDeckBySlug(e.slug);
+            const localCards = deck?.Cards?.length ?? (deck as any)?.TotalCards ?? 0;
+            if (deck && localCards > 0) {
+              hasAnyInstalledDeck = true;
+              break;
+            }
           } catch {
             // ignore
           }
         }
+      }
 
-        if (installedSlugs.length > 0) {
-          try {
-            const stored = await loadActiveDeckSlug();
-            if (!stored) await setActiveDeckSlug(installedSlugs[0]);
-          } catch {}
+      // first launch bootstrap: auto-install only FREE + PUBLIC decks
+      if (!hasAnyInstalledDeck) {
+        const entriesForBootstrap: any[] =
+          manifestDecks.length > 0 ? (manifestDecks as any[]) : buildFallbackDeckEntries(updates);
 
-          for (const slug of installedSlugs) {
+        const candidates: Array<{
+          slug: string;
+          remoteUrl: string;
+          remoteVersion: string;
+          remoteSha256: string | null;
+        }> = [];
+
+        for (const entry of entriesForBootstrap) {
+          const info: any = updates?.[entry.slug];
+
+          // ✅ 更稳：remoteUrl / remoteVersion / sha 可以来自 updates 或 manifest entry
+          const remoteUrl: string | null =
+            (info?.remoteUrl as string | undefined) ??
+            (entry as any)?.remoteUrl ??
+            (entry as any)?.url ??
+            null;
+
+          const remoteVersion: string | null =
+            (info?.remoteVersion as string | undefined) ??
+            (entry as any)?.remoteVersion ??
+            (entry as any)?.version ??
+            null;
+
+          const remoteSha256: string | null =
+            (info?.remoteSha256 as string | undefined) ??
+            (entry as any)?.remoteSha256 ??
+            (entry as any)?.sha256 ??
+            null;
+
+          const hasUpdate: boolean = info?.hasUpdate ?? true;
+
+          if (!remoteUrl || !remoteVersion || !hasUpdate) continue;
+
+          const deckType = Number((entry as any)?.deckType ?? info?.deckType ?? 2);
+          const downloadModeRaw =
+            (info?.downloadMode as string | undefined) ??
+            (entry as any)?.downloadMode ??
+            (deckType === 1 ? 'public' : 'auth');
+          const downloadMode = String(downloadModeRaw).toLowerCase().trim();
+
+          // Only bootstrap-install PUBLIC + FREE decks.
+          if (deckType !== 1) continue;
+          if (downloadMode !== 'public') continue;
+
+          candidates.push({
+            slug: entry.slug,
+            remoteUrl,
+            remoteVersion,
+            remoteSha256,
+          });
+        }
+
+        const bootstrapKey = authUserSub ?? 'anon';
+        const alreadyAttempted = bootstrapAttemptedKeyRef.current === bootstrapKey;
+
+        if (candidates.length > 0 && !alreadyAttempted) {
+          bootstrapAttemptedKeyRef.current = bootstrapKey;
+
+          setBootstrapOpen(true);
+          setBootstrapText('自动下载题库中…');
+          setBootstrapProgress({ done: 0, total: candidates.length });
+
+          const installedSlugs: string[] = [];
+
+          for (let i = 0; i < candidates.length; i++) {
+            const c = candidates[i];
+            setBootstrapText(`自动下载题库中… (${i + 1}/${candidates.length})`);
+            setBootstrapProgress({ done: i, total: candidates.length });
+
             try {
-              await applyCachedRemoteProgress(slug);
-            } catch {}
+              const ok = await installDeckFromUrl(c.slug, c.remoteUrl, c.remoteVersion, c.remoteSha256);
+              if (ok) installedSlugs.push(c.slug);
+            } catch {
+              // ignore single failure
+            }
           }
 
+          setBootstrapProgress({ done: candidates.length, total: candidates.length });
+          setBootstrapText('正在完成初始化…');
+
+          if (installedSlugs.length > 0) {
+            // set active deck if missing
+            try {
+              const stored = await loadActiveDeckSlug();
+              if (!stored) await setActiveDeckSlug(installedSlugs[0]);
+            } catch {
+              // ignore
+            }
+
+            // apply cached remote progress (if any) for the decks we installed
+            for (const slug of installedSlugs) {
+              try {
+                await applyCachedRemoteProgress(slug);
+              } catch {
+                // ignore
+              }
+            }
+
+            // recompute updates after installs
+            try {
+              updates = await checkManifestForUpdates(isPremiumUser);
+            } catch {
+              // ignore
+            }
+          }
+
+          // try to read manifest again after bootstrap (some impls cache on first update)
           try {
-            updates = await checkManifestForUpdates(isPremiumUser);
-          } catch {}
+            if (manifestDecks.length === 0) {
+              manifestDecks = await listManifestDecks();
+            }
+          } catch {
+            // ignore
+          }
+
+          setBootstrapOpen(false);
+          setBootstrapProgress(null);
         }
       }
     } catch {
       updates = {};
       manifestDecks = [];
     }
+
+    const deckEntries: any[] =
+      manifestDecks.length > 0 ? (manifestDecks as any[]) : buildFallbackDeckEntries(updates);
 
     // Month buckets
     const year = now.getFullYear();
@@ -500,7 +646,7 @@ useEffect(() => {
 
     let totalDueAllDecks = 0;
 
-    for (const entry of manifestDecks) {
+    for (const entry of deckEntries) {
       const availability = (entry.availability ?? '').toLowerCase();
       const isComing = availability === 'coming';
 
@@ -530,7 +676,7 @@ useEffect(() => {
       }
 
       const deck = await resolveDeckBySlug(entry.slug);
-      const localCards = deck?.Cards?.length ?? deck?.TotalCards ?? 0;
+      const localCards = deck?.Cards?.length ?? (deck as any)?.TotalCards ?? 0;
 
       const displayTotalCards =
         typeof entry.totalCards === 'number' && Number.isFinite(entry.totalCards)
@@ -541,11 +687,11 @@ useEffect(() => {
 
       if (!canStudy) {
         deckSummaries.push({
-          slug: deck?.Slug ?? entry.slug,
-          title: deck?.Title ?? entry.title ?? entry.slug,
-          locale: deck?.Locale ?? entry.locale ?? 'en-US',
-          version: deck?.Version ?? entry.version,
-          deckType: deck?.DeckType ?? entry.deckType ?? 1,
+          slug: (deck as any)?.Slug ?? entry.slug,
+          title: (deck as any)?.Title ?? entry.title ?? entry.slug,
+          locale: (deck as any)?.Locale ?? entry.locale ?? 'en-US',
+          version: (deck as any)?.Version ?? entry.version,
+          deckType: (deck as any)?.DeckType ?? entry.deckType ?? 1,
           totalCards: displayTotalCards,
           localCards,
           studyCards: localCards,
@@ -565,10 +711,10 @@ useEffect(() => {
       }
 
       try {
-        await applyCachedRemoteProgress(deck.Slug);
+        await applyCachedRemoteProgress((deck as any).Slug);
       } catch {}
 
-      const progress = await loadDeckProgress(deck);
+      const progress = await loadDeckProgress(deck as any);
       const learnedCount = progress.filter(isLearned).length;
 
       const studyCards = Math.max(localCards, 0);
@@ -584,11 +730,11 @@ useEffect(() => {
       const percent = denom > 0 ? clamp01(learnedCount / denom) : 0;
 
       deckSummaries.push({
-        slug: deck.Slug,
-        title: deck.Title,
-        locale: deck.Locale,
-        version: deck.Version,
-        deckType: deck.DeckType,
+        slug: (deck as any).Slug,
+        title: (deck as any).Title,
+        locale: (deck as any).Locale,
+        version: (deck as any).Version,
+        deckType: (deck as any).DeckType,
         totalCards: displayTotalCards,
         localCards,
         studyCards,
@@ -632,7 +778,7 @@ useEffect(() => {
       allUpcoming30,
       monthCounts,
     };
-  }, [isPremiumUser]);
+  }, [isPremiumUser, authUserSub]);
 
   const loadHomeFromLocal = useCallback(async () => {
     const next = await computeHomeState();
@@ -770,21 +916,44 @@ useEffect(() => {
     };
   }, [asOf, monthCounts]);
 
+  // ✅ FIX: loading 分支也要渲染 bootstrap Modal，否则首次启动弹窗不会出现
   if (loading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
-          <View style={styles.center}>
-            <ActivityIndicator size="large" color="#6366F1" />
-            <Text style={styles.loadingText}>Loading home…</Text>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.safeArea}>
+          <LinearGradient
+            colors={['#F5F3FF', '#E0F2FE']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.gradient}
+          >
+            {/* First launch bootstrap modal (also render during loading!) */}
+            <Modal transparent animationType="fade" visible={bootstrapOpen}>
+              <View style={styles.modalOverlay}>
+                <View style={styles.modalCardOpaque}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <ActivityIndicator />
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.modalTitle}>正在初始化题库</Text>
+                      <Text style={styles.modalSubtitle}>{bootstrapText}</Text>
+                      {bootstrapProgress ? (
+                        <Text style={[styles.modalSubtitle, { marginTop: 8 }]}>
+                          {bootstrapProgress.done}/{bootstrapProgress.total}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </View>
+                </View>
+              </View>
+            </Modal>
+
+            <View style={styles.center}>
+              <ActivityIndicator size="large" color="#6366F1" />
+              <Text style={styles.loadingText}>Loading home…</Text>
+            </View>
+          </LinearGradient>
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
@@ -799,6 +968,26 @@ useEffect(() => {
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
         >
+          {/* First launch bootstrap modal */}
+          <Modal transparent animationType="fade" visible={bootstrapOpen}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalCardOpaque}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <ActivityIndicator />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={styles.modalTitle}>正在初始化题库</Text>
+                    <Text style={styles.modalSubtitle}>{bootstrapText}</Text>
+                    {bootstrapProgress ? (
+                      <Text style={[styles.modalSubtitle, { marginTop: 8 }]}>
+                        {bootstrapProgress.done}/{bootstrapProgress.total}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
           {/* Month View */}
           <Modal animationType="fade" transparent visible={isMonthOpen} onRequestClose={closeMonth}>
             <View style={styles.modalOverlay}>
@@ -953,10 +1142,7 @@ useEffect(() => {
                     <Text style={[styles.segmentText, styles.segmentTextActive]}>Week</Text>
                   </Pressable>
 
-                  <Pressable
-                    style={({ pressed }) => [styles.segmentItem, pressed && styles.pressed]}
-                    onPress={openMonth}
-                  >
+                  <Pressable style={({ pressed }) => [styles.segmentItem, pressed && styles.pressed]} onPress={openMonth}>
                     <Text style={styles.segmentText}>{isSignedIn ? 'Month' : 'Month 🔒'}</Text>
                   </Pressable>
                 </View>
@@ -1052,9 +1238,10 @@ useEffect(() => {
 
                   const deckUpdate = updates?.[d.slug];
                   const hasInstalledVersion =
-                    typeof deckUpdate?.installedVersion === 'string' && deckUpdate.installedVersion.trim().length > 0;
+                    typeof (deckUpdate as any)?.installedVersion === 'string' &&
+                    String((deckUpdate as any).installedVersion).trim().length > 0;
 
-                  const hasUpdate = hasInstalledVersion && !!deckUpdate?.hasUpdate;
+                  const hasUpdate = hasInstalledVersion && !!(deckUpdate as any)?.hasUpdate;
 
                   const isTrialInstalled = lockedPremium && isSignedIn && d.canStudy;
 
@@ -1078,29 +1265,11 @@ useEffect(() => {
                           downloadMode: d.downloadMode,
                           hasAccessToken: !!accessToken,
                         });
-                        // right after console.log('[Home] press', ...)
-const u = updates?.[d.slug];
-if (d.slug === 'react-basics-draft') {
-  console.log('[Home] updates', {
-    slug: d.slug,
-    installedVersion: u?.installedVersion ?? null,
-    remoteVersion: u?.remoteVersion ?? null,
-    hasUpdate: !!u?.hasUpdate,
-    hasRemoteUrl: !!u?.remoteUrl,
-    localCards: d.localCards,
-    totalCards: d.totalCards,
-    canStudy: d.canStudy,
-    needsFull,
-    needsFullInstall,
-  });
-}
 
                         if (isComing) {
-                          Alert.alert(
-                            'Coming soon',
-                            d.eta ? `ETA: ${d.eta}` : 'This deck is not available yet.',
-                            [{ text: 'OK' }],
-                          );
+                          Alert.alert('Coming soon', d.eta ? `ETA: ${d.eta}` : 'This deck is not available yet.', [
+                            { text: 'OK' },
+                          ]);
                           return;
                         }
 
@@ -1138,7 +1307,7 @@ if (d.slug === 'react-basics-draft') {
                         // locked premium: try preview
                         if (lockedPremium) {
                           if (isSignedIn) {
-                            const info = updates?.[d.slug];
+                            const info: any = updates?.[d.slug];
                             if (info?.remoteUrl && info.remoteVersion) {
                               setState((prev) => ({ ...prev, loading: true }));
                               try {
@@ -1178,13 +1347,9 @@ if (d.slug === 'react-basics-draft') {
                             let ok = false;
 
                             // public path
-                            if (deckUpdate?.remoteUrl) {
-                              ok = await installDeckFromUrl(
-                                d.slug,
-                                deckUpdate.remoteUrl,
-                                deckUpdate.remoteVersion,
-                                deckUpdate.remoteSha256,
-                              );
+                            const info: any = deckUpdate as any;
+                            if (info?.remoteUrl) {
+                              ok = await installDeckFromUrl(d.slug, info.remoteUrl, info.remoteVersion, info.remoteSha256);
                             } else {
                               // premium auth path (serverPremium only)
                               const mode = String(d.downloadMode ?? '').toLowerCase();
@@ -1228,7 +1393,9 @@ if (d.slug === 'react-basics-draft') {
                           {isComing
                             ? `Coming${d.eta ? ` · ${d.eta}` : ''}`
                             : isPremium
-                              ? (lockedPremium && isSignedIn ? 'Premium · Free trial' : 'Premium')
+                              ? lockedPremium && isSignedIn
+                                ? 'Premium · Free trial'
+                                : 'Premium'
                               : 'Free'}{' '}
                           · {d.totalCards} cards
                         </Text>
