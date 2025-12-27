@@ -1,7 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
-const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
 const { requireAdmin } = require("../../common/auth");
 const { ValidationError, requireInteger, parseJsonBody } = require("../../common/validate");
@@ -9,18 +9,20 @@ const { pool } = require("../db/pg");
 const { requireDeckWrite } = require("./helpers");
 
 const CONTENT_BUCKET = process.env.CONTENT_BUCKET || null;
+const PREMIUM_BUCKET = process.env.PREMIUM_BUCKET || null;
 
-function normalizePrefix(p) {
-  if (p === undefined || p === null) return "content/";
-  let s = String(p).trim();
-  s = s.replace(/^\/+/, ""); // no leading /
-  if (s === "") return "";
-  if (!s.endsWith("/")) s += "/";
-  return s;
+function normalizePrefix(p, defName) {
+  let s = String(p ?? defName).trim();
+  s = s.replace(/^\/+/, "");
+  s = s.replace(/\/+$/, "");
+  return s || defName;
 }
 
-const CONTENT_PREFIX = normalizePrefix(process.env.CONTENT_PREFIX);
-const MANIFEST_KEY = `${CONTENT_PREFIX}manifest.json`;
+const CONTENT_PREFIX = normalizePrefix(process.env.CONTENT_PREFIX, "content");
+const PREMIUM_PREFIX = normalizePrefix(process.env.PREMIUM_PREFIX, "premium");
+
+// Manifest is always written to the public bucket (rebuild endpoint)
+const MANIFEST_KEY = `${CONTENT_PREFIX}/manifest.json`;
 
 let _s3;
 function s3() {
@@ -43,48 +45,42 @@ function makeBuildId() {
   return `${y}${mo}${da}T${hh}${mm}${ss}Z-${rand}`;
 }
 
-async function streamToString(body) {
-  if (!body) return "";
-  const chunks = [];
-  for await (const chunk of body) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-async function getJsonOrNull(key) {
-  try {
-    const out = await s3().send(
-      new GetObjectCommand({
-        Bucket: CONTENT_BUCKET,
-        Key: key,
-      })
-    );
-    const text = await streamToString(out.Body);
-    if (!text) return null;
-    return JSON.parse(text);
-  } catch (e) {
-    const status = e?.$metadata?.httpStatusCode;
-    const name = e?.name || "";
-    if (status === 404 || name === "NoSuchKey") return null;
-    throw e;
-  }
-}
-
-async function putJson(key, obj, cacheControl) {
-  const body = JSON.stringify(obj);
+async function putJson({ bucket, key, obj, cacheControl }) {
   await s3().send(
     new PutObjectCommand({
-      Bucket: CONTENT_BUCKET,
+      Bucket: bucket,
       Key: key,
-      Body: body,
+      Body: JSON.stringify(obj),
       ContentType: "application/json; charset=utf-8",
       CacheControl: cacheControl,
-    })
+    }),
   );
 }
 
-async function handleAuthoringPublish({ event, method, res, auth }) {
+function inferTier(deckType, tierValue) {
+  const t = String(tierValue || "").trim().toLowerCase();
+  if (t === "free" || t === "premium") return t;
+  return Number(deckType) === 1 ? "free" : "premium";
+}
+
+function toInt(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clampPreviewCount(previewCardsValue, fullCount) {
+  const full = Math.max(0, toInt(fullCount, 0));
+  const raw = toInt(previewCardsValue, 0);
+
+  // DB 配了正数 => 以 DB 为准（但不超过 fullCount）
+  if (raw > 0) return full > 0 ? Math.min(raw, full) : raw;
+
+  // 兜底：至少给一点 preview，避免 “非 premium / 未登录” 无法安装
+  if (full > 0) return Math.min(10, full);
+  return 0;
+}
+
+async function handleAuthoringPublish({ event, method, query, res, auth }) {
   const okRes = requireAdmin({ auth, res });
   if (okRes !== true) return okRes;
 
@@ -101,6 +97,9 @@ async function handleAuthoringPublish({ event, method, res, auth }) {
     const deckIdInt = requireInteger(body.deckId, "deckId");
     const note = body.note != null ? String(body.note).trim() : null;
 
+    // mode=preview only returns JSON export and does NOT write S3
+    const mode = String(query?.mode || "").trim().toLowerCase() === "preview" ? "preview" : "publish";
+
     const isSuperAdmin = auth.isSuperAdmin;
     const adminSub = auth.userSub || null;
 
@@ -110,7 +109,7 @@ async function handleAuthoringPublish({ event, method, res, auth }) {
       if (ok !== true) return ok;
     }
 
-    // 读 deck
+    // 读 deck（包含 preview_cards）
     const dr = await db.query(
       `
       select
@@ -122,14 +121,16 @@ async function handleAuthoringPublish({ event, method, res, auth }) {
         locale,
         deck_type as "deckType",
         version,
+        tier,
+        total_cards as "totalCards",
+        preview_cards as "previewCards",
         is_deleted as "isDeleted",
-        created_at as "createdAt",
         updated_at as "updatedAt"
       from decks
       where id = $1
       limit 1
       `,
-      [deckIdInt]
+      [deckIdInt],
     );
 
     if (dr.rowCount === 0) return res.notFound("Deck not found");
@@ -139,114 +140,163 @@ async function handleAuthoringPublish({ event, method, res, auth }) {
       return res.badRequest("DECK_DELETED", "Deck is deleted (cannot publish)");
     }
 
-    const deckSlug = String(deck.slug);
+    const deckSlug = String(deck.slug || "").trim();
 
     // 基本安全：slug 不允许包含 /
-    if (deckSlug.includes("/") || deckSlug.includes("..")) {
+    if (!deckSlug || deckSlug.includes("/") || deckSlug.includes("..")) {
       throw new ValidationError("deck.slug contains invalid characters", "deckSlug");
     }
 
-    // 读 cards
+    // 读 cards（flat v2 content format used by mobile installer）
     const cr = await db.query(
       `
       select
         stable_uid as "stableUid",
+        order_in_deck as "orderInDeck",
+        difficulty,
         question,
         explanation,
-        code_snippet as "codeSnippet",
         code_language as "codeLanguage",
+        code_snippet as "codeSnippet",
         real_world_usage as "realWorldUsage",
-        difficulty,
-        order_in_deck as "orderInDeck",
-        revision,
-        version,
-        updated_at as "updatedAt"
+        revision
       from cards
       where deck_id = $1 and is_deleted = 0
       order by order_in_deck asc, id asc
       `,
-      [deckIdInt]
+      [deckIdInt],
     );
 
     const cards = cr.rows || [];
-    const buildId = makeBuildId();
 
-    const deckPath = `decks/${deckSlug}/builds/${buildId}/deck.json`;
-    const deckKey = `${CONTENT_PREFIX}${deckPath}`;
+    const tier = inferTier(deck.deckType, deck.tier);
 
-    const publishedAtMs = Date.now();
+    // premium 才需要 PREMIUM_BUCKET
+    if (tier === "premium" && !PREMIUM_BUCKET) {
+      return res.badRequest("CONFIG_ERROR", "Missing env PREMIUM_BUCKET");
+    }
 
-    // 1) 写 immutable deck.json（长缓存）
-    const deckJson = {
-      schemaVersion: 1,
-      buildId,
-      generatedAtMs: publishedAtMs,
-      deck: {
-        slug: deckSlug,
-        title: deck.title,
-        author: deck.author,
-        description: deck.description,
-        locale: deck.locale,
-        deckType: Number(deck.deckType),
-        version: Number(deck.version),
-        updatedAt: deck.updatedAt,
-      },
-      cards,
-    };
-
-    await putJson(deckKey, deckJson, "public, max-age=31536000, immutable");
-
-    // 2) 更新 manifest.json（短缓存）
-    const existing = (await getJsonOrNull(MANIFEST_KEY)) || {};
-    const decks = Array.isArray(existing.decks) ? existing.decks : [];
-
-    const nextEntry = {
+    // Base export (preview uses DB version)
+    const baseDeckJson = {
       slug: deckSlug,
       title: deck.title,
-      locale: deck.locale,
+      locale: deck.locale || "en-US",
       deckType: Number(deck.deckType),
-      buildId,
-      path: deckPath, // 👈 相对 prefix 的路径
-      cardCount: cards.length,
-      publishedAtMs,
+      version: String(deck.version ?? "1"),
+      // 这里是“全量 deck 视角”的 totalCards（发布时会被强制自洽）
+      totalCards: toInt(deck.totalCards, cards.length),
+      cards: (cards || []).map((c) => ({
+        stableUid: c.stableUid,
+        orderInDeck: Number(c.orderInDeck),
+        difficulty: Number(c.difficulty ?? 2),
+        question: c.question,
+        explanation: c.explanation ?? "",
+        codeLanguage: c.codeLanguage ?? null,
+        codeSnippet: c.codeSnippet ?? "",
+        realWorldUsage: c.realWorldUsage ?? "",
+        revision: Number(c.revision ?? 1),
+      })),
     };
 
-    const nextDecks = decks.filter((d) => d && String(d.slug) !== deckSlug);
-    nextDecks.push(nextEntry);
-    nextDecks.sort((a, b) => String(a.slug).localeCompare(String(b.slug)));
+    if (mode === "preview") {
+      return res.ok({
+        mode: "preview",
+        deckId: deckIdInt,
+        deckSlug,
+        tier,
+        cardCount: baseDeckJson.cards.length,
+        export: baseDeckJson,
+      });
+    }
 
-    const manifest = {
-      schemaVersion: 1,
-      generatedAtMs: publishedAtMs,
-      prefix: CONTENT_PREFIX, // 例如 "content/" 或 ""
-      decks: nextDecks,
+    // Publish mode: IMPORTANT invariant for mobile installer
+    // - deck.json.version MUST equal buildId
+    const buildId = makeBuildId();
+
+    const fullCards = baseDeckJson.cards || [];
+    const fullDeckToWrite = {
+      ...baseDeckJson,
+      version: buildId,
+      // ✅ publish artifacts must be self-consistent for the mobile installer
+      totalCards: fullCards.length,
+      cards: fullCards,
     };
 
-    await putJson(MANIFEST_KEY, manifest, "public, max-age=60, s-maxage=60");
+    // Choose bucket/key by tier
+    let bucket;
+    let key;
+    if (tier === "premium") {
+      bucket = PREMIUM_BUCKET;
+      key = `${PREMIUM_PREFIX}/decks/${deckSlug}/builds/${buildId}/deck.json`;
+    } else {
+      bucket = CONTENT_BUCKET;
+      key = `${CONTENT_PREFIX}/decks/${deckSlug}/builds/${buildId}/deck.json`;
+    }
 
-    // 3) 记录 publish 历史（可选，但推荐）
+    await putJson({
+      bucket,
+      key,
+      obj: fullDeckToWrite,
+      cacheControl: "public, max-age=31536000, immutable",
+    });
+
+    // ✅ premium: also write PUBLIC preview to CONTENT_BUCKET
+    let preview = null;
+    if (tier === "premium") {
+      const previewBuildId = `${buildId}-preview`;
+      const previewCount = clampPreviewCount(deck.previewCards, fullDeckToWrite.cards.length);
+
+      const previewDeckToWrite = {
+        ...baseDeckJson,
+        version: previewBuildId,
+        cards: fullDeckToWrite.cards.slice(0, previewCount),
+      };
+
+      // preview 文件也必须自洽
+      previewDeckToWrite.totalCards = previewDeckToWrite.cards.length;
+
+      const previewKey = `${CONTENT_PREFIX}/decks/${deckSlug}/previews/${previewBuildId}/deck.json`;
+
+      await putJson({
+        bucket: CONTENT_BUCKET,
+        key: previewKey,
+        obj: previewDeckToWrite,
+        cacheControl: "public, max-age=31536000, immutable",
+      });
+
+      preview = {
+        previewBuildId,
+        previewKey,
+        previewCards: previewDeckToWrite.cards.length,
+      };
+    }
+
+    // 记录 publish 历史（manifestRebuild 用 build_id 作为 source of truth）
     try {
       await db.query(
         `
         insert into deck_publishes (deck_id, deck_slug, build_id, s3_key, published_by_admin_sub, note)
         values ($1,$2,$3,$4,$5,$6)
         `,
-        [deckIdInt, deckSlug, buildId, deckKey, adminSub, note]
+        [deckIdInt, deckSlug, buildId, `s3://${bucket}/${key}`, adminSub, note],
       );
     } catch (e) {
-      // 如果你还没跑 002 migration，这里别让 publish 整体失败
+      // 42P01 = undefined_table
       const code = e?.code || "";
-      if (code !== "42P01") throw e; // 42P01 = undefined_table
+      if (code !== "42P01") throw e;
     }
 
     return res.ok({
+      mode: "publish",
       deckId: deckIdInt,
       deckSlug,
+      tier,
       buildId,
-      cardCount: cards.length,
+      cardCount: fullDeckToWrite.cards.length,
+      bucket,
+      key,
+      preview, // premium 时返回 preview 元信息，方便你 debug/联调
       manifestKey: MANIFEST_KEY,
-      deckKey,
-      publishedAtMs,
     });
   } catch (err) {
     if (err instanceof ValidationError) return res.badRequest("VALIDATION_ERROR", err.message);

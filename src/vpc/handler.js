@@ -7,6 +7,7 @@ const { logInfo, logError } = require("../common/log");
 const { handleDbNetcheck } = require("./db/netcheck");
 const { handleDbRcEvents } = require("./db/queryRcEvents");
 const { handleDbPremiumState } = require("./db/queryPremiumState");
+
 // DB
 const {
   handleDbPing,
@@ -14,7 +15,7 @@ const {
   handleDbMigrationsList,
   handleDbCreateDatabase,
   handleDbListDatabases,
-  handleDbDropAndRecreate
+  handleDbDropAndRecreate,
 } = require("./db/migrate");
 
 // Authoring
@@ -22,6 +23,7 @@ const { handleAuthoringDecks } = require("./authoring/decks");
 const { handleAuthoringCards } = require("./authoring/cards");
 const { handleAuthoringPermissions } = require("./authoring/permissions");
 const { handleAuthoringPublish } = require("./authoring/publish");
+const { handleManifestRebuild } = require("./authoring/manifestRebuild");
 
 // Runtime
 const { handleMe } = require("./runtime/me");
@@ -71,6 +73,20 @@ exports.handler = async (event) => {
   const traceId = event.requestContext?.requestId || null;
   const res = makeRes(traceId);
 
+  // ✅ 关键：这里是 CloudWatch 能看到的
+  logInfo(
+    JSON.stringify({
+      tag: "boot",
+      lambda: "core-vpc",
+      version: process.env.AWS_LAMBDA_FUNCTION_VERSION,
+      apiEnv: process.env.API_ENV,
+      allowDevPremium: process.env.ALLOW_DEV_PREMIUM,
+      disallowSandbox: process.env.DISALLOW_SANDBOX_PREMIUM,
+      path,
+      method,
+    }),
+  );
+
   // ✅ SAFE auth parsing (webhook uses Authorization header but NOT JWT)
   let auth = {
     userSub: null,
@@ -85,11 +101,10 @@ exports.handler = async (event) => {
     // ignore (webhooks / public routes may carry non-JWT auth header)
   }
 
-  const query = event.queryStringParameters || {};
+  const query = event.queryStringParameters || {}; // ✅ keep it always object
 
   if (method === "OPTIONS") return res.raw(200, { ok: true });
 
-  // log request summary (avoid logging full token/body)
   logInfo(
     JSON.stringify({
       traceId,
@@ -101,21 +116,13 @@ exports.handler = async (event) => {
       groups: auth.groups,
       isAdmin: auth.isAdmin,
       isSuperAdmin: auth.isSuperAdmin,
-    })
+    }),
   );
 
   try {
-    // Simple fixed routes
     if (path === "/health" && method === "GET") return res.ok({ ok: true });
 
-    // ✅ RevenueCat webhooks (NO DB version)
-    // New canonical routes:
-    // - /webhooks/revenuecat/development
-    // - /webhooks/revenuecat/production
-    //
-    // Optional legacy aliases:
-    // - /rc/webhook
-    // - /webhooks/revenuecat
+    // ✅ RevenueCat webhooks
     if (
       (path === "/webhooks/revenuecat/development" ||
         path === "/webhooks/revenuecat/production" ||
@@ -151,6 +158,10 @@ exports.handler = async (event) => {
     if (path === "/api/v1/admin/db/premium-state" && method === "GET") {
       return handleDbPremiumState({ event, method, path, query, res, auth });
     }
+    if (path === "/api/v1/admin/db/rc-events" && method === "GET") {
+      return handleDbRcEvents({ event, method, path, query, res, auth });
+    }
+
     // Authoring
     if (path === "/api/v1/authoring/decks") {
       return handleAuthoringDecks({ event, method, path, query, res, auth });
@@ -164,9 +175,10 @@ exports.handler = async (event) => {
     if (path === "/api/v1/authoring/publish") {
       return handleAuthoringPublish({ event, method, path, query, res, auth });
     }
-    if (path === "/api/v1/admin/db/rc-events" && method === "GET") {
-      return handleDbRcEvents({ event, method, path, query, res, auth });
+    if (path === "/api/v1/admin/manifest/rebuild" && method === "POST") {
+      return handleManifestRebuild({ event, method, path, query, res, auth });
     }
+
     // Runtime
     if (path === "/api/v1/me" && method === "GET") {
       return handleMe({ event, method, path, query, res, auth });
@@ -177,12 +189,35 @@ exports.handler = async (event) => {
     if (path === "/api/v1/entitlements" && method === "GET") {
       return handleEntitlements({ event, method, path, query, res, auth });
     }
-    if (path === "/api/v1/content/premium-url" && method === "GET") {
-      return handlePremiumDeckUrl({ event, method, path, query, res, auth });
+
+    // ✅ premium-url / premium-url-dev (same handler)
+    if (
+      (path === "/api/v1/content/premium-url" ||
+        path === "/api/v1/runtime/premium-url" ||
+        path === "/api/v1/content/premium-url-dev" ||
+        path === "/api/v1/runtime/premium-url-dev") &&
+      method === "GET"
+    ) {
+      const isDevRoute = path.endsWith("-dev");
+
+      // dev route: auto enable dev bypass (no need for client dev=1 / header)
+      const q = { ...(query || {}) };
+      let e = event;
+
+      if (isDevRoute) {
+        q.dev = "1";
+        e = {
+          ...event,
+          queryStringParameters: q,
+          headers: { ...(event.headers || {}), "x-dev-bypass": "1" },
+        };
+      }
+
+      return handlePremiumDeckUrl({ event: e, method, query: q, res, auth });
     }
-    // ✅ Sync (aliases for mobile v1)
+
+    // ✅ Sync
     if (path === "/api/v1/sync/progress/events" || path === "/api/v1/sync/push") {
-      // 这里把 path 传成 canonical，避免 handler 内部如果做了 path 判断会出问题
       return handleProgressEvents({
         event,
         method,
@@ -203,11 +238,10 @@ exports.handler = async (event) => {
       });
     }
 
-    // Admin users (v1 冻结：先占位，后面实现)
+    // Admin users placeholders
     {
       const p1 = match("/api/v1/admin/users", path);
       if (p1 && method === "GET") {
-        // TODO: implement /api/v1/admin/users list
         if (!auth.isSuperAdmin) return res.forbidden("Requires super_admin");
         return res.notImplemented("TODO: admin users list");
       }
@@ -223,7 +257,7 @@ exports.handler = async (event) => {
       }
     }
 
-    // Internal routes (only for edge-public to call)
+    // Internal routes
     if (path === "/api/internal/entitlements/apply" && method === "POST") {
       return handleInternalEntitlementsApply({ event, method, path, query, res, auth });
     }

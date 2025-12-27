@@ -3,7 +3,7 @@
 const crypto = require("crypto");
 const { Pool } = require("pg");
 
-const RC_WEBHOOK_IMPL_VERSION = "2025-12-25T23:58Z-v6";
+const RC_WEBHOOK_IMPL_VERSION = "2025-12-27T00:30Z-v13";
 
 // ---------------------
 // PG pool (vpc lambda)
@@ -64,6 +64,11 @@ async function insertRcEventOnce(row) {
   );
 }
 
+/**
+ * ✅ Upsert premium state with:
+ * - out-of-order protection by last_event_ts_ms
+ * - production-env priority: sandbox must NOT override production
+ */
 async function upsertPremiumState(row) {
   const p = pool();
   if (!p) return;
@@ -80,20 +85,24 @@ async function upsertPremiumState(row) {
       updated_at,
       last_event_id,
       last_event_type,
-      last_event_at
+      last_event_at,
+      last_event_ts_ms
     )
-    values ($1,$2,$3,$4,$5,$6,now(),$7,$8,now())
+    values ($1,$2,$3,$4,$5,$6,now(),$7,$8,to_timestamp($9/1000.0),$9)
     on conflict (app_user_id) do update set
-      premium_active  = excluded.premium_active,
-      premium_env     = excluded.premium_env,
-      product_id      = excluded.product_id,
-      entitlement_id  = excluded.entitlement_id,
-      expires_at_ms   = excluded.expires_at_ms,
-      updated_at      = now(),
-      last_event_id   = excluded.last_event_id,
-      last_event_type = excluded.last_event_type,
-      last_event_at   = now()
-    ;
+      premium_active   = excluded.premium_active,
+      premium_env      = excluded.premium_env,
+      product_id       = excluded.product_id,
+      entitlement_id   = excluded.entitlement_id,
+      expires_at_ms    = excluded.expires_at_ms,
+      updated_at       = now(),
+      last_event_id    = excluded.last_event_id,
+      last_event_type  = excluded.last_event_type,
+      last_event_at    = excluded.last_event_at,
+      last_event_ts_ms = excluded.last_event_ts_ms
+    where
+      user_premium_state.last_event_ts_ms <= excluded.last_event_ts_ms
+      and (user_premium_state.premium_env <> 'production' or excluded.premium_env = 'production');
     `,
     [
       row.app_user_id,
@@ -104,6 +113,7 @@ async function upsertPremiumState(row) {
       row.expires_at_ms,
       row.last_event_id,
       row.last_event_type,
+      row.last_event_ts_ms,
     ],
   );
 }
@@ -201,6 +211,24 @@ function mapPremiumEnv(eventEnvUpper) {
   return "none";
 }
 
+function isPromoProduct(productId) {
+  const s = String(productId || "").trim().toLowerCase();
+  return s.startsWith("rc_promo_");
+}
+
+function computePremiumActive({ typeUpper, expMs, nowMs }) {
+  // hard-negative event types
+  if (typeUpper === "EXPIRATION") return false;
+  if (typeUpper === "CANCELLATION") return false;
+  if (typeUpper === "REFUND") return false;
+
+  // normal case
+  if (typeof expMs === "number") return expMs > nowMs;
+
+  // promo/lifetime often has no expiration => treat as active
+  return true;
+}
+
 // ---------------------
 // handler
 // ---------------------
@@ -249,14 +277,36 @@ exports.handleRevenuecatWebhook = async ({ event, method, path, query, res }) =>
   const eventId = String(ev.id || "").trim();
   if (!eventId) return res.raw(400, { ok: false, error: "Missing event.id", mode, impl: RC_WEBHOOK_IMPL_VERSION });
 
-  const type = String(ev.type || "").trim() || "UNKNOWN";
-  const isTest = type === "TEST";
+  const typeUpper = upper(ev.type || "UNKNOWN");
+  const isTest = typeUpper === "TEST";
 
   const envUpper = upper(ev.environment || "");
   const appUserId = String(ev.app_user_id || "").trim() || null;
   const productId = String(ev.product_id || "").trim() || null;
 
-  // ✅ TEST 事件：跳过 env/product gate
+  const eventTsMs = typeof ev.event_timestamp_ms === "number" ? ev.event_timestamp_ms : Date.now();
+  const expMs = typeof ev.expiration_at_ms === "number" ? ev.expiration_at_ms : null;
+
+  const promo = isPromoProduct(productId);
+
+  // ✅ 1) ALWAYS log event (even mismatch)
+  try {
+    await insertRcEventOnce({
+      event_id: eventId,
+      mode,
+      environment: envUpper || null,
+      event_type: typeUpper || null,
+      app_user_id: appUserId,
+      product_id: productId,
+      event_timestamp_ms: eventTsMs,
+      expiration_at_ms: expMs,
+      raw: JSON.stringify(payload),
+    });
+  } catch (e) {
+    console.warn("[rc-webhook] db insert rc_webhook_events failed:", e?.message || e);
+  }
+
+  // ✅ TEST 事件：跳过 gate，只记日志
   if (!isTest) {
     // env gate
     const expectedEnv = getExpectedEnv(mode);
@@ -271,14 +321,14 @@ exports.handleRevenuecatWebhook = async ({ event, method, path, query, res }) =>
         gotEnv: envUpper || null,
         expectedEnv,
         eventId,
-        type,
+        type: typeUpper,
       });
     }
 
-    // monthly product gate
+    // monthly product gate (promo bypass)
     const monthly = getMonthlyProductId();
-    if (productId && monthly && productId !== monthly) {
-      console.warn("[rc-webhook] product mismatch", { mode, path, eventId, got: productId, expected: monthly });
+    if (productId && monthly && productId !== monthly && !promo) {
+      console.warn("[rc-webhook] product mismatch", { path, got: productId, expected: monthly, eventId, type: typeUpper });
       return res.raw(200, {
         ok: true,
         accepted: false,
@@ -288,35 +338,17 @@ exports.handleRevenuecatWebhook = async ({ event, method, path, query, res }) =>
         gotProductId: productId || null,
         expectedMonthlyProductId: monthly,
         eventId,
-        type,
+        type: typeUpper,
       });
     }
-  }
-
-  // ✅ 1) event log (idempotent)
-  try {
-    await insertRcEventOnce({
-      event_id: eventId,
-      mode,
-      environment: envUpper || null,
-      event_type: type || null,
-      app_user_id: appUserId,
-      product_id: productId,
-      event_timestamp_ms: ev.event_timestamp_ms ?? null,
-      expiration_at_ms: ev.expiration_at_ms ?? null,
-      raw: JSON.stringify(payload),
-    });
-  } catch (e) {
-    console.warn("[rc-webhook] db insert rc_webhook_events failed:", e?.message || e);
   }
 
   // ✅ 2) premium state (REAL events only)
   if (!isTest && appUserId) {
     const nowMs = Date.now();
-    const expMs = typeof ev.expiration_at_ms === "number" ? ev.expiration_at_ms : null;
-
-    const premiumActive = expMs != null ? expMs > nowMs : false;
+    const premiumActive = computePremiumActive({ typeUpper, expMs, nowMs });
     const premiumEnv = mapPremiumEnv(envUpper);
+    const promoAllowed = promo; // keep explicit in logs
 
     try {
       await upsertPremiumState({
@@ -327,40 +359,30 @@ exports.handleRevenuecatWebhook = async ({ event, method, path, query, res }) =>
         entitlement_id: ev.entitlement_id || null,
         expires_at_ms: expMs,
         last_event_id: eventId,
-        last_event_type: type,
+        last_event_type: typeUpper,
+        last_event_ts_ms: eventTsMs,
       });
     } catch (e) {
       console.warn("[rc-webhook] db upsert user_premium_state failed:", e?.message || e);
     }
+
+    console.log(
+      JSON.stringify({
+        tag: "rc-webhook",
+        impl: RC_WEBHOOK_IMPL_VERSION,
+        mode,
+        isTest,
+        route: path,
+        eventId,
+        type: typeUpper,
+        environment: envUpper || null,
+        appUserId,
+        productId,
+        promo,
+        promoAllowed,
+      }),
+    );
   }
 
-  // log summary (no token)
-  console.log(
-    JSON.stringify({
-      tag: "rc-webhook",
-      impl: RC_WEBHOOK_IMPL_VERSION,
-      mode,
-      isTest,
-      route: path,
-      eventId,
-      type,
-      environment: envUpper || null,
-      appUserId,
-      productId,
-    }),
-  );
-
-  return res.raw(200, {
-    ok: true,
-    accepted: true,
-    mode,
-    impl: RC_WEBHOOK_IMPL_VERSION,
-    isTest,
-    route: path,
-    eventId,
-    type,
-    environment: envUpper || null,
-    appUserId,
-    productId,
-  });
+  return res.raw(200, { ok: true, accepted: true, mode, impl: RC_WEBHOOK_IMPL_VERSION, eventId, type: typeUpper, promo });
 };

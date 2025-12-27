@@ -1,39 +1,36 @@
 // mobile/src/premium/revenuecat.ts
 import Purchases, { type CustomerInfo, type PurchasesPackage } from 'react-native-purchases';
 import { fetchAuthSession } from 'aws-amplify/auth';
-
-/**
- * ============================
- * Production-first + Sandbox-fallback (Client)
- * ============================
- *
- * Goals:
- * - UI uses RC SDK (fast)
- * - But we expose enough metadata for server sync & gating
- *
- * Important:
- * - EntitlementInfo includes "Is Sandbox" => can distinguish sandbox vs production.  [oai_citation:4‡RevenueCat](https://www.revenuecat.com/docs/customers/customer-info)
- */
+import { APP_ENV, IS_PROD, premiumUrlPath } from '../config/appEnv';
 
 // ---------- Env ----------
 const RC_IOS_API_KEY = (process.env.EXPO_PUBLIC_RC_IOS_API_KEY || '').trim();
 const ENTITLEMENT_ID = (process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || '').trim(); // MUST be Identifier
 const MONTHLY_PRODUCT_ID = (process.env.EXPO_PUBLIC_RC_MONTHLY_PRODUCT_ID || '').trim();
 
-// Whether to accept sandbox entitlements as "Premium" in this build.
-// - production (App Store): should be 0
-// - staging/TestFlight: should be 1
-const ALLOW_SANDBOX = String(process.env.EXPO_PUBLIC_RC_ALLOW_SANDBOX || (__DEV__ ? '1' : '0')) === '1';
-
-// Dangerous fallback (dev-only): if entitlement id mismatch but there are active entitlements, treat as premium.
-// - set 1 only in dev while wiring dashboard
-const ALLOW_ANY_ACTIVE_ENTITLEMENT_FALLBACK =
-  String(process.env.EXPO_PUBLIC_RC_ALLOW_ANY_ENTITLEMENT || '0') === '1';
-
 const API_BASE_URL =
   (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() ||
   (process.env.EXPO_PUBLIC_API_BASE || '').trim() ||
   '';
+
+/**
+ * ✅ Hard safety:
+ * - production build: NEVER allow sandbox as Premium
+ * - dev build: allow sandbox by default
+ */
+const _allowSandboxRaw = String(process.env.EXPO_PUBLIC_RC_ALLOW_SANDBOX || '1') === '1';
+export const ALLOW_SANDBOX: boolean = IS_PROD ? false : _allowSandboxRaw;
+
+if (IS_PROD && _allowSandboxRaw) {
+  console.warn('[rc] EXPO_PUBLIC_RC_ALLOW_SANDBOX=1 ignored because build is production.');
+}
+
+// Dangerous fallback (dev-only): if entitlement id mismatch but there are active entitlements, treat as premium.
+// ✅ hard-disabled on production build
+const _allowAnyEntRaw = String(process.env.EXPO_PUBLIC_RC_ALLOW_ANY_ENTITLEMENT || '0') === '1';
+const ALLOW_ANY_ACTIVE_ENTITLEMENT_FALLBACK: boolean = IS_PROD ? false : _allowAnyEntRaw;
+
+export const PREMIUM_URL_PATH = premiumUrlPath(); // '/api/v1/content/premium-url' or '-dev'
 
 export type PremiumEnv = 'production' | 'sandbox' | 'none';
 
@@ -98,11 +95,8 @@ function entitlementIsSandbox(ent: any): boolean | null {
 }
 
 function entitlementIsActive(ent: any): boolean {
-  // If it came from entitlements.active map, it's active by definition.
-  // But we also handle entitlements.all entries (has isActive).
   const v = ent?.isActive;
   if (typeof v === 'boolean') return v;
-  // fallback: if no explicit isActive, assume active if expiresAt in future OR no expiry
   const exp = toMsDate(ent?.expirationDate ?? ent?.expiresDate ?? ent?.expiration_date ?? ent?.expires_date);
   if (exp == null) return true;
   return exp > Date.now();
@@ -114,7 +108,6 @@ function entitlementProductId(ent: any): string | null {
 }
 
 function entitlementExpiresAtMs(ent: any): number | null {
-  // RN: expirationDate (ISO string) commonly
   return toMsDate(ent?.expirationDate ?? ent?.expiresDate ?? ent?.expiration_date ?? ent?.expires_date);
 }
 
@@ -141,7 +134,6 @@ function pickAnyActiveEntitlementProductionFirst(info: CustomerInfo): any | null
   const ents = Object.values(active || {});
   if (ents.length === 0) return null;
 
-  // production-first
   const prod = ents.find((e) => entitlementIsSandbox(e) === false);
   return prod ?? ents[0] ?? null;
 }
@@ -169,13 +161,13 @@ export function getPremiumStatus(info: CustomerInfo | null | undefined): Premium
     const ent = pickEntitlementById(info, ENTITLEMENT_ID);
     if (ent && entitlementIsActive(ent)) {
       const isSb = entitlementIsSandbox(ent);
-      const prod = isSb === false || isSb == null; // treat unknown as prod (defensive)
-      const sand = isSb === true;
 
-      const activeProduction = prod;
-      const activeSandbox = sand;
+      const activeProduction = isSb === false || isSb == null; // treat unknown as prod (defensive)
+      const activeSandbox = isSb === true;
 
-      const effectiveActive = activeProduction || (ALLOW_SANDBOX && activeSandbox);
+      // ✅ production build: sandbox never counts
+      const effectiveActive = activeProduction || (!IS_PROD && ALLOW_SANDBOX && activeSandbox);
+
       const env: PremiumEnv = activeProduction ? 'production' : effectiveActive ? 'sandbox' : 'none';
 
       return {
@@ -197,13 +189,11 @@ export function getPremiumStatus(info: CustomerInfo | null | undefined): Premium
     const ent = pickAnyActiveEntitlementProductionFirst(info);
     if (ent && entitlementIsActive(ent)) {
       const isSb = entitlementIsSandbox(ent);
-      const prod = isSb === false || isSb == null;
-      const sand = isSb === true;
 
-      const activeProduction = prod;
-      const activeSandbox = sand;
+      const activeProduction = isSb === false || isSb == null;
+      const activeSandbox = isSb === true;
 
-      const effectiveActive = activeProduction || (ALLOW_SANDBOX && activeSandbox);
+      const effectiveActive = activeProduction || (!IS_PROD && ALLOW_SANDBOX && activeSandbox);
       const env: PremiumEnv = activeProduction ? 'production' : effectiveActive ? 'sandbox' : 'none';
 
       return {
@@ -222,9 +212,7 @@ export function getPremiumStatus(info: CustomerInfo | null | undefined): Premium
 
   // 3) Last resort fallback: activeSubscriptions (no env info) — only use for UI hinting.
   const subs = (info as any)?.activeSubscriptions;
-  if (Array.isArray(subs) && subs.length > 0) {
-    // We cannot know sandbox vs production here; treat as production for UI,
-    // but server must be the source of truth for real access.
+  if (!IS_PROD && Array.isArray(subs) && subs.length > 0) {
     return {
       active: true,
       activeProduction: true,
@@ -251,9 +239,6 @@ export function getPremiumStatus(info: CustomerInfo | null | undefined): Premium
   };
 }
 
-/**
- * Backward compatible helper (what your HomeScreen expects)
- */
 export function isPremiumActive(info: CustomerInfo): boolean {
   return getPremiumStatus(info).active;
 }
@@ -274,7 +259,6 @@ async function ensureConfigured(): Promise<void> {
 
     Purchases.configure({ apiKey: RC_IOS_API_KEY });
 
-    // Optional: make SDK fetch latest customerInfo a bit more eagerly
     try {
       // @ts-ignore
       if (typeof Purchases.invalidateCustomerInfoCache === 'function') {
@@ -282,6 +266,10 @@ async function ensureConfigured(): Promise<void> {
         await Purchases.invalidateCustomerInfoCache();
       }
     } catch {}
+
+    if (__DEV__) {
+      console.log('[rc] configured', { APP_ENV, IS_PROD, ALLOW_SANDBOX, PREMIUM_URL_PATH });
+    }
   })();
 
   try {
@@ -314,9 +302,6 @@ async function getCognitoAccessTokenSafe(): Promise<string | null> {
   }
 }
 
-/**
- * Bind RC appUserId = Cognito sub (recommended).
- */
 export async function rcLoginWithCognitoSub(): Promise<string | null> {
   await ensureConfigured();
 
@@ -343,7 +328,6 @@ export async function rcLoginWithCognitoSub(): Promise<string | null> {
       return String(sub);
     } catch (e) {
       console.warn('[rc] logIn failed (non-fatal):', (e as any)?.message ?? e);
-      // still return sub so UI can proceed; server gating is the truth
       return String(sub);
     } finally {
       _loginPromise = null;
@@ -380,13 +364,9 @@ function pickMonthlyPackage(offerings: any): PurchasesPackage {
   return pkg;
 }
 
-/**
- * Pull CustomerInfo (best-effort)
- */
 export async function rcGetCustomerInfoSafe(): Promise<CustomerInfo> {
   await ensureConfigured();
 
-  // try bind to cognito sub (non-fatal)
   try {
     await rcLoginWithCognitoSub();
   } catch {}
@@ -402,8 +382,7 @@ export async function rcGetCustomerInfoSafe(): Promise<CustomerInfo> {
   const info = await Purchases.getCustomerInfo();
 
   if (__DEV__) {
-    const st = getPremiumStatus(info);
-    console.log('[rc] premiumStatus', st);
+    console.log('[rc] premiumStatus', getPremiumStatus(info));
   }
 
   return info;
@@ -417,8 +396,6 @@ export async function rcPurchaseMonthly(): Promise<CustomerInfo> {
   const pkg = pickMonthlyPackage(offerings);
 
   const { customerInfo } = await Purchases.purchasePackage(pkg);
-
-  // purchase may return slightly stale customerInfo; fetch again
   const fresh = await Purchases.getCustomerInfo();
 
   if (__DEV__) {
@@ -441,13 +418,6 @@ export async function rcRestore(): Promise<CustomerInfo> {
   return info;
 }
 
-/**
- * ✅ Server sync (recommended):
- * - after purchase/restore
- * - at app start (signed-in)
- *
- * Server should be source of truth for premium content downloads.
- */
 export async function rcSyncPremiumToServer(reason: string = 'manual'): Promise<any | null> {
   if (!API_BASE_URL) return null;
 
@@ -462,7 +432,7 @@ export async function rcSyncPremiumToServer(reason: string = 'manual'): Promise<
         authorization: `Bearer ${at}`,
         'cache-control': 'no-cache',
       },
-      body: JSON.stringify({ reason, platform: 'ios', ts: Date.now() }),
+      body: JSON.stringify({ reason, platform: 'ios', ts: Date.now(), clientEnv: APP_ENV }),
     });
 
     const json = await resp.json().catch(() => null);

@@ -7,6 +7,8 @@
     "development": {
       "distribution": "internal",
       "developmentClient": true,
+      "channel": "development",
+      "environment": "development",
       "ios": {
         "buildConfiguration": "Debug",
         "image": "latest",
@@ -19,6 +21,8 @@
     "development-simulator": {
       "distribution": "internal",
       "developmentClient": true,
+      "channel": "development",
+      "environment": "development",
       "ios": {
         "simulator": true,
         "buildConfiguration": "Debug",
@@ -32,6 +36,7 @@
     "production": {
       "distribution": "store",
       "channel": "production",
+      "environment": "production",
       "ios": {
         "buildConfiguration": "Release",
         "image": "latest",

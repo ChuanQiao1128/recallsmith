@@ -22,6 +22,11 @@ const CONTENT_BASE_URL =
   (process.env.EXPO_PUBLIC_CONTENT_BASE_URL || '').trim() ||
   'https://d1ditdi9jqpy6n.cloudfront.net';
 
+const API_BASE_URL =
+  (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() ||
+  (process.env.EXPO_PUBLIC_API_BASE || '').trim() ||
+  'https://ktbq1sie2c.execute-api.ap-southeast-2.amazonaws.com';
+
 const MANIFEST_URL = joinUrl(CONTENT_BASE_URL, 'content', 'manifest.json');
 const MANIFEST_CACHE_KEY = 'devcards:content:manifest:v2';
 const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:'; // + userKey + ":" + slug
@@ -31,6 +36,154 @@ const UTF8_ENCODING: any = (FileSystem as any)?.EncodingType?.UTF8 ?? 'utf8';
 
 // Patch constraints (client-side safety)
 const MAX_PATCH_HOPS = 4;
+const DECK_REPO_IMPL = 'deckRepository-2025-12-26-v2';
+try {
+  console.log('[deckRepository] impl', DECK_REPO_IMPL);
+} catch {}
+
+/**
+ * ✅ Single-flight / in-flight dedupe for installs
+ * Key includes: userKey + slug + remoteVersion (or url hash fallback)
+ */
+const _installInFlight = new Map<string, Promise<boolean>>();
+
+function hash8(s: string): string | null {
+  try {
+    // use a tiny hash to avoid huge keys
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const crypto = require('crypto');
+    return crypto.createHash('sha256').update(String(s || ''), 'utf8').digest('hex').slice(0, 8);
+  } catch {
+    // fallback: length-based
+    const t = String(s || '');
+    return t ? String(t.length) : null;
+  }
+}
+
+function makeInstallKey(userKey: string, slug: string, remoteVersion: string | null, url: string): string {
+  const u = sanitizeUserKey(userKey);
+  const s = slugToFileName(String(slug || ''));
+  const rv = normalizeVersion(remoteVersion);
+  const urlKey = rv ? rv : `url:${hash8(url) ?? 'na'}`;
+  return `${u}:${s}:${urlKey}`;
+}
+
+function makeTmpPath(dir: string, slug: string, remoteVersion: string | null, kind: 'full' | 'patch'): string {
+  const base = slugToFileName(slug);
+  const v = normalizeVersion(remoteVersion) ?? 'na';
+  const rnd = Math.random().toString(16).slice(2);
+  const ts = Date.now();
+  const suffix = kind === 'patch' ? 'patch.tmp.json' : 'tmp.json';
+  return `${dir}${base}.${v}.${ts}.${rnd}.${suffix}`;
+}
+
+// ✅ DEV debug: trace who deletes deck files (helps diagnose accidental purges)
+try {
+  const _del: any = (FileSystem as any).deleteAsync?.bind(FileSystem);
+  if (typeof _del === 'function' && !(FileSystem as any).__devcardsDeletePatched) {
+    (FileSystem as any).__devcardsDeletePatched = true;
+    (FileSystem as any).deleteAsync = async (uri: any, opts: any) => {
+      try {
+        const s = String(uri || '');
+        if (s.includes('devcards-decks-v2') && s.endsWith('.json') && !s.includes('.tmp.') && !s.endsWith('.patch.tmp.json')) {
+          const st = new Error().stack || '';
+          console.warn('[fs] deleteAsync deck file', {
+            uri: s,
+            impl: DECK_REPO_IMPL,
+            stackTop: st.split('\n').slice(0, 8).join(' | '),
+          });
+        }
+      } catch {}
+      return await _del(uri, opts);
+    };
+  }
+} catch {}
+
+// ✅ More reliable than FileSystem.downloadAsync for very long/presigned URLs on iOS
+async function downloadToFileViaFetch(url: string, fileUri: string): Promise<void> {
+  const resp = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'cache-control': 'no-cache',
+      accept: 'application/json',
+    },
+  });
+
+  const text = await resp.text();
+
+  console.log('[installDeckFromUrl] fetch', {
+    status: resp.status,
+    ok: resp.ok,
+    urlLen: url.length,
+    ct: resp.headers.get('content-type'),
+    bytes: text.length,
+    fileUri,
+  });
+
+  if (!resp.ok) {
+    const head = text.slice(0, 200).replace(/\s+/g, ' ').trim();
+    throw new Error(`download_failed_http_${resp.status}: ${head}`);
+  }
+
+  await FileSystem.writeAsStringAsync(fileUri, text, { encoding: UTF8_ENCODING });
+}
+
+// ✅ Premium cache (best-effort) to avoid calling /entitlements too often
+let _premiumServerCache = { atMs: 0, value: false };
+const PREMIUM_SERVER_CACHE_TTL_MS = 60_000;
+
+function tokenToStringAny(t: any): string | null {
+  if (!t) return null;
+  if (typeof t === 'string') return t;
+  if (typeof t?.toString === 'function') return String(t.toString());
+  return null;
+}
+
+async function getIsPremiumUserWithServerFallback(): Promise<boolean> {
+  // 1) local store (may lag)
+  try {
+    const local = await getIsPremiumUser();
+    if (local) return true;
+  } catch {
+    // ignore
+  }
+
+  // 2) short TTL cache
+  const now = Date.now();
+  if (now - _premiumServerCache.atMs < PREMIUM_SERVER_CACHE_TTL_MS) {
+    return _premiumServerCache.value;
+  }
+
+  // 3) server truth via /api/v1/entitlements
+  try {
+    const session: any = await fetchAuthSession();
+    const at = tokenToStringAny(session?.tokens?.accessToken) ?? null;
+    if (!at || !at.trim()) {
+      _premiumServerCache = { atMs: now, value: false };
+      return false;
+    }
+
+    const u = new URL('/api/v1/entitlements', API_BASE_URL);
+    const resp = await fetch(u.toString(), {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${at.trim()}`,
+        accept: 'application/json',
+        'cache-control': 'no-cache',
+      },
+    });
+
+    const json = await resp.json().catch(() => null);
+    const tier = String(json?.data?.tier || '').toLowerCase();
+    const ok = resp.ok && tier === 'premium';
+
+    _premiumServerCache = { atMs: now, value: ok };
+    return ok;
+  } catch {
+    _premiumServerCache = { atMs: now, value: false };
+    return false;
+  }
+}
 
 /**
  * User isolation:
@@ -112,7 +265,7 @@ type RawManifest = {
     // ✅ premium preview fields (optional)
     previewCards?: number | null;
     previewVersion?: string | number | null;
-    previewBuildId?: number | string | null;
+    previewBuildId?: string | number | null;
     previewPath?: string | null;
     previewSha256?: string | null;
 
@@ -241,12 +394,6 @@ export type DeckContent = DeckExport;
  *  Public API
  *  ========================= */
 
-/**
- * Home screen will call this:
- * - For public decks: remoteUrl is deck.json
- * - For premium decks (non-premium user): remoteUrl is preview deck.json
- * - For premium decks (premium user): remoteUrl stays null (full download uses presigned URL later)
- */
 export async function checkManifestForUpdates(
   _isPremiumUser: boolean = false,
 ): Promise<Record<string, UpdateInfo>> {
@@ -265,23 +412,19 @@ export async function checkManifestForUpdates(
 
     const availability = String(d.availability || '').toLowerCase();
     if (availability === 'retired') {
-      // Home should hide it; update info not needed.
       continue;
     }
 
     const meta = await getDeckMeta(slug, userKey);
     const installed = meta?.buildId || null;
 
-    // full version/buildId from manifest
     const fullRemoteVersion = normalizeVersion(d.version ?? d.buildId) ?? null;
 
     const mode = String(d.downloadMode || '').toLowerCase();
     const tier = String((d as any).tier || '').toLowerCase();
 
-    // public path
     const path = typeof d.path === 'string' && d.path.trim().length > 0 ? d.path.trim() : null;
 
-    // premium preview fields
     const previewPath =
       typeof (d as any).previewPath === 'string' && String((d as any).previewPath).trim()
         ? String((d as any).previewPath).trim()
@@ -292,18 +435,15 @@ export async function checkManifestForUpdates(
 
     const previewSha256 = (d as any).previewSha256 ? String((d as any).previewSha256) : null;
 
-    // Decide which URL/version/sha to expose
     let remoteUrl: string | null = null;
     let effectiveRemoteVersion: string | null = fullRemoteVersion;
     let effectiveRemoteSha256: string | null = (d.sha256 ?? null) ? String(d.sha256) : null;
 
-    // Public deck: direct download
     if (mode === 'public' && path) {
       remoteUrl =
         /^https?:\/\//i.test(path) ? path : joinUrl(CONTENT_BASE_URL, manifest.prefix, path);
     }
 
-    // Premium deck (non-premium user): allow preview download from CloudFront
     if (!_isPremiumUser && tier === 'premium' && previewPath) {
       remoteUrl =
         /^https?:\/\//i.test(previewPath)
@@ -314,15 +454,11 @@ export async function checkManifestForUpdates(
       effectiveRemoteSha256 = previewSha256 ?? effectiveRemoteSha256;
     }
 
-    // ✅ hasUpdate rules:
-    // - if remoteUrl exists: normal compare
-    // - if premium user + premium deck: compare versions even though remoteUrl is null (download uses presigned URL)
     let hasUpdate = false;
 
     if (remoteUrl && effectiveRemoteVersion) {
       hasUpdate = installed !== effectiveRemoteVersion;
     } else if (_isPremiumUser && tier === 'premium' && effectiveRemoteVersion) {
-      // full updates for premium users (remoteUrl intentionally null)
       hasUpdate = installed !== effectiveRemoteVersion;
     }
 
@@ -383,24 +519,31 @@ export async function resolveDeckBySlug(slug: string): Promise<DeckContent | nul
   const meta = await getDeckMeta(safeSlug, userKey);
   if (!meta?.fileUri || !meta?.buildId) return null;
 
-  // Use manifest to enforce premium preview gate + retired purge
   const manifest = await loadManifestCached();
   const entry = (manifest?.decks || []).find((d) => String(d.slug || '').trim() === safeSlug) as any;
 
   const availability = String(entry?.availability || '').toLowerCase();
   if (availability === 'retired') {
-    await purgeLocalDeckForRetired(safeSlug, userKey, entry?.retiredAtMs ?? null);
-    return null;
+    const rAt =
+      typeof entry?.retiredAtMs === 'number' && Number.isFinite(entry.retiredAtMs)
+        ? Number(entry.retiredAtMs)
+        : null;
+
+    if (rAt == null) {
+      console.warn('[content] retiredDeckMissingRetiredAtMsSkipPurge', { slug: safeSlug });
+    } else {
+      await purgeLocalDeckForRetired(safeSlug, userKey, rAt);
+      return null;
+    }
   }
 
-  const isPremiumUser = await getIsPremiumUser();
+  const isPremiumUser = await getIsPremiumUserWithServerFallback();
   const tier = String(entry?.tier || '').toLowerCase();
   const previewVersion = normalizeVersion(entry?.previewVersion ?? entry?.previewBuildId) ?? null;
 
   if (tier === 'premium' && !isPremiumUser) {
-    // non-premium: only allow previewVersion locally (if present)
     if (!previewVersion || meta.buildId !== previewVersion) {
-      await purgeLocalDeckForRetired(safeSlug, userKey, null);
+      await purgeLocalDeckForGate(safeSlug, userKey);
       return null;
     }
   }
@@ -415,14 +558,12 @@ export async function resolveDeckBySlug(slug: string): Promise<DeckContent | nul
     const rawText = await FileSystem.readAsStringAsync(meta.fileUri, { encoding: UTF8_ENCODING });
     const parsed = JSON.parse(rawText);
 
-    // v1-ish
     if (isRawDeckV1(parsed)) {
       if (parsed.deck?.slug !== safeSlug) return null;
       if (!Array.isArray(parsed.cards)) return null;
       return mapRawDeckV1ToDeckExport(parsed);
     }
 
-    // flat v2
     if (isRawDeckFlat(parsed)) {
       if (parsed.slug !== safeSlug) return null;
       if (!Array.isArray(parsed.cards)) return null;
@@ -435,11 +576,6 @@ export async function resolveDeckBySlug(slug: string): Promise<DeckContent | nul
   }
 }
 
-/**
- * Install/update a deck:
- * - Prefer incremental patch chain when possible
- * - Fall back to full download (existing behavior)
- */
 export async function installDeckFromUrl(
   slug: string,
   url: string,
@@ -448,137 +584,250 @@ export async function installDeckFromUrl(
 ): Promise<boolean> {
   const safeSlug = String(slug).trim();
   const safeUrl = String(url || '').trim();
-  if (!safeSlug || !safeUrl) return false;
+
+  const fail = (reason: string, extra?: any) => {
+    try {
+      console.warn('[installDeckFromUrl] fail', {
+        reason,
+        slug: safeSlug || String(slug || ''),
+        remoteVersion,
+        urlLen: safeUrl ? safeUrl.length : 0,
+        hasQuery: safeUrl ? safeUrl.includes('?') : false,
+        ...(extra || {}),
+      });
+    } catch {}
+    return false;
+  };
+
+  console.log('[installDeckFromUrl] impl', DECK_REPO_IMPL);
+  console.log('[installDeckFromUrl] enter', {
+    impl: DECK_REPO_IMPL,
+    slug: safeSlug || String(slug || ''),
+    remoteVersion,
+    urlLen: safeUrl ? safeUrl.length : 0,
+    hasQuery: safeUrl ? safeUrl.includes('?') : false,
+  });
+
+  if (!safeSlug || !safeUrl) return fail('missing_slug_or_url');
 
   const userKey = await getCurrentUserKey();
-  const isPremiumUser = await getIsPremiumUser();
-  const manifest = await loadManifestCached();
+  const inKey = makeInstallKey(userKey, safeSlug, remoteVersion, safeUrl);
 
-  const entry = (manifest?.decks || []).find((d) => String(d.slug || '').trim() === safeSlug) as any;
-
-  const availability = String(entry?.availability || '').toLowerCase();
-  if (availability === 'retired') {
-    await purgeLocalDeckForRetired(safeSlug, userKey, entry?.retiredAtMs ?? null);
-    return false;
+  const existingInFlight = _installInFlight.get(inKey);
+  if (existingInFlight) {
+    console.log('[installDeckFromUrl] join_in_flight', { slug: safeSlug, remoteVersion, userKey });
+    return await existingInFlight;
   }
 
-  const tier = String(entry?.tier || '').toLowerCase();
-  const isPreviewInstall = tier === 'premium' && !isPremiumUser;
+  const runner = (async (): Promise<boolean> => {
+    const isPremiumUser = await getIsPremiumUserWithServerFallback();
+    const manifest = await loadManifestCached();
 
-  const previewVersion = normalizeVersion(entry?.previewVersion ?? entry?.previewBuildId) ?? null;
+    const entry = (manifest?.decks || []).find((d) => String(d.slug || '').trim() === safeSlug) as any;
 
-  const existing = await getDeckMeta(safeSlug, userKey);
+    if (!manifest) console.warn('[installDeckFromUrl] manifest_missing');
+    if (!entry) console.warn('[installDeckFromUrl] manifest_entry_missing', { slug: safeSlug });
 
-  // If already up-to-date, no work.
-  if (existing?.buildId && remoteVersion && existing.buildId === remoteVersion) {
-    return true;
-  }
+    const availability = String(entry?.availability || '').toLowerCase();
+    if (availability === 'retired') {
+      const rAt =
+        typeof entry?.retiredAtMs === 'number' && Number.isFinite(entry.retiredAtMs)
+          ? Number(entry.retiredAtMs)
+          : null;
 
-  const dir = getDeckDirForUser(userKey);
-  await ensureDir(dir);
+      if (rAt == null) {
+        console.warn('[installDeckFromUrl] retired_missing_retiredAtMs_skip_purge', { slug: safeSlug });
+      } else {
+        await purgeLocalDeckForRetired(safeSlug, userKey, rAt);
+      }
 
-  const finalPath = `${dir}${slugToFileName(safeSlug)}.json`;
-  const tmpPath = `${dir}${slugToFileName(safeSlug)}.tmp.json`;
+      return fail('retired');
+    }
 
-  // ✅ Attempt patch update (only if we have existing content + patch graph)
-  if (existing?.buildId && existing?.fileUri && remoteVersion && manifest) {
-    const patchEdges: PatchEdge[] =
-      (isPreviewInstall ? entry?.previewPatches : entry?.patches) || [];
+    const tier = String(entry?.tier || '').toLowerCase();
+    const isPreviewInstall = tier === 'premium' && !isPremiumUser;
+    const previewVersion = normalizeVersion(entry?.previewVersion ?? entry?.previewBuildId) ?? null;
 
-    if (Array.isArray(patchEdges) && patchEdges.length > 0) {
-      const patchRes = await tryPatchUpdate({
-        slug: safeSlug,
-        fromVersion: existing.buildId,
-        toVersion: remoteVersion,
-        fileUri: existing.fileUri,
-        outFileUri: finalPath,
-        prefix: String(manifest.prefix || 'content'),
-        edges: patchEdges,
-        userKey,
-      });
+    console.log('[installDeckFromUrl] start', {
+      slug: safeSlug,
+      tier,
+      remoteVersion,
+      isPremiumUser,
+      previewVersion,
+      urlLen: safeUrl.length,
+      hasQuery: safeUrl.includes('?'),
+    });
 
-      if (patchRes.ok) {
-        console.log('[content] patchUpdateApplied', {
+    const existing = await getDeckMeta(safeSlug, userKey);
+
+    if (existing?.buildId && remoteVersion && existing.buildId === remoteVersion) {
+      console.log('[installDeckFromUrl] already_up_to_date', { slug: safeSlug, buildId: existing.buildId });
+      return true;
+    }
+
+    const dir = getDeckDirForUser(userKey);
+    await ensureDir(dir);
+
+    const finalPath = `${dir}${slugToFileName(safeSlug)}.json`;
+
+    // Patch update path (kept)
+    if (existing?.buildId && existing?.fileUri && remoteVersion && manifest) {
+      const patchEdges: PatchEdge[] = (isPreviewInstall ? entry?.previewPatches : entry?.patches) || [];
+      if (Array.isArray(patchEdges) && patchEdges.length > 0) {
+        const patchRes = await tryPatchUpdate({
           slug: safeSlug,
           fromVersion: existing.buildId,
           toVersion: remoteVersion,
-          hops: patchRes.hops,
+          fileUri: existing.fileUri,
+          outFileUri: finalPath,
+          prefix: String(manifest.prefix || 'content'),
+          edges: patchEdges,
+          userKey,
         });
-        return true;
-      }
 
-      console.log('[content] patchUpdateFallbackToFull', {
-        slug: safeSlug,
-        fromVersion: existing.buildId,
-        toVersion: remoteVersion,
-      });
-    }
-  }
+        if (patchRes.ok) {
+          console.log('[installDeckFromUrl] patch_applied', {
+            slug: safeSlug,
+            fromVersion: existing.buildId,
+            toVersion: remoteVersion,
+            hops: patchRes.hops,
+          });
+          return true;
+        }
 
-  // ====== Full download (existing behavior) ======
-  try {
-    await FileSystem.deleteAsync(tmpPath, { idempotent: true });
-    await FileSystem.downloadAsync(safeUrl, tmpPath);
-
-    const rawText = await FileSystem.readAsStringAsync(tmpPath, { encoding: UTF8_ENCODING });
-    const parsed = JSON.parse(rawText);
-
-    // Accept both shapes
-    let resolvedBuildId: string | null = null;
-    let cardCount = 0;
-
-    if (isRawDeckV1(parsed)) {
-      if (!parsed.deck || parsed.deck.slug !== safeSlug) return false;
-      if (!Array.isArray(parsed.cards)) return false;
-      if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim()))
-        return false;
-
-      resolvedBuildId = String(parsed.buildId || '').trim() || null;
-      cardCount = parsed.cards.length;
-
-      if (remoteVersion && resolvedBuildId && resolvedBuildId !== remoteVersion) return false;
-    } else if (isRawDeckFlat(parsed)) {
-      if (parsed.slug !== safeSlug) return false;
-      if (!Array.isArray(parsed.cards)) return false;
-      if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim()))
-        return false;
-
-      resolvedBuildId = normalizeVersion(parsed.version) ?? null;
-      cardCount = parsed.cards.length;
-
-      if (remoteVersion && resolvedBuildId && resolvedBuildId !== remoteVersion) return false;
-    } else {
-      return false;
-    }
-
-    const finalBuildId = (remoteVersion && remoteVersion.trim()) || resolvedBuildId;
-    if (!finalBuildId) return false;
-
-    // ✅ FINAL gate: non-premium premium can only install previewVersion (even if remoteVersion is missing)
-    if (tier === 'premium' && !isPremiumUser) {
-      if (!previewVersion || finalBuildId !== previewVersion) {
-        return false;
+        console.log('[installDeckFromUrl] patch_fallback_to_full', {
+          slug: safeSlug,
+          fromVersion: existing.buildId,
+          toVersion: remoteVersion,
+        });
       }
     }
 
-    await FileSystem.deleteAsync(finalPath, { idempotent: true });
-    await FileSystem.moveAsync({ from: tmpPath, to: finalPath });
+    // ====== Full download (with unique tmp) ======
+    const tmpPath = makeTmpPath(dir, safeSlug, remoteVersion, 'full');
 
-    const meta: DeckInstallMeta = {
-      slug: safeSlug,
-      buildId: finalBuildId,
-      installedAtMs: Date.now(),
-      fileUri: finalPath,
-      cardCount,
+    const cleanupTmp = async () => {
+      try {
+        await FileSystem.deleteAsync(tmpPath, { idempotent: true });
+      } catch {}
     };
 
-    await AsyncStorage.setItem(deckMetaKey(safeSlug, userKey), JSON.stringify(meta));
-    return true;
-  } catch {
     try {
-      await FileSystem.deleteAsync(tmpPath, { idempotent: true });
-    } catch {}
-    return false;
+      // no delete needed (unique tmp), but keep defensive cleanup
+      await cleanupTmp();
+
+      if (safeUrl.includes('?') || safeUrl.length > 900) {
+        await downloadToFileViaFetch(safeUrl, tmpPath);
+      } else {
+        await FileSystem.downloadAsync(safeUrl, tmpPath);
+      }
+
+      const rawText = await FileSystem.readAsStringAsync(tmpPath, { encoding: UTF8_ENCODING });
+      const parsed = JSON.parse(rawText);
+
+      let resolvedBuildId: string | null = null;
+      let cardCount = 0;
+
+      if (isRawDeckV1(parsed)) {
+        if (!parsed.deck || parsed.deck.slug !== safeSlug) {
+          await cleanupTmp();
+          return fail('v1_slug_mismatch', { got: parsed?.deck?.slug });
+        }
+        if (!Array.isArray(parsed.cards)) {
+          await cleanupTmp();
+          return fail('v1_cards_not_array');
+        }
+        if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim())) {
+          await cleanupTmp();
+          return fail('v1_bad_stable_uid');
+        }
+
+        resolvedBuildId = String(parsed.buildId || '').trim() || null;
+        cardCount = parsed.cards.length;
+
+        if (remoteVersion && resolvedBuildId && resolvedBuildId !== remoteVersion) {
+          await cleanupTmp();
+          return fail('v1_remote_version_mismatch', { resolvedBuildId, remoteVersion });
+        }
+      } else if (isRawDeckFlat(parsed)) {
+        if (parsed.slug !== safeSlug) {
+          await cleanupTmp();
+          return fail('flat_slug_mismatch', { got: parsed?.slug });
+        }
+        if (!Array.isArray(parsed.cards)) {
+          await cleanupTmp();
+          return fail('flat_cards_not_array');
+        }
+        if (parsed.cards.some((c) => !c || typeof c.stableUid !== 'string' || !c.stableUid.trim())) {
+          await cleanupTmp();
+          return fail('flat_bad_stable_uid');
+        }
+
+        resolvedBuildId = normalizeVersion(parsed.version) ?? null;
+        cardCount = parsed.cards.length;
+
+        if (remoteVersion && resolvedBuildId && resolvedBuildId !== remoteVersion) {
+          await cleanupTmp();
+          return fail('flat_remote_version_mismatch', {
+            resolvedBuildId,
+            remoteVersion,
+            parsedVersion: parsed?.version,
+          });
+        }
+      } else {
+        await cleanupTmp();
+        return fail('unknown_deck_shape', { keys: Object.keys(parsed || {}).slice(0, 20) });
+      }
+
+      const finalBuildId = (remoteVersion && remoteVersion.trim()) || resolvedBuildId;
+      if (!finalBuildId) {
+        await cleanupTmp();
+        return fail('missing_final_build_id', { resolvedBuildId, remoteVersion });
+      }
+
+      if (tier === 'premium' && !isPremiumUser) {
+        const okPreview = !!previewVersion && finalBuildId === previewVersion;
+        if (!okPreview) {
+          await cleanupTmp();
+          return fail('reject_non_premium_full', { finalBuildId, previewVersion });
+        }
+      }
+
+      // atomic-ish replace
+      await FileSystem.deleteAsync(finalPath, { idempotent: true });
+      await FileSystem.moveAsync({ from: tmpPath, to: finalPath });
+
+      const meta: DeckInstallMeta = {
+        slug: safeSlug,
+        buildId: finalBuildId,
+        installedAtMs: Date.now(),
+        fileUri: finalPath,
+        cardCount,
+      };
+
+      await AsyncStorage.setItem(deckMetaKey(safeSlug, userKey), JSON.stringify(meta));
+
+      console.log('[installDeckFromUrl] success', { slug: safeSlug, buildId: finalBuildId, cardCount });
+      return true;
+    } catch (e: any) {
+      await cleanupTmp();
+
+      console.error('[installDeckFromUrl] full download failed', {
+        slug: safeSlug,
+        urlLen: safeUrl.length,
+        hasQuery: safeUrl.includes('?'),
+        message: e?.message ?? String(e),
+      });
+
+      return false;
+    }
+  })();
+
+  _installInFlight.set(inKey, runner);
+  try {
+    return await runner;
+  } finally {
+    _installInFlight.delete(inKey);
   }
 }
 
@@ -601,7 +850,6 @@ async function tryPatchUpdate(args: {
   if (!slug || !fromVersion || !toVersion) return { ok: false, hops: 0 };
   if (fromVersion === toVersion) return { ok: true, hops: 0 };
 
-  // Resolve a chain (BFS) from fromVersion -> toVersion
   const chain = resolvePatchChain(edges, fromVersion, toVersion, MAX_PATCH_HOPS);
   if (!chain) return { ok: false, hops: 0 };
 
@@ -612,7 +860,6 @@ async function tryPatchUpdate(args: {
     hops: chain.length,
   });
 
-  // Load local deck (must be flat v2 for patch apply)
   let deck: RawDeckJsonFlat | null = null;
   try {
     const info = await FileSystem.getInfoAsync(fileUri);
@@ -622,7 +869,6 @@ async function tryPatchUpdate(args: {
     const parsed = JSON.parse(rawText);
 
     if (!isRawDeckFlat(parsed)) {
-      // We only patch-update flat v2; v1 falls back to full.
       return { ok: false, hops: 0 };
     }
 
@@ -633,7 +879,6 @@ async function tryPatchUpdate(args: {
     return { ok: false, hops: 0 };
   }
 
-  // Apply deltas sequentially
   try {
     let cur = fromVersion;
 
@@ -661,11 +906,15 @@ async function tryPatchUpdate(args: {
 
     if (String(cur).trim() !== String(toVersion).trim()) return { ok: false, hops: 0 };
 
-    // Write atomically: write tmp then replace final file
     const dir = getDeckDirForUser(userKey);
-    const patchTmp = `${dir}${slugToFileName(slug)}.patch.tmp.json`;
+    await ensureDir(dir);
 
-    await FileSystem.deleteAsync(patchTmp, { idempotent: true });
+    const patchTmp = makeTmpPath(dir, slug, toVersion, 'patch');
+
+    try {
+      await FileSystem.deleteAsync(patchTmp, { idempotent: true });
+    } catch {}
+
     await FileSystem.writeAsStringAsync(patchTmp, JSON.stringify(deck, null, 2), {
       encoding: UTF8_ENCODING,
     });
@@ -710,7 +959,6 @@ function resolvePatchChain(
     adj.set(fv, list);
   }
 
-  // BFS
   const q: string[] = [];
   const visited = new Set<string>();
   const prev = new Map<string, { v: string; edge: PatchEdge }>();
@@ -734,7 +982,6 @@ function resolvePatchChain(
 
   if (!visited.has(to)) return null;
 
-  // Reconstruct path
   const chain: PatchEdge[] = [];
   let cur = to;
   while (cur !== from) {
@@ -812,7 +1059,23 @@ function applyDelta(deck: RawDeckJsonFlat, delta: DeckDelta): RawDeckJsonFlat {
  *  Retired reconcile / purge
  *  ========================= */
 
-// review/storage.ts keys (must be purged when a deck is retired)
+async function purgeLocalDeckForGate(slug: string, userKey: string): Promise<void> {
+  try {
+    const meta = await getDeckMeta(slug, userKey);
+    if (meta?.fileUri) {
+      try {
+        await FileSystem.deleteAsync(meta.fileUri, { idempotent: true });
+      } catch {}
+    }
+    await removeDeckMeta(slug, userKey);
+    console.log('[content] gatedDeckLocalState', {
+      slug,
+      expectedPath: meta?.fileUri ?? null,
+      metaExistsAfter: false,
+    });
+  } catch {}
+}
+
 const REVIEW_PROGRESS_PREFIX = 'deck-progress:';
 const REVIEW_DAILY_PREFIX = 'deck-daily-stats:';
 const REVIEW_META_PREFIX = 'deck-meta:';
@@ -827,11 +1090,20 @@ async function reconcileRetiredDecks(manifest: RawManifest): Promise<void> {
     for (const d of retired) {
       const slug = String(d.slug || '').trim();
       if (!slug) continue;
-      await purgeLocalDeckForRetired(slug, userKey, (d as any).retiredAtMs ?? null);
+
+      const rAt =
+        typeof (d as any).retiredAtMs === 'number' && Number.isFinite((d as any).retiredAtMs)
+          ? Number((d as any).retiredAtMs)
+          : null;
+
+      if (rAt == null) {
+        console.warn('[content] retiredDeckReconcileSkipMissingRetiredAtMs', { slug });
+        continue;
+      }
+
+      await purgeLocalDeckForRetired(slug, userKey, rAt);
     }
-  } catch {
-    // best-effort only
-  }
+  } catch {}
 }
 
 async function purgeLocalDeckForRetired(
@@ -840,7 +1112,27 @@ async function purgeLocalDeckForRetired(
   retiredAtMs: number | null,
 ): Promise<void> {
   try {
-    // 1) delete deck file
+    const stack = new Error().stack || '';
+    console.warn('[content] purgeLocalDeckForRetired_call', {
+      slug,
+      retiredAtMs: retiredAtMs ?? null,
+      impl: DECK_REPO_IMPL,
+      stackTop: stack.split('\n').slice(0, 6).join(' | '),
+    });
+  } catch {}
+
+  if (retiredAtMs == null) {
+    console.warn('[content] retiredDeckLocalState', {
+      slug,
+      retiredAtMs: null,
+      skipped: true,
+      impl: DECK_REPO_IMPL,
+    });
+    return;
+  }
+
+  const retiredAt = Number(retiredAtMs);
+  try {
     const meta = await getDeckMeta(slug, userKey);
     if (meta?.fileUri) {
       try {
@@ -848,10 +1140,8 @@ async function purgeLocalDeckForRetired(
       } catch {}
     }
 
-    // 2) delete our deck meta key
     await removeDeckMeta(slug, userKey);
 
-    // 3) delete review progress keys (slug-bound)
     const exactKeys = [
       `${REVIEW_PROGRESS_PREFIX}${slug}`,
       `${REVIEW_DAILY_PREFIX}${slug}`,
@@ -868,7 +1158,6 @@ async function purgeLocalDeckForRetired(
 
     const purgeKeys = [...exactKeys, ...legacyProgressKeys, ...legacyDailyKeys];
 
-    // also purge any devcards content keys that mention slug (defensive)
     const devcardsKeys = allKeys.filter(
       (k) =>
         k.startsWith('devcards:') &&
@@ -880,16 +1169,15 @@ async function purgeLocalDeckForRetired(
       await AsyncStorage.multiRemove(allPurge);
     }
 
-    console.log('[content] retiredDeckLocalState', {
+    console.log('[content] retiredDeckLocalState_v3', {
       slug,
-      retiredAtMs: retiredAtMs ?? null,
+      retiredAtMs: retiredAt,
       expectedPath: meta?.fileUri ?? null,
       expectedFileExistsAfter: false,
       metaExistsAfter: false,
+      impl: DECK_REPO_IMPL,
     });
-  } catch {
-    // ignore
-  }
+  } catch {}
 }
 
 /** =========================
@@ -921,10 +1209,23 @@ function slugToFileName(slug: string): string {
   return slug.replace(/[^a-zA-Z0-9._-]+/g, '_');
 }
 
+/**
+ * ✅ makeDirectoryAsync is safer than getInfo+make in concurrent situations
+ * If folder already exists, ignore errors.
+ */
 async function ensureDir(dir: string) {
-  const info = await FileSystem.getInfoAsync(dir);
-  if (info.exists && info.isDirectory) return;
-  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  try {
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+    return;
+  } catch {
+    // If it exists already, we're good
+    try {
+      const info = await FileSystem.getInfoAsync(dir);
+      if (info.exists && info.isDirectory) return;
+    } catch {}
+    // If we still can't confirm, rethrow a meaningful error
+    throw new Error(`ensureDir_failed: ${dir}`);
+  }
 }
 
 function deckMetaKey(slug: string, userKey: string) {

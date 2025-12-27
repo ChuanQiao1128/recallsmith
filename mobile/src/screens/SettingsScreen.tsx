@@ -16,6 +16,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
+import Purchases from 'react-native-purchases';
+
 import type { RootStackParamList } from '../navigation/types';
 import { checkManifestForUpdates, installDeckFromUrl } from '../content/deckRepository';
 import {
@@ -317,6 +321,87 @@ export function SettingsScreen({ navigation }: Props) {
 
   const timeOptions = timePicker === 'morning' ? MORNING_OPTIONS : EVENING_OPTIONS;
 
+  // =========================
+  // Dev tools: Reset local state
+  // =========================
+  const [resettingLocal, setResettingLocal] = useState(false);
+
+  const showDevTools =
+    __DEV__ || String(process.env.EXPO_PUBLIC_ENV || '').toLowerCase().trim() === 'development';
+
+  async function resetLocalStateNow() {
+    if (resettingLocal) return;
+
+    setResettingLocal(true);
+    try {
+      // 1) RevenueCat logout (best-effort)
+      try {
+        // @ts-ignore
+        if (typeof Purchases.invalidateCustomerInfoCache === 'function') {
+          // @ts-ignore
+          await Purchases.invalidateCustomerInfoCache();
+        }
+        await Purchases.logOut();
+      } catch {
+        // ignore
+      }
+
+      // 2) App sign out (best-effort)
+      try {
+        await signOutNow();
+      } catch {
+        // ignore
+      }
+
+      // 3) Clear AsyncStorage (cached premium, prefs, local flags, etc.)
+      try {
+        await AsyncStorage.clear();
+      } catch {
+        // ignore
+      }
+
+      // 4) Delete local deck caches (idempotent)
+      const base =
+  // ✅ Expo SDK 新写法（typed）
+  (FileSystem as any)?.Paths?.document ??
+  // ✅ 兼容老版本（runtime 可能有，但 TS 不一定有）
+  (FileSystem as any)?.documentDirectory ??
+  '';
+      const pathsToDelete = [
+        `${base}devcards-decks-v2`,
+        `${base}devcards-decks`,
+        `${base}decks`,
+      ].filter(Boolean);
+
+      for (const p of pathsToDelete) {
+        try {
+          const info = await FileSystem.getInfoAsync(p);
+          if (info.exists) {
+            await FileSystem.deleteAsync(p, { idempotent: true });
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // 5) Reset in-memory UI bits (so Settings reflects it immediately)
+      setUpdateMessage(null);
+      setPrefs({
+        morningEnabled: true,
+        morningTime: '09:00',
+        eveningEnabled: true,
+        eveningTime: '20:00',
+      });
+
+      Alert.alert(
+        'Reset complete',
+        'Local cache cleared (auth, RC, AsyncStorage, deck files). Close the app and reopen it to start fresh.',
+      );
+    } finally {
+      setResettingLocal(false);
+    }
+  }
+
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
@@ -398,12 +483,10 @@ export function SettingsScreen({ navigation }: Props) {
               </View>
             </View>
 
-            {/* Premium (button with style) */}
+            {/* Premium */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Premium</Text>
-              <Text style={styles.sectionSubtitle}>
-                Unlock premium decks and advanced learning features.
-              </Text>
+              <Text style={styles.sectionSubtitle}>Unlock premium decks and advanced learning features.</Text>
 
               <Pressable
                 style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
@@ -445,6 +528,48 @@ export function SettingsScreen({ navigation }: Props) {
                 </Pressable>
               )}
             </View>
+
+            {/* Dev tools */}
+            {showDevTools ? (
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Dev tools</Text>
+                <Text style={styles.sectionSubtitle}>
+                  Reset local caches without deleting the app (auth, RevenueCat, AsyncStorage, deck files).
+                </Text>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.dangerButton,
+                    pressed && styles.buttonPressed,
+                    resettingLocal && styles.buttonDisabled,
+                  ]}
+                  disabled={resettingLocal}
+                  onPress={() => {
+                    Alert.alert(
+                      'Reset local state',
+                      'This will sign out, clear local storage, and delete downloaded decks. Continue?',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Reset', style: 'destructive', onPress: resetLocalStateNow },
+                      ],
+                    );
+                  }}
+                >
+                  {resettingLocal ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <ActivityIndicator />
+                      <Text style={styles.primaryButtonText}>Resetting…</Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.primaryButtonText}>Reset local state</Text>
+                  )}
+                </Pressable>
+
+                <Text style={[styles.muted, { marginTop: 10 }]}>
+                  After reset: fully close the app and reopen for a clean run.
+                </Text>
+              </View>
+            ) : null}
 
             {/* Reminders */}
             <View style={styles.sectionCard}>

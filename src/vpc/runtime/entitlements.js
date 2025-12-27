@@ -3,6 +3,18 @@
 const { requireUser } = require("../../common/auth");
 const { pool } = require("../db/pg");
 
+const ENTITLEMENTS_IMPL = "entitlements-v3";
+
+function numOrNull(v) {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function lower(v) {
+  return String(v || "").trim().toLowerCase();
+}
+
 async function handleEntitlements({ res, auth }) {
   const okRes = requireUser({ auth, res });
   if (okRes !== true) return okRes;
@@ -13,13 +25,19 @@ async function handleEntitlements({ res, auth }) {
   const userSub = String(auth.userSub || "").trim();
   if (!userSub) return res.unauthorized("Missing user");
 
+  const nowMs = Date.now();
+
   // ---------------------------------------
   // v2: RevenueCat-backed premium state first
   // ---------------------------------------
+  let rcRow = null;
+  let rcErr = null;
+
   try {
+    // IMPORTANT: do NOT swallow errors silently
     const s = await p.query(
       `
-      select premium_active, premium_env, product_id, expires_at_ms
+      select premium_active, premium_env, product_id, expires_at_ms, last_event_id, last_event_type, last_event_ts_ms
       from user_premium_state
       where app_user_id = $1
       limit 1;
@@ -27,25 +45,37 @@ async function handleEntitlements({ res, auth }) {
       [userSub],
     );
 
-    const row = s.rows?.[0] || null;
-    const active = !!row?.premium_active;
-    const expiresAtMs = row?.expires_at_ms != null ? Number(row.expires_at_ms) : null;
+    rcRow = s.rows?.[0] || null;
+  } catch (e) {
+    rcErr = e?.message || String(e);
+    console.warn("[entitlements] rc_state query failed:", { impl: ENTITLEMENTS_IMPL, userSub, err: rcErr });
+  }
+
+  if (rcRow) {
+    const env = lower(rcRow.premium_env);
+    const expMs = numOrNull(rcRow.expires_at_ms);
+    // prefer expires_at_ms truth if present; otherwise fallback to premium_active
+    const active =
+      expMs != null ? expMs > nowMs : !!rcRow.premium_active;
 
     if (active) {
       return res.ok({
         userSub,
         tier: "premium",
-        expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : null,
-        unlockedDeckSlugs: [], // premium = full unlock
+        expiresAtMs: expMs,
+        unlockedDeckSlugs: [],
         premiumSource: "revenuecat",
-        premiumEnv: row?.premium_env || null, // sandbox/production/none
-        productId: row?.product_id || null,
-        serverTimeMs: Date.now(),
+        premiumEnv: env || null, // sandbox/production/none
+        productId: rcRow.product_id || null,
+        serverTimeMs: nowMs,
+
+        // dev diagnostics (safe)
+        impl: ENTITLEMENTS_IMPL,
+        rcLastEventId: rcRow.last_event_id || null,
+        rcLastEventType: rcRow.last_event_type || null,
+        rcLastEventTsMs: numOrNull(rcRow.last_event_ts_ms),
       });
     }
-  } catch (e) {
-    // If table missing or query fails, silently fall back to legacy entitlements
-    // (keeps system resilient during rollout)
   }
 
   // ---------------------------------------
@@ -102,7 +132,12 @@ async function handleEntitlements({ res, auth }) {
     premiumSource: "legacy",
     premiumEnv: null,
     productId: null,
-    serverTimeMs: Date.now(),
+    serverTimeMs: nowMs,
+
+    // dev diagnostics: only when legacy path is returned
+    impl: ENTITLEMENTS_IMPL,
+    rcCheckError: rcErr,
+    rcRowSeen: !!rcRow,
   });
 }
 

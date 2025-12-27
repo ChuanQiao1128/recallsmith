@@ -10,8 +10,7 @@ import {
   Modal,
   Alert,
 } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -38,10 +37,10 @@ import {
   type UpdateInfo,
 } from '../content/deckRepository';
 
-// ✅ premium entitlement
-import { usePremiumUser } from '../premium/premiumStore';
+// ✅ premium entitlement (local store cache only)
+import { usePremiumUser, setIsPremiumUser } from '../premium/premiumStore';
 
-// ✅ auth state (for Month view gate)
+// ✅ auth state
 import { useAuthStore } from '../auth/authStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
@@ -56,18 +55,12 @@ type DeckSummary = {
   version: string;
   deckType: number; // 1 = free, else premium
 
-  // ✅ Display total (full deck total from manifest)
   totalCards: number;
-
-  // ✅ Installed total (preview may be 15)
   localCards: number;
-
-  // ✅ For study stats (use local cards if installed)
   studyCards: number;
 
   canStudy: boolean;
 
-  // ✅ from manifest v2
   tier?: string | null;
   availability?: string | null;
   eta?: string | null;
@@ -79,7 +72,6 @@ type DeckSummary = {
   newToday: number;
   masteredApprox: number;
 
-  // percent is relative to studyCards (preview=15), NOT full totalCards (30)
   percent: number; // 0..1
 };
 
@@ -149,36 +141,90 @@ function buildUpcoming(progress: CardProgress[], now: Date, days: number): Calen
 const WEEKDAYS_MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /** =========================
- *  ✅ Premium download helper (Home)
+ *  ✅ API base
  *  ========================= */
-
-// API base (adjust if you already use another env var name)
 const API_BASE_URL =
   (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() ||
   (process.env.EXPO_PUBLIC_API_BASE || '').trim() ||
   'https://ktbq1sie2c.execute-api.ap-southeast-2.amazonaws.com';
 
-// GET /api/v1/content/premium-url?slug=react-basics&dev=1
-async function fetchPremiumDeckUrl(slug: string): Promise<{ url: string; buildId: string } | null> {
+function isTruthyEnv(v: any): boolean {
+  const s = String(v ?? '').trim().toLowerCase();
+  return s === '1' || s === 'true' || s === 'yes' || s === 'on';
+}
+
+/** =========================
+ *  ✅ Premium URL fetch (auth required)
+ *
+ *  ⚠️ SECURITY FIX:
+ *  - 默认不再自动加 dev=1
+ *  - 如果你真的需要本地绕过，只能手动设置 EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=1
+ *  ========================= */
+async function fetchPremiumDeckUrl(
+  slug: string,
+  accessToken: string | null,
+): Promise<{ url: string; buildId: string } | null> {
   const s = String(slug || '').trim();
   if (!s) return null;
 
   const u = new URL('/api/v1/content/premium-url', API_BASE_URL);
   u.searchParams.set('slug', s);
 
-  // ✅ DEV-only bypass (because you don't have login yet)
-  if (__DEV__) u.searchParams.set('dev', '1');
+// ✅ dev bypass for sandbox premium -> full download
+const appEnv = String(process.env.EXPO_PUBLIC_ENV || '').trim().toLowerCase();
 
-  const resp = await fetch(u.toString(), {
-    method: 'GET',
-    headers: {
-      'cache-control': 'no-cache',
-    },
+// 允许 sandbox 的总开关：
+// - development 环境默认允许（为了 dev client / EAS Update 测试）
+// - 其他环境必须显式设置 EXPO_PUBLIC_RC_ALLOW_SANDBOX=1
+const allowSandbox =
+  appEnv === 'development' || isTruthyEnv(process.env.EXPO_PUBLIC_RC_ALLOW_SANDBOX);
+
+// dev=1 的开关：
+// - development 环境：默认 true（不需要你额外配变量）
+//   如果你想在 dev 里禁用：EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=0
+// - 非 development：必须显式 EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=1 才会启用
+const bypassRaw = process.env.EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL;
+let allowDevBypass = false;
+
+if (allowSandbox) {
+  if (appEnv === 'development') {
+    allowDevBypass = bypassRaw ? isTruthyEnv(bypassRaw) : true; // ✅ dev 默认开
+  } else {
+    allowDevBypass = isTruthyEnv(bypassRaw); // ✅ 非 dev 必须显式开
+  }
+}
+
+  const headers: Record<string, string> = {
+    'cache-control': 'no-cache',
+    accept: 'application/json',
+  };
+
+if (allowDevBypass) {
+  u.searchParams.set('dev', '1');
+  headers['x-dev-bypass'] = '1';   // ✅ 再加一层保险
+}
+
+  if (accessToken && accessToken.trim()) {
+    headers.Authorization = `Bearer ${accessToken.trim()}`;
+  }
+
+  console.log('[premium-url] request', {
+    slug: s,
+    url: u.toString(),
+    hasBearer: !!headers.Authorization,
+    tokenLen: accessToken ? accessToken.length : 0,
+    devBypass: allowDevBypass,
   });
 
+  const resp = await fetch(u.toString(), { method: 'GET', headers });
   const json = await resp.json().catch(() => null);
 
-  // Your API wrapper returns: { success, data, error, traceId, version }
+  console.log('[premium-url] response', {
+    status: resp.status,
+    success: !!json?.success,
+    err: json?.error?.message ?? null,
+  });
+
   const ok = !!json?.success && !!json?.data?.url && !!json?.data?.buildId;
   if (!ok) {
     const msg = json?.error?.message || `Failed to get premium url (HTTP ${resp.status})`;
@@ -188,37 +234,145 @@ async function fetchPremiumDeckUrl(slug: string): Promise<{ url: string; buildId
   return { url: String(json.data.url), buildId: String(json.data.buildId) };
 }
 
+/** =========================
+ *  ✅ Server truth premium
+ *  ========================= */
+async function fetchServerPremium(accessToken: string | null): Promise<boolean> {
+  if (!accessToken || !accessToken.trim()) return false;
+
+  const u = new URL('/api/v1/entitlements', API_BASE_URL);
+
+  const resp = await fetch(u.toString(), {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken.trim()}`,
+      accept: 'application/json',
+      'cache-control': 'no-cache',
+    },
+  });
+
+  const json = await resp.json().catch(() => null);
+
+  // ✅ 只信服务端明确的 tier=premium
+  const tier = json?.data?.tier;
+  return String(tier || '').toLowerCase() === 'premium';
+}
+
 export function HomeScreen({ navigation }: Props) {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [deckFilter, setDeckFilter] = useState<DeckFilter>('all');
 
   const [isMonthOpen, setIsMonthOpen] = useState(false);
+  const [isMonthGateOpen, setIsMonthGateOpen] = useState(false);
+  const pendingOpenMonthRef = useRef(false);
 
   const [weekHint, setWeekHint] = useState<string | null>(null);
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isMounted = useRef(true);
 
-  // ✅ premium entitlement
-  const isPremiumUser = usePremiumUser();
-
-  // ✅ auth state (Month requires sign-in)
+  // ✅ auth
   const authStatus = useAuthStore((s) => s.status);
+  const accessToken = useAuthStore((s) => s.accessToken);
   const authInit = useAuthStore((s) => s.init);
   const authUserSub = useAuthStore((s) => s.userSub);
   const isSignedIn = authStatus === 'signed_in';
-
-  const [isMonthGateOpen, setIsMonthGateOpen] = useState(false);
-  const pendingOpenMonthRef = useRef(false);
-const didInitAuthRef = useRef(false);
-
 useEffect(() => {
-  if (didInitAuthRef.current) return;
-  if (authStatus === 'unknown') {
-    didInitAuthRef.current = true;
-    void authInit();
+  console.log('[debug] useEffect fired, accessToken =', accessToken);
+
+  if (!accessToken) {
+    console.log('[debug] accessToken is empty');
+    return;
   }
-}, [authStatus, authInit]);
+
+  const t = String(accessToken);
+
+  console.log('[debug][ACCESS_TOKEN]', JSON.stringify({
+    len: t.length,
+    head: t.slice(0, 18),
+    tail: t.slice(-18),
+    hasDots: t.includes('.'),
+  }));
+}, [accessToken]);
+  /**
+   * ✅ Premium truth model
+   * - serverPremium: 唯一“放行 premium 下载/安装”的真相
+   * - premiumStore: 仅作为缓存/展示（不会再用于放行）
+   */
+  const cachedPremium = usePremiumUser(authUserSub); // cache only
+  const [serverPremium, setServerPremium] = useState(false);
+
+  // ✅ EFFECTIVE premium used for gating actions (downloads, full install)
+  const isPremiumUser = serverPremium;
+
+  // ✅ debug log only when relevant values change
+  const lastDbgRef = useRef<string>('');
+  useEffect(() => {
+    const cur = JSON.stringify({
+      apiBase: API_BASE_URL,
+      authStatus,
+      isSignedIn,
+      hasAccessToken: !!accessToken,
+      cachedPremium,
+      serverPremium,
+      effectivePremium: isPremiumUser,
+      userSub: authUserSub ?? null,
+    });
+    if (cur !== lastDbgRef.current) {
+      lastDbgRef.current = cur;
+      console.log('[Home] state', cur);
+    }
+  }, [authStatus, isSignedIn, accessToken, cachedPremium, serverPremium, isPremiumUser, authUserSub]);
+
+  // ✅ Always init auth once on mount
+  useEffect(() => {
+    void authInit();
+  }, [authInit]);
+
+  /**
+   * ✅ Refresh server premium whenever token/user changes
+   * SECURITY FIX:
+   * - 每次 user/token 变化先立刻 setServerPremium(false)，杜绝串号“残留 premium”
+   * - 再拉取服务端真相
+   * - 同步写回 premiumStore（覆盖你手动改过的 premium）
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    // ✅ reset immediately to avoid stale premium when switching accounts
+    setServerPremium(false);
+
+    (async () => {
+      // signed out / no token => definitely not premium
+      if (!accessToken || !accessToken.trim()) {
+        try {
+          await setIsPremiumUser(false, authUserSub);
+        } catch {}
+        return;
+      }
+
+      try {
+        const p = await fetchServerPremium(accessToken);
+        if (cancelled) return;
+        setServerPremium(p);
+
+        // ✅ keep local cache aligned with server truth
+        try {
+          await setIsPremiumUser(p, authUserSub);
+        } catch {}
+      } catch {
+        if (cancelled) return;
+        setServerPremium(false);
+        try {
+          await setIsPremiumUser(false, authUserSub);
+        } catch {}
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, authUserSub]);
 
   useEffect(() => {
     return () => {
@@ -245,7 +399,7 @@ useEffect(() => {
     };
   }, []);
 
-  // ✅ after sign-in, if user came from Month gate, auto open Month
+  // after sign-in, if user came from Month gate, auto open Month
   useEffect(() => {
     if (isSignedIn && pendingOpenMonthRef.current) {
       pendingOpenMonthRef.current = false;
@@ -283,7 +437,7 @@ useEffect(() => {
         (u) => typeof u.installedVersion === 'string' && u.installedVersion.trim().length > 0,
       );
 
-      // ✅ first launch auto-install only FREE + PUBLIC decks
+      // first launch auto-install only FREE + PUBLIC decks
       if (!hasAnyInstalledDeck && manifestDecks.length > 0) {
         const installedSlugs: string[] = [];
 
@@ -357,19 +511,15 @@ useEffect(() => {
           locale: entry.locale ?? 'en-US',
           version: entry.version,
           deckType: entry.deckType ?? 1,
-
           totalCards: entry.totalCards ?? 0,
           localCards: 0,
           studyCards: 0,
-
           canStudy: false,
-
           tier: entry.tier ?? null,
           availability: entry.availability ?? null,
           eta: entry.eta ?? null,
           downloadMode: entry.downloadMode ?? null,
           order: (entry as any).order,
-
           dueToday: 0,
           plannedToday: 0,
           newToday: 0,
@@ -380,10 +530,8 @@ useEffect(() => {
       }
 
       const deck = await resolveDeckBySlug(entry.slug);
-
       const localCards = deck?.Cards?.length ?? deck?.TotalCards ?? 0;
 
-      // Display total should reflect full deck total from manifest
       const displayTotalCards =
         typeof entry.totalCards === 'number' && Number.isFinite(entry.totalCards)
           ? entry.totalCards
@@ -398,19 +546,15 @@ useEffect(() => {
           locale: deck?.Locale ?? entry.locale ?? 'en-US',
           version: deck?.Version ?? entry.version,
           deckType: deck?.DeckType ?? entry.deckType ?? 1,
-
           totalCards: displayTotalCards,
           localCards,
           studyCards: localCards,
-
           canStudy,
-
           tier: entry.tier ?? null,
           availability: entry.availability ?? null,
           eta: entry.eta ?? null,
           downloadMode: entry.downloadMode ?? null,
           order: (entry as any).order,
-
           dueToday: 0,
           plannedToday: 0,
           newToday: 0,
@@ -427,7 +571,6 @@ useEffect(() => {
       const progress = await loadDeckProgress(deck);
       const learnedCount = progress.filter(isLearned).length;
 
-      // Study stats should use localCards (preview=15)
       const studyCards = Math.max(localCards, 0);
       const denom = Math.max(studyCards, 1);
 
@@ -446,19 +589,15 @@ useEffect(() => {
         locale: deck.Locale,
         version: deck.Version,
         deckType: deck.DeckType,
-
         totalCards: displayTotalCards,
         localCards,
         studyCards,
-
         canStudy,
-
         tier: entry.tier ?? null,
         availability: entry.availability ?? null,
         eta: entry.eta ?? null,
         downloadMode: entry.downloadMode ?? null,
         order: (entry as any).order,
-
         dueToday,
         plannedToday: dueToday,
         newToday: newRemaining,
@@ -503,14 +642,10 @@ useEffect(() => {
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-
       async function run() {
         await loadHomeFromLocal();
         if (cancelled) return;
-
-        // forceProgressSync('home_focus').catch(() => {});
       }
-
       void run();
       return () => {
         cancelled = true;
@@ -518,26 +653,18 @@ useEffect(() => {
     }, [loadHomeFromLocal]),
   );
 
-  // ✅ Refresh Home immediately after:
-  // - sign-in / sign-out
-  // - account switch (userSub changes while still signed_in)
-  // - premium status changes
+  // Refresh Home after auth/premium changes
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      if (authStatus === 'unknown') return;
-
       // show spinner while switching account / syncing
       setState((prev) => ({ ...prev, loading: true }));
 
-      // ✅ ensure local progress reflects the *current* signed-in user
       if (isSignedIn) {
         try {
           await forceProgressSync('home_auth_changed');
-        } catch {
-          // ignore (offline etc.)
-        }
+        } catch {}
       }
 
       if (cancelled) return;
@@ -594,13 +721,10 @@ useEffect(() => {
   }, [deckSummaries, deckFilter]);
 
   function openMonth() {
-  
-
     if (!isSignedIn) {
       setIsMonthGateOpen(true);
       return;
     }
-
     setIsMonthOpen(true);
   }
   function closeMonth() {
@@ -675,22 +799,19 @@ useEffect(() => {
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
         >
-          {/* Month View (requires sign-in; unchanged) */}
+          {/* Month View */}
           <Modal animationType="fade" transparent visible={isMonthOpen} onRequestClose={closeMonth}>
             <View style={styles.modalOverlay}>
               <Pressable style={styles.modalBackdrop} onPress={closeMonth} />
-
               <View style={styles.modalCardOpaque}>
                 <View style={styles.modalHeaderRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.modalTitle}>{monthGrid.monthLabel}</Text>
                     <Text style={styles.modalSubtitle}>{totalDueAllDecks} due today across all decks</Text>
                   </View>
-
                   <Pressable
                     style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]}
                     onPress={closeMonth}
-                    accessibilityLabel="Close month view"
                   >
                     <Text style={styles.modalCloseText}>✕</Text>
                   </Pressable>
@@ -707,7 +828,6 @@ useEffect(() => {
                 <View style={styles.monthGrid}>
                   {monthGrid.cells.map((cell, idx) => {
                     if (!cell) return <View key={`empty-${idx}`} style={styles.monthCell} />;
-
                     const intensity = maxMonth <= 0 ? 1 : 0.55 + 0.45 * clamp01(cell.count / maxMonth);
                     const hidden = cell.count === 0;
 
@@ -716,7 +836,6 @@ useEffect(() => {
                         <Text style={[styles.monthDayNumber, cell.isToday && styles.monthDayNumberToday]}>
                           {cell.date.getDate()}
                         </Text>
-
                         <View style={styles.monthMeta}>
                           <View style={[styles.monthDot, { opacity: hidden ? 0 : intensity }]} />
                           <Text style={[styles.monthCount, { opacity: hidden ? 0 : 1 }]} numberOfLines={1}>
@@ -735,7 +854,7 @@ useEffect(() => {
             </View>
           </Modal>
 
-          {/* Month Gate (unchanged) */}
+          {/* Month Gate */}
           <Modal
             animationType="fade"
             transparent
@@ -744,18 +863,15 @@ useEffect(() => {
           >
             <View style={styles.modalOverlay}>
               <Pressable style={styles.modalBackdrop} onPress={() => setIsMonthGateOpen(false)} />
-
               <View style={styles.gateCard}>
                 <View style={styles.modalHeaderRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.modalTitle}>Unlock Month View</Text>
                     <Text style={styles.modalSubtitle}>30-day calendar + consistency insights</Text>
                   </View>
-
                   <Pressable
                     style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]}
                     onPress={() => setIsMonthGateOpen(false)}
-                    accessibilityLabel="Close sign-in gate"
                   >
                     <Text style={styles.modalCloseText}>✕</Text>
                   </Pressable>
@@ -862,7 +978,6 @@ useEffect(() => {
                       key={day.dateKey}
                       style={({ pressed }) => [styles.weekCell, pressed && styles.pressed]}
                       onPress={() => showWeekHint(`${dateText} · ${count} card${count === 1 ? '' : 's'}`)}
-                      accessibilityLabel={`${dateText}, ${count} cards`}
                     >
                       <Text style={styles.weekDate} numberOfLines={1}>
                         {dateText}
@@ -928,20 +1043,19 @@ useEffect(() => {
                   const availability = (d.availability ?? '').toLowerCase();
                   const isComing = availability === 'coming';
 
+                  // ✅ locked is based on serverPremium truth
                   const lockedPremium = isPremium && !isPremiumUser;
 
-                  // ✅ premium user but still has preview installed (15/30) -> should download full
                   const needsFull =
                     isPremiumUser && isPremium && d.localCards > 0 && d.localCards < d.totalCards;
                   const needsFullInstall = isPremiumUser && isPremium && !d.canStudy;
+
                   const deckUpdate = updates?.[d.slug];
                   const hasInstalledVersion =
                     typeof deckUpdate?.installedVersion === 'string' && deckUpdate.installedVersion.trim().length > 0;
 
-                  // ✅ IMPORTANT: do NOT require remoteUrl here (premium full update uses presigned url)
                   const hasUpdate = hasInstalledVersion && !!deckUpdate?.hasUpdate;
 
-                  // trial installed: locked premium but user is signed in and preview is installed (canStudy)
                   const isTrialInstalled = lockedPremium && isSignedIn && d.canStudy;
 
                   return (
@@ -953,7 +1067,34 @@ useEffect(() => {
                         pressed && styles.deckRowPressed,
                       ]}
                       onPress={async () => {
-                        // coming
+                        console.log('[Home] press', {
+                          slug: d.slug,
+                          serverPremium,
+                          effectivePremium: isPremiumUser,
+                          lockedPremium,
+                          needsFullInstall,
+                          needsFull,
+                          canStudy: d.canStudy,
+                          downloadMode: d.downloadMode,
+                          hasAccessToken: !!accessToken,
+                        });
+                        // right after console.log('[Home] press', ...)
+const u = updates?.[d.slug];
+if (d.slug === 'react-basics-draft') {
+  console.log('[Home] updates', {
+    slug: d.slug,
+    installedVersion: u?.installedVersion ?? null,
+    remoteVersion: u?.remoteVersion ?? null,
+    hasUpdate: !!u?.hasUpdate,
+    hasRemoteUrl: !!u?.remoteUrl,
+    localCards: d.localCards,
+    totalCards: d.totalCards,
+    canStudy: d.canStudy,
+    needsFull,
+    needsFullInstall,
+  });
+}
+
                         if (isComing) {
                           Alert.alert(
                             'Coming soon',
@@ -962,36 +1103,17 @@ useEffect(() => {
                           );
                           return;
                         }
-                        // ✅ premium user: not installed on this device yet -> install full first
-if (needsFullInstall) {
-  setState((prev) => ({ ...prev, loading: true }));
-  try {
-    const data = await fetchPremiumDeckUrl(d.slug);
-    if (!data?.url || !data?.buildId) throw new Error('Failed to get premium download url');
 
-    const ok = await installDeckFromUrl(d.slug, data.url, data.buildId, null);
-    if (!ok) throw new Error('Failed to install full deck');
+                        // premium full install (auth) — only allowed when serverPremium=true
+                        if (needsFullInstall || needsFull) {
+                          if (!accessToken || !accessToken.trim()) {
+                            Alert.alert('Sign-in required', 'Please sign in again to download premium decks.');
+                            return;
+                          }
 
-    try {
-      await applyCachedRemoteProgress(d.slug);
-    } catch {}
-
-    const newState = await computeHomeState();
-    if (isMounted.current) setState(newState);
-
-    openDeck(d.slug);
-  } catch (e: any) {
-    console.error('Full install failed:', e);
-    Alert.alert('Download failed', e?.message ?? 'Failed to download full deck.');
-    setState((prev) => ({ ...prev, loading: false }));
-  }
-  return;
-}
-                        // ✅ premium user: if still on preview, download full first
-                        if (needsFull) {
                           setState((prev) => ({ ...prev, loading: true }));
                           try {
-                            const data = await fetchPremiumDeckUrl(d.slug);
+                            const data = await fetchPremiumDeckUrl(d.slug, accessToken);
                             if (!data?.url || !data?.buildId) throw new Error('Failed to get premium download url');
 
                             const ok = await installDeckFromUrl(d.slug, data.url, data.buildId, null);
@@ -1006,21 +1128,19 @@ if (needsFullInstall) {
 
                             openDeck(d.slug);
                           } catch (e: any) {
-                            console.error('Full download failed:', e);
+                            console.error('Premium install failed:', e);
                             Alert.alert('Download failed', e?.message ?? 'Failed to download full deck.');
                             setState((prev) => ({ ...prev, loading: false }));
                           }
                           return;
                         }
 
+                        // locked premium: try preview
                         if (lockedPremium) {
-                          // Signed-in free user: install preview first (remoteUrl is previewUrl after repo fix)
                           if (isSignedIn) {
                             const info = updates?.[d.slug];
-
                             if (info?.remoteUrl && info.remoteVersion) {
                               setState((prev) => ({ ...prev, loading: true }));
-
                               try {
                                 const ok = await installDeckFromUrl(
                                   d.slug,
@@ -1028,15 +1148,12 @@ if (needsFullInstall) {
                                   info.remoteVersion,
                                   info.remoteSha256,
                                 );
-
                                 if (ok) {
                                   try {
                                     await applyCachedRemoteProgress(d.slug);
                                   } catch {}
-
                                   const newState = await computeHomeState();
                                   if (isMounted.current) setState(newState);
-
                                   openDeck(d.slug);
                                   return;
                                 }
@@ -1048,8 +1165,6 @@ if (needsFullInstall) {
                               }
                             }
                           }
-
-                          // Not signed in (or preview missing) -> open deck screen (it will show login gate)
                           openDeck(d.slug);
                           return;
                         }
@@ -1059,11 +1174,10 @@ if (needsFullInstall) {
 
                         if (needsInstall || needsUpdate) {
                           setState((prev) => ({ ...prev, loading: true }));
-
                           try {
                             let ok = false;
 
-                            // PUBLIC path: use manifest-derived remoteUrl
+                            // public path
                             if (deckUpdate?.remoteUrl) {
                               ok = await installDeckFromUrl(
                                 d.slug,
@@ -1072,10 +1186,11 @@ if (needsFullInstall) {
                                 deckUpdate.remoteSha256,
                               );
                             } else {
-                              // PREMIUM (auth) path: call API to get presigned URL, then install
+                              // premium auth path (serverPremium only)
                               const mode = String(d.downloadMode ?? '').toLowerCase();
                               if (isPremiumUser && mode === 'auth') {
-                                const data = await fetchPremiumDeckUrl(d.slug);
+                                if (!accessToken || !accessToken.trim()) throw new Error('Missing access token');
+                                const data = await fetchPremiumDeckUrl(d.slug, accessToken);
                                 if (!data?.url || !data?.buildId) throw new Error('Failed to get premium download url');
                                 ok = await installDeckFromUrl(d.slug, data.url, data.buildId, null);
                               } else {
@@ -1087,7 +1202,6 @@ if (needsFullInstall) {
                               try {
                                 await applyCachedRemoteProgress(d.slug);
                               } catch {}
-
                               const newState = await computeHomeState();
                               if (isMounted.current) setState(newState);
                               openDeck(d.slug);
@@ -1120,7 +1234,6 @@ if (needsFullInstall) {
                         </Text>
                       </View>
 
-                      {/* Right side pills */}
                       {isComing ? (
                         <View style={styles.deckRowRight}>
                           <Text style={styles.comingPill}>Coming</Text>
@@ -1128,8 +1241,6 @@ if (needsFullInstall) {
                       ) : lockedPremium ? (
                         <View style={styles.deckRowRight}>
                           <Text style={styles.lockedPill}>{isSignedIn ? 'Free Trial' : '🔒 Premium'}</Text>
-
-                          {/* trial installed => show only progress bar (no 15/15 text) */}
                           {isTrialInstalled ? (
                             <View style={styles.rowBarBg}>
                               <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
@@ -1139,12 +1250,8 @@ if (needsFullInstall) {
                         </View>
                       ) : d.canStudy ? (
                         <View style={styles.deckRowRight}>
-                          {/* premium user still on preview => prompt full download */}
                           {needsFull ? <Text style={styles.updatePill}>Download full</Text> : null}
-
-                          {/* updates (including premium full updates) */}
                           {hasUpdate && !needsFull ? <Text style={styles.updatePill}>Update available</Text> : null}
-
                           <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
                           <View style={styles.rowBarBg}>
                             <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
@@ -1154,9 +1261,9 @@ if (needsFullInstall) {
                       ) : (
                         <View style={styles.deckRowRight}>
                           {hasUpdate && !needsFull ? <Text style={styles.updatePill}>Update available</Text> : null}
-                         <Text style={styles.lockedPill}>
-                          {isPremiumUser && isPremium ? 'Download full' : 'Not installed'}
-                        </Text>
+                          <Text style={styles.lockedPill}>
+                            {isPremiumUser && isPremium ? 'Download full' : 'Not installed'}
+                          </Text>
                         </View>
                       )}
                     </Pressable>
@@ -1281,7 +1388,6 @@ const styles = StyleSheet.create({
   },
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   sectionTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
-  sectionMeta: { fontSize: 12, color: '#6B7280' },
 
   segmentThree: {
     marginTop: 10,
@@ -1290,12 +1396,7 @@ const styles = StyleSheet.create({
     padding: 4,
     backgroundColor: 'rgba(17,24,39,0.05)',
   },
-  segmentThreeItem: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 999,
-    alignItems: 'center',
-  },
+  segmentThreeItem: { flex: 1, paddingVertical: 8, borderRadius: 999, alignItems: 'center' },
   segmentThreeItemActive: { backgroundColor: 'rgba(79,70,229,0.14)' },
   segmentThreeText: { fontSize: 12, fontWeight: '800', color: '#111827' },
   segmentThreeTextActive: { color: '#4F46E5' },
@@ -1437,12 +1538,7 @@ const styles = StyleSheet.create({
   monthDayNumberToday: { color: '#4F46E5' },
 
   monthMeta: { marginTop: 6, height: 24, alignItems: 'center', justifyContent: 'center' },
-  monthDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 999,
-    backgroundColor: '#4F46E5',
-  },
+  monthDot: { width: 10, height: 10, borderRadius: 999, backgroundColor: '#4F46E5' },
   monthCount: { marginTop: 4, fontSize: 11, fontWeight: '800', color: '#111827' },
 
   modalLegend: { marginTop: 8, fontSize: 11, color: '#6B7280' },
