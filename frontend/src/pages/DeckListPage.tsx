@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { fetchDecks, deleteDeck } from '../api/authoring';
+import { deleteDeck, fetchDecks, publishDeck, rebuildManifest } from '../api/authoring';
 import { fetchContentManifest } from '../api/contentManifest';
 import type { Deck } from '../types/deck';
 
@@ -21,74 +21,104 @@ interface DeckListState {
 
 type ManifestDeckLite = {
   slug: string;
-  version: string;
+  title?: string;
   locale?: string;
+
+  availability?: string;
+  tier?: string;
+  downloadMode?: string;
+
+  version?: string;
+  buildId?: string | null;
+
+  path?: string | null;
+
+  previewCards?: number | null;
+  previewBuildId?: string | null;
+  previewPath?: string | null;
 };
 
 type ManifestState = {
   loading: boolean;
   error: string | null;
-  publishedAt?: string;
+  publishedAt?: unknown;
   bySlug: Record<string, ManifestDeckLite>;
+  raw: unknown | null;
 };
 
 type DeckStatus = 'published' | 'needs_publish' | 'unpublished';
 
 function safeDateTime(value: unknown): string {
-  if (!value) return '—';
+  if (value === undefined || value === null || value === '') return '—';
   const d = new Date(value as string | number | Date);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString();
 }
 
-/**
- * normalize version for comparison:
- * - "12" vs 12 => "12"
- * - "v12" => "12"
- * - "1.2.3" / "v1.2" => "1.2.3" / "1.2"
- * - "2025-12-12" => "2025-12-12"
- */
-function normalizeVersion(v: unknown): string {
-  if (v === undefined || v === null) return '';
-  const s = String(v).trim();
-  if (!s) return '';
+function toManifestDeckLite(input: unknown): ManifestDeckLite | null {
+  if (!input || typeof input !== 'object') return null;
+  const o = input as Record<string, unknown>;
 
-  // date-like: 2025-12-12
-  const dateLike = s.match(/(\d{4}-\d{2}-\d{2})/);
-  if (dateLike) return dateLike[1];
+  const slug = typeof o.slug === 'string' ? o.slug : '';
+  if (!slug) return null;
 
-  // semver-like: 1.2 or 1.2.3 (also works for v1.2.3)
-  const semverLike = s.match(/(\d+(?:\.\d+)+)/);
-  if (semverLike) return semverLike[1];
+  const buildId =
+    typeof o.buildId === 'string' ? o.buildId : o.buildId === null ? null : undefined;
 
-  // fallback: first number token: v12 -> 12
-  const num = s.match(/(\d+)/);
-  if (num) return num[1];
+  const path = typeof o.path === 'string' ? o.path : o.path === null ? null : undefined;
 
-  return s;
+  const previewPath =
+    typeof o.previewPath === 'string' ? o.previewPath : o.previewPath === null ? null : undefined;
+
+  const previewBuildId =
+    typeof o.previewBuildId === 'string'
+      ? o.previewBuildId
+      : o.previewBuildId === null
+        ? null
+        : undefined;
+
+  const previewCards =
+    typeof o.previewCards === 'number' ? o.previewCards : o.previewCards === null ? null : undefined;
+
+  return {
+    slug,
+    title: typeof o.title === 'string' ? o.title : undefined,
+    locale: typeof o.locale === 'string' ? o.locale : undefined,
+
+    availability: typeof o.availability === 'string' ? o.availability : undefined,
+    tier: typeof o.tier === 'string' ? o.tier : undefined,
+    downloadMode: typeof o.downloadMode === 'string' ? o.downloadMode : undefined,
+
+    version: typeof o.version === 'string' ? o.version : undefined,
+    buildId,
+    path,
+
+    previewCards,
+    previewBuildId,
+    previewPath,
+  };
 }
 
-function getDeckStatus(deck: Deck, publishedVersionRaw: string | undefined): DeckStatus {
-  const published = (publishedVersionRaw ?? '').trim();
-  if (!published) return 'unpublished';
+function getManifestPublishedAt(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.publishedAt === 'string') return o.publishedAt;
+  if (typeof o.generatedAt === 'string') return o.generatedAt;
+  if (typeof o.generatedAtMs === 'number') return o.generatedAtMs;
+  return undefined;
+}
 
-  const deckWithVersion = deck as Deck & { version?: unknown };
-  const draftV = normalizeVersion(deckWithVersion.version);
-  const pubV = normalizeVersion(published);
+function getDeckStatusFromManifest(m?: ManifestDeckLite): DeckStatus {
+  if (!m) return 'unpublished';
 
-  // If both are pure numbers, compare numerically
-  const dn = /^\d+$/.test(draftV) ? Number(draftV) : NaN;
-  const pn = /^\d+$/.test(pubV) ? Number(pubV) : NaN;
-  if (!Number.isNaN(dn) && !Number.isNaN(pn)) {
-    return dn === pn ? 'published' : 'needs_publish';
-  }
+  const availability = String(m.availability ?? '').trim().toLowerCase();
+  if (availability && availability !== 'live') return 'unpublished';
 
-  // Otherwise compare normalized strings
-  if (draftV && pubV) {
-    return draftV === pubV ? 'published' : 'needs_publish';
-  }
+  const buildId = String(m.buildId ?? '').trim();
+  if (buildId) return 'published';
 
-  return String(deckWithVersion.version ?? '') === published ? 'published' : 'needs_publish';
+  // live but no build => needs publish
+  return 'needs_publish';
 }
 
 function statusBadge(status: DeckStatus) {
@@ -126,9 +156,11 @@ export function DeckListPage() {
     error: null,
     publishedAt: undefined,
     bySlug: {},
+    raw: null,
   });
 
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [publishingId, setPublishingId] = useState<number | null>(null);
 
   // UI filters
   const [q, setQ] = useState('');
@@ -149,7 +181,6 @@ export function DeckListPage() {
       setDeckState(prev => ({ ...prev, loading: true, error: null }));
       setManifestState(prev => ({ ...prev, loading: true, error: null }));
     } else {
-      // keep previous data, just clear errors
       setDeckState(prev => ({ ...prev, error: null }));
       setManifestState(prev => ({ ...prev, error: null }));
     }
@@ -171,25 +202,34 @@ export function DeckListPage() {
 
       // manifest
       if (!manifestRes.ok) {
-        setManifestState({ loading: false, error: manifestRes.error, publishedAt: undefined, bySlug: {} });
+        setManifestState({ loading: false, error: manifestRes.error, publishedAt: undefined, bySlug: {}, raw: null });
       } else {
+        const raw = manifestRes.data as unknown;
+
         const bySlug: Record<string, ManifestDeckLite> = {};
-        for (const d of manifestRes.data.decks) {
-          bySlug[d.slug] = { slug: d.slug, version: d.version, locale: d.locale };
+        const decksRaw =
+          raw && typeof raw === 'object' && Array.isArray((raw as Record<string, unknown>).decks)
+            ? ((raw as Record<string, unknown>).decks as unknown[])
+            : [];
+
+        for (const d of decksRaw) {
+          const lite = toManifestDeckLite(d);
+          if (lite) bySlug[lite.slug] = lite;
         }
 
         setManifestState({
           loading: false,
           error: null,
-          publishedAt: manifestRes.data.publishedAt ?? manifestRes.data.generatedAt,
+          publishedAt: getManifestPublishedAt(raw),
           bySlug,
+          raw,
         });
       }
     } catch (err: unknown) {
       if (!mountedRef.current) return;
       const message = err instanceof Error ? err.message : 'Network error.';
       setDeckState({ loading: false, error: message, decks: [] });
-      setManifestState({ loading: false, error: message, publishedAt: undefined, bySlug: {} });
+      setManifestState({ loading: false, error: message, publishedAt: undefined, bySlug: {}, raw: null });
     }
   }
 
@@ -214,11 +254,45 @@ export function DeckListPage() {
         return;
       }
 
-      setDeckState(prev => ({ ...prev, decks: prev.decks.filter(d => d.id !== deckId) }));
+      setDeckState(prev => ({ ...prev, decks: prev.decks.filter(d => Number(d.id) !== deckId) }));
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Network error.');
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  async function handlePublish(deckId: number) {
+    if (!superAdmin) return;
+
+    const ok = window.confirm(
+      'Publish will:\n' +
+        '1) Export cards and upload deck.json to S3\n' +
+        '2) Rebuild manifest.json\n\n' +
+        'IMPORTANT: Mobile can only read cards when manifest availability=live.\n\n' +
+        'Continue?',
+    );
+    if (!ok) return;
+
+    try {
+      setPublishingId(deckId);
+
+      const pub = await publishDeck({ deckId });
+      if (!pub.success) {
+        alert(pub.error?.message ?? 'Publish failed.');
+        return;
+      }
+
+      const rb = await rebuildManifest();
+      if (!rb.success) {
+        alert(rb.error?.message ?? 'Manifest rebuild failed (publish succeeded).');
+      }
+
+      await loadAll(false);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Network error.');
+    } finally {
+      setPublishingId(null);
     }
   }
 
@@ -243,16 +317,13 @@ export function DeckListPage() {
 
   const viewRows = useMemo(() => {
     const query = q.trim().toLowerCase();
+
     return decks
       .map(d => {
-        const published = manifestState.bySlug[d.slug]?.version ?? '';
-        const status = getDeckStatus(d, published);
+        const m = manifestState.bySlug[d.slug];
+        const status = getDeckStatusFromManifest(m);
 
-        return {
-          deck: d,
-          publishedVersion: published,
-          status,
-        };
+        return { deck: d, manifest: m, status };
       })
       .filter(row => {
         const d = row.deck;
@@ -285,19 +356,14 @@ export function DeckListPage() {
     let unpub = 0;
 
     for (const d of decks) {
-      const pv = manifestState.bySlug[d.slug]?.version;
-      const st = getDeckStatus(d, pv);
+      const m = manifestState.bySlug[d.slug];
+      const st = getDeckStatusFromManifest(m);
       if (st === 'published') published += 1;
       if (st === 'needs_publish') needs += 1;
       if (st === 'unpublished') unpub += 1;
     }
 
-    return {
-      total: decks.length,
-      published,
-      needsPublish: needs,
-      unpublished: unpub,
-    };
+    return { total: decks.length, published, needsPublish: needs, unpublished: unpub };
   }, [decks, manifestState.bySlug]);
 
   if (deckState.loading) {
@@ -331,62 +397,82 @@ export function DeckListPage() {
     <ConsoleShell
       title="RecallSmith Console"
       subtitle="Authoring · Decks"
-      userLabel={user ? `${user.email ?? user.username ?? 'Signed in'}${superAdmin ? ' · super_admin' : ' · editor'}` : '—'}
+      userLabel={
+        user
+          ? `${user.email ?? user.username ?? 'Signed in'}${superAdmin ? ' · super_admin' : ' · editor'}`
+          : '—'
+      }
       superAdmin={superAdmin}
       onSignOut={handleSignOut}
       onGoAdminUsers={superAdmin ? () => navigate('/admin/users') : undefined}
     >
       {/* Top strip: manifest + refresh */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="text-xs text-slate-600">
-          {manifestState.loading ? (
-            <span>Loading manifest…</span>
-          ) : manifestState.error ? (
-            <span className="text-amber-800">
-              Manifest unavailable: {manifestState.error}
-              <span className="text-slate-500"> (set VITE_CONTENT_MANIFEST_URL + S3 CORS)</span>
-            </span>
-          ) : (
-            <span>
-              Manifest OK{manifestState.publishedAt ? ` · publishedAt=${safeDateTime(manifestState.publishedAt)}` : ''}
-            </span>
-          )}
-        </div>
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="text-xs text-slate-600">
+            {manifestState.loading ? (
+              <span>Loading manifest…</span>
+            ) : manifestState.error ? (
+              <span className="text-amber-800">
+                Manifest unavailable: {manifestState.error}
+                <span className="text-slate-500"> (set VITE_CONTENT_MANIFEST_URL + S3 CORS)</span>
+              </span>
+            ) : (
+              <span>
+                Manifest OK{manifestState.publishedAt ? ` · publishedAt=${safeDateTime(manifestState.publishedAt)}` : ''}
+              </span>
+            )}
+          </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
-            onClick={() => void loadAll(false)}
-            title="Reload decks + manifest"
-          >
-            Refresh
-          </button>
-
-          {superAdmin ? (
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700"
-              onClick={() => navigate('/decks/new')}
-              title="super_admin only"
+              className="text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+              onClick={() => void loadAll(false)}
+              title="Reload decks + manifest"
             >
-              + New Deck
+              Refresh
             </button>
-          ) : (
-            <button
-              type="button"
-              className="text-xs px-3 py-1.5 rounded bg-slate-200 text-slate-500 cursor-not-allowed"
-              disabled
-              title="Only super_admin can create decks"
-            >
-              + New Deck
-            </button>
-          )}
+
+            {superAdmin ? (
+              <button
+                type="button"
+                className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                onClick={() => navigate('/decks/new')}
+                title="super_admin only"
+              >
+                + New Deck
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="text-xs px-3 py-1.5 rounded bg-slate-200 text-slate-500 cursor-not-allowed"
+                disabled
+                title="Only super_admin can create decks"
+              >
+                + New Deck
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* ✅ manifest.json raw viewer */}
+        {!manifestState.error && manifestState.raw ? (
+          <details className="bg-white border border-slate-200 rounded-lg shadow-sm px-4 py-3">
+            <summary className="cursor-pointer text-sm text-slate-700 select-none">
+              View manifest.json (raw)
+            </summary>
+            <div className="mt-3 overflow-x-auto">
+              <pre className="text-xs text-slate-700 whitespace-pre">
+                {JSON.stringify(manifestState.raw, null, 2)}
+              </pre>
+            </div>
+          </details>
+        ) : null}
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
           <div className="text-xs text-slate-500">Total decks</div>
           <div className="mt-1 text-2xl font-semibold text-slate-900">{stats.total}</div>
@@ -413,13 +499,13 @@ export function DeckListPage() {
       </div>
 
       {/* Filters + table */}
-      <div className="bg-white border border-slate-200 rounded-lg shadow-sm">
+      <div className="bg-white border border-slate-200 rounded-lg shadow-sm mt-3">
         <div className="px-4 py-3 border-b border-slate-100 flex flex-col gap-3">
           <div className="flex items-start justify-between">
             <div>
               <h2 className="text-base font-semibold text-slate-900">Decks</h2>
               <p className="text-xs text-slate-500 mt-1">
-                Compare DB draft version vs published manifest version. Editors only see assigned decks.
+                Status is derived from manifest availability + buildId. (live+buildId =&gt; Published)
               </p>
             </div>
           </div>
@@ -482,8 +568,7 @@ export function DeckListPage() {
                 <th className="px-4 py-2 text-left font-semibold text-slate-600">Deck</th>
                 <th className="px-4 py-2 text-left font-semibold text-slate-600">Locale</th>
                 <th className="px-4 py-2 text-left font-semibold text-slate-600">Type</th>
-                <th className="px-4 py-2 text-left font-semibold text-slate-600">Draft v</th>
-                <th className="px-4 py-2 text-left font-semibold text-slate-600">Published v</th>
+                <th className="px-4 py-2 text-left font-semibold text-slate-600">Manifest</th>
                 <th className="px-4 py-2 text-left font-semibold text-slate-600">Status</th>
                 <th className="px-4 py-2 text-left font-semibold text-slate-600">Updated</th>
                 <th className="px-4 py-2 text-left font-semibold text-slate-600">Actions</th>
@@ -493,24 +578,19 @@ export function DeckListPage() {
             <tbody>
               {viewRows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500 text-sm">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500 text-sm">
                     No decks match your filters.
                   </td>
                 </tr>
               ) : (
                 viewRows.map(row => {
                   const deck = row.deck;
-                  const published = row.publishedVersion;
-                  const hasPublished = (published ?? '').trim().length > 0;
+                  const m = row.manifest;
 
                   const deckWithDates = deck as Deck & { updatedAt?: unknown; createdAt?: unknown };
                   const updatedAt = deckWithDates.updatedAt ?? deckWithDates.createdAt;
 
-                  // ✅ 可以编辑吗？
-                  // - super_admin: 一定可以
-                  // - editor: 依赖后端返回 canWrite；没返回时默认不可写（避免误开放）
-                  const canWrite =
-                    superAdmin || (typeof deck.canWrite === 'boolean' ? deck.canWrite : false);
+                  const canWrite = superAdmin || (typeof deck.canWrite === 'boolean' ? deck.canWrite : false);
 
                   return (
                     <tr key={deck.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
@@ -523,12 +603,19 @@ export function DeckListPage() {
 
                       <td className="px-4 py-3">{typeBadge(deck.deckType)}</td>
 
-                      <td className="px-4 py-3 text-slate-700 font-mono text-xs">
-                        {String((deck as Deck & { version?: unknown }).version ?? '—')}
-                      </td>
-
-                      <td className="px-4 py-3 text-slate-700 font-mono text-xs">
-                        {hasPublished ? published : <span className="text-slate-400">—</span>}
+                      <td className="px-4 py-3 text-xs text-slate-700">
+                        {!m ? (
+                          <span className="text-slate-400">—</span>
+                        ) : (
+                          <div className="space-y-1">
+                            <div className="font-mono">
+                              availability={m.availability ?? '—'} • download={m.downloadMode ?? '—'}
+                            </div>
+                            <div className="font-mono">buildId={m.buildId ?? '—'}</div>
+                            <div className="font-mono">path={m.path ?? '—'}</div>
+                            {m.previewPath ? <div className="font-mono">previewPath={m.previewPath}</div> : null}
+                          </div>
+                        )}
                       </td>
 
                       <td className="px-4 py-3">{statusBadge(row.status)}</td>
@@ -567,12 +654,24 @@ export function DeckListPage() {
                           {superAdmin ? (
                             <button
                               type="button"
-                              disabled={deletingId === deck.id}
-                              onClick={() => void handleDeleteDeck(deck.id)}
+                              disabled={publishingId === Number(deck.id)}
+                              onClick={() => void handlePublish(Number(deck.id))}
+                              className="text-xs px-2 py-1 rounded border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                              title="Upload deck.json + rebuild manifest"
+                            >
+                              {publishingId === Number(deck.id) ? 'Publishing…' : 'Publish'}
+                            </button>
+                          ) : null}
+
+                          {superAdmin ? (
+                            <button
+                              type="button"
+                              disabled={deletingId === Number(deck.id)}
+                              onClick={() => void handleDeleteDeck(Number(deck.id))}
                               className="text-xs px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
                               title="super_admin only"
                             >
-                              {deletingId === deck.id ? 'Deleting…' : 'Delete'}
+                              {deletingId === Number(deck.id) ? 'Deleting…' : 'Delete'}
                             </button>
                           ) : null}
                         </div>

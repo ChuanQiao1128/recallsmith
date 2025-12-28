@@ -12,6 +12,20 @@ const {
 const { pool } = require("../db/pg");
 const { handlePgError, buildUpdateSet, requireDeckWrite } = require("./helpers");
 
+function normalizeAvailability(v) {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "live" || s === "coming" || s === "retired") return s;
+  throw new ValidationError("availability must be one of: live | coming | retired", "availability");
+}
+
+function normalizeTier(v) {
+  if (v === null) return null;
+  const s = String(v ?? "").trim().toLowerCase();
+  if (!s) return null;
+  if (s === "free" || s === "premium") return s;
+  throw new ValidationError("tier must be one of: free | premium (or null)", "tier");
+}
+
 async function handleAuthoringDecks({ method, query, event, res, auth }) {
   const okRes = requireAdmin({ auth, res });
   if (okRes !== true) return okRes;
@@ -39,6 +53,16 @@ async function handleAuthoringDecks({ method, query, event, res, auth }) {
           d.locale,
           d.deck_type  as "deckType",
           d.version,
+
+          -- ✅ mobile/manifest fields
+          d.tier,
+          d.availability,
+          d.eta,
+          d.manifest_order as "manifestOrder",
+          d.total_cards as "totalCards",
+          d.preview_cards as "previewCards",
+          d.retired_at_ms as "retiredAtMs",
+
           d.is_deleted as "isDeleted",
           d.created_at as "createdAt",
           d.updated_at as "updatedAt"
@@ -97,9 +121,18 @@ async function handleAuthoringDecks({ method, query, event, res, auth }) {
         returning
           id, slug, title, author, description, locale,
           deck_type as "deckType",
-          version, is_deleted as "isDeleted",
+          version,
+
+          tier, availability, eta,
+          manifest_order as "manifestOrder",
+          total_cards as "totalCards",
+          preview_cards as "previewCards",
+          retired_at_ms as "retiredAtMs",
+
+          is_deleted as "isDeleted",
           created_at as "createdAt", updated_at as "updatedAt";
       `;
+
       const params = [
         String(slug).trim(),
         String(title).trim(),
@@ -125,20 +158,69 @@ async function handleAuthoringDecks({ method, query, event, res, auth }) {
       const body = parseJsonBody(event);
       if (!body) return res.badRequest("BAD_REQUEST", "Invalid JSON body");
 
-      const { id, slug, title, author, description, locale, deckType, version, isDeleted } = body;
+      const {
+        id,
+
+        // existing
+        slug,
+        title,
+        author,
+        description,
+        locale,
+        deckType,
+        version,
+        isDeleted,
+
+        // ✅ new fields
+        tier,
+        availability,
+        eta,
+        manifestOrder,
+        totalCards,
+        previewCards,
+        retiredAtMs,
+      } = body;
+
       const idInt = requireInteger(id, "id");
 
-      // 权限：对 deck 的 write 权限
+      // permission: deck write
       {
         const ok = await requireDeckWrite({ db, adminSub, deckId: idInt, isSuperAdmin, res });
         if (ok !== true) return ok;
       }
 
-      // ✅ 今日架构优先：slug 是 deckSlug（手机端进度主键），editor 禁止改
-      const updateBody = { slug, title, author, description, locale, deckType, version, isDeleted };
+      // today architecture: slug is progress key; editor cannot change slug
+      const updateBody = {
+        slug,
+        title,
+        author,
+        description,
+        locale,
+        deckType,
+        version,
+        isDeleted,
+
+        tier,
+        availability,
+        eta,
+        manifestOrder,
+        totalCards,
+        previewCards,
+        retiredAtMs,
+      };
+
       if (!isSuperAdmin) {
+        // editors: restrict dangerous fields
         delete updateBody.isDeleted;
-        delete updateBody.slug; // 👈 关键：防止 editor 改 slug 导致进度对不上
+        delete updateBody.slug;
+
+        delete updateBody.tier;
+        delete updateBody.availability;
+        delete updateBody.eta;
+        delete updateBody.manifestOrder;
+        delete updateBody.totalCards;
+        delete updateBody.previewCards;
+        delete updateBody.retiredAtMs;
       }
 
       const spec = [
@@ -150,6 +232,15 @@ async function handleAuthoringDecks({ method, query, event, res, auth }) {
         ["deckType", "deck_type", (v) => (v === null ? null : ensureInteger(v, "deckType"))],
         ["version", "version", (v) => (v === null ? null : ensureInteger(v, "version"))],
         ["isDeleted", "is_deleted", (v) => (parseBoolean(v, false) ? 1 : 0)],
+
+        // ✅ new fields
+        ["tier", "tier", (v) => normalizeTier(v)],
+        ["availability", "availability", (v) => normalizeAvailability(v)],
+        ["eta", "eta", (v) => (v === null ? null : String(v).trim())],
+        ["manifestOrder", "manifest_order", (v) => (v === null ? null : ensureInteger(v, "manifestOrder"))],
+        ["totalCards", "total_cards", (v) => (v === null ? null : ensureInteger(v, "totalCards"))],
+        ["previewCards", "preview_cards", (v) => (v === null ? null : ensureInteger(v, "previewCards"))],
+        ["retiredAtMs", "retired_at_ms", (v) => (v === null ? null : ensureInteger(v, "retiredAtMs"))],
       ];
 
       const { fields, params } = buildUpdateSet(updateBody, spec);
@@ -162,9 +253,19 @@ async function handleAuthoringDecks({ method, query, event, res, auth }) {
         returning
           id, slug, title, author, description, locale,
           deck_type as "deckType",
-          version, is_deleted as "isDeleted",
-          created_at as "createdAt", updated_at as "updatedAt";
+          version,
+
+          tier, availability, eta,
+          manifest_order as "manifestOrder",
+          total_cards as "totalCards",
+          preview_cards as "previewCards",
+          retired_at_ms as "retiredAtMs",
+
+          is_deleted as "isDeleted",
+          created_at as "createdAt",
+          updated_at as "updatedAt";
       `;
+
       params.push(idInt);
 
       const r = await db.query(sql, params);
@@ -185,7 +286,7 @@ async function handleAuthoringDecks({ method, query, event, res, auth }) {
       const idInt = requireInteger(query.id, "id");
       const r = await db.query(
         `update decks set is_deleted = 1, updated_at = now() where id = $1 returning id;`,
-        [idInt]
+        [idInt],
       );
       if (r.rowCount === 0) return res.notFound("Deck not found");
       return res.ok(null);
