@@ -219,11 +219,12 @@ export async function fetchContentManifest(opts?: {
     const resp = await fetch(finalUrl, {
       method: 'GET',
       signal: opts?.signal,
-      headers: { 'Cache-Control': 'no-cache' },
+      // ✅ 不要加 Cache-Control 这种会触发 preflight 的 header
+      headers: { accept: 'application/json' },
     });
 
     if (!resp.ok) {
-      const text = await resp.text();
+      const text = await resp.text().catch(() => '');
       return { ok: false, error: `Manifest request failed (HTTP ${resp.status}): ${text}` };
     }
 

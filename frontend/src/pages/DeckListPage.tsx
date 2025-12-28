@@ -2,8 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { deleteDeck, fetchDecks, publishDeck, rebuildManifest } from '../api/authoring';
-import { fetchContentManifest } from '../api/contentManifest';
+import { deleteDeck, fetchAdminManifest, fetchDecks, publishDeck, rebuildManifest } from '../api/authoring';
+import { getContentManifestUrl } from '../api/contentManifest';
 import type { Deck } from '../types/deck';
 
 import { clearStoredTokens } from '../auth/tokenStore';
@@ -31,6 +31,8 @@ type ManifestDeckLite = {
   version?: string;
   buildId?: string | null;
 
+  totalCards?: number | null;
+
   path?: string | null;
 
   previewCards?: number | null;
@@ -38,15 +40,27 @@ type ManifestDeckLite = {
   previewPath?: string | null;
 };
 
+type ManifestMeta = {
+  schemaVersion?: number;
+  prefix?: string;
+  generatedAtMs?: number;
+  publishedAt?: string;
+  generatedAt?: string;
+  deckCount?: number;
+};
+
 type ManifestState = {
   loading: boolean;
   error: string | null;
-  publishedAt?: unknown;
+  url: string;
+  meta: ManifestMeta;
   bySlug: Record<string, ManifestDeckLite>;
   raw: unknown | null;
 };
 
 type DeckStatus = 'published' | 'needs_publish' | 'unpublished';
+
+const MANIFEST_URL_OVERRIDE_KEY = 'rs_manifest_url_override';
 
 function safeDateTime(value: unknown): string {
   if (value === undefined || value === null || value === '') return '—';
@@ -55,56 +69,131 @@ function safeDateTime(value: unknown): string {
   return d.toLocaleString();
 }
 
-function toManifestDeckLite(input: unknown): ManifestDeckLite | null {
-  if (!input || typeof input !== 'object') return null;
-  const o = input as Record<string, unknown>;
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
+}
 
-  const slug = typeof o.slug === 'string' ? o.slug : '';
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.trim().length > 0;
+}
+
+function toOptionalString(v: unknown): string | undefined {
+  if (!isNonEmptyString(v)) return undefined;
+  return v.trim();
+}
+
+function toOptionalNumber(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim()) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function toOptionalNullableNumber(v: unknown): number | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  const n = toOptionalNumber(v);
+  return n === undefined ? null : n;
+}
+
+function pick(o: Record<string, unknown>, keys: string[]): unknown {
+  for (const k of keys) {
+    if (k in o) return o[k];
+  }
+  return undefined;
+}
+
+function toManifestDeckLite(input: unknown): ManifestDeckLite | null {
+  if (!isRecord(input)) return null;
+
+  const slugV = pick(input, ['slug', 'Slug']);
+  const slug = toOptionalString(slugV) ?? '';
   if (!slug) return null;
 
+  const title = toOptionalString(pick(input, ['title', 'Title']));
+  const locale = toOptionalString(pick(input, ['locale', 'Locale']));
+
+  const availability = toOptionalString(pick(input, ['availability', 'Availability']));
+  const tier = toOptionalString(pick(input, ['tier', 'Tier']));
+  const downloadMode = toOptionalString(pick(input, ['downloadMode', 'DownloadMode']));
+
+  const version = toOptionalString(pick(input, ['version', 'Version']));
+
+  const buildIdRaw = pick(input, ['buildId', 'BuildId']);
   const buildId =
-    typeof o.buildId === 'string' ? o.buildId : o.buildId === null ? null : undefined;
+    buildIdRaw === null ? null : isNonEmptyString(buildIdRaw) ? String(buildIdRaw).trim() : undefined;
 
-  const path = typeof o.path === 'string' ? o.path : o.path === null ? null : undefined;
+  const pathRaw = pick(input, ['path', 'Path']);
+  const path = pathRaw === null ? null : isNonEmptyString(pathRaw) ? String(pathRaw).trim() : undefined;
 
-  const previewPath =
-    typeof o.previewPath === 'string' ? o.previewPath : o.previewPath === null ? null : undefined;
+  const totalCards = toOptionalNullableNumber(pick(input, ['totalCards', 'TotalCards']));
 
+  const previewCards = toOptionalNullableNumber(pick(input, ['previewCards', 'PreviewCards']));
+
+  const previewBuildIdRaw = pick(input, ['previewBuildId', 'PreviewBuildId']);
   const previewBuildId =
-    typeof o.previewBuildId === 'string'
-      ? o.previewBuildId
-      : o.previewBuildId === null
-        ? null
+    previewBuildIdRaw === null
+      ? null
+      : isNonEmptyString(previewBuildIdRaw)
+        ? String(previewBuildIdRaw).trim()
         : undefined;
 
-  const previewCards =
-    typeof o.previewCards === 'number' ? o.previewCards : o.previewCards === null ? null : undefined;
+  const previewPathRaw = pick(input, ['previewPath', 'PreviewPath']);
+  const previewPath =
+    previewPathRaw === null
+      ? null
+      : isNonEmptyString(previewPathRaw)
+        ? String(previewPathRaw).trim()
+        : undefined;
 
   return {
     slug,
-    title: typeof o.title === 'string' ? o.title : undefined,
-    locale: typeof o.locale === 'string' ? o.locale : undefined,
+    ...(title ? { title } : {}),
+    ...(locale ? { locale } : {}),
 
-    availability: typeof o.availability === 'string' ? o.availability : undefined,
-    tier: typeof o.tier === 'string' ? o.tier : undefined,
-    downloadMode: typeof o.downloadMode === 'string' ? o.downloadMode : undefined,
+    ...(availability ? { availability } : {}),
+    ...(tier ? { tier } : {}),
+    ...(downloadMode ? { downloadMode } : {}),
 
-    version: typeof o.version === 'string' ? o.version : undefined,
-    buildId,
-    path,
+    ...(version ? { version } : {}),
+    ...(buildId !== undefined ? { buildId } : {}),
+    ...(path !== undefined ? { path } : {}),
+    ...(totalCards !== undefined ? { totalCards } : {}),
 
-    previewCards,
-    previewBuildId,
-    previewPath,
+    ...(previewCards !== undefined ? { previewCards } : {}),
+    ...(previewBuildId !== undefined ? { previewBuildId } : {}),
+    ...(previewPath !== undefined ? { previewPath } : {}),
   };
 }
 
-function getManifestPublishedAt(raw: unknown): unknown {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const o = raw as Record<string, unknown>;
-  if (typeof o.publishedAt === 'string') return o.publishedAt;
-  if (typeof o.generatedAt === 'string') return o.generatedAt;
-  if (typeof o.generatedAtMs === 'number') return o.generatedAtMs;
+function parseManifestMeta(raw: unknown): ManifestMeta {
+  if (!isRecord(raw)) return {};
+
+  const schemaVersion = toOptionalNumber(pick(raw, ['schemaVersion', 'SchemaVersion']));
+  const prefix = toOptionalString(pick(raw, ['prefix', 'Prefix']));
+  const generatedAtMs = toOptionalNumber(pick(raw, ['generatedAtMs', 'GeneratedAtMs']));
+  const publishedAt = toOptionalString(pick(raw, ['publishedAt', 'PublishedAt']));
+  const generatedAt = toOptionalString(pick(raw, ['generatedAt', 'GeneratedAt']));
+
+  const decksRaw = pick(raw, ['decks', 'Decks']);
+  const deckCount = Array.isArray(decksRaw) ? decksRaw.length : undefined;
+
+  return {
+    ...(schemaVersion !== undefined ? { schemaVersion } : {}),
+    ...(prefix ? { prefix } : {}),
+    ...(generatedAtMs !== undefined ? { generatedAtMs } : {}),
+    ...(publishedAt ? { publishedAt } : {}),
+    ...(generatedAt ? { generatedAt } : {}),
+    ...(deckCount !== undefined ? { deckCount } : {}),
+  };
+}
+
+function getManifestPublishedAt(meta: ManifestMeta): unknown {
+  if (typeof meta.generatedAtMs === 'number') return meta.generatedAtMs;
+  if (meta.publishedAt) return meta.publishedAt;
+  if (meta.generatedAt) return meta.generatedAt;
   return undefined;
 }
 
@@ -117,7 +206,6 @@ function getDeckStatusFromManifest(m?: ManifestDeckLite): DeckStatus {
   const buildId = String(m.buildId ?? '').trim();
   if (buildId) return 'published';
 
-  // live but no build => needs publish
   return 'needs_publish';
 }
 
@@ -139,11 +227,60 @@ function typeBadge(deckType: number) {
   return <Badge tone="info">Paid</Badge>;
 }
 
+function stripQuery(u: string): string {
+  const i = u.indexOf('?');
+  return i >= 0 ? u.slice(0, i) : u;
+}
+
+function buildDeckAssetUrl(manifestUrl: string, prefix: string | undefined, assetPath: string): string {
+  const clean = stripQuery(manifestUrl);
+  const safePath = assetPath.replace(/^\/+/, '');
+
+  if (prefix && clean.includes(`/${prefix}/manifest.json`)) {
+    const base = clean.split(`/${prefix}/manifest.json`)[0] + `/${prefix}/`;
+    return base + safePath;
+  }
+
+  if (clean.endsWith('/manifest.json')) {
+    return clean.slice(0, clean.length - '/manifest.json'.length + 1) + safePath;
+  }
+
+  const lastSlash = clean.lastIndexOf('/');
+  const dir = lastSlash >= 0 ? clean.slice(0, lastSlash + 1) : clean + '/';
+  return dir + safePath;
+}
+
+/**
+ * ✅ IMPORTANT: Avoid CORS preflight:
+ * - Do NOT send custom headers (e.g. Cache-Control)
+ * - Rely on ?t= for cache busting
+ */
+
+
 export function DeckListPage() {
   const navigate = useNavigate();
 
   const user = useMemo(() => readSessionUser(), []);
   const superAdmin = useMemo(() => isSuperAdmin(user), [user]);
+
+  const defaultManifestUrl = useMemo(() => getContentManifestUrl(), []);
+  const [manifestUrlOverride, setManifestUrlOverride] = useState<string>(() => {
+    try {
+      return localStorage.getItem(MANIFEST_URL_OVERRIDE_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+
+  const manifestUrl = useMemo(() => {
+    const o = manifestUrlOverride.trim();
+    return o || defaultManifestUrl;
+  }, [manifestUrlOverride, defaultManifestUrl]);
+
+  const isLikelyMockUrl = useMemo(() => {
+    const u = manifestUrl.trim();
+    return u === '/manifest/index.json' || u.startsWith('/manifest/');
+  }, [manifestUrl]);
 
   const [deckState, setDeckState] = useState<DeckListState>({
     loading: true,
@@ -154,7 +291,8 @@ export function DeckListPage() {
   const [manifestState, setManifestState] = useState<ManifestState>({
     loading: true,
     error: null,
-    publishedAt: undefined,
+    url: manifestUrl,
+    meta: {},
     bySlug: {},
     raw: null,
   });
@@ -162,7 +300,6 @@ export function DeckListPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [publishingId, setPublishingId] = useState<number | null>(null);
 
-  // UI filters
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | DeckStatus>('all');
   const [localeFilter, setLocaleFilter] = useState<'all' | string>('all');
@@ -179,40 +316,45 @@ export function DeckListPage() {
   async function loadAll(showSpinner = false) {
     if (showSpinner) {
       setDeckState(prev => ({ ...prev, loading: true, error: null }));
-      setManifestState(prev => ({ ...prev, loading: true, error: null }));
+      setManifestState(prev => ({ ...prev, loading: true, error: null, url: manifestUrl }));
     } else {
       setDeckState(prev => ({ ...prev, error: null }));
-      setManifestState(prev => ({ ...prev, error: null }));
+      setManifestState(prev => ({ ...prev, error: null, url: manifestUrl }));
     }
 
     try {
       const [decksRes, manifestRes] = await Promise.all([
-        fetchDecks(),
-        fetchContentManifest({ bustCache: true }),
-      ]);
+  fetchDecks(),
+  fetchAdminManifest(),
+]);
+
 
       if (!mountedRef.current) return;
 
-      // decks
       if (!decksRes.success) {
         setDeckState({ loading: false, error: decksRes.error?.message ?? 'Failed to load decks.', decks: [] });
       } else {
         setDeckState({ loading: false, error: null, decks: decksRes.data ?? [] });
       }
 
-      // manifest
-      if (!manifestRes.ok) {
-        setManifestState({ loading: false, error: manifestRes.error, publishedAt: undefined, bySlug: {}, raw: null });
+      if (!manifestRes.success) {
+        setManifestState({
+          loading: false,
+          error: manifestRes.error?.message ?? 'Failed to load manifest.',
+          url: manifestUrl,
+          meta: {},
+          bySlug: {},
+          raw: null,
+        });
       } else {
-        const raw = manifestRes.data as unknown;
+        const raw = manifestRes.data;
+        const meta = parseManifestMeta(raw);
+
+        const decksRaw = isRecord(raw) ? pick(raw, ['decks', 'Decks']) : null;
+        const deckArr: unknown[] = Array.isArray(decksRaw) ? decksRaw : [];
 
         const bySlug: Record<string, ManifestDeckLite> = {};
-        const decksRaw =
-          raw && typeof raw === 'object' && Array.isArray((raw as Record<string, unknown>).decks)
-            ? ((raw as Record<string, unknown>).decks as unknown[])
-            : [];
-
-        for (const d of decksRaw) {
+        for (const d of deckArr) {
           const lite = toManifestDeckLite(d);
           if (lite) bySlug[lite.slug] = lite;
         }
@@ -220,7 +362,8 @@ export function DeckListPage() {
         setManifestState({
           loading: false,
           error: null,
-          publishedAt: getManifestPublishedAt(raw),
+          url: manifestUrl,
+          meta,
           bySlug,
           raw,
         });
@@ -229,31 +372,28 @@ export function DeckListPage() {
       if (!mountedRef.current) return;
       const message = err instanceof Error ? err.message : 'Network error.';
       setDeckState({ loading: false, error: message, decks: [] });
-      setManifestState({ loading: false, error: message, publishedAt: undefined, bySlug: {}, raw: null });
+      setManifestState({ loading: false, error: message, url: manifestUrl, meta: {}, bySlug: {}, raw: null });
     }
   }
 
   useEffect(() => {
     void loadAll(true);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manifestUrl]);
 
   async function handleDeleteDeck(deckId: number) {
     if (!superAdmin) return;
 
-    const ok = window.confirm(
-      'Delete deck is a destructive action.\n\nThis will delete the deck (and likely its cards).\nAre you sure?',
-    );
+    const ok = window.confirm('Delete deck is destructive.\n\nContinue?');
     if (!ok) return;
 
     try {
       setDeletingId(deckId);
       const res = await deleteDeck(deckId);
-
       if (!res.success) {
         alert(res.error?.message ?? 'Delete deck failed.');
         return;
       }
-
       setDeckState(prev => ({ ...prev, decks: prev.decks.filter(d => Number(d.id) !== deckId) }));
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Network error.');
@@ -266,11 +406,7 @@ export function DeckListPage() {
     if (!superAdmin) return;
 
     const ok = window.confirm(
-      'Publish will:\n' +
-        '1) Export cards and upload deck.json to S3\n' +
-        '2) Rebuild manifest.json\n\n' +
-        'IMPORTANT: Mobile can only read cards when manifest availability=live.\n\n' +
-        'Continue?',
+      'Publish will:\n1) Upload deck.json to S3\n2) Rebuild manifest.json\n\nContinue?',
     );
     if (!ok) return;
 
@@ -309,9 +445,7 @@ export function DeckListPage() {
 
   const localeOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const d of decks) {
-      if (d.locale) set.add(d.locale);
-    }
+    for (const d of decks) if (d.locale) set.add(d.locale);
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [decks]);
 
@@ -322,25 +456,19 @@ export function DeckListPage() {
       .map(d => {
         const m = manifestState.bySlug[d.slug];
         const status = getDeckStatusFromManifest(m);
-
         return { deck: d, manifest: m, status };
       })
       .filter(row => {
         const d = row.deck;
 
-        // search
         if (query) {
           const s = `${d.slug ?? ''} ${d.title ?? ''} ${d.locale ?? ''}`.toLowerCase();
           if (!s.includes(query)) return false;
         }
 
-        // status filter
         if (statusFilter !== 'all' && row.status !== statusFilter) return false;
-
-        // locale filter
         if (localeFilter !== 'all' && String(d.locale) !== localeFilter) return false;
 
-        // type filter
         if (typeFilter !== 'all') {
           if (typeFilter === 'starter' && d.deckType !== 1) return false;
           if (typeFilter === 'paid' && d.deckType === 1) return false;
@@ -366,6 +494,29 @@ export function DeckListPage() {
     return { total: decks.length, published, needsPublish: needs, unpublished: unpub };
   }, [decks, manifestState.bySlug]);
 
+  function applyManifestUrlOverride() {
+    try {
+      const trimmed = manifestUrlOverride.trim();
+      if (trimmed) localStorage.setItem(MANIFEST_URL_OVERRIDE_KEY, trimmed);
+      else localStorage.removeItem(MANIFEST_URL_OVERRIDE_KEY);
+    } catch {
+      // Ignore localStorage errors
+    }
+    void loadAll(true);
+  }
+
+  function clearManifestUrlOverride() {
+    setManifestUrlOverride('');
+    try {
+      localStorage.removeItem(MANIFEST_URL_OVERRIDE_KEY);
+    } catch {
+      // Ignore localStorage errors
+    }
+    void loadAll(true);
+  }
+
+  const manifestPublishedAt = getManifestPublishedAt(manifestState.meta);
+
   if (deckState.loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
@@ -380,7 +531,6 @@ export function DeckListPage() {
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded shadow-sm max-w-md">
           <div className="font-semibold mb-1">Failed to load decks</div>
           <div className="text-sm">{deckState.error}</div>
-
           <button
             type="button"
             className="mt-3 text-sm px-3 py-1.5 rounded-md border border-red-200 text-red-800 hover:bg-red-100"
@@ -395,7 +545,7 @@ export function DeckListPage() {
 
   return (
     <ConsoleShell
-      title="RecallSmith Console"
+      title="DeveloperCards Console"
       subtitle="Authoring · Decks"
       userLabel={
         user
@@ -406,21 +556,35 @@ export function DeckListPage() {
       onSignOut={handleSignOut}
       onGoAdminUsers={superAdmin ? () => navigate('/admin/users') : undefined}
     >
-      {/* Top strip: manifest + refresh */}
+      {/* Top strip */}
       <div className="flex flex-col gap-2">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div className="text-xs text-slate-600">
+            <div>
+              <span className="font-semibold">Manifest URL:</span>{' '}
+              <a className="underline text-slate-700" href={manifestState.url} target="_blank" rel="noreferrer">
+                {manifestState.url}
+              </a>
+            </div>
+
+            {isLikelyMockUrl ? (
+              <div className="mt-1 text-amber-800">
+                ⚠️ Probably MOCK manifest ({manifestState.url}). Use S3/CloudFront URL (…/content/manifest.json)
+              </div>
+            ) : null}
+
             {manifestState.loading ? (
-              <span>Loading manifest…</span>
+              <div className="mt-1">Loading manifest…</div>
             ) : manifestState.error ? (
-              <span className="text-amber-800">
-                Manifest unavailable: {manifestState.error}
-                <span className="text-slate-500"> (set VITE_CONTENT_MANIFEST_URL + S3 CORS)</span>
-              </span>
+              <div className="mt-1 text-amber-800">Manifest unavailable: {manifestState.error}</div>
             ) : (
-              <span>
-                Manifest OK{manifestState.publishedAt ? ` · publishedAt=${safeDateTime(manifestState.publishedAt)}` : ''}
-              </span>
+              <div className="mt-1">
+                Manifest OK
+                {manifestState.meta.schemaVersion != null ? ` · schema=${manifestState.meta.schemaVersion}` : ''}
+                {manifestState.meta.prefix ? ` · prefix=${manifestState.meta.prefix}` : ''}
+                {manifestPublishedAt ? ` · generatedAt=${safeDateTime(manifestPublishedAt)}` : ''}
+                {manifestState.meta.deckCount != null ? ` · decks=${manifestState.meta.deckCount}` : ''}
+              </div>
             )}
           </div>
 
@@ -429,7 +593,6 @@ export function DeckListPage() {
               type="button"
               className="text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
               onClick={() => void loadAll(false)}
-              title="Reload decks + manifest"
             >
               Refresh
             </button>
@@ -439,44 +602,56 @@ export function DeckListPage() {
                 type="button"
                 className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700"
                 onClick={() => navigate('/decks/new')}
-                title="super_admin only"
               >
                 + New Deck
               </button>
-            ) : (
-              <button
-                type="button"
-                className="text-xs px-3 py-1.5 rounded bg-slate-200 text-slate-500 cursor-not-allowed"
-                disabled
-                title="Only super_admin can create decks"
-              >
-                + New Deck
-              </button>
-            )}
+            ) : null}
           </div>
         </div>
 
-        {/* ✅ manifest.json raw viewer */}
+        <details className="bg-white border border-slate-200 rounded-lg shadow-sm px-4 py-3">
+          <summary className="cursor-pointer text-sm text-slate-700 select-none">Manifest URL override (debug)</summary>
+          <div className="mt-3 flex flex-col md:flex-row gap-2 md:items-center">
+            <input
+              className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm font-mono"
+              value={manifestUrlOverride}
+              onChange={e => setManifestUrlOverride(e.target.value)}
+              placeholder="https://<cloudfront>/content/manifest.json"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="text-xs px-3 py-2 rounded bg-slate-900 text-white hover:bg-slate-800"
+                onClick={applyManifestUrlOverride}
+              >
+                Apply
+              </button>
+              <button
+                type="button"
+                className="text-xs px-3 py-2 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                onClick={clearManifestUrlOverride}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        </details>
+
         {!manifestState.error && manifestState.raw ? (
           <details className="bg-white border border-slate-200 rounded-lg shadow-sm px-4 py-3">
-            <summary className="cursor-pointer text-sm text-slate-700 select-none">
-              View manifest.json (raw)
-            </summary>
+            <summary className="cursor-pointer text-sm text-slate-700 select-none">View manifest.json (raw)</summary>
             <div className="mt-3 overflow-x-auto">
-              <pre className="text-xs text-slate-700 whitespace-pre">
-                {JSON.stringify(manifestState.raw, null, 2)}
-              </pre>
+              <pre className="text-xs text-slate-700 whitespace-pre">{JSON.stringify(manifestState.raw, null, 2)}</pre>
             </div>
           </details>
         ) : null}
       </div>
 
-      {/* Summary cards */}
+      {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
           <div className="text-xs text-slate-500">Total decks</div>
           <div className="mt-1 text-2xl font-semibold text-slate-900">{stats.total}</div>
-          <div className="mt-1 text-[11px] text-slate-400">Visible to you (permission-filtered)</div>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
@@ -501,15 +676,6 @@ export function DeckListPage() {
       {/* Filters + table */}
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm mt-3">
         <div className="px-4 py-3 border-b border-slate-100 flex flex-col gap-3">
-          <div className="flex items-start justify-between">
-            <div>
-              <h2 className="text-base font-semibold text-slate-900">Decks</h2>
-              <p className="text-xs text-slate-500 mt-1">
-                Status is derived from manifest availability + buildId. (live+buildId =&gt; Published)
-              </p>
-            </div>
-          </div>
-
           <div className="flex flex-col lg:flex-row gap-2 lg:items-center lg:justify-between">
             <div className="flex-1">
               <input
@@ -525,7 +691,6 @@ export function DeckListPage() {
                 className="rounded-md border border-slate-300 px-2 py-2 text-sm bg-white"
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value as 'all' | DeckStatus)}
-                title="Status filter"
               >
                 <option value="all">All status</option>
                 <option value="published">Published</option>
@@ -537,7 +702,6 @@ export function DeckListPage() {
                 className="rounded-md border border-slate-300 px-2 py-2 text-sm bg-white"
                 value={localeFilter}
                 onChange={e => setLocaleFilter(e.target.value)}
-                title="Locale filter"
               >
                 <option value="all">All locales</option>
                 {localeOptions.map(loc => (
@@ -551,7 +715,6 @@ export function DeckListPage() {
                 className="rounded-md border border-slate-300 px-2 py-2 text-sm bg-white"
                 value={typeFilter}
                 onChange={e => setTypeFilter(e.target.value as 'all' | 'starter' | 'paid')}
-                title="Type filter"
               >
                 <option value="all">All types</option>
                 <option value="starter">Starter</option>
@@ -587,13 +750,19 @@ export function DeckListPage() {
                   const deck = row.deck;
                   const m = row.manifest;
 
-                  const deckWithDates = deck as Deck & { updatedAt?: unknown; createdAt?: unknown };
-                  const updatedAt = deckWithDates.updatedAt ?? deckWithDates.createdAt;
+                  const updatedAt =
+                    (deck as Deck & { updatedAt?: unknown; createdAt?: unknown }).updatedAt ?? (deck as Deck & { updatedAt?: unknown; createdAt?: unknown }).createdAt ?? null;
 
-                  const canWrite = superAdmin || (typeof deck.canWrite === 'boolean' ? deck.canWrite : false);
+                  const prefix = manifestState.meta.prefix;
+
+                  const deckJsonUrl =
+                    m?.path ? buildDeckAssetUrl(manifestState.url, prefix, m.path) : null;
+
+                  const previewDeckJsonUrl =
+                    m?.previewPath ? buildDeckAssetUrl(manifestState.url, prefix, m.previewPath) : null;
 
                   return (
-                    <tr key={deck.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                    <tr key={String(deck.id)} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
                       <td className="px-4 py-3">
                         <div className="text-slate-900 font-medium">{deck.title}</div>
                         <div className="text-[11px] text-slate-500 font-mono">{deck.slug}</div>
@@ -609,11 +778,29 @@ export function DeckListPage() {
                         ) : (
                           <div className="space-y-1">
                             <div className="font-mono">
-                              availability={m.availability ?? '—'} • download={m.downloadMode ?? '—'}
+                              availability={m.availability ?? '—'} • tier={m.tier ?? '—'} • download={m.downloadMode ?? '—'}
                             </div>
-                            <div className="font-mono">buildId={m.buildId ?? '—'}</div>
-                            <div className="font-mono">path={m.path ?? '—'}</div>
-                            {m.previewPath ? <div className="font-mono">previewPath={m.previewPath}</div> : null}
+                            <div className="font-mono">
+                              buildId={m.buildId ?? '—'} • version={m.version ?? '—'} • totalCards={m.totalCards ?? '—'}
+                            </div>
+                            <div className="font-mono break-all">
+                              path={m.path ?? '—'}{' '}
+                              {deckJsonUrl ? (
+                                <a className="underline text-slate-700" href={deckJsonUrl} target="_blank" rel="noreferrer">
+                                  (open)
+                                </a>
+                              ) : null}
+                            </div>
+                            {m.previewPath ? (
+                              <div className="font-mono break-all">
+                                previewPath={m.previewPath}{' '}
+                                {previewDeckJsonUrl ? (
+                                  <a className="underline text-slate-700" href={previewDeckJsonUrl} target="_blank" rel="noreferrer">
+                                    (open)
+                                  </a>
+                                ) : null}
+                              </div>
+                            ) : null}
                           </div>
                         )}
                       </td>
@@ -635,9 +822,7 @@ export function DeckListPage() {
                           <button
                             type="button"
                             onClick={() => navigate(`/decks/edit?deckId=${deck.id}`)}
-                            disabled={!canWrite}
-                            className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
-                            title={canWrite ? 'Edit deck metadata' : 'You do not have write permission for this deck'}
+                            className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
                           >
                             Edit
                           </button>
@@ -646,7 +831,6 @@ export function DeckListPage() {
                             type="button"
                             onClick={() => navigate(`/decks/preview?deckId=${deck.id}`)}
                             className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
-                            title="Preview mobile DeckExport JSON"
                           >
                             Preview
                           </button>
@@ -657,7 +841,6 @@ export function DeckListPage() {
                               disabled={publishingId === Number(deck.id)}
                               onClick={() => void handlePublish(Number(deck.id))}
                               className="text-xs px-2 py-1 rounded border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 disabled:cursor-not-allowed"
-                              title="Upload deck.json + rebuild manifest"
                             >
                               {publishingId === Number(deck.id) ? 'Publishing…' : 'Publish'}
                             </button>
@@ -669,7 +852,6 @@ export function DeckListPage() {
                               disabled={deletingId === Number(deck.id)}
                               onClick={() => void handleDeleteDeck(Number(deck.id))}
                               className="text-xs px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
-                              title="super_admin only"
                             >
                               {deletingId === Number(deck.id) ? 'Deleting…' : 'Delete'}
                             </button>

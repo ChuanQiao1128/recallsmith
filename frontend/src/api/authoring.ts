@@ -431,3 +431,12 @@ export async function rebuildManifest(): Promise<ApiResult<RebuildManifestData>>
     return fail<RebuildManifestData>(toApiErrorMessage(err));
   }
 }
+
+export async function fetchAdminManifest(): Promise<ApiResult<Record<string, unknown>>> {
+  try {
+    const resp = await http.get<ApiResult<Record<string, unknown>>>('/api/v1/admin/manifest');
+    return resp.data;
+  } catch (err) {
+    return fail<Record<string, unknown>>(toApiErrorMessage(err));
+  }
+}

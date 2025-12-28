@@ -32,6 +32,7 @@ const { handleEntitlements } = require("./runtime/entitlements");
 const { handleProgressEvents } = require("./runtime/progressEvents");
 const { handleProgressGet } = require("./runtime/progressGet");
 const { handlePremiumDeckUrl } = require("./runtime/premiumDeckUrl");
+const { handleAdminManifest } = require("./runtime/adminManifest");
 
 // Internal
 const { handleInternalEntitlementsApply } = require("./internal/entitlementsApply");
@@ -189,7 +190,9 @@ exports.handler = async (event) => {
     if (path === "/api/v1/entitlements" && method === "GET") {
       return handleEntitlements({ event, method, path, query, res, auth });
     }
-
+    if (path === "/api/v1/admin/manifest" && method === "GET") {
+      return handleAdminManifest({ event, method, path, query, res, auth });
+    }
     // ✅ premium-url / premium-url-dev (same handler)
     if (
       (path === "/api/v1/content/premium-url" ||

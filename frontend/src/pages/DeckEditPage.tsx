@@ -1,5 +1,5 @@
 // src/pages/DeckEditPage.tsx
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import {
@@ -36,22 +36,24 @@ type ManifestInfo = {
   loading: boolean;
   error: string | null;
   generatedAtMs?: number;
-  entry?: {
-    slug: string;
-    availability?: string;
-    tier?: string;
-    downloadMode?: string;
+  entry?:
+    | {
+        slug: string;
+        availability?: string;
+        tier?: string;
+        downloadMode?: string;
 
-    version?: string;
-    buildId?: string | null;
+        version?: string;
+        buildId?: string | null;
 
-    path?: string | null;
-    totalCards?: number | null;
+        path?: string | null;
+        totalCards?: number | null;
 
-    previewBuildId?: string | null;
-    previewPath?: string | null;
-    previewCards?: number | null;
-  } | null;
+        previewBuildId?: string | null;
+        previewPath?: string | null;
+        previewCards?: number | null;
+      }
+    | null;
 };
 
 type FormState = {
@@ -64,7 +66,7 @@ type FormState = {
   deckType: number;
   version: string;
 
-  // ✅ mobile/manifest fields (super_admin)
+  // mobile/manifest fields (super_admin)
   tier: '' | DeckTier; // '' => null (infer)
   availability: DeckAvailability;
   eta: string;
@@ -120,7 +122,11 @@ export function DeckEditPage() {
 
   const [load, setLoad] = useState<LoadState>({ loading: true, error: null, deck: null });
   const [cardsInfo, setCardsInfo] = useState<CardsInfo>({ loading: false, error: null, count: null });
-  const [manifestInfo, setManifestInfo] = useState<ManifestInfo>({ loading: false, error: null, entry: null });
+  const [manifestInfo, setManifestInfo] = useState<ManifestInfo>({
+    loading: false,
+    error: null,
+    entry: null,
+  });
 
   const [form, setForm] = useState<FormState>({
     slug: '',
@@ -162,8 +168,19 @@ export function DeckEditPage() {
     }
   }
 
-  async function refreshManifest() {
+  /**
+   * ✅ FIX: refreshManifest does NOT depend on load/form state.
+   * We pass slug explicitly, so it never triggers effect loops.
+   */
+  const refreshManifest = useCallback(async (slug: string) => {
+    const safeSlug = String(slug || '').trim();
+    if (!safeSlug) {
+      setManifestInfo({ loading: false, error: 'Missing slug', entry: null });
+      return;
+    }
+
     setManifestInfo(prev => ({ ...prev, loading: true, error: null }));
+
     const res = await fetchContentManifest({ bustCache: true });
     if (!mountedRef.current) return;
 
@@ -173,7 +190,7 @@ export function DeckEditPage() {
     }
 
     const decks = res.data.decks ?? [];
-    const found = decks.find(d => String(d.slug) === String(load.deck?.slug ?? form.slug).trim()) ?? null;
+    const found = decks.find(d => String(d.slug).trim() === safeSlug) ?? null;
 
     setManifestInfo({
       loading: false,
@@ -198,8 +215,12 @@ export function DeckEditPage() {
           }
         : null,
     });
-  }
+  }, []);
 
+  /**
+   * ✅ FIX: only depend on deckId.
+   * No refreshManifest in deps (it’s stable) AND it doesn’t depend on state.
+   */
   useEffect(() => {
     let cancelled = false;
 
@@ -214,6 +235,7 @@ export function DeckEditPage() {
       setSaveOk(null);
 
       try {
+        // 1) load deck
         const deckRes = await fetchDeckById(deckId);
         if (cancelled || !mountedRef.current) return;
 
@@ -225,7 +247,7 @@ export function DeckEditPage() {
         const found = deckRes.data;
         setLoad({ loading: false, error: null, deck: found });
 
-        // init form
+        // init form once
         setForm({
           slug: toStr(found.slug),
           title: toStr(found.title),
@@ -235,10 +257,11 @@ export function DeckEditPage() {
           deckType: Number(found.deckType ?? 1) || 1,
           version: toStr(found.version ?? '1'),
 
-          tier: (found.tier === 'free' || found.tier === 'premium') ? found.tier : '',
-          availability: (found.availability === 'coming' || found.availability === 'retired' || found.availability === 'live')
-            ? found.availability
-            : 'live',
+          tier: found.tier === 'free' || found.tier === 'premium' ? found.tier : '',
+          availability:
+            found.availability === 'coming' || found.availability === 'retired' || found.availability === 'live'
+              ? found.availability
+              : 'live',
           eta: toStr(found.eta ?? ''),
 
           manifestOrder: found.manifestOrder != null ? String(found.manifestOrder) : '',
@@ -247,7 +270,7 @@ export function DeckEditPage() {
           retiredAtMs: found.retiredAtMs != null ? String(found.retiredAtMs) : '',
         });
 
-        // load cards count
+        // 2) load cards count
         setCardsInfo({ loading: true, error: null, count: null });
         const cardsRes = await fetchCardsByDeck(found.id);
         if (cancelled || !mountedRef.current) return;
@@ -258,8 +281,8 @@ export function DeckEditPage() {
           setCardsInfo({ loading: false, error: null, count: (cardsRes.data ?? []).length });
         }
 
-        // load manifest
-        await refreshManifest();
+        // 3) load manifest for this deck.slug
+        await refreshManifest(found.slug);
       } catch (err: unknown) {
         if (cancelled || !mountedRef.current) return;
         setLoad({ loading: false, error: err instanceof Error ? err.message : 'Network error.', deck: null });
@@ -269,7 +292,7 @@ export function DeckEditPage() {
     return () => {
       cancelled = true;
     };
-  }, [deckId]);
+  }, [deckId, refreshManifest]);
 
   async function onSave(goBackAfter = false) {
     if (!load.deck) return;
@@ -296,7 +319,6 @@ export function DeckEditPage() {
 
       const versionNum = parsePositiveIntOrError(form.version, 'version');
 
-      // base payload
       const payload: Parameters<typeof updateDeck>[0] = {
         id: load.deck.id,
         slug,
@@ -308,23 +330,17 @@ export function DeckEditPage() {
         version: versionNum,
       };
 
-      // super_admin fields
       if (superAdmin) {
         const effTier = effectiveTier(deckType, form.tier);
 
         payload.tier = form.tier ? form.tier : null;
         payload.availability = form.availability;
-
-        // coming => allow eta; else clear
         payload.eta = form.availability === 'coming' && form.eta.trim() ? form.eta.trim() : null;
 
         payload.manifestOrder = parseNullableInt(form.manifestOrder);
         payload.totalCards = parseNullableInt(form.totalCards);
 
-        // premium => allow previewCards; else clear
         payload.previewCards = effTier === 'premium' ? parseNullableInt(form.previewCards) : null;
-
-        // retired => allow retiredAtMs; else clear
         payload.retiredAtMs = form.availability === 'retired' ? parseNullableInt(form.retiredAtMs) : null;
       }
 
@@ -338,12 +354,9 @@ export function DeckEditPage() {
       setSaveOk('Saved.');
       setLoad(prev => ({ ...prev, deck: res.data ?? prev.deck }));
 
-      // refresh manifest display (optional)
-      await refreshManifest();
+      await refreshManifest(res.data.slug);
 
-      if (goBackAfter) {
-        navigate('/', { replace: true });
-      }
+      if (goBackAfter) navigate('/', { replace: true });
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : 'Network error.');
     } finally {
@@ -405,16 +418,18 @@ export function DeckEditPage() {
       if (rebuildAfter) {
         setRebuilding(true);
         setRebuildMsg(null);
+
         const r = await rebuildManifest();
         if (!r.success || !r.data) {
           setRebuildMsg(r.error?.message ?? 'Manifest rebuild failed.');
         } else {
           setRebuildMsg(`Manifest rebuilt · generatedAtMs=${r.data.generatedAtMs} · deckCount=${r.data.deckCount}`);
         }
+
         setRebuilding(false);
       }
 
-      await refreshManifest();
+      await refreshManifest(load.deck.slug);
     } catch (err: unknown) {
       setPublishError(err instanceof Error ? err.message : 'Network error.');
     } finally {
@@ -432,8 +447,9 @@ export function DeckEditPage() {
         setRebuildMsg(r.error?.message ?? 'Manifest rebuild failed.');
         return;
       }
+
       setRebuildMsg(`Manifest rebuilt · generatedAtMs=${r.data.generatedAtMs} · deckCount=${r.data.deckCount}`);
-      await refreshManifest();
+      if (load.deck) await refreshManifest(load.deck.slug);
     } catch (err: unknown) {
       setRebuildMsg(err instanceof Error ? err.message : 'Network error.');
     } finally {
@@ -518,6 +534,15 @@ export function DeckEditPage() {
             >
               Back
             </button>
+
+            <button
+              type="button"
+              className="text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+              onClick={() => refreshManifest(deck.slug)}
+              title="Reload manifest entry for this deck"
+            >
+              Refresh Manifest View
+            </button>
           </div>
         </div>
 
@@ -556,8 +581,7 @@ export function DeckEditPage() {
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
               value={form.slug}
               onChange={e => setForm(prev => ({ ...prev, slug: e.target.value }))}
-              placeholder="e.g. js-async-basics"
-              disabled={!superAdmin} // safer: slug is progress key
+              disabled={!superAdmin}
               title={!superAdmin ? 'Slug is locked (progress key).' : 'Slug changes are dangerous (progress key).'}
             />
           </label>
@@ -617,11 +641,8 @@ export function DeckEditPage() {
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono"
               value={form.version}
               onChange={e => setForm(prev => ({ ...prev, version: e.target.value }))}
-              placeholder="1"
             />
-            <div className="text-[11px] text-slate-500 mt-1">
-              这是 DB draft version（不是 buildId）。每次内容改动建议 +1。
-            </div>
+            <div className="text-[11px] text-slate-500 mt-1">DB draft version（不是 buildId）。建议内容改动就 +1。</div>
           </label>
         </div>
 
@@ -635,9 +656,7 @@ export function DeckEditPage() {
               </div>
             </div>
 
-            {!superAdmin ? (
-              <div className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-500">super_admin only</div>
-            ) : null}
+            {!superAdmin ? <div className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-500">super_admin only</div> : null}
           </div>
 
           <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -653,9 +672,6 @@ export function DeckEditPage() {
                 <option value="coming">coming</option>
                 <option value="retired">retired</option>
               </select>
-              <div className="text-[11px] text-slate-500 mt-1">
-                coming → mobile shows Coming Soon (downloadMode=none). live → allow installs.
-              </div>
             </label>
 
             <label className="block">
@@ -695,7 +711,6 @@ export function DeckEditPage() {
                 value={form.manifestOrder}
                 onChange={e => setForm(prev => ({ ...prev, manifestOrder: e.target.value }))}
                 disabled={!superAdmin}
-                placeholder="e.g. 10"
               />
             </label>
 
@@ -706,11 +721,7 @@ export function DeckEditPage() {
                 value={form.totalCards}
                 onChange={e => setForm(prev => ({ ...prev, totalCards: e.target.value }))}
                 disabled={!superAdmin}
-                placeholder="e.g. 120"
               />
-              <div className="text-[11px] text-slate-500 mt-1">
-                Must reflect full deck size; manifest uses this value (not card table count).
-              </div>
             </label>
 
             {effTier === 'premium' ? (
@@ -721,7 +732,6 @@ export function DeckEditPage() {
                   value={form.previewCards}
                   onChange={e => setForm(prev => ({ ...prev, previewCards: e.target.value }))}
                   disabled={!superAdmin}
-                  placeholder="e.g. 10"
                 />
               </label>
             ) : null}
@@ -752,20 +762,9 @@ export function DeckEditPage() {
           </div>
         </div>
 
-        {/* Save errors */}
-        {saveError ? (
-          <div className="mt-4 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
-            {saveError}
-          </div>
-        ) : null}
+        {saveError ? <div className="mt-4 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">{saveError}</div> : null}
+        {saveOk ? <div className="mt-4 bg-green-50 border border-green-200 text-green-800 px-3 py-2 rounded text-sm">{saveOk}</div> : null}
 
-        {saveOk ? (
-          <div className="mt-4 bg-green-50 border border-green-200 text-green-800 px-3 py-2 rounded text-sm">
-            {saveOk}
-          </div>
-        ) : null}
-
-        {/* Save actions */}
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
@@ -791,7 +790,7 @@ export function DeckEditPage() {
           <div className="text-sm font-semibold text-slate-900">Publish & Manifest</div>
           <div className="text-xs text-slate-500 mt-1">
             Publish writes <code className="font-mono">deck.json</code> to S3. Rebuild Manifest writes{' '}
-            <code className="font-mono">manifest.json</code> to S3. Mobile reads manifest to decide coming/live/install.
+            <code className="font-mono">manifest.json</code> to S3.
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
@@ -800,7 +799,6 @@ export function DeckEditPage() {
               disabled={!superAdmin || publishing}
               className="text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
               onClick={() => void doPreviewExport()}
-              title="No S3 write. Returns export JSON."
             >
               {publishing ? 'Working…' : 'Preview Export'}
             </button>
@@ -819,7 +817,7 @@ export function DeckEditPage() {
               disabled={!superAdmin || publishing}
               className="text-xs px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
               onClick={() => void doPublish(true)}
-              title="Best for mobile testing: publish + rebuild manifest"
+              title="Publish + rebuild manifest"
             >
               {publishing ? 'Publishing…' : 'Publish & Rebuild Manifest'}
             </button>
@@ -832,34 +830,11 @@ export function DeckEditPage() {
             >
               {rebuilding ? 'Rebuilding…' : 'Rebuild Manifest'}
             </button>
-
-            <button
-              type="button"
-              className="text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
-              onClick={() => void refreshManifest()}
-              title="Reload manifest.json (bustCache)"
-            >
-              Refresh Manifest View
-            </button>
           </div>
 
-          {publishError ? (
-            <div className="mt-3 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
-              {publishError}
-            </div>
-          ) : null}
-
-          {publishOk ? (
-            <div className="mt-3 bg-green-50 border border-green-200 text-green-800 px-3 py-2 rounded text-sm">
-              {publishOk}
-            </div>
-          ) : null}
-
-          {rebuildMsg ? (
-            <div className="mt-3 bg-slate-50 border border-slate-200 text-slate-800 px-3 py-2 rounded text-sm">
-              {rebuildMsg}
-            </div>
-          ) : null}
+          {publishError ? <div className="mt-3 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">{publishError}</div> : null}
+          {publishOk ? <div className="mt-3 bg-green-50 border border-green-200 text-green-800 px-3 py-2 rounded text-sm">{publishOk}</div> : null}
+          {rebuildMsg ? <div className="mt-3 bg-slate-50 border border-slate-200 text-slate-800 px-3 py-2 rounded text-sm">{rebuildMsg}</div> : null}
 
           {previewJson ? (
             <div className="mt-4">
@@ -870,22 +845,14 @@ export function DeckEditPage() {
             </div>
           ) : null}
 
-          {/* Manifest view */}
           <div className="mt-6 bg-white border border-slate-200 rounded-lg p-3">
             <div className="flex items-center justify-between">
               <div className="text-xs text-slate-600 font-semibold">manifest.json (current)</div>
-              {manifestInfo.loading ? (
-                <div className="text-[11px] text-slate-500">Loading…</div>
-              ) : null}
+              {manifestInfo.loading ? <div className="text-[11px] text-slate-500">Loading…</div> : null}
             </div>
 
             {manifestInfo.error ? (
-              <div className="text-sm text-amber-700 mt-2">
-                Manifest unavailable: {manifestInfo.error}
-                <div className="text-[11px] text-slate-500 mt-1">
-                  Check: VITE_CONTENT_MANIFEST_URL + S3/CloudFront CORS + public read.
-                </div>
-              </div>
+              <div className="text-sm text-amber-700 mt-2">Manifest unavailable: {manifestInfo.error}</div>
             ) : manifestInfo.entry ? (
               <div className="mt-2 text-sm text-slate-800">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -900,7 +867,7 @@ export function DeckEditPage() {
                   <div>
                     <div className="text-[11px] text-slate-500">buildId / version</div>
                     <div className="font-mono text-xs">
-                      {(manifestInfo.entry.buildId ?? 'null') as string} / {manifestInfo.entry.version ?? '—'}
+                      {String(manifestInfo.entry.buildId ?? 'null')} / {manifestInfo.entry.version ?? '—'}
                     </div>
                   </div>
 
@@ -926,9 +893,7 @@ export function DeckEditPage() {
                 </div>
               </div>
             ) : (
-              <div className="text-sm text-slate-500 mt-2">
-                Deck not found in manifest (yet). If availability=coming, buildId will be null.
-              </div>
+              <div className="text-sm text-slate-500 mt-2">Deck not found in manifest yet.</div>
             )}
           </div>
         </div>
