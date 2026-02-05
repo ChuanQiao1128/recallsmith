@@ -691,6 +691,7 @@ export function DeckListPage() {
                 className="rounded-md border border-slate-300 px-2 py-2 text-sm bg-white"
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value as 'all' | DeckStatus)}
+                aria-label="Filter by status"
               >
                 <option value="all">All status</option>
                 <option value="published">Published</option>
@@ -702,6 +703,7 @@ export function DeckListPage() {
                 className="rounded-md border border-slate-300 px-2 py-2 text-sm bg-white"
                 value={localeFilter}
                 onChange={e => setLocaleFilter(e.target.value)}
+                aria-label="Filter by locale"
               >
                 <option value="all">All locales</option>
                 {localeOptions.map(loc => (
@@ -715,6 +717,7 @@ export function DeckListPage() {
                 className="rounded-md border border-slate-300 px-2 py-2 text-sm bg-white"
                 value={typeFilter}
                 onChange={e => setTypeFilter(e.target.value as 'all' | 'starter' | 'paid')}
+                aria-label="Filter by type"
               >
                 <option value="all">All types</option>
                 <option value="starter">Starter</option>

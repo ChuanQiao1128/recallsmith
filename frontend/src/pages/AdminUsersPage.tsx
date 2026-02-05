@@ -729,11 +729,11 @@ export function AdminUsersPage() {
                             </div>
 
                             <div className="col-span-2 flex justify-center">
-                              <input type="checkbox" checked={p.canRead} onChange={() => togglePerm(id, 'canRead')} />
+                              <input type="checkbox" checked={p.canRead} onChange={() => togglePerm(id, 'canRead')} aria-label={`Read permission for ${d.slug}`} />
                             </div>
 
                             <div className="col-span-3 flex justify-center">
-                              <input type="checkbox" checked={p.canWrite} onChange={() => togglePerm(id, 'canWrite')} />
+                              <input type="checkbox" checked={p.canWrite} onChange={() => togglePerm(id, 'canWrite')} aria-label={`Write permission for ${d.slug}`} />
                             </div>
                           </div>
                         );

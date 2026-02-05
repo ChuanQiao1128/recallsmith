@@ -233,6 +233,7 @@ export function NewDeckPage() {
                          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               value={form.author}
               onChange={e => handleChange('author', e.target.value)}
+              placeholder="RecallSmith Team"
             />
           </div>
 
@@ -246,6 +247,7 @@ export function NewDeckPage() {
                            focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 value={form.locale}
                 onChange={e => handleChange('locale', e.target.value)}
+                aria-label="Locale"
               >
                 <option value="en-US">en-US</option>
                 <option value="zh-CN">zh-CN</option>
@@ -336,6 +338,7 @@ export function NewDeckPage() {
                                focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                     value={form.freeCardCount}
                     onChange={e => handleChange('freeCardCount', Number(e.target.value))}
+                    aria-label="Free Card Count"
                   />
                 )}
 
