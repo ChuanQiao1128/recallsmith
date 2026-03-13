@@ -560,14 +560,14 @@ export function HomeScreen({ navigation }: Props) {
           bootstrapAttemptedKeyRef.current = bootstrapKey;
 
           setBootstrapOpen(true);
-          setBootstrapText('自动下载题库中…');
+          setBootstrapText('Auto downloading…');
           setBootstrapProgress({ done: 0, total: candidates.length });
 
           const installedSlugs: string[] = [];
 
           for (let i = 0; i < candidates.length; i++) {
             const c = candidates[i];
-            setBootstrapText(`自动下载题库中… (${i + 1}/${candidates.length})`);
+            setBootstrapText(`Auto downloading… (${i + 1}/${candidates.length})`);
             setBootstrapProgress({ done: i, total: candidates.length });
 
             try {
@@ -579,7 +579,7 @@ export function HomeScreen({ navigation }: Props) {
           }
 
           setBootstrapProgress({ done: candidates.length, total: candidates.length });
-          setBootstrapText('正在完成初始化…');
+          setBootstrapText('Now initializing…');
 
           if (installedSlugs.length > 0) {
             // set active deck if missing
@@ -934,7 +934,7 @@ export function HomeScreen({ navigation }: Props) {
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                     <ActivityIndicator />
                     <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={styles.modalTitle}>正在初始化题库</Text>
+                      <Text style={styles.modalTitle}>Now initializing</Text>
                       <Text style={styles.modalSubtitle}>{bootstrapText}</Text>
                       {bootstrapProgress ? (
                         <Text style={[styles.modalSubtitle, { marginTop: 8 }]}>
@@ -975,7 +975,7 @@ export function HomeScreen({ navigation }: Props) {
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <ActivityIndicator />
                   <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={styles.modalTitle}>正在初始化题库</Text>
+                    <Text style={styles.modalTitle}>Now initializing</Text>
                     <Text style={styles.modalSubtitle}>{bootstrapText}</Text>
                     {bootstrapProgress ? (
                       <Text style={[styles.modalSubtitle, { marginTop: 8 }]}>

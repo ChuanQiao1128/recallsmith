@@ -1,0 +1,149 @@
+using System.Globalization;
+using System.Text.Json;
+using Amazon.Lambda.APIGatewayEvents;
+using Npgsql;
+using RecallSmith.Lambda.Common;
+using RecallSmith.Lambda.Vpc.Db;
+
+namespace RecallSmith.Lambda.Vpc.Authoring;
+
+public static class Helpers
+{
+  public static APIGatewayProxyResponse? HandlePgError(Exception ex, Res res)
+  {
+    if (ex is not PostgresException pg) return null;
+
+    // 23505: unique_violation
+    if (pg.SqlState == "23505")
+    {
+      var constraint = pg.ConstraintName ?? string.Empty;
+      var detail = pg.Detail ?? string.Empty;
+      var message = "Duplicate value violates unique constraint.";
+
+      switch (constraint)
+      {
+        case "uq_cards_deck_uid":
+          message = "Another card in this deck already uses this Stable UID.";
+          break;
+        case "uq_cards_deck_order":
+          message = "Order in deck must be unique within this deck.";
+          break;
+        case "decks_slug_key":
+          message = "Slug is already used by another deck.";
+          break;
+        case "uq_admin_deck_permissions":
+          message = "Duplicate permission entry for this admin and deck.";
+          break;
+        default:
+          if (detail.Contains("(slug)", StringComparison.Ordinal)) message = "Slug is already used by another deck.";
+          break;
+      }
+
+      return res.BadRequest("UNIQUE_VIOLATION", message);
+    }
+
+    return null;
+  }
+
+  public sealed record UpdateField(string BodyKey, string ColumnName, Func<JsonElement, object?> Transform);
+
+  public static (List<string> Fields, List<object?> Parameters) BuildUpdateSet(JsonElement body, IReadOnlyList<UpdateField> spec)
+  {
+    var fields = new List<string>();
+    var parameters = new List<object?>();
+    var idx = 1;
+
+    foreach (var f in spec)
+    {
+      if (!body.TryGetProperty(f.BodyKey, out var el)) continue;
+      var value = f.Transform(el);
+      fields.Add($"{f.ColumnName} = ${idx++}");
+      parameters.Add(value);
+    }
+
+    fields.Add("updated_at = now()");
+    return (fields, parameters);
+  }
+
+  public static bool ParseBoolean(JsonElement el, bool defaultValue = false)
+  {
+    return el.ValueKind switch
+    {
+      JsonValueKind.True => true,
+      JsonValueKind.False => false,
+      JsonValueKind.String => Validation.ParseBoolean(el.GetString(), defaultValue),
+      JsonValueKind.Number => Validation.ParseBoolean(el.ToString(), defaultValue),
+      _ => defaultValue,
+    };
+  }
+
+  public static long? ParseOptionalInteger(JsonElement el, string fieldName)
+  {
+    if (el.ValueKind == JsonValueKind.Null) return null;
+    var s = el.ToString();
+    return Validation.ParseOptionalInteger(s, fieldName);
+  }
+
+  public static long RequireInteger(JsonElement el, string fieldName)
+  {
+    if (el.ValueKind == JsonValueKind.Null || el.ValueKind == JsonValueKind.Undefined)
+    {
+      throw new ValidationError($"{fieldName} is required", fieldName);
+    }
+    return Validation.RequireInteger(el.ToString(), fieldName);
+  }
+
+  public static long EnsureInteger(JsonElement el, string fieldName)
+  {
+    if (el.ValueKind == JsonValueKind.Null) throw new ValidationError($"{fieldName} must be an integer", fieldName);
+    return Validation.EnsureInteger(el.ToString(), fieldName);
+  }
+
+  private static async Task<bool> DeckPerm(NpgsqlConnection conn, string adminSub, long deckId, string column)
+  {
+    var sql = $"""
+      select 1 as ok
+      from admin_deck_permissions
+      where admin_sub = $1 and deck_id = $2 and {column} = 1
+      limit 1
+      """;
+
+    var rows = await DbUtil.QueryAsync(conn, null, sql, [adminSub, deckId]);
+    return rows.Count > 0;
+  }
+
+  public static async Task<APIGatewayProxyResponse?> RequireDeckRead(
+    NpgsqlConnection conn,
+    string? adminSub,
+    long deckId,
+    bool isSuperAdmin,
+    Res res)
+  {
+    if (isSuperAdmin) return null;
+    if (string.IsNullOrEmpty(adminSub)) return res.Forbidden("Requires authenticated admin user");
+    var ok = await DeckPerm(conn, adminSub, deckId, "can_read");
+    if (!ok) return res.Forbidden("No permission for this deck (read)");
+    return null;
+  }
+
+  public static async Task<APIGatewayProxyResponse?> RequireDeckWrite(
+    NpgsqlConnection conn,
+    string? adminSub,
+    long deckId,
+    bool isSuperAdmin,
+    Res res)
+  {
+    if (isSuperAdmin) return null;
+    if (string.IsNullOrEmpty(adminSub)) return res.Forbidden("Requires authenticated admin user");
+    var ok = await DeckPerm(conn, adminSub, deckId, "can_write");
+    if (!ok) return res.Forbidden("No permission for this deck (write)");
+    return null;
+  }
+
+  public static async Task<long?> GetDeckIdByCardId(NpgsqlConnection conn, long cardId)
+  {
+    var rows = await DbUtil.QueryAsync(conn, null, "select deck_id as \"deckId\" from cards where id = $1", [cardId]);
+    if (rows.Count == 0) return null;
+    return Convert.ToInt64(rows[0]["deckId"], CultureInfo.InvariantCulture);
+  }
+}
