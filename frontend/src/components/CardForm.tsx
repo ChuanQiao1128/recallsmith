@@ -229,8 +229,9 @@ export function CardForm(props: CardFormProps) {
       {/* Language + Difficulty + Order + Revision */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Code Language</label>
+          <label htmlFor="codeLanguage" className="block text-sm font-medium text-slate-700 mb-1">Code Language</label>
           <select
+            id="codeLanguage"
             className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm bg-white
                        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             value={values.codeLanguage}
@@ -245,8 +246,9 @@ export function CardForm(props: CardFormProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Difficulty</label>
+          <label htmlFor="difficulty" className="block text-sm font-medium text-slate-700 mb-1">Difficulty</label>
           <select
+            id="difficulty"
             className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm bg-white
                        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             value={values.difficulty}
@@ -259,8 +261,9 @@ export function CardForm(props: CardFormProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Order in Deck</label>
+          <label htmlFor="orderInDeck" className="block text-sm font-medium text-slate-700 mb-1">Order in Deck</label>
           <input
+            id="orderInDeck"
             type="number"
             className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -271,8 +274,9 @@ export function CardForm(props: CardFormProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Revision</label>
+          <label htmlFor="revision" className="block text-sm font-medium text-slate-700 mb-1">Revision</label>
           <input
+            id="revision"
             type="number"
             className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
