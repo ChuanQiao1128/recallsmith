@@ -23,6 +23,7 @@ const { handleAuthoringDecks } = require("./authoring/decks");
 const { handleAuthoringCards } = require("./authoring/cards");
 const { handleAuthoringPermissions } = require("./authoring/permissions");
 const { handleAuthoringPublish } = require("./authoring/publish");
+const { handleAuthoringPublishStatus } = require("./authoring/publishStatus");
 const { handleManifestRebuild } = require("./authoring/manifestRebuild");
 
 // Runtime
@@ -40,6 +41,9 @@ const { handleInternalSubscriptionsUpsert } = require("./internal/subscriptionsU
 
 // ✅ Webhooks
 const { handleRevenuecatWebhook } = require("./webhooks/revenuecatWebhook");
+
+// ✅ SQS Workers
+const { handlePublishWorker } = require("./worker/publishWorker");
 
 function getMethod(event) {
   return event.requestContext?.http?.method || event.httpMethod || "GET";
@@ -69,6 +73,16 @@ function match(pattern, path) {
 }
 
 exports.handler = async (event) => {
+  // ✅ 1. 识别并路由 SQS 事件 (Background Worker)
+  // 如果事件包含 Records 且来源是 sqs，则直接交给 Worker 处理，不需要走 HTTP 的流程
+  if (event.Records && event.Records.length > 0 && event.Records[0].eventSource === "aws:sqs") {
+    logInfo(JSON.stringify({ tag: "sqs_trigger", count: event.Records.length }));
+    // 为了支持 SQS partial batch response，你可以根据需要在 worker 内部处理
+    // 这里我们假设 worker 会自己处理并抛出异常或返回 SQS 期望的格式
+    return handlePublishWorker(event);
+  }
+
+  // ✅ 2. 正常的 API Gateway HTTP 请求处理
   const method = getMethod(event);
   const path = getPath(event);
   const traceId = event.requestContext?.requestId || null;
@@ -176,6 +190,13 @@ exports.handler = async (event) => {
     if (path === "/api/v1/authoring/publish") {
       return handleAuthoringPublish({ event, method, path, query, res, auth });
     }
+    
+    // ✅ 轮询任务状态接口
+    const publishStatusMatch = match("/api/v1/authoring/publish/status/:jobId", path);
+    if (publishStatusMatch && method === "GET") {
+      return handleAuthoringPublishStatus({ event, method, path, query, res, auth, jobId: publishStatusMatch.jobId });
+    }
+
     if (path === "/api/v1/admin/manifest/rebuild" && method === "POST") {
       return handleManifestRebuild({ event, method, path, query, res, auth });
     }
