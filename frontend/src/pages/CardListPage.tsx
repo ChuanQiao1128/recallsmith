@@ -4,6 +4,8 @@ import { deleteCard, fetchCardsByDeck, fetchDeckById } from '../api/authoring';
 import type { Deck } from '../types/deck';
 import type { Card } from '../types/card';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
+import { RarityBadge } from '../components/RarityBadge';
+import { RarityDistribution } from '../components/RarityDistribution';
 
 interface CardListState {
   deckId: number;
@@ -190,6 +192,7 @@ export function CardListPage() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-6">
+        <RarityDistribution cards={cards} />
         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-800">Card List</h2>
@@ -203,7 +206,7 @@ export function CardListPage() {
                   <th className="px-3 py-2 text-left font-semibold text-slate-600">Id</th>
                   <th className="px-3 py-2 text-left font-semibold text-slate-600">StableUid</th>
                   <th className="px-3 py-2 text-left font-semibold text-slate-600">Question</th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Diff</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Rarity</th>
                   <th className="px-3 py-2 text-left font-semibold text-slate-600">Created</th>
                   <th className="px-3 py-2 text-left font-semibold text-slate-600">Updated</th>
                   <th className="px-3 py-2 text-left font-semibold text-slate-600">Order</th>
@@ -227,8 +230,8 @@ export function CardListPage() {
                       <td className="px-3 py-2 text-slate-700 font-mono text-xs">{card.id}</td>
                       <td className="px-3 py-2 text-slate-700 font-mono text-xs">{card.stableUid}</td>
                       <td className="px-3 py-2 text-slate-800">{card.question}</td>
-                      <td className="px-3 py-2 text-slate-600">
-                        {card.difficulty === 1 ? 'Easy' : card.difficulty === 2 ? 'Medium' : 'Hard'}
+                      <td className="px-3 py-2">
+                        <RarityBadge difficulty={card.difficulty} />
                       </td>
                       <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.createdAt).toLocaleString()}</td>
                       <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.updatedAt).toLocaleString()}</td>

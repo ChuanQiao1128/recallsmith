@@ -18,4 +18,7 @@ export interface Card {
 
   createdAt: string;
   updatedAt: string;
+
+  // 🎮 Gacha: 虚拟字段，由 difficulty 映射
+  rarity?: 'common' | 'rare' | 'epic';
 }
