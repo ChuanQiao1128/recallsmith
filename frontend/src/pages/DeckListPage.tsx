@@ -2,16 +2,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { deleteDeck, fetchAdminManifest, fetchDecks, publishDeck, rebuildManifest } from '../api/authoring';
+import { deleteDeck, fetchAdminManifest, fetchDecks, publishDeck, rebuildManifest, fetchCardsByDeck } from '../api/authoring';
 import { getContentManifestUrl } from '../api/contentManifest';
 import type { Deck } from '../types/deck';
 
 import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
-import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { readSessionUser, isSuperAdmin, type SessionUser } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
-import { Badge } from '../components/ui/Badge';
 
 interface DeckListState {
   loading: boolean;
@@ -60,8 +59,6 @@ type ManifestState = {
 
 type DeckStatus = 'published' | 'needs_publish' | 'unpublished';
 
-const MANIFEST_URL_OVERRIDE_KEY = 'rs_manifest_url_override';
-
 function safeDateTime(value: unknown): string {
   if (value === undefined || value === null || value === '') return '—';
   const d = new Date(value as string | number | Date);
@@ -103,6 +100,24 @@ function pick(o: Record<string, unknown>, keys: string[]): unknown {
     if (k in o) return o[k];
   }
   return undefined;
+}
+
+// ✅ 核心修复：自动剥离外层的 { manifest: { ... } } 包装
+function getManifestTarget(raw: unknown): Record<string, unknown> {
+  if (!isRecord(raw)) return {};
+  if (isRecord(raw.manifest)) return raw.manifest as Record<string, unknown>;
+  if (isRecord(raw.data) && isRecord(raw.data.manifest)) return raw.data.manifest as Record<string, unknown>;
+  if (isRecord(raw.data)) return raw.data as Record<string, unknown>;
+  return raw;
+}
+
+function extractDecksArray(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+
+  const target = getManifestTarget(raw);
+  const decks = target['decks'] ?? target['Decks'];
+  if (Array.isArray(decks)) return decks;
+  return [];
 }
 
 function toManifestDeckLite(input: unknown): ManifestDeckLite | null {
@@ -169,15 +184,15 @@ function toManifestDeckLite(input: unknown): ManifestDeckLite | null {
 }
 
 function parseManifestMeta(raw: unknown): ManifestMeta {
-  if (!isRecord(raw)) return {};
+  const target = getManifestTarget(raw);
 
-  const schemaVersion = toOptionalNumber(pick(raw, ['schemaVersion', 'SchemaVersion']));
-  const prefix = toOptionalString(pick(raw, ['prefix', 'Prefix']));
-  const generatedAtMs = toOptionalNumber(pick(raw, ['generatedAtMs', 'GeneratedAtMs']));
-  const publishedAt = toOptionalString(pick(raw, ['publishedAt', 'PublishedAt']));
-  const generatedAt = toOptionalString(pick(raw, ['generatedAt', 'GeneratedAt']));
+  const schemaVersion = toOptionalNumber(pick(target, ['schemaVersion', 'SchemaVersion']));
+  const prefix = toOptionalString(pick(target, ['prefix', 'Prefix']));
+  const generatedAtMs = toOptionalNumber(pick(target, ['generatedAtMs', 'GeneratedAtMs']));
+  const publishedAt = toOptionalString(pick(target, ['publishedAt', 'PublishedAt']));
+  const generatedAt = toOptionalString(pick(target, ['generatedAt', 'GeneratedAt']));
 
-  const decksRaw = pick(raw, ['decks', 'Decks']);
+  const decksRaw = pick(target, ['decks', 'Decks']);
   const deckCount = Array.isArray(decksRaw) ? decksRaw.length : undefined;
 
   return {
@@ -190,64 +205,33 @@ function parseManifestMeta(raw: unknown): ManifestMeta {
   };
 }
 
-function getManifestPublishedAt(meta: ManifestMeta): unknown {
-  if (typeof meta.generatedAtMs === 'number') return meta.generatedAtMs;
-  if (meta.publishedAt) return meta.publishedAt;
-  if (meta.generatedAt) return meta.generatedAt;
-  return undefined;
-}
+function getDeckStatusFromManifest(deck: Deck, m?: ManifestDeckLite, actualCards?: number | null): DeckStatus {
+  const isPublished = !!(m && (m.buildId || m.path));
+  
+  // 优先使用真实的卡片数量，如果还没加载完则 fallback 到元数据中的 totalCards
+  const dbCards = typeof actualCards === 'number' ? actualCards : (Number(deck.totalCards) || 0);
 
-function getDeckStatusFromManifest(m?: ManifestDeckLite): DeckStatus {
-  if (!m) return 'unpublished';
-
-  const availability = String(m.availability ?? '').trim().toLowerCase();
-  if (availability && availability !== 'live') return 'unpublished';
-
-  const buildId = String(m.buildId ?? '').trim();
-  if (buildId) return 'published';
-
-  return 'needs_publish';
+  if (isPublished) return 'published';
+  if (dbCards > 0) return 'needs_publish';
+  
+  return 'unpublished';
 }
 
 function statusBadge(status: DeckStatus) {
-  switch (status) {
-    case 'published':
-      return <Badge tone="success">Published</Badge>;
-    case 'needs_publish':
-      return <Badge tone="warning">Needs publish</Badge>;
-    case 'unpublished':
-      return <Badge tone="neutral">Unpublished</Badge>;
-    default:
-      return <Badge tone="neutral">—</Badge>;
+  if (status === 'published') {
+    return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm">Published</span>;
   }
+  if (status === 'needs_publish') {
+    return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm">Needs Publish</span>;
+  }
+  return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 shadow-sm">Unpublished</span>;
 }
 
 function typeBadge(deckType: number) {
-  if (deckType === 1) return <Badge tone="success">Starter</Badge>;
-  return <Badge tone="info">Paid</Badge>;
-}
-
-function stripQuery(u: string): string {
-  const i = u.indexOf('?');
-  return i >= 0 ? u.slice(0, i) : u;
-}
-
-function buildDeckAssetUrl(manifestUrl: string, prefix: string | undefined, assetPath: string): string {
-  const clean = stripQuery(manifestUrl);
-  const safePath = assetPath.replace(/^\/+/, '');
-
-  if (prefix && clean.includes(`/${prefix}/manifest.json`)) {
-    const base = clean.split(`/${prefix}/manifest.json`)[0] + `/${prefix}/`;
-    return base + safePath;
+  if (deckType === 1) {
+    return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">Starter</span>;
   }
-
-  if (clean.endsWith('/manifest.json')) {
-    return clean.slice(0, clean.length - '/manifest.json'.length + 1) + safePath;
-  }
-
-  const lastSlash = clean.lastIndexOf('/');
-  const dir = lastSlash >= 0 ? clean.slice(0, lastSlash + 1) : clean + '/';
-  return dir + safePath;
+  return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-fuchsia-50 text-fuchsia-700 border border-fuchsia-200">Paid</span>;
 }
 
 /**
@@ -260,27 +244,10 @@ function buildDeckAssetUrl(manifestUrl: string, prefix: string | undefined, asse
 export function DeckListPage() {
   const navigate = useNavigate();
 
-  const user = useMemo(() => readSessionUser(), []);
-  const superAdmin = useMemo(() => isSuperAdmin(user), [user]);
+  const user = useMemo<SessionUser | null>(() => readSessionUser(), []);
+  const superAdmin = useMemo<boolean>(() => isSuperAdmin(user), [user]);
 
-  const defaultManifestUrl = useMemo(() => getContentManifestUrl(), []);
-  const [manifestUrlOverride, setManifestUrlOverride] = useState<string>(() => {
-    try {
-      return localStorage.getItem(MANIFEST_URL_OVERRIDE_KEY) ?? '';
-    } catch {
-      return '';
-    }
-  });
-
-  const manifestUrl = useMemo(() => {
-    const o = manifestUrlOverride.trim();
-    return o || defaultManifestUrl;
-  }, [manifestUrlOverride, defaultManifestUrl]);
-
-  const isLikelyMockUrl = useMemo(() => {
-    const u = manifestUrl.trim();
-    return u === '/manifest/index.json' || u.startsWith('/manifest/');
-  }, [manifestUrl]);
+  const manifestUrl = useMemo(() => getContentManifestUrl(), []);
 
   const [deckState, setDeckState] = useState<DeckListState>({
     loading: true,
@@ -297,12 +264,14 @@ export function DeckListPage() {
     raw: null,
   });
 
+  // 用于存储每个 Deck 真实的卡片数量，null 表示加载失败
+  const [cardCounts, setCardCounts] = useState<Record<number, number | null>>({});
+
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [publishingId, setPublishingId] = useState<number | null>(null);
 
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | DeckStatus>('all');
-  const [localeFilter, setLocaleFilter] = useState<'all' | string>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'starter' | 'paid'>('all');
 
   const mountedRef = useRef(true);
@@ -317,6 +286,7 @@ export function DeckListPage() {
     if (showSpinner) {
       setDeckState(prev => ({ ...prev, loading: true, error: null }));
       setManifestState(prev => ({ ...prev, loading: true, error: null, url: manifestUrl }));
+      setCardCounts({}); // 刷新时清空旧的卡片统计
     } else {
       setDeckState(prev => ({ ...prev, error: null }));
       setManifestState(prev => ({ ...prev, error: null, url: manifestUrl }));
@@ -347,11 +317,14 @@ export function DeckListPage() {
           raw: null,
         });
       } else {
-        const raw = manifestRes.data;
-        const meta = parseManifestMeta(raw);
+        let raw = manifestRes.data;
+        // If the backend returns stringified JSON, parse it automatically
+        if (typeof raw === 'string') {
+          try { raw = JSON.parse(raw); } catch { /* ignore */ }
+        }
 
-        const decksRaw = isRecord(raw) ? pick(raw, ['decks', 'Decks']) : null;
-        const deckArr: unknown[] = Array.isArray(decksRaw) ? decksRaw : [];
+        const meta = parseManifestMeta(raw);
+        const deckArr = extractDecksArray(raw);
 
         const bySlug: Record<string, ManifestDeckLite> = {};
         for (const d of deckArr) {
@@ -366,6 +339,19 @@ export function DeckListPage() {
           meta,
           bySlug,
           raw,
+        });
+      }
+
+      // ✅ 页面主体加载完成后，静默拉取真实的卡片数量进行覆盖
+      if (decksRes.success && decksRes.data) {
+        decksRes.data.forEach(d => {
+          fetchCardsByDeck(Number(d.id)).then(res => {
+            if (!mountedRef.current) return;
+            const count = (res.success && res.data) ? res.data.length : null;
+            setCardCounts(prev => ({ ...prev, [Number(d.id)]: count }));
+          }).catch(() => {
+            if (mountedRef.current) setCardCounts(prev => ({ ...prev, [Number(d.id)]: null }));
+          });
         });
       }
     } catch (err: unknown) {
@@ -441,33 +427,27 @@ export function DeckListPage() {
     }
   }
 
-  const decks = useMemo(() => deckState.decks ?? [], [deckState.decks]);
+  const decks = useMemo<Deck[]>(() => deckState.decks ?? [], [deckState.decks]);
 
-  const localeOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const d of decks) if (d.locale) set.add(d.locale);
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [decks]);
-
-  const viewRows = useMemo(() => {
+  const viewRows = useMemo<{ deck: Deck; manifest: ManifestDeckLite | undefined; status: DeckStatus; actualCount: number | null }[]>(() => {
     const query = q.trim().toLowerCase();
 
     return decks
       .map(d => {
-        const m = manifestState.bySlug[d.slug];
-        const status = getDeckStatusFromManifest(m);
-        return { deck: d, manifest: m, status };
+        const m = manifestState.bySlug[String(d.slug || '').trim()];
+        const actualCount = cardCounts[Number(d.id)];
+        const status = getDeckStatusFromManifest(d, m, actualCount);
+        return { deck: d, manifest: m, status, actualCount };
       })
       .filter(row => {
         const d = row.deck;
 
         if (query) {
-          const s = `${d.slug ?? ''} ${d.title ?? ''} ${d.locale ?? ''}`.toLowerCase();
+          const s = `${d.slug ?? ''} ${d.title ?? ''}`.toLowerCase();
           if (!s.includes(query)) return false;
         }
 
         if (statusFilter !== 'all' && row.status !== statusFilter) return false;
-        if (localeFilter !== 'all' && String(d.locale) !== localeFilter) return false;
 
         if (typeFilter !== 'all') {
           if (typeFilter === 'starter' && d.deckType !== 1) return false;
@@ -475,47 +455,15 @@ export function DeckListPage() {
         }
 
         return true;
+      })
+      .sort((a, b) => {
+        const oA = typeof (a.deck as Deck & { manifestOrder?: number }).manifestOrder === 'number' ? (a.deck as Deck & { manifestOrder?: number }).manifestOrder! : 999999;
+        const oB = typeof (b.deck as Deck & { manifestOrder?: number }).manifestOrder === 'number' ? (b.deck as Deck & { manifestOrder?: number }).manifestOrder! : 999999;
+        return oA - oB;
       });
-  }, [decks, manifestState.bySlug, q, statusFilter, localeFilter, typeFilter]);
+  }, [decks, manifestState.bySlug, q, statusFilter, typeFilter, cardCounts]);
 
-  const stats = useMemo(() => {
-    let published = 0;
-    let needs = 0;
-    let unpub = 0;
 
-    for (const d of decks) {
-      const m = manifestState.bySlug[d.slug];
-      const st = getDeckStatusFromManifest(m);
-      if (st === 'published') published += 1;
-      if (st === 'needs_publish') needs += 1;
-      if (st === 'unpublished') unpub += 1;
-    }
-
-    return { total: decks.length, published, needsPublish: needs, unpublished: unpub };
-  }, [decks, manifestState.bySlug]);
-
-  function applyManifestUrlOverride() {
-    try {
-      const trimmed = manifestUrlOverride.trim();
-      if (trimmed) localStorage.setItem(MANIFEST_URL_OVERRIDE_KEY, trimmed);
-      else localStorage.removeItem(MANIFEST_URL_OVERRIDE_KEY);
-    } catch {
-      // Ignore localStorage errors
-    }
-    void loadAll(true);
-  }
-
-  function clearManifestUrlOverride() {
-    setManifestUrlOverride('');
-    try {
-      localStorage.removeItem(MANIFEST_URL_OVERRIDE_KEY);
-    } catch {
-      // Ignore localStorage errors
-    }
-    void loadAll(true);
-  }
-
-  const manifestPublishedAt = getManifestPublishedAt(manifestState.meta);
 
   if (deckState.loading) {
     return (
@@ -530,7 +478,7 @@ export function DeckListPage() {
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded shadow-sm max-w-md">
           <div className="font-semibold mb-1">Failed to load decks</div>
-          <div className="text-sm">{deckState.error}</div>
+          <div className="text-sm">{String(deckState.error)}</div>
           <button
             type="button"
             className="mt-3 text-sm px-3 py-1.5 rounded-md border border-red-200 text-red-800 hover:bg-red-100"
@@ -556,276 +504,211 @@ export function DeckListPage() {
       onSignOut={handleSignOut}
       onGoAdminUsers={superAdmin ? () => navigate('/admin/users') : undefined}
     >
-      {/* Top strip */}
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-          <div className="text-xs text-slate-600">
-            <div>
-              <span className="font-semibold">Manifest URL:</span>{' '}
-              <a className="underline text-slate-700" href={manifestState.url} target="_blank" rel="noreferrer">
-                {manifestState.url}
-              </a>
-            </div>
-
-            {isLikelyMockUrl ? (
-              <div className="mt-1 text-amber-800">
-                ⚠️ Probably MOCK manifest ({manifestState.url}). Use S3/CloudFront URL (…/content/manifest.json)
-              </div>
-            ) : null}
-
-            {manifestState.loading ? (
-              <div className="mt-1">Loading manifest…</div>
-            ) : manifestState.error ? (
-              <div className="mt-1 text-amber-800">Manifest unavailable: {manifestState.error}</div>
-            ) : (
-              <div className="mt-1">
-                Manifest OK
-                {manifestState.meta.schemaVersion != null ? ` · schema=${manifestState.meta.schemaVersion}` : ''}
-                {manifestState.meta.prefix ? ` · prefix=${manifestState.meta.prefix}` : ''}
-                {manifestPublishedAt ? ` · generatedAt=${safeDateTime(manifestPublishedAt)}` : ''}
-                {manifestState.meta.deckCount != null ? ` · decks=${manifestState.meta.deckCount}` : ''}
-              </div>
-            )}
+      <div className="w-full mx-auto space-y-6">
+        {/* Header Section */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Decks</h1>
+            <p className="text-sm text-slate-500 mt-1">Manage your flashcard decks, edit content, and publish to mobile.</p>
           </div>
-
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              className="text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 shadow-sm transition-all active:scale-95"
               onClick={() => void loadAll(false)}
             >
+              <svg className="w-4 h-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
               Refresh
             </button>
-
             {superAdmin ? (
               <button
                 type="button"
-                className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 shadow-sm transition-all active:scale-95"
                 onClick={() => navigate('/decks/new')}
               >
-                + New Deck
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                New Deck
               </button>
             ) : null}
           </div>
         </div>
 
-        <details className="bg-white border border-slate-200 rounded-lg shadow-sm px-4 py-3">
-          <summary className="cursor-pointer text-sm text-slate-700 select-none">Manifest URL override (debug)</summary>
-          <div className="mt-3 flex flex-col md:flex-row gap-2 md:items-center">
-            <input
-              className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm font-mono"
-              value={manifestUrlOverride}
-              onChange={e => setManifestUrlOverride(e.target.value)}
-              placeholder="https://<cloudfront>/content/manifest.json"
-            />
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="text-xs px-3 py-2 rounded bg-slate-900 text-white hover:bg-slate-800"
-                onClick={applyManifestUrlOverride}
-              >
-                Apply
-              </button>
-              <button
-                type="button"
-                className="text-xs px-3 py-2 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
-                onClick={clearManifestUrlOverride}
-              >
-                Clear
-              </button>
+        {/* Manifest Error Banner */}
+        {!!manifestState.error && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 shadow-sm">
+            <svg className="w-5 h-5 text-red-600 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <div>
+              <h3 className="text-sm font-semibold text-red-800">Manifest Sync Error</h3>
+              <p className="text-xs text-red-700 mt-1">Failed to load manifest.json from S3. Decks may incorrectly show as Unpublished. Error: {String(manifestState.error)}</p>
             </div>
           </div>
-        </details>
+        )}
 
-        {!manifestState.error && manifestState.raw ? (
-          <details className="bg-white border border-slate-200 rounded-lg shadow-sm px-4 py-3">
-            <summary className="cursor-pointer text-sm text-slate-700 select-none">View manifest.json (raw)</summary>
-            <div className="mt-3 overflow-x-auto">
-              <pre className="text-xs text-slate-700 whitespace-pre">{JSON.stringify(manifestState.raw, null, 2)}</pre>
+        {/* <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-slate-500">Total Decks</div>
+              <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center border border-slate-100">
+                <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+              </div>
             </div>
-          </details>
-        ) : null}
-      </div>
+            <div className="mt-3 text-3xl font-bold text-slate-900">{0}</div>
+          </div>
 
-      {/* Summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
-        <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
-          <div className="text-xs text-slate-500">Total decks</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{stats.total}</div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
-          <div className="text-xs text-slate-500">Published</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{stats.published}</div>
-          <div className="mt-2">{statusBadge('published')}</div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
-          <div className="text-xs text-slate-500">Needs publish</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{stats.needsPublish}</div>
-          <div className="mt-2">{statusBadge('needs_publish')}</div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
-          <div className="text-xs text-slate-500">Unpublished</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{stats.unpublished}</div>
-          <div className="mt-2">{statusBadge('unpublished')}</div>
-        </div>
-      </div>
-
-      {/* Filters + table */}
-      <div className="bg-white border border-slate-200 rounded-lg shadow-sm mt-3">
-        <div className="px-4 py-3 border-b border-slate-100 flex flex-col gap-3">
-          <div className="flex flex-col lg:flex-row gap-2 lg:items-center lg:justify-between">
-            <div className="flex-1">
-              <input
-                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                value={q}
-                onChange={e => setQ(e.target.value)}
-                placeholder="Search by slug / title / locale…"
-              />
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-slate-500">Published</div>
+              <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center border border-emerald-100">
+                <svg className="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              </div>
             </div>
+            <div className="mt-3 text-3xl font-bold text-slate-900">{0}</div>
+          </div>
 
-            <div className="flex flex-wrap gap-2">
-              <select
-                className="rounded-md border border-slate-300 px-2 py-2 text-sm bg-white"
-                value={statusFilter}
-                onChange={e => setStatusFilter(e.target.value as 'all' | DeckStatus)}
-                aria-label="Filter by status"
-              >
-                <option value="all">All status</option>
-                <option value="published">Published</option>
-                <option value="needs_publish">Needs publish</option>
-                <option value="unpublished">Unpublished</option>
-              </select>
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between relative overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-br from-amber-50/50 to-transparent pointer-events-none"></div>
+            <div className="flex items-center justify-between relative">
+              <div className="text-sm font-medium text-amber-700">Needs Publish</div>
+              <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center border border-amber-200">
+                <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+              </div>
+            </div>
+            <div className="mt-3 text-3xl font-bold text-amber-700 relative">{0}</div>
+          </div>
 
-              <select
-                className="rounded-md border border-slate-300 px-2 py-2 text-sm bg-white"
-                value={localeFilter}
-                onChange={e => setLocaleFilter(e.target.value)}
-                aria-label="Filter by locale"
-              >
-                <option value="all">All locales</option>
-                {localeOptions.map(loc => (
-                  <option key={loc} value={loc}>
-                    {loc}
-                  </option>
-                ))}
-              </select>
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-slate-500">Unpublished</div>
+              <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center border border-slate-200">
+                <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" /></svg>
+              </div>
+            </div>
+            <div className="mt-3 text-3xl font-bold text-slate-900">{0}</div>
+          </div>
+        </div> -->
 
-              <select
-                className="rounded-md border border-slate-300 px-2 py-2 text-sm bg-white"
-                value={typeFilter}
-                onChange={e => setTypeFilter(e.target.value as 'all' | 'starter' | 'paid')}
-                aria-label="Filter by type"
-              >
-                <option value="all">All types</option>
-                <option value="starter">Starter</option>
-                <option value="paid">Paid</option>
-              </select>
+        {/* Main List Container */}
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          {/* Filters Bar */}
+          <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+            <div className="flex flex-col lg:flex-row gap-3 lg:items-center justify-between">
+              <div className="relative flex-1 max-w-md">
+                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-300 bg-white text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-shadow"
+                  value={q}
+                  onChange={e => setQ(e.target.value)}
+                  placeholder="Search by slug or title..."
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="rounded-lg border border-slate-300 py-2 pl-3 pr-8 text-sm bg-white font-medium text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value as 'all' | DeckStatus)}
+                  aria-label="Filter by status"
+                >
+                  <option value="all">All Status</option>
+                  <option value="published">Published</option>
+                  <option value="needs_publish">Needs Publish</option>
+                  <option value="unpublished">Unpublished</option>
+                </select>
+                <select
+                  className="rounded-lg border border-slate-300 py-2 pl-3 pr-8 text-sm bg-white font-medium text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={typeFilter}
+                  onChange={e => setTypeFilter(e.target.value as 'all' | 'starter' | 'paid')}
+                  aria-label="Filter by type"
+                >
+                  <option value="all">All Types</option>
+                  <option value="starter">Starter</option>
+                  <option value="paid">Paid</option>
+                </select>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm whitespace-nowrap">
+            <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500 font-semibold">
               <tr>
-                <th className="px-4 py-2 text-left font-semibold text-slate-600">Deck</th>
-                <th className="px-4 py-2 text-left font-semibold text-slate-600">Locale</th>
-                <th className="px-4 py-2 text-left font-semibold text-slate-600">Type</th>
-                <th className="px-4 py-2 text-left font-semibold text-slate-600">Manifest</th>
-                <th className="px-4 py-2 text-left font-semibold text-slate-600">Status</th>
-                <th className="px-4 py-2 text-left font-semibold text-slate-600">Updated</th>
-                <th className="px-4 py-2 text-left font-semibold text-slate-600">Actions</th>
+                <th className="px-6 py-4">Deck</th>
+                <th className="px-6 py-4">Cards</th>
+                <th className="px-6 py-4">Type</th>
+                <th className="px-6 py-4">Status</th>
+                <th className="px-6 py-4">Updated</th>
+                <th className="px-6 py-4">Actions</th>
               </tr>
             </thead>
 
-            <tbody>
+            <tbody className="divide-y divide-slate-100">
               {viewRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500 text-sm">
+                  <td colSpan={6} className="px-6 py-16 text-center text-slate-500 text-sm">
                     No decks match your filters.
                   </td>
                 </tr>
               ) : (
                 viewRows.map(row => {
-                  const deck = row.deck;
-                  const m = row.manifest;
-
-                  const updatedAt =
-                    (deck as Deck & { updatedAt?: unknown; createdAt?: unknown }).updatedAt ?? (deck as Deck & { updatedAt?: unknown; createdAt?: unknown }).createdAt ?? null;
-
-                  const prefix = manifestState.meta.prefix;
-
-                  const deckJsonUrl =
-                    m?.path ? buildDeckAssetUrl(manifestState.url, prefix, m.path) : null;
-
-                  const previewDeckJsonUrl =
-                    m?.previewPath ? buildDeckAssetUrl(manifestState.url, prefix, m.previewPath) : null;
+                  const deck = row.deck as Deck & { updatedAt?: string | null; createdAt?: string | null; manifestOrder?: number };
+                  const updatedAt = deck.updatedAt ?? deck.createdAt ?? null;
 
                   return (
-                    <tr key={String(deck.id)} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                      <td className="px-4 py-3">
-                        <div className="text-slate-900 font-medium">{deck.title}</div>
-                        <div className="text-[11px] text-slate-500 font-mono">{deck.slug}</div>
-                      </td>
-
-                      <td className="px-4 py-3 text-slate-700">{deck.locale ?? '—'}</td>
-
-                      <td className="px-4 py-3">{typeBadge(deck.deckType)}</td>
-
-                      <td className="px-4 py-3 text-xs text-slate-700">
-                        {!m ? (
-                          <span className="text-slate-400">—</span>
-                        ) : (
-                          <div className="space-y-1">
-                            <div className="font-mono">
-                              availability={m.availability ?? '—'} • tier={m.tier ?? '—'} • download={m.downloadMode ?? '—'}
-                            </div>
-                            <div className="font-mono">
-                              buildId={m.buildId ?? '—'} • version={m.version ?? '—'} • totalCards={m.totalCards ?? '—'}
-                            </div>
-                            <div className="font-mono break-all">
-                              path={m.path ?? '—'}{' '}
-                              {deckJsonUrl ? (
-                                <a className="underline text-slate-700" href={deckJsonUrl} target="_blank" rel="noreferrer">
-                                  (open)
-                                </a>
-                              ) : null}
-                            </div>
-                            {m.previewPath ? (
-                              <div className="font-mono break-all">
-                                previewPath={m.previewPath}{' '}
-                                {previewDeckJsonUrl ? (
-                                  <a className="underline text-slate-700" href={previewDeckJsonUrl} target="_blank" rel="noreferrer">
-                                    (open)
-                                  </a>
-                                ) : null}
-                              </div>
-                            ) : null}
+                    <tr key={String(deck.id)} className="hover:bg-slate-50/60 transition-colors group">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 shadow-sm" title="Manifest Order">
+                            #{String(deck.manifestOrder ?? '-')}
+                          </span>
+                          <div>
+                            <div className="text-slate-900 font-medium">{String(deck.title ?? '')}</div>
+                            <div className="text-[11px] text-slate-500 font-mono">{String(deck.slug ?? '')}</div>
                           </div>
-                        )}
+                        </div>
                       </td>
 
-                      <td className="px-4 py-3">{statusBadge(row.status)}</td>
+                      <td className="px-6 py-4">
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/decks/cards?deckId=${deck.id}`)}
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-mono border shadow-sm transition-colors ${
+                            row.actualCount !== undefined
+                              ? 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 cursor-pointer'
+                              : 'bg-slate-50 text-slate-400 border-slate-100 animate-pulse'
+                          }`}
+                          title="Manage Cards"
+                        >
+                          {typeof row.actualCount === 'number' ? String(row.actualCount) : (row.actualCount === null ? '?' : '...')}
+                        </button>
+                      </td>
 
-                      <td className="px-4 py-3 text-slate-500 text-xs">{safeDateTime(updatedAt)}</td>
+                      <td className="px-6 py-4">{typeBadge(deck.deckType)}</td>
 
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap items-center gap-2">
+                      <td className="px-6 py-4">{statusBadge(row.status)}</td>
+
+                      <td className="px-6 py-4 text-slate-500 text-xs">{safeDateTime(updatedAt)}</td>
+
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
                           <button
                             type="button"
                             onClick={() => navigate(`/decks/cards?deckId=${deck.id}`)}
-                            className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
                           >
-                            View Cards
+                            Cards
                           </button>
 
                           <button
                             type="button"
                             onClick={() => navigate(`/decks/edit?deckId=${deck.id}`)}
-                            className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
                           >
                             Edit
                           </button>
@@ -833,20 +716,27 @@ export function DeckListPage() {
                           <button
                             type="button"
                             onClick={() => navigate(`/decks/preview?deckId=${deck.id}`)}
-                            className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                            className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors"
                           >
                             Preview
                           </button>
 
                           {superAdmin ? (
-                            <button
-                              type="button"
-                              disabled={publishingId === Number(deck.id)}
-                              onClick={() => void handlePublish(Number(deck.id))}
-                              className="text-xs px-2 py-1 rounded border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 disabled:cursor-not-allowed"
-                            >
-                              {publishingId === Number(deck.id) ? 'Publishing…' : 'Publish'}
-                            </button>
+                            <>
+                              <span className="w-px h-4 bg-slate-200 mx-1"></span>
+                              <button
+                                type="button"
+                                disabled={publishingId === Number(deck.id)}
+                                onClick={() => void handlePublish(Number(deck.id))}
+                                className={`text-xs px-3 py-1.5 rounded-lg border ${
+                                  row.status === 'needs_publish'
+                                    ? 'bg-amber-500 border-transparent text-white hover:bg-amber-600 shadow-sm font-semibold'
+                                    : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                                } disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
+                              >
+                                {publishingId === Number(deck.id) ? 'Publishing…' : 'Publish'}
+                              </button>
+                            </>
                           ) : null}
 
                           {superAdmin ? (
@@ -854,7 +744,7 @@ export function DeckListPage() {
                               type="button"
                               disabled={deletingId === Number(deck.id)}
                               onClick={() => void handleDeleteDeck(Number(deck.id))}
-                              className="text-xs px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                              className="text-xs font-medium px-2 text-red-500 hover:text-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
                             >
                               {deletingId === Number(deck.id) ? 'Deleting…' : 'Delete'}
                             </button>
@@ -868,6 +758,19 @@ export function DeckListPage() {
             </tbody>
           </table>
         </div>
+        </div>
+
+        {/* Developer Debug Panel for Manifest Response */}
+        {superAdmin && manifestState.raw !== null && (
+          <details className="mt-8 bg-slate-50 border border-slate-200 rounded-xl p-4 transition-all">
+            <summary className="text-xs font-semibold text-slate-500 cursor-pointer outline-none select-none hover:text-slate-700">
+              [Developer] Inspect Raw S3 manifest.json
+            </summary>
+            <pre className="mt-3 text-[11px] text-slate-600 overflow-auto max-h-96 whitespace-pre-wrap font-mono">
+              {JSON.stringify(manifestState.raw, null, 2)}
+            </pre>
+          </details>
+        )}
       </div>
     </ConsoleShell>
   );
