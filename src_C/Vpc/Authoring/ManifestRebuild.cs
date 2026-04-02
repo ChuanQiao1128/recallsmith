@@ -5,7 +5,7 @@ using Amazon.S3;
 using Amazon.S3.Model;
 using Npgsql;
 using RecallSmith.Lambda.Common;
-using RecallSmith.Lambda.Vpc.Db;
+using RecallSmith.Lambda.Db;
 
 namespace RecallSmith.Lambda.Vpc.Authoring;
 
@@ -149,6 +149,7 @@ public static class ManifestRebuild
           s3_key,
           created_at
         from deck_publishes
+        where status = 'SUCCESS'
         order by deck_slug, created_at desc;
         """;
 
@@ -184,6 +185,15 @@ public static class ManifestRebuild
 
       var downloadMode = DeriveDownloadMode(tier, availability);
       var buildId = availability == "live" && latest.TryGetValue(slug, out var b) ? b : null;
+
+      // ✅ Filter out draft decks:
+      // If a deck is 'live' but has no corresponding build_id in deck_publishes,
+      // it's a draft that has never been published. It must be excluded from manifest.json
+      // to prevent it from appearing on mobile clients.
+      if (availability == "live" && string.IsNullOrEmpty(buildId))
+      {
+        return null;
+      }
 
       var version = availability == "live" && !string.IsNullOrEmpty(buildId)
         ? buildId
@@ -234,7 +244,7 @@ public static class ManifestRebuild
         patches = (object?)null,
         previewPatches = (object?)null,
       };
-    }).ToList();
+    }).Where(x => x is not null).ToList();
 
     var manifest = new
     {

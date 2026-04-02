@@ -194,22 +194,16 @@ export function EditCardPage() {
       typeof values.orderInDeck === 'number'
         ? values.orderInDeck
         : Number(values.orderInDeck) || 1;
-    const revision =
-      typeof values.revision === 'number'
-        ? values.revision
-        : Number(values.revision) || 1;
-
     const result = await updateCard({
       id: Number(card.id),
-      expectedVersion: (card as unknown as { version?: number }).version ?? 1,
+      deckId: Number(card.deckId),
       question: values.question.trim(),
       explanation: values.explanation?.trim() || undefined,
-      realWorldUsage: values.realWorldUsage?.trim() || undefined,
       codeSnippet: values.codeSnippet || undefined,
       codeLanguage: values.codeLanguage || undefined,
       difficulty,
       orderInDeck,
-      revision,
+      stableUid: card.stableUid,
     });
 
     if (!result.success) {

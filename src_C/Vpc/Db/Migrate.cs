@@ -12,7 +12,7 @@ public static class Migrate
   private static string MigrationsDir()
   {
     // Copied to output via csproj <CopyToOutputDirectory>.
-    return Path.Combine(AppContext.BaseDirectory, "Vpc", "Db", "Migrations");
+    return Path.Combine(AppContext.BaseDirectory, "Db", "Migrations");
   }
 
   private static List<Migration> LoadMigrations()
@@ -151,7 +151,7 @@ public static class Migrate
     var migrations = LoadMigrations();
     if (migrations.Count == 0)
     {
-      return res.BadRequest("MIGRATIONS_EMPTY", "No migrations found in src/vpc/db/migrations");
+      return res.BadRequest("MIGRATIONS_EMPTY", "No migrations found in Db/Migrations");
     }
 
     var dryRun = string.Equals(req.Query.TryGetValue("dryRun", out var d) ? d : null, "true", StringComparison.OrdinalIgnoreCase);

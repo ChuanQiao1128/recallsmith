@@ -1,4 +1,5 @@
 // src/api/admin.ts
+// 管理后台 API - 使用 /api/v1/ 路径
 import type { ApiResult } from '../types/api';
 import { http } from './http';
 import axios from 'axios';
@@ -54,7 +55,6 @@ function fail<T>(message: string, code = 'NETWORK_ERROR'): ApiResult<T> {
   return { success: false, data: null, error: { code, message }, traceId: '' };
 }
 
-// ✅ 关键：补齐 apiGet / apiPost，避免“根本没发请求”
 async function apiGet<T>(path: string): Promise<ApiResult<T>> {
   try {
     const resp = await http.get<ApiResult<T>>(path);
@@ -73,24 +73,27 @@ async function apiPost<T>(path: string, body: unknown): Promise<ApiResult<T>> {
   }
 }
 
+// ==================== Migrate ====================
+
 export async function runMigrate(reset: boolean): Promise<ApiResult<{ migrated: boolean; reset: boolean }>> {
   const qs = reset ? '?reset=1' : '';
-  return apiPost(`/api/admin/migrate${qs}`, {});
+  return apiPost(`/api/v1/admin/db/migrate${qs}`, {});
 }
 
+// ==================== Users ====================
+
 export async function listAdminUsers(): Promise<ApiResult<AdminUser[]>> {
-  // ✅ users 走 cognito-admin-lambda
-  // ✅ permissions 走 vpc-db-lambda（super_admin 才能读）
+  // users 走 cognito-admin-lambda
+  // permissions 走 vpc-lambda
   const [usersRes, permsRes] = await Promise.all([
-    apiGet<AdminUser[]>('/api/admin/users'),
-    apiGet<Array<{ adminSub?: string; deckId?: unknown; deckSlug?: string; deckTitle?: string; locale?: string; canRead?: boolean; canWrite?: boolean }>>('/api/admin/permissions'),
+    apiGet<AdminUser[]>('/api/v1/admin/users'),
+    apiGet<Array<{ adminSub?: string; deckId?: unknown; deckSlug?: string; deckTitle?: string; locale?: string; canRead?: boolean; canWrite?: boolean }>>('/api/v1/admin/permissions'),
   ]);
 
   if (!usersRes.success) return usersRes;
 
   const users = usersRes.data ?? [];
 
-  // permissions 拉不到也不阻塞 users 列表（只是不显示 counts）
   if (!permsRes.success) {
     return { ...usersRes, data: users.map(u => ({ ...u, deckPermissions: [] })) };
   }
@@ -120,25 +123,28 @@ export async function listAdminUsers(): Promise<ApiResult<AdminUser[]>> {
   };
 }
 
-// ✅ console 只创建 editor（你现在的页面已经这么写了）
 export async function createAdminUser(input: {
   username: string;
   email: string;
   tempPassword: string;
   groups: string[];
 }): Promise<ApiResult<AdminUser>> {
-  return apiPost<AdminUser>('/api/admin/users', input);
+  return apiPost<AdminUser>('/api/v1/admin/users', input);
 }
+
+// ==================== Decks ====================
 
 export async function listAdminDecks(includeDeleted = false): Promise<ApiResult<DeckSummary[]>> {
   const qs = includeDeleted ? '?includeDeleted=1' : '';
-  return apiGet<DeckSummary[]>(`/api/admin/decks${qs}`);
+  return apiGet<DeckSummary[]>(`/api/v1/authoring/decks${qs}`);
 }
+
+// ==================== Permissions ====================
 
 export async function saveAdminDeckPermissionsBulk(input: {
   adminSub: string;
   permissions: Array<{ deckId: number; canRead: boolean; canWrite: boolean }>;
   mode?: 'replace' | 'merge';
 }): Promise<ApiResult<{ saved: number; replace: boolean }>> {
-  return apiPost<{ saved: number; replace: boolean }>('/api/admin/permissions/bulk', input);
+  return apiPost<{ saved: number; replace: boolean }>('/api/v1/admin/permissions/bulk', input);
 }

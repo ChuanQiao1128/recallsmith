@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Build only the Public lambda (to keep the deployment zip small). -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <DefineConstants>$(DefineConstants);LAMBDA_PUBLIC</DefineConstants>
+
+    <!-- Keep handler strings stable across zips. -->
+    <AssemblyName>RecallSmith.Lambda</AssemblyName>
+    <RootNamespace>RecallSmith.Lambda</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="AssemblyInfo.cs" />
+    <Compile Include="PublicFunction.cs" />
+    <Compile Include="SnapStartHooks.cs" />
+    <Compile Include="Ai\ExplainCard.cs" />
+    <Compile Include="Billing\Verify.cs" />
+    <Compile Include="Billing\WebhookApple.cs" />
+    <Compile Include="Billing\WebhookGoogle.cs" />
+    <Compile Include="CognitoAdmin\CognitoClient.cs" />
+    <Compile Include="CognitoAdmin\DeleteUser.cs" />
+    <Compile Include="CognitoAdmin\DisableUser.cs" />
+    <Compile Include="CognitoAdmin\Users.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 引用 Shared 类库 -->
+    <ProjectReference Include="..\Shared\RecallSmith.Lambda.Common\RecallSmith.Lambda.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Amazon.Lambda.APIGatewayEvents" Version="2.7.3" />
+    <PackageReference Include="Amazon.Lambda.Core" Version="2.5.0" />
+    <PackageReference Include="Amazon.Lambda.Serialization.SystemTextJson" Version="2.4.0" />
+    <PackageReference Include="AWSSDK.Core" Version="4.0.0" />
+    <PackageReference Include="AWSSDK.CognitoIdentityProvider" Version="4.0.0" />
+  </ItemGroup>
+</Project>

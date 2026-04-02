@@ -123,6 +123,7 @@ exports.handleManifestRebuild = async ({ event, method, path, query, res, auth }
         s3_key,
         created_at
       from deck_publishes
+      where status = 'SUCCESS'
       order by deck_slug, created_at desc;
       `,
     );
@@ -133,7 +134,7 @@ exports.handleManifestRebuild = async ({ event, method, path, query, res, auth }
     // deck_publishes 不存在时允许系统继续（例如本地/早期环境）
   }
 
-  const out = decks.map((d) => {
+  const out = decks.reduce((acc, d) => {
     const slug = String(d.slug || "");
     const deckType = toInt(d.deckType, 1);
 
@@ -147,6 +148,14 @@ exports.handleManifestRebuild = async ({ event, method, path, query, res, auth }
 
     // live 才允许 buildId
     const buildId = availability === "live" ? latest.get(slug) || null : null;
+
+    // ✅ 阻断草稿泄露的核心逻辑：
+    // 如果当前 deck 是 live 状态，但在 deck_publishes 表里找不到它的发布记录（buildId 为 null），
+    // 说明这只是管理员在后台新建的“草稿”，尚未执行过 publish 推送到 S3。
+    // 必须把它丢弃，绝对不能写入 manifest.json 导致移动端可见。
+    if (availability === "live" && !buildId) {
+      return acc;
+    }
 
     // ✅ live decks: version 必须等于 buildId（与 deck.json.version 对齐）
     const version =
@@ -176,7 +185,7 @@ exports.handleManifestRebuild = async ({ event, method, path, query, res, auth }
         ? `decks/${slug}/previews/${previewBuildId}/deck.json`
         : null;
 
-    return {
+    acc.push({
       order,
       slug,
       title: d.title,
@@ -212,8 +221,10 @@ exports.handleManifestRebuild = async ({ event, method, path, query, res, auth }
 
       patches: null,
       previewPatches: null,
-    };
-  });
+    });
+    
+    return acc;
+  }, []);
 
   const manifest = {
     schemaVersion: 2,

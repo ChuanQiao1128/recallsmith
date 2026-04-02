@@ -1,7 +1,7 @@
 using System.Globalization;
 using Amazon.Lambda.APIGatewayEvents;
 using RecallSmith.Lambda.Common;
-using RecallSmith.Lambda.Vpc.Db;
+using RecallSmith.Lambda.Db;
 
 namespace RecallSmith.Lambda.Vpc.Runtime;
 

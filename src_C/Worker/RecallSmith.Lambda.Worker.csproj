@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Lambda 特定配置 -->
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <AWSProjectType>Lambda</AWSProjectType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- AWS Lambda -->
+    <PackageReference Include="Amazon.Lambda.Core" Version="2.5.0" />
+    <PackageReference Include="Amazon.Lambda.Serialization.SystemTextJson" Version="2.4.4" />
+    <PackageReference Include="Amazon.Lambda.SQSEvents" Version="2.2.1" />
+
+    <!-- AWS SDK -->
+    <PackageReference Include="AWSSDK.S3" Version="4.0.0" />
+    <PackageReference Include="AWSSDK.SQS" Version="4.0.0" />
+
+    <!-- 内部引用 -->
+    <ProjectReference Include="..\Shared\RecallSmith.Lambda.Common\RecallSmith.Lambda.Common.csproj" />
+    <ProjectReference Include="..\Shared\RecallSmith.Lambda.Db\RecallSmith.Lambda.Db.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -4,6 +4,7 @@ import type { Deck, DeckAvailability, DeckTier } from '../types/deck';
 import type { Card } from '../types/card';
 import axios from 'axios';
 import { http } from './http';
+import { dedupeRequest, DedupeKeys } from './dedupe';
 
 function toApiErrorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
@@ -52,7 +53,8 @@ function toOptionalInt(v: unknown): number | null | undefined {
   return undefined;
 }
 
-function normalizeDeck(d: Deck): Deck {
+function normalizeDeck(d: Deck | null | undefined): Deck | null {
+  if (!d) return null;
   const o = d as unknown as UnknownRecord;
 
   return {
@@ -96,347 +98,411 @@ function normalizeCard(c: Card): Card {
   };
 }
 
-// 小工具：确保一定有 stableUid（后端现在要求必填）
+// 小工具：确保一定有 stableUid
 function ensureStableUid(input?: string): string {
-  const trimmed = (input ?? '').trim();
-  if (trimmed) return trimmed;
-
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const v = (input ?? '').trim();
+  if (v) return v;
+  return `card_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// ==================== Decks ====================
+// ---------------------- decks ----------------------
 
 export async function fetchDecks(): Promise<ApiResult<Deck[]>> {
-  try {
-    const resp = await http.get<ApiResult<Deck[]>>('/api/v1/authoring/decks');
-    const raw = resp.data;
+  return dedupeRequest(DedupeKeys.decks(), async () => {
+    try {
+      const resp = await http.get<ApiResult<Deck[]>>('/api/v1/authoring/decks');
+      const raw = resp.data;
 
-    if (!raw.success) return raw;
+      if (!raw.success) return raw;
 
-    const list = raw.data ?? [];
-    const normalized = list.map(normalizeDeck);
+      const list = raw.data ?? [];
+      const normalized = list.map(normalizeDeck).filter((d): d is Deck => d !== null);
 
-    return { ...raw, data: normalized };
-  } catch (err) {
-    return fail<Deck[]>(toApiErrorMessage(err));
-  }
+      return { ...raw, data: normalized };
+    } catch (err) {
+      return fail<Deck[]>(toApiErrorMessage(err));
+    }
+  });
 }
 
-// ✅ 单条 Deck：直接走后端 GET /authoring/decks?id=xx
 export async function fetchDeckById(id: number): Promise<ApiResult<Deck>> {
   try {
     const resp = await http.get<ApiResult<Deck[]>>('/api/v1/authoring/decks', {
       params: { id },
     });
-
     const raw = resp.data;
-    if (!raw.success) {
-      return {
-        success: false,
-        data: null,
-        error: raw.error ?? { code: 'REQUEST_FAILED', message: 'Request failed.' },
-        traceId: raw.traceId ?? '',
-      };
-    }
+
+    if (!raw.success) return { ...raw, data: null };
 
     const list = raw.data ?? [];
-    const first = list[0] ?? null;
-
-    if (!first) {
-      return {
-        success: false,
-        data: null,
-        error: { code: 'NOT_FOUND', message: 'Deck not found' },
-        traceId: raw.traceId ?? '',
-      };
+    if (list.length === 0) {
+      return fail<Deck>('Deck not found', 'NOT_FOUND');
     }
-
-    return {
-      success: true,
-      data: normalizeDeck(first),
-      error: null,
-      traceId: raw.traceId ?? '',
-    };
+    const normalized = normalizeDeck(list[0]);
+    if (!normalized) {
+      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+    }
+    return { ...raw, data: normalized };
   } catch (err) {
     return fail<Deck>(toApiErrorMessage(err));
   }
 }
 
-// ---------------------- 创建 Deck ----------------------
-
-export interface CreateDeckParams {
-  slug: string;
-  title: string;
-  author: string;
+export async function createDeck(params: { 
+  title: string; 
+  slug?: string; 
   description?: string;
-  locale: string;
-  deckType: number; // 1 = Starter, 2 = Paid
-
-  // mobile/publish 相关（可选，后端暂时可以忽略）
-  contentVersion?: string;
-  isFreeStarter?: boolean;
-  freeCardCount?: number;
-}
-
-export async function createDeck(params: CreateDeckParams): Promise<ApiResult<Deck>> {
-  try {
-    const resp = await http.post<ApiResult<Deck>>('/api/v1/authoring/decks', {
-      slug: params.slug,
-      title: params.title,
-      author: params.author,
-      description: params.description,
-      locale: params.locale,
-      deckType: params.deckType,
-
-      contentVersion: params.contentVersion,
-      isFreeStarter: params.isFreeStarter,
-      freeCardCount: params.freeCardCount,
-    });
-
-    const raw = resp.data;
-    if (!raw.success || !raw.data) return raw;
-
-    return { ...raw, data: normalizeDeck(raw.data) };
-  } catch (err) {
-    return fail<Deck>(toApiErrorMessage(err));
-  }
-}
-
-export interface UpdateDeckPayload {
-  id: number;
-  slug?: string;
-  title?: string;
   author?: string;
-  description?: string | null;
-  locale?: string | null;
-  deckType?: number | null;
-  version?: number | null;
-
-  // ✅ super_admin only：mobile/manifest 字段（需要后端 PUT 支持）
-  tier?: DeckTier | null;
-  availability?: DeckAvailability | null;
-  eta?: string | null;
-  manifestOrder?: number | null;
-  totalCards?: number | null;
-  previewCards?: number | null;
-  retiredAtMs?: number | null;
-}
-
-export async function updateDeck(payload: UpdateDeckPayload): Promise<ApiResult<Deck>> {
+}): Promise<ApiResult<Deck>> {
   try {
-    const resp = await http.put<ApiResult<Deck>>('/api/v1/authoring/decks', payload);
+    // 统一使用 JSON body，与 updateDeck 保持一致
+    const body: Record<string, unknown> = { title: params.title };
+    if (params.slug) body.slug = params.slug;
+    if (params.description) body.description = params.description;
+    if (params.author) body.author = params.author;
+
+    const resp = await http.post<ApiResult<Deck>>('/api/v1/authoring/decks', body);
     const raw = resp.data;
-    if (!raw.success || !raw.data) return raw;
-    return { ...raw, data: normalizeDeck(raw.data) };
+
+    if (!raw.success) return { ...raw, data: null };
+
+    const deck = raw.data;
+    if (!deck) {
+      return fail<Deck>('Create deck failed: no data returned', 'SERVER_ERROR');
+    }
+    const normalized = normalizeDeck(deck);
+    if (!normalized) {
+      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+    }
+    return { ...raw, data: normalized };
   } catch (err) {
     return fail<Deck>(toApiErrorMessage(err));
   }
 }
 
-// ✅ 删除 Deck（super_admin only）
+export async function updateDeck(
+  id: number,
+  params: {
+    title?: string;
+    slug?: string;
+    description?: string;
+    manifestOrder?: number | null;
+    availability?: DeckAvailability | null;
+    tier?: DeckTier | null;
+    eta?: string | null;
+    retiredAtMs?: number | null;
+    totalCards?: number | null;
+    previewCards?: number | null;
+  }
+): Promise<ApiResult<Deck>> {
+  try {
+    // Backend expects JSON body for PUT, not query string
+    const body: Record<string, unknown> = { id };
+    if (params.title !== undefined) body.title = params.title;
+    if (params.slug !== undefined) body.slug = params.slug;
+    if (params.description !== undefined) body.description = params.description;
+    if (params.manifestOrder !== undefined) body.manifestOrder = params.manifestOrder;
+    if (params.availability !== undefined) body.availability = params.availability;
+    if (params.tier !== undefined) body.tier = params.tier;
+    if (params.eta !== undefined) body.eta = params.eta;
+    if (params.retiredAtMs !== undefined) body.retiredAtMs = params.retiredAtMs;
+    if (params.totalCards !== undefined) body.totalCards = params.totalCards;
+    if (params.previewCards !== undefined) body.previewCards = params.previewCards;
+
+    // Backend returns single deck object, not array
+    const resp = await http.put<ApiResult<Deck>>('/api/v1/authoring/decks', body);
+    const raw = resp.data;
+
+    if (!raw.success) return { ...raw, data: null };
+
+    const deck = raw.data;
+    if (!deck) {
+      return fail<Deck>('Update deck failed: no data returned', 'SERVER_ERROR');
+    }
+    const normalized = normalizeDeck(deck);
+    if (!normalized) {
+      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+    }
+    return { ...raw, data: normalized };
+  } catch (err) {
+    return fail<Deck>(toApiErrorMessage(err));
+  }
+}
+
 export async function deleteDeck(id: number): Promise<ApiResult<null>> {
   try {
-    const resp = await http.delete<ApiResult<null>>('/api/v1/authoring/decks', {
-      params: { id },
-    });
+    // 统一使用 JSON body 传递参数
+    const resp = await http.delete<ApiResult<null>>('/api/v1/authoring/decks', { data: { id } });
     return resp.data;
   } catch (err) {
     return fail<null>(toApiErrorMessage(err));
   }
 }
 
-// ==================== Cards ====================
+// ---------------------- cards ----------------------
 
 export async function fetchCardsByDeck(deckId: number): Promise<ApiResult<Card[]>> {
-  try {
-    const resp = await http.get<ApiResult<Card[]>>('/api/v1/authoring/cards', {
-      params: { deckId },
-    });
+  return dedupeRequest(DedupeKeys.cards(deckId), async () => {
+    try {
+      const resp = await http.get<ApiResult<Card[]>>('/api/v1/authoring/cards', {
+        params: { deckId },
+      });
+      const raw = resp.data;
 
-    const raw = resp.data;
-    if (!raw.success) return raw;
+      if (!raw.success) return raw;
 
-    const list = raw.data ?? [];
-    const normalized = list.map(normalizeCard);
-    return { ...raw, data: normalized };
-  } catch (err) {
-    return fail<Card[]>(toApiErrorMessage(err));
-  }
+      const list = raw.data ?? [];
+      return { ...raw, data: list.map(normalizeCard) };
+    } catch (err) {
+      return fail<Card[]>(toApiErrorMessage(err));
+    }
+  });
 }
 
-export async function createCard(input: {
+export async function createCard(params: {
   deckId: number;
   question: string;
   explanation?: string;
-  realWorldUsage?: string;
   codeSnippet?: string;
   codeLanguage?: string;
   difficulty?: number;
   orderInDeck?: number;
   stableUid?: string;
-  revision?: number;
+  realWorldUsage?: string;
 }): Promise<ApiResult<Card>> {
   try {
-    const resp = await http.post<ApiResult<Card>>('/api/v1/authoring/cards', {
-      deckId: input.deckId,
-      stableUid: ensureStableUid(input.stableUid),
-      question: input.question,
-      explanation: input.explanation,
-      realWorldUsage: input.realWorldUsage,
-      codeSnippet: input.codeSnippet,
-      codeLanguage: input.codeLanguage,
-      difficulty: input.difficulty,
-      orderInDeck: input.orderInDeck ?? 1,
-      revision: input.revision,
-    });
+    const body: Record<string, unknown> = {
+      deckId: params.deckId,
+      question: params.question,
+    };
+    if (params.explanation !== undefined) body.explanation = params.explanation;
+    if (params.codeSnippet !== undefined) body.codeSnippet = params.codeSnippet;
+    if (params.codeLanguage !== undefined) body.codeLanguage = params.codeLanguage;
+    if (params.difficulty !== undefined) body.difficulty = params.difficulty;
+    if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
+    if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
+    body.stableUid = ensureStableUid(params.stableUid);
 
+    // 统一使用单条记录返回格式
+    const resp = await http.post<ApiResult<Card>>('/api/v1/authoring/cards', body);
     const raw = resp.data;
-    if (!raw.success || !raw.data) return raw;
-    return { ...raw, data: normalizeCard(raw.data) };
+
+    if (!raw.success) return { ...raw, data: null };
+
+    const card = raw.data;
+    if (!card) {
+      return fail<Card>('Create card failed: no data returned', 'SERVER_ERROR');
+    }
+    return { ...raw, data: normalizeCard(card) };
   } catch (err) {
     return fail<Card>(toApiErrorMessage(err));
   }
 }
 
-export async function updateCard(input: {
+export async function updateCard(params: {
   id: number;
-  expectedVersion: number;
+  deckId: number;
   question?: string;
   explanation?: string;
-  realWorldUsage?: string;
   codeSnippet?: string;
   codeLanguage?: string;
   difficulty?: number;
   orderInDeck?: number;
-  revision?: number;
+  stableUid?: string;
+  expectedVersion?: number;
 }): Promise<ApiResult<Card>> {
   try {
-    const resp = await http.put<ApiResult<Card>>('/api/v1/authoring/cards', {
-      id: input.id,
-      expectedVersion: input.expectedVersion,
-      question: input.question,
-      explanation: input.explanation,
-      realWorldUsage: input.realWorldUsage,
-      codeSnippet: input.codeSnippet,
-      codeLanguage: input.codeLanguage,
-      difficulty: input.difficulty,
-      orderInDeck: input.orderInDeck,
-      revision: input.revision,
-    });
+    const query = new URLSearchParams();
+    query.append('id', String(params.id));
+    query.append('deckId', String(params.deckId));
 
+    const body: Record<string, unknown> = {};
+    if (params.question !== undefined) body.question = params.question;
+    if (params.explanation !== undefined) body.explanation = params.explanation;
+    if (params.codeSnippet !== undefined) body.codeSnippet = params.codeSnippet;
+    if (params.codeLanguage !== undefined) body.codeLanguage = params.codeLanguage;
+    if (params.difficulty !== undefined) body.difficulty = params.difficulty;
+    if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
+    if (params.stableUid !== undefined) body.stableUid = params.stableUid;
+
+    const resp = await http.put<ApiResult<Card[]>>(`/api/v1/authoring/cards?${query.toString()}`, body);
     const raw = resp.data;
-    if (!raw.success || !raw.data) return raw;
-    return { ...raw, data: normalizeCard(raw.data) };
+
+    if (!raw.success) return { ...raw, data: null };
+
+    const list = raw.data ?? [];
+    if (list.length === 0) {
+      return fail<Card>('Update card failed: no data returned', 'SERVER_ERROR');
+    }
+    return { ...raw, data: normalizeCard(list[0]) };
   } catch (err) {
     return fail<Card>(toApiErrorMessage(err));
   }
 }
 
-export async function deleteCard(id: number): Promise<ApiResult<null>> {
+export async function deleteCard(cardId: number): Promise<ApiResult<null>> {
   try {
-    const resp = await http.delete<ApiResult<null>>('/api/v1/authoring/cards', {
-      params: { id },
-    });
+    // 统一使用 JSON body 传递参数
+    const resp = await http.delete<ApiResult<null>>('/api/v1/authoring/cards', { data: { id: cardId } });
     return resp.data;
   } catch (err) {
     return fail<null>(toApiErrorMessage(err));
   }
 }
 
-// ==================== Publish / Manifest ====================
+// ---------------------- permissions ----------------------
 
-export type PublishedTier = 'free' | 'premium';
+export async function fetchPermissions(): Promise<ApiResult<{ adminSub: string; deckId: number; canRead: boolean; canWrite: boolean }[]>> {
+  try {
+    const resp = await http.get<ApiResult<{ adminSub: string; deckId: number; canRead: boolean; canWrite: boolean }[]>>('/api/v1/admin/permissions');
+    return resp.data;
+  } catch (err) {
+    return fail(toApiErrorMessage(err));
+  }
+}
 
-export type DeckExportCard = {
-  stableUid: string;
-  orderInDeck: number;
-  difficulty: number;
-  question: string;
-  explanation: string;
-  codeLanguage: string | null;
-  codeSnippet: string;
-  realWorldUsage: string;
-  revision: number;
-};
+export async function updatePermission(params: { adminSub: string; deckId: number; canRead?: boolean; canWrite?: boolean }): Promise<ApiResult<null>> {
+  try {
+    // 统一使用 JSON body 传递参数
+    const body: Record<string, unknown> = {
+      adminSub: params.adminSub,
+      deckId: params.deckId,
+    };
+    if (params.canRead !== undefined) body.canRead = params.canRead;
+    if (params.canWrite !== undefined) body.canWrite = params.canWrite;
 
-export type DeckExport = {
-  slug: string;
-  title: string;
-  locale: string;
-  deckType: number;
-  version: string;
-  totalCards: number;
-  cards: DeckExportCard[];
-};
+    const resp = await http.put<ApiResult<null>>('/api/v1/admin/permissions', body);
+    return resp.data;
+  } catch (err) {
+    return fail(toApiErrorMessage(err));
+  }
+}
 
-export type PublishDeckPreviewData = {
-  mode: 'preview';
-  deckId: number;
+export async function bulkUpdatePermissions(params: { adminSub: string; deckIds: number[]; canRead?: boolean; canWrite?: boolean }): Promise<ApiResult<null>> {
+  try {
+    const body: Record<string, unknown> = {
+      adminSub: params.adminSub,
+      deckIds: params.deckIds,
+    };
+    if (params.canRead !== undefined) body.canRead = params.canRead;
+    if (params.canWrite !== undefined) body.canWrite = params.canWrite;
+
+    const resp = await http.put<ApiResult<null>>('/api/v1/admin/permissions/bulk', body);
+    return resp.data;
+  } catch (err) {
+    return fail(toApiErrorMessage(err));
+  }
+}
+
+// ---------------------- publish ----------------------
+
+export async function publishDeck(
+  deckId: number, 
+  note?: string
+): Promise<ApiResult<{ mode: string; jobId?: string }>> {
+  try {
+    const resp = await http.post<ApiResult<{ mode: string; jobId?: string }>>('/api/v1/authoring/publish', {
+      deckId,
+      note: note ?? '',
+    });
+    return resp.data;
+  } catch (err) {
+    return fail(toApiErrorMessage(err));
+  }
+}
+
+export async function checkPublishJobStatus(jobId: string): Promise<ApiResult<{ jobId: string; status: string; buildId?: string; s3Key?: string; errorMessage?: string }>> {
+  try {
+    const resp = await http.get<ApiResult<{ jobId: string; status: string; buildId?: string; s3Key?: string; errorMessage?: string }>>(`/api/v1/authoring/publish/status?jobId=${encodeURIComponent(jobId)}`);
+    return resp.data;
+  } catch (err) {
+    return fail(toApiErrorMessage(err));
+  }
+}
+
+export interface PublishJob {
+  jobId: string;
   deckSlug: string;
-  tier: PublishedTier;
-  cardCount: number;
-  export: DeckExport;
-};
-
-export type PublishDeckOkData = {
-  mode: 'publish';
-  deckId: number;
-  deckSlug: string;
-  tier: PublishedTier;
-  buildId: string;
-  cardCount: number;
-  bucket: string;
-  key: string;
-  preview: { previewBuildId: string; previewKey: string; previewCards: number } | null;
-  manifestKey: string;
-};
-
-export type PublishDeckData = PublishDeckPreviewData | PublishDeckOkData;
-
-export async function publishDeck(input: {
-  deckId: number;
+  status: 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
   note?: string;
-  mode?: 'publish' | 'preview';
-}): Promise<ApiResult<PublishDeckData>> {
+  errorMessage?: string;
+  createdAt: number;
+}
+
+export async function fetchPublishJobs(): Promise<ApiResult<PublishJob[]>> {
   try {
-    const mode = input.mode === 'preview' ? 'preview' : 'publish';
-
-    const resp = await http.post<ApiResult<PublishDeckData>>(
-      '/api/v1/authoring/publish',
-      { deckId: input.deckId, note: input.note ?? null },
-      mode === 'preview' ? { params: { mode: 'preview' } } : undefined,
-    );
-
+    const resp = await http.get<ApiResult<PublishJob[]>>('/api/v1/authoring/publish/jobs');
     return resp.data;
   } catch (err) {
-    return fail<PublishDeckData>(toApiErrorMessage(err));
+    return fail(toApiErrorMessage(err));
   }
 }
 
-export type RebuildManifestData = {
-  ok: true;
-  manifestKey: string;
-  generatedAtMs: number;
-  deckCount: number;
-};
-
-export async function rebuildManifest(): Promise<ApiResult<RebuildManifestData>> {
-  try {
-    const resp = await http.post<ApiResult<RebuildManifestData>>('/api/v1/admin/manifest/rebuild', null);
-    return resp.data;
-  } catch (err) {
-    return fail<RebuildManifestData>(toApiErrorMessage(err));
-  }
-}
+// ---------------------- manifest ----------------------
 
 export async function fetchAdminManifest(): Promise<ApiResult<Record<string, unknown>>> {
+  return dedupeRequest(DedupeKeys.manifest(), async () => {
+    try {
+      const resp = await http.get<ApiResult<Record<string, unknown>>>('/api/v1/admin/manifest');
+      return resp.data;
+    } catch (err) {
+      return fail<Record<string, unknown>>(toApiErrorMessage(err));
+    }
+  });
+}
+
+export async function rebuildManifest(): Promise<ApiResult<{ ok: boolean; generatedAtMs?: number; deckCount?: number }>> {
   try {
-    const resp = await http.get<ApiResult<Record<string, unknown>>>('/api/v1/admin/manifest');
+    const resp = await http.post<ApiResult<{ ok: boolean; generatedAtMs?: number; deckCount?: number }>>('/api/v1/admin/manifest/rebuild');
     return resp.data;
   } catch (err) {
-    return fail<Record<string, unknown>>(toApiErrorMessage(err));
+    return fail(toApiErrorMessage(err));
+  }
+}
+
+// ---------------------- dashboard (合并 API，减少请求次数) ----------------------
+
+export interface DashboardData {
+  decks: Deck[];
+  manifest: {
+    meta: {
+      schemaVersion?: number;
+      prefix?: string;
+      generatedAtMs?: number;
+      deckCount?: number;
+    };
+    decks: Array<{
+      slug: string;
+      title?: string;
+      locale?: string;
+      deckType?: number;
+      tier?: string;
+      availability?: string;
+      version?: string;
+      buildId?: string | null;
+      totalCards?: number;
+      path?: string | null;
+      previewCards?: number | null;
+      previewPath?: string | null;
+    }>;
+  };
+}
+
+export async function fetchDashboard(): Promise<ApiResult<DashboardData>> {
+  try {
+    const resp = await http.get<ApiResult<DashboardData>>('/api/v1/authoring/dashboard');
+    const raw = resp.data;
+
+    if (!raw.success) return raw;
+
+    // Normalize decks (filter out nulls)
+    const data = raw.data;
+    if (data?.decks) {
+      data.decks = data.decks.map(normalizeDeck).filter((d): d is Deck => d !== null);
+    }
+
+    return { ...raw, data };
+  } catch (err) {
+    return fail<DashboardData>(toApiErrorMessage(err));
   }
 }

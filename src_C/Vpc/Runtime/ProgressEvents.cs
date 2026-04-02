@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 using Amazon.Lambda.APIGatewayEvents;
 using Npgsql;
 using RecallSmith.Lambda.Common;
-using RecallSmith.Lambda.Vpc.Db;
+using RecallSmith.Lambda.Db;
 
 namespace RecallSmith.Lambda.Vpc.Runtime;
 

@@ -4,10 +4,11 @@ using System.Text.Json;
 using Amazon;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.S3;
-using Amazon.S3.Model;
+using Amazon.SQS;
+using Amazon.SQS.Model;
 using Npgsql;
 using RecallSmith.Lambda.Common;
-using RecallSmith.Lambda.Vpc.Db;
+using RecallSmith.Lambda.Db;
 
 namespace RecallSmith.Lambda.Vpc.Authoring;
 
@@ -15,6 +16,7 @@ public static class Publish
 {
   private static readonly string? ContentBucket = Environment.GetEnvironmentVariable("CONTENT_BUCKET");
   private static readonly string? PremiumBucket = Environment.GetEnvironmentVariable("PREMIUM_BUCKET");
+  private static readonly string? PublishJobQueueUrl = Environment.GetEnvironmentVariable("PUBLISH_JOB_QUEUE_URL");
 
   private static string NormalizePrefix(string? p, string defName)
   {
@@ -37,13 +39,25 @@ public static class Publish
     return _s3;
   }
 
+  private static AmazonSQSClient? _sqs;
+  private static AmazonSQSClient SQS()
+  {
+    if (_sqs is not null) return _sqs;
+    var region = Environment.GetEnvironmentVariable("AWS_REGION") ?? "ap-southeast-2";
+    _sqs = new AmazonSQSClient(RegionEndpoint.GetBySystemName(region));
+    return _sqs;
+  }
+
   // Used by SnapStart runtime hooks to ensure we don't reuse pre-snapshot network state.
   public static void Reset()
   {
-    var c = _s3;
+    var s3Client = _s3;
     _s3 = null;
-    if (c is null) return;
-    try { c.Dispose(); } catch { /* best-effort */ }
+    if (s3Client is not null) try { s3Client.Dispose(); } catch { /* best-effort */ }
+
+    var sqsClient = _sqs;
+    _sqs = null;
+    if (sqsClient is not null) try { sqsClient.Dispose(); } catch { /* best-effort */ }
   }
 
   private static string MakeBuildId()
@@ -54,44 +68,11 @@ public static class Publish
     return $"{utc:yyyyMMdd'T'HHmmss'Z'}-{rand}";
   }
 
-  private static async Task PutJson(string bucket, string key, object obj, string cacheControl)
-  {
-    var json = JsonSerializer.Serialize(obj);
-    var put = new PutObjectRequest
-    {
-      BucketName = bucket,
-      Key = key,
-      ContentBody = json,
-      ContentType = "application/json; charset=utf-8",
-    };
-    put.Headers.CacheControl = cacheControl;
-    await S3().PutObjectAsync(put);
-  }
-
   private static string InferTier(long deckType, object? tierValue)
   {
     var t = (Convert.ToString(tierValue, CultureInfo.InvariantCulture) ?? string.Empty).Trim().ToLowerInvariant();
     if (t is "free" or "premium") return t;
     return deckType == 1 ? "free" : "premium";
-  }
-
-  private static int ToInt(object? v, int fallback)
-  {
-    if (v is null) return fallback;
-    if (v is int i) return i;
-    if (v is long l) return (int)l;
-    if (int.TryParse(Convert.ToString(v, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)) return n;
-    return fallback;
-  }
-
-  private static int ClampPreviewCount(object? previewCardsValue, int fullCount)
-  {
-    var full = Math.Max(0, ToInt(fullCount, 0));
-    var raw = ToInt(previewCardsValue, 0);
-
-    if (raw > 0) return full > 0 ? Math.Min(raw, full) : raw;
-    if (full > 0) return Math.Min(10, full);
-    return 0;
   }
 
   public static async Task<APIGatewayProxyResponse> HandleAuthoringPublish(LambdaRequest req, Res res, AuthContext auth)
@@ -100,7 +81,12 @@ public static class Publish
     if (deny is not null) return deny;
 
     if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
-    if (string.IsNullOrEmpty(ContentBucket)) return res.BadRequest("CONFIG_ERROR", "Missing env CONTENT_BUCKET");
+
+    var mode = (req.Query.TryGetValue("mode", out var m) ? m : string.Empty).Trim().ToLowerInvariant() == "preview"
+      ? "preview"
+      : "publish";
+
+    if (mode == "publish" && string.IsNullOrEmpty(PublishJobQueueUrl)) return res.BadRequest("CONFIG_ERROR", "Missing env PUBLISH_JOB_QUEUE_URL");
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
@@ -112,13 +98,8 @@ public static class Publish
 
       var body = doc.RootElement;
       if (!body.TryGetProperty("deckId", out var deckIdEl)) return res.BadRequest("VALIDATION_ERROR", "deckId is required");
-
       var deckIdInt = Validation.RequireInteger(deckIdEl.ToString(), "deckId");
       var note = body.TryGetProperty("note", out var noteEl) && noteEl.ValueKind != JsonValueKind.Null ? noteEl.ToString().Trim() : null;
-
-      var mode = (req.Query.TryGetValue("mode", out var m) ? m : string.Empty).Trim().ToLowerInvariant() == "preview"
-        ? "preview"
-        : "publish";
 
       var isSuperAdmin = auth.IsSuperAdmin;
       var adminSub = auth.UserSub;
@@ -224,83 +205,63 @@ public static class Publish
         });
       }
 
+      // --- ASYNC PUBLISH LOGIC ---
+
+      Log.Info("[DEBUG] 1. Starting async publish logic.");
+
+      // 1. Generate Job ID
+      var jobId = Guid.NewGuid().ToString();
+      // 💡 修复：为 PENDING 任务预先生成一个 buildId 以满足数据库非空约束
       var buildId = MakeBuildId();
 
-      var fullDeckToWrite = new
-      {
-        baseDeckJson.slug,
-        baseDeckJson.title,
-        baseDeckJson.locale,
-        baseDeckJson.deckType,
-        version = buildId,
-        totalCards = baseCards.Count,
-        cards = baseCards,
-      };
-
-      string bucket;
-      string key;
+      // 💡 修复：预先计算出 s3_key 以满足数据库非空约束
+      // 这个路径格式必须和 ManifestRebuild.cs 中的逻辑保持一致
+      string s3Key;
       if (tier == "premium")
       {
-        bucket = PremiumBucket!;
-        key = $"{PremiumPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
+        if (string.IsNullOrEmpty(PremiumBucket)) throw new InvalidOperationException("Missing env PREMIUM_BUCKET for premium deck");
+        s3Key = $"{PremiumPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
       }
       else
       {
-        bucket = ContentBucket!;
-        key = $"{ContentPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
+        if (string.IsNullOrEmpty(ContentBucket)) throw new InvalidOperationException("Missing env CONTENT_BUCKET for free deck");
+        s3Key = $"{ContentPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
       }
 
-      await PutJson(bucket, key, fullDeckToWrite, "public, max-age=31536000, immutable");
+      // 2. Insert PENDING job record into the database
+      const string insertJobSql = """
+        insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note)
+        values ($1, $2, $3, $4, $5, 'PENDING', $6, $7)
+        """;
+      Log.Info($"[DEBUG] 2. Inserting PENDING job {jobId} into database...");
+      await DbUtil.ExecuteAsync(conn, null, insertJobSql, [jobId, buildId, s3Key, deckIdInt, deckSlug, adminSub, note]);
+      Log.Info("[DEBUG] 3. Database insert successful.");
 
-      object? preview = null;
-      if (tier == "premium")
+
+      // 3. Create the SQS message payload
+      var messageBody = JsonSerializer.Serialize(new
       {
-        var previewBuildId = $"{buildId}-preview";
-        var previewCount = ClampPreviewCount(deck.TryGetValue("previewCards", out var pc) ? pc : null, baseCards.Count);
+        jobId,
+        deckId = deckIdInt,
+        // 💡 最佳实践：把 Worker 需要的所有信息都放进消息体
+        adminSub,
+        note
+      });
 
-        var previewDeckToWrite = new
-        {
-          baseDeckJson.slug,
-          baseDeckJson.title,
-          baseDeckJson.locale,
-          baseDeckJson.deckType,
-          version = previewBuildId,
-          totalCards = previewCount,
-          cards = baseCards.Take(previewCount).ToList(),
-        };
-
-        var previewKey = $"{ContentPrefix}/decks/{deckSlug}/previews/{previewBuildId}/deck.json";
-        await PutJson(ContentBucket!, previewKey, previewDeckToWrite, "public, max-age=31536000, immutable");
-
-        preview = new { previewBuildId, previewKey, previewCards = previewCount };
-      }
-
-      try
+      Log.Info($"[DEBUG] 4. Preparing to send message to SQS queue: {PublishJobQueueUrl}");
+      // 4. Send the message to the SQS queue
+      var sendMessageRequest = new SendMessageRequest
       {
-        const string publishSql = """
-          insert into deck_publishes (deck_id, deck_slug, build_id, s3_key, published_by_admin_sub, note)
-          values ($1,$2,$3,$4,$5,$6)
-          """;
-
-        await DbUtil.ExecuteAsync(conn, null, publishSql, [deckIdInt, deckSlug, buildId, $"s3://{bucket}/{key}", adminSub, note]);
-      }
-      catch (PostgresException pg) when (pg.SqlState == "42P01")
-      {
-        // deck_publishes doesn't exist in some envs; ignore
-      }
+        QueueUrl = PublishJobQueueUrl,
+        MessageBody = messageBody
+      };
+      await SQS().SendMessageAsync(sendMessageRequest);
+      Log.Info("[DEBUG] 5. SQS message sent successfully!");
 
       return res.Ok(new
       {
-        mode = "publish",
-        deckId = deckIdInt,
-        deckSlug,
-        tier,
-        buildId,
-        cardCount = baseCards.Count,
-        bucket,
-        key,
-        preview,
-        manifestKey = ManifestKey,
+        mode = "async",
+        jobId
       });
     }
     catch (Exception ex) when (ex is ValidationError)
@@ -309,7 +270,17 @@ public static class Publish
     }
     catch (Exception ex)
     {
+      Log.Error("[DEBUG] Caught unhandled exception in Publish handler", ex);
       return res.Error500(ex);
     }
+  }
+  
+  private static int ToInt(object? v, int fallback)
+  {
+    if (v is null) return fallback;
+    if (v is int i) return i;
+    if (v is long l) return (int)l;
+    if (int.TryParse(Convert.ToString(v, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)) return n;
+    return fallback;
   }
 }

@@ -142,13 +142,8 @@ export function NewCardPage() {
       typeof values.orderInDeck === 'number'
         ? values.orderInDeck
         : Number(values.orderInDeck) || 1;
-    const revision =
-      typeof values.revision === 'number'
-        ? values.revision
-        : Number(values.revision) || 1;
-
     const result = await createCard({
-      deckId: Number(deck.id), // ✅ deck.id 可能是 string，这里强制转成 number
+      deckId: Number(deck.id),
       stableUid: values.stableUid,
       question: values.question.trim(),
       explanation: values.explanation?.trim() || undefined,
@@ -157,7 +152,6 @@ export function NewCardPage() {
       codeLanguage: values.codeLanguage || undefined,
       difficulty,
       orderInDeck,
-      revision,
     });
 
     if (!result.success) {

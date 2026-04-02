@@ -2,15 +2,49 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { deleteDeck, fetchAdminManifest, fetchDecks, publishDeck, rebuildManifest, fetchCardsByDeck } from '../api/authoring';
+import { deleteDeck, fetchAdminManifest, fetchDecks, fetchPublishJobs, publishDeck, rebuildManifest } from '../api/authoring';
 import { getContentManifestUrl } from '../api/contentManifest';
 import type { Deck } from '../types/deck';
+import type { PublishJob } from '../api/authoring';
 
 import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin, type SessionUser } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
+
+// ==================== 缓存工具 ====================
+const CACHE_KEY_DECKS = 'recallsmith_decks_cache';
+const CACHE_KEY_MANIFEST = 'recallsmith_manifest_cache';
+const CACHE_TTL = 5 * 60 * 1000; // 5分钟
+
+interface CacheItem<T> {
+  data: T;
+  timestamp: number;
+}
+
+function getCache<T>(key: string): T | null {
+  try {
+    const item = localStorage.getItem(key);
+    if (!item) return null;
+    const parsed: CacheItem<T> = JSON.parse(item);
+    if (Date.now() - parsed.timestamp > CACHE_TTL) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function setCache<T>(key: string, data: T) {
+  try {
+    localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
+  } catch {
+    // 忽略存储错误
+  }
+}
 
 interface DeckListState {
   loading: boolean;
@@ -205,14 +239,12 @@ function parseManifestMeta(raw: unknown): ManifestMeta {
   };
 }
 
-function getDeckStatusFromManifest(deck: Deck, m?: ManifestDeckLite, actualCards?: number | null): DeckStatus {
+function getDeckStatusFromManifest(deck: Deck, m?: ManifestDeckLite, cardCount?: number): DeckStatus {
   const isPublished = !!(m && (m.buildId || m.path));
-  
-  // 优先使用真实的卡片数量，如果还没加载完则 fallback 到元数据中的 totalCards
-  const dbCards = typeof actualCards === 'number' ? actualCards : (Number(deck.totalCards) || 0);
+  const count = cardCount ?? deck.totalCards ?? 0;
 
   if (isPublished) return 'published';
-  if (dbCards > 0) return 'needs_publish';
+  if (count > 0) return 'needs_publish';
   
   return 'unpublished';
 }
@@ -264,11 +296,12 @@ export function DeckListPage() {
     raw: null,
   });
 
-  // 用于存储每个 Deck 真实的卡片数量，null 表示加载失败
-  const [cardCounts, setCardCounts] = useState<Record<number, number | null>>({});
-
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [publishingId, setPublishingId] = useState<number | null>(null);
+
+  // Publish Jobs state
+  const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
+  const [activeTab, setActiveTab] = useState<'decks' | 'publishJobs'>('decks');
 
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | DeckStatus>('all');
@@ -282,43 +315,61 @@ export function DeckListPage() {
     };
   }, []);
 
-  async function loadAll(showSpinner = false) {
-    if (showSpinner) {
+  async function loadAll(forceRefresh = false) {
+    // 💡 缓存优化：先检查缓存
+    const cachedDecks = getCache<Deck[]>(CACHE_KEY_DECKS);
+    const cachedManifest = getCache<{ meta: ManifestMeta; bySlug: Record<string, ManifestDeckLite>; raw: unknown }>(CACHE_KEY_MANIFEST);
+    
+    // 如果有缓存且不强刷，立即显示缓存（无 loading），然后后台刷新
+    const hasCache = cachedDecks && cachedManifest;
+    if (hasCache && !forceRefresh) {
+      setDeckState({ loading: false, error: null, decks: cachedDecks });
+      setManifestState({
+        loading: false,
+        error: null,
+        url: manifestUrl,
+        meta: cachedManifest.meta,
+        bySlug: cachedManifest.bySlug,
+        raw: cachedManifest.raw,
+      });
+    } else {
+      // 无缓存或强制刷新时显示 loading
       setDeckState(prev => ({ ...prev, loading: true, error: null }));
       setManifestState(prev => ({ ...prev, loading: true, error: null, url: manifestUrl }));
-      setCardCounts({}); // 刷新时清空旧的卡片统计
-    } else {
-      setDeckState(prev => ({ ...prev, error: null }));
-      setManifestState(prev => ({ ...prev, error: null, url: manifestUrl }));
     }
 
     try {
+      // 并行请求 decks 和 manifest
       const [decksRes, manifestRes] = await Promise.all([
-  fetchDecks(),
-  fetchAdminManifest(),
-]);
-
+        fetchDecks(),
+        fetchAdminManifest(),
+      ]);
 
       if (!mountedRef.current) return;
 
       if (!decksRes.success) {
-        setDeckState({ loading: false, error: decksRes.error?.message ?? 'Failed to load decks.', decks: [] });
+        if (!cachedDecks) {
+          setDeckState({ loading: false, error: decksRes.error?.message ?? 'Failed to load decks.', decks: [] });
+        }
       } else {
-        setDeckState({ loading: false, error: null, decks: decksRes.data ?? [] });
+        const decks = decksRes.data ?? [];
+        setCache(CACHE_KEY_DECKS, decks);
+        setDeckState({ loading: false, error: null, decks });
       }
 
       if (!manifestRes.success) {
-        setManifestState({
-          loading: false,
-          error: manifestRes.error?.message ?? 'Failed to load manifest.',
-          url: manifestUrl,
-          meta: {},
-          bySlug: {},
-          raw: null,
-        });
+        if (!cachedManifest) {
+          setManifestState({
+            loading: false,
+            error: manifestRes.error?.message ?? 'Failed to load manifest.',
+            url: manifestUrl,
+            meta: {},
+            bySlug: {},
+            raw: null,
+          });
+        }
       } else {
         let raw = manifestRes.data;
-        // If the backend returns stringified JSON, parse it automatically
         if (typeof raw === 'string') {
           try { raw = JSON.parse(raw); } catch { /* ignore */ }
         }
@@ -332,6 +383,7 @@ export function DeckListPage() {
           if (lite) bySlug[lite.slug] = lite;
         }
 
+        setCache(CACHE_KEY_MANIFEST, { meta, bySlug, raw });
         setManifestState({
           loading: false,
           error: null,
@@ -342,28 +394,26 @@ export function DeckListPage() {
         });
       }
 
-      // ✅ 页面主体加载完成后，静默拉取真实的卡片数量进行覆盖
-      if (decksRes.success && decksRes.data) {
-        decksRes.data.forEach(d => {
-          fetchCardsByDeck(Number(d.id)).then(res => {
-            if (!mountedRef.current) return;
-            const count = (res.success && res.data) ? res.data.length : null;
-            setCardCounts(prev => ({ ...prev, [Number(d.id)]: count }));
-          }).catch(() => {
-            if (mountedRef.current) setCardCounts(prev => ({ ...prev, [Number(d.id)]: null }));
-          });
-        });
+      // ✅ 卡片数量直接使用 DB 中的 total_cards，不再逐个调 API
+
+      // 同时刷新 publish jobs（强制刷新时）
+      if (forceRefresh) {
+        void loadPublishJobs();
       }
     } catch (err: unknown) {
       if (!mountedRef.current) return;
       const message = err instanceof Error ? err.message : 'Network error.';
-      setDeckState({ loading: false, error: message, decks: [] });
-      setManifestState({ loading: false, error: message, url: manifestUrl, meta: {}, bySlug: {}, raw: null });
+      // 如果有缓存，不显示错误
+      if (!cachedDecks) {
+        setDeckState({ loading: false, error: message, decks: [] });
+        setManifestState({ loading: false, error: message, url: manifestUrl, meta: {}, bySlug: {}, raw: null });
+      }
     }
   }
 
   useEffect(() => {
-    void loadAll(true);
+    // 初始加载：优先使用缓存，避免 loading 闪烁
+    void loadAll(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifestUrl]);
 
@@ -399,7 +449,7 @@ export function DeckListPage() {
     try {
       setPublishingId(deckId);
 
-      const pub = await publishDeck({ deckId });
+      const pub = await publishDeck(deckId);
       if (!pub.success) {
         alert(pub.error?.message ?? 'Publish failed.');
         return;
@@ -410,13 +460,34 @@ export function DeckListPage() {
         alert(rb.error?.message ?? 'Manifest rebuild failed (publish succeeded).');
       }
 
-      await loadAll(false);
+      // 发布成功后强制刷新，确保数据最新
+      await loadAll(true);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Network error.');
     } finally {
       setPublishingId(null);
     }
   }
+
+  // 加载发布任务
+  async function loadPublishJobs() {
+    try {
+      const res = await fetchPublishJobs();
+      if (res.success && res.data) {
+        setPublishJobs(res.data);
+      }
+    } catch (err) {
+      // 静默失败，不影响主页面
+      console.error('Failed to load publish jobs:', err);
+    }
+  }
+
+  // 定期刷新 publish jobs
+  useEffect(() => {
+    loadPublishJobs();
+    const interval = setInterval(loadPublishJobs, 30000); // 每30秒刷新
+    return () => clearInterval(interval);
+  }, []);
 
   function handleSignOut() {
     clearStoredTokens();
@@ -429,15 +500,15 @@ export function DeckListPage() {
 
   const decks = useMemo<Deck[]>(() => deckState.decks ?? [], [deckState.decks]);
 
-  const viewRows = useMemo<{ deck: Deck; manifest: ManifestDeckLite | undefined; status: DeckStatus; actualCount: number | null }[]>(() => {
+  const viewRows = useMemo<{ deck: Deck; manifest: ManifestDeckLite | undefined; status: DeckStatus; cardCount: number }[]>(() => {
     const query = q.trim().toLowerCase();
 
     return decks
       .map(d => {
         const m = manifestState.bySlug[String(d.slug || '').trim()];
-        const actualCount = cardCounts[Number(d.id)];
-        const status = getDeckStatusFromManifest(d, m, actualCount);
-        return { deck: d, manifest: m, status, actualCount };
+        const cardCount = d.totalCards ?? 0;
+        const status = getDeckStatusFromManifest(d, m, cardCount);
+        return { deck: d, manifest: m, status, cardCount };
       })
       .filter(row => {
         const d = row.deck;
@@ -461,7 +532,7 @@ export function DeckListPage() {
         const oB = typeof (b.deck as Deck & { manifestOrder?: number }).manifestOrder === 'number' ? (b.deck as Deck & { manifestOrder?: number }).manifestOrder! : 999999;
         return oA - oB;
       });
-  }, [decks, manifestState.bySlug, q, statusFilter, typeFilter, cardCounts]);
+  }, [decks, manifestState.bySlug, q, statusFilter, typeFilter]);
 
 
 
@@ -508,20 +579,75 @@ export function DeckListPage() {
         {/* Header Section */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Decks</h1>
-            <p className="text-sm text-slate-500 mt-1">Manage your flashcard decks, edit content, and publish to mobile.</p>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+              {activeTab === 'decks' ? 'Decks' : 'Publish Jobs'}
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">
+              {activeTab === 'decks' 
+                ? 'Manage your flashcard decks, edit content, and publish to mobile.' 
+                : 'View and monitor deck publishing tasks.'}
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 shadow-sm transition-all active:scale-95"
-              onClick={() => void loadAll(false)}
-            >
-              <svg className="w-4 h-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Refresh
-            </button>
+            {/* Tab Switcher - 横向开关样式 */}
+            {superAdmin && (
+              <div className="flex items-center bg-white border border-slate-300 rounded-xl p-1 shadow-sm">
+                <button
+                  type="button"
+                  className={`relative px-5 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
+                    activeTab === 'decks'
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  onClick={() => setActiveTab('decks')}
+                >
+                  Decks
+                </button>
+                <button
+                  type="button"
+                  className={`relative px-5 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2 ${
+                    activeTab === 'publishJobs'
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                  onClick={() => setActiveTab('publishJobs')}
+                >
+                  Publish Jobs
+                  {publishJobs.filter(j => j.status === 'PENDING' || j.status === 'PROCESSING').length > 0 && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                      activeTab === 'publishJobs' ? 'bg-white text-indigo-600' : 'bg-amber-500 text-white'
+                    }`}>
+                      {publishJobs.filter(j => j.status === 'PENDING' || j.status === 'PROCESSING').length}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* Refresh 按钮 - 两个标签页都有 */}
+            {activeTab === 'decks' ? (
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 shadow-sm transition-all active:scale-95"
+                onClick={() => void loadAll(false)}
+              >
+                <svg className="w-4 h-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 shadow-sm transition-all active:scale-95"
+                onClick={() => void loadPublishJobs()}
+              >
+                <svg className="w-4 h-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh
+              </button>
+            )}
             {superAdmin ? (
               <button
                 type="button"
@@ -593,7 +719,59 @@ export function DeckListPage() {
           </div>
         </div> -->
 
-        {/* Main List Container */}
+        {/* Main List Container - Tab Content */}
+        {activeTab === 'publishJobs' && superAdmin ? (
+          /* Publish Jobs List */
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-700">Recent Publish Jobs</h3>
+              <button
+                type="button"
+                onClick={() => void loadPublishJobs()}
+                className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+              >
+                Refresh
+              </button>
+            </div>
+            <div className="overflow-auto">
+              {publishJobs.length === 0 ? (
+                <div className="px-4 py-12 text-center text-sm text-slate-500">No publish jobs yet.</div>
+              ) : (
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase text-slate-500 font-medium">
+                    <tr>
+                      <th className="px-4 py-3 text-left">Job ID</th>
+                      <th className="px-4 py-3 text-left">Deck</th>
+                      <th className="px-4 py-3 text-left">Status</th>
+                      <th className="px-4 py-3 text-left">Note</th>
+                      <th className="px-4 py-3 text-left">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {publishJobs.map(job => (
+                      <tr key={job.jobId} className="hover:bg-slate-50/60">
+                        <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{job.jobId.slice(0, 8)}...</td>
+                        <td className="px-4 py-3 font-medium text-slate-700">{job.deckSlug}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium ${
+                            job.status === 'SUCCESS' ? 'bg-emerald-100 text-emerald-700' :
+                            job.status === 'FAILED' ? 'bg-red-100 text-red-700' :
+                            job.status === 'PROCESSING' ? 'bg-blue-100 text-blue-700' :
+                            'bg-amber-100 text-amber-700'
+                          }`}>
+                            {job.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-600 max-w-xs truncate">{job.note || '-'}</td>
+                        <td className="px-4 py-3 text-xs text-slate-500">{safeDateTime(job.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        ) : (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
           {/* Filters Bar */}
           <div className="p-4 border-b border-slate-100 bg-slate-50/50">
@@ -678,14 +856,10 @@ export function DeckListPage() {
                         <button
                           type="button"
                           onClick={() => navigate(`/decks/cards?deckId=${deck.id}`)}
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-mono border shadow-sm transition-colors ${
-                            row.actualCount !== undefined
-                              ? 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 cursor-pointer'
-                              : 'bg-slate-50 text-slate-400 border-slate-100 animate-pulse'
-                          }`}
+                          className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-mono border shadow-sm transition-colors bg-slate-100 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 cursor-pointer"
                           title="Manage Cards"
                         >
-                          {typeof row.actualCount === 'number' ? String(row.actualCount) : (row.actualCount === null ? '?' : '...')}
+                          {row.cardCount}
                         </button>
                       </td>
 
@@ -759,6 +933,7 @@ export function DeckListPage() {
           </table>
         </div>
         </div>
+        )}
 
         {/* Developer Debug Panel for Manifest Response */}
         {superAdmin && manifestState.raw !== null && (

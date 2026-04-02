@@ -5,7 +5,7 @@ using Amazon.Lambda.APIGatewayEvents;
 using Amazon.S3;
 using Amazon.S3.Model;
 using RecallSmith.Lambda.Common;
-using RecallSmith.Lambda.Vpc.Db;
+using RecallSmith.Lambda.Db;
 
 namespace RecallSmith.Lambda.Vpc.Runtime;
 

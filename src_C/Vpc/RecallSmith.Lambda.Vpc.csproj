@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Keep handler strings stable across zips. -->
+    <AssemblyName>RecallSmith.Lambda</AssemblyName>
+    <RootNamespace>RecallSmith.Lambda</RootNamespace>
+
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Amazon.Lambda.APIGatewayEvents" Version="2.7.3" />
+    <PackageReference Include="Amazon.Lambda.Core" Version="2.5.0" />
+    <PackageReference Include="Amazon.Lambda.Serialization.SystemTextJson" Version="2.4.0" />
+    <PackageReference Include="AWSSDK.Core" Version="4.0.0" />
+    <PackageReference Include="AWSSDK.S3" Version="4.0.0" />
+    <PackageReference Include="AWSSDK.SQS" Version="4.0.0" />
+    <PackageReference Include="Npgsql" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 引用 Shared 类库 -->
+    <ProjectReference Include="..\Shared\RecallSmith.Lambda.Common\RecallSmith.Lambda.Common.csproj" />
+    <ProjectReference Include="..\Shared\RecallSmith.Lambda.Db\RecallSmith.Lambda.Db.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Db\Migrations\*.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>

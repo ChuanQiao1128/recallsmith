@@ -134,13 +134,6 @@ export function NewDeckPage() {
         title: trimmedTitle,
         author: trimmedAuthor,
         description: form.description,
-        locale: form.locale,
-        deckType: form.deckType,
-
-        // ✅ 新字段（后端没实现也通常会忽略 query param；实现后就直接生效）
-        contentVersion: trimmedVersion,
-        isFreeStarter,
-        freeCardCount: isStarter ? undefined : form.freeCardCount,
       });
 
       if (!result.success) {
