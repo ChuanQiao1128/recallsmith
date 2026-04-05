@@ -20,7 +20,10 @@ public class JobRepository : IJobRepository
       SET status = 'PROCESSING',
           updated_at = now()
       WHERE job_id = $1 
-        AND status IN ('PENDING', 'FAILED')
+        AND (
+          status IN ('PENDING', 'FAILED')
+          OR (status = 'PROCESSING' AND updated_at < now() - interval '15 minutes')
+        )
       """;
 
     var rowsAffected = await DbUtil.ExecuteAsync(conn, null, sql, [jobId]);

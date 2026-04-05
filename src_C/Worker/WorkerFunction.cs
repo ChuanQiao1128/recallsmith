@@ -77,7 +77,9 @@ public class WorkerFunction
       }
       catch (Exception ex)
       {
-        // 路线 B: 系统级崩溃，交给 AWS 重试
+        // 路线 B: 系统级崩溃，交给 AWS SQS 自动重试
+        // ⚠️ 基础设施注意: AWS 官方建议将 SQS Visibility Timeout 设置为 Lambda Timeout 的 6 倍以上
+        // 避免因处理大卡组耗时过长，导致 SQS 误判超时并将同一条消息再次派发 (浪费算力并引发不必要的并发锁争抢)
         LogWithJobId(jobId, $"System error: {ex.Message}");
         throw;
       }

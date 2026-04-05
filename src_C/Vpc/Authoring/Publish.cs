@@ -209,6 +209,24 @@ public static class Publish
 
       Log.Info("[DEBUG] 1. Starting async publish logic.");
 
+      // 💡 核心防御：防重复并发提交（幂等性）。
+      // 如果用户在 15 分钟内重复点击（或 F5 刷新后再次点击），直接返回正在处理的 jobId，让前端顺滑接管轮询。
+      const string checkDuplicateSql = """
+        select job_id as "jobId"
+        from deck_publishes 
+        where deck_id = $1 
+          and status in ('PENDING', 'PROCESSING') 
+          and updated_at > now() - interval '15 minutes'
+        limit 1
+        """;
+      var existingRows = await DbUtil.QueryAsync(conn, null, checkDuplicateSql, [deckIdInt]);
+      if (existingRows.Count > 0)
+      {
+        var existingJobId = Convert.ToString(existingRows[0]["jobId"], CultureInfo.InvariantCulture);
+        Log.Info($"[DEBUG] 1.5. Found existing active job {existingJobId}. Returning it to resume polling.");
+        return res.Ok(new { mode = "async", jobId = existingJobId, note = "Resumed existing job" });
+      }
+
       // 1. Generate Job ID
       var jobId = Guid.NewGuid().ToString();
       // 💡 修复：为 PENDING 任务预先生成一个 buildId 以满足数据库非空约束
@@ -255,8 +273,20 @@ public static class Publish
         QueueUrl = PublishJobQueueUrl,
         MessageBody = messageBody
       };
-      await SQS().SendMessageAsync(sendMessageRequest);
-      Log.Info("[DEBUG] 5. SQS message sent successfully!");
+
+      try 
+      {
+        await SQS().SendMessageAsync(sendMessageRequest);
+        Log.Info("[DEBUG] 5. SQS message sent successfully!");
+      }
+      catch (Exception ex)
+      {
+        // 💡 核心防御：双写失败回退
+        // 如果 SQS 网络抖动发送失败，立刻将数据库任务状态标为 FAILED，防止产生永远等不到 Worker 的孤儿订单
+        Log.Error($"[DEBUG] SQS send failed for {jobId}. Rolling back status to FAILED.", ex);
+        await DbUtil.ExecuteAsync(conn, null, "UPDATE deck_publishes SET status = 'FAILED', updated_at = now() WHERE job_id = $1", [jobId]);
+        throw;
+      }
 
       return res.Ok(new
       {

@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { deleteDeck, fetchAdminManifest, fetchDecks, fetchPublishJobs, publishDeck, rebuildManifest } from '../api/authoring';
+import { deleteDeck, fetchAdminManifest, fetchDecks, fetchPublishJobs, publishDeck} from '../api/authoring';
 import { getContentManifestUrl } from '../api/contentManifest';
 import type { Deck } from '../types/deck';
 import type { PublishJob } from '../api/authoring';
@@ -303,6 +303,10 @@ export function DeckListPage() {
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
   const [activeTab, setActiveTab] = useState<'decks' | 'publishJobs'>('decks');
 
+  // 轮询使用的 Ref
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activePollsRef = useRef(0);
+
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | DeckStatus>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'starter' | 'paid'>('all');
@@ -455,11 +459,6 @@ export function DeckListPage() {
         return;
       }
 
-      const rb = await rebuildManifest();
-      if (!rb.success) {
-        alert(rb.error?.message ?? 'Manifest rebuild failed (publish succeeded).');
-      }
-
       // 发布成功后强制刷新，确保数据最新
       await loadAll(true);
     } catch (err: unknown) {
@@ -469,24 +468,53 @@ export function DeckListPage() {
     }
   }
 
-  // 加载发布任务
+  // 加载发布任务并结合退避轮询（Exponential Backoff Polling）
   async function loadPublishJobs() {
+    // 每次调用前清除旧定时器，防止并行请求竞态
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+
     try {
       const res = await fetchPublishJobs();
+      if (!mountedRef.current) return;
+
       if (res.success && res.data) {
         setPublishJobs(res.data);
+
+        // 检查是否有仍在处理中的任务
+        const hasActive = res.data.some(j => j.status === 'PENDING' || j.status === 'PROCESSING');
+        let nextDelay = 30000; // 默认空闲时每 30 秒查一次
+
+        if (hasActive) {
+          activePollsRef.current += 1;
+          const attempts = activePollsRef.current;
+          // 动态退避算法：前 2 次等待 2 秒，接着 5 秒，最后上限 10 秒
+          if (attempts <= 2) nextDelay = 2000;
+          else if (attempts <= 5) nextDelay = 5000;
+          else nextDelay = 10000;
+        } else {
+          activePollsRef.current = 0; // 没有活跃任务，重置计数器
+        }
+
+        // 安排下一次轮询
+        pollTimerRef.current = setTimeout(() => void loadPublishJobs(), nextDelay);
       }
     } catch (err) {
-      // 静默失败，不影响主页面
+      if (!mountedRef.current) return;
       console.error('Failed to load publish jobs:', err);
+      // 出错时回退到较慢的轮询（30秒）
+      pollTimerRef.current = setTimeout(() => void loadPublishJobs(), 30000);
     }
   }
 
-  // 定期刷新 publish jobs
+  // 初次挂载时启动轮询，卸载时清理
   useEffect(() => {
-    loadPublishJobs();
-    const interval = setInterval(loadPublishJobs, 30000); // 每30秒刷新
-    return () => clearInterval(interval);
+    void loadPublishJobs();
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
   }, []);
 
   function handleSignOut() {

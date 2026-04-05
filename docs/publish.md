@@ -1,321 +1,154 @@
-📋 发布任务完整架构流程文档
-阶段一：前端触发（用户点击 → API 调用）
-Step 1: 用户点击 Publish 按钮
-文件位置: frontend/src/pages/DeckListPage.tsx 代码行: ~901-904
+📋 生产级异步发布流水线架构文档 (Production-Grade Async Publish Pipeline)
 
-<button
-  type="button"
-  disabled={publishingId === Number(deck.id)}
-  onClick={() => void handlePublish(Number(deck.id))}  // ← 点击触发
->
-  {publishingId === Number(deck.id) ? 'Publishing…' : 'Publish'}
-</button>
-架构要点: 使用 publishingId 状态防止重复点击，UI 立即显示 "Publishing…" 提供反馈。
+本文档详细描述了 RecallSmith 卡组发布系统的完整请求生命周期。
+该系统采用了**前后端分离、API网关鉴权、SQS队列削峰、Lambda Serverless后台处理**的高可用架构。
 
-Step 2: handlePublish 处理函数
-文件位置: frontend/src/pages/DeckListPage.tsx 代码行: ~441-470
+> **设计哲学**：防御性编程。不相信网络是可靠的，不相信内存是无限的，不相信用户不会狂按 F5。
 
-async function handlePublish(deckId: number) {
-  if (!superAdmin) return;
+---
 
-  const ok = window.confirm(
-    'Publish will:\n1) Upload deck.json to S3\n2) Rebuild manifest.json\n\nContinue?',
-  );
-  if (!ok) return;
+## 🌊 阶段一：前台触发 (Frontend Trigger)
 
-  try {
-    setPublishingId(deckId);  // ← 设置 loading 状态
+前端的核心职责是：拦截手抖、传递指令、开启轮询、平滑反馈。
 
-    const pub = await publishDeck(deckId);  // ← 调用 API 层
-    if (!pub.success) {
-      alert(pub.error?.message ?? 'Publish failed.');
-      return;
-    }
+### Step 1: UI 防抖与发起请求
+**文件位置**: `frontend/src/pages/DeckListPage.tsx` (~450)
 
-    const rb = await rebuildManifest();  // ← 同步重建 manifest
-    if (!rb.success) {
-      alert(rb.error?.message ?? 'Manifest rebuild failed (publish succeeded).');
-    }
+当用户点击 Publish：
+1. **UI 即时反馈**：利用 `setPublishingId(deckId)` 将按钮变为灰色的 `Publishing...`，防止双击。
+2. **发送请求**：调用 `await publishDeck(deckId)` 接口。
+3. **强制刷新**：接口一返回成功，立刻调用 `loadAll(true)` 刷新页面数据，进入轮询阶段。
 
-    await loadAll(true);  // ← 强制刷新列表
-  } catch (err: unknown) {
-    alert(err instanceof Error ? err.message : 'Network error.');
-  } finally {
-    setPublishingId(null);  // ← 清除 loading
-  }
+*注意：前端在这里绝对不去调用 `rebuildManifest`，避免与后端的真实进度发生竞态（Race Condition）。*
+
+---
+
+## 🛡️ 阶段二：前台接待层 (HTTP API)
+
+后端 API 只做“极速前置处理”，绝不碰耗时的 I/O 和打包计算。必须在 0.1 秒内响应前端。
+
+### Step 2: 严格鉴权与配置断言
+**文件位置**: `src_C/Vpc/Authoring/Publish.cs` (~80)
+
+1. `Auth.RequireAdmin`: 确认令牌有效。
+2. `Helpers.RequireDeckWrite`: 核对 `admin_deck_permissions` 数据库表，确保越权访问被拦截。
+3. 断言 `PUBLISH_JOB_QUEUE_URL` 环境变量存在，避免配置缺失引发内部报错。
+
+### Step 3: 核心防御 1 - 幂等性拦截 (Idempotency)
+**文件位置**: `src_C/Vpc/Authoring/Publish.cs` (~210)
+
+```csharp
+const string checkDuplicateSql = """
+  select job_id from deck_publishes 
+  where deck_id = $1 and status in ('PENDING', 'PROCESSING') 
+    and updated_at > now() - interval '15 minutes' limit 1
+""";
+```
+*   **解决的痛点**：用户点完发布，嫌慢按 F5 刷新了网页，然后又点了一次发布。
+*   **巧妙应对**：API 不报错也不生成新任务，而是**把数据库里那个已经在跑的 `jobId` 捞出来还给前端**。前端拿到老 ID，无缝接管进度条，完美避免了服务器重复干活。
+
+### Step 4: 订单落库与核心防御 2 - 双写容错 (Dual Write Fallback)
+**文件位置**: `src_C/Vpc/Authoring/Publish.cs` (~240)
+
+系统需要在数据库插入 `PENDING` 记录，并向 SQS 发送消息。这是经典的“分布式双写难题”。
+```csharp
+// 1. 插入 PENDING 记录
+await DbUtil.ExecuteAsync(conn, null, insertJobSql, [jobId, ...]);
+
+try {
+  // 2. 发送消息到 SQS 传送带
+  await SQS().SendMessageAsync(sendMessageRequest);
+} catch (Exception) {
+  // 3. 容错回退：网络抖动导致发消息失败，立刻把账本里的订单标为 FAILED
+  await DbUtil.ExecuteAsync(conn, null, "UPDATE deck_publishes SET status = 'FAILED' WHERE job_id = $1", [jobId]);
+  throw;
 }
-架构要点:
+```
+*   **解决的痛点**：如果 SQS 崩了，数据库里会留下永远等不到 Worker 来接单的“孤儿任务”，导致前端页面一直卡死。
 
-用户确认对话框明确告知操作影响
-错误隔离：Publish 失败直接返回，Manifest 失败单独提示
-loadAll(true) 强制刷新确保数据一致性
-Step 3: API 层 - publishDeck 函数
-文件位置: frontend/src/api/authoring.ts 代码行: ~399-412
+---
 
-export async function publishDeck(
-  deckId: number, 
-  note?: string
-): Promise<ApiResult<{ mode: string; jobId?: string }>> {
-  try {
-    const resp = await http.post<ApiResult<{ mode: string; jobId?: string }>>(
-      '/api/v1/authoring/publish',  // ← 后端 API 端点
-      { deckId, note: note ?? '' }
-    );
-    return resp.data;
-  } catch (err) {
-    return fail(toApiErrorMessage(err));
-  }
-}
-架构要点: 统一返回 ApiResult<T> 格式，网络错误转换为业务错误对象。
+## ⏳ 阶段三：顾客等餐 (Frontend Polling)
 
-阶段二：后端 Vpc Lambda（HTTP API 处理）
-Step 4: API 入口 - HandleAuthoringPublish
-文件位置: src_C/Vpc/Authoring/Publish.cs 代码行: ~78-90
+### Step 5: 核心优化 3 - 指数退避轮询 (Exponential Backoff Polling)
+**文件位置**: `frontend/src/pages/DeckListPage.tsx` (~480)
 
-public static async Task<APIGatewayProxyResponse> HandleAuthoringPublish(
-  LambdaRequest req, 
-  Res res, 
-  AuthContext auth)
-{
-  var deny = Auth.RequireAdmin(auth, res);
-  if (deny is not null) return deny;
+一旦前端拿到了 `jobId`，开始查询任务列表 `fetchPublishJobs()`：
+*   如果队列里有 `PENDING` 或 `PROCESSING` 的任务，触发退避算法：
+    *   **前 2 次**：每 2 秒查一次（应对 Lambda 冷启动快的常态，实现极速反馈）。
+    *   **第 3~5 次**：每 5 秒查一次。
+    *   **5 次以后**：每 10 秒查一次。
+*   如果任务全部完成：进入休眠模式，每 30 秒维持一次心跳。
+*   **解决的痛点**：弃用了死板的 `setInterval`，用最少的网络请求换取了极其丝滑的 UI 反馈。
 
-  if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
-  
-  // 关键配置检查
-  if (mode == "publish" && string.IsNullOrEmpty(PublishJobQueueUrl)) 
-    return res.BadRequest("CONFIG_ERROR", "Missing env PUBLISH_JOB_QUEUE_URL");
-架构要点: 严格的权限控制（RequireAdmin + RequireDeckWrite），配置缺失立即失败。
+---
 
-Step 5: 权限验证 - RequireDeckWrite
-文件位置: src_C/Vpc/Authoring/Helpers.cs（内嵌在 Publish.cs 调用中） 使用位置: Publish.cs ~107
+## 👨‍🍳 阶段四：后厨做菜 (Worker Lambda)
 
-var denyDeck = await Helpers.RequireDeckWrite(conn, adminSub, deckIdInt, isSuperAdmin, res);
-if (denyDeck is not null) return denyDeck;
-验证逻辑: 检查 admin_deck_permissions 表，确保当前用户对该 Deck 有写权限。
+由 AWS SQS 自动触发的后端 Worker 集群。这里是脏活累活的中心。
 
-Step 6: 数据准备 - 查询 Deck 和 Cards
-文件位置: src_C/Vpc/Authoring/Publish.cs 代码行: ~110-161
+### Step 6: 核心防御 4 - 乐观锁与超时窃取 (Optimistic Lock & Timeout Stealing)
+**文件位置**: `src_C/Worker/Repositories/JobRepository.cs`
 
-// 查询 Deck 基础信息
-const string deckSql = """
-  select id, slug, title, ..., is_deleted as "isDeleted"
-  from decks where id = $1 limit 1
-  """;
-
-// 查询所有 Cards
-const string cardsSql = """
-  select stable_uid as "stableUid", order_in_deck as "orderInDeck", ...
-  from cards where deck_id = $1 and is_deleted = 0
-  order by order_in_deck asc, id asc
-  """;
-架构要点:
-
-软删除检查 (is_deleted = 0)
-SQL 注入防护：使用参数化查询 $1
-Step 7: 生成 Job 元数据
-文件位置: src_C/Vpc/Authoring/Publish.cs 代码行: ~212-229
-
-// 1. 生成 Job ID (GUID)
-var jobId = Guid.NewGuid().ToString();
-
-// 2. 生成 Build ID (时间戳 + 随机数)
-var buildId = MakeBuildId();  // 20251214T094955Z-a1b2c3d4
-
-// 3. 预计算 S3 Key
-string s3Key;
-if (tier == "premium")
-  s3Key = $"{PremiumPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
-else
-  s3Key = $"{ContentPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
-架构要点: S3 Key 预计算确保数据库约束满足，路径规范化防止目录遍历攻击。
-
-Step 8: 数据库插入 - PENDING 状态
-文件位置: src_C/Vpc/Authoring/Publish.cs 代码行: ~232-237
-
-const string insertJobSql = """
-  insert into deck_publishes (
-    job_id, build_id, s3_key, deck_id, deck_slug, 
-    status, published_by_admin_sub, note
+Worker 被唤醒后，第一件事是去数据库抢单（CAS 模式）：
+```sql
+UPDATE deck_publishes 
+SET status = 'PROCESSING', updated_at = now()
+WHERE job_id = $1 
+  AND (
+    status IN ('PENDING', 'FAILED')
+    OR (status = 'PROCESSING' AND updated_at < now() - interval '15 minutes')
   )
-  values ($1, $2, $3, $4, $5, 'PENDING', $6, $7)
-  """;
+```
+*   **防重复消费**：SQS 可能会把同一条消息发给两个 Worker。只有最先执行这条 UPDATE（更新行数 > 0）的 Worker 能抢到锁去干活，另一个 Worker 会直接优雅下班。
+*   **锁超时窃取（修复僵尸任务）**：如果上一个 Worker 在执行时发生了 OOM 或底层断电（硬中断猝死），状态会永远卡在 `PROCESSING`。SQS 会过几分钟重新派发消息。此时，新 Worker 发现订单过了 15 分钟还没出锅，就会利用 `OR` 语句强行接管这口锅。
 
-await DbUtil.ExecuteAsync(conn, null, insertJobSql, 
-  [jobId, buildId, s3Key, deckIdInt, deckSlug, adminSub, note]);
-数据库表结构: deck_publishes 表
+### Step 7: 核心防御 5 - 磁盘流式处理防 OOM (Stream to S3)
+**文件位置**: `src_C/Worker/S3/S3DeckUploader.cs`
 
-job_id: UUID 主键
-status: PENDING → PROCESSING → SUCCESS/FAILED
-build_id: 关联 S3 路径
-attempt_count: 重试计数器
-Step 9: 发送 SQS 消息
-文件位置: src_C/Vpc/Authoring/Publish.cs 代码行: ~242-258
+如果一个卡组包含几千张带有富文本代码的卡片，在内存里直接拼接 JSON 会导致 Lambda 瞬间爆内存（OOM）。
+```csharp
+var tmpPath = Path.Combine("/tmp", $"{Guid.NewGuid()}.json");
+await using (var fs = new FileStream(tmpPath, FileMode.Create)) {
+  await JsonSerializer.SerializeAsync(fs, data, options);
+}
+// SDK 会自动以 8MB 分块 Multipart 上传
+var putRequest = new PutObjectRequest { FilePath = tmpPath, ... };
+```
+*   **解决的痛点**：抛弃了内存拼接大字符串的危险做法。利用 Lambda 免费自带的 512MB `/tmp` 磁盘和流式序列化，把内存消耗从几十兆降低到了极其平稳的几 MB。
 
-// 构造消息体
-var messageBody = JsonSerializer.Serialize(new {
-  jobId,
-  deckId = deckIdInt,
-  adminSub,
-  note
-});
+### Step 8: 核心防御 6 - 解耦防惊群效应 (Anti-Thundering Herd)
+**文件位置**: `src_C/Worker/Manifest/ManifestService.cs`
 
-// 发送到 SQS
-var sendMessageRequest = new SendMessageRequest {
-  QueueUrl = PublishJobQueueUrl,
-  MessageBody = messageBody
+Worker 上传完卡组后，需要更新总索引册 `manifest.json`：
+```csharp
+var request = new SendMessageRequest {
+  QueueUrl = ManifestQueueUrl,
+  MessageBody = "{\"action\": \"rebuild_manifest\"}"
 };
-await SQS().SendMessageAsync(sendMessageRequest);
+await SQS().SendMessageAsync(request);
+```
+*   **解决的痛点**：如果运营人员一次性点了 50 个卡组的发布，50 个 Worker 会同时完工，然后并发去数据库进行 50 次沉重的全表扫描，数据库连接池瞬间被打爆。
+*   **巧妙应对**：Worker 完工后只发一个极轻量级的 SQS 消息。通过配置 SQS 的 Batching Window（延迟聚合），哪怕一分钟内收到 50 响门铃，最终也只会触发 **1 次** Builder Lambda 进行目录重建！
 
-// 返回给前端
-return res.Ok(new { mode = "async", jobId });
-架构要点: 消息体包含 Worker 需要的所有信息，避免 Worker 再次查询数据库。
+### Step 9: 智能错误分类路线
+**文件位置**: `src_C/Worker/WorkerFunction.cs` (~70)
 
-阶段三：Worker Lambda（异步处理）
-Step 10: SQS 触发 Worker
-文件位置: src_C/Worker/WorkerFunction.cs 代码行: ~49-58
+*   `catch (BusinessException)`：业务死胡同（比如卡组里一张卡都没有）。将订单标为 `FAILED`，程序**正常结束**，SQS 就会彻底删掉该消息。（**不再重试**）。
+*   `catch (Exception)`：系统偶发崩溃（比如断网）。将日志抛出，程序**抛出异常**崩溃。SQS 看到 Lambda 崩溃，就会保留该消息并在随后重新派发。（**自动重试**）。
+    *   *(运维注意：确保 SQS 可见性超时 Visibility Timeout 设置为 Lambda Timeout 的 6 倍以上，防止活还没干完就被 SQS 提前判死刑。)*
 
-public async Task FunctionHandler(SQSEvent sqsEvent, ILambdaContext context)
-{
-  foreach (var record in sqsEvent.Records)
-  {
-    var message = ParseMessage(record.Body);  // 解析消息
-    var jobId = message.JobId;
-    
-    LogWithJobId(jobId, $"Processing message {record.MessageId}");
-Lambda 配置:
+---
 
-触发器: SQS Queue
-批处理大小: 1（确保逐条处理）
-并发: 根据 SQS 消息数自动扩展
-Step 11: 解析消息
-文件位置: src_C/Worker/WorkerFunction.cs 代码行: ~90-105
+## 💡 附录：面试实战精要 (Interview Q&A)
 
-private static PublishJobMessage ParseMessage(string body)
-{
-  try {
-    var message = JsonSerializer.Deserialize<PublishJobMessage>(body);
-    if (message?.JobId is null)
-      throw new ArgumentException("Missing jobId in message body");
-    return message;
-  }
-  catch (JsonException ex) {
-    throw new ArgumentException($"Invalid JSON message body: {ex.Message}");
-  }
-}
-Step 12: 乐观锁抢占 - TryAcquireJobAsync
-文件位置: src_C/Worker/Services/PublishJobProcessor.cs 代码行: ~25-34
+当你向面试官讲解这套架构时，可主动抛出以下高价值亮点：
 
-public async Task ProcessAsync(string jobId)
-{
-  // Step 2: 乐观锁抢占任务
-  var acquired = await _jobRepository.TryAcquireJobAsync(jobId);
-  if (!acquired)
-  {
-    Console.WriteLine($"[JobId={jobId}] Job already processed or acquired by another worker");
-    return;  // 优雅退出，不抛异常
-  }
-核心 SQL (JobRepository.cs):
-
-UPDATE deck_publishes 
-SET status = 'PROCESSING', updated_at = now(), attempt_count = attempt_count + 1
-WHERE job_id = @jobId AND status IN ('PENDING', 'FAILED')
-架构要点: Compare-And-Swap 模式，只有更新行数 > 0 才算抢占成功。
-
-Step 13: 加载业务数据
-文件位置: src_C/Worker/Services/PublishJobProcessor.cs 代码行: ~74-144
-
-private async Task<DeckExportData> LoadDeckDataAsync(int deckId)
-{
-  // 查询 deck 信息
-  const string deckSql = "...";
-  
-  // 查询 cards
-  const string cardsSql = "...";
-  
-  return new DeckExportData {
-    Slug = ...,
-    Cards = cards.Select(...).ToList()
-  };
-}
-Step 14: 上传 S3
-文件位置: src_C/Worker/Services/PublishJobProcessor.cs 代码行: ~55-58
-
-// Step 4: 外部系统调用 (S3)
-await _s3Uploader.UploadAsync(job.S3Key, deckData);
-
-Console.WriteLine($"[JobId={jobId}] Uploaded to S3: {job.S3Key}");
-S3Uploader 实现: 使用 AmazonS3Client.PutObjectAsync 上传 JSON 序列化后的 Deck 数据。
-
-Step 15: 任务完成 - 更新状态
-文件位置: src_C/Worker/Services/PublishJobProcessor.cs 代码行: ~60-63
-
-// Step 5: 最终一致性提交
-await _jobRepository.CompleteJobAsync(jobId);
-
-Console.WriteLine($"[JobId={jobId}] Job completed successfully");
-CompleteJobAsync SQL:
-
-UPDATE deck_publishes 
-SET status = 'SUCCESS', updated_at = now() 
-WHERE job_id = @jobId
-Step 16: 触发 Manifest 重建
-文件位置: src_C/Worker/WorkerFunction.cs 代码行: ~64-68
-
-// Step 6: 触发 Manifest 重建
-LogWithJobId(jobId, "Triggering manifest rebuild");
-await _manifestService.RebuildAsync();
-架构要点: Manifest 重建是独立服务，可以被多次调用（幂等）。
-
-Step 17: 错误处理双路线
-文件位置: src_C/Worker/WorkerFunction.cs 代码行: ~70-83
-
-catch (BusinessException ex)
-{
-  // 路线 A: 业务级死胡同（数据错误，无需重试）
-  await _processor.FailAsync(jobId, ex.Message);  // 标记 FAILED
-  // 正常结束，SQS 删除消息
-}
-catch (Exception ex)
-{
-  // 路线 B: 系统级崩溃（网络超时等，需要重试）
-  throw;  // SQS 不会删除消息，自动重试
-}
-阶段四：前端状态同步
-Step 18: 轮询 Publish Jobs
-文件位置: frontend/src/pages/DeckListPage.tsx 代码行: ~472-480
-
-// 定期刷新 publish jobs
-useEffect(() => {
-  loadPublishJobs();
-  const interval = setInterval(loadPublishJobs, 30000); // 30秒轮询
-  return () => clearInterval(interval);
-}, []);
-Step 19: 查询 Job 列表
-文件位置: src_C/Vpc/Authoring/PublishJobs.cs 代码行: ~8-39
-
-public static async Task<APIGatewayProxyResponse> HandleFetchPublishJobs(...)
-{
-  const string sql = """
-    select job_id as "jobId", deck_slug as "deckSlug", status, ...
-    from deck_publishes
-    order by created_at desc
-    limit 100;
-    """;
-  
-  var rows = await DbUtil.QueryAsync(conn, null, sql, []);
-  return res.Ok(rows);
-}
-架构亮点总结
-设计点	代码位置	解决的问题
-异步队列	Publish.cs:253	长耗时操作不阻塞用户
-乐观锁	PublishJobProcessor.cs:28	SQS 重复消费防护
-状态机	deck_publishes.status	任务可追溯、可重试
-错误分类	WorkerFunction.cs:70-83	业务错误不重试，系统错误自动重试
-前端轮询	DeckListPage.tsx:472	简单可靠的状态同步
-建议阅读顺序:
-
-先看 DeckListPage.tsx:441 handlePublish（入口）
-再看 Publish.cs:78 HandleAuthoringPublish（API 层）
-再看 WorkerFunction.cs:49 FunctionHandler（消费层）
-最后 PublishJobProcessor.cs:25 ProcessAsync（业务逻辑）
+1. **"我是怎么处理分布式双写失败的？"**
+   *“在往数据库插入 PENDING 并向 SQS 发消息时，由于这不是强一致性事务。我用 try-catch 包裹了 SQS API 并在 catch 中将数据库记录标为 FAILED 进行了回退补偿，防止产生永远卡死的孤儿任务。”*
+2. **"我是怎么处理用户狂点刷新导致资源浪费的？"**
+   *“除了前端的 loading 防抖，我在 API 层加入了基于时间窗口的 15 分钟幂等性锁。一旦发现卡组正在处理中，不再发起新任务，而是顺滑地将老任务 jobId 返给前端让其恢复轮询。”*
+3. **"我是怎么处理 Serverless 大数据量 OOM 问题的？"**
+   *“绝对不在 Lambda 内存中拼接大型 JSON String。我使用了 IAsyncEnumerable 与 SerializeAsync 组合，将几千张卡片的数据如流水线般写入 Lambda 的临时磁盘，配合 AWS S3 的分块流式上传，将内存占用严格压制在个位数 MB。”*
+4. **"Sqs At-Least-Once 的坑我是怎么填的？"**
+   *“利用 PostgreSQL 单行事务的原子性，写了一条带有影响行数校验的 CAS 乐观锁语句。并在锁里内置了时间戳心跳，如果前一个 Lambda OOM 猝死，新的重试 Lambda 可以在 15 分钟后强行窃取僵尸任务。”*
