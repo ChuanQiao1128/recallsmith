@@ -312,11 +312,11 @@ export async function updateCard(params: {
   expectedVersion?: number;
 }): Promise<ApiResult<Card>> {
   try {
-    const query = new URLSearchParams();
-    query.append('id', String(params.id));
-    query.append('deckId', String(params.deckId));
-
-    const body: Record<string, unknown> = {};
+    // Backend expects id and expectedVersion in JSON body, not query string
+    const body: Record<string, unknown> = {
+      id: params.id,
+      expectedVersion: params.expectedVersion ?? 1,
+    };
     if (params.question !== undefined) body.question = params.question;
     if (params.explanation !== undefined) body.explanation = params.explanation;
     if (params.codeSnippet !== undefined) body.codeSnippet = params.codeSnippet;
@@ -324,17 +324,18 @@ export async function updateCard(params: {
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
     if (params.stableUid !== undefined) body.stableUid = params.stableUid;
+    if (params.deckId !== undefined) body.deckId = params.deckId;
 
-    const resp = await http.put<ApiResult<Card[]>>(`/api/v1/authoring/cards?${query.toString()}`, body);
+    const resp = await http.put<ApiResult<Card>>('/api/v1/authoring/cards', body);
     const raw = resp.data;
 
     if (!raw.success) return { ...raw, data: null };
 
-    const list = raw.data ?? [];
-    if (list.length === 0) {
+    const card = raw.data;
+    if (!card) {
       return fail<Card>('Update card failed: no data returned', 'SERVER_ERROR');
     }
-    return { ...raw, data: normalizeCard(list[0]) };
+    return { ...raw, data: normalizeCard(card) };
   } catch (err) {
     return fail<Card>(toApiErrorMessage(err));
   }
@@ -342,8 +343,8 @@ export async function updateCard(params: {
 
 export async function deleteCard(cardId: number): Promise<ApiResult<null>> {
   try {
-    // 统一使用 JSON body 传递参数
-    const resp = await http.delete<ApiResult<null>>('/api/v1/authoring/cards', { data: { id: cardId } });
+    // Backend expects id in query string, not body
+    const resp = await http.delete<ApiResult<null>>(`/api/v1/authoring/cards?id=${encodeURIComponent(cardId)}`);
     return resp.data;
   } catch (err) {
     return fail<null>(toApiErrorMessage(err));

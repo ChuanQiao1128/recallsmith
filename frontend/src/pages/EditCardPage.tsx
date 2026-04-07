@@ -204,6 +204,7 @@ export function EditCardPage() {
       difficulty,
       orderInDeck,
       stableUid: card.stableUid,
+      expectedVersion: card.version,
     });
 
     if (!result.success) {
