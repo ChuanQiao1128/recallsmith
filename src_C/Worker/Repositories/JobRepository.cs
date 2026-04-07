@@ -10,7 +10,7 @@ public class JobRepository : IJobRepository
   /// UPDATE deck_publishes SET status = 'PROCESSING' 
   /// WHERE job_id = @jobId AND status IN ('PENDING', 'FAILED')
   /// </summary>
-  public async Task<bool> TryAcquireJobAsync(string jobId)
+  public async Task<bool> TryAcquireJobAsync(string jobId, int receiveCount = 1)
   {
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null) throw new InvalidOperationException("Failed to open database connection");
@@ -22,11 +22,11 @@ public class JobRepository : IJobRepository
       WHERE job_id = $1 
         AND (
           status IN ('PENDING', 'FAILED')
-          OR (status = 'PROCESSING' AND updated_at < now() - interval '15 minutes')
+          OR (status = 'PROCESSING' AND ($2 > 1 OR updated_at < now() - interval '15 minutes'))
         )
       """;
 
-    var rowsAffected = await DbUtil.ExecuteAsync(conn, null, sql, [jobId]);
+    var rowsAffected = await DbUtil.ExecuteAsync(conn, null, sql, [jobId, receiveCount]);
     return rowsAffected > 0;
   }
 

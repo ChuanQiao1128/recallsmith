@@ -8,7 +8,7 @@ public interface IJobRepository
   /// <summary>
   /// Step 2: 乐观锁抢占任务
   /// </summary>
-  Task<bool> TryAcquireJobAsync(string jobId);
+  Task<bool> TryAcquireJobAsync(string jobId, int receiveCount = 1);
 
   /// <summary>
   /// 获取任务信息
