@@ -42,6 +42,11 @@ import {
   refreshDailyRemindersFromCache,
   type ReminderPrefs,
 } from '../notifications/reminders';
+import { getAudiencePreference, setAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
+import { getAudiencePreferenceLabel } from '../features/gacha/audience/audienceRules';
+import { buildReminderPlanVM } from '../features/gacha/reminders/reminderPlanner';
+import { loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
+import { resetAllReviewSchedules } from '../review/storage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
@@ -245,6 +250,10 @@ export function SettingsScreen({ navigation }: Props) {
   useFocusEffect(
     useCallback(() => {
       void loadRevenueCatInfo({ forceRefresh: false });
+      void (async () => {
+        const streak = await loadStreakSnapshot();
+        if (mountedRef.current) setStreakSnapshot(streak);
+      })();
     }, [loadRevenueCatInfo]),
   );
 
@@ -480,6 +489,10 @@ export function SettingsScreen({ navigation }: Props) {
   });
 
   const [timePicker, setTimePicker] = useState<null | 'morning' | 'evening'>(null);
+  const [audiencePref, setAudiencePrefState] = useState<AudiencePreference>('both');
+  const [audienceSaving, setAudienceSaving] = useState(false);
+  const [freshStarting, setFreshStarting] = useState(false);
+  const [streakSnapshot, setStreakSnapshot] = useState<StreakSnapshot | null>(null);
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -517,6 +530,49 @@ export function SettingsScreen({ navigation }: Props) {
     }
     void loadPrefs();
   }, [isSignedIn, loadPrefs]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [pref, streak] = await Promise.all([getAudiencePreference(), loadStreakSnapshot()]);
+      if (!cancelled) {
+        setAudiencePrefState(pref);
+        setStreakSnapshot(streak);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const reminderPlan = useMemo(() => buildReminderPlanVM(prefs), [prefs]);
+
+  async function updateAudiencePref(next: AudiencePreference) {
+    if (audienceSaving || audiencePref === next) return;
+    setAudienceSaving(true);
+    try {
+      const saved = await setAudiencePreference(next);
+      setAudiencePrefState(saved);
+      showPrefsHint('Saved · content preference updated');
+    } catch (e: any) {
+      Alert.alert('Update failed', e?.message ?? 'Failed to update content preference.');
+    } finally {
+      setAudienceSaving(false);
+    }
+  }
+
+  async function handleFreshStart() {
+    if (freshStarting) return;
+    setFreshStarting(true);
+    try {
+      await resetAllReviewSchedules(new Date());
+      Alert.alert('Review schedule reset', 'Learned cards are due again today. Your library stays intact.');
+    } catch (e: any) {
+      Alert.alert('Reset failed', e?.message ?? 'Unable to reset your review schedule.');
+    } finally {
+      setFreshStarting(false);
+    }
+  }
 
   async function updatePrefs(patch: Partial<ReminderPrefs>) {
     if (!isSignedIn) {
@@ -904,8 +960,8 @@ export function SettingsScreen({ navigation }: Props) {
                 {!authReady
                   ? 'Loading account…'
                   : isSignedIn
-                    ? `Signed in · ${email ?? '—'} · Backup enabled`
-                    : 'Signed out · sign in to enable backup and unlock Month view'}
+                    ? `Signed in · ${email ?? '—'} · Backup on`
+                    : 'Signed out · sign in for backup and month view'}
               </Text>
 
               {!isSignedIn ? (
@@ -921,13 +977,92 @@ export function SettingsScreen({ navigation }: Props) {
                   <Text style={styles.primaryButtonText}>Sign in / Register</Text>
                 </Pressable>
               ) : (
-                <Pressable
-                  style={({ pressed }) => [styles.dangerButton, pressed && styles.buttonPressed]}
-                  onPress={handleSignOut}
-                >
-                  <Text style={styles.primaryButtonText}>Sign out</Text>
-                </Pressable>
+                <>
+                  <Pressable
+                    style={({ pressed }) => [styles.dangerButton, pressed && styles.buttonPressed]}
+                    onPress={handleSignOut}
+                  >
+                    <Text style={styles.primaryButtonText}>Sign out</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.secondaryButton,
+                      pressed && styles.buttonPressed,
+                      freshStarting && styles.buttonDisabled,
+                    ]}
+                    disabled={freshStarting}
+                    onPress={() => {
+                      Alert.alert(
+                        'Reset review schedule',
+                        'Keep your library. Bring learned cards back into today. Continue?',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          { text: freshStarting ? 'Resetting…' : 'Reset', style: 'destructive', onPress: handleFreshStart },
+                        ],
+                      );
+                    }}
+                  >
+                    <Text style={styles.secondaryButtonText}>{freshStarting ? 'Resetting schedule…' : 'Reset review schedule'}</Text>
+                  </Pressable>
+                </>
               )}
+            </View>
+
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Momentum</Text>
+              <Text style={styles.sectionSubtitle}>
+                Keep the loop small: one qualified card protects the day, five days protect the week.
+              </Text>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Daily streak</Text>
+                <Text style={styles.kValue}>{streakSnapshot ? `${streakSnapshot.currentDailyStreak} days` : '—'}</Text>
+              </View>
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>This week</Text>
+                <Text style={styles.kValue}>{streakSnapshot ? `${streakSnapshot.weekCompletedDays}/7` : '—'}</Text>
+              </View>
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Qualified runs</Text>
+                <Text style={styles.kValue}>{streakSnapshot ? String(streakSnapshot.totalQualifiedSessions) : '—'}</Text>
+              </View>
+            </View>
+
+            {/* Content preferences */}
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Content preferences</Text>
+              <Text style={styles.sectionSubtitle}>
+                Pick what you want to unlock next. Due cards still come back on schedule.
+              </Text>
+
+              <View style={styles.audienceRow}>
+                {([
+                  { key: 'junior', label: 'Junior' },
+                  { key: 'both', label: 'Both' },
+                  { key: 'all', label: 'All' },
+                ] as const).map((item) => {
+                  const active = audiencePref === item.key;
+                  return (
+                    <Pressable
+                      key={item.key}
+                      style={({ pressed }) => [
+                        styles.audienceChip,
+                        active && styles.audienceChipActive,
+                        pressed && styles.pressed,
+                        audienceSaving && styles.buttonDisabled,
+                      ]}
+                      disabled={audienceSaving}
+                      onPress={() => void updateAudiencePref(item.key)}
+                    >
+                      <Text style={[styles.audienceChipText, active && styles.audienceChipTextActive]}>{item.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Text style={[styles.muted, { marginTop: 10 }]}>Current preference: {audiencePref === 'junior' ? 'Junior only' : audiencePref === 'both' ? 'Both' : 'All levels'} · {getAudiencePreferenceLabel(audiencePref)} lane</Text>
+              <Text style={[styles.muted, { marginTop: 6 }]}>This only shapes new content supply and draw recommendations. Due cards still return on schedule.</Text>
             </View>
 
             {/* Dev tools */}
@@ -979,6 +1114,8 @@ export function SettingsScreen({ navigation }: Props) {
               <Text style={styles.sectionSubtitle}>
                 Keep consistency with a morning reminder and a smart evening check-in.
               </Text>
+              <Text style={[styles.muted, { marginTop: 10 }]}>{reminderPlan.statusLine}</Text>
+              <Text style={[styles.muted, { marginTop: 4 }]}>{reminderPlan.eveningLine}</Text>
 
               {!isSignedIn ? (
                 <View style={styles.gateBox}>
@@ -1243,6 +1380,22 @@ const styles = StyleSheet.create({
 
   sectionTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
   sectionSubtitle: { marginTop: 6, fontSize: 12, color: '#6B7280', lineHeight: 16 },
+  audienceRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  audienceChip: {
+    flex: 1,
+    borderRadius: 999,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: 'rgba(17,24,39,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.08)',
+  },
+  audienceChipActive: {
+    backgroundColor: 'rgba(79,70,229,0.12)',
+    borderColor: 'rgba(79,70,229,0.20)',
+  },
+  audienceChipText: { fontSize: 12, fontWeight: '900', color: '#111827' },
+  audienceChipTextActive: { color: '#4F46E5' },
 
   // badges
   badge: {

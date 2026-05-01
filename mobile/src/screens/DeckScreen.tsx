@@ -31,8 +31,10 @@ import {
 } from '../content/deckRepository';
 
 import type { CardProgress } from '../review/model';
-import { formatDateKey } from '../review/model';
 import { loadDeckProgress, loadOrInitDailyStats, type DailyStats } from '../review/storage';
+import { buildLibraryCardRows, buildLibraryVM, countUpdatedCards } from '../features/gacha/library/libraryMapper';
+import { clamp01, isLearnedProgress } from '../features/gacha/selectors/progressSelectors';
+import { countDueToday } from '../features/gacha/planner/sessionPlanner';
 
 // premium entitlement
 import { usePremiumUser, setIsPremiumUser } from '../premium/premiumStore';
@@ -70,65 +72,6 @@ function showTrialUpsellDialog(opts: {
       { text: 'Upgrade', onPress: onUpgrade },
     ],
   );
-}
-
-function startOfToday(now: Date) {
-  const d = new Date(now.getTime());
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function isLearned(p: CardProgress): boolean {
-  return typeof p.lastReviewedAt === 'number' && p.lastReviewedAt > 0;
-}
-
-function isScheduled(p: CardProgress): boolean {
-  return isLearned(p) && typeof p.nextReviewAt === 'number' && p.nextReviewAt > 0;
-}
-
-function countDueToday(progress: CardProgress[], now: Date): number {
-  const today0 = startOfToday(now);
-  const todayKey = formatDateKey(today0);
-  let count = 0;
-
-  for (const p of progress) {
-    if (!isScheduled(p)) continue;
-
-    const next = new Date(p.nextReviewAt);
-    const effective = next.getTime() < today0.getTime() ? today0 : next;
-    if (formatDateKey(effective) === todayKey) count += 1;
-  }
-
-  return count;
-}
-
-function getCardRevision(card: any): number {
-  const r = card?.Revision;
-  return typeof r === 'number' && r > 0 ? r : 1;
-}
-
-function getSeenRevision(p: CardProgress): number {
-  const seen = (p as any).lastSeenRevision;
-  if (typeof seen === 'number') return seen;
-  return isLearned(p) ? 1 : 0;
-}
-
-function countUpdatedCards(cards: any[], progress: CardProgress[]): number {
-  const pMap = new Map(progress.map((p) => [p.stableUid, p]));
-  let count = 0;
-
-  for (const card of cards) {
-    const p = pMap.get(card?.StableUid);
-    if (!p) continue;
-    if (!isLearned(p)) continue;
-    if (getCardRevision(card) > getSeenRevision(p)) count += 1;
-  }
-
-  return count;
-}
-
-function clamp01(n: number): number {
-  return Math.max(0, Math.min(1, n));
 }
 
 function lower(s: any): string {
@@ -246,6 +189,7 @@ export function DeckScreen({ navigation, route }: Props) {
   });
 
   const [sessionCount, setSessionCount] = useState(10);
+  const [inventoryFilter, setInventoryFilter] = useState<'all' | 'new' | 'learning' | 'mastered'>('all');
 
   const minSession = 5;
   const maxSession = 50;
@@ -286,7 +230,6 @@ export function DeckScreen({ navigation, route }: Props) {
 
           if (cancelled) return;
 
-          // coming soon
           if (entry && lower(entry.availability) === 'coming') {
             setState({
               loading: false,
@@ -344,6 +287,8 @@ export function DeckScreen({ navigation, route }: Props) {
                 if (ok) {
                   deck = await resolveDeckBySlug(slugStr);
                   if (cancelled) return;
+                } else {
+                  throw new Error('The deck package could not be installed. Please republish the deck or update the app.');
                 }
               } catch (e: any) {
                 console.warn('[premium] fetch/upgrade full deck failed:', e?.message ?? e);
@@ -371,6 +316,8 @@ export function DeckScreen({ navigation, route }: Props) {
               if (ok) {
                 deck = await resolveDeckBySlug(slugStr);
                 if (cancelled) return;
+              } else {
+                throw new Error('The deck package could not be installed. Please republish the deck or update the app.');
               }
             }
           }
@@ -838,7 +785,7 @@ export function DeckScreen({ navigation, route }: Props) {
 
   const now = new Date();
   const dueToday = countDueToday(progress, now);
-  const learnedCount = progress.filter(isLearned).length;
+  const learnedCount = progress.filter(isLearnedProgress).length;
 
   const newRemaining = isTrial
     ? Math.max(previewTotal - learnedCount, 0)
@@ -855,8 +802,21 @@ export function DeckScreen({ navigation, route }: Props) {
 
   const overallPercent = totalCardsFull > 0 ? clamp01(learnedCount / totalCardsFull) : 0;
 
-  const deckTypeLabel =
-    deck.DeckType === 1 ? 'Starter deck' : isTrial ? 'Premium deck · Free trial' : 'Premium deck';
+  const libraryVm = buildLibraryVM({
+    deck,
+    progress,
+    now,
+    isTrial,
+    previewTotal,
+  });
+  const libraryRows = buildLibraryCardRows({
+    deck,
+    progress,
+    now,
+    isTrial,
+    previewTotal,
+  });
+  const filteredLibraryRows = libraryRows.filter((row) => inventoryFilter === 'all' || row.status === inventoryFilter);
 
   const disableReviewDue = !canStudy || dueToday === 0;
 
@@ -917,12 +877,12 @@ export function DeckScreen({ navigation, route }: Props) {
         }
 
         navigation.navigate(
-          'Review',
+          'SessionCard',
           {
             slug: d.Slug,
             mode,
             limit: sessionCount,
-            previewLimit: previewTotal, // ✅ trial 关键参数（ReviewScreen 依赖它判断 isTrial）
+            previewLimit: previewTotal,
           } as any,
         );
         return;
@@ -942,7 +902,7 @@ export function DeckScreen({ navigation, route }: Props) {
         // 如果 refresh 后变成 premium，继续走正常流程
       }
 
-      navigation.navigate('Review', {
+      navigation.navigate('SessionCard', {
         slug: d.Slug,
         mode,
         limit: sessionCount,
@@ -966,30 +926,30 @@ export function DeckScreen({ navigation, route }: Props) {
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.headerRow}>
-              <Pressable
-                style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
-                onPress={() => navigation.goBack()}
-              >
-                <Text style={styles.backText}>← Home</Text>
-              </Pressable>
+              <View style={styles.headerRow}>
+                <Pressable
+                  style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
+                  onPress={() => navigation.goBack()}
+                >
+                  <Text style={styles.backText}>← Home</Text>
+                </Pressable>
 
-              <View style={{ flex: 1 }}>
-                <Text style={styles.title} numberOfLines={1}>
-                  {deck.Title}
-                </Text>
-                <Text style={styles.subtitle} numberOfLines={1}>
-                  {deck.Locale} · {deckTypeLabel}
-                </Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.title} numberOfLines={1}>
+                    {libraryVm.title}
+                  </Text>
+                  <Text style={styles.subtitle} numberOfLines={1}>
+                    {deck.Locale} · {libraryVm.subtitle}
+                  </Text>
+                </View>
               </View>
-            </View>
 
             <View style={styles.heroCard}>
-              <Text style={styles.heroLabel}>Study overview</Text>
+              <Text style={styles.heroLabel}>Library overview</Text>
 
               {!canStudy ? (
                 <Text style={styles.sectionSubTitle}>
-                  This deck is a placeholder in this build. Content will be available later.
+                  This track is not live in the current release yet. Keep moving through the available pools for now, and we will surface it here once it opens.
                 </Text>
               ) : (
                 <>
@@ -997,7 +957,7 @@ export function DeckScreen({ navigation, route }: Props) {
                     <Text style={styles.heroTotal}>
                       {learnedCount}/{totalCardsFull}
                     </Text>
-                    <Text style={styles.heroTotalLabel}>learned (approx)</Text>
+                    <Text style={styles.heroTotalLabel}>seen in library</Text>
                   </View>
 
                   <View style={styles.progressBarBg}>
@@ -1013,18 +973,22 @@ export function DeckScreen({ navigation, route }: Props) {
                   <View style={styles.heroStatsRow}>
                     <View style={styles.heroStat}>
                       <Text style={styles.heroStatLabel}>Due today</Text>
-                      <Text style={[styles.heroStatValue, { color: '#EF4444' }]}>{dueToday}</Text>
+                      <Text style={[styles.heroStatValue, { color: '#EF4444' }]}>{libraryVm.counts.dueTodayCount}</Text>
                     </View>
 
                     <View style={styles.heroStat}>
-                      <Text style={styles.heroStatLabel}>New cards</Text>
-                      <Text style={[styles.heroStatValue, { color: '#0EA5E9' }]}>{newRemaining}</Text>
+                      <Text style={styles.heroStatLabel}>Learning</Text>
+                      <Text style={[styles.heroStatValue, { color: '#0EA5E9' }]}>{libraryVm.counts.learningCount}</Text>
                     </View>
 
                     <View style={styles.heroStat}>
-                      <Text style={styles.heroStatLabel}>Have learned</Text>
-                      <Text style={[styles.heroStatValue, { color: '#22C55E' }]}>{learnedCount}</Text>
+                      <Text style={styles.heroStatLabel}>Mastered</Text>
+                      <Text style={[styles.heroStatValue, { color: '#22C55E' }]}>{libraryVm.counts.masteredCount}</Text>
                     </View>
+                  </View>
+
+                  <View style={styles.updatePill}>
+                    <Text style={styles.updatePillText}>{libraryVm.drawStatusLabel}</Text>
                   </View>
 
                   {isTrial ? (
@@ -1037,10 +1001,10 @@ export function DeckScreen({ navigation, route }: Props) {
                     </View>
                   ) : null}
 
-                  {!isTrial && updatedCount > 0 ? (
+                  {!isTrial && libraryVm.counts.updatedCount > 0 ? (
                     <View style={styles.updatePill}>
                       <Text style={styles.updatePillText}>
-                        ✨ {updatedCount} card{updatedCount === 1 ? '' : 's'} updated since you last reviewed.
+                        ✨ {libraryVm.counts.updatedCount} card{libraryVm.counts.updatedCount === 1 ? '' : 's'} updated since you last reviewed.
                       </Text>
                     </View>
                   ) : null}
@@ -1049,9 +1013,67 @@ export function DeckScreen({ navigation, route }: Props) {
             </View>
 
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Cards for this session</Text>
+              <Text style={styles.sectionTitle}>Library status</Text>
+              <Text style={styles.sectionSubTitle}>This is your secondary workspace: browse owned cards here after your main daily run, not before it.</Text>
+
+              <View style={styles.libraryStatusRow}>
+                <View style={[styles.libraryStatusCard, styles.libraryStatusCardNew]}>
+                  <Text style={styles.libraryStatusValue}>{libraryVm.counts.newCount}</Text>
+                  <Text style={styles.libraryStatusLabel}>New</Text>
+                </View>
+                <View style={[styles.libraryStatusCard, styles.libraryStatusCardLearning]}>
+                  <Text style={styles.libraryStatusValue}>{libraryVm.counts.learningCount}</Text>
+                  <Text style={styles.libraryStatusLabel}>Learning</Text>
+                </View>
+                <View style={[styles.libraryStatusCard, styles.libraryStatusCardMastered]}>
+                  <Text style={styles.libraryStatusValue}>{libraryVm.counts.masteredCount}</Text>
+                  <Text style={styles.libraryStatusLabel}>Mastered</Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Owned cards</Text>
+              <Text style={styles.sectionSubTitle}>Filter the inventory without changing today’s due-review priority.</Text>
+
+              <View style={styles.inventoryFilterRow}>
+                {([
+                  { key: 'all', label: 'All' },
+                  { key: 'new', label: 'New' },
+                  { key: 'learning', label: 'Learning' },
+                  { key: 'mastered', label: 'Mastered' },
+                ] as const).map((item) => {
+                  const active = inventoryFilter === item.key;
+                  return (
+                    <Pressable
+                      key={item.key}
+                      style={[styles.inventoryFilterChip, active && styles.inventoryFilterChipActive]}
+                      onPress={() => setInventoryFilter(item.key)}
+                    >
+                      <Text style={[styles.inventoryFilterText, active && styles.inventoryFilterTextActive]}>{item.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {filteredLibraryRows.length === 0 ? (
+                <Text style={styles.sectionSubTitle}>No cards in this slice yet.</Text>
+              ) : (
+                filteredLibraryRows.map((row) => (
+                  <View key={row.stableUid} style={styles.libraryRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.libraryRowQuestion} numberOfLines={2}>{row.question}</Text>
+                      <Text style={styles.libraryRowMeta}>#{row.orderInDeck} · {row.statusLabel} · Difficulty {row.difficulty}{row.isDueToday ? ' · Due today' : ''}{row.isUpdated ? ' · Updated' : ''}</Text>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+
+            <View style={[styles.sectionCard, styles.sessionSetupCard]}>
+              <Text style={styles.sectionTitleSecondary}>Quick session setup</Text>
               <Text style={styles.sectionSubTitle}>
-                Start small and keep consistency. 5–15 cards per run is a good default.
+                Optional launch controls if you want to open this deck directly. Your main daily run still starts from Home.
               </Text>
 
               <View style={styles.sessionRow}>
@@ -1228,12 +1250,45 @@ const styles = StyleSheet.create({
   },
   progressBarFill: { backgroundColor: '#6366F1', borderRadius: 999 },
 
-  heroStatsRow: { flexDirection: 'row', marginTop: 4 },
-  heroStat: { flex: 1 },
-  heroStatLabel: { fontSize: 11, color: '#9CA3AF' },
-  heroStatValue: { marginTop: 2, fontSize: 16, fontWeight: '600' },
-
-  sectionCard: {
+  heroStatsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 },
+  heroStat: { flex: 1, alignItems: 'center' },
+  heroStatLabel: { fontSize: 11, color: '#6B7280' },
+  heroStatValue: { marginTop: 4, fontSize: 18, fontWeight: '700' },
+  libraryStatusRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  libraryStatusCard: {
+    flex: 1,
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(17,24,39,0.04)',
+    alignItems: 'center',
+  },
+  libraryStatusCardNew: { backgroundColor: 'rgba(14,165,233,0.08)' },
+  libraryStatusCardLearning: { backgroundColor: 'rgba(79,70,229,0.08)' },
+  libraryStatusCardMastered: { backgroundColor: 'rgba(34,197,94,0.10)' },
+  libraryStatusValue: { fontSize: 22, fontWeight: '800', color: '#111827' },
+  libraryStatusLabel: { marginTop: 4, fontSize: 11, fontWeight: '700', color: '#6B7280' },
+  inventoryFilterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  inventoryFilterChip: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(17,24,39,0.04)',
+  },
+  inventoryFilterChipActive: { backgroundColor: 'rgba(79,70,229,0.12)' },
+  inventoryFilterText: { fontSize: 12, fontWeight: '700', color: '#111827' },
+  inventoryFilterTextActive: { color: '#4F46E5' },
+  libraryRow: {
+    marginTop: 10,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(17,24,39,0.03)',
+  },
+  libraryRowQuestion: { fontSize: 13, fontWeight: '700', color: '#111827' },
+  libraryRowMeta: { marginTop: 4, fontSize: 11, color: '#6B7280' },
+ 
+   sectionCard: {
     borderRadius: 20,
     paddingVertical: 16,
     paddingHorizontal: 16,
@@ -1244,7 +1299,12 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     marginBottom: 16,
   },
+  sessionSetupCard: {
+    backgroundColor: 'rgba(255,255,255,0.74)',
+    shadowOpacity: 0.04,
+  },
   sectionTitle: { fontSize: 15, fontWeight: '600', color: '#111827' },
+  sectionTitleSecondary: { fontSize: 13, fontWeight: '700', color: '#4B5563' },
   sectionSubTitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
 
   sessionRow: { flexDirection: 'row', alignItems: 'center', marginTop: 14 },

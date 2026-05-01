@@ -215,20 +215,20 @@ export function PaywallScreen({ navigation }: Props) {
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>What you get</Text>
               <Text style={styles.sectionSubtitle}>
-                Premium is designed to keep your interview prep focused and consistent.
+                Premium keeps your deeper interview tracks, upgrades, and future releases in one stable lane.
               </Text>
 
               <View style={{ height: 10 }} />
 
               <Bullet text="Access all premium decks" />
-              <Bullet text="More curated interview tracks (coming soon)" />
-              <Bullet text="Priority updates and new content drops" />
+              <Bullet text="Expanding curated interview tracks as new pools ship" />
+              <Bullet text="Priority content updates and release access" />
             </View>
 
             {/* Actions */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Upgrade</Text>
-              <Text style={styles.sectionSubtitle}>Purchase uses Apple In-App Purchase via RevenueCat.</Text>
+              <Text style={styles.sectionSubtitle}>Purchase is handled through Apple In-App Purchase via RevenueCat, so premium access can be restored later on the same account.</Text>
 
               <Pressable
                 style={({ pressed }) => [
@@ -275,7 +275,7 @@ export function PaywallScreen({ navigation }: Props) {
             </View>
 
             <View style={styles.footerBox}>
-              <Text style={styles.footerText}>You can keep studying free decks without subscribing.</Text>
+              <Text style={styles.footerText}>Free decks stay available even if you never upgrade.</Text>
             </View>
 
             <View style={{ height: 10 }} />

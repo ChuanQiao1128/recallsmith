@@ -19,8 +19,20 @@ import type { RootStackParamList } from '../navigation/types';
 
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 
-import type { CardProgress } from '../review/model';
 import { formatDateKey } from '../review/model';
+
+import type { CalendarDay, DeckSummary } from '../features/gacha/contracts';
+import { buildHomeVM } from '../features/gacha/selectors/homeSelectors';
+import { buildUpcoming, clamp01, isLearnedProgress, isScheduledProgress, startOfToday } from '../features/gacha/selectors/progressSelectors';
+import TodayPressureCard from '../features/gacha/components/TodayPressureCard';
+
+
+import { fetchPremiumDeckUrl, fetchServerPremium } from '../features/gacha/home/homeRemote';
+import { loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
+
+import { loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
+import { MOCK_HOME_STATES } from '../mock/home';
+import { resolveHomeState } from '../features/gacha/home/homeStateMachine';
 
 import { loadDeckProgress } from '../review/storage';
 import { syncDailyReminders } from '../notifications/reminders';
@@ -46,34 +58,6 @@ import { useAuthStore } from '../auth/authStore';
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
 type DeckFilter = 'all' | 'free' | 'premium';
-type CalendarDay = { dateKey: string; count: number };
-
-type DeckSummary = {
-  slug: string;
-  title: string;
-  locale: string;
-  version: string;
-  deckType: number; // 1 = free, else premium
-
-  totalCards: number;
-  localCards: number;
-  studyCards: number;
-
-  canStudy: boolean;
-
-  tier?: string | null;
-  availability?: string | null;
-  eta?: string | null;
-  downloadMode?: string | null;
-  order?: number;
-
-  dueToday: number;
-  plannedToday: number;
-  newToday: number;
-  masteredApprox: number;
-
-  percent: number; // 0..1
-};
 
 type HomeState = {
   loading: boolean;
@@ -86,16 +70,6 @@ type HomeState = {
   monthCounts: Record<string, number>;
 };
 
-function clamp01(v: number) {
-  return Math.max(0, Math.min(1, v));
-}
-
-function startOfToday(now: Date) {
-  const d = new Date(now.getTime());
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
 function weekdayShort(d: Date) {
   return d.toLocaleDateString('en-US', { weekday: 'short' });
 }
@@ -104,160 +78,13 @@ function formatMonthDay(d: Date) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function isLearned(p: CardProgress): boolean {
-  return typeof p.lastReviewedAt === 'number' && p.lastReviewedAt > 0;
-}
-
-function isScheduled(p: CardProgress): boolean {
-  return isLearned(p) && typeof p.nextReviewAt === 'number' && p.nextReviewAt > 0;
-}
-
-function buildUpcoming(progress: CardProgress[], now: Date, days: number): CalendarDay[] {
-  const out: CalendarDay[] = [];
-  const index = new Map<string, number>();
-  const today0 = startOfToday(now);
-
-  for (let i = 0; i < days; i++) {
-    const d = new Date(today0.getTime());
-    d.setDate(d.getDate() + i);
-    const key = formatDateKey(d);
-    index.set(key, i);
-    out.push({ dateKey: key, count: 0 });
-  }
-
-  for (const p of progress) {
-    if (!isScheduled(p)) continue;
-
-    const next = new Date(p.nextReviewAt);
-    const effective = next.getTime() < today0.getTime() ? today0 : next;
-    const key = formatDateKey(effective);
-    const idx = index.get(key);
-    if (idx !== undefined) out[idx].count += 1;
-  }
-
-  return out;
-}
-
 const WEEKDAYS_MON = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-/** =========================
- *  ✅ API base
- *  ========================= */
-const API_BASE_URL =
-  (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() ||
-  (process.env.EXPO_PUBLIC_API_BASE || '').trim() ||
-  'https://ktbq1sie2c.execute-api.ap-southeast-2.amazonaws.com';
-
-function isTruthyEnv(v: any): boolean {
-  const s = String(v ?? '').trim().toLowerCase();
-  return s === '1' || s === 'true' || s === 'yes' || s === 'on';
-}
-
-/** =========================
- *  ✅ Premium URL fetch (auth required)
- *
- *  ⚠️ SECURITY FIX:
- *  - 默认不再自动加 dev=1
- *  - 如果你真的需要本地绕过，只能手动设置 EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=1
- *  ========================= */
-async function fetchPremiumDeckUrl(
-  slug: string,
-  accessToken: string | null,
-): Promise<{ url: string; buildId: string } | null> {
-  const s = String(slug || '').trim();
-  if (!s) return null;
-
-  const u = new URL('/api/v1/content/premium-url', API_BASE_URL);
-  u.searchParams.set('slug', s);
-
-  // ✅ dev bypass for sandbox premium -> full download
-  const appEnv = String(process.env.EXPO_PUBLIC_ENV || '').trim().toLowerCase();
-
-  // 允许 sandbox 的总开关：
-  // - development 环境默认允许（为了 dev client / EAS Update 测试）
-  // - 其他环境必须显式设置 EXPO_PUBLIC_RC_ALLOW_SANDBOX=1
-  const allowSandbox =
-    appEnv === 'development' || isTruthyEnv(process.env.EXPO_PUBLIC_RC_ALLOW_SANDBOX);
-
-  // dev=1 的开关：
-  // - development 环境：默认 true（不需要你额外配变量）
-  //   如果你想在 dev 里禁用：EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=0
-  // - 非 development：必须显式 EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL=1 才会启用
-  const bypassRaw = process.env.EXPO_PUBLIC_DEV_BYPASS_PREMIUM_URL;
-  let allowDevBypass = false;
-
-  if (allowSandbox) {
-    if (appEnv === 'development') {
-      allowDevBypass = bypassRaw ? isTruthyEnv(bypassRaw) : true; // ✅ dev 默认开
-    } else {
-      allowDevBypass = isTruthyEnv(bypassRaw); // ✅ 非 dev 必须显式开
-    }
-  }
-
-  if (allowDevBypass) u.searchParams.set('dev', '1');
-
-  const headers: Record<string, string> = {
-    'cache-control': 'no-cache',
-    accept: 'application/json',
-  };
-
-  if (accessToken && accessToken.trim()) {
-    headers.Authorization = `Bearer ${accessToken.trim()}`;
-  }
-
-  console.log('[premium-url] request', {
-    slug: s,
-    url: u.toString(),
-    hasBearer: !!headers.Authorization,
-    tokenLen: accessToken ? accessToken.length : 0,
-    devBypass: allowDevBypass,
-  });
-
-  const resp = await fetch(u.toString(), { method: 'GET', headers });
-  const json = await resp.json().catch(() => null);
-
-  console.log('[premium-url] response', {
-    status: resp.status,
-    success: !!json?.success,
-    err: json?.error?.message ?? null,
-  });
-
-  const ok = !!json?.success && !!json?.data?.url && !!json?.data?.buildId;
-  if (!ok) {
-    const msg = json?.error?.message || `Failed to get premium url (HTTP ${resp.status})`;
-    throw new Error(msg);
-  }
-
-  return { url: String(json.data.url), buildId: String(json.data.buildId) };
-}
-
-/** =========================
- *  ✅ Server truth premium
- *  ========================= */
-async function fetchServerPremium(accessToken: string | null): Promise<boolean> {
-  if (!accessToken || !accessToken.trim()) return false;
-
-  const u = new URL('/api/v1/entitlements', API_BASE_URL);
-
-  const resp = await fetch(u.toString(), {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${accessToken.trim()}`,
-      accept: 'application/json',
-      'cache-control': 'no-cache',
-    },
-  });
-
-  const json = await resp.json().catch(() => null);
-
-  // ✅ 只信服务端明确的 tier=premium
-  const tier = json?.data?.tier;
-  return String(tier || '').toLowerCase() === 'premium';
-}
-
-export function HomeScreen({ navigation }: Props) {
+export function HomeScreen({ navigation, route }: Props) {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [deckFilter, setDeckFilter] = useState<DeckFilter>('all');
+  const [drawWallet, setDrawWallet] = useState<RewardWalletState>({ availablePulls: 0, reservePulls: 0 });
+  const [streakSnapshot, setStreakSnapshot] = useState<StreakSnapshot | null>(null);
 
   const [isMonthOpen, setIsMonthOpen] = useState(false);
   const [isMonthGateOpen, setIsMonthGateOpen] = useState(false);
@@ -290,7 +117,7 @@ export function HomeScreen({ navigation }: Props) {
   const lastDbgRef = useRef<string>('');
   useEffect(() => {
     const cur = JSON.stringify({
-      apiBase: API_BASE_URL,
+      apiBase: 'managed-in-homeRemote',
       authStatus,
       isSignedIn,
       hasAccessToken: !!accessToken,
@@ -715,7 +542,7 @@ export function HomeScreen({ navigation }: Props) {
       } catch {}
 
       const progress = await loadDeckProgress(deck as any);
-      const learnedCount = progress.filter(isLearned).length;
+      const learnedCount = progress.filter(isLearnedProgress).length;
 
       const studyCards = Math.max(localCards, 0);
       const denom = Math.max(studyCards, 1);
@@ -756,7 +583,7 @@ export function HomeScreen({ navigation }: Props) {
       }
 
       for (const p of progress) {
-        if (!isScheduled(p)) continue;
+        if (!isScheduledProgress(p)) continue;
 
         const next = new Date(p.nextReviewAt);
         const effective = next.getTime() < today0.getTime() ? today0 : next;
@@ -791,6 +618,11 @@ export function HomeScreen({ navigation }: Props) {
       async function run() {
         await loadHomeFromLocal();
         if (cancelled) return;
+        const [wallet, streak] = await Promise.all([loadRewardWalletState(), loadStreakSnapshot()]);
+        if (!cancelled) {
+          setDrawWallet(wallet);
+          setStreakSnapshot(streak);
+        }
       }
       void run();
       return () => {
@@ -866,6 +698,50 @@ export function HomeScreen({ navigation }: Props) {
     });
   }, [deckSummaries, deckFilter]);
 
+  const selectedDeckSummary = useMemo(
+    () => deckSummaries.find((deck) => deck.slug === selectedSlug) ?? deckSummaries[0] ?? null,
+    [deckSummaries, selectedSlug],
+  );
+
+  const homeVm = useMemo(
+    () => buildHomeVM({ deckSummaries, selectedSlug, hasSignedInUser: isSignedIn }),
+    [deckSummaries, selectedSlug, isSignedIn],
+  );
+
+  const firstDrawCoach = route.params?.firstDrawCoach ?? false;
+  const mockHomeStateOverride = route.params?.mockState;
+
+  const v6HomeState = useMemo(() => {
+    if (mockHomeStateOverride) return mockHomeStateOverride;
+    return resolveHomeState({
+      dueCount: homeVm.counts.selectedDue,
+      newCount: homeVm.counts.selectedNew,
+      wallet: drawWallet,
+      streakCount: streakSnapshot?.currentDailyStreak ?? 0,
+    });
+  }, [drawWallet, streakSnapshot, homeVm, mockHomeStateOverride]);
+
+  function startTodayChallenge() {
+    if (!selectedDeckSummary) {
+      return;
+    }
+
+    if (homeVm.hero.ctaAction === 'none') {
+      return;
+    }
+
+    if (homeVm.hero.ctaAction === 'deck' || !selectedDeckSummary.canStudy) {
+      openDeck(selectedDeckSummary.slug);
+      return;
+    }
+
+    void setActiveDeckSlug(selectedDeckSummary.slug);
+    setSelectedSlug(selectedDeckSummary.slug);
+    navigation.navigate('DailyDose', {
+      slug: selectedDeckSummary.slug,
+    });
+  }
+
   function openMonth() {
     if (!isSignedIn) {
       setIsMonthGateOpen(true);
@@ -881,6 +757,13 @@ export function HomeScreen({ navigation }: Props) {
     void setActiveDeckSlug(slug);
     setSelectedSlug(slug);
     navigation.navigate('Deck', { slug });
+  }
+
+  function showDeckInstallFailure(deckTitle: string) {
+    Alert.alert(
+      'Download failed',
+      `The deck package for "${deckTitle}" could not be installed. Please try again after republishing the deck or updating the app.`,
+    );
   }
 
   const monthGrid = useMemo(() => {
@@ -922,7 +805,7 @@ export function HomeScreen({ navigation }: Props) {
       <SafeAreaProvider>
         <SafeAreaView style={styles.safeArea}>
           <LinearGradient
-            colors={['#F5F3FF', '#E0F2FE']}
+            colors={['#FAF3E0', '#F3E8C8']}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.gradient}
@@ -963,7 +846,7 @@ export function HomeScreen({ navigation }: Props) {
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
+          colors={['#FAF3E0', '#F3E8C8']}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
@@ -996,7 +879,7 @@ export function HomeScreen({ navigation }: Props) {
                 <View style={styles.modalHeaderRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.modalTitle}>{monthGrid.monthLabel}</Text>
-                    <Text style={styles.modalSubtitle}>{totalDueAllDecks} due today across all decks</Text>
+                    <Text style={styles.modalSubtitle}>{totalDueAllDecks} due today across all decks · use this as support planning, not your main start point</Text>
                   </View>
                   <Pressable
                     style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]}
@@ -1055,8 +938,8 @@ export function HomeScreen({ navigation }: Props) {
               <View style={styles.gateCard}>
                 <View style={styles.modalHeaderRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.modalTitle}>Unlock Month View</Text>
-                    <Text style={styles.modalSubtitle}>30-day calendar + consistency insights</Text>
+                    <Text style={styles.modalTitle}>Unlock Month support</Text>
+                    <Text style={styles.modalSubtitle}>30-day planning view + consistency insights</Text>
                   </View>
                   <Pressable
                     style={({ pressed }) => [styles.modalCloseBtn, pressed && styles.pressed]}
@@ -1069,7 +952,7 @@ export function HomeScreen({ navigation }: Props) {
                 <View style={{ marginTop: 10 }}>
                   {[
                     'See your next 30 days across all decks',
-                    'Spot gaps and stay consistent with trends',
+                    'Use it as a planning surface after you know today’s route',
                     'Enable cloud backup after sign-in (shown immediately)',
                   ].map((t, idx) => (
                     <View key={`b-${idx}`} style={styles.bulletRow}>
@@ -1104,7 +987,7 @@ export function HomeScreen({ navigation }: Props) {
                 </View>
 
                 <Text style={styles.gateFootnote}>
-                  Week view stays free. Sign in unlocks Month view and enables backup.
+                  Week view stays free. Sign in unlocks Month support and backup.
                 </Text>
               </View>
             </View>
@@ -1113,333 +996,77 @@ export function HomeScreen({ navigation }: Props) {
           <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
             <View style={styles.headingRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.appTitle}>DeveloperCards</Text>
-                <Text style={styles.appSubtitle}>A clean way to stay consistent.</Text>
+                <Text style={styles.homeKicker}>COLD START HOME · {selectedDeckSummary?.slug ?? 'NO-DECK'}</Text>
+                <Text style={styles.appTitle}>RecallSmith</Text>
+                <Text style={styles.appSubtitle}>Draw first, then keep today’s study route compact and deliberate.</Text>
+
+                <Pressable style={({ pressed }) => [styles.activeDeckPill, pressed && styles.pressed]} onPress={() => navigation.navigate('PoolPicker', { activePoolId: selectedDeckSummary?.slug })}>
+                    <Text style={styles.activeDeckPillText}>{selectedDeckSummary?.title ?? 'Choose a deck'}</Text>
+                </Pressable>
               </View>
 
-              <Pressable
-                style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
-                onPress={() => navigation.navigate('Settings')}
-              >
+              <Pressable style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]} onPress={() => navigation.navigate('Settings')}>
                 <Text style={styles.iconButtonText}>⚙︎</Text>
               </Pressable>
             </View>
 
-            <View style={[styles.cardGlass, styles.calendarCardFixed]}>
-              <View style={styles.cardHeaderRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle}>Calendar</Text>
-                  <Text style={styles.cardSubtitle} numberOfLines={1}>
-                    All decks · {totalDueAllDecks} due today
-                  </Text>
-                </View>
-
-                <View style={styles.segment}>
-                  <Pressable
-                    style={({ pressed }) => [styles.segmentItem, styles.segmentItemActive, pressed && styles.pressed]}
-                    onPress={() => {}}
-                  >
-                    <Text style={[styles.segmentText, styles.segmentTextActive]}>Week</Text>
-                  </Pressable>
-
-                  <Pressable style={({ pressed }) => [styles.segmentItem, pressed && styles.pressed]} onPress={openMonth}>
-                    <Text style={styles.segmentText}>{isSignedIn ? 'Month' : 'Month 🔒'}</Text>
-                  </Pressable>
-                </View>
+            <View style={styles.heroGiftCard}>
+              <View style={styles.heroGlowOrb} />
+              <View style={styles.heroBadgeRow}>
+                <Text style={styles.heroGiftIcon}>🎁</Text>
+                <Text style={styles.heroBadge}>FIRST GIFT CARD</Text>
               </View>
-
-              <View style={styles.weekGrid}>
-                {week7.map((day, idx) => {
-                  const date = new Date(asOf.getTime());
-                  date.setDate(date.getDate() + idx);
-
-                  const dateText = formatMonthDay(date);
-                  const label = idx === 0 ? 'Today' : weekdayShort(date);
-
-                  const count = day.count;
-                  const pct = maxWeek <= 0 ? 0 : count === 0 ? 0 : Math.max(0.12, count / maxWeek);
-
-                  return (
-                    <Pressable
-                      key={day.dateKey}
-                      style={({ pressed }) => [styles.weekCell, pressed && styles.pressed]}
-                      onPress={() => showWeekHint(`${dateText} · ${count} card${count === 1 ? '' : 's'}`)}
-                    >
-                      <Text style={styles.weekDate} numberOfLines={1}>
-                        {dateText}
-                      </Text>
-
-                      <View style={styles.weekBarBg}>
-                        <View style={{ flex: 1 - pct }} />
-                        <View style={[styles.weekBarFill, { flex: pct, opacity: count === 0 ? 0 : 1 }]} />
-                      </View>
-
-                      <Text style={styles.weekLabel} numberOfLines={1}>
-                        {label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-
-              <View style={styles.weekHintSlot}>
-                <Text style={styles.weekHintText} numberOfLines={1} ellipsizeMode="tail">
-                  {weekHint ?? 'Tap a day bar to see the exact count.'}
-                </Text>
-              </View>
+              <Text style={styles.heroTitle}>{homeVm.hero.title}</Text>
+              <Text style={styles.heroSubtitle}>{homeVm.hero.subtitle}</Text>
+              <Text style={styles.heroMeta}>{selectedDeckSummary?.title ?? 'Install a deck to begin'} · {drawWallet.availablePulls} pull token{drawWallet.availablePulls === 1 ? '' : 's'} · {drawWallet.reservePulls} reserve</Text>
+              <Pressable
+                style={({ pressed }) => [styles.heroPrimaryButton, (homeVm.hero.ctaDisabled || !selectedDeckSummary) && styles.buttonDisabled, pressed && styles.pressed]}
+                disabled={homeVm.hero.ctaDisabled || !selectedDeckSummary}
+                onPress={startTodayChallenge}
+              >
+                <Text style={styles.heroPrimaryButtonText}>{homeVm.hero.ctaLabel}</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.heroSecondaryButton, pressed && styles.pressed]}
+                onPress={() => navigation.navigate('Draw', { slug: selectedDeckSummary?.slug ?? undefined, rewardPending: true })}
+              >
+                <Text style={styles.heroSecondaryButtonText}>{firstDrawCoach ? 'Open first draw route' : 'Peek at reward draw'}</Text>
+              </Pressable>
             </View>
+
+            {firstDrawCoach ? (
+              <View style={[styles.sectionCard, styles.secondarySectionCard, styles.amberSectionCard]}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.sectionTitleSecondary}>First draw coach</Text>
+                </View>
+                <Text style={styles.sectionSubtitleCompact}>Your first product loop starts here: draw first, then study the revealed cards. The rest of Home can stay secondary for now.</Text>
+                <Pressable
+                  style={({ pressed }) => [styles.secondaryInlineButton, pressed && styles.pressed]}
+                  onPress={() => navigation.navigate('Draw', { slug: selectedDeckSummary?.slug ?? undefined, rewardPending: true })}
+                >
+                  <Text style={styles.secondaryInlineButtonText}>Start first draw</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {v6HomeState !== 'active' ? (
+              <View style={[styles.sectionCard, styles.secondarySectionCard, styles.stateHintCard]}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.sectionTitleSecondary}>{MOCK_HOME_STATES[v6HomeState].title}</Text>
+                </View>
+                <Text style={styles.sectionSubtitleCompact}>{MOCK_HOME_STATES[v6HomeState].helper}</Text>
+              </View>
+            ) : null}
 
             <View style={styles.sectionCard}>
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionTitle}>Decks</Text>
+              <Text style={styles.sectionTitle}>Today pressure</Text>
+              <Text style={styles.sectionSubtitleCompact}>A clearer view of the active deck before you commit.</Text>
+              <View style={styles.embeddedCardSlot}>
+                <TodayPressureCard counts={homeVm.counts} selectedDeckTitle={homeVm.selectedDeckTitle} />
               </View>
-
-              <View style={styles.segmentThree}>
-                {(['all', 'free', 'premium'] as const).map((key) => {
-                  const active = deckFilter === key;
-                  const label = key === 'all' ? 'ALL' : key === 'free' ? 'Free' : 'Premium';
-                  return (
-                    <Pressable
-                      key={key}
-                      style={({ pressed }) => [
-                        styles.segmentThreeItem,
-                        active && styles.segmentThreeItemActive,
-                        pressed && styles.pressed,
-                      ]}
-                      onPress={() => setDeckFilter(key)}
-                    >
-                      <Text style={[styles.segmentThreeText, active && styles.segmentThreeTextActive]}>{label}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-
-              {deckSummaries.length === 0 ? (
-                <View style={styles.emptyBox}>
-                  <Text style={styles.emptyTitle}>No decks installed yet</Text>
-                  <Text style={styles.emptySubtitle}>
-                    We will try to download decks automatically. You can also tap “Check & update decks” in Settings.
-                  </Text>
-                </View>
-              ) : (
-                filteredDecks.map((d) => {
-                  const active = d.slug === selectedSlug;
-                  const isPremium = d.deckType !== 1;
-
-                  const availability = (d.availability ?? '').toLowerCase();
-                  const isComing = availability === 'coming';
-
-                  // ✅ locked is based on serverPremium truth
-                  const lockedPremium = isPremium && !isPremiumUser;
-
-                  const needsFull =
-                    isPremiumUser && isPremium && d.localCards > 0 && d.localCards < d.totalCards;
-                  const needsFullInstall = isPremiumUser && isPremium && !d.canStudy;
-
-                  const deckUpdate = updates?.[d.slug];
-                  const hasInstalledVersion =
-                    typeof (deckUpdate as any)?.installedVersion === 'string' &&
-                    String((deckUpdate as any).installedVersion).trim().length > 0;
-
-                  const hasUpdate = hasInstalledVersion && !!(deckUpdate as any)?.hasUpdate;
-
-                  const isTrialInstalled = lockedPremium && isSignedIn && d.canStudy;
-
-                  return (
-                    <Pressable
-                      key={d.slug}
-                      style={({ pressed }) => [
-                        styles.deckRow,
-                        active && styles.deckRowActive,
-                        pressed && styles.deckRowPressed,
-                      ]}
-                      onPress={async () => {
-                        console.log('[Home] press', {
-                          slug: d.slug,
-                          serverPremium,
-                          effectivePremium: isPremiumUser,
-                          lockedPremium,
-                          needsFullInstall,
-                          needsFull,
-                          canStudy: d.canStudy,
-                          downloadMode: d.downloadMode,
-                          hasAccessToken: !!accessToken,
-                        });
-
-                        if (isComing) {
-                          Alert.alert('Coming soon', d.eta ? `ETA: ${d.eta}` : 'This deck is not available yet.', [
-                            { text: 'OK' },
-                          ]);
-                          return;
-                        }
-
-                        // premium full install (auth) — only allowed when serverPremium=true
-                        if (needsFullInstall || needsFull) {
-                          if (!accessToken || !accessToken.trim()) {
-                            Alert.alert('Sign-in required', 'Please sign in again to download premium decks.');
-                            return;
-                          }
-
-                          setState((prev) => ({ ...prev, loading: true }));
-                          try {
-                            const data = await fetchPremiumDeckUrl(d.slug, accessToken);
-                            if (!data?.url || !data?.buildId) throw new Error('Failed to get premium download url');
-
-                            const ok = await installDeckFromUrl(d.slug, data.url, data.buildId, null);
-                            if (!ok) throw new Error('Failed to install full deck');
-
-                            try {
-                              await applyCachedRemoteProgress(d.slug);
-                            } catch {}
-
-                            const newState = await computeHomeState();
-                            if (isMounted.current) setState(newState);
-
-                            openDeck(d.slug);
-                          } catch (e: any) {
-                            console.error('Premium install failed:', e);
-                            Alert.alert('Download failed', e?.message ?? 'Failed to download full deck.');
-                            setState((prev) => ({ ...prev, loading: false }));
-                          }
-                          return;
-                        }
-
-                        // locked premium: try preview
-                        if (lockedPremium) {
-                          if (isSignedIn) {
-                            const info: any = updates?.[d.slug];
-                            if (info?.remoteUrl && info.remoteVersion) {
-                              setState((prev) => ({ ...prev, loading: true }));
-                              try {
-                                const ok = await installDeckFromUrl(
-                                  d.slug,
-                                  info.remoteUrl,
-                                  info.remoteVersion,
-                                  info.remoteSha256,
-                                );
-                                if (ok) {
-                                  try {
-                                    await applyCachedRemoteProgress(d.slug);
-                                  } catch {}
-                                  const newState = await computeHomeState();
-                                  if (isMounted.current) setState(newState);
-                                  openDeck(d.slug);
-                                  return;
-                                }
-                              } catch (e: any) {
-                                console.error('Preview install failed:', e);
-                                Alert.alert('Download failed', e?.message ?? 'Failed to download preview.');
-                              } finally {
-                                setState((prev) => ({ ...prev, loading: false }));
-                              }
-                            }
-                          }
-                          openDeck(d.slug);
-                          return;
-                        }
-
-                        const needsInstall = !d.canStudy;
-                        const needsUpdate = d.canStudy && hasUpdate && !needsFull;
-
-                        if (needsInstall || needsUpdate) {
-                          setState((prev) => ({ ...prev, loading: true }));
-                          try {
-                            let ok = false;
-
-                            // public path
-                            const info: any = deckUpdate as any;
-                            if (info?.remoteUrl) {
-                              ok = await installDeckFromUrl(d.slug, info.remoteUrl, info.remoteVersion, info.remoteSha256);
-                            } else {
-                              // premium auth path (serverPremium only)
-                              const mode = String(d.downloadMode ?? '').toLowerCase();
-                              if (isPremiumUser && mode === 'auth') {
-                                if (!accessToken || !accessToken.trim()) throw new Error('Missing access token');
-                                const data = await fetchPremiumDeckUrl(d.slug, accessToken);
-                                if (!data?.url || !data?.buildId) throw new Error('Failed to get premium download url');
-                                ok = await installDeckFromUrl(d.slug, data.url, data.buildId, null);
-                              } else {
-                                ok = false;
-                              }
-                            }
-
-                            if (ok) {
-                              try {
-                                await applyCachedRemoteProgress(d.slug);
-                              } catch {}
-                              const newState = await computeHomeState();
-                              if (isMounted.current) setState(newState);
-                              openDeck(d.slug);
-                            } else {
-                              setState((prev) => ({ ...prev, loading: false }));
-                            }
-                          } catch (e: any) {
-                            console.error('Deck install/update failed:', e);
-                            Alert.alert('Download failed', e?.message ?? 'Failed to download this deck.');
-                            setState((prev) => ({ ...prev, loading: false }));
-                          }
-                          return;
-                        }
-
-                        openDeck(d.slug);
-                      }}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.deckRowTitle, active && styles.deckRowTitleActive]} numberOfLines={1}>
-                          {d.title}
-                        </Text>
-
-                        <Text style={styles.deckRowSub} numberOfLines={1}>
-                          {isComing
-                            ? `Coming${d.eta ? ` · ${d.eta}` : ''}`
-                            : isPremium
-                              ? lockedPremium && isSignedIn
-                                ? 'Premium · Free trial'
-                                : 'Premium'
-                              : 'Free'}{' '}
-                          · {d.totalCards} cards
-                        </Text>
-                      </View>
-
-                      {isComing ? (
-                        <View style={styles.deckRowRight}>
-                          <Text style={styles.comingPill}>Coming</Text>
-                        </View>
-                      ) : lockedPremium ? (
-                        <View style={styles.deckRowRight}>
-                          <Text style={styles.lockedPill}>{isSignedIn ? 'Free Trial' : '🔒 Premium'}</Text>
-                          {isTrialInstalled ? (
-                            <View style={styles.rowBarBg}>
-                              <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
-                              <View style={{ flex: 1 - d.percent }} />
-                            </View>
-                          ) : null}
-                        </View>
-                      ) : d.canStudy ? (
-                        <View style={styles.deckRowRight}>
-                          {needsFull ? <Text style={styles.updatePill}>Download full</Text> : null}
-                          {hasUpdate && !needsFull ? <Text style={styles.updatePill}>Update available</Text> : null}
-                          <Text style={styles.duePill}>{d.masteredApprox} finished</Text>
-                          <View style={styles.rowBarBg}>
-                            <View style={[styles.rowBarFill, { flex: d.percent, opacity: d.percent === 0 ? 0 : 1 }]} />
-                            <View style={{ flex: 1 - d.percent }} />
-                          </View>
-                        </View>
-                      ) : (
-                        <View style={styles.deckRowRight}>
-                          {hasUpdate && !needsFull ? <Text style={styles.updatePill}>Update available</Text> : null}
-                          <Text style={styles.lockedPill}>
-                            {isPremiumUser && isPremium ? 'Download full' : 'Not installed'}
-                          </Text>
-                        </View>
-                      )}
-                    </Pressable>
-                  );
-                })
-              )}
             </View>
 
-            <View style={{ height: 24 }} />
+            <View style={{ height: 8 }} />
           </ScrollView>
         </LinearGradient>
       </SafeAreaView>
@@ -1449,37 +1076,156 @@ export function HomeScreen({ navigation }: Props) {
 
 export default HomeScreen;
 
-const GLASS = 'rgba(255,255,255,0.16)';
-const BORDER = 'rgba(255,255,255,0.45)';
+const GLASS = 'rgba(255,249,240,0.72)';
+const BORDER = 'rgba(140,122,91,0.18)';
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  safeArea: { flex: 1, backgroundColor: '#FAF3E0' },
   gradient: { flex: 1 },
-  container: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 30 },
+  container: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 112 },
 
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  loadingText: { marginTop: 10, color: '#6B7280' },
+  loadingText: { marginTop: 10, color: '#8C7A5B' },
 
   pressed: { opacity: 0.9 },
+  buttonDisabled: { opacity: 0.45 },
 
-  headingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  appTitle: { fontSize: 22, fontWeight: '800', color: '#111827' },
-  appSubtitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
+  headingRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10 },
+  homeKicker: { fontSize: 11, fontWeight: '800', color: '#8C7A5B', letterSpacing: 1.1, fontFamily: 'Courier' },
+  appTitle: { marginTop: 6, fontSize: 28, fontWeight: '900', color: '#2A2218' },
+  appSubtitle: { marginTop: 4, fontSize: 12, lineHeight: 18, color: '#6B5A45' },
+
+  headingSupportRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+  },
+  activeDeckPill: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: 'rgba(200,136,58,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(200,136,58,0.18)',
+  },
+  activeDeckPillText: {
+    color: '#7A603D',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  supportLinkChip: {
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    backgroundColor: 'rgba(42,34,24,0.05)',
+  },
+  supportLinkText: {
+    color: '#5A4B38',
+    fontSize: 11,
+    fontWeight: '700',
+  },
 
   iconButton: {
     width: 42,
     height: 42,
     borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.86)',
+    backgroundColor: 'rgba(255,249,240,0.9)',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(140,122,91,0.14)',
+    shadowColor: '#9A7A42',
+    shadowOpacity: 0.10,
+    shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
   },
   iconButtonPressed: { opacity: 0.92 },
-  iconButtonText: { fontSize: 18, color: '#111827' },
+  iconButtonText: { fontSize: 18, color: '#2A2218' },
+
+  heroGiftCard: {
+    borderRadius: 28,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    backgroundColor: '#E9BF6A',
+    borderWidth: 1,
+    borderColor: 'rgba(166,111,38,0.22)',
+    shadowColor: '#C8883A',
+    shadowOpacity: 0.28,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 12 },
+    marginBottom: 14,
+    overflow: 'hidden',
+  },
+  heroGlowOrb: {
+    position: 'absolute',
+    top: -36,
+    right: -18,
+    width: 136,
+    height: 136,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.28)',
+  },
+  heroBadgeRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  heroGiftIcon: { fontSize: 20, marginRight: 8 },
+  heroBadge: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: 'rgba(58,38,8,0.88)',
+    letterSpacing: 1.2,
+    fontFamily: 'Courier',
+    backgroundColor: 'rgba(255,255,255,0.4)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+  heroTitle: { fontSize: 28, lineHeight: 34, fontWeight: '900', color: '#2A2218' },
+  heroSubtitle: { marginTop: 8, fontSize: 14, lineHeight: 20, color: '#4A3822' },
+  heroMeta: { marginTop: 10, fontSize: 11, lineHeight: 16, color: '#6A532C', fontWeight: '700', fontFamily: 'Courier' },
+  heroPrimaryButton: {
+    marginTop: 18,
+    borderRadius: 16,
+    paddingVertical: 15,
+    alignItems: 'center',
+    backgroundColor: '#3A2608',
+  },
+  heroPrimaryButtonText: { color: '#FFF7E9', fontSize: 15, fontWeight: '900' },
+  heroSecondaryButton: {
+    marginTop: 10,
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+    backgroundColor: 'rgba(58,38,8,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(58,38,8,0.12)',
+  },
+  heroSecondaryButtonText: { color: '#3A2608', fontSize: 13, fontWeight: '800' },
+
+  subduedRouteCard: {
+    borderRadius: 24,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
+    backgroundColor: 'rgba(255,249,240,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(140,122,91,0.14)',
+    marginBottom: 14,
+  },
+  subduedRouteKicker: { fontSize: 11, fontWeight: '800', color: '#8C7A5B', letterSpacing: 1, fontFamily: 'Courier' },
+  subduedRouteTitle: { marginTop: 8, fontSize: 18, lineHeight: 24, fontWeight: '800', color: '#2A2218' },
+  subduedRouteBody: { marginTop: 8, fontSize: 12, lineHeight: 18, color: '#6B5A45' },
+  subduedRouteButton: {
+    marginTop: 14,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    backgroundColor: 'rgba(42,34,24,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(42,34,24,0.08)',
+  },
+  subduedRouteButtonText: { fontSize: 12, fontWeight: '800', color: '#2A2218' },
 
   cardGlass: {
     borderRadius: 22,
@@ -1496,42 +1242,46 @@ const styles = StyleSheet.create({
   },
 
   calendarCardFixed: { minHeight: 200 },
+  calendarSupportCard: {
+    backgroundColor: 'rgba(255,249,240,0.82)',
+    shadowOpacity: 0.07,
+  },
 
   cardHeaderRow: { flexDirection: 'row', alignItems: 'center' },
-  cardTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
-  cardSubtitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
+  cardTitle: { fontSize: 15, fontWeight: '800', color: '#2A2218' },
+  cardSubtitle: { marginTop: 4, fontSize: 12, color: '#8C7A5B' },
 
   segment: {
     flexDirection: 'row',
     borderRadius: 999,
     padding: 4,
-    backgroundColor: 'rgba(255,255,255,0.55)',
+    backgroundColor: 'rgba(255,249,240,0.9)',
     borderWidth: 1,
-    borderColor: 'rgba(17,24,39,0.08)',
+    borderColor: 'rgba(140,122,91,0.14)',
     marginLeft: 12,
   },
   segmentItem: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999 },
-  segmentItemActive: { backgroundColor: 'rgba(79,70,229,0.14)' },
-  segmentText: { fontSize: 12, fontWeight: '700', color: '#111827' },
-  segmentTextActive: { color: '#4F46E5' },
+  segmentItemActive: { backgroundColor: 'rgba(200,136,58,0.14)' },
+  segmentText: { fontSize: 12, fontWeight: '700', color: '#2A2218' },
+  segmentTextActive: { color: '#A66F26' },
 
   weekGrid: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
   weekCell: { flex: 1, alignItems: 'center' },
-  weekDate: { fontSize: 10, color: '#6B7280' },
-  weekLabel: { marginTop: 6, fontSize: 10, color: '#6B7280' },
+  weekDate: { fontSize: 10, color: '#8C7A5B' },
+  weekLabel: { marginTop: 6, fontSize: 10, color: '#8C7A5B' },
 
   weekBarBg: {
     marginTop: 8,
     height: 38,
     width: 12,
     borderRadius: 999,
-    backgroundColor: 'rgba(17,24,39,0.08)',
+    backgroundColor: 'rgba(140,122,91,0.12)',
     overflow: 'hidden',
   },
   weekBarFill: {
     width: 12,
     borderRadius: 999,
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#C8883A',
   },
 
   weekHintSlot: {
@@ -1540,21 +1290,98 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  weekHintText: { fontSize: 11, color: '#6B7280' },
+  weekHintText: { fontSize: 11, color: '#8C7A5B' },
 
   sectionCard: {
     borderRadius: 22,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(255,255,255,0.86)',
-    shadowColor: '#000',
-    shadowOpacity: 0.10,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 10 },
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255,249,240,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(140,122,91,0.12)',
+    shadowColor: '#9A7A42',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
     marginBottom: 14,
   },
+  secondarySectionCard: {
+    backgroundColor: 'rgba(255,249,240,0.72)',
+    shadowOpacity: 0.05,
+  },
+  supportSummaryCard: {
+    borderRadius: 22,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(42,34,24,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(42,34,24,0.08)',
+    marginBottom: 14,
+  },
+  supportSummaryKicker: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#8C7A5B',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    fontFamily: 'Courier',
+  },
+  supportSummaryTitle: {
+    marginTop: 8,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '800',
+    color: '#2A2218',
+  },
+  supportSummaryBody: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#6B5A45',
+  },
+  stateHintCard: {
+    borderColor: 'rgba(79,70,229,0.18)',
+    backgroundColor: 'rgba(79,70,229,0.06)',
+  },
+  amberSectionCard: {
+    borderColor: 'rgba(200,136,58,0.28)',
+  },
+  embeddedCardSlot: { marginTop: 12 },
+  momentumCard: {
+    borderRadius: 22,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(200,136,58,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(200,136,58,0.18)',
+    marginBottom: 14,
+  },
+  momentumLabel: { fontSize: 11, fontWeight: '800', color: '#A66F26', textTransform: 'uppercase', letterSpacing: 0.8, fontFamily: 'Courier' },
+  momentumTitle: { marginTop: 6, fontSize: 16, fontWeight: '800', color: '#4A3822' },
+  momentumBody: { marginTop: 6, fontSize: 12, lineHeight: 17, color: '#6B5A45' },
+  momentumHint: { marginTop: 8, fontSize: 11, color: '#8C7A5B' },
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
-  sectionTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
+  sectionTitle: { fontSize: 15, fontWeight: '800', color: '#2A2218' },
+  sectionTitleSecondary: { fontSize: 13, fontWeight: '800', color: '#6B5A45' },
+  sectionSubtitleCompact: { marginTop: 6, fontSize: 11, lineHeight: 16, color: '#8C7A5B' },
+  v6ShellRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  v6ShellChip: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(200,136,58,0.10)',
+  },
+  v6ShellChipText: { fontSize: 11, fontWeight: '700', color: '#A66F26' },
+  secondaryInlineButton: {
+    marginTop: 12,
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: 'rgba(200,136,58,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(200,136,58,0.16)',
+  },
+  secondaryInlineButtonText: { fontSize: 12, fontWeight: '800', color: '#A66F26' },
 
   segmentThree: {
     marginTop: 10,
@@ -1572,9 +1399,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: 16,
-    paddingVertical: 12,
+    paddingVertical: 11,
     paddingHorizontal: 12,
-    backgroundColor: 'rgba(17,24,39,0.04)',
+    backgroundColor: 'rgba(17,24,39,0.03)',
     marginTop: 10,
   },
   deckRowActive: {

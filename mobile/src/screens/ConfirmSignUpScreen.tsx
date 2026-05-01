@@ -102,7 +102,7 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
 
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Confirmation code</Text>
-            <Text style={styles.cardHint}>Use the latest code you received.</Text>
+            <Text style={styles.cardHint}>Use the latest code to finish protecting sync and recovery.</Text>
 
             <Text style={styles.label}>Code</Text>
             <View style={styles.inputWrap}>
@@ -153,7 +153,7 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
               <Text style={styles.secondaryText}>Resend code</Text>
             </Pressable>
 
-            <Text style={styles.footnote}>Tip: only the latest code works.</Text>
+            <Text style={styles.footnote}>Only the latest code works. If you requested several, use the newest email.</Text>
           </View>
 
           <View style={{ height: 28 }} />

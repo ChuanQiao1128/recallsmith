@@ -32,7 +32,6 @@ import {
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 
 import type { CardProgress, ReviewRating } from '../review/model';
-import { scheduleNextReview, formatDateKey } from '../review/model';
 
 import {
   loadDeckProgress,
@@ -53,56 +52,20 @@ import {
 // ✅ premium entitlement
 import { usePremiumUser, setIsPremiumUser } from '../premium/premiumStore';
 import { rcGetCustomerInfoSafe, isPremiumActive } from '../premium/revenuecat';
+import { countDueToday, pickNextCard } from '../features/gacha/planner/sessionPlanner';
+import { buildRatedSessionState, buildSessionProgressVM, modeLabel, type CurrentCardLike } from '../features/gacha/session/sessionReviewHelpers';
+import { buildCardMap, buildPreviewDeck, normalizeCodeLanguage, renderSimpleMarkdown, showTrialUpsellDialog, sortCards } from '../features/gacha/session/reviewContentHelpers';
+import SessionProgressHeader from '../features/gacha/components/SessionProgressHeader';
+import RatingBar from '../features/gacha/components/RatingBar';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Review'>;
 type UiRating = ReviewRating;
-
-interface CurrentCard {
-  card: CardExport;
-  progress: CardProgress;
-}
 
 type TrialInfo = {
   isTrial: boolean;
   previewCount: number; // e.g. 30
   totalCards: number; // full deck total for dialog copy
 };
-
-function showTrialUpsellDialog(
-  navigation: any,
-  opts: { deckTitle: string; previewCount: number; totalCards: number },
-) {
-  const { deckTitle, previewCount, totalCards } = opts;
-
-  Alert.alert(
-    '免费试学已完成',
-    `你已学完「${deckTitle}」可免费学习的前 ${previewCount} 张卡片（共 ${totalCards} 张）。\n\n你仍可无限复习这 ${previewCount} 张。\n升级 Premium 解锁剩余内容并继续进度。`,
-    [
-      { text: '继续复习', style: 'cancel' },
-      { text: '升级 Premium', onPress: () => navigation.navigate('Paywall' as any) },
-    ],
-  );
-}
-
-function buildPreviewDeck(deck: DeckExport, previewLimit: number): DeckExport {
-  const cards = deck.Cards ?? [];
-  const take = Math.max(0, Math.min(previewLimit, cards.length));
-  return {
-    ...deck,
-    Cards: cards.slice(0, take),
-    TotalCards: Math.min(deck.TotalCards ?? cards.length, take),
-  };
-}
-
-function buildCardMap(deck: DeckExport): Map<string, CardExport> {
-  const map = new Map<string, CardExport>();
-  for (const c of deck.Cards ?? []) map.set(c.StableUid, c);
-  return map;
-}
-
-function sortCards(deck: DeckExport): CardExport[] {
-  return [...(deck.Cards ?? [])].sort((a, b) => a.OrderInDeck - b.OrderInDeck);
-}
 
 function startOfToday(now: Date) {
   const d = new Date(now.getTime());
@@ -112,50 +75,6 @@ function startOfToday(now: Date) {
 
 function isLearned(p: CardProgress): boolean {
   return typeof p.lastReviewedAt === 'number' && p.lastReviewedAt > 0;
-}
-
-function isNewCard(p: CardProgress): boolean {
-  return !isLearned(p);
-}
-
-function isScheduled(p: CardProgress): boolean {
-  return isLearned(p) && typeof p.nextReviewAt === 'number' && p.nextReviewAt > 0;
-}
-
-function isDueTodayBucket(p: CardProgress, now: Date): boolean {
-  if (!isScheduled(p)) return false;
-
-  const today0 = startOfToday(now);
-  const todayKey = formatDateKey(today0);
-
-  const next = new Date(p.nextReviewAt);
-  const effective = next.getTime() < today0.getTime() ? today0 : next;
-
-  return formatDateKey(effective) === todayKey;
-}
-
-function countDueToday(progress: CardProgress[], now: Date): number {
-  let c = 0;
-  for (const p of progress) {
-    if (isDueTodayBucket(p, now)) c += 1;
-  }
-  return c;
-}
-
-function getCardRevision(card: any): number {
-  const r = card?.Revision;
-  return typeof r === 'number' && r > 0 ? r : 1;
-}
-
-function getSeenRevision(p: CardProgress): number {
-  const seen = (p as any).lastSeenRevision;
-  if (typeof seen === 'number') return seen;
-  return isLearned(p) ? 1 : 0;
-}
-
-function isUpdatedCard(card: any, p: CardProgress): boolean {
-  if (!isLearned(p)) return false;
-  return getCardRevision(card) > getSeenRevision(p);
 }
 
 /**
@@ -187,104 +106,6 @@ function computePremiumActive(customerInfo: any): boolean {
   return false;
 }
 
-function pickNextCard(
-  deck: DeckExport,
-  progress: CardProgress[],
-  now: Date,
-  mode: 'review-due' | 'learn-new' | 'mixed',
-  avoidUid?: string | null,
-  index?: { cards: CardExport[]; cardMap: Map<string, CardExport> } | null,
-): CurrentCard | null {
-  const cardMap = index?.cardMap ?? buildCardMap(deck);
-  const cards = index?.cards ?? sortCards(deck);
-  const pMap = new Map(progress.map((p) => [p.stableUid, p]));
-
-  const pickWith = (predicate: (card: CardExport, p: CardProgress) => boolean) => {
-    for (const card of cards) {
-      if (avoidUid && card.StableUid === avoidUid) continue;
-      const p = pMap.get(card.StableUid);
-      if (!p) continue;
-      if (predicate(card, p)) return { card: cardMap.get(card.StableUid)!, progress: p };
-    }
-
-    if (avoidUid) {
-      for (const card of cards) {
-        const p = pMap.get(card.StableUid);
-        if (!p) continue;
-        if (predicate(card, p)) return { card: cardMap.get(card.StableUid)!, progress: p };
-      }
-    }
-
-    return null;
-  };
-
-  const pickDue = () => pickWith((_card, p) => isDueTodayBucket(p, now));
-  const pickUpdated = () => pickWith((card, p) => isUpdatedCard(card, p));
-  const pickNew = () => pickWith((_card, p) => isNewCard(p));
-
-  if (mode === 'review-due') return pickDue();
-  if (mode === 'learn-new') return pickNew();
-
-  return pickDue() ?? pickUpdated() ?? pickNew();
-}
-
-function modeLabel(mode: string) {
-  if (mode === 'review-due') return 'Review Due';
-  if (mode === 'learn-new') return 'Learn';
-  return 'Mixed';
-}
-
-function normalizeCodeLanguage(lang?: string | null): string {
-  const l = (lang ?? '').trim().toLowerCase();
-  if (!l) return 'text';
-
-  if (l === 'ts') return 'typescript';
-  if (l === 'tsx') return 'tsx';
-  if (l === 'js') return 'javascript';
-  if (l === 'jsx') return 'jsx';
-  if (l === 'py') return 'python';
-  if (l === 'rb') return 'ruby';
-  if (l === 'sh' || l === 'shell') return 'bash';
-  if (l === 'yml') return 'yaml';
-  if (l === 'c++') return 'cpp';
-  if (l === 'c#' || l === 'cs' || l === 'csharp') return 'csharp';
-
-  return l;
-}
-
-function renderSimpleMarkdown(text: string, stylesObj: any) {
-  const lines = text.split('\n');
-  const nodes: React.ReactNode[] = [];
-
-  lines.forEach((line, idx) => {
-    const raw = line.trimEnd();
-    if (raw.trim().length === 0) {
-      nodes.push(<View key={`sp-${idx}`} style={{ height: 8 }} />);
-      return;
-    }
-
-    const bullet = raw.startsWith('- ') || raw.startsWith('* ') ? raw.slice(2).trim() : null;
-
-    if (bullet !== null) {
-      nodes.push(
-        <View key={`b-${idx}`} style={stylesObj.mdBulletRow}>
-          <Text style={stylesObj.mdBullet}>•</Text>
-          <Text style={stylesObj.mdText}>{bullet}</Text>
-        </View>,
-      );
-      return;
-    }
-
-    nodes.push(
-      <Text key={`p-${idx}`} style={stylesObj.mdText}>
-        {raw}
-      </Text>,
-    );
-  });
-
-  return nodes;
-}
-
 export function ReviewScreen({ navigation, route }: Props) {
   const slugFromRoute = route.params?.slug ?? null;
   const { mode = 'mixed', limit = 20 } = route.params ?? {};
@@ -300,7 +121,7 @@ export function ReviewScreen({ navigation, route }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   const [dailyStats, setDailyStats] = useState<DailyStats | null>(null);
-  const [current, setCurrent] = useState<CurrentCard | null>(null);
+  const [current, setCurrent] = useState<CurrentCardLike | null>(null);
 
   // ✅ premium entitlement
   const isPremiumUser = usePremiumUser();
@@ -567,7 +388,14 @@ export function ReviewScreen({ navigation, route }: Props) {
           const stats = await loadOrInitDailyStats(deckForStudy, p);
           if (cancelled) return;
 
-          const next = pickNextCard(deckForStudy, p, now, mode, null, cardIndexRef.current);
+          const next = pickNextCard({
+            deck: deckForStudy,
+            progress: p,
+            now,
+            mode,
+            avoidUid: null,
+            index: cardIndexRef.current,
+          });
 
           setProgress(p);
           setDailyStats(stats);
@@ -639,7 +467,12 @@ export function ReviewScreen({ navigation, route }: Props) {
 
   const now = new Date();
   const dueTodayCount = countDueToday(progress, now);
-  const sessionPercent = sessionLimit > 0 ? Math.min(sessionDone / sessionLimit, 1) : 0;
+  const sessionVm = buildSessionProgressVM({
+    sessionDone,
+    sessionLimit,
+    dueTodayCount,
+    mode,
+  });
 
   const PERSPECTIVE = 1000;
 
@@ -650,32 +483,31 @@ export function ReviewScreen({ navigation, route }: Props) {
 
     setReviewing(true);
     try {
-      const nowMs = Date.now();
+      const nowAtRating = new Date();
+      const nowMs = nowAtRating.getTime();
 
-      const seenRev = getCardRevision(current.card);
+      const nextState = buildRatedSessionState({
+        current,
+        progress,
+        rating: uiRating,
+        mode,
+        sessionDone,
+        sessionLimit,
+        now: nowAtRating,
+        cardIndex: cardIndexRef.current,
+      });
 
-      const updatedOne: CardProgress = {
-        ...scheduleNextReview(current.progress, uiRating, new Date(nowMs)),
-        lastSeenRevision: seenRev,
-      };
+      await saveDeckProgress(deck, nextState.updatedProgress);
 
-      const prevLearnedCount = progress.filter(isLearned).length;
-
-      const newProgress = progress.map((p) => (p.stableUid === updatedOne.stableUid ? updatedOne : p));
-
-      // ✅ persist progress (trial uses preview deck => only preview cards are saved)
-      await saveDeckProgress(deck, newProgress);
-
-      // ✅ enqueue sync event (crash-safe)
       try {
         const eventId = await recordReviewEvent({
           deckSlug: deck.Slug,
           deckVersion: deck.Version,
-          stableUid: updatedOne.stableUid,
+          stableUid: nextState.updatedOne.stableUid,
           rating: uiRating,
           reviewedAtMs: nowMs,
-          progressAfter: updatedOne,
-          lastSeenRevision: seenRev,
+          progressAfter: nextState.updatedOne,
+          lastSeenRevision: nextState.updatedOne.lastSeenRevision,
         });
 
         if (eventId) {
@@ -685,12 +517,11 @@ export function ReviewScreen({ navigation, route }: Props) {
         console.warn('[Review] recordReviewEvent failed:', (e as any)?.message ?? e);
       }
 
-      // ✅ trial completion popup: crossing N learned in learn/mixed
       {
         const t = trialRef.current;
         if (t.isTrial && (mode === 'learn-new' || mode === 'mixed') && t.previewCount > 0) {
-          const nextLearnedCount = newProgress.filter(isLearned).length;
-          const crossed = prevLearnedCount < t.previewCount && nextLearnedCount >= t.previewCount;
+          const nextLearnedCount = nextState.updatedProgress.filter(isLearned).length;
+          const crossed = nextState.prevLearnedCount < t.previewCount && nextLearnedCount >= t.previewCount;
           if (crossed) {
             showTrialUpsellDialog(navigation, {
               deckTitle: deck.Title,
@@ -701,26 +532,13 @@ export function ReviewScreen({ navigation, route }: Props) {
         }
       }
 
-      const nextDone = sessionDone + 1;
-      setSessionDone(nextDone);
-
-      const remaining = sessionLimit > 0 ? Math.max(sessionLimit - nextDone, 0) : Infinity;
-
-      avoidUidRef.current = updatedOne.stableUid;
-
-      const next =
-        remaining > 0
-          ? pickNextCard(deck, newProgress, new Date(), mode, avoidUidRef.current, cardIndexRef.current)
-          : null;
-
-      setProgress(newProgress);
-      setCurrent(next);
+      setSessionDone(nextState.nextDone);
+      avoidUidRef.current = nextState.updatedOne.stableUid;
+      setProgress(nextState.updatedProgress);
+      setCurrent(nextState.nextCurrent);
 
       resetToFront();
-
-      const now2 = new Date();
-      const remainingDueCount = countDueToday(newProgress, now2);
-      void syncDailyReminders({ remainingDueCount, now: now2 });
+      void syncDailyReminders({ remainingDueCount: nextState.remainingDueCount, now: new Date(nowAtRating.getTime()) });
     } finally {
       setReviewing(false);
     }
@@ -747,39 +565,39 @@ export function ReviewScreen({ navigation, route }: Props) {
               <Text style={styles.title} numberOfLines={1}>
                 {deck.Title}
               </Text>
-              <Text style={styles.subtitle}>
-                Session {sessionDone}/{sessionLimit || '∞'} · {modeLabel(mode)}
-              </Text>
+              <Text style={styles.subtitle}>{sessionVm.subtitle}</Text>
             </View>
           </View>
 
-          <View style={styles.sessionCard}>
-            <View style={styles.sessionHeaderRow}>
-              <Text style={styles.sessionLabel}>Session progress</Text>
-              <Text style={styles.sessionValue}>
-                {sessionDone} / {sessionLimit || '∞'}
-              </Text>
-            </View>
-
-            <View style={styles.progressBarBg}>
-              <View style={[styles.progressBarFill, { flex: sessionPercent, opacity: sessionPercent === 0 ? 0 : 1 }]} />
-              <View style={{ flex: 1 - sessionPercent }} />
-            </View>
-
-            <Text style={styles.sessionHint}>
-              {dueTodayCount} card{dueTodayCount === 1 ? '' : 's'} due today in this deck.
-            </Text>
-          </View>
+          <SessionProgressHeader vm={sessionVm} />
 
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
             <Text style={styles.sectionTitle}>Now reviewing</Text>
+            <Text style={styles.sectionSubtitle}>Read first, then rate from memory. The next card should feel close, not delayed.</Text>
 
             {!current ? (
               <View style={styles.doneCard}>
-                <Text style={styles.doneTitle}>You are done for now 🎉</Text>
+                <Text style={styles.doneTitle}>Route complete 🎉</Text>
                 <Text style={styles.doneBody}>
-                  This session is complete. You can go back to the deck screen and start another run later.
+                  This run is complete. Review the reward summary, then decide whether to return home or reopen the deck.
                 </Text>
+                <View style={styles.doneActions}>
+                  <Pressable
+                    style={({ pressed }) => [styles.doneButton, pressed && styles.backButtonPressed]}
+                    onPress={() =>
+                      navigation.replace('SessionSummary', {
+                        slug: deck.Slug,
+                        deckTitle: deck.Title,
+                        sessionDone,
+                        sessionLimit,
+                        minimumGoal: 1,
+                        dueCount: dueTodayCount,
+                      })
+                    }
+                  >
+                    <Text style={styles.doneButtonText}>View summary</Text>
+                  </Pressable>
+                </View>
               </View>
             ) : (
               <View style={styles.cardCard}>
@@ -813,7 +631,7 @@ export function ReviewScreen({ navigation, route }: Props) {
                       <Text style={styles.cardQuestion}>{current.card.Question}</Text>
 
                       <View style={styles.flipHintBox}>
-                        <Text style={styles.flipHintText}>Tap the card to reveal the back.</Text>
+                        <Text style={styles.flipHintText}>Tap once to reveal the answer, examples, and rating controls.</Text>
                       </View>
                     </Pressable>
                   </Animated.View>
@@ -876,67 +694,7 @@ export function ReviewScreen({ navigation, route }: Props) {
                       </View>
 
                       <View style={styles.backRatingSection}>
-                        <Text style={styles.ratingHint}>
-                          Think about how well you recalled this before seeing the answer.
-                        </Text>
-
-                        <View style={styles.ratingGrid}>
-                          <Pressable
-                            style={({ pressed }) => [
-                              styles.ratingButton,
-                              styles.ratingAgain,
-                              pressed && styles.ratingPressed,
-                              reviewing && styles.ratingDisabled,
-                            ]}
-                            disabled={reviewing}
-                            onPress={() => handleRating('again')}
-                          >
-                            <Text style={styles.ratingTitle}>Again</Text>
-                            <Text style={styles.ratingSub}>Show very soon</Text>
-                          </Pressable>
-
-                          <Pressable
-                            style={({ pressed }) => [
-                              styles.ratingButton,
-                              styles.ratingHard,
-                              pressed && styles.ratingPressed,
-                              reviewing && styles.ratingDisabled,
-                            ]}
-                            disabled={reviewing}
-                            onPress={() => handleRating('hard')}
-                          >
-                            <Text style={styles.ratingTitle}>Hard</Text>
-                            <Text style={styles.ratingSub}>Short interval</Text>
-                          </Pressable>
-
-                          <Pressable
-                            style={({ pressed }) => [
-                              styles.ratingButton,
-                              styles.ratingGood,
-                              pressed && styles.ratingPressed,
-                              reviewing && styles.ratingDisabled,
-                            ]}
-                            disabled={reviewing}
-                            onPress={() => handleRating('good')}
-                          >
-                            <Text style={styles.ratingTitle}>Good</Text>
-                            <Text style={styles.ratingSub}>Normal interval</Text>
-                          </Pressable>
-
-                          <Pressable
-                            style={({ pressed }) => [
-                              styles.ratingButton,
-                              styles.ratingEasy,
-                              pressed && styles.ratingPressed,
-                              reviewing && styles.ratingDisabled,
-                            ]}
-                            disabled={reviewing}
-                            onPress={() => handleRating('easy')}
-                          >
-                            <Text style={styles.ratingTitle}>Easy</Text>
-                            <Text style={styles.ratingSub}>Much later</Text>
-                          </Pressable>
-                        </View>
+                        <RatingBar disabled={reviewing} onRate={handleRating} />
                       </View>
                     </View>
                   </Animated.View>
@@ -977,36 +735,6 @@ const styles = StyleSheet.create({
   title: { fontSize: 18, fontWeight: '700', color: '#111827' },
   subtitle: { fontSize: 12, color: '#6B7280' },
 
-  sessionCard: {
-    borderRadius: 20,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    backgroundColor: CARD_GLASS,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    shadowColor: '#000',
-    shadowOpacity: 0.14,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 10 },
-    marginBottom: 14,
-  },
-  sessionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  sessionLabel: { fontSize: 13, color: '#111827', fontWeight: '500' },
-  sessionValue: { fontSize: 13, color: '#4F46E5', fontWeight: '600' },
-
-  progressBarBg: {
-    marginTop: 6,
-    marginBottom: 6,
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-    flexDirection: 'row',
-    overflow: 'hidden',
-  },
-  progressBarFill: { backgroundColor: '#4F46E5', borderRadius: 999 },
-
-  sessionHint: { fontSize: 11, color: '#6B7280' },
-
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 24 },
 
@@ -1014,8 +742,30 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#111827',
-    marginBottom: 8,
+    marginBottom: 6,
   },
+  sectionSubtitle: { fontSize: 12, lineHeight: 18, color: '#6B7280', marginBottom: 12 },
+
+  doneCard: {
+    borderRadius: 22,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
+  },
+  doneTitle: { fontSize: 18, fontWeight: '700', color: '#111827' },
+  doneBody: { marginTop: 8, fontSize: 13, lineHeight: 20, color: '#4B5563' },
+  doneActions: { marginTop: 14, flexDirection: 'row' },
+  doneButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(79,70,229,0.12)',
+  },
+  doneButtonText: { fontSize: 13, fontWeight: '700', color: '#4F46E5' },
 
   cardCard: {
     borderRadius: 22,
@@ -1132,44 +882,4 @@ const styles = StyleSheet.create({
   mdBulletRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 },
   mdBullet: { width: 18, fontSize: 14, color: '#374151', lineHeight: 18 },
   mdText: { flex: 1, fontSize: 13, color: '#374151', lineHeight: 18 },
-
-  ratingHint: {
-    marginTop: 6,
-    paddingHorizontal: 10,
-    fontSize: 13,
-    color: '#6B7280',
-    marginBottom: 8,
-  },
-
-  ratingGrid: {
-    paddingHorizontal: 10,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    paddingBottom: 10,
-  },
-  ratingButton: {
-    width: '48%',
-    borderRadius: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    marginBottom: 8,
-  },
-  ratingAgain: { backgroundColor: '#FEE2E2' },
-  ratingHard: { backgroundColor: '#FFEDD5' },
-  ratingGood: { backgroundColor: '#DCFCE7' },
-  ratingEasy: { backgroundColor: '#DBEAFE' },
-  ratingPressed: { opacity: 0.9 },
-  ratingDisabled: { opacity: 0.5 },
-  ratingTitle: { fontSize: 14, fontWeight: '600', color: '#111827' },
-  ratingSub: { fontSize: 11, color: '#4B5563', marginTop: 2 },
-
-  doneCard: {
-    borderRadius: 20,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    backgroundColor: '#ECFDF5',
-  },
-  doneTitle: { fontSize: 16, fontWeight: '600', color: '#166534', marginBottom: 4 },
-  doneBody: { fontSize: 13, color: '#166534' },
 });

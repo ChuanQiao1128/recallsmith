@@ -1,0 +1,108 @@
+import type { MockDailyDoseCard } from './types';
+import type { LevelSessionCard } from '../features/gacha/session/levelFlow';
+
+export const MOCK_SESSION_CARDS: Record<string, LevelSessionCard> = {
+  'dose-1': {
+    stableUid: 'dose-1',
+    question: 'Explain the difference between Task and Thread.',
+    answer: 'A Thread is an OS-scheduled execution unit. A Task is a higher-level async abstraction that may run on threads but can also represent non-blocking work.',
+    code: 'var result = await service.GetUserAsync();',
+    codeLanguage: 'csharp',
+    irlPrompt: 'In a backend interview, when would using Task help you scale better than manually managing threads?',
+    irlHint: 'Talk about IO-bound work, pool reuse, and not blocking request threads.',
+    audience: 'Junior',
+    tag: 'async-await',
+    difficulty: 1,
+    rarity: 'COM',
+  },
+  'dose-2': {
+    stableUid: 'dose-2',
+    question: 'What does ConfigureAwait(false) change?',
+    answer: 'It tells the await continuation not to capture the current synchronization context, which helps library code avoid deadlocks and reduce unnecessary context hops.',
+    code: 'await httpClient.GetStringAsync(url).ConfigureAwait(false);',
+    codeLanguage: 'csharp',
+    irlPrompt: 'What bug can appear if a shared library always captures the caller context in high-volume services?',
+    irlHint: 'Mention deadlocks in old UI/server contexts and wasted rescheduling.',
+    audience: 'Both',
+    tag: 'async-await',
+    difficulty: 2,
+    rarity: 'RAR',
+  },
+  'dose-3': {
+    stableUid: 'dose-3',
+    question: 'Why can DbContext lifetime cause hidden production bugs?',
+    answer: 'A DbContext that lives too long can retain stale tracking state, leak memory, and blur transaction boundaries across requests.',
+    code: 'services.AddDbContext<AppDbContext>(options => options.UseSqlServer(conn));',
+    codeLanguage: 'csharp',
+    irlPrompt: 'How would a singleton DbContext fail differently under light local testing vs real concurrent traffic?',
+    irlHint: 'Focus on stale entities, thread-unsafety, and mixed request state.',
+    audience: 'All',
+    tag: 'ef-core',
+    difficulty: 3,
+    rarity: 'LEG',
+  },
+  'dose-4': {
+    stableUid: 'dose-4',
+    question: 'How would you explain eventual consistency to an interviewer?',
+    answer: 'Eventual consistency means writes may not be visible everywhere immediately, but replicas converge over time. Design around temporary mismatch and idempotent retries.',
+    code: 'await bus.PublishAsync(new OrderCreated(orderId));',
+    codeLanguage: 'csharp',
+    irlPrompt: 'When a user updates a profile and another service still reads old data, what design choices keep the experience safe?',
+    irlHint: 'Mention retries, UI messaging, and compensating actions.',
+    audience: 'Both',
+    tag: 'messaging',
+    difficulty: 3,
+    rarity: 'RAR',
+  },
+  'draw-1': {
+    stableUid: 'draw-1',
+    question: 'What problem does dependency injection solve?',
+    answer: 'Dependency injection reduces hidden coupling and makes object graphs configurable, testable, and easier to replace.',
+    code: 'builder.Services.AddScoped<IClock, SystemClock>();',
+    codeLanguage: 'csharp',
+    irlPrompt: 'Why is constructor injection usually a better interview answer than creating dependencies with new inside controllers?',
+    irlHint: 'Talk about test seams, lifecycle control, and separation of concerns.',
+    audience: 'Junior',
+    tag: 'oop',
+    difficulty: 2,
+    rarity: 'RAR',
+  },
+  'draw-2': {
+    stableUid: 'draw-2',
+    question: 'How does ASP.NET Core middleware ordering affect requests?',
+    answer: 'Middleware runs in registration order on the way in and reverse order on the way out, so ordering determines auth, logging, exception handling, and routing behavior.',
+    code: 'app.UseAuthentication();\napp.UseAuthorization();\napp.MapControllers();',
+    codeLanguage: 'csharp',
+    irlPrompt: 'What production issue appears when auth middleware is placed after endpoint mapping?',
+    irlHint: 'Describe skipped auth checks and handlers running too late.',
+    audience: 'All',
+    tag: 'aspnet-core',
+    difficulty: 3,
+    rarity: 'LEG',
+  },
+  'draw-3': {
+    stableUid: 'draw-3',
+    question: 'When should you prefer IQueryable over IEnumerable?',
+    answer: 'Use IQueryable while composing database queries so filtering stays server-side. Switch to IEnumerable after materialization when operating in memory.',
+    code: 'var adults = db.Users.Where(u => u.Age >= 18);',
+    codeLanguage: 'csharp',
+    irlPrompt: 'What interview explanation shows you understand the performance cost of calling ToList too early?',
+    irlHint: 'Mention network round-trips, transferred rows, and lost SQL translation.',
+    audience: 'Both',
+    tag: 'linq',
+    difficulty: 2,
+    rarity: 'RAR',
+  },
+};
+
+export const MOCK_DAILY_DOSE: MockDailyDoseCard[] = [
+  { stableUid: 'dose-1', question: MOCK_SESSION_CARDS['dose-1'].question, difficulty: 1, role: 'warmup' },
+  { stableUid: 'dose-2', question: MOCK_SESSION_CARDS['dose-2'].question, difficulty: 2, role: 'normal' },
+  { stableUid: 'dose-3', question: MOCK_SESSION_CARDS['dose-3'].question, difficulty: 3, role: 'elite' },
+  { stableUid: 'dose-4', question: MOCK_SESSION_CARDS['dose-4'].question, difficulty: 3, role: 'boss' },
+];
+
+export function buildMockSessionCards(cardIds?: string[]): LevelSessionCard[] {
+  const ids = cardIds?.length ? cardIds : MOCK_DAILY_DOSE.map((card) => card.stableUid);
+  return ids.map((id) => MOCK_SESSION_CARDS[id]).filter(Boolean);
+}

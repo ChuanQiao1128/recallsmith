@@ -617,3 +617,63 @@ export async function loadAllProgress(): Promise<Record<string, CardProgress[]>>
 
   return out;
 }
+
+export async function resetAllReviewSchedules(now: Date = new Date()): Promise<void> {
+  const allKeys = await AsyncStorage.getAllKeys();
+  const scope = await getUserScopePrefix();
+  const progressKeys = allKeys.filter(
+    (k) =>
+      k.startsWith(`${scope}${PROGRESS_PREFIX}`) &&
+      !k.slice((`${scope}${PROGRESS_PREFIX}`).length).includes(':'),
+  );
+
+  const nowMs = now.getTime();
+  const progressPairs = await AsyncStorage.multiGet(progressKeys);
+  const progressWrites: [string, string][] = [];
+
+  for (const [key, raw] of progressPairs) {
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) continue;
+      const reset = parsed.map((item: any) => {
+        const learned = typeof item?.lastReviewedAt === 'number' && item.lastReviewedAt > 0;
+        if (!learned) return item;
+        return {
+          ...item,
+          nextReviewAt: nowMs,
+        };
+      });
+      progressWrites.push([key, JSON.stringify(reset)]);
+    } catch {}
+  }
+
+  if (progressWrites.length) {
+    await AsyncStorage.multiSet(progressWrites);
+  }
+
+  const dailyKeys = allKeys.filter((k) => k.startsWith(`${scope}${DAILY_PREFIX}`));
+  const todayKey = formatDateKey(now);
+  const dailyPairs = await AsyncStorage.multiGet(dailyKeys);
+  const dailyWrites: [string, string][] = [];
+
+  for (const [key, raw] of dailyPairs) {
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') continue;
+      dailyWrites.push([
+        key,
+        JSON.stringify({
+          ...parsed,
+          dateKey: todayKey,
+          doneCount: 0,
+        }),
+      ]);
+    } catch {}
+  }
+
+  if (dailyWrites.length) {
+    await AsyncStorage.multiSet(dailyWrites);
+  }
+}
