@@ -101,14 +101,14 @@ export default function SignInScreen({ navigation, route }: Props) {
 
             <View style={{ flex: 1 }}>
               <Text style={styles.title}>Welcome back</Text>
-              <Text style={styles.subtitle}>Sign in to sync your progress.</Text>
+              <Text style={styles.subtitle}>Sign in to restore your study progress, sync, and account recovery.</Text>
             </View>
           </View>
 
           {/* Card */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Sign in</Text>
-            <Text style={styles.cardHint}>Use the email you verified.</Text>
+            <Text style={styles.cardHint}>Use the verified email tied to your study history.</Text>
 
             <Text style={styles.label}>Email</Text>
             <View style={styles.inputWrap}>
@@ -185,7 +185,7 @@ export default function SignInScreen({ navigation, route }: Props) {
             </Pressable>
 
             <Text style={styles.footnote}>
-              By continuing, you agree to keep your credentials safe.
+              Keep using an email you can access later if you ever need to restore study history on a new device.
             </Text>
           </View>
 

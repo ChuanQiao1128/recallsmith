@@ -79,13 +79,13 @@ export default function SignUpScreen({ navigation }: Props) {
 
             <View style={{ flex: 1 }}>
               <Text style={styles.title}>Create your account</Text>
-              <Text style={styles.subtitle}>Verify email to enable cloud sync.</Text>
+              <Text style={styles.subtitle}>Verify email to protect sync and future account recovery.</Text>
             </View>
           </View>
 
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Sign up</Text>
-            <Text style={styles.cardHint}>We’ll email you a verification code.</Text>
+            <Text style={styles.cardHint}>We’ll send a verification code before cloud sync turns on.</Text>
 
             <Text style={styles.label}>Email</Text>
             <View style={styles.inputWrap}>
@@ -162,7 +162,7 @@ export default function SignUpScreen({ navigation }: Props) {
             </Pressable>
 
             <Text style={styles.footnote}>
-              Use a real email — you’ll need the verification code.
+              Use an email you can access again later if you ever need to recover your account.
             </Text>
           </View>
 

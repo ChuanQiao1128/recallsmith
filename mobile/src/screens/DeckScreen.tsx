@@ -1,1375 +1,597 @@
-// mobile/src/screens/DeckScreen.tsx
-import React, { useState, useCallback, useRef } from 'react';
+/** @v7 deck install gate only */
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
   ActivityIndicator,
   Alert,
-  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import type { RootStackParamList, StudyMode } from '../navigation/types';
-
-import type { DeckExport } from '../types/deckExport';
-import { setActiveDeckSlug, loadActiveDeckSlug } from '../content/activeDeck';
-import { fetchPremiumDeckUrl } from '../content/premiumDeckApi';
-// resolver + manifest + installer
+import type { RootStackParamList } from '../navigation/types';
+import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import {
-  resolveDeckBySlug,
-  listManifestDecks,
   checkManifestForUpdates,
   installDeckFromUrl,
+  listManifestDecks,
+  resolveDeckBySlug,
   type ManifestDeckEntry,
+  type UpdateInfo,
 } from '../content/deckRepository';
-
-import type { CardProgress } from '../review/model';
-import { formatDateKey } from '../review/model';
-import { loadDeckProgress, loadOrInitDailyStats, type DailyStats } from '../review/storage';
-
-// premium entitlement
-import { usePremiumUser, setIsPremiumUser } from '../premium/premiumStore';
-import { rcGetCustomerInfoSafe, isPremiumActive } from '../premium/revenuecat';
-
-// auth (Amplify + Zustand)
+import { fetchPremiumDeckUrl } from '../content/premiumDeckApi';
 import { useAuthUser, useAuthStore } from '../auth/authStore';
+import { usePremiumUser } from '../premium/premiumStore';
+import { isPremiumActive, rcGetCustomerInfoSafe } from '../premium/revenuecat';
+import { colors } from '../theme/colors';
+import { spacing } from '../theme/spacing';
+import { typography } from '../theme/typography';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Deck'>;
 
-interface DeckState {
+type GateActionKind =
+  | 'open-library'
+  | 'install'
+  | 'update'
+  | 'trial-start'
+  | 'paywall'
+  | 'sign-in'
+  | 'coming'
+  | 'none';
+
+type DeckGateState = {
   loading: boolean;
-  deck: DeckExport | null;
-  progress: CardProgress[];
-  dailyStats: DailyStats | null;
+  empty: boolean;
   error: string | null;
-
-  manifestEntry?: ManifestDeckEntry | null;
-  lockedReason?: 'coming' | 'login' | 'trial' | null;
-}
-
-function showTrialUpsellDialog(opts: {
+  slug: string | null;
   deckTitle: string;
-  previewCount: number;
-  totalCards: number;
-  onUpgrade: () => void;
-}) {
-  const { deckTitle, previewCount, totalCards, onUpgrade } = opts;
+  deckCardCount: number;
+  manifestEntry: ManifestDeckEntry | null;
+  updateInfo: UpdateInfo | null;
+};
 
-  Alert.alert(
-    'Free trial completed',
-    `You’ve finished the free trial for “${deckTitle}” (${previewCount} cards out of ${totalCards}).\n\nYou can still review these ${previewCount} cards forever.\nUpgrade to Premium to unlock the rest and continue your progress.`,
-    [
-      { text: 'Keep reviewing', style: 'cancel' },
-      { text: 'Upgrade', onPress: onUpgrade },
-    ],
-  );
+const INITIAL_STATE: DeckGateState = {
+  loading: true,
+  empty: false,
+  error: null,
+  slug: null,
+  deckTitle: 'Deck',
+  deckCardCount: 0,
+  manifestEntry: null,
+  updateInfo: null,
+};
+
+function lower(value: unknown): string {
+  return String(value ?? '').toLowerCase();
 }
 
-function startOfToday(now: Date) {
-  const d = new Date(now.getTime());
-  d.setHours(0, 0, 0, 0);
-  return d;
+function isPremiumDeck(entry: ManifestDeckEntry | null): boolean {
+  if (!entry) return false;
+  return Number(entry.deckType ?? 1) !== 1 || lower(entry.tier) === 'premium';
 }
 
-function isLearned(p: CardProgress): boolean {
-  return typeof p.lastReviewedAt === 'number' && p.lastReviewedAt > 0;
-}
+function resolveGateAction(params: {
+  hasLocalDeck: boolean;
+  manifestEntry: ManifestDeckEntry | null;
+  updateInfo: UpdateInfo | null;
+  premium: boolean;
+  signedIn: boolean;
+}): GateActionKind {
+  const { hasLocalDeck, manifestEntry, updateInfo, premium, signedIn } = params;
 
-function isScheduled(p: CardProgress): boolean {
-  return isLearned(p) && typeof p.nextReviewAt === 'number' && p.nextReviewAt > 0;
-}
-
-function countDueToday(progress: CardProgress[], now: Date): number {
-  const today0 = startOfToday(now);
-  const todayKey = formatDateKey(today0);
-  let count = 0;
-
-  for (const p of progress) {
-    if (!isScheduled(p)) continue;
-
-    const next = new Date(p.nextReviewAt);
-    const effective = next.getTime() < today0.getTime() ? today0 : next;
-    if (formatDateKey(effective) === todayKey) count += 1;
+  if (lower(manifestEntry?.availability ?? 'live') === 'coming') {
+    return 'coming';
   }
 
-  return count;
-}
+  const premiumDeck = isPremiumDeck(manifestEntry);
+  const hasRemote = !!updateInfo?.remoteUrl && !!updateInfo.remoteVersion;
 
-function getCardRevision(card: any): number {
-  const r = card?.Revision;
-  return typeof r === 'number' && r > 0 ? r : 1;
-}
-
-function getSeenRevision(p: CardProgress): number {
-  const seen = (p as any).lastSeenRevision;
-  if (typeof seen === 'number') return seen;
-  return isLearned(p) ? 1 : 0;
-}
-
-function countUpdatedCards(cards: any[], progress: CardProgress[]): number {
-  const pMap = new Map(progress.map((p) => [p.stableUid, p]));
-  let count = 0;
-
-  for (const card of cards) {
-    const p = pMap.get(card?.StableUid);
-    if (!p) continue;
-    if (!isLearned(p)) continue;
-    if (getCardRevision(card) > getSeenRevision(p)) count += 1;
+  if (premiumDeck && !premium) {
+    if (hasLocalDeck) {
+      return 'open-library';
+    }
+    if (!signedIn) {
+      return 'sign-in';
+    }
+    return hasRemote ? 'trial-start' : 'paywall';
   }
 
-  return count;
+  if (!hasLocalDeck) {
+    return hasRemote ? 'install' : 'none';
+  }
+
+  if (updateInfo?.hasUpdate && hasRemote) {
+    return 'update';
+  }
+
+  return 'open-library';
 }
 
-function clamp01(n: number): number {
-  return Math.max(0, Math.min(1, n));
-}
-
-function lower(s: any): string {
-  return String(s ?? '').toLowerCase();
-}
-
-function getPreviewLimit(deck: DeckExport | null, entry?: ManifestDeckEntry | null): number {
-  const raw =
-    (deck as any)?.PreviewCards ??
-    (deck as any)?.previewCards ??
-    (entry as any)?.previewCards ??
-    15;
-
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 15;
-}
-
-function buildPreviewDeck(deck: DeckExport, previewLimit: number): DeckExport {
-  const cards = deck.Cards ?? [];
-  const take = Math.max(0, Math.min(previewLimit, cards.length));
+function actionCopy(kind: GateActionKind): { title: string; body: string; primary: string } {
+  if (kind === 'install') {
+    return {
+      title: 'Install required',
+      body: 'Install this deck once, then browse and review from Library.',
+      primary: 'Install deck',
+    };
+  }
+  if (kind === 'update') {
+    return {
+      title: 'Update available',
+      body: 'Apply the latest deck update before your next challenge run.',
+      primary: 'Update deck',
+    };
+  }
+  if (kind === 'trial-start') {
+    return {
+      title: 'Premium trial preview',
+      body: 'Install the free preview to review sample cards while premium stays locked.',
+      primary: 'Start free trial',
+    };
+  }
+  if (kind === 'paywall') {
+    return {
+      title: 'Premium required',
+      body: 'Upgrade to unlock this full deck.',
+      primary: 'Upgrade',
+    };
+  }
+  if (kind === 'sign-in') {
+    return {
+      title: 'Sign in required',
+      body: 'Sign in first to access the premium trial preview.',
+      primary: 'Sign in',
+    };
+  }
+  if (kind === 'coming') {
+    return {
+      title: 'Coming soon',
+      body: 'This deck is announced but not published yet.',
+      primary: 'Back',
+    };
+  }
+  if (kind === 'none') {
+    return {
+      title: 'Deck not ready',
+      body: 'No install package is available yet for this deck.',
+      primary: 'Back',
+    };
+  }
   return {
-    ...deck,
-    Cards: cards.slice(0, take),
-    TotalCards: Math.min(deck.TotalCards ?? cards.length, take),
+    title: 'Ready',
+    body: 'This deck is installed. Continue in Library.',
+    primary: 'Open library',
   };
 }
 
 export function DeckScreen({ navigation, route }: Props) {
-  const slugFromRoute = route.params?.slug;
-  const [slug, setSlug] = useState<string | null>(slugFromRoute ?? null);
-
-  const isPremiumUser = usePremiumUser();
+  const [state, setState] = useState<DeckGateState>(INITIAL_STATE);
+  const [busy, setBusy] = useState(false);
 
   const authInit = useAuthStore((s) => s.init);
   const { status: authStatus, isSignedIn } = useAuthUser();
-  const isLoggedIn = isSignedIn;
+  const premium = usePremiumUser();
 
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-
-  // 防止连点重复 navigate
-  const startingRef = useRef(false);
-
-  // Ensure auth status is loaded (if app didn’t init auth store elsewhere)
-  useFocusEffect(
-    useCallback(() => {
+  const refresh = useCallback(async () => {
+    setState((prev) => ({ ...prev, loading: true, empty: false, error: null }));
+    try {
       if (authStatus === 'unknown') {
-        void authInit();
+        await authInit();
       }
-    }, [authStatus, authInit]),
-  );
 
-  // ✅ whenever entering this screen (and logged in), refresh RevenueCat entitlement
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-
-      async function refreshPremium() {
-        if (!isLoggedIn) return;
-
+      if (isSignedIn) {
         try {
           const info = await rcGetCustomerInfoSafe();
-          if (cancelled) return;
-
-          const active = isPremiumActive(info);
-          setIsPremiumUser(active);
+          void isPremiumActive(info);
         } catch {
-          // ignore
+          // Entitlement check is best effort for this screen.
         }
       }
 
-      void refreshPremium();
-      return () => {
-        cancelled = true;
-      };
-    }, [isLoggedIn]),
-  );
+      const manifest = await listManifestDecks();
+      const liveEntries = manifest.filter((entry) => lower(entry.availability ?? 'live') !== 'retired');
 
-  useFocusEffect(
-    useCallback(() => {
-      if (slugFromRoute) {
-        setSlug(slugFromRoute);
-        void setActiveDeckSlug(slugFromRoute);
-        return;
-      }
+      const chosenSlug =
+        route.params?.slug ?? (await loadActiveDeckSlug()) ?? liveEntries[0]?.slug ?? null;
 
-      let cancelled = false;
-      async function initSlug() {
-        const stored = await loadActiveDeckSlug();
-        if (cancelled) return;
-        if (stored) {
-          setSlug(stored);
-          return;
-        }
-
-        const manifest = await listManifestDecks();
-        if (cancelled) return;
-        if (manifest[0]?.slug) setSlug(manifest[0].slug);
-      }
-      void initSlug();
-
-      return () => {
-        cancelled = true;
-      };
-    }, [slugFromRoute]),
-  );
-
-  const [state, setState] = useState<DeckState>({
-    loading: true,
-    deck: null,
-    progress: [],
-    dailyStats: null,
-    error: null,
-    manifestEntry: null,
-    lockedReason: null,
-  });
-
-  const [sessionCount, setSessionCount] = useState(10);
-
-  const minSession = 5;
-  const maxSession = 50;
-
-  function changeSession(delta: number) {
-    setSessionCount((prev) => Math.min(maxSession, Math.max(minSession, prev + delta)));
-  }
-  function setPreset(count: number) {
-    setSessionCount(count);
-  }
-
-  useFocusEffect(
-    useCallback(() => {
-      if (!slug) {
+      if (!chosenSlug) {
         setState({
           loading: false,
-          deck: null,
-          progress: [],
-          dailyStats: null,
-          error: 'No deck available. Please install a deck from Settings.',
+          empty: true,
+          error: null,
+          slug: null,
+          deckTitle: 'Deck',
+          deckCardCount: 0,
           manifestEntry: null,
-          lockedReason: null,
+          updateInfo: null,
         });
         return;
       }
 
-      let cancelled = false;
+      const [deck, updates] = await Promise.all([
+        resolveDeckBySlug(chosenSlug),
+        checkManifestForUpdates(premium).catch(() => ({} as Record<string, UpdateInfo>)),
+      ]);
 
-      async function load() {
-        const slugStr = slug;
-        if (!slugStr) return;
+      const entry = liveEntries.find((item) => item.slug === chosenSlug) ?? null;
+      const title = deck?.Title ?? entry?.title ?? chosenSlug;
+      const count = deck?.Cards?.length ?? deck?.TotalCards ?? entry?.totalCards ?? 0;
 
-        setState((prev) => ({ ...prev, loading: true, error: null, lockedReason: null }));
+      await setActiveDeckSlug(chosenSlug);
 
-        try {
-          const manifest = await listManifestDecks();
-          const entry = manifest.find((x) => x.slug === slugStr) ?? null;
+      setState({
+        loading: false,
+        empty: false,
+        error: null,
+        slug: chosenSlug,
+        deckTitle: title,
+        deckCardCount: count,
+        manifestEntry: entry,
+        updateInfo: updates[chosenSlug] ?? null,
+      });
+    } catch (e: any) {
+      setState((prev) => ({
+        ...prev,
+        loading: false,
+        empty: false,
+        error: e?.message ?? 'Failed to load deck gate.',
+      }));
+    }
+  }, [authInit, authStatus, isSignedIn, premium, route.params?.slug]);
 
-          if (cancelled) return;
-
-          // coming soon
-          if (entry && lower(entry.availability) === 'coming') {
-            setState({
-              loading: false,
-              deck: null,
-              progress: [],
-              dailyStats: null,
-              error: null,
-              manifestEntry: entry,
-              lockedReason: 'coming',
-            });
-            return;
-          }
-
-          // identify premium deck from manifest (tier/downloadMode)
-          const premiumByManifest = entry
-            ? lower((entry as any).tier) === 'premium' || lower((entry as any).downloadMode) === 'auth'
-            : false;
-
-          // not logged in: show login-gated deck UI
-          if (premiumByManifest && !isLoggedIn) {
-            setState({
-              loading: false,
-              deck: null,
-              progress: [],
-              dailyStats: null,
-              error: null,
-              manifestEntry: entry,
-              lockedReason: 'login',
-            });
-            return;
-          }
-
-          // resolve local deck
-          let deck = await resolveDeckBySlug(slugStr);
-          if (cancelled) return;
-
-          // ✅ DEV: premium 用户优先安装 full deck（private bucket presigned url）
-          if (__DEV__ && entry && premiumByManifest && isLoggedIn && isPremiumUser) {
-            const fullVersion = (entry as any).version;
-            const needFull = !deck || deck.Version !== fullVersion;
-
-            if (needFull) {
-              try {
-                const r = await fetchPremiumDeckUrl(slugStr);
-                if (cancelled) return;
-
-                const ok = await installDeckFromUrl(
-                  slugStr,
-                  r.url,
-                  r.buildId,
-                  (entry as any).sha256 ?? null,
-                );
-                if (cancelled) return;
-
-                if (ok) {
-                  deck = await resolveDeckBySlug(slugStr);
-                  if (cancelled) return;
-                }
-              } catch (e: any) {
-                console.warn('[premium] fetch/upgrade full deck failed:', e?.message ?? e);
-              }
-            }
-          }
-
-          // if not installed, try auto-install (only works for public URLs)
-          if (!deck) {
-            const updates = await checkManifestForUpdates();
-            if (cancelled) return;
-
-            const info = (updates as any)[slugStr];
-            const canDownload = !!info?.remoteUrl && !!info?.remoteVersion;
-
-            if (canDownload) {
-              const ok = await installDeckFromUrl(
-                slugStr,
-                info.remoteUrl!,
-                info.remoteVersion!,
-                info.remoteSha256 ?? null,
-              );
-              if (cancelled) return;
-
-              if (ok) {
-                deck = await resolveDeckBySlug(slugStr);
-                if (cancelled) return;
-              }
-            }
-          }
-
-          if (!deck) throw new Error('Deck not found');
-
-          void setActiveDeckSlug(deck.Slug);
-
-          const premiumByDeck = deck.DeckType !== 1;
-          const isPremiumDeck = premiumByManifest || premiumByDeck;
-
-          // defensive: premium deck but not logged in
-          if (isPremiumDeck && !isLoggedIn) {
-            setState({
-              loading: false,
-              deck: null,
-              progress: [],
-              dailyStats: null,
-              error: null,
-              manifestEntry: entry,
-              lockedReason: 'login',
-            });
-            return;
-          }
-
-          // trial: logged in but not premium
-          const isTrial = isPremiumDeck && isLoggedIn && !isPremiumUser;
-
-          if (isTrial) {
-            const previewLimit = getPreviewLimit(deck, entry);
-            const previewDeck = buildPreviewDeck(deck, previewLimit);
-
-            const progress = await loadDeckProgress(previewDeck);
-            if (cancelled) return;
-
-            const dailyStats = await loadOrInitDailyStats(previewDeck, progress);
-            if (cancelled) return;
-
-            setState({
-              loading: false,
-              deck, // full deck for totals
-              progress, // preview-only progress
-              dailyStats,
-              error: null,
-              manifestEntry: entry,
-              lockedReason: 'trial',
-            });
-            return;
-          }
-
-          // normal (starter or premium user)
-          const progress = await loadDeckProgress(deck);
-          if (cancelled) return;
-
-          const dailyStats = await loadOrInitDailyStats(deck, progress);
-          if (cancelled) return;
-
-          setState({
-            loading: false,
-            deck,
-            progress,
-            dailyStats,
-            error: null,
-            manifestEntry: entry,
-            lockedReason: null,
-          });
-        } catch (e: any) {
-          if (cancelled) return;
-          setState({
-            loading: false,
-            deck: null,
-            progress: [],
-            dailyStats: null,
-            error: e?.message ?? 'Failed to load deck.',
-            manifestEntry: null,
-            lockedReason: null,
-          });
-        }
-      }
-
-      void load();
-      return () => {
-        cancelled = true;
-      };
-    }, [slug, isPremiumUser, isLoggedIn]),
+  useFocusEffect(
+    useCallback(() => {
+      void refresh();
+    }, [refresh]),
   );
 
-  const { loading, deck, progress, dailyStats, error, manifestEntry, lockedReason } = state;
+  const gateAction = useMemo(() => {
+    const hasLocalDeck = state.deckCardCount > 0;
+    return resolveGateAction({
+      hasLocalDeck,
+      manifestEntry: state.manifestEntry,
+      updateInfo: state.updateInfo,
+      premium,
+      signedIn: isSignedIn,
+    });
+  }, [isSignedIn, premium, state.deckCardCount, state.manifestEntry, state.updateInfo]);
 
-  if (error) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
-          <View style={styles.center}>
-            <Text style={styles.title}>Deck not found</Text>
-            <Text style={styles.subtitle}>{error}</Text>
-            <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
-              <Text style={styles.backText}>← Back</Text>
-            </Pressable>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  }
+  const copy = actionCopy(gateAction);
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
-          <View style={styles.center}>
-            <ActivityIndicator size="large" color="#6366F1" />
-            <Text style={styles.loadingText}>Loading deck...</Text>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  }
-
-  if (lockedReason === 'coming' && manifestEntry) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
-          <View style={styles.center}>
-            <Text style={styles.title}>⏳ Coming soon</Text>
-            <Text style={styles.subtitle} numberOfLines={3}>
-              “{manifestEntry.title ?? manifestEntry.slug}” is not available yet.
-              {(manifestEntry as any).eta ? `\nETA: ${(manifestEntry as any).eta}` : ''}
-            </Text>
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.backButton,
-                pressed && styles.backButtonPressed,
-                { marginTop: 10 },
-              ]}
-              onPress={() => navigation.goBack()}
-            >
-              <Text style={styles.backText}>← Back</Text>
-            </Pressable>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  }
-
-  // Not logged in: show deck-like screen + Sign In / Sign Up modal
-  if (lockedReason === 'login') {
-    const title = (manifestEntry as any)?.title ?? (manifestEntry as any)?.slug ?? 'Premium Deck';
-    const locale = (manifestEntry as any)?.locale ?? 'en-US';
-    const previewCount = getPreviewLimit(null, manifestEntry);
-
-    const totalCardsFull = Number.isFinite((manifestEntry as any)?.totalCards)
-      ? Number((manifestEntry as any)?.totalCards)
-      : 0;
-
-    const dueToday = 0;
-    const learnedCount = 0;
-    const newRemaining = previewCount;
-    const overallPercent = 0;
-
-    const promptLogin = () => setAuthModalOpen(true);
-
-    // Try common route names; fallback to Paywall
-    const navHas = (name: string) => {
-      const s = (navigation as any).getState?.();
-      if (s?.routeNames?.includes(name)) return true;
-
-      const p1 = (navigation as any).getParent?.();
-      const s1 = p1?.getState?.();
-      if (s1?.routeNames?.includes(name)) return true;
-
-      const p2 = p1?.getParent?.();
-      const s2 = p2?.getState?.();
-      if (s2?.routeNames?.includes(name)) return true;
-
-      return false;
-    };
-
-    const goSignIn = () => {
-      setAuthModalOpen(false);
-
-      if (navHas('SignIn')) return (navigation as any).navigate('SignIn');
-      if (navHas('Login')) return (navigation as any).navigate('Login');
-
-      if (navHas('Auth')) return (navigation as any).navigate('Auth', { screen: 'SignIn' });
-
-      (navigation as any).navigate('Paywall');
-    };
-
-    const goSignUp = () => {
-      setAuthModalOpen(false);
-
-      if (navHas('SignUp')) return (navigation as any).navigate('SignUp');
-      if (navHas('Register')) return (navigation as any).navigate('Register');
-
-      if (navHas('Auth')) return (navigation as any).navigate('Auth', { screen: 'SignUp' });
-
-      (navigation as any).navigate('Paywall');
-    };
-
-    return (
-      <SafeAreaProvider>
-        <SafeAreaView style={styles.safeArea}>
-          <LinearGradient
-            colors={['#F5F3FF', '#E0F2FE']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.gradient}
-          >
-            <ScrollView
-              style={styles.scroll}
-              contentContainerStyle={styles.scrollContent}
-              showsVerticalScrollIndicator={false}
-            >
-              <View style={styles.headerRow}>
-                <Pressable
-                  style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
-                  onPress={() => navigation.goBack()}
-                >
-                  <Text style={styles.backText}>← Home</Text>
-                </Pressable>
-
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.title} numberOfLines={1}>
-                    {title}
-                  </Text>
-                  <Text style={styles.subtitle} numberOfLines={1}>
-                    {locale} · Premium deck
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.updatePill}>
-                <Text style={styles.updatePillText}>
-                  Sign in to unlock a free trial of the first {previewCount} cards
-                  {totalCardsFull ? ` (out of ${totalCardsFull})` : ''}.
-                </Text>
-              </View>
-
-              <View style={styles.heroCard}>
-                <Text style={styles.heroLabel}>Study overview</Text>
-
-                <View style={styles.heroTopRow}>
-                  <Text style={styles.heroTotal}>
-                    {learnedCount}/{totalCardsFull || '—'}
-                  </Text>
-                  <Text style={styles.heroTotalLabel}>learned (preview)</Text>
-                </View>
-
-                <View style={styles.progressBarBg}>
-                  <View style={[styles.progressBarFill, { flex: overallPercent, opacity: 0 }]} />
-                  <View style={{ flex: 1 }} />
-                </View>
-
-                <View style={styles.heroStatsRow}>
-                  <View style={styles.heroStat}>
-                    <Text style={styles.heroStatLabel}>Due today</Text>
-                    <Text style={[styles.heroStatValue, { color: '#EF4444' }]}>{dueToday}</Text>
-                  </View>
-
-                  <View style={styles.heroStat}>
-                    <Text style={styles.heroStatLabel}>Trial cards</Text>
-                    <Text style={[styles.heroStatValue, { color: '#0EA5E9' }]}>{newRemaining}</Text>
-                  </View>
-
-                  <View style={styles.heroStat}>
-                    <Text style={styles.heroStatLabel}>Have learned</Text>
-                    <Text style={[styles.heroStatValue, { color: '#22C55E' }]}>{learnedCount}</Text>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.sectionCard}>
-                <Text style={styles.sectionTitle}>Cards for this session</Text>
-                <Text style={styles.sectionSubTitle}>Sign in to start your free trial.</Text>
-
-                <View style={styles.sessionRow}>
-                  <Pressable style={styles.sessionButton} onPress={() => changeSession(-5)}>
-                    <Text style={styles.sessionButtonText}>−</Text>
-                  </Pressable>
-
-                  <View style={styles.sessionCenter}>
-                    <Text style={styles.sessionNumber}>{sessionCount}</Text>
-                    <Text style={styles.sessionLabel}>cards</Text>
-                  </View>
-
-                  <Pressable style={styles.sessionButton} onPress={() => changeSession(+5)}>
-                    <Text style={styles.sessionButtonText}>+</Text>
-                  </Pressable>
-                </View>
-
-                <View style={styles.sessionPresetRow}>
-                  {[5, 10, 15, 20].map((v) => (
-                    <Pressable
-                      key={v}
-                      style={[styles.presetChip, sessionCount === v && styles.presetChipActive]}
-                      onPress={() => setPreset(v)}
-                    >
-                      <Text
-                        style={[
-                          styles.presetChipText,
-                          sessionCount === v && styles.presetChipTextActive,
-                        ]}
-                      >
-                        {v}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-
-              <View style={styles.sectionCard}>
-                <Text style={styles.sectionTitle}>Choose a mode</Text>
-                <Text style={styles.sectionSubTitle}>Sign in to begin your free trial.</Text>
-
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.modeCard,
-                    styles.modeCardReview,
-                    pressed && styles.modeCardPressed,
-                    styles.modeCardDisabled,
-                  ]}
-                  onPress={promptLogin}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.modeTitle}>Review Due</Text>
-                    <Text style={styles.modeSubtitle}>A review plan appears after you sign in.</Text>
-                  </View>
-                  <Text style={styles.modeCount}>🔒</Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.modeCard,
-                    styles.modeCardNew,
-                    pressed && styles.modeCardPressed,
-                    styles.modeCardDisabled,
-                  ]}
-                  onPress={promptLogin}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.modeTitle}>Learn</Text>
-                    <Text style={styles.modeSubtitle}>
-                      Sign in to study the first {previewCount} cards for free.
-                    </Text>
-                  </View>
-                  <Text style={styles.modeCount}>🔒</Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.modeCard,
-                    styles.modeCardMixed,
-                    pressed && styles.modeCardPressed,
-                    styles.modeCardDisabled,
-                  ]}
-                  onPress={promptLogin}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.modeTitle}>Mixed</Text>
-                    <Text style={styles.modeSubtitle}>Sign in to start your trial session.</Text>
-                  </View>
-                  <Text style={styles.modeCount}>🔒</Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [styles.upgradeButton, pressed && { opacity: 0.9 }]}
-                  onPress={promptLogin}
-                >
-                  <Text style={styles.upgradeButtonText}>Start free trial</Text>
-                </Pressable>
-              </View>
-            </ScrollView>
-
-            <Modal
-              transparent
-              visible={authModalOpen}
-              animationType="fade"
-              onRequestClose={() => setAuthModalOpen(false)}
-            >
-              <View style={styles.modalOverlay}>
-                <Pressable
-                  style={StyleSheet.absoluteFillObject}
-                  onPress={() => setAuthModalOpen(false)}
-                />
-                <View style={styles.modalCard}>
-                  <Pressable
-                    style={styles.modalClose}
-                    onPress={() => setAuthModalOpen(false)}
-                    accessibilityLabel="Close"
-                  >
-                    <Text style={styles.modalCloseText}>✕</Text>
-                  </Pressable>
-
-                  <Text style={styles.modalTitle}>Start your free trial</Text>
-                  <Text style={styles.modalBody}>
-                    Sign in to study the first {previewCount} cards for free.{'\n\n'}
-                    After the trial, you can still review these {previewCount} cards forever.{'\n'}
-                    Upgrade to Premium to unlock the full deck.
-                  </Text>
-
-                  <View style={styles.modalBtnRow}>
-                    <Pressable style={styles.modalSecondaryBtn} onPress={goSignIn}>
-                      <Text style={styles.modalSecondaryText}>Sign In</Text>
-                    </Pressable>
-
-                    <Pressable style={styles.modalPrimaryBtn} onPress={goSignUp}>
-                      <Text style={styles.modalPrimaryText}>Sign Up</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              </View>
-            </Modal>
-          </LinearGradient>
-        </SafeAreaView>
-      </SafeAreaProvider>
-    );
-  }
-
-  if (!deck || !dailyStats) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
-          <View style={styles.center}>
-            <Text style={styles.title}>Deck not ready</Text>
-            <Text style={styles.subtitle}>Please try again.</Text>
-            <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
-              <Text style={styles.backText}>← Back</Text>
-            </Pressable>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  }
-
-  const isTrial = lockedReason === 'trial';
-
-  const canStudy = (deck.Cards?.length ?? 0) > 0;
-  const totalCardsFull = (deck.TotalCards ?? deck.Cards?.length ?? 0) || 0;
-
-  const previewLimit = isTrial ? getPreviewLimit(deck, manifestEntry) : 0;
-  const previewTotal = isTrial
-    ? Math.min(previewLimit, totalCardsFull || (deck.Cards?.length ?? 0))
-    : 0;
-
-  const now = new Date();
-  const dueToday = countDueToday(progress, now);
-  const learnedCount = progress.filter(isLearned).length;
-
-  const newRemaining = isTrial
-    ? Math.max(previewTotal - learnedCount, 0)
-    : Math.max(totalCardsFull - learnedCount, 0);
-
-  const previewDone = isTrial && previewTotal > 0 && learnedCount >= previewTotal;
-
-  const updatedCount = canStudy
-    ? countUpdatedCards(
-        isTrial ? (deck.Cards ?? []).slice(0, previewTotal) : (deck.Cards ?? []),
-        progress,
-      )
-    : 0;
-
-  const overallPercent = totalCardsFull > 0 ? clamp01(learnedCount / totalCardsFull) : 0;
-
-  const deckTypeLabel =
-    deck.DeckType === 1 ? 'Starter deck' : isTrial ? 'Premium deck · Free trial' : 'Premium deck';
-
-  const disableReviewDue = !canStudy || dueToday === 0;
-
-  const lockLearn = isTrial && previewDone;
-  const lockMixed = isTrial && previewDone;
-
-  const disableLearn = isTrial ? !canStudy : !canStudy || newRemaining === 0;
-  const disableMixed = isTrial
-    ? !canStudy
-    : !canStudy || (dueToday === 0 && newRemaining === 0 && updatedCount === 0);
-
-  async function maybeRefreshPremiumOnce(): Promise<boolean> {
-    if (!isLoggedIn) return false;
-    try {
-      const info = await rcGetCustomerInfoSafe();
-      const active = isPremiumActive(info);
-      setIsPremiumUser(active);
-      return active;
-    } catch {
-      return isPremiumUser;
+  const runInstall = useCallback(async () => {
+    if (!state.slug || !state.updateInfo?.remoteVersion) {
+      Alert.alert('Install unavailable', 'This deck package is not ready yet.');
+      return;
     }
-  }
 
-  async function startMode(mode: StudyMode) {
-    if (startingRef.current) return;
-    startingRef.current = true;
+    let remoteUrl = state.updateInfo.remoteUrl;
+    if (!remoteUrl && isPremiumDeck(state.manifestEntry) && isSignedIn) {
+      const premiumPayload = await fetchPremiumDeckUrl(state.slug);
+      remoteUrl = premiumPayload.url;
+    }
 
+    if (!remoteUrl) {
+      Alert.alert('Install unavailable', 'Unable to resolve a download URL right now.');
+      return;
+    }
+
+    const ok = await installDeckFromUrl(
+      state.slug,
+      remoteUrl,
+      state.updateInfo.remoteVersion,
+      state.updateInfo.remoteSha256,
+    );
+
+    if (!ok) {
+      Alert.alert('Install failed', 'Please try again in a moment.');
+      return;
+    }
+
+    await setActiveDeckSlug(state.slug);
+    await refresh();
+    navigation.navigate('Library');
+  }, [isSignedIn, navigation, refresh, state.manifestEntry, state.slug, state.updateInfo]);
+
+  const handlePrimary = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
     try {
-      if (!canStudy) return;
-
-      const d = deck;
-      if (!d) return;
-
-      void setActiveDeckSlug(d.Slug);
-
-      const premiumByDeck = d.DeckType !== 1;
-      const premiumByManifest = manifestEntry
-        ? lower((manifestEntry as any).tier) === 'premium' ||
-          lower((manifestEntry as any).downloadMode) === 'auth'
-        : false;
-
-      const isPremiumDeck = premiumByDeck || premiumByManifest;
-
-      /**
-       * ✅ FIX 核心：
-       * Trial 用户点击 Learn/Mixed 不应该立刻跳 Paywall。
-       * 先处理 trial 分支，再考虑 premium hard guard。
-       */
-      if (isTrial) {
-        if ((mode === 'learn-new' || mode === 'mixed') && previewDone) {
-          showTrialUpsellDialog({
-            deckTitle: d.Title,
-            previewCount: previewTotal,
-            totalCards: totalCardsFull,
-            onUpgrade: () => navigation.navigate('Paywall' as any),
-          });
-          return;
+      if (gateAction === 'open-library') {
+        if (state.slug) {
+          await setActiveDeckSlug(state.slug);
         }
-
-        navigation.navigate(
-          'Review',
-          {
-            slug: d.Slug,
-            mode,
-            limit: sessionCount,
-            previewLimit: previewTotal, // ✅ trial 关键参数（ReviewScreen 依赖它判断 isTrial）
-          } as any,
-        );
+        navigation.navigate('Library');
         return;
       }
 
-      /**
-       * Premium deck 但本地 store 还没变成 premium：
-       * - 先尝试即时 refresh 一次（避免“已买但还被当成非会员”）
-       * - 如果刷新后仍不是 premium => 去 Paywall
-       */
-      if (isPremiumDeck && isLoggedIn && !isPremiumUser) {
-        const active = await maybeRefreshPremiumOnce();
-        if (!active) {
-          navigation.navigate('Paywall' as any);
-          return;
-        }
-        // 如果 refresh 后变成 premium，继续走正常流程
+      if (gateAction === 'install' || gateAction === 'update' || gateAction === 'trial-start') {
+        await runInstall();
+        return;
       }
 
-      navigation.navigate('Review', {
-        slug: d.Slug,
-        mode,
-        limit: sessionCount,
-      } as any);
-    } finally {
-      startingRef.current = false;
-    }
-  }
+      if (gateAction === 'paywall') {
+        navigation.navigate('Paywall');
+        return;
+      }
 
-  return (
-    <SafeAreaProvider>
-      <SafeAreaView style={styles.safeArea}>
+      if (gateAction === 'sign-in') {
+        navigation.navigate('SignIn');
+        return;
+      }
+
+      navigation.goBack();
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, gateAction, navigation, runInstall, state.slug]);
+
+  if (state.loading) {
+    return (
+      <SafeAreaView testID="screen-deck-root" style={styles.safeArea}>
         <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
+          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
         >
-          <ScrollView
-            style={styles.scroll}
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={styles.headerRow}>
-              <Pressable
-                style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
-                onPress={() => navigation.goBack()}
-              >
-                <Text style={styles.backText}>← Home</Text>
-              </Pressable>
-
-              <View style={{ flex: 1 }}>
-                <Text style={styles.title} numberOfLines={1}>
-                  {deck.Title}
-                </Text>
-                <Text style={styles.subtitle} numberOfLines={1}>
-                  {deck.Locale} · {deckTypeLabel}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.heroCard}>
-              <Text style={styles.heroLabel}>Study overview</Text>
-
-              {!canStudy ? (
-                <Text style={styles.sectionSubTitle}>
-                  This deck is a placeholder in this build. Content will be available later.
-                </Text>
-              ) : (
-                <>
-                  <View style={styles.heroTopRow}>
-                    <Text style={styles.heroTotal}>
-                      {learnedCount}/{totalCardsFull}
-                    </Text>
-                    <Text style={styles.heroTotalLabel}>learned (approx)</Text>
-                  </View>
-
-                  <View style={styles.progressBarBg}>
-                    <View
-                      style={[
-                        styles.progressBarFill,
-                        { flex: overallPercent, opacity: overallPercent === 0 ? 0 : 1 },
-                      ]}
-                    />
-                    <View style={{ flex: Math.max(0, 1 - overallPercent) }} />
-                  </View>
-
-                  <View style={styles.heroStatsRow}>
-                    <View style={styles.heroStat}>
-                      <Text style={styles.heroStatLabel}>Due today</Text>
-                      <Text style={[styles.heroStatValue, { color: '#EF4444' }]}>{dueToday}</Text>
-                    </View>
-
-                    <View style={styles.heroStat}>
-                      <Text style={styles.heroStatLabel}>New cards</Text>
-                      <Text style={[styles.heroStatValue, { color: '#0EA5E9' }]}>{newRemaining}</Text>
-                    </View>
-
-                    <View style={styles.heroStat}>
-                      <Text style={styles.heroStatLabel}>Have learned</Text>
-                      <Text style={[styles.heroStatValue, { color: '#22C55E' }]}>{learnedCount}</Text>
-                    </View>
-                  </View>
-
-                  {isTrial ? (
-                    <View style={styles.updatePill}>
-                      <Text style={styles.updatePillText}>
-                        {previewDone
-                          ? `Free trial completed: ${previewTotal}/${totalCardsFull}. Upgrade to unlock the rest.`
-                          : `Free trial: first ${previewTotal} cards. Learned ${learnedCount}/${previewTotal}.`}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  {!isTrial && updatedCount > 0 ? (
-                    <View style={styles.updatePill}>
-                      <Text style={styles.updatePillText}>
-                        ✨ {updatedCount} card{updatedCount === 1 ? '' : 's'} updated since you last reviewed.
-                      </Text>
-                    </View>
-                  ) : null}
-                </>
-              )}
-            </View>
-
-            <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Cards for this session</Text>
-              <Text style={styles.sectionSubTitle}>
-                Start small and keep consistency. 5–15 cards per run is a good default.
-              </Text>
-
-              <View style={styles.sessionRow}>
-                <Pressable style={styles.sessionButton} onPress={() => changeSession(-5)}>
-                  <Text style={styles.sessionButtonText}>−</Text>
-                </Pressable>
-
-                <View style={styles.sessionCenter}>
-                  <Text style={styles.sessionNumber}>{sessionCount}</Text>
-                  <Text style={styles.sessionLabel}>cards</Text>
-                </View>
-
-                <Pressable style={styles.sessionButton} onPress={() => changeSession(+5)}>
-                  <Text style={styles.sessionButtonText}>+</Text>
-                </Pressable>
-              </View>
-
-              <View style={styles.sessionPresetRow}>
-                {[5, 10, 15, 30].map((v) => (
-                  <Pressable
-                    key={v}
-                    style={[styles.presetChip, sessionCount === v && styles.presetChipActive]}
-                    onPress={() => setPreset(v)}
-                  >
-                    <Text
-                      style={[
-                        styles.presetChipText,
-                        sessionCount === v && styles.presetChipTextActive,
-                      ]}
-                    >
-                      {v}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-
-            <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Choose a mode</Text>
-              <Text style={styles.sectionSubTitle}>Quick pick based on what you want to achieve today.</Text>
-
-              <Pressable
-                style={({ pressed }) => [
-                  styles.modeCard,
-                  styles.modeCardReview,
-                  pressed && styles.modeCardPressed,
-                  disableReviewDue && styles.modeCardDisabled,
-                ]}
-                disabled={disableReviewDue}
-                onPress={() => void startMode('review-due')}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.modeTitle}>Review Due</Text>
-                  <Text style={styles.modeSubtitle}>Clear today&apos;s reviews first.</Text>
-                </View>
-                <Text style={styles.modeCount}>{dueToday} due</Text>
-              </Pressable>
-
-              <Pressable
-                style={({ pressed }) => [
-                  styles.modeCard,
-                  styles.modeCardNew,
-                  pressed && styles.modeCardPressed,
-                  (disableLearn || lockLearn) && styles.modeCardDisabled,
-                ]}
-                disabled={disableLearn}
-                onPress={() => void startMode('learn-new')}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.modeTitle}>Learn</Text>
-                  <Text style={styles.modeSubtitle}>
-                    {lockLearn ? 'Locked — Upgrade to continue.' : 'Add new concepts for today.'}
-                  </Text>
-                </View>
-                <Text style={styles.modeCount}>{lockLearn ? '🔒' : `${newRemaining} new`}</Text>
-              </Pressable>
-
-              <Pressable
-                style={({ pressed }) => [
-                  styles.modeCard,
-                  styles.modeCardMixed,
-                  pressed && styles.modeCardPressed,
-                  (disableMixed || lockMixed) && styles.modeCardDisabled,
-                ]}
-                disabled={disableMixed}
-                onPress={() => void startMode('mixed')}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.modeTitle}>Mixed</Text>
-                  <Text style={styles.modeSubtitle}>
-                    {lockMixed ? 'Locked — Upgrade to continue.' : 'Balanced run (due + updated + a few new).'}
-                  </Text>
-                </View>
-                <Text style={styles.modeCount}>{lockMixed ? '🔒' : `up to ${sessionCount}`}</Text>
-              </Pressable>
-
-              <View style={styles.tipBox}>
-                <Text style={styles.tipTitle}>Tip</Text>
-                <Text style={styles.tipBody}>
-                  Review due cards first, then learn new ones. This keeps the calendar manageable.
-                </Text>
-              </View>
-
-              {isTrial ? (
-                <Pressable
-                  style={({ pressed }) => [styles.upgradeButton, pressed && { opacity: 0.9 }]}
-                  onPress={() => navigation.navigate('Paywall' as any)}
-                >
-                  <Text style={styles.upgradeButtonText}>Unlock Premium</Text>
-                </Pressable>
-              ) : null}
-            </View>
-          </ScrollView>
+          <View style={styles.centerState}>
+            <ActivityIndicator size="large" color={colors.gold} />
+            <Text style={styles.loadingText} numberOfLines={1}>
+              Loading deck gate...
+            </Text>
+          </View>
         </LinearGradient>
       </SafeAreaView>
-    </SafeAreaProvider>
+    );
+  }
+
+  if (state.empty) {
+    return (
+      <SafeAreaView testID="screen-deck-root" style={styles.safeArea}>
+        <LinearGradient
+          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.centerState}>
+            <Text style={styles.errorTitle} numberOfLines={2}>
+              No deck ready yet
+            </Text>
+            <Text style={styles.errorBody} numberOfLines={2}>
+              Return home and open Library after a deck is published.
+            </Text>
+            <Pressable
+              testID="screen-deck-primary-cta"
+              style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+              onPress={() => navigation.navigate('Home')}
+            >
+              <Text style={styles.primaryButtonText} numberOfLines={1}>
+                Back home
+              </Text>
+            </Pressable>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
+  if (state.error) {
+    return (
+      <SafeAreaView testID="screen-deck-root" style={styles.safeArea}>
+        <LinearGradient
+          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.centerState}>
+            <Text style={styles.errorTitle} numberOfLines={2}>
+              Deck unavailable
+            </Text>
+            <Text style={styles.errorBody} numberOfLines={2}>
+              {state.error}
+            </Text>
+            <Pressable
+              testID="screen-deck-primary-cta"
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+              onPress={() => void refresh()}
+            >
+              <Text style={styles.secondaryButtonText} numberOfLines={1}>
+                Retry
+              </Text>
+            </Pressable>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView testID="screen-deck-root" style={styles.safeArea}>
+      <LinearGradient
+        colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradient}
+      >
+        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+          <Pressable style={({ pressed }) => [styles.backButton, pressed && styles.pressed]} onPress={() => navigation.goBack()}>
+            <Text style={styles.backText} numberOfLines={1}>
+              ← Back
+            </Text>
+          </Pressable>
+
+          <View style={styles.card}>
+            <Text style={styles.eyebrow} numberOfLines={1}>
+              Deck gate
+            </Text>
+            <Text style={styles.title} numberOfLines={2}>
+              {state.deckTitle}
+            </Text>
+            <Text style={styles.subtitle} numberOfLines={1}>
+              {state.deckCardCount} cards
+            </Text>
+
+            <View style={styles.rule} />
+
+            <Text style={styles.stateTitle} numberOfLines={1}>
+              {copy.title}
+            </Text>
+            <Text style={styles.stateBody} numberOfLines={2}>
+              {copy.body}
+            </Text>
+
+            {state.updateInfo?.remoteVersion ? (
+              <Text style={styles.versionLine} numberOfLines={1}>
+                Remote version: {state.updateInfo.remoteVersion}
+              </Text>
+            ) : null}
+
+            <View testID="screen-deck-primary-cta">
+              <Pressable
+                testID="deck-gate-primary-cta"
+                style={({ pressed }) => [styles.primaryButton, (pressed || busy) && styles.pressed]}
+                onPress={() => void handlePrimary()}
+                disabled={busy}
+              >
+                <Text style={styles.primaryButtonText} numberOfLines={1}>
+                  {busy ? 'Working...' : copy.primary}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </ScrollView>
+      </LinearGradient>
+    </SafeAreaView>
   );
 }
 
 export default DeckScreen;
 
-const CARD_BG = 'rgba(255,255,255,0.18)';
-const CARD_BORDER = 'rgba(255,255,255,0.55)';
-
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
-  scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 18, paddingBottom: 24 },
-
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
-  loadingText: { marginTop: 10, color: '#6B7280' },
-
-  headerRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10, marginBottom: 16 },
+  container: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: spacing.screenPadding,
+    paddingBottom: spacing.xl,
+  },
+  centerState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  loadingText: {
+    marginTop: spacing.sm,
+    fontSize: typography.bodySmall,
+    color: colors.inkSecondary,
+  },
+  errorTitle: {
+    fontSize: typography.title3,
+    color: colors.ink,
+    fontWeight: '900',
+  },
+  errorBody: {
+    marginTop: spacing.sm,
+    fontSize: typography.bodySmall,
+    color: colors.inkSecondary,
+    textAlign: 'center',
+  },
   backButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    minHeight: 44,
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.7)',
-    marginRight: 10,
+    backgroundColor: 'rgba(255,255,255,0.8)',
   },
-  backButtonPressed: { opacity: 0.9 },
-  backText: { fontSize: 13, color: '#111827' },
-
-  title: { fontSize: 20, fontWeight: '700', color: '#111827' },
-  subtitle: { marginTop: 2, fontSize: 12, color: '#6B7280' },
-
-  heroCard: {
-    borderRadius: 24,
-    padding: 18,
-    backgroundColor: CARD_BG,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    shadowColor: '#000',
-    shadowOpacity: 0.14,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 4,
-    marginBottom: 16,
+  backText: {
+    color: colors.ink,
+    fontSize: typography.bodySmall,
+    fontWeight: '700',
   },
-  heroLabel: { fontSize: 12, color: '#4338CA', fontWeight: '600', marginBottom: 6 },
-  heroTopRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: 6 },
-  heroTotal: { fontSize: 28, fontWeight: '700', color: '#111827', marginRight: 6 },
-  heroTotalLabel: { fontSize: 12, color: '#6B7280' },
-
-  progressBarBg: {
-    marginTop: 4,
-    marginBottom: 10,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-    flexDirection: 'row',
-    overflow: 'hidden',
-  },
-  progressBarFill: { backgroundColor: '#6366F1', borderRadius: 999 },
-
-  heroStatsRow: { flexDirection: 'row', marginTop: 4 },
-  heroStat: { flex: 1 },
-  heroStatLabel: { fontSize: 11, color: '#9CA3AF' },
-  heroStatValue: { marginTop: 2, fontSize: 16, fontWeight: '600' },
-
-  sectionCard: {
-    borderRadius: 20,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
+  card: {
+    marginTop: spacing.sm,
+    borderRadius: spacing.cardRadius,
+    padding: spacing.md,
     backgroundColor: 'rgba(255,255,255,0.9)',
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    marginBottom: 16,
-  },
-  sectionTitle: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  sectionSubTitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
-
-  sessionRow: { flexDirection: 'row', alignItems: 'center', marginTop: 14 },
-  sessionButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#F9FAFB',
+    borderColor: 'rgba(42,34,24,0.12)',
+  },
+  eyebrow: {
+    fontSize: typography.caption,
+    color: colors.gold,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  title: {
+    marginTop: spacing.xs,
+    fontSize: typography.title2,
+    color: colors.ink,
+    fontWeight: '900',
+  },
+  subtitle: {
+    marginTop: spacing.xs,
+    fontSize: typography.bodySmall,
+    color: colors.inkSecondary,
+  },
+  rule: {
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+    height: 1,
+    backgroundColor: 'rgba(42,34,24,0.14)',
+  },
+  stateTitle: {
+    fontSize: typography.body,
+    color: colors.ink,
+    fontWeight: '800',
+  },
+  stateBody: {
+    marginTop: spacing.xs,
+    fontSize: typography.bodySmall,
+    color: colors.inkSecondary,
+    lineHeight: 18,
+  },
+  versionLine: {
+    marginTop: spacing.sm,
+    fontSize: typography.caption,
+    color: colors.inkSecondary,
+  },
+  primaryButton: {
+    marginTop: spacing.md,
+    minHeight: 44,
+    borderRadius: spacing.buttonRadius,
+    backgroundColor: colors.ink,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sessionButtonText: { fontSize: 22, color: '#111827', fontWeight: '600' },
-  sessionCenter: { flex: 1, alignItems: 'center' },
-  sessionNumber: { fontSize: 30, fontWeight: '700', color: '#4F46E5' },
-  sessionLabel: { fontSize: 12, color: '#6B7280' },
-
-  sessionPresetRow: { flexDirection: 'row', marginTop: 10, justifyContent: 'space-between' },
-  presetChip: {
-    flex: 1,
-    marginHorizontal: 4,
-    borderRadius: 999,
+  primaryButtonText: {
+    color: colors.parchmentBg,
+    fontSize: typography.button,
+    fontWeight: '900',
+  },
+  secondaryButton: {
+    marginTop: spacing.md,
+    minHeight: 44,
+    borderRadius: spacing.buttonRadius,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    paddingVertical: 6,
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-  },
-  presetChipActive: { backgroundColor: '#4F46E5', borderColor: '#4F46E5' },
-  presetChipText: { fontSize: 13, color: '#111827' },
-  presetChipTextActive: { color: '#FFFFFF', fontWeight: '600' },
-
-  modeCard: {
-    marginTop: 10,
-    borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  modeCardReview: { backgroundColor: '#FEE2E2' },
-  modeCardNew: { backgroundColor: '#DBEAFE' },
-  modeCardMixed: { backgroundColor: '#E0E7FF' },
-  modeCardPressed: { opacity: 0.9 },
-  modeCardDisabled: { opacity: 0.55 },
-
-  modeTitle: { fontSize: 14, fontWeight: '600', color: '#111827' },
-  modeSubtitle: { marginTop: 2, fontSize: 12, color: '#4B5563', maxWidth: 220 },
-  modeCount: { fontSize: 13, color: '#111827', fontWeight: '500' },
-
-  tipBox: { marginTop: 12, borderRadius: 14, backgroundColor: '#F5F3FF', padding: 10 },
-  tipTitle: { fontSize: 13, fontWeight: '600', color: '#4F46E5', marginBottom: 4 },
-  tipBody: { fontSize: 12, color: '#4B5563' },
-
-  updatePill: {
-    marginTop: 10,
-    borderRadius: 14,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: 'rgba(79,70,229,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(79,70,229,0.18)',
-  },
-  updatePillText: { fontSize: 12, color: '#4F46E5', fontWeight: '600' },
-
-  upgradeButton: {
-    marginTop: 12,
-    borderRadius: 999,
-    backgroundColor: '#4F46E5',
-    paddingVertical: 12,
-    paddingHorizontal: 22,
-    alignItems: 'center',
-  },
-  upgradeButtonText: { color: '#FFFFFF', fontWeight: '800', fontSize: 14 },
-
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderColor: 'rgba(42,34,24,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 18,
+    paddingHorizontal: spacing.md,
   },
-  modalCard: {
-    width: '100%',
-    borderRadius: 18,
-    backgroundColor: '#FFFFFF',
-    padding: 16,
+  secondaryButtonText: {
+    color: colors.ink,
+    fontSize: typography.button,
+    fontWeight: '700',
   },
-  modalClose: {
-    position: 'absolute',
-    top: 10,
-    left: 10,
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: 'rgba(17,24,39,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalCloseText: { fontSize: 16, fontWeight: '900', color: '#111827' },
-
-  modalTitle: { fontSize: 16, fontWeight: '800', color: '#111827', paddingLeft: 40 },
-  modalBody: { marginTop: 8, fontSize: 12, color: '#4B5563', lineHeight: 18 },
-
-  modalBtnRow: { flexDirection: 'row', marginTop: 14 },
-  modalSecondaryBtn: {
-    flex: 1,
-    marginRight: 10,
-    borderRadius: 999,
-    backgroundColor: 'rgba(17,24,39,0.06)',
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(17,24,39,0.10)',
-  },
-  modalSecondaryText: { fontSize: 13, fontWeight: '800', color: '#111827' },
-
-  modalPrimaryBtn: {
-    flex: 1,
-    borderRadius: 999,
-    backgroundColor: '#4F46E5',
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  modalPrimaryText: { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
+  pressed: { opacity: 0.9 },
 });
