@@ -5,30 +5,65 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
-import { buildSessionSummaryVM } from '../features/gacha/session/summaryMapper';
-import { applySessionRewardToWallet, canAcceptMorePulls, loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { RewardSummaryCard } from '../features/gacha/components/RewardSummaryCard';
+import { SummaryProgressBlock } from '../features/gacha/components/SummaryProgressBlock';
 import { buildDrawState } from '../features/gacha/draw/drawState';
-import { applySessionStreak, loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import { resolveNewMilestones, type Milestone } from '../features/gacha/milestones/milestoneTracker';
+import { applySessionRewardToWallet, loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { buildSessionSummaryVM } from '../features/gacha/session/summaryMapper';
+import { applySessionStreak, loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
+import type { HomeCtaKind } from '../features/gacha/selectors/homeSelectors';
+import { a11y } from '../theme/a11y';
+import { colors } from '../theme/colors';
+import { spacing } from '../theme/spacing';
+import { typography } from '../theme/typography';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SessionSummary'>;
 
+function navigateFromActionKind(args: {
+  kind: HomeCtaKind;
+  slug: string;
+  rewardPending: boolean;
+  navigation: Props['navigation'];
+}): void {
+  const { kind, slug, rewardPending, navigation } = args;
+
+  if (kind === 'nothing_to_learn') {
+    navigation.navigate('Deck', { slug });
+    return;
+  }
+
+  if (kind === 'wallet_full') {
+    navigation.navigate('Draw', { slug, rewardPending });
+    return;
+  }
+
+  navigation.navigate('Home');
+}
+
 export function SessionSummaryScreen({ navigation, route }: Props) {
   const { sessionId, deckTitle, slug, sessionDone, sessionLimit, minimumGoal, dueCount, streakEarned = false } = route.params;
+
   const [walletBeforeReward, setWalletBeforeReward] = useState<RewardWalletState | null>(null);
-  const [streakSnapshot, setStreakSnapshot] = useState<StreakSnapshot | null>(null);
+  const [streakBeforeSnapshot, setStreakBeforeSnapshot] = useState<StreakSnapshot | null>(null);
+  const [streakAfterSnapshot, setStreakAfterSnapshot] = useState<StreakSnapshot | null>(null);
   const [newMilestones, setNewMilestones] = useState<Milestone[]>([]);
 
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
       if (sessionId) {
         const rewardPulls = sessionLimit > 0 && sessionDone >= sessionLimit ? 2 : sessionDone >= minimumGoal ? 1 : 0;
-        const rewardResult = await applySessionRewardToWallet(sessionId, rewardPulls);
-        const streakResult = await applySessionStreak({ sessionId, earned: streakEarned });
+        const [rewardResult, streakResult] = await Promise.all([
+          applySessionRewardToWallet(sessionId, rewardPulls),
+          applySessionStreak({ sessionId, earned: streakEarned }),
+        ]);
+
         if (!cancelled) {
           setWalletBeforeReward(rewardResult.walletBefore);
-          setStreakSnapshot(streakResult.after);
+          setStreakBeforeSnapshot(streakResult.before);
+          setStreakAfterSnapshot(streakResult.after);
           setNewMilestones(resolveNewMilestones({ before: streakResult.before, after: streakResult.after }));
         }
         return;
@@ -37,9 +72,11 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
       const [currentWallet, currentStreak] = await Promise.all([loadRewardWalletState(), loadStreakSnapshot()]);
       if (!cancelled) {
         setWalletBeforeReward(currentWallet);
-        setStreakSnapshot(currentStreak);
+        setStreakBeforeSnapshot(currentStreak);
+        setStreakAfterSnapshot(currentStreak);
       }
     })();
+
     return () => {
       cancelled = true;
     };
@@ -54,8 +91,19 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
         minimumGoal,
         dueCount,
         wallet: walletBeforeReward,
+        streakBefore: streakBeforeSnapshot?.currentDailyStreak ?? null,
+        streakAfter: streakAfterSnapshot?.currentDailyStreak ?? null,
       }),
-    [deckTitle, sessionDone, sessionLimit, minimumGoal, dueCount, walletBeforeReward],
+    [
+      deckTitle,
+      sessionDone,
+      sessionLimit,
+      minimumGoal,
+      dueCount,
+      walletBeforeReward,
+      streakBeforeSnapshot,
+      streakAfterSnapshot,
+    ],
   );
 
   const drawVm = useMemo(
@@ -70,77 +118,123 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
 
   const latestMilestone = newMilestones[0] ?? null;
 
+  const streakBefore = streakBeforeSnapshot?.currentDailyStreak ?? streakAfterSnapshot?.currentDailyStreak ?? 0;
+  const streakAfter = streakAfterSnapshot?.currentDailyStreak ?? streakBefore;
+  const streakChanged = streakAfter > streakBefore || streakEarned;
+
+  const actionBody =
+    summary.vm.nextAction.primary.kind === 'nothing_to_learn'
+      ? "Open your library to review today's updates."
+      : drawVm.canOpen
+        ? 'Continue your day, then open draw when you want to spend pulls.'
+        : 'Continue to Home for the next run.';
+
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+      <LinearGradient
+        colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradient}
+      >
         <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCard}>
             <View style={styles.heroTopRow}>
-              <Text style={styles.heroBadge}>{summary.vm.rewardBadge}</Text>
-              <Text style={styles.heroCompletion}>{summary.vm.completionLabel}</Text>
+              <Text numberOfLines={1} style={styles.heroBadge}>
+                {summary.vm.reward.badge}
+              </Text>
+              <Text numberOfLines={1} style={styles.heroCompletion}>
+                {summary.vm.progress.completionLabel}
+              </Text>
             </View>
-            <Text style={styles.title}>{summary.vm.title}</Text>
-            <Text style={styles.subtitle}>{summary.vm.subtitle}</Text>
-          </View>
-
-            <View style={[styles.card, styles.rewardCard]}>
-              <Text style={styles.cardEyebrow}>Reward</Text>
-              <Text style={styles.cardTitle}>{summary.vm.rewardTitle}</Text>
-              <Text style={styles.rewardBodyStrong}>{summary.vm.rewardBody}</Text>
-              <Text style={styles.rewardSupport}>Treat this as a clean payout for finishing the run, not a loot screen that hides the learning result.</Text>
-              <Text style={styles.walletFootnote}>Wallet now: {summary.resolvedReward.walletAfter.availablePulls} ready · {summary.resolvedReward.walletAfter.reservePulls} in reserve</Text>
-            </View>
-
-          <View style={styles.card}>
-            <Text style={styles.cardEyebrow}>Progress</Text>
-            <Text style={styles.cardTitle}>Learning progress</Text>
-            <Text style={styles.cardBody}>{summary.vm.progressBody}</Text>
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.cardEyebrow}>Daily streak</Text>
-            <Text style={styles.cardTitle}>{streakSnapshot ? `${streakSnapshot.currentDailyStreak} day streak live` : 'Loading streak…'}</Text>
-            <Text style={styles.cardBody}>
-              {streakSnapshot
-                ? `${streakSnapshot.weekCompletedDays}/7 days landed this week · ${streakSnapshot.totalQualifiedSessions} qualified runs total.`
-                : 'We update streak progress after the first qualified card in a run.'}
+            <Text numberOfLines={2} style={styles.title}>
+              {summary.vm.title}
+            </Text>
+            <Text numberOfLines={1} style={styles.subtitle}>
+              {summary.vm.subtitle}
             </Text>
           </View>
 
+          <RewardSummaryCard
+            testID="summary-reward-block"
+            reward={summary.vm.reward}
+            ctaLabel={drawVm.canOpen ? drawVm.ctaLabel : null}
+            onPressUsePulls={
+              drawVm.canOpen
+                ? () => navigation.navigate('Draw', { slug, rewardPending: drawVm.state === 'reward-pending' })
+                : null
+            }
+          />
+
+          <SummaryProgressBlock
+            testID="summary-progress-block"
+            done={summary.vm.progress.done}
+            total={summary.vm.progress.total}
+            completionLabel={summary.vm.progress.completionLabel}
+            body={summary.vm.progress.body}
+            streak={{ before: streakBefore, after: streakAfter, earned: streakChanged }}
+            transitions={summary.vm.progress.transitions}
+            streakNote={summary.vm.progress.streakNote}
+            transitionsNote={summary.vm.progress.transitionsNote}
+          />
+
           {latestMilestone ? (
-            <View style={[styles.card, styles.milestoneCard]}>
-              <Text style={styles.cardEyebrow}>Milestone</Text>
-              <Text style={styles.cardTitle}>{latestMilestone.title}</Text>
-              <Text style={styles.cardBody}>{latestMilestone.body}</Text>
+            <View style={styles.milestoneCard}>
+              <Text numberOfLines={1} style={styles.cardEyebrow}>
+                Milestone
+              </Text>
+              <Text numberOfLines={2} style={styles.cardTitle}>
+                {latestMilestone.title}
+              </Text>
+              <Text numberOfLines={2} style={styles.cardBody}>
+                {latestMilestone.body}
+              </Text>
             </View>
           ) : null}
 
           <View style={styles.actionCard}>
-            <Text style={styles.actionTitle}>Next action</Text>
-            <Text style={styles.actionBody}>Return home to start another run, open draw if you want to spend reward pulls, or open your library to inspect what changed.</Text>
-
-            <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]} onPress={() => navigation.navigate('Home')}>
-              <Text style={styles.primaryButtonText}>{summary.vm.nextActionLabel}</Text>
-            </Pressable>
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.secondaryButton,
-                pressed && styles.buttonPressed,
-                !canAcceptMorePulls(summary.resolvedReward.walletAfter) && styles.buttonDisabled,
-              ]}
-              disabled={false}
-              onPress={() => navigation.navigate('Draw', { slug, rewardPending: drawVm.state === 'reward-pending' })}
-            >
-              <Text style={styles.secondaryButtonText}>{drawVm.ctaLabel}</Text>
-            </Pressable>
+            <Text numberOfLines={1} style={styles.actionTitle}>
+              Next action
+            </Text>
+            <Text numberOfLines={2} style={styles.actionBody}>
+              {actionBody}
+            </Text>
 
             <Pressable
-              style={({ pressed }) => [styles.tertiaryButton, pressed && styles.buttonPressed]}
-              onPress={() => navigation.navigate('Deck', { slug })}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
+              onPress={() =>
+                navigateFromActionKind({
+                  kind: summary.vm.nextAction.primary.kind,
+                  slug,
+                  rewardPending: drawVm.state === 'reward-pending',
+                  navigation,
+                })
+              }
             >
-              <Text style={styles.tertiaryButtonText}>{summary.vm.secondaryActionLabel}</Text>
+              <Text numberOfLines={1} style={styles.primaryButtonText}>
+                {summary.vm.nextAction.primary.label}
+              </Text>
             </Pressable>
+
+            {summary.vm.nextAction.secondary ? (
+              <Pressable
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+                onPress={() =>
+                  navigateFromActionKind({
+                    kind: summary.vm.nextAction.secondary!.kind,
+                    slug,
+                    rewardPending: false,
+                    navigation,
+                  })
+                }
+              >
+                <Text numberOfLines={1} style={styles.secondaryButtonText}>
+                  {summary.vm.nextAction.secondary.label}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
         </ScrollView>
       </LinearGradient>
@@ -151,89 +245,137 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
 export default SessionSummaryScreen;
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
-  container: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 30 },
-  heroCard: {
-    borderRadius: 24,
-    padding: 18,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 10 },
-    marginBottom: 14,
+  container: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: spacing.screenPadding,
+    paddingBottom: spacing.lg,
   },
-  heroTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  heroCard: {
+    borderRadius: spacing.lg,
+    padding: spacing.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    shadowColor: colors.ink,
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 9 },
+    marginBottom: spacing.sm,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
   heroBadge: {
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: 'rgba(79,70,229,0.12)',
-    color: '#4F46E5',
-    fontSize: 11,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    backgroundColor: 'rgba(42, 34, 24, 0.08)',
+    color: colors.ink,
+    fontSize: typography.caption,
+    fontWeight: '800',
+  },
+  heroCompletion: {
+    color: colors.inkSecondary,
+    fontSize: typography.caption,
+    fontWeight: '700',
+  },
+  title: {
+    marginTop: 8,
+    color: colors.ink,
+    fontSize: typography.title2,
+    lineHeight: 28,
     fontWeight: '900',
   },
-  heroCompletion: { fontSize: 12, fontWeight: '800', color: '#6B7280' },
-  title: { fontSize: 24, lineHeight: 30, fontWeight: '800', color: '#111827', marginTop: 10 },
-  subtitle: { marginTop: 8, fontSize: 13, lineHeight: 18, color: '#374151' },
-  card: {
-    borderRadius: 22,
-    padding: 16,
-    backgroundColor: 'rgba(255,255,255,0.86)',
-    shadowColor: '#000',
-    shadowOpacity: 0.10,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 10 },
-    marginBottom: 14,
-  },
-  rewardCard: {
-    backgroundColor: 'rgba(79,70,229,0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(79,70,229,0.12)',
+  subtitle: {
+    marginTop: 6,
+    color: colors.inkSecondary,
+    fontSize: typography.bodySmall,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   milestoneCard: {
-    backgroundColor: 'rgba(16,185,129,0.10)',
+    borderRadius: spacing.lg,
+    padding: spacing.md,
+    backgroundColor: 'rgba(126, 157, 94, 0.12)',
     borderWidth: 1,
-    borderColor: 'rgba(16,185,129,0.16)',
+    borderColor: 'rgba(126, 157, 94, 0.28)',
+    marginBottom: spacing.sm,
   },
-  cardEyebrow: { fontSize: 11, fontWeight: '800', color: '#4F46E5', textTransform: 'uppercase', letterSpacing: 0.5 },
-  cardTitle: { fontSize: 15, fontWeight: '800', color: '#111827', marginTop: 6 },
-  cardBody: { marginTop: 6, fontSize: 12, lineHeight: 18, color: '#6B7280' },
-  rewardBodyStrong: { marginTop: 8, fontSize: 14, lineHeight: 20, color: '#312E81', fontWeight: '700' },
-  rewardSupport: { marginTop: 8, fontSize: 12, lineHeight: 18, color: '#5B5BD6' },
-  walletFootnote: { marginTop: 8, fontSize: 11, lineHeight: 16, color: '#4338CA', fontWeight: '700' },
+  cardEyebrow: {
+    color: colors.mint,
+    fontSize: typography.caption,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  cardTitle: {
+    marginTop: 4,
+    color: colors.ink,
+    fontSize: typography.title3,
+    lineHeight: 22,
+    fontWeight: '800',
+  },
+  cardBody: {
+    marginTop: 6,
+    color: colors.inkSecondary,
+    fontSize: typography.bodySmall,
+    lineHeight: 18,
+  },
   actionCard: {
-    borderRadius: 22,
-    padding: 16,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    shadowColor: '#000',
-    shadowOpacity: 0.10,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 10 },
+    borderRadius: spacing.lg,
+    padding: spacing.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    shadowColor: colors.ink,
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
   },
-  actionTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
-  actionBody: { marginTop: 6, fontSize: 12, lineHeight: 18, color: '#6B7280' },
-  primaryButton: { borderRadius: 14, backgroundColor: '#4F46E5', paddingVertical: 14, alignItems: 'center', marginTop: 6 },
-  primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  actionTitle: {
+    color: colors.ink,
+    fontSize: typography.title3,
+    lineHeight: 22,
+    fontWeight: '800',
+  },
+  actionBody: {
+    marginTop: 6,
+    color: colors.inkSecondary,
+    fontSize: typography.bodySmall,
+    lineHeight: 18,
+  },
+  primaryButton: {
+    marginTop: spacing.sm,
+    minHeight: a11y.minTouch,
+    borderRadius: spacing.buttonRadius,
+    backgroundColor: colors.ink,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  primaryButtonText: {
+    color: colors.parchmentBg,
+    fontSize: typography.body,
+    fontWeight: '800',
+  },
   secondaryButton: {
-    borderRadius: 14,
-    backgroundColor: 'rgba(79,70,229,0.10)',
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 10,
+    marginTop: spacing.sm,
+    minHeight: a11y.minTouch,
+    borderRadius: spacing.buttonRadius,
+    backgroundColor: 'rgba(42, 34, 24, 0.06)',
     borderWidth: 1,
-    borderColor: 'rgba(79,70,229,0.12)',
-  },
-  secondaryButtonText: { color: '#4F46E5', fontSize: 14, fontWeight: '800' },
-  tertiaryButton: {
-    borderRadius: 14,
-    backgroundColor: 'rgba(17,24,39,0.04)',
-    paddingVertical: 14,
+    borderColor: 'rgba(42, 34, 24, 0.2)',
     alignItems: 'center',
-    marginTop: 10,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
   },
-  tertiaryButtonText: { color: '#374151', fontSize: 14, fontWeight: '700' },
-  buttonDisabled: { opacity: 0.55 },
-  buttonPressed: { opacity: 0.92 },
+  secondaryButtonText: {
+    color: colors.inkSecondary,
+    fontSize: typography.body,
+    fontWeight: '700',
+  },
+  buttonPressed: {
+    opacity: 0.85,
+  },
 });
