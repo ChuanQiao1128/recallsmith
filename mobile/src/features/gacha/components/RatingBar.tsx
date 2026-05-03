@@ -11,12 +11,13 @@ const RATING_ITEMS: Array<{ key: ReviewRating; title: string; subtitle: string; 
 
 export function RatingBar(props: {
   disabled?: boolean;
+  testID?: string;
   onRate: (rating: ReviewRating) => void;
 }) {
-  const { disabled = false, onRate } = props;
+  const { disabled = false, testID = 'review-rating-bar', onRate } = props;
 
   return (
-    <View style={styles.wrapper}>
+    <View style={styles.wrapper} testID={testID}>
       <Text style={styles.hint}>Think about how well you recalled this before seeing the answer.</Text>
       <View style={styles.grid}>
         {RATING_ITEMS.map((item) => (
@@ -43,13 +44,17 @@ export function RatingBar(props: {
 const styles = StyleSheet.create({
   wrapper: {},
   hint: { fontSize: 12, color: '#6B7280', marginBottom: 10 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  grid: { flexDirection: 'row', gap: 8 },
   ratingButton: {
-    width: '48%',
+    flex: 1,
+    minWidth: 64,
+    minHeight: 56,
     borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
     borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   ratingAgain: { backgroundColor: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.18)' },
   ratingHard: { backgroundColor: 'rgba(245,158,11,0.08)', borderColor: 'rgba(245,158,11,0.18)' },

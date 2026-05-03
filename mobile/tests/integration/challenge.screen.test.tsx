@@ -131,8 +131,9 @@ describe('ChallengeScreen', () => {
     });
     await flush();
 
+    const begin = tree.root.find((node) => node.props?.testID === 'challenge-begin-cta');
     act(() => {
-      findPressableByLabel(tree, "Start today's run").props.onPress();
+      begin.props.onPress();
     });
 
     expect(navigation.navigate).toHaveBeenCalledWith('SessionCard', {
@@ -164,11 +165,16 @@ describe('ChallengeScreen', () => {
       return Array.isArray(c) ? c.join('') : String(c ?? '');
     }).join('\n');
 
-    expect(textBlob).toContain("Today’s route");
-    expect(textBlob).toContain('Minimum goal');
-    expect(textBlob).toContain('Route preview');
-    expect(textBlob).toContain("Start today's run");
+    expect(textBlob).toContain('Today’s challenge');
+    expect(textBlob).toContain('Stay on streak');
+    expect(textBlob).toContain('Full clear');
+    expect(textBlob).toContain('Begin');
     expect(textBlob).not.toContain('Run framing');
     expect(textBlob).not.toContain('Play this run');
+
+    const beginButtons = tree.root.findAll(
+      (node) => (node.type as any) === 'Pressable' && node.props?.testID === 'challenge-begin-cta',
+    );
+    expect(beginButtons).toHaveLength(1);
   });
 });

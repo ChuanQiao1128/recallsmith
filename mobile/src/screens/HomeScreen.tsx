@@ -400,14 +400,16 @@ export function HomeScreen({ navigation, route }: Props) {
         if (!slug) return;
         void setActiveDeckSlug(slug);
         setSelectedSlug(slug);
-        navigation.navigate('DailyDose', { slug });
+        navigation.navigate('Challenge', { slug });
         return;
       }
+      case 'library':
       case 'deck': {
-        if (!slug) return;
-        void setActiveDeckSlug(slug);
-        setSelectedSlug(slug);
-        navigation.navigate('Deck', { slug });
+        if (slug) {
+          void setActiveDeckSlug(slug);
+          setSelectedSlug(slug);
+        }
+        navigation.navigate('Library');
         return;
       }
       case 'draw': {
@@ -446,13 +448,8 @@ export function HomeScreen({ navigation, route }: Props) {
         }
         const { activeSlug } = await executeDeckAction(action);
         setSelectedSlug(activeSlug);
-        if (
-          action.kind === 'open' ||
-          action.kind === 'install' ||
-          action.kind === 'update' ||
-          action.kind === 'trial-start'
-        ) {
-          navigation.navigate('Deck', { slug: activeSlug });
+        if (action.kind === 'open' || action.kind === 'install' || action.kind === 'update' || action.kind === 'trial-start') {
+          navigation.navigate('Library');
         }
         await refreshHome();
       } catch {

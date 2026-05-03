@@ -150,7 +150,7 @@ describe('home primary CTA target', () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   });
 
-  it('navigates to DailyDose when today has pending work', async () => {
+  it('navigates to Challenge when today has pending work', async () => {
     progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
 
     let tree!: renderer.ReactTestRenderer;
@@ -171,10 +171,10 @@ describe('home primary CTA target', () => {
     });
 
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
-    expect(navigateMock).toHaveBeenCalledWith('DailyDose', { slug: 'csharp' });
+    expect(navigateMock).toHaveBeenCalledWith('Challenge', { slug: 'csharp' });
   });
 
-  it('navigates to Deck when there is no pending work', async () => {
+  it('navigates to Library when there is no pending work', async () => {
     progressFixture = [
       {
         stableUid: '1',
@@ -202,6 +202,6 @@ describe('home primary CTA target', () => {
     });
 
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
-    expect(navigateMock).toHaveBeenCalledWith('Deck', { slug: 'csharp' });
+    expect(navigateMock).toHaveBeenCalledWith('Library');
   });
 });

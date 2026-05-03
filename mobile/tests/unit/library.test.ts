@@ -63,4 +63,20 @@ describe('buildLibraryVM', () => {
     expect(rows[1].isDueToday).toBe(true);
     expect(rows[1].isUpdated).toBe(true);
   });
+
+  it.each([
+    { filter: 'all', expected: ['1', '2', '3', '4'] },
+    { filter: 'new', expected: ['1', '4'] },
+    { filter: 'learning', expected: ['2'] },
+    { filter: 'mastered', expected: ['3'] },
+  ] as const)('filters cards by %s', ({ filter, expected }) => {
+    const vm = buildLibraryVM({
+      deck: sampleDeck,
+      progress: sampleProgress,
+      now: NOW,
+      filter,
+    });
+
+    expect(vm.cards.map((item) => item.stableUid)).toEqual(expected);
+  });
 });

@@ -44,7 +44,9 @@ vi.mock('expo-linear-gradient', () => {
 });
 
 vi.mock('@react-navigation/native', () => ({
-  useFocusEffect: () => {},
+  useFocusEffect: (callback: any) => {
+    React.useEffect(() => callback(), [callback]);
+  },
 }));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({

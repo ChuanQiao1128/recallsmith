@@ -58,7 +58,7 @@ describe('buildHomeVM', () => {
     expect(home.hero.ctaDisabled).toBe(true);
   });
 
-  it('routes users to the deck when the selected deck is not study-ready', () => {
+  it('routes users to the library when the selected deck is not study-ready', () => {
     const home = buildHomeVM({
       selectedSlug: 'premium-deck',
       hasSignedInUser: true,
@@ -82,7 +82,7 @@ describe('buildHomeVM', () => {
       ],
     });
 
-    expect(home.hero.ctaLabel).toBe('Open deck');
+    expect(home.hero.ctaLabel).toBe('Open library');
     expect(home.hero.ctaAction).toBe('deck');
   });
 

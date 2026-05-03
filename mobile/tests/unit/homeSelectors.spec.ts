@@ -70,7 +70,7 @@ describe('buildHomeVM CTA kinds', () => {
     expect(vm.hero.ctaAction).toBe('challenge');
   });
 
-  it('keeps deck CTA when there is no work', () => {
+  it('keeps library CTA when there is no work', () => {
     const vm = buildHomeVM({
       selectedSlug: 'csharp',
       hasSignedInUser: true,
@@ -79,7 +79,7 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('nothing_to_learn');
-    expect(vm.hero.ctaLabel).toBe('Open deck');
+    expect(vm.hero.ctaLabel).toBe('Open library');
     expect(vm.hero.ctaAction).toBe('deck');
   });
 

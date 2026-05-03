@@ -8,7 +8,16 @@ vi.mock('react-native', () => {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
+    FlatList: ({ data = [], renderItem, ListHeaderComponent, ...props }: any) =>
+      React.createElement(
+        'FlatList',
+        props,
+        ListHeaderComponent,
+        ...(data as any[]).map((item, index) => renderItem({ item, index })),
+      ),
     Pressable: ({ children, onPress, ...props }: any) => React.createElement('Pressable', { ...props, onPress }, typeof children === 'function' ? children({ pressed: false }) : children),
+    ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
+    useWindowDimensions: () => ({ width: 390, height: 844 }),
     StyleSheet: { create: (styles: any) => styles },
   };
 });
@@ -25,6 +34,30 @@ vi.mock('expo-linear-gradient', () => {
 
 vi.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: vi.fn() }),
+  useFocusEffect: (callback: any) => {
+    React.useEffect(() => callback(), [callback]);
+  },
+}));
+
+vi.mock('../../src/content/activeDeck', () => ({
+  loadActiveDeckSlug: vi.fn(async () => 'csharp'),
+  setActiveDeckSlug: vi.fn(async () => {}),
+}));
+
+vi.mock('../../src/content/deckRepository', () => ({
+  listManifestDecks: vi.fn(async () => [{ slug: 'csharp', title: 'C# Interview', availability: 'live' }]),
+  resolveDeckBySlug: vi.fn(async () => ({
+    Slug: 'csharp',
+    Title: 'C# Interview',
+    Locale: 'en-US',
+    Version: '1',
+    DeckType: 1,
+    Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
+  })),
+}));
+
+vi.mock('../../src/review/storage', () => ({
+  loadDeckProgress: vi.fn(async () => [{ stableUid: '1', stage: 0, nextReviewAt: 0 }]),
 }));
 
 import { LibraryScreen } from '../../src/screens/LibraryScreen';
@@ -68,16 +101,14 @@ describe('phase B shells', () => {
     warnSpy.mockRestore();
   });
 
-  it('opens sort/filter from library shell', async () => {
+  it('renders library shell with responsive grid metadata', async () => {
     const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(<LibraryScreen navigation={{ navigate } as any} route={{ key: 'lib', name: 'Library' } as any} />);
     });
-    act(() => {
-      findPressableByText(tree, 'Filter library').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('SortFilter');
+    const grid = tree.root.find((node) => node.props?.testID === 'library-card-grid');
+    expect(grid.props.numColumns).toBe(3);
   });
 
   it('opens tag explorer from pool overview shell', async () => {

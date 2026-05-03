@@ -64,6 +64,11 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
     expect(planned.newCount).toBe(2);
     expect(planned.limit).toBe(2);
   });
+
+  it('does not force a boss node when there is no high-pressure backlog', () => {
+    const planned = planChallengeRoute({ deck: sampleDeck, progress: sampleProgress, now: NOW });
+    expect(planned.nodes.some((node) => node.role === 'boss')).toBe(false);
+  });
 });
 
 describe('countDueToday / pickNextCard', () => {

@@ -29,7 +29,8 @@ function navigateFromActionKind(args: {
   const { kind, slug, rewardPending, navigation } = args;
 
   if (kind === 'nothing_to_learn') {
-    navigation.navigate('Deck', { slug });
+    void slug;
+    navigation.navigate('Library');
     return;
   }
 

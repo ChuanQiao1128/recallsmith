@@ -195,7 +195,7 @@ describe('HomeScreen', () => {
     logSpy.mockRestore();
   });
 
-  it('opens DailyDose when today has work', async () => {
+  it('opens Challenge when today has work', async () => {
     progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
 
     let tree!: renderer.ReactTestRenderer;
@@ -209,10 +209,10 @@ describe('HomeScreen', () => {
     });
 
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
-    expect(navigateMock).toHaveBeenCalledWith('DailyDose', { slug: 'csharp' });
+    expect(navigateMock).toHaveBeenCalledWith('Challenge', { slug: 'csharp' });
   });
 
-  it('opens Deck when there is no pressure today', async () => {
+  it('opens Library when there is no pressure today', async () => {
     progressFixture = [{ stableUid: '1', stage: 1, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 86400000 }];
 
     let tree!: renderer.ReactTestRenderer;
@@ -222,11 +222,11 @@ describe('HomeScreen', () => {
     await flush();
 
     act(() => {
-      findPressableByLabel(tree, 'Open deck').props.onPress();
+      findPressableByLabel(tree, 'Open library').props.onPress();
     });
 
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
-    expect(navigateMock).toHaveBeenCalledWith('Deck', { slug: 'csharp' });
+    expect(navigateMock).toHaveBeenCalledWith('Library');
   });
 
   it('keeps draw as a secondary entry without replacing the main CTA', async () => {

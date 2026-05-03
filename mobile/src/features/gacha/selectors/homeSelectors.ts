@@ -25,7 +25,7 @@ export type HomeCtaKind =
   | 'wallet_full'
   | 'error';
 
-export type HomeCtaNav = 'challenge' | 'deck' | 'draw' | 'none' | 'retry';
+export type HomeCtaNav = 'challenge' | 'deck' | 'library' | 'draw' | 'none' | 'retry';
 
 export type HomeDrawState = 'locked' | 'available' | 'reserve' | 'wallet-full';
 
@@ -257,8 +257,8 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
     case 'first_run':
       return {
         kind,
-        label: 'Open deck',
-        nav: 'deck',
+        label: 'Open library',
+        nav: 'library',
         testID: 'home-primary-cta',
         disabled: false,
       };
@@ -305,8 +305,8 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
     case 'nothing_to_learn':
       return {
         kind,
-        label: 'Open deck',
-        nav: 'deck',
+        label: 'Open library',
+        nav: 'library',
         testID: 'home-primary-cta',
         disabled: false,
       };
@@ -570,8 +570,8 @@ export function buildHomeVM(params: {
   } else if (!selectedDeck.canStudy && statusKind === 'first_run') {
     cta = {
       ...cta,
-      label: 'Open deck',
-      nav: 'deck',
+      label: 'Open library',
+      nav: 'library',
       disabled: false,
     };
   }
@@ -599,7 +599,7 @@ export function buildHomeVM(params: {
       ctaAction:
         cta.nav === 'challenge'
           ? 'challenge'
-          : cta.nav === 'deck'
+          : cta.nav === 'deck' || cta.nav === 'library'
             ? 'deck'
             : 'none',
       ctaDisabled: cta.disabled,

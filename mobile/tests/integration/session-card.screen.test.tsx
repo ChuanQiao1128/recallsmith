@@ -43,6 +43,7 @@ vi.mock('react-native-safe-area-context', () => {
   const React = require('react');
   return {
     SafeAreaView: ({ children, ...props }: any) => React.createElement('SafeAreaView', props, children),
+    useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
   };
 });
 
@@ -199,6 +200,11 @@ describe('SessionCardScreen', () => {
     expect(useSessionStore.getState().slug).toBe('csharp');
 
     await act(async () => {
+      findPressableByLabel(tree, 'Reveal answer').props.onPress();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
       findPressableByLabel(tree, 'Good').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
@@ -216,5 +222,34 @@ describe('SessionCardScreen', () => {
       dueCount: 0,
       streakEarned: true,
     });
+  });
+
+  it('keeps rating dock mounted while content scrolls', async () => {
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{
+            key: 'session-card',
+            name: 'SessionCard',
+            params: { slug: 'csharp', mode: 'mixed', limit: 1 },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const dock = tree.root.findAll(
+      (node) => (node.type as any) === 'View' && node.props?.testID === 'review-rating-dock',
+    );
+    const bar = tree.root.findAll(
+      (node) => (node.type as any) === 'View' && node.props?.testID === 'review-rating-bar',
+    );
+
+    expect(dock).toHaveLength(1);
+    expect(bar).toHaveLength(1);
   });
 });

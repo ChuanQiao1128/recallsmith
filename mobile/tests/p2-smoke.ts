@@ -197,7 +197,7 @@ const homeNotReady = buildHomeVM({
     },
   ],
 });
-assert.equal(homeNotReady.hero.ctaLabel, 'Open deck');
+assert.equal(homeNotReady.hero.ctaLabel, 'Open library');
 assert.equal(homeNotReady.hero.ctaAction, 'deck');
 
 const homeWithNoWork = buildHomeVM({
@@ -222,7 +222,7 @@ const homeWithNoWork = buildHomeVM({
     },
   ],
 });
-assert.equal(homeWithNoWork.hero.ctaLabel, 'Open deck');
+assert.equal(homeWithNoWork.hero.ctaLabel, 'Open library');
 assert.equal(homeWithNoWork.hero.ctaAction, 'deck');
 
 const homeWithWork = buildHomeVM({

@@ -1,6 +1,8 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+let mockWidth = 360;
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -22,7 +24,7 @@ vi.mock('react-native', () => {
         { ...props, onPress },
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
-    useWindowDimensions: () => ({ width: 390, height: 844 }),
+    useWindowDimensions: () => ({ width: mockWidth, height: 844 }),
     StyleSheet: { create: (styles: any) => styles },
   };
 });
@@ -53,9 +55,7 @@ vi.mock('../../src/content/activeDeck', () => ({
 }));
 
 vi.mock('../../src/content/deckRepository', () => ({
-  listManifestDecks: vi.fn(async () => [
-    { slug: 'csharp', title: 'C# Interview', availability: 'live' },
-  ]),
+  listManifestDecks: vi.fn(async () => [{ slug: 'csharp', title: 'C# Interview', availability: 'live' }]),
   resolveDeckBySlug: vi.fn(async () => ({
     Slug: 'csharp',
     Title: 'C# Interview',
@@ -65,7 +65,6 @@ vi.mock('../../src/content/deckRepository', () => ({
     Cards: [
       { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' },
       { StableUid: '2', OrderInDeck: 2, Difficulty: 2, Question: 'Q2' },
-      { StableUid: '3', OrderInDeck: 3, Difficulty: 3, Question: 'Q3' },
     ],
   })),
 }));
@@ -74,7 +73,6 @@ vi.mock('../../src/review/storage', () => ({
   loadDeckProgress: vi.fn(async () => [
     { stableUid: '1', stage: 0, nextReviewAt: 0 },
     { stableUid: '2', stage: 2, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 86400000 },
-    { stableUid: '3', stage: 4, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 86400000 },
   ]),
 }));
 
@@ -87,68 +85,38 @@ async function flush() {
   });
 }
 
-describe('LibraryScreen', () => {
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-  let warnSpy: ReturnType<typeof vi.spyOn>;
-
+describe('LibraryScreen responsive columns', () => {
   beforeEach(() => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
-  afterEach(() => {
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
-  });
-
-  it('renders four filters with collection status chips', async () => {
-    const navigate = vi.fn();
+  it('uses 2 columns at 360pt', async () => {
+    mockWidth = 360;
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
       );
     });
     await flush();
 
-    const blob = tree.root
-      .findAll((node) => (node.type as any) === 'Text')
-      .map((node) => {
-        const c = node.props.children;
-        return Array.isArray(c) ? c.join('') : String(c ?? '');
-      })
-      .join('\n');
-
-    expect(blob).toContain('Library');
-    expect(blob).toContain('All');
-    expect(blob).toContain('New');
-    expect(blob).toContain('Learning');
-    expect(blob).toContain('Mastered');
+    const grid = tree.root.find((node) => node.props?.testID === 'library-card-grid');
+    expect(grid.props.numColumns).toBe(2);
   });
 
-  it('opens card detail from library card grid', async () => {
-    const navigate = vi.fn();
+  it('uses 3 columns at 390pt', async () => {
+    mockWidth = 390;
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
       );
     });
     await flush();
 
-    const q1 = tree.root.find(
-      (node) =>
-        (node.type as any) === 'Pressable' &&
-        node.findAll((child) => (child.type as any) === 'Text' && child.props.children === 'Q1').length > 0,
-    );
-
-    act(() => {
-      q1.props.onPress();
-    });
-
-    expect(navigate).toHaveBeenCalledWith('CardDetail', { cardId: '1' });
+    const grid = tree.root.find((node) => node.props?.testID === 'library-card-grid');
+    expect(grid.props.numColumns).toBe(3);
   });
 });

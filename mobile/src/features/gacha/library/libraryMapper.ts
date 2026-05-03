@@ -5,6 +5,7 @@ import { isLearnedProgress, isMasteredProgress, isNewProgress, isScheduledProgre
 import { formatDateKey } from '../../../review/model';
 
 export type LibraryCardStatus = 'new' | 'learning' | 'mastered';
+export type LibraryFilter = 'all' | 'new' | 'learning' | 'mastered';
 
 export type LibraryCardRow = {
   stableUid: string;
@@ -15,6 +16,18 @@ export type LibraryCardRow = {
   statusLabel: 'New' | 'Learning' | 'Mastered';
   isDueToday: boolean;
   isUpdated: boolean;
+};
+
+export type LibraryFilterChip = {
+  key: LibraryFilter;
+  label: 'All' | 'New' | 'Learning' | 'Mastered';
+  count: number;
+};
+
+export type LibraryViewModel = LibraryVM & {
+  filter: LibraryFilter;
+  filters: LibraryFilterChip[];
+  cards: LibraryCardRow[];
 };
 
 function isDueToday(progress: CardProgress, now: Date): boolean {
@@ -88,22 +101,37 @@ export function buildLibraryCardRows(params: {
 export function buildLibraryVM(params: {
   deck: DeckExport;
   progress: CardProgress[];
+  filter?: LibraryFilter;
   now?: Date;
   isTrial?: boolean;
   previewTotal?: number;
-}): LibraryVM {
-  const { deck, progress, now = new Date(), isTrial = false, previewTotal = 0 } = params;
-  const newCount = progress.filter((item) => isNewProgress(item)).length;
-  const masteredCount = progress.filter((item) => isMasteredProgress(item)).length;
-  const learningCount = progress.filter((item) => isLearnedProgress(item) && !isMasteredProgress(item)).length;
-  const dueTodayCount = progress.filter((item) => isDueToday(item, now)).length;
-  const updatedCount = countUpdatedCards(isTrial ? (deck.Cards ?? []).slice(0, previewTotal) : deck.Cards ?? [], progress);
+}): LibraryViewModel {
+  const { deck, progress, filter = 'all', now = new Date(), isTrial = false, previewTotal = 0 } = params;
+  const rows = buildLibraryCardRows({ deck, progress, now, isTrial, previewTotal });
+  const newCount = rows.filter((item) => item.status === 'new').length;
+  const masteredCount = rows.filter((item) => item.status === 'mastered').length;
+  const learningCount = rows.filter((item) => item.status === 'learning').length;
+  const dueTodayCount = rows.filter((item) => item.isDueToday).length;
+  const updatedCount = countUpdatedCards(
+    isTrial ? (deck.Cards ?? []).slice(0, previewTotal) : deck.Cards ?? [],
+    progress,
+  );
   const drawStatusLabel =
     dueTodayCount > 0
       ? 'Clear today’s due cards before opening more new content.'
       : newCount > 0
         ? 'You have room to learn fresh cards today.'
         : 'No pending pressure right now — browse your library or return later.';
+
+  const cards =
+    filter === 'all' ? rows : rows.filter((item) => item.status === filter);
+
+  const filters: LibraryFilterChip[] = [
+    { key: 'all', label: 'All', count: rows.length },
+    { key: 'new', label: 'New', count: newCount },
+    { key: 'learning', label: 'Learning', count: learningCount },
+    { key: 'mastered', label: 'Mastered', count: masteredCount },
+  ];
 
   return {
     title: deck.Title,
@@ -116,5 +144,8 @@ export function buildLibraryVM(params: {
       dueTodayCount,
       updatedCount,
     },
+    filter,
+    filters,
+    cards,
   };
 }
