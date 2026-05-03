@@ -2,6 +2,8 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+let viewportWidth = 390;
+
 vi.mock('react-native', () => {
   const React = require('react');
   return {
@@ -9,6 +11,7 @@ vi.mock('react-native', () => {
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
+    useWindowDimensions: () => ({ width: viewportWidth, height: 844, scale: 3, fontScale: 1 }),
     Pressable: ({ children, onPress, ...props }: any) =>
       React.createElement(
         'Pressable',
@@ -105,6 +108,7 @@ describe('ChallengeScreen', () => {
 
   beforeEach(() => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    viewportWidth = 390;
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -177,4 +181,42 @@ describe('ChallengeScreen', () => {
     );
     expect(beginButtons).toHaveLength(1);
   });
+
+  it.each([360, 375, 390, 430])(
+    'keeps required challenge test anchors and single-line primary CTA at width %d',
+    async (width) => {
+      viewportWidth = width;
+      const navigation = {
+        navigate: vi.fn(),
+        goBack: vi.fn(),
+      } as any;
+
+      let tree!: renderer.ReactTestRenderer;
+      await act(async () => {
+        tree = renderer.create(
+          <ChallengeScreen
+            navigation={navigation}
+            route={{ key: 'challenge', name: 'Challenge', params: { slug: 'csharp' } } as any}
+          />,
+        );
+      });
+      await flush();
+
+      const roots = tree.root.findAll((node) => node.props?.testID === 'screen-challenge-root');
+      const primaryAnchors = tree.root.findAll(
+        (node) => node.props?.testID === 'screen-challenge-primary-cta',
+      );
+      const beginButtons = tree.root.findAll(
+        (node) => (node.type as any) === 'Pressable' && node.props?.testID === 'challenge-begin-cta',
+      );
+      expect(roots.length).toBeGreaterThan(0);
+      expect(primaryAnchors.length).toBeGreaterThan(0);
+      expect(beginButtons).toHaveLength(1);
+
+      const beginText = beginButtons[0].find(
+        (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
+      );
+      expect(beginText.props.numberOfLines).toBe(1);
+    },
+  );
 });

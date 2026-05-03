@@ -49,39 +49,53 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
   const [streakBeforeSnapshot, setStreakBeforeSnapshot] = useState<StreakSnapshot | null>(null);
   const [streakAfterSnapshot, setStreakAfterSnapshot] = useState<StreakSnapshot | null>(null);
   const [newMilestones, setNewMilestones] = useState<Milestone[]>([]);
+  const [summaryResolveStatus, setSummaryResolveStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [summaryResolveError, setSummaryResolveError] = useState<string | null>(null);
+  const [summaryRetryToken, setSummaryRetryToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setSummaryResolveStatus('loading');
+    setSummaryResolveError(null);
 
     (async () => {
-      if (sessionId) {
-        const rewardPulls = sessionLimit > 0 && sessionDone >= sessionLimit ? 2 : sessionDone >= minimumGoal ? 1 : 0;
-        const [rewardResult, streakResult] = await Promise.all([
-          applySessionRewardToWallet(sessionId, rewardPulls),
-          applySessionStreak({ sessionId, earned: streakEarned }),
-        ]);
+      try {
+        if (sessionId) {
+          const rewardPulls = sessionLimit > 0 && sessionDone >= sessionLimit ? 2 : sessionDone >= minimumGoal ? 1 : 0;
+          const [rewardResult, streakResult] = await Promise.all([
+            applySessionRewardToWallet(sessionId, rewardPulls),
+            applySessionStreak({ sessionId, earned: streakEarned }),
+          ]);
 
-        if (!cancelled) {
-          setWalletBeforeReward(rewardResult.walletBefore);
-          setStreakBeforeSnapshot(streakResult.before);
-          setStreakAfterSnapshot(streakResult.after);
-          setNewMilestones(resolveNewMilestones({ before: streakResult.before, after: streakResult.after }));
+          if (!cancelled) {
+            setWalletBeforeReward(rewardResult.walletBefore);
+            setStreakBeforeSnapshot(streakResult.before);
+            setStreakAfterSnapshot(streakResult.after);
+            setNewMilestones(resolveNewMilestones({ before: streakResult.before, after: streakResult.after }));
+            setSummaryResolveStatus('ready');
+          }
+          return;
         }
-        return;
-      }
 
-      const [currentWallet, currentStreak] = await Promise.all([loadRewardWalletState(), loadStreakSnapshot()]);
-      if (!cancelled) {
-        setWalletBeforeReward(currentWallet);
-        setStreakBeforeSnapshot(currentStreak);
-        setStreakAfterSnapshot(currentStreak);
+        const [currentWallet, currentStreak] = await Promise.all([loadRewardWalletState(), loadStreakSnapshot()]);
+        if (!cancelled) {
+          setWalletBeforeReward(currentWallet);
+          setStreakBeforeSnapshot(currentStreak);
+          setStreakAfterSnapshot(currentStreak);
+          setSummaryResolveStatus('ready');
+        }
+      } catch {
+        if (!cancelled) {
+          setSummaryResolveStatus('error');
+          setSummaryResolveError('Unable to refresh reward and streak details right now.');
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [sessionId, sessionDone, sessionLimit, minimumGoal, streakEarned]);
+  }, [sessionId, sessionDone, sessionLimit, minimumGoal, streakEarned, summaryRetryToken]);
 
   const summary = useMemo(
     () =>
@@ -122,16 +136,37 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
   const streakBefore = streakBeforeSnapshot?.currentDailyStreak ?? streakAfterSnapshot?.currentDailyStreak ?? 0;
   const streakAfter = streakAfterSnapshot?.currentDailyStreak ?? streakBefore;
   const streakChanged = streakAfter > streakBefore || streakEarned;
+  const summaryHasActivity = sessionDone > 0 || dueCount > 0 || summary.resolvedReward.rewardPulls > 0 || streakAfter > 0;
+  const isSummaryError = summaryResolveStatus === 'error';
+  const isSummaryLoading = summaryResolveStatus === 'loading';
+  const isSummaryEmpty = summaryResolveStatus === 'ready' && !summaryHasActivity;
+
+  const actionTitle = isSummaryError ? 'Refresh summary' : isSummaryEmpty ? 'No run logged yet' : 'Next action';
 
   const actionBody =
-    summary.vm.nextAction.primary.kind === 'nothing_to_learn'
-      ? "Open your library to review today's updates."
-      : drawVm.canOpen
-        ? 'Continue your day, then open draw when you want to spend pulls.'
-        : 'Continue to Home for the next run.';
+    isSummaryError
+      ? (summaryResolveError ?? 'Unable to refresh reward and streak details right now.')
+      : isSummaryLoading
+        ? 'Wrapping up reward and streak details...'
+        : isSummaryEmpty
+          ? 'Open your library to choose cards for the next run.'
+          : summary.vm.nextAction.primary.kind === 'nothing_to_learn'
+            ? "Open your library to review today's updates."
+            : drawVm.canOpen
+              ? 'Continue your day, then open draw when you want to spend pulls.'
+              : 'Continue to Home for the next run.';
+
+  const primaryActionLabel = isSummaryLoading
+    ? 'Updating...'
+    : isSummaryError
+      ? 'Retry'
+      : isSummaryEmpty
+        ? 'Open library'
+        : summary.vm.nextAction.primary.label;
+  const isPrimaryActionDisabled = isSummaryLoading;
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView testID="screen-session-summary-root" style={styles.safeArea}>
       <LinearGradient
         colors={[colors.parchmentBg, colors.parchmentBgDeep]}
         start={{ x: 0, y: 0 }}
@@ -195,32 +230,54 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
 
           <View style={styles.actionCard}>
             <Text numberOfLines={1} style={styles.actionTitle}>
-              Next action
+              {actionTitle}
             </Text>
             <Text numberOfLines={2} style={styles.actionBody}>
               {actionBody}
             </Text>
 
             <Pressable
+              testID="screen-session-summary-primary-cta"
               accessibilityRole="button"
-              style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
-              onPress={() =>
+              accessibilityState={{ disabled: isPrimaryActionDisabled }}
+              disabled={isPrimaryActionDisabled}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                isPrimaryActionDisabled && styles.primaryButtonDisabled,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => {
+                if (isSummaryLoading) {
+                  return;
+                }
+
+                if (isSummaryError) {
+                  setSummaryRetryToken((current) => current + 1);
+                  return;
+                }
+
+                if (isSummaryEmpty) {
+                  navigation.navigate('Library');
+                  return;
+                }
+
                 navigateFromActionKind({
                   kind: summary.vm.nextAction.primary.kind,
                   slug,
                   rewardPending: drawVm.state === 'reward-pending',
                   navigation,
-                })
-              }
+                });
+              }}
             >
               <Text numberOfLines={1} style={styles.primaryButtonText}>
-                {summary.vm.nextAction.primary.label}
+                {primaryActionLabel}
               </Text>
             </Pressable>
 
-            {summary.vm.nextAction.secondary ? (
+            {summaryResolveStatus === 'ready' && !isSummaryEmpty && summary.vm.nextAction.secondary ? (
               <Pressable
-                accessibilityRole="button"
+                testID="screen-session-summary-secondary-cta"
+                accessibilityRole="link"
                 style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
                 onPress={() =>
                   navigateFromActionKind({
@@ -263,12 +320,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 9 },
     marginBottom: spacing.sm,
   },
-  heroTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
+  heroTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
   heroBadge: {
     borderRadius: 999,
     paddingHorizontal: spacing.sm,
@@ -278,25 +330,9 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     fontWeight: '800',
   },
-  heroCompletion: {
-    color: colors.inkSecondary,
-    fontSize: typography.caption,
-    fontWeight: '700',
-  },
-  title: {
-    marginTop: 8,
-    color: colors.ink,
-    fontSize: typography.title2,
-    lineHeight: 28,
-    fontWeight: '900',
-  },
-  subtitle: {
-    marginTop: 6,
-    color: colors.inkSecondary,
-    fontSize: typography.bodySmall,
-    lineHeight: 18,
-    fontWeight: '600',
-  },
+  heroCompletion: { color: colors.inkSecondary, fontSize: typography.caption, fontWeight: '700' },
+  title: { marginTop: 8, color: colors.ink, fontSize: typography.title2, lineHeight: 28, fontWeight: '900' },
+  subtitle: { marginTop: 6, color: colors.inkSecondary, fontSize: typography.bodySmall, lineHeight: 18, fontWeight: '600' },
   milestoneCard: {
     borderRadius: spacing.lg,
     padding: spacing.md,
@@ -312,19 +348,8 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  cardTitle: {
-    marginTop: 4,
-    color: colors.ink,
-    fontSize: typography.title3,
-    lineHeight: 22,
-    fontWeight: '800',
-  },
-  cardBody: {
-    marginTop: 6,
-    color: colors.inkSecondary,
-    fontSize: typography.bodySmall,
-    lineHeight: 18,
-  },
+  cardTitle: { marginTop: 4, color: colors.ink, fontSize: typography.title3, lineHeight: 22, fontWeight: '800' },
+  cardBody: { marginTop: 6, color: colors.inkSecondary, fontSize: typography.bodySmall, lineHeight: 18 },
   actionCard: {
     borderRadius: spacing.lg,
     padding: spacing.md,
@@ -334,18 +359,8 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 8 },
   },
-  actionTitle: {
-    color: colors.ink,
-    fontSize: typography.title3,
-    lineHeight: 22,
-    fontWeight: '800',
-  },
-  actionBody: {
-    marginTop: 6,
-    color: colors.inkSecondary,
-    fontSize: typography.bodySmall,
-    lineHeight: 18,
-  },
+  actionTitle: { color: colors.ink, fontSize: typography.title3, lineHeight: 22, fontWeight: '800' },
+  actionBody: { marginTop: 6, color: colors.inkSecondary, fontSize: typography.bodySmall, lineHeight: 18 },
   primaryButton: {
     marginTop: spacing.sm,
     minHeight: a11y.minTouch,
@@ -355,28 +370,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
   },
-  primaryButtonText: {
-    color: colors.parchmentBg,
-    fontSize: typography.body,
-    fontWeight: '800',
+  primaryButtonDisabled: {
+    opacity: 0.65,
   },
+  primaryButtonText: { color: colors.parchmentBg, fontSize: typography.body, fontWeight: '800' },
   secondaryButton: {
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
     minHeight: a11y.minTouch,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: 'rgba(42, 34, 24, 0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(42, 34, 24, 0.2)',
-    alignItems: 'center',
+    alignSelf: 'flex-start',
+    alignItems: 'flex-start',
     justifyContent: 'center',
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.xs,
   },
   secondaryButtonText: {
     color: colors.inkSecondary,
-    fontSize: typography.body,
+    fontSize: typography.bodySmall,
     fontWeight: '700',
+    textDecorationLine: 'underline',
   },
-  buttonPressed: {
-    opacity: 0.85,
-  },
+  buttonPressed: { opacity: 0.85 },
 });

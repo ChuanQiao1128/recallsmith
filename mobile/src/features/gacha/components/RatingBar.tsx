@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ReviewRating } from '../../../review/model';
+import { colors } from '../../../theme/colors';
 
 const RATING_ITEMS: Array<{ key: ReviewRating; title: string; subtitle: string; styleKey: keyof typeof styles }> = [
   { key: 'again', title: 'Again', subtitle: 'Show very soon', styleKey: 'ratingAgain' },
@@ -18,7 +19,9 @@ export function RatingBar(props: {
 
   return (
     <View style={styles.wrapper} testID={testID}>
-      <Text style={styles.hint}>Think about how well you recalled this before seeing the answer.</Text>
+      <Text style={styles.hint} numberOfLines={2}>
+        Think about how well you recalled this before seeing the answer.
+      </Text>
       <View style={styles.grid}>
         {RATING_ITEMS.map((item) => (
           <Pressable
@@ -32,8 +35,12 @@ export function RatingBar(props: {
             disabled={disabled}
             onPress={() => onRate(item.key)}
           >
-            <Text style={styles.ratingTitle}>{item.title}</Text>
-            <Text style={styles.ratingSub}>{item.subtitle}</Text>
+            <Text style={styles.ratingTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.ratingSub} numberOfLines={1}>
+              {item.subtitle}
+            </Text>
           </Pressable>
         ))}
       </View>
@@ -43,7 +50,7 @@ export function RatingBar(props: {
 
 const styles = StyleSheet.create({
   wrapper: {},
-  hint: { fontSize: 12, color: '#6B7280', marginBottom: 10 },
+  hint: { fontSize: 12, color: colors.inkSecondary, marginBottom: 10 },
   grid: { flexDirection: 'row', gap: 8 },
   ratingButton: {
     flex: 1,
@@ -62,8 +69,8 @@ const styles = StyleSheet.create({
   ratingEasy: { backgroundColor: 'rgba(79,70,229,0.08)', borderColor: 'rgba(79,70,229,0.18)' },
   ratingPressed: { opacity: 0.92 },
   ratingDisabled: { opacity: 0.55 },
-  ratingTitle: { fontSize: 13, fontWeight: '800', color: '#111827' },
-  ratingSub: { marginTop: 4, fontSize: 11, color: '#6B7280' },
+  ratingTitle: { fontSize: 13, fontWeight: '800', color: colors.ink },
+  ratingSub: { marginTop: 4, fontSize: 11, color: colors.inkSecondary },
 });
 
 export default RatingBar;

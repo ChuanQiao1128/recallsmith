@@ -43,11 +43,17 @@ import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
+type SettingsLoadState = 'loading' | 'ready' | 'empty' | 'error';
 
 const SUPPORT_URL =
   'https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Support-Help-2bfa758eb545809ead04d8f8321a40dc?pvs=74';
 const PRIVACY_URL =
   'https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Privacy-Policy-2bfa758eb54580db99a3ed89369f9a13?pvs=74';
+const PREMIUM_COPY = {
+  title: 'Premium',
+  body: 'Unlock premium tracks and keep upgrades in one place.',
+  action: 'Open premium',
+} as const;
 
 const DEFAULT_REMINDER_PREFS: ReminderPrefs = {
   morningEnabled: true,
@@ -55,6 +61,15 @@ const DEFAULT_REMINDER_PREFS: ReminderPrefs = {
   eveningEnabled: true,
   eveningTime: '20:00',
 };
+
+function hasSettingsPayload(
+  prefs: ReminderPrefs | null | undefined,
+  snapshot: StreakSnapshot | null,
+): boolean {
+  if (snapshot) return true;
+  if (!prefs) return false;
+  return typeof prefs.morningTime === 'string' && typeof prefs.eveningTime === 'string';
+}
 
 function normalizeUrl(url: string): string {
   if (/^https?:\/\//i.test(url)) return url;
@@ -84,7 +99,8 @@ export function SettingsScreen({ navigation }: Props) {
   const signOutNow = useAuthStore((state) => state.signOutNow);
   const signedIn = status === 'signed_in';
 
-  const [loading, setLoading] = useState(true);
+  const [loadState, setLoadState] = useState<SettingsLoadState>('loading');
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [audience, setAudience] = useState<AudiencePreference>('both');
   const [audienceSaving, setAudienceSaving] = useState(false);
   const [reminderPrefs, setReminderPrefsState] = useState<ReminderPrefs>(DEFAULT_REMINDER_PREFS);
@@ -94,7 +110,8 @@ export function SettingsScreen({ navigation }: Props) {
   const reminderPlan = useMemo(() => buildReminderPlanVM(reminderPrefs), [reminderPrefs]);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
+    setLoadState('loading');
+    setLoadError(null);
     try {
       const [nextAudience, nextPrefs, nextStreak] = await Promise.all([
         loadAudiencePreference(),
@@ -102,11 +119,19 @@ export function SettingsScreen({ navigation }: Props) {
         loadStreakSnapshot(),
       ]);
 
+      if (!hasSettingsPayload(nextPrefs, nextStreak)) {
+        setStreak(null);
+        setLoadState('empty');
+        return;
+      }
+
       setAudience(nextAudience);
       setReminderPrefsState(nextPrefs);
       setStreak(nextStreak);
-    } finally {
-      setLoading(false);
+      setLoadState('ready');
+    } catch {
+      setLoadError('Unable to load settings right now.');
+      setLoadState('error');
     }
   }, []);
 
@@ -156,9 +181,9 @@ export function SettingsScreen({ navigation }: Props) {
   const momentumDays = streak?.currentDailyStreak ?? 0;
   const totalSessions = streak?.totalQualifiedSessions ?? 0;
 
-  if (loading || authLoading || status === 'unknown') {
+  if (authLoading || status === 'unknown' || loadState === 'loading') {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} testID="screen-settings-root">
         <LinearGradient
           colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
@@ -176,8 +201,70 @@ export function SettingsScreen({ navigation }: Props) {
     );
   }
 
+  if (loadState === 'error') {
+    return (
+      <SafeAreaView style={styles.safeArea} testID="screen-settings-root">
+        <LinearGradient
+          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.centerState}>
+            <Text style={styles.errorTitle} numberOfLines={2}>
+              Settings unavailable
+            </Text>
+            <Text style={styles.errorBody} numberOfLines={2}>
+              {loadError ?? 'Unable to load settings right now.'}
+            </Text>
+            <Pressable
+              style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+              onPress={() => void refresh()}
+              testID="screen-settings-primary-cta"
+            >
+              <Text style={styles.retryText} numberOfLines={1}>
+                Retry
+              </Text>
+            </Pressable>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadState === 'empty') {
+    return (
+      <SafeAreaView style={styles.safeArea} testID="screen-settings-root">
+        <LinearGradient
+          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.centerState}>
+            <Text style={styles.errorTitle} numberOfLines={2}>
+              No settings ready yet
+            </Text>
+            <Text style={styles.errorBody} numberOfLines={2}>
+              Reload to bring back account, reminder, and appearance options.
+            </Text>
+            <Pressable
+              style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+              onPress={() => void refresh()}
+              testID="screen-settings-primary-cta"
+            >
+              <Text style={styles.retryText} numberOfLines={1}>
+                Reload settings
+              </Text>
+            </Pressable>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} testID="screen-settings-root">
       <LinearGradient
         colors={[colors.parchmentBg, colors.parchmentBgDeep]}
         start={{ x: 0, y: 0 }}
@@ -207,7 +294,9 @@ export function SettingsScreen({ navigation }: Props) {
             <Text style={styles.sectionBody} numberOfLines={1}>
               {momentumDays} days streak · {totalSessions} qualified sessions
             </Text>
-            <Text style={styles.metaText}>{reminderPlan.eveningLine}</Text>
+            <Text style={styles.metaText} numberOfLines={1}>
+              {reminderPlan.eveningLine}
+            </Text>
           </View>
 
           <AccountSection
@@ -217,6 +306,7 @@ export function SettingsScreen({ navigation }: Props) {
             onSignIn={onSignIn}
             onSignOut={() => void onSignOut()}
             onResetReviewSchedule={onResetReviewSchedule}
+            primaryCtaTestID="screen-settings-primary-cta"
           />
 
           <ContentSection
@@ -232,6 +322,23 @@ export function SettingsScreen({ navigation }: Props) {
           />
 
           <AppearanceSection />
+
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle} numberOfLines={1}>
+              {PREMIUM_COPY.title}
+            </Text>
+            <Text style={styles.sectionBody} numberOfLines={1}>
+              {PREMIUM_COPY.body}
+            </Text>
+            <Pressable
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+              onPress={() => navigation.navigate('Paywall')}
+            >
+              <Text style={styles.secondaryButtonText} numberOfLines={1}>
+                {PREMIUM_COPY.action}
+              </Text>
+            </Pressable>
+          </View>
 
           <AboutSection
             appVersion={appVersion}
@@ -271,6 +378,32 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     fontSize: typography.bodySmall,
     color: colors.inkSecondary,
+  },
+  errorTitle: {
+    fontSize: typography.title3,
+    color: colors.ink,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  errorBody: {
+    marginTop: spacing.xs,
+    fontSize: typography.bodySmall,
+    color: colors.inkSecondary,
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: spacing.sm,
+    minHeight: 44,
+    borderRadius: spacing.buttonRadius,
+    backgroundColor: colors.ink,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  retryText: {
+    color: colors.parchmentBg,
+    fontSize: typography.button,
+    fontWeight: '800',
   },
   headerRow: {
     flexDirection: 'row',
@@ -326,6 +459,20 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     color: colors.inkSecondary,
     lineHeight: 17,
+  },
+  secondaryButton: {
+    marginTop: spacing.sm,
+    minHeight: 44,
+    borderRadius: spacing.buttonRadius,
+    borderWidth: 1,
+    borderColor: 'rgba(42,34,24,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryButtonText: {
+    color: colors.ink,
+    fontSize: typography.button,
+    fontWeight: '700',
   },
   pressed: {
     opacity: 0.9,

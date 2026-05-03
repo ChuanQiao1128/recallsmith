@@ -91,7 +91,7 @@ export function ChallengeScreen({ navigation, route }: Props) {
   }
   if (loading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView testID="screen-challenge-root" style={styles.safeArea}>
         <LinearGradient
           colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
@@ -110,7 +110,7 @@ export function ChallengeScreen({ navigation, route }: Props) {
   }
   if (loadError || !challengeRoute) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView testID="screen-challenge-root" style={styles.safeArea}>
         <LinearGradient
           colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
@@ -135,7 +135,7 @@ export function ChallengeScreen({ navigation, route }: Props) {
     );
   }
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView testID="screen-challenge-root" style={styles.safeArea}>
       <LinearGradient
         colors={[colors.parchmentBg, colors.parchmentBgDeep]}
         start={{ x: 0, y: 0 }}
@@ -178,15 +178,17 @@ export function ChallengeScreen({ navigation, route }: Props) {
             </View>
           </View>
           <RoutePreview nodes={challengeRoute.nodes} />
-          <Pressable
-            testID="challenge-begin-cta"
-            style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-            onPress={startRoute}
-          >
-            <Text style={styles.primaryButtonText} numberOfLines={1}>
-              {COPY.begin}
-            </Text>
-          </Pressable>
+          <View testID="screen-challenge-primary-cta">
+            <Pressable
+              testID="challenge-begin-cta"
+              style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+              onPress={startRoute}
+            >
+              <Text style={styles.primaryButtonText} numberOfLines={1}>
+                {COPY.begin}
+              </Text>
+            </Pressable>
+          </View>
         </ScrollView>
       </LinearGradient>
     </SafeAreaView>

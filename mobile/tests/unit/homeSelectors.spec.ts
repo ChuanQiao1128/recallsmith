@@ -70,6 +70,60 @@ describe('buildHomeVM CTA kinds', () => {
     expect(vm.hero.ctaAction).toBe('challenge');
   });
 
+  it('derives today_partial from runtime session progress without statusHint', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 4, newToday: 1 })],
+      wallet: { availablePulls: 0, reservePulls: 0 },
+      runtimeStatus: {
+        qualifiedToday: false,
+        completedToday: 1,
+        completedRouteToday: false,
+      },
+    });
+
+    expect(vm.cta.kind).toBe('today_partial');
+    expect(vm.cta.label).toBe('Continue today’s challenge');
+    expect(vm.cta.nav).toBe('challenge');
+  });
+
+  it('derives today_done from runtime streak-qualified signal without statusHint', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 2, newToday: 1 })],
+      wallet: { availablePulls: 1, reservePulls: 0 },
+      runtimeStatus: {
+        qualifiedToday: true,
+        completedToday: 1,
+        completedRouteToday: false,
+      },
+    });
+
+    expect(vm.cta.kind).toBe('today_done');
+    expect(vm.cta.label).toBe('Minimum goal reached');
+    expect(vm.cta.nav).toBe('draw');
+  });
+
+  it('derives today_full_clear from runtime completion signal without statusHint', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 0, newToday: 0 })],
+      wallet: { availablePulls: 2, reservePulls: 0 },
+      runtimeStatus: {
+        qualifiedToday: true,
+        completedToday: 2,
+        completedRouteToday: true,
+      },
+    });
+
+    expect(vm.cta.kind).toBe('today_full_clear');
+    expect(vm.cta.label).toBe('Full clear completed');
+    expect(vm.cta.nav).toBe('draw');
+  });
+
   it('keeps library CTA when there is no work', () => {
     const vm = buildHomeVM({
       selectedSlug: 'csharp',
@@ -93,5 +147,19 @@ describe('buildHomeVM CTA kinds', () => {
 
     expect(vm.draw.state).toBe('wallet-full');
     expect(vm.draw.label).toMatch(/Wallet full/i);
+  });
+
+  it('keeps a usable primary CTA when no deck is available', () => {
+    const vm = buildHomeVM({
+      selectedSlug: null,
+      hasSignedInUser: false,
+      deckSummaries: [],
+      wallet: { availablePulls: 0, reservePulls: 0 },
+    });
+
+    expect(vm.cta.kind).toBe('first_run');
+    expect(vm.cta.label).toBe('Open library');
+    expect(vm.cta.nav).toBe('library');
+    expect(vm.cta.disabled).toBe(false);
   });
 });

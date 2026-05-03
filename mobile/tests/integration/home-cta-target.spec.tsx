@@ -74,6 +74,40 @@ vi.mock('../../src/content/deckRepository', () => ({
 }));
 
 vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
+  loadHomeDeckSummaries: vi.fn(async () => {
+    const now = Date.now();
+    const dueToday = progressFixture.filter((item) => {
+      const next = Number(item?.nextReviewAt ?? 0);
+      return next <= now;
+    }).length;
+    const newToday = progressFixture.filter((item) => Number(item?.stage ?? 0) === 0).length;
+    return {
+      deckSummaries: [
+        {
+          slug: 'csharp',
+          title: 'C# Interview',
+          locale: 'en-US',
+          version: '1',
+          deckType: 1,
+          totalCards: 1,
+          localCards: 1,
+          studyCards: 1,
+          canStudy: true,
+          dueToday,
+          plannedToday: dueToday,
+          newToday,
+          masteredApprox: Math.max(0, 1 - newToday),
+          percent: 1,
+        },
+      ],
+      updates: {},
+      allUpcoming30: Array.from({ length: 30 }, (_, i) => ({
+        dateKey: new Date(now + i * 86_400_000).toISOString(),
+        count: i === 0 ? dueToday : 0,
+      })),
+      asOfISO: new Date(now).toISOString(),
+    };
+  }),
   loadDeckUpdates: vi.fn(async () => ({})),
   resolveDeckAction: vi.fn(async () => ({ kind: 'open', slug: 'csharp' })),
   executeDeckAction: vi.fn(async () => ({ activeSlug: 'csharp' })),
@@ -135,6 +169,7 @@ vi.mock('../../src/features/gacha/components/TodayPressureCard', () => {
 });
 
 import { HomeScreen } from '../../src/screens/HomeScreen';
+import * as deckRepository from '../../src/content/deckRepository';
 
 async function flush() {
   await act(async () => {
@@ -144,6 +179,8 @@ async function flush() {
 }
 
 describe('home primary CTA target', () => {
+  const listManifestDecksMock = vi.mocked(deckRepository.listManifestDecks);
+
   beforeEach(() => {
     setActiveDeckSlugMock.mockClear();
     navigateMock.mockClear();
@@ -202,6 +239,32 @@ describe('home primary CTA target', () => {
     });
 
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
+    expect(navigateMock).toHaveBeenCalledWith('Library');
+  });
+
+  it('navigates to Library when no deck is available', async () => {
+    listManifestDecksMock.mockResolvedValueOnce([]);
+    progressFixture = [];
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home' } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const cta = tree.root.find((node) => node.props?.testID === 'home-primary-cta');
+    expect(cta.props.disabled).toBe(false);
+    await act(async () => {
+      cta.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(setActiveDeckSlugMock).not.toHaveBeenCalled();
     expect(navigateMock).toHaveBeenCalledWith('Library');
   });
 });

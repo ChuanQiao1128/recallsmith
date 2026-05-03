@@ -461,7 +461,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   }
   if (loadError) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} testID="screen-session-card-root">
         <LinearGradient
           colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
@@ -490,7 +490,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   }
   if (loading || !dailyStats || !deck) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} testID="screen-session-card-root">
         <LinearGradient
           colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
@@ -509,7 +509,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   }
   const ratingDockHeight = 164 + Math.max(insets.bottom, 8);
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} testID="screen-session-card-root">
       <LinearGradient
         colors={[colors.parchmentBg, colors.parchmentBgDeep]}
         start={{ x: 0, y: 0 }}
@@ -537,6 +537,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           </View>
           <SessionProgressHeader vm={sessionVm} />
           <ScrollView
+            testID="screen-session-card-primary-surface"
             style={styles.scroll}
             contentContainerStyle={[
               styles.scrollContent,

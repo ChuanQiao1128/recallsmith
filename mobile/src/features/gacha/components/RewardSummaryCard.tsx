@@ -82,6 +82,7 @@ export function RewardSummaryCard(props: RewardSummaryCardProps) {
 
       {canUsePulls ? (
         <Pressable
+          testID="summary-reward-use-pulls-cta"
           accessibilityRole="button"
           style={({ pressed }) => [styles.ctaButton, pressed && styles.ctaButtonPressed]}
           onPress={onPressUsePulls ?? undefined}

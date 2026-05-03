@@ -29,8 +29,19 @@ export function buildDrawState(params: {
   wallet: RewardWalletState;
   hasTodayWork: boolean;
   rewardPending?: boolean;
+  hasActivePool?: boolean;
 }): DrawStateVM {
-  const { wallet, hasTodayWork, rewardPending = false } = params;
+  const { wallet, hasTodayWork, rewardPending = false, hasActivePool = true } = params;
+
+  if (!hasActivePool) {
+    return {
+      state: 'locked',
+      title: 'Draw locked for now',
+      helper: 'No active draw pool is ready yet. Open Library to choose or install a pool first.',
+      ctaLabel: 'View library',
+      canOpen: false,
+    };
+  }
 
   if (rewardPending && wallet.availablePulls > 0) {
     return {

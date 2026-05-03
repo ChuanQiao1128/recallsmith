@@ -248,8 +248,18 @@ describe('SessionCardScreen', () => {
     const bar = tree.root.findAll(
       (node) => (node.type as any) === 'View' && node.props?.testID === 'review-rating-bar',
     );
+    const root = tree.root.findAll(
+      (node) => (node.type as any) === 'SafeAreaView' && node.props?.testID === 'screen-session-card-root',
+    );
+    const primarySurface = tree.root.findAll(
+      (node) =>
+        (node.type as any) === 'ScrollView' &&
+        node.props?.testID === 'screen-session-card-primary-surface',
+    );
 
     expect(dock).toHaveLength(1);
     expect(bar).toHaveLength(1);
+    expect(root).toHaveLength(1);
+    expect(primarySurface).toHaveLength(1);
   });
 });

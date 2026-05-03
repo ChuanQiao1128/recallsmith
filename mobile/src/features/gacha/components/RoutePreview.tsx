@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { RoutePreviewNode } from '../contracts';
+import { colors } from '../../../theme/colors';
 
 function roleLabel(role: RoutePreviewNode['role']) {
   if (role === 'warmup') return 'Warm-up';
@@ -14,8 +15,12 @@ export function RoutePreview(props: { nodes: RoutePreviewNode[] }) {
 
   return (
     <View style={styles.card}>
-      <Text style={styles.title}>Route preview</Text>
-      <Text style={styles.subtitle}>Today should feel like one short run, not a long to-do list.</Text>
+      <Text style={styles.title} numberOfLines={2}>
+        Route preview
+      </Text>
+      <Text style={styles.subtitle} numberOfLines={1}>
+        Today should feel like one short run, not a long to-do list.
+      </Text>
 
       <View style={styles.nodes}>
         {nodes.map((node, index) => (
@@ -24,9 +29,15 @@ export function RoutePreview(props: { nodes: RoutePreviewNode[] }) {
               <Text style={styles.nodeIndex}>{index + 1}</Text>
             </View>
             <View style={styles.nodeBody}>
-              <Text style={styles.nodeRole}>{roleLabel(node.role)}</Text>
-              <Text style={styles.nodeTitle}>{node.title}</Text>
-              <Text style={styles.nodeSubtitle}>{node.subtitle}</Text>
+              <Text style={styles.nodeRole} numberOfLines={1}>
+                {roleLabel(node.role)}
+              </Text>
+              <Text style={styles.nodeTitle} numberOfLines={2}>
+                {node.title}
+              </Text>
+              <Text style={styles.nodeSubtitle} numberOfLines={1}>
+                {node.subtitle}
+              </Text>
             </View>
           </View>
         ))}
@@ -40,14 +51,14 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     padding: 16,
     backgroundColor: 'rgba(255,255,255,0.86)',
-    shadowColor: '#000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.10,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 10 },
     marginBottom: 14,
   },
-  title: { fontSize: 15, fontWeight: '800', color: '#111827' },
-  subtitle: { marginTop: 6, fontSize: 12, color: '#6B7280' },
+  title: { fontSize: 15, fontWeight: '800', color: colors.ink },
+  subtitle: { marginTop: 6, fontSize: 12, color: colors.inkSecondary },
   nodes: { marginTop: 14, gap: 10 },
   nodeRow: { flexDirection: 'row', alignItems: 'flex-start' },
   nodeIndexWrap: {
@@ -59,11 +70,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  nodeIndex: { fontSize: 12, fontWeight: '800', color: '#4F46E5' },
+  nodeIndex: { fontSize: 12, fontWeight: '800', color: colors.gold },
   nodeBody: { flex: 1 },
-  nodeRole: { fontSize: 10, fontWeight: '800', color: '#6B7280', textTransform: 'uppercase' },
-  nodeTitle: { marginTop: 2, fontSize: 13, fontWeight: '700', color: '#111827' },
-  nodeSubtitle: { marginTop: 2, fontSize: 11, lineHeight: 16, color: '#6B7280' },
+  nodeRole: { fontSize: 10, fontWeight: '800', color: colors.inkSecondary, textTransform: 'uppercase' },
+  nodeTitle: { marginTop: 2, fontSize: 13, fontWeight: '700', color: colors.ink },
+  nodeSubtitle: { marginTop: 2, fontSize: 11, lineHeight: 16, color: colors.inkSecondary },
 });
 
 export default RoutePreview;

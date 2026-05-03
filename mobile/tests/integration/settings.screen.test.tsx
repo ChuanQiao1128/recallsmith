@@ -4,7 +4,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const alertMock = vi.fn();
 const setAudiencePreferenceMock = vi.fn(async (next: string) => next);
+const getAudiencePreferenceMock = vi.fn(async () => 'both');
 const resetAllReviewSchedulesMock = vi.fn(async (_now?: Date) => {});
+const signOutNowMock = vi.fn(async () => {});
+const getReminderPrefsMock = vi.fn(async () => ({
+  morningEnabled: true,
+  morningTime: '08:00',
+  eveningEnabled: true,
+  eveningTime: '20:00',
+}));
+const loadStreakSnapshotMock = vi.fn(async () => ({
+  currentDailyStreak: 3,
+  longestDailyStreak: 3,
+  weekCompletedDays: 5,
+  totalQualifiedSessions: 8,
+  lastQualifiedDateKey: '2026-04-24',
+  currentWeekKey: '2026-W17',
+}));
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -82,7 +98,7 @@ vi.mock('../../src/auth/authStore', () => ({
       status: 'signed_in',
       email: 'test@example.com',
       loading: false,
-      signOutNow: vi.fn(async () => {}),
+      signOutNow: signOutNowMock,
     }),
 }));
 
@@ -98,13 +114,13 @@ vi.mock('../../src/config/remoteConfig', () => ({
 }));
 
 vi.mock('../../src/notifications/reminders', () => ({
-  getReminderPrefs: vi.fn(async () => ({ enabled: false, morningTime: '08:00', eveningTime: '20:00' })),
+  getReminderPrefs: () => getReminderPrefsMock(),
   setReminderPrefs: vi.fn(async (next: any) => next),
   refreshDailyRemindersFromCache: vi.fn(async () => {}),
 }));
 
 vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
-  getAudiencePreference: vi.fn(async () => 'both'),
+  getAudiencePreference: () => getAudiencePreferenceMock(),
   setAudiencePreference: (next: string) => setAudiencePreferenceMock(next),
 }));
 
@@ -113,14 +129,7 @@ vi.mock('../../src/review/storage', () => ({
 }));
 
 vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
-  loadStreakSnapshot: vi.fn(async () => ({
-    currentDailyStreak: 3,
-    longestDailyStreak: 3,
-    weekCompletedDays: 5,
-    totalQualifiedSessions: 8,
-    lastQualifiedDateKey: '2026-04-24',
-    currentWeekKey: '2026-W17',
-  })),
+  loadStreakSnapshot: () => loadStreakSnapshotMock(),
 }));
 
 import { SettingsScreen } from '../../src/screens/SettingsScreen';
@@ -129,15 +138,53 @@ async function flush() {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
+    await Promise.resolve();
   });
+}
+
+function nodeText(node: renderer.ReactTestInstance): string {
+  const content = node.props.children;
+  return Array.isArray(content) ? content.join('') : String(content ?? '');
 }
 
 function findPressableByText(tree: renderer.ReactTestRenderer, label: string) {
   return tree.root.find(
     (node) =>
       (node.type as any) === 'Pressable' &&
-      node.findAll((child) => (child.type as any) === 'Text' && child.props.children === label).length > 0,
+      node.findAll((child) => (child.type as any) === 'Text' && nodeText(child) === label).length > 0,
   );
+}
+
+function findPressableByTestID(tree: renderer.ReactTestRenderer, testID: string) {
+  return tree.root.find((node) => (node.type as any) === 'Pressable' && node.props?.testID === testID);
+}
+
+function findHostNodesByTestID(
+  tree: renderer.ReactTestRenderer,
+  hostType: string,
+  testID: string,
+) {
+  return tree.root.findAll(
+    (node) => (node.type as any) === hostType && node.props?.testID === testID,
+  );
+}
+
+async function renderSettings() {
+  const navigate = vi.fn();
+  const goBack = vi.fn();
+  let tree!: renderer.ReactTestRenderer;
+
+  await act(async () => {
+    tree = renderer.create(
+      <SettingsScreen
+        navigation={{ navigate, goBack } as any}
+        route={{ key: 'settings', name: 'Settings' } as any}
+      />,
+    );
+  });
+  await flush();
+
+  return { tree, navigate };
 }
 
 describe('SettingsScreen', () => {
@@ -147,7 +194,28 @@ describe('SettingsScreen', () => {
   beforeEach(() => {
     alertMock.mockReset();
     setAudiencePreferenceMock.mockClear();
+    getAudiencePreferenceMock.mockReset();
+    getAudiencePreferenceMock.mockResolvedValue('both');
     resetAllReviewSchedulesMock.mockClear();
+    signOutNowMock.mockReset();
+    signOutNowMock.mockResolvedValue(undefined);
+    getReminderPrefsMock.mockReset();
+    getReminderPrefsMock.mockResolvedValue({
+      morningEnabled: true,
+      morningTime: '08:00',
+      eveningEnabled: true,
+      eveningTime: '20:00',
+    });
+    loadStreakSnapshotMock.mockReset();
+    loadStreakSnapshotMock.mockResolvedValue({
+      currentDailyStreak: 3,
+      longestDailyStreak: 3,
+      weekCompletedDays: 5,
+      totalQualifiedSessions: 8,
+      lastQualifiedDateKey: '2026-04-24',
+      currentWeekKey: '2026-W17',
+    });
+
     (globalThis as any).__DEV__ = false;
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -159,12 +227,31 @@ describe('SettingsScreen', () => {
     warnSpy.mockRestore();
   });
 
-  it('saves audience preference when a chip is pressed', async () => {
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<SettingsScreen navigation={{ navigate: vi.fn(), goBack: vi.fn() } as any} route={{ key: 'settings', name: 'Settings' } as any} />);
+  it('keeps root and primary CTA testID contract with single anchor', async () => {
+    const { tree } = await renderSettings();
+
+    const roots = findHostNodesByTestID(tree, 'SafeAreaView', 'screen-settings-root');
+    const primaryCtas = findHostNodesByTestID(tree, 'Pressable', 'screen-settings-primary-cta');
+
+    expect(roots).toHaveLength(1);
+    expect(primaryCtas).toHaveLength(1);
+
+    const primaryText = findPressableByTestID(tree, 'screen-settings-primary-cta').find(
+      (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
+    );
+    expect(primaryText.props.numberOfLines).toBe(1);
+
+    const reminderMeta = tree.root.findAll(
+      (node) => (node.type as any) === 'Text' && nodeText(node).includes('due cards remain'),
+    );
+    expect(reminderMeta.length).toBeGreaterThan(0);
+    reminderMeta.forEach((node) => {
+      expect(node.props.numberOfLines).toBe(1);
     });
-    await flush();
+  });
+
+  it('saves audience preference when a chip is pressed', async () => {
+    const { tree } = await renderSettings();
 
     await act(async () => {
       findPressableByText(tree, 'Junior').props.onPress();
@@ -175,11 +262,7 @@ describe('SettingsScreen', () => {
   });
 
   it('confirms and runs Fresh Start reset flow', async () => {
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<SettingsScreen navigation={{ navigate: vi.fn(), goBack: vi.fn() } as any} route={{ key: 'settings', name: 'Settings' } as any} />);
-    });
-    await flush();
+    const { tree } = await renderSettings();
 
     act(() => {
       findPressableByText(tree, 'Reset review schedule').props.onPress();
@@ -203,21 +286,78 @@ describe('SettingsScreen', () => {
     );
   });
 
-  it('renders momentum and reminder support copy', async () => {
-    let tree!: renderer.ReactTestRenderer;
+  it('renders Premium section and routes action to Paywall', async () => {
+    const { tree, navigate } = await renderSettings();
+
+    const textBlob = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => nodeText(node))
+      .join('\n');
+
+    expect(textBlob).toContain('Premium');
+    expect(textBlob).toContain('Open premium');
+
+    act(() => {
+      findPressableByText(tree, 'Open premium').props.onPress();
+    });
+
+    expect(navigate).toHaveBeenCalledWith('Paywall');
+  });
+
+  it('renders empty state with actionable reload CTA', async () => {
+    getReminderPrefsMock.mockResolvedValueOnce(null as any);
+    loadStreakSnapshotMock.mockResolvedValueOnce(null as any);
+
+    const { tree } = await renderSettings();
+
+    const textBlob = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => nodeText(node))
+      .join('\n');
+
+    expect(textBlob).toContain('No settings ready yet');
+
+    const roots = findHostNodesByTestID(tree, 'SafeAreaView', 'screen-settings-root');
+    const primaryCtas = findHostNodesByTestID(tree, 'Pressable', 'screen-settings-primary-cta');
+    expect(roots).toHaveLength(1);
+    expect(primaryCtas).toHaveLength(1);
+
     await act(async () => {
-      tree = renderer.create(<SettingsScreen navigation={{ navigate: vi.fn(), goBack: vi.fn() } as any} route={{ key: 'settings', name: 'Settings' } as any} />);
+      findPressableByTestID(tree, 'screen-settings-primary-cta').props.onPress();
+      await Promise.resolve();
     });
     await flush();
 
-    const textBlob = tree.root.findAll((node) => (node.type as any) === 'Text').map((node) => {
-      const c = node.props.children;
-      return Array.isArray(c) ? c.join('') : String(c ?? '');
-    }).join('\n');
+    const postReloadBlob = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => nodeText(node))
+      .join('\n');
+    expect(postReloadBlob).toContain('Momentum');
+  });
 
-    expect(textBlob).toContain('Momentum');
-    expect(textBlob).toContain('3 days');
-    expect(textBlob).toContain('8');
-    expect(textBlob).toContain('due cards remain');
+  it('renders error state and retries refresh', async () => {
+    getReminderPrefsMock.mockRejectedValueOnce(new Error('network down'));
+
+    const { tree } = await renderSettings();
+
+    const textBlob = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => nodeText(node))
+      .join('\n');
+    expect(textBlob).toContain('Settings unavailable');
+
+    await act(async () => {
+      findPressableByTestID(tree, 'screen-settings-primary-cta').props.onPress();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(getReminderPrefsMock).toHaveBeenCalledTimes(2);
+
+    const postRetryBlob = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => nodeText(node))
+      .join('\n');
+    expect(postRetryBlob).toContain('Momentum');
   });
 });

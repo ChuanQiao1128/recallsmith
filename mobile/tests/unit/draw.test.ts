@@ -62,6 +62,18 @@ describe('drawState', () => {
     expect(state.canOpen).toBe(true);
     expect(state.helper).toMatch(/reserve/i);
   });
+
+  it('keeps draw locked when no active pool is available even with pulls in wallet', () => {
+    const state = buildDrawState({
+      wallet: { availablePulls: 2, reservePulls: 0 },
+      hasTodayWork: false,
+      hasActivePool: false,
+    });
+
+    expect(state.state).toBe('locked');
+    expect(state.canOpen).toBe(false);
+    expect(state.ctaLabel).toBe('View library');
+  });
 });
 
 describe('consumePulls', () => {

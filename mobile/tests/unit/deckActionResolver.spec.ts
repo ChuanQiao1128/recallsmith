@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const setActiveDeckSlugMock = vi.fn(async (_slug: string) => {});
 const loadActiveDeckSlugMock = vi.fn(async () => null);
 const checkManifestForUpdatesMock = vi.fn(async (_premium: boolean) => ({}));
+const listManifestDecksMock = vi.fn(async () => []);
+const resolveDeckBySlugMock = vi.fn(async (_slug: string) => null);
 const installDeckFromUrlMock = vi.fn(
   async (
     _slug: string,
@@ -19,12 +21,26 @@ vi.mock('../../src/content/activeDeck', () => ({
 
 vi.mock('../../src/content/deckRepository', () => ({
   checkManifestForUpdates: (premium: boolean) => checkManifestForUpdatesMock(premium),
+  listManifestDecks: () => listManifestDecksMock(),
+  resolveDeckBySlug: (slug: string) => resolveDeckBySlugMock(slug),
   installDeckFromUrl: (
     slug: string,
     url: string,
     remoteVersion: string | null,
     remoteSha256: string | null,
   ) => installDeckFromUrlMock(slug, url, remoteVersion, remoteSha256),
+}));
+
+vi.mock('../../src/review/storage', () => ({
+  loadDeckProgress: vi.fn(async () => []),
+}));
+
+vi.mock('../../src/sync/progressSync', () => ({
+  applyCachedRemoteProgress: vi.fn(async () => {}),
+}));
+
+vi.mock('../../src/notifications/reminders', () => ({
+  syncDailyReminders: vi.fn(async () => {}),
 }));
 
 import {
@@ -58,6 +74,8 @@ describe('deckActionResolver', () => {
     setActiveDeckSlugMock.mockClear();
     loadActiveDeckSlugMock.mockClear();
     checkManifestForUpdatesMock.mockClear();
+    listManifestDecksMock.mockClear();
+    resolveDeckBySlugMock.mockClear();
     installDeckFromUrlMock.mockClear();
   });
 

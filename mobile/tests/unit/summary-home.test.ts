@@ -47,15 +47,16 @@ describe('buildSessionSummaryVM', () => {
 });
 
 describe('buildHomeVM', () => {
-  it('disables the hero CTA when no deck is available', () => {
+  it('keeps an enabled library CTA when no deck is available', () => {
     const home = buildHomeVM({
       selectedSlug: null,
       hasSignedInUser: false,
       deckSummaries: [],
     });
 
-    expect(home.hero.ctaAction).toBe('none');
-    expect(home.hero.ctaDisabled).toBe(true);
+    expect(home.hero.ctaLabel).toBe('Open library');
+    expect(home.hero.ctaAction).toBe('deck');
+    expect(home.hero.ctaDisabled).toBe(false);
   });
 
   it('routes users to the library when the selected deck is not study-ready', () => {

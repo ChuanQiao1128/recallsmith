@@ -175,9 +175,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   flipBackButton: {
-    minHeight: 32,
+    minHeight: 44,
+    minWidth: 44,
     paddingHorizontal: spacing.xs,
     borderRadius: 999,
+    alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(42,34,24,0.08)',
   },

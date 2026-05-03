@@ -64,6 +64,12 @@ export type HomeCtaVM = {
   disabled: boolean;
 };
 
+export type HomeRuntimeStatus = {
+  qualifiedToday: boolean;
+  completedToday: number;
+  completedRouteToday: boolean;
+};
+
 export type HomeDrawVM = {
   state: HomeDrawState;
   label: string;
@@ -227,8 +233,12 @@ function inferStatusKind(input: {
   draw: HomeDrawVM;
   statusHint?: HomeCtaKind;
   errorMessage?: string | null;
+  runtimeStatus?: Partial<HomeRuntimeStatus>;
 }): HomeCtaKind {
-  const { selectedDeck, draw, statusHint, errorMessage } = input;
+  const { selectedDeck, draw, statusHint, errorMessage, runtimeStatus } = input;
+  const completedToday = Math.max(0, Number(runtimeStatus?.completedToday ?? 0) || 0);
+  const qualifiedToday = !!runtimeStatus?.qualifiedToday;
+  const completedRouteToday = !!runtimeStatus?.completedRouteToday;
 
   if (statusHint) return statusHint;
   if (errorMessage) return 'error';
@@ -241,11 +251,24 @@ function inferStatusKind(input: {
     return 'wallet_full';
   }
 
+  const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
+  if (completedRouteToday || (qualifiedToday && !hasTodayWork)) {
+    return 'today_full_clear';
+  }
+
+  if (qualifiedToday && hasTodayWork) {
+    return 'today_done';
+  }
+
+  if (completedToday > 0 && hasTodayWork) {
+    return 'today_partial';
+  }
+
   if (selectedDeck.dueToday > 0 && selectedDeck.newToday === 0) {
     return 'due_only';
   }
 
-  if (selectedDeck.dueToday > 0 || selectedDeck.newToday > 0) {
+  if (hasTodayWork) {
     return 'today_pending';
   }
 
@@ -379,13 +402,15 @@ function buildHeroCopy(params: {
         subtitle: 'You already started today. Finish the remaining route.',
         helper: `${counts.selectedDue} due · ${counts.selectedNew} fresh still waiting.`,
       };
-    case 'today_done':
+    case 'today_done': {
+      const remaining = counts.selectedDue + counts.selectedNew;
       return {
         eyebrow: 'Today',
         title: 'Minimum goal already done',
         subtitle: 'You can stop here or spend pulls and keep momentum.',
-        helper: `${counts.selectedDue} due cards still available for full clear.`,
+        helper: `${remaining} card${remaining === 1 ? '' : 's'} still available for full clear.`,
       };
+    }
     case 'today_full_clear':
       return {
         eyebrow: 'Today',
@@ -538,6 +563,7 @@ export function buildHomeVM(params: {
   accountLockup?: string | null;
   statusHint?: HomeCtaKind;
   errorMessage?: string | null;
+  runtimeStatus?: Partial<HomeRuntimeStatus>;
 }): HomeViewModel {
   const {
     deckSummaries,
@@ -550,6 +576,7 @@ export function buildHomeVM(params: {
     accountLockup = null,
     statusHint,
     errorMessage = null,
+    runtimeStatus,
   } = params;
 
   const selectedDeck =
@@ -557,15 +584,21 @@ export function buildHomeVM(params: {
   const counts = buildCounts(deckSummaries, selectedDeck);
   const routePreview = buildRoutePreview(selectedDeck);
   const draw = buildDrawVM(wallet);
-  const statusKind = inferStatusKind({ selectedDeck, draw, statusHint, errorMessage });
+  const statusKind = inferStatusKind({
+    selectedDeck,
+    draw,
+    statusHint,
+    errorMessage,
+    runtimeStatus,
+  });
   let cta = mapStatusToCta(statusKind);
   if (!selectedDeck) {
     cta = {
       kind: 'first_run',
-      label: 'No deck available yet',
-      nav: 'none',
+      label: 'Open library',
+      nav: 'library',
       testID: 'home-primary-cta',
-      disabled: true,
+      disabled: false,
     };
   } else if (!selectedDeck.canStudy && statusKind === 'first_run') {
     cta = {

@@ -44,6 +44,7 @@ vi.mock('expo-linear-gradient', () => {
 });
 
 import { SessionSummaryScreen } from '../../src/screens/SessionSummaryScreen';
+import * as rewardWallet from '../../src/features/gacha/rewards/rewardWallet';
 
 function getTextContent(node: any): string {
   if (typeof node === 'string') return node;
@@ -52,12 +53,13 @@ function getTextContent(node: any): string {
   return '';
 }
 
-function findPressableByText(tree: renderer.ReactTestRenderer, label: string) {
-  return tree.root.find(
-    (node) =>
-      (node.type as any) === 'Pressable' &&
-      node.findAll((child) => (child.type as any) === 'Text' && getTextContent(child) === label).length > 0,
-  );
+function findPressableByTestID(tree: renderer.ReactTestRenderer, testID: string) {
+  return tree.root.find((node) => (node.type as any) === 'Pressable' && node.props?.testID === testID);
+}
+
+function flattenStyle(style: any): Record<string, unknown> {
+  const list = Array.isArray(style) ? style : [style];
+  return list.filter(Boolean).reduce((acc, item) => Object.assign(acc, item), {});
 }
 
 describe('SessionSummaryScreen', () => {
@@ -109,6 +111,35 @@ describe('SessionSummaryScreen', () => {
       await Promise.resolve();
     });
 
+    const rootAnchors = tree.root.findAll((node) => node.props?.testID === 'screen-session-summary-root');
+    const primaryAnchors = tree.root.findAll((node) => node.props?.testID === 'screen-session-summary-primary-cta');
+    const secondaryAnchors = tree.root.findAll(
+      (node) => (node.type as any) === 'Pressable' && node.props?.testID === 'screen-session-summary-secondary-cta',
+    );
+    expect(rootAnchors.length).toBeGreaterThan(0);
+    expect(primaryAnchors.length).toBeGreaterThan(0);
+    expect(secondaryAnchors.length).toBeGreaterThan(0);
+
+    const primaryText = findPressableByTestID(tree, 'screen-session-summary-primary-cta').find(
+      (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
+    );
+    const secondaryCta = findPressableByTestID(tree, 'screen-session-summary-secondary-cta');
+    const secondaryText = secondaryCta.find(
+      (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
+    );
+    const primaryTextStyle = flattenStyle(primaryText.props.style);
+    const secondaryTextStyle = flattenStyle(secondaryText.props.style);
+    const secondaryButtonStyle = flattenStyle(secondaryCta.props.style({ pressed: false }));
+
+    expect(primaryText.props.numberOfLines).toBe(1);
+    expect(secondaryText.props.numberOfLines).toBe(1);
+    expect(secondaryCta.props.accessibilityRole).toBe('link');
+    expect(secondaryButtonStyle.minHeight).toBe(44);
+    expect(secondaryButtonStyle.alignSelf).toBe('flex-start');
+    expect(secondaryButtonStyle.backgroundColor).toBeUndefined();
+    expect(secondaryButtonStyle.borderWidth).toBeUndefined();
+    expect(secondaryTextStyle.fontSize).toBeLessThan(primaryTextStyle.fontSize as number);
+
     const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
     expect(texts).toContain('+2 free pulls');
     expect(texts).toContain('2 ready to use');
@@ -144,8 +175,135 @@ describe('SessionSummaryScreen', () => {
     expect(JSON.parse(walletRaw!)).toEqual({ availablePulls: 2, reservePulls: 0 });
 
     act(() => {
-      findPressableByText(tree, 'Open draw').props.onPress();
+      findPressableByTestID(tree, 'summary-reward-use-pulls-cta').props.onPress();
     });
     expect(navigation.navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
+  });
+
+  it('shows an error branch and retries reward resolution without navigating away', async () => {
+    const applyRewardSpy = vi.spyOn(rewardWallet, 'applySessionRewardToWallet').mockRejectedValueOnce(new Error('network error'));
+    const navigation = {
+      navigate: vi.fn(),
+    } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionSummaryScreen
+          navigation={navigation}
+          route={{
+            key: 'summary',
+            name: 'SessionSummary',
+            params: {
+              sessionId: 'sess-error',
+              slug: 'csharp',
+              deckTitle: 'C# Interview',
+              sessionDone: 1,
+              sessionLimit: 4,
+              minimumGoal: 1,
+              dueCount: 1,
+              streakEarned: true,
+            },
+          } as any}
+        />,
+      );
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    let texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
+    expect(texts).toContain('Unable to refresh reward and streak details right now.');
+    expect(texts).toContain('Retry');
+
+    act(() => {
+      findPressableByTestID(tree, 'screen-session-summary-primary-cta').props.onPress();
+    });
+    expect(navigation.navigate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
+    expect(texts).not.toContain('Unable to refresh reward and streak details right now.');
+    expect(applyRewardSpy).toHaveBeenCalledTimes(2);
+    applyRewardSpy.mockRestore();
+  });
+
+  it('keeps the primary CTA disabled while reward resolution is loading', async () => {
+    let resolveReward!: (value: Awaited<ReturnType<typeof rewardWallet.applySessionRewardToWallet>>) => void;
+    const pendingReward = new Promise<Awaited<ReturnType<typeof rewardWallet.applySessionRewardToWallet>>>((resolve) => {
+      resolveReward = resolve;
+    });
+    const applyRewardSpy = vi.spyOn(rewardWallet, 'applySessionRewardToWallet').mockReturnValueOnce(pendingReward);
+
+    const navigation = {
+      navigate: vi.fn(),
+    } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionSummaryScreen
+          navigation={navigation}
+          route={{
+            key: 'summary',
+            name: 'SessionSummary',
+            params: {
+              sessionId: 'sess-loading',
+              slug: 'csharp',
+              deckTitle: 'C# Interview',
+              sessionDone: 1,
+              sessionLimit: 4,
+              minimumGoal: 1,
+              dueCount: 2,
+              streakEarned: true,
+            },
+          } as any}
+        />,
+      );
+    });
+
+    let texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
+    expect(texts).toContain('Wrapping up reward and streak details...');
+    expect(texts).toContain('Updating...');
+
+    const primaryCta = findPressableByTestID(tree, 'screen-session-summary-primary-cta');
+    expect(primaryCta.props.disabled).toBe(true);
+
+    act(() => {
+      primaryCta.props.onPress();
+    });
+    expect(navigation.navigate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveReward({
+        walletBefore: { availablePulls: 0, reservePulls: 0 },
+        walletAfter: { availablePulls: 1, reservePulls: 0 },
+        applied: {
+          availablePulls: 1,
+          reservePulls: 0,
+          appliedToAvailable: 1,
+          appliedToReserve: 0,
+          dropped: 0,
+          rewardPulls: 1,
+        },
+        alreadyApplied: false,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const updatedPrimaryCta = findPressableByTestID(tree, 'screen-session-summary-primary-cta');
+    expect(updatedPrimaryCta.props.disabled).toBe(false);
+
+    texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
+    expect(texts).not.toContain('Updating...');
+    expect(applyRewardSpy).toHaveBeenCalledTimes(1);
+    applyRewardSpy.mockRestore();
   });
 });

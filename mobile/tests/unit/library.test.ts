@@ -30,9 +30,23 @@ const sampleProgress = [
 
 describe('buildLibraryVM', () => {
   it('derives new / learning / mastered / updated counts for owned cards', () => {
-    const library = buildLibraryVM({ deck: sampleDeck, progress: sampleProgress, now: NOW });
+    const library = buildLibraryVM({
+      deck: sampleDeck,
+      progress: sampleProgress,
+      now: NOW,
+      decks: [
+        { slug: 'csharp', title: 'C# Interview' },
+        { slug: 'aws', title: 'AWS Core' },
+      ],
+      selectedDeckSlug: 'aws',
+    });
 
     expect(library.subtitle).toBe('Library · Owned cards');
+    expect(library.decks).toEqual([
+      { slug: 'csharp', title: 'C# Interview' },
+      { slug: 'aws', title: 'AWS Core' },
+    ]);
+    expect(library.selectedDeckSlug).toBe('aws');
     expect(library.counts).toMatchObject({
       newCount: 2,
       learningCount: 1,

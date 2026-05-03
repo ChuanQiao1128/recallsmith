@@ -46,6 +46,7 @@ type GateActionKind =
 
 type DeckGateState = {
   loading: boolean;
+  empty: boolean;
   error: string | null;
   slug: string | null;
   deckTitle: string;
@@ -56,6 +57,7 @@ type DeckGateState = {
 
 const INITIAL_STATE: DeckGateState = {
   loading: true,
+  empty: false,
   error: null,
   slug: null,
   deckTitle: 'Deck',
@@ -176,7 +178,7 @@ export function DeckScreen({ navigation, route }: Props) {
   const premium = usePremiumUser();
 
   const refresh = useCallback(async () => {
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    setState((prev) => ({ ...prev, loading: true, empty: false, error: null }));
     try {
       if (authStatus === 'unknown') {
         await authInit();
@@ -198,7 +200,17 @@ export function DeckScreen({ navigation, route }: Props) {
         route.params?.slug ?? (await loadActiveDeckSlug()) ?? liveEntries[0]?.slug ?? null;
 
       if (!chosenSlug) {
-        throw new Error('No deck available.');
+        setState({
+          loading: false,
+          empty: true,
+          error: null,
+          slug: null,
+          deckTitle: 'Deck',
+          deckCardCount: 0,
+          manifestEntry: null,
+          updateInfo: null,
+        });
+        return;
       }
 
       const [deck, updates] = await Promise.all([
@@ -214,6 +226,7 @@ export function DeckScreen({ navigation, route }: Props) {
 
       setState({
         loading: false,
+        empty: false,
         error: null,
         slug: chosenSlug,
         deckTitle: title,
@@ -225,6 +238,7 @@ export function DeckScreen({ navigation, route }: Props) {
       setState((prev) => ({
         ...prev,
         loading: false,
+        empty: false,
         error: e?.message ?? 'Failed to load deck gate.',
       }));
     }
@@ -318,7 +332,7 @@ export function DeckScreen({ navigation, route }: Props) {
 
   if (state.loading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView testID="screen-deck-root" style={styles.safeArea}>
         <LinearGradient
           colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
@@ -336,9 +350,40 @@ export function DeckScreen({ navigation, route }: Props) {
     );
   }
 
+  if (state.empty) {
+    return (
+      <SafeAreaView testID="screen-deck-root" style={styles.safeArea}>
+        <LinearGradient
+          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.centerState}>
+            <Text style={styles.errorTitle} numberOfLines={2}>
+              No deck ready yet
+            </Text>
+            <Text style={styles.errorBody} numberOfLines={2}>
+              Return home and open Library after a deck is published.
+            </Text>
+            <Pressable
+              testID="screen-deck-primary-cta"
+              style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+              onPress={() => navigation.navigate('Home')}
+            >
+              <Text style={styles.primaryButtonText} numberOfLines={1}>
+                Back home
+              </Text>
+            </Pressable>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
   if (state.error) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView testID="screen-deck-root" style={styles.safeArea}>
         <LinearGradient
           colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
@@ -352,7 +397,11 @@ export function DeckScreen({ navigation, route }: Props) {
             <Text style={styles.errorBody} numberOfLines={2}>
               {state.error}
             </Text>
-            <Pressable style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]} onPress={() => void refresh()}>
+            <Pressable
+              testID="screen-deck-primary-cta"
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+              onPress={() => void refresh()}
+            >
               <Text style={styles.secondaryButtonText} numberOfLines={1}>
                 Retry
               </Text>
@@ -364,7 +413,7 @@ export function DeckScreen({ navigation, route }: Props) {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView testID="screen-deck-root" style={styles.safeArea}>
       <LinearGradient
         colors={[colors.parchmentBg, colors.parchmentBgDeep]}
         start={{ x: 0, y: 0 }}
@@ -404,16 +453,18 @@ export function DeckScreen({ navigation, route }: Props) {
               </Text>
             ) : null}
 
-            <Pressable
-              testID="deck-gate-primary-cta"
-              style={({ pressed }) => [styles.primaryButton, (pressed || busy) && styles.pressed]}
-              onPress={() => void handlePrimary()}
-              disabled={busy}
-            >
-              <Text style={styles.primaryButtonText} numberOfLines={1}>
-                {busy ? 'Working...' : copy.primary}
-              </Text>
-            </Pressable>
+            <View testID="screen-deck-primary-cta">
+              <Pressable
+                testID="deck-gate-primary-cta"
+                style={({ pressed }) => [styles.primaryButton, (pressed || busy) && styles.pressed]}
+                onPress={() => void handlePrimary()}
+                disabled={busy}
+              >
+                <Text style={styles.primaryButtonText} numberOfLines={1}>
+                  {busy ? 'Working...' : copy.primary}
+                </Text>
+              </Pressable>
+            </View>
           </View>
         </ScrollView>
       </LinearGradient>

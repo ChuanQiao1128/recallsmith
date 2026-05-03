@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('react-native', () => {
   const React = require('react');
   return {
+    ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
@@ -42,6 +43,14 @@ function collectText(tree: renderer.ReactTestRenderer) {
   }).join('\n');
 }
 
+function makeRouteParams(overrides?: Record<string, unknown>) {
+  return {
+    slug: 'csharp',
+    drawResult: MOCK_DRAW_RESULTS,
+    ...(overrides ?? {}),
+  };
+}
+
 describe('DrawResultScreen', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -60,7 +69,7 @@ describe('DrawResultScreen', () => {
   it('opens card detail modal from a draw result card', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'draw-result', name: 'DrawResult', params: { slug: 'csharp', drawResult: MOCK_DRAW_RESULTS } } as any} />);
+      tree = renderer.create(<DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
     });
 
     act(() => {
@@ -76,7 +85,7 @@ describe('DrawResultScreen', () => {
   it('uses study-focused result actions instead of Enter level', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'draw-result', name: 'DrawResult', params: { slug: 'csharp', drawResult: MOCK_DRAW_RESULTS } } as any} />);
+      tree = renderer.create(<DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
     });
 
     const textBlob = collectText(tree);
@@ -90,7 +99,7 @@ describe('DrawResultScreen', () => {
   it('uses the reward draw naming system consistently on the result page', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'draw-result', name: 'DrawResult', params: { slug: 'csharp', drawResult: MOCK_DRAW_RESULTS } } as any} />);
+      tree = renderer.create(<DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
     });
 
     const textBlob = collectText(tree);
@@ -99,5 +108,140 @@ describe('DrawResultScreen', () => {
     expect(textBlob).toContain('seed #');
     expect(textBlob).not.toContain('COLLECTIBLE REVEAL');
     expect(textBlob).not.toContain('BOSS PULL');
+  });
+
+  it('carries a ceremony afterglow into the result hero', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{
+            key: 'draw-result',
+            name: 'DrawResult',
+            params: {
+              slug: 'csharp',
+              drawResult: MOCK_DRAW_RESULTS,
+              ceremonyEcho: { rarity: 'LEG', phaseCue: 'Center card revealed last · Flip axis at 180°' },
+            },
+          } as any}
+        />,
+      );
+    });
+
+    const textBlob = collectText(tree);
+    expect(textBlob).toContain('Ceremony afterglow');
+    expect(textBlob).toContain('LEG carryover');
+    expect(textBlob).toContain('Center card revealed last');
+    expect(textBlob).toContain('Flip axis at 180°');
+  });
+
+  it('gives single-pull results a dedicated hero outcome', async () => {
+    const singlePull = { ...MOCK_DRAW_RESULTS, cards: [MOCK_DRAW_RESULTS.cards[0]] };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams({ drawResult: singlePull }) } as any} />,
+      );
+    });
+
+    const textBlob = collectText(tree);
+    expect(textBlob).toContain('Single pull secured');
+    expect(textBlob).toContain('1 drawn card ready');
+    expect(textBlob).toContain(singlePull.cards[0].question);
+  });
+
+  it('provides the required DrawResult testIDs including modal close action', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
+    });
+
+    expect(tree.root.findByProps({ testID: 'screen-draw-result-root' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' })).toBeTruthy();
+
+    act(() => {
+      findPressablesByText(tree, MOCK_DRAW_RESULTS.cards[0].question)[0].props.onPress();
+    });
+
+    const closeDetail = tree.root.findByProps({ testID: 'screen-draw-result-detail-close' });
+    expect(closeDetail).toBeTruthy();
+
+    act(() => {
+      closeDetail.props.onPress();
+    });
+
+    expect(tree.root.findAllByProps({ testID: 'screen-draw-result-detail-close' })).toHaveLength(0);
+  });
+
+  it('renders loading state with recovery CTA back to Draw', async () => {
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate } as any}
+          route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams({ stateOverride: 'loading' }) } as any}
+        />,
+      );
+    });
+
+    const textBlob = collectText(tree);
+    expect(textBlob).toContain('Preparing draw result');
+    expect(tree.root.findByProps({ testID: 'screen-draw-result-root' })).toBeTruthy();
+    const primary = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
+    act(() => {
+      primary.props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp' });
+  });
+
+  it('renders error state with recovery CTA back to Draw', async () => {
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate } as any}
+          route={{
+            key: 'draw-result',
+            name: 'DrawResult',
+            params: makeRouteParams({ stateOverride: 'error', errorMessage: 'Payload missing from ceremony handoff.' }),
+          } as any}
+        />,
+      );
+    });
+
+    const textBlob = collectText(tree);
+    expect(textBlob).toContain('Draw result unavailable');
+    expect(textBlob).toContain('Payload missing from ceremony handoff.');
+    const primary = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
+    act(() => {
+      primary.props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp' });
+  });
+
+  it('renders empty-card state with recovery CTA back to Draw', async () => {
+    const navigate = vi.fn();
+    const emptyDrawResult = { ...MOCK_DRAW_RESULTS, cards: [] };
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate } as any}
+          route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams({ drawResult: emptyDrawResult }) } as any}
+        />,
+      );
+    });
+
+    const textBlob = collectText(tree);
+    expect(textBlob).toContain('No cards were drawn');
+    const primary = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
+    act(() => {
+      primary.props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp' });
   });
 });

@@ -23,8 +23,17 @@ export function AccountSection(props: {
   onSignIn: () => void;
   onSignOut: () => void;
   onResetReviewSchedule: () => void;
+  primaryCtaTestID?: string;
 }) {
-  const { signedIn, email, resetting, onSignIn, onSignOut, onResetReviewSchedule } = props;
+  const {
+    signedIn,
+    email,
+    resetting,
+    onSignIn,
+    onSignOut,
+    onResetReviewSchedule,
+    primaryCtaTestID,
+  } = props;
 
   return (
     <View style={styles.sectionCard}>
@@ -42,6 +51,7 @@ export function AccountSection(props: {
       <Pressable
         style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
         onPress={signedIn ? onSignOut : onSignIn}
+        testID={primaryCtaTestID}
       >
         <Text style={styles.primaryButtonText} numberOfLines={1}>
           {signedIn ? ACCOUNT_COPY.signOut : ACCOUNT_COPY.signIn}

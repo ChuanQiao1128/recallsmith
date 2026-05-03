@@ -14,26 +14,28 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
-import { buildUpcoming, clamp01, isLearnedProgress } from '../features/gacha/selectors/progressSelectors';
-import type { CalendarDay, DeckSummary } from '../features/gacha/contracts';
-import { buildHomeVM, type HomeDeckVM, type HomeViewModel } from '../features/gacha/selectors/homeSelectors';
+import {
+  buildHomeVM,
+  type HomeDeckVM,
+  type HomeRuntimeStatus,
+  type HomeViewModel,
+} from '../features/gacha/selectors/homeSelectors';
 import TodayPressureCard from '../features/gacha/components/TodayPressureCard';
 import {
   executeDeckAction,
-  loadDeckUpdates,
+  loadHomeDeckSummaries,
   resolveDeckAction,
 } from '../features/gacha/home/deckActionResolver';
 import HomeDeckRow from '../features/gacha/home/HomeDeckRow';
 import { fetchServerPremium } from '../features/gacha/home/homeRemote';
 import { loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
-import { loadDeckProgress } from '../review/storage';
-import { listManifestDecks, resolveDeckBySlug, type ManifestDeckEntry } from '../content/deckRepository';
-import { syncDailyReminders } from '../notifications/reminders';
-import { applyCachedRemoteProgress, forceProgressSync } from '../sync/progressSync';
+import { formatDateKey } from '../review/model';
+import { forceProgressSync } from '../sync/progressSync';
 import { useAuthStore } from '../auth/authStore';
 import { setIsPremiumUser, usePremiumUser } from '../premium/premiumStore';
 import { resolveHomeState } from '../features/gacha/home/homeStateMachine';
+import { useSessionStore } from '../features/gacha/session/sessionStore';
 import { MOCK_HOME_STATES } from '../mock/home';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
@@ -49,171 +51,11 @@ const EMPTY_VM = buildHomeVM({
   selectedSlug: null,
   hasSignedInUser: false,
 });
-function toDeckEntriesFromUpdates(rawUpdates: Record<string, any>): ManifestDeckEntry[] {
-  return Object.entries(rawUpdates ?? {})
-    .map(([slug, info]) => ({
-      slug,
-      title: String((info as any)?.title ?? slug),
-      locale: String((info as any)?.locale ?? 'en-US'),
-      version: String((info as any)?.remoteVersion ?? 'unknown'),
-      deckType: Number((info as any)?.deckType ?? 1),
-      tier: (info as any)?.tier ?? null,
-      availability: (info as any)?.availability ?? 'live',
-      eta: (info as any)?.eta ?? null,
-      downloadMode: (info as any)?.downloadMode ?? null,
-      totalCards:
-        typeof (info as any)?.remoteCardCount === 'number'
-          ? (info as any).remoteCardCount
-          : undefined,
-      buildId: null,
-      path: null,
-      sha256: null,
-      order:
-        typeof (info as any)?.order === 'number' ? Number((info as any).order) : undefined,
-      retiredAtMs: null,
-    }))
-    .sort((a, b) => {
-      const ao = typeof a.order === 'number' ? a.order : 9999;
-      const bo = typeof b.order === 'number' ? b.order : 9999;
-      if (ao !== bo) return ao - bo;
-      return a.title.localeCompare(b.title);
-    });
-}
-async function buildDeckSummaries(params: {
-  premium: boolean;
-}): Promise<{
-  deckSummaries: DeckSummary[];
-  updates: Record<string, any>;
-  allUpcoming30: CalendarDay[];
-  asOfISO: string;
-}> {
-  const { premium } = params;
-  const now = new Date();
-  let updates: Record<string, any> = {};
-  let manifestDecks: ManifestDeckEntry[] = [];
-  try {
-    updates = await loadDeckUpdates(premium);
-  } catch {
-    updates = {};
-  }
-  try {
-    manifestDecks = await listManifestDecks();
-  } catch {
-    manifestDecks = [];
-  }
-  const deckEntries =
-    manifestDecks.length > 0 ? manifestDecks : toDeckEntriesFromUpdates(updates);
-  const allUpcoming30 = buildUpcoming([], now, 30);
-  const deckSummaries: DeckSummary[] = [];
-  let totalDueAllDecks = 0;
-  for (const entry of deckEntries) {
-    const availability = String(entry.availability ?? 'live').toLowerCase();
-    if (availability === 'retired') {
-      continue;
-    }
-    if (availability === 'coming') {
-      deckSummaries.push({
-        slug: entry.slug,
-        title: entry.title ?? entry.slug,
-        locale: entry.locale ?? 'en-US',
-        version: entry.version,
-        deckType: entry.deckType ?? 1,
-        totalCards: entry.totalCards ?? 0,
-        localCards: 0,
-        studyCards: 0,
-        canStudy: false,
-        tier: entry.tier ?? null,
-        availability: entry.availability ?? null,
-        eta: entry.eta ?? null,
-        downloadMode: entry.downloadMode ?? null,
-        order: entry.order,
-        dueToday: 0,
-        plannedToday: 0,
-        newToday: 0,
-        masteredApprox: 0,
-        percent: 0,
-      });
-      continue;
-    }
-    const deck = await resolveDeckBySlug(entry.slug);
-    const localCards = deck?.Cards?.length ?? (deck as any)?.TotalCards ?? 0;
-    const canStudy = !!deck && localCards > 0;
-    const declaredTotal =
-      typeof entry.totalCards === 'number' && Number.isFinite(entry.totalCards)
-        ? entry.totalCards
-        : localCards;
-    if (!canStudy) {
-      deckSummaries.push({
-        slug: entry.slug,
-        title: entry.title ?? entry.slug,
-        locale: entry.locale ?? 'en-US',
-        version: entry.version,
-        deckType: entry.deckType ?? 1,
-        totalCards: declaredTotal,
-        localCards,
-        studyCards: localCards,
-        canStudy: false,
-        tier: entry.tier ?? null,
-        availability: entry.availability ?? null,
-        eta: entry.eta ?? null,
-        downloadMode: entry.downloadMode ?? null,
-        order: entry.order,
-        dueToday: 0,
-        plannedToday: 0,
-        newToday: 0,
-        masteredApprox: 0,
-        percent: 0,
-      });
-      continue;
-    }
-    try {
-      await applyCachedRemoteProgress((deck as any).Slug);
-    } catch {
-      // Keep local-only progress if remote cache fails.
-    }
-    const progress = await loadDeckProgress(deck as any);
-    const learned = progress.filter(isLearnedProgress).length;
-    const denom = Math.max(1, localCards);
-    const upcoming = buildUpcoming(progress, now, 30);
-    const dueToday = upcoming[0]?.count ?? 0;
-    totalDueAllDecks += dueToday;
-    for (let i = 0; i < allUpcoming30.length; i++) {
-      allUpcoming30[i].count += upcoming[i]?.count ?? 0;
-    }
-    deckSummaries.push({
-      slug: String((deck as any).Slug),
-      title: String((deck as any).Title),
-      locale: String((deck as any).Locale),
-      version: String((deck as any).Version),
-      deckType: Number((deck as any).DeckType ?? 1),
-      totalCards: declaredTotal,
-      localCards,
-      studyCards: localCards,
-      canStudy: true,
-      tier: entry.tier ?? null,
-      availability: entry.availability ?? null,
-      eta: entry.eta ?? null,
-      downloadMode: entry.downloadMode ?? null,
-      order: entry.order,
-      dueToday,
-      plannedToday: dueToday,
-      newToday: Math.max(0, denom - learned),
-      masteredApprox: learned,
-      percent: clamp01(learned / denom),
-    });
-  }
-  void syncDailyReminders({ remainingDueCount: totalDueAllDecks, now });
-  return {
-    deckSummaries,
-    updates,
-    allUpcoming30,
-    asOfISO: now.toISOString(),
-  };
-}
 export function HomeScreen({ navigation, route }: Props) {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [deckOpen, setDeckOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [drawSupportOpen, setDrawSupportOpen] = useState(false);
   const [deckBusySlug, setDeckBusySlug] = useState<string | null>(null);
   const [drawWallet, setDrawWallet] = useState<RewardWalletState>({
     availablePulls: 0,
@@ -299,7 +141,7 @@ export function HomeScreen({ navigation, route }: Props) {
     setHomeState((prev) => ({ ...prev, loading: true, error: null }));
     try {
       const [summary, wallet, streak] = await Promise.all([
-        buildDeckSummaries({ premium: isPremiumUser }),
+        loadHomeDeckSummaries({ premium: isPremiumUser }),
         loadRewardWalletState(),
         loadStreakSnapshot(),
       ]);
@@ -309,6 +151,23 @@ export function HomeScreen({ navigation, route }: Props) {
       if (!currentSelectedSlug && activeSlug) {
         setSelectedSlug(activeSlug);
       }
+      const session = useSessionStore.getState();
+      const now = new Date(summary.asOfISO);
+      const todayKey = formatDateKey(now);
+      const sessionStartDay =
+        typeof session.startedAt === 'number' && session.startedAt > 0
+          ? formatDateKey(new Date(session.startedAt))
+          : null;
+      const sameDeckSession =
+        !!activeSlug && session.slug === activeSlug && sessionStartDay === todayKey;
+      const runtimeStatus: HomeRuntimeStatus = {
+        qualifiedToday: streak.lastQualifiedDateKey === todayKey,
+        completedToday: sameDeckSession ? session.completedCount : 0,
+        completedRouteToday:
+          sameDeckSession &&
+          session.route.length > 0 &&
+          session.completedCount >= session.route.length,
+      };
       const vm = buildHomeVM({
         deckSummaries: summary.deckSummaries,
         selectedSlug: activeSlug,
@@ -320,6 +179,7 @@ export function HomeScreen({ navigation, route }: Props) {
         accountLockup: isSignedIn
           ? null
           : 'Sign in to unlock cloud backup and month planning.',
+        runtimeStatus,
       });
       setDrawWallet(wallet);
       setStreakSnapshot(streak);
@@ -494,10 +354,13 @@ export function HomeScreen({ navigation, route }: Props) {
       );
     });
   }, [homeState.vm.calendar]);
+  const primaryCtaDisabled =
+    homeState.vm.cta.disabled ||
+    (homeState.vm.cta.nav === 'challenge' && !homeState.vm.selectedDeckSlug);
   if (homeState.loading) {
     return (
       <SafeAreaProvider>
-        <SafeAreaView style={styles.safeArea}>
+        <SafeAreaView style={styles.safeArea} testID="screen-home-root">
           <LinearGradient
             colors={[colors.parchmentBg, colors.parchmentBgDeep]}
             start={{ x: 0, y: 0 }}
@@ -517,7 +380,7 @@ export function HomeScreen({ navigation, route }: Props) {
   }
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} testID="screen-home-root">
         <LinearGradient
           colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
@@ -569,28 +432,25 @@ export function HomeScreen({ navigation, route }: Props) {
                   {homeState.vm.goal.fullClear}
                 </Text>
               </View>
-              <Pressable
-                testID={homeState.vm.cta.testID}
-                accessibilityRole="button"
-                style={({ pressed }) => [
-                  styles.primaryCta,
-                  (homeState.vm.cta.disabled || !homeState.vm.selectedDeckSlug) &&
-                    homeState.vm.cta.nav !== 'retry' &&
-                    styles.primaryCtaDisabled,
-                  pressed && styles.pressed,
-                ]}
-                disabled={
-                  homeState.vm.cta.disabled ||
-                  (!homeState.vm.selectedDeckSlug && homeState.vm.cta.nav !== 'retry')
-                }
-                onPress={() => {
-                  void handlePrimaryCta();
-                }}
-              >
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
-                  {homeState.vm.cta.label}
-                </Text>
-              </Pressable>
+              <View testID="screen-home-primary-cta">
+                <Pressable
+                  testID={homeState.vm.cta.testID}
+                  accessibilityRole="button"
+                  style={({ pressed }) => [
+                    styles.primaryCta,
+                    primaryCtaDisabled && styles.primaryCtaDisabled,
+                    pressed && styles.pressed,
+                  ]}
+                  disabled={primaryCtaDisabled}
+                  onPress={() => {
+                    void handlePrimaryCta();
+                  }}
+                >
+                  <Text style={styles.primaryCtaText} numberOfLines={1}>
+                    {homeState.vm.cta.label}
+                  </Text>
+                </Pressable>
+              </View>
               <Text style={styles.drawBadge} numberOfLines={1}>
                 {homeState.vm.draw.label}
               </Text>
@@ -601,6 +461,9 @@ export function HomeScreen({ navigation, route }: Props) {
               ) : null}
             </View>
             <Pressable
+              testID="home-collapse-decks-toggle"
+              accessibilityRole="button"
+              accessibilityState={{ expanded: deckOpen }}
               style={({ pressed }) => [styles.collapseHeader, pressed && styles.pressed]}
               onPress={() => setDeckOpen((prev) => !prev)}
             >
@@ -630,6 +493,9 @@ export function HomeScreen({ navigation, route }: Props) {
               </View>
             ) : null}
             <Pressable
+              testID="home-collapse-week-support-toggle"
+              accessibilityRole="button"
+              accessibilityState={{ expanded: calendarOpen }}
               style={({ pressed }) => [styles.collapseHeader, pressed && styles.pressed]}
               onPress={() => setCalendarOpen((prev) => !prev)}
             >
@@ -647,28 +513,23 @@ export function HomeScreen({ navigation, route }: Props) {
               </Text>
             ) : null}
             <Pressable
-              style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]}
-              onPress={() =>
-                navigation.navigate('Draw', {
-                  slug: homeState.vm.selectedDeckSlug ?? undefined,
-                  rewardPending: true,
-                })
-              }
+              testID="home-collapse-draw-support-toggle"
+              accessibilityRole="button"
+              accessibilityState={{ expanded: drawSupportOpen }}
+              style={({ pressed }) => [styles.collapseHeader, pressed && styles.pressed]}
+              onPress={() => setDrawSupportOpen((prev) => !prev)}
             >
-              <Text style={styles.secondaryCtaText} numberOfLines={1}>
-                {firstDrawCoach ? 'Open first draw route' : 'Peek at reward draw'}
+              <Text style={styles.collapseTitle} numberOfLines={1}>
+                Draw support
+              </Text>
+              <Text style={styles.collapseArrow} numberOfLines={1}>
+                {drawSupportOpen ? 'Hide' : 'Show'}
               </Text>
             </Pressable>
-            {firstDrawCoach ? (
-              <View style={styles.coachCard}>
-                <Text style={styles.coachTitle} numberOfLines={1}>
-                  First draw coach
-                </Text>
-                <Text style={styles.coachBody} numberOfLines={1}>
-                  Draw first, then run the daily route.
-                </Text>
+            {drawSupportOpen ? (
+              <View style={styles.collapseBody}>
                 <Pressable
-                  style={({ pressed }) => [styles.inlineButton, pressed && styles.pressed]}
+                  style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]}
                   onPress={() =>
                     navigation.navigate('Draw', {
                       slug: homeState.vm.selectedDeckSlug ?? undefined,
@@ -676,10 +537,33 @@ export function HomeScreen({ navigation, route }: Props) {
                     })
                   }
                 >
-                  <Text style={styles.inlineButtonText} numberOfLines={1}>
-                    Start first draw
+                  <Text style={styles.secondaryCtaText} numberOfLines={1}>
+                    {firstDrawCoach ? 'Open first draw route' : 'Peek at reward draw'}
                   </Text>
                 </Pressable>
+                {firstDrawCoach ? (
+                  <View style={styles.coachCard}>
+                    <Text style={styles.coachTitle} numberOfLines={1}>
+                      First draw coach
+                    </Text>
+                    <Text style={styles.coachBody} numberOfLines={1}>
+                      Draw first, then run the daily route.
+                    </Text>
+                    <Pressable
+                      style={({ pressed }) => [styles.inlineButton, pressed && styles.pressed]}
+                      onPress={() =>
+                        navigation.navigate('Draw', {
+                          slug: homeState.vm.selectedDeckSlug ?? undefined,
+                          rewardPending: true,
+                        })
+                      }
+                    >
+                      <Text style={styles.inlineButtonText} numberOfLines={1}>
+                        Start first draw
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
               </View>
             ) : null}
             {v6HomeState !== 'active' ? (

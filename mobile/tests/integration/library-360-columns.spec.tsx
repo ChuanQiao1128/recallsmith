@@ -119,4 +119,34 @@ describe('LibraryScreen responsive columns', () => {
     const grid = tree.root.find((node) => node.props?.testID === 'library-card-grid');
     expect(grid.props.numColumns).toBe(3);
   });
+
+  it('uses 2 columns at 375pt', async () => {
+    mockWidth = 375;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+
+    const grid = tree.root.find((node) => node.props?.testID === 'library-card-grid');
+    expect(grid.props.numColumns).toBe(2);
+  });
+
+  it('uses 3 columns at 430pt', async () => {
+    mockWidth = 430;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+
+    const grid = tree.root.find((node) => node.props?.testID === 'library-card-grid');
+    expect(grid.props.numColumns).toBe(3);
+  });
 });

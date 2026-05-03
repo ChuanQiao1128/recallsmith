@@ -28,8 +28,12 @@ export function RemindersSection(props: {
         {REMINDERS_COPY.body}
       </Text>
 
-      <Text style={styles.metaLine}>{plan.statusLine}</Text>
-      <Text style={styles.metaLine}>{plan.eveningLine}</Text>
+      <Text style={styles.metaLine} numberOfLines={1}>
+        {plan.statusLine}
+      </Text>
+      <Text style={styles.metaLine} numberOfLines={1}>
+        {plan.eveningLine}
+      </Text>
 
       {!signedIn ? (
         <Pressable style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]} onPress={onSignIn}>

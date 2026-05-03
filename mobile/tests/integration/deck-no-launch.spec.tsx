@@ -2,6 +2,14 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+let viewportWidth = 390;
+
+const loadActiveDeckSlugMock = vi.fn<() => Promise<string | null>>();
+const listManifestDecksMock = vi.fn();
+const resolveDeckBySlugMock = vi.fn();
+const checkManifestForUpdatesMock = vi.fn();
+const installDeckFromUrlMock = vi.fn();
+
 vi.mock('react-native', () => {
   const React = require('react');
   return {
@@ -16,6 +24,7 @@ vi.mock('react-native', () => {
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
     Alert: { alert: vi.fn() },
+    useWindowDimensions: () => ({ width: viewportWidth, height: 844 }),
     StyleSheet: { create: (styles: any) => styles },
   };
 });
@@ -55,22 +64,15 @@ vi.mock('../../src/premium/revenuecat', () => ({
 }));
 
 vi.mock('../../src/content/activeDeck', () => ({
-  loadActiveDeckSlug: vi.fn(async () => 'csharp'),
+  loadActiveDeckSlug: () => loadActiveDeckSlugMock(),
   setActiveDeckSlug: vi.fn(async () => {}),
 }));
 
 vi.mock('../../src/content/deckRepository', () => ({
-  listManifestDecks: vi.fn(async () => [
-    { slug: 'csharp', title: 'C# Interview', deckType: 1, availability: 'live' },
-  ]),
-  resolveDeckBySlug: vi.fn(async () => ({
-    Slug: 'csharp',
-    Title: 'C# Interview',
-    DeckType: 1,
-    Cards: [{ StableUid: '1', OrderInDeck: 1, Question: 'Q1', Difficulty: 1 }],
-  })),
-  checkManifestForUpdates: vi.fn(async () => ({})),
-  installDeckFromUrl: vi.fn(async () => true),
+  listManifestDecks: () => listManifestDecksMock(),
+  resolveDeckBySlug: (...args: any[]) => resolveDeckBySlugMock(...args),
+  checkManifestForUpdates: () => checkManifestForUpdatesMock(),
+  installDeckFromUrl: (...args: any[]) => installDeckFromUrlMock(...args),
 }));
 
 vi.mock('../../src/content/premiumDeckApi', () => ({
@@ -86,28 +88,108 @@ async function flush() {
   });
 }
 
+async function renderDeck(routeParams?: { slug?: string }) {
+  const navigate = vi.fn();
+  const goBack = vi.fn();
+  let tree!: renderer.ReactTestRenderer;
+
+  await act(async () => {
+    tree = renderer.create(
+      <DeckScreen
+        navigation={{ navigate, goBack } as any}
+        route={{ key: 'deck', name: 'Deck', params: routeParams } as any}
+      />,
+    );
+  });
+  await flush();
+
+  return { tree, navigate, goBack };
+}
+
 describe('DeckScreen v7 gate', () => {
   beforeEach(() => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    viewportWidth = 390;
+
+    loadActiveDeckSlugMock.mockReset();
+    listManifestDecksMock.mockReset();
+    resolveDeckBySlugMock.mockReset();
+    checkManifestForUpdatesMock.mockReset();
+    installDeckFromUrlMock.mockReset();
+
+    loadActiveDeckSlugMock.mockResolvedValue('csharp');
+    listManifestDecksMock.mockResolvedValue([
+      { slug: 'csharp', title: 'C# Interview', deckType: 1, availability: 'live' },
+    ]);
+    resolveDeckBySlugMock.mockResolvedValue({
+      Slug: 'csharp',
+      Title: 'C# Interview',
+      DeckType: 1,
+      Cards: [{ StableUid: '1', OrderInDeck: 1, Question: 'Q1', Difficulty: 1 }],
+    });
+    checkManifestForUpdatesMock.mockResolvedValue({});
+    installDeckFromUrlMock.mockResolvedValue(true);
   });
 
-  it('does not render mode selector or library card grid', async () => {
-    let tree!: renderer.ReactTestRenderer;
+  it.each([360, 375, 390, 430])(
+    'keeps gate-only layout and single primary CTA at width %d',
+    async (width) => {
+      viewportWidth = width;
+      const { tree } = await renderDeck({ slug: 'csharp' });
 
-    await act(async () => {
-      tree = renderer.create(
-        <DeckScreen
-          navigation={{ navigate: vi.fn(), goBack: vi.fn() } as any}
-          route={{ key: 'deck', name: 'Deck', params: { slug: 'csharp' } } as any}
-        />,
+      const modeSelector = tree.root.findAll((node) => node.props?.testID === 'mode-selector');
+      const grid = tree.root.findAll((node) => node.props?.testID === 'library-card-grid');
+      expect(modeSelector).toHaveLength(0);
+      expect(grid).toHaveLength(0);
+
+      const routeRoots = tree.root.findAll((node) => node.props?.testID === 'screen-deck-root');
+      const primaryAnchors = tree.root.findAll((node) => node.props?.testID === 'screen-deck-primary-cta');
+      const gatePrimary = tree.root.findAll((node) => node.props?.testID === 'deck-gate-primary-cta');
+
+      expect(routeRoots).toHaveLength(1);
+      expect(primaryAnchors).toHaveLength(1);
+      expect(gatePrimary).toHaveLength(1);
+
+      const primaryText = gatePrimary[0].find(
+        (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
       );
+      expect(primaryText.props.numberOfLines).toBe(1);
+    },
+  );
+
+  it('renders an empty-state fallback CTA when no deck is available', async () => {
+    viewportWidth = 360;
+    loadActiveDeckSlugMock.mockResolvedValueOnce(null);
+    listManifestDecksMock.mockResolvedValueOnce([]);
+
+    const { tree, navigate } = await renderDeck(undefined);
+
+    const routeRoots = tree.root.findAll((node) => node.props?.testID === 'screen-deck-root');
+    const primaryAnchors = tree.root.findAll((node) => node.props?.testID === 'screen-deck-primary-cta');
+    const gatePrimary = tree.root.findAll((node) => node.props?.testID === 'deck-gate-primary-cta');
+
+    expect(routeRoots).toHaveLength(1);
+    expect(primaryAnchors).toHaveLength(1);
+    expect(gatePrimary).toHaveLength(0);
+
+    const textBlob = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => {
+        const children = node.props.children;
+        return Array.isArray(children) ? children.join('') : String(children ?? '');
+      })
+      .join('\n');
+    expect(textBlob).toContain('No deck ready yet');
+
+    const emptyPrimary = tree.root.find((node) => node.props?.testID === 'screen-deck-primary-cta');
+    const emptyPrimaryText = emptyPrimary.find(
+      (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
+    );
+    expect(emptyPrimaryText.props.numberOfLines).toBe(1);
+
+    act(() => {
+      emptyPrimary.props.onPress();
     });
-    await flush();
-
-    const modeSelector = tree.root.findAll((node) => node.props?.testID === 'mode-selector');
-    const grid = tree.root.findAll((node) => node.props?.testID === 'library-card-grid');
-
-    expect(modeSelector).toHaveLength(0);
-    expect(grid).toHaveLength(0);
+    expect(navigate).toHaveBeenCalledWith('Home');
   });
 });

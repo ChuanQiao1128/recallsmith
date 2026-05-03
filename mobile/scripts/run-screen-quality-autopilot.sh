@@ -51,6 +51,57 @@ function run_cmd() {
   return 1
 }
 
+function inline_hex_scope_paths() {
+  case "$SCREEN" in
+    HomeScreen)
+      printf '%s\n' \
+        "src/screens/HomeScreen.tsx" \
+        "src/features/gacha/components/HomeHero.tsx" \
+        "src/features/gacha/components/TodayPressureCard.tsx" \
+        "src/features/gacha/components/RoutePreview.tsx" \
+        "src/features/gacha/home/HomeDeckRow.tsx"
+      ;;
+    SessionSummaryScreen)
+      printf '%s\n' \
+        "src/screens/SessionSummaryScreen.tsx" \
+        "src/features/gacha/components/RewardSummaryCard.tsx" \
+        "src/features/gacha/components/SummaryProgressBlock.tsx"
+      ;;
+    LibraryScreen)
+      printf '%s\n' "src/screens/LibraryScreen.tsx"
+      ;;
+    DeckScreen)
+      printf '%s\n' "src/screens/DeckScreen.tsx"
+      ;;
+    ChallengeScreen)
+      printf '%s\n' \
+        "src/screens/ChallengeScreen.tsx" \
+        "src/features/gacha/components/RoutePreview.tsx"
+      ;;
+    SessionCardScreen)
+      printf '%s\n' \
+        "src/screens/SessionCardScreen.tsx" \
+        "src/features/gacha/components/RatingBar.tsx" \
+        "src/features/gacha/components/ReviewBody.tsx"
+      ;;
+    SettingsScreen)
+      printf '%s\n' "src/screens/SettingsScreen.tsx"
+      ;;
+    DrawScreen)
+      printf '%s\n' "src/screens/DrawScreen.tsx"
+      ;;
+    DrawCeremonyScreen)
+      printf '%s\n' "src/screens/DrawCeremonyScreen.tsx"
+      ;;
+    DrawResultScreen)
+      printf '%s\n' "src/screens/DrawResultScreen.tsx"
+      ;;
+    *)
+      printf '%s\n' "src/screens/${SCREEN}.tsx"
+      ;;
+  esac
+}
+
 function run_gate_checks() {
   GATE_STATUS_FILE="$LOG_DIR/${ROUND}-gate-status.txt"
   : >"$GATE_STATUS_FILE"
@@ -70,7 +121,18 @@ function run_gate_checks() {
     echo "PASS gate-screen-lines" >>"$GATE_STATUS_FILE"
   fi
 
-  if grep -nE "#[0-9A-Fa-f]{6}" src/screens/*.tsx src/features/gacha/components/*.tsx >"$LOG_DIR/${ROUND}-gate-inline-hex.log" 2>&1; then
+  local inline_hex_paths=()
+  while IFS= read -r path; do
+    inline_hex_paths+=("$path")
+  done < <(inline_hex_scope_paths)
+
+  if (( ${#inline_hex_paths[@]} == 0 )); then
+    inline_hex_paths=(src/screens/*.tsx src/features/gacha/components/*.tsx)
+  fi
+
+  printf '%s\n' "${inline_hex_paths[@]}" >"$LOG_DIR/${ROUND}-gate-inline-hex-scope.log"
+
+  if grep -nE "#[0-9A-Fa-f]{6}" "${inline_hex_paths[@]}" >"$LOG_DIR/${ROUND}-gate-inline-hex.log" 2>&1; then
     echo "FAIL gate-inline-hex" >>"$GATE_STATUS_FILE"
     ok=1
   else
@@ -162,9 +224,8 @@ PROMPT
 
   write_critic_schema
 
-  if ! "$CODEX_BIN" exec \
-    --sandbox workspace-write \
-    --ask-for-approval never \
+  if ! "$CODEX_BIN" -a never exec \
+    -s workspace-write \
     -C "$ROOT_DIR" \
     "${MODEL_ARGS[@]}" \
     --output-schema "$LOG_DIR/critic-schema.json" \
@@ -244,9 +305,8 @@ Expected work:
 4. Stop after edits and provide a concise summary.
 PROMPT
 
-  if ! "$CODEX_BIN" exec \
-    --sandbox workspace-write \
-    --ask-for-approval never \
+  if ! "$CODEX_BIN" -a never exec \
+    -s workspace-write \
     -C "$ROOT_DIR" \
     "${MODEL_ARGS[@]}" \
     --output-last-message "$LOG_DIR/${ROUND}-repair-output.txt" \

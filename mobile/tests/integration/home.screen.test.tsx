@@ -239,6 +239,10 @@ describe('HomeScreen', () => {
     await flush();
 
     act(() => {
+      findPressableByLabel(tree, 'Draw support').props.onPress();
+    });
+
+    act(() => {
       findPressableByLabel(tree, 'Peek at reward draw').props.onPress();
     });
 
@@ -273,6 +277,10 @@ describe('HomeScreen', () => {
       tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home', params: { firstDrawCoach: true } } as any} />);
     });
     await flush();
+
+    act(() => {
+      findPressableByLabel(tree, 'Draw support').props.onPress();
+    });
 
     act(() => {
       findPressableByLabel(tree, 'Start first draw').props.onPress();

@@ -3,6 +3,7 @@ import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 let progressFixture: any[] = [];
+let viewportWidth = 390;
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -11,6 +12,7 @@ vi.mock('react-native', () => {
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
+    useWindowDimensions: () => ({ width: viewportWidth, height: 844, scale: 3, fontScale: 1 }),
     Pressable: ({ children, onPress, ...props }: any) =>
       React.createElement(
         'Pressable',
@@ -72,6 +74,40 @@ vi.mock('../../src/content/deckRepository', () => ({
 }));
 
 vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
+  loadHomeDeckSummaries: vi.fn(async () => {
+    const now = Date.now();
+    const dueToday = progressFixture.filter((item) => {
+      const next = Number(item?.nextReviewAt ?? 0);
+      return next <= now;
+    }).length;
+    const newToday = progressFixture.filter((item) => Number(item?.stage ?? 0) === 0).length;
+    return {
+      deckSummaries: [
+        {
+          slug: 'csharp',
+          title: 'C# Interview',
+          locale: 'en-US',
+          version: '1',
+          deckType: 1,
+          totalCards: 10,
+          localCards: 10,
+          studyCards: 10,
+          canStudy: true,
+          dueToday,
+          plannedToday: dueToday,
+          newToday,
+          masteredApprox: Math.max(0, 10 - newToday),
+          percent: 0.4,
+        },
+      ],
+      updates: {},
+      allUpcoming30: Array.from({ length: 30 }, (_, i) => ({
+        dateKey: new Date(now + i * 86_400_000).toISOString(),
+        count: i === 0 ? dueToday : 0,
+      })),
+      asOfISO: new Date(now).toISOString(),
+    };
+  }),
   loadDeckUpdates: vi.fn(async () => ({})),
   resolveDeckAction: vi.fn(async () => ({ kind: 'open', slug: 'csharp' })),
   executeDeckAction: vi.fn(async () => ({ activeSlug: 'csharp' })),
@@ -144,10 +180,54 @@ async function flush() {
 describe('home primary CTA uniqueness', () => {
   beforeEach(() => {
     progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
+    viewportWidth = 390;
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   });
 
-  it('renders exactly one home-primary-cta on Home first screen', async () => {
+  it.each([360, 375, 390, 430])(
+    'keeps one primary CTA and stable first-screen hierarchy at width %d',
+    async (width) => {
+      viewportWidth = width;
+      let tree!: renderer.ReactTestRenderer;
+      await act(async () => {
+        tree = renderer.create(
+          <HomeScreen
+            navigation={{ navigate: vi.fn() } as any}
+            route={{ key: 'home', name: 'Home' } as any}
+          />,
+        );
+      });
+      await flush();
+
+      const matches = tree.root.findAll((node) => node.props?.testID === 'home-primary-cta');
+      expect(matches).toHaveLength(1);
+
+      const primaryCtaText = matches[0].find(
+        (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
+      );
+      expect(primaryCtaText.props.numberOfLines).toBe(1);
+
+      const rootMatches = tree.root.findAll((node) => node.props?.testID === 'screen-home-root');
+      expect(rootMatches).toHaveLength(1);
+
+      const primarySurfaceMatches = tree.root.findAll(
+        (node) => node.props?.testID === 'screen-home-primary-cta',
+      );
+      expect(primarySurfaceMatches).toHaveLength(1);
+
+      const textBlob = tree.root
+        .findAll((node) => (node.type as any) === 'Text')
+        .map((node) => {
+          const c = node.props.children;
+          return Array.isArray(c) ? c.join('') : String(c ?? '');
+        })
+        .join('\n');
+      expect(textBlob).not.toContain('Peek at reward draw');
+      expect(textBlob).not.toContain('Start first draw');
+    },
+  );
+
+  it('adds explicit accessibility semantics on Home collapsible triggers', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -159,7 +239,38 @@ describe('home primary CTA uniqueness', () => {
     });
     await flush();
 
-    const matches = tree.root.findAll((node) => node.props?.testID === 'home-primary-cta');
-    expect(matches).toHaveLength(1);
+    const decksToggle = tree.root.find((node) => node.props?.testID === 'home-collapse-decks-toggle');
+    const weekToggle = tree.root.find(
+      (node) => node.props?.testID === 'home-collapse-week-support-toggle',
+    );
+    const drawToggle = tree.root.find(
+      (node) => node.props?.testID === 'home-collapse-draw-support-toggle',
+    );
+
+    expect(decksToggle.props.accessibilityRole).toBe('button');
+    expect(weekToggle.props.accessibilityRole).toBe('button');
+    expect(drawToggle.props.accessibilityRole).toBe('button');
+    expect(decksToggle.props.accessibilityState).toEqual({ expanded: false });
+    expect(weekToggle.props.accessibilityState).toEqual({ expanded: false });
+    expect(drawToggle.props.accessibilityState).toEqual({ expanded: false });
+
+    act(() => {
+      decksToggle.props.onPress();
+      weekToggle.props.onPress();
+      drawToggle.props.onPress();
+    });
+
+    expect(
+      tree.root.find((node) => node.props?.testID === 'home-collapse-decks-toggle').props
+        .accessibilityState,
+    ).toEqual({ expanded: true });
+    expect(
+      tree.root.find((node) => node.props?.testID === 'home-collapse-week-support-toggle').props
+        .accessibilityState,
+    ).toEqual({ expanded: true });
+    expect(
+      tree.root.find((node) => node.props?.testID === 'home-collapse-draw-support-toggle').props
+        .accessibilityState,
+    ).toEqual({ expanded: true });
   });
 });

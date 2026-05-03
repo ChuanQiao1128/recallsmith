@@ -24,7 +24,14 @@ export type LibraryFilterChip = {
   count: number;
 };
 
+export type LibraryDeckOption = {
+  slug: string;
+  title: string;
+};
+
 export type LibraryViewModel = LibraryVM & {
+  decks: LibraryDeckOption[];
+  selectedDeckSlug: string;
   filter: LibraryFilter;
   filters: LibraryFilterChip[];
   cards: LibraryCardRow[];
@@ -105,8 +112,19 @@ export function buildLibraryVM(params: {
   now?: Date;
   isTrial?: boolean;
   previewTotal?: number;
+  decks?: LibraryDeckOption[];
+  selectedDeckSlug?: string | null;
 }): LibraryViewModel {
-  const { deck, progress, filter = 'all', now = new Date(), isTrial = false, previewTotal = 0 } = params;
+  const {
+    deck,
+    progress,
+    filter = 'all',
+    now = new Date(),
+    isTrial = false,
+    previewTotal = 0,
+    decks = [{ slug: deck.Slug, title: deck.Title }],
+    selectedDeckSlug,
+  } = params;
   const rows = buildLibraryCardRows({ deck, progress, now, isTrial, previewTotal });
   const newCount = rows.filter((item) => item.status === 'new').length;
   const masteredCount = rows.filter((item) => item.status === 'mastered').length;
@@ -144,6 +162,8 @@ export function buildLibraryVM(params: {
       dueTodayCount,
       updatedCount,
     },
+    decks,
+    selectedDeckSlug: decks.some((item) => item.slug === selectedDeckSlug) && selectedDeckSlug ? selectedDeckSlug : deck.Slug,
     filter,
     filters,
     cards,
