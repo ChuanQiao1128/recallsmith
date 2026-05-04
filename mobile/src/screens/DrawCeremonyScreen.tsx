@@ -7,9 +7,13 @@ import type { RootStackParamList } from '../navigation/types';
 import { a11y } from '../theme/a11y';
 import { animation } from '../theme/animation';
 import { colors } from '../theme/colors';
-
-type CeremonyPhase = 'warmup' | 'focus' | 'reveal';
-type MultiPhase = 'orbit' | 'charge' | 'stabilize';
+import {
+  CEREMONY_COPY,
+  getCeremonyRarityLabel,
+  type CeremonyPhase,
+  type CeremonyRarity,
+  type MultiCeremonyPhase,
+} from '../features/gacha/draw/ceremonyCopy';
 
 const STAR_FIELD = Array.from({ length: 40 }, (_, index) => ({
   left: `${5 + ((index * 13) % 90)}%`,
@@ -45,12 +49,31 @@ const CEREMONY_COLOR = {
   whiteBadge: 'rgba(255,255,255,0.16)',
   textBright: 'rgba(255,247,232,1)',
   textSoft: 'rgba(255,247,232,0.8)',
+  beamLeg: 'rgba(245,213,122,0.9)',
+  beamCommon: 'rgba(214,199,154,0.48)',
+  particleGold: 'rgba(245,213,122,1)',
+  goldBorderStrong: 'rgba(232,184,90,0.92)',
+  goldBorderSoft: 'rgba(232,184,90,0.6)',
+  goldBorderBright: 'rgba(232,184,90,0.9)',
+  goldCardBorder: 'rgba(245,213,122,0.92)',
+  creamBorderFaint: 'rgba(245,236,196,0.18)',
+  creamGlyph: 'rgba(245,236,196,0.2)',
+  footerBg: 'rgba(245,236,196,0.06)',
+  footerBorder: 'rgba(245,236,196,0.12)',
+  buttonBg: 'rgba(245,236,196,0.1)',
+  buttonBorder: 'rgba(245,236,196,0.18)',
 } as const;
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DrawCeremony'>;
+type DrawCeremonyResult = NonNullable<RootStackParamList['DrawCeremony']['drawResult']>;
+type DrawCeremonyCard = DrawCeremonyResult['cards'][number];
+
+function selectFeaturedCeremonyCard(cards: DrawCeremonyCard[]): DrawCeremonyCard | null {
+  return cards.find((card) => card.rarity === 'LEG') ?? cards.find((card) => card.rarity === 'RAR') ?? cards[0] ?? null;
+}
 
 export function DrawCeremonyScreen({ navigation, route }: Props) {
-  const drawResult = route.params.drawResult ?? {
+  const drawResult: DrawCeremonyResult = route.params.drawResult ?? {
     poolId: route.params.slug,
     cards: [],
     pityBefore: 0,
@@ -58,17 +81,15 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     pityAfter: 0,
     highlightedRarity: null,
   };
-  const actualFeaturedRarity = useMemo(() => {
-    if (drawResult.cards.some((card) => card.rarity === 'LEG')) return 'LEG';
-    if (drawResult.cards.some((card) => card.rarity === 'RAR')) return 'RAR';
-    return drawResult.highlightedRarity ?? null;
-  }, [drawResult.cards, drawResult.highlightedRarity]);
-  const featuredRarity = actualFeaturedRarity ?? (drawResult.pityTriggered ? 'RAR+' : 'COM+');
+  const featuredCard = useMemo(() => selectFeaturedCeremonyCard(drawResult.cards), [drawResult.cards]);
+  const actualFeaturedRarity = featuredCard?.rarity ?? drawResult.highlightedRarity ?? null;
+  const featuredRarity: CeremonyRarity = actualFeaturedRarity ?? (drawResult.pityTriggered ? 'RAR+' : 'COM+');
+  const featuredTone = featuredRarity === 'LEG' ? 'leg' : featuredRarity === 'RAR' || featuredRarity === 'RAR+' ? 'rar' : 'com';
+  const ceremonyEchoRarity = featuredCard?.rarity ?? drawResult.highlightedRarity ?? (drawResult.pityTriggered ? 'RAR' : 'COM');
   const isSinglePull = drawResult.cards.length === 1;
-  const featuredCard = drawResult.cards[0] ?? null;
   const [reduceMotionEnabled, setReduceMotionEnabled] = useState(false);
   const [phase, setPhase] = useState<CeremonyPhase>('warmup');
-  const [multiPhase, setMultiPhase] = useState<MultiPhase>('orbit');
+  const [multiPhase, setMultiPhase] = useState<MultiCeremonyPhase>('orbit');
 
   const stageScale = useRef(new Animated.Value(0.94)).current;
   const stageGlow = useRef(new Animated.Value(0.35)).current;
@@ -79,7 +100,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     const leg = drawResult.cards.filter((card) => card.rarity === 'LEG').length;
     const rar = drawResult.cards.filter((card) => card.rarity === 'RAR').length;
     const com = drawResult.cards.filter((card) => card.rarity === 'COM').length;
-    return `${leg}⚡ · ${rar}🔷 · ${com}⚪ · pity ${drawResult.pityAfter}/10`;
+    return `${leg} Legendary, ${rar} Rare, ${com} Common, pity ${drawResult.pityAfter}/10`;
   }, [drawResult.cards, drawResult.pityAfter]);
 
   useEffect(() => {
@@ -141,9 +162,10 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
       navigation.replace('DrawResult', {
         slug: route.params.slug,
         drawResult,
+        deckTitle: route.params.deckTitle,
         ceremonyEcho: {
-          rarity: featuredRarity === 'LEG' || featuredRarity === 'RAR' ? featuredRarity : 'COM',
-          phaseCue: isSinglePull ? 'Front face unlocked · Flip axis at 180°' : 'Center card revealed last · Flip axis at 180°',
+          rarity: ceremonyEchoRarity,
+          phaseCue: isSinglePull ? CEREMONY_COPY.handoffCue.single : CEREMONY_COPY.handoffCue.multi,
         },
       });
     }, finishAt);
@@ -157,45 +179,24 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
       cardLift.stopAnimation();
       cardRotate.stopAnimation();
     };
-  }, [cardLift, cardRotate, drawResult, featuredRarity, isSinglePull, navigation, reduceMotionEnabled, route.params.slug, stageGlow, stageScale]);
+  }, [cardLift, cardRotate, ceremonyEchoRarity, drawResult, featuredRarity, isSinglePull, navigation, reduceMotionEnabled, route.params.deckTitle, route.params.slug, stageGlow, stageScale]);
 
   const ceremonyTitle = isSinglePull
-    ? phase === 'warmup'
-      ? 'Single pull reveal warming up'
-      : phase === 'focus'
-        ? 'Single pull locking onto the center card'
-        : 'Single pull reward revealed'
-    : multiPhase === 'orbit'
-      ? 'Cards entering orbit'
-      : multiPhase === 'charge'
-        ? 'Center card charging the reveal'
-        : 'Result spread stabilizing';
+    ? CEREMONY_COPY.single.title[phase]
+    : CEREMONY_COPY.multi.title[multiPhase];
 
   const ceremonyBody = isSinglePull
-    ? phase === 'warmup'
-      ? 'One reward card is charging before the reveal lands.'
-      : phase === 'focus'
-        ? 'Hold the center line for the flip.'
-        : 'Reward locked. Result handoff is live.'
-    : multiPhase === 'orbit'
-      ? 'The ten-card fan settles before the center card takes over.'
-      : multiPhase === 'charge'
-        ? 'The center card owns the spotlight now.'
-        : 'Rarity counts and the final spread are locking in.';
-  const revealHint = isSinglePull && phase !== 'reveal' ? 'Think first. Tap to reveal.' : null;
-  const motionHint = reduceMotionEnabled ? 'Reduced-motion ceremony enabled' : null;
+    ? CEREMONY_COPY.single.body[phase]
+    : CEREMONY_COPY.multi.body[multiPhase];
+  const revealHint = isSinglePull && phase !== 'reveal' ? CEREMONY_COPY.single.revealHint : null;
+  const motionHint = reduceMotionEnabled ? CEREMONY_COPY.motionHint : null;
   const phaseCue = isSinglePull
-    ? phase === 'focus'
-      ? 'Flip breach armed'
-      : phase === 'reveal'
-        ? 'Front face unlocked · Flip axis at 180°'
-        : 'Single-card lock acquired'
-    : multiPhase === 'charge'
-      ? 'Final breach armed'
-      : multiPhase === 'stabilize'
-        ? 'Center card revealed last · Flip axis at 180°'
-        : 'Deckfall in progress';
-  const raritySignal = featuredRarity === 'LEG' ? 'LEG core breach' : featuredRarity === 'RAR' ? 'RAR resonance' : 'COM drift';
+    ? CEREMONY_COPY.single.phaseCue[phase]
+    : CEREMONY_COPY.multi.phaseCue[multiPhase];
+  const raritySignal = getCeremonyRarityLabel(featuredRarity);
+  const metaSegments = [isSinglePull ? CEREMONY_COPY.single.meta : CEREMONY_COPY.multi.meta, drawResult.seedLabel].filter(Boolean);
+  const metaLine = metaSegments.join(' - ');
+  const featuredLine = `${isSinglePull ? CEREMONY_COPY.single.featuredPrefix : CEREMONY_COPY.multi.featuredPrefix} ${raritySignal}`;
 
   const stageTransform = {
     transform: [
@@ -222,11 +223,11 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     ],
   };
 
-  const beamColor = featuredRarity === 'LEG' ? 'rgba(245,213,122,0.9)' : featuredRarity === 'RAR' ? CEREMONY_COLOR.dustLilac : 'rgba(214,199,154,0.48)';
-  const beamPeakOpacity = reduceMotionEnabled ? 0.34 : featuredRarity === 'LEG' ? 0.95 : featuredRarity === 'RAR' ? 0.78 : 0.5;
-  const beamPeakScale = reduceMotionEnabled ? 1.02 : featuredRarity === 'LEG' ? 1.35 : 1.08;
-  const ringPeakOpacity = reduceMotionEnabled ? 0.3 : featuredRarity === 'LEG' ? 0.85 : 0.62;
-  const ringPeakScale = reduceMotionEnabled ? 1.04 : featuredRarity === 'LEG' ? 1.28 : 1.1;
+  const beamColor = featuredTone === 'leg' ? CEREMONY_COLOR.beamLeg : featuredTone === 'rar' ? CEREMONY_COLOR.dustLilac : CEREMONY_COLOR.beamCommon;
+  const beamPeakOpacity = reduceMotionEnabled ? 0.34 : featuredTone === 'leg' ? 0.95 : featuredTone === 'rar' ? 0.78 : 0.5;
+  const beamPeakScale = reduceMotionEnabled ? 1.02 : featuredTone === 'leg' ? 1.35 : 1.08;
+  const ringPeakOpacity = reduceMotionEnabled ? 0.3 : featuredTone === 'leg' ? 0.85 : 0.62;
+  const ringPeakScale = reduceMotionEnabled ? 1.04 : featuredTone === 'leg' ? 1.28 : 1.1;
   const beamStyle = {
     opacity: stageGlow.interpolate({
       inputRange: [0, 1],
@@ -259,7 +260,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   return (
     <SafeAreaView style={styles.safeArea} testID="screen-draw-ceremony-root">
       <LinearGradient colors={CEREMONY_GRADIENT} style={styles.gradient}>
-        <View pointerEvents="none" style={styles.starLayer}>
+        <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" pointerEvents="none" style={styles.starLayer}>
           {STAR_FIELD.map((star, index) => (
             <View
               key={`star-${index}`}
@@ -288,7 +289,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
                   top: particle.top as any,
                   fontSize: particle.size,
                   opacity: particle.opacity,
-                  color: particle.amber ? 'rgba(245,213,122,1)' : CEREMONY_COLOR.dustLilac,
+                  color: particle.amber ? CEREMONY_COLOR.particleGold : CEREMONY_COLOR.dustLilac,
                 },
               ]}
             >
@@ -301,8 +302,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
         </View>
 
         <View style={styles.content}>
-          <Text style={styles.metaLine} numberOfLines={1}>{isSinglePull ? 'Single pull ceremony' : 'Reward draw ceremony'} · {drawResult.seedLabel ?? 'seed #----'}</Text>
-          <Text style={styles.glyphLegend} numberOfLines={1}>Glyph field online · {CODE_GLYPHS.join(' ')}</Text>
+          <Text style={styles.metaLine} numberOfLines={1}>{metaLine}</Text>
           {motionHint ? <Text style={styles.motionHint} numberOfLines={1}>{motionHint}</Text> : null}
           <Text style={styles.title} numberOfLines={2}>{ceremonyTitle}</Text>
           <Text style={styles.body} numberOfLines={2}>{ceremonyBody}</Text>
@@ -325,13 +325,13 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
               >
                 {phase === 'reveal' && featuredCard ? (
                   <>
-                    <Text style={styles.singleCardBadge}>{featuredCard.rarity}</Text>
-                    <Text style={styles.singleCardQuestion} numberOfLines={3}>{featuredCard.question}</Text>
-                    <Text style={styles.singleCardHint} numberOfLines={2}>One card only · hold the result for the next study run</Text>
+                    <Text style={styles.singleCardBadge} numberOfLines={1} testID="draw-ceremony-reveal-rarity">{featuredCard.rarity}</Text>
+                    <Text style={styles.singleCardQuestion} numberOfLines={3} testID="draw-ceremony-reveal-question">{featuredCard.question}</Text>
+                    <Text style={styles.singleCardHint} numberOfLines={2}>{CEREMONY_COPY.single.cardHint}</Text>
                   </>
                 ) : (
                   <>
-                    <Text style={styles.cardBackCommand}>{'> recall.draw()'}</Text>
+                    <Text style={styles.cardBackCommand}>{CEREMONY_COPY.cardBackLabel}</Text>
                     <Text style={styles.cardGlyphCenter}>◈</Text>
                   </>
                 )}
@@ -340,9 +340,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
               <>
                 {multiPhase === 'stabilize' && featuredCard ? (
                   <View style={styles.finalRevealCard}>
-                    <Text style={styles.finalRevealBadge}>{featuredCard.rarity}</Text>
-                    <Text style={styles.finalRevealQuestion} numberOfLines={3}>{featuredCard.question}</Text>
-                    <Text style={styles.finalRevealHint} numberOfLines={2}>Center card flips last · the spread locks in behind it</Text>
+                    <Text style={styles.finalRevealBadge} numberOfLines={1} testID="draw-ceremony-reveal-rarity">{featuredCard.rarity}</Text>
+                    <Text style={styles.finalRevealQuestion} numberOfLines={3} testID="draw-ceremony-reveal-question">{featuredCard.question}</Text>
+                    <Text style={styles.finalRevealHint} numberOfLines={2}>{CEREMONY_COPY.multi.finalHint}</Text>
                   </View>
                 ) : null}
                 {STACK_ROTATIONS.map((rotation, index) => (
@@ -353,13 +353,13 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
                       index === 2 && multiPhase !== 'orbit' ? styles.cardBackHero : null,
                       {
                         transform: [{ translateY: Math.abs(rotation) * 0.45 }, { rotate: `${rotation}deg` }],
-                        borderColor: index === 2 ? 'rgba(232,184,90,0.92)' : 'rgba(245,236,196,0.18)',
+                        borderColor: index === 2 ? CEREMONY_COLOR.goldBorderStrong : CEREMONY_COLOR.creamBorderFaint,
                         shadowOpacity: index === 2 ? 0.45 : 0.12,
                         opacity: multiPhase === 'stabilize' && index === 2 ? 0.08 : 1,
                       },
                     ]}
                   >
-                    <Text style={styles.cardBackCommand}>{'> recall.draw()'}</Text>
+                    <Text style={styles.cardBackCommand}>{CEREMONY_COPY.cardBackLabel}</Text>
                     <Text style={[styles.cardGlyph, index === 2 && styles.cardGlyphCenter]}>◈</Text>
                   </View>
                 ))}
@@ -368,27 +368,37 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
           </Animated.View>
 
           <View style={styles.footerBlock}>
-            <Text style={[styles.raritySignal, featuredRarity === 'LEG' ? styles.raritySignalLeg : featuredRarity === 'RAR' ? styles.raritySignalRar : styles.raritySignalCom]}>{raritySignal}</Text>
-            <Text style={styles.featuredText} numberOfLines={1}>{isSinglePull ? `Single-pull spotlight: ${featuredRarity}` : `Featured reward window: ${featuredRarity}`}</Text>
-            {drawResult?.pityTriggered ? <Text style={styles.pityText} numberOfLines={1}>Pity triggered · RAR+ guaranteed in this reveal</Text> : null}
+            <Text
+              style={[styles.raritySignal, featuredTone === 'leg' ? styles.raritySignalLeg : featuredTone === 'rar' ? styles.raritySignalRar : styles.raritySignalCom]}
+              numberOfLines={1}
+              testID="draw-ceremony-footer-rarity"
+            >
+              {raritySignal}
+            </Text>
+            <Text style={styles.featuredText} numberOfLines={1}>{featuredLine}</Text>
+            {drawResult?.pityTriggered ? <Text style={styles.pityText} numberOfLines={1}>{CEREMONY_COPY.pityBonus}</Text> : null}
             <Text style={styles.statsText} numberOfLines={1}>{statsLine}</Text>
           </View>
 
           <Pressable
             testID="screen-draw-ceremony-primary-cta"
             style={({ pressed }) => [styles.skipButton, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Show draw result"
+            accessibilityHint="Opens the completed draw result."
             onPress={() =>
               navigation.replace('DrawResult', {
                 slug: route.params.slug,
                 drawResult,
+                deckTitle: route.params.deckTitle,
                 ceremonyEcho: {
-                  rarity: featuredRarity === 'LEG' || featuredRarity === 'RAR' ? featuredRarity : 'COM',
-                  phaseCue: isSinglePull ? 'Front face unlocked · Flip axis at 180°' : 'Center card revealed last · Flip axis at 180°',
+                  rarity: ceremonyEchoRarity,
+                  phaseCue: isSinglePull ? CEREMONY_COPY.handoffCue.single : CEREMONY_COPY.handoffCue.multi,
                 },
               })
             }
           >
-            <Text style={styles.skipText} numberOfLines={1}>{isSinglePull ? 'Skip to single-pull result' : 'Skip ceremony'}</Text>
+            <Text style={styles.skipText} numberOfLines={1}>{CEREMONY_COPY.primaryCta}</Text>
           </Pressable>
         </View>
       </LinearGradient>
@@ -455,14 +465,6 @@ const styles = StyleSheet.create({
     color: colors.glowGold,
     fontSize: 11,
     letterSpacing: 1,
-    fontWeight: '700',
-    textAlign: 'center',
-    fontFamily: 'Courier',
-  },
-  glyphLegend: {
-    marginTop: 8,
-    color: 'rgba(245,236,196,0.82)',
-    fontSize: 11,
     fontWeight: '700',
     textAlign: 'center',
     fontFamily: 'Courier',
@@ -534,7 +536,7 @@ const styles = StyleSheet.create({
   },
   cardGlyph: {
     fontSize: 44,
-    color: 'rgba(245,236,196,0.20)',
+    color: CEREMONY_COLOR.creamGlyph,
     fontWeight: '700',
     fontFamily: 'Courier',
   },
@@ -542,7 +544,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 18,
     alignSelf: 'center',
-    color: 'rgba(245,236,196,0.72)',
+    color: CEREMONY_COLOR.copySoft,
     fontSize: 11,
     fontFamily: 'Courier',
     fontWeight: '700',
@@ -555,7 +557,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     backgroundColor: CEREMONY_COLOR.shellStrong,
     borderWidth: 1.5,
-    borderColor: 'rgba(245,236,196,0.18)',
+    borderColor: CEREMONY_COLOR.creamBorderFaint,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 18,
@@ -565,10 +567,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 14 },
   },
   singleCardFocus: {
-    borderColor: 'rgba(232,184,90,0.6)',
+    borderColor: CEREMONY_COLOR.goldBorderSoft,
   },
   singleCardReveal: {
-    borderColor: 'rgba(232,184,90,0.9)',
+    borderColor: CEREMONY_COLOR.goldBorderBright,
     backgroundColor: CEREMONY_COLOR.shellReveal,
     shadowOpacity: 0.42,
   },
@@ -579,7 +581,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: CEREMONY_COLOR.whiteBadge,
     color: CEREMONY_COLOR.textBright,
     fontSize: 11,
     fontWeight: '900',
@@ -594,7 +596,7 @@ const styles = StyleSheet.create({
   },
   singleCardHint: {
     marginTop: 12,
-    color: 'rgba(255,247,232,0.8)',
+    color: CEREMONY_COLOR.textSoft,
     fontSize: 12,
     lineHeight: 17,
   },
@@ -605,10 +607,10 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     backgroundColor: CEREMONY_COLOR.shellReveal,
     borderWidth: 1.5,
-    borderColor: 'rgba(245,213,122,0.92)',
+    borderColor: CEREMONY_COLOR.goldCardBorder,
     padding: 18,
     justifyContent: 'flex-end',
-    shadowColor: 'rgba(245,213,122,1)',
+    shadowColor: CEREMONY_COLOR.particleGold,
     shadowOpacity: 0.42,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 14 },
@@ -618,7 +620,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: CEREMONY_COLOR.whiteBadge,
     color: CEREMONY_COLOR.textBright,
     fontSize: 11,
     fontWeight: '900',
@@ -633,7 +635,7 @@ const styles = StyleSheet.create({
   },
   finalRevealHint: {
     marginTop: 12,
-    color: 'rgba(255,247,232,0.8)',
+    color: CEREMONY_COLOR.textSoft,
     fontSize: 12,
     lineHeight: 17,
   },
@@ -642,9 +644,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    backgroundColor: 'rgba(245,236,196,0.06)',
+    backgroundColor: CEREMONY_COLOR.footerBg,
     borderWidth: 1,
-    borderColor: 'rgba(245,236,196,0.12)',
+    borderColor: CEREMONY_COLOR.footerBorder,
   },
   raritySignal: {
     fontSize: 11,
@@ -653,12 +655,12 @@ const styles = StyleSheet.create({
     fontFamily: 'Courier',
     textTransform: 'uppercase',
   },
-  raritySignalLeg: { color: 'rgba(245,213,122,1)' },
+  raritySignalLeg: { color: CEREMONY_COLOR.particleGold },
   raritySignalRar: { color: CEREMONY_COLOR.dustLilac },
   raritySignalCom: { color: CEREMONY_COLOR.copyMuted },
   featuredText: { color: colors.cosmicInk, fontSize: 13, fontWeight: '800', marginTop: 8 },
   pityText: { marginTop: 8, fontSize: 12, fontWeight: '800', color: colors.glowGold, textAlign: 'center' },
-  statsText: { marginTop: 8, fontSize: 11, color: 'rgba(245,236,196,0.72)', fontFamily: 'Courier' },
+  statsText: { marginTop: 8, fontSize: 11, color: CEREMONY_COLOR.copySoft, fontFamily: 'Courier' },
   skipButton: {
     marginTop: 22,
     minHeight: a11y.minTouch,
@@ -666,9 +668,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    backgroundColor: 'rgba(245,236,196,0.10)',
+    backgroundColor: CEREMONY_COLOR.buttonBg,
     borderWidth: 1,
-    borderColor: 'rgba(245,236,196,0.18)',
+    borderColor: CEREMONY_COLOR.buttonBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -3,6 +3,8 @@ import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = new Map<string, string>();
+let viewportWidth = 390;
+let viewportHeight = 844;
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
@@ -20,6 +22,7 @@ vi.mock('react-native', () => {
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
+    useWindowDimensions: () => ({ width: viewportWidth, height: viewportHeight, scale: 3, fontScale: 1 }),
     Pressable: ({ children, onPress, ...props }: any) =>
       React.createElement(
         'Pressable',
@@ -107,6 +110,13 @@ function collectText(tree: renderer.ReactTestRenderer) {
   }).join('\n');
 }
 
+function flattenStyle(style: any): Record<string, any> {
+  if (Array.isArray(style)) {
+    return Object.assign({}, ...style.map(flattenStyle));
+  }
+  return style ?? {};
+}
+
 describe('DrawScreen', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -114,6 +124,8 @@ describe('DrawScreen', () => {
   beforeEach(() => {
     store.clear();
     store.set('recallsmith:reward-wallet:v1', JSON.stringify({ availablePulls: 2, reservePulls: 1 }));
+    viewportWidth = 390;
+    viewportHeight = 844;
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -183,7 +195,7 @@ describe('DrawScreen', () => {
     expect(drawResult.cards).toHaveLength(1);
   });
 
-  it('shows a library fallback CTA when draw is locked', async () => {
+  it('routes locked active-pool users back home instead of opening Deck', async () => {
     store.set('recallsmith:reward-wallet:v1', JSON.stringify({ availablePulls: 0, reservePulls: 0 }));
     const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
 
@@ -194,11 +206,14 @@ describe('DrawScreen', () => {
       await Promise.resolve();
     });
 
+    expect(collectText(tree)).toContain('Back to Home');
+    expect(collectText(tree)).toContain('Preview 1 pull (free)');
+
     act(() => {
       findPressableByTestId(tree, 'screen-draw-primary-cta').props.onPress();
     });
 
-    expect(navigation.navigate).toHaveBeenCalledWith('Deck', { slug: 'csharp' });
+    expect(navigation.navigate).toHaveBeenCalledWith('Home');
   });
 
   it('still lets the user preview a single pull when wallet is empty', async () => {
@@ -211,6 +226,8 @@ describe('DrawScreen', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+
+    expect(collectText(tree)).toContain('Preview 1 pull (free)');
 
     await act(async () => {
       findPressableByTestId(tree, 'screen-draw-secondary-cta').props.onPress();
@@ -232,6 +249,35 @@ describe('DrawScreen', () => {
     expect(drawResult.cards).toHaveLength(1);
   });
 
+  it('renders the resolved active deck title for non-default pools', async () => {
+    const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
+    const resolveSpy = vi.spyOn(deckRepository, 'resolveDeckBySlug');
+    resolveSpy.mockResolvedValueOnce({
+      Slug: 'python',
+      Title: 'Python Advanced',
+      Locale: 'en-US',
+      Version: '1',
+      DeckType: 1,
+      TotalCards: 1,
+      Cards: [{ StableUid: 'py-1', OrderInDeck: 1, Question: 'Q', Difficulty: 1 }],
+    } as any);
+
+    try {
+      let tree!: renderer.ReactTestRenderer;
+      await act(async () => {
+        tree = renderer.create(<DrawScreen navigation={navigation} route={{ key: 'draw', name: 'Draw', params: { slug: 'python' } } as any} />);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const textBlob = collectText(tree);
+      expect(textBlob).toContain('Current pool · Python Advanced');
+      expect(textBlob).not.toContain('Current pool · C# Interview');
+    } finally {
+      resolveSpy.mockRestore();
+    }
+  });
+
   it('renders a productized draw briefing instead of prototype-only labels', async () => {
     const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
 
@@ -245,14 +291,35 @@ describe('DrawScreen', () => {
     const textBlob = collectText(tree);
 
     expect(textBlob).toContain('Reward draw');
-    expect(textBlob).toContain('Drop odds');
+    expect(textBlob).toContain('Pull briefing');
+    expect(textBlob).toContain('One reward pull opens a 10-card reveal.');
     expect(textBlob).toContain('Current pool');
-    expect(textBlob).toContain('Open 10 pull');
+    expect(textBlob).toContain('Open 10-card pull');
+    expect(textBlob).not.toContain('Drop odds');
+    expect(textBlob).not.toContain('until guaranteed');
+    expect(textBlob).not.toContain('COM 70%');
     expect(textBlob).not.toContain('COSMIC ARCHIVE');
     expect(textBlob).not.toContain('DROP TABLE');
 
     expect(findTextNodeContaining(tree, 'Use reward pulls after the study route').props.numberOfLines).toBe(1);
-    expect(findTextNodeContaining(tree, 'Open 10 pull').props.numberOfLines).toBe(1);
+    expect(findTextNodeContaining(tree, 'Open 10-card pull').props.numberOfLines).toBe(1);
+  });
+
+  it('keeps the decorative card stack compact on a 360pt viewport', async () => {
+    viewportWidth = 360;
+    viewportHeight = 640;
+    const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<DrawScreen navigation={navigation} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const stackStage = tree.root.findByProps({ testID: 'draw-card-stack-stage' });
+    expect(flattenStyle(stackStage.props.style).height).toBeLessThanOrEqual(192);
+    expect(findTextNodeContaining(tree, 'Open 10-card pull').props.numberOfLines).toBe(1);
   });
 
   it('renders an error state with retry action when draw dependencies fail', async () => {
@@ -279,7 +346,7 @@ describe('DrawScreen', () => {
         await Promise.resolve();
       });
 
-      expect(collectText(tree)).toContain('Open 10 pull');
+      expect(collectText(tree)).toContain('Open 10-card pull');
       expect(walletSpy).toHaveBeenCalledTimes(2);
     } finally {
       walletSpy.mockRestore();

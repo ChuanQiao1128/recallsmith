@@ -376,6 +376,15 @@ function buildHeroCopy(params: {
 }): { eyebrow: string; title: string; subtitle: string; helper: string } {
   const { statusKind, selectedDeck, counts, hasSignedInUser } = params;
 
+  if (statusKind === 'error') {
+    return {
+      eyebrow: 'Home',
+      title: 'Could not refresh Home right now',
+      subtitle: 'Your local progress is safe. Retry to sync state.',
+      helper: 'If this keeps happening, reopen the app after network stabilizes.',
+    };
+  }
+
   if (!selectedDeck) {
     return {
       eyebrow: 'Today',
@@ -440,13 +449,6 @@ function buildHeroCopy(params: {
         title: 'Reward wallet is full',
         subtitle: 'Spend pulls first, then continue the study loop.',
         helper: `${FREE_PULL_CAP} ready and ${FREE_PULL_OVERFLOW_CAP} reserve are currently occupied.`,
-      };
-    case 'error':
-      return {
-        eyebrow: 'Home',
-        title: 'Could not refresh Home right now',
-        subtitle: 'Your local progress is safe. Retry to sync state.',
-        helper: 'If this keeps happening, reopen the app after network stabilizes.',
       };
     default: {
       const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
@@ -592,7 +594,7 @@ export function buildHomeVM(params: {
     runtimeStatus,
   });
   let cta = mapStatusToCta(statusKind);
-  if (!selectedDeck) {
+  if (!selectedDeck && statusKind !== 'error') {
     cta = {
       kind: 'first_run',
       label: 'Open library',
@@ -600,7 +602,7 @@ export function buildHomeVM(params: {
       testID: 'home-primary-cta',
       disabled: false,
     };
-  } else if (!selectedDeck.canStudy && statusKind === 'first_run') {
+  } else if (selectedDeck && !selectedDeck.canStudy && statusKind === 'first_run') {
     cta = {
       ...cta,
       label: 'Open library',
@@ -673,4 +675,39 @@ export function buildHomeVM(params: {
   }
 
   return vm;
+}
+
+type BuildHomeVMParams = Parameters<typeof buildHomeVM>[0];
+
+export type HomeScreenVMInput =
+  | { state: 'empty' }
+  | { state: 'ready'; params: BuildHomeVMParams }
+  | {
+      state: 'error';
+      hasSignedInUser: boolean;
+      wallet?: RewardWalletState | null;
+      message: string;
+    };
+
+export function buildHomeScreenVM(input: HomeScreenVMInput): HomeViewModel {
+  switch (input.state) {
+    case 'empty':
+      return buildHomeVM({
+        deckSummaries: [],
+        selectedSlug: null,
+        hasSignedInUser: false,
+      });
+    case 'error':
+      return buildHomeVM({
+        deckSummaries: [],
+        selectedSlug: null,
+        hasSignedInUser: input.hasSignedInUser,
+        wallet: input.wallet,
+        statusHint: 'error',
+        errorMessage: input.message,
+      });
+    case 'ready':
+    default:
+      return buildHomeVM(input.params);
+  }
 }

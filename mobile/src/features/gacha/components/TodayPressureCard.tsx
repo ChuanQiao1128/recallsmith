@@ -1,12 +1,23 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import type { TodayCounts } from '../contracts';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
 import { typography } from '../../../theme/typography';
 
+const TODAY_PRESSURE_TOKENS = {
+  card: 'rgba(255,255,255,0.86)',
+  metricNormal: 'rgba(79,70,229,0.10)',
+  metricElite: 'rgba(234,179,8,0.12)',
+  metricBoss: 'rgba(244,114,182,0.12)',
+  metricTotal: 'rgba(126,157,94,0.12)',
+} as const;
+
 export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitle: string | null }) {
   const { counts, selectedDeckTitle } = props;
+  const { width } = useWindowDimensions();
+  const useCompactMetrics = width < 390;
+  const metricSizeStyle = useCompactMetrics ? styles.metricCompact : styles.metricWide;
 
   return (
     <View style={styles.card}>
@@ -17,8 +28,8 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
         {selectedDeckTitle ? `${selectedDeckTitle} · ${counts.selectedDue} due · ${counts.selectedNew} fresh` : 'No active deck selected'}
       </Text>
 
-      <View style={styles.row}>
-        <View style={[styles.metric, styles.metricNormal]}>
+      <View testID="home-today-count-grid" style={styles.row}>
+        <View testID="home-today-count-normal" style={[styles.metric, metricSizeStyle, styles.metricNormal]}>
           <Text style={styles.metricValue} numberOfLines={1}>
             {counts.normalCount}
           </Text>
@@ -26,7 +37,7 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
             Normal
           </Text>
         </View>
-        <View style={[styles.metric, styles.metricElite]}>
+        <View testID="home-today-count-elite" style={[styles.metric, metricSizeStyle, styles.metricElite]}>
           <Text style={styles.metricValue} numberOfLines={1}>
             {counts.eliteCount}
           </Text>
@@ -34,7 +45,7 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
             Elite
           </Text>
         </View>
-        <View style={[styles.metric, styles.metricBoss]}>
+        <View testID="home-today-count-boss" style={[styles.metric, metricSizeStyle, styles.metricBoss]}>
           <Text style={styles.metricValue} numberOfLines={1}>
             {counts.bossCount}
           </Text>
@@ -42,10 +53,18 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
             Boss
           </Text>
         </View>
+        <View testID="home-today-count-total" style={[styles.metric, metricSizeStyle, styles.metricTotal]}>
+          <Text style={styles.metricValue} numberOfLines={1}>
+            {counts.totalDueAllDecks}
+          </Text>
+          <Text style={styles.metricLabel} numberOfLines={1}>
+            Total
+          </Text>
+        </View>
       </View>
 
-      <Text style={styles.footnote} numberOfLines={2}>
-        Across all decks: {counts.totalDueAllDecks} due today · mastered in selected deck: {counts.selectedMastered}
+      <Text style={styles.footnote} numberOfLines={1}>
+        Mastered in selected deck: {counts.selectedMastered}
       </Text>
     </View>
   );
@@ -55,8 +74,8 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: 22,
     padding: spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.86)',
-    shadowColor: '#000',
+    backgroundColor: TODAY_PRESSURE_TOKENS.card,
+    shadowColor: colors.ink,
     shadowOpacity: 0.10,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 10 },
@@ -64,11 +83,14 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: typography.body, fontWeight: '800', color: colors.ink },
   subtitle: { marginTop: 6, fontSize: typography.caption, color: colors.inkSecondary },
-  row: { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.sm },
-  metric: { flex: 1, borderRadius: 16, paddingVertical: 14, paddingHorizontal: spacing.xs },
-  metricNormal: { backgroundColor: 'rgba(79,70,229,0.10)' },
-  metricElite: { backgroundColor: 'rgba(234,179,8,0.12)' },
-  metricBoss: { backgroundColor: 'rgba(244,114,182,0.12)' },
+  row: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.sm, justifyContent: 'space-between' },
+  metric: { borderRadius: 16, paddingVertical: 14, paddingHorizontal: spacing.xs },
+  metricWide: { flex: 1, minWidth: 0 },
+  metricCompact: { width: '48%' },
+  metricNormal: { backgroundColor: TODAY_PRESSURE_TOKENS.metricNormal },
+  metricElite: { backgroundColor: TODAY_PRESSURE_TOKENS.metricElite },
+  metricBoss: { backgroundColor: TODAY_PRESSURE_TOKENS.metricBoss },
+  metricTotal: { backgroundColor: TODAY_PRESSURE_TOKENS.metricTotal },
   metricValue: { fontSize: 24, fontWeight: '800', color: colors.ink },
   metricLabel: { marginTop: 4, fontSize: typography.caption, fontWeight: '700', color: colors.inkSecondary, textTransform: 'uppercase' },
   footnote: { marginTop: spacing.sm, fontSize: typography.caption, lineHeight: 16, color: colors.inkSecondary },

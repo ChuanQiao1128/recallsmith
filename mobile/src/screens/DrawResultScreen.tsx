@@ -16,11 +16,10 @@ const SPARKS = Array.from({ length: 18 }, (_, index) => ({
   amber: index % 4 === 0,
 }));
 
-const DRAW_RESULT_GRADIENT = [colors.cosmicBg, 'rgba(17,23,61,1)', colors.parchmentBg] as const;
 const DRAW_RESULT_COLOR = {
+  gradientMid: 'rgba(17,23,61,1)',
   sparkLilac: 'rgba(201,173,247,1)',
   copyMuted: 'rgba(214,199,154,1)',
-  copySoft: 'rgba(245,236,196,0.82)',
   copyPrimary: 'rgba(248,239,210,1)',
   heroShell: 'rgba(11,16,48,0.92)',
   heroBorder: 'rgba(245,236,196,0.12)',
@@ -47,32 +46,54 @@ const DRAW_RESULT_COLOR = {
   cardMeta: 'rgba(107,90,69,1)',
   secondaryBg: 'rgba(255,255,255,0.72)',
   secondaryBorder: 'rgba(42,34,24,0.08)',
-  ghostBorder: 'rgba(255,255,255,0.18)',
-  ghostBg: 'rgba(11,16,48,0.24)',
   modalOverlay: 'rgba(0,0,0,0.5)',
   modalCopy: 'rgba(90,75,56,1)',
   primaryText: 'rgba(255,255,255,1)',
+  comCardBg: 'rgba(239,230,204,0.94)',
+  comCardBorder: 'rgba(140,122,91,0.18)',
+  rarCardBg: 'rgba(232,224,240,0.96)',
+  rarCardBorder: 'rgba(110,76,159,0.16)',
+  legCardBg: 'rgba(249,232,196,0.98)',
+  legCardBorder: 'rgba(200,136,58,0.18)',
 } as const;
+const DRAW_RESULT_GRADIENT = [colors.cosmicBg, DRAW_RESULT_COLOR.gradientMid, colors.parchmentBg] as const;
+const drawResultColors = DRAW_RESULT_COLOR;
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DrawResult'>;
 type DrawResultRouteParams = RootStackParamList['DrawResult'] & {
   stateOverride?: 'loading' | 'error';
   errorMessage?: string;
 };
+type DrawResultCard = NonNullable<RootStackParamList['DrawResult']['drawResult']>['cards'][number];
 
-function deriveCardTag(question: string) {
-  const q = question.toLowerCase();
-  if (q.includes('middleware') || q.includes('asp.net')) return 'ASP.NET CORE';
-  if (q.includes('dependency injection') || q.includes('lifetimes')) return 'ARCHITECTURE';
-  if (q.includes('iqueryable') || q.includes('ienumerable') || q.includes('linq')) return 'LINQ';
-  if (q.includes('dbcontext')) return 'EF CORE';
-  if (q.includes('configureawait') || q.includes('async')) return 'ASYNC / AWAIT';
-  if (q.includes('iam') || q.includes('sqs') || q.includes('sns')) return 'AWS';
-  return 'CORE';
+function normalizeText(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '';
 }
 
 function buildStarRow(difficulty: number) {
   return Array.from({ length: 5 }, (_, index) => (index < difficulty ? '★' : '☆')).join('');
+}
+
+function joinMeta(segments: string[]) {
+  return segments.filter((segment) => segment.trim().length > 0).join(' · ');
+}
+
+function getCardTag(card: DrawResultCard | null | undefined) {
+  return normalizeText(card?.tag);
+}
+
+function getCardMeta(card: DrawResultCard) {
+  return joinMeta([getCardTag(card), buildStarRow(card.difficulty)]);
+}
+
+function getDeckLabel(params: DrawResultRouteParams, slug: string) {
+  return normalizeText(params.deckTitle) || normalizeText(params.drawResult?.poolId) || slug;
+}
+
+function getRarityLabel(rarity: 'COM' | 'RAR' | 'LEG') {
+  if (rarity === 'LEG') return 'Legendary';
+  if (rarity === 'RAR') return 'Rare';
+  return 'Common';
 }
 
 export function DrawResultScreen({ navigation, route }: Props) {
@@ -99,7 +120,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
   const selectedCard = cards.find((card) => card.stableUid === selectedCardId) ?? null;
 
-  const deckLabel = slug === 'aws' ? 'AWS SAA' : 'C# Interview';
+  const deckLabel = getDeckLabel(params, slug);
 
   if (stateOverride === 'loading') {
     return (
@@ -117,6 +138,9 @@ export function DrawResultScreen({ navigation, route }: Props) {
               <Pressable
                 testID="screen-draw-result-primary-cta"
                 style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Back to draw"
+                accessibilityHint="Returns to the draw screen."
                 onPress={() => navigation.navigate('Draw', { slug })}
               >
                 <Text style={styles.primaryButtonText} numberOfLines={1}>
@@ -145,13 +169,22 @@ export function DrawResultScreen({ navigation, route }: Props) {
               <Pressable
                 testID="screen-draw-result-primary-cta"
                 style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Back to draw"
+                accessibilityHint="Returns to the draw screen."
                 onPress={() => navigation.navigate('Draw', { slug })}
               >
                 <Text style={styles.primaryButtonText} numberOfLines={1}>
                   Back to Draw
                 </Text>
               </Pressable>
-              <Pressable style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]} onPress={() => navigation.navigate('Home')}>
+              <Pressable
+                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Back to home"
+                accessibilityHint="Returns to the home screen."
+                onPress={() => navigation.navigate('Home')}
+              >
                 <Text style={styles.secondaryButtonText} numberOfLines={1}>
                   Back to Home
                 </Text>
@@ -178,13 +211,22 @@ export function DrawResultScreen({ navigation, route }: Props) {
               <Pressable
                 testID="screen-draw-result-primary-cta"
                 style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Back to draw"
+                accessibilityHint="Returns to the draw screen."
                 onPress={() => navigation.navigate('Draw', { slug })}
               >
                 <Text style={styles.primaryButtonText} numberOfLines={1}>
                   Back to Draw
                 </Text>
               </Pressable>
-              <Pressable style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]} onPress={() => navigation.navigate('Deck', { slug })}>
+              <Pressable
+                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="View library first"
+                accessibilityHint="Opens your library before starting study."
+                onPress={() => navigation.navigate('Library')}
+              >
                 <Text style={styles.secondaryButtonText} numberOfLines={1}>
                   View library first
                 </Text>
@@ -213,8 +255,8 @@ export function DrawResultScreen({ navigation, route }: Props) {
                       width: spark.size,
                       height: spark.size,
                       borderRadius: spark.size,
-                      backgroundColor: spark.amber ? colors.glowGold : DRAW_RESULT_COLOR.sparkLilac,
-                      shadowColor: spark.amber ? colors.glowGold : DRAW_RESULT_COLOR.sparkLilac,
+                      backgroundColor: spark.amber ? colors.glowGold : drawResultColors.sparkLilac,
+                      shadowColor: spark.amber ? colors.glowGold : drawResultColors.sparkLilac,
                     },
                   ]}
                 />
@@ -222,7 +264,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
             </View>
 
             <Text style={styles.eyebrow} numberOfLines={1}>
-              {isSinglePull ? 'Single pull result' : 'Reward draw result'} · {drawResult.seedLabel ?? 'seed #----'}
+              {joinMeta([isSinglePull ? 'Single pull result' : 'Reward draw result', normalizeText(drawResult.seedLabel)])}
             </Text>
             <Text style={styles.title} numberOfLines={2}>
               {isSinglePull ? 'Single pull secured' : `${drawResult.cards.length} drawn cards ready for your next study loop`}
@@ -235,28 +277,29 @@ export function DrawResultScreen({ navigation, route }: Props) {
             {ceremonyEcho ? (
               <View style={styles.afterglowPill}>
                 <Text style={styles.afterglowLabel} numberOfLines={1}>
-                  Ceremony afterglow
+                  Reward ready
                 </Text>
                 <Text
                   style={[styles.afterglowValue, ceremonyEcho.rarity === 'LEG' ? styles.afterglowLeg : ceremonyEcho.rarity === 'RAR' ? styles.afterglowRar : styles.afterglowCom]}
                   numberOfLines={1}
                 >
-                  {ceremonyEcho.rarity} carryover
-                </Text>
-                <Text style={styles.afterglowCue} numberOfLines={2}>
-                  {ceremonyEcho.phaseCue}
+                  {getRarityLabel(ceremonyEcho.rarity)} · just drawn
                 </Text>
               </View>
             ) : null}
 
             {featuredCard ? (
               <Pressable
+                testID="screen-draw-result-featured-card"
                 style={({ pressed }) => [
                   styles.featuredCard,
                   isSinglePull && styles.featuredSingle,
                   featuredCard.rarity === 'LEG' ? styles.featuredLeg : featuredCard.rarity === 'RAR' ? styles.featuredRar : styles.featuredCom,
                   pressed && styles.pressed,
                 ]}
+                accessibilityRole="button"
+                accessibilityLabel={`Open featured reward detail: ${featuredCard.question}`}
+                accessibilityHint="Opens a detailed view for the featured reward card."
                 onPress={() => setSelectedCardId(featuredCard.stableUid)}
               >
                 <Text style={styles.featuredBadge} numberOfLines={1}>
@@ -272,7 +315,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   {featuredCard.question}
                 </Text>
                 <Text style={styles.featuredMeta} numberOfLines={1}>
-                  {deriveCardTag(featuredCard.question)} · {buildStarRow(featuredCard.difficulty)} · tap for closer detail
+                  {joinMeta([getCardMeta(featuredCard), 'tap for closer detail'])}
                 </Text>
               </Pressable>
             ) : null}
@@ -294,19 +337,25 @@ export function DrawResultScreen({ navigation, route }: Props) {
             {drawResult.cards.map((card, index) => (
               <Pressable
                 key={`${card.stableUid}-${card.question}`}
+                testID={`screen-draw-result-grid-card-${index}`}
                 onPress={() => setSelectedCardId(card.stableUid)}
                 style={[
                   styles.card,
                   (index === 0 || isSinglePull) && styles.cardTall,
                   card.rarity === 'LEG' ? styles.legCard : card.rarity === 'RAR' ? styles.rarCard : styles.comCard,
                 ]}
+                accessibilityRole="button"
+                accessibilityLabel={`Open reward detail: ${card.question}`}
+                accessibilityHint="Opens detailed information for this reward card."
               >
                 <Text style={styles.cardRarity} numberOfLines={1}>
                   {card.rarity}
                 </Text>
-                <Text style={styles.cardTag} numberOfLines={1}>
-                  {deriveCardTag(card.question)}
-                </Text>
+                {getCardTag(card) ? (
+                  <Text style={styles.cardTag} numberOfLines={1}>
+                    {getCardTag(card)}
+                  </Text>
+                ) : null}
                 <Text style={styles.cardTitle} numberOfLines={isSinglePull || index === 0 ? 3 : 2}>{card.question}</Text>
                 <Text style={styles.cardMeta} numberOfLines={1}>
                   {buildStarRow(card.difficulty)}
@@ -319,24 +368,29 @@ export function DrawResultScreen({ navigation, route }: Props) {
             <Pressable
               testID="screen-draw-result-primary-cta"
               style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-              onPress={() => navigation.navigate('Level', { slug, source: 'draw', cardIds: drawResult.cards.map((card) => card.stableUid) })}
+              accessibilityRole="button"
+              accessibilityLabel={isSinglePull ? 'Study this reward now' : 'Start studying drawn cards'}
+              accessibilityHint="Starts the study flow for drawn reward cards."
+              onPress={() => navigation.navigate('SessionCard', { slug, mode: 'learn-new', limit: Math.max(1, drawResult.cards.length) })}
             >
               <Text style={styles.primaryButtonText} numberOfLines={1}>
                 {isSinglePull ? 'Study this reward now' : 'Start studying drawn cards'}
               </Text>
             </Pressable>
 
-            <Pressable style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]} onPress={() => navigation.navigate('Deck', { slug })}>
+            <Pressable
+              testID="screen-draw-result-secondary-cta"
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+              accessibilityRole="button"
+              accessibilityLabel="View library first"
+              accessibilityHint="Opens your library without starting a study run."
+              onPress={() => navigation.navigate('Library')}
+            >
               <Text style={styles.secondaryButtonText} numberOfLines={1}>
                 View library first
               </Text>
             </Pressable>
 
-            <Pressable style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]} onPress={() => navigation.navigate('Home')}>
-              <Text style={styles.ghostButtonText} numberOfLines={1}>
-                Back to Home
-              </Text>
-            </Pressable>
           </View>
         </ScrollView>
 
@@ -353,9 +407,16 @@ export function DrawResultScreen({ navigation, route }: Props) {
                 {selectedCard?.question}
               </Text>
               <Text style={styles.modalBody} numberOfLines={3}>
-                {deriveCardTag(selectedCard?.question ?? '')} · {buildStarRow(selectedCard?.difficulty ?? 0)} · This reveal layer keeps the draw feeling premium before the full library detail takes over.
+                {selectedCard ? getCardMeta(selectedCard) : ''}
               </Text>
-              <Pressable testID="screen-draw-result-detail-close" style={styles.primaryButton} onPress={() => setSelectedCardId(null)}>
+              <Pressable
+                testID="screen-draw-result-detail-close"
+                style={styles.primaryButton}
+                accessibilityRole="button"
+                accessibilityLabel="Close detail"
+                accessibilityHint="Closes the reward detail modal."
+                onPress={() => setSelectedCardId(null)}
+              >
                 <Text style={styles.primaryButtonText} numberOfLines={1}>
                   Close detail
                 </Text>
@@ -378,18 +439,18 @@ const styles = StyleSheet.create({
   stateCard: {
     borderRadius: spacing.lg,
     padding: spacing.md + 2,
-    backgroundColor: DRAW_RESULT_COLOR.heroShell,
+    backgroundColor: drawResultColors.heroShell,
     borderWidth: 1,
-    borderColor: DRAW_RESULT_COLOR.afterglowBorder,
+    borderColor: drawResultColors.afterglowBorder,
   },
   stateTitle: { color: colors.cosmicInk, fontSize: typography.title2, lineHeight: 28, fontWeight: '900', textAlign: 'center' },
-  stateBody: { marginTop: spacing.xs, color: DRAW_RESULT_COLOR.copyMuted, fontSize: typography.bodySmall, lineHeight: 18, textAlign: 'center' },
+  stateBody: { marginTop: spacing.xs, color: drawResultColors.copyMuted, fontSize: typography.bodySmall, lineHeight: 18, textAlign: 'center' },
   heroShell: {
     borderRadius: 28,
     padding: spacing.md + 4,
-    backgroundColor: DRAW_RESULT_COLOR.heroShell,
+    backgroundColor: drawResultColors.heroShell,
     borderWidth: 1,
-    borderColor: DRAW_RESULT_COLOR.heroBorder,
+    borderColor: drawResultColors.heroBorder,
     overflow: 'hidden',
   },
   sparkLayer: { ...StyleSheet.absoluteFillObject },
@@ -399,30 +460,29 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
   },
   eyebrow: { color: colors.glowGold, fontSize: typography.caption, fontWeight: '800', letterSpacing: 1.4, fontFamily: 'Courier' },
-  title: { marginTop: spacing.sm - 2, fontSize: 30, lineHeight: 36, fontWeight: '900', color: DRAW_RESULT_COLOR.copyPrimary },
-  body: { marginTop: spacing.sm - 2, fontSize: typography.bodySmall, lineHeight: 19, color: DRAW_RESULT_COLOR.copyMuted },
+  title: { marginTop: spacing.sm - 2, fontSize: 30, lineHeight: 36, fontWeight: '900', color: drawResultColors.copyPrimary },
+  body: { marginTop: spacing.sm - 2, fontSize: typography.bodySmall, lineHeight: 19, color: drawResultColors.copyMuted },
   afterglowPill: {
     marginTop: spacing.sm + 2,
     borderRadius: 18,
     paddingHorizontal: spacing.sm + 2,
     paddingVertical: spacing.sm,
-    backgroundColor: DRAW_RESULT_COLOR.afterglowShell,
+    backgroundColor: drawResultColors.afterglowShell,
     borderWidth: 1,
-    borderColor: DRAW_RESULT_COLOR.afterglowBorder,
+    borderColor: drawResultColors.afterglowBorder,
   },
   afterglowLabel: { color: colors.glowGold, fontSize: typography.caption, fontWeight: '900', letterSpacing: 1.1, fontFamily: 'Courier' },
   afterglowValue: { marginTop: spacing.xs, fontSize: typography.bodySmall, fontWeight: '900' },
-  afterglowLeg: { color: DRAW_RESULT_COLOR.legText },
-  afterglowRar: { color: DRAW_RESULT_COLOR.rarText },
-  afterglowCom: { color: DRAW_RESULT_COLOR.comText },
-  afterglowCue: { marginTop: spacing.xs, fontSize: 12, lineHeight: 17, color: colors.cosmicInk },
+  afterglowLeg: { color: drawResultColors.legText },
+  afterglowRar: { color: drawResultColors.rarText },
+  afterglowCom: { color: drawResultColors.comText },
   featuredCard: {
     marginTop: spacing.sm + 6,
     borderRadius: 24,
     padding: spacing.sm + 6,
     minHeight: 220,
     justifyContent: 'flex-end',
-    shadowColor: DRAW_RESULT_COLOR.black,
+    shadowColor: drawResultColors.black,
     shadowOpacity: 0.22,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 10 },
@@ -432,21 +492,21 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   featuredLeg: { backgroundColor: colors.gold },
-  featuredRar: { backgroundColor: DRAW_RESULT_COLOR.featuredRar },
-  featuredCom: { backgroundColor: DRAW_RESULT_COLOR.featuredCom },
+  featuredRar: { backgroundColor: drawResultColors.featuredRar },
+  featuredCom: { backgroundColor: drawResultColors.featuredCom },
   featuredBadge: {
     alignSelf: 'flex-start',
     borderRadius: 999,
     paddingHorizontal: spacing.sm - 2,
     paddingVertical: 5,
-    backgroundColor: DRAW_RESULT_COLOR.featuredBadgeBg,
-    color: DRAW_RESULT_COLOR.featuredBadgeText,
+    backgroundColor: drawResultColors.featuredBadgeBg,
+    color: drawResultColors.featuredBadgeText,
     fontSize: typography.caption,
     fontWeight: '900',
     overflow: 'hidden',
   },
-  featuredQuestion: { marginTop: spacing.sm + 2, fontSize: typography.title1, lineHeight: 34, fontWeight: '900', color: DRAW_RESULT_COLOR.whiteSoft },
-  featuredMeta: { marginTop: spacing.sm - 2, fontSize: 12, color: DRAW_RESULT_COLOR.whiteSoftMuted, fontWeight: '700' },
+  featuredQuestion: { marginTop: spacing.sm + 2, fontSize: typography.title1, lineHeight: 34, fontWeight: '900', color: drawResultColors.whiteSoft },
+  featuredMeta: { marginTop: spacing.sm - 2, fontSize: 12, color: drawResultColors.whiteSoftMuted, fontWeight: '700' },
   summaryRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.sm + 2, marginBottom: spacing.sm + 2 },
   summaryChip: {
     marginRight: spacing.xs,
@@ -458,9 +518,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     overflow: 'hidden',
   },
-  summaryChipLeg: { backgroundColor: DRAW_RESULT_COLOR.summaryLegBg, color: DRAW_RESULT_COLOR.summaryLegText },
-  summaryChipRar: { backgroundColor: DRAW_RESULT_COLOR.summaryRarBg, color: DRAW_RESULT_COLOR.summaryRarText },
-  summaryChipCom: { backgroundColor: DRAW_RESULT_COLOR.summaryComBg, color: DRAW_RESULT_COLOR.summaryComText },
+  summaryChipLeg: { backgroundColor: drawResultColors.summaryLegBg, color: drawResultColors.summaryLegText },
+  summaryChipRar: { backgroundColor: drawResultColors.summaryRarBg, color: drawResultColors.summaryRarText },
+  summaryChipCom: { backgroundColor: drawResultColors.summaryComBg, color: drawResultColors.summaryComText },
   gridWrap: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   card: {
     width: '48%',
@@ -472,13 +532,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   cardTall: { width: '100%', minHeight: 150 },
-  comCard: { backgroundColor: 'rgba(239,230,204,0.94)', borderColor: 'rgba(140,122,91,0.18)' },
-  rarCard: { backgroundColor: 'rgba(232,224,240,0.96)', borderColor: 'rgba(110,76,159,0.16)' },
-  legCard: { backgroundColor: 'rgba(249,232,196,0.98)', borderColor: 'rgba(200,136,58,0.18)' },
-  cardRarity: { fontSize: typography.caption, fontWeight: '900', color: DRAW_RESULT_COLOR.cardRarity },
-  cardTag: { marginTop: 6, fontSize: 10, fontWeight: '800', color: DRAW_RESULT_COLOR.cardTag, letterSpacing: 0.7 },
+  comCard: { backgroundColor: drawResultColors.comCardBg, borderColor: drawResultColors.comCardBorder },
+  rarCard: { backgroundColor: drawResultColors.rarCardBg, borderColor: drawResultColors.rarCardBorder },
+  legCard: { backgroundColor: drawResultColors.legCardBg, borderColor: drawResultColors.legCardBorder },
+  cardRarity: { fontSize: typography.caption, fontWeight: '900', color: drawResultColors.cardRarity },
+  cardTag: { marginTop: 6, fontSize: 10, fontWeight: '800', color: drawResultColors.cardTag, letterSpacing: 0.7 },
   cardTitle: { marginTop: spacing.xs + 2, fontSize: 14, lineHeight: 19, fontWeight: '800', color: colors.ink },
-  cardMeta: { marginTop: spacing.xs + 2, fontSize: typography.caption, color: DRAW_RESULT_COLOR.cardMeta },
+  cardMeta: { marginTop: spacing.xs + 2, fontSize: typography.caption, color: drawResultColors.cardMeta },
   buttonStack: { marginTop: spacing.sm - 2 },
   primaryButton: {
     borderRadius: 16,
@@ -493,46 +553,33 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 8 },
   },
-  primaryButtonText: { color: DRAW_RESULT_COLOR.primaryText, fontSize: typography.button, fontWeight: '900' },
+  primaryButtonText: { color: drawResultColors.primaryText, fontSize: typography.button, fontWeight: '900' },
   secondaryButton: {
     marginTop: spacing.sm - 2,
     borderRadius: 16,
     minHeight: a11y.minTouch,
-    backgroundColor: DRAW_RESULT_COLOR.secondaryBg,
+    backgroundColor: drawResultColors.secondaryBg,
     paddingHorizontal: spacing.md,
     paddingVertical: 15,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: DRAW_RESULT_COLOR.secondaryBorder,
+    borderColor: drawResultColors.secondaryBorder,
   },
   secondaryButtonText: { color: colors.ink, fontSize: 14, fontWeight: '800' },
-  ghostButton: {
-    marginTop: spacing.sm - 2,
-    borderRadius: 16,
-    minHeight: a11y.minTouch,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: DRAW_RESULT_COLOR.ghostBorder,
-    backgroundColor: DRAW_RESULT_COLOR.ghostBg,
-  },
-  ghostButtonText: { color: DRAW_RESULT_COLOR.copyPrimary, fontSize: 14, fontWeight: '800' },
   pressed: { opacity: 0.92 },
   modalOverlay: {
     flex: 1,
-    backgroundColor: DRAW_RESULT_COLOR.modalOverlay,
+    backgroundColor: drawResultColors.modalOverlay,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
   },
   modalCard: { width: '100%', borderRadius: spacing.lg, padding: spacing.md + 4, backgroundColor: colors.parchmentBg },
   modalRarity: { fontSize: typography.caption, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.1 },
-  modalRarityLeg: { color: DRAW_RESULT_COLOR.summaryLegText },
-  modalRarityRar: { color: DRAW_RESULT_COLOR.summaryRarText },
-  modalRarityCom: { color: DRAW_RESULT_COLOR.summaryComText },
+  modalRarityLeg: { color: drawResultColors.summaryLegText },
+  modalRarityRar: { color: drawResultColors.summaryRarText },
+  modalRarityCom: { color: drawResultColors.summaryComText },
   modalTitle: { marginTop: spacing.sm - 2, fontSize: typography.title2, lineHeight: 28, fontWeight: '900', color: colors.ink },
-  modalBody: { marginTop: spacing.xs, fontSize: typography.bodySmall, lineHeight: 19, color: DRAW_RESULT_COLOR.modalCopy },
+  modalBody: { marginTop: spacing.xs, fontSize: typography.bodySmall, lineHeight: 19, color: drawResultColors.modalCopy },
 });

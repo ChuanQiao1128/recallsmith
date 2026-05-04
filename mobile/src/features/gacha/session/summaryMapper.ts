@@ -1,4 +1,3 @@
-import { FREE_PULL_CAP } from '../constants';
 import type { HomeCtaKind } from '../selectors/homeSelectors';
 import type { ResolvedSessionReward } from '../rewards/rewardResolver';
 import { resolveSessionReward } from '../rewards/rewardResolver';
@@ -36,6 +35,15 @@ export const COPY = {
       `${newToLearning} cards entered Learning · ${learningToMastered} cards mastered`,
   },
   nextAction: {
+    fullClearTitle: 'Cleared today. What now?',
+    streakSavedTitle: 'Streak saved. Keep moving?',
+    progressTitle: 'Progress saved. Keep going?',
+    emptyTitle: 'No run logged yet',
+    libraryTitle: 'Library is ready',
+    drawBody: 'Continue your day, then open draw when you want to spend pulls.',
+    homeBody: 'Continue to Home for the next run.',
+    libraryBody: "Browse your library to review today's updates.",
+    emptyBody: "Browse your library while we wait for tomorrow's run.",
     continue: 'Continue',
     openLibrary: 'Open library',
     backHome: 'Back home',
@@ -67,6 +75,8 @@ export type SessionSummaryVM = {
     };
   };
   nextAction: {
+    title: string;
+    body: string;
     primary: { label: string; kind: HomeCtaKind };
     secondary: { label: string; kind: HomeCtaKind } | null;
   };
@@ -112,6 +122,32 @@ function resolvePrimaryAction(params: {
   }
 
   return { label: COPY.nextAction.openLibrary, kind: 'nothing_to_learn' };
+}
+
+function resolveNextActionCopy(params: {
+  resolvedReward: ResolvedSessionReward;
+  hasActivity: boolean;
+  primaryKind: HomeCtaKind;
+}): { title: string; body: string } {
+  const { resolvedReward, hasActivity, primaryKind } = params;
+
+  if (!hasActivity) {
+    return { title: COPY.nextAction.emptyTitle, body: COPY.nextAction.emptyBody };
+  }
+
+  if (primaryKind === 'nothing_to_learn') {
+    return { title: COPY.nextAction.libraryTitle, body: COPY.nextAction.libraryBody };
+  }
+
+  if (resolvedReward.completedFullRun) {
+    return { title: COPY.nextAction.fullClearTitle, body: COPY.nextAction.drawBody };
+  }
+
+  if (resolvedReward.completedMinimumGoal) {
+    return { title: COPY.nextAction.streakSavedTitle, body: COPY.nextAction.homeBody };
+  }
+
+  return { title: COPY.nextAction.progressTitle, body: COPY.nextAction.homeBody };
 }
 
 export function buildSessionSummaryVM(params: {
@@ -200,6 +236,11 @@ export function buildSessionSummaryVM(params: {
 
   const primaryAction = resolvePrimaryAction({ dueCount, resolvedReward });
   const secondaryAction = { label: COPY.nextAction.backHome, kind: 'today_done' as HomeCtaKind };
+  const nextActionCopy = resolveNextActionCopy({
+    resolvedReward,
+    hasActivity: sessionDone > 0 || dueCount > 0 || resolvedReward.rewardPulls > 0 || (streakAfter ?? 0) > 0,
+    primaryKind: primaryAction.kind,
+  });
 
   const vm: SessionSummaryVM = {
     reward: {
@@ -232,6 +273,8 @@ export function buildSessionSummaryVM(params: {
       transitions: transitionSummary,
     },
     nextAction: {
+      title: nextActionCopy.title,
+      body: nextActionCopy.body,
       primary: primaryAction,
       secondary: secondaryAction,
     },

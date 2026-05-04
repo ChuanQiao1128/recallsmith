@@ -9,6 +9,7 @@ import { RewardSummaryCard } from '../features/gacha/components/RewardSummaryCar
 import { SummaryProgressBlock } from '../features/gacha/components/SummaryProgressBlock';
 import { buildDrawState } from '../features/gacha/draw/drawState';
 import { resolveNewMilestones, type Milestone } from '../features/gacha/milestones/milestoneTracker';
+import { computeSessionRewardPulls } from '../features/gacha/rewards/rewardResolver';
 import { applySessionRewardToWallet, loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { buildSessionSummaryVM } from '../features/gacha/session/summaryMapper';
 import { applySessionStreak, loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
@@ -61,7 +62,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
     (async () => {
       try {
         if (sessionId) {
-          const rewardPulls = sessionLimit > 0 && sessionDone >= sessionLimit ? 2 : sessionDone >= minimumGoal ? 1 : 0;
+          const rewardPulls = computeSessionRewardPulls({ sessionDone, sessionLimit, minimumGoal });
           const [rewardResult, streakResult] = await Promise.all([
             applySessionRewardToWallet(sessionId, rewardPulls),
             applySessionStreak({ sessionId, earned: streakEarned }),
@@ -132,6 +133,8 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
   );
 
   const latestMilestone = newMilestones[0] ?? null;
+  const extraMilestonesCount = Math.max(0, newMilestones.length - 1);
+  const extraMilestonesLabel = extraMilestonesCount > 0 ? `+${extraMilestonesCount} more milestone${extraMilestonesCount === 1 ? '' : 's'} unlocked` : null;
 
   const streakBefore = streakBeforeSnapshot?.currentDailyStreak ?? streakAfterSnapshot?.currentDailyStreak ?? 0;
   const streakAfter = streakAfterSnapshot?.currentDailyStreak ?? streakBefore;
@@ -141,20 +144,14 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
   const isSummaryLoading = summaryResolveStatus === 'loading';
   const isSummaryEmpty = summaryResolveStatus === 'ready' && !summaryHasActivity;
 
-  const actionTitle = isSummaryError ? 'Refresh summary' : isSummaryEmpty ? 'No run logged yet' : 'Next action';
+  const actionTitle = isSummaryError ? 'Refresh summary' : summary.vm.nextAction.title;
 
   const actionBody =
     isSummaryError
       ? (summaryResolveError ?? 'Unable to refresh reward and streak details right now.')
       : isSummaryLoading
         ? 'Wrapping up reward and streak details...'
-        : isSummaryEmpty
-          ? 'Open your library to choose cards for the next run.'
-          : summary.vm.nextAction.primary.kind === 'nothing_to_learn'
-            ? "Open your library to review today's updates."
-            : drawVm.canOpen
-              ? 'Continue your day, then open draw when you want to spend pulls.'
-              : 'Continue to Home for the next run.';
+        : summary.vm.nextAction.body;
 
   const primaryActionLabel = isSummaryLoading
     ? 'Updating...'
@@ -225,6 +222,11 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
               <Text numberOfLines={2} style={styles.cardBody}>
                 {latestMilestone.body}
               </Text>
+              {extraMilestonesLabel ? (
+                <Text numberOfLines={1} style={styles.cardMeta}>
+                  {extraMilestonesLabel}
+                </Text>
+              ) : null}
             </View>
           ) : null}
 
@@ -350,6 +352,7 @@ const styles = StyleSheet.create({
   },
   cardTitle: { marginTop: 4, color: colors.ink, fontSize: typography.title3, lineHeight: 22, fontWeight: '800' },
   cardBody: { marginTop: 6, color: colors.inkSecondary, fontSize: typography.bodySmall, lineHeight: 18 },
+  cardMeta: { marginTop: 8, color: colors.mint, fontSize: typography.caption, lineHeight: 16, fontWeight: '800' },
   actionCard: {
     borderRadius: spacing.lg,
     padding: spacing.md,

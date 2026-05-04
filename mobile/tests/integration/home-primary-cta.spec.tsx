@@ -4,6 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 let progressFixture: any[] = [];
 let viewportWidth = 390;
+let authFixture = {
+  status: 'signed_out',
+  accessToken: '',
+  userSub: null as string | null,
+};
+let cachedPremiumFixture = false;
+const fetchServerPremiumMock = vi.fn(async (_token: string) => false);
+const resolveDeckActionMock = vi.fn(async (_input: any) => ({ kind: 'open', slug: 'csharp' }));
+const executeDeckActionMock = vi.fn(async (_action: any) => ({ activeSlug: 'csharp' }));
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -109,8 +118,8 @@ vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
     };
   }),
   loadDeckUpdates: vi.fn(async () => ({})),
-  resolveDeckAction: vi.fn(async () => ({ kind: 'open', slug: 'csharp' })),
-  executeDeckAction: vi.fn(async () => ({ activeSlug: 'csharp' })),
+  resolveDeckAction: (input: any) => resolveDeckActionMock(input),
+  executeDeckAction: (action: any) => executeDeckActionMock(action),
 }));
 
 vi.mock('../../src/review/storage', () => ({
@@ -129,20 +138,20 @@ vi.mock('../../src/sync/progressSync', () => ({
 vi.mock('../../src/auth/authStore', () => ({
   useAuthStore: (selector: any) =>
     selector({
-      status: 'signed_out',
-      accessToken: '',
+      status: authFixture.status,
+      accessToken: authFixture.accessToken,
       init: vi.fn(async () => {}),
-      userSub: null,
+      userSub: authFixture.userSub,
     }),
 }));
 
 vi.mock('../../src/premium/premiumStore', () => ({
-  usePremiumUser: () => false,
+  usePremiumUser: () => cachedPremiumFixture,
   setIsPremiumUser: vi.fn(async () => {}),
 }));
 
 vi.mock('../../src/features/gacha/home/homeRemote', () => ({
-  fetchServerPremium: vi.fn(async () => false),
+  fetchServerPremium: (token: string) => fetchServerPremiumMock(token),
 }));
 
 vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
@@ -160,14 +169,6 @@ vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
   })),
 }));
 
-vi.mock('../../src/features/gacha/components/TodayPressureCard', () => {
-  const React = require('react');
-  return {
-    __esModule: true,
-    default: () => React.createElement('View', null, React.createElement('Text', null, 'TodayPressureCard')),
-  };
-});
-
 import { HomeScreen } from '../../src/screens/HomeScreen';
 
 async function flush() {
@@ -181,6 +182,16 @@ describe('home primary CTA uniqueness', () => {
   beforeEach(() => {
     progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
     viewportWidth = 390;
+    authFixture = {
+      status: 'signed_out',
+      accessToken: '',
+      userSub: null,
+    };
+    cachedPremiumFixture = false;
+    fetchServerPremiumMock.mockReset();
+    fetchServerPremiumMock.mockResolvedValue(false);
+    resolveDeckActionMock.mockClear();
+    executeDeckActionMock.mockClear();
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   });
 
@@ -224,6 +235,17 @@ describe('home primary CTA uniqueness', () => {
         .join('\n');
       expect(textBlob).not.toContain('Peek at reward draw');
       expect(textBlob).not.toContain('Start first draw');
+      expect(textBlob).toContain('Normal');
+      expect(textBlob).toContain('Elite');
+      expect(textBlob).toContain('Boss');
+      expect(textBlob).toContain('Total');
+
+      const metricStyle = tree.root.findByProps({ testID: 'home-today-count-total' }).props.style;
+      expect(metricStyle).toEqual(
+        expect.arrayContaining([
+          width < 390 ? expect.objectContaining({ width: '48%' }) : expect.objectContaining({ flex: 1 }),
+        ]),
+      );
     },
   );
 
@@ -243,21 +265,16 @@ describe('home primary CTA uniqueness', () => {
     const weekToggle = tree.root.find(
       (node) => node.props?.testID === 'home-collapse-week-support-toggle',
     );
-    const drawToggle = tree.root.find(
-      (node) => node.props?.testID === 'home-collapse-draw-support-toggle',
-    );
 
     expect(decksToggle.props.accessibilityRole).toBe('button');
     expect(weekToggle.props.accessibilityRole).toBe('button');
-    expect(drawToggle.props.accessibilityRole).toBe('button');
     expect(decksToggle.props.accessibilityState).toEqual({ expanded: false });
     expect(weekToggle.props.accessibilityState).toEqual({ expanded: false });
-    expect(drawToggle.props.accessibilityState).toEqual({ expanded: false });
+    expect(tree.root.findAll((node) => node.props?.testID === 'home-collapse-draw-support-toggle')).toHaveLength(0);
 
     act(() => {
       decksToggle.props.onPress();
       weekToggle.props.onPress();
-      drawToggle.props.onPress();
     });
 
     expect(
@@ -268,9 +285,43 @@ describe('home primary CTA uniqueness', () => {
       tree.root.find((node) => node.props?.testID === 'home-collapse-week-support-toggle').props
         .accessibilityState,
     ).toEqual({ expanded: true });
-    expect(
-      tree.root.find((node) => node.props?.testID === 'home-collapse-draw-support-toggle').props
-        .accessibilityState,
-    ).toEqual({ expanded: true });
+  });
+
+  it('keeps cached premium active when the server premium check fails', async () => {
+    cachedPremiumFixture = true;
+    authFixture = {
+      status: 'signed_in',
+      accessToken: 'access-token',
+      userSub: 'premium-user',
+    };
+    fetchServerPremiumMock.mockRejectedValueOnce(new Error('network'));
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'home', name: 'Home' } as any}
+        />,
+      );
+    });
+    await flush();
+
+    act(() => {
+      tree.root.find((node) => node.props?.testID === 'home-collapse-decks-toggle').props.onPress();
+    });
+
+    await act(async () => {
+      tree.root.find((node) => node.props?.testID === 'home-deck-row-csharp').props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(fetchServerPremiumMock).toHaveBeenCalledWith('access-token');
+    expect(resolveDeckActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        premium: true,
+        signedIn: true,
+      }),
+    );
   });
 });

@@ -74,6 +74,7 @@ describe('buildLibraryVM', () => {
     const rows = buildLibraryCardRows({ deck: sampleDeck, progress: sampleProgress, now: NOW });
 
     expect(rows.map((row) => row.status)).toEqual(['new', 'learning', 'mastered', 'new']);
+    expect(rows.map((row) => row.badgeTone)).toEqual(['new', 'learning', 'mastered', 'new']);
     expect(rows[1].isDueToday).toBe(true);
     expect(rows[1].isUpdated).toBe(true);
   });

@@ -18,6 +18,7 @@ import { listManifestDecks, resolveDeckBySlug } from '../content/deckRepository'
 import { loadDeckProgress } from '../review/storage';
 import {
   buildLibraryVM,
+  type LibraryCardBadgeTone,
   type LibraryDeckOption,
   type LibraryFilter,
   type LibraryViewModel,
@@ -28,6 +29,82 @@ import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 type Props = NativeStackScreenProps<RootStackParamList, 'Library'>;
+
+type LibraryHeaderProps = {
+  vm: LibraryViewModel;
+  onSelectDeck: (slug: string) => void;
+  onSelectFilter: (filter: LibraryFilter) => void;
+};
+
+function LibraryHeader({ vm, onSelectDeck, onSelectFilter }: LibraryHeaderProps) {
+  return (
+    <View>
+      <Text style={styles.eyebrow} numberOfLines={1}>
+        Library
+      </Text>
+      <Text style={styles.title} numberOfLines={2}>
+        {vm.title}
+      </Text>
+      <Text style={styles.subtitle} numberOfLines={1}>
+        {vm.subtitle}
+      </Text>
+      {vm.decks.length > 1 ? (
+        <View style={styles.deckSwitcher} testID="library-deck-switcher">
+          {vm.decks.map((deckOption) => {
+            const selectedDeck = deckOption.slug === vm.selectedDeckSlug;
+            return (
+              <Pressable
+                key={deckOption.slug}
+                testID={`library-deck-${deckOption.slug}`}
+                style={({ pressed }) => [
+                  styles.deckChip,
+                  selectedDeck && styles.deckChipActive,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => onSelectDeck(deckOption.slug)}
+              >
+                <Text style={[styles.deckChipText, selectedDeck && styles.deckChipTextActive]} numberOfLines={1}>
+                  {deckOption.title}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+      <View style={styles.filterRow}>
+        {vm.filters.map((chip) => {
+          const selected = chip.key === vm.filter;
+          return (
+            <Pressable
+              key={chip.key}
+              testID={`library-filter-${chip.key}`}
+              style={({ pressed }) => [
+                styles.filterChip,
+                selected && styles.filterChipActive,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => onSelectFilter(chip.key)}
+            >
+              <Text style={[styles.filterChipText, selected && styles.filterChipTextActive]} numberOfLines={1}>
+                {chip.label}
+              </Text>
+              <Text style={[styles.filterChipCount, selected && styles.filterChipTextActive]} numberOfLines={1}>
+                {chip.count}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function getStatusBadgeToneStyle(tone: LibraryCardBadgeTone) {
+  if (tone === 'new') return styles.statusBadgeNew;
+  if (tone === 'learning') return styles.statusBadgeLearning;
+  return styles.statusBadgeMastered;
+}
+
 export function LibraryScreen({ navigation }: Props) {
   const { width } = useWindowDimensions();
   const [loading, setLoading] = useState(true);
@@ -161,69 +238,13 @@ export function LibraryScreen({ navigation }: Props) {
             contentContainerStyle={styles.container}
             showsVerticalScrollIndicator={false}
             columnWrapperStyle={numColumns > 1 ? styles.columnWrap : undefined}
-            ListHeaderComponent={(
-              <View>
-                <Text style={styles.eyebrow} numberOfLines={1}>
-                  Library
-                </Text>
-                <Text style={styles.title} numberOfLines={2}>
-                  {vm.title}
-                </Text>
-                <Text style={styles.subtitle} numberOfLines={1}>
-                  {vm.subtitle}
-                </Text>
-                <Text style={styles.statusLine} numberOfLines={1}>
-                  {vm.drawStatusLabel}
-                </Text>
-                {vm.decks.length > 1 ? (
-                  <View style={styles.deckSwitcher} testID="library-deck-switcher">
-                    {vm.decks.map((deckOption) => {
-                      const selectedDeck = deckOption.slug === vm.selectedDeckSlug;
-                      return (
-                        <Pressable
-                          key={deckOption.slug}
-                          testID={`library-deck-${deckOption.slug}`}
-                          style={({ pressed }) => [
-                            styles.deckChip,
-                            selectedDeck && styles.deckChipActive,
-                            pressed && styles.pressed,
-                          ]}
-                          onPress={() => void refresh(deckOption.slug)}
-                        >
-                          <Text style={[styles.deckChipText, selectedDeck && styles.deckChipTextActive]} numberOfLines={1}>
-                            {deckOption.title}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                ) : null}
-                <View style={styles.filterRow}>
-                  {vm.filters.map((chip) => {
-                    const selected = chip.key === vm.filter;
-                    return (
-                      <Pressable
-                        key={chip.key}
-                        testID={`library-filter-${chip.key}`}
-                        style={({ pressed }) => [
-                          styles.filterChip,
-                          selected && styles.filterChipActive,
-                          pressed && styles.pressed,
-                        ]}
-                        onPress={() => setFilter(chip.key)}
-                      >
-                        <Text style={[styles.filterChipText, selected && styles.filterChipTextActive]} numberOfLines={1}>
-                          {chip.label}
-                        </Text>
-                        <Text style={[styles.filterChipCount, selected && styles.filterChipTextActive]} numberOfLines={1}>
-                          {chip.count}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
-            )}
+            ListHeaderComponent={
+              <LibraryHeader
+                vm={vm}
+                onSelectDeck={(slug) => void refresh(slug)}
+                onSelectFilter={setFilter}
+              />
+            }
             ListEmptyComponent={(
               <View style={styles.emptyState} testID="library-empty-state">
                 <Text style={styles.errorTitle} numberOfLines={2}>
@@ -246,7 +267,7 @@ export function LibraryScreen({ navigation }: Props) {
                   testID="library-empty-cta"
                 >
                   <Text style={styles.retryText} numberOfLines={1}>
-                    {vm.filter === 'all' ? 'Open deck gate' : 'Show all cards'}
+                    {vm.filter === 'all' ? 'Install a deck' : 'Show all cards'}
                   </Text>
                 </Pressable>
               </View>
@@ -261,11 +282,14 @@ export function LibraryScreen({ navigation }: Props) {
                 testID={`library-card-${item.stableUid}`}
                 onPress={() => navigation.navigate('CardDetail', { cardId: item.stableUid })}
               >
-                <Text style={styles.cardQuestion} numberOfLines={1}>
+                <Text style={styles.cardQuestion} numberOfLines={2}>
                   {item.question}
                 </Text>
                 <View style={styles.badgeRow}>
-                  <View style={styles.statusBadge}>
+                  <View
+                    style={[styles.statusBadge, getStatusBadgeToneStyle(item.badgeTone)]}
+                    testID={`library-card-status-${item.stableUid}`}
+                  >
                     <Text style={styles.statusBadgeText} numberOfLines={1}>
                       {item.statusLabel}
                     </Text>
@@ -296,7 +320,6 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: typography.caption, color: colors.gold, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 },
   title: { marginTop: spacing.xs, fontSize: typography.title2, color: colors.ink, fontWeight: '900' },
   subtitle: { marginTop: spacing.xs, fontSize: typography.bodySmall, color: colors.inkSecondary },
-  statusLine: { marginTop: spacing.sm, fontSize: typography.caption, color: colors.inkSecondary },
   deckSwitcher: { marginTop: spacing.md, flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   deckChip: { minHeight: 44, minWidth: 92, paddingHorizontal: spacing.sm, borderRadius: 999, borderWidth: 1, borderColor: colors.inkSecondary, backgroundColor: colors.parchmentBg, alignItems: 'center', justifyContent: 'center' },
   deckChipActive: { borderColor: colors.ink, backgroundColor: colors.ink },
@@ -314,6 +337,9 @@ const styles = StyleSheet.create({
   cardThreeColumns: { maxWidth: '31%' },
   cardQuestion: { fontSize: typography.bodySmall, color: colors.ink, fontWeight: '700' },
   badgeRow: { marginTop: spacing.sm, flexDirection: 'row', alignItems: 'center' },
-  statusBadge: { borderRadius: 999, paddingHorizontal: spacing.xs, paddingVertical: 4, backgroundColor: colors.glowGold },
+  statusBadge: { borderRadius: 999, paddingHorizontal: spacing.xs, paddingVertical: 4 },
+  statusBadgeNew: { backgroundColor: colors.mint },
+  statusBadgeLearning: { backgroundColor: colors.gold },
+  statusBadgeMastered: { backgroundColor: colors.glowGold },
   statusBadgeText: { fontSize: typography.caption, color: colors.ink, fontWeight: '700' },
 });

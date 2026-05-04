@@ -6,6 +6,26 @@ let progressFixture: any[] = [];
 const setActiveDeckSlugMock = vi.fn(async (_slug?: string) => {});
 const loadActiveDeckSlugMock = vi.fn(async () => 'csharp');
 const navigateMock = vi.fn();
+let manifestDecksFixture: any[] = [
+  { slug: 'csharp', title: 'C# Interview', locale: 'en-US', version: '1', deckType: 1, totalCards: 1, availability: 'live' },
+];
+let resolvedDeckFixture: any = {
+  Slug: 'csharp',
+  Title: 'C# Interview',
+  Locale: 'en-US',
+  Version: '1',
+  DeckType: 1,
+  TotalCards: 1,
+  Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' }],
+};
+const resolveDeckBySlugMock = vi.fn(async (_slug: string) => resolvedDeckFixture);
+let authFixture = {
+  status: 'signed_out',
+  accessToken: '',
+  userSub: null as string | null,
+};
+let cachedPremiumFixture = false;
+const fetchServerPremiumMock = vi.fn(async (_token: string) => false);
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -63,18 +83,8 @@ vi.mock('../../src/content/activeDeck', () => ({
 
 vi.mock('../../src/content/deckRepository', () => ({
   checkManifestForUpdates: vi.fn(async () => ({})),
-  listManifestDecks: vi.fn(async () => [
-    { slug: 'csharp', title: 'C# Interview', locale: 'en-US', version: '1', deckType: 1, totalCards: 1, availability: 'live' },
-  ]),
-  resolveDeckBySlug: vi.fn(async () => ({
-    Slug: 'csharp',
-    Title: 'C# Interview',
-    Locale: 'en-US',
-    Version: '1',
-    DeckType: 1,
-    TotalCards: 1,
-    Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' }],
-  })),
+  listManifestDecks: vi.fn(async () => manifestDecksFixture),
+  resolveDeckBySlug: (slug: string) => resolveDeckBySlugMock(slug),
   installDeckFromUrl: vi.fn(async () => true),
 }));
 
@@ -92,17 +102,17 @@ vi.mock('../../src/sync/progressSync', () => ({
 }));
 
 vi.mock('../../src/premium/premiumStore', () => ({
-  usePremiumUser: () => false,
+  usePremiumUser: () => cachedPremiumFixture,
   setIsPremiumUser: vi.fn(),
 }));
 
 vi.mock('../../src/auth/authStore', () => ({
   useAuthStore: (selector: any) =>
     selector({
-      status: 'signed_out',
-      accessToken: '',
+      status: authFixture.status,
+      accessToken: authFixture.accessToken,
       init: vi.fn(async () => {}),
-      userSub: null,
+      userSub: authFixture.userSub,
       loading: false,
     }),
 }));
@@ -138,7 +148,7 @@ vi.mock('../../src/features/gacha/components/RoutePreview', () => {
 
 vi.mock('../../src/features/gacha/home/homeRemote', () => ({
   fetchPremiumDeckUrl: vi.fn(async () => null),
-  fetchServerPremium: vi.fn(async () => false),
+  fetchServerPremium: (token: string) => fetchServerPremiumMock(token),
 }));
 
 vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
@@ -173,6 +183,10 @@ function findPressableByLabel(tree: renderer.ReactTestRenderer, label: string) {
   );
 }
 
+function findPressablesByTestID(tree: renderer.ReactTestRenderer, testID: string) {
+  return tree.root.findAll((node) => (node.type as any) === 'Pressable' && node.props?.testID === testID);
+}
+
 describe('HomeScreen', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -180,6 +194,28 @@ describe('HomeScreen', () => {
 
   beforeEach(() => {
     progressFixture = [];
+    manifestDecksFixture = [
+      { slug: 'csharp', title: 'C# Interview', locale: 'en-US', version: '1', deckType: 1, totalCards: 1, availability: 'live' },
+    ];
+    resolvedDeckFixture = {
+      Slug: 'csharp',
+      Title: 'C# Interview',
+      Locale: 'en-US',
+      Version: '1',
+      DeckType: 1,
+      TotalCards: 1,
+      Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' }],
+    };
+    resolveDeckBySlugMock.mockReset();
+    resolveDeckBySlugMock.mockImplementation(async () => resolvedDeckFixture);
+    authFixture = {
+      status: 'signed_out',
+      accessToken: '',
+      userSub: null,
+    };
+    cachedPremiumFixture = false;
+    fetchServerPremiumMock.mockReset();
+    fetchServerPremiumMock.mockResolvedValue(false);
     navigateMock.mockReset();
     setActiveDeckSlugMock.mockClear();
     loadActiveDeckSlugMock.mockClear();
@@ -229,7 +265,7 @@ describe('HomeScreen', () => {
     expect(navigateMock).toHaveBeenCalledWith('Library');
   });
 
-  it('keeps draw as a secondary entry without replacing the main CTA', async () => {
+  it('keeps draw support out of the default secondary drawers', async () => {
     progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
 
     let tree!: renderer.ReactTestRenderer;
@@ -238,15 +274,9 @@ describe('HomeScreen', () => {
     });
     await flush();
 
-    act(() => {
-      findPressableByLabel(tree, 'Draw support').props.onPress();
-    });
-
-    act(() => {
-      findPressableByLabel(tree, 'Peek at reward draw').props.onPress();
-    });
-
-    expect(navigateMock).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
+    expect(findPressablesByTestID(tree, 'home-collapse-decks-toggle')).toHaveLength(1);
+    expect(findPressablesByTestID(tree, 'home-collapse-week-support-toggle')).toHaveLength(1);
+    expect(findPressablesByTestID(tree, 'home-collapse-draw-support-toggle')).toHaveLength(0);
   });
 
   it('keeps home focused on the main route instead of support clutter', async () => {
@@ -271,7 +301,7 @@ describe('HomeScreen', () => {
     expect(textBlob).not.toContain('Reward draw');
   });
 
-  it('shows first draw coach and routes into draw', async () => {
+  it('shows first draw as a secondary hero link and routes into draw', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home', params: { firstDrawCoach: true } } as any} />);
@@ -279,17 +309,29 @@ describe('HomeScreen', () => {
     await flush();
 
     act(() => {
-      findPressableByLabel(tree, 'Draw support').props.onPress();
-    });
-
-    act(() => {
-      findPressableByLabel(tree, 'Start first draw').props.onPress();
+      tree.root.findByProps({ testID: 'home-first-draw-link' }).props.onPress();
     });
 
     expect(navigateMock).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
   });
 
-  it('renders churned state copy when mockState override is provided', async () => {
+  it('labels the icon-only Settings entry for assistive tech', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />);
+    });
+    await flush();
+
+    const settingsButtons = tree.root.findAll(
+      (node) =>
+        (node.type as any) === 'Pressable' && node.props?.accessibilityLabel === 'Settings',
+    );
+
+    expect(settingsButtons).toHaveLength(1);
+    expect(settingsButtons[0].props.accessibilityRole).toBe('button');
+  });
+
+  it('does not render v6 fallback state copy when mockState override is provided', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home', params: { mockState: 'churned' } } as any} />);
@@ -301,6 +343,73 @@ describe('HomeScreen', () => {
       return Array.isArray(c) ? c.join('') : String(c ?? '');
     }).join('\n');
 
-    expect(textBlob).toContain('Fresh start is available');
+    expect(textBlob).not.toContain('Fresh start is available');
+    expect(findPressablesByTestID(tree, 'home-primary-cta')).toHaveLength(1);
+  });
+
+  it('keeps refresh failures on a retry CTA instead of routing to Library', async () => {
+    progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
+    let shouldRejectDeck = true;
+    resolveDeckBySlugMock.mockImplementation(async () => {
+      if (shouldRejectDeck) {
+        throw new Error('deck read failed');
+      }
+      return resolvedDeckFixture;
+    });
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />);
+    });
+    await flush();
+    await flush();
+
+    const retryCta = findPressableByLabel(tree, 'Try again');
+    expect(retryCta.props.testID).toBe('home-primary-cta');
+
+    const callsBeforeRetry = resolveDeckBySlugMock.mock.calls.length;
+    shouldRejectDeck = false;
+    act(() => {
+      retryCta.props.onPress();
+    });
+    await flush();
+    await flush();
+
+    expect(resolveDeckBySlugMock.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+    expect(navigateMock).not.toHaveBeenCalledWith('Library');
+    expect(findPressableByLabel(tree, 'Start today’s challenge')).toBeTruthy();
+  });
+
+  it('uses cached premium while a server premium refresh fails', async () => {
+    manifestDecksFixture = [
+      { slug: 'csharp', title: 'Premium Deck', locale: 'en-US', version: '1', deckType: 2, totalCards: 10, availability: 'live' },
+    ];
+    resolvedDeckFixture = null;
+    authFixture = {
+      status: 'signed_in',
+      accessToken: 'access-token',
+      userSub: 'premium-user',
+    };
+    cachedPremiumFixture = true;
+    fetchServerPremiumMock.mockRejectedValueOnce(new Error('network'));
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />);
+    });
+    await flush();
+
+    act(() => {
+      findPressablesByTestID(tree, 'home-collapse-decks-toggle')[0].props.onPress();
+    });
+
+    await act(async () => {
+      findPressablesByTestID(tree, 'home-deck-row-csharp')[0].props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(fetchServerPremiumMock).toHaveBeenCalledWith('access-token');
+    expect(navigateMock).not.toHaveBeenCalledWith('Paywall');
+    expect(navigateMock).toHaveBeenCalledWith('Library');
   });
 });

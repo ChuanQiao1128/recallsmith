@@ -17,7 +17,7 @@ import {
   canAcceptMorePulls,
   loadRewardWalletState,
 } from '../../src/features/gacha/rewards/rewardWallet';
-import { resolveSessionReward } from '../../src/features/gacha/rewards/rewardResolver';
+import { computeSessionRewardPulls, resolveSessionReward } from '../../src/features/gacha/rewards/rewardResolver';
 
 describe('reward wallet', () => {
   beforeEach(() => {
@@ -54,6 +54,18 @@ describe('reward wallet', () => {
 
     expect(reward.rewardPulls).toBe(0);
     expect(reward.rewardMessage).toMatch(/progress saved/i);
+  });
+
+  it('computes no pulls below the minimum goal', () => {
+    expect(computeSessionRewardPulls({ sessionDone: 0, sessionLimit: 4, minimumGoal: 1 })).toBe(0);
+  });
+
+  it('computes one pull at the minimum goal', () => {
+    expect(computeSessionRewardPulls({ sessionDone: 1, sessionLimit: 4, minimumGoal: 1 })).toBe(1);
+  });
+
+  it('computes two pulls for a full clear', () => {
+    expect(computeSessionRewardPulls({ sessionDone: 4, sessionLimit: 4, minimumGoal: 1 })).toBe(2);
   });
 
   it('reports whether the wallet can still accept more pulls', () => {

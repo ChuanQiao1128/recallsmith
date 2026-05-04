@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -10,7 +10,6 @@ import { loadActiveDeckSlug } from '../content/activeDeck';
 import { listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress } from '../review/storage';
 import { buildDrawState } from '../features/gacha/draw/drawState';
-import { buildPityProgressLabel } from '../features/gacha/draw/pity';
 import { consumePullsFromStoredWallet, loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { getAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
 import { getAudiencePreferenceLabel } from '../features/gacha/audience/audienceRules';
@@ -47,6 +46,7 @@ type DrawLoadState = 'loading' | 'ready' | 'empty' | 'error';
 type Props = NativeStackScreenProps<RootStackParamList, 'Draw'>;
 
 export function DrawScreen({ navigation, route }: Props) {
+  const { height: viewportHeight } = useWindowDimensions();
   const slugFromRoute = route.params?.slug ?? null;
   const rewardPending = route.params?.rewardPending ?? false;
   const [loadState, setLoadState] = useState<DrawLoadState>('loading');
@@ -54,6 +54,7 @@ export function DrawScreen({ navigation, route }: Props) {
   const [retryToken, setRetryToken] = useState(0);
   const [wallet, setWallet] = useState<RewardWalletState>({ availablePulls: 0, reservePulls: 0 });
   const [slug, setSlug] = useState<string | null>(slugFromRoute);
+  const [deckTitle, setDeckTitle] = useState('No active pool');
   const [hasActivePool, setHasActivePool] = useState(false);
   const [hasTodayWork, setHasTodayWork] = useState(false);
   const [opening, setOpening] = useState(false);
@@ -79,6 +80,7 @@ export function DrawScreen({ navigation, route }: Props) {
           if (!nextSlug) {
             if (!cancelled) {
               setSlug(null);
+              setDeckTitle('No active pool');
               setHasActivePool(false);
               setWallet(nextWallet);
               setHasTodayWork(false);
@@ -91,16 +93,18 @@ export function DrawScreen({ navigation, route }: Props) {
 
           const deck = await resolveDeckBySlug(nextSlug);
           const progress = deck ? await loadDeckProgress(deck) : [];
+          const nextDeckTitle = deck?.Title?.trim() || nextSlug;
           const dueCount = progress.filter((item) => typeof item.nextReviewAt === 'number' && item.nextReviewAt > 0 && item.nextReviewAt <= Date.now()).length;
           const newCount = progress.filter((item) => !(typeof item.lastReviewedAt === 'number' && item.lastReviewedAt > 0)).length;
 
           if (!cancelled) {
             setSlug(nextSlug);
+            setDeckTitle(nextDeckTitle);
             setHasActivePool(!!deck);
             setWallet(nextWallet);
             setHasTodayWork(!!deck && (dueCount > 0 || newCount > 0));
             setAudiencePref(nextAudiencePref);
-            setPityBefore(8);
+            setPityBefore(0);
             setLoadState(deck ? 'ready' : 'empty');
           }
         } catch (error: any) {
@@ -123,8 +127,12 @@ export function DrawScreen({ navigation, route }: Props) {
     [wallet, hasTodayWork, rewardPending, hasActivePool],
   );
 
-  const deckTitle = !hasActivePool ? 'No active pool' : slug === 'aws' ? 'AWS SAA' : slug ? 'C# Interview' : 'No active pool';
-  const metaLine = `${wallet.availablePulls} token${wallet.availablePulls === 1 ? '' : 's'} · ${wallet.reservePulls} reserve · ${getAudiencePreferenceLabel(audiencePref)}`;
+  const metaLine = `${wallet.availablePulls} ready pull${wallet.availablePulls === 1 ? '' : 's'} · ${wallet.reservePulls} reserve · ${getAudiencePreferenceLabel(audiencePref)}`;
+  const stackStageHeight = Math.min(240, Math.max(172, viewportHeight * 0.3));
+  const cardBackHeight = Math.min(206, Math.max(156, stackStageHeight - 20));
+  const cardBackWidth = Math.min(152, Math.max(116, cardBackHeight * 0.74));
+  const primaryActionLabel = opening ? 'Opening…' : drawVm.canOpen ? 'Open 10-card pull' : hasActivePool ? 'Back to Home' : 'View library';
+  const secondaryActionLabel = drawVm.canOpen ? 'Open 1 pull' : hasActivePool && slug ? 'Preview 1 pull (free)' : 'View library';
 
   async function openPull(drawCount: number, options?: { previewOnly?: boolean }) {
     if (!slug || opening || !hasActivePool) return;
@@ -137,7 +145,7 @@ export function DrawScreen({ navigation, route }: Props) {
         setWallet(result.wallet);
       }
       setPityBefore(drawResult.pityAfter);
-      navigation.navigate('DrawCeremony', { slug, drawResult });
+      navigation.navigate('DrawCeremony', { slug, drawResult, deckTitle });
     } finally {
       setOpening(false);
     }
@@ -279,16 +287,21 @@ export function DrawScreen({ navigation, route }: Props) {
             <Text style={styles.subtitle} numberOfLines={1}>
               {drawVm.canOpen
                 ? 'Use reward pulls after the study route, not before it.'
-                : 'Today still has study pressure. Clear the route first, then come back.'}
+                : hasTodayWork
+                  ? 'Today still has study pressure. Clear the route first, then come back.'
+                  : 'Finish another short run to earn a pull, or preview for free.'}
             </Text>
 
-            <View style={styles.stackStage}>
+            <View testID="draw-card-stack-stage" style={[styles.stackStage, { height: stackStageHeight }]}>
               {CARD_STACK.map((rotation, index) => (
                 <View
                   key={`stack-${rotation}`}
                   style={[
                     styles.cardBack,
                     {
+                      width: cardBackWidth,
+                      height: cardBackHeight,
+                      borderRadius: Math.min(20, cardBackWidth * 0.13),
                       transform: [{ translateY: Math.abs(rotation) * 0.7 }, { rotate: `${rotation}deg` }],
                       borderColor: index === 2 ? 'rgba(232,184,90,0.9)' : 'rgba(245,236,196,0.2)',
                       shadowOpacity: index === 2 ? 0.42 : 0.12,
@@ -314,26 +327,15 @@ export function DrawScreen({ navigation, route }: Props) {
 
           <View style={styles.infoCard}>
             <Text style={styles.infoKicker} numberOfLines={1}>
-              Drop odds
+              Pull briefing
             </Text>
-            <View style={styles.oddsRow}>
-              <Text style={[styles.oddsChip, styles.oddsChipCom]} numberOfLines={1}>
-                COM 70%
-              </Text>
-              <Text style={[styles.oddsChip, styles.oddsChipRar]} numberOfLines={1}>
-                RAR 27%
-              </Text>
-              <Text style={[styles.oddsChip, styles.oddsChipLeg]} numberOfLines={1}>
-                LEG 3%
-              </Text>
-            </View>
             <Text style={styles.infoBody} numberOfLines={2}>
-              {buildPityProgressLabel(pityBefore)}
+              One reward pull opens a 10-card reveal.
             </Text>
             <Text style={styles.supportText} numberOfLines={2}>
               {drawVm.canOpen
-                ? 'A reward pull is ready. Open it now, then continue through ceremony and result spread.'
-                : 'This draw chamber stays locked until today’s challenge is handled. Library remains available first.'}
+                ? 'Reveal details appear after the ceremony, using the current pool and wallet state.'
+                : 'Preview stays free. Return Home for today’s route, or use Library to browse owned cards.'}
             </Text>
           </View>
 
@@ -342,12 +344,12 @@ export function DrawScreen({ navigation, route }: Props) {
               What happens next
             </Text>
             <Text style={styles.actionTitle} numberOfLines={2}>
-              {drawVm.canOpen ? 'Choose a light 1-pull peek or open the full 10-card reveal' : 'No reward pull is banked yet, but you can still preview the single-pull reveal'}
+              {drawVm.canOpen ? 'Spend one reward pull for a full 10-card reveal' : 'No reward pull is ready yet, but preview is available'}
             </Text>
             <Text style={styles.actionBody} numberOfLines={2}>
               {drawVm.canOpen
-                ? 'Single pull is the low-friction reward. Ten-pull is the full ceremony and result spread.'
-                : 'Library stays available, and a preview single pull lets you test the draw animation first.'}
+                ? 'The secondary pull opens one card. The main pull opens the full ceremony and result spread.'
+                : 'The preview single pull does not change your wallet. Home remains the path back to study.'}
             </Text>
 
             <Pressable
@@ -360,14 +362,14 @@ export function DrawScreen({ navigation, route }: Props) {
                   return;
                 }
                 if (hasActivePool && slug) {
-                  navigation.navigate('Deck', { slug } as any);
+                  navigation.navigate('Home');
                   return;
                 }
                 navigation.navigate('Library');
               }}
             >
               <Text style={styles.primaryButtonText} numberOfLines={1}>
-                {opening ? 'Opening…' : drawVm.canOpen ? 'Open 10 pull' : 'View library'}
+                {primaryActionLabel}
               </Text>
             </Pressable>
 
@@ -388,7 +390,7 @@ export function DrawScreen({ navigation, route }: Props) {
               }}
             >
               <Text style={styles.secondaryButtonText} numberOfLines={1}>
-                Open 1 pull
+                {secondaryActionLabel}
               </Text>
             </Pressable>
           </View>
@@ -500,20 +502,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   infoKicker: { color: colors.glowGold, fontSize: typography.caption, letterSpacing: 1.2, fontWeight: '800', fontFamily: 'Courier' },
-  oddsRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12 },
-  oddsChip: {
-    borderRadius: 999,
-    paddingHorizontal: spacing.xs + 2,
-    paddingVertical: 6,
-    fontSize: typography.caption,
-    fontWeight: '800',
-    marginRight: 8,
-    marginBottom: 8,
-    overflow: 'hidden',
-  },
-  oddsChipCom: { backgroundColor: 'rgba(239,230,204,0.16)', color: DRAW_COLOR.copyMuted },
-  oddsChipRar: { backgroundColor: 'rgba(201,173,247,0.16)', color: DRAW_COLOR.dustLilac },
-  oddsChipLeg: { backgroundColor: 'rgba(232,184,90,0.18)', color: colors.glowGold },
   infoBody: { marginTop: 2, color: colors.cosmicInk, fontSize: typography.bodySmall, lineHeight: 18, fontWeight: '700' },
   supportText: { marginTop: spacing.xs, color: DRAW_COLOR.copySoft, fontSize: 12, lineHeight: 18 },
   actionCard: {

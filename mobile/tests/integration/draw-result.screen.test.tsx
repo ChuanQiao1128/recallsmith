@@ -47,6 +47,7 @@ function makeRouteParams(overrides?: Record<string, unknown>) {
   return {
     slug: 'csharp',
     drawResult: MOCK_DRAW_RESULTS,
+    deckTitle: 'C# Interview',
     ...(overrides ?? {}),
   };
 }
@@ -80,6 +81,7 @@ describe('DrawResultScreen', () => {
 
     expect(textBlob).toContain('Close detail');
     expect(textBlob).toContain(MOCK_DRAW_RESULTS.cards[0].question);
+    expect(textBlob).not.toMatch(/reveal layer|premium|library detail takes over/i);
   });
 
   it('uses study-focused result actions instead of Enter level', async () => {
@@ -91,9 +93,10 @@ describe('DrawResultScreen', () => {
     const textBlob = collectText(tree);
     expect(textBlob).toContain('Start studying drawn cards');
     expect(textBlob).toContain('View library first');
-    expect(textBlob).toContain('Back to Home');
+    expect(textBlob).not.toContain('Back to Home');
     expect(textBlob).not.toContain('Enter level');
     expect(textBlob).not.toContain('Store for later');
+    expect(tree.root.findAllByProps({ testID: 'screen-draw-result-ghost-cta' })).toHaveLength(0);
   });
 
   it('uses the reward draw naming system consistently on the result page', async () => {
@@ -110,7 +113,19 @@ describe('DrawResultScreen', () => {
     expect(textBlob).not.toContain('BOSS PULL');
   });
 
-  it('carries a ceremony afterglow into the result hero', async () => {
+  it('keeps ceremony handoff jargon out of the result hero', async () => {
+    const jargonSafeResult = {
+      ...MOCK_DRAW_RESULTS,
+      cards: [
+        {
+          stableUid: 'handoff-1',
+          question: 'What should a queue consumer do after processing a message?',
+          difficulty: 2,
+          rarity: 'LEG' as const,
+          tag: 'Messaging',
+        },
+      ],
+    };
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -121,7 +136,8 @@ describe('DrawResultScreen', () => {
             name: 'DrawResult',
             params: {
               slug: 'csharp',
-              drawResult: MOCK_DRAW_RESULTS,
+              drawResult: jargonSafeResult,
+              deckTitle: 'Messaging Patterns',
               ceremonyEcho: { rarity: 'LEG', phaseCue: 'Center card revealed last · Flip axis at 180°' },
             },
           } as any}
@@ -130,10 +146,79 @@ describe('DrawResultScreen', () => {
     });
 
     const textBlob = collectText(tree);
-    expect(textBlob).toContain('Ceremony afterglow');
-    expect(textBlob).toContain('LEG carryover');
-    expect(textBlob).toContain('Center card revealed last');
-    expect(textBlob).toContain('Flip axis at 180°');
+    expect(textBlob).toContain('Reward ready');
+    expect(textBlob).toContain('Legendary · just drawn');
+    expect(textBlob).not.toMatch(/axis|breach|unlocked|core|drift|resonance/i);
+  });
+
+  it('omits seed placeholders when no seed label is available', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{
+            key: 'draw-result',
+            name: 'DrawResult',
+            params: makeRouteParams({ drawResult: { ...MOCK_DRAW_RESULTS, seedLabel: undefined } }),
+          } as any}
+        />,
+      );
+    });
+
+    const textBlob = collectText(tree);
+    expect(textBlob).not.toContain('seed #----');
+  });
+
+  it('uses supplied deck titles instead of deriving labels from slug', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{
+            key: 'draw-result',
+            name: 'DrawResult',
+            params: makeRouteParams({
+              slug: 'frontend',
+              deckTitle: 'Frontend Patterns',
+              drawResult: { ...MOCK_DRAW_RESULTS, poolId: 'frontend' },
+            }),
+          } as any}
+        />,
+      );
+    });
+
+    const textBlob = collectText(tree);
+    expect(textBlob).toContain('Frontend Patterns');
+    expect(textBlob).not.toContain('C# Interview');
+  });
+
+  it('does not fabricate card tags for unknown-topic draw cards', async () => {
+    const unknownTopicResult = {
+      ...MOCK_DRAW_RESULTS,
+      cards: [
+        {
+          stableUid: 'unknown-1',
+          question: 'What should a queue consumer do after processing a message?',
+          difficulty: 2,
+          rarity: 'COM' as const,
+        },
+      ],
+    };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams({ drawResult: unknownTopicResult, deckTitle: 'Queue Patterns' }) } as any}
+        />,
+      );
+    });
+
+    const textBlob = collectText(tree);
+    expect(textBlob).not.toContain('CORE');
   });
 
   it('gives single-pull results a dedicated hero outcome', async () => {
@@ -159,7 +244,20 @@ describe('DrawResultScreen', () => {
     });
 
     expect(tree.root.findByProps({ testID: 'screen-draw-result-root' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' })).toBeTruthy();
+    const primaryCta = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
+    expect(primaryCta).toBeTruthy();
+    expect(primaryCta.props.accessibilityRole).toBe('button');
+    expect(primaryCta.props.accessibilityLabel).toBeTruthy();
+
+    const featuredCard = tree.root.findByProps({ testID: 'screen-draw-result-featured-card' });
+    expect(featuredCard).toBeTruthy();
+    expect(featuredCard.props.accessibilityRole).toBe('button');
+    expect(String(featuredCard.props.accessibilityLabel)).toContain('Open featured reward detail');
+
+    const firstGridCard = tree.root.findByProps({ testID: 'screen-draw-result-grid-card-0' });
+    expect(firstGridCard).toBeTruthy();
+    expect(firstGridCard.props.accessibilityRole).toBe('button');
+    expect(String(firstGridCard.props.accessibilityLabel)).toContain('Open reward detail');
 
     act(() => {
       findPressablesByText(tree, MOCK_DRAW_RESULTS.cards[0].question)[0].props.onPress();
@@ -243,5 +341,41 @@ describe('DrawResultScreen', () => {
       primary.props.onPress();
     });
     expect(navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp' });
+  });
+
+  it('routes the primary action to the real study flow', async () => {
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<DrawResultScreen navigation={{ navigate } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
+    });
+
+    const primary = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
+    act(() => {
+      primary.props.onPress();
+    });
+
+    expect(navigate).toHaveBeenCalledWith('SessionCard', {
+      slug: 'csharp',
+      mode: 'learn-new',
+      limit: MOCK_DRAW_RESULTS.cards.length,
+    });
+    expect(navigate).not.toHaveBeenCalledWith('Level', expect.anything());
+  });
+
+  it('routes the secondary action to Library', async () => {
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<DrawResultScreen navigation={{ navigate } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
+    });
+
+    const secondary = tree.root.findByProps({ testID: 'screen-draw-result-secondary-cta' });
+    act(() => {
+      secondary.props.onPress();
+    });
+
+    expect(navigate).toHaveBeenCalledWith('Library');
+    expect(navigate).not.toHaveBeenCalledWith('Deck', expect.anything());
   });
 });

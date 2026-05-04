@@ -164,10 +164,18 @@ describe('LibraryScreen', () => {
     expect(blob).toContain('New');
     expect(blob).toContain('Learning');
     expect(blob).toContain('Mastered');
+    expect(blob).not.toContain('You have room to learn fresh cards today.');
+    expect(blob).not.toContain('Clear today');
     expect(tree.root.find((node) => node.props?.testID === 'library-filter-all')).toBeTruthy();
     expect(tree.root.find((node) => node.props?.testID === 'library-filter-new')).toBeTruthy();
     expect(tree.root.find((node) => node.props?.testID === 'library-filter-learning')).toBeTruthy();
     expect(tree.root.find((node) => node.props?.testID === 'library-filter-mastered')).toBeTruthy();
+
+    const badgeBackgrounds = ['1', '2', '3'].map((stableUid) => {
+      const badge = tree.root.find((node) => node.props?.testID === `library-card-status-${stableUid}`);
+      return badge.props.style[1].backgroundColor;
+    });
+    expect(new Set(badgeBackgrounds).size).toBe(3);
   });
 
   it('opens card detail from library card grid', async () => {
@@ -240,6 +248,8 @@ describe('LibraryScreen', () => {
       .join('\n');
 
     expect(blob).toContain('No cards in this library yet');
+    expect(blob).toContain('Install a deck');
+    expect(blob).not.toContain('Open deck gate');
     expect(tree.root.find((node) => node.props?.testID === 'library-empty-state')).toBeTruthy();
 
     const emptyCta = tree.root.find((node) => node.props?.testID === 'library-empty-cta');

@@ -3,6 +3,7 @@ export type MockDrawCard = {
   question: string;
   difficulty: number;
   rarity: 'COM' | 'RAR' | 'LEG';
+  tag?: string;
 };
 
 export type PoolOdds = {

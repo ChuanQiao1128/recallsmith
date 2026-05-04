@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildHomeScreenVM,
   buildHomeVM,
   type HomeCtaKind,
 } from '../../src/features/gacha/selectors/homeSelectors';
@@ -161,5 +162,27 @@ describe('buildHomeVM CTA kinds', () => {
     expect(vm.cta.label).toBe('Open library');
     expect(vm.cta.nav).toBe('library');
     expect(vm.cta.disabled).toBe(false);
+  });
+
+  it('preserves retry CTA when Home refresh fails before deck data is available', () => {
+    const vm = buildHomeScreenVM({
+      state: 'error',
+      hasSignedInUser: false,
+      wallet: { availablePulls: 0, reservePulls: 0 },
+      message: 'boom',
+    });
+
+    expect(vm.cta.kind).toBe('error');
+    expect(vm.cta.label).toBe('Try again');
+    expect(vm.cta.nav).toBe('retry');
+    expect(vm.hero.headline).toBe('Could not refresh Home right now');
+  });
+
+  it('builds the empty Home VM through the screen VM helper', () => {
+    const vm = buildHomeScreenVM({ state: 'empty' });
+
+    expect(vm.cta.kind).toBe('first_run');
+    expect(vm.cta.label).toBe('Open library');
+    expect(vm.selectedDeckSlug).toBeNull();
   });
 });

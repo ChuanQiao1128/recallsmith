@@ -15,7 +15,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import {
-  buildHomeVM,
+  buildHomeScreenVM,
   type HomeDeckVM,
   type HomeRuntimeStatus,
   type HomeViewModel,
@@ -28,15 +28,13 @@ import {
 } from '../features/gacha/home/deckActionResolver';
 import HomeDeckRow from '../features/gacha/home/HomeDeckRow';
 import { fetchServerPremium } from '../features/gacha/home/homeRemote';
-import { loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
-import { loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
+import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { loadStreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import { formatDateKey } from '../review/model';
 import { forceProgressSync } from '../sync/progressSync';
 import { useAuthStore } from '../auth/authStore';
 import { setIsPremiumUser, usePremiumUser } from '../premium/premiumStore';
-import { resolveHomeState } from '../features/gacha/home/homeStateMachine';
 import { useSessionStore } from '../features/gacha/session/sessionStore';
-import { MOCK_HOME_STATES } from '../mock/home';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
@@ -46,22 +44,24 @@ type HomeState = {
   error: string | null;
   vm: HomeViewModel;
 };
-const EMPTY_VM = buildHomeVM({
-  deckSummaries: [],
-  selectedSlug: null,
-  hasSignedInUser: false,
-});
+const EMPTY_VM = buildHomeScreenVM({ state: 'empty' });
+const HOME_TOKENS = {
+  border: 'rgba(90,75,56,0.16)',
+  borderStrong: 'rgba(90,75,56,0.18)',
+  borderSoft: 'rgba(90,75,56,0.12)',
+  card: 'rgba(255,255,255,0.88)',
+  cardSoft: 'rgba(255,255,255,0.72)',
+  cardSofter: 'rgba(255,255,255,0.62)',
+  iconBg: 'rgba(255,255,255,0.84)',
+  badgeBg: 'rgba(243,232,200,0.8)',
+  linkBg: 'rgba(232,184,90,0.2)',
+} as const;
+
 export function HomeScreen({ navigation, route }: Props) {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [deckOpen, setDeckOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const [drawSupportOpen, setDrawSupportOpen] = useState(false);
   const [deckBusySlug, setDeckBusySlug] = useState<string | null>(null);
-  const [drawWallet, setDrawWallet] = useState<RewardWalletState>({
-    availablePulls: 0,
-    reservePulls: 0,
-  });
-  const [streakSnapshot, setStreakSnapshot] = useState<StreakSnapshot | null>(null);
   const [homeState, setHomeState] = useState<HomeState>({
     loading: true,
     error: null,
@@ -76,17 +76,22 @@ export function HomeScreen({ navigation, route }: Props) {
   const isSignedIn = authStatus === 'signed_in';
   const cachedPremium = usePremiumUser(authUserSub);
   const [serverPremium, setServerPremium] = useState(false);
-  const isPremiumUser = serverPremium;
+  const [serverPremiumLoaded, setServerPremiumLoaded] = useState(false);
+  const isPremiumUser = serverPremiumLoaded ? serverPremium : cachedPremium;
   const firstDrawCoach = route.params?.firstDrawCoach ?? false;
-  const mockHomeStateOverride = route.params?.mockState;
   useEffect(() => {
     void authInit();
   }, [authInit]);
   useEffect(() => {
     let cancelled = false;
     setServerPremium(false);
+    setServerPremiumLoaded(false);
     (async () => {
       if (!accessToken || !accessToken.trim()) {
+        if (!cancelled) {
+          setServerPremium(false);
+          setServerPremiumLoaded(true);
+        }
         try {
           await setIsPremiumUser(false, authUserSub);
         } catch {
@@ -98,6 +103,7 @@ export function HomeScreen({ navigation, route }: Props) {
         const premium = await fetchServerPremium(accessToken);
         if (cancelled) return;
         setServerPremium(premium);
+        setServerPremiumLoaded(true);
         try {
           await setIsPremiumUser(premium, authUserSub);
         } catch {
@@ -106,11 +112,7 @@ export function HomeScreen({ navigation, route }: Props) {
       } catch {
         if (cancelled) return;
         setServerPremium(false);
-        try {
-          await setIsPremiumUser(false, authUserSub);
-        } catch {
-          // Cache sync is best effort.
-        }
+        setServerPremiumLoaded(false);
       }
     })();
     return () => {
@@ -168,21 +170,22 @@ export function HomeScreen({ navigation, route }: Props) {
           session.route.length > 0 &&
           session.completedCount >= session.route.length,
       };
-      const vm = buildHomeVM({
-        deckSummaries: summary.deckSummaries,
-        selectedSlug: activeSlug,
-        hasSignedInUser: isSignedIn,
-        wallet,
-        updates: summary.updates,
-        allUpcoming30: summary.allUpcoming30,
-        premium: isPremiumUser,
-        accountLockup: isSignedIn
-          ? null
-          : 'Sign in to unlock cloud backup and month planning.',
-        runtimeStatus,
+      const vm = buildHomeScreenVM({
+        state: 'ready',
+        params: {
+          deckSummaries: summary.deckSummaries,
+          selectedSlug: activeSlug,
+          hasSignedInUser: isSignedIn,
+          wallet,
+          updates: summary.updates,
+          allUpcoming30: summary.allUpcoming30,
+          premium: isPremiumUser,
+          accountLockup: isSignedIn
+            ? null
+            : 'Sign in to unlock cloud backup and month planning.',
+          runtimeStatus,
+        },
       });
-      setDrawWallet(wallet);
-      setStreakSnapshot(streak);
       setHomeState({ loading: false, error: null, vm });
     } catch {
       if (!isMountedRef.current) return;
@@ -190,13 +193,11 @@ export function HomeScreen({ navigation, route }: Props) {
         availablePulls: 0,
         reservePulls: 0,
       }));
-      const vm = buildHomeVM({
-        deckSummaries: [],
-        selectedSlug: null,
+      const vm = buildHomeScreenVM({
+        state: 'error',
         hasSignedInUser: isSignedIn,
         wallet: fallbackWallet,
-        statusHint: 'error',
-        errorMessage: 'Could not refresh Home right now.',
+        message: 'Could not refresh Home right now.',
       });
       setHomeState({
         loading: false,
@@ -235,17 +236,6 @@ export function HomeScreen({ navigation, route }: Props) {
       cancelled = true;
     };
   }, [authStatus, authUserSub, isSignedIn, isPremiumUser, refreshHome]);
-  const v6HomeState = useMemo(() => {
-    if (mockHomeStateOverride) {
-      return mockHomeStateOverride;
-    }
-    return resolveHomeState({
-      dueCount: homeState.vm.counts.selectedDue,
-      newCount: homeState.vm.counts.selectedNew,
-      wallet: drawWallet,
-      streakCount: streakSnapshot?.currentDailyStreak ?? 0,
-    });
-  }, [drawWallet, streakSnapshot, homeState.vm, mockHomeStateOverride]);
   const selectedDeckRow = useMemo(() => {
     return (
       homeState.vm.decks.rows.find((row) => row.deck.slug === homeState.vm.selectedDeckSlug) ??
@@ -397,11 +387,12 @@ export function HomeScreen({ navigation, route }: Props) {
                   RecallSmith
                 </Text>
                 <Text style={styles.subtitle} numberOfLines={1}>
-                  Today: decide if you should run, how many cards, and where to start.
+                  Today's plan, in one screen.
                 </Text>
               </View>
               <Pressable
                 accessibilityRole="button"
+                accessibilityLabel="Settings"
                 style={({ pressed }) => [styles.settingsIcon, pressed && styles.pressed]}
                 onPress={() => navigation.navigate('Settings')}
               >
@@ -454,6 +445,23 @@ export function HomeScreen({ navigation, route }: Props) {
               <Text style={styles.drawBadge} numberOfLines={1}>
                 {homeState.vm.draw.label}
               </Text>
+              {firstDrawCoach ? (
+                <Pressable
+                  accessibilityRole="button"
+                  testID="home-first-draw-link"
+                  style={({ pressed }) => [styles.heroSecondaryLink, pressed && styles.pressed]}
+                  onPress={() =>
+                    navigation.navigate('Draw', {
+                      slug: homeState.vm.selectedDeckSlug ?? undefined,
+                      rewardPending: true,
+                    })
+                  }
+                >
+                  <Text style={styles.heroSecondaryLinkText} numberOfLines={1}>
+                    Open first draw
+                  </Text>
+                </Pressable>
+              ) : null}
               {homeState.error ? (
                 <Text style={styles.errorText} numberOfLines={2}>
                   {homeState.error}
@@ -467,9 +475,14 @@ export function HomeScreen({ navigation, route }: Props) {
               style={({ pressed }) => [styles.collapseHeader, pressed && styles.pressed]}
               onPress={() => setDeckOpen((prev) => !prev)}
             >
-              <Text style={styles.collapseTitle} numberOfLines={1}>
-                Your decks ({homeState.vm.decks.rows.length})
-              </Text>
+              <View style={styles.collapseTextWrap}>
+                <Text style={styles.collapseTitle} numberOfLines={1}>
+                  Your decks ({homeState.vm.decks.rows.length})
+                </Text>
+                <Text style={styles.collapseSubtitle} numberOfLines={1}>
+                  Deck status and actions
+                </Text>
+              </View>
               <Text style={styles.collapseArrow} numberOfLines={1}>
                 {deckOpen ? 'Hide' : 'Show'}
               </Text>
@@ -499,9 +512,14 @@ export function HomeScreen({ navigation, route }: Props) {
               style={({ pressed }) => [styles.collapseHeader, pressed && styles.pressed]}
               onPress={() => setCalendarOpen((prev) => !prev)}
             >
-              <Text style={styles.collapseTitle} numberOfLines={1}>
-                Week support
-              </Text>
+              <View style={styles.collapseTextWrap}>
+                <Text style={styles.collapseTitle} numberOfLines={1}>
+                  Week support
+                </Text>
+                <Text style={styles.collapseSubtitle} numberOfLines={1}>
+                  7-day review shape
+                </Text>
+              </View>
               <Text style={styles.collapseArrow} numberOfLines={1}>
                 {calendarOpen ? 'Hide' : 'Show'}
               </Text>
@@ -511,70 +529,6 @@ export function HomeScreen({ navigation, route }: Props) {
               <Text style={styles.accountLockup} numberOfLines={1}>
                 {homeState.vm.account.lockup}
               </Text>
-            ) : null}
-            <Pressable
-              testID="home-collapse-draw-support-toggle"
-              accessibilityRole="button"
-              accessibilityState={{ expanded: drawSupportOpen }}
-              style={({ pressed }) => [styles.collapseHeader, pressed && styles.pressed]}
-              onPress={() => setDrawSupportOpen((prev) => !prev)}
-            >
-              <Text style={styles.collapseTitle} numberOfLines={1}>
-                Draw support
-              </Text>
-              <Text style={styles.collapseArrow} numberOfLines={1}>
-                {drawSupportOpen ? 'Hide' : 'Show'}
-              </Text>
-            </Pressable>
-            {drawSupportOpen ? (
-              <View style={styles.collapseBody}>
-                <Pressable
-                  style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]}
-                  onPress={() =>
-                    navigation.navigate('Draw', {
-                      slug: homeState.vm.selectedDeckSlug ?? undefined,
-                      rewardPending: true,
-                    })
-                  }
-                >
-                  <Text style={styles.secondaryCtaText} numberOfLines={1}>
-                    {firstDrawCoach ? 'Open first draw route' : 'Peek at reward draw'}
-                  </Text>
-                </Pressable>
-                {firstDrawCoach ? (
-                  <View style={styles.coachCard}>
-                    <Text style={styles.coachTitle} numberOfLines={1}>
-                      First draw coach
-                    </Text>
-                    <Text style={styles.coachBody} numberOfLines={1}>
-                      Draw first, then run the daily route.
-                    </Text>
-                    <Pressable
-                      style={({ pressed }) => [styles.inlineButton, pressed && styles.pressed]}
-                      onPress={() =>
-                        navigation.navigate('Draw', {
-                          slug: homeState.vm.selectedDeckSlug ?? undefined,
-                          rewardPending: true,
-                        })
-                      }
-                    >
-                      <Text style={styles.inlineButtonText} numberOfLines={1}>
-                        Start first draw
-                      </Text>
-                    </Pressable>
-                  </View>
-                ) : null}
-              </View>
-            ) : null}
-            {v6HomeState !== 'active' ? (
-              <View style={styles.stateCard}>
-                <Text style={styles.stateTitle} numberOfLines={1}>
-                  {MOCK_HOME_STATES[v6HomeState].title}
-                </Text>
-                <Text style={styles.stateBody} numberOfLines={1}>
-                  {MOCK_HOME_STATES[v6HomeState].helper}
-                </Text>
-              </View>
             ) : null}
           </ScrollView>
         </LinearGradient>
@@ -595,9 +549,9 @@ const styles = StyleSheet.create({
   kicker: { fontSize: typography.caption, fontWeight: '800', color: colors.inkSecondary, letterSpacing: 1 },
   title: { marginTop: 4, fontSize: typography.title1, fontWeight: '900', color: colors.ink },
   subtitle: { marginTop: 4, fontSize: typography.bodySmall, color: colors.inkSecondary },
-  settingsIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(90,75,56,0.16)', backgroundColor: 'rgba(255,255,255,0.84)' },
+  settingsIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: HOME_TOKENS.border, backgroundColor: HOME_TOKENS.iconBg },
   settingsText: { color: colors.ink, fontSize: 18 },
-  primaryCard: { borderRadius: spacing.lg, borderWidth: 1, borderColor: 'rgba(90,75,56,0.18)', backgroundColor: 'rgba(255,255,255,0.88)', padding: spacing.md },
+  primaryCard: { borderRadius: spacing.lg, borderWidth: 1, borderColor: HOME_TOKENS.borderStrong, backgroundColor: HOME_TOKENS.card, padding: spacing.md },
   heroEyebrow: { fontSize: typography.caption, fontWeight: '800', color: colors.gold, letterSpacing: 0.8 },
   heroHeadline: { marginTop: spacing.xs, fontSize: typography.title2, lineHeight: 28, fontWeight: '900', color: colors.ink },
   heroSubline: { marginTop: 6, fontSize: typography.bodySmall, color: colors.inkSecondary },
@@ -607,27 +561,21 @@ const styles = StyleSheet.create({
   primaryCta: { marginTop: spacing.sm, minHeight: 46, borderRadius: spacing.buttonRadius, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md, backgroundColor: colors.ink },
   primaryCtaDisabled: { opacity: 0.45 },
   primaryCtaText: { color: colors.parchmentBg, fontSize: typography.button, fontWeight: '900' },
-  drawBadge: { marginTop: spacing.sm, alignSelf: 'flex-start', fontSize: typography.caption, fontWeight: '800', color: colors.inkSecondary, paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(90,75,56,0.18)', backgroundColor: 'rgba(243,232,200,0.8)' },
+  drawBadge: { marginTop: spacing.sm, alignSelf: 'flex-start', fontSize: typography.caption, fontWeight: '800', color: colors.inkSecondary, paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: HOME_TOKENS.borderStrong, backgroundColor: HOME_TOKENS.badgeBg },
+  heroSecondaryLink: { marginTop: spacing.xs, minHeight: 44, alignSelf: 'flex-start', borderRadius: spacing.buttonRadius, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, backgroundColor: HOME_TOKENS.linkBg },
+  heroSecondaryLinkText: { fontSize: typography.bodySmall, fontWeight: '800', color: colors.ink },
   errorText: { marginTop: spacing.xs, color: colors.danger, fontSize: typography.caption, lineHeight: 16 },
-  collapseHeader: { marginTop: spacing.sm, minHeight: 44, borderRadius: spacing.buttonRadius, borderWidth: 1, borderColor: 'rgba(90,75,56,0.16)', backgroundColor: 'rgba(255,255,255,0.72)', paddingHorizontal: spacing.sm, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  collapseHeader: { marginTop: spacing.sm, minHeight: 56, borderRadius: spacing.buttonRadius, borderWidth: 1, borderColor: HOME_TOKENS.border, backgroundColor: HOME_TOKENS.cardSoft, paddingHorizontal: spacing.sm, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  collapseTextWrap: { flex: 1, paddingRight: spacing.sm },
   collapseTitle: { fontSize: typography.body, fontWeight: '800', color: colors.ink },
+  collapseSubtitle: { marginTop: 2, fontSize: typography.caption, color: colors.inkSecondary },
   collapseArrow: { fontSize: typography.caption, fontWeight: '700', color: colors.inkSecondary },
-  collapseBody: { marginTop: spacing.xs, borderRadius: spacing.cardRadius, backgroundColor: 'rgba(255,255,255,0.62)', borderWidth: 1, borderColor: 'rgba(90,75,56,0.12)', padding: spacing.sm },
-  calendarGrid: { marginTop: spacing.xs, borderRadius: spacing.cardRadius, borderWidth: 1, borderColor: 'rgba(90,75,56,0.12)', backgroundColor: 'rgba(255,255,255,0.62)', padding: spacing.sm, flexDirection: 'row', justifyContent: 'space-between' },
+  collapseBody: { marginTop: spacing.xs, borderRadius: spacing.cardRadius, backgroundColor: HOME_TOKENS.cardSofter, borderWidth: 1, borderColor: HOME_TOKENS.borderSoft, padding: spacing.sm },
+  calendarGrid: { marginTop: spacing.xs, borderRadius: spacing.cardRadius, borderWidth: 1, borderColor: HOME_TOKENS.borderSoft, backgroundColor: HOME_TOKENS.cardSofter, padding: spacing.sm, flexDirection: 'row', justifyContent: 'space-between' },
   calendarCell: { alignItems: 'center', width: '13%' },
   calendarDay: { fontSize: typography.caption, color: colors.inkSecondary },
-  calendarBarTrack: { width: 10, height: 40, borderRadius: 999, backgroundColor: 'rgba(90,75,56,0.16)', justifyContent: 'flex-end', overflow: 'hidden', marginTop: 4 },
+  calendarBarTrack: { width: 10, height: 40, borderRadius: 999, backgroundColor: HOME_TOKENS.border, justifyContent: 'flex-end', overflow: 'hidden', marginTop: 4 },
   calendarBarFill: { width: 10, borderRadius: 999, backgroundColor: colors.gold },
   calendarCount: { marginTop: 4, fontSize: typography.caption, color: colors.inkSecondary, fontWeight: '700' },
   accountLockup: { marginTop: spacing.sm, fontSize: typography.caption, color: colors.inkSecondary },
-  secondaryCta: { marginTop: spacing.sm, minHeight: 44, borderRadius: spacing.buttonRadius, borderWidth: 1, borderColor: 'rgba(90,75,56,0.16)', backgroundColor: 'rgba(200,136,58,0.14)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md },
-  secondaryCtaText: { fontSize: typography.bodySmall, fontWeight: '800', color: colors.ink },
-  coachCard: { marginTop: spacing.sm, borderRadius: spacing.cardRadius, borderWidth: 1, borderColor: 'rgba(90,75,56,0.16)', backgroundColor: 'rgba(255,255,255,0.72)', padding: spacing.sm },
-  coachTitle: { fontSize: typography.body, fontWeight: '800', color: colors.ink },
-  coachBody: { marginTop: 4, fontSize: typography.caption, color: colors.inkSecondary },
-  inlineButton: { marginTop: spacing.xs, minHeight: 44, borderRadius: spacing.buttonRadius, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, backgroundColor: 'rgba(232,184,90,0.2)' },
-  inlineButtonText: { fontSize: typography.bodySmall, fontWeight: '800', color: colors.ink },
-  stateCard: { marginTop: spacing.sm, borderRadius: spacing.cardRadius, borderWidth: 1, borderColor: 'rgba(90,75,56,0.16)', backgroundColor: 'rgba(255,255,255,0.72)', padding: spacing.sm },
-  stateTitle: { fontSize: typography.body, fontWeight: '800', color: colors.ink },
-  stateBody: { marginTop: 4, fontSize: typography.caption, color: colors.inkSecondary },
 });

@@ -105,6 +105,23 @@ describe('LibraryScreen responsive columns', () => {
     expect(grid.props.numColumns).toBe(2);
   });
 
+  it('allows card questions to use two lines at 360pt', async () => {
+    mockWidth = 360;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+
+    const question = tree.root.find(
+      (node) => (node.type as any) === 'Text' && node.props.children === 'Q1',
+    );
+    expect(question.props.numberOfLines).toBe(2);
+  });
+
   it('uses 3 columns at 390pt', async () => {
     mockWidth = 390;
 

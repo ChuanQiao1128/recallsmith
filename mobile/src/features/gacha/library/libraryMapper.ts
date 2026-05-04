@@ -5,6 +5,7 @@ import { isLearnedProgress, isMasteredProgress, isNewProgress, isScheduledProgre
 import { formatDateKey } from '../../../review/model';
 
 export type LibraryCardStatus = 'new' | 'learning' | 'mastered';
+export type LibraryCardBadgeTone = 'new' | 'learning' | 'mastered';
 export type LibraryFilter = 'all' | 'new' | 'learning' | 'mastered';
 
 export type LibraryCardRow = {
@@ -14,6 +15,7 @@ export type LibraryCardRow = {
   difficulty: number;
   status: LibraryCardStatus;
   statusLabel: 'New' | 'Learning' | 'Mastered';
+  badgeTone: LibraryCardBadgeTone;
   isDueToday: boolean;
   isUpdated: boolean;
 };
@@ -99,6 +101,7 @@ export function buildLibraryCardRows(params: {
         difficulty: card.Difficulty,
         status,
         statusLabel: status === 'mastered' ? 'Mastered' : status === 'learning' ? 'Learning' : 'New',
+        badgeTone: status,
         isDueToday: isDueToday(progressEntry as CardProgress, now),
         isUpdated: getCardRevision(card) > getSeenRevision(progressEntry as CardProgress) && isLearnedProgress(progressEntry as CardProgress),
       };

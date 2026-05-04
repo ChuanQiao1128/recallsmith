@@ -34,7 +34,8 @@ import {
   recordReviewEvent,
   scheduleProgressSync,
 } from '../sync/progressSync';
-import { countDueToday, pickNextCard } from '../features/gacha/planner/sessionPlanner';
+import { countDueToday, pickNextCard, planChallengeRoute } from '../features/gacha/planner/sessionPlanner';
+import { computeSessionRewardPulls } from '../features/gacha/rewards/rewardResolver';
 import {
   buildRatedSessionState,
   buildSessionProgressVM,
@@ -46,8 +47,6 @@ import {
   showTrialUpsellDialog,
   sortCards,
 } from '../features/gacha/session/reviewContentHelpers';
-import { resolveRouteRole } from '../features/gacha/planner/sessionRoles';
-import type { RoutePreviewNode } from '../features/gacha/contracts';
 import { resetSessionStore, useSessionStore } from '../features/gacha/session/sessionStore';
 import SessionProgressHeader from '../features/gacha/components/SessionProgressHeader';
 import RatingBar from '../features/gacha/components/RatingBar';
@@ -64,46 +63,10 @@ type TrialInfo = {
   previewCount: number;
   totalCards: number;
 };
+const EMPTY_TRIAL_INFO: TrialInfo = { isTrial: false, previewCount: 0, totalCards: 0 };
+
 function isLearned(progress: CardProgress): boolean {
   return typeof progress.lastReviewedAt === 'number' && progress.lastReviewedAt > 0;
-}
-function buildSessionRouteNodes(limit: number): RoutePreviewNode[] {
-  const total = Math.max(1, limit);
-  const hasBoss = total >= 4;
-  const hasElite = total >= 2;
-  return Array.from({ length: total }).map((_, index) => {
-    const role = resolveRouteRole({ index, total, hasElite, hasBoss });
-    if (role === 'warmup') {
-      return {
-        id: `warmup-${index}`,
-        role,
-        title: 'Warm-up node',
-        subtitle: 'Start with one low-friction recall win.',
-      };
-    }
-    if (role === 'elite') {
-      return {
-        id: `elite-${index}`,
-        role,
-        title: 'Elite recall',
-        subtitle: 'A sharper mid-run check.',
-      };
-    }
-    if (role === 'boss') {
-      return {
-        id: `boss-${index}`,
-        role,
-        title: 'Boss check',
-        subtitle: 'Close the run with a clean recap test.',
-      };
-    }
-    return {
-      id: `normal-${index}`,
-      role,
-      title: 'Normal node',
-      subtitle: 'Standard learning / recall step.',
-    };
-  });
 }
 function computePremiumActive(customerInfo: any): boolean {
   try {
@@ -140,10 +103,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [reviewing, setReviewing] = useState(false);
   const [sessionDone, setSessionDone] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
+  const [plannedMinimumGoal, setPlannedMinimumGoal] = useState<number | null>(null);
+  const [trialInfo, setTrialInfo] = useState<TrialInfo>(EMPTY_TRIAL_INFO);
   const sessionLimit = limit;
   const isPremiumUser = usePremiumUser();
   const insets = useSafeAreaInsets();
-  const trialRef = useRef<TrialInfo>({ isTrial: false, previewCount: 0, totalCards: 0 });
+  const trialRef = useRef<TrialInfo>(EMPTY_TRIAL_INFO);
   const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport> } | null>(null);
   const sessionRoute = useSessionStore((state) => state.route);
   const sessionRouteIndex = useSessionStore((state) => state.currentIndex);
@@ -204,6 +169,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setProgress([]);
         setDailyStats(null);
         setCurrent(null);
+        setPlannedMinimumGoal(null);
+        trialRef.current = EMPTY_TRIAL_INFO;
+        setTrialInfo(EMPTY_TRIAL_INFO);
         return;
       }
       let cancelled = false;
@@ -214,6 +182,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setLoadError(null);
         setSessionDone(0);
         setShowAnswer(false);
+        setPlannedMinimumGoal(null);
+        trialRef.current = EMPTY_TRIAL_INFO;
+        setTrialInfo(EMPTY_TRIAL_INFO);
         const now = new Date();
         let premiumActive = isPremiumUser;
         let verifiedPremium = false;
@@ -286,11 +257,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
             cards: sortCards(deckForStudy),
             cardMap: buildCardMap(deckForStudy),
           };
-          trialRef.current = {
+          const nextTrialInfo = {
             isTrial,
             previewCount: isTrial ? (deckForStudy.Cards?.length ?? previewCount) : 0,
             totalCards: fullCount,
           };
+          trialRef.current = nextTrialInfo;
+          setTrialInfo(nextTrialInfo);
           setDeck(deckForStudy);
           void setActiveDeckSlug(resolved.Slug);
           try {
@@ -315,6 +288,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
           }
           const stats = await loadOrInitDailyStats(deckForStudy, nextProgress);
           if (cancelled) return;
+          const plannedChallenge = planChallengeRoute({ deck: deckForStudy, progress: nextProgress, now });
+          setPlannedMinimumGoal(plannedChallenge.minimumGoal);
           const nextCurrent = pickNextCard({
             deck: deckForStudy,
             progress: nextProgress,
@@ -323,15 +298,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
             avoidUid: null,
             index: cardIndexRef.current,
           });
-          const routeNodes = buildSessionRouteNodes(
-            sessionLimit > 0
-              ? sessionLimit
-              : Math.max(1, cardIndexRef.current?.cards.length ?? 1),
-          );
           startSession({
             sessionId: `${deckForStudy.Slug}-${now.getTime()}`,
             slug: deckForStudy.Slug,
-            route: routeNodes,
+            route: plannedChallenge.nodes,
             startedAt: now.getTime(),
           });
           setProgress(nextProgress);
@@ -346,6 +316,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
           setProgress([]);
           setDailyStats(null);
           setCurrent(null);
+          setPlannedMinimumGoal(null);
+          trialRef.current = EMPTY_TRIAL_INFO;
+          setTrialInfo(EMPTY_TRIAL_INFO);
           setLoadError(e?.message ?? 'Failed to load deck.');
           setLoading(false);
         }
@@ -421,6 +394,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
       }
       recordSessionRating({ stableUid: current.card.StableUid, rating });
       advanceSession();
+      const minimumGoal =
+        plannedMinimumGoal ??
+        planChallengeRoute({ deck, progress: nextState.updatedProgress, now: nowAtRating }).minimumGoal;
       setSessionDone(nextState.nextDone);
       setProgress(nextState.updatedProgress);
       setCurrent(nextState.nextCurrent);
@@ -435,7 +411,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
             slug: deck.Slug,
             deckTitle: deck.Title,
             sessionDone: nextState.nextDone,
-            rewardPulls: nextState.nextDone >= sessionLimit ? 2 : nextState.nextDone >= 1 ? 1 : 0,
+            rewardPulls: computeSessionRewardPulls({
+              sessionDone: nextState.nextDone,
+              sessionLimit,
+              minimumGoal,
+            }),
             masteredCount: Math.max(
               0,
               nextState.updatedProgress.filter((item) => item.stage >= 4).length -
@@ -450,7 +430,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           deckTitle: deck.Title,
           sessionDone: nextState.nextDone,
           sessionLimit,
-          minimumGoal: 1,
+          minimumGoal,
           dueCount: nextState.remainingDueCount,
           streakEarned: useSessionStore.getState().streakEarned,
         });
@@ -507,7 +487,24 @@ export function SessionCardScreen({ navigation, route }: Props) {
       </SafeAreaView>
     );
   }
+  function requestPause() {
+    Alert.alert('Pause this run?', 'Your ratings are saved.', [
+      { text: 'Keep reviewing', style: 'cancel' },
+      { text: 'Pause', onPress: () => navigation.goBack() },
+    ]);
+  }
   const ratingDockHeight = 164 + Math.max(insets.bottom, 8);
+  const doneMinimumGoal =
+    plannedMinimumGoal ?? planChallengeRoute({ deck, progress, now }).minimumGoal;
+  const doneRewardPulls = computeSessionRewardPulls({
+    sessionDone,
+    sessionLimit,
+    minimumGoal: doneMinimumGoal,
+  });
+  const previewChecked = trialInfo.isTrial
+    ? Math.min(trialInfo.previewCount, progress.filter(isLearned).length)
+    : 0;
+  const previewRemaining = Math.max(trialInfo.previewCount - previewChecked, 0);
   return (
     <SafeAreaView style={styles.safeArea} testID="screen-session-card-root">
       <LinearGradient
@@ -519,11 +516,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
         <View style={styles.container}>
           <View style={styles.headerRow}>
             <Pressable
-              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-              onPress={() => navigation.goBack()}
+              style={({ pressed }) => [styles.pauseButton, pressed && styles.pressed]}
+              onPress={requestPause}
             >
-              <Text style={styles.backText} numberOfLines={1}>
-                ← Challenge
+              <Text style={styles.pauseText} numberOfLines={1}>
+                Pause
               </Text>
             </Pressable>
             <View style={styles.headerTextWrap}>
@@ -545,6 +542,16 @@ export function SessionCardScreen({ navigation, route }: Props) {
             ]}
             showsVerticalScrollIndicator={false}
           >
+            {trialInfo.isTrial && trialInfo.previewCount > 0 ? (
+              <View style={styles.trialPreview} testID="session-card-trial-preview">
+                <Text style={styles.trialPreviewLabel} numberOfLines={1}>
+                  Preview run
+                </Text>
+                <Text style={styles.trialPreviewBody} numberOfLines={1}>
+                  {previewRemaining} of {trialInfo.previewCount} preview cards remaining
+                </Text>
+              </View>
+            ) : null}
             {!current ? (
               <View style={styles.doneCard}>
                 <Text style={styles.doneTitle} numberOfLines={1}>
@@ -561,7 +568,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                           slug: deck.Slug,
                           deckTitle: deck.Title,
                           sessionDone,
-                          rewardPulls: sessionDone >= sessionLimit ? 2 : sessionDone >= 1 ? 1 : 0,
+                          rewardPulls: doneRewardPulls,
                           masteredCount: progress.filter((item) => item.stage >= 4).length,
                         })
                       : navigation.replace('SessionSummary', {
@@ -569,14 +576,14 @@ export function SessionCardScreen({ navigation, route }: Props) {
                           deckTitle: deck.Title,
                           sessionDone,
                           sessionLimit,
-                          minimumGoal: 1,
+                          minimumGoal: doneMinimumGoal,
                           dueCount: dueTodayCount,
                           streakEarned: useSessionStore.getState().streakEarned,
                         })
                   }
                 >
                   <Text style={styles.doneButtonText} numberOfLines={1}>
-                    View summary
+                    Continue
                   </Text>
                 </Pressable>
               </View>
@@ -659,6 +666,24 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.82)',
     marginRight: spacing.xs,
   },
+  pauseButton: {
+    minHeight: 44,
+    minWidth: 44,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.5)',
+    borderWidth: 1,
+    borderColor: 'rgba(42,34,24,0.12)',
+    marginRight: spacing.xs,
+  },
+  pauseText: {
+    color: colors.inkSecondary,
+    fontSize: typography.caption,
+    fontWeight: '800',
+  },
   backText: {
     color: colors.ink,
     fontSize: typography.bodySmall,
@@ -681,6 +706,27 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingTop: spacing.xs,
+  },
+  trialPreview: {
+    marginBottom: spacing.xs,
+    borderRadius: spacing.buttonRadius,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    backgroundColor: 'rgba(255,255,255,0.62)',
+    borderWidth: 1,
+    borderColor: 'rgba(42,34,24,0.1)',
+  },
+  trialPreviewLabel: {
+    fontSize: typography.caption,
+    color: colors.gold,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  trialPreviewBody: {
+    marginTop: 2,
+    fontSize: typography.caption,
+    color: colors.inkSecondary,
+    fontWeight: '700',
   },
   doneCard: {
     borderRadius: spacing.cardRadius,

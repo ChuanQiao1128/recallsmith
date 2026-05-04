@@ -12,30 +12,35 @@ const CSHARP_POOL: MockDrawCard[] = [
     question: 'What problem does dependency injection solve?',
     difficulty: 2,
     rarity: 'RAR',
+    tag: 'Architecture',
   },
   {
     stableUid: 'draw-2',
     question: 'How does ASP.NET Core middleware ordering affect requests?',
     difficulty: 3,
     rarity: 'LEG',
+    tag: 'ASP.NET Core',
   },
   {
     stableUid: 'draw-3',
     question: 'When should you prefer IQueryable over IEnumerable?',
     difficulty: 2,
     rarity: 'RAR',
+    tag: 'LINQ',
   },
   {
     stableUid: 'dose-2',
     question: 'What does ConfigureAwait(false) change?',
     difficulty: 2,
     rarity: 'COM',
+    tag: 'Async / await',
   },
   {
     stableUid: 'dose-3',
     question: 'Why can DbContext lifetime cause hidden production bugs?',
     difficulty: 3,
     rarity: 'LEG',
+    tag: 'EF Core',
   },
 ];
 
@@ -45,18 +50,21 @@ const AWS_POOL: MockDrawCard[] = [
     question: 'When should you choose SQS over SNS?',
     difficulty: 2,
     rarity: 'RAR',
+    tag: 'AWS Messaging',
   },
   {
     stableUid: 'draw-aws-2',
     question: 'Why does IAM explicit deny override allow?',
     difficulty: 3,
     rarity: 'LEG',
+    tag: 'AWS IAM',
   },
   {
     stableUid: 'draw-aws-3',
     question: 'What problem does Auto Scaling solve for burst traffic?',
     difficulty: 1,
     rarity: 'COM',
+    tag: 'AWS Compute',
   },
 ];
 

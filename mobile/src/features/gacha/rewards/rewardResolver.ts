@@ -9,6 +9,20 @@ export type ResolvedSessionReward = {
   rewardMessage: string;
 };
 
+export function computeSessionRewardPulls(params: {
+  sessionDone: number;
+  sessionLimit: number;
+  minimumGoal: number;
+}): number {
+  const sessionDone = Math.max(0, Math.floor(params.sessionDone));
+  const sessionLimit = Math.max(0, Math.floor(params.sessionLimit));
+  const minimumGoal = Math.max(1, Math.floor(params.minimumGoal));
+
+  if (sessionLimit > 0 && sessionDone >= sessionLimit) return 2;
+  if (sessionDone >= minimumGoal) return 1;
+  return 0;
+}
+
 export function resolveSessionReward(params: {
   sessionDone: number;
   sessionLimit: number;
@@ -16,12 +30,12 @@ export function resolveSessionReward(params: {
   wallet: RewardWalletState;
 }): ResolvedSessionReward {
   const { sessionDone, sessionLimit, minimumGoal, wallet } = params;
-  const completedMinimumGoal = sessionDone >= minimumGoal;
-  const completedFullRun = sessionLimit > 0 && sessionDone >= sessionLimit;
-
-  let rewardPulls = 0;
-  if (completedFullRun) rewardPulls = 2;
-  else if (completedMinimumGoal) rewardPulls = 1;
+  const safeSessionDone = Math.max(0, Math.floor(sessionDone));
+  const safeSessionLimit = Math.max(0, Math.floor(sessionLimit));
+  const safeMinimumGoal = Math.max(1, Math.floor(minimumGoal));
+  const completedMinimumGoal = safeSessionDone >= safeMinimumGoal;
+  const completedFullRun = safeSessionLimit > 0 && safeSessionDone >= safeSessionLimit;
+  const rewardPulls = computeSessionRewardPulls({ sessionDone, sessionLimit, minimumGoal });
 
   const walletAfter = applyRewardToWallet(wallet, rewardPulls);
   const rewardMessage =

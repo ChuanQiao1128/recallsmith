@@ -81,6 +81,7 @@ export type RootStackParamList = {
         question: string;
         difficulty: number;
         rarity: 'COM' | 'RAR' | 'LEG';
+        tag?: string;
       }>;
       pityBefore: number;
       pityAfter: number;
@@ -88,6 +89,7 @@ export type RootStackParamList = {
       highlightedRarity: 'RAR' | 'LEG' | null;
       seedLabel?: string;
     };
+    deckTitle?: string;
   };
   DrawResult: {
     slug: string;
@@ -98,6 +100,7 @@ export type RootStackParamList = {
         question: string;
         difficulty: number;
         rarity: 'COM' | 'RAR' | 'LEG';
+        tag?: string;
       }>;
       pityBefore: number;
       pityAfter: number;
@@ -105,6 +108,11 @@ export type RootStackParamList = {
       highlightedRarity: 'RAR' | 'LEG' | null;
       seedLabel?: string;
     };
+    deckTitle?: string;
+    ceremonyEcho?: {
+      rarity: 'COM' | 'RAR' | 'LEG';
+      phaseCue: string;
+    } | null;
   };
   Settlement: {
     slug: string;
