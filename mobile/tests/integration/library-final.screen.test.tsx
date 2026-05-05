@@ -136,7 +136,7 @@ describe('LibraryScreen', () => {
     warnSpy.mockRestore();
   });
 
-  it('renders four filters with collection status chips', async () => {
+  it('renders All/Owned/Missing filters with collection status chips', async () => {
     const navigate = vi.fn();
 
     let tree!: renderer.ReactTestRenderer;
@@ -161,15 +161,14 @@ describe('LibraryScreen', () => {
 
     expect(blob).toContain('Library');
     expect(blob).toContain('All');
-    expect(blob).toContain('New');
-    expect(blob).toContain('Learning');
-    expect(blob).toContain('Mastered');
+    expect(blob).toContain('Owned');
+    expect(blob).toContain('Missing');
+    expect(blob).toContain('2/3');
     expect(blob).not.toContain('You have room to learn fresh cards today.');
     expect(blob).not.toContain('Clear today');
     expect(tree.root.find((node) => node.props?.testID === 'library-filter-all')).toBeTruthy();
-    expect(tree.root.find((node) => node.props?.testID === 'library-filter-new')).toBeTruthy();
-    expect(tree.root.find((node) => node.props?.testID === 'library-filter-learning')).toBeTruthy();
-    expect(tree.root.find((node) => node.props?.testID === 'library-filter-mastered')).toBeTruthy();
+    expect(tree.root.find((node) => node.props?.testID === 'library-filter-owned')).toBeTruthy();
+    expect(tree.root.find((node) => node.props?.testID === 'library-filter-missing')).toBeTruthy();
 
     const badgeBackgrounds = ['1', '2', '3'].map((stableUid) => {
       const badge = tree.root.find((node) => node.props?.testID === `library-card-status-${stableUid}`);
@@ -220,6 +219,25 @@ describe('LibraryScreen', () => {
 
     act(() => {
       awsDeckChip.props.onPress();
+    });
+    await flush();
+
+    expect(tree.root.find((node) => node.props?.testID === 'library-card-a1')).toBeTruthy();
+    expect(tree.root.findAll((node) => node.props?.testID === 'library-card-1')).toHaveLength(0);
+  });
+
+  it('applies focusSlug route params on initial load', async () => {
+    const navigate = vi.fn();
+    mockManifestDecks = [
+      { slug: 'csharp', title: 'C# Interview', availability: 'live' },
+      { slug: 'aws', title: 'AWS Core', availability: 'live' },
+    ];
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library', params: { focusSlug: 'aws' } } as any} />,
+      );
     });
     await flush();
 

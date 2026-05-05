@@ -81,9 +81,8 @@ describe('buildLibraryVM', () => {
 
   it.each([
     { filter: 'all', expected: ['1', '2', '3', '4'] },
-    { filter: 'new', expected: ['1', '4'] },
-    { filter: 'learning', expected: ['2'] },
-    { filter: 'mastered', expected: ['3'] },
+    { filter: 'owned', expected: ['2', '3'] },
+    { filter: 'missing', expected: ['1', '4'] },
   ] as const)('filters cards by %s', ({ filter, expected }) => {
     const vm = buildLibraryVM({
       deck: sampleDeck,

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -48,6 +48,9 @@ function LibraryHeader({ vm, onSelectDeck, onSelectFilter }: LibraryHeaderProps)
       <Text style={styles.subtitle} numberOfLines={1}>
         {vm.subtitle}
       </Text>
+      <Text style={styles.collectionBar} numberOfLines={1} testID="library-collection-bar">
+        {`${vm.counts.learningCount + vm.counts.masteredCount}/${vm.counts.newCount + vm.counts.learningCount + vm.counts.masteredCount}`}
+      </Text>
       {vm.decks.length > 1 ? (
         <View style={styles.deckSwitcher} testID="library-deck-switcher">
           {vm.decks.map((deckOption) => {
@@ -77,7 +80,8 @@ function LibraryHeader({ vm, onSelectDeck, onSelectFilter }: LibraryHeaderProps)
           return (
             <Pressable
               key={chip.key}
-              testID={`library-filter-${chip.key}`}
+              testID={chip.key === 'missing' ? 'library-filter-missing' : `library-filter-${chip.key}`}
+              nativeID={chip.key === 'missing' ? 'library-filter-unowned' : undefined}
               style={({ pressed }) => [
                 styles.filterChip,
                 selected && styles.filterChipActive,
@@ -105,8 +109,9 @@ function getStatusBadgeToneStyle(tone: LibraryCardBadgeTone) {
   return styles.statusBadgeMastered;
 }
 
-export function LibraryScreen({ navigation }: Props) {
+export function LibraryScreen({ navigation, route }: Props) {
   const { width } = useWindowDimensions();
+  const listRef = useRef<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
@@ -159,8 +164,8 @@ export function LibraryScreen({ navigation }: Props) {
   );
   useFocusEffect(
     useCallback(() => {
-      void refresh();
-    }, [refresh]),
+      void refresh(route.params?.focusSlug ?? null);
+    }, [refresh, route.params?.focusSlug]),
   );
   const vm: LibraryViewModel | null = useMemo(() => {
     if (!deck) return null;
@@ -173,6 +178,13 @@ export function LibraryScreen({ navigation }: Props) {
       selectedDeckSlug: selectedSlug,
     });
   }, [deck, progress, filter, deckOptions, selectedSlug]);
+  useEffect(() => {
+    if (!vm) return;
+    if (!route.params?.scrollToNew) return;
+    const firstMissingIndex = vm.cards.findIndex((item) => item.status === 'new');
+    if (firstMissingIndex < 0) return;
+    listRef.current?.scrollToIndex?.({ index: firstMissingIndex, animated: true });
+  }, [route.params?.scrollToNew, vm]);
   if (loading) {
     return (
       <SafeAreaView style={styles.safeArea} testID="screen-library-root">
@@ -231,6 +243,7 @@ export function LibraryScreen({ navigation }: Props) {
       >
         <View style={styles.primarySurface} testID="screen-library-primary-surface">
           <FlatList
+            ref={listRef}
             data={vm.cards}
             key={`${numColumns}-${vm.filter}-${selectedSlug ?? 'none'}`}
             numColumns={numColumns}
@@ -253,7 +266,7 @@ export function LibraryScreen({ navigation }: Props) {
                 <Text style={styles.errorBody} numberOfLines={2}>
                   {vm.filter === 'all'
                     ? 'Open deck to install or update content, then return here to browse.'
-                    : 'Switch back to All to browse every owned card.'}
+                    : 'Switch back to All to browse every card.'}
                 </Text>
                 <Pressable
                   style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
@@ -320,6 +333,7 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: typography.caption, color: colors.gold, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 },
   title: { marginTop: spacing.xs, fontSize: typography.title2, color: colors.ink, fontWeight: '900' },
   subtitle: { marginTop: spacing.xs, fontSize: typography.bodySmall, color: colors.inkSecondary },
+  collectionBar: { marginTop: spacing.xs, fontSize: typography.caption, color: colors.inkSecondary, fontWeight: '800' },
   deckSwitcher: { marginTop: spacing.md, flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   deckChip: { minHeight: 44, minWidth: 92, paddingHorizontal: spacing.sm, borderRadius: 999, borderWidth: 1, borderColor: colors.inkSecondary, backgroundColor: colors.parchmentBg, alignItems: 'center', justifyContent: 'center' },
   deckChipActive: { borderColor: colors.ink, backgroundColor: colors.ink },

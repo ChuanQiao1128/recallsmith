@@ -6,7 +6,7 @@ import { formatDateKey } from '../../../review/model';
 
 export type LibraryCardStatus = 'new' | 'learning' | 'mastered';
 export type LibraryCardBadgeTone = 'new' | 'learning' | 'mastered';
-export type LibraryFilter = 'all' | 'new' | 'learning' | 'mastered';
+export type LibraryFilter = 'all' | 'owned' | 'missing';
 
 export type LibraryCardRow = {
   stableUid: string;
@@ -22,7 +22,7 @@ export type LibraryCardRow = {
 
 export type LibraryFilterChip = {
   key: LibraryFilter;
-  label: 'All' | 'New' | 'Learning' | 'Mastered';
+  label: 'All' | 'Owned' | 'Missing';
   count: number;
 };
 
@@ -145,13 +145,16 @@ export function buildLibraryVM(params: {
         : 'No pending pressure right now — browse your library or return later.';
 
   const cards =
-    filter === 'all' ? rows : rows.filter((item) => item.status === filter);
+    filter === 'all'
+      ? rows
+      : filter === 'missing'
+        ? rows.filter((item) => item.status === 'new')
+        : rows.filter((item) => item.status === 'learning' || item.status === 'mastered');
 
   const filters: LibraryFilterChip[] = [
     { key: 'all', label: 'All', count: rows.length },
-    { key: 'new', label: 'New', count: newCount },
-    { key: 'learning', label: 'Learning', count: learningCount },
-    { key: 'mastered', label: 'Mastered', count: masteredCount },
+    { key: 'owned', label: 'Owned', count: learningCount + masteredCount },
+    { key: 'missing', label: 'Missing', count: newCount },
   ];
 
   return {
