@@ -1,3 +1,5 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 export type MockDrawCard = {
   stableUid: string;
   question: string;
@@ -22,7 +24,16 @@ export type MockDrawResult = {
   seedLabel: string;
 };
 
-function pickRarity(roll: number, odds: PoolOdds): 'COM' | 'RAR' | 'LEG' {
+export type PityState = {
+  draws: number;
+  threshold: number;
+};
+
+export const DEFAULT_PITY_STATE: PityState = { draws: 0, threshold: 10 };
+
+const PITY_PREFIX = 'devcards:draw-pity:';
+
+export function pickRarity(roll: number, odds: PoolOdds): 'COM' | 'RAR' | 'LEG' {
   if (roll < odds.leg) return 'LEG';
   if (roll < odds.leg + odds.rar) return 'RAR';
   return 'COM';
@@ -73,4 +84,33 @@ export function buildMockDrawResult(params: {
     highlightedRarity,
     seedLabel: `seed #${(poolId.length * 173 + pityBefore * 91 + drawCount * 47).toString(16)}`,
   };
+}
+
+export function buildPityProgressLabelV9(state: PityState, missingLegCount: number): string {
+  if (missingLegCount === 0) return '';
+  const remaining = Math.max(0, state.threshold - state.draws);
+  if (remaining === 0) return 'Next draw guarantees a missing rare or better';
+  return `${remaining} draws until guaranteed reveal`;
+}
+
+export async function loadPityState(slug: string): Promise<PityState> {
+  try {
+    const raw = await AsyncStorage.getItem(`${PITY_PREFIX}${slug}`);
+    if (!raw) return { ...DEFAULT_PITY_STATE };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.draws !== 'number') return { ...DEFAULT_PITY_STATE };
+    return {
+      draws: Math.max(0, Math.floor(parsed.draws)),
+      threshold:
+        typeof parsed.threshold === 'number' && parsed.threshold > 0
+          ? parsed.threshold
+          : DEFAULT_PITY_STATE.threshold,
+    };
+  } catch {
+    return { ...DEFAULT_PITY_STATE };
+  }
+}
+
+export async function savePityState(slug: string, state: PityState): Promise<void> {
+  await AsyncStorage.setItem(`${PITY_PREFIX}${slug}`, JSON.stringify(state));
 }

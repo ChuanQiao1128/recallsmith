@@ -1,11 +1,7 @@
 import type { CardProgress } from '../../../review/model';
 import type { CardExport } from '../../../types/deckExport';
 import { rarityOfCard } from './cardRarity';
-
-export type PityState = {
-  draws: number;
-  threshold: number;
-};
+import type { PityState } from './pity';
 
 export type SelectionInput = {
   deckCards: CardExport[];
