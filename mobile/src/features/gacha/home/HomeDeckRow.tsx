@@ -6,10 +6,10 @@ import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
 
 const HOME_DECK_ROW_TOKENS = {
-  border: 'rgba(90,75,56,0.16)',
-  surface: 'rgba(255,255,255,0.92)',
-  selectedBorder: 'rgba(200,136,58,0.35)',
-  selectedSurface: 'rgba(232,184,90,0.14)',
+  border: colors.hairline,
+  surface: colors.softCream,
+  selectedBorder: colors.gold,
+  selectedSurface: colors.softPeach,
 } as const;
 
 export type HomeDeckRowProps = {

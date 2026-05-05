@@ -6,7 +6,7 @@ import { formatDateKey } from '../../../review/model';
 
 export type LibraryCardStatus = 'new' | 'learning' | 'mastered';
 export type LibraryCardBadgeTone = 'new' | 'learning' | 'mastered';
-export type LibraryFilter = 'all' | 'owned' | 'missing';
+export type LibraryFilter = 'all' | 'new' | 'learning' | 'mastered';
 
 export type LibraryCardRow = {
   stableUid: string;
@@ -14,7 +14,7 @@ export type LibraryCardRow = {
   question: string;
   difficulty: number;
   status: LibraryCardStatus;
-  statusLabel: 'New' | 'Learning' | 'Mastered';
+  statusLabel: 'Missing' | 'Learning' | 'Mastered';
   badgeTone: LibraryCardBadgeTone;
   isDueToday: boolean;
   isUpdated: boolean;
@@ -22,7 +22,7 @@ export type LibraryCardRow = {
 
 export type LibraryFilterChip = {
   key: LibraryFilter;
-  label: 'All' | 'Owned' | 'Missing';
+  label: 'All' | 'New' | 'Learning' | 'Mastered';
   count: number;
 };
 
@@ -100,7 +100,7 @@ export function buildLibraryCardRows(params: {
         question: card.Question,
         difficulty: card.Difficulty,
         status,
-        statusLabel: status === 'mastered' ? 'Mastered' : status === 'learning' ? 'Learning' : 'New',
+        statusLabel: status === 'mastered' ? 'Mastered' : status === 'learning' ? 'Learning' : 'Missing',
         badgeTone: status,
         isDueToday: isDueToday(progressEntry as CardProgress, now),
         isUpdated: getCardRevision(card) > getSeenRevision(progressEntry as CardProgress) && isLearnedProgress(progressEntry as CardProgress),
@@ -147,14 +147,17 @@ export function buildLibraryVM(params: {
   const cards =
     filter === 'all'
       ? rows
-      : filter === 'missing'
+      : filter === 'new'
         ? rows.filter((item) => item.status === 'new')
-        : rows.filter((item) => item.status === 'learning' || item.status === 'mastered');
+        : filter === 'learning'
+          ? rows.filter((item) => item.status === 'learning')
+          : rows.filter((item) => item.status === 'mastered');
 
   const filters: LibraryFilterChip[] = [
     { key: 'all', label: 'All', count: rows.length },
-    { key: 'owned', label: 'Owned', count: learningCount + masteredCount },
-    { key: 'missing', label: 'Missing', count: newCount },
+    { key: 'new', label: 'New', count: newCount },
+    { key: 'learning', label: 'Learning', count: learningCount },
+    { key: 'mastered', label: 'Mastered', count: masteredCount },
   ];
 
   return {

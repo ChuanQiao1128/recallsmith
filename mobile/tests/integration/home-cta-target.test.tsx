@@ -2,12 +2,11 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+let progressFixture: any[] = [];
+let deckSummariesFixture: any[] | null = null;
 let walletFixture = { availablePulls: 0, reservePulls: 0 };
-let activeSlugFixture: string | null = 'csharp';
-let deckSummariesFixture: any[] = [];
-
-const navigateMock = vi.fn();
 const setActiveDeckSlugMock = vi.fn(async (_slug: string) => {});
+const navigateMock = vi.fn();
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -22,7 +21,6 @@ vi.mock('react-native', () => {
         { ...props, onPress },
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
-    useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
     Alert: { alert: vi.fn() },
     StyleSheet: { create: (styles: any) => styles },
   };
@@ -50,26 +48,63 @@ vi.mock('@react-navigation/native', () => ({
 }));
 
 vi.mock('../../src/content/activeDeck', () => ({
-  loadActiveDeckSlug: vi.fn(async () => activeSlugFixture),
-  setActiveDeckSlug: vi.fn(async (slug: string) => setActiveDeckSlugMock(slug)),
+  loadActiveDeckSlug: vi.fn(async () => 'csharp'),
+  setActiveDeckSlug: (slug: string) => setActiveDeckSlugMock(slug),
 }));
 
 vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
   loadHomeDeckSummaries: vi.fn(async () => {
     const now = Date.now();
-    const totalDue = deckSummariesFixture.reduce((sum, deck) => sum + Number(deck.dueToday ?? 0), 0);
+    const dueToday = progressFixture.filter((item) => {
+      const next = Number(item?.nextReviewAt ?? 0);
+      return next <= now;
+    }).length;
+    const newToday = progressFixture.filter((item) => Number(item?.stage ?? 0) === 0).length;
     return {
-      deckSummaries: deckSummariesFixture,
+      deckSummaries:
+        deckSummariesFixture ??
+        [
+          {
+            slug: 'csharp',
+            title: 'C# Interview',
+            locale: 'en-US',
+            version: '1',
+            deckType: 1,
+            totalCards: 1,
+            localCards: 1,
+            studyCards: 1,
+            canStudy: true,
+            dueToday,
+            plannedToday: dueToday,
+            newToday,
+            masteredApprox: Math.max(0, 1 - newToday),
+            percent: 1,
+          },
+        ],
       updates: {},
       allUpcoming30: Array.from({ length: 30 }, (_, i) => ({
         dateKey: new Date(now + i * 86_400_000).toISOString(),
-        count: i === 0 ? totalDue : 0,
+        count: i === 0 ? dueToday : 0,
       })),
       asOfISO: new Date(now).toISOString(),
     };
   }),
+  loadDeckUpdates: vi.fn(async () => ({})),
   resolveDeckAction: vi.fn(async () => ({ kind: 'open', slug: 'csharp' })),
   executeDeckAction: vi.fn(async () => ({ activeSlug: 'csharp' })),
+}));
+
+vi.mock('../../src/review/storage', () => ({
+  loadDeckProgress: vi.fn(async () => progressFixture),
+}));
+
+vi.mock('../../src/notifications/reminders', () => ({
+  syncDailyReminders: vi.fn(async () => {}),
+}));
+
+vi.mock('../../src/sync/progressSync', () => ({
+  forceProgressSync: vi.fn(async () => {}),
+  applyCachedRemoteProgress: vi.fn(async () => {}),
 }));
 
 vi.mock('../../src/auth/authStore', () => ({
@@ -106,9 +141,13 @@ vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
   })),
 }));
 
-vi.mock('../../src/sync/progressSync', () => ({
-  forceProgressSync: vi.fn(async () => {}),
-}));
+vi.mock('../../src/features/gacha/components/TodayPressureCard', () => {
+  const React = require('react');
+  return {
+    __esModule: true,
+    default: () => React.createElement('View', null, React.createElement('Text', null, 'TodayPressureCard')),
+  };
+});
 
 import { HomeScreen } from '../../src/screens/HomeScreen';
 
@@ -119,151 +158,88 @@ async function flush() {
   });
 }
 
-describe('HomeScreen v9', () => {
+describe('home primary CTA target', () => {
   beforeEach(() => {
-    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-    walletFixture = { availablePulls: 2, reservePulls: 0 };
-    activeSlugFixture = 'csharp';
-    deckSummariesFixture = [
-      {
-        slug: 'csharp',
-        title: 'C# Interview',
-        locale: 'en-US',
-        version: '1',
-        deckType: 1,
-        totalCards: 10,
-        localCards: 10,
-        studyCards: 10,
-        canStudy: true,
-        dueToday: 1,
-        plannedToday: 1,
-        newToday: 1,
-        masteredApprox: 4,
-        percent: 0.4,
-      },
-      {
-        slug: 'aws',
-        title: 'AWS Core',
-        locale: 'en-US',
-        version: '1',
-        deckType: 1,
-        totalCards: 8,
-        localCards: 8,
-        studyCards: 8,
-        canStudy: true,
-        dueToday: 2,
-        plannedToday: 2,
-        newToday: 0,
-        masteredApprox: 5,
-        percent: 0.62,
-      },
-    ];
-    navigateMock.mockReset();
     setActiveDeckSlugMock.mockClear();
+    navigateMock.mockClear();
+    deckSummariesFixture = null;
+    walletFixture = { availablePulls: 0, reservePulls: 0 };
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   });
 
-  it('renders root shell with one primary CTA surface', async () => {
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
-      );
-    });
-    await flush();
+  it('navigates to Challenge when today has pending work', async () => {
+    progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
 
-    expect(tree.root.findByProps({ testID: 'screen-home-root' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'screen-home-primary-cta' })).toBeTruthy();
-    expect(
-      tree.root.findAll(
-        (node) =>
-          node.props?.testID === 'home-primary-cta' && (node.type as any) === 'Pressable',
-      ),
-    ).toHaveLength(1);
-    expect(tree.root.findByProps({ testID: 'home-pack-visual' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'home-draw-status-badge' })).toBeTruthy();
-  });
-
-  it('shows due-card study link and routes it to Challenge', async () => {
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
-      );
-    });
-    await flush();
-
-    const studyLink = tree.root.findByProps({ testID: 'home-study-due-link' });
-    expect(studyLink).toBeTruthy();
-
-    act(() => {
-      studyLink.props.onPress();
-    });
-
-    expect(navigateMock).toHaveBeenCalledWith('Challenge');
-  });
-
-  it('hides due-card study link when no deck has due work', async () => {
-    deckSummariesFixture = deckSummariesFixture.map((deck) => ({
-      ...deck,
-      dueToday: 0,
-      plannedToday: 0,
-      newToday: 0,
-    }));
-
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
-      );
-    });
-    await flush();
-
-    expect(tree.root.findAllByProps({ testID: 'home-study-due-link' })).toHaveLength(0);
-  });
-
-  it('keeps settings button accessible and opens first draw coach link when enabled', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
         <HomeScreen
           navigation={{ navigate: navigateMock } as any}
-          route={{ key: 'home', name: 'Home', params: { firstDrawCoach: true } } as any}
+          route={{ key: 'home', name: 'Home' } as any}
         />,
       );
     });
     await flush();
 
-    const settings = tree.root.find(
-      (node) => (node.type as any) === 'Pressable' && node.props?.accessibilityLabel === 'Settings',
-    );
-    expect(settings).toBeTruthy();
-
-    const firstDrawLink = tree.root.findByProps({ testID: 'home-first-draw-link' });
-    act(() => {
-      firstDrawLink.props.onPress();
+    const cta = tree.root.find((node) => node.props?.testID === 'home-primary-cta');
+    await act(async () => {
+      cta.props.onPress();
+      await Promise.resolve();
     });
 
-    expect(navigateMock).toHaveBeenCalledWith('Draw', {
-      slug: 'csharp',
-      rewardPending: true,
-    });
+    expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
+    expect(navigateMock).toHaveBeenCalledWith('Challenge', { slug: 'csharp' });
   });
 
-  it('routes primary CTA to Draw when pulls are available', async () => {
+  it('navigates to Library when there is no pending work', async () => {
+    progressFixture = [
+      {
+        stableUid: '1',
+        stage: 1,
+        lastReviewedAt: Date.now() - 1000,
+        nextReviewAt: Date.now() + 24 * 60 * 60 * 1000,
+      },
+    ];
+
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home' } as any}
+        />,
       );
     });
     await flush();
 
-    const primary = tree.root.find(
-      (node) =>
-        node.props?.testID === 'home-primary-cta' && (node.type as any) === 'Pressable',
-    );
+    const cta = tree.root.find((node) => node.props?.testID === 'home-primary-cta');
     await act(async () => {
-      primary.props.onPress();
+      cta.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
+    expect(navigateMock).toHaveBeenCalledWith('Library');
+  });
+
+  it('navigates to Draw when pending work exists and pulls are available', async () => {
+    progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
+    walletFixture = { availablePulls: 2, reservePulls: 0 };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home' } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const cta = tree.root.find((node) => node.props?.testID === 'home-primary-cta');
+    await act(async () => {
+      cta.props.onPress();
       await Promise.resolve();
     });
 
@@ -271,5 +247,31 @@ describe('HomeScreen v9', () => {
       slug: 'csharp',
       rewardPending: true,
     });
+  });
+
+  it('navigates to Library when no deck is available', async () => {
+    progressFixture = [];
+    deckSummariesFixture = [];
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home' } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const cta = tree.root.find((node) => node.props?.testID === 'home-primary-cta');
+    expect(cta.props.disabled).toBe(false);
+    await act(async () => {
+      cta.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(setActiveDeckSlugMock).not.toHaveBeenCalled();
+    expect(navigateMock).toHaveBeenCalledWith('Library');
   });
 });

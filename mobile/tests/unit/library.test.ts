@@ -81,8 +81,9 @@ describe('buildLibraryVM', () => {
 
   it.each([
     { filter: 'all', expected: ['1', '2', '3', '4'] },
-    { filter: 'owned', expected: ['2', '3'] },
-    { filter: 'missing', expected: ['1', '4'] },
+    { filter: 'new', expected: ['1', '4'] },
+    { filter: 'learning', expected: ['2'] },
+    { filter: 'mastered', expected: ['3'] },
   ] as const)('filters cards by %s', ({ filter, expected }) => {
     const vm = buildLibraryVM({
       deck: sampleDeck,
@@ -92,5 +93,16 @@ describe('buildLibraryVM', () => {
     });
 
     expect(vm.cards.map((item) => item.stableUid)).toEqual(expected);
+  });
+
+  it('exposes the v7 four-filter contract from mapper', () => {
+    const vm = buildLibraryVM({
+      deck: sampleDeck,
+      progress: sampleProgress,
+      now: NOW,
+      filter: 'all',
+    });
+
+    expect(vm.filters.map((item) => item.key)).toEqual(['all', 'new', 'learning', 'mastered']);
   });
 });

@@ -475,8 +475,13 @@ export async function checkManifestForUpdates(
   return out;
 }
 
-export async function listManifestDecks(): Promise<ManifestDeckEntry[]> {
-  const manifest = await loadManifestCached();
+export async function listManifestDecks(
+  options?: { preferRemote?: boolean },
+): Promise<ManifestDeckEntry[]> {
+  const preferRemote = options?.preferRemote === true;
+  const manifest = preferRemote
+    ? await loadManifestPreferRemote()
+    : (await loadManifestCached()) ?? (await loadManifestPreferRemote());
   if (!manifest) return [];
 
   await reconcileRetiredDecks(manifest);
@@ -1256,7 +1261,14 @@ async function removeDeckMeta(slug: string, userKey?: string) {
 async function loadManifestPreferRemote(): Promise<RawManifest | null> {
   const remote = await fetchRemoteManifest();
   if (remote) return remote;
-  return await loadManifestCached();
+  const cached = await loadManifestCached();
+  if ((globalThis as any).__DEV__ === true) {
+    console.warn('[content] manifest_remote_unavailable_using_cache', {
+      url: MANIFEST_URL,
+      cachedDecks: cached?.decks?.length ?? 0,
+    });
+  }
+  return cached;
 }
 
 async function loadManifestCached(): Promise<RawManifest | null> {
@@ -1268,6 +1280,14 @@ async function loadManifestCached(): Promise<RawManifest | null> {
 
     if (typeof obj.prefix !== 'string' || !obj.prefix.trim()) obj.prefix = 'content';
     obj.prefix = obj.prefix.replace(/^\/+/, '').replace(/\/+$/, '');
+
+    if ((globalThis as any).__DEV__ === true) {
+      console.log('[content] manifest_cache_loaded', {
+        key: MANIFEST_CACHE_KEY,
+        decks: obj.decks.length,
+        schemaVersion: obj.schemaVersion,
+      });
+    }
 
     return obj;
   } catch {
@@ -1281,17 +1301,43 @@ async function fetchRemoteManifest(): Promise<RawManifest | null> {
       method: 'GET',
       headers: { 'cache-control': 'no-cache' },
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      if ((globalThis as any).__DEV__ === true) {
+        console.warn('[content] manifest_remote_http_error', {
+          url: MANIFEST_URL,
+          status: resp.status,
+        });
+      }
+      return null;
+    }
 
     const json = (await resp.json()) as RawManifest;
-    if (!json || !Array.isArray(json.decks)) return null;
+    if (!json || !Array.isArray(json.decks)) {
+      if ((globalThis as any).__DEV__ === true) {
+        console.warn('[content] manifest_remote_invalid_shape', { url: MANIFEST_URL });
+      }
+      return null;
+    }
 
     if (typeof json.prefix !== 'string' || !json.prefix.trim()) json.prefix = 'content';
     json.prefix = json.prefix.replace(/^\/+/, '').replace(/\/+$/, '');
 
     await AsyncStorage.setItem(MANIFEST_CACHE_KEY, JSON.stringify(json));
+    if ((globalThis as any).__DEV__ === true) {
+      console.log('[content] manifest_remote_loaded', {
+        url: MANIFEST_URL,
+        decks: json.decks.length,
+        schemaVersion: json.schemaVersion,
+        prefix: json.prefix,
+      });
+    }
     return json;
   } catch {
+    if ((globalThis as any).__DEV__ === true) {
+      console.warn('[content] manifest_remote_fetch_exception', {
+        url: MANIFEST_URL,
+      });
+    }
     return null;
   }
 }

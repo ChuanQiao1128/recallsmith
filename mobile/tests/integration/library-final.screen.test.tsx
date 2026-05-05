@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 function makeDeck(slug: string, title: string, cards: Array<{ uid: string; order: number; difficulty: number; question: string }>) {
   return {
@@ -87,9 +87,7 @@ vi.mock('../../src/content/deckRepository', () => ({
 vi.mock('../../src/review/storage', () => ({
   loadDeckProgress: vi.fn(async (deck: any) => {
     if (deck?.Slug === 'aws') {
-      return [
-        { stableUid: 'a1', stage: 2, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 86400000 },
-      ];
+      return [{ stableUid: 'a1', stage: 2, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 86400000 }];
     }
     return [
       { stableUid: '1', stage: 0, nextReviewAt: 0 },
@@ -108,14 +106,19 @@ async function flush() {
   });
 }
 
-describe('LibraryScreen', () => {
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-  let warnSpy: ReturnType<typeof vi.spyOn>;
+function collectText(tree: renderer.ReactTestRenderer): string {
+  return tree.root
+    .findAll((node) => (node.type as any) === 'Text')
+    .map((node) => {
+      const c = node.props.children;
+      return Array.isArray(c) ? c.join('') : String(c ?? '');
+    })
+    .join('\n');
+}
 
+describe('LibraryScreen v9', () => {
   beforeEach(() => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     mockActiveDeckSlug = 'csharp';
     mockManifestDecks = [{ slug: 'csharp', title: 'C# Interview', availability: 'live' }];
     mockDecksBySlug = {
@@ -131,74 +134,77 @@ describe('LibraryScreen', () => {
     };
   });
 
-  afterEach(() => {
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
-  });
-
-  it('renders All/Owned/Missing filters with collection status chips', async () => {
-    const navigate = vi.fn();
-
+  it('renders collection bar and primary grid shell ids', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
       );
     });
     await flush();
 
-    expect(tree.root.find((node) => node.props?.testID === 'screen-library-root')).toBeTruthy();
-    expect(tree.root.find((node) => node.props?.testID === 'screen-library-primary-surface')).toBeTruthy();
-    expect(tree.root.find((node) => node.props?.testID === 'library-card-grid')).toBeTruthy();
-
-    const blob = tree.root
-      .findAll((node) => (node.type as any) === 'Text')
-      .map((node) => {
-        const c = node.props.children;
-        return Array.isArray(c) ? c.join('') : String(c ?? '');
-      })
-      .join('\n');
-
-    expect(blob).toContain('Library');
-    expect(blob).toContain('All');
-    expect(blob).toContain('Owned');
-    expect(blob).toContain('Missing');
-    expect(blob).toContain('2/3');
-    expect(blob).not.toContain('You have room to learn fresh cards today.');
-    expect(blob).not.toContain('Clear today');
-    expect(tree.root.find((node) => node.props?.testID === 'library-filter-all')).toBeTruthy();
-    expect(tree.root.find((node) => node.props?.testID === 'library-filter-owned')).toBeTruthy();
-    expect(tree.root.find((node) => node.props?.testID === 'library-filter-missing')).toBeTruthy();
-
-    const badgeBackgrounds = ['1', '2', '3'].map((stableUid) => {
-      const badge = tree.root.find((node) => node.props?.testID === `library-card-status-${stableUid}`);
-      return badge.props.style[1].backgroundColor;
-    });
-    expect(new Set(badgeBackgrounds).size).toBe(3);
+    expect(tree.root.findByProps({ testID: 'screen-library-root' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'screen-library-primary-surface' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-card-grid' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-collection-bar' })).toBeTruthy();
+    expect(collectText(tree)).toContain('2/3');
+    const statusOne = tree.root.findByProps({ testID: 'library-card-status-1' });
+    const statusOneText = statusOne.find((child: any) => (child.type as any) === 'Text').props.children;
+    expect(statusOneText).toBe('Missing');
   });
 
-  it('opens card detail from library card grid', async () => {
-    const navigate = vi.fn();
-
+  it('shows only All/New/Learning/Mastered filters in filter sheet', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
       );
     });
     await flush();
-
-    const q1 = tree.root.find((node) => node.props?.testID === 'library-card-1');
 
     act(() => {
-      q1.props.onPress();
+      tree.root.findByProps({ testID: 'library-filter-summary' }).props.onPress();
     });
 
-    expect(navigate).toHaveBeenCalledWith('CardDetail', { cardId: '1' });
+    expect(tree.root.findByProps({ testID: 'library-filter-sheet' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-sheet-filter-all' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-sheet-filter-new' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-sheet-filter-learning' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-sheet-filter-mastered' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'library-sheet-filter-owned' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'library-sheet-filter-missing' })).toHaveLength(0);
   });
 
-  it('renders deck switcher for multiple decks and refreshes the grid for selected deck', async () => {
-    const navigate = vi.fn();
+  it('keeps collection bar invariant across filter toggles', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+
+    const readCollectionBar = () => {
+      const bar = tree.root.findByProps({ testID: 'library-collection-bar' });
+      const value = bar.props.children;
+      return Array.isArray(value) ? value.join('') : String(value ?? '');
+    };
+
+    const baseline = readCollectionBar();
+    expect(baseline).toBe('2/3');
+
+    for (const filterKey of ['all', 'new', 'learning', 'mastered'] as const) {
+      act(() => {
+        tree.root.findByProps({ testID: 'library-filter-summary' }).props.onPress();
+      });
+      act(() => {
+        tree.root.findByProps({ testID: `library-sheet-filter-${filterKey}` }).props.onPress();
+      });
+      expect(readCollectionBar()).toBe(baseline);
+    }
+  });
+
+  it('applies focusSlug route param on initial load', async () => {
     mockManifestDecks = [
       { slug: 'csharp', title: 'C# Interview', availability: 'live' },
       { slug: 'aws', title: 'AWS Core', availability: 'live' },
@@ -207,73 +213,51 @@ describe('LibraryScreen', () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+        <LibraryScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'library', name: 'Library', params: { focusSlug: 'aws' } } as any}
+        />,
       );
     });
     await flush();
 
-    expect(tree.root.find((node) => node.props?.testID === 'library-deck-switcher')).toBeTruthy();
-    expect(tree.root.find((node) => node.props?.testID === 'library-deck-csharp')).toBeTruthy();
-    const awsDeckChip = tree.root.find((node) => node.props?.testID === 'library-deck-aws');
-    expect(tree.root.find((node) => node.props?.testID === 'library-card-1')).toBeTruthy();
-
-    act(() => {
-      awsDeckChip.props.onPress();
-    });
-    await flush();
-
-    expect(tree.root.find((node) => node.props?.testID === 'library-card-a1')).toBeTruthy();
-    expect(tree.root.findAll((node) => node.props?.testID === 'library-card-1')).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'library-card-a1' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'library-card-1' })).toHaveLength(0);
   });
 
-  it('applies focusSlug route params on initial load', async () => {
-    const navigate = vi.fn();
-    mockManifestDecks = [
-      { slug: 'csharp', title: 'C# Interview', availability: 'live' },
-      { slug: 'aws', title: 'AWS Core', availability: 'live' },
-    ];
-
+  it('highlights first new card when entering with scrollToNew flag', async () => {
     let tree!: renderer.ReactTestRenderer;
+
     await act(async () => {
       tree = renderer.create(
-        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library', params: { focusSlug: 'aws' } } as any} />,
+        <LibraryScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'library', name: 'Library', params: { scrollToNew: true } } as any}
+        />,
       );
     });
     await flush();
 
-    expect(tree.root.find((node) => node.props?.testID === 'library-card-a1')).toBeTruthy();
-    expect(tree.root.findAll((node) => node.props?.testID === 'library-card-1')).toHaveLength(0);
+    const firstCard = tree.root.findByProps({ testID: 'library-card-1' });
+    const flattenedStyle = Array.isArray(firstCard.props.style)
+      ? Object.assign({}, ...firstCard.props.style)
+      : firstCard.props.style;
+    expect(flattenedStyle.borderWidth).toBe(2);
   });
 
-  it('renders empty-state recovery CTA when no cards are available', async () => {
-    const navigate = vi.fn();
+  it('renders empty-state recovery CTA when deck has no cards', async () => {
     mockDecksBySlug.csharp = makeDeck('csharp', 'C# Interview', []);
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
       );
     });
     await flush();
 
-    const blob = tree.root
-      .findAll((node) => (node.type as any) === 'Text')
-      .map((node) => {
-        const c = node.props.children;
-        return Array.isArray(c) ? c.join('') : String(c ?? '');
-      })
-      .join('\n');
-
-    expect(blob).toContain('No cards in this library yet');
-    expect(blob).toContain('Install a deck');
-    expect(blob).not.toContain('Open deck gate');
-    expect(tree.root.find((node) => node.props?.testID === 'library-empty-state')).toBeTruthy();
-
-    const emptyCta = tree.root.find((node) => node.props?.testID === 'library-empty-cta');
-    act(() => {
-      emptyCta.props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('Deck');
+    expect(tree.root.findByProps({ testID: 'library-empty-state' })).toBeTruthy();
+    expect(collectText(tree)).toContain('Nothing matches');
+    expect(tree.root.findByProps({ testID: 'library-empty-cta' })).toBeTruthy();
   });
 });

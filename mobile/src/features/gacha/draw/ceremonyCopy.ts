@@ -61,6 +61,52 @@ export const CEREMONY_COPY = {
   },
 } as const;
 
+export const CEREMONY_COPY_V9 = {
+  swipe: {
+    title: 'Swipe to open',
+    body: 'Drag the pack to start the reveal.',
+  },
+  approach: {
+    title: 'Pack inbound',
+    body: 'Your pack is moving into focus.',
+    rareTitles: {
+      COM: 'Pack inbound',
+      RAR: 'Rare inbound',
+      LEG: 'Legendary inbound',
+    },
+  },
+  hold: {
+    title: 'Hold steady',
+    body: 'The reveal is loading.',
+  },
+  'tear-flip': {
+    title: 'Opening carousel',
+    body: 'Ten cards are spinning into place.',
+  },
+  'flash-reveal': {
+    title: 'Card revealed',
+    body: 'The featured card is visible. Final settle comes next.',
+  },
+  settle: {
+    title: 'Cards in place',
+    body: 'Tap to see your draw.',
+  },
+} as const;
+
+const CEREMONY_TEAR_FLIP_SINGLE = {
+  title: 'Opening reveal',
+  body: 'Your card is spinning into place.',
+} as const;
+
+type CeremonyPhaseV9 = keyof typeof CEREMONY_COPY_V9;
+
+export function getCeremonyPhaseCopy(phase: CeremonyPhaseV9, isMulti: boolean) {
+  if (phase === 'tear-flip') {
+    return isMulti ? CEREMONY_COPY_V9['tear-flip'] : CEREMONY_TEAR_FLIP_SINGLE;
+  }
+  return CEREMONY_COPY_V9[phase];
+}
+
 export function getCeremonyRarityLabel(rarity: CeremonyRarity) {
   return CEREMONY_COPY.rarity[rarity];
 }

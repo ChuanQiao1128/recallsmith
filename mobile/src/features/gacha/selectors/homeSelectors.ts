@@ -275,7 +275,15 @@ function inferStatusKind(input: {
   return 'nothing_to_learn';
 }
 
-function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
+function mapStatusToCta(params: {
+  kind: HomeCtaKind;
+  draw: HomeDrawVM;
+  selectedDeckTitle: string | null;
+}): HomeCtaVM {
+  const { kind, draw, selectedDeckTitle } = params;
+  const drawReady = draw.state !== 'locked';
+  const drawLabel = selectedDeckTitle ? `Open ${selectedDeckTitle}` : 'Open reward draw';
+
   switch (kind) {
     case 'first_run':
       return {
@@ -286,6 +294,15 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
         disabled: false,
       };
     case 'today_pending':
+      if (drawReady) {
+        return {
+          kind,
+          label: drawLabel,
+          nav: 'draw',
+          testID: 'home-primary-cta',
+          disabled: false,
+        };
+      }
       return {
         kind,
         label: 'Start today’s challenge',
@@ -294,6 +311,15 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
         disabled: false,
       };
     case 'today_partial':
+      if (drawReady) {
+        return {
+          kind,
+          label: drawLabel,
+          nav: 'draw',
+          testID: 'home-primary-cta',
+          disabled: false,
+        };
+      }
       return {
         kind,
         label: 'Continue today’s challenge',
@@ -302,22 +328,49 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
         disabled: false,
       };
     case 'today_done':
+      if (drawReady) {
+        return {
+          kind,
+          label: drawLabel,
+          nav: 'draw',
+          testID: 'home-primary-cta',
+          disabled: false,
+        };
+      }
       return {
         kind,
-        label: 'Minimum goal reached',
-        nav: 'draw',
+        label: 'Continue today’s challenge',
+        nav: 'challenge',
         testID: 'home-primary-cta',
         disabled: false,
       };
     case 'today_full_clear':
+      if (drawReady) {
+        return {
+          kind,
+          label: drawLabel,
+          nav: 'draw',
+          testID: 'home-primary-cta',
+          disabled: false,
+        };
+      }
       return {
         kind,
-        label: 'Full clear completed',
-        nav: 'draw',
+        label: 'Open library',
+        nav: 'library',
         testID: 'home-primary-cta',
         disabled: false,
       };
     case 'due_only':
+      if (drawReady) {
+        return {
+          kind,
+          label: drawLabel,
+          nav: 'draw',
+          testID: 'home-primary-cta',
+          disabled: false,
+        };
+      }
       return {
         kind,
         label: 'Clear due reviews',
@@ -326,6 +379,15 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
         disabled: false,
       };
     case 'nothing_to_learn':
+      if (drawReady) {
+        return {
+          kind,
+          label: drawLabel,
+          nav: 'draw',
+          testID: 'home-primary-cta',
+          disabled: false,
+        };
+      }
       return {
         kind,
         label: 'Open library',
@@ -336,7 +398,7 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
     case 'wallet_full':
       return {
         kind,
-        label: 'Spend reward pulls',
+        label: drawLabel,
         nav: 'draw',
         testID: 'home-primary-cta',
         disabled: false,
@@ -593,7 +655,11 @@ export function buildHomeVM(params: {
     errorMessage,
     runtimeStatus,
   });
-  let cta = mapStatusToCta(statusKind);
+  let cta = mapStatusToCta({
+    kind: statusKind,
+    draw,
+    selectedDeckTitle: selectedDeck?.title ?? null,
+  });
   if (!selectedDeck && statusKind !== 'error') {
     cta = {
       kind: 'first_run',

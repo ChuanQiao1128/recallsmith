@@ -46,15 +46,15 @@ type HomeState = {
 };
 const EMPTY_VM = buildHomeScreenVM({ state: 'empty' });
 const HOME_TOKENS = {
-  border: 'rgba(90,75,56,0.16)',
-  borderStrong: 'rgba(90,75,56,0.18)',
-  borderSoft: 'rgba(90,75,56,0.12)',
-  card: 'rgba(255,255,255,0.88)',
-  cardSoft: 'rgba(255,255,255,0.72)',
-  cardSofter: 'rgba(255,255,255,0.62)',
-  iconBg: 'rgba(255,255,255,0.84)',
-  badgeBg: 'rgba(243,232,200,0.8)',
-  linkBg: 'rgba(232,184,90,0.2)',
+  border: colors.hairline,
+  borderStrong: colors.hairline,
+  borderSoft: colors.hairline,
+  card: colors.softCream,
+  cardSoft: colors.parchmentBg,
+  cardSofter: colors.softMist,
+  iconBg: colors.softCream,
+  badgeBg: colors.parchmentBgDeep,
+  linkBg: colors.softLavender,
 } as const;
 
 export function HomeScreen({ navigation, route }: Props) {
@@ -347,11 +347,6 @@ export function HomeScreen({ navigation, route }: Props) {
   const primaryCtaDisabled =
     homeState.vm.cta.disabled ||
     (homeState.vm.cta.nav === 'challenge' && !homeState.vm.selectedDeckSlug);
-  const hasDrawPulls = homeState.vm.draw.state !== 'locked';
-  const primaryCtaLabel =
-    hasDrawPulls && homeState.vm.selectedDeckTitle
-      ? `Open ${homeState.vm.selectedDeckTitle}`
-      : homeState.vm.cta.label;
   const totalDueAcrossDecks = homeState.vm.counts.totalDueAllDecks;
   if (homeState.loading) {
     return (
@@ -406,6 +401,24 @@ export function HomeScreen({ navigation, route }: Props) {
               </Pressable>
             </View>
             <View style={styles.primaryCard}>
+              <View testID="home-pack-visual" style={styles.packGatewayStage}>
+                <View pointerEvents="none" style={styles.packGatewayHalo} />
+                <View pointerEvents="none" style={styles.packGatewayShadow} />
+                <LinearGradient
+                  colors={[colors.softLavender, colors.softPeach, colors.softCream]}
+                  start={{ x: 0.1, y: 0 }}
+                  end={{ x: 0.9, y: 1 }}
+                  style={styles.packGatewayPack}
+                >
+                  <View pointerEvents="none" style={styles.packGatewayShine} />
+                  <Text style={styles.packGatewayKicker} numberOfLines={1}>
+                    Reward pack
+                  </Text>
+                  <Text style={styles.packGatewayTitle} numberOfLines={1}>
+                    {homeState.vm.selectedDeckTitle ?? 'Pick a deck'}
+                  </Text>
+                </LinearGradient>
+              </View>
               <Text style={styles.heroEyebrow} numberOfLines={1}>
                 {homeState.vm.hero.eyebrow}
               </Text>
@@ -444,11 +457,11 @@ export function HomeScreen({ navigation, route }: Props) {
                   }}
                 >
                   <Text style={styles.primaryCtaText} numberOfLines={1}>
-                    {primaryCtaLabel}
+                    {homeState.vm.cta.label}
                   </Text>
                 </Pressable>
               </View>
-              <Text style={styles.drawBadge} numberOfLines={1}>
+              <Text testID="home-draw-status-badge" style={styles.drawBadge} numberOfLines={1}>
                 {homeState.vm.draw.label}
               </Text>
               {totalDueAcrossDecks > 0 ? (
@@ -570,6 +583,27 @@ const styles = StyleSheet.create({
   settingsIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: HOME_TOKENS.border, backgroundColor: HOME_TOKENS.iconBg },
   settingsText: { color: colors.ink, fontSize: 18 },
   primaryCard: { borderRadius: spacing.lg, borderWidth: 1, borderColor: HOME_TOKENS.borderStrong, backgroundColor: HOME_TOKENS.card, padding: spacing.md },
+  packGatewayStage: { marginBottom: spacing.sm, minHeight: 122, alignItems: 'center', justifyContent: 'center' },
+  packGatewayHalo: { position: 'absolute', top: 16, width: 214, height: 88, borderRadius: 999, backgroundColor: colors.shine },
+  packGatewayShadow: { position: 'absolute', bottom: 8, width: 156, height: 18, borderRadius: 999, backgroundColor: colors.shadowSoft },
+  packGatewayPack: {
+    width: 188,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.parchmentBg,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
+  },
+  packGatewayShine: { position: 'absolute', top: 8, left: 24, width: 56, height: 8, borderRadius: 999, backgroundColor: colors.shine },
+  packGatewayKicker: { fontSize: typography.caption, fontWeight: '800', color: colors.inkSoft, textTransform: 'uppercase', letterSpacing: 0.6 },
+  packGatewayTitle: { marginTop: 4, fontSize: typography.body, fontWeight: '900', color: colors.ink, textAlign: 'center' },
   heroEyebrow: { fontSize: typography.caption, fontWeight: '800', color: colors.gold, letterSpacing: 0.8 },
   heroHeadline: { marginTop: spacing.xs, fontSize: typography.title2, lineHeight: 28, fontWeight: '900', color: colors.ink },
   heroSubline: { marginTop: 6, fontSize: typography.bodySmall, color: colors.inkSecondary },

@@ -1,64 +1,39 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+} from 'react-native';
+import * as RN from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+
 import type { RootStackParamList } from '../navigation/types';
 import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
-import { a11y } from '../theme/a11y';
 import { colors } from '../theme/colors';
-import { spacing } from '../theme/spacing';
-import { typography } from '../theme/typography';
+import {
+  PAGE_GRADIENT_LIGHT,
+  rarityAccentColor,
+  rarityHaloColor,
+} from '../theme/packArt';
+import { drawResultStyles as styles } from '../features/gacha/components/drawResultStyles';
 
-const SPARKS = Array.from({ length: 18 }, (_, index) => ({
-  left: `${8 + ((index * 21) % 82)}%`,
-  top: `${4 + ((index * 13) % 64)}%`,
-  size: index % 3 === 0 ? 6 : 3,
-  amber: index % 4 === 0,
-}));
-
-const DRAW_RESULT_COLOR = {
-  gradientMid: 'rgba(17,23,61,1)',
-  sparkLilac: 'rgba(201,173,247,1)',
-  copyMuted: 'rgba(214,199,154,1)',
-  copyPrimary: 'rgba(248,239,210,1)',
-  heroShell: 'rgba(11,16,48,0.92)',
-  heroBorder: 'rgba(245,236,196,0.12)',
-  afterglowShell: 'rgba(245,236,196,0.08)',
-  afterglowBorder: 'rgba(245,236,196,0.14)',
-  legText: 'rgba(245,213,122,1)',
-  rarText: 'rgba(201,173,247,1)',
-  comText: 'rgba(214,199,154,1)',
-  black: 'rgba(0,0,0,1)',
-  whiteSoft: 'rgba(255,249,241,1)',
-  whiteSoftMuted: 'rgba(255,249,241,0.82)',
-  featuredRar: 'rgba(76,62,128,1)',
-  featuredCom: 'rgba(106,90,67,1)',
-  featuredBadgeBg: 'rgba(255,255,255,0.18)',
-  featuredBadgeText: 'rgba(255,245,230,1)',
-  summaryLegBg: 'rgba(249,232,196,1)',
-  summaryLegText: 'rgba(166,111,38,1)',
-  summaryRarBg: 'rgba(232,224,240,1)',
-  summaryRarText: 'rgba(110,76,159,1)',
-  summaryComBg: 'rgba(239,230,204,1)',
-  summaryComText: 'rgba(140,122,91,1)',
-  cardRarity: 'rgba(90,70,48,1)',
-  cardTag: 'rgba(140,122,91,1)',
-  cardMeta: 'rgba(107,90,69,1)',
-  secondaryBg: 'rgba(255,255,255,0.72)',
-  secondaryBorder: 'rgba(42,34,24,0.08)',
-  modalOverlay: 'rgba(0,0,0,0.5)',
-  modalCopy: 'rgba(90,75,56,1)',
-  primaryText: 'rgba(255,255,255,1)',
-  comCardBg: 'rgba(239,230,204,0.94)',
-  comCardBorder: 'rgba(140,122,91,0.18)',
-  rarCardBg: 'rgba(232,224,240,0.96)',
-  rarCardBorder: 'rgba(110,76,159,0.16)',
-  legCardBg: 'rgba(249,232,196,0.98)',
-  legCardBorder: 'rgba(200,136,58,0.18)',
-} as const;
-const DRAW_RESULT_GRADIENT = [colors.cosmicBg, DRAW_RESULT_COLOR.gradientMid, colors.parchmentBg] as const;
-const drawResultColors = DRAW_RESULT_COLOR;
+// ─── Animated guard ─────────────────────────────────────────────────────────
+// Vitest mocks use a strict Proxy that throws on missing exports — wrap access.
+function readAnimated(): any {
+  try {
+    return (RN as any).Animated ?? {};
+  } catch {
+    return {};
+  }
+}
+const A: any = readAnimated();
+const AnimatedView: any = A.View ?? View;
+const hasAnimated = typeof A.Value === 'function';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DrawResult'>;
 type DrawResultRouteParams = RootStackParamList['DrawResult'] & {
@@ -67,57 +42,101 @@ type DrawResultRouteParams = RootStackParamList['DrawResult'] & {
 };
 type DrawResultCard = NonNullable<RootStackParamList['DrawResult']['drawResult']>['cards'][number];
 
-function normalizeText(value: unknown) {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '';
+function normalizeText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
-function buildStarRow(difficulty: number) {
-  return Array.from({ length: 5 }, (_, index) => (index < difficulty ? '★' : '☆')).join('');
+function deckLabel(params: DrawResultRouteParams): string {
+  return normalizeText(params.deckTitle) || normalizeText(params.drawResult?.poolId) || params.slug;
 }
 
-function joinMeta(segments: string[]) {
-  return segments.filter((segment) => segment.trim().length > 0).join(' · ');
-}
-
-function getCardTag(card: DrawResultCard | null | undefined) {
-  return normalizeText(card?.tag);
-}
-
-function getCardMeta(card: DrawResultCard) {
-  return joinMeta([getCardTag(card), buildStarRow(card.difficulty)]);
-}
-
-function getDeckLabel(params: DrawResultRouteParams, slug: string) {
-  return normalizeText(params.deckTitle) || normalizeText(params.drawResult?.poolId) || slug;
-}
-
-function getRarityLabel(rarity: 'COM' | 'RAR' | 'LEG') {
+function rarityLabel(rarity: 'COM' | 'RAR' | 'LEG'): string {
   if (rarity === 'LEG') return 'Legendary';
   if (rarity === 'RAR') return 'Rare';
   return 'Common';
 }
 
+function cardTagText(card: DrawResultCard): string {
+  return typeof card.tag === 'string' && card.tag.trim() ? card.tag.trim() : '';
+}
+
+const FEATURED_GRADIENT_BY_RARITY: Record<
+  'COM' | 'RAR' | 'LEG',
+  readonly [string, string, string]
+> = {
+  LEG: [colors.softCream, colors.rarityLegendary, colors.glowGold],
+  RAR: [colors.softLavender, colors.rarityRare, colors.pokeBlue],
+  COM: [colors.softPeach, colors.rarityCommon, colors.gold],
+} as const;
+
 export function DrawResultScreen({ navigation, route }: Props) {
   const params = route.params as DrawResultRouteParams;
-  const slug = params.slug;
   const drawResult = params.drawResult ?? null;
-  const ceremonyEcho = params.ceremonyEcho ?? null;
-  const stateOverride = params.stateOverride;
-  const errorMessage = params.errorMessage ?? 'Draw result is unavailable right now.';
-  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [remainingPulls, setRemainingPulls] = useState(0);
+  const [remainingPulls, setRemainingPulls] = useState<number | null>(null);
+  const [detailUid, setDetailUid] = useState<string | null>(null);
+  const [isAllCardsOpen, setIsAllCardsOpen] = useState(false);
+  const [registerVisible, setRegisterVisible] = useState(true);
+
   const cards = drawResult?.cards ?? [];
-  const isSinglePull = cards.length === 1;
+  const featured = useMemo(
+    () =>
+      cards.find((card) => card.rarity === 'LEG') ??
+      cards.find((card) => card.rarity === 'RAR') ??
+      cards[0] ??
+      null,
+    [cards],
+  );
+  const hasLegendary = cards.some((card) => card.rarity === 'LEG');
+
+  const summary = useMemo(() => {
+    const LEG = cards.filter((card) => card.rarity === 'LEG').length;
+    const RAR = cards.filter((card) => card.rarity === 'RAR').length;
+    const COM = cards.filter((card) => card.rarity === 'COM').length;
+    return { LEG, RAR, COM };
+  }, [cards]);
+
   const ownedAfter = typeof params.ownedAfter === 'number' ? params.ownedAfter : cards.length;
-  const totalCards = typeof params.totalCards === 'number' ? params.totalCards : cards.length;
+  const totalCards =
+    typeof params.totalCards === 'number' ? params.totalCards : Math.max(cards.length, 1);
+
+  const detailCard = cards.find((card) => card.stableUid === detailUid) ?? null;
+
+  // Pokedex registration toast — fades in/out at top
+  const registerOpacityRef = useRef<any>(hasAnimated ? new A.Value(0) : null);
+  const featuredEntryRef = useRef<any>(hasAnimated ? new A.Value(0) : null);
+
+  useEffect(() => {
+    if (!hasAnimated) return;
+    A.sequence([
+      A.timing(registerOpacityRef.current, {
+        toValue: 1,
+        duration: 320,
+        useNativeDriver: true,
+      }),
+      A.delay(2400),
+      A.timing(registerOpacityRef.current, {
+        toValue: 0,
+        duration: 320,
+        useNativeDriver: true,
+      }),
+    ]).start(() => setRegisterVisible(false));
+    A.spring(featuredEntryRef.current, {
+      toValue: 1,
+      friction: 6,
+      tension: 90,
+      useNativeDriver: true,
+    }).start();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     loadRewardWalletState()
       .then((wallet) => {
         if (cancelled) return;
-        const total = Math.max(0, Number(wallet.availablePulls ?? 0)) + Math.max(0, Number(wallet.reservePulls ?? 0));
-        setRemainingPulls(total);
+        const pulls =
+          Math.max(0, Number(wallet.availablePulls ?? 0) || 0) +
+          Math.max(0, Number(wallet.reservePulls ?? 0) || 0);
+        setRemainingPulls(pulls);
       })
       .catch(() => {
         if (!cancelled) setRemainingPulls(0);
@@ -127,328 +146,364 @@ export function DrawResultScreen({ navigation, route }: Props) {
     };
   }, []);
 
-  const raritySummary = useMemo(() => {
-    const leg = cards.filter((card) => card.rarity === 'LEG').length;
-    const rar = cards.filter((card) => card.rarity === 'RAR').length;
-    const com = cards.filter((card) => card.rarity === 'COM').length;
-    return { leg, rar, com };
-  }, [cards]);
+  const isWalletLoading = remainingPulls === null;
+  const primaryLabel = isWalletLoading
+    ? 'Checking pulls...'
+    : remainingPulls > 0
+      ? 'Continue draw'
+      : 'Go to Library';
 
-  const featuredCard = useMemo(() => {
-    return cards.find((card) => card.rarity === 'LEG') ?? cards.find((card) => card.rarity === 'RAR') ?? cards[0] ?? null;
-  }, [cards]);
+  const handlePrimary = () => {
+    if (isWalletLoading) {
+      return;
+    }
+    if (remainingPulls > 0) {
+      navigation.navigate('Draw', { slug: params.slug });
+      return;
+    }
+    navigation.navigate('Library', { focusSlug: params.slug, scrollToNew: true });
+  };
 
-  const selectedCard = cards.find((card) => card.stableUid === selectedCardId) ?? null;
-
-  const deckLabel = getDeckLabel(params, slug);
-
-  if (stateOverride === 'loading') {
+  // Loading state override
+  if (params.stateOverride === 'loading') {
     return (
       <SafeAreaView style={styles.safeArea} testID="screen-draw-result-root">
-        <LinearGradient colors={DRAW_RESULT_GRADIENT} locations={[0, 0.42, 1]} style={styles.gradient}>
-          <View style={styles.stateCenter}>
-            <View style={styles.stateCard}>
-              <ActivityIndicator size="large" color={colors.glowGold} />
-              <Text style={styles.stateTitle} numberOfLines={2}>
-                Preparing draw result
+        <LinearGradient colors={PAGE_GRADIENT_LIGHT} style={styles.gradient}>
+          <View style={styles.stateWrap}>
+            <ActivityIndicator size="large" color={colors.pokeBlueDeep} />
+            <Text style={styles.stateTitle} numberOfLines={2}>
+              Preparing draw result
+            </Text>
+            <Pressable
+              testID="screen-draw-result-primary-cta"
+              style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]}
+              onPress={() => navigation.navigate('Draw', { slug: params.slug })}
+            >
+              <Text style={styles.primaryCtaText} numberOfLines={1}>
+                Back to draw
               </Text>
-              <Text style={styles.stateBody} numberOfLines={2}>
-                Finalizing rarity spread and card details for your next study loop.
-              </Text>
-              <Pressable
-                testID="screen-draw-result-primary-cta"
-                style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-                accessibilityRole="button"
-                accessibilityLabel="Back to draw"
-                accessibilityHint="Returns to the draw screen."
-                onPress={() => navigation.navigate('Draw', { slug })}
-              >
-                <Text style={styles.primaryButtonText} numberOfLines={1}>
-                  Back to Draw
-                </Text>
-              </Pressable>
-            </View>
+            </Pressable>
           </View>
         </LinearGradient>
       </SafeAreaView>
     );
   }
 
-  if (stateOverride === 'error' || !drawResult) {
+  // Error state
+  if (params.stateOverride === 'error' || !drawResult) {
     return (
       <SafeAreaView style={styles.safeArea} testID="screen-draw-result-root">
-        <LinearGradient colors={DRAW_RESULT_GRADIENT} locations={[0, 0.42, 1]} style={styles.gradient}>
-          <View style={styles.stateCenter}>
-            <View style={styles.stateCard}>
-              <Text style={styles.stateTitle} numberOfLines={2}>
-                Draw result unavailable
+        <LinearGradient colors={PAGE_GRADIENT_LIGHT} style={styles.gradient}>
+          <View style={styles.stateWrap}>
+            <Text style={styles.stateTitle} numberOfLines={2}>
+              Draw result unavailable
+            </Text>
+            <Text style={styles.stateBody} numberOfLines={2}>
+              {params.errorMessage ?? 'Draw result is unavailable right now.'}
+            </Text>
+            <Pressable
+              testID="screen-draw-result-primary-cta"
+              style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]}
+              onPress={() => navigation.navigate('Draw', { slug: params.slug })}
+            >
+              <Text style={styles.primaryCtaText} numberOfLines={1}>
+                Back to draw
               </Text>
-              <Text style={styles.stateBody} numberOfLines={2}>
-                {errorMessage}
-              </Text>
-              <Pressable
-                testID="screen-draw-result-primary-cta"
-                style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-                accessibilityRole="button"
-                accessibilityLabel="Back to draw"
-                accessibilityHint="Returns to the draw screen."
-                onPress={() => navigation.navigate('Draw', { slug })}
-              >
-                <Text style={styles.primaryButtonText} numberOfLines={1}>
-                  Back to Draw
-                </Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-                accessibilityRole="button"
-                accessibilityLabel="Back to home"
-                accessibilityHint="Returns to the home screen."
-                onPress={() => navigation.navigate('Home')}
-              >
-                <Text style={styles.secondaryButtonText} numberOfLines={1}>
-                  Back to Home
-                </Text>
-              </Pressable>
-            </View>
+            </Pressable>
           </View>
         </LinearGradient>
       </SafeAreaView>
     );
   }
 
-  if (drawResult.cards.length === 0) {
+  // No cards drawn
+  if (cards.length === 0) {
     return (
       <SafeAreaView style={styles.safeArea} testID="screen-draw-result-root">
-        <LinearGradient colors={DRAW_RESULT_GRADIENT} locations={[0, 0.42, 1]} style={styles.gradient}>
-          <View style={styles.stateCenter}>
-            <View style={styles.stateCard}>
-              <Text style={styles.stateTitle} numberOfLines={2}>
-                No cards were drawn
+        <LinearGradient colors={PAGE_GRADIENT_LIGHT} style={styles.gradient}>
+          <View style={styles.stateWrap}>
+            <Text style={styles.stateTitle} numberOfLines={2}>
+              Nothing pulled
+            </Text>
+            <Text style={styles.stateBody} numberOfLines={2}>
+              The draw did not return any cards. Try again.
+            </Text>
+            <Pressable
+              testID="screen-draw-result-primary-cta"
+              style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]}
+              onPress={() => navigation.navigate('Draw', { slug: params.slug })}
+            >
+              <Text style={styles.primaryCtaText} numberOfLines={1}>
+                Back to draw
               </Text>
-              <Text style={styles.stateBody} numberOfLines={2}>
-                Return to Draw and open another pull to continue your study path.
-              </Text>
-              <Pressable
-                testID="screen-draw-result-primary-cta"
-                style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-                accessibilityRole="button"
-                accessibilityLabel="Back to draw"
-                accessibilityHint="Returns to the draw screen."
-                onPress={() => navigation.navigate('Draw', { slug })}
-              >
-                <Text style={styles.primaryButtonText} numberOfLines={1}>
-                  Back to Draw
-                </Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-                accessibilityRole="button"
-                accessibilityLabel="View library first"
-                accessibilityHint="Opens your library before starting study."
-                onPress={() => navigation.navigate('Library')}
-              >
-                <Text style={styles.secondaryButtonText} numberOfLines={1}>
-                  View library first
-                </Text>
-              </Pressable>
-            </View>
+            </Pressable>
           </View>
         </LinearGradient>
       </SafeAreaView>
     );
   }
+
+  const featuredAccent = featured ? rarityAccentColor(featured.rarity) : colors.rarityCommon;
+  const featuredHalo = featured ? rarityHaloColor(featured.rarity) : colors.softPeach;
+  const featuredScale =
+    hasAnimated && featuredEntryRef.current
+      ? featuredEntryRef.current.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] })
+      : 1;
+  const featuredOpacity =
+    hasAnimated && featuredEntryRef.current
+      ? featuredEntryRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, 1] })
+      : 1;
 
   return (
     <SafeAreaView style={styles.safeArea} testID="screen-draw-result-root">
-      <LinearGradient colors={DRAW_RESULT_GRADIENT} locations={[0, 0.42, 1]} style={styles.gradient}>
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-          <View style={styles.heroShell}>
-            <View pointerEvents="none" style={styles.sparkLayer}>
-              {SPARKS.map((spark, index) => (
-                <View
-                  key={`spark-${index}`}
-                  style={[
-                    styles.spark,
-                    {
-                      left: spark.left as any,
-                      top: spark.top as any,
-                      width: spark.size,
-                      height: spark.size,
-                      borderRadius: spark.size,
-                      backgroundColor: spark.amber ? colors.glowGold : drawResultColors.sparkLilac,
-                      shadowColor: spark.amber ? colors.glowGold : drawResultColors.sparkLilac,
-                    },
-                  ]}
-                />
-              ))}
+      <LinearGradient colors={PAGE_GRADIENT_LIGHT} style={styles.gradient}>
+        {/* Pokedex registration pill — fades in then out */}
+        {registerVisible ? (
+          <AnimatedView
+            pointerEvents="none"
+            style={[
+              styles.registerPill,
+              hasAnimated ? { opacity: registerOpacityRef.current } : null,
+            ]}
+          >
+            <View style={styles.registerIcon}>
+              <Text style={styles.registerIconText}>📘</Text>
             </View>
-
-            <Text style={styles.eyebrow} numberOfLines={1}>
-              {joinMeta([isSinglePull ? 'Single pull result' : 'Reward draw result', normalizeText(drawResult.seedLabel)])}
+            <Text style={styles.registerText} numberOfLines={1}>
+              {`圖鑑登錄 +${cards.length}  ·  Pokedex +${cards.length}`}
             </Text>
-            <Text style={styles.title} numberOfLines={2}>
-              {isSinglePull ? 'Single pull secured' : `${drawResult.cards.length} drawn cards ready for your next study loop`}
+          </AnimatedView>
+        ) : null}
+
+        <ScrollView
+          contentContainerStyle={styles.container}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.header} testID="draw-result-header">
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              {deckLabel(params)}
             </Text>
             <View style={styles.collectionBar} testID="draw-result-collection-bar">
-              <Text style={styles.collectionBarLabel} numberOfLines={1}>
-                Collection {ownedAfter}/{totalCards}
+              <Text style={styles.collectionText} numberOfLines={1}>
+                {`${ownedAfter}/${totalCards}`}
               </Text>
             </View>
-            <Text style={styles.body} numberOfLines={1}>
-              {isSinglePull
-                ? `1 drawn card ready for your next study loop. ${deckLabel} · ${raritySummary.leg} LEG · ${raritySummary.rar} RAR · ${raritySummary.com} COM · pity now at ${drawResult.pityAfter}/10.`
-                : `${deckLabel} · ${raritySummary.leg} LEG · ${raritySummary.rar} RAR · ${raritySummary.com} COM · pity now at ${drawResult.pityAfter}/10.`}
-            </Text>
-            {ceremonyEcho ? (
-              <View style={styles.afterglowPill}>
-                <Text style={styles.afterglowLabel} numberOfLines={1}>
-                  Reward ready
-                </Text>
-                <Text
-                  style={[styles.afterglowValue, ceremonyEcho.rarity === 'LEG' ? styles.afterglowLeg : ceremonyEcho.rarity === 'RAR' ? styles.afterglowRar : styles.afterglowCom]}
-                  numberOfLines={1}
-                >
-                  {getRarityLabel(ceremonyEcho.rarity)} · just drawn
-                </Text>
-              </View>
-            ) : null}
+          </View>
 
-            {featuredCard ? (
+          {/* Featured card — rarity-themed gradient + glow */}
+          {featured ? (
+            <AnimatedView
+              style={[
+                styles.featuredHaloWrap,
+                hasAnimated
+                  ? { transform: [{ scale: featuredScale }], opacity: featuredOpacity }
+                  : null,
+              ]}
+            >
+              <View
+                pointerEvents="none"
+                style={[styles.featuredHalo, { backgroundColor: featuredHalo }]}
+              />
               <Pressable
                 testID="screen-draw-result-featured-card"
-                style={({ pressed }) => [
-                  styles.featuredCard,
-                  isSinglePull && styles.featuredSingle,
-                  featuredCard.rarity === 'LEG' ? styles.featuredLeg : featuredCard.rarity === 'RAR' ? styles.featuredRar : styles.featuredCom,
-                  pressed && styles.pressed,
-                ]}
+                style={({ pressed }) => [styles.featured, pressed && styles.pressed]}
                 accessibilityRole="button"
-                accessibilityLabel={`Open featured reward detail: ${featuredCard.question}`}
-                accessibilityHint="Opens a detailed view for the featured reward card."
-                onPress={() => setSelectedCardId(featuredCard.stableUid)}
+                accessibilityLabel={`Open featured card detail: ${featured.question}`}
+                onPress={() => setDetailUid(featured.stableUid)}
               >
-                <Text style={styles.featuredBadge} numberOfLines={1}>
-                  {isSinglePull
-                    ? 'Single-pull reward'
-                    : featuredCard.rarity === 'LEG'
-                      ? 'Top reward'
-                      : featuredCard.rarity === 'RAR'
-                        ? 'Highlighted reward'
-                        : 'First reward'}
-                </Text>
-                <Text style={styles.featuredQuestion} numberOfLines={2}>
-                  {featuredCard.question}
-                </Text>
-                <Text style={styles.featuredMeta} numberOfLines={1}>
-                  {joinMeta([getCardMeta(featuredCard), 'tap for closer detail'])}
-                </Text>
+                <LinearGradient
+                  colors={FEATURED_GRADIENT_BY_RARITY[featured.rarity]}
+                  start={{ x: 0.1, y: 0 }}
+                  end={{ x: 0.9, y: 1 }}
+                  style={styles.featuredGradient}
+                >
+                  {/* NEW stamp */}
+                  <View style={styles.newBadgeWrap}>
+                    <View style={styles.newBadge}>
+                      <Text style={styles.newBadgeText} numberOfLines={1}>
+                        NEW
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Rarity chip */}
+                  <View style={[styles.featuredRarityChip, { backgroundColor: featuredAccent }]}>
+                    <Text style={styles.featuredRarity} numberOfLines={1}>
+                      ★ {rarityLabel(featured.rarity)}
+                    </Text>
+                  </View>
+
+                  {/* Question text on white slab */}
+                  <View style={styles.featuredQuestionSlab}>
+                    <Text style={styles.featuredQuestion} numberOfLines={3}>
+                      {featured.question}
+                    </Text>
+                  </View>
+
+                  {/* Decorative shine */}
+                  <View pointerEvents="none" style={styles.featuredShine} />
+                </LinearGradient>
               </Pressable>
-            ) : null}
+            </AnimatedView>
+          ) : null}
+
+          {/* Summary chips */}
+          <View style={styles.summaryStrip} testID="draw-result-summary-strip">
+            <View style={[styles.summaryChip, styles.summaryChipCom]}>
+              <Text style={styles.summaryChipText} numberOfLines={1}>
+                {`${summary.COM} COM`}
+              </Text>
+            </View>
+            <View style={[styles.summaryChip, styles.summaryChipRar]}>
+              <Text style={styles.summaryChipText} numberOfLines={1}>
+                {`${summary.RAR} RAR`}
+              </Text>
+            </View>
+            <View style={[styles.summaryChip, styles.summaryChipLeg]}>
+              <Text style={styles.summaryChipText} numberOfLines={1}>
+                {`${summary.LEG} LEG`}
+              </Text>
+            </View>
           </View>
 
-          <View style={styles.summaryRow}>
-            <Text style={[styles.summaryChip, styles.summaryChipLeg]} numberOfLines={1}>
-              {raritySummary.leg} LEG
-            </Text>
-            <Text style={[styles.summaryChip, styles.summaryChipRar]} numberOfLines={1}>
-              {raritySummary.rar} RAR
-            </Text>
-            <Text style={[styles.summaryChip, styles.summaryChipCom]} numberOfLines={1}>
-              {raritySummary.com} COM
-            </Text>
-          </View>
-
-          <View style={styles.gridWrap}>
-            {drawResult.cards.map((card, index) => (
+          {cards.length > 1 ? (
+            <>
               <Pressable
-                key={`${card.stableUid}-${card.question}`}
-                testID={`screen-draw-result-grid-card-${index}`}
-                onPress={() => setSelectedCardId(card.stableUid)}
-                style={[
-                  styles.card,
-                  (index === 0 || isSinglePull) && styles.cardTall,
-                  card.rarity === 'LEG' ? styles.legCard : card.rarity === 'RAR' ? styles.rarCard : styles.comCard,
-                ]}
+                testID="draw-result-open-all-cards"
+                style={({ pressed }) => [styles.sheetToggleButton, pressed && styles.pressed]}
                 accessibilityRole="button"
-                accessibilityLabel={`Open reward detail: ${card.question}`}
-                accessibilityHint="Opens detailed information for this reward card."
+                accessibilityLabel={
+                  isAllCardsOpen
+                    ? `Hide all ${cards.length} cards from this draw`
+                    : `View all ${cards.length} cards from this draw`
+                }
+                onPress={() => setIsAllCardsOpen((prev) => !prev)}
               >
-                <Text style={styles.cardRarity} numberOfLines={1}>
-                  {card.rarity}
-                </Text>
-                {getCardTag(card) ? (
-                  <Text style={styles.cardTag} numberOfLines={1}>
-                    {getCardTag(card)}
-                  </Text>
-                ) : null}
-                <Text style={styles.cardTitle} numberOfLines={isSinglePull || index === 0 ? 3 : 2}>{card.question}</Text>
-                <Text style={styles.cardMeta} numberOfLines={1}>
-                  {buildStarRow(card.difficulty)}
+                <Text style={styles.sheetToggleText} numberOfLines={1}>
+                  {isAllCardsOpen ? 'Hide all cards' : `View all cards (${cards.length})`}
                 </Text>
               </Pressable>
-            ))}
-          </View>
+              {isAllCardsOpen ? (
+                <View
+                  {...({
+                    testID: 'draw-result-all-cards-sheet',
+                    snapPoints: ['92%'],
+                  } as any)}
+                  style={styles.sheetWrap}
+                >
+                  {cards.map((card, index) => {
+                    const accent = rarityAccentColor(card.rarity);
+                    return (
+                      <Pressable
+                        key={`${card.stableUid}-${index}`}
+                        testID={`screen-draw-result-grid-card-${index}`}
+                        style={({ pressed }) => [styles.gridCard, pressed && styles.pressed]}
+                        onPress={() => setDetailUid(card.stableUid)}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.gridSlotNumber} numberOfLines={1}>
+                          {String(index + 1).padStart(3, '0')}
+                        </Text>
+                        <View style={[styles.gridRarityDot, { backgroundColor: accent }]}>
+                          <Text style={styles.gridRarityDotText} numberOfLines={1}>
+                            {card.rarity}
+                          </Text>
+                        </View>
+                        <View style={styles.gridBody}>
+                          {cardTagText(card) ? (
+                            <Text style={styles.gridTag} numberOfLines={1}>
+                              {cardTagText(card)}
+                            </Text>
+                          ) : null}
+                          <Text style={styles.gridQuestion} numberOfLines={2}>
+                            {card.question}
+                          </Text>
+                        </View>
+                        <View style={[styles.gridNewRibbon, { backgroundColor: accent }]}>
+                          <Text style={styles.gridNewRibbonText} numberOfLines={1}>
+                            NEW
+                          </Text>
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : null}
+            </>
+          ) : null}
 
-          <View style={styles.buttonStack}>
+          {/* Footer */}
+          <View style={styles.footer}>
             <Pressable
               testID="screen-draw-result-primary-cta"
-              style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
               accessibilityRole="button"
-              accessibilityLabel={remainingPulls > 0 ? 'Continue draw' : 'Go to Library'}
-              accessibilityHint={remainingPulls > 0 ? 'Returns to Draw to open more cards.' : 'Opens Library for this deck.'}
-              onPress={() => {
-                if (remainingPulls > 0) {
-                  navigation.navigate('Draw', { slug });
-                  return;
-                }
-                navigation.navigate('Library', { focusSlug: slug, scrollToNew: true });
-              }}
+              accessibilityLabel={
+                isWalletLoading
+                  ? 'Checking remaining pulls'
+                  : remainingPulls > 0
+                  ? `Continue drawing from ${deckLabel(params)}`
+                  : 'Go to library, scroll to new cards'
+              }
+              accessibilityState={{ disabled: isWalletLoading }}
+              disabled={isWalletLoading}
+              style={({ pressed }) => [
+                styles.primaryCta,
+                isWalletLoading ? { opacity: 0.72 } : null,
+                pressed && styles.pressed,
+              ]}
+              onPress={handlePrimary}
             >
-              <Text style={styles.primaryButtonText} numberOfLines={1}>
-                {remainingPulls > 0 ? 'Continue draw' : 'Go to Library'}
+              <Text style={styles.primaryCtaText} numberOfLines={1}>
+                {primaryLabel}
               </Text>
             </Pressable>
-
             <Pressable
               testID="draw-result-done-link"
-              style={({ pressed }) => [styles.doneLink, pressed && styles.pressed]}
               accessibilityRole="button"
-              accessibilityLabel="Done"
-              accessibilityHint="Returns to Home."
+              accessibilityLabel="Done. Back to home."
+              style={({ pressed }) => [styles.doneLink, pressed && styles.pressed]}
               onPress={() => navigation.navigate('Home')}
             >
-              <Text style={styles.doneLinkText} numberOfLines={1}>
+              <Text style={styles.doneText} numberOfLines={1}>
                 Done
               </Text>
             </Pressable>
-
           </View>
         </ScrollView>
 
-        <Modal transparent animationType="fade" visible={!!selectedCard} onRequestClose={() => setSelectedCardId(null)}>
+        {/* Confetti overlay for legendary */}
+        {hasLegendary ? <View testID="draw-result-confetti" style={styles.confetti} /> : null}
+
+        {/* Detail modal */}
+        <Modal
+          visible={!!detailCard}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setDetailUid(null)}
+        >
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
-              <Text
-                style={[styles.modalRarity, selectedCard?.rarity === 'LEG' ? styles.modalRarityLeg : selectedCard?.rarity === 'RAR' ? styles.modalRarityRar : styles.modalRarityCom]}
-                numberOfLines={1}
-              >
-                {selectedCard?.rarity}
-              </Text>
-              <Text style={styles.modalTitle} numberOfLines={2}>
-                {selectedCard?.question}
-              </Text>
-              <Text style={styles.modalBody} numberOfLines={3}>
-                {selectedCard ? getCardMeta(selectedCard) : ''}
+              {detailCard ? (
+                <View
+                  style={[
+                    styles.modalRarityChip,
+                    { backgroundColor: rarityAccentColor(detailCard.rarity) },
+                  ]}
+                >
+                  <Text style={styles.modalRarity} numberOfLines={1}>
+                    ★ {rarityLabel(detailCard.rarity)}
+                  </Text>
+                </View>
+              ) : null}
+              <Text style={styles.modalTitle} numberOfLines={3}>
+                {detailCard?.question ?? ''}
               </Text>
               <Pressable
                 testID="screen-draw-result-detail-close"
-                style={styles.primaryButton}
-                accessibilityRole="button"
-                accessibilityLabel="Close detail"
-                accessibilityHint="Closes the reward detail modal."
-                onPress={() => setSelectedCardId(null)}
+                style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]}
+                onPress={() => setDetailUid(null)}
               >
-                <Text style={styles.primaryButtonText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1}>
                   Close detail
                 </Text>
               </Pressable>
@@ -461,169 +516,3 @@ export function DrawResultScreen({ navigation, route }: Props) {
 }
 
 export default DrawResultScreen;
-
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.cosmicBgDeep },
-  gradient: { flex: 1 },
-  container: { paddingHorizontal: spacing.screenPadding, paddingTop: spacing.md, paddingBottom: spacing.xl + 2 },
-  stateCenter: { flex: 1, justifyContent: 'center', paddingHorizontal: spacing.screenPadding },
-  stateCard: {
-    borderRadius: spacing.lg,
-    padding: spacing.md + 2,
-    backgroundColor: drawResultColors.heroShell,
-    borderWidth: 1,
-    borderColor: drawResultColors.afterglowBorder,
-  },
-  stateTitle: { color: colors.cosmicInk, fontSize: typography.title2, lineHeight: 28, fontWeight: '900', textAlign: 'center' },
-  stateBody: { marginTop: spacing.xs, color: drawResultColors.copyMuted, fontSize: typography.bodySmall, lineHeight: 18, textAlign: 'center' },
-  heroShell: {
-    borderRadius: 28,
-    padding: spacing.md + 4,
-    backgroundColor: drawResultColors.heroShell,
-    borderWidth: 1,
-    borderColor: drawResultColors.heroBorder,
-    overflow: 'hidden',
-  },
-  sparkLayer: { ...StyleSheet.absoluteFillObject },
-  spark: {
-    position: 'absolute',
-    shadowOpacity: 0.9,
-    shadowRadius: 12,
-  },
-  eyebrow: { color: colors.glowGold, fontSize: typography.caption, fontWeight: '800', letterSpacing: 1.4, fontFamily: 'Courier' },
-  title: { marginTop: spacing.sm - 2, fontSize: 30, lineHeight: 36, fontWeight: '900', color: drawResultColors.copyPrimary },
-  collectionBar: {
-    marginTop: spacing.xs,
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-    backgroundColor: drawResultColors.afterglowShell,
-    borderWidth: 1,
-    borderColor: drawResultColors.afterglowBorder,
-  },
-  collectionBarLabel: { color: drawResultColors.copyPrimary, fontSize: typography.caption, fontWeight: '800' },
-  body: { marginTop: spacing.sm - 2, fontSize: typography.bodySmall, lineHeight: 19, color: drawResultColors.copyMuted },
-  afterglowPill: {
-    marginTop: spacing.sm + 2,
-    borderRadius: 18,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.sm,
-    backgroundColor: drawResultColors.afterglowShell,
-    borderWidth: 1,
-    borderColor: drawResultColors.afterglowBorder,
-  },
-  afterglowLabel: { color: colors.glowGold, fontSize: typography.caption, fontWeight: '900', letterSpacing: 1.1, fontFamily: 'Courier' },
-  afterglowValue: { marginTop: spacing.xs, fontSize: typography.bodySmall, fontWeight: '900' },
-  afterglowLeg: { color: drawResultColors.legText },
-  afterglowRar: { color: drawResultColors.rarText },
-  afterglowCom: { color: drawResultColors.comText },
-  featuredCard: {
-    marginTop: spacing.sm + 6,
-    borderRadius: 24,
-    padding: spacing.sm + 6,
-    minHeight: 220,
-    justifyContent: 'flex-end',
-    shadowColor: drawResultColors.black,
-    shadowOpacity: 0.22,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-  },
-  featuredSingle: {
-    minHeight: 260,
-    justifyContent: 'space-between',
-  },
-  featuredLeg: { backgroundColor: colors.gold },
-  featuredRar: { backgroundColor: drawResultColors.featuredRar },
-  featuredCom: { backgroundColor: drawResultColors.featuredCom },
-  featuredBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    paddingHorizontal: spacing.sm - 2,
-    paddingVertical: 5,
-    backgroundColor: drawResultColors.featuredBadgeBg,
-    color: drawResultColors.featuredBadgeText,
-    fontSize: typography.caption,
-    fontWeight: '900',
-    overflow: 'hidden',
-  },
-  featuredQuestion: { marginTop: spacing.sm + 2, fontSize: typography.title1, lineHeight: 34, fontWeight: '900', color: drawResultColors.whiteSoft },
-  featuredMeta: { marginTop: spacing.sm - 2, fontSize: 12, color: drawResultColors.whiteSoftMuted, fontWeight: '700' },
-  summaryRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.sm + 2, marginBottom: spacing.sm + 2 },
-  summaryChip: {
-    marginRight: spacing.xs,
-    marginBottom: spacing.xs,
-    borderRadius: 999,
-    paddingHorizontal: spacing.sm - 2,
-    paddingVertical: 6,
-    fontSize: typography.caption,
-    fontWeight: '900',
-    overflow: 'hidden',
-  },
-  summaryChipLeg: { backgroundColor: drawResultColors.summaryLegBg, color: drawResultColors.summaryLegText },
-  summaryChipRar: { backgroundColor: drawResultColors.summaryRarBg, color: drawResultColors.summaryRarText },
-  summaryChipCom: { backgroundColor: drawResultColors.summaryComBg, color: drawResultColors.summaryComText },
-  gridWrap: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  card: {
-    width: '48%',
-    borderRadius: 20,
-    padding: spacing.sm + 2,
-    minHeight: 126,
-    marginBottom: spacing.sm,
-    justifyContent: 'space-between',
-    borderWidth: 1,
-  },
-  cardTall: { width: '100%', minHeight: 150 },
-  comCard: { backgroundColor: drawResultColors.comCardBg, borderColor: drawResultColors.comCardBorder },
-  rarCard: { backgroundColor: drawResultColors.rarCardBg, borderColor: drawResultColors.rarCardBorder },
-  legCard: { backgroundColor: drawResultColors.legCardBg, borderColor: drawResultColors.legCardBorder },
-  cardRarity: { fontSize: typography.caption, fontWeight: '900', color: drawResultColors.cardRarity },
-  cardTag: { marginTop: 6, fontSize: 10, fontWeight: '800', color: drawResultColors.cardTag, letterSpacing: 0.7 },
-  cardTitle: { marginTop: spacing.xs + 2, fontSize: 14, lineHeight: 19, fontWeight: '800', color: colors.ink },
-  cardMeta: { marginTop: spacing.xs + 2, fontSize: typography.caption, color: drawResultColors.cardMeta },
-  buttonStack: { marginTop: spacing.sm - 2 },
-  primaryButton: {
-    borderRadius: 16,
-    minHeight: a11y.minTouch,
-    backgroundColor: colors.gold,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: colors.gold,
-    shadowOpacity: 0.24,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 8 },
-  },
-  primaryButtonText: { color: drawResultColors.primaryText, fontSize: typography.button, fontWeight: '900' },
-  secondaryButton: {
-    marginTop: spacing.sm - 2,
-    borderRadius: 16,
-    minHeight: a11y.minTouch,
-    backgroundColor: drawResultColors.secondaryBg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: drawResultColors.secondaryBorder,
-  },
-  secondaryButtonText: { color: colors.ink, fontSize: 14, fontWeight: '800' },
-  doneLink: { marginTop: spacing.sm - 2, minHeight: a11y.minTouch, alignItems: 'center', justifyContent: 'center' },
-  doneLinkText: { color: colors.parchmentBgDeep, fontSize: typography.bodySmall, fontWeight: '800' },
-  pressed: { opacity: 0.92 },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: drawResultColors.modalOverlay,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.lg,
-  },
-  modalCard: { width: '100%', borderRadius: spacing.lg, padding: spacing.md + 4, backgroundColor: colors.parchmentBg },
-  modalRarity: { fontSize: typography.caption, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.1 },
-  modalRarityLeg: { color: drawResultColors.summaryLegText },
-  modalRarityRar: { color: drawResultColors.summaryRarText },
-  modalRarityCom: { color: drawResultColors.summaryComText },
-  modalTitle: { marginTop: spacing.sm - 2, fontSize: typography.title2, lineHeight: 28, fontWeight: '900', color: colors.ink },
-  modalBody: { marginTop: spacing.xs, fontSize: typography.bodySmall, lineHeight: 19, color: drawResultColors.modalCopy },
-});

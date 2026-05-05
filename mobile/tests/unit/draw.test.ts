@@ -92,4 +92,11 @@ describe('consumePulls', () => {
     expect(result.wallet).toEqual({ availablePulls: 1, reservePulls: 0 });
     expect(result.spent).toBe(1);
   });
+
+  it('does not treat reserve pulls as immediately spendable for a single open action', () => {
+    const result = consumePullsFromWallet({ availablePulls: 5, reservePulls: 5 }, 10);
+
+    expect(result.spent).toBe(5);
+    expect(result.wallet).toEqual({ availablePulls: 5, reservePulls: 0 });
+  });
 });

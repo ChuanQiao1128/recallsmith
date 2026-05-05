@@ -89,7 +89,7 @@ describe('buildHomeVM CTA kinds', () => {
     expect(vm.cta.nav).toBe('challenge');
   });
 
-  it('derives today_done from runtime streak-qualified signal without statusHint', () => {
+  it('derives today_done with draw CTA when pulls are available', () => {
     const vm = buildHomeVM({
       selectedSlug: 'csharp',
       hasSignedInUser: true,
@@ -103,11 +103,29 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('today_done');
-    expect(vm.cta.label).toBe('Minimum goal reached');
+    expect(vm.cta.label).toBe('Open C# Interview');
     expect(vm.cta.nav).toBe('draw');
   });
 
-  it('derives today_full_clear from runtime completion signal without statusHint', () => {
+  it('keeps challenge CTA for today_done when pulls are locked', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 2, newToday: 1 })],
+      wallet: { availablePulls: 0, reservePulls: 0 },
+      runtimeStatus: {
+        qualifiedToday: true,
+        completedToday: 1,
+        completedRouteToday: false,
+      },
+    });
+
+    expect(vm.cta.kind).toBe('today_done');
+    expect(vm.cta.label).toBe('Continue today’s challenge');
+    expect(vm.cta.nav).toBe('challenge');
+  });
+
+  it('derives today_full_clear with draw CTA when pulls are available', () => {
     const vm = buildHomeVM({
       selectedSlug: 'csharp',
       hasSignedInUser: true,
@@ -121,8 +139,26 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('today_full_clear');
-    expect(vm.cta.label).toBe('Full clear completed');
+    expect(vm.cta.label).toBe('Open C# Interview');
     expect(vm.cta.nav).toBe('draw');
+  });
+
+  it('falls back to library CTA for today_full_clear when pulls are locked', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 0, newToday: 0 })],
+      wallet: { availablePulls: 0, reservePulls: 0 },
+      runtimeStatus: {
+        qualifiedToday: true,
+        completedToday: 2,
+        completedRouteToday: true,
+      },
+    });
+
+    expect(vm.cta.kind).toBe('today_full_clear');
+    expect(vm.cta.label).toBe('Open library');
+    expect(vm.cta.nav).toBe('library');
   });
 
   it('keeps library CTA when there is no work', () => {

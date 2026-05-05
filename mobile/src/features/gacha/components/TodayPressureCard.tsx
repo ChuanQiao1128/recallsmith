@@ -6,11 +6,12 @@ import { spacing } from '../../../theme/spacing';
 import { typography } from '../../../theme/typography';
 
 const TODAY_PRESSURE_TOKENS = {
-  card: 'rgba(255,255,255,0.86)',
-  metricNormal: 'rgba(79,70,229,0.10)',
-  metricElite: 'rgba(234,179,8,0.12)',
-  metricBoss: 'rgba(244,114,182,0.12)',
-  metricTotal: 'rgba(126,157,94,0.12)',
+  card: colors.softCream,
+  metricNormal: colors.softLavender,
+  metricElite: colors.parchmentBgDeep,
+  metricBoss: colors.softPeach,
+  metricTotal: colors.softMist,
+  metricBorder: colors.hairline,
 } as const;
 
 export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitle: string | null }) {
@@ -75,6 +76,8 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     padding: spacing.md,
     backgroundColor: TODAY_PRESSURE_TOKENS.card,
+    borderWidth: 1,
+    borderColor: TODAY_PRESSURE_TOKENS.metricBorder,
     shadowColor: colors.ink,
     shadowOpacity: 0.10,
     shadowRadius: 14,
@@ -84,7 +87,13 @@ const styles = StyleSheet.create({
   title: { fontSize: typography.body, fontWeight: '800', color: colors.ink },
   subtitle: { marginTop: 6, fontSize: typography.caption, color: colors.inkSecondary },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.sm, justifyContent: 'space-between' },
-  metric: { borderRadius: 16, paddingVertical: 14, paddingHorizontal: spacing.xs },
+  metric: {
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.xs,
+    borderWidth: 1,
+    borderColor: TODAY_PRESSURE_TOKENS.metricBorder,
+  },
   metricWide: { flex: 1, minWidth: 0 },
   metricCompact: { width: '48%' },
   metricNormal: { backgroundColor: TODAY_PRESSURE_TOKENS.metricNormal },
