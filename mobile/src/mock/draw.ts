@@ -75,6 +75,7 @@ export const MOCK_DRAW_RESULTS = buildMockDrawResult({
   pityBefore: 8,
 });
 
+/** @deprecated use commitDraw from features/gacha/draw */
 export function buildPoolDrawResult(poolId: string, pityBefore: number = 0, drawCount: number = 10) {
   const normalized = poolId === 'aws' ? 'aws' : 'csharp';
   return buildMockDrawResult({

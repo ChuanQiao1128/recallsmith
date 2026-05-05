@@ -83,3 +83,5 @@ export function buildDrawState(params: {
     canOpen: false,
   };
 }
+
+export { commitDraw, type DrawCommitResult, type DrawnCardVm } from './drawCommit';

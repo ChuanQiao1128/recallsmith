@@ -10,10 +10,10 @@ import { loadActiveDeckSlug } from '../content/activeDeck';
 import { listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress } from '../review/storage';
 import { buildDrawState } from '../features/gacha/draw/drawState';
+import { commitDraw } from '../features/gacha/draw/drawCommit';
 import { consumePullsFromStoredWallet, loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { getAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
 import { getAudiencePreferenceLabel } from '../features/gacha/audience/audienceRules';
-import { buildPoolDrawResult } from '../mock/draw';
 import { a11y } from '../theme/a11y';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
@@ -59,7 +59,6 @@ export function DrawScreen({ navigation, route }: Props) {
   const [hasTodayWork, setHasTodayWork] = useState(false);
   const [opening, setOpening] = useState(false);
   const [audiencePref, setAudiencePref] = useState<AudiencePreference>('both');
-  const [pityBefore, setPityBefore] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
@@ -85,7 +84,6 @@ export function DrawScreen({ navigation, route }: Props) {
               setWallet(nextWallet);
               setHasTodayWork(false);
               setAudiencePref(nextAudiencePref);
-              setPityBefore(0);
               setLoadState('empty');
             }
             return;
@@ -104,7 +102,6 @@ export function DrawScreen({ navigation, route }: Props) {
             setWallet(nextWallet);
             setHasTodayWork(!!deck && (dueCount > 0 || newCount > 0));
             setAudiencePref(nextAudiencePref);
-            setPityBefore(0);
             setLoadState(deck ? 'ready' : 'empty');
           }
         } catch (error: any) {
@@ -140,11 +137,20 @@ export function DrawScreen({ navigation, route }: Props) {
     setOpening(true);
     try {
       const result = previewOnly ? null : await consumePullsFromStoredWallet(1);
-      const drawResult = buildPoolDrawResult(slug, pityBefore, drawCount);
+      const committed = await commitDraw(slug, drawCount === 1 ? 1 : 10);
+      if (!committed) return;
       if (result) {
         setWallet(result.wallet);
       }
-      setPityBefore(drawResult.pityAfter);
+      const drawResult = {
+        poolId: slug,
+        cards: committed.cards,
+        pityBefore: committed.pityBefore,
+        pityAfter: committed.pityAfter,
+        pityTriggered: committed.pityFiredFor !== null,
+        highlightedRarity: committed.highlightedRarity,
+        seedLabel: undefined,
+      };
       navigation.navigate('DrawCeremony', { slug, drawResult, deckTitle });
     } finally {
       setOpening(false);
