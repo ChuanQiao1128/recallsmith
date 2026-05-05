@@ -1,9 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
+import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { a11y } from '../theme/a11y';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
@@ -104,8 +105,27 @@ export function DrawResultScreen({ navigation, route }: Props) {
   const stateOverride = params.stateOverride;
   const errorMessage = params.errorMessage ?? 'Draw result is unavailable right now.';
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [remainingPulls, setRemainingPulls] = useState(0);
   const cards = drawResult?.cards ?? [];
   const isSinglePull = cards.length === 1;
+  const ownedAfter = typeof params.ownedAfter === 'number' ? params.ownedAfter : cards.length;
+  const totalCards = typeof params.totalCards === 'number' ? params.totalCards : cards.length;
+
+  useEffect(() => {
+    let cancelled = false;
+    loadRewardWalletState()
+      .then((wallet) => {
+        if (cancelled) return;
+        const total = Math.max(0, Number(wallet.availablePulls ?? 0)) + Math.max(0, Number(wallet.reservePulls ?? 0));
+        setRemainingPulls(total);
+      })
+      .catch(() => {
+        if (!cancelled) setRemainingPulls(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const raritySummary = useMemo(() => {
     const leg = cards.filter((card) => card.rarity === 'LEG').length;
@@ -269,6 +289,11 @@ export function DrawResultScreen({ navigation, route }: Props) {
             <Text style={styles.title} numberOfLines={2}>
               {isSinglePull ? 'Single pull secured' : `${drawResult.cards.length} drawn cards ready for your next study loop`}
             </Text>
+            <View style={styles.collectionBar} testID="draw-result-collection-bar">
+              <Text style={styles.collectionBarLabel} numberOfLines={1}>
+                Collection {ownedAfter}/{totalCards}
+              </Text>
+            </View>
             <Text style={styles.body} numberOfLines={1}>
               {isSinglePull
                 ? `1 drawn card ready for your next study loop. ${deckLabel} · ${raritySummary.leg} LEG · ${raritySummary.rar} RAR · ${raritySummary.com} COM · pity now at ${drawResult.pityAfter}/10.`
@@ -369,25 +394,31 @@ export function DrawResultScreen({ navigation, route }: Props) {
               testID="screen-draw-result-primary-cta"
               style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
               accessibilityRole="button"
-              accessibilityLabel={isSinglePull ? 'Study this reward now' : 'Start studying drawn cards'}
-              accessibilityHint="Starts the study flow for drawn reward cards."
-              onPress={() => navigation.navigate('SessionCard', { slug, mode: 'learn-new', limit: Math.max(1, drawResult.cards.length) })}
+              accessibilityLabel={remainingPulls > 0 ? 'Continue draw' : 'Go to Library'}
+              accessibilityHint={remainingPulls > 0 ? 'Returns to Draw to open more cards.' : 'Opens Library for this deck.'}
+              onPress={() => {
+                if (remainingPulls > 0) {
+                  navigation.navigate('Draw', { slug });
+                  return;
+                }
+                navigation.navigate('Library', { focusSlug: slug, scrollToNew: true });
+              }}
             >
               <Text style={styles.primaryButtonText} numberOfLines={1}>
-                {isSinglePull ? 'Study this reward now' : 'Start studying drawn cards'}
+                {remainingPulls > 0 ? 'Continue draw' : 'Go to Library'}
               </Text>
             </Pressable>
 
             <Pressable
-              testID="screen-draw-result-secondary-cta"
-              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+              testID="draw-result-done-link"
+              style={({ pressed }) => [styles.doneLink, pressed && styles.pressed]}
               accessibilityRole="button"
-              accessibilityLabel="View library first"
-              accessibilityHint="Opens your library without starting a study run."
-              onPress={() => navigation.navigate('Library')}
+              accessibilityLabel="Done"
+              accessibilityHint="Returns to Home."
+              onPress={() => navigation.navigate('Home')}
             >
-              <Text style={styles.secondaryButtonText} numberOfLines={1}>
-                View library first
+              <Text style={styles.doneLinkText} numberOfLines={1}>
+                Done
               </Text>
             </Pressable>
 
@@ -461,6 +492,17 @@ const styles = StyleSheet.create({
   },
   eyebrow: { color: colors.glowGold, fontSize: typography.caption, fontWeight: '800', letterSpacing: 1.4, fontFamily: 'Courier' },
   title: { marginTop: spacing.sm - 2, fontSize: 30, lineHeight: 36, fontWeight: '900', color: drawResultColors.copyPrimary },
+  collectionBar: {
+    marginTop: spacing.xs,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    backgroundColor: drawResultColors.afterglowShell,
+    borderWidth: 1,
+    borderColor: drawResultColors.afterglowBorder,
+  },
+  collectionBarLabel: { color: drawResultColors.copyPrimary, fontSize: typography.caption, fontWeight: '800' },
   body: { marginTop: spacing.sm - 2, fontSize: typography.bodySmall, lineHeight: 19, color: drawResultColors.copyMuted },
   afterglowPill: {
     marginTop: spacing.sm + 2,
@@ -567,6 +609,8 @@ const styles = StyleSheet.create({
     borderColor: drawResultColors.secondaryBorder,
   },
   secondaryButtonText: { color: colors.ink, fontSize: 14, fontWeight: '800' },
+  doneLink: { marginTop: spacing.sm - 2, minHeight: a11y.minTouch, alignItems: 'center', justifyContent: 'center' },
+  doneLinkText: { color: colors.parchmentBgDeep, fontSize: typography.bodySmall, fontWeight: '800' },
   pressed: { opacity: 0.92 },
   modalOverlay: {
     flex: 1,

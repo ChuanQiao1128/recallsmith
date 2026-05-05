@@ -149,7 +149,13 @@ export function DrawScreen({ navigation, route }: Props) {
         highlightedRarity: committed.highlightedRarity,
         seedLabel: undefined,
       };
-      navigation.navigate('DrawCeremony', { slug, drawResult, deckTitle });
+      navigation.navigate('DrawCeremony', {
+        slug,
+        drawResult,
+        deckTitle,
+        ownedAfter: committed.ownedAfter,
+        totalCards: committed.totalCards,
+      });
     } finally {
       setOpening(false);
     }

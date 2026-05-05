@@ -163,6 +163,8 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
         slug: route.params.slug,
         drawResult,
         deckTitle: route.params.deckTitle,
+        ownedAfter: route.params.ownedAfter,
+        totalCards: route.params.totalCards,
         ceremonyEcho: {
           rarity: ceremonyEchoRarity,
           phaseCue: isSinglePull ? CEREMONY_COPY.handoffCue.single : CEREMONY_COPY.handoffCue.multi,
@@ -391,6 +393,8 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
                 slug: route.params.slug,
                 drawResult,
                 deckTitle: route.params.deckTitle,
+                ownedAfter: route.params.ownedAfter,
+                totalCards: route.params.totalCards,
                 ceremonyEcho: {
                   rarity: ceremonyEchoRarity,
                   phaseCue: isSinglePull ? CEREMONY_COPY.handoffCue.single : CEREMONY_COPY.handoffCue.multi,

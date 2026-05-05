@@ -25,7 +25,7 @@ export type RootStackParamList = {
   PoolPicker: { activePoolId?: string } | undefined;
   FreshStartLanding: undefined;
   PausedPool: undefined;
-  Library: undefined;
+  Library: { focusSlug?: string; scrollToNew?: boolean } | undefined;
   SortFilter: undefined;
   CardDetail: { cardId: string };
   PoolOverview: { poolId: string };
@@ -90,6 +90,8 @@ export type RootStackParamList = {
       seedLabel?: string;
     };
     deckTitle?: string;
+    ownedAfter?: number;
+    totalCards?: number;
   };
   DrawResult: {
     slug: string;
@@ -113,6 +115,8 @@ export type RootStackParamList = {
       rarity: 'COM' | 'RAR' | 'LEG';
       phaseCue: string;
     } | null;
+    ownedAfter?: number;
+    totalCards?: number;
   };
   Settlement: {
     slug: string;

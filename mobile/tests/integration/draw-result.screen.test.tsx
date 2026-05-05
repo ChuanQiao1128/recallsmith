@@ -1,6 +1,7 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+let walletFixture = { availablePulls: 2, reservePulls: 0 };
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -25,6 +26,10 @@ vi.mock('expo-linear-gradient', () => {
   return { LinearGradient: ({ children, ...props }: any) => React.createElement('LinearGradient', props, children) };
 });
 
+vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
+  loadRewardWalletState: vi.fn(async () => walletFixture),
+}));
+
 import { DrawResultScreen } from '../../src/screens/DrawResultScreen';
 import { MOCK_DRAW_RESULTS } from '../../src/mock/draw';
 
@@ -48,8 +53,17 @@ function makeRouteParams(overrides?: Record<string, unknown>) {
     slug: 'csharp',
     drawResult: MOCK_DRAW_RESULTS,
     deckTitle: 'C# Interview',
+    ownedAfter: 4,
+    totalCards: 20,
     ...(overrides ?? {}),
   };
+}
+
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 describe('DrawResultScreen', () => {
@@ -58,6 +72,7 @@ describe('DrawResultScreen', () => {
 
   beforeEach(() => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    walletFixture = { availablePulls: 2, reservePulls: 0 };
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -84,19 +99,22 @@ describe('DrawResultScreen', () => {
     expect(textBlob).not.toMatch(/reveal layer|premium|library detail takes over/i);
   });
 
-  it('uses study-focused result actions instead of Enter level', async () => {
+  it('uses single-action draw flow actions instead of study/start-level actions', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(<DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
     });
+    await flush();
 
     const textBlob = collectText(tree);
-    expect(textBlob).toContain('Start studying drawn cards');
-    expect(textBlob).toContain('View library first');
-    expect(textBlob).not.toContain('Back to Home');
+    expect(textBlob).toContain('Continue draw');
+    expect(textBlob).toContain('Done');
     expect(textBlob).not.toContain('Enter level');
     expect(textBlob).not.toContain('Store for later');
+    expect(tree.root.findByProps({ testID: 'draw-result-collection-bar' })).toBeTruthy();
+    expect(textBlob).toContain('Collection 4/20');
     expect(tree.root.findAllByProps({ testID: 'screen-draw-result-ghost-cta' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'screen-draw-result-secondary-cta' })).toHaveLength(0);
   });
 
   it('uses the reward draw naming system consistently on the result page', async () => {
@@ -248,6 +266,8 @@ describe('DrawResultScreen', () => {
     expect(primaryCta).toBeTruthy();
     expect(primaryCta.props.accessibilityRole).toBe('button');
     expect(primaryCta.props.accessibilityLabel).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'draw-result-collection-bar' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'draw-result-done-link' })).toBeTruthy();
 
     const featuredCard = tree.root.findByProps({ testID: 'screen-draw-result-featured-card' });
     expect(featuredCard).toBeTruthy();
@@ -349,33 +369,48 @@ describe('DrawResultScreen', () => {
     await act(async () => {
       tree = renderer.create(<DrawResultScreen navigation={{ navigate } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
     });
+    await flush();
 
     const primary = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
     act(() => {
       primary.props.onPress();
     });
 
-    expect(navigate).toHaveBeenCalledWith('SessionCard', {
-      slug: 'csharp',
-      mode: 'learn-new',
-      limit: MOCK_DRAW_RESULTS.cards.length,
-    });
-    expect(navigate).not.toHaveBeenCalledWith('Level', expect.anything());
+    expect(navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp' });
   });
 
-  it('routes the secondary action to Library', async () => {
+  it('routes done link to Home', async () => {
     const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(<DrawResultScreen navigation={{ navigate } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
     });
+    await flush();
 
-    const secondary = tree.root.findByProps({ testID: 'screen-draw-result-secondary-cta' });
+    const secondary = tree.root.findByProps({ testID: 'draw-result-done-link' });
     act(() => {
       secondary.props.onPress();
     });
 
-    expect(navigate).toHaveBeenCalledWith('Library');
-    expect(navigate).not.toHaveBeenCalledWith('Deck', expect.anything());
+    expect(navigate).toHaveBeenCalledWith('Home');
+  });
+
+  it('uses Go to Library CTA when wallet has no pulls remaining', async () => {
+    walletFixture = { availablePulls: 0, reservePulls: 0 };
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<DrawResultScreen navigation={{ navigate } as any} route={{ key: 'draw-result', name: 'DrawResult', params: makeRouteParams() } as any} />);
+    });
+    await flush();
+
+    const textBlob = collectText(tree);
+    expect(textBlob).toContain('Go to Library');
+
+    const primary = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
+    act(() => {
+      primary.props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledWith('Library', { focusSlug: 'csharp', scrollToNew: true });
   });
 });
