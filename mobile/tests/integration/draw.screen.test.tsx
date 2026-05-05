@@ -103,6 +103,15 @@ function findTextNodeContaining(tree: renderer.ReactTestRenderer, needle: string
   });
 }
 
+function findTextNodesContaining(tree: renderer.ReactTestRenderer, needle: string) {
+  return tree.root.findAll((node) => {
+    if ((node.type as any) !== 'Text') return false;
+    const children = node.props.children;
+    const text = Array.isArray(children) ? children.join('') : String(children ?? '');
+    return text.includes(needle);
+  });
+}
+
 function collectText(tree: renderer.ReactTestRenderer) {
   return tree.root.findAll((node) => (node.type as any) === 'Text').map((node) => {
     const c = node.props.children;
@@ -149,6 +158,12 @@ describe('DrawScreen', () => {
     expect(tree.root.findByProps({ testID: 'screen-draw-root' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'screen-draw-primary-cta' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' })).toBeTruthy();
+    const footerCtas = tree.root.findAll(
+      (node) =>
+        (node.type as any) === 'Pressable' &&
+        (node.props.testID === 'screen-draw-primary-cta' || node.props.testID === 'screen-draw-secondary-cta'),
+    );
+    expect(footerCtas).toHaveLength(2);
 
     await act(async () => {
       findPressableByTestId(tree, 'screen-draw-primary-cta').props.onPress();
@@ -207,7 +222,7 @@ describe('DrawScreen', () => {
     });
 
     expect(collectText(tree)).toContain('Back to Home');
-    expect(collectText(tree)).toContain('Preview 1 pull (free)');
+    expect(collectText(tree)).toContain('Open 1');
 
     act(() => {
       findPressableByTestId(tree, 'screen-draw-primary-cta').props.onPress();
@@ -227,7 +242,7 @@ describe('DrawScreen', () => {
       await Promise.resolve();
     });
 
-    expect(collectText(tree)).toContain('Preview 1 pull (free)');
+    expect(collectText(tree)).toContain('Open 1');
 
     await act(async () => {
       findPressableByTestId(tree, 'screen-draw-secondary-cta').props.onPress();
@@ -294,7 +309,7 @@ describe('DrawScreen', () => {
     expect(textBlob).toContain('Pull briefing');
     expect(textBlob).toContain('One reward pull opens a 10-card reveal.');
     expect(textBlob).toContain('Current pool');
-    expect(textBlob).toContain('Open 10-card pull');
+    expect(textBlob).toContain('Open 10');
     expect(textBlob).not.toContain('Drop odds');
     expect(textBlob).not.toContain('until guaranteed');
     expect(textBlob).not.toContain('COM 70%');
@@ -302,7 +317,7 @@ describe('DrawScreen', () => {
     expect(textBlob).not.toContain('DROP TABLE');
 
     expect(findTextNodeContaining(tree, 'Use reward pulls after the study route').props.numberOfLines).toBe(1);
-    expect(findTextNodeContaining(tree, 'Open 10-card pull').props.numberOfLines).toBe(1);
+    expect(findTextNodesContaining(tree, 'Open 10').some((node) => node.props.numberOfLines === 1)).toBe(true);
   });
 
   it('keeps the decorative card stack compact on a 360pt viewport', async () => {
@@ -319,7 +334,7 @@ describe('DrawScreen', () => {
 
     const stackStage = tree.root.findByProps({ testID: 'draw-card-stack-stage' });
     expect(flattenStyle(stackStage.props.style).height).toBeLessThanOrEqual(192);
-    expect(findTextNodeContaining(tree, 'Open 10-card pull').props.numberOfLines).toBe(1);
+    expect(findTextNodesContaining(tree, 'Open 10').some((node) => node.props.numberOfLines === 1)).toBe(true);
   });
 
   it('renders an error state with retry action when draw dependencies fail', async () => {
@@ -346,7 +361,7 @@ describe('DrawScreen', () => {
         await Promise.resolve();
       });
 
-      expect(collectText(tree)).toContain('Open 10-card pull');
+      expect(collectText(tree)).toContain('Open 10');
       expect(walletSpy).toHaveBeenCalledTimes(2);
     } finally {
       walletSpy.mockRestore();

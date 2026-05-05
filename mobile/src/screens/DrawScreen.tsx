@@ -13,7 +13,6 @@ import { buildDrawState } from '../features/gacha/draw/drawState';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
 import { consumePullsFromStoredWallet, loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { getAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
-import { getAudiencePreferenceLabel } from '../features/gacha/audience/audienceRules';
 import { a11y } from '../theme/a11y';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
@@ -124,12 +123,11 @@ export function DrawScreen({ navigation, route }: Props) {
     [wallet, hasTodayWork, rewardPending, hasActivePool],
   );
 
-  const metaLine = `${wallet.availablePulls} ready pull${wallet.availablePulls === 1 ? '' : 's'} · ${wallet.reservePulls} reserve · ${getAudiencePreferenceLabel(audiencePref)}`;
   const stackStageHeight = Math.min(240, Math.max(172, viewportHeight * 0.3));
   const cardBackHeight = Math.min(206, Math.max(156, stackStageHeight - 20));
   const cardBackWidth = Math.min(152, Math.max(116, cardBackHeight * 0.74));
-  const primaryActionLabel = opening ? 'Opening…' : drawVm.canOpen ? 'Open 10-card pull' : hasActivePool ? 'Back to Home' : 'View library';
-  const secondaryActionLabel = drawVm.canOpen ? 'Open 1 pull' : hasActivePool && slug ? 'Preview 1 pull (free)' : 'View library';
+  const primaryActionLabel = opening ? 'Opening…' : drawVm.canOpen ? 'Open 10' : hasActivePool ? 'Back to Home' : 'View library';
+  const secondaryActionLabel = drawVm.canOpen ? 'Open 1' : hasActivePool && slug ? 'Open 1' : 'View library';
 
   async function openPull(drawCount: number, options?: { previewOnly?: boolean }) {
     if (!slug || opening || !hasActivePool) return;
@@ -299,6 +297,11 @@ export function DrawScreen({ navigation, route }: Props) {
             </Text>
 
             <View testID="draw-card-stack-stage" style={[styles.stackStage, { height: stackStageHeight }]}>
+              <View style={styles.walletBadge} testID="draw-wallet-badge">
+                <Text style={styles.walletBadgeText} numberOfLines={1}>
+                  × {wallet.availablePulls}
+                </Text>
+              </View>
               {CARD_STACK.map((rotation, index) => (
                 <View
                   key={`stack-${rotation}`}
@@ -325,9 +328,6 @@ export function DrawScreen({ navigation, route }: Props) {
               <Text style={styles.metaPill} numberOfLines={1}>
                 Current pool · {deckTitle}
               </Text>
-              <Text style={styles.metaPill} numberOfLines={1}>
-                {metaLine}
-              </Text>
             </View>
           </View>
 
@@ -350,12 +350,12 @@ export function DrawScreen({ navigation, route }: Props) {
               What happens next
             </Text>
             <Text style={styles.actionTitle} numberOfLines={2}>
-              {drawVm.canOpen ? 'Spend one reward pull for a full 10-card reveal' : 'No reward pull is ready yet, but preview is available'}
+              {drawVm.canOpen ? 'Open 10 cards now or open 1 card' : 'No reward pull is ready yet, but Open 1 is available'}
             </Text>
             <Text style={styles.actionBody} numberOfLines={2}>
               {drawVm.canOpen
                 ? 'The secondary pull opens one card. The main pull opens the full ceremony and result spread.'
-                : 'The preview single pull does not change your wallet. Home remains the path back to study.'}
+                : 'The single-card open does not change your wallet. Home remains the path back to study.'}
             </Text>
 
             <Pressable
@@ -471,6 +471,21 @@ const styles = StyleSheet.create({
   title: { marginTop: spacing.sm - 2, color: colors.cosmicInk, fontSize: typography.title1, lineHeight: 34, fontWeight: '900' },
   subtitle: { marginTop: spacing.xs, color: DRAW_COLOR.copyMuted, fontSize: typography.bodySmall, lineHeight: 19 },
   stackStage: { height: 240, alignItems: 'center', justifyContent: 'center', marginTop: 18 },
+  walletBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 2,
+    borderRadius: 999,
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(245,236,196,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,236,196,0.3)',
+  },
+  walletBadgeText: { color: colors.cosmicInk, fontSize: typography.caption, fontWeight: '900' },
   cardBack: {
     position: 'absolute',
     width: 152,
