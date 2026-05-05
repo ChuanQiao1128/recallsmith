@@ -347,6 +347,12 @@ export function HomeScreen({ navigation, route }: Props) {
   const primaryCtaDisabled =
     homeState.vm.cta.disabled ||
     (homeState.vm.cta.nav === 'challenge' && !homeState.vm.selectedDeckSlug);
+  const hasDrawPulls = homeState.vm.draw.state !== 'locked';
+  const primaryCtaLabel =
+    hasDrawPulls && homeState.vm.selectedDeckTitle
+      ? `Open ${homeState.vm.selectedDeckTitle}`
+      : homeState.vm.cta.label;
+  const totalDueAcrossDecks = homeState.vm.counts.totalDueAllDecks;
   if (homeState.loading) {
     return (
       <SafeAreaProvider>
@@ -438,13 +444,25 @@ export function HomeScreen({ navigation, route }: Props) {
                   }}
                 >
                   <Text style={styles.primaryCtaText} numberOfLines={1}>
-                    {homeState.vm.cta.label}
+                    {primaryCtaLabel}
                   </Text>
                 </Pressable>
               </View>
               <Text style={styles.drawBadge} numberOfLines={1}>
                 {homeState.vm.draw.label}
               </Text>
+              {totalDueAcrossDecks > 0 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  testID="home-study-due-link"
+                  style={({ pressed }) => [styles.studyDueLink, pressed && styles.pressed]}
+                  onPress={() => navigation.navigate('Challenge')}
+                >
+                  <Text style={styles.studyDueLinkText} numberOfLines={1}>
+                    {`Study ${totalDueAcrossDecks} due cards`}
+                  </Text>
+                </Pressable>
+              ) : null}
               {firstDrawCoach ? (
                 <Pressable
                   accessibilityRole="button"
@@ -562,6 +580,8 @@ const styles = StyleSheet.create({
   primaryCtaDisabled: { opacity: 0.45 },
   primaryCtaText: { color: colors.parchmentBg, fontSize: typography.button, fontWeight: '900' },
   drawBadge: { marginTop: spacing.sm, alignSelf: 'flex-start', fontSize: typography.caption, fontWeight: '800', color: colors.inkSecondary, paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: HOME_TOKENS.borderStrong, backgroundColor: HOME_TOKENS.badgeBg },
+  studyDueLink: { marginTop: spacing.xs, minHeight: 44, alignSelf: 'flex-start', justifyContent: 'center' },
+  studyDueLinkText: { fontSize: typography.bodySmall, fontWeight: '800', color: colors.ink },
   heroSecondaryLink: { marginTop: spacing.xs, minHeight: 44, alignSelf: 'flex-start', borderRadius: spacing.buttonRadius, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, backgroundColor: HOME_TOKENS.linkBg },
   heroSecondaryLinkText: { fontSize: typography.bodySmall, fontWeight: '800', color: colors.ink },
   errorText: { marginTop: spacing.xs, color: colors.danger, fontSize: typography.caption, lineHeight: 16 },

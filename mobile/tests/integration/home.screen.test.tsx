@@ -232,7 +232,7 @@ describe('HomeScreen', () => {
   });
 
   it('opens Challenge when today has work', async () => {
-    progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
+    progressFixture = [{ stableUid: '1', stage: 1, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() - 1000 }];
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -241,11 +241,12 @@ describe('HomeScreen', () => {
     await flush();
 
     act(() => {
-      findPressableByLabel(tree, 'Start today’s challenge').props.onPress();
+      findPressableByLabel(tree, 'Open C# Interview').props.onPress();
     });
 
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
     expect(navigateMock).toHaveBeenCalledWith('Challenge', { slug: 'csharp' });
+    expect(tree.root.findByProps({ testID: 'home-study-due-link' })).toBeTruthy();
   });
 
   it('opens Library when there is no pressure today', async () => {
@@ -258,7 +259,7 @@ describe('HomeScreen', () => {
     await flush();
 
     act(() => {
-      findPressableByLabel(tree, 'Open library').props.onPress();
+      findPressableByLabel(tree, 'Open C# Interview').props.onPress();
     });
 
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
@@ -377,7 +378,7 @@ describe('HomeScreen', () => {
 
     expect(resolveDeckBySlugMock.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
     expect(navigateMock).not.toHaveBeenCalledWith('Library');
-    expect(findPressableByLabel(tree, 'Start today’s challenge')).toBeTruthy();
+    expect(findPressableByLabel(tree, 'Open C# Interview')).toBeTruthy();
   });
 
   it('uses cached premium while a server premium refresh fails', async () => {
