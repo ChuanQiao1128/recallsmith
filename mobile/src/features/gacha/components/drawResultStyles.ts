@@ -73,6 +73,19 @@ export const drawResultStyles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.sm,
   },
+  headerTitleColumn: {
+    alignItems: 'center',
+  },
+  // Gold uppercase eyebrow above the deck title — reinforces +N to
+  // Pokedex persistently after the top toast fades.
+  headerEyebrow: {
+    color: colors.gold,
+    fontSize: typography.caption,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
   headerTitle: {
     color: colors.inkSoft,
     fontSize: typography.title2,
@@ -104,29 +117,35 @@ export const drawResultStyles = StyleSheet.create({
     justifyContent: 'center',
   },
   featuredHalo: {
+    // Smaller, lower-opacity halo so it accents the card instead of dwarfing it
     position: 'absolute',
-    width: 360,
-    height: 360,
-    borderRadius: 360,
-    top: -50,
+    width: 240,
+    height: 240,
+    borderRadius: 240,
+    top: 20,
+    opacity: 0.45,
   },
+  // Card aspect → closer to real trading card 5:7. Constrained max-width so it
+  // doesn't spread edge-to-edge on tall phones; centered.
   featured: {
-    width: '100%',
-    borderRadius: 24,
+    width: 260,
+    aspectRatio: 5 / 7,
+    alignSelf: 'center',
+    borderRadius: 18,
     overflow: 'hidden',
-    shadowColor: 'rgba(58,35,5,0.32)',
-    shadowOpacity: 0.6,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 8,
+    shadowColor: 'rgba(58,35,5,0.4)',
+    shadowOpacity: 0.7,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 10,
   },
   featuredGradient: {
-    minHeight: 230,
-    padding: spacing.md,
+    flex: 1,
+    padding: 14,
     justifyContent: 'flex-end',
-    borderRadius: 24,
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.6)',
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.7)',
   },
   newBadgeWrap: {
     position: 'absolute',
@@ -163,11 +182,62 @@ export const drawResultStyles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
-  featuredQuestionSlab: {
-    backgroundColor: 'rgba(255,255,255,0.92)',
+  // Featured card — proper card structure (top bar / art window / text panel /
+  // watermark) instead of just a gradient slab with text on it.
+  featuredTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  // Pack-themed art window — uses the actual pack palette as a gradient
+  // backdrop instead of generic concentric rings. The "code" inside is the
+  // pack identifier rendered larger so it reads as authentic, not stickered.
+  featuredArtWindow: {
+    flex: 1,
+    minHeight: 120,
     borderRadius: 14,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 6,
+  },
+  featuredArtGradient: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  featuredArtRing: {
+    position: 'absolute',
+    width: '60%',
+    aspectRatio: 1,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.30)',
+  },
+  featuredArtCode: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 38,
+    fontWeight: '900',
+    letterSpacing: 4,
+    textShadowColor: 'rgba(0,0,0,0.3)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  // Subtle serial line at the bottom of the featured card — reads as
+  // registry mark, not a sticker. Replaces the rotated OFFICIAL stamp.
+  featuredSerial: {
+    marginTop: 8,
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 2.4,
+    textAlign: 'right',
+  },
+  featuredQuestionSlab: {
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
+    minHeight: 64,
   },
   featuredQuestion: {
     color: colors.inkSoft,
@@ -185,27 +255,49 @@ export const drawResultStyles = StyleSheet.create({
     transform: [{ rotate: '18deg' }],
   },
 
+  // Bigger, hollow chips with colored rarity dot — reads like a stat row, not
+  // colored pills competing with the featured card.
   summaryStrip: {
-    marginTop: spacing.sm,
+    marginTop: spacing.md,
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
+    gap: 10,
     justifyContent: 'center',
+    alignItems: 'center',
   },
   summaryChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
-  summaryChipLeg: { backgroundColor: colors.rarityLegendary },
-  summaryChipRar: { backgroundColor: colors.rarityRare },
-  summaryChipCom: { backgroundColor: colors.rarityCommon },
+  // Colored dots (kept legacy chip class names for backward compat with screen)
+  summaryChipLeg: { borderColor: colors.rarityLegendary },
+  summaryChipRar: { borderColor: colors.rarityRare },
+  summaryChipCom: { borderColor: colors.rarityCommon },
   summaryChipText: {
-    color: colors.softCream,
+    color: colors.inkSoft,
     fontSize: typography.caption,
     fontWeight: '900',
     letterSpacing: 0.4,
   },
+  summaryChipDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+  },
+  // Hidden chip strip — used for single-card draws where chips would only
+  // show "1 RAR" with two zero counts (no information value).
+  summaryStripHidden: { height: 0, opacity: 0, marginTop: 0, overflow: 'hidden' },
 
   sheetToggleButton: {
     marginTop: spacing.md,
@@ -223,6 +315,79 @@ export const drawResultStyles = StyleSheet.create({
     color: colors.inkSoft,
     fontSize: typography.bodySmall,
     fontWeight: '800',
+  },
+
+  // ─── Always-on mini-strip (Pokemon-style row of card thumbnails) ────────
+  miniStrip: {
+    marginTop: spacing.md,
+  },
+  miniStripContent: {
+    paddingHorizontal: 4,
+    columnGap: 8,
+  },
+  miniCard: {
+    width: 88,
+    height: 124,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    paddingTop: 14, // leaves room for the rarity bar
+    marginRight: 8,
+    shadowColor: 'rgba(58,35,5,0.18)',
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  miniCardRarityBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 6,
+  },
+  miniCardSlot: {
+    color: colors.inkMuted,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  miniCardQuestion: {
+    marginTop: 4,
+    color: colors.inkSoft,
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '700',
+    flex: 1,
+  },
+  // Gold rarity stars — top-right corner of mini card. Aligns visually
+  // with the Library tile's rarity star convention. textShadow for depth.
+  miniCardStars: {
+    position: 'absolute',
+    top: 6,
+    right: 8,
+    color: colors.gold,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    textShadowColor: 'rgba(58,35,5,0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1.5,
+  },
+  miniCardChip: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginTop: 4,
+  },
+  miniCardChipText: {
+    color: '#FFFFFF',
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.4,
   },
 
   sheetWrap: {
@@ -258,6 +423,20 @@ export const drawResultStyles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1,
+  },
+  // Gold rarity stars on grid card — sits between slot # (top-left)
+  // and rarity dot (top-right). Mirrors Library tile language.
+  gridStars: {
+    position: 'absolute',
+    top: 6,
+    left: 36,
+    color: colors.gold,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    textShadowColor: 'rgba(58,35,5,0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1.5,
   },
   gridRarityDot: {
     position: 'absolute',
@@ -336,6 +515,25 @@ export const drawResultStyles = StyleSheet.create({
     fontSize: typography.bodySmall,
     fontWeight: '800',
     textDecorationLine: 'underline',
+  },
+  // Secondary "Earn more pulls →" pill — only renders when wallet hit
+  // zero. Gold accent so it reads as a reward path, not a generic link.
+  earnPullsPill: {
+    marginTop: spacing.sm,
+    minHeight: 48,
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(232,184,90,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(232,184,90,0.45)',
+  },
+  earnPullsText: {
+    color: colors.gold,
+    fontSize: typography.bodySmall,
+    fontWeight: '900',
+    letterSpacing: 0.4,
   },
 
   confetti: {

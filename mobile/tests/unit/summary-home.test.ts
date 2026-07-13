@@ -4,30 +4,35 @@ import { buildHomeVM } from '../../src/features/gacha/selectors/homeSelectors';
 
 describe('buildSessionSummaryVM', () => {
   it('builds full-run summary copy with wallet-aware reward text', () => {
+    // v3 reward calibration: full clear → +1 pull (was +2). See
+    // computeSessionRewardPulls in rewardResolver.
     const summary = buildSessionSummaryVM({
       deckTitle: 'C# Interview',
-      sessionDone: 4,
-      sessionLimit: 4,
+      sessionDone: 5,
+      sessionLimit: 5,
       minimumGoal: 1,
       dueCount: 3,
       wallet: { availablePulls: 0, reservePulls: 0 },
     });
 
     expect(summary.vm.completionLabel).toBe('Full run cleared');
-    expect(summary.vm.rewardBadge).toMatch(/\+2 pull/i);
+    expect(summary.vm.rewardBadge).toMatch(/\+1 pull/i);
     expect(summary.vm.rewardBody).toMatch(/ready to use/i);
   });
 
   it('falls back to neutral reward copy when wallet is unavailable', () => {
+    // v3: hitting only minimumGoal (not full clear) earns 0 pulls now.
+    // The summary copy still distinguishes "no reward earned this run"
+    // from "no wallet info available".
     const summary = buildSessionSummaryVM({
       deckTitle: 'C# Interview',
       sessionDone: 1,
-      sessionLimit: 4,
+      sessionLimit: 5,
       minimumGoal: 1,
       dueCount: 3,
     });
 
-    expect(summary.vm.rewardBody).toMatch(/earned for this run/i);
+    // Below full clear → progress saved, no pull badge
     expect(summary.vm.nextActionLabel).toBe('Keep momentum');
   });
 

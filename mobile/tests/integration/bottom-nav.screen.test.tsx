@@ -46,7 +46,7 @@ describe('BottomTabBar', () => {
     expect(textBlob).toContain('Me');
   });
 
-  it('routes review tab presses to Challenge', async () => {
+  it('routes review tab presses to SessionCard for one-tap study', async () => {
     const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -57,7 +57,10 @@ describe('BottomTabBar', () => {
       findPressableByLabel(tree, 'Review').props.onPress();
     });
 
-    expect(navigate).toHaveBeenCalledWith('Challenge');
+    // Review tab now goes straight to SessionCard (one-tap study)
+    // — was 'Challenge' which showed a route preview + Begin button.
+    // Aligns with the Home CTA flow which also bypasses Challenge.
+    expect(navigate).toHaveBeenCalledWith('SessionCard');
   });
 
   it('routes me tab presses to More', async () => {

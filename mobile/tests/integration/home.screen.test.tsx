@@ -183,7 +183,10 @@ describe('HomeScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'home-draw-status-badge' })).toBeTruthy();
   });
 
-  it('shows due-card study link and routes it to Challenge', async () => {
+  it('shows due-card study link and routes it directly to SessionCard', async () => {
+    // The Home daily-study path bypasses the Challenge route-preview
+    // interstitial and drops users straight into the first review card.
+    // Saves a tap on the highest-volume daily action.
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -199,7 +202,9 @@ describe('HomeScreen v9', () => {
       studyLink.props.onPress();
     });
 
-    expect(navigateMock).toHaveBeenCalledWith('Challenge');
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', expect.objectContaining({}));
+    const lastCall = navigateMock.mock.calls.find((c) => c[0] === 'SessionCard');
+    expect(lastCall?.[0]).toBe('SessionCard');
   });
 
   it('hides due-card study link when no deck has due work', async () => {

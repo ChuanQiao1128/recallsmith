@@ -148,8 +148,9 @@ describe('SessionSummaryScreen', () => {
     expect(secondaryTextStyle.fontSize).toBeLessThan(primaryTextStyle.fontSize as number);
 
     const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
-    expect(texts).toContain('+2 free pulls');
-    expect(texts).toContain('2 ready to use');
+    // v3 reward calibration: full clear → +1 free pull (was +2).
+    expect(texts).toContain('+1 free pull');
+    expect(texts).toContain('1 ready to use');
     expect(texts).toContain('Daily streak');
     expect(texts).toContain('First day complete');
 
@@ -179,7 +180,8 @@ describe('SessionSummaryScreen', () => {
 
     const walletRaw = store.get('recallsmith:reward-wallet:v1');
     expect(walletRaw).toBeTruthy();
-    expect(JSON.parse(walletRaw!)).toEqual({ availablePulls: 2, reservePulls: 0 });
+    // v3: full clear → +1 pull persisted to wallet (was +2).
+    expect(JSON.parse(walletRaw!)).toEqual({ availablePulls: 1, reservePulls: 0 });
 
     act(() => {
       findPressableByTestID(tree, 'summary-reward-use-pulls-cta').props.onPress();

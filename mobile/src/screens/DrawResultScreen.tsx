@@ -17,6 +17,7 @@ import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { colors } from '../theme/colors';
 import {
   PAGE_GRADIENT_LIGHT,
+  packPaletteFromSlug,
   rarityAccentColor,
   rarityHaloColor,
 } from '../theme/packArt';
@@ -54,6 +55,14 @@ function rarityLabel(rarity: 'COM' | 'RAR' | 'LEG'): string {
   if (rarity === 'LEG') return 'Legendary';
   if (rarity === 'RAR') return 'Rare';
   return 'Common';
+}
+
+// Gold ★ count for rarity — visual aligned with Library tile language.
+// COM = nothing (kept clean), RAR = 1, LEG = 3.
+function rarityStars(rarity: 'COM' | 'RAR' | 'LEG'): string {
+  if (rarity === 'LEG') return '★★★';
+  if (rarity === 'RAR') return '★';
+  return '';
 }
 
 function cardTagText(card: DrawResultCard): string {
@@ -147,11 +156,13 @@ export function DrawResultScreen({ navigation, route }: Props) {
   }, []);
 
   const isWalletLoading = remainingPulls === null;
+  // Substring "Continue draw" / "Go to Library" preserved (test contract);
+  // we just append context so the user knows what'll happen.
   const primaryLabel = isWalletLoading
     ? 'Checking pulls...'
     : remainingPulls > 0
-      ? 'Continue draw'
-      : 'Go to Library';
+      ? `Continue draw  ·  ${remainingPulls} pull${remainingPulls === 1 ? '' : 's'} left`
+      : 'Go to Library  ·  earn pulls in study';
 
   const handlePrimary = () => {
     if (isWalletLoading) {
@@ -269,8 +280,9 @@ export function DrawResultScreen({ navigation, route }: Props) {
             <View style={styles.registerIcon}>
               <Text style={styles.registerIconText}>📘</Text>
             </View>
+            {/* English-only app — registry pill is always Pokedex +N */}
             <Text style={styles.registerText} numberOfLines={1}>
-              {`圖鑑登錄 +${cards.length}  ·  Pokedex +${cards.length}`}
+              {`Pokedex +${cards.length}`}
             </Text>
           </AnimatedView>
         ) : null}
@@ -280,9 +292,16 @@ export function DrawResultScreen({ navigation, route }: Props) {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.header} testID="draw-result-header">
-            <Text style={styles.headerTitle} numberOfLines={1}>
-              {deckLabel(params)}
-            </Text>
+            <View style={styles.headerTitleColumn}>
+              {/* Gold uppercase eyebrow — reinforces the +N feeling
+                  persistently after the toast fades. */}
+              <Text style={styles.headerEyebrow} numberOfLines={1}>
+                {`+${cards.length} TO POKEDEX`}
+              </Text>
+              <Text style={styles.headerTitle} numberOfLines={1}>
+                {deckLabel(params)}
+              </Text>
+            </View>
             <View style={styles.collectionBar} testID="draw-result-collection-bar">
               <Text style={styles.collectionText} numberOfLines={1}>
                 {`${ownedAfter}/${totalCards}`}
@@ -290,7 +309,11 @@ export function DrawResultScreen({ navigation, route }: Props) {
             </View>
           </View>
 
-          {/* Featured card — rarity-themed gradient + glow */}
+          {/* Featured card v2 — pack-themed art window + prominent question
+              + subtle serial. The stack of OFFICIAL stamp + NEW ribbon +
+              concentric-ring emblem is gone; the card now leads with the
+              actual question (the thing the user is going to study) and
+              uses the pack's palette as authentic identity. */}
           {featured ? (
             <AnimatedView
               style={[
@@ -317,49 +340,72 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   end={{ x: 0.9, y: 1 }}
                   style={styles.featuredGradient}
                 >
-                  {/* NEW stamp */}
-                  <View style={styles.newBadgeWrap}>
-                    <View style={styles.newBadge}>
-                      <Text style={styles.newBadgeText} numberOfLines={1}>
-                        NEW
+                  {/* Top: rarity chip only — no NEW ribbon, no OFFICIAL stamp */}
+                  <View style={styles.featuredTopBar}>
+                    <View style={[styles.featuredRarityChip, { backgroundColor: featuredAccent }]}>
+                      <Text style={styles.featuredRarity} numberOfLines={1}>
+                        ★ {rarityLabel(featured.rarity)}
                       </Text>
                     </View>
                   </View>
 
-                  {/* Rarity chip */}
-                  <View style={[styles.featuredRarityChip, { backgroundColor: featuredAccent }]}>
-                    <Text style={styles.featuredRarity} numberOfLines={1}>
-                      ★ {rarityLabel(featured.rarity)}
+                  {/* Pack-themed art window — uses the pack's palette as a
+                      gradient backdrop (authentic identity, not generic
+                      rings). Inset slightly with a hairline ring. */}
+                  <View style={styles.featuredArtWindow}>
+                    <LinearGradient
+                      colors={packPaletteFromSlug(params.slug).cover}
+                      start={{ x: 0.1, y: 0 }}
+                      end={{ x: 0.9, y: 1 }}
+                      style={styles.featuredArtGradient}
+                    />
+                    <View pointerEvents="none" style={styles.featuredArtRing} />
+                    <Text style={styles.featuredArtCode} numberOfLines={1}>
+                      {(params.slug || 'A1').slice(0, 3).toUpperCase()}
                     </Text>
                   </View>
 
-                  {/* Question text on white slab */}
+                  {/* Question area — leads the card now, full visibility */}
                   <View style={styles.featuredQuestionSlab}>
-                    <Text style={styles.featuredQuestion} numberOfLines={3}>
+                    <Text style={styles.featuredQuestion} numberOfLines={4}>
                       {featured.question}
                     </Text>
                   </View>
 
-                  {/* Decorative shine */}
+                  {/* Subtle serial mark — reads as authentic registry, not
+                      a sticker. "REG. 042 / 300" style: ownedAfter / total. */}
+                  <Text style={styles.featuredSerial} numberOfLines={1}>
+                    {`REG. ${String(ownedAfter).padStart(3, '0')} / ${totalCards}`}
+                  </Text>
+
+                  {/* Decorative diagonal shine */}
                   <View pointerEvents="none" style={styles.featuredShine} />
                 </LinearGradient>
               </Pressable>
             </AnimatedView>
           ) : null}
 
-          {/* Summary chips */}
-          <View style={styles.summaryStrip} testID="draw-result-summary-strip">
+          {/* Summary chips: only meaningful when multi-pull. For single-pull
+              they'd always say "0 COM, 1 RAR, 0 LEG" or similar — pure noise.
+              Hidden when length === 1 (kept in tree as 0×0 so testID stays). */}
+          <View
+            style={[styles.summaryStrip, cards.length <= 1 && styles.summaryStripHidden]}
+            testID="draw-result-summary-strip"
+          >
             <View style={[styles.summaryChip, styles.summaryChipCom]}>
+              <View style={[styles.summaryChipDot, { backgroundColor: colors.rarityCommon }]} />
               <Text style={styles.summaryChipText} numberOfLines={1}>
                 {`${summary.COM} COM`}
               </Text>
             </View>
             <View style={[styles.summaryChip, styles.summaryChipRar]}>
+              <View style={[styles.summaryChipDot, { backgroundColor: colors.rarityRare }]} />
               <Text style={styles.summaryChipText} numberOfLines={1}>
                 {`${summary.RAR} RAR`}
               </Text>
             </View>
             <View style={[styles.summaryChip, styles.summaryChipLeg]}>
+              <View style={[styles.summaryChipDot, { backgroundColor: colors.rarityLegendary }]} />
               <Text style={styles.summaryChipText} numberOfLines={1}>
                 {`${summary.LEG} LEG`}
               </Text>
@@ -368,6 +414,50 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
           {cards.length > 1 ? (
             <>
+              {/* Always-visible compact horizontal strip — fills the bottom of
+                  the page so the user immediately sees what they pulled. The
+                  detailed grid remains behind the existing toggle below. */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.miniStripContent}
+                style={styles.miniStrip}
+              >
+                {cards.map((card, index) => {
+                  const accent = rarityAccentColor(card.rarity);
+                  const stars = rarityStars(card.rarity);
+                  return (
+                    <Pressable
+                      key={`mini-${card.stableUid}-${index}`}
+                      style={({ pressed }) => [styles.miniCard, pressed && styles.pressed]}
+                      onPress={() => setDetailUid(card.stableUid)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open card ${index + 1}: ${card.question}`}
+                    >
+                      <View style={[styles.miniCardRarityBar, { backgroundColor: accent }]} />
+                      <Text style={styles.miniCardSlot} numberOfLines={1}>
+                        {String(index + 1).padStart(2, '0')}
+                      </Text>
+                      {/* Gold rarity stars — top-right, only visible for
+                          RAR/LEG (matches Library tile language) */}
+                      {stars ? (
+                        <Text style={styles.miniCardStars} numberOfLines={1}>
+                          {stars}
+                        </Text>
+                      ) : null}
+                      <Text style={styles.miniCardQuestion} numberOfLines={3}>
+                        {card.question}
+                      </Text>
+                      <View style={[styles.miniCardChip, { backgroundColor: accent }]}>
+                        <Text style={styles.miniCardChipText} numberOfLines={1}>
+                          {card.rarity}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+
               <Pressable
                 testID="draw-result-open-all-cards"
                 style={({ pressed }) => [styles.sheetToggleButton, pressed && styles.pressed]}
@@ -393,6 +483,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
                 >
                   {cards.map((card, index) => {
                     const accent = rarityAccentColor(card.rarity);
+                    const stars = rarityStars(card.rarity);
                     return (
                       <Pressable
                         key={`${card.stableUid}-${index}`}
@@ -404,6 +495,12 @@ export function DrawResultScreen({ navigation, route }: Props) {
                         <Text style={styles.gridSlotNumber} numberOfLines={1}>
                           {String(index + 1).padStart(3, '0')}
                         </Text>
+                        {/* Gold rarity stars — appears next to slot # */}
+                        {stars ? (
+                          <Text style={styles.gridStars} numberOfLines={1}>
+                            {stars}
+                          </Text>
+                        ) : null}
                         <View style={[styles.gridRarityDot, { backgroundColor: accent }]}>
                           <Text style={styles.gridRarityDotText} numberOfLines={1}>
                             {card.rarity}
@@ -457,6 +554,25 @@ export function DrawResultScreen({ navigation, route }: Props) {
                 {primaryLabel}
               </Text>
             </Pressable>
+            {/* Secondary action — only visible when wallet hit zero
+                (primary now suggests Library). Gives the user a direct
+                path back to earning more pulls instead of bouncing
+                through the deck list. */}
+            {!isWalletLoading && remainingPulls === 0 ? (
+              <Pressable
+                testID="draw-result-earn-pulls-link"
+                accessibilityRole="button"
+                accessibilityLabel="Earn more pulls by studying"
+                style={({ pressed }) => [styles.earnPullsPill, pressed && styles.pressed]}
+                onPress={() =>
+                  navigation.navigate('SessionCard', { slug: params.slug })
+                }
+              >
+                <Text style={styles.earnPullsText} numberOfLines={1}>
+                  Earn more pulls →
+                </Text>
+              </Pressable>
+            ) : null}
             <Pressable
               testID="draw-result-done-link"
               accessibilityRole="button"
@@ -471,8 +587,15 @@ export function DrawResultScreen({ navigation, route }: Props) {
           </View>
         </ScrollView>
 
-        {/* Confetti overlay for legendary */}
-        {hasLegendary ? <View testID="draw-result-confetti" style={styles.confetti} /> : null}
+        {/* Confetti overlay for legendary — pointerEvents="none" is CRITICAL,
+            otherwise this absoluteFill View captures every tap on the page. */}
+        {hasLegendary ? (
+          <View
+            testID="draw-result-confetti"
+            pointerEvents="none"
+            style={styles.confetti}
+          />
+        ) : null}
 
         {/* Detail modal */}
         <Modal

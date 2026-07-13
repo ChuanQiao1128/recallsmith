@@ -28,12 +28,18 @@ import { libraryStyles as styles } from '../features/gacha/library/libraryScreen
 import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
+import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Library'>;
 
 export function LibraryScreen({ navigation, route }: Props) {
   const { width } = useWindowDimensions();
   const listRef = useRef<any>(null);
+  // Debounce — when the user rapidly tab-swaps to Library and back,
+  // skip refetching if the last successful refresh was within 1.5s.
+  // Eliminates the spinner-flash on quick tab swap UX.
+  const lastRefreshAtRef = useRef<number>(0);
+  const REFRESH_DEBOUNCE_MS = 1500;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,8 +50,30 @@ export function LibraryScreen({ navigation, route }: Props) {
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [filterOpen, setFilterOpen] = useState(false);
   const [highlightedUid, setHighlightedUid] = useState<string | null>(null);
+  // Wallet state — drives the empty-collection banner's CTA target.
+  // wallet=0 → banner sends user to SessionCard (earn pulls first);
+  // wallet>0 → banner sends user to Draw (open the pack now).
+  const [walletPulls, setWalletPulls] = useState<number>(0);
 
   const numColumns = width < 390 ? 2 : 3;
+
+  useEffect(() => {
+    let cancelled = false;
+    loadRewardWalletState()
+      .then((wallet) => {
+        if (cancelled) return;
+        const total =
+          Math.max(0, Number(wallet.availablePulls ?? 0) || 0) +
+          Math.max(0, Number(wallet.reservePulls ?? 0) || 0);
+        setWalletPulls(total);
+      })
+      .catch(() => {
+        /* default 0 is fine for the banner CTA decision */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const refresh = useCallback(
     async (preferredSlug?: string | null) => {
@@ -84,6 +112,7 @@ export function LibraryScreen({ navigation, route }: Props) {
         setError(loadErr?.message ?? 'Failed to load library.');
       } finally {
         setLoading(false);
+        lastRefreshAtRef.current = Date.now();
       }
     },
     [selectedSlug],
@@ -91,7 +120,15 @@ export function LibraryScreen({ navigation, route }: Props) {
 
   useFocusEffect(
     useCallback(() => {
-      void refresh(route.params?.focusSlug ?? null);
+      // Skip refetch if user was just here (within 1.5s). Eliminates
+      // spinner-flash on rapid tab-swaps. Force refresh when caller
+      // passes focusSlug (e.g. routed back from Draw with new card).
+      const focusSlug = route.params?.focusSlug ?? null;
+      const sinceLast = Date.now() - lastRefreshAtRef.current;
+      if (!focusSlug && sinceLast < REFRESH_DEBOUNCE_MS && lastRefreshAtRef.current > 0) {
+        return;
+      }
+      void refresh(focusSlug);
     }, [refresh, route.params?.focusSlug]),
   );
 
@@ -112,18 +149,36 @@ export function LibraryScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!vm || !route.params?.scrollToNew) return;
     const targetIndex = visibleCards.findIndex((card) => card.status === 'new');
-    if (targetIndex < 0) return;
+    // Guard against the FlatList not having rendered the new data yet —
+    // findIndex returns an index into our new array, but RN's internal
+    // ListView may still be on the old (smaller) dataset for one frame.
+    if (targetIndex < 0 || targetIndex >= visibleCards.length) return;
 
     const targetUid = visibleCards[targetIndex]?.stableUid;
     if (!targetUid) return;
 
-    listRef.current?.scrollToIndex?.({ index: targetIndex, animated: true });
     setHighlightedUid(targetUid);
+    // Defer the scroll one tick — by the time this runs, the FlatList has
+    // committed the new data prop and scrollToIndex's internal range matches.
+    const scrollTimer = setTimeout(() => {
+      try {
+        listRef.current?.scrollToIndex?.({
+          index: targetIndex,
+          animated: true,
+          viewPosition: 0.3,
+        });
+      } catch {
+        /* swallowed — onScrollToIndexFailed will retry */
+      }
+    }, 60);
 
-    const timer = setTimeout(() => {
+    const highlightTimer = setTimeout(() => {
       setHighlightedUid((prev) => (prev === targetUid ? null : prev));
     }, 1500);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(scrollTimer);
+      clearTimeout(highlightTimer);
+    };
   }, [route.params?.scrollToNew, visibleCards, vm]);
 
   const ownedCount = vm ? vm.counts.learningCount + vm.counts.masteredCount : 0;
@@ -200,6 +255,23 @@ export function LibraryScreen({ navigation, route }: Props) {
             contentContainerStyle={styles.container}
             showsVerticalScrollIndicator={false}
             columnWrapperStyle={numColumns > 1 ? styles.columnWrap : undefined}
+            // Per RN docs: scrollToIndex can fail when the target hasn't been
+            // measured yet (offscreen rows). Recover via offset estimation +
+            // retry, instead of throwing an Invariant Violation.
+            onScrollToIndexFailed={(info) => {
+              const ROW_HEIGHT_GUESS = 132;
+              const offset = (info.index / Math.max(numColumns, 1)) * ROW_HEIGHT_GUESS;
+              listRef.current?.scrollToOffset?.({ offset, animated: true });
+              setTimeout(() => {
+                if (info.index < visibleCards.length) {
+                  listRef.current?.scrollToIndex?.({
+                    index: info.index,
+                    animated: true,
+                    viewPosition: 0.3,
+                  });
+                }
+              }, 120);
+            }}
             ListHeaderComponent={
               <LibraryHeader
                 title={vm.title}
@@ -218,6 +290,20 @@ export function LibraryScreen({ navigation, route }: Props) {
                   setFilter(nextFilter);
                   setFilterOpen(false);
                 }}
+                // Brand-new user CTA — banner only renders when
+                // ownedCount === 0. Wallet-aware routing:
+                //   wallet > 0 → Draw (open the pack right now)
+                //   wallet = 0 → SessionCard (earn pulls first)
+                // Avoids a useless bounce through Draw → "Earn pulls"
+                // → SessionCard for users who haven't earned anything.
+                onOpenFirstPack={() => {
+                  if (walletPulls > 0) {
+                    navigation.navigate('Draw', { slug: vm.selectedDeckSlug });
+                  } else {
+                    navigation.navigate('SessionCard', { slug: vm.selectedDeckSlug });
+                  }
+                }}
+                openFirstPackHasPulls={walletPulls > 0}
               />
             }
             ListEmptyComponent={
@@ -247,6 +333,7 @@ export function LibraryScreen({ navigation, route }: Props) {
                 item={item}
                 numColumns={numColumns}
                 highlighted={highlightedUid === item.stableUid}
+                deckSlug={vm.selectedDeckSlug}
                 onPress={(stableUid) => navigation.navigate('CardDetail', { cardId: stableUid })}
               />
             )}

@@ -79,16 +79,13 @@ describe('phase A onboarding screens', () => {
       welcomeTree = renderer.create(<WelcomeScreen navigation={{ replace } as any} route={{ key: 'welcome', name: 'Welcome' } as any} />);
     });
 
+    // Welcome v3 is a single page (no more 3-swipe carousel + Next buttons).
+    // One tap on the primary CTA completes the welcome stage and replaces
+    // into the audience survey. CTA copy was "Continue to audience" —
+    // simplified to "Continue" because "audience" was internal jargon
+    // that meant nothing to first-time users.
     await act(async () => {
-      findPressableByText(welcomeTree, 'Next').props.onPress();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      findPressableByText(welcomeTree, 'Next').props.onPress();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      findPressableByText(welcomeTree, 'Continue to audience').props.onPress();
+      findPressableByText(welcomeTree, 'Continue').props.onPress();
       await Promise.resolve();
     });
     expect(replace).toHaveBeenCalledWith('AudienceSurvey');
@@ -99,7 +96,9 @@ describe('phase A onboarding screens', () => {
     });
 
     await act(async () => {
-      findPressableByText(surveyTree, 'All').props.onPress();
+      // Audience option labels were rewritten outcome-driven:
+      // Junior → "Just starting", Both → "Mix it up", All → "Push me"
+      findPressableByText(surveyTree, 'Push me').props.onPress();
       await Promise.resolve();
     });
 

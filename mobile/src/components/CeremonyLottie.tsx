@@ -497,28 +497,29 @@ export function MultiPackFlyIn({
   testID?: string;
 }) {
   const lanes: CeremonyFlyInLane[] = [
+    // Wing offsets pushed wider to accommodate the bigger 200x280 packs
     {
       driver: leftRef,
-      fromX: -260,
-      fromY: -200,
+      fromX: -300,
+      fromY: -220,
       fromRot: '-32deg',
-      toX: -88,
-      toY: 18,
+      toX: -120,
+      toY: 24,
       toRot: '-9deg',
-      finalScale: 0.78,
-      finalOpacity: 0.55,
+      finalScale: 0.7,
+      finalOpacity: 0.45,
       zIndex: 1,
     },
     {
       driver: rightRef,
-      fromX: 260,
-      fromY: -200,
+      fromX: 300,
+      fromY: -220,
       fromRot: '32deg',
-      toX: 88,
-      toY: 18,
+      toX: 120,
+      toY: 24,
       toRot: '9deg',
-      finalScale: 0.78,
-      finalOpacity: 0.55,
+      finalScale: 0.7,
+      finalOpacity: 0.45,
       zIndex: 1,
     },
     {
@@ -551,12 +552,38 @@ export const ceremonyStyles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(255,255,255,0.18)',
   },
-  haloLarge: {
+  // Multi-layer halo system — replaces the single flat-color circle. Renders
+  // (back to front): rotating rays → soft outer glow → bright animated core.
+  haloRays: {
     position: 'absolute',
-    width: 420,
-    height: 420,
-    borderRadius: 420,
-    top: '20%',
+    width: 360,
+    height: 360,
+    top: '24%',
+    left: '50%',
+    marginLeft: -180,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  haloRay: {
+    position: 'absolute',
+    width: 6,
+    height: 140,
+    borderRadius: 3,
+  },
+  haloOuter: {
+    position: 'absolute',
+    width: 280,
+    height: 280,
+    borderRadius: 280,
+    top: '28%',
+    alignSelf: 'center',
+  },
+  haloCore: {
+    position: 'absolute',
+    width: 150,
+    height: 150,
+    borderRadius: 150,
+    top: '36%',
     alignSelf: 'center',
   },
   content: {
@@ -565,24 +592,30 @@ export const ceremonyStyles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
   },
+  // Phase title shrunk from title1 (28pt) → title3 (17pt). Each phase's
+  // "Swipe to open / Hold steady / Card revealed" was visually shouting,
+  // taking attention from the pack art.
   phaseTitle: {
     color: colors.inkSoft,
-    fontSize: typography.title1,
-    lineHeight: 34,
+    fontSize: typography.title3,
+    lineHeight: 22,
     fontWeight: '900',
     textAlign: 'center',
+    letterSpacing: 0.3,
   },
   phaseBody: {
-    marginTop: spacing.xs,
+    marginTop: 2,
     color: colors.inkMuted,
-    fontSize: typography.bodySmall,
+    fontSize: typography.caption,
     fontWeight: '700',
     textAlign: 'center',
+    opacity: 0.7,
   },
+  // Stage taller — pack now fills more of the visual area.
   stage: {
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
     width: 280,
-    height: 320,
+    height: 360,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -606,26 +639,27 @@ export const ceremonyStyles = StyleSheet.create({
     shadowOpacity: 0.9,
     shadowRadius: 6,
   },
+  // Pack enlarged: 200x240 → 240x336 to fill the stage area
   swipePack: {
-    width: 220,
-    minHeight: 280,
+    width: 260,
+    minHeight: 360,
     alignItems: 'center',
     justifyContent: 'center',
   },
   swipePackInner: {
-    width: 200,
-    minHeight: 240,
-    borderRadius: 24,
+    width: 240,
+    minHeight: 336,
+    borderRadius: 22,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
     overflow: 'hidden',
-    shadowColor: 'rgba(58,35,5,0.3)',
-    shadowOpacity: 0.6,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
+    shadowColor: 'rgba(58,35,5,0.4)',
+    shadowOpacity: 0.7,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 10,
   },
   swipeTrack: {
     marginTop: spacing.md,
@@ -666,9 +700,10 @@ export const ceremonyStyles = StyleSheet.create({
     height: 1,
     opacity: 0,
   },
+  // Approach/hold/single-tear pack — same enlarged dimensions as swipePackInner
   stageCard: {
-    width: 200,
-    minHeight: 280,
+    width: 240,
+    minHeight: 336,
     borderRadius: 22,
     borderWidth: 3,
     borderColor: 'rgba(255,255,255,0.6)',
@@ -676,8 +711,8 @@ export const ceremonyStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: spacing.md,
-    shadowColor: 'rgba(58,35,5,0.32)',
-    shadowOpacity: 0.5,
+    shadowColor: 'rgba(58,35,5,0.4)',
+    shadowOpacity: 0.65,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 12 },
     elevation: 8,
@@ -692,22 +727,23 @@ export const ceremonyStyles = StyleSheet.create({
   stageCardTear: {
     transform: [{ rotate: '8deg' }],
   },
+  // Multi-pack fly-in trio — bigger center pack so the wing packs read clearly
   flyInStage: {
-    width: 280,
-    height: 320,
+    width: 320,
+    height: 360,
     alignItems: 'center',
     justifyContent: 'center',
   },
   flyInPack: {
     position: 'absolute',
-    width: 160,
-    height: 224,
+    width: 200,
+    height: 280,
     borderRadius: 22,
     shadowColor: 'rgba(58,35,5,0.4)',
     shadowOpacity: 0.6,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 10,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 12,
   },
   flyInPackInner: {
     flex: 1,
@@ -821,6 +857,43 @@ export const ceremonyStyles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1,
   },
+  // Radial energy streaks behind the swirl during multi-pull tear-flip.
+  // 8 thin Views rotated around the center; their opacity is driven by
+  // orbitProgress so they fade in as the vortex builds.
+  orbitEnergyLine: {
+    position: 'absolute',
+    width: 3,
+    height: 110,
+    borderRadius: 999,
+    top: '50%',
+    left: '50%',
+    marginLeft: -1.5,
+  },
+  // Face-down card back used inside orbitCard / orbitCenterCard during
+  // tear-flip (cards swirl while still face-down — reveal is in
+  // cards-on-table phase). Same monogram look as the table card backs.
+  orbitCardBack: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 18,
+    backgroundColor: '#10143A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  orbitCardBackRing: {
+    position: 'absolute',
+    width: '70%',
+    height: '70%',
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: 'rgba(218,180,90,0.35)',
+  },
+  orbitCardBackMonogram: {
+    color: 'rgba(218,180,90,0.85)',
+    fontSize: 36,
+    fontWeight: '900',
+    letterSpacing: 1.4,
+    fontStyle: 'italic',
+  },
   cardBackText: {
     color: colors.shine,
     fontSize: typography.bodySmall,
@@ -854,6 +927,9 @@ export const ceremonyStyles = StyleSheet.create({
     letterSpacing: 0.9,
     textTransform: 'uppercase',
   },
+  footerRarityHidden: { opacity: 0, height: 0, marginTop: 0 },
+  // Phase title/body kept in tree for tests but visually 0×0
+  phaseCopyHidden: { fontSize: 0, lineHeight: 0, height: 0, opacity: 0 },
   skipButton: {
     marginTop: spacing.md,
     minHeight: a11y.minTouch,
@@ -879,6 +955,165 @@ export const ceremonyStyles = StyleSheet.create({
   flash: {
     ...StyleSheet.absoluteFillObject,
   },
+  // Bright near-white core layered ABOVE the rarity-tinted ring. Centered,
+  // smaller than full screen — reads as the burst origin point. Together
+  // with `flash` (the colored ring), they form a layered radial flash.
+  flashCore: {
+    position: 'absolute',
+    top: '30%',
+    left: '20%',
+    right: '20%',
+    bottom: '30%',
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    shadowColor: '#FFFFFF',
+    shadowOpacity: 0.9,
+    shadowRadius: 40,
+  },
+
+  // Top-right ✕ to skip the ceremony — for repeat-pull users
+  ceremonySkipX: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 50,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+  },
+  ceremonySkipXText: {
+    color: colors.inkSoft,
+    fontSize: 22,
+    fontWeight: '300',
+    marginTop: -2,
+  },
+
+  // ─── Tap-to-flip table layout ─────────────────────────────────────────
+  // Container — full width, centered content. Inner rows handle the actual arc.
+  tapTable: {
+    width: '100%',
+    minHeight: 240,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  // One arc row of up to 5 cards
+  tapRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  // Two-row stack for 6-10 cards
+  tapTwoRows: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    rowGap: 18,
+  },
+  tapCardSlot: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: -2, // tiny overlap so cards feel like a physical hand
+  },
+  tapCardSide: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backfaceVisibility: 'hidden',
+  },
+  // Card back — refined monogram look, no cartoon diamond / "POCKET" text.
+  // Deep navy gradient + thin gold border + subtle "R" emblem in the middle.
+  tapCardBack: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(218,180,90,0.55)', // thin gold edge
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  tapCardBackInnerRing: {
+    position: 'absolute',
+    width: '70%',
+    height: '70%',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(218,180,90,0.30)',
+  },
+  // Per-deck PNG card back fills the entire tapCardBack area. resizeMode
+  // is 'cover' so the gold filigree pattern reaches the edges instead of
+  // showing a procedural background behind a letterboxed image.
+  tapCardBackImage: {
+    width: '100%',
+    height: '100%',
+  },
+  tapCardBackMonogram: {
+    color: 'rgba(218,180,90,0.85)',
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: 1,
+    fontStyle: 'italic',
+  },
+  tapCardFace: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 2,
+    paddingHorizontal: 4,
+    paddingVertical: 6,
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    overflow: 'hidden',
+  },
+  tapCardChip: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 999,
+  },
+  tapCardChipText: {
+    color: '#FFFFFF',
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+  tapCardQuestion: {
+    color: colors.inkSoft,
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '700',
+  },
+  tapCardHoloOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.18,
+  },
+  tapCardBurst: {
+    position: 'absolute',
+    width: 80,
+    height: 80,
+    borderRadius: 999,
+    shadowColor: '#FFFFFF',
+    shadowOpacity: 0.9,
+    shadowRadius: 14,
+  },
+  // Stays visible after the flip — soft accent-colored radial that gives
+  // RAR/LEG cards continuous radiance. Sized w+28 × h+28 so it bleeds out
+  // beyond the card edges. Low opacity keeps it ambient, not loud.
+  tapCardPersistentHalo: {
+    position: 'absolute',
+    borderRadius: 999,
+    opacity: 0.22,
+  },
+
   pressed: { opacity: 0.9 },
 });
 

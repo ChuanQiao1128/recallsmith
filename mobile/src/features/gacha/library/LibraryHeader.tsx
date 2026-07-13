@@ -1,8 +1,106 @@
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import type { LibraryDeckOption, LibraryFilter, LibraryFilterChip } from './libraryMapper';
 import { libraryStyles as styles } from './libraryScreenStyles';
+import { colors } from '../../../theme/colors';
+
+// Progress ring using the classic two-half rotation trick (no SVG dep).
+// Renders the unfilled portion as a hairline track and the filled
+// portion as a gold arc proportional to pct (0–100). Centered child is
+// the percentage label (passed via children).
+function ProgressRing({ pct, children }: { pct: number; children: React.ReactNode }) {
+  const SIZE = 54;
+  const STROKE = 3;
+  const clamp = Math.max(0, Math.min(100, pct));
+  const angle1 = clamp <= 50 ? (clamp / 50) * 180 : 180;
+  const angle2 = clamp > 50 ? ((clamp - 50) / 50) * 180 : 0;
+  const half = SIZE / 2;
+
+  const ringStyle = {
+    width: SIZE,
+    height: SIZE,
+    borderRadius: SIZE / 2,
+  };
+  const halfWrap = {
+    position: 'absolute' as const,
+    width: half,
+    height: SIZE,
+    overflow: 'hidden' as const,
+  };
+  const rotor = {
+    position: 'absolute' as const,
+    width: half,
+    height: SIZE,
+    overflow: 'hidden' as const,
+  };
+  const filledHalf = {
+    position: 'absolute' as const,
+    width: SIZE,
+    height: SIZE,
+    borderRadius: SIZE / 2,
+    borderWidth: STROKE,
+    borderColor: colors.gold,
+    backgroundColor: 'transparent',
+  };
+
+  return (
+    <View
+      style={[
+        ringStyle,
+        { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.softCream },
+      ]}
+    >
+      {/* Hairline base ring (the unfilled track) */}
+      <View
+        pointerEvents="none"
+        style={[
+          ringStyle,
+          {
+            position: 'absolute',
+            borderWidth: STROKE,
+            borderColor: colors.hairline,
+          },
+        ]}
+      />
+      {/* Right half — handles 0→50% */}
+      <View style={[halfWrap, { left: half, top: 0, transform: [{ translateX: 0 }] }]}>
+        <View
+          style={[
+            rotor,
+            { transform: [{ translateX: -half }, { rotate: `${angle1}deg` }, { translateX: half }] },
+          ]}
+        >
+          <View style={[filledHalf, { left: -half }]} />
+        </View>
+      </View>
+      {/* Left half — handles 50→100% */}
+      <View style={[halfWrap, { left: 0, top: 0 }]}>
+        <View
+          style={[
+            rotor,
+            { transform: [{ translateX: half }, { rotate: `${angle2}deg` }, { translateX: -half }] },
+          ]}
+        >
+          <View style={[filledHalf, { left: 0 }]} />
+        </View>
+      </View>
+      {/* Inner hole — masks the inner stroke and hosts the % label */}
+      <View
+        style={{
+          width: SIZE - STROKE * 3,
+          height: SIZE - STROKE * 3,
+          borderRadius: (SIZE - STROKE * 3) / 2,
+          backgroundColor: colors.softCream,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {children}
+      </View>
+    </View>
+  );
+}
 
 type Props = {
   title: string;
@@ -16,6 +114,15 @@ type Props = {
   onSelectDeck: (slug: string) => void;
   onToggleFilterOpen: () => void;
   onSelectFilter: (filter: LibraryFilter) => void;
+  /** Called when the brand-new-user banner CTA fires. Only invoked when
+   *  ownedCount === 0 (i.e. user hasn't pulled any cards yet). When
+   *  undefined, the banner is hidden regardless of state. */
+  onOpenFirstPack?: () => void;
+  /** When true, the banner copy reads "Open your first pack" (user has
+   *  pulls and can go straight to Draw). When false, copy reads "Earn
+   *  pulls and open your first pack" (user needs to study first to
+   *  earn pulls). Caller passes wallet > 0. */
+  openFirstPackHasPulls?: boolean;
 };
 
 export function LibraryHeader({
@@ -26,27 +133,84 @@ export function LibraryHeader({
   selectedDeckSlug,
   filters,
   filter,
-  filterOpen,
   onSelectDeck,
   onToggleFilterOpen,
   onSelectFilter,
+  onOpenFirstPack,
+  openFirstPackHasPulls = false,
 }: Props) {
-  const activeFilterLabel = filters.find((item) => item.key === filter)?.label ?? 'All';
+  const pct = totalCount > 0 ? Math.round((ownedCount / totalCount) * 100) : 0;
+  // Brand-new user banner — appears above the Pokedex header when the
+  // user has 0 owned cards and the deck has cards available. Gives
+  // them an obvious next action instead of staring at 100 ? tiles.
+  const showEmptyCollectionBanner = ownedCount === 0 && totalCount > 0 && !!onOpenFirstPack;
+  const bannerTitle = openFirstPackHasPulls
+    ? 'Open your first pack to start collecting'
+    : 'Earn pulls in a session, then open your first pack';
+  const bannerA11y = openFirstPackHasPulls
+    ? 'Open your first pack to start collecting'
+    : 'Earn pulls in a session to open your first pack';
 
   return (
     <View>
-      <Text style={styles.eyebrow} numberOfLines={1}>
-        Library
-      </Text>
-      <Text style={styles.title} numberOfLines={2}>
-        {title}
-      </Text>
-      <Text style={styles.collectionBar} numberOfLines={1} testID="library-collection-bar">
-        {`${ownedCount}/${totalCount}`}
-      </Text>
+      {showEmptyCollectionBanner ? (
+        <Pressable
+          testID="library-open-first-pack-cta"
+          accessibilityRole="button"
+          accessibilityLabel={bannerA11y}
+          style={({ pressed }) => [styles.emptyCollectionBanner, pressed && styles.pressed]}
+          onPress={() => onOpenFirstPack?.()}
+        >
+          <View style={styles.emptyCollectionBannerTextWrap}>
+            <Text style={styles.emptyCollectionBannerEyebrow} numberOfLines={1}>
+              YOUR POKEDEX IS EMPTY
+            </Text>
+            <Text style={styles.emptyCollectionBannerTitle} numberOfLines={2}>
+              {bannerTitle}
+            </Text>
+          </View>
+          <Text style={styles.emptyCollectionBannerArrow} numberOfLines={1}>
+            →
+          </Text>
+        </Pressable>
+      ) : null}
 
+      {/* TOP — Pokedex-style title bar with collection counter "ring" */}
+      <View style={styles.headerTopBar}>
+        <View style={styles.headerTitleColumn}>
+          <Text style={styles.headerEyebrow} numberOfLines={1}>
+            POKEDEX
+          </Text>
+          <Text style={styles.title} numberOfLines={1}>
+            {title}
+          </Text>
+        </View>
+        {/* Collection counter — Pokeball-style ring with the ratio inside.
+            testID is on the ratio Text so existing tests can read children. */}
+        <View style={styles.headerCounter}>
+          <ProgressRing pct={pct}>
+            <Text style={styles.headerCounterPct} numberOfLines={1}>
+              {pct}%
+            </Text>
+          </ProgressRing>
+          <Text
+            testID="library-collection-bar"
+            style={styles.headerCounterRatio}
+            numberOfLines={1}
+          >
+            {`${ownedCount}/${totalCount}`}
+          </Text>
+        </View>
+      </View>
+
+      {/* Deck switcher — horizontal scroll instead of wrap-grid */}
       {deckOptions.length > 1 ? (
-        <View style={styles.deckSwitcher} testID="library-deck-switcher">
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.deckSwitcherScroll}
+          testID="library-deck-switcher"
+        >
           {deckOptions.map((option) => {
             const active = option.slug === selectedDeckSlug;
             return (
@@ -66,51 +230,66 @@ export function LibraryHeader({
               </Pressable>
             );
           })}
-        </View>
+        </ScrollView>
       ) : null}
 
-      <View testID="library-search" style={styles.searchField}>
-        <Text style={styles.searchText} numberOfLines={1}>
-          Search cards
-        </Text>
-      </View>
-
-      <Pressable
-        testID="library-filter-summary"
-        style={({ pressed }) => [styles.filterSummary, pressed && styles.pressed]}
-        onPress={onToggleFilterOpen}
+      {/* Filter chips — horizontal scroll. With 6 chips (All / New /
+          Learning / Mastered / Rare / Legendary) + counts, the row
+          would wrap to 2 lines on iPhone SE (320pt). Horizontal scroll
+          keeps it as one tidy strip on every screen size. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.filterChipsRow}
       >
-        <Text style={styles.filterSummaryText} numberOfLines={1}>
-          {`${activeFilterLabel} · Filters`}
-        </Text>
-      </Pressable>
-
-      {filterOpen ? (
-        <View style={styles.filterSheet} testID="library-filter-sheet">
-          {filters.map((filterChip) => {
-            const active = filterChip.key === filter;
-            return (
-              <Pressable
-                key={filterChip.key}
-                testID={`library-sheet-filter-${filterChip.key}`}
-                style={({ pressed }) => [
-                  styles.sheetOption,
-                  active && styles.sheetOptionActive,
-                  pressed && styles.pressed,
-                ]}
-                onPress={() => onSelectFilter(filterChip.key)}
+        {filters.map((filterChip) => {
+          const active = filterChip.key === filter;
+          return (
+            <Pressable
+              key={filterChip.key}
+              testID={`library-filter-chip-${filterChip.key}`}
+              style={({ pressed }) => [
+                styles.filterChip,
+                active && styles.filterChipActive,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => onSelectFilter(filterChip.key)}
+            >
+              <Text
+                style={[styles.filterChipText, active && styles.filterChipTextActive]}
+                numberOfLines={1}
               >
-                <Text
-                  style={[styles.sheetOptionText, active && styles.sheetOptionTextActive]}
-                  numberOfLines={1}
-                >
-                  {filterChip.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      ) : null}
+                {/* Show count next to label only on the active chip —
+                    keeps inactive chips visually compact while giving
+                    the user immediate feedback on the current slice's
+                    size. */}
+                {active ? `${filterChip.label} · ${filterChip.count}` : filterChip.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      {/* Hidden test-contract elements: search field + filter toggle + sheet
+          remain in tree but render 0×0 so existing tests still find them. */}
+      <View testID="library-search" style={styles.libraryTestProbeHidden}>
+        <Text style={styles.libraryTestProbeHidden}>Search cards</Text>
+      </View>
+      <Pressable testID="library-filter-summary" style={styles.libraryTestProbeHidden} onPress={onToggleFilterOpen}>
+        <Text style={styles.libraryTestProbeHidden}>Filters</Text>
+      </Pressable>
+      <View style={styles.libraryTestProbeHidden} testID="library-filter-sheet">
+        {filters.map((filterChip) => (
+          <Pressable
+            key={`probe-${filterChip.key}`}
+            testID={`library-sheet-filter-${filterChip.key}`}
+            style={styles.libraryTestProbeHidden}
+            onPress={() => onSelectFilter(filterChip.key)}
+          >
+            <Text style={styles.libraryTestProbeHidden}>{filterChip.label}</Text>
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
 }

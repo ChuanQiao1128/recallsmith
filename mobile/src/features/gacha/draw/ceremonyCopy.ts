@@ -98,11 +98,21 @@ const CEREMONY_TEAR_FLIP_SINGLE = {
   body: 'Your card is spinning into place.',
 } as const;
 
-type CeremonyPhaseV9 = keyof typeof CEREMONY_COPY_V9;
+const CEREMONY_CARDS_ON_TABLE = {
+  title: 'Tap to reveal',
+  body: 'Tap each card to flip it.',
+} as const;
 
-export function getCeremonyPhaseCopy(phase: CeremonyPhaseV9, isMulti: boolean) {
+type CeremonyPhaseV9 = keyof typeof CEREMONY_COPY_V9;
+// Caller can also pass the new 'cards-on-table' phase which lives outside the V9 table.
+type CeremonyPhaseExtended = CeremonyPhaseV9 | 'cards-on-table';
+
+export function getCeremonyPhaseCopy(phase: CeremonyPhaseExtended, isMulti: boolean) {
   if (phase === 'tear-flip') {
     return isMulti ? CEREMONY_COPY_V9['tear-flip'] : CEREMONY_TEAR_FLIP_SINGLE;
+  }
+  if (phase === 'cards-on-table') {
+    return CEREMONY_CARDS_ON_TABLE;
   }
   return CEREMONY_COPY_V9[phase];
 }

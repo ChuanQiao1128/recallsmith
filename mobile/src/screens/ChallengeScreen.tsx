@@ -14,6 +14,7 @@ import type { ChallengeRoute } from '../features/gacha/contracts';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
+import { packPaletteFromSlug } from '../theme/packArt';
 type Props = NativeStackScreenProps<RootStackParamList, 'Challenge'>;
 const COPY = {
   loading: 'Preparing today’s challenge...',
@@ -155,9 +156,19 @@ export function ChallengeScreen({ navigation, route }: Props) {
             <Text style={styles.title} numberOfLines={2}>
               {title}
             </Text>
-            <Text style={styles.subtitle} numberOfLines={1}>
-              {challengeRoute.deckTitle}
-            </Text>
+            {/* Subtitle row gains a pack-palette dot — instant visual cue
+                of which deck the user is about to study. */}
+            <View style={styles.subtitleRow}>
+              <View
+                style={[
+                  styles.deckDot,
+                  { backgroundColor: packPaletteFromSlug(challengeRoute.slug).cover[1] },
+                ]}
+              />
+              <Text style={styles.subtitle} numberOfLines={1}>
+                {challengeRoute.deckTitle}
+              </Text>
+            </View>
             <View style={styles.goalRow}>
               <View style={styles.goalCard}>
                 <Text style={styles.goalLabel} numberOfLines={1}>
@@ -226,8 +237,8 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     color: colors.gold,
     textTransform: 'uppercase',
-    fontWeight: '800',
-    letterSpacing: 0.6,
+    fontWeight: '900',
+    letterSpacing: 1.2,
   },
   title: {
     marginTop: spacing.xs,
@@ -235,10 +246,22 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontWeight: '900',
   },
-  subtitle: {
+  // Subtitle row hosts a pack-palette dot followed by the deck title.
+  subtitleRow: {
     marginTop: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  deckDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+  },
+  subtitle: {
     fontSize: typography.bodySmall,
     color: colors.inkSecondary,
+    fontWeight: '700',
   },
   goalRow: {
     marginTop: spacing.md,
@@ -265,16 +288,23 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     marginTop: spacing.md,
-    minHeight: 44,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.ink,
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    shadowColor: 'rgba(44,156,192,0.4)',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
   primaryButtonText: {
-    color: colors.parchmentBg,
+    color: '#FFFFFF',
     fontSize: typography.button,
     fontWeight: '900',
+    letterSpacing: 0.4,
   },
   backButton: {
     alignSelf: 'flex-start',

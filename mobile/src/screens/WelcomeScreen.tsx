@@ -1,62 +1,94 @@
-import React, { useState } from 'react';
+import React from 'react';
+import * as RN from 'react-native';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { completeWelcome } from '../features/gacha/onboarding/onboardingPrefs';
+import { colors } from '../theme/colors';
+import { packImageForSlug, packPaletteFromSlug } from '../theme/packArt';
 
-const PAGES = [
-  {
-    title: 'Draw makes the start lighter',
-    body: 'Open the app, see your route, and use reward pulls as a support loop instead of a distraction.',
-  },
-  {
-    title: 'One card keeps the day alive',
-    body: 'You do not need a giant session to preserve momentum. v6 is built around small daily closure.',
-  },
-  {
-    title: 'The system should adapt to you',
-    body: 'Audience, streak, milestones, and plan should all feel like support systems around recall.',
-  },
-] as const;
+// Vitest mocks RN without Image — guarded lookup so tests don't crash.
+function readRN<T = any>(key: string, fallback: T): T {
+  try {
+    const value = (RN as any)[key];
+    return (value ?? fallback) as T;
+  } catch {
+    return fallback;
+  }
+}
+const RNImage: any = readRN('Image', null);
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Welcome'>;
 
+// Welcome v3 — single page. Drops the 3-swipe carousel + internal jargon
+// ("v6", "phase A"). New users see one value proposition + the actual
+// first pack they're about to study, and reach the audience survey in
+// one tap. Cuts onboarding clicks from 4 to 1 before the survey gate.
 export function WelcomeScreen({ navigation }: Props) {
-  const [index, setIndex] = useState(0);
-  const page = PAGES[index];
+  const featuredSlug = 'csharp';
+  const cover = packImageForSlug(featuredSlug);
+  const palette = packPaletteFromSlug(featuredSlug);
 
   async function next() {
-    if (index < PAGES.length - 1) {
-      setIndex((value) => value + 1);
-      return;
-    }
     await completeWelcome();
     navigation.replace('AudienceSurvey');
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={['#F5F3FF', '#FAF3E0']} style={styles.gradient}>
+      <LinearGradient colors={[colors.parchmentBg, colors.parchmentBgDeep]} style={styles.gradient}>
         <ScrollView contentContainerStyle={styles.container}>
-          <Text style={styles.eyebrow}>Welcome</Text>
-          <Text style={styles.title}>{page.title}</Text>
-          <Text style={styles.body}>{page.body}</Text>
+          <Text style={styles.eyebrow} numberOfLines={1}>
+            WELCOME TO DEVELOPERCARDS
+          </Text>
 
-          <View style={styles.progressRow}>
-            {PAGES.map((_, itemIndex) => (
-              <View key={itemIndex} style={[styles.progressDot, itemIndex === index && styles.progressDotActive]} />
-            ))}
+          {/* Hero pack — gives a real artifact for the user to anchor on
+              instead of generic onboarding copy. Same float-with-halo
+              technique as Home v4. The pack itself is tappable and
+              advances onboarding — users instinctively reach for it. */}
+          <View style={styles.heroBand}>
+            <View pointerEvents="none" style={styles.heroHalo} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Continue"
+              style={styles.packFloat}
+              onPress={() => void next()}
+              hitSlop={8}
+            >
+              {cover && RNImage ? (
+                <RNImage source={cover} resizeMode="contain" style={styles.packImage} />
+              ) : (
+                <LinearGradient
+                  colors={palette.cover}
+                  start={{ x: 0.1, y: 0 }}
+                  end={{ x: 0.9, y: 1 }}
+                  style={styles.packFallback}
+                >
+                  <Text style={styles.packFallbackTitle} numberOfLines={1}>
+                    C#
+                  </Text>
+                </LinearGradient>
+              )}
+            </Pressable>
           </View>
 
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>What changes in phase A</Text>
-            <Text style={styles.cardBody}>Home becomes a product surface, Draw becomes a visible flow, and Settlement becomes a real completion layer.</Text>
-          </View>
+          {/* Value proposition — one line, no internal product jargon */}
+          <Text style={styles.title} numberOfLines={2}>
+            Open packs. Collect cards. Master the deck.
+          </Text>
+          <Text style={styles.body} numberOfLines={2}>
+            Study a few cards a day, build mastery without the grind.
+          </Text>
 
-          <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]} onPress={() => void next()}>
-            <Text style={styles.primaryButtonText}>{index === PAGES.length - 1 ? 'Continue to audience' : 'Next'}</Text>
+          <Pressable
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+            onPress={() => void next()}
+          >
+            {/* Was "Continue to audience" — "audience" is internal jargon
+                that meant nothing to first-time users. Now: just "Continue". */}
+            <Text style={styles.primaryButtonText}>Continue</Text>
           </Pressable>
         </ScrollView>
       </LinearGradient>
@@ -67,19 +99,86 @@ export function WelcomeScreen({ navigation }: Props) {
 export default WelcomeScreen;
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
-  container: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: 32 },
-  eyebrow: { fontSize: 12, fontWeight: '900', color: '#4F46E5', textTransform: 'uppercase', letterSpacing: 0.6 },
-  title: { marginTop: 12, fontSize: 30, lineHeight: 36, fontWeight: '900', color: '#111827' },
-  body: { marginTop: 12, fontSize: 15, lineHeight: 22, color: '#4B5563' },
-  progressRow: { flexDirection: 'row', gap: 8, marginTop: 20 },
-  progressDot: { width: 10, height: 10, borderRadius: 999, backgroundColor: 'rgba(79,70,229,0.18)' },
-  progressDotActive: { backgroundColor: '#4F46E5' },
-  card: { marginTop: 24, borderRadius: 18, padding: 16, backgroundColor: 'rgba(255,255,255,0.86)' },
-  cardTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
-  cardBody: { marginTop: 8, fontSize: 13, lineHeight: 19, color: '#6B7280' },
-  primaryButton: { marginTop: 28, borderRadius: 14, backgroundColor: '#4F46E5', paddingVertical: 16, alignItems: 'center' },
-  primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  container: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 28, paddingBottom: 32 },
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: colors.gold,
+    textTransform: 'uppercase',
+    letterSpacing: 1.4,
+    textAlign: 'center',
+  },
+  // Pack floats with shadow + halo, no frame — same language as Home v4
+  heroBand: {
+    alignItems: 'center',
+    marginTop: 24,
+    marginBottom: 24,
+    height: 280,
+    justifyContent: 'center',
+  },
+  heroHalo: {
+    position: 'absolute',
+    width: 280,
+    height: 280,
+    borderRadius: 280,
+    backgroundColor: 'rgba(232,184,90,0.18)',
+  },
+  packFloat: {
+    width: 180,
+    height: 252,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: 'rgba(58,35,5,0.30)',
+    shadowOpacity: 1,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 10,
+  },
+  packImage: { width: '100%', height: '100%' },
+  packFallback: {
+    width: 180,
+    height: 252,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  packFallbackTitle: {
+    color: '#FFFFFF',
+    fontSize: 32,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  title: {
+    fontSize: 26,
+    lineHeight: 32,
+    fontWeight: '900',
+    color: colors.ink,
+    textAlign: 'center',
+  },
+  body: {
+    marginTop: 14,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.inkSecondary,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  primaryButton: {
+    marginTop: 32,
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: 'rgba(44,156,192,0.4)',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
   pressed: { opacity: 0.92 },
 });

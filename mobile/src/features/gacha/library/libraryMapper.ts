@@ -3,16 +3,28 @@ import type { CardProgress } from '../../../review/model';
 import type { LibraryVM } from '../contracts';
 import { isLearnedProgress, isMasteredProgress, isNewProgress, isScheduledProgress, startOfToday } from '../selectors/progressSelectors';
 import { formatDateKey } from '../../../review/model';
+import { rarityFromDifficulty, type Rarity } from '../draw/cardRarity';
+import { cardIconFor } from '../../../theme/cardIcon';
 
 export type LibraryCardStatus = 'new' | 'learning' | 'mastered';
 export type LibraryCardBadgeTone = 'new' | 'learning' | 'mastered';
-export type LibraryFilter = 'all' | 'new' | 'learning' | 'mastered';
+// Now includes the gacha rarity dimension. Real Pokedex players
+// also want to slice by COM/RAR/LEG, not just by SRS state.
+export type LibraryFilter = 'all' | 'new' | 'learning' | 'mastered' | 'rare' | 'legendary';
 
 export type LibraryCardRow = {
   stableUid: string;
   orderInDeck: number;
   question: string;
   difficulty: number;
+  // Drop rarity from the gacha system into the Library row so tiles
+  // can render rarity indicators (stars) and the filter sheet can
+  // slice by rarity tier independently of SRS status.
+  rarity: Rarity;
+  // Single emoji derived from card.Tag → fallback to card.CodeLanguage.
+  // Lets every tile carry a small visual identity, breaking up the
+  // "rows of identical text rectangles" feel.
+  icon: string;
   status: LibraryCardStatus;
   statusLabel: 'Missing' | 'Learning' | 'Mastered';
   badgeTone: LibraryCardBadgeTone;
@@ -22,7 +34,7 @@ export type LibraryCardRow = {
 
 export type LibraryFilterChip = {
   key: LibraryFilter;
-  label: 'All' | 'New' | 'Learning' | 'Mastered';
+  label: 'All' | 'New' | 'Learning' | 'Mastered' | 'Rare' | 'Legendary';
   count: number;
 };
 
@@ -99,6 +111,8 @@ export function buildLibraryCardRows(params: {
         orderInDeck: card.OrderInDeck,
         question: card.Question,
         difficulty: card.Difficulty,
+        rarity: rarityFromDifficulty(card.Difficulty),
+        icon: cardIconFor(card),
         status,
         statusLabel: status === 'mastered' ? 'Mastered' : status === 'learning' ? 'Learning' : 'Missing',
         badgeTone: status,
@@ -132,6 +146,11 @@ export function buildLibraryVM(params: {
   const newCount = rows.filter((item) => item.status === 'new').length;
   const masteredCount = rows.filter((item) => item.status === 'mastered').length;
   const learningCount = rows.filter((item) => item.status === 'learning').length;
+  // Rarity counts — independent of SRS state. Counts ALL cards (owned
+  // + missing) of each tier so the filter chips show the deck's rarity
+  // distribution, not just what the user owns.
+  const rareCount = rows.filter((item) => item.rarity === 'RAR').length;
+  const legendaryCount = rows.filter((item) => item.rarity === 'LEG').length;
   const dueTodayCount = rows.filter((item) => item.isDueToday).length;
   const updatedCount = countUpdatedCards(
     isTrial ? (deck.Cards ?? []).slice(0, previewTotal) : deck.Cards ?? [],
@@ -144,6 +163,8 @@ export function buildLibraryVM(params: {
         ? 'You have room to learn fresh cards today.'
         : 'No pending pressure right now — browse your library or return later.';
 
+  // Filter resolver — SRS dimensions and rarity dimensions are
+  // independent. Only one filter active at a time (single-select chips).
   const cards =
     filter === 'all'
       ? rows
@@ -151,13 +172,21 @@ export function buildLibraryVM(params: {
         ? rows.filter((item) => item.status === 'new')
         : filter === 'learning'
           ? rows.filter((item) => item.status === 'learning')
-          : rows.filter((item) => item.status === 'mastered');
+          : filter === 'mastered'
+            ? rows.filter((item) => item.status === 'mastered')
+            : filter === 'rare'
+              ? rows.filter((item) => item.rarity === 'RAR')
+              : filter === 'legendary'
+                ? rows.filter((item) => item.rarity === 'LEG')
+                : rows;
 
   const filters: LibraryFilterChip[] = [
     { key: 'all', label: 'All', count: rows.length },
     { key: 'new', label: 'New', count: newCount },
     { key: 'learning', label: 'Learning', count: learningCount },
     { key: 'mastered', label: 'Mastered', count: masteredCount },
+    { key: 'rare', label: 'Rare', count: rareCount },
+    { key: 'legendary', label: 'Legendary', count: legendaryCount },
   ];
 
   return {

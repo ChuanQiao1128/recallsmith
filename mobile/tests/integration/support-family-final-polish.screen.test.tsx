@@ -75,7 +75,7 @@ describe('support family final polish', () => {
     });
     const aboutBlob = textBlob(aboutTree);
     expect(aboutBlob).toContain('lightweight product identity page');
-    expect(aboutBlob).toContain('RecallSmith mobile v6 candidate build');
+    expect(aboutBlob).toContain('DeveloperCards mobile v6 candidate build');
   });
 
   it('keeps error/offline/toast surfaces aligned around short recovery loops', async () => {

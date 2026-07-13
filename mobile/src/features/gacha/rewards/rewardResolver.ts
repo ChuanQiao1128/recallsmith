@@ -9,6 +9,13 @@ export type ResolvedSessionReward = {
   rewardMessage: string;
 };
 
+// Reward formula calibrated for the v3 5-card session cap:
+//   • Full clear (sessionDone >= sessionLimit) → +1 pull
+//   • Below full clear → 0 pulls
+// Was: full=+2, min=+1. The 5-card cap means every session is short
+// enough that "finish the run" is the right unit of reward — partial
+// credit dilutes the incentive. Streak preservation lives in a
+// separate path (sessionStore.streakEarned via minimumGoal).
 export function computeSessionRewardPulls(params: {
   sessionDone: number;
   sessionLimit: number;
@@ -16,10 +23,8 @@ export function computeSessionRewardPulls(params: {
 }): number {
   const sessionDone = Math.max(0, Math.floor(params.sessionDone));
   const sessionLimit = Math.max(0, Math.floor(params.sessionLimit));
-  const minimumGoal = Math.max(1, Math.floor(params.minimumGoal));
 
-  if (sessionLimit > 0 && sessionDone >= sessionLimit) return 2;
-  if (sessionDone >= minimumGoal) return 1;
+  if (sessionLimit > 0 && sessionDone >= sessionLimit) return 1;
   return 0;
 }
 

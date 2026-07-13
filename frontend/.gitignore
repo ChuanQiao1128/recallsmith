@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ReleaseGuard scanner artifacts (auto-generated, not source)
+.releaseguard/
+artifacts/releaseguard/
+_archive_duplicates/

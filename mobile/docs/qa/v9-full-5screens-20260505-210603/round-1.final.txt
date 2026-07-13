@@ -1,0 +1,32 @@
+**Changed Files**
+- [src/screens/HomeScreen.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/src/screens/HomeScreen.tsx)
+- [src/screens/DrawScreen.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/src/screens/DrawScreen.tsx)
+- [src/screens/DrawCeremonyScreen.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/src/screens/DrawCeremonyScreen.tsx)
+- [src/screens/DrawResultScreen.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/src/screens/DrawResultScreen.tsx)
+- [src/screens/LibraryScreen.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/src/screens/LibraryScreen.tsx)
+- [src/features/gacha/draw/ceremonyCopy.ts](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/src/features/gacha/draw/ceremonyCopy.ts)
+- [tests/integration/home.screen.test.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/tests/integration/home.screen.test.tsx)
+- [tests/integration/draw.screen.test.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/tests/integration/draw.screen.test.tsx)
+- [tests/integration/draw-ceremony.screen.test.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/tests/integration/draw-ceremony.screen.test.tsx)
+- [tests/integration/draw-result.screen.test.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/tests/integration/draw-result.screen.test.tsx)
+- [tests/integration/library-final.screen.test.tsx](/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/tests/integration/library-final.screen.test.tsx)
+
+**What Reached Final v9**
+- Home is now pack-first with carousel, focused pack meta, primary `Open {deck}` CTA, downgraded study link, and preserved compatibility IDs.
+- Draw is simplified to hero + only `Open 10` and `Open 1` actions (no extra explanatory cards), with pull badge and direct ceremony entry.
+- Ceremony now runs explicit 5 phases (`approach/hold/tear-flip/flash-reveal/settle`) with skip gated to settle/reveal-complete path.
+- Result now has collection bar, single primary CTA routed by remaining pulls (`Continue draw` vs `Go to Library`), plus `Done` link.
+- Library now uses `All/Owned/Missing` as primary filter axis, dim missing cards vs bright owned cards, and supports `focusSlug + scrollToNew` highlight behavior.
+
+**What Still Not Fully Done**
+- Home first-session staggered “pack float-in” animation with persisted mount flag was not implemented.
+- Draw long-press quick-tip on `Open 10` was not implemented.
+- Library missing-card visual uses dim/lock treatment, but no true image grayscale filter pipeline (no cover assets in current card grid).
+
+**Exact Test Results**
+- `npm run test:typecheck`  
+  - Passed (`tsc --noEmit`).
+- `npx vitest run tests/integration/home.screen.test.tsx tests/integration/draw.screen.test.tsx tests/integration/draw-ceremony.screen.test.tsx tests/integration/draw-result.screen.test.tsx tests/integration/library-final.screen.test.tsx tests/unit/homeSelectors.spec.ts tests/unit/draw.test.ts tests/unit/library.test.ts`  
+  - Passed: `7` files, `40` tests.
+- `npm run test:integration`  
+  - Passed: `29` files, `105` tests.

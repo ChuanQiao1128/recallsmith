@@ -152,7 +152,12 @@ describe('poolSelection', () => {
     expect(first.cards.map((card) => card.StableUid)).toEqual(second.cards.map((card) => card.StableUid));
   });
 
-  it('surfaces seen-unowned cards at least 1.5x as often as never-seen cards over many seeds', () => {
+  it('samples uniformly from the missing pool regardless of review history', () => {
+    // Real gacha pulls are uniform random from the unowned pool. The
+    // "spaced repetition through pulls" weighting was removed because it
+    // made the Library look like a contiguous block at the front (the
+    // user always re-pulled cards they'd already studied). Reinforcement
+    // now lives only in study sessions, not in pulls.
     const deckCards = [buildCard('seen', 1), buildCard('never', 1)];
     const progress = [buildProgress({ stableUid: 'seen', stage: 2, lastReviewedAt: 2000, nextReviewAt: 9000 })];
 
@@ -172,7 +177,39 @@ describe('poolSelection', () => {
       if (uid === 'never') neverHits += 1;
     }
 
+    // Both cards must be reachable
+    expect(seenHits).toBeGreaterThan(0);
     expect(neverHits).toBeGreaterThan(0);
-    expect(seenHits / neverHits).toBeGreaterThanOrEqual(1.5);
+    // And neither dominates — uniform sampling produces ~500/500 ± noise.
+    // We assert ratio in [0.7, 1.3] which is a comfortable band for 1000
+    // trials of a fair coin (true 50/50 has stdev ~16 hits at n=1000).
+    const ratio = seenHits / neverHits;
+    expect(ratio).toBeGreaterThanOrEqual(0.7);
+    expect(ratio).toBeLessThanOrEqual(1.3);
+  });
+
+  it('produces scattered slot numbers across many draws (not a contiguous front block)', () => {
+    // Visual sanity: after pulling 30 cards from a 100-card pool, the
+    // owned slot numbers should span a wide range (not always 0..29).
+    // This guards against the old weight-bias regression where pulls
+    // surfaced low-index cards first.
+    const deckCards = Array.from({ length: 100 }, (_, i) =>
+      buildCard(`uid-${String(i).padStart(3, '0')}`, 1),
+    );
+    const result = selectDrawCards({
+      deckCards,
+      ownedSet: new Set(),
+      progress: [],
+      drawCount: 30,
+      pityState: { draws: 0, threshold: 999 },
+      seed: 42,
+    });
+    const drawnIndices = result.cards
+      .map((card) => Number(card.StableUid.replace('uid-', '')))
+      .sort((a, b) => a - b);
+    // The highest index should NOT be capped near 29 (which it would be
+    // if the algorithm was picking from the top of the missing list).
+    const highest = drawnIndices[drawnIndices.length - 1];
+    expect(highest).toBeGreaterThan(40);
   });
 });

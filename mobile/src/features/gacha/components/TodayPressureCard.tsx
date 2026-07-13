@@ -72,27 +72,31 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
 }
 
 const styles = StyleSheet.create({
+  // Tightened: less padding, smaller numbers, lighter shadow — fits on screen
+  // alongside the bigger pack hero without crowding.
   card: {
-    borderRadius: 22,
-    padding: spacing.md,
+    borderRadius: 18,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 10,
     backgroundColor: TODAY_PRESSURE_TOKENS.card,
     borderWidth: 1,
     borderColor: TODAY_PRESSURE_TOKENS.metricBorder,
     shadowColor: colors.ink,
-    shadowOpacity: 0.10,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 10 },
-    marginBottom: spacing.sm,
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    marginBottom: spacing.xs,
   },
-  title: { fontSize: typography.body, fontWeight: '800', color: colors.ink },
-  subtitle: { marginTop: 6, fontSize: typography.caption, color: colors.inkSecondary },
-  row: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.sm, justifyContent: 'space-between' },
+  title: { fontSize: typography.bodySmall, fontWeight: '800', color: colors.ink },
+  subtitle: { marginTop: 2, fontSize: 10, color: colors.inkSecondary },
+  row: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8, justifyContent: 'space-between' },
   metric: {
-    borderRadius: 16,
-    paddingVertical: 14,
-    paddingHorizontal: spacing.xs,
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
     borderWidth: 1,
     borderColor: TODAY_PRESSURE_TOKENS.metricBorder,
+    alignItems: 'center',
   },
   metricWide: { flex: 1, minWidth: 0 },
   metricCompact: { width: '48%' },
@@ -100,9 +104,9 @@ const styles = StyleSheet.create({
   metricElite: { backgroundColor: TODAY_PRESSURE_TOKENS.metricElite },
   metricBoss: { backgroundColor: TODAY_PRESSURE_TOKENS.metricBoss },
   metricTotal: { backgroundColor: TODAY_PRESSURE_TOKENS.metricTotal },
-  metricValue: { fontSize: 24, fontWeight: '800', color: colors.ink },
-  metricLabel: { marginTop: 4, fontSize: typography.caption, fontWeight: '700', color: colors.inkSecondary, textTransform: 'uppercase' },
-  footnote: { marginTop: spacing.sm, fontSize: typography.caption, lineHeight: 16, color: colors.inkSecondary },
+  metricValue: { fontSize: 18, fontWeight: '900', color: colors.ink },
+  metricLabel: { marginTop: 2, fontSize: 9, fontWeight: '800', color: colors.inkSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
+  footnote: { marginTop: 8, fontSize: 10, color: colors.inkSecondary },
 });
 
 export default TodayPressureCard;

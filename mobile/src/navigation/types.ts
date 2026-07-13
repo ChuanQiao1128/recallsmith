@@ -15,6 +15,9 @@ export type RootStackParamList = {
     | {
         firstDrawCoach?: boolean;
         mockState?: MockHomeState;
+        // One-shot notice surfaced as a toast on Home mount, then
+        // cleared. Used by PermissionPrompt to acknowledge a deny.
+        notice?: 'notifications-denied' | 'notifications-skipped';
       }
     | undefined;
   Settings: undefined;
@@ -150,10 +153,14 @@ export type RootStackParamList = {
     previewLimit?: number;
   };
 
+  // Slug / mode / limit are now optional — SessionCard falls back to
+  // activeDeckSlug + sane defaults (mixed mode, limit 20). Lets the
+  // Home daily-study path navigate with just `{ slug }` (or even
+  // nothing) instead of needing to pre-plan the route.
   SessionCard: {
-    slug: string;
-    mode: StudyMode;
-    limit: number;
+    slug?: string;
+    mode?: StudyMode;
+    limit?: number;
     previewLimit?: number;
     completionRoute?: 'summary' | 'settlement';
   };

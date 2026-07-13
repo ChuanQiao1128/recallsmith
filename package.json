@@ -7,5 +7,8 @@
     "pg": "^8.16.3",
     "react-native-syntax-highlighter": "^2.1.0",
     "react-syntax-highlighter": "^16.1.0"
+  },
+  "devDependencies": {
+    "releaseguard": "file:../../../Documents/Claude/Projects/ReleaseGuard/packages/releaseguard/releaseguard-0.7.3.tgz"
   }
 }

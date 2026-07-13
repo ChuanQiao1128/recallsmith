@@ -20,37 +20,23 @@ export type SelectionOutput = {
 };
 
 export function selectDrawCards(input: SelectionInput): SelectionOutput {
-  const { deckCards, ownedSet, progress, drawCount, pityState, seed } = input;
+  const { deckCards, ownedSet, drawCount, pityState, seed } = input;
 
-  const progressByUid = new Map(progress.map((item) => [item.stableUid, item]));
   const missing = deckCards.filter((card) => !ownedSet.has(card.StableUid));
 
   if (missing.length === 0) {
     return { cards: [], poolExhausted: true, pityNext: pityState, pityFiredFor: null };
   }
 
+  // Pure uniform random from the missing pool — matches real gacha
+  // collection mechanics. Previously this weighted by review history
+  // (3× for previously-reviewed cards), which biased pulls toward cards
+  // the user had already studied. That made the Library look like a
+  // contiguous block at the front (#001-#005 always lit up first) —
+  // unrealistic for a Pokedex collection game. The "spaced repetition"
+  // reinforcement now lives only in study sessions, not in pulls.
   type Weighted = { card: CardExport; weight: number };
-  const now = seed;
-  const weighted: Weighted[] = missing.map((card) => {
-    const currentProgress = progressByUid.get(card.StableUid);
-    let weight = 1.0;
-    if (
-      currentProgress &&
-      typeof currentProgress.nextReviewAt === 'number' &&
-      currentProgress.nextReviewAt > 0 &&
-      currentProgress.nextReviewAt <= now
-    ) {
-      weight = 2.0;
-    }
-    if (
-      currentProgress &&
-      typeof currentProgress.lastReviewedAt === 'number' &&
-      currentProgress.lastReviewedAt > 0
-    ) {
-      weight = 3.0;
-    }
-    return { card, weight };
-  });
+  const weighted: Weighted[] = missing.map((card) => ({ card, weight: 1.0 }));
 
   let pityFiredFor: 'LEG' | 'RAR' | null = null;
   let pityNext: PityState = pityState;

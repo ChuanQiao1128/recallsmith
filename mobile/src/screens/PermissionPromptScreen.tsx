@@ -1,24 +1,89 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
+import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PermissionPrompt'>;
 
+// Guarded require — keeps vitest happy when expo-notifications isn't
+// loadable in jsdom. On real devices this resolves to the real module.
+function safeRequestNotificationPermission(): Promise<'granted' | 'denied' | 'undetermined' | 'error'> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Notifications = require('expo-notifications');
+    if (!Notifications?.requestPermissionsAsync) return Promise.resolve('error');
+    return Notifications.requestPermissionsAsync()
+      .then((res: any) => {
+        const status = res?.status ?? res?.granted ? 'granted' : (res?.status ?? 'undetermined');
+        if (status === 'granted' || res?.granted === true) return 'granted';
+        if (status === 'denied') return 'denied';
+        return 'undetermined';
+      })
+      .catch(() => 'error' as const);
+  } catch {
+    return Promise.resolve('error');
+  }
+}
+
+// PermissionPrompt v3 — actually requests the iOS notification permission
+// when the user taps "Allow reminders" (was just navigating, which was
+// misleading). "Not now" still skips without asking. Either path lands
+// in Home with the firstDrawCoach hint so onboarding completes the same.
 export function PermissionPromptScreen({ navigation }: Props) {
+  const [busy, setBusy] = useState(false);
+
+  async function handleAllow() {
+    if (busy) return;
+    setBusy(true);
+    let resultStatus: 'granted' | 'denied' | 'undetermined' | 'error' = 'undetermined';
+    try {
+      // Trigger the real iOS permission sheet. We don't gate the
+      // navigation on the result — even if the user denies, they should
+      // still complete onboarding and reach Home. But we DO acknowledge
+      // the deny via a one-shot Home toast so the user doesn't feel the
+      // tap was ignored.
+      resultStatus = await safeRequestNotificationPermission();
+    } finally {
+      navigation.replace('Home', {
+        firstDrawCoach: true,
+        notice: resultStatus === 'denied' ? 'notifications-denied' : undefined,
+      });
+    }
+  }
+
+  function handleSkip() {
+    if (busy) return;
+    navigation.replace('Home', {
+      firstDrawCoach: true,
+      notice: 'notifications-skipped',
+    });
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={['#FAF3E0', '#F5F3FF']} style={styles.gradient}>
+      <LinearGradient colors={[colors.parchmentBg, colors.parchmentBgDeep]} style={styles.gradient}>
         <ScrollView contentContainerStyle={styles.container}>
-          <Text style={styles.eyebrow}>Permission prompt</Text>
-          <Text style={styles.title}>Allow reminders when the route starts slipping</Text>
-          <Text style={styles.body}>In v6 this sits after first draw. For the front-end build, it acts as the final onboarding handoff into Home.</Text>
-          <Pressable style={styles.primaryButton} onPress={() => navigation.replace('Home', { firstDrawCoach: true })}>
-            <Text style={styles.primaryButtonText}>Allow and continue</Text>
+          <Text style={styles.eyebrow}>NOTIFICATIONS</Text>
+          <Text style={styles.title}>Stay on streak with daily reminders</Text>
+          <Text style={styles.body}>
+            We&apos;ll ping you once a day if cards are waiting. You can change this
+            anytime in settings — and we never send anything else.
+          </Text>
+          <Pressable
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, busy && styles.buttonDisabled]}
+            disabled={busy}
+            onPress={() => void handleAllow()}
+          >
+            <Text style={styles.primaryButtonText}>{busy ? 'Asking…' : 'Allow reminders'}</Text>
           </Pressable>
-          <Pressable style={styles.secondaryButton} onPress={() => navigation.replace('Home', { firstDrawCoach: true })}>
+          <Pressable
+            style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed, busy && styles.buttonDisabled]}
+            disabled={busy}
+            onPress={handleSkip}
+          >
             <Text style={styles.secondaryButtonText}>Not now</Text>
           </Pressable>
         </ScrollView>
@@ -30,14 +95,45 @@ export function PermissionPromptScreen({ navigation }: Props) {
 export default PermissionPromptScreen;
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#FAF3E0' },
+  safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
-  container: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 30 },
-  eyebrow: { fontSize: 11, fontWeight: '800', color: '#C8883A', textTransform: 'uppercase', letterSpacing: 0.6 },
-  title: { marginTop: 10, fontSize: 28, lineHeight: 34, fontWeight: '900', color: '#2A2218' },
-  body: { marginTop: 10, fontSize: 14, lineHeight: 20, color: '#5A4B38' },
-  primaryButton: { marginTop: 20, borderRadius: 14, backgroundColor: '#2A2218', paddingVertical: 16, alignItems: 'center' },
-  primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
-  secondaryButton: { marginTop: 10, borderRadius: 14, backgroundColor: 'rgba(42,34,24,0.08)', paddingVertical: 16, alignItems: 'center' },
-  secondaryButtonText: { color: '#2A2218', fontSize: 14, fontWeight: '800' },
+  container: { paddingHorizontal: 24, paddingTop: 36, paddingBottom: 32 },
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: colors.gold,
+    textTransform: 'uppercase',
+    letterSpacing: 1.4,
+  },
+  title: { marginTop: 12, fontSize: 28, lineHeight: 34, fontWeight: '900', color: colors.ink },
+  body: { marginTop: 12, fontSize: 14, lineHeight: 21, color: colors.inkSecondary, fontWeight: '600' },
+  primaryButton: {
+    marginTop: 28,
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: 'rgba(44,156,192,0.4)',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
+  secondaryButton: {
+    marginTop: 12,
+    minHeight: 48,
+    borderRadius: 999,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryButtonText: { color: colors.inkSoft, fontSize: 14, fontWeight: '800', letterSpacing: 0.3 },
+  buttonDisabled: { opacity: 0.55 },
+  pressed: { opacity: 0.92 },
 });

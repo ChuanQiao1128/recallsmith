@@ -16,6 +16,8 @@ import {
   applySessionRewardToWallet,
   canAcceptMorePulls,
   loadRewardWalletState,
+  seedStarterPullsIfNeeded,
+  STARTER_PULL_GRANT,
 } from '../../src/features/gacha/rewards/rewardWallet';
 import { computeSessionRewardPulls, resolveSessionReward } from '../../src/features/gacha/rewards/rewardResolver';
 
@@ -56,22 +58,68 @@ describe('reward wallet', () => {
     expect(reward.rewardMessage).toMatch(/progress saved/i);
   });
 
-  it('computes no pulls below the minimum goal', () => {
-    expect(computeSessionRewardPulls({ sessionDone: 0, sessionLimit: 4, minimumGoal: 1 })).toBe(0);
+  // v3 reward calibration: only full clear earns pulls (was tiered
+  // formula with 1 pull for min, 2 for full). With 5-card sessions the
+  // run is short enough that completion is the right unit of reward.
+  it('computes no pulls when the session is empty', () => {
+    expect(computeSessionRewardPulls({ sessionDone: 0, sessionLimit: 5, minimumGoal: 1 })).toBe(0);
   });
 
-  it('computes one pull at the minimum goal', () => {
-    expect(computeSessionRewardPulls({ sessionDone: 1, sessionLimit: 4, minimumGoal: 1 })).toBe(1);
+  it('computes no pulls for a partial run (below full clear)', () => {
+    expect(computeSessionRewardPulls({ sessionDone: 3, sessionLimit: 5, minimumGoal: 1 })).toBe(0);
+    expect(computeSessionRewardPulls({ sessionDone: 4, sessionLimit: 5, minimumGoal: 1 })).toBe(0);
   });
 
-  it('computes two pulls for a full clear', () => {
-    expect(computeSessionRewardPulls({ sessionDone: 4, sessionLimit: 4, minimumGoal: 1 })).toBe(2);
+  it('computes one pull for a full clear', () => {
+    expect(computeSessionRewardPulls({ sessionDone: 5, sessionLimit: 5, minimumGoal: 1 })).toBe(1);
   });
 
   it('reports whether the wallet can still accept more pulls', () => {
     expect(canAcceptMorePulls({ availablePulls: 0, reservePulls: 0 })).toBe(true);
     expect(canAcceptMorePulls({ availablePulls: 30, reservePulls: 4 })).toBe(true);
     expect(canAcceptMorePulls({ availablePulls: 30, reservePulls: 5 })).toBe(false);
+  });
+
+  // Brand-new-user starter grant — seeds 3 pulls on first boot so a
+  // user can experience their first ceremony without first having to
+  // study 5 cards. Idempotent (flag-guarded), and skipped when the
+  // wallet is already non-empty (pre-existing users).
+  describe('starter pull seeding', () => {
+    it('grants 3 starter pulls to a brand-new (empty) wallet on first boot', async () => {
+      const result = await seedStarterPullsIfNeeded();
+      expect(result.seeded).toBe(true);
+      expect(result.wallet.availablePulls).toBe(STARTER_PULL_GRANT);
+      expect(result.wallet.reservePulls).toBe(0);
+      const persisted = await loadRewardWalletState();
+      expect(persisted.availablePulls).toBe(STARTER_PULL_GRANT);
+    });
+
+    it('does not re-seed once the seeded flag is set, even if user spent down to 0', async () => {
+      await seedStarterPullsIfNeeded(); // first boot — grants 3
+      // Simulate user spending all pulls — write directly to mock store.
+      store.set('recallsmith:reward-wallet:v1', JSON.stringify({ availablePulls: 0, reservePulls: 0 }));
+      const second = await seedStarterPullsIfNeeded();
+      expect(second.seeded).toBe(false);
+      expect(second.wallet.availablePulls).toBe(0);
+    });
+
+    it('does not grant pulls to a pre-existing wallet that already has reward pulls', async () => {
+      // Pre-existing user — wallet already populated before starter feature shipped.
+      store.set('recallsmith:reward-wallet:v1', JSON.stringify({ availablePulls: 5, reservePulls: 0 }));
+      const result = await seedStarterPullsIfNeeded();
+      expect(result.seeded).toBe(false);
+      expect(result.wallet.availablePulls).toBe(5);
+    });
+
+    it('marks the wallet as seeded after a no-op skip so future boots also skip', async () => {
+      store.set('recallsmith:reward-wallet:v1', JSON.stringify({ availablePulls: 5, reservePulls: 0 }));
+      await seedStarterPullsIfNeeded(); // skipped — but flag should be set
+      // Now simulate that pre-existing wallet draining to 0.
+      store.set('recallsmith:reward-wallet:v1', JSON.stringify({ availablePulls: 0, reservePulls: 0 }));
+      const second = await seedStarterPullsIfNeeded();
+      expect(second.seeded).toBe(false); // flag prevents re-seed
+      expect(second.wallet.availablePulls).toBe(0);
+    });
   });
 
   it('persists and deduplicates a session reward application', async () => {

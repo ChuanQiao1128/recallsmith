@@ -3,6 +3,16 @@ import { FREE_PULL_CAP, FREE_PULL_OVERFLOW_CAP } from '../constants';
 
 const REWARD_WALLET_KEY = 'recallsmith:reward-wallet:v1';
 const APPLIED_SESSION_PREFIX = 'recallsmith:reward-session:';
+// Marks that we've already considered (and possibly granted) the
+// brand-new-user starter pulls. Set the flag once per device; from
+// then on we never re-grant, even if the user spends down to 0.
+const WALLET_SEEDED_KEY = 'recallsmith:wallet-seeded:v1';
+
+// Brand-new users get a small starter wallet so the *first* gacha
+// experience can happen in seconds — they don't have to study 5
+// cards before discovering what a pull even feels like. Seeded once,
+// then the regular earn-pulls-by-clearing-sessions loop takes over.
+export const STARTER_PULL_GRANT = 3;
 
 export type RewardWalletState = {
   availablePulls: number;
@@ -65,6 +75,56 @@ export async function loadRewardWalletState(): Promise<RewardWalletState> {
 
 export async function saveRewardWalletState(state: RewardWalletState): Promise<void> {
   await AsyncStorage.setItem(REWARD_WALLET_KEY, JSON.stringify(state));
+}
+
+/**
+ * One-shot starter grant for brand-new wallets.
+ *
+ * Idempotent — guarded by a separate "seeded" flag in AsyncStorage so:
+ *   • A user who's already played and spent all their pulls never gets
+ *     another silent top-up.
+ *   • A user who pre-existed before this feature shipped (wallet may
+ *     already have pulls in it) doesn't get an extra 3 — we just mark
+ *     them seeded and move on.
+ *
+ * Returns the wallet state the caller should treat as current. Callers
+ * that already loaded the wallet should re-load it (or use the returned
+ * value) to pick up the seeded pulls. Safe to call on every app boot.
+ */
+export async function seedStarterPullsIfNeeded(): Promise<{
+  wallet: RewardWalletState;
+  seeded: boolean;
+}> {
+  try {
+    const alreadySeeded = await AsyncStorage.getItem(WALLET_SEEDED_KEY);
+    if (alreadySeeded) {
+      return { wallet: await loadRewardWalletState(), seeded: false };
+    }
+
+    const current = await loadRewardWalletState();
+    // Only grant if the wallet is genuinely empty — pre-existing users
+    // who already have pulls (or reserve) shouldn't get a free top-up
+    // just because we shipped this feature.
+    const isEmpty = current.availablePulls === 0 && current.reservePulls === 0;
+    if (!isEmpty) {
+      await AsyncStorage.setItem(WALLET_SEEDED_KEY, '1');
+      return { wallet: current, seeded: false };
+    }
+
+    const seededWallet: RewardWalletState = {
+      availablePulls: STARTER_PULL_GRANT,
+      reservePulls: 0,
+    };
+    await Promise.all([
+      saveRewardWalletState(seededWallet),
+      AsyncStorage.setItem(WALLET_SEEDED_KEY, '1'),
+    ]);
+    return { wallet: seededWallet, seeded: true };
+  } catch {
+    // Storage failure: don't crash boot — fall back to whatever the
+    // regular load gives us. The next successful boot will retry.
+    return { wallet: await loadRewardWalletState(), seeded: false };
+  }
 }
 
 export function consumePullsFromWallet(current: RewardWalletState, count: number): {

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Amazon.Lambda.APIGatewayEvents;
@@ -22,7 +24,16 @@ public static class ProgressEvents
     long EventTimeMs,
     long? NextReviewAtMs,
     int? LastSeenRevision,
-    string? DeckVersion);
+    string? DeckVersion,
+    int SchemaVersion,
+    string EventType,
+    string? SessionId,
+    long? OfflineQueueDelayMs,
+    long? DwellTimeMs,
+    string? ReviewStage,
+    int? ReviewCountForCard,
+    int? CardRevision,
+    int? StatedDifficulty);
 
   public static async Task<APIGatewayProxyResponse> HandleProgressEvents(LambdaRequest req, Res res, AuthContext auth)
   {
@@ -56,6 +67,7 @@ public static class ProgressEvents
 
       var userSub = auth.UserSub!;
       var email = GetClaimString(auth.Claims, "email") ?? GetClaimString(auth.Claims, "cognito:email");
+      var userIdHash = HashUserId(userSub);
 
       var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -106,6 +118,29 @@ public static class ProgressEvents
         var deckVersion = e.TryGetProperty("deckVersion", out var dv) ? dv.ToString().Trim() : string.Empty;
         deckVersion = string.IsNullOrEmpty(deckVersion) ? null : deckVersion;
 
+        var schemaVersion = OptionalInt(e.TryGetProperty("schemaVersion", out var sv) ? sv : (JsonElement?)null) ?? 1;
+        if (schemaVersion <= 0) schemaVersion = 1;
+
+        var rawEventType =
+          OptionalString(e.TryGetProperty("eventType", out var et) ? et : (JsonElement?)null) ??
+          OptionalString(e.TryGetProperty("type", out var typ) ? typ : (JsonElement?)null) ??
+          "card_reviewed";
+        var eventType = rawEventType.Equals("review", StringComparison.OrdinalIgnoreCase)
+          ? "card_reviewed"
+          : rawEventType;
+
+        var sessionId = OptionalString(e.TryGetProperty("sessionId", out var sid) ? sid : (JsonElement?)null);
+        var offlineQueueDelayMs =
+          OptionalNonNegativeLong(e.TryGetProperty("offlineQueueDelayMs", out var oqd) ? oqd : (JsonElement?)null) ??
+          (eventTimeMs > 0 && nowMs >= eventTimeMs ? nowMs - eventTimeMs : (long?)null);
+        var dwellTimeMs = OptionalNonNegativeLong(e.TryGetProperty("dwellTimeMs", out var dtm) ? dtm : (JsonElement?)null);
+        var reviewStage = OptionalString(e.TryGetProperty("reviewStage", out var rs) ? rs : (JsonElement?)null);
+        var reviewCountForCard = OptionalInt(e.TryGetProperty("reviewCountForCard", out var rcfc) ? rcfc : (JsonElement?)null);
+        var cardRevision =
+          OptionalInt(e.TryGetProperty("cardRevision", out var cr) ? cr : (JsonElement?)null) ??
+          lastSeenRevision;
+        var statedDifficulty = OptionalInt(e.TryGetProperty("statedDifficulty", out var sd) ? sd : (JsonElement?)null);
+
         normalized.Add(new NormalizedEvent(
           EventId: eventId,
           DeckSlug: deckSlug,
@@ -114,7 +149,16 @@ public static class ProgressEvents
           EventTimeMs: eventTimeMs,
           NextReviewAtMs: nextReviewAtMs,
           LastSeenRevision: lastSeenRevision,
-          DeckVersion: deckVersion));
+          DeckVersion: deckVersion,
+          SchemaVersion: schemaVersion,
+          EventType: eventType,
+          SessionId: sessionId,
+          OfflineQueueDelayMs: offlineQueueDelayMs,
+          DwellTimeMs: dwellTimeMs,
+          ReviewStage: reviewStage,
+          ReviewCountForCard: reviewCountForCard,
+          CardRevision: cardRevision,
+          StatedDifficulty: statedDifficulty));
       }
 
       var allEventIds = normalized.Select(x => x.EventId).ToList();
@@ -156,6 +200,17 @@ public static class ProgressEvents
               {P(ref idx)},
               to_timestamp({P(ref idx)}/1000.0),
               {P(ref idx)},
+              {P(ref idx)},
+              {P(ref idx)},
+              {P(ref idx)},
+              {P(ref idx)},
+              {P(ref idx)},
+              to_timestamp({P(ref idx)}/1000.0),
+              {P(ref idx)},
+              {P(ref idx)},
+              {P(ref idx)},
+              {P(ref idx)},
+              {P(ref idx)},
               {P(ref idx)}
             )
             """);
@@ -171,20 +226,89 @@ public static class ProgressEvents
           parameters.Add(ev.NextReviewAtMs);
           parameters.Add(ev.LastSeenRevision);
           parameters.Add(ev.DeckVersion);
+          parameters.Add(ev.SchemaVersion);
+          parameters.Add(ev.EventType);
+          parameters.Add(ev.SessionId);
+          parameters.Add(clientPlatform);
+          parameters.Add(ev.EventTimeMs);
+          parameters.Add(ev.OfflineQueueDelayMs);
+          parameters.Add(ev.DwellTimeMs);
+          parameters.Add(ev.ReviewStage);
+          parameters.Add(ev.ReviewCountForCard);
+          parameters.Add(ev.CardRevision);
+          parameters.Add(ev.StatedDifficulty);
         }
+
+        var userHashParam = P(ref idx);
+        parameters.Add(userIdHash);
 
         var sql = $"""
           with ins as (
             insert into user_progress_events (
               event_id, user_sub, deck_slug, stable_uid, rating, event_time, device_id, client_version,
-              next_review_at, last_seen_revision, deck_version
+              next_review_at, last_seen_revision, deck_version,
+              schema_version, event_type, session_id, client_platform, client_event_time,
+              offline_queue_delay_ms, dwell_time_ms, review_stage, review_count_for_card,
+              card_revision, stated_difficulty
             )
             values {string.Join(", ", values)}
             on conflict (event_id) do nothing
             returning
               event_id, user_sub, deck_slug, stable_uid,
               rating, event_time,
-              next_review_at, last_seen_revision, deck_version
+              next_review_at, last_seen_revision, deck_version,
+              schema_version, event_type, session_id, device_id, client_version, client_platform,
+              client_event_time, server_received_at, offline_queue_delay_ms, dwell_time_ms,
+              review_stage, review_count_for_card, card_revision, stated_difficulty
+          ),
+          outbox as (
+            insert into analytics_event_outbox (
+              event_id, event_type, aggregate_type, aggregate_id, payload
+            )
+            select
+              event_id,
+              event_type,
+              'card',
+              deck_slug || ':' || stable_uid,
+              jsonb_strip_nulls(jsonb_build_object(
+                'event_id', event_id::text,
+                'schema_version', schema_version,
+                'event_type', event_type,
+                'user_id_hash', {userHashParam},
+                'deck_slug', deck_slug,
+                'card_stable_uid', stable_uid,
+                'card_revision', card_revision,
+                'stated_difficulty', stated_difficulty,
+                'rating', case rating
+                  when 1 then 'again'
+                  when 2 then 'hard'
+                  when 3 then 'good'
+                  when 4 then 'easy'
+                  else null
+                end,
+                'rating_value', rating,
+                'response_score', case rating
+                  when 1 then 4
+                  when 2 then 3
+                  when 3 then 1
+                  when 4 then 0
+                  else null
+                end,
+                'session_id', session_id,
+                'review_stage', review_stage,
+                'review_count_for_card', review_count_for_card,
+                'dwell_time_ms', dwell_time_ms,
+                'client_event_ts', client_event_time,
+                'server_received_ts', server_received_at,
+                'device_id', device_id,
+                'platform', client_platform,
+                'app_version', client_version,
+                'offline_queue_delay_ms', offline_queue_delay_ms,
+                'deck_version', deck_version
+              ))
+            from ins
+            on conflict (event_id) do nothing
+            returning 1
           ),
           agg as (
             select
@@ -352,6 +476,32 @@ public static class ProgressEvents
     return null;
   }
 
+  private static long? OptionalNonNegativeLong(JsonElement? v)
+  {
+    if (v is null) return null;
+    var el = v.Value;
+    if (el.ValueKind == JsonValueKind.Null || el.ValueKind == JsonValueKind.Undefined) return null;
+
+    if (el.ValueKind == JsonValueKind.Number)
+    {
+      if (el.TryGetInt64(out var n) && n >= 0) return n;
+      if (el.TryGetDouble(out var d) && d >= 0) return (long)Math.Floor(d);
+      return null;
+    }
+
+    var s = el.ToString().Trim();
+    return long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) && i >= 0 ? i : null;
+  }
+
+  private static string? OptionalString(JsonElement? v)
+  {
+    if (v is null) return null;
+    var el = v.Value;
+    if (el.ValueKind == JsonValueKind.Null || el.ValueKind == JsonValueKind.Undefined) return null;
+    var s = el.ToString().Trim();
+    return s.Length == 0 ? null : s;
+  }
+
   private static JsonElement? DeepGet(JsonElement obj, string p1, string p2)
   {
     if (obj.ValueKind != JsonValueKind.Object) return null;
@@ -364,6 +514,12 @@ public static class ProgressEvents
     if (!claims.TryGetValue(key, out var el)) return null;
     if (el.ValueKind == JsonValueKind.Null || el.ValueKind == JsonValueKind.Undefined) return null;
     return el.ValueKind == JsonValueKind.String ? el.GetString() : el.ToString();
+  }
+
+  private static string HashUserId(string userSub)
+  {
+    var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(userSub));
+    return Convert.ToHexString(bytes).ToLowerInvariant();
   }
 
   private static List<string> ParseStringArrayFromJson(object? value)
@@ -394,4 +550,3 @@ public static class ProgressEvents
     return [];
   }
 }
-

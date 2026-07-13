@@ -281,7 +281,7 @@ describe('home primary CTA uniqueness', () => {
       wallet: { availablePulls: 0, reservePulls: 0 },
       expectedPrimaryCta: 'Start today’s challenge',
       expectedDrawBadge: 'Clear today’s route to unlock pulls',
-      expectedRoute: 'Challenge',
+      expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },
     {
@@ -350,7 +350,7 @@ describe('home primary CTA uniqueness', () => {
       progress: [{ stableUid: '1', stage: 0, nextReviewAt: 0 }],
       wallet: { availablePulls: 0, reservePulls: 0 },
       expectedPrimaryCta: 'Continue today’s challenge',
-      expectedRoute: 'Challenge',
+      expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },
     {

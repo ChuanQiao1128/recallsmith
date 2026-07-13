@@ -188,7 +188,9 @@ describe('home primary CTA target', () => {
     });
 
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
-    expect(navigateMock).toHaveBeenCalledWith('Challenge', { slug: 'csharp' });
+    // Daily study bypasses the Challenge interstitial and goes straight
+    // into SessionCard.
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
   });
 
   it('navigates to Library when there is no pending work', async () => {

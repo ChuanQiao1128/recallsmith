@@ -13,6 +13,7 @@ import { EditCardPage } from './pages/EditCardPage';
 import { DeckPreviewPage } from './pages/DeckPreviewPage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
 import { DeckEditPage } from './pages/DeckEditPage';
+import { ContentIntelligencePage } from './pages/ContentIntelligencePage';
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
         <Route path="/decks/preview" element={<DeckPreviewPage />} />
 
         <Route path="/admin/users" element={<AdminUsersPage />} />
+        <Route path="/content-intelligence" element={<ContentIntelligencePage />} />
         <Route path="/decks/edit" element={<DeckEditPage />} />
       </Route>
 

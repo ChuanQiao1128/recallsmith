@@ -90,7 +90,13 @@ function computePremiumActive(customerInfo: any): boolean {
 }
 export function SessionCardScreen({ navigation, route }: Props) {
   const slugFromRoute = route.params?.slug ?? null;
-  const { mode = 'mixed', limit = 20, completionRoute = 'summary' } = route.params ?? {};
+  const { mode = 'mixed', completionRoute = 'summary' } = route.params ?? {};
+  // Route-supplied limit is now optional. When the caller doesn't
+  // explicitly pass one, sessionLimit derives from planChallengeRoute
+  // (which respects SESSION_MAIN_ROUTE_DEFAULT = 5 + actual due/new
+  // card availability). Was hard-coded to 20 — the source of "Run 0/20"
+  // headers showing on decks that only had 3 due cards.
+  const routeLimit = route.params?.limit;
   const previewLimitRaw = Number((route.params as any)?.previewLimit ?? 0);
   const previewLimit = Number.isFinite(previewLimitRaw) ? previewLimitRaw : 0;
   const [slug, setSlug] = useState<string | null>(slugFromRoute);
@@ -104,12 +110,18 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [sessionDone, setSessionDone] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
   const [plannedMinimumGoal, setPlannedMinimumGoal] = useState<number | null>(null);
+  // Cached planner-derived limit. Loaded after planChallengeRoute runs.
+  // null until first plan, then sticks. Falls back to routeLimit (when
+  // caller passes one explicitly), then to 5 (the new default cap).
+  const [plannedLimit, setPlannedLimit] = useState<number | null>(null);
   const [trialInfo, setTrialInfo] = useState<TrialInfo>(EMPTY_TRIAL_INFO);
-  const sessionLimit = limit;
+  const sessionLimit = plannedLimit ?? routeLimit ?? 5;
   const isPremiumUser = usePremiumUser();
   const insets = useSafeAreaInsets();
   const trialRef = useRef<TrialInfo>(EMPTY_TRIAL_INFO);
   const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport> } | null>(null);
+  const cardShownAtRef = useRef(Date.now());
+  const sessionId = useSessionStore((state) => state.sessionId);
   const sessionRoute = useSessionStore((state) => state.route);
   const sessionRouteIndex = useSessionStore((state) => state.currentIndex);
   const startSession = useSessionStore((state) => state.startSession);
@@ -120,6 +132,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
       resetSessionStore();
     };
   }, []);
+  useEffect(() => {
+    if (current?.card?.StableUid) {
+      cardShownAtRef.current = Date.now();
+    }
+  }, [current?.card?.StableUid]);
   useFocusEffect(
     useCallback(() => {
       if (slugFromRoute) {
@@ -170,6 +187,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setDailyStats(null);
         setCurrent(null);
         setPlannedMinimumGoal(null);
+        setPlannedLimit(null);
         trialRef.current = EMPTY_TRIAL_INFO;
         setTrialInfo(EMPTY_TRIAL_INFO);
         return;
@@ -183,6 +201,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setSessionDone(0);
         setShowAnswer(false);
         setPlannedMinimumGoal(null);
+        setPlannedLimit(null);
         trialRef.current = EMPTY_TRIAL_INFO;
         setTrialInfo(EMPTY_TRIAL_INFO);
         const now = new Date();
@@ -290,6 +309,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
           if (cancelled) return;
           const plannedChallenge = planChallengeRoute({ deck: deckForStudy, progress: nextProgress, now });
           setPlannedMinimumGoal(plannedChallenge.minimumGoal);
+          // Sync sessionLimit to the planner's actual route length so
+          // the header reads "Run 0/3" when the deck has 3 due cards
+          // (was always "Run 0/20" because of the hard-coded default).
+          setPlannedLimit(plannedChallenge.limit);
           const nextCurrent = pickNextCard({
             deck: deckForStudy,
             progress: nextProgress,
@@ -327,7 +350,16 @@ export function SessionCardScreen({ navigation, route }: Props) {
       return () => {
         cancelled = true;
       };
-    }, [isPremiumUser, mode, navigation, previewLimit, sessionLimit, slug]),
+      // sessionLimit is INTENTIONALLY excluded from the dep array.
+      // Including it caused an infinite reload loop:
+      //   load() → setPlannedLimit(null)        → sessionLimit changes
+      //          → effect re-fires → setPlannedLimit(planned.limit) → changes again
+      //          → effect re-fires → ...
+      // The visual symptom on Home → SessionCard was a loading card
+      // that flashed continuously. sessionLimit is derived state we
+      // SET inside this effect, so it must not gate the effect itself.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isPremiumUser, mode, navigation, previewLimit, slug]),
   );
   const now = new Date();
   const dueTodayCount = countDueToday(progress, now);
@@ -369,6 +401,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
           stableUid: nextState.updatedOne.stableUid,
           rating,
           reviewedAtMs: nowMs,
+          sessionId,
+          cardRevision: typeof current.card.Revision === 'number' ? current.card.Revision : 1,
+          statedDifficulty: typeof current.card.Difficulty === 'number' ? current.card.Difficulty : null,
+          reviewStage: isLearned(current.progress) ? 'repeat_review' : 'first_review',
+          dwellTimeMs: Math.max(0, nowMs - cardShownAtRef.current),
           progressAfter: nextState.updatedOne,
           lastSeenRevision: nextState.updatedOne.lastSeenRevision,
         });
@@ -501,6 +538,24 @@ export function SessionCardScreen({ navigation, route }: Props) {
     sessionLimit,
     minimumGoal: doneMinimumGoal,
   });
+  // Reward shown to user as motivation if they finish the run. Computed
+  // assuming sessionDone === sessionLimit so the value reflects the
+  // "full clear" outcome regardless of where they currently are.
+  const fullClearReward = computeSessionRewardPulls({
+    sessionDone: sessionLimit,
+    sessionLimit,
+    minimumGoal: doneMinimumGoal,
+  });
+  // Only show the stake pill while there's still room to full-clear and
+  // a meaningful reward exists. Also hides on trivial sessions (≤2
+  // cards, e.g. preview runs) where the "FULL CLEAR · +1 PULL" copy
+  // looks silly and adds visual noise. 3+ cards is the threshold where
+  // "full clear" feels like an actual goal.
+  const showFullClearStake =
+    !!current
+    && sessionLimit >= 3
+    && sessionDone < sessionLimit
+    && fullClearReward > 0;
   const previewChecked = trialInfo.isTrial
     ? Math.min(trialInfo.previewCount, progress.filter(isLearned).length)
     : 0;
@@ -532,6 +587,25 @@ export function SessionCardScreen({ navigation, route }: Props) {
               </Text>
             </View>
           </View>
+          {/* Full-clear reward stake — gold uppercase pill. Two states:
+              • Mid-session: "FULL CLEAR · +N PULLS" (the goal)
+              • Final stretch (≤3 cards left): "{remaining} TO GO · +N PULLS"
+                — finish-line framing, gives the user a sprint feeling
+                without animating (Animated.loop is battery-expensive). */}
+          {showFullClearStake ? (
+            <View style={styles.fullClearStakePill} testID="session-card-fullclear-stake">
+              <Text style={styles.fullClearStakeText} numberOfLines={1}>
+                {(() => {
+                  const remaining = sessionLimit - sessionDone;
+                  const pullLabel = fullClearReward === 1 ? 'PULL' : 'PULLS';
+                  if (remaining <= 3 && sessionDone > 0) {
+                    return `${remaining} TO GO · +${fullClearReward} ${pullLabel}`;
+                  }
+                  return `FULL CLEAR · +${fullClearReward} ${pullLabel}`;
+                })()}
+              </Text>
+            </View>
+          ) : null}
           <SessionProgressHeader vm={sessionVm} />
           <ScrollView
             testID="screen-session-card-primary-surface"
@@ -666,23 +740,33 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.82)',
     marginRight: spacing.xs,
   },
+  // Pause button — strengthened to read as a real escape control.
+  // Bigger touch target (48), softCream fill (matches brand), hairline
+  // gold border, bolder ink text. Data is auto-saved on every rating
+  // so swipe-back is also safe, but explicit Pause is more discoverable.
   pauseButton: {
-    minHeight: 44,
-    minWidth: 44,
-    paddingHorizontal: spacing.sm,
+    minHeight: 48,
+    minWidth: 64,
+    paddingHorizontal: 14,
     paddingVertical: spacing.xs,
     borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.5)',
+    backgroundColor: colors.softCream,
     borderWidth: 1,
-    borderColor: 'rgba(42,34,24,0.12)',
-    marginRight: spacing.xs,
+    borderColor: colors.hairline,
+    marginRight: spacing.sm,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   pauseText: {
-    color: colors.inkSecondary,
-    fontSize: typography.caption,
-    fontWeight: '800',
+    color: colors.inkSoft,
+    fontSize: typography.bodySmall,
+    fontWeight: '900',
+    letterSpacing: 0.3,
   },
   backText: {
     color: colors.ink,
@@ -719,8 +803,28 @@ const styles = StyleSheet.create({
   trialPreviewLabel: {
     fontSize: typography.caption,
     color: colors.gold,
-    fontWeight: '800',
+    fontWeight: '900',
     textTransform: 'uppercase',
+    letterSpacing: 1.2,
+  },
+  // Full-clear reward stake pill — gold accent, low-key but always
+  // visible during the run.
+  fullClearStakePill: {
+    alignSelf: 'center',
+    marginTop: spacing.xs,
+    marginBottom: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(232,184,90,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(232,184,90,0.35)',
+  },
+  fullClearStakeText: {
+    color: colors.gold,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.0,
   },
   trialPreviewBody: {
     marginTop: 2,
@@ -731,14 +835,19 @@ const styles = StyleSheet.create({
   doneCard: {
     borderRadius: spacing.cardRadius,
     padding: spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: 'rgba(255,255,255,0.94)',
     borderWidth: 1,
-    borderColor: 'rgba(42,34,24,0.12)',
+    borderColor: colors.hairline,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   doneTitle: {
     fontSize: typography.title3,
     color: colors.ink,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   doneBody: {
     marginTop: spacing.xs,
@@ -748,16 +857,23 @@ const styles = StyleSheet.create({
   },
   doneButton: {
     marginTop: spacing.md,
-    minHeight: 44,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.ink,
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    shadowColor: 'rgba(44,156,192,0.4)',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
   doneButtonText: {
-    color: colors.parchmentBg,
+    color: '#FFFFFF',
     fontSize: typography.button,
-    fontWeight: '800',
+    fontWeight: '900',
+    letterSpacing: 0.4,
   },
   ratingDock: {
     position: 'absolute',
