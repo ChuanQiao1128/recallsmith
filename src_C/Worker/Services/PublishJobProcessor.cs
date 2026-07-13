@@ -13,13 +13,17 @@ public class PublishJobProcessor : IPublishJobProcessor
 {
   private readonly IJobRepository _jobRepository;
   private readonly IS3DeckUploader _s3Uploader;
+  private readonly IContentArtifactsGenerator _contentArtifacts;
 
   public PublishJobProcessor(
     IJobRepository jobRepository,
-    IS3DeckUploader s3Uploader)
+    IS3DeckUploader s3Uploader,
+    IContentArtifactsGenerator? contentArtifacts = null)
   {
     _jobRepository = jobRepository;
     _s3Uploader = s3Uploader;
+    _contentArtifacts = contentArtifacts
+      ?? new ContentArtifactsGenerator(s3Uploader, new ContentArtifactsRepository());
   }
 
   public async Task ProcessAsync(string jobId)
@@ -52,10 +56,21 @@ public class PublishJobProcessor : IPublishJobProcessor
 
     Console.WriteLine($"[JobId={jobId}] Loaded {deckData.Cards.Count} cards");
 
-    // Step 4: 外部系统调用 (S3)
-    await _s3Uploader.UploadAsync(job.S3Key, deckData);
+    // 💡 契约修复：deck.json 的 version 必须等于本次构建的 buildId（字符串），
+    // 与 manifest entry 的 version 保持一致 —— 客户端全量安装校验 deck.json.version === manifest version。
+    if (!string.IsNullOrEmpty(job.BuildId))
+    {
+      deckData.Version = job.BuildId;
+    }
 
-    Console.WriteLine($"[JobId={jobId}] Uploaded to S3: {job.S3Key}");
+    // Step 4: 外部系统调用 (S3)
+    var uploadResult = await _s3Uploader.UploadAsync(job.S3Key, deckData);
+
+    Console.WriteLine($"[JobId={jobId}] Uploaded to S3: {job.S3Key} (sha256={uploadResult.Sha256}, bytes={uploadResult.Bytes})");
+
+    // Step 4.5: 内容分发 v3 附加产物（chunked package / delta patch / DB 元数据）
+    // 完全 best-effort：生成器内部吞掉所有异常，绝不影响发布任务
+    await _contentArtifacts.GenerateAsync(job, deckData, uploadResult);
 
     // Step 5: 最终一致性提交
     await _jobRepository.CompleteJobAsync(jobId);

@@ -2,10 +2,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { deleteDeck, fetchAdminManifest, fetchDecks, fetchPublishJobs, publishDeck} from '../api/authoring';
+import {
+  ADMIN_DECKS_ENDPOINT_MISSING,
+  deleteDeck,
+  fetchAdminDecksPage,
+  fetchAdminManifest,
+  fetchDeckBySlug,
+  fetchDecks,
+  fetchPublishJobs,
+  publishDeck,
+} from '../api/authoring';
 import { getContentManifestUrl } from '../api/contentManifest';
 import type { Deck } from '../types/deck';
 import type { PublishJob } from '../api/authoring';
+import {
+  DECKS_PAGE_SIZE,
+  applyDecksPage,
+  derivePagedDeckStatus,
+  emptyDeckPageListState,
+  isStarterLike,
+  removeDeckBySlug,
+} from './deckListPagination';
+import type { DeckPageListState, DeckStatus } from './deckListPagination';
 
 import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
@@ -91,7 +109,30 @@ type ManifestState = {
   raw: unknown | null;
 };
 
-type DeckStatus = 'published' | 'needs_publish' | 'unpublished';
+type ListMode = 'paginated' | 'legacy';
+
+// Error codes that mean "the paginated endpoint is unusable here" → fall back
+// to the legacy full-list load (404 = not deployed yet, 403 = not permitted).
+const PAGINATED_FALLBACK_CODES = new Set<string>([
+  ADMIN_DECKS_ENDPOINT_MISSING,
+  'NOT_FOUND',
+  'FORBIDDEN',
+]);
+
+// Unified row shape rendered by the table, produced by both the paginated
+// (/api/v1/admin/decks) and legacy (full fetchDecks + manifest) data paths.
+type ConsoleDeckRow = {
+  key: string;
+  id: number | null;
+  slug: string;
+  title: string;
+  deckType: number | null;
+  tier: string | null;
+  manifestOrder: number | null;
+  cardCount: number;
+  status: DeckStatus;
+  updatedAt: string | number | null;
+};
 
 function safeDateTime(value: unknown): string {
   if (value === undefined || value === null || value === '') return '—';
@@ -296,8 +337,25 @@ export function DeckListPage() {
     raw: null,
   });
 
-  const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [publishingId, setPublishingId] = useState<number | null>(null);
+  const [deletingSlug, setDeletingSlug] = useState<string | null>(null);
+  const [publishingSlug, setPublishingSlug] = useState<string | null>(null);
+
+  // Paginated deck list state (GET /api/v1/admin/decks). Falls back to the
+  // legacy full-list load when the endpoint is unavailable (feature-detect).
+  // Non-superadmin sessions start in legacy mode directly: the paginated
+  // endpoint is super_admin-gated, so probing it would be a guaranteed 403.
+  const [listMode, setListMode] = useState<ListMode>(() => (superAdmin ? 'paginated' : 'legacy'));
+  const listModeRef = useRef<ListMode>(superAdmin ? 'paginated' : 'legacy');
+  const [paged, setPaged] = useState<DeckPageListState>(emptyDeckPageListState);
+  const [pagedInitialized, setPagedInitialized] = useState(false);
+  const [pagedLoading, setPagedLoading] = useState(true);
+  const [pagedLoadingMore, setPagedLoadingMore] = useState(false);
+  const [pagedError, setPagedError] = useState<string | null>(null);
+  const pagedRequestSeq = useRef(0);
+  // slug → deck id cache: the paginated contract does not guarantee ids, but
+  // every row action needs one; resolved lazily via GET /authoring/decks?slug=.
+  const resolvedIdsRef = useRef<Map<string, number>>(new Map());
+  const [debouncedQ, setDebouncedQ] = useState('');
 
   // Publish Jobs state
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
@@ -415,34 +473,143 @@ export function DeckListPage() {
     }
   }
 
-  useEffect(() => {
-    // 初始加载：优先使用缓存，避免 loading 闪烁
-    void loadAll(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifestUrl]);
+  // ==================== paginated loading (new admin decks endpoint) ====================
 
-  async function handleDeleteDeck(deckId: number) {
+  async function loadPagedFirst(query: string) {
+    const seq = ++pagedRequestSeq.current;
+    setPagedLoading(true);
+    setPagedLoadingMore(false);
+    setPagedError(null);
+
+    const res = await fetchAdminDecksPage({ limit: DECKS_PAGE_SIZE, q: query });
+    if (!mountedRef.current || seq !== pagedRequestSeq.current) return;
+
+    if (!res.success) {
+      // Feature-detect: endpoint not deployed (404) or not permitted (403) →
+      // fall back to the legacy full-list load and stay in legacy mode.
+      if (res.error && PAGINATED_FALLBACK_CODES.has(res.error.code)) {
+        console.warn(
+          `[DeckListPage] GET /api/v1/admin/decks unavailable (${res.error.code}); falling back to legacy deck list load.`,
+        );
+        listModeRef.current = 'legacy';
+        setListMode('legacy');
+        setPagedLoading(false);
+        void loadAll(false);
+        return;
+      }
+      setPagedLoading(false);
+      setPagedInitialized(true);
+      setPagedError(res.error?.message ?? 'Failed to load decks.');
+      return;
+    }
+
+    setPaged(
+      applyDecksPage(
+        emptyDeckPageListState,
+        res.data ?? { items: [], nextCursor: null, hasMore: false },
+        'reset',
+      ),
+    );
+    setPagedLoading(false);
+    setPagedInitialized(true);
+  }
+
+  async function loadPagedMore() {
+    if (pagedLoading || pagedLoadingMore || !paged.hasMore || !paged.nextCursor) return;
+
+    const seq = ++pagedRequestSeq.current;
+    setPagedLoadingMore(true);
+    setPagedError(null);
+
+    const res = await fetchAdminDecksPage({
+      limit: DECKS_PAGE_SIZE,
+      cursor: paged.nextCursor,
+      q: debouncedQ,
+    });
+    if (!mountedRef.current) return;
+    setPagedLoadingMore(false);
+    if (seq !== pagedRequestSeq.current) return; // superseded by a newer load
+
+    if (!res.success) {
+      setPagedError(res.error?.message ?? 'Failed to load more decks.');
+      return;
+    }
+    const page = res.data ?? { items: [], nextCursor: null, hasMore: false };
+    setPaged(prev => applyDecksPage(prev, page, 'append'));
+  }
+
+  async function resolveDeckId(row: ConsoleDeckRow): Promise<number | null> {
+    if (row.id !== null && Number.isFinite(row.id)) return row.id;
+    const cached = resolvedIdsRef.current.get(row.slug);
+    if (cached !== undefined) return cached;
+
+    const res = await fetchDeckBySlug(row.slug);
+    const id = res.success && res.data ? Number(res.data.id) : Number.NaN;
+    if (Number.isFinite(id)) {
+      resolvedIdsRef.current.set(row.slug, id);
+      return id;
+    }
+    alert(res.error?.message ?? 'Failed to resolve deck id.');
+    return null;
+  }
+
+  async function navigateWithDeckId(row: ConsoleDeckRow, to: (id: number) => string) {
+    const id = await resolveDeckId(row);
+    if (id === null) return;
+    navigate(to(id));
+  }
+
+  // Debounce the search box → server-side q for the paginated endpoint.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  // Sessions that START in legacy mode (non-superadmin) load the legacy list on
+  // mount — the paginated effect below never fires for them, and the 403
+  // fallback path (which normally triggers loadAll) is deliberately skipped.
+  useEffect(() => {
+    if (listModeRef.current === 'legacy') void loadAll(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Initial load + search-driven reloads. Paginated mode only: legacy mode
+  // filters client-side over the already-loaded full list.
+  useEffect(() => {
+    if (listModeRef.current === 'legacy') return;
+    void loadPagedFirst(debouncedQ);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQ]);
+
+  async function handleDeleteDeck(row: ConsoleDeckRow) {
     if (!superAdmin) return;
 
     const ok = window.confirm('Delete deck is destructive.\n\nContinue?');
     if (!ok) return;
 
     try {
-      setDeletingId(deckId);
+      setDeletingSlug(row.slug);
+      const deckId = await resolveDeckId(row);
+      if (deckId === null) return;
+
       const res = await deleteDeck(deckId);
       if (!res.success) {
         alert(res.error?.message ?? 'Delete deck failed.');
         return;
       }
-      setDeckState(prev => ({ ...prev, decks: prev.decks.filter(d => Number(d.id) !== deckId) }));
+      if (listModeRef.current === 'paginated') {
+        setPaged(prev => removeDeckBySlug(prev, row.slug));
+      } else {
+        setDeckState(prev => ({ ...prev, decks: prev.decks.filter(d => String(d.slug) !== row.slug) }));
+      }
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Network error.');
     } finally {
-      setDeletingId(null);
+      setDeletingSlug(null);
     }
   }
 
-  async function handlePublish(deckId: number) {
+  async function handlePublish(row: ConsoleDeckRow) {
     if (!superAdmin) return;
 
     const ok = window.confirm(
@@ -451,7 +618,9 @@ export function DeckListPage() {
     if (!ok) return;
 
     try {
-      setPublishingId(deckId);
+      setPublishingSlug(row.slug);
+      const deckId = await resolveDeckId(row);
+      if (deckId === null) return;
 
       const pub = await publishDeck(deckId);
       if (!pub.success) {
@@ -460,11 +629,16 @@ export function DeckListPage() {
       }
 
       // 发布成功后强制刷新，确保数据最新
-      await loadAll(true);
+      if (listModeRef.current === 'paginated') {
+        void loadPublishJobs();
+        await loadPagedFirst(debouncedQ);
+      } else {
+        await loadAll(true);
+      }
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Network error.');
     } finally {
-      setPublishingId(null);
+      setPublishingSlug(null);
     }
   }
 
@@ -528,7 +702,35 @@ export function DeckListPage() {
 
   const decks = useMemo<Deck[]>(() => deckState.decks ?? [], [deckState.decks]);
 
-  const viewRows = useMemo<{ deck: Deck; manifest: ManifestDeckLite | undefined; status: DeckStatus; cardCount: number }[]>(() => {
+  const viewRows = useMemo<ConsoleDeckRow[]>(() => {
+    if (listMode === 'paginated') {
+      // Server already applied q (ILIKE on slug/title) and ordering
+      // (updated_at DESC, slug); status/type filters remain client-side
+      // refinements over the loaded pages.
+      return paged.items
+        .map<ConsoleDeckRow>(item => ({
+          key: item.slug,
+          id: item.id ?? null,
+          slug: item.slug,
+          title: item.title ?? '',
+          deckType: item.deckType ?? null,
+          tier: item.tier ?? null,
+          manifestOrder: null,
+          cardCount: item.totalCards ?? 0,
+          status: derivePagedDeckStatus(item),
+          updatedAt: item.updatedAtMs ?? null,
+        }))
+        .filter(row => {
+          if (statusFilter !== 'all' && row.status !== statusFilter) return false;
+          if (typeFilter !== 'all') {
+            const starter = isStarterLike(row.deckType, row.tier);
+            if (typeFilter === 'starter' && !starter) return false;
+            if (typeFilter === 'paid' && starter) return false;
+          }
+          return true;
+        });
+    }
+
     const query = q.trim().toLowerCase();
 
     return decks
@@ -536,7 +738,7 @@ export function DeckListPage() {
         const m = manifestState.bySlug[String(d.slug || '').trim()];
         const cardCount = d.totalCards ?? 0;
         const status = getDeckStatusFromManifest(d, m, cardCount);
-        return { deck: d, manifest: m, status, cardCount };
+        return { deck: d, status, cardCount };
       })
       .filter(row => {
         const d = row.deck;
@@ -559,12 +761,36 @@ export function DeckListPage() {
         const oA = typeof (a.deck as Deck & { manifestOrder?: number }).manifestOrder === 'number' ? (a.deck as Deck & { manifestOrder?: number }).manifestOrder! : 999999;
         const oB = typeof (b.deck as Deck & { manifestOrder?: number }).manifestOrder === 'number' ? (b.deck as Deck & { manifestOrder?: number }).manifestOrder! : 999999;
         return oA - oB;
+      })
+      .map<ConsoleDeckRow>(({ deck: d, status, cardCount }) => {
+        const withDates = d as Deck & { updatedAt?: string | null; createdAt?: string | null };
+        const idNum = Number(d.id);
+        return {
+          key: String(d.id),
+          id: Number.isFinite(idNum) ? idNum : null,
+          slug: String(d.slug ?? ''),
+          title: String(d.title ?? ''),
+          deckType: typeof d.deckType === 'number' ? d.deckType : null,
+          tier: d.tier ?? null,
+          manifestOrder: typeof d.manifestOrder === 'number' ? d.manifestOrder : null,
+          cardCount,
+          status,
+          updatedAt: withDates.updatedAt ?? withDates.createdAt ?? null,
+        };
       });
-  }, [decks, manifestState.bySlug, q, statusFilter, typeFilter]);
+  }, [listMode, paged.items, decks, manifestState.bySlug, q, statusFilter, typeFilter]);
 
 
 
-  if (deckState.loading) {
+  const initialLoading = listMode === 'paginated' ? !pagedInitialized : deckState.loading;
+  const fatalError =
+    listMode === 'paginated'
+      ? pagedInitialized && !pagedLoading && paged.items.length === 0 && pagedError
+        ? pagedError
+        : null
+      : deckState.error;
+
+  if (initialLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
         <div className="text-slate-600 text-lg">Loading console…</div>
@@ -572,16 +798,19 @@ export function DeckListPage() {
     );
   }
 
-  if (deckState.error) {
+  if (fatalError) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded shadow-sm max-w-md">
           <div className="font-semibold mb-1">Failed to load decks</div>
-          <div className="text-sm">{String(deckState.error)}</div>
+          <div className="text-sm">{String(fatalError)}</div>
           <button
             type="button"
             className="mt-3 text-sm px-3 py-1.5 rounded-md border border-red-200 text-red-800 hover:bg-red-100"
-            onClick={() => void loadAll(true)}
+            onClick={() => {
+              if (listMode === 'paginated') void loadPagedFirst(debouncedQ);
+              else void loadAll(true);
+            }}
           >
             Retry
           </button>
@@ -601,6 +830,7 @@ export function DeckListPage() {
       }
       superAdmin={superAdmin}
       onSignOut={handleSignOut}
+      onGoContentIntelligence={() => navigate('/content-intelligence')}
       onGoAdminUsers={superAdmin ? () => navigate('/admin/users') : undefined}
     >
       <div className="w-full mx-auto space-y-6">
@@ -657,7 +887,10 @@ export function DeckListPage() {
               <button
                 type="button"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 shadow-sm transition-all active:scale-95"
-                onClick={() => void loadAll(false)}
+                onClick={() => {
+                  if (listModeRef.current === 'paginated') void loadPagedFirst(debouncedQ);
+                  else void loadAll(false);
+                }}
               >
                 <svg className="w-4 h-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -855,111 +1088,140 @@ export function DeckListPage() {
             </thead>
 
             <tbody className="divide-y divide-slate-100">
-              {viewRows.length === 0 ? (
+              {listMode === 'paginated' && pagedLoading ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-16 text-center text-slate-500 text-sm">
-                    No decks match your filters.
+                    Loading decks…
+                  </td>
+                </tr>
+              ) : viewRows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-16 text-center text-slate-500 text-sm">
+                    {q.trim() ? 'No decks match your search.' : 'No decks match your filters.'}
                   </td>
                 </tr>
               ) : (
-                viewRows.map(row => {
-                  const deck = row.deck as Deck & { updatedAt?: string | null; createdAt?: string | null; manifestOrder?: number };
-                  const updatedAt = deck.updatedAt ?? deck.createdAt ?? null;
-
-                  return (
-                    <tr key={String(deck.id)} className="hover:bg-slate-50/60 transition-colors group">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 shadow-sm" title="Manifest Order">
-                            #{String(deck.manifestOrder ?? '-')}
-                          </span>
-                          <div>
-                            <div className="text-slate-900 font-medium">{String(deck.title ?? '')}</div>
-                            <div className="text-[11px] text-slate-500 font-mono">{String(deck.slug ?? '')}</div>
-                          </div>
+                viewRows.map(row => (
+                  <tr key={row.key} className="hover:bg-slate-50/60 transition-colors group">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 shadow-sm" title="Manifest Order">
+                          #{String(row.manifestOrder ?? '-')}
+                        </span>
+                        <div>
+                          <div className="text-slate-900 font-medium">{row.title}</div>
+                          <div className="text-[11px] text-slate-500 font-mono">{row.slug}</div>
                         </div>
-                      </td>
+                      </div>
+                    </td>
 
-                      <td className="px-6 py-4">
+                    <td className="px-6 py-4">
+                      <button
+                        type="button"
+                        onClick={() => void navigateWithDeckId(row, id => `/decks/cards?deckId=${id}`)}
+                        className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-mono border shadow-sm transition-colors bg-slate-100 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 cursor-pointer"
+                        title="Manage Cards"
+                      >
+                        {row.cardCount}
+                      </button>
+                    </td>
+
+                    <td className="px-6 py-4">{typeBadge(isStarterLike(row.deckType, row.tier) ? 1 : 2)}</td>
+
+                    <td className="px-6 py-4">{statusBadge(row.status)}</td>
+
+                    <td className="px-6 py-4 text-slate-500 text-xs">{safeDateTime(row.updatedAt)}</td>
+
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
                         <button
                           type="button"
-                          onClick={() => navigate(`/decks/cards?deckId=${deck.id}`)}
-                          className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-mono border shadow-sm transition-colors bg-slate-100 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 cursor-pointer"
-                          title="Manage Cards"
+                          onClick={() => void navigateWithDeckId(row, id => `/decks/cards?deckId=${id}`)}
+                          className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
                         >
-                          {row.cardCount}
+                          Cards
                         </button>
-                      </td>
 
-                      <td className="px-6 py-4">{typeBadge(deck.deckType)}</td>
+                        <button
+                          type="button"
+                          onClick={() => void navigateWithDeckId(row, id => `/decks/edit?deckId=${id}`)}
+                          className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+                        >
+                          Edit
+                        </button>
 
-                      <td className="px-6 py-4">{statusBadge(row.status)}</td>
+                        <button
+                          type="button"
+                          onClick={() => void navigateWithDeckId(row, id => `/decks/preview?deckId=${id}`)}
+                          className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors"
+                        >
+                          Preview
+                        </button>
 
-                      <td className="px-6 py-4 text-slate-500 text-xs">{safeDateTime(updatedAt)}</td>
-
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/decks/cards?deckId=${deck.id}`)}
-                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
-                          >
-                            Cards
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/decks/edit?deckId=${deck.id}`)}
-                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
-                          >
-                            Edit
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/decks/preview?deckId=${deck.id}`)}
-                            className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors"
-                          >
-                            Preview
-                          </button>
-
-                          {superAdmin ? (
-                            <>
-                              <span className="w-px h-4 bg-slate-200 mx-1"></span>
-                              <button
-                                type="button"
-                                disabled={publishingId === Number(deck.id)}
-                                onClick={() => void handlePublish(Number(deck.id))}
-                                className={`text-xs px-3 py-1.5 rounded-lg border ${
-                                  row.status === 'needs_publish'
-                                    ? 'bg-amber-500 border-transparent text-white hover:bg-amber-600 shadow-sm font-semibold'
-                                    : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-                                } disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
-                              >
-                                {publishingId === Number(deck.id) ? 'Publishing…' : 'Publish'}
-                              </button>
-                            </>
-                          ) : null}
-
-                          {superAdmin ? (
+                        {superAdmin ? (
+                          <>
+                            <span className="w-px h-4 bg-slate-200 mx-1"></span>
                             <button
                               type="button"
-                              disabled={deletingId === Number(deck.id)}
-                              onClick={() => void handleDeleteDeck(Number(deck.id))}
-                              className="text-xs font-medium px-2 text-red-500 hover:text-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                              disabled={publishingSlug === row.slug}
+                              onClick={() => void handlePublish(row)}
+                              className={`text-xs px-3 py-1.5 rounded-lg border ${
+                                row.status === 'needs_publish'
+                                  ? 'bg-amber-500 border-transparent text-white hover:bg-amber-600 shadow-sm font-semibold'
+                                  : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                              } disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
                             >
-                              {deletingId === Number(deck.id) ? 'Deleting…' : 'Delete'}
+                              {publishingSlug === row.slug ? 'Publishing…' : 'Publish'}
                             </button>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
+                          </>
+                        ) : null}
+
+                        {superAdmin ? (
+                          <button
+                            type="button"
+                            disabled={deletingSlug === row.slug}
+                            onClick={() => void handleDeleteDeck(row)}
+                            className="text-xs font-medium px-2 text-red-500 hover:text-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {deletingSlug === row.slug ? 'Deleting…' : 'Delete'}
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
         </div>
+
+        {/* Pagination footer (paginated mode only) */}
+        {listMode === 'paginated' && (
+          <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/50 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-xs text-slate-500">
+              {pagedLoading
+                ? 'Loading…'
+                : `Loaded ${paged.items.length} deck${paged.items.length === 1 ? '' : 's'}${
+                    !paged.hasMore && paged.items.length > 0 ? ' · end of list' : ''
+                  }`}
+            </span>
+            <div className="flex items-center gap-3">
+              {pagedError && paged.items.length > 0 ? (
+                <span className="text-xs text-red-600">{pagedError}</span>
+              ) : null}
+              {paged.hasMore ? (
+                <button
+                  type="button"
+                  disabled={pagedLoadingMore || pagedLoading}
+                  onClick={() => void loadPagedMore()}
+                  className="text-xs font-semibold px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                >
+                  {pagedLoadingMore ? 'Loading more…' : 'Load more'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        )}
         </div>
         )}
 

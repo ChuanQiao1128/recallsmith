@@ -1,6 +1,8 @@
 // mobile/src/sync/progressSync.ts
 import * as Crypto from 'expo-crypto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
 import { apiJson } from '../api/apiClient';
 import { resolveDeckBySlug } from '../content/deckRepository';
@@ -81,10 +83,16 @@ type ProgressGetResp = {
   serverTimeMs: number;
   sinceMs: number | null;
   items: ProgressItem[];
+
+  // ✅ Keyset pagination (additive; absent on old servers — feature-detect)
+  nextCursor?: string | null;
+  hasMore?: boolean;
 };
 
 export type ProgressEvent = {
   eventId: string;
+  schemaVersion?: number;
+  eventType?: 'card_reviewed';
   deckSlug: string;
   deckVersion: string | null;
   stableUid: string;
@@ -92,6 +100,13 @@ export type ProgressEvent = {
   reviewedAtMs: number;
   progressAfter?: any;
   lastSeenRevision: number | null;
+  sessionId?: string | null;
+  cardRevision?: number | null;
+  statedDifficulty?: number | null;
+  reviewStage?: 'first_review' | 'repeat_review' | string | null;
+  reviewCountForCard?: number | null;
+  dwellTimeMs?: number | null;
+  offlineQueueDelayMs?: number | null;
 };
 
 /**
@@ -120,6 +135,15 @@ let _accessTokenMem: string | null = null;
  */
 function kCursor(userSub: string) {
   return `${userPrefix(userSub)}sync:cursorMs:v1`;
+}
+/**
+ * ✅ v2 cursor: opaque server-issued keyset cursor (base64url tuple).
+ * Stored in a NEW key — the v1 key must stay a plain ms number, because
+ * getCursorMs() parses it with toMs() and a base64 string would silently
+ * read back as null (full re-pull).
+ */
+function kCursorToken(userSub: string) {
+  return `${userPrefix(userSub)}sync:cursor:v2`;
 }
 function kLastSync(userSub: string) {
   return `${userPrefix(userSub)}sync:last:v1`;
@@ -186,6 +210,35 @@ function mapRatingToNumber(r: any): number {
   if (s === 'good') return 3;
   if (s === 'easy') return 4;
   return 3;
+}
+
+function optionalFiniteNumber(v: any): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function optionalPositiveInt(v: any): number | null {
+  const n = optionalFiniteNumber(v);
+  if (n == null) return null;
+  const i = Math.floor(n);
+  return i > 0 ? i : null;
+}
+
+function optionalNonNegativeInt(v: any): number | null {
+  const n = optionalFiniteNumber(v);
+  if (n == null) return null;
+  const i = Math.floor(n);
+  return i >= 0 ? i : null;
+}
+
+function optionalString(v: any): string | null {
+  const s = v == null ? '' : String(v).trim();
+  return s ? s : null;
+}
+
+function getClientVersion(): string {
+  return Constants.expoConfig?.version ?? 'unknown';
 }
 
 function pickDeckSlugFromAny(obj: any): string | null {
@@ -508,6 +561,12 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
   let deckVersion: string | null | undefined = undefined;
   let progressAfter: any = undefined;
   let lastSeenRevision: number | null | undefined = undefined;
+  let sessionId: string | null | undefined = undefined;
+  let cardRevision: number | null | undefined = undefined;
+  let statedDifficulty: number | null | undefined = undefined;
+  let reviewStage: string | null | undefined = undefined;
+  let reviewCountForCard: number | null | undefined = undefined;
+  let dwellTimeMs: number | null | undefined = undefined;
 
   if (typeof args[0] === 'string') {
     deckSlug = String(args[0]).trim();
@@ -530,12 +589,23 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
     if (obj.lastSeenRevision != null && Number.isFinite(Number(obj.lastSeenRevision))) {
       lastSeenRevision = Number(obj.lastSeenRevision);
     }
+
+    sessionId = optionalString(obj.sessionId);
+    cardRevision = optionalPositiveInt(obj.cardRevision);
+    statedDifficulty = optionalPositiveInt(obj.statedDifficulty);
+    reviewStage = optionalString(obj.reviewStage);
+    reviewCountForCard = optionalPositiveInt(obj.reviewCountForCard);
+    dwellTimeMs = optionalNonNegativeInt(obj.dwellTimeMs);
   }
 
   if (!deckSlug || !stableUid) return null;
 
+  const resolvedRevision = cardRevision ?? lastSeenRevision ?? optionalPositiveInt(progressAfter?.lastSeenRevision);
+
   const ev: ProgressEvent = {
     eventId: Crypto.randomUUID(),
+    schemaVersion: 1,
+    eventType: 'card_reviewed',
     deckSlug,
     deckVersion: deckVersion ?? null,
     stableUid,
@@ -543,6 +613,13 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
     reviewedAtMs,
     progressAfter,
     lastSeenRevision: lastSeenRevision ?? null,
+    sessionId: sessionId ?? null,
+    cardRevision: resolvedRevision ?? null,
+    statedDifficulty: statedDifficulty ?? null,
+    reviewStage: reviewStage ?? null,
+    reviewCountForCard: reviewCountForCard ?? null,
+    dwellTimeMs: dwellTimeMs ?? null,
+    offlineQueueDelayMs: 0,
   };
 
   await enqueueProgressEvent(userSub, ev);
@@ -572,6 +649,28 @@ async function setCursorMs(userSub: string, ms: number): Promise<void> {
 async function clearCursorMs(userSub: string): Promise<void> {
   try {
     await AsyncStorage.removeItem(kCursor(userSub));
+  } catch {}
+}
+
+async function getCursorToken(userSub: string): Promise<string | null> {
+  try {
+    const raw = await AsyncStorage.getItem(kCursorToken(userSub));
+    const t = raw && raw.trim() ? raw.trim() : null;
+    return t;
+  } catch {
+    return null;
+  }
+}
+
+async function setCursorToken(userSub: string, token: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(kCursorToken(userSub), token);
+  } catch {}
+}
+
+async function clearCursorToken(userSub: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(kCursorToken(userSub));
   } catch {}
 }
 
@@ -624,7 +723,8 @@ async function healCursorIfCacheMissing(userSub: string): Promise<void> {
   _healedOnce = true;
 
   const cursor = await getCursorMs(userSub);
-  if (cursor == null) return;
+  const cursorToken = await getCursorToken(userSub);
+  if (cursor == null && cursorToken == null) return;
 
   try {
     const keys = await AsyncStorage.getAllKeys();
@@ -632,7 +732,9 @@ async function healCursorIfCacheMissing(userSub: string): Promise<void> {
     const hasAnyCache = keys.some((k) => k.startsWith(prefix));
     if (!hasAnyCache) {
       console.warn('[progressSync] heal: cursor exists but no remote cache keys; reset cursor', { cursor, userSub });
+      // heal 的语义是“重新全量拉取”，v1 ms cursor 和 v2 keyset cursor 必须一起清
       await clearCursorMs(userSub);
+      await clearCursorToken(userSub);
     }
   } catch {
     // ignore
@@ -753,27 +855,96 @@ function mergeRemoteIntoLocalProgress(
  * Pull
  * ----------------------------
  */
+
+/**
+ * ✅ 排水环硬上限（安全阀）：
+ * - 正常情况下 hasMore=false 会提前 break；
+ * - 上限用来兜底“服务端 bug / cursor 不前进 / 恶意 hasMore=true”导致的死循环。
+ * - 20 页 × 5000 行 = 单次 sync 最多 10 万行，远超真实 backlog；
+ *   剩余数据（如有）会在下一次 sync 继续收敛，不会丢。
+ */
+const MAX_PULL_PAGES_PER_SYNC = 20;
+
 async function pullProgressAndApply(
   userSub: string,
   accessToken: string,
 ): Promise<{ pulled: number; applied: number }> {
   await healCursorIfCacheMissing(userSub);
 
+  let pulled = 0;
+  let applied = 0;
+
+  // while(hasMore) 排水环：每页走完整的 fetch -> cache -> merge -> advance-cursor 流程，
+  // cursor 只在该页成功应用后才持久化（沿用原“advance only after success”原则）。
+  for (let page = 0; page < MAX_PULL_PAGES_PER_SYNC; page++) {
+    const r = await pullProgressPageAndApply(userSub, accessToken);
+    pulled += r.pulled;
+    applied += r.applied;
+    if (!r.hasMore) break;
+  }
+
+  _lastPullAtMs = Date.now();
+  return { pulled, applied };
+}
+
+/**
+ * 拉取并应用“一页”进度。
+ * - 老服务端（无 nextCursor/hasMore 字段）：行为与历史版本完全一致（单页、legacy ms cursor）。
+ * - 新服务端：请求带上 opaque keyset cursor（v2），响应的 nextCursor 在本页成功应用后持久化。
+ */
+async function pullProgressPageAndApply(
+  userSub: string,
+  accessToken: string,
+): Promise<{ pulled: number; applied: number; hasMore: boolean }> {
   const cursorBefore = await getCursorMs(userSub);
+  const cursorToken = await getCursorToken(userSub);
 
   const qs: string[] = ['limit=5000'];
+  // 新 keyset cursor（服务端签发的 base64url 元组）。老服务端会忽略未知参数并回退用 sinceMs。
+  if (cursorToken != null) qs.push(`cursor=${encodeURIComponent(cursorToken)}`);
+  // legacy ms cursor 继续发送：兼容老服务端 / 服务端回滚的场景。
   if (cursorBefore != null) qs.push(`sinceMs=${encodeURIComponent(String(cursorBefore))}`);
   const url = `/api/v1/sync/progress?${qs.join('&')}`;
 
-  const resp = await apiJson<ApiOk<ProgressGetResp>>(url, {
-    method: 'GET',
-    accessToken,
-    timeoutMs: 15000,
-  });
+  let resp: ApiOk<ProgressGetResp>;
+  try {
+    resp = await apiJson<ApiOk<ProgressGetResp>>(url, {
+      method: 'GET',
+      accessToken,
+      timeoutMs: 15000,
+    });
+  } catch (e: any) {
+    // 自愈：v2 keyset cursor 被服务端 400 拒绝（畸形/版本不认——AsyncStorage 损坏或
+    // 未来 cursor 版本演进）。若不清除，之后每次 sync 都会原样重发同一个坏 cursor，
+    // pull 将永久瘫痪。处置：清掉 v2 cursor，本页立即用 legacy sinceMs 重试一次。
+    if (cursorToken != null && e?.status === 400) {
+      console.warn('[progressSync] pull cursor rejected (400); clearing v2 cursor, retrying with sinceMs', {
+        userSub,
+        message: e?.message ?? String(e),
+      });
+      await clearCursorToken(userSub);
+      const legacyQs: string[] = ['limit=5000'];
+      if (cursorBefore != null) legacyQs.push(`sinceMs=${encodeURIComponent(String(cursorBefore))}`);
+      resp = await apiJson<ApiOk<ProgressGetResp>>(`/api/v1/sync/progress?${legacyQs.join('&')}`, {
+        method: 'GET',
+        accessToken,
+        timeoutMs: 15000,
+      });
+    } else {
+      throw e;
+    }
+  }
 
-  const items: ProgressItem[] = resp?.data?.items ?? [];
+  const data = resp?.data;
+  const items: ProgressItem[] = data?.items ?? [];
+
+  // 特性探测：老服务端没有 nextCursor/hasMore -> hasMore=false -> 单页，与今天完全一致。
+  const nextCursor =
+    typeof data?.nextCursor === 'string' && data.nextCursor.trim() ? data.nextCursor.trim() : null;
+  const hasMore = data?.hasMore === true && nextCursor != null;
+
   if (!Array.isArray(items) || items.length === 0) {
-    return { pulled: 0, applied: 0 };
+    return { pulled: 0, applied: 0, hasMore: false };
   }
 
   const byDeck = new Map<string, ProgressItem[]>();
@@ -842,12 +1013,20 @@ async function pullProgressAndApply(
   }
 
   // 3) advance cursor only if caching succeeded
-  if (cacheAllOk && maxUpdatedAt > (cursorBefore ?? 0)) {
-    await setCursorMs(userSub, maxUpdatedAt);
+  if (cacheAllOk) {
+    if (maxUpdatedAt > (cursorBefore ?? 0)) {
+      await setCursorMs(userSub, maxUpdatedAt);
+    }
+    // ✅ 无论 hasMore 与否都持久化 nextCursor：
+    // 最后一页的 cursor 是精确的 keyset 元组，下一次 sync 从它续拉，
+    // 才能修复“同一 updated_at 跨页/跨 sync 边界被 strict > 永久跳过”的 bug。
+    if (nextCursor != null) {
+      await setCursorToken(userSub, nextCursor);
+    }
   }
 
-  _lastPullAtMs = Date.now();
-  return { pulled: items.length, applied };
+  // 缓存失败时不推进 cursor，也不要继续排水（否则会在同一页上打转）。
+  return { pulled: items.length, applied, hasMore: cacheAllOk ? hasMore : false };
 }
 
 /**
@@ -892,13 +1071,24 @@ async function syncProgressOnce(
       accessToken,
       body: {
         deviceId,
+        clientPlatform: Platform.OS,
+        clientVersion: getClientVersion(),
         events: batch.map((ev: any) => ({
           eventId: ev.eventId,
+          schemaVersion: ev.schemaVersion ?? 1,
+          eventType: ev.eventType ?? 'card_reviewed',
           type: 'review',
           deckSlug: ev.deckSlug,
           deckVersion: ev.deckVersion ?? null,
           stableUid: ev.stableUid,
           rating: ev.rating,
+          sessionId: ev.sessionId ?? null,
+          cardRevision: ev.cardRevision ?? ev.lastSeenRevision ?? null,
+          statedDifficulty: ev.statedDifficulty ?? null,
+          reviewStage: ev.reviewStage ?? null,
+          reviewCountForCard: ev.reviewCountForCard ?? null,
+          dwellTimeMs: ev.dwellTimeMs ?? null,
+          offlineQueueDelayMs: Math.max(0, Date.now() - Number(ev.reviewedAtMs ?? Date.now())),
 
           reviewedAtMs: ev.reviewedAtMs,
           eventTimeMs: ev.reviewedAtMs,

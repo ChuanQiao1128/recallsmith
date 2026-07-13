@@ -1,10 +1,12 @@
 // mobile/src/content/deckRepository.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Crypto from 'expo-crypto';
 import { fetchAuthSession } from 'aws-amplify/auth';
 
 import type { DeckExport } from '../types/deckExport';
 import { getIsPremiumUser } from '../premium/premiumStore';
+import { installDeckFromChunkedPackage } from './chunkedInstall';
 
 /**
  * v2 Content repository (CloudFront -> manifest.json -> deck.json)
@@ -29,6 +31,9 @@ const API_BASE_URL =
 
 const MANIFEST_URL = joinUrl(CONTENT_BASE_URL, 'content', 'manifest.json');
 const MANIFEST_CACHE_KEY = 'devcards:content:manifest:v2';
+// ✅ Conditional GET: ETag stored in a SIBLING key — MANIFEST_CACHE_KEY must keep
+// holding the raw RawManifest JSON (other code/tests seed & read it directly).
+const MANIFEST_ETAG_KEY = 'devcards:content:manifestEtag:v1';
 const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:'; // + userKey + ":" + slug
 
 // Runtime-safe "utf8" encoding without relying on FileSystem.EncodingType types
@@ -258,6 +263,9 @@ type RawManifest = {
     path?: string | null;
 
     sha256?: string | null;
+
+    // ✅ v3 chunked package for public decks (path relative to prefix)
+    packagePath?: string | null;
 
     // ✅ v2 incremental patches for public decks
     patches?: PatchEdge[] | null;
@@ -585,7 +593,7 @@ export async function installDeckFromUrl(
   slug: string,
   url: string,
   remoteVersion: string | null,
-  _remoteSha256: string | null,
+  remoteSha256: string | null,
 ): Promise<boolean> {
   const safeSlug = String(slug).trim();
   const safeUrl = String(url || '').trim();
@@ -708,6 +716,62 @@ export async function installDeckFromUrl(
       }
     }
 
+    // ====== Chunked package install (v3, free live decks) ======
+    const packagePath =
+      typeof entry?.packagePath === 'string' && entry.packagePath.trim().length > 0
+        ? entry.packagePath.trim()
+        : null;
+
+    if (packagePath && !isPreviewInstall && remoteVersion && manifest) {
+      const prefix = String(manifest.prefix || 'content');
+      const packageUrl = /^https?:\/\//i.test(packagePath)
+        ? packagePath
+        : joinUrl(CONTENT_BASE_URL, prefix, packagePath);
+
+      const chunkRes = await installDeckFromChunkedPackage({
+        slug: safeSlug,
+        packageUrl,
+        remoteVersion,
+        deckDir: dir,
+        finalPath,
+        resolveRelativeUrl: (relativePath) => joinUrl(CONTENT_BASE_URL, prefix, relativePath),
+      });
+
+      if (chunkRes.ok) {
+        // Meta write must not throw out of installDeckFromUrl (callers expect a boolean);
+        // on failure fall through to full download, which rewrites meta inside its own try/catch.
+        try {
+          const meta: DeckInstallMeta = {
+            slug: safeSlug,
+            buildId: remoteVersion,
+            installedAtMs: Date.now(),
+            fileUri: finalPath,
+            cardCount: chunkRes.cardCount,
+          };
+          await AsyncStorage.setItem(deckMetaKey(safeSlug, userKey), JSON.stringify(meta));
+
+          console.log('[installDeckFromUrl] chunked_applied', {
+            slug: safeSlug,
+            buildId: remoteVersion,
+            cardCount: chunkRes.cardCount,
+          });
+          return true;
+        } catch (e: any) {
+          console.warn('[installDeckFromUrl] chunked_meta_write_failed_fallback_to_full', {
+            slug: safeSlug,
+            remoteVersion,
+            message: e?.message ?? String(e),
+          });
+        }
+      } else {
+        console.log('[installDeckFromUrl] chunked_fallback_to_full', {
+          slug: safeSlug,
+          remoteVersion,
+          reason: chunkRes.reason,
+        });
+      }
+    }
+
     // ====== Full download (with unique tmp) ======
     const tmpPath = makeTmpPath(dir, safeSlug, remoteVersion, 'full');
 
@@ -728,6 +792,20 @@ export async function installDeckFromUrl(
       }
 
       const rawText = await FileSystem.readAsStringAsync(tmpPath, { encoding: UTF8_ENCODING });
+
+      // ✅ v3 whole-file integrity check (null/empty = old manifest, skip)
+      if (typeof remoteSha256 === 'string' && remoteSha256.trim().length > 0) {
+        const expected = remoteSha256.trim().toLowerCase();
+        const got = String(
+          await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, rawText),
+        ).toLowerCase();
+
+        if (got !== expected) {
+          await cleanupTmp();
+          return fail('sha256_mismatch', { expected, got });
+        }
+      }
+
       const parsed = JSON.parse(rawText);
 
       let resolvedBuildId: string | null = null;
@@ -898,7 +976,19 @@ async function tryPatchUpdate(args: {
 
       if (!resp.ok) return { ok: false, hops: 0 };
 
-      const delta = (await resp.json()) as DeckDelta;
+      const deltaText = await resp.text();
+
+      // ✅ v3 patch integrity check on the raw response text (absent = skip)
+      if (typeof edge.sha256 === 'string' && edge.sha256.trim().length > 0) {
+        const expected = edge.sha256.trim().toLowerCase();
+        const got = String(
+          await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, deltaText),
+        ).toLowerCase();
+
+        if (got !== expected) return { ok: false, hops: 0 };
+      }
+
+      const delta = JSON.parse(deltaText) as DeckDelta;
       if (!isDeckDelta(delta)) return { ok: false, hops: 0 };
 
       if (String(delta.slug).trim() !== slug) return { ok: false, hops: 0 };
@@ -1297,10 +1387,46 @@ async function loadManifestCached(): Promise<RawManifest | null> {
 
 async function fetchRemoteManifest(): Promise<RawManifest | null> {
   try {
-    const resp = await fetch(MANIFEST_URL, {
-      method: 'GET',
-      headers: { 'cache-control': 'no-cache' },
-    });
+    // Conditional GET: send If-None-Match only when we hold BOTH a stored ETag
+    // and a usable cached manifest (a 304 without a cache would leave us empty).
+    let etag: string | null = null;
+    try {
+      const storedEtag = await AsyncStorage.getItem(MANIFEST_ETAG_KEY);
+      if (storedEtag && storedEtag.trim()) {
+        const cached = await loadManifestCached();
+        if (cached) etag = storedEtag.trim();
+      }
+    } catch {}
+
+    // Keep 'cache-control: no-cache' ON: CloudFront ignores client Cache-Control
+    // for its own cache decisions, but it natively answers If-None-Match with 304
+    // when the cached object's ETag matches — so the conditional GET works with
+    // the header present, and keeping it preserves today's behavior for any
+    // intermediate cache that does honor it (revalidate, don't serve stale).
+    const headers: Record<string, string> = { 'cache-control': 'no-cache' };
+    if (etag) headers['if-none-match'] = etag;
+
+    const resp = await fetch(MANIFEST_URL, { method: 'GET', headers });
+
+    if (resp.status === 304) {
+      const cached = await loadManifestCached();
+      if (cached) {
+        if ((globalThis as any).__DEV__ === true) {
+          console.log('[content] manifest_not_modified_using_cache', {
+            url: MANIFEST_URL,
+            decks: cached.decks.length,
+          });
+        }
+        return cached;
+      }
+      // Cache vanished between the pre-check and the 304 (rare race):
+      // drop the stale ETag so the next call refetches unconditionally.
+      try {
+        await AsyncStorage.removeItem(MANIFEST_ETAG_KEY);
+      } catch {}
+      return null;
+    }
+
     if (!resp.ok) {
       if ((globalThis as any).__DEV__ === true) {
         console.warn('[content] manifest_remote_http_error', {
@@ -1323,6 +1449,19 @@ async function fetchRemoteManifest(): Promise<RawManifest | null> {
     json.prefix = json.prefix.replace(/^\/+/, '').replace(/\/+$/, '');
 
     await AsyncStorage.setItem(MANIFEST_CACHE_KEY, JSON.stringify(json));
+
+    // Persist the response ETag alongside the cache (sibling key) for the next
+    // conditional GET; clear it when the server stops sending one so we never
+    // hold an ETag that no longer matches the cached manifest.
+    try {
+      const respEtag = resp.headers?.get?.('etag');
+      if (respEtag && respEtag.trim()) {
+        await AsyncStorage.setItem(MANIFEST_ETAG_KEY, respEtag.trim());
+      } else {
+        await AsyncStorage.removeItem(MANIFEST_ETAG_KEY);
+      }
+    } catch {}
+
     if ((globalThis as any).__DEV__ === true) {
       console.log('[content] manifest_remote_loaded', {
         url: MANIFEST_URL,

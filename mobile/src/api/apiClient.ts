@@ -63,7 +63,12 @@ export async function apiJson<T>(
         json?.message ||
         (typeof text === 'string' && text.trim() ? text.trim() : null) ||
         `HTTP ${resp.status} ${resp.statusText}`;
-      throw new Error(msg);
+      // Attach status/code so callers can react to specific rejections
+      // (e.g. a 400 on a stale sync cursor) — additive, message unchanged.
+      const err: any = new Error(msg);
+      err.status = resp.status;
+      err.apiErrorCode = typeof json?.error?.code === 'string' ? json.error.code : null;
+      throw err;
     }
 
     // 有些接口可能返回空 body，这里保持和之前一致：空就返回 null
