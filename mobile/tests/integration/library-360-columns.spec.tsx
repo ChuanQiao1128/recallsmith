@@ -107,7 +107,12 @@ describe('LibraryScreen responsive columns', () => {
     expect(grid.props.numColumns).toBe(2);
   });
 
-  it('clamps card questions to one line at 360pt', async () => {
+  // The one-line clamp this test was written for is gone. LibraryCardTile now
+  // gives owned questions two lines, and a missing card shows a "?" mystery
+  // placeholder instead of its question at all (both decisions are documented
+  // in LibraryCardTile.tsx). What still has to hold at 360pt is that every body
+  // text is line-bounded, so tile height cannot run away.
+  it('keeps card body text line-bounded at 360pt', async () => {
     mockWidth = 360;
 
     let tree!: renderer.ReactTestRenderer;
@@ -118,10 +123,21 @@ describe('LibraryScreen responsive columns', () => {
     });
     await flush();
 
-    const question = tree.root.find(
+    // Q1 belongs to the "new" card, which renders the placeholder instead.
+    const missingCards = tree.root.findAll(
       (node) => (node.type as any) === 'Text' && node.props.children === 'Q1',
     );
-    expect(question.props.numberOfLines).toBe(1);
+    expect(missingCards).toHaveLength(0);
+
+    const placeholder = tree.root.find(
+      (node) => (node.type as any) === 'Text' && node.props.children === '?',
+    );
+    expect(placeholder.props.numberOfLines).toBe(1);
+
+    const question = tree.root.find(
+      (node) => (node.type as any) === 'Text' && node.props.children === 'Q2',
+    );
+    expect(question.props.numberOfLines).toBe(2);
   });
 
   it('renders per-card Missing/Learning/Mastered status badges', async () => {

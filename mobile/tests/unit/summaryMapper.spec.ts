@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionSummaryVM, COPY } from '../../src/features/gacha/session/summaryMapper';
 
+// These scenarios were written against the pre-v3 reward formula (full clear
+// = +2 pulls, minimum goal = +1). rewardResolver.ts deliberately replaced it
+// with "full clear = +1, anything below full clear = 0" once the session cap
+// dropped to 5 cards, so a partial run no longer moves the wallet at all.
+// Assertions below track the current formula; the old numbers are kept in the
+// test names only where they still describe the input wallet.
 describe('summaryMapper wallet scenarios', () => {
   it('maps 0 wallet state into minimum-goal reward copy', () => {
     const summary = buildSessionSummaryVM({
@@ -13,12 +19,13 @@ describe('summaryMapper wallet scenarios', () => {
     });
 
     expect(summary.vm.reward.walletBefore).toEqual({ available: 0, reserve: 0 });
-    expect(summary.vm.reward.walletAfter).toEqual({ available: 1, reserve: 0 });
+    expect(summary.vm.reward.walletAfter).toEqual({ available: 0, reserve: 0 });
     expect(summary.vm.progress.completionLabel).toBe('You kept the streak.');
-    expect(summary.vm.reward.body).toContain('1 ready to use');
+    expect(summary.vm.reward.body).toContain('No free pulls this run');
+    expect(summary.vm.reward.body).toContain('0 ready to use');
   });
 
-  it('maps mid-wallet state (1-29) with additive pull copy', () => {
+  it('maps mid-wallet state (1-29) with no pull on a partial run', () => {
     const summary = buildSessionSummaryVM({
       deckTitle: 'C# Interview',
       sessionDone: 1,
@@ -28,12 +35,12 @@ describe('summaryMapper wallet scenarios', () => {
       wallet: { availablePulls: 12, reservePulls: 0 },
     });
 
-    expect(summary.vm.reward.walletAfter).toEqual({ available: 13, reserve: 0 });
-    expect(summary.vm.reward.body).toContain('+1 free pull added');
-    expect(summary.vm.reward.usePullsLabel).toBe('Use 13 pulls');
+    expect(summary.vm.reward.walletAfter).toEqual({ available: 12, reserve: 0 });
+    expect(summary.vm.reward.body).toContain('No free pulls this run');
+    expect(summary.vm.reward.usePullsLabel).toBe('Use 12 pulls');
   });
 
-  it('maps 29 → 30 + reserve with full-clear copy', () => {
+  it('maps 29 → 30 with full-clear copy', () => {
     const summary = buildSessionSummaryVM({
       deckTitle: 'C# Interview',
       sessionDone: 4,
@@ -44,8 +51,10 @@ describe('summaryMapper wallet scenarios', () => {
     });
 
     expect(summary.vm.progress.completionLabel).toBe("Cleared today's run.");
-    expect(summary.vm.reward.walletAfter).toEqual({ available: 30, reserve: 1 });
-    expect(summary.vm.reward.body).toContain('30 ready · 1 pending in reserve');
+    // +1 fits exactly in the remaining available room, so nothing spills into reserve.
+    expect(summary.vm.reward.walletAfter).toEqual({ available: 30, reserve: 0 });
+    expect(summary.vm.reward.body).toContain('+1 free pull added');
+    expect(summary.vm.reward.body).toContain('30 ready to use');
   });
 
   it('maps wallet-full state with reserve-pending copy', () => {

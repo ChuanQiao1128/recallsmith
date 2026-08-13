@@ -1,0 +1,44 @@
+# Both suites run the plain command a human would type after cloning, on
+# purpose. The test counts this repo claims are only worth anything if a
+# stranger can reproduce them, and an automation with no observable success
+# signal does not exist.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  mobile:
+    name: mobile (vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npx vitest run
+
+  backend:
+    name: backend (dotnet test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src_C
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      # The test project is named explicitly rather than letting `dotnet test`
+      # pick up the solution: RecallSmith.Lambda.sln does not reference
+      # Tests/RecallSmith.Lambda.IntegrationTests, so a bare `dotnet test` here
+      # restores, discovers zero test projects and exits 0. A green job that
+      # asserts nothing is worse than no job at all.
+      - run: dotnet test Tests/RecallSmith.Lambda.IntegrationTests
