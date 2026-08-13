@@ -393,7 +393,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
         now: nowAtRating,
         cardIndex: cardIndexRef.current,
       });
-      await saveDeckProgress(deck, nextState.updatedProgress);
+      // Events are facts, progress is a projection; facts must land first. A
+      // queued event can rebuild the progress on the next sync, but a saved
+      // progress with no event means the server never learns this review
+      // happened, so a kill between the two writes must not land on that side.
       try {
         const eventId = await recordReviewEvent({
           deckSlug: deck.Slug,
@@ -415,6 +418,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       } catch (e) {
         console.warn('[SessionCard] recordReviewEvent failed:', (e as any)?.message ?? e);
       }
+      await saveDeckProgress(deck, nextState.updatedProgress);
       const trial = trialRef.current;
       if (trial.isTrial && (mode === 'learn-new' || mode === 'mixed') && trial.previewCount > 0) {
         const nextLearnedCount = nextState.updatedProgress.filter(isLearned).length;

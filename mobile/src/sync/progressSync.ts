@@ -343,35 +343,65 @@ async function writeQueue(userSub: string, arr: ProgressEvent[]): Promise<void> 
   } catch {}
 }
 
+// Every queue mutation below is a read-modify-write over one AsyncStorage key,
+// and single-threaded JS does not make that safe: a race needs two awaits, not
+// two threads. The push-ack path (removeProgressEventsById, inside a sync round)
+// and the rating path (enqueueProgressEvent) routinely overlap, and whoever read
+// first writes last, silently deleting the other's event. That loss is invisible
+// locally because deck progress was already saved, so it only surfaces as a
+// missing review on another device. This promise chain is the mutex: each
+// critical section runs to completion before the next one gets to read.
+let _queueLockTail: Promise<unknown> = Promise.resolve();
+
+function withQueueLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = _queueLockTail.then(fn);
+  // The tail must never carry a rejection forward, or one failed section would
+  // reject every later one. Callers still see the real outcome through `run`.
+  _queueLockTail = run.catch(() => undefined);
+  return run;
+}
+
+// The lock deliberately does NOT span peek -> push -> remove: holding it across
+// a network call would block rating for the length of a request. Re-delivering
+// an already-pushed event is safe (eventId is the server-side idempotency key);
+// dropping a never-pushed one is not.
 async function enqueueProgressEvent(userSub: string, ev: ProgressEvent): Promise<void> {
-  const q = await readQueue(userSub);
-  q.push(ev);
+  return withQueueLock(async () => {
+    const q = await readQueue(userSub);
+    q.push(ev);
 
-  // 保护上限：最多保留 3000 条（避免极端情况下 AsyncStorage 膨胀）
-  const MAX = 3000;
-  const out = q.length > MAX ? q.slice(q.length - MAX) : q;
+    // 保护上限：最多保留 3000 条（避免极端情况下 AsyncStorage 膨胀）
+    const MAX = 3000;
+    const out = q.length > MAX ? q.slice(q.length - MAX) : q;
 
-  await writeQueue(userSub, out);
+    await writeQueue(userSub, out);
+  });
 }
 
 async function peekProgressEvents(userSub: string, limit: number): Promise<ProgressEvent[]> {
-  const q = await readQueue(userSub);
-  return q.slice(0, Math.max(0, limit));
+  return withQueueLock(async () => {
+    const q = await readQueue(userSub);
+    return q.slice(0, Math.max(0, limit));
+  });
 }
 
 async function removeProgressEventsById(userSub: string, ids: string[]): Promise<void> {
   if (!ids || ids.length === 0) return;
   const idSet = new Set(ids.map(String));
-  const q = await readQueue(userSub);
-  const out = q.filter((ev) => !idSet.has(String(ev?.eventId)));
-  if (out.length !== q.length) {
-    await writeQueue(userSub, out);
-  }
+  return withQueueLock(async () => {
+    const q = await readQueue(userSub);
+    const out = q.filter((ev) => !idSet.has(String(ev?.eventId)));
+    if (out.length !== q.length) {
+      await writeQueue(userSub, out);
+    }
+  });
 }
 
 async function progressQueueSize(userSub: string): Promise<number> {
-  const q = await readQueue(userSub);
-  return q.length;
+  return withQueueLock(async () => {
+    const q = await readQueue(userSub);
+    return q.length;
+  });
 }
 
 /**
@@ -547,6 +577,11 @@ async function onUserChanged(prevSub: string | null, nextSub: string | null): Pr
  * ----------------------------
  */
 export async function recordReviewEvent(...args: any[]): Promise<string | null> {
+  // Known limitation: reviews done while signed out are never synced. Without a
+  // token there is no userSub to partition the queue by, so we drop the event
+  // instead of queueing it, and it stays dropped after the user signs in. The
+  // fix is a pending-sub queue that gets adopted on login; not done here because
+  // adopting anonymous events into an existing account needs a merge policy.
   const accessToken = await getSyncAccessToken();
   if (!accessToken) return null;
 

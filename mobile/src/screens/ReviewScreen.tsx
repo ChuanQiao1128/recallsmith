@@ -506,8 +506,11 @@ export function ReviewScreen({ navigation, route }: Props) {
         cardIndex: cardIndexRef.current,
       });
 
-      await saveDeckProgress(deck, nextState.updatedProgress);
-
+      // Events are facts, progress is a projection; facts must land first. If we
+      // are killed between the two writes, a queued event still rebuilds the
+      // progress on the next sync, but a saved progress with no event means the
+      // server never learns this review happened. Ordering the cheap write after
+      // the durable one is the only ordering that degrades safely.
       try {
         const eventId = await recordReviewEvent({
           deckSlug: deck.Slug,
@@ -530,6 +533,8 @@ export function ReviewScreen({ navigation, route }: Props) {
       } catch (e) {
         console.warn('[Review] recordReviewEvent failed:', (e as any)?.message ?? e);
       }
+
+      await saveDeckProgress(deck, nextState.updatedProgress);
 
       {
         const t = trialRef.current;
