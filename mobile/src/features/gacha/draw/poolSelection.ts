@@ -22,7 +22,20 @@ export type SelectionOutput = {
 export function selectDrawCards(input: SelectionInput): SelectionOutput {
   const { deckCards, ownedSet, drawCount, pityState, seed } = input;
 
-  const missing = deckCards.filter((card) => !ownedSet.has(card.StableUid));
+  // Missing pool is deduplicated by StableUid, not just filtered. Nothing
+  // between the deck export and this function enforces uid uniqueness, and
+  // a duplicated uid used to let a single pull grant the same card twice:
+  // the reveal ceremony shows two copies while the owned set (keyed by uid)
+  // grows by one, so the player silently ends up a card short of the
+  // drawCount they paid for. Found by the "never grants the same card twice"
+  // property test, whose generator draws uids from a 6-value alphabet.
+  const seenUids = new Set<string>();
+  const missing: CardExport[] = [];
+  for (const card of deckCards) {
+    if (ownedSet.has(card.StableUid) || seenUids.has(card.StableUid)) continue;
+    seenUids.add(card.StableUid);
+    missing.push(card);
+  }
 
   if (missing.length === 0) {
     return { cards: [], poolExhausted: true, pityNext: pityState, pityFiredFor: null };
@@ -88,12 +101,35 @@ export function selectDrawCards(input: SelectionInput): SelectionOutput {
     remaining.splice(pickedIndex, 1);
   }
 
+  // The counter moves once per CALL, not once per card revealed, so the
+  // threshold buys wildly different things depending on how the player pulls.
+  // scripts/pity-simulation.ts (100k runs, 100-card deck of 70 COM/27 RAR/
+  // 3 LEG, threshold 10) measured the cost of a first LEG:
+  //   single-draw player: mean 9.46 cards, and never worse than 11 - the
+  //                       guarantee is what ends almost every run.
+  //   ten-draw  player:   mean 30 cards, p90 60, p99 80 - and the guarantee
+  //                       never fires at all, because reaching 10 calls costs
+  //                       110 cards and the whole deck is only 100. Its safety
+  //                       net is deck exhaustion, not pity.
+  // So the floor is not "10x worse" for ten-draw players, it is absent. Whether
+  // to count per card or per call is a product decision and is left alone here;
+  // this comment exists so the next reader inherits the number, not the guess.
   if (pityFiredFor === null) {
     const surfacedLegendary = cards.some((card) => rarityOfCard(card) === 'LEG');
     if (surfacedLegendary) {
       pityNext = { ...pityNext, draws: 0 };
     } else {
-      pityNext = { ...pityNext, draws: pityNext.draws + 1 };
+      // Cap at the threshold instead of incrementing forever. An all-commons
+      // missing pool is the end state of every collection (once the last RAR
+      // and LEG are owned, only commons are left to draw), and in that state
+      // the guarantee block above can never fire, so the counter used to grow
+      // without bound. That is not a cosmetic leak: buildPityProgressLabelV9
+      // clamps `threshold - draws` at 0, so a player sitting at draws=57
+      // reads "next draw guarantees a reveal" on every pull while nothing is
+      // ever guaranteed. Capping keeps the counter armed rather than resetting
+      // it, so the instant a RAR+ re-enters the pool (new deck version, or an
+      // owned-set reset) the very next pull pays the guarantee out.
+      pityNext = { ...pityNext, draws: Math.min(pityNext.draws + 1, pityNext.threshold) };
     }
   }
 

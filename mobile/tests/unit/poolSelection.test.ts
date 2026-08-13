@@ -126,7 +126,10 @@ describe('poolSelection', () => {
 
     expect(result.pityFiredFor).toBeNull();
     expect(result.cards[0].Difficulty).toBe(1);
-    expect(result.pityNext.draws).toBe(11);
+    // Held at the threshold, not incremented to 11: an all-commons pool can
+    // never fire pity, so an uncapped counter would climb forever while the
+    // progress label kept promising a guarantee that never arrives.
+    expect(result.pityNext.draws).toBe(10);
   });
 
   it('is deterministic for the same seed', () => {

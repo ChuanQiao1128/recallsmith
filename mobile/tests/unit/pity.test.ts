@@ -26,7 +26,7 @@ describe('pity helpers', () => {
   });
 
   it('formats pity progress labels', () => {
-    expect(buildPityProgressLabel(8)).toBe('8/10 until guaranteed RAR+');
+    expect(buildPityProgressLabel(8)).toBe('8/10 draws until guaranteed RAR+');
   });
 
   it('injects a RAR+ card when pity is about to trigger', () => {
