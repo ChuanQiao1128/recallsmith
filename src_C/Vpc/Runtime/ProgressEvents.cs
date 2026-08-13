@@ -99,6 +99,16 @@ public static class ProgressEvents
 
         if (eventTimeMs <= 0) throw new ValidationError($"events[{i}].eventTimeMs invalid", $"events[{i}].eventTimeMs");
 
+        // Upper bound on a client-supplied clock. greatest() is monotonic and
+        // has no undo path; a device with a 2030 clock would permanently poison
+        // this user's merge -- last_reviewed_at would sit in the future forever,
+        // and every later real review would lose the LWW comparison against it.
+        // 5 minutes of slack absorbs honest clock skew; anything beyond that is
+        // clamped rather than rejected, because the review itself did happen and
+        // dropping the event would cost the user real work.
+        var eventTimeUpperBoundMs = nowMs + 5 * 60 * 1000;
+        if (eventTimeMs > eventTimeUpperBoundMs) eventTimeMs = eventTimeUpperBoundMs;
+
         // Phase3: nextReviewAtMs (also supports progressAfter.nextReviewAt)
         long? nextReviewAtMs =
           OptionalMs(e.TryGetProperty("nextReviewAtMs", out var nrm) ? nrm : (JsonElement?)null) ??

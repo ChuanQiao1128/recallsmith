@@ -790,8 +790,13 @@ function getDeckUidSet(deck: any): Set<string> {
 
 /**
  * Merge remote progress items into local CardProgress[].
+ *
+ * Exported only so the multi-device simulator
+ * (tests/unit/multiDeviceSync.sim.test.ts) can drive the real merge instead of
+ * a copy of it. A re-implementation in the test would assert that the copy
+ * converges, which is exactly the claim nobody needs.
  */
-function mergeRemoteIntoLocalProgress(
+export function mergeRemoteIntoLocalProgress(
   local: CardProgress[],
   remoteRows: ProgressItem[],
 ): { merged: CardProgress[]; changed: boolean; appliedCount: number } {
@@ -804,6 +809,16 @@ function mergeRemoteIntoLocalProgress(
     nextReviewAt: number;
     row: ProgressItem;
   };
+
+  /** Total order on remote snapshots of one card. See the tie note below. */
+  function compareRemoteBest(a: RemoteBest, b: RemoteBest): number {
+    if (a.updatedAt !== b.updatedAt) return a.updatedAt - b.updatedAt;
+    if (a.lastReviewedAt !== b.lastReviewedAt) return a.lastReviewedAt - b.lastReviewedAt;
+    if (a.nextReviewAt !== b.nextReviewAt) return a.nextReviewAt - b.nextReviewAt;
+    const au = String(a.row?.stableUid ?? '');
+    const bu = String(b.row?.stableUid ?? '');
+    return au < bu ? -1 : au > bu ? 1 : 0;
+  }
 
   const bestRemote = new Map<string, RemoteBest>();
 
@@ -820,8 +835,28 @@ function mergeRemoteIntoLocalProgress(
     const nextReviewAt = hasNext ? (serverNext as number) : lastReviewedAt;
 
     const prev = bestRemote.get(uid);
-    if (!prev || updatedAt > prev.updatedAt) {
-      bestRemote.set(uid, { lastReviewedAt, updatedAt, hasNext, nextReviewAt, row: r });
+    const candidate: RemoteBest = { lastReviewedAt, updatedAt, hasNext, nextReviewAt, row: r };
+
+    // remoteRows is a BAG, not a sequence: pages of one drain, a replay of the
+    // remote cache, a retried request. A strict `updatedAt > prev.updatedAt`
+    // means "the first row seen wins the tie", so the answer depended on array
+    // order and the merge was not commutative.
+    //
+    // Counterexample, from tests/unit/multiDeviceSync.sim.test.ts:
+    //   rows = [ {uid, updatedAt: T, lastReviewedAt: T-300},
+    //            {uid, updatedAt: T, lastReviewedAt: T} ]
+    //   merge(local, rows) kept T-300, merge(local, reversed) kept T.
+    // updatedAt ties are not exotic: the server stamps updated_at from a single
+    // now() per transaction and toMs() floors it to milliseconds, the same
+    // ms-granularity collision the keyset cursor already had to fix at
+    // microsecond precision.
+    //
+    // So compare a tuple that totally orders the rows instead. stableUid is the
+    // documented last component and is included for completeness, but it is
+    // constant inside a group (it is the map key), which is why the timestamps
+    // have to carry the tiebreak.
+    if (!prev || compareRemoteBest(candidate, prev) > 0) {
+      bestRemote.set(uid, candidate);
     }
   }
 

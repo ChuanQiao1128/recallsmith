@@ -96,12 +96,23 @@ public static class OutboxPublisher
 
   private static async Task<List<Dictionary<string, object?>>> ClaimPending(NpgsqlConnection conn, int limit)
   {
+    // The 'processing' reclaim clause is the whole point of the second
+    // predicate. A row is flipped to 'processing' before the S3 put; if the
+    // lambda is killed between the two (timeout, OOM, deploy), nothing ever
+    // flips it back and the row is a black hole -- claimed forever, published
+    // never, invisible to any retry. Worker/Repositories/JobRepository.cs:24
+    // already solves the identical problem with the identical 15-minute reclaim
+    // window; the same person made two different decisions in two places, and
+    // this is the one that was wrong.
     const string sql = """
       with claimed as (
         select id
         from analytics_event_outbox
-        where status = 'pending'
-          and available_at <= now()
+        where available_at <= now()
+          and (
+            status = 'pending'
+            or (status = 'processing' and updated_at < now() - interval '15 minutes')
+          )
         order by id
         limit $1::int
         for update skip locked
