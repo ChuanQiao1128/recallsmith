@@ -198,16 +198,26 @@ export async function applySessionRewardToWallet(sessionId: string, rewardPulls:
     availablePulls: applied.availablePulls,
     reservePulls: applied.reservePulls,
   };
-  await Promise.all([
-    saveRewardWalletState(walletAfter),
-    AsyncStorage.setItem(
-      dedupeKey,
-      JSON.stringify({
-        rewardPulls,
-        walletBefore: wallet,
-      }),
-    ),
-  ]);
+  // Order matters, and it is the whole idempotency guarantee. These two
+  // writes used to go out together in one Promise.all, which means the
+  // mechanism meant to make the grant exactly-once was itself not
+  // ordered: a kill could land the wallet write and lose the dedupe key,
+  // and the next settle of the same session would pay out again.
+  //
+  // The dedupe record now lands first, and the wallet second. Between
+  // two writes with no transaction there are only two failure
+  // directions, and refusing to pick one is how you get the bad one by
+  // default. We pick under-granting: a crash between the two writes
+  // loses one reward instead of double-granting; rewards can be
+  // re-granted by support, trust cannot.
+  await AsyncStorage.setItem(
+    dedupeKey,
+    JSON.stringify({
+      rewardPulls,
+      walletBefore: wallet,
+    }),
+  );
+  await saveRewardWalletState(walletAfter);
 
   return {
     walletBefore: wallet,

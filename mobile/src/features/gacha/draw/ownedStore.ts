@@ -1,33 +1,28 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { loadDrawState, saveDrawState } from './drawStateStore';
 
-const OWNED_PREFIX = 'devcards:draw-owned:';
-
-async function ownedKey(slug: string): Promise<string> {
-  return `${OWNED_PREFIX}${slug}`;
-}
+// The owned set no longer owns a key of its own. It is one half of the
+// per-deck draw state (see drawStateStore.ts) so that a draw can commit
+// owned + pity in a single write. These helpers stay for callers that
+// legitimately touch only one half outside of a draw; they read-modify-
+// write the whole record so they can never drop the other half.
 
 export async function loadOwnedSet(slug: string): Promise<Set<string>> {
-  try {
-    const raw = await AsyncStorage.getItem(await ownedKey(slug));
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set();
-    return new Set(parsed.filter((item): item is string => typeof item === 'string'));
-  } catch {
-    return new Set();
-  }
+  const state = await loadDrawState(slug);
+  return new Set(state.owned);
 }
 
 export async function saveOwnedSet(slug: string, set: Set<string>): Promise<void> {
-  await AsyncStorage.setItem(await ownedKey(slug), JSON.stringify([...set]));
+  const state = await loadDrawState(slug);
+  await saveDrawState(slug, { owned: [...set], pity: state.pity });
 }
 
 export async function markCardsOwned(slug: string, stableUids: string[]): Promise<Set<string>> {
-  const current = await loadOwnedSet(slug);
+  const state = await loadDrawState(slug);
+  const current = new Set(state.owned);
   for (const stableUid of stableUids) {
     current.add(stableUid);
   }
-  await saveOwnedSet(slug, current);
+  await saveDrawState(slug, { owned: [...current], pity: state.pity });
   return current;
 }
 
@@ -37,5 +32,9 @@ export async function isCardOwned(slug: string, stableUid: string): Promise<bool
 }
 
 export async function clearOwnedSet(slug: string): Promise<void> {
-  await AsyncStorage.removeItem(await ownedKey(slug));
+  // Clears the collection only. Removing the whole record would also
+  // wipe pity, which is a different piece of progress and not what the
+  // caller asked for.
+  const state = await loadDrawState(slug);
+  await saveDrawState(slug, { owned: [], pity: state.pity });
 }

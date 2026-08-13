@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { loadDrawState, saveDrawState } from './drawStateStore';
 
 export type MockDrawCard = {
   stableUid: string;
@@ -31,17 +31,19 @@ export type PityState = {
 
 export const DEFAULT_PITY_STATE: PityState = { draws: 0, threshold: 10 };
 
-const PITY_PREFIX = 'devcards:draw-pity:';
-
 export function pickRarity(roll: number, odds: PoolOdds): 'COM' | 'RAR' | 'LEG' {
   if (roll < odds.leg) return 'LEG';
   if (roll < odds.leg + odds.rar) return 'RAR';
   return 'COM';
 }
 
+// "8/10 until guaranteed RAR+" read as 8 of 10 cards, which is not what the
+// counter measures: poolSelection advances it once per draw action, so a
+// ten-card pull moves it by 1. Saying "draws" keeps the unit honest without
+// touching the mechanic (see the simulation numbers in poolSelection.ts).
 export function buildPityProgressLabel(count: number): string {
   const safe = Math.max(0, Math.min(9, Math.floor(count)));
-  return `${safe}/10 until guaranteed RAR+`;
+  return `${safe}/10 draws until guaranteed RAR+`;
 }
 
 export function buildMockDrawResult(params: {
@@ -93,24 +95,31 @@ export function buildPityProgressLabelV9(state: PityState, missingLegCount: numb
   return `${remaining} draws until guaranteed reveal`;
 }
 
+/**
+ * Normalises a persisted pity record. Kept separate from storage so the
+ * merged-key loader can stay ignorant of gameplay defaults: the store
+ * reports what was written, this decides what a missing threshold means.
+ */
+export function normalizePityState(stored: PityState | null): PityState {
+  if (!stored) return { ...DEFAULT_PITY_STATE };
+  return {
+    draws: Math.max(0, Math.floor(stored.draws)),
+    threshold: stored.threshold > 0 ? stored.threshold : DEFAULT_PITY_STATE.threshold,
+  };
+}
+
 export async function loadPityState(slug: string): Promise<PityState> {
   try {
-    const raw = await AsyncStorage.getItem(`${PITY_PREFIX}${slug}`);
-    if (!raw) return { ...DEFAULT_PITY_STATE };
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed.draws !== 'number') return { ...DEFAULT_PITY_STATE };
-    return {
-      draws: Math.max(0, Math.floor(parsed.draws)),
-      threshold:
-        typeof parsed.threshold === 'number' && parsed.threshold > 0
-          ? parsed.threshold
-          : DEFAULT_PITY_STATE.threshold,
-    };
+    const state = await loadDrawState(slug);
+    return normalizePityState(state.pity);
   } catch {
     return { ...DEFAULT_PITY_STATE };
   }
 }
 
 export async function savePityState(slug: string, state: PityState): Promise<void> {
-  await AsyncStorage.setItem(`${PITY_PREFIX}${slug}`, JSON.stringify(state));
+  // Read-modify-write of the merged record: pity shares its key with the
+  // owned set now, so writing pity alone would erase the collection.
+  const current = await loadDrawState(slug);
+  await saveDrawState(slug, { owned: current.owned, pity: state });
 }
