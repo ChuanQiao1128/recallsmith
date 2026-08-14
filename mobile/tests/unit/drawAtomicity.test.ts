@@ -23,6 +23,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 const SLUG = 'csharp';
+const SCOPE = 'devcards:u:anon:';
 
 const deckCards = Array.from({ length: 12 }, (_, index) => ({
   StableUid: `c${index + 1}`,
@@ -49,6 +50,10 @@ vi.mock('../../src/content/deckRepository', () => ({
 
 vi.mock('../../src/review/storage', () => ({
   loadDeckProgress: vi.fn(async () => []),
+  // Draw state is user-scoped through this helper now. The mock returns
+  // the same shape the real helper produces while signed out, so the key
+  // constants below stay literal and readable.
+  getUserScopedKey: vi.fn(async (baseKey: string) => `${SCOPE}${baseKey}`),
 }));
 
 import { commitDraw, replayDraw } from '../../src/features/gacha/draw/drawCommit';
@@ -56,8 +61,10 @@ import { loadDrawHistory } from '../../src/features/gacha/draw/drawStateStore';
 import { loadOwnedSet } from '../../src/features/gacha/draw/ownedStore';
 import { loadPityState } from '../../src/features/gacha/draw/pity';
 
-const STATE_KEY = `devcards:draw-state:${SLUG}`;
-const HISTORY_KEY = `devcards:draw-history:${SLUG}`;
+const STATE_KEY = `${SCOPE}devcards:draw-state:${SLUG}`;
+const HISTORY_KEY = `${SCOPE}devcards:draw-history:${SLUG}`;
+// Unscoped on purpose: these are what pre-partition builds wrote, and
+// the migration path is the only thing that still reads them.
 const LEGACY_OWNED_KEY = `devcards:draw-owned:${SLUG}`;
 const LEGACY_PITY_KEY = `devcards:draw-pity:${SLUG}`;
 

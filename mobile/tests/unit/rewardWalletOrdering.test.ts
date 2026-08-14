@@ -31,8 +31,10 @@ import {
   loadRewardWalletState,
 } from '../../src/features/gacha/rewards/rewardWallet';
 
-const WALLET_KEY = 'recallsmith:reward-wallet:v1';
-const DEDUPE_KEY = 'recallsmith:reward-session:session-42';
+// Both keys are user-scoped now. Nobody is signed in here, so the real
+// scope helper resolves to the "anon" partition.
+const WALLET_KEY = 'devcards:u:anon:recallsmith:reward-wallet:v1';
+const DEDUPE_KEY = 'devcards:u:anon:recallsmith:reward-session:session-42';
 
 describe('session reward idempotency ordering', () => {
   beforeEach(() => {

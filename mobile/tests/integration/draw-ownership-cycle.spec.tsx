@@ -36,6 +36,9 @@ vi.mock('../../src/content/deckRepository', () => ({
 
 vi.mock('../../src/review/storage', () => ({
   loadDeckProgress: vi.fn(async () => []),
+  // Draw state keys are user-scoped through this helper; the mock keeps
+  // the signed-out shape the real helper produces.
+  getUserScopedKey: vi.fn(async (baseKey: string) => `devcards:u:anon:${baseKey}`),
 }));
 
 import { commitDraw } from '../../src/features/gacha/draw/drawCommit';

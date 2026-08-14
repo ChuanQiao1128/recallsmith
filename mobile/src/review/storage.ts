@@ -67,6 +67,20 @@ async function getUserScopePrefix(): Promise<string> {
 }
 
 /**
+ * Builds a storage key inside the current user's partition.
+ *
+ * Exported so subsystems outside review (gacha draw state, reward
+ * wallet) partition against the exact same notion of "who is signed in"
+ * instead of deriving their own. One definition is what makes
+ * setActiveUserSubForStorage() able to switch the whole app's storage
+ * scope in one call: a second copy of this rule would keep serving the
+ * previous account's data for the length of its own cache.
+ */
+export async function getUserScopedKey(baseKey: string): Promise<string> {
+  return `${await getUserScopePrefix()}${baseKey}`;
+}
+
+/**
  * ---- Key builders (user-scoped) ----
  */
 async function progressKey(slug: string): Promise<string> {

@@ -178,7 +178,9 @@ describe('SessionSummaryScreen', () => {
       await Promise.resolve();
     });
 
-    const walletRaw = store.get('recallsmith:reward-wallet:v1');
+    // Wallet keys are user-scoped; no user is signed in under test, so
+    // the scope resolves to "anon".
+    const walletRaw = store.get('devcards:u:anon:recallsmith:reward-wallet:v1');
     expect(walletRaw).toBeTruthy();
     // v3: full clear → +1 pull persisted to wallet (was +2).
     expect(JSON.parse(walletRaw!)).toEqual({ availablePulls: 1, reservePulls: 0 });
