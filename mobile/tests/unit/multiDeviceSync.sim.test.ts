@@ -471,6 +471,50 @@ describe('multi-device sync simulation', () => {
     expect(stageOf(d1)).toBe(server.rows.get('uid-a')!.srsStage);
   });
 
+  it('demotion converges: device A fails a card and device B pulls the LOWER stage', () => {
+    // Until the scheduler grew negative feedback, stage only ever went up, so
+    // "merge by greatest" and "merge by last write" agreed on every possible
+    // input and the choice between them was untestable. A demotion is the first
+    // input that separates them, and it separates them in the direction that
+    // matters: greatest() would hand device B back the rung the user just
+    // failed out of, from a snapshot B took before the failure, and the card
+    // would go back to sleep for weeks. This is why srs_stage merges by LWW,
+    // not greatest.
+    const server = new FakeServer();
+    const a = new FakeDevice('dA');
+    const b = new FakeDevice('dB');
+
+    // Both devices climb to rung 4 on the same events, so B holds a high stage
+    // locally when the demotion arrives.
+    a.review('uid-a', 'good', T0 + 1_000);
+    a.review('uid-a', 'good', T0 + 2_000);
+    a.review('uid-a', 'good', T0 + 3_000);
+    a.review('uid-a', 'good', T0 + 4_000);
+    a.push(server, T0 + 5_000);
+    b.pull(server);
+
+    const stageOf = (dev: FakeDevice) => dev.local.find((p) => p.stableUid === 'uid-a')!.stage;
+    expect(stageOf(a)).toBe(4);
+    expect(stageOf(b)).toBe(4);
+
+    // A fails the card: two rungs down, and due in 10 minutes.
+    a.review('uid-a', 'again', T0 + 6_000);
+    expect(stageOf(a)).toBe(2);
+    a.push(server, T0 + 7_000);
+
+    expect(server.rows.get('uid-a')!.srsStage).toBe(2);
+    // greatest() on the same column would still read 4 here; the LWW group
+    // takes the rung from the same review as the due date next to it.
+    expect(server.rows.get('uid-a')!.dueAtMs).toBe(T0 + 6_000 + 10 * 60 * 1000);
+
+    b.pull(server);
+    expect(stageOf(b)).toBe(2);
+    expect(b.local.find((p) => p.stableUid === 'uid-a')!.nextReviewAt).toBe(
+      T0 + 6_000 + 10 * 60 * 1000,
+    );
+    expect(stageOf(b)).toBe(stageOf(a));
+  });
+
   it('legacy rows: a remote row without srsStage leaves the local stage alone', () => {
     // Rows merged before migration 013 come back with srsStage null. Writing a
     // 0 for them would silently drop every affected card to the bottom of the

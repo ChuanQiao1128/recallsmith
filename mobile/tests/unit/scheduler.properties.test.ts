@@ -63,7 +63,11 @@ describe('scheduler properties', () => {
     );
   });
 
-  it('monotonicity: good never lowers the stage, and easy is never below good', () => {
+  // Monotonicity is deliberately scoped to good/easy. It used to read as a
+  // property of the scheduler as a whole because nothing could ever lower a
+  // stage; now that again/hard demote, "the stage never goes down" is false by
+  // design and only the success ratings still climb.
+  it('monotonicity (good/easy only): good never lowers the stage, and easy is never below good', () => {
     fc.assert(
       fc.property(dirtyStageArb, nowMsArb, (stage, nowMs) => {
         const p = progressAt(stage, nowMs);
@@ -79,12 +83,86 @@ describe('scheduler properties', () => {
     );
   });
 
-  it('again semantics: exactly +10min and the stage is left untouched', () => {
+  // REWRITTEN, on purpose. The previous property asserted the ratchet: "again
+  // schedules +10min and leaves the stage untouched". That was the defect
+  // transcribed as a specification, and it passed for as long as it existed. A
+  // test proves the code matches itself, not that it matches the need -- and
+  // the need is that a card the user just failed comes back sooner, not on the
+  // 42-day interval it had earned before failing.
+  it('again semantics: +10min, the stage drops two rungs (floored at 0), and a lapse is counted', () => {
+    fc.assert(
+      fc.property(dirtyStageArb, nowMsArb, (stage, nowMs) => {
+        const before = progressAt(stage, nowMs);
+        const next = scheduleNextReview(before, 'again', new Date(nowMs));
+
+        expect(next.nextReviewAt).toBe(nowMs + 10 * 60 * 1000);
+        expect(next.stage).toBe(Math.max(0, clampStage(stage) - 2));
+        expect(next.lapses).toBe((before.lapses ?? 0) + 1);
+        expect(next.hardStreak).toBe(0);
+      }),
+    );
+  });
+
+  it('again never raises the stage, and saturates at 0 rather than going negative', () => {
     fc.assert(
       fc.property(dirtyStageArb, nowMsArb, (stage, nowMs) => {
         const next = scheduleNextReview(progressAt(stage, nowMs), 'again', new Date(nowMs));
-        expect(next.nextReviewAt).toBe(nowMs + 10 * 60 * 1000);
-        expect(next.stage).toBe(clampStage(stage));
+        expect(next.stage).toBeLessThanOrEqual(clampStage(stage));
+        expect(next.stage).toBeGreaterThanOrEqual(0);
+      }),
+    );
+  });
+
+  // The hard streak is the reason #0 (the AsyncStorage whitelist) had to land
+  // first: a counter that does not survive a reload can never reach 3, so this
+  // property would hold in memory and be dead in the app.
+  it('hard streak: two hards hold the stage, the third demotes one rung and resets the streak', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: MAX_STAGE }), nowMsArb, (stage, nowMs) => {
+        const p0 = progressAt(stage, nowMs);
+
+        const h1 = scheduleNextReview(p0, 'hard', new Date(nowMs));
+        expect(h1.stage).toBe(stage);
+        expect(h1.hardStreak).toBe(1);
+
+        const h2 = scheduleNextReview(h1, 'hard', new Date(nowMs + 1));
+        expect(h2.stage).toBe(stage);
+        expect(h2.hardStreak).toBe(2);
+
+        const h3 = scheduleNextReview(h2, 'hard', new Date(nowMs + 2));
+        expect(h3.stage).toBe(Math.max(0, stage - 1));
+        expect(h3.hardStreak).toBe(0);
+
+        // A fourth hard starts a fresh run: the drop is one rung per three
+        // answers, not a cliff.
+        const h4 = scheduleNextReview(h3, 'hard', new Date(nowMs + 3));
+        expect(h4.stage).toBe(h3.stage);
+        expect(h4.hardStreak).toBe(1);
+      }),
+    );
+  });
+
+  it('any non-hard answer clears the hard streak', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: MAX_STAGE }),
+        fc.constantFrom<ReviewRating>('again', 'good', 'easy'),
+        nowMsArb,
+        (stage, rating, nowMs) => {
+          const primed = { ...progressAt(stage, nowMs), hardStreak: 2 };
+          const next = scheduleNextReview(primed, rating, new Date(nowMs));
+          expect(next.hardStreak).toBe(0);
+        },
+      ),
+    );
+  });
+
+  it('lapses only ever grow, and only on again', () => {
+    fc.assert(
+      fc.property(dirtyStageArb, ratingArb, nowMsArb, (stage, rating, nowMs) => {
+        const before = { ...progressAt(stage, nowMs), lapses: 4 };
+        const next = scheduleNextReview(before, rating, new Date(nowMs));
+        expect(next.lapses).toBe(rating === 'again' ? 5 : 4);
       }),
     );
   });
@@ -119,15 +197,17 @@ describe('scheduler properties', () => {
   it('known lossy cases: hard and again cannot be round-tripped', () => {
     const nowMs = 1_700_000_000_000;
 
-    // hard at stage 4 schedules round(15 * 0.7) = 11 days, which is not a bucket
+    // hard at stage 4 (first of the streak, so no demotion yet) schedules
+    // round(15 * 0.7) = 11 days, which is not a bucket
     const hard = scheduleNextReview(progressAt(4, nowMs), 'hard', new Date(nowMs));
     expect(hard.stage).toBe(4);
     expect(hard.nextReviewAt - nowMs).toBe(11 * DAY_MS);
     expect(inferStageFromIntervalMs(hard.nextReviewAt - nowMs)).toBe(3);
 
-    // again keeps the stage but schedules 10 minutes, which reads as stage 0
+    // again drops two rungs and schedules 10 minutes, which reads as stage 0:
+    // the interval no longer says anything about the rung it landed on
     const again = scheduleNextReview(progressAt(5, nowMs), 'again', new Date(nowMs));
-    expect(again.stage).toBe(5);
+    expect(again.stage).toBe(3);
     expect(inferStageFromIntervalMs(again.nextReviewAt - nowMs)).toBe(0);
   });
 });
