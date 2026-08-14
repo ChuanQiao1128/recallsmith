@@ -358,6 +358,26 @@ function kQueue(userSub: string) {
   return `${userPrefix(userSub)}sync:progressQueue:v1`;
 }
 
+/**
+ * The queue partition used while nobody is signed in.
+ *
+ * A review done signed out is still a fact, and facts are not allowed to depend
+ * on whether an account happened to be attached at the time. There is no real
+ * userSub to namespace the queue with, so the events go to a reserved one and
+ * get adopted by the next account that signs in on this device (see
+ * adoptPendingProgressEvents). The name is deliberately not a legal Cognito sub,
+ * so it can never collide with a real user's partition.
+ */
+const PENDING_SUB = '__pending__';
+
+/**
+ * Queue cap, shared by the rating path and the adoption path.
+ *
+ * Both append to a queue, so both need the same ceiling: adopting an unbounded
+ * pending queue into a user queue would otherwise be the one way past it.
+ */
+const MAX_QUEUE_EVENTS = 3000;
+
 async function readQueue(userSub: string): Promise<ProgressEvent[]> {
   try {
     const raw = await AsyncStorage.getItem(kQueue(userSub));
@@ -404,11 +424,75 @@ async function enqueueProgressEvent(userSub: string, ev: ProgressEvent): Promise
     q.push(ev);
 
     // 保护上限：最多保留 3000 条（避免极端情况下 AsyncStorage 膨胀）
-    const MAX = 3000;
-    const out = q.length > MAX ? q.slice(q.length - MAX) : q;
+    const out = q.length > MAX_QUEUE_EVENTS ? q.slice(q.length - MAX_QUEUE_EVENTS) : q;
 
     await writeQueue(userSub, out);
   });
+}
+
+/**
+ * Move every signed-out event into the queue of the account that just signed in.
+ *
+ * Merge policy (this is the decision the old known-limitation comment was
+ * waiting on): the next account to sign in on this device adopts ALL pending
+ * events. Rationale: on a personal device, the person who reviewed before
+ * signing in and the person who then signs in are the same person. The shared
+ * device case can mis-attribute reviews, and that risk is accepted and recorded
+ * here: events are UUID-keyed idempotent facts, so a mis-adoption cannot break
+ * a server invariant, it only files those reviews under the adopter.
+ *
+ * Local progress from the anonymous period is NOT migrated: only the events
+ * move. The adopter's projection realigns through push, server merge and pull,
+ * which is this system's whole thesis in one code path, facts come first and the
+ * projection is rebuildable from them.
+ *
+ * Crash safety: copy first, clear second, never the other way around. A crash
+ * between the two leaves duplicates, not losses, and duplicates are absorbed
+ * twice over: this function skips eventIds already in the user queue, and the
+ * server keys events by event_id (already-pushed ones come back in
+ * duplicateEventIds). The reverse order would trade a recoverable duplicate for
+ * an unrecoverable loss.
+ */
+async function adoptPendingProgressEvents(userSub: string): Promise<number> {
+  if (!userSub || userSub === PENDING_SUB) return 0;
+
+  const adopted = await withQueueLock(async () => {
+    const pending = await readQueue(PENDING_SUB);
+    if (pending.length === 0) return 0;
+
+    const own = await readQueue(userSub);
+    const seen = new Set(own.map((ev) => String(ev?.eventId ?? '')));
+
+    // Append rather than interleave: order inside each partition is preserved,
+    // and the server orders by reviewedAtMs anyway, so queue order only decides
+    // push batching.
+    const merged = own.slice();
+    let added = 0;
+
+    for (const ev of pending) {
+      const id = String(ev?.eventId ?? '');
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(ev);
+      added += 1;
+    }
+
+    const out =
+      merged.length > MAX_QUEUE_EVENTS ? merged.slice(merged.length - MAX_QUEUE_EVENTS) : merged;
+
+    await writeQueue(userSub, out);
+    await writeQueue(PENDING_SUB, []);
+
+    return added;
+  });
+
+  if (adopted > 0) {
+    // The adopted events are only durable locally so far, so ask for a push now
+    // instead of waiting for the next focus event.
+    scheduleProgressSync({ delayMs: 0, reason: 'pending_adopted' });
+  }
+
+  return adopted;
 }
 
 async function peekProgressEvents(userSub: string, limit: number): Promise<ProgressEvent[]> {
@@ -496,6 +580,13 @@ export async function setActiveUserSub(userSub: string | null): Promise<void> {
 
     // ✅ 关键：同步刷新 review/storage.ts 的内存缓存（绕过 TTL）
     setActiveUserSubForStorage(next);
+
+    // Not a no-op branch any more: re-signing in as the sub already stored from
+    // a previous session lands here (the token expired, reviews went pending,
+    // the user signed back in as themselves), which is precisely when there is
+    // something to adopt. Adoption is idempotent, so running it on every
+    // same-sub call is cheap and cannot double-count.
+    if (next) await adoptPendingProgressEvents(next);
     return;
   }
 
@@ -602,6 +693,9 @@ async function onUserChanged(prevSub: string | null, nextSub: string | null): Pr
   if (ENABLE_WIPE_ON_USER_CHANGE) {
     await wipeLocalStudyStateBestEffort();
   }
+
+  // Sign-in / account switch: the arriving account takes the signed-out events.
+  if (nextSub) await adoptPendingProgressEvents(nextSub);
 }
 
 /**
@@ -610,16 +704,15 @@ async function onUserChanged(prevSub: string | null, nextSub: string | null): Pr
  * ----------------------------
  */
 export async function recordReviewEvent(...args: any[]): Promise<string | null> {
-  // Known limitation: reviews done while signed out are never synced. Without a
-  // token there is no userSub to partition the queue by, so we drop the event
-  // instead of queueing it, and it stays dropped after the user signs in. The
-  // fix is a pending-sub queue that gets adopted on login; not done here because
-  // adopting anonymous events into an existing account needs a merge policy.
+  // No token (signed out), or a token we cannot read a sub out of: the event is
+  // still produced, it just goes to the PENDING_SUB partition instead of a
+  // user's. It rides the same withQueueLock serializer and the same cap, because
+  // the lock is one global chain rather than one per sub, so pending and user
+  // queues can never be mid-write at the same time. Adoption on sign-in
+  // (adoptPendingProgressEvents) is what eventually gets these to the server.
   const accessToken = await getSyncAccessToken();
-  if (!accessToken) return null;
-
-  const userSub = await ensureUserSubReady(accessToken);
-  if (!userSub) return null;
+  const resolvedSub = accessToken ? await ensureUserSubReady(accessToken) : null;
+  const queueSub = resolvedSub ?? PENDING_SUB;
 
   let deckSlug: string | null = null;
   let stableUid: string | null = null;
