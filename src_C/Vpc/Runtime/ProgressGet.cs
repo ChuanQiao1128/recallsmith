@@ -50,6 +50,11 @@ public static class ProgressGet
         (extract(epoch from last_reviewed_at) * 1000)::bigint as "lastReviewedAtMs",
         (extract(epoch from due_at) * 1000)::bigint as "nextReviewAtMs",
         last_seen_revision as "lastSeenRevision",
+        -- Nullable by design: null marks a row merged before the server stored
+        -- stage, and the client falls back to inferring it from the interval
+        -- for exactly those rows. Sending 0 instead would be a lie a client
+        -- cannot detect (0 is a real rung).
+        srs_stage as "srsStage",
         (extract(epoch from updated_at) * 1000)::bigint as "updatedAtMs",
         floor(extract(epoch from updated_at) * 1000000)::bigint as "__cursorUs"
       from user_progress

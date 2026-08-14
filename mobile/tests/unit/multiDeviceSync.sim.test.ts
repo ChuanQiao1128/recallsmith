@@ -9,8 +9,8 @@
 // This file is pure memory: no AsyncStorage, no HTTP, no timers. FakeServer is
 // a TS transcription of the 6-CTE ingest SQL in
 // src_C/Vpc/Runtime/ProgressEvents.cs:245-396 (event_id dedupe, additive
-// review_count, greatest() on the monotonic columns, event-time LWW on
-// last_rating/due_at). The devices call the REAL scheduleNextReview and the
+// review_count, greatest() on the monotonic columns, event-time LWW on the
+// last_rating/due_at/srs_stage group). The devices call the REAL scheduleNextReview and the
 // REAL mergeRemoteIntoLocalProgress, so a client-side order dependency shows up
 // here as a failing assertion rather than as a support ticket.
 //
@@ -69,6 +69,9 @@ type SyncEvent = {
   rating: ReviewRating;
   eventTimeMs: number;
   nextReviewAtMs: number;
+  // The server reads this out of progressAfter.stage. null models a client
+  // (or a stored row) from before migration 013.
+  srsStage: number | null;
 };
 
 type ServerRow = {
@@ -78,6 +81,7 @@ type ServerRow = {
   lastRating: number;
   lastReviewedAtMs: number;
   dueAtMs: number;
+  srsStage: number | null;
   updatedAtMs: number;
 };
 
@@ -139,6 +143,7 @@ class FakeServer {
         lastRating: RATING_VALUE[last.rating],
         lastReviewedAtMs: last.eventTimeMs,
         dueAtMs: last.nextReviewAtMs,
+        srsStage: last.srsStage,
         updatedAtMs: nowMs,
       };
 
@@ -150,7 +155,9 @@ class FakeServer {
 
       // `upsert ... do update`: one operator per column, chosen by what the
       // column means. Counters add, monotonic facts take greatest(), and the
-      // two "state as of the last review" columns follow event time.
+      // three "state as of the last review" columns follow event time -- one
+      // predicate for all three, so the rung can never come from a different
+      // review than the due date next to it.
       const excludedWins = excluded.lastReviewedAtMs >= current.lastReviewedAtMs;
       this.rows.set(uid, {
         stableUid: uid,
@@ -159,6 +166,7 @@ class FakeServer {
         lastReviewedAtMs: Math.max(current.lastReviewedAtMs, excluded.lastReviewedAtMs),
         lastRating: excludedWins ? excluded.lastRating : current.lastRating,
         dueAtMs: excludedWins ? excluded.dueAtMs : current.dueAtMs,
+        srsStage: excludedWins ? excluded.srsStage : current.srsStage,
         updatedAtMs: nowMs,
       });
     }
@@ -174,6 +182,7 @@ class FakeServer {
       lastRating: r.lastRating,
       lastReviewedAtMs: r.lastReviewedAtMs,
       nextReviewAtMs: r.dueAtMs,
+      srsStage: r.srsStage,
       updatedAtMs: r.updatedAtMs,
     }));
   }
@@ -207,6 +216,8 @@ class FakeDevice {
       rating,
       eventTimeMs: nowMs,
       nextReviewAtMs: next.nextReviewAt,
+      // What progressAfter has always contained and the ingest used to drop.
+      srsStage: next.stage,
     });
   }
 
@@ -223,11 +234,12 @@ class FakeDevice {
   }
 
   /**
-   * The part of local state sync actually owns. `stage` is deliberately absent:
-   * it is never pushed and never merged, so two devices that reviewed the same
-   * card a different number of times keep different stages forever. That is a
-   * real (and currently accepted) hole in the contract, not an oversight of
-   * this assertion -- see the followup note in review/model.ts.
+   * The part of local state sync owns. `stage` is in here, and that inclusion
+   * is the point: it used to be excluded with a note saying two devices that
+   * reviewed one card a different number of times keep different stages
+   * forever. Migration 013 put the rung on the wire and in user_progress, so
+   * the disclaimer became an assertion -- if stage ever stops converging, this
+   * is the test that says so.
    */
   syncedState(): string {
     return JSON.stringify(
@@ -235,6 +247,7 @@ class FakeDevice {
         .sort((a, b) => (a.stableUid < b.stableUid ? -1 : 1))
         .map((p) => ({
           stableUid: p.stableUid,
+          stage: p.stage,
           lastReviewedAt: p.lastReviewedAt ?? null,
           nextReviewAt: p.nextReviewAt ?? 0,
         })),
@@ -312,6 +325,9 @@ describe('multi-device sync simulation', () => {
           .sort((a, b) => (a.stableUid < b.stableUid ? -1 : 1))
           .map((r) => ({
             stableUid: r.stableUid,
+            // Key order matches syncedState(): these two strings are compared
+            // as JSON text, so the shape has to line up as well as the values.
+            stage: r.srsStage,
             lastReviewedAt: r.lastReviewedAtMs,
             nextReviewAt: r.dueAtMs,
           })),
@@ -399,7 +415,7 @@ describe('multi-device sync simulation', () => {
     // row in the array wins, so the merge answered differently depending on
     // page order.
     const local: CardProgress[] = [{ stableUid: 'uid-a', stage: 0, nextReviewAt: 0 }];
-    const rowAt = (lastReviewedAt: number, nextReviewAt: number) => ({
+    const rowAt = (lastReviewedAt: number, nextReviewAt: number, srsStage: number) => ({
       deckSlug: DECK,
       stableUid: 'uid-a',
       status: 1,
@@ -407,11 +423,12 @@ describe('multi-device sync simulation', () => {
       lastRating: 3,
       lastReviewedAtMs: lastReviewedAt,
       nextReviewAtMs: nextReviewAt,
+      srsStage,
       updatedAtMs: T0 + 500,
     });
 
-    const older = rowAt(T0 + 100, T0 + 100 + 86_400_000);
-    const newer = rowAt(T0 + 400, T0 + 400 + 86_400_000);
+    const older = rowAt(T0 + 100, T0 + 100 + 86_400_000, 1);
+    const newer = rowAt(T0 + 400, T0 + 400 + 86_400_000, 2);
 
     const forward = mergeRemoteIntoLocalProgress(local, [older, newer] as any);
     const reverse = mergeRemoteIntoLocalProgress(local, [newer, older] as any);
@@ -419,6 +436,65 @@ describe('multi-device sync simulation', () => {
     expect(JSON.stringify(forward.merged)).toBe(JSON.stringify(reverse.merged));
     // And the winner is the newer row, not "whichever was listed first".
     expect(forward.merged[0].lastReviewedAt).toBe(T0 + 400);
+    // The rung travels with the due date it was produced with, in both orders.
+    expect(forward.merged[0].stage).toBe(2);
+    expect(reverse.merged[0].stage).toBe(2);
+  });
+
+  it('stage converges: two devices with different review counts agree after pull', () => {
+    // The hole the old syncedState() comment described, now driven end to end.
+    // d0 reviews the card three times and reaches rung 3; d1 reviews it once,
+    // earlier, and sits on rung 1. Before stage was on the wire, d1 could only
+    // guess the rung back out of the interval -- and `good` at rung 3 schedules
+    // 8 days, whose floor is the 8-day bucket only by luck; a `hard` or `again`
+    // review makes the guess plainly wrong.
+    const server = new FakeServer();
+    const d0 = new FakeDevice('d0');
+    const d1 = new FakeDevice('d1');
+
+    d1.review('uid-a', 'good', T0 + 500);
+    d0.review('uid-a', 'good', T0 + 1_000);
+    d0.review('uid-a', 'good', T0 + 2_000);
+    d0.review('uid-a', 'good', T0 + 3_000);
+
+    d1.push(server, T0 + 4_000);
+    d0.push(server, T0 + 4_000);
+    d1.pull(server);
+    d0.pull(server);
+
+    const stageOf = (dev: FakeDevice) => dev.local.find((p) => p.stableUid === 'uid-a')!.stage;
+
+    expect(server.rows.get('uid-a')!.srsStage).toBe(3);
+    expect(stageOf(d0)).toBe(3);
+    expect(stageOf(d1)).toBe(3);
+    // Not just equal to each other: equal to the rung the winning review left.
+    expect(stageOf(d1)).toBe(server.rows.get('uid-a')!.srsStage);
+  });
+
+  it('legacy rows: a remote row without srsStage leaves the local stage alone', () => {
+    // Rows merged before migration 013 come back with srsStage null. Writing a
+    // 0 for them would silently drop every affected card to the bottom of the
+    // ladder, so null must mean "keep what you have and infer", not "rung 0".
+    const local: CardProgress[] = [
+      { stableUid: 'uid-a', stage: 4, lastReviewedAt: T0, nextReviewAt: T0 + 86_400_000 },
+    ];
+
+    const legacyRow = {
+      deckSlug: DECK,
+      stableUid: 'uid-a',
+      status: 1,
+      reviewCount: 1,
+      lastRating: 3,
+      lastReviewedAtMs: T0 + 10_000,
+      nextReviewAtMs: T0 + 10_000 + 8 * 86_400_000,
+      srsStage: null,
+      updatedAtMs: T0 + 10_000,
+    };
+
+    const { merged } = mergeRemoteIntoLocalProgress(local, [legacyRow] as any);
+
+    expect(merged[0].lastReviewedAt).toBe(T0 + 10_000);
+    expect(merged[0].stage).toBe(4);
   });
 
   it('documented boundary: an exact event_time tie on one card IS arrival ordered', () => {
@@ -439,6 +515,7 @@ describe('multi-device sync simulation', () => {
       rating,
       eventTimeMs: at,
       nextReviewAtMs: at + RATING_VALUE[rating] * 86_400_000,
+      srsStage: RATING_VALUE[rating],
     });
 
     const a = new FakeServer();
@@ -451,8 +528,12 @@ describe('multi-device sync simulation', () => {
 
     expect(a.rows.get('uid-a')!.lastRating).toBe(RATING_VALUE.easy);
     expect(b.rows.get('uid-a')!.lastRating).toBe(RATING_VALUE.again);
+    // srs_stage joined the same group, so it swings with its rating rather
+    // than drifting onto its own answer: the group moves as one.
+    expect(a.rows.get('uid-a')!.srsStage).toBe(RATING_VALUE.easy);
+    expect(b.rows.get('uid-a')!.srsStage).toBe(RATING_VALUE.again);
     // The order-insensitive columns still agree, which is the point: the
-    // asymmetry is confined to the two LWW columns.
+    // asymmetry is confined to the LWW group.
     expect(a.rows.get('uid-a')!.reviewCount).toBe(b.rows.get('uid-a')!.reviewCount);
     expect(a.rows.get('uid-a')!.lastReviewedAtMs).toBe(b.rows.get('uid-a')!.lastReviewedAtMs);
   });

@@ -7,6 +7,7 @@ import { Platform } from 'react-native';
 import { apiJson } from '../api/apiClient';
 import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../review/storage';
+import { clampStage } from '../review/model';
 import type { CardProgress } from '../review/model';
 
 /**
@@ -76,6 +77,11 @@ type ProgressItem = {
   // Phase 3
   nextReviewAtMs?: number | string | null;
 
+  // The scheduler ladder position the server kept from the winning review.
+  // Absent/null on rows merged before the server stored stage (and on old
+  // servers), which is what keeps inferStageFromIntervalMs alive as a fallback.
+  srsStage?: number | string | null;
+
   updatedAtMs: number | string | null;
 };
 
@@ -107,7 +113,19 @@ export type ProgressEvent = {
   reviewCountForCard?: number | null;
   dwellTimeMs?: number | null;
   offlineQueueDelayMs?: number | null;
+  schedulerVersion?: string | null;
 };
+
+/**
+ * Which scheduler produced progressAfter.stage / nextReviewAt.
+ *
+ * A name, not a number: the server stores this without interpreting it, so the
+ * only thing it has to support is "tell old rows from new ones". A version
+ * number invites arithmetic (`>= 2`), and arithmetic on a label nobody
+ * compares is how a compatibility bug gets written. Change the name when the
+ * ladder changes meaning, never bump it for a bugfix.
+ */
+const SCHEDULER_VERSION = 'ladder-v1';
 
 /**
  * ----------------------------
@@ -230,6 +248,21 @@ function optionalNonNegativeInt(v: any): number | null {
   if (n == null) return null;
   const i = Math.floor(n);
   return i >= 0 ? i : null;
+}
+
+/**
+ * A remote stage, or null when the server has none for that row.
+ *
+ * null and 0 are different answers and must stay different: 0 is a real rung
+ * (a card that keeps getting `again`), while null means "this row predates the
+ * server storing stage, infer it from the interval". Collapsing them would
+ * quietly reset those cards to the bottom of the ladder.
+ */
+function optionalRemoteStage(v: any): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return clampStage(n);
 }
 
 function optionalString(v: any): string | null {
@@ -655,9 +688,13 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
     reviewCountForCard: reviewCountForCard ?? null,
     dwellTimeMs: dwellTimeMs ?? null,
     offlineQueueDelayMs: 0,
+    // Stamped at record time, not at push time: an event that sat in the queue
+    // across an app upgrade was still produced by the scheduler that was
+    // running when the user rated the card.
+    schedulerVersion: SCHEDULER_VERSION,
   };
 
-  await enqueueProgressEvent(userSub, ev);
+  await enqueueProgressEvent(queueSub, ev);
   return ev.eventId;
 }
 
@@ -807,6 +844,7 @@ export function mergeRemoteIntoLocalProgress(
     updatedAt: number;
     hasNext: boolean;
     nextReviewAt: number;
+    srsStage: number | null;
     row: ProgressItem;
   };
 
@@ -815,6 +853,11 @@ export function mergeRemoteIntoLocalProgress(
     if (a.updatedAt !== b.updatedAt) return a.updatedAt - b.updatedAt;
     if (a.lastReviewedAt !== b.lastReviewedAt) return a.lastReviewedAt - b.lastReviewedAt;
     if (a.nextReviewAt !== b.nextReviewAt) return a.nextReviewAt - b.nextReviewAt;
+    // stage entered the payload, so it has to enter the order too: two rows
+    // alike on the timestamps but differing on the rung would otherwise be a
+    // tie, and a tie is exactly where "first row in the array wins" comes back.
+    // -1 sorts a missing stage below every real rung (0..6).
+    if ((a.srsStage ?? -1) !== (b.srsStage ?? -1)) return (a.srsStage ?? -1) - (b.srsStage ?? -1);
     const au = String(a.row?.stableUid ?? '');
     const bu = String(b.row?.stableUid ?? '');
     return au < bu ? -1 : au > bu ? 1 : 0;
@@ -834,8 +877,10 @@ export function mergeRemoteIntoLocalProgress(
     const hasNext = serverNext != null;
     const nextReviewAt = hasNext ? (serverNext as number) : lastReviewedAt;
 
+    const srsStage = optionalRemoteStage((r as any).srsStage);
+
     const prev = bestRemote.get(uid);
-    const candidate: RemoteBest = { lastReviewedAt, updatedAt, hasNext, nextReviewAt, row: r };
+    const candidate: RemoteBest = { lastReviewedAt, updatedAt, hasNext, nextReviewAt, srsStage, row: r };
 
     // remoteRows is a BAG, not a sequence: pages of one drain, a replay of the
     // remote cache, a retried request. A strict `updatedAt > prev.updatedAt`
@@ -877,6 +922,13 @@ export function mergeRemoteIntoLocalProgress(
     const remoteLast = remote.lastReviewedAt;
     const remoteNext = remote.nextReviewAt > 0 ? remote.nextReviewAt : remote.lastReviewedAt;
 
+    // The client mirror of the server's atomic group: wherever we accept the
+    // remote due date we accept the remote stage in the same assignment, so a
+    // card's rung and its next review always come from one device's review.
+    // A null remote stage is left alone rather than written: that is a legacy
+    // row, and storage.ts still infers its stage from the interval.
+    const remoteStagePatch = remote.srsStage != null ? { stage: remote.srsStage } : {};
+
     // Case A: 远端更“新”
     if (remoteLast > localLast) {
       changed = true;
@@ -885,6 +937,7 @@ export function mergeRemoteIntoLocalProgress(
         ...p,
         lastReviewedAt: remoteLast,
         nextReviewAt: remoteNext,
+        ...remoteStagePatch,
       } as any;
     }
 
@@ -895,6 +948,7 @@ export function mergeRemoteIntoLocalProgress(
       return {
         ...p,
         nextReviewAt: remoteNext,
+        ...remoteStagePatch,
       } as any;
     }
 
@@ -914,6 +968,9 @@ export function mergeRemoteIntoLocalProgress(
       stableUid: uid,
       lastReviewedAt: remote.lastReviewedAt,
       nextReviewAt: Math.max(next, remote.lastReviewedAt),
+      // Same rule as above: adopt the server's rung when it has one, and stay
+      // silent when it does not, so the interval fallback keeps its job.
+      ...(remote.srsStage != null ? { stage: remote.srsStage } : {}),
     } as any);
   }
 
@@ -1165,6 +1222,11 @@ async function syncProgressOnce(
 
           // Phase3：直接发 nextReviewAtMs（避免新设备把 future 卡当 due）
           nextReviewAtMs: toMs(ev.progressAfter?.nextReviewAt) ?? null,
+
+          // Events queued before this field existed carry no version; the
+          // current one is the honest guess for them (they came from this
+          // install, running this ladder).
+          schedulerVersion: ev.schedulerVersion ?? SCHEDULER_VERSION,
 
           progressAfter: ev.progressAfter ?? null,
           lastSeenRevision: ev.lastSeenRevision ?? null,

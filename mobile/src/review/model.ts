@@ -83,9 +83,13 @@ export function scheduleNextReview(p: CardProgress, rating: ReviewRating, now: D
  * Underestimating only costs an extra review. Errors we cannot avoid should at
  * least always fall on the recoverable side.
  *
- * Followup: the actual fix is to carry stage over the wire and persist it
- * server-side, so no device ever has to guess. This stays as the fallback for
- * rows written before that exists.
+ * Scope, as of migration 013: this is now the FALLBACK, not the mechanism.
+ * stage is carried over the wire (progressAfter.stage) and persisted in
+ * user_progress.srs_stage, and a pull that brings back a non-null srsStage
+ * adopts it directly, so no device has to guess. What still reaches this
+ * function is rows merged before the server stored stage, where srsStage comes
+ * back null: for those the lossy floor above is all the information there is,
+ * which is why it keeps erring downward.
  */
 export function inferStageFromIntervalMs(intervalMs: number): number | null {
   if (!Number.isFinite(intervalMs)) return null;

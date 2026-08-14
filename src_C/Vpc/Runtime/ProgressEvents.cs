@@ -33,7 +33,15 @@ public static class ProgressEvents
     string? ReviewStage,
     int? ReviewCountForCard,
     int? CardRevision,
-    int? StatedDifficulty);
+    int? StatedDifficulty,
+    int? SrsStage,
+    string? SchedulerVersion);
+
+  // The ladder in mobile/src/review/model.ts has 7 buckets (INTERVALS_DAYS),
+  // so a valid stage is 0..6. The client clamps with clampStage() before it
+  // ever writes progress; clamping again here keeps a rebuilt or tampered
+  // client from writing a rung that no scheduler can interpret.
+  private const int MaxSrsStage = 6;
 
   public static async Task<APIGatewayProxyResponse> HandleProgressEvents(LambdaRequest req, Res res, AuthContext auth)
   {
@@ -151,6 +159,17 @@ public static class ProgressEvents
           lastSeenRevision;
         var statedDifficulty = OptionalInt(e.TryGetProperty("statedDifficulty", out var sd) ? sd : (JsonElement?)null);
 
+        // progressAfter has always carried the full CardProgress, stage
+        // included; the ingest simply threw the field away and every device
+        // had to guess the stage back out of the interval. Reading it is not a
+        // protocol change, it is the server stopping the loss.
+        var srsStage = OptionalInt(DeepGet(e, "progressAfter", "stage"));
+        if (srsStage is not null) srsStage = Math.Clamp(srsStage.Value, 0, MaxSrsStage);
+
+        // Stored, never interpreted: scheduling stays entirely on the client,
+        // so this is provenance for the day the ladder changes shape.
+        var schedulerVersion = OptionalString(e.TryGetProperty("schedulerVersion", out var scv) ? scv : (JsonElement?)null);
+
         normalized.Add(new NormalizedEvent(
           EventId: eventId,
           DeckSlug: deckSlug,
@@ -168,7 +187,9 @@ public static class ProgressEvents
           ReviewStage: reviewStage,
           ReviewCountForCard: reviewCountForCard,
           CardRevision: cardRevision,
-          StatedDifficulty: statedDifficulty));
+          StatedDifficulty: statedDifficulty,
+          SrsStage: srsStage,
+          SchedulerVersion: schedulerVersion));
       }
 
       var allEventIds = normalized.Select(x => x.EventId).ToList();
@@ -221,6 +242,7 @@ public static class ProgressEvents
               {P(ref idx)},
               {P(ref idx)},
               {P(ref idx)},
+              {P(ref idx)},
               {P(ref idx)}
             )
             """);
@@ -247,6 +269,28 @@ public static class ProgressEvents
           parameters.Add(ev.ReviewCountForCard);
           parameters.Add(ev.CardRevision);
           parameters.Add(ev.StatedDifficulty);
+          parameters.Add(ev.SchedulerVersion);
+        }
+
+        // srs_stage rides alongside the batch as an inline VALUES list joined
+        // on event_id, instead of becoming a column of user_progress_events.
+        // The events table records what the client REPORTED about a review;
+        // the ladder position is state, and its home is user_progress. Joining
+        // here keeps the ingest one statement (the merge stays atomic with the
+        // event insert) without adding a seventh CTE.
+        //
+        // Deduped on event_id because the join must be a function of it: a
+        // batch that repeats one eventId inserts a single row (ON CONFLICT DO
+        // NOTHING), and a VALUES side listing that id twice would fan that row
+        // out and let `distinct on` pick between two stages at random.
+        var stageRows = new List<string>();
+        var stageSeen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var ev in normalized)
+        {
+          if (!stageSeen.Add(ev.EventId)) continue;
+          stageRows.Add($"({P(ref idx)}::uuid, {P(ref idx)}::smallint)");
+          parameters.Add(ev.EventId);
+          parameters.Add(ev.SrsStage);
         }
 
         var userHashParam = P(ref idx);
@@ -259,7 +303,7 @@ public static class ProgressEvents
               next_review_at, last_seen_revision, deck_version,
               schema_version, event_type, session_id, client_platform, client_event_time,
               offline_queue_delay_ms, dwell_time_ms, review_stage, review_count_for_card,
-              card_revision, stated_difficulty
+              card_revision, stated_difficulty, scheduler_version
             )
             values {string.Join(", ", values)}
             on conflict (event_id) do nothing
@@ -269,7 +313,8 @@ public static class ProgressEvents
               next_review_at, last_seen_revision, deck_version,
               schema_version, event_type, session_id, device_id, client_version, client_platform,
               client_event_time, server_received_at, offline_queue_delay_ms, dwell_time_ms,
-              review_stage, review_count_for_card, card_revision, stated_difficulty
+              review_stage, review_count_for_card, card_revision, stated_difficulty,
+              scheduler_version
           ),
           outbox as (
             insert into analytics_event_outbox (
@@ -329,15 +374,19 @@ public static class ProgressEvents
             group by user_sub, deck_slug, stable_uid
           ),
           last_row as (
-            select distinct on (user_sub, deck_slug, stable_uid)
-              user_sub, deck_slug, stable_uid,
-              rating as last_rating,
-              event_time as last_reviewed_at,
-              coalesce(next_review_at, event_time) as next_review_at,
-              last_seen_revision,
-              deck_version
-            from ins
-            order by user_sub, deck_slug, stable_uid, event_time desc
+            select distinct on (i.user_sub, i.deck_slug, i.stable_uid)
+              i.user_sub, i.deck_slug, i.stable_uid,
+              i.rating as last_rating,
+              i.event_time as last_reviewed_at,
+              coalesce(i.next_review_at, i.event_time) as next_review_at,
+              i.last_seen_revision,
+              i.deck_version,
+              s.srs_stage,
+              i.scheduler_version
+            from ins i
+            join (values {string.Join(", ", stageRows)}) as s(event_id, srs_stage)
+              on s.event_id = i.event_id
+            order by i.user_sub, i.deck_slug, i.stable_uid, i.event_time desc
           ),
           merged as (
             select
@@ -347,7 +396,9 @@ public static class ProgressEvents
               l.last_reviewed_at,
               l.next_review_at,
               l.last_seen_revision,
-              l.deck_version
+              l.deck_version,
+              l.srs_stage,
+              l.scheduler_version
             from agg a
             join last_row l using (user_sub, deck_slug, stable_uid)
           ),
@@ -357,6 +408,7 @@ public static class ProgressEvents
               status, last_rating, last_reviewed_at,
               review_count, due_at,
               last_seen_revision,
+              srs_stage, last_scheduler_version,
               updated_at
             )
             select
@@ -367,6 +419,8 @@ public static class ProgressEvents
               inc as review_count,
               next_review_at as due_at,
               last_seen_revision,
+              srs_stage,
+              scheduler_version as last_scheduler_version,
               now() as updated_at
             from merged
             on conflict (user_sub, deck_slug, stable_uid)
@@ -389,6 +443,34 @@ public static class ProgressEvents
                 when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
                   then excluded.due_at
                 else user_progress.due_at
+              end,
+
+              -- srs_stage and last_scheduler_version join last_rating/due_at
+              -- under the SAME predicate on purpose: those four columns are one
+              -- atomic verdict, "the state as of the most recent review". Any
+              -- per-column choice here (greatest, coalesce) would let stage come
+              -- from device A while due_at came from device B, and that stitched
+              -- pair describes a review that nobody ever did.
+              --
+              -- Not greatest(): stage is "which rung the last review left the
+              -- card on", not "the highest rung ever reached". The day `again`
+              -- demotes a card, a monotonic merge would make the demotion
+              -- permanently unable to propagate.
+              --
+              -- The winner writing null (an old client that sends no stage)
+              -- is deliberate: null means "unknown, infer it from the interval",
+              -- which is honest, while keeping the previous stage next to a new
+              -- due_at is exactly the stitched state above.
+              srs_stage = case
+                when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
+                  then excluded.srs_stage
+                else user_progress.srs_stage
+              end,
+
+              last_scheduler_version = case
+                when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
+                  then excluded.last_scheduler_version
+                else user_progress.last_scheduler_version
               end,
 
               last_seen_revision = greatest(

@@ -15,8 +15,13 @@ namespace RecallSmith.Lambda.Vpc.Runtime;
 ///   status, last_reviewed_at, last_seen_revision -> greatest(): facts that can
 ///     only ever move one way.
 ///   review_count -> addition: a count of events, not a state.
-///   last_rating, due_at -> last-writer-wins keyed on event time: "the state as
-///     of the most recent review", which is meaningless without an order.
+///   last_rating, due_at, srs_stage -> last-writer-wins keyed on event time:
+///     "the state as of the most recent review", which is meaningless without
+///     an order. These three are decided by ONE comparison, not three: a stage
+///     from one device next to a due_at from another describes a review that
+///     never happened. (last_scheduler_version rides in the same group in SQL;
+///     it is omitted here only because a provenance string has no algebra to
+///     check.)
 ///
 /// Together those give a join semilattice on everything except review_count,
 /// which is where the interesting result lives (see ProgressMergeTests).
@@ -37,7 +42,8 @@ public readonly record struct ProgressState(
   int? LastRating,
   long LastReviewedAtMs,
   long DueAtMs,
-  int LastSeenRevision);
+  int LastSeenRevision,
+  int? SrsStage = null);
 
 public static class ProgressMerge
 {
@@ -53,13 +59,22 @@ public static class ProgressMerge
       LastRating: incomingWins ? incoming.LastRating : current.LastRating,
       LastReviewedAtMs: Math.Max(current.LastReviewedAtMs, incoming.LastReviewedAtMs),
       DueAtMs: incomingWins ? incoming.DueAtMs : current.DueAtMs,
-      LastSeenRevision: Math.Max(current.LastSeenRevision, incoming.LastSeenRevision));
+      LastSeenRevision: Math.Max(current.LastSeenRevision, incoming.LastSeenRevision),
+      // Same `incomingWins`, not a second decision: reusing the one boolean is
+      // what makes "atomic group" mean something the compiler enforces.
+      SrsStage: incomingWins ? incoming.SrsStage : current.SrsStage);
   }
 
   private static int CompareRecency(ProgressState a, ProgressState b)
   {
     if (a.LastReviewedAtMs != b.LastReviewedAtMs) return a.LastReviewedAtMs.CompareTo(b.LastReviewedAtMs);
     if (a.DueAtMs != b.DueAtMs) return a.DueAtMs.CompareTo(b.DueAtMs);
-    return (a.LastRating ?? 0).CompareTo(b.LastRating ?? 0);
+    if (a.LastRating != b.LastRating) return (a.LastRating ?? 0).CompareTo(b.LastRating ?? 0);
+    // Stage joins the tiebreak because it joined the group: two states alike on
+    // everything else but the rung are otherwise a tie, and a tie means both
+    // orders declare the other side the winner, which is exactly how
+    // commutativity dies. -1 sorts a missing stage below every real rung
+    // (rungs are 0..6), so the comparison stays total.
+    return (a.SrsStage ?? -1).CompareTo(b.SrsStage ?? -1);
   }
 }
