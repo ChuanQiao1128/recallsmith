@@ -136,6 +136,18 @@ function normalizeNumber(v: any, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 }
 
+function normalizeNonNegative(v: any): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
+}
+
+/**
+ * This function is the AsyncStorage schema. Adding a field to CardProgress
+ * without adding it here creates a field that exists only in memory: the entry
+ * is rebuilt from the whitelist below on every load, so anything missing is
+ * dropped on the next read with no error and no log. A counter that resets on
+ * every app start is worse than no counter, because the code that reads it
+ * looks correct.
+ */
 function normalizeProgressEntry(raw: any): CardProgress | null {
   const stableUid = raw?.stableUid;
   if (typeof stableUid !== 'string' || stableUid.length === 0) return null;
@@ -156,7 +168,24 @@ function normalizeProgressEntry(raw: any): CardProgress | null {
       ? raw.lastSeenRevision
       : undefined;
 
-  return { stableUid, stage, lastReviewedAt, nextReviewAt, lastSeenRevision };
+  // Scheduler feedback counters and the revision-demotion mark. All three are
+  // optional and non-negative: absent means "never happened yet", which is a
+  // different statement from 0 only for revisionDemotedAt, where 0 is not a
+  // reachable timestamp anyway.
+  const lapses = normalizeNonNegative(raw.lapses);
+  const hardStreak = normalizeNonNegative(raw.hardStreak);
+  const revisionDemotedAt = normalizeNonNegative(raw.revisionDemotedAt);
+
+  return {
+    stableUid,
+    stage,
+    lastReviewedAt,
+    nextReviewAt,
+    lastSeenRevision,
+    lapses,
+    hardStreak,
+    revisionDemotedAt,
+  };
 }
 
 function cardRevision(card: any): number {
