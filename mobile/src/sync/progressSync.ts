@@ -7,6 +7,7 @@ import { Platform } from 'react-native';
 import { apiJson } from '../api/apiClient';
 import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../review/storage';
+import { syncDrawStateNow } from './drawStateSync';
 import { clampStage } from '../review/model';
 import type { CardProgress } from '../review/model';
 
@@ -1419,6 +1420,24 @@ async function runSyncNow(reason: string): Promise<void> {
     if (_pending) {
       _pending = false;
       scheduleProgressSync({ delayMs: 300, reason: 'pending_flush' });
+    }
+
+    // Gamification state rides the same trigger points (app_start / manual /
+    // token_set / user_changed / rating flush) instead of growing a scheduler of
+    // its own: one thing decides when this device talks to the server.
+    //
+    // It runs in `finally`, after the flags are cleared, for two reasons. A
+    // failed review sync (offline, 5xx) must not skip it, because the two have
+    // independent failure modes and the draw state may be the half that can get
+    // through. And nothing above may wait on it: syncDrawStateNow swallows its
+    // own errors, and the review sync's success, error record and in-flight
+    // state are all already settled by the time it starts.
+    try {
+      const drawToken = await getSyncAccessToken();
+      if (drawToken) await syncDrawStateNow(drawToken);
+    } catch {
+      // Unreachable by contract (syncDrawStateNow never throws); belt and
+      // braces, because the one thing this call may never do is fail a review.
     }
   }
 }

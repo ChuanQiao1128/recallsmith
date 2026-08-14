@@ -225,6 +225,15 @@ public sealed class VpcFunction
         return await Vpc.Runtime.ProgressGet.HandleProgressGet(req, res, auth);
       }
 
+      // Gamification state (collection, pity, wallet). Deliberately its own
+      // route and not a field on the review sync: it is snapshot-shaped rather
+      // than event-shaped, and keeping it separate is what lets a failure here
+      // be silently skipped by the client without touching review sync.
+      if (p.EndsWith("/api/v1/draw-state/sync", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Runtime.DrawStateSync.HandleDrawStateSync(req, res, auth);
+      }
+
       // Admin users placeholders
       {
         var p1 = RouteMatcher.Match("/api/v1/admin/users", p);
