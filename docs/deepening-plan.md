@@ -234,9 +234,29 @@ migration、`Pg.Reset()`),然后直接调 `ProgressEvents.HandleProgressEvents`
 
 ## 6. 明确不做的事(求职期纪律)
 
-- ❌ 不换 SM-2/FSRS——固定阶梯 + `inferStageFromIntervalMs` 的有损反推是**更好的故事**
-- ❌ 不做游戏化状态上云(owned/pity/wallet 换机即丢)——README roadmap 诚实标注;
-  简历措辞把"多设备合并"**限定在复习进度**
+- ❌ 不换 SM-2/FSRS(固定阶梯不变)。但 Fix A 之后措辞要更新:`inferStageFromIntervalMs`
+  的有损反推**不再是唯一手段**,而是 migration 013 之前那些行(`srs_stage` 为 null)的
+  回退路径;stage 一直在 wire 上,服务端此前只是读完即丢,现在与 `due_at` / `last_rating` /
+  `last_scheduler_version` 在同一条 LWW 谓词里被一次裁决(杜绝 stage 来自设备 A、
+  due_at 来自设备 B 的缝合态)。故事从"有损反推"升级成"有损反推被降级为 legacy 兜底"。
+- ✅ **已修复(2026-08,见 docs/limitations-fix-plan.md):游戏化状态已分区并上云**。
+  原措辞是"不做游戏化状态上云(owned/pity/wallet 换机即丢),简历里把'多设备合并'
+  限定在复习进度",两条现在都不成立:
+  - **按 userSub 分区**(Fix B1):`draw-state` / `draw-history` / `reward-wallet` /
+    `reward-session` / `wallet-seeded` 全部走 `getUserScopedKey()`,与复习进度同一套
+    scope 规则。同机换账号继承图鉴的 bug 已消失。旧全局 key 采用"先复制到当前 scope、
+    再删除"的一次性认领;唯独 sessionId 去重键**不做旧 key 回退**(命中的语义是
+    "已结算",回退会让 B 账号吞掉自己的奖励)。
+  - **上云**(Fix B2):migration 014 + `POST /api/v1/draw-state/sync` 单往返;
+    每种数据按语义选算子:owned = grow-only set(`ON CONFLICT DO NOTHING`,天然幂等)、
+    pity/wallet = LWW 快照(时间戳 clamp 到服务端 now+5min,复用 eventTime 的教训)。
+  - **多设备合并不再限于复习进度**:同一句话现在可以说成"每类状态按它自身的代数选合并
+    算子",这比原来的限定说法更强。
+  - 残余取舍(诚实标注,不要在简历里省略):钱包是 LWW 快照,两台离线设备各自消费 pull
+    后只保留一台的结果;真正的修法是钱包事件化(grants/spends 作为事实、余额作投影),
+    已列 followup。draw-history 是诊断数据,明确不上云。
+  - 验证缺口:Docker 未开,014 的 SQL 与端点只做了编译级 + 纯函数级(DrawStateMerge 规格)
+    验证,Testcontainers 真库往返待补(与 Fix A 的 013 同一批)。
 - ❌ 不实现 docs/gacha-system-design.md 的经济系统(双券/每日签到/premium pity)——
   该文档与实现已是两个产品,在文档头部标注 superseded
 - ❌ 不重构架构、不清理全部 any、不补 frontend(零测试)的测试
