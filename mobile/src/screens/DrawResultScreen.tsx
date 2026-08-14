@@ -301,6 +301,20 @@ export function DrawResultScreen({ navigation, route }: Props) {
               <Text style={styles.headerTitle} numberOfLines={1}>
                 {deckLabel(params)}
               </Text>
+              {/* pityTriggered has ridden in the route params since the
+                  ceremony was built and nothing ever showed it. A guarantee
+                  the player cannot tell fired is a guarantee they never got.
+                  Reuses the eyebrow style so no new visual language is
+                  introduced for a one-line marker. */}
+              {drawResult.pityTriggered ? (
+                <Text
+                  style={styles.headerEyebrow}
+                  testID="draw-result-guarantee-badge"
+                  numberOfLines={1}
+                >
+                  GUARANTEE PAID OUT
+                </Text>
+              ) : null}
             </View>
             <View style={styles.collectionBar} testID="draw-result-collection-bar">
               <Text style={styles.collectionText} numberOfLines={1}>

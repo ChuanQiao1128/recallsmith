@@ -89,7 +89,12 @@ describe('buildHomeVM CTA kinds', () => {
     expect(vm.cta.nav).toBe('challenge');
   });
 
-  it('derives today_done with draw CTA when pulls are available', () => {
+  // Rewritten, not adjusted. The old case asserted that a wallet with pulls
+  // in it takes the primary button away from study on a day that still has
+  // cards waiting. That was the behaviour under test agreeing with itself:
+  // the reward exists because study happened, so it cannot be the app's
+  // answer to why the user opened it today.
+  it('keeps the challenge CTA for today_done even when pulls are available', () => {
     const vm = buildHomeVM({
       selectedSlug: 'csharp',
       hasSignedInUser: true,
@@ -103,8 +108,60 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('today_done');
-    expect(vm.cta.label).toBe('Open C# Interview');
-    expect(vm.cta.nav).toBe('draw');
+    expect(vm.cta.label).toBe('Continue today’s challenge');
+    expect(vm.cta.nav).toBe('challenge');
+  });
+
+  it('keeps the primary CTA on study when cards are due and the wallet has pulls', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 4, newToday: 0 })],
+      wallet: { availablePulls: 3, reservePulls: 0 },
+    });
+
+    expect(vm.cta.kind).toBe('due_only');
+    expect(vm.cta.nav).toBe('challenge');
+    expect(vm.cta.label).toBe('Clear due reviews');
+    // The pulls are still announced, just not from the primary button.
+    expect(vm.draw.state).toBe('available');
+  });
+
+  it('keeps the primary CTA on study when the wallet is full and work remains', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 2, newToday: 1 })],
+      wallet: { availablePulls: 30, reservePulls: 5 },
+    });
+
+    expect(vm.cta.kind).toBe('wallet_full');
+    expect(vm.cta.nav).toBe('challenge');
+    expect(vm.draw.state).toBe('wallet-full');
+  });
+
+  it('never names a deck in a CTA that opens the draw chamber', () => {
+    const drawVms = [
+      buildHomeVM({
+        selectedSlug: 'csharp',
+        hasSignedInUser: true,
+        deckSummaries: [makeDeck({ dueToday: 0, newToday: 0 })],
+        wallet: { availablePulls: 2, reservePulls: 0 },
+        runtimeStatus: { qualifiedToday: true, completedToday: 2, completedRouteToday: true },
+      }),
+      buildHomeVM({
+        selectedSlug: 'csharp',
+        hasSignedInUser: true,
+        deckSummaries: [makeDeck({ dueToday: 0, newToday: 0 })],
+        wallet: { availablePulls: 2, reservePulls: 0 },
+      }),
+    ];
+
+    for (const vm of drawVms) {
+      expect(vm.cta.nav).toBe('draw');
+      expect(vm.cta.label).toBe('Open reward draw');
+      expect(vm.cta.label).not.toContain('C# Interview');
+    }
   });
 
   it('keeps challenge CTA for today_done when pulls are locked', () => {
@@ -139,7 +196,7 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('today_full_clear');
-    expect(vm.cta.label).toBe('Open C# Interview');
+    expect(vm.cta.label).toBe('Open reward draw');
     expect(vm.cta.nav).toBe('draw');
   });
 

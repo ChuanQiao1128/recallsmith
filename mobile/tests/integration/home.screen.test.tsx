@@ -254,7 +254,10 @@ describe('HomeScreen v9', () => {
     });
   });
 
-  it('routes primary CTA to Draw when pulls are available', async () => {
+  // Ready pulls no longer outrank due cards. The primary button is the app's
+  // daily answer to "why are you here", and while there is study work left
+  // that answer is study.
+  it('routes primary CTA to study even when pulls are available', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -272,9 +275,7 @@ describe('HomeScreen v9', () => {
       await Promise.resolve();
     });
 
-    expect(navigateMock).toHaveBeenCalledWith('Draw', {
-      slug: 'csharp',
-      rewardPending: true,
-    });
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
+    expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
   });
 });

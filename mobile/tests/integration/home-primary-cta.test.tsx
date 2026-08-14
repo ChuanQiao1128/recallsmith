@@ -284,29 +284,32 @@ describe('home primary CTA uniqueness', () => {
       expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },
+    // The deck fixture always has work due, so every wallet state below keeps
+    // the primary button on study. The wallet badge is where the reward is
+    // announced, and it stays informative in all four states.
     {
       label: 'available',
       wallet: { availablePulls: 2, reservePulls: 0 },
-      expectedPrimaryCta: 'Open C# Interview',
+      expectedPrimaryCta: 'Start today’s challenge',
       expectedDrawBadge: '2 pulls ready',
-      expectedRoute: 'Draw',
-      expectedParams: { slug: 'csharp', rewardPending: true },
+      expectedRoute: 'SessionCard',
+      expectedParams: { slug: 'csharp' },
     },
     {
       label: 'reserve',
       wallet: { availablePulls: 1, reservePulls: 2 },
-      expectedPrimaryCta: 'Open C# Interview',
+      expectedPrimaryCta: 'Start today’s challenge',
       expectedDrawBadge: '1 ready · 2 in reserve',
-      expectedRoute: 'Draw',
-      expectedParams: { slug: 'csharp', rewardPending: true },
+      expectedRoute: 'SessionCard',
+      expectedParams: { slug: 'csharp' },
     },
     {
       label: 'wallet-full',
       wallet: { availablePulls: 30, reservePulls: 5 },
-      expectedPrimaryCta: 'Open C# Interview',
+      expectedPrimaryCta: 'Start today’s challenge',
       expectedDrawBadge: 'Wallet full (30 + 5)',
-      expectedRoute: 'Draw',
-      expectedParams: { slug: 'csharp', rewardPending: true },
+      expectedRoute: 'SessionCard',
+      expectedParams: { slug: 'csharp' },
     },
   ])(
     'keeps v9 reward gateway contract for %s wallet state',
@@ -354,12 +357,14 @@ describe('home primary CTA uniqueness', () => {
       expectedParams: { slug: 'csharp' },
     },
     {
+      // Minimum goal met but cards still waiting: the reward does not get to
+      // end the day on the user's behalf.
       label: 'today_done_available',
       progress: [{ stableUid: '1', stage: 0, nextReviewAt: 0 }],
       wallet: { availablePulls: 2, reservePulls: 0 },
-      expectedPrimaryCta: 'Open C# Interview',
-      expectedRoute: 'Draw',
-      expectedParams: { slug: 'csharp', rewardPending: true },
+      expectedPrimaryCta: 'Continue today’s challenge',
+      expectedRoute: 'SessionCard',
+      expectedParams: { slug: 'csharp' },
     },
     {
       label: 'today_full_clear_locked',
@@ -387,7 +392,9 @@ describe('home primary CTA uniqueness', () => {
         },
       ],
       wallet: { availablePulls: 2, reservePulls: 0 },
-      expectedPrimaryCta: 'Open C# Interview',
+      // Nothing left to learn: the draw may take the button, and the label
+      // now names the screen it actually opens.
+      expectedPrimaryCta: 'Open reward draw',
       expectedRoute: 'Draw',
       expectedParams: { slug: 'csharp', rewardPending: true },
     },

@@ -9,7 +9,10 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { checkManifestForUpdates, installDeckFromUrl, listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
+import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
+import { loadDrawState } from '../features/gacha/draw/drawStateStore';
+import { buildPityProgressLabelV9, normalizePityState } from '../features/gacha/draw/pity';
 import {
   consumePullsFromStoredWallet,
   loadRewardWalletState,
@@ -46,6 +49,7 @@ type DrawReady = {
   canPullSingle: boolean;
   canPullMulti: boolean;
   deckOptions: DeckOption[];
+  pityLabel: string;
 };
 
 const SWIPE_ARM_DISTANCE = 72;
@@ -72,6 +76,28 @@ function buildDeckOptions(manifest: any[]): DeckOption[] {
     out.push({ slug, title: normalizeTitle(item, slug) });
   }
   return out;
+}
+
+// The guarantee's whole product value is that a player can see it coming.
+// buildPityProgressLabelV9 shipped with the counter persisted, capped and
+// tested, and zero callers, so the cost was paid and none of the benefit
+// collected. This is the caller.
+async function loadPityLabel(slug: string, deckCards: any[]): Promise<string> {
+  try {
+    const state = await loadDrawState(slug);
+    const owned = new Set(state.owned);
+    // Counts the legendary gap only, which is what the label's own contract
+    // says. An unowned RAR also keeps the guarantee live, so a deck missing
+    // rares but no legendaries stays silent rather than over-promising.
+    const missingLegCount = deckCards.filter(
+      (card) => rarityOfCard(card) === 'LEG' && !owned.has(card?.StableUid),
+    ).length;
+    return buildPityProgressLabelV9(normalizePityState(state.pity), missingLegCount);
+  } catch {
+    // A storage failure must not cost the user the pack. A missing progress
+    // line is a smaller loss than an unopenable draw screen.
+    return '';
+  }
 }
 
 function findNeighbors(options: DeckOption[], currentSlug: string): { left: DeckOption | null; right: DeckOption | null } {
@@ -353,6 +379,7 @@ export function DrawScreen({ navigation, route }: Props) {
 
           const wallet = await loadRewardWalletState();
           const pulls = spendablePulls(wallet);
+          const pityLabel = await loadPityLabel(slug, (deck as any)?.Cards ?? []);
           const deckTitle = normalizeTitle(deck, slug);
           const mergedOptions = deckOptions.some((item) => item.slug === slug)
             ? deckOptions.map((item) => (item.slug === slug ? { ...item, title: deckTitle } : item))
@@ -366,6 +393,7 @@ export function DrawScreen({ navigation, route }: Props) {
               canPullSingle: pulls >= 1,
               canPullMulti: pulls >= 10,
               deckOptions: mergedOptions,
+              pityLabel,
             });
             setSelectedSlug(slug);
             setSwipePrimed(false);
@@ -562,6 +590,14 @@ export function DrawScreen({ navigation, route }: Props) {
               </Text>
             </View>
           </View>
+
+          {/* Guarantee countdown. Rendered next to the pulls badge because it
+              answers the question a player asks right before spending one. */}
+          {ready.pityLabel ? (
+            <Text style={styles.pityProgress} testID="draw-pity-progress" numberOfLines={1}>
+              {ready.pityLabel}
+            </Text>
+          ) : null}
 
           <View
             testID="draw-card-stack-stage"
@@ -774,6 +810,15 @@ const styles = StyleSheet.create({
   },
 
   pullsBadgeText: { color: colors.inkSoft, fontSize: typography.bodySmall, fontWeight: '900' },
+  pityProgress: {
+    marginTop: 6,
+    paddingHorizontal: 4,
+    alignSelf: 'flex-end',
+    color: colors.inkMuted,
+    fontSize: typography.caption,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
   // Center the hero column instead of pinning to top — pack visually centered.
   hero: { marginTop: spacing.md, flex: 1, alignItems: 'center', justifyContent: 'center' },
   // ─── Hero backlight v2 — gold radial halo BEHIND the pack ──────────────

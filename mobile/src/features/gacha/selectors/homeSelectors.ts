@@ -247,11 +247,16 @@ function inferStatusKind(input: {
     return 'first_run';
   }
 
-  if (draw.state === 'wallet-full') {
+  const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
+
+  // A full wallet is a nudge about a reward, never a verdict about the day.
+  // Ranking it above the clear states used to hide "today is done" behind
+  // "wallet is full", and now that the primary button follows the kind into
+  // study, that masking would point the button at work that does not exist.
+  if (draw.state === 'wallet-full' && hasTodayWork) {
     return 'wallet_full';
   }
 
-  const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
   if (completedRouteToday || (qualifiedToday && !hasTodayWork)) {
     return 'today_full_clear';
   }
@@ -275,14 +280,27 @@ function inferStatusKind(input: {
   return 'nothing_to_learn';
 }
 
-function mapStatusToCta(params: {
-  kind: HomeCtaKind;
-  draw: HomeDrawVM;
-  selectedDeckTitle: string | null;
-}): HomeCtaVM {
-  const { kind, draw, selectedDeckTitle } = params;
-  const drawReady = draw.state !== 'locked';
-  const drawLabel = selectedDeckTitle ? `Open ${selectedDeckTitle}` : 'Open reward draw';
+// Only these two kinds mean "today's learning is settled". They are the only
+// ones allowed to hand the primary button to the reward draw: ready pulls are
+// a reward for study, and a reward that can outrank study makes the main
+// button answer a question the user did not ask. The whitelist is over the
+// kind alone because the kind already encodes the answer, so no extra flag has
+// to be threaded through the view model to reach this decision.
+const DRAW_PRIMARY_KINDS: ReadonlySet<HomeCtaKind> = new Set<HomeCtaKind>([
+  'today_full_clear',
+  'nothing_to_learn',
+]);
+
+// The primary button names the screen it opens. It used to render
+// "Open <deck title>" and then navigate to the draw chamber, so the one
+// sentence Home says to a user every day misdescribed its own destination.
+// Wording follows drawState.ts, which calls this surface a draw and never
+// borrows a deck title for it.
+const DRAW_CTA_LABEL = 'Open reward draw';
+
+function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCtaVM {
+  const { kind, draw } = params;
+  const drawTakesPrimary = draw.state !== 'locked' && DRAW_PRIMARY_KINDS.has(kind);
 
   switch (kind) {
     case 'first_run':
@@ -294,15 +312,6 @@ function mapStatusToCta(params: {
         disabled: false,
       };
     case 'today_pending':
-      if (drawReady) {
-        return {
-          kind,
-          label: drawLabel,
-          nav: 'draw',
-          testID: 'home-primary-cta',
-          disabled: false,
-        };
-      }
       return {
         kind,
         label: 'Start today’s challenge',
@@ -311,15 +320,6 @@ function mapStatusToCta(params: {
         disabled: false,
       };
     case 'today_partial':
-      if (drawReady) {
-        return {
-          kind,
-          label: drawLabel,
-          nav: 'draw',
-          testID: 'home-primary-cta',
-          disabled: false,
-        };
-      }
       return {
         kind,
         label: 'Continue today’s challenge',
@@ -328,15 +328,6 @@ function mapStatusToCta(params: {
         disabled: false,
       };
     case 'today_done':
-      if (drawReady) {
-        return {
-          kind,
-          label: drawLabel,
-          nav: 'draw',
-          testID: 'home-primary-cta',
-          disabled: false,
-        };
-      }
       return {
         kind,
         label: 'Continue today’s challenge',
@@ -345,10 +336,10 @@ function mapStatusToCta(params: {
         disabled: false,
       };
     case 'today_full_clear':
-      if (drawReady) {
+      if (drawTakesPrimary) {
         return {
           kind,
-          label: drawLabel,
+          label: DRAW_CTA_LABEL,
           nav: 'draw',
           testID: 'home-primary-cta',
           disabled: false,
@@ -362,15 +353,6 @@ function mapStatusToCta(params: {
         disabled: false,
       };
     case 'due_only':
-      if (drawReady) {
-        return {
-          kind,
-          label: drawLabel,
-          nav: 'draw',
-          testID: 'home-primary-cta',
-          disabled: false,
-        };
-      }
       return {
         kind,
         label: 'Clear due reviews',
@@ -379,10 +361,10 @@ function mapStatusToCta(params: {
         disabled: false,
       };
     case 'nothing_to_learn':
-      if (drawReady) {
+      if (drawTakesPrimary) {
         return {
           kind,
-          label: drawLabel,
+          label: DRAW_CTA_LABEL,
           nav: 'draw',
           testID: 'home-primary-cta',
           disabled: false,
@@ -396,10 +378,13 @@ function mapStatusToCta(params: {
         disabled: false,
       };
     case 'wallet_full':
+      // Reachable only while today still has work (see inferStatusKind), so
+      // study is the honest destination and the full wallet stays a hero-copy
+      // nudge instead of taking the button.
       return {
         kind,
-        label: drawLabel,
-        nav: 'draw',
+        label: 'Start today’s challenge',
+        nav: 'challenge',
         testID: 'home-primary-cta',
         disabled: false,
       };
@@ -509,7 +494,10 @@ function buildHeroCopy(params: {
       return {
         eyebrow: 'Today',
         title: 'Reward wallet is full',
-        subtitle: 'Spend pulls first, then continue the study loop.',
+        // The primary button now sends this state into study, so the nudge
+        // has to agree with it. Telling the user to spend pulls first while
+        // the button starts a session is the same label deception in copy.
+        subtitle: 'Clear today’s route first, then spend pulls so reserve can flow.',
         helper: `${FREE_PULL_CAP} ready and ${FREE_PULL_OVERFLOW_CAP} reserve are currently occupied.`,
       };
     default: {
@@ -658,7 +646,6 @@ export function buildHomeVM(params: {
   let cta = mapStatusToCta({
     kind: statusKind,
     draw,
-    selectedDeckTitle: selectedDeck?.title ?? null,
   });
   if (!selectedDeck && statusKind !== 'error') {
     cta = {

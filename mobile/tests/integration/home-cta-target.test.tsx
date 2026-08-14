@@ -224,7 +224,11 @@ describe('home primary CTA target', () => {
     expect(navigateMock).toHaveBeenCalledWith('Library');
   });
 
-  it('navigates to Draw when pending work exists and pulls are available', async () => {
+  // The inverse of what this case used to assert. A wallet with pulls in it
+  // is a reward for study already done; letting it take the primary button
+  // while cards are due made Home answer a question nobody asked, and the
+  // label it showed ("Open <deck>") named a screen it did not open.
+  it('navigates to study, not Draw, when work is due and pulls are available', async () => {
     progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
     walletFixture = { availablePulls: 2, reservePulls: 0 };
 
@@ -245,10 +249,13 @@ describe('home primary CTA target', () => {
       await Promise.resolve();
     });
 
-    expect(navigateMock).toHaveBeenCalledWith('Draw', {
-      slug: 'csharp',
-      rewardPending: true,
-    });
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
+    expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
+
+    const ctaLabel = cta
+      .find((node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number')
+      .props.children;
+    expect(ctaLabel).toBe('Start today’s challenge');
   });
 
   it('navigates to Library when no deck is available', async () => {
