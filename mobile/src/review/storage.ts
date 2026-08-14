@@ -365,6 +365,15 @@ function reconcileProgressWithDeck(
           ...p,
           nextReviewAt: nowMs,
           stage: Math.max(clampStage(p.stage ?? 0) - 1, 0),
+          // Record WHEN this demotion happened, not just that the card is due.
+          // Without the timestamp the next pull silently undid the whole thing:
+          // the server still holds the pre-update due date from the last real
+          // review, the merge saw a row it had no reason to distrust, and the
+          // relearn this branch exists to force never happened. The sync merge
+          // reads this mark to tell "a due date from before the content
+          // changed" apart from "a genuinely newer review", and
+          // scheduleNextReview clears it once a real review arrives.
+          revisionDemotedAt: nowMs,
         };
         changed = true;
       }

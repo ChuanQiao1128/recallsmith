@@ -43,7 +43,12 @@ vi.mock('../../src/review/storage', () => ({
   setActiveUserSubForStorage: vi.fn(),
 }));
 
-import { scheduleNextReview, type CardProgress, type ReviewRating } from '../../src/review/model';
+import {
+  scheduleNextReview,
+  MAX_NEXT_REVIEW_HORIZON_MS,
+  type CardProgress,
+  type ReviewRating,
+} from '../../src/review/model';
 import { mergeRemoteIntoLocalProgress } from '../../src/sync/progressSync';
 
 const DECK = 'aws-basics';
@@ -102,13 +107,19 @@ class FakeServer {
       if (this.seenEventIds.has(e.eventId)) continue;
       this.seenEventIds.add(e.eventId);
 
-      // Mirrors the C# parameter layer: nextReviewAt is floored at eventTime
-      // (ProgressEvents.cs:108) and eventTime is capped at now + 5 min.
+      // Mirrors the C# parameter layer: eventTime is capped at now + 5 min, and
+      // nextReviewAt is bounded on BOTH sides, floored at eventTime and capped
+      // at eventTime + 90 days. The upper cap is the newer half: without it a
+      // due date centuries out was stored and echoed back forever, and since
+      // such a card is never due, no later review could ever correct it.
       const eventTimeMs = Math.min(e.eventTimeMs, nowMs + 5 * 60 * 1000);
       inserted.push({
         ...e,
         eventTimeMs,
-        nextReviewAtMs: Math.max(e.nextReviewAtMs, eventTimeMs),
+        nextReviewAtMs: Math.min(
+          Math.max(e.nextReviewAtMs, eventTimeMs),
+          eventTimeMs + MAX_NEXT_REVIEW_HORIZON_MS,
+        ),
       });
     }
     if (inserted.length === 0) return;
@@ -125,10 +136,13 @@ class FakeServer {
       // from having to touch one row twice.
       const inc = group.length;
 
-      // `last_row`: distinct on (...) order by event_time desc. Postgres leaves
-      // the winner unspecified when two events share event_time; the eventId
-      // tiebreak here makes the replica deterministic, and the gap that hides
-      // is asserted in the "documented boundary" test below.
+      // `last_row`: distinct on (...) order by event_time desc, event_id desc.
+      // Postgres leaves the winner unspecified among ties, so the SQL carries
+      // the same event_id tiebreak this replica uses; the two are meant to be
+      // read side by side. What the replica CANNOT prove is that Postgres
+      // honours it on the real query plan, so that half waits on Testcontainers.
+      // Ties across separate transactions are a different case and stay
+      // arrival-ordered by design, asserted in the "documented boundary" test.
       const last = group.reduce((a, b) =>
         b.eventTimeMs > a.eventTimeMs ||
         (b.eventTimeMs === a.eventTimeMs && b.eventId > a.eventId)
@@ -541,17 +555,93 @@ describe('multi-device sync simulation', () => {
     expect(merged[0].stage).toBe(4);
   });
 
-  it('documented boundary: an exact event_time tie on one card IS arrival ordered', () => {
-    // Not a bug report, a contract. `last_rating`/`due_at` use event-time LWW
-    // with `excluded.last_reviewed_at >= current`, and `distinct on ... order by
-    // event_time desc` picks an unspecified row among ties. So two devices
-    // rating the same card in the same millisecond is the one input where the
+  it('permanent exile: a due date past the horizon is clamped on both sides of the wire', () => {
+    // The failure mode this guards is silent AND self-sealing: a card due in
+    // year 2500 is never shown, so the user can never rate it, so no later
+    // event can ever correct it. Push, merge and pull all report success while
+    // the card leaves the product.
+    const poisoned = T0 + 500 * 365 * 86_400_000;
+
+    const server = new FakeServer();
+    server.ingest(
+      [
+        {
+          eventId: 'e-poison',
+          stableUid: 'uid-a',
+          rating: 'good',
+          eventTimeMs: T0 + 1_000,
+          nextReviewAtMs: poisoned,
+          srsStage: 2,
+        },
+      ],
+      T0 + 1_000,
+    );
+
+    expect(server.rows.get('uid-a')!.dueAtMs).toBe(T0 + 1_000 + MAX_NEXT_REVIEW_HORIZON_MS);
+
+    // And the client refuses it again on the way in, because this device may be
+    // talking to a server that has not shipped the ingest clamp yet.
+    const local: CardProgress[] = [{ stableUid: 'uid-a', stage: 0, nextReviewAt: 0 }];
+    const { merged } = mergeRemoteIntoLocalProgress(local, [
+      {
+        deckSlug: DECK,
+        stableUid: 'uid-a',
+        status: 1,
+        reviewCount: 1,
+        lastRating: 3,
+        lastReviewedAtMs: T0 + 1_000,
+        nextReviewAtMs: poisoned,
+        srsStage: 2,
+        updatedAtMs: T0 + 1_000,
+      },
+    ] as any);
+
+    expect(merged[0].nextReviewAt).toBe(T0 + 1_000 + MAX_NEXT_REVIEW_HORIZON_MS);
+  });
+
+  it('same-batch event_time tie is decided by event_id, not by array order', () => {
+    // `distinct on (...) order by event_time desc` returns an UNSPECIFIED row
+    // among ties, so with event_time alone the plan decided which rating, due
+    // date and rung a user kept. The ingest's own eventTimeMs clamp made that
+    // systematic rather than rare: every event from a skewed clock lands on the
+    // same now + 5 min bound. `, event_id desc` is the total order that fixes
+    // it, and the winner must not depend on the order the rows were listed in.
+    const at = T0 + 2_000;
+    const mk = (id: string, rating: ReviewRating): SyncEvent => ({
+      eventId: id,
+      stableUid: 'uid-a',
+      rating,
+      eventTimeMs: at,
+      nextReviewAtMs: at + RATING_VALUE[rating] * 86_400_000,
+      srsStage: RATING_VALUE[rating],
+    });
+
+    const forward = new FakeServer();
+    forward.ingest([mk('e1', 'again'), mk('e2', 'easy')], at + 1);
+
+    const reverse = new FakeServer();
+    reverse.ingest([mk('e2', 'easy'), mk('e1', 'again')], at + 1);
+
+    // Highest event_id wins in both, so the two servers agree.
+    expect(forward.rows.get('uid-a')!.lastRating).toBe(RATING_VALUE.easy);
+    expect(reverse.rows.get('uid-a')!.lastRating).toBe(RATING_VALUE.easy);
+    expect(forward.semanticState()).toBe(reverse.semanticState());
+  });
+
+  it('documented boundary: an event_time tie ACROSS transactions IS arrival ordered', () => {
+    // Not a bug report, a contract, and the half the event_id tiebreak does not
+    // reach. Inside one batch `distinct on ... order by event_time desc,
+    // event_id desc` now picks deterministically, but two events that arrive in
+    // separate pushes never meet in that CTE: they meet in the upsert, whose
+    // predicate is `excluded.last_reviewed_at >= current`, and `>=` means the
+    // later arrival wins the tie. So two devices rating the same card in the
+    // same millisecond, pushing separately, is still the one input where the
     // server's answer depends on which push landed first.
     //
     // Nothing upstream prevents it (event_id dedupe only removes identical
     // events, not simultaneous ones), which is exactly why it is pinned here:
-    // if someone later adds a tiebreaker, this test fails and the reviewer has
-    // to decide deliberately instead of accidentally.
+    // if someone later makes the upsert tie-break too, this test fails and the
+    // reviewer has to decide deliberately instead of accidentally.
     const at = T0 + 1_000;
     const mk = (id: string, rating: ReviewRating): SyncEvent => ({
       eventId: id,

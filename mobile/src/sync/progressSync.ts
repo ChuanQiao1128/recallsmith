@@ -8,7 +8,7 @@ import { apiJson } from '../api/apiClient';
 import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../review/storage';
 import { syncDrawStateNow } from './drawStateSync';
-import { clampStage } from '../review/model';
+import { clampStage, MAX_NEXT_REVIEW_HORIZON_MS } from '../review/model';
 import type { CardProgress } from '../review/model';
 
 /**
@@ -379,6 +379,43 @@ const PENDING_SUB = '__pending__';
  */
 const MAX_QUEUE_EVENTS = 3000;
 
+/**
+ * How many events this partition has dropped at the cap, ever.
+ *
+ * The cap itself is fine (an unbounded queue would eventually break
+ * AsyncStorage), but until now it discarded the OLDEST reviews with no counter,
+ * no log line and no UI: the events the server never received were exactly the
+ * ones nobody could find out about. Every layer reported success. A number that
+ * survives restarts is the cheapest thing that turns "we think this never
+ * happens" into something checkable, and it is per partition (the __pending__
+ * signed-out queue included) because a cap hit there means something different
+ * from a cap hit on a signed-in queue.
+ *
+ * Stored separately from the queue so a drop is still counted when the queue is
+ * later flushed to empty.
+ */
+function kDropped(userSub: string) {
+  return `${userPrefix(userSub)}sync:droppedEvents:v1`;
+}
+
+async function readDroppedCount(userSub: string): Promise<number> {
+  try {
+    const raw = await AsyncStorage.getItem(kDropped(userSub));
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function addDroppedCount(userSub: string, n: number): Promise<void> {
+  if (!Number.isFinite(n) || n <= 0) return;
+  try {
+    const prev = await readDroppedCount(userSub);
+    await AsyncStorage.setItem(kDropped(userSub), String(prev + Math.floor(n)));
+  } catch {}
+}
+
 async function readQueue(userSub: string): Promise<ProgressEvent[]> {
   try {
     const raw = await AsyncStorage.getItem(kQueue(userSub));
@@ -428,6 +465,9 @@ async function enqueueProgressEvent(userSub: string, ev: ProgressEvent): Promise
     const out = q.length > MAX_QUEUE_EVENTS ? q.slice(q.length - MAX_QUEUE_EVENTS) : q;
 
     await writeQueue(userSub, out);
+    // Count what the slice above threw away. Written inside the lock with the
+    // queue, so the counter can never disagree with what was actually dropped.
+    await addDroppedCount(userSub, q.length - out.length);
   });
 }
 
@@ -482,6 +522,9 @@ async function adoptPendingProgressEvents(userSub: string): Promise<number> {
       merged.length > MAX_QUEUE_EVENTS ? merged.slice(merged.length - MAX_QUEUE_EVENTS) : merged;
 
     await writeQueue(userSub, out);
+    // Adoption is the other way past the cap, so it counts its losses too, and
+    // it counts them against the account that ended up owning the events.
+    await addDroppedCount(userSub, merged.length - out.length);
     await writeQueue(PENDING_SUB, []);
 
     return added;
@@ -969,7 +1012,15 @@ export function mergeRemoteIntoLocalProgress(
 
     const serverNext = toMs((r as any).nextReviewAtMs);
     const hasNext = serverNext != null;
-    const nextReviewAt = hasNext ? (serverNext as number) : lastReviewedAt;
+    // Mirror of the ingest clamp in src_C/Vpc/Runtime/ProgressEvents.cs. It is
+    // not redundant with it: this device may be talking to a server that has
+    // not shipped that clamp, or reading a row stored before it existed (those
+    // are repaired by migration 015, but only once the migration has run). A
+    // due date past the horizon removes the card from the product with no error
+    // anywhere, and the client is the last place that can refuse it.
+    const nextReviewAt = hasNext
+      ? Math.min(serverNext as number, lastReviewedAt + MAX_NEXT_REVIEW_HORIZON_MS)
+      : lastReviewedAt;
 
     const srsStage = optionalRemoteStage((r as any).srsStage);
 
@@ -1023,10 +1074,31 @@ export function mergeRemoteIntoLocalProgress(
     // row, and storage.ts still infers its stage from the interval.
     const remoteStagePatch = remote.srsStage != null ? { stage: remote.srsStage } : {};
 
+    // A deck revision pulled this card back to due (see reconcileProgressWithDeck
+    // in review/storage.ts) AFTER the review the remote row describes. The
+    // server is not wrong, it is just answering an older question: its due date
+    // was computed from content the user has since not seen. Adopting it undoes
+    // the relearn, and it undoes it silently, on every pull, so the content
+    // update never reaches the user at all.
+    //
+    // While the mark stands, the local schedule wins. Both nextReviewAt and
+    // stage stay local, because the demotion is one verdict about one card and
+    // splitting it would leave the rung from one device next to the due date
+    // from another, the same stitched state the server-side merge comment warns
+    // about. lastReviewedAt is still taken from the remote row: that review did
+    // happen, and pinning it forward is what stops this branch from re-running
+    // forever. The local intent expires the moment a real review arrives, since
+    // scheduleNextReview clears the mark.
+    const demotedAt = toMs((p as any).revisionDemotedAt) ?? 0;
+    const keepLocalSchedule = demotedAt > remoteLast;
+
     // Case A: 远端更“新”
     if (remoteLast > localLast) {
       changed = true;
       appliedCount += 1;
+      if (keepLocalSchedule) {
+        return { ...p, lastReviewedAt: remoteLast } as any;
+      }
       return {
         ...p,
         lastReviewedAt: remoteLast,
@@ -1036,7 +1108,13 @@ export function mergeRemoteIntoLocalProgress(
     }
 
     // Case B: lastReviewedAt 相同，但远端带 nextReviewAtMs（Phase3）
-    if (remote.hasNext && remoteLast === localLast && remoteNext > 0 && remoteNext !== localNext) {
+    if (
+      !keepLocalSchedule &&
+      remote.hasNext &&
+      remoteLast === localLast &&
+      remoteNext > 0 &&
+      remoteNext !== localNext
+    ) {
       changed = true;
       appliedCount += 1;
       return {
@@ -1521,13 +1599,19 @@ export async function getProgressSyncDebugState(): Promise<any> {
   const token = await getSyncAccessToken();
   const userSub = token ? await ensureUserSubReady(token) : null;
 
-  const [cursorMs, lastRaw, err, deviceId, qSize] = await Promise.all([
-    userSub ? getCursorMs(userSub) : Promise.resolve(null),
-    userSub ? AsyncStorage.getItem(kLastSync(userSub)) : Promise.resolve(null),
-    userSub ? AsyncStorage.getItem(kLastError(userSub)) : Promise.resolve(null),
-    getDeviceId(),
-    userSub ? progressQueueSize(userSub) : Promise.resolve(0),
-  ]);
+  const [cursorMs, lastRaw, err, deviceId, qSize, dropped, pendingSize, pendingDropped] =
+    await Promise.all([
+      userSub ? getCursorMs(userSub) : Promise.resolve(null),
+      userSub ? AsyncStorage.getItem(kLastSync(userSub)) : Promise.resolve(null),
+      userSub ? AsyncStorage.getItem(kLastError(userSub)) : Promise.resolve(null),
+      getDeviceId(),
+      userSub ? progressQueueSize(userSub) : Promise.resolve(0),
+      userSub ? readDroppedCount(userSub) : Promise.resolve(0),
+      // The signed-out partition is reported whether or not anyone is signed in:
+      // events stranded there are precisely the ones no account can see.
+      progressQueueSize(PENDING_SUB),
+      readDroppedCount(PENDING_SUB),
+    ]);
 
   let last = null;
   try {
@@ -1539,6 +1623,11 @@ export async function getProgressSyncDebugState(): Promise<any> {
     userSub: userSub ?? null,
     cursorMs,
     queueSize: qSize,
+    // Reviews this device threw away at the queue cap and can never send. Not
+    // folded into one total: the two partitions fail for different reasons.
+    droppedCount: dropped,
+    pendingQueueSize: pendingSize,
+    pendingDroppedCount: pendingDropped,
     last,
     lastError: err || null,
   };

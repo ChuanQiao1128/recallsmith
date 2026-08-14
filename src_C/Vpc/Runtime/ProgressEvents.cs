@@ -43,6 +43,20 @@ public static class ProgressEvents
   // client from writing a rung that no scheduler can interpret.
   private const int MaxSrsStage = 6;
 
+  // Upper bound on how far ahead one review may schedule the next one.
+  //
+  // The ladder in mobile/src/review/model.ts (INTERVALS_DAYS) tops out at 60
+  // days, so 90 is deliberately NOT "the algorithm's range plus slack": it is a
+  // physically impossible value, the kind only a corrupt clock, a unit mix-up
+  // (seconds read as milliseconds) or a tampered client produces. An invariant
+  // written against the impossible survives a ladder change; one written against
+  // the current maximum has to be edited every time the product tunes it, and
+  // the edit that gets forgotten is the one that starts rejecting real reviews.
+  //
+  // The client clamps the same horizon in mergeRemoteIntoLocalProgress
+  // (mobile/src/sync/progressSync.ts) for rows an older server already stored.
+  private const long MaxNextReviewHorizonMs = 90L * 24 * 60 * 60 * 1000;
+
   public static async Task<APIGatewayProxyResponse> HandleProgressEvents(LambdaRequest req, Res res, AuthContext auth)
   {
     var deny = Auth.RequireUser(auth, res);
@@ -126,6 +140,20 @@ public static class ProgressEvents
         if (nextReviewAtMs is not null && nextReviewAtMs < eventTimeMs)
         {
           nextReviewAtMs = eventTimeMs;
+        }
+
+        // The bound that was missing. Without it a due date of year 2500 was
+        // stored, echoed back on every pull and adopted by every device, and the
+        // card was gone: it is never due, so the user never rates it, so no
+        // later event can ever correct it. Nothing anywhere reports this. Push,
+        // merge and pull all succeed, the card simply stops existing for the
+        // user. Clamping (not rejecting) keeps the review itself, which is a
+        // fact the user earned, and bounds only the schedule derived from it.
+        // Already-poisoned rows are repaired once by migration 015; this clamp
+        // only guards the ingest path.
+        if (nextReviewAtMs is not null && nextReviewAtMs > eventTimeMs + MaxNextReviewHorizonMs)
+        {
+          nextReviewAtMs = eventTimeMs + MaxNextReviewHorizonMs;
         }
 
         var lastSeenRevision =
@@ -386,7 +414,23 @@ public static class ProgressEvents
             from ins i
             join (values {string.Join(", ", stageRows)}) as s(event_id, srs_stage)
               on s.event_id = i.event_id
-            order by i.user_sub, i.deck_slug, i.stable_uid, i.event_time desc
+            -- event_id is the last-resort tiebreak, and it is not decoration.
+            -- `distinct on` returns an UNSPECIFIED row among ties, so with
+            -- event_time alone two events on one card in the same millisecond
+            -- let the plan (parallel scan, index choice, row order) decide which
+            -- rating, due date and rung the user ends up with. Ties are not
+            -- exotic either: the eventTimeMs clamp above maps every event from a
+            -- skewed clock onto the SAME bound, which turns a rare collision
+            -- into a systematic one. Any total order beats none; event_id is
+            -- already unique, already indexed as the primary key, and does not
+            -- vary with the plan.
+            --
+            -- The TS replica in mobile/tests/unit/multiDeviceSync.sim.test.ts
+            -- mirrors this exact rule. That replica can only prove the rule is
+            -- consistent with itself: whether Postgres really honours it here
+            -- needs a live database, so the SQL-side proof waits on
+            -- Testcontainers.
+            order by i.user_sub, i.deck_slug, i.stable_uid, i.event_time desc, i.event_id desc
           ),
           merged as (
             select
