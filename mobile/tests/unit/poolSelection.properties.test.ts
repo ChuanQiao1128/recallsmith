@@ -148,15 +148,36 @@ describe('poolSelection properties', () => {
     );
   });
 
-  it('keeps the pity counter inside its domain (0, held, or +1, never past threshold)', () => {
-    // Domain closure is what makes the label honest: buildPityProgressLabelV9
-    // renders `threshold - draws` and clamps at 0, so a counter that runs
-    // past the threshold shows "guaranteed" forever while nothing changes.
+  it('leaves the pity counter equal to the trailing run of commons, capped at threshold', () => {
+    // The counter has one meaning now: commons revealed in a row since the
+    // last RAR+. This property is that sentence, written as arithmetic over
+    // the output the caller actually sees, so the storage value and the
+    // revealed sequence can never drift apart.
+    //
+    // Domain closure rides along and is what keeps the label honest:
+    // buildPityProgressLabelV9 renders `threshold - draws` and clamps at 0,
+    // so a counter past the threshold would show "guaranteed" forever while
+    // nothing ever changes.
     fc.assert(
       fc.property(inputArb(), (input) => {
-        const { pityNext } = call(input);
+        const { cards, pityNext } = call(input);
+
+        let trailingCommons = 0;
+        let sawRarePlus = false;
+        for (let index = cards.length - 1; index >= 0; index -= 1) {
+          if (rarityOfCard(cards[index]) !== 'COM') {
+            sawRarePlus = true;
+            break;
+          }
+          trailingCommons += 1;
+        }
+        // No RAR+ in this pull means the run started before it, so the
+        // incoming counter carries over.
+        const expected = sawRarePlus ? trailingCommons : input.pityState.draws + trailingCommons;
+
         expect(pityNext.threshold).toBe(input.pityState.threshold);
-        expect([0, input.pityState.draws, input.pityState.draws + 1]).toContain(pityNext.draws);
+        expect(pityNext.draws).toBe(Math.min(expected, input.pityState.threshold));
+        expect(pityNext.draws).toBeGreaterThanOrEqual(0);
         expect(pityNext.draws).toBeLessThanOrEqual(pityNext.threshold);
       }),
     );
@@ -176,7 +197,10 @@ describe('poolSelection properties', () => {
     );
   });
 
-  it('honours the pity promise: at threshold with a RAR+ in the pool, one is granted', () => {
+  it('honours the pity promise: at threshold with a RAR+ in the pool, the very next card is one', () => {
+    // Stronger than "somewhere in the pull". The counter is per card, so the
+    // card the player is owed is the next one revealed, not merely one of the
+    // ten they paid for.
     fc.assert(
       fc.property(inputArb(), (input) => {
         const atThreshold = {
@@ -190,8 +214,55 @@ describe('poolSelection properties', () => {
 
         const result = call(atThreshold);
         expect(result.pityFiredFor).not.toBeNull();
-        expect(result.cards.some((card) => rarityOfCard(card) !== 'COM')).toBe(true);
-        expect(result.pityNext.draws).toBe(0);
+        expect(rarityOfCard(result.cards[0])).not.toBe('COM');
+      }),
+    );
+  });
+
+  it('never lets a run of commons pass the threshold while an unowned RAR+ is left', () => {
+    // This is the whole point of counting per card, stated as the promise the
+    // player is given: however you group your pulls, you cannot see more than
+    // `threshold` commons in a row while the pool still owes you a rare.
+    //
+    // The run is tracked across pull boundaries because the player does not
+    // see boundaries, only a stream of cards. It starts at pityState.draws:
+    // that IS the run carried over from before this window.
+    //
+    // The check is skipped once the pool has no RAR+ left to give, which is
+    // not a loophole but the honest edge of the promise: an all-commons pool
+    // cannot honour it, and the counter sits capped at the threshold instead.
+    fc.assert(
+      fc.property(inputArb(), (input) => {
+        const owned = new Set(input.ownedSet);
+        let state = input.pityState;
+        let comRun = state.draws;
+
+        for (let pull = 0; pull < 6; pull += 1) {
+          const pool = missingPool({ ...input, ownedSet: owned });
+          if (pool.length === 0) break;
+
+          const poolLeft = new Map(pool.map((card) => [card.StableUid, card]));
+          const result = call({ ...input, ownedSet: owned, pityState: state, seed: input.seed + pull });
+
+          for (const card of result.cards) {
+            const owedARarePlus = [...poolLeft.values()].some(
+              (candidate) => rarityOfCard(candidate) !== 'COM',
+            );
+            poolLeft.delete(card.StableUid);
+
+            if (rarityOfCard(card) === 'COM') {
+              comRun += 1;
+              if (owedARarePlus) {
+                expect(comRun).toBeLessThanOrEqual(state.threshold);
+              }
+            } else {
+              comRun = 0;
+            }
+          }
+
+          for (const card of result.cards) owned.add(card.StableUid);
+          state = result.pityNext;
+        }
       }),
     );
   });

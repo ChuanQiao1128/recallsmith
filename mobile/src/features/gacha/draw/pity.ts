@@ -37,13 +37,13 @@ export function pickRarity(roll: number, odds: PoolOdds): 'COM' | 'RAR' | 'LEG' 
   return 'COM';
 }
 
-// "8/10 until guaranteed RAR+" read as 8 of 10 cards, which is not what the
-// counter measures: poolSelection advances it once per draw action, so a
-// ten-card pull moves it by 1. Saying "draws" keeps the unit honest without
-// touching the mechanic (see the simulation numbers in poolSelection.ts).
+// Back to cards. This label used to say "draws" because the counter really
+// did move once per draw action, so a ten-card pull advanced it by 1 and "8/10
+// cards" would have been a lie. poolSelection now counts revealed cards, so
+// the reading a player already had is the correct one.
 export function buildPityProgressLabel(count: number): string {
   const safe = Math.max(0, Math.min(9, Math.floor(count)));
-  return `${safe}/10 draws until guaranteed RAR+`;
+  return `${safe}/10 cards until guaranteed RAR+`;
 }
 
 export function buildMockDrawResult(params: {
@@ -91,8 +91,11 @@ export function buildMockDrawResult(params: {
 export function buildPityProgressLabelV9(state: PityState, missingLegCount: number): string {
   if (missingLegCount === 0) return '';
   const remaining = Math.max(0, state.threshold - state.draws);
-  if (remaining === 0) return 'Next draw guarantees a missing rare or better';
-  return `${remaining} draws until guaranteed reveal`;
+  // "card", not "draw": the counter advances per revealed card, so the very
+  // next card is the one that pays out, whether it arrives in a single pull or
+  // as slot 3 of a ten-card pull.
+  if (remaining === 0) return 'Next card guarantees a missing rare or better';
+  return `${remaining} ${remaining === 1 ? 'card' : 'cards'} until guaranteed reveal`;
 }
 
 /**

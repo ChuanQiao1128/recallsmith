@@ -26,7 +26,7 @@ describe('pity helpers', () => {
   });
 
   it('formats pity progress labels', () => {
-    expect(buildPityProgressLabel(8)).toBe('8/10 draws until guaranteed RAR+');
+    expect(buildPityProgressLabel(8)).toBe('8/10 cards until guaranteed RAR+');
   });
 
   it('injects a RAR+ card when pity is about to trigger', () => {
@@ -60,10 +60,14 @@ describe('pity helpers', () => {
   });
 
   it('returns guarantee label when pity remaining is zero', () => {
-    expect(buildPityProgressLabelV9({ draws: 10, threshold: 10 }, 1)).toBe('Next draw guarantees a missing rare or better');
+    expect(buildPityProgressLabelV9({ draws: 10, threshold: 10 }, 1)).toBe('Next card guarantees a missing rare or better');
   });
 
   it('returns countdown label when pity has not reached threshold', () => {
-    expect(buildPityProgressLabelV9({ draws: 7, threshold: 10 }, 1)).toBe('3 draws until guaranteed reveal');
+    expect(buildPityProgressLabelV9({ draws: 7, threshold: 10 }, 1)).toBe('3 cards until guaranteed reveal');
+  });
+
+  it('says "card" in the singular when one card is left before the guarantee', () => {
+    expect(buildPityProgressLabelV9({ draws: 9, threshold: 10 }, 1)).toBe('1 card until guaranteed reveal');
   });
 });
