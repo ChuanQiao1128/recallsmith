@@ -24,5 +24,15 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Hand-made "* 2.tsx" Finder copies inside src/ are user scratch files, not source.
+  // They are untracked and broken; excluding them keeps tsc honest without deleting anything.
+  "exclude": [
+    "src/**/* 2.ts",
+    "src/**/* 2.tsx",
+    // Untracked wip drafts whose hooks only exist under _ui-review/proposed/files;
+    // they are imported by nobody and would fail the build for everyone.
+    "src/components/decks/DeckActions.tsx",
+    "src/components/decks/DeckListTable.tsx"
+  ]
 }
