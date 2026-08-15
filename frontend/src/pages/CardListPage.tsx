@@ -180,6 +180,15 @@ export function CardListPage() {
 
             <button
               type="button"
+              className="text-sm px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+              onClick={() => navigate(`/decks/cards/import?deckId=${deck.id}`)}
+              title="Paste or load a markdown deck document and reconcile it against this deck"
+            >
+              Import Markdown
+            </button>
+
+            <button
+              type="button"
               className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium
                          bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800
                          focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"

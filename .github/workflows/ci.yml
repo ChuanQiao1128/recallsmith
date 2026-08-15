@@ -25,6 +25,25 @@ jobs:
       - run: npm ci
       - run: npx vitest run
 
+  frontend:
+    name: frontend (vitest + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # Tests before build: the import reconciler is pure and fails in
+      # milliseconds, so there is no reason to spend a bundle on finding out.
+      - run: npx vitest run
+      - run: npm run build
+
   backend:
     name: backend (dotnet test)
     runs-on: ubuntu-latest

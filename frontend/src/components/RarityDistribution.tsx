@@ -1,9 +1,11 @@
 import { useMemo } from 'react';
-import type { Card } from '../types/card';
 import { mapDifficultyToRarity } from '../gacha/rarityConfig';
 
 interface RarityDistributionProps {
-  cards: Card[];
+  // Only difficulty is read, so the prop asks for exactly that. The import
+  // preview shows the distribution of cards that do not exist server side yet
+  // and therefore have no id, version or timestamps to invent.
+  cards: readonly { difficulty: number }[];
 }
 
 export function RarityDistribution({ cards }: RarityDistributionProps) {

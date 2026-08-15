@@ -10,6 +10,7 @@ import { NewDeckPage } from './pages/NewDeckPage';
 import { CardListPage } from './pages/CardListPage';
 import { NewCardPage } from './pages/NewCardPage';
 import { EditCardPage } from './pages/EditCardPage';
+import { DeckImportPage } from './pages/DeckImportPage';
 import { DeckPreviewPage } from './pages/DeckPreviewPage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
 import { DeckEditPage } from './pages/DeckEditPage';
@@ -31,6 +32,7 @@ function App() {
         <Route path="/decks/cards" element={<CardListPage />} />
         <Route path="/decks/cards/new" element={<NewCardPage />} />
         <Route path="/decks/cards/edit" element={<EditCardPage />} />
+        <Route path="/decks/cards/import" element={<DeckImportPage />} />
 
         <Route path="/decks/preview" element={<DeckPreviewPage />} />
 

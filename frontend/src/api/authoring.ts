@@ -426,6 +426,12 @@ export async function updateCard(params: {
   explanation?: string;
   codeSnippet?: string;
   codeLanguage?: string;
+  // The PUT handler has always accepted realWorldUsage (Vpc/Authoring/Cards.cs
+  // update spec); this client just never forwarded it, so the field could be
+  // written on create and never changed again. The markdown importer compares
+  // it when deciding update vs unchanged, so leaving it out here would make a
+  // USAGE edit replan forever and break the "re-import is a no-op" promise.
+  realWorldUsage?: string;
   difficulty?: number;
   orderInDeck?: number;
   stableUid?: string;
@@ -441,6 +447,7 @@ export async function updateCard(params: {
     if (params.explanation !== undefined) body.explanation = params.explanation;
     if (params.codeSnippet !== undefined) body.codeSnippet = params.codeSnippet;
     if (params.codeLanguage !== undefined) body.codeLanguage = params.codeLanguage;
+    if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
     if (params.stableUid !== undefined) body.stableUid = params.stableUid;
