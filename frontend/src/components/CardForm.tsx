@@ -203,13 +203,14 @@ export function CardForm(props: CardFormProps) {
 
       {/* Question */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">
+        <label htmlFor="question" className="block text-sm font-medium text-slate-700 mb-1">
           Question <span className="text-red-500">*</span>
         </label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      min-h-[80px]"
+          id="question"
           value={values.question}
           onChange={e => handleChange('question', e.target.value)}
           onBlur={handleQuestionBlur}
@@ -219,7 +220,7 @@ export function CardForm(props: CardFormProps) {
 
       {/* StableUid */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">
+        <label htmlFor="stableUid" className="block text-sm font-medium text-slate-700 mb-1">
           Stable UID <span className="text-red-500">*</span>
         </label>
         <input
@@ -227,6 +228,7 @@ export function CardForm(props: CardFormProps) {
           className={`block w-full rounded-md border px-3 py-2 text-sm font-mono
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      ${mode === 'edit' ? 'border-slate-200 bg-slate-100 text-slate-500' : 'border-slate-300'}`}
+          id="stableUid"
           value={values.stableUid}
           readOnly={mode === 'edit'}
           onChange={e => handleChange('stableUid', slugifyWhileTyping(e.target.value))}
@@ -242,11 +244,12 @@ export function CardForm(props: CardFormProps) {
 
       {/* Explanation */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">Explanation</label>
+        <label htmlFor="explanation" className="block text-sm font-medium text-slate-700 mb-1">Explanation</label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      min-h-[100px]"
+          id="explanation"
           value={values.explanation}
           onChange={e => handleChange('explanation', e.target.value)}
           placeholder="A concise but clear explanation of the answer..."
@@ -329,11 +332,12 @@ export function CardForm(props: CardFormProps) {
 
       {/* Code Snippet + Preview */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">Code Snippet</label>
+        <label htmlFor="codeSnippet" className="block text-sm font-medium text-slate-700 mb-1">Code Snippet</label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      min-h-[140px]"
+          id="codeSnippet"
           value={values.codeSnippet}
           onChange={e => handleChange('codeSnippet', e.target.value)}
           placeholder={`function makeCounter() {\n  let count = 0;\n  return function () {\n    count++;\n    return count;\n  };\n}`}
@@ -358,11 +362,12 @@ export function CardForm(props: CardFormProps) {
 
         {/* RealWorldUsage */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">RealWorldUsage</label>
+        <label htmlFor="realWorldUsage" className="block text-sm font-medium text-slate-700 mb-1">RealWorldUsage</label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      min-h-[90px]"
+          id="realWorldUsage"
           value={values.realWorldUsage}
           onChange={e => handleChange('realWorldUsage', e.target.value)}
           placeholder="Where would you use this in real projects? Any pitfalls?"

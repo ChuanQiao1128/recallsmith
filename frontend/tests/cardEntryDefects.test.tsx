@@ -291,3 +291,91 @@ describe('the console does not hand out an export it has already rejected', () =
     expect(download.disabled).toBe(false);
   });
 });
+
+// --- F6 -------------------------------------------------------------------
+
+// The third control on this same form that collected a value and threw it away.
+// Unlike F4 the field is not even mentioned in the client's request types, yet
+// the backend has always read it: Cards.cs parses `revision` on create and
+// carries it in the update field map. So the form asked for a number, refused
+// to submit while it was invalid, and then dropped it.
+//
+// Validating an input that is never sent is the tell. A rule that guards
+// nothing is not a safety net, it is a claim that something is being protected.
+describe('the revision the form insists on is the revision that gets stored', () => {
+  it('sends it when creating a card', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[`/decks/cards/new?deckId=${DECK_ID}`]}>
+        <NewCardPage />
+      </MemoryRouter>,
+    );
+
+    const revision = await screen.findByLabelText('Revision');
+    await user.clear(revision);
+    await user.type(revision, '3');
+
+    const question = screen.getByLabelText(/question/i);
+    await user.type(question, 'What is a span?');
+    await user.tab();
+
+    await user.click(screen.getByRole('button', { name: /create|save|保存/i }));
+
+    await waitFor(() => expect(api.createCard).toHaveBeenCalled());
+    expect(api.createCard.mock.calls[0][0]).toMatchObject({ revision: 3 });
+  });
+
+  it('sends it when editing a card', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]}>
+        <EditCardPage />
+      </MemoryRouter>,
+    );
+
+    const revision = await screen.findByLabelText('Revision');
+    await user.clear(revision);
+    await user.type(revision, '7');
+
+    await user.click(screen.getByRole('button', { name: /save|保存|update/i }));
+
+    await waitFor(() => expect(api.updateCard).toHaveBeenCalled());
+    expect(api.updateCard.mock.calls[0][0]).toMatchObject({ revision: 7 });
+  });
+});
+
+// --- 可及性：每个 label 都要真的连着它的控件 --------------------------------
+
+// Found by a test that could not locate the Question field by its label. Four
+// of the nine labels carried htmlFor and five did not, so a screen reader had
+// no way to say what those five inputs were for, and clicking the text did not
+// focus the box. Pinned here rather than left as a convention, because the
+// convention was already half broken and nothing noticed.
+describe('every field on the card form is reachable by its label', () => {
+  it('associates all nine labels with a control', () => {
+    render(
+      <CardForm
+        mode="create"
+        deck={deck}
+        initialValues={{
+          question: '', stableUid: '', explanation: '', realWorldUsage: '',
+          codeSnippet: '', codeLanguage: '', difficulty: 2, orderInDeck: 10, revision: 1,
+        }}
+        onSubmit={async () => ({ ok: true })}
+        onCancel={() => {}}
+      />,
+    );
+
+    const labels = [...document.querySelectorAll('label')];
+    expect(labels.length).toBeGreaterThanOrEqual(9);
+
+    const orphans = labels
+      .filter(l => {
+        const id = l.getAttribute('for');
+        return !id || document.getElementById(id) === null;
+      })
+      .map(l => l.textContent?.trim());
+
+    expect(orphans).toEqual([]);
+  });
+});

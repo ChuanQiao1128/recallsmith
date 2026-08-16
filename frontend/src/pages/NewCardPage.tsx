@@ -195,6 +195,13 @@ export function NewCardPage() {
       codeLanguage: values.codeLanguage || undefined,
       difficulty,
       orderInDeck,
+      // Forwarded now that the client type carries it. The form has validated
+      // this field all along; a rule that guards a value nobody sends is not a
+      // safety net, it is a claim that something is being protected.
+      revision:
+        typeof values.revision === 'number' && Number.isFinite(values.revision)
+          ? values.revision
+          : 1,
     });
 
     if (!result.success) {

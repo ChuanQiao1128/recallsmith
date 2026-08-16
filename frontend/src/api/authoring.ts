@@ -387,6 +387,9 @@ export async function createCard(params: {
   codeLanguage?: string;
   difficulty?: number;
   orderInDeck?: number;
+  // See the note on updateCard: the backend has parsed this since Cards.cs was
+  // written, and the form has always collected it.
+  revision?: number;
   stableUid?: string;
   realWorldUsage?: string;
 }): Promise<ApiResult<Card>> {
@@ -401,6 +404,7 @@ export async function createCard(params: {
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
     if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
+    if (params.revision !== undefined) body.revision = params.revision;
     body.stableUid = ensureStableUid(params.stableUid);
 
     // 统一使用单条记录返回格式
@@ -434,6 +438,11 @@ export async function updateCard(params: {
   realWorldUsage?: string;
   difficulty?: number;
   orderInDeck?: number;
+  // Distinct from expectedVersion. That one is the optimistic-concurrency
+  // token the server compares; this one is an author-controlled content
+  // revision the backend has parsed since Cards.cs was written. The form
+  // collected it and validated it and no client ever forwarded it.
+  revision?: number;
   stableUid?: string;
   expectedVersion?: number;
 }): Promise<ApiResult<Card>> {
@@ -450,6 +459,7 @@ export async function updateCard(params: {
     if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
+    if (params.revision !== undefined) body.revision = params.revision;
     if (params.stableUid !== undefined) body.stableUid = params.stableUid;
     if (params.deckId !== undefined) body.deckId = params.deckId;
 
