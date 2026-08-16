@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { invalidateProgressQueueCache } from '../../sync/progressQueueCache';
+
 // Progress-only keys (always wiped). Auth tokens, premium cache,
 // onboarding stage are NOT in this list by default.
 const PROGRESS_KEY_PREFIXES = [
@@ -49,6 +51,10 @@ export async function resetAllProgress(opts: ResetOptions = {}): Promise<ResetPr
   if (matchedKeys.length > 0) {
     await AsyncStorage.multiRemove(matchedKeys);
   }
+  // The `devcards:u:` prefix covers both sync queue partitions, and progressSync
+  // keeps the parsed queue in memory. Without this, the next rating would
+  // serialise that in-memory copy back to storage and undo the reset.
+  invalidateProgressQueueCache();
   return {
     removedKeyCount: matchedKeys.length,
     matchedKeys,

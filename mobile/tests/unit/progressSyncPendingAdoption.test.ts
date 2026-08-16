@@ -26,14 +26,27 @@ const userQueueKey = (sub: string) => `devcards:u:${sub}:sync:progressQueue:v1`;
 
 const store = new Map<string, string>();
 
-/** Simulates dying right after the copy: the clear-write never reaches disk. */
+/**
+ * Simulates dying right after the copy: the clear-write never reaches disk.
+ *
+ * Injected as a REJECTED setItem rather than a silently ignored one. Both leave
+ * the pending events on disk, which is the condition the test is about, but a
+ * silent success is not a failure mode AsyncStorage has, and progressSync now
+ * keeps a parsed copy of the queue in memory: told the write succeeded, it
+ * would go on believing the partition was cleared, and the simulated crash
+ * would only be visible on disk. A rejection is what a real storage failure
+ * looks like, and it makes the module drop its cached copy, so both storage and
+ * memory agree the clear never happened.
+ */
 let dropPendingClearWrite = false;
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getItem: vi.fn(async (key: string) => store.get(key) ?? null),
     setItem: vi.fn(async (key: string, value: string) => {
-      if (dropPendingClearWrite && key === PENDING_QUEUE_KEY && value === '[]') return;
+      if (dropPendingClearWrite && key === PENDING_QUEUE_KEY && value === '[]') {
+        throw new Error('simulated storage failure: pending clear-write lost');
+      }
       store.set(key, value);
     }),
     removeItem: vi.fn(async (key: string) => {

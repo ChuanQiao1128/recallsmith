@@ -8,6 +8,11 @@ import { apiJson } from '../api/apiClient';
 import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../review/storage';
 import { syncDrawStateNow } from './drawStateSync';
+import {
+  getCachedQueue,
+  setCachedQueue,
+  invalidateProgressQueueCache,
+} from './progressQueueCache';
 import { clampStage, MAX_NEXT_REVIEW_HORIZON_MS } from '../review/model';
 import type { CardProgress } from '../review/model';
 
@@ -416,7 +421,52 @@ async function addDroppedCount(userSub: string, n: number): Promise<void> {
   } catch {}
 }
 
-async function readQueue(userSub: string): Promise<ProgressEvent[]> {
+/**
+ * ----------------------------
+ * Write-through queue cache
+ * ----------------------------
+ *
+ * The parsed queue, per partition. Absent means "not read from storage yet in
+ * this process", which is a different statement from "empty".
+ *
+ * The waste it removes: every queue mutation used to be a full round trip
+ * through JSON. Enqueue read the whole queue back from AsyncStorage, JSON.parse
+ * of every event ever queued, pushed ONE event, and JSON.stringify the whole
+ * thing again. That put an O(depth) parse on the rating path, where depth grows
+ * with everything the user does offline, so the cost of grading a card depended
+ * on how long they had been out of signal. Measured on this laptop with
+ * scripts/bench-hot-paths.ts, a single enqueue cost ~1.5 ms at depth 1000 and
+ * ~4.5 ms at depth 3000 (the cap), against ~38 µs of fixed cost. That is a
+ * frame budget spent re-reading data the process just wrote.
+ *
+ * Why a cache is safe here, specifically:
+ *   1. readQueue and writeQueue are the ONLY doors to the queue key, and every
+ *      caller of both runs inside withQueueLock. That promise chain is a single
+ *      writer, so there is no interleaving that could observe a half-updated
+ *      cache, and no second writer whose disk write the cache could miss.
+ *   2. AsyncStorage is process-local. Nothing outside this module writes the
+ *      queue key, so "storage changed behind our back" is not a case that
+ *      exists, with the two exceptions handled by invalidateQueueCache below
+ *      (the debug reset and the disabled wipe, both of which delete keys
+ *      directly rather than through writeQueue).
+ *
+ * What it deliberately does NOT change: the event is still serialised and
+ * handed to AsyncStorage on the rating path, awaited, before recordReviewEvent
+ * resolves. See the durability note on writeQueue.
+ */
+// The cache itself lives in ./progressQueueCache so the debug reset can
+// invalidate it without importing this module (and expo along with it).
+
+/**
+ * The cold read: the one JSON.parse of a partition per app launch.
+ *
+ * The parse did not become free, it became once. On a cold start with a full
+ * queue the first enqueue still pays it (~4.5 ms at depth 3000 in the bench),
+ * and that is the honest shape of this optimisation: the cost moved off the
+ * per-rating path and onto the launch path, where it happens once and competes
+ * with app startup rather than with a tap.
+ */
+async function loadQueueFromStorage(userSub: string): Promise<ProgressEvent[]> {
   try {
     const raw = await AsyncStorage.getItem(kQueue(userSub));
     if (!raw) return [];
@@ -428,10 +478,62 @@ async function readQueue(userSub: string): Promise<ProgressEvent[]> {
   }
 }
 
+/**
+ * The cached array itself is returned, not a copy.
+ *
+ * Copying would put an O(depth) allocation back on the path this change exists
+ * to make O(1). The contract for callers is therefore: treat the result as
+ * owned by the cache. Mutate it only if you write it back through writeQueue in
+ * the same critical section (enqueueProgressEvent does exactly that), and
+ * otherwise derive a new array (slice/filter, as peek/remove/adopt do).
+ * Everything here runs under withQueueLock, so "the same critical section" is a
+ * real boundary and not a hope.
+ */
+async function readQueue(userSub: string): Promise<ProgressEvent[]> {
+  const cached = getCachedQueue(userSub);
+  if (cached) return cached;
+
+  const loaded = await loadQueueFromStorage(userSub);
+  setCachedQueue(userSub, loaded);
+  return loaded;
+}
+
+/**
+ * Durability vs latency, written down because it is a deliberate choice and not
+ * an oversight.
+ *
+ * The cache removes the READ. The WRITE stays exactly where it was: one
+ * serialise plus one awaited AsyncStorage.setItem, on the rating path, before
+ * recordReviewEvent resolves and the UI moves on. It would be easy to make
+ * enqueue look ~40x faster again by batching writes or deferring them to an
+ * idle callback, and it would be wrong: this queue is the durable log of facts,
+ * the local deck progress is only a projection of it, and an event that exists
+ * solely in memory is lost to a crash, an OS kill or a battery pull. The system
+ * is offline-first, so "the network will have it" is not a fallback either.
+ *
+ * The same trade-off with a different name is fsync policy in a trading or
+ * database system: write-behind buys throughput and pays with a window of
+ * acknowledged-but-lost writes. Here the window is set to zero on purpose. What
+ * this change eliminated is pure waste, work whose removal costs no durability
+ * at all, which is the only kind of optimisation that needs no justification.
+ *
+ * Cache before disk, not after: both are inside the lock, so no reader can ever
+ * see them disagree.
+ *
+ * A failed write drops the cache instead of keeping the value that never
+ * landed. The cache's whole claim is "this is what the queue key holds", and
+ * after a rejected setItem this process does not know what the key holds, so
+ * the only safe answer is to forget and re-read. That restores exactly the
+ * pre-cache behaviour, where every read reflected storage, including the bad
+ * cases (a rejected enqueue write loses that event, as it always did).
+ */
 async function writeQueue(userSub: string, arr: ProgressEvent[]): Promise<void> {
+  setCachedQueue(userSub, arr);
   try {
     await AsyncStorage.setItem(kQueue(userSub), JSON.stringify(arr));
-  } catch {}
+  } catch {
+    invalidateProgressQueueCache(userSub);
+  }
 }
 
 // Every queue mutation below is a read-modify-write over one AsyncStorage key,
@@ -458,6 +560,10 @@ function withQueueLock<T>(fn: () => Promise<T>): Promise<T> {
 // dropping a never-pushed one is not.
 async function enqueueProgressEvent(userSub: string, ev: ProgressEvent): Promise<void> {
   return withQueueLock(async () => {
+    // Append in place on the cached array and write that same array back. This
+    // is the one caller allowed to mutate what readQueue returned (see its
+    // contract note), and it is why the common case is an O(1) push instead of
+    // parse-copy-serialise.
     const q = await readQueue(userSub);
     q.push(ev);
 
@@ -599,6 +705,12 @@ export async function setSyncAccessToken(token: string | null): Promise<void> {
 
   if (!t) {
     await setActiveUserSub(null);
+    // Sign-out is a session boundary, so nothing from the previous session is
+    // answered out of memory afterwards. setActiveUserSub already drops the
+    // cache when the sub actually changes, but signing out with no sub resolved
+    // yet (token expired before the sub was ever read) takes its no-op branch,
+    // and that is precisely the case where signed-out events are queued.
+    invalidateProgressQueueCache();
     // token 被清除 -> 取消任何 pending 的 sync
     if (_timer) clearTimeout(_timer);
     _timer = null;
@@ -719,12 +831,24 @@ async function wipeLocalStudyStateBestEffort(): Promise<void> {
       await AsyncStorage.multiRemove(toRemove);
     }
   } catch {}
+  // shouldWipeKey matches the queue keys (they contain "progress"), so this
+  // deletes queue data without going through writeQueue. Every partition is
+  // dropped because the filter is a prefix/substring match, not a per-user one.
+  invalidateProgressQueueCache();
 }
 
 async function onUserChanged(prevSub: string | null, nextSub: string | null): Promise<void> {
   // 清掉内存状态
   _lastPullAtMs = 0;
   _healedOnce = false;
+
+  // The queue cache is per partition, so a switch cannot mix two accounts'
+  // events even without this line. It is dropped anyway for two reasons: the
+  // signed-out partition is about to be rewritten by adoption below, and an
+  // account the user has left has no claim on this process's memory. Dropping
+  // it costs one re-parse on the next enqueue and removes a whole class of
+  // "stale partition" reasoning from the account-switch path.
+  invalidateProgressQueueCache();
 
   // 清掉 pending timer
   if (_timer) clearTimeout(_timer);
@@ -1676,15 +1800,27 @@ export async function resetProgressSyncState(): Promise<void> {
   const userSub = await ensureUserSubReady(token);
   if (!userSub) return;
 
-  try {
-    const keys = await AsyncStorage.getAllKeys();
-    const prefix = userPrefix(userSub);
+  // Held under the queue lock so this cannot land between another section's
+  // read and its write: that section would otherwise write its snapshot back
+  // and resurrect the queue this call just deleted. Before the cache the same
+  // race existed against the snapshot in flight; now it would also leave a
+  // cache entry describing keys that no longer exist, so the deletion and the
+  // invalidation belong in one critical section.
+  await withQueueLock(async () => {
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const prefix = userPrefix(userSub);
 
-    const toRemove = keys.filter((k) => k.startsWith(prefix));
-    if (toRemove.length > 0) {
-      await AsyncStorage.multiRemove(toRemove);
-    }
-  } catch {}
+      const toRemove = keys.filter((k) => k.startsWith(prefix));
+      if (toRemove.length > 0) {
+        await AsyncStorage.multiRemove(toRemove);
+      }
+    } catch {}
+
+    // Only this user's partition: the signed-out queue lives outside userPrefix
+    // and was not deleted, so dropping its cache would be a pointless re-parse.
+    invalidateProgressQueueCache(userSub);
+  });
 
   _lastPullAtMs = 0;
   _healedOnce = false;
