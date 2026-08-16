@@ -19,6 +19,15 @@ import type { PublishJob } from '../api/authoring';
 import { nextPollDelay } from '../lib/publishJobsPolling';
 import type { PollOutcome } from '../lib/publishJobsPolling';
 import {
+  emptyErrorFeed,
+  clearNotice,
+  pollingNotice,
+  reportBusinessFailure,
+  reportThrownFailure,
+} from '../lib/errorFeed';
+import type { ErrorNotice, PollFailure } from '../lib/errorFeed';
+import { ErrorBanner, ErrorBannerList } from '../components/ui/ErrorBanner';
+import {
   DECKS_PAGE_SIZE,
   applyDecksPage,
   derivePagedDeckStatus,
@@ -33,6 +42,13 @@ import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin, type SessionUser } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
+
+// Error feed keys. One per operation, because "one slot per operation" is what
+// keeps a repeated failure from stacking and a publish failure from erasing a
+// delete failure the user has not read yet.
+const ERR_RESOLVE_ID = 'deck.resolveId';
+const ERR_DELETE_DECK = 'deck.delete';
+const ERR_PUBLISH_DECK = 'deck.publish';
 
 // ==================== 缓存工具 ====================
 const CACHE_KEY_DECKS = 'recallsmith_decks_cache';
@@ -365,10 +381,17 @@ export function DeckListPage() {
   // Job id of the publish currently being timed, if any.
   const pendingPublishJobIdRef = useRef<string | null>(null);
   const [activeTab, setActiveTab] = useState<'decks' | 'publishJobs'>('decks');
-  const [publishJobsError, setPublishJobsError] = useState<string | null>(null);
+  // Message and kind travel together: two useState calls could drift apart and
+  // label a transport failure as a refusal, which gives the opposite advice.
+  const [pollFailure, setPollFailure] = useState<PollFailure | null>(null);
   // Derived from the timer rather than set by a branch, so a future path that
   // forgets to reschedule surfaces as a visible banner instead of silence.
   const [pollingStopped, setPollingStopped] = useState(false);
+
+  // One feed for every action that can fail on this page. Keyed by operation,
+  // so a retry loop replaces its own notice instead of stacking copies.
+  const [errors, setErrors] = useState<ErrorNotice[]>(emptyErrorFeed);
+  const pollNotice = pollingNotice(pollFailure, pollingStopped);
 
   // 轮询使用的 Ref
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -552,13 +575,21 @@ export function DeckListPage() {
     const cached = resolvedIdsRef.current.get(row.slug);
     if (cached !== undefined) return cached;
 
+    setErrors(prev => clearNotice(prev, ERR_RESOLVE_ID));
     const res = await fetchDeckBySlug(row.slug);
     const id = res.success && res.data ? Number(res.data.id) : Number.NaN;
     if (Number.isFinite(id)) {
       resolvedIdsRef.current.set(row.slug, id);
       return id;
     }
-    alert(res.error?.message ?? 'Failed to resolve deck id.');
+    setErrors(prev =>
+      reportBusinessFailure(
+        prev,
+        ERR_RESOLVE_ID,
+        `Could not look up deck "${row.slug}"`,
+        res.error?.message,
+      ),
+    );
     return null;
   }
 
@@ -596,6 +627,10 @@ export function DeckListPage() {
     const ok = window.confirm('Delete deck is destructive.\n\nContinue?');
     if (!ok) return;
 
+    // Clearing before the attempt is what makes a success wipe the banner:
+    // every success path would otherwise have to remember to do it.
+    setErrors(prev => clearNotice(prev, ERR_DELETE_DECK));
+
     try {
       setDeletingSlug(row.slug);
       const deckId = await resolveDeckId(row);
@@ -603,7 +638,14 @@ export function DeckListPage() {
 
       const res = await deleteDeck(deckId);
       if (!res.success) {
-        alert(res.error?.message ?? 'Delete deck failed.');
+        setErrors(prev =>
+          reportBusinessFailure(
+            prev,
+            ERR_DELETE_DECK,
+            `Deleting deck "${row.slug}" failed`,
+            res.error?.message,
+          ),
+        );
         return;
       }
       if (listModeRef.current === 'paginated') {
@@ -612,7 +654,9 @@ export function DeckListPage() {
         setDeckState(prev => ({ ...prev, decks: prev.decks.filter(d => String(d.slug) !== row.slug) }));
       }
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Network error.');
+      setErrors(prev =>
+        reportThrownFailure(prev, ERR_DELETE_DECK, `Deleting deck "${row.slug}" failed`, err),
+      );
     } finally {
       setDeletingSlug(null);
     }
@@ -629,6 +673,7 @@ export function DeckListPage() {
     // The journey starts once the user has committed, so the time the dialog
     // sat open is not counted as our latency.
     markStart('publish');
+    setErrors(prev => clearNotice(prev, ERR_PUBLISH_DECK));
 
     try {
       setPublishingSlug(row.slug);
@@ -637,7 +682,14 @@ export function DeckListPage() {
 
       const pub = await publishDeck(deckId);
       if (!pub.success) {
-        alert(pub.error?.message ?? 'Publish failed.');
+        setErrors(prev =>
+          reportBusinessFailure(
+            prev,
+            ERR_PUBLISH_DECK,
+            `Publishing deck "${row.slug}" failed`,
+            pub.error?.message,
+          ),
+        );
         return;
       }
       pendingPublishJobIdRef.current = pub.data?.jobId ?? null;
@@ -650,7 +702,9 @@ export function DeckListPage() {
         await loadAll(true);
       }
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Network error.');
+      setErrors(prev =>
+        reportThrownFailure(prev, ERR_PUBLISH_DECK, `Publishing deck "${row.slug}" failed`, err),
+      );
     } finally {
       setPublishingSlug(null);
     }
@@ -702,7 +756,14 @@ export function DeckListPage() {
     activePollsRef.current = decision.nextActivePolls;
 
     if (decision.jobs) setPublishJobs(decision.jobs);
-    setPublishJobsError(decision.showError);
+    // The outcome is the only place that still knows whether the server
+    // answered or the transport threw, so the kind is captured here and not
+    // guessed from the message text later.
+    setPollFailure(
+      decision.showError === null
+        ? null
+        : { kind: outcome.kind === 'exception' ? 'network' : 'business', message: decision.showError },
+    );
     if (decision.showError) console.error('Failed to load publish jobs:', decision.showError);
 
     if (!decision.stopped) {
@@ -969,29 +1030,24 @@ export function DeckListPage() {
           </div>
         )}
 
+        {/* Failed actions on this page. Non-blocking by construction: the
+            banners sit in the flow, so nothing about a failure parks the main
+            thread the way window.alert did. */}
+        <ErrorBannerList
+          notices={errors}
+          onDismiss={key => setErrors(prev => clearNotice(prev, key))}
+        />
+
         {/* Publish Jobs Refresh Banner. A failed refresh has to be visible:
-            silently stale job rows read as "the publish is stuck". */}
-        {superAdmin && (!!publishJobsError || pollingStopped) && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 shadow-sm">
-            <svg className="w-5 h-5 text-red-600 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-sm font-semibold text-red-800">Publish Jobs Not Refreshing</h3>
-              <p className="text-xs text-red-700 mt-1">
-                {publishJobsError ?? 'Could not refresh publish jobs.'} Job statuses shown below may be out of date.
-              </p>
-              {pollingStopped && (
-                <button
-                  type="button"
-                  onClick={() => void loadPublishJobs()}
-                  className="mt-2 text-xs font-semibold text-red-800 underline underline-offset-2 hover:text-red-900"
-                >
-                  Auto-refresh stopped. Click to retry.
-                </button>
-              )}
-            </div>
-          </div>
+            silently stale job rows read as "the publish is stuck". It is not
+            dismissible, because it is derived from live poll state and would
+            come straight back; it leaves when the poll recovers. */}
+        {superAdmin && pollNotice && (
+          <ErrorBanner
+            notice={pollNotice}
+            onRetry={pollingStopped ? () => void loadPublishJobs() : undefined}
+            retryLabel="Auto-refresh stopped. Click to retry."
+          />
         )}
 
         {/* <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

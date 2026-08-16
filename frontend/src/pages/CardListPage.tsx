@@ -6,6 +6,18 @@ import type { Card } from '../types/card';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { RarityBadge } from '../components/RarityBadge';
 import { RarityDistribution } from '../components/RarityDistribution';
+import { ErrorBannerList } from '../components/ui/ErrorBanner';
+import {
+  emptyErrorFeed,
+  clearNotice,
+  reportBusinessFailure,
+  reportThrownFailure,
+} from '../lib/errorFeed';
+import type { ErrorNotice } from '../lib/errorFeed';
+
+// One key for the delete action: a user who retries against a server that is
+// still refusing gets the latest verdict, not a growing stack of copies.
+const ERR_DELETE_CARD = 'card.delete';
 
 interface CardListState {
   deckId: number;
@@ -94,6 +106,8 @@ export function CardListPage() {
     };
   }, [deckId, invalidDeckId]);
 
+  const [errors, setErrors] = useState<ErrorNotice[]>(emptyErrorFeed);
+
   const effectiveLoading = state.loading || state.deckId !== deckId;
 
   async function handleDelete(cardId: number) {
@@ -102,10 +116,21 @@ export function CardListPage() {
     const ok = window.confirm('Are you sure you want to delete this card?');
     if (!ok) return;
 
+    // Clearing up front is what makes a successful retry remove the banner,
+    // instead of every success path having to remember to.
+    setErrors(prev => clearNotice(prev, ERR_DELETE_CARD));
+
     try {
       const result = await deleteCard(cardId);
       if (!result.success) {
-        alert(result.error?.message ?? 'Delete card failed.');
+        setErrors(prev =>
+          reportBusinessFailure(
+            prev,
+            ERR_DELETE_CARD,
+            `Deleting card #${cardId} failed`,
+            result.error?.message,
+          ),
+        );
         return;
       }
 
@@ -114,7 +139,9 @@ export function CardListPage() {
         cards: prev.cards.filter(c => c.id !== cardId),
       }));
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Network error.');
+      setErrors(prev =>
+        reportThrownFailure(prev, ERR_DELETE_CARD, `Deleting card #${cardId} failed`, err),
+      );
     }
   }
 
@@ -201,6 +228,16 @@ export function CardListPage() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-6">
+        {/* Failed deletes land here rather than in a modal dialog, so the row
+            the user was working on stays visible and clickable. */}
+        {errors.length > 0 && (
+          <div className="mb-4">
+            <ErrorBannerList
+              notices={errors}
+              onDismiss={key => setErrors(prev => clearNotice(prev, key))}
+            />
+          </div>
+        )}
         <RarityDistribution cards={cards} />
         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
