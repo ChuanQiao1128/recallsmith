@@ -22,7 +22,11 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
-import { findApiCallSites, scanHookWiring } from './support/hookWiringScan';
+import {
+  findApiCallSites,
+  findHookShapedExportsOutsideHooksDir,
+  scanHookWiring,
+} from './support/hookWiringScan';
 import type { SourceFile } from './support/hookWiringScan';
 
 const SRC_ROOT = fileURLToPath(new URL('../src', import.meta.url));
@@ -231,6 +235,29 @@ describe('the scan itself is still looking at something', () => {
     // claim about the barrel rather than about the codebase. Adding a hook
     // nobody calls and leaving it out of the barrel was, until this line,
     // enough to pass.
+    //
+    // SCOPE: `hooksNotInBarrel` reads only files under src/hooks/. A hook
+    // declared in src/utils, src/auth or a page is outside it entirely — see
+    // the case below, which is the other half of the claim.
     expect(scan.hooksNotInBarrel).toEqual([]);
+  });
+
+  it('knows exactly which hooks live outside src/hooks, and they are accounted for', () => {
+    // The assertion above is scoped to src/hooks/; this one covers the rest of
+    // src/. Deliberately NOT folded into hooksNotInBarrel: that field is
+    // asserted to be empty, and useAuth — which is correctly wired — would
+    // land in it and turn a working hook red.
+    //
+    // useAuth is real and called from four places, hand-verified:
+    //   src/auth/RequireAuth.tsx:7, src/auth/RequireGroup.tsx:12,
+    //   src/pages/LoginPage.tsx:13, src/pages/AuthCallbackPage.tsx:9
+    // It is listed here because it is UNGUARDED, not because it is debt. This
+    // scan deliberately does not judge call sites for out-of-barrel hooks —
+    // that would need relative specifiers resolved to files — so a second
+    // entry appearing here is a prompt for a person, not a verdict: barrel it
+    // so the real ratchet covers it, or add it with its call sites verified
+    // the same way.
+    const outside = findHookShapedExportsOutsideHooksDir(sources).map(entry => entry.name);
+    expect(outside).toEqual(['useAuth']);
   });
 });

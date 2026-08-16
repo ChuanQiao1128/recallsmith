@@ -38,21 +38,39 @@
 // nothing is installed to get this.
 //
 // ---------------------------------------------------------------------------
-// Three inaccuracies kept on purpose
+// Four inaccuracies kept on purpose — and they do NOT all lean the same way
 //
-// All three err toward calling a live hook an orphan. That direction lands in
-// hookWiring.test.ts's first assertion, goes red, and brings a person. The
-// opposite error — vouching for a hook nobody calls — is the one that shrinks
-// the ratchet in silence, so the judgement is bent away from it.
+// This block used to be titled "three inaccuracies" and claimed all three
+// erred toward calling a live hook an orphan. That summary was refuted by its
+// own third entry before shadowing was ever considered: a call in an
+// unreachable branch does not over-report an orphan, it vouches for one. A
+// guard whose self-description is wrong is running the disease it exists to
+// detect, so the list is split by DIRECTION instead of counted.
+//
+// SAFE DIRECTION — over-reports an orphan. Lands in hookWiring.test.ts's first
+// assertion, goes red, and brings a person. Wrong, but loudly wrong.
 //
 //   1. A hook invoked only through an alias (`const h = useCards; h(1)`) is
 //      reported as an orphan. Following it would mean tracking assignments.
 //   2. A hook reached through a dynamic `import('../hooks')` is reported as an
 //      orphan — but the import site is listed in `namespaceImports`, so this
-//      one is loud rather than silent.
+//      one is loud twice over.
+//
+// UNSAFE DIRECTION — vouches for a hook nothing really calls, which shrinks
+// the ratchet in silence. Nothing goes red. These two are tolerated because
+// closing them needs analysis this file deliberately does not do, and both are
+// pinned by cases in hookWiringScan.test.ts so they cannot widen unnoticed.
+//
 //   3. A call sitting in a branch that can never run still counts as a call.
 //      Reachability is a different question, and guessing at it would
-//      manufacture false orphans.
+//      manufacture false orphans — but the answer it gives is "called".
+//   4. A local binding that shadows an imported name is credited to the
+//      import: `import { useCards } from '../hooks'` beside a local
+//      `function useCards()` reports the barrel's useCards as called even
+//      though the only call site resolves to the local. Resolving it needs a
+//      binder over the whole program. See the note on `calledIdentifiers`
+//      below, which has said this correctly all along — ~150 lines further
+//      down, where nobody reads first.
 //
 // A fourth gap is left to a different assertion: `export * from './useDecks'`
 // in the barrel would publish hooks this file never lists, emptying
@@ -100,6 +118,20 @@ export interface HookWiringScan {
    * invisible, which would leave "the debt cannot grow" true only of the
    * barrel. Reported separately so a failure names the actual problem instead
    * of blaming the allowlist.
+   *
+   * SCOPE, stated precisely because it is narrower than the name suggests:
+   * only files whose path contains `src/hooks/` (HOOKS_DIR_MARKER, consumed in
+   * scanHookWiring) are considered. A hook declared anywhere else under src/ —
+   * src/utils, src/auth, a page file — is invisible to this field. Today that
+   * blind spot holds exactly one hook and no debt: `useAuth`
+   * (src/auth/AuthContext.tsx) has four call sites — RequireAuth.tsx:7,
+   * RequireGroup.tsx:12, LoginPage.tsx:13, AuthCallbackPage.tsx:9 — so it is
+   * correctly wired, merely unguarded. Do NOT widen this field's scope to
+   * cover it: hookWiring.test.ts asserts `hooksNotInBarrel` equals [], and
+   * useAuth would land there and turn a correctly-wired hook red.
+   * `hookShapedExportsOutsideHooksDir` below is the separate, allowlisted
+   * assertion that keeps the blind spot from silently acquiring a second
+   * occupant.
    */
   hooksNotInBarrel: string[];
   /** How many files were handed in. A floor on this catches a broken glob. */
@@ -243,6 +275,10 @@ function bindingsFrom(source: ts.SourceFile, from: RegExp): {
  * toward "called", which is the unsafe direction, but resolving it needs a
  * binder and a type checker over the whole program; the shapes that actually
  * shrank the ratchet were comments and bare references, and those are gone.
+ *
+ * This is item 4 of the UNSAFE DIRECTION list in the file header, and
+ * hookWiringScan.test.ts's "shadowing is credited to the import" case pins it
+ * with its inverse, so the gap cannot widen without a test noticing.
  */
 function calledIdentifiers(source: ts.SourceFile): Set<string> {
   const names = new Set<string>();
@@ -377,6 +413,49 @@ export function scanHookWiring(files: SourceFile[]): HookWiringScan {
     hooksNotInBarrel,
     scannedFileCount: files.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The blind spot in hooksNotInBarrel, turned from a comment into an assertion.
+//
+// Everything above is scoped to src/hooks/. Writing "and hooks elsewhere are
+// invisible" in prose is the documentation floor; prose cannot fail. This
+// function enumerates the hooks living in that blind spot so a test can hold
+// the list against a one-entry allowlist, and the day someone adds a second
+// out-of-barrel hook the decision — barrel it, or justify it — has to be made
+// then rather than discovered later.
+//
+// It deliberately does NOT decide whether those hooks are called. Doing that
+// needs relative specifiers resolved to files, i.e. module resolution, and
+// inventing one here would add a second way of being wrong to a file whose
+// whole point is being right about wiring. The allowlist entry carries its
+// call sites as a hand-verified comment instead.
+// ---------------------------------------------------------------------------
+
+export interface OutsideHookExport {
+  /** Hook-shaped exported symbol. */
+  name: string;
+  /** File that declares it, posix-normalised. */
+  path: string;
+}
+
+/**
+ * Hook-shaped top-level exports under src/ that do NOT live in src/hooks/,
+ * sorted by name then path.
+ */
+export function findHookShapedExportsOutsideHooksDir(files: SourceFile[]): OutsideHookExport[] {
+  const found: OutsideHookExport[] = [];
+
+  for (const file of files) {
+    const path = toPosix(file.path);
+    if (path.includes(HOOKS_DIR_MARKER)) continue;
+
+    for (const name of declaredHookExports(parse(file))) {
+      found.push({ name, path });
+    }
+  }
+
+  return found.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
 }
 
 // ---------------------------------------------------------------------------

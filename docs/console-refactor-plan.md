@@ -396,10 +396,243 @@ AssertionError: expected [ Array(1) ] to deeply equal []
 4. **`src/pages/deckListPagination.ts` 至今零测试。** 它是上一波「抽出去了但没测」的先例,
    本步刻意没有重蹈(新模块 23 条单测 + 3 条页面级焊点),但那个文件本身仍然裸着。
 5. **`src` 全量 35 个既有 eslint error。** 与 HEAD 一致,本步未增未减。
-6. **`manifestState.meta` 是只写状态。**(本步新发现)`parseManifestMeta` 的返回值
+6. **`manifestState.meta` 是只写状态。**(第 5.5 步新发现)`parseManifestMeta` 的返回值
    写进 state、写进 localStorage 缓存,**没有任何 JSX 读它**。
    它不是完全死的(缓存里存了、读回来又塞进 state),但它对用户不可见。
-   第 6 步要么把它接到界面上,要么删掉它和它那 4 条单测——**本步不做这个裁决。**
+   第 6 步要么把它接到界面上,要么删掉它和它那 4 条单测——**不做这个裁决。**
+7. **入门卡组判定三方不自洽 —— 已钉住,刻意未修。**(第 5.6 步新发现)
+   同一个「这是不是入门卡组」的问题有 **3 个调用点、2 个谓词**:
+
+   | 位置 | 谓词 |
+   | --- | --- |
+   | `DeckListPage.tsx:641` paginated 类型过滤 | `isStarterLike(row.deckType, row.tier)` |
+   | `DeckListPage.tsx:669-670` legacy 类型过滤 | `d.deckType !== 1` / `d.deckType === 1` |
+   | `DeckListPage.tsx:1064` 类型徽章(JSX) | `isStarterLike(row.deckType, row.tier)` |
+
+   (`:641` 与 `:1064` 逐字节相同,只有 `:669-670` 分叉 —— 说「三个答案」是不准的。
+   这一点有操作意义:改 `isStarterLike` 一次动两处,改 legacy 过滤只动一处,变异矩阵按此设计。)
+
+   `isStarterLike`(`deckListPagination.ts:79-85`)在 `deckType` 不是 number 时
+   回落到 `tier !== 'premium'`。所以对 **deckType 为 null、tier 为 `'free'`** 的卡组:
+
+   - legacy + Starter 筛选 → **排除**;legacy + Paid 筛选 → **保留**
+   - paginated + Starter 筛选 → **保留**;paginated + Paid 筛选 → **排除**
+   - 两种模式下徽章都显示 **Starter**
+
+   即:legacy 路径下,一张徽章写着 Starter 的卡组,只在选 **Paid** 时才出现在列表里。
+
+   **这个状态在生产可达,不是虚构的 fixture:** `normalizeDeck`(`api/authoring.ts:63`)
+   算的是 `deckType: toInt(o.deckType, d.deckType)`,其中 `o` 就是 `d` 本身转成 record ——
+   候选值与兜底值是**同一个值**;`toInt`(`:36-43`)只接受有限 number 或非空数字字符串,
+   否则返回兜底,于是 `null` 原样穿过。而 `types/deck.ts:13` 声明的是 `deckType: number`。
+   **类型在撒谎。**
+
+   守卫:`tests/deckListViewRows.test.tsx` 的 **V1 / V2 / V3**(legacy 三态)
+   与 **V4 / V5**(paginated 反向)。其中 V3 最关键——「一张徽章写着 Starter 的行
+   只在 Paid 筛选下出现」这半边活在 JSX 里,只能通过 DOM 观察,纯函数测试**物理上看不见**。
+   **不要删这几条。** 把两个谓词统一掉是改产品语义,不是重构;
+   变异矩阵 M1 与焊点矩阵 (c) 都要求这个编辑**必须把 V2/V3 打红**,那就是本步的交付物。
+   谁来裁决哪个谓词赢:第 7 步或人工。
+
+---
+
+## 五点五、第 5.6 步(补网 → 抽 `viewRows` → 焊点校验)实际结果
+
+本步只动 `frontend/` 与 `docs/`,不 commit。核心交付是**一张网**,不是一次抽取:
+`viewRows` 那 75 行今天零覆盖,而它里面藏着一条产品语义级的不自洽。
+本步把不自洽**钉成测试而不修它**,再在有网的前提下把纯逻辑搬出去。
+
+### 5.6.0 验收命令(逐条可复制)
+
+```bash
+cd frontend
+npx vitest run                                   # 18 files / 205 tests 全绿
+npx tsc -b --force                               # exit 0 ← 真正的类型闸门,见 5.6.6
+npx tsc --noEmit                                 # exit 0(但这条**什么都没检查**,见 5.6.6)
+npx eslint src tests vitest.config.ts            # 36 problems (35 errors, 1 warning) = HEAD 基线
+npm run build                                    # js 521.05 kB / gzip 154.86 kB;css 与基线逐字节相同
+```
+
+测试专用 standalone tsc(`tests/` 不在任何 tsconfig 的 include 里,见第五节缺陷 3):
+
+```bash
+# 配置文件只放在 scratchpad,不进仓库
+npx tsc --noEmit -p <scratchpad>/tsconfig.tests.json   # exit 0
+# tsconfig.tests.json = extends frontend/tsconfig.app.json
+#   + include: [src, tests, vitest.config.ts, node_modules/vite/client.d.ts]
+#   + typeRoots: [frontend/node_modules/@types], types: ["node"]
+```
+
+这条不是形式主义:往 `tests/deckListViewRows.test.tsx` 注入一行
+`const _x: number = "s";`,standalone tsc 报 `TS2322`,而 `npx tsc --noEmit` **exit 0 毫无反应**。
+
+### 5.6.1 落地清单
+
+| 文件 | 状态 | 是什么 |
+| --- | --- | --- |
+| `tests/deckListViewRows.test.tsx` | 新增 | V0-V9b 共 12 条,页面级钉住 `viewRows` 的全部过滤/排序语义 |
+| `tests/deckListPageFallback.test.tsx` | 新增 | F1-F3 共 3 条,补 `FORBIDDEN` / `NOT_FOUND` 两个回退码 + `listModeRef` 那一行 |
+| `tests/deckListRowsWiring.test.ts` | 新增 | W1-W4,AST 断言 memo 输入对象与 deps 数组逐项同源 |
+| `src/pages/deckListRows.ts` | 新增 | `buildViewRows` + `ConsoleDeckRow` + `ListMode` + `BuildViewRowsInput` |
+| `src/pages/DeckListPage.tsx` | 改 | 净新增 11 行:2 行 import + 折叠后的 useMemo |
+| `tests/support/hookWiringScan.ts` | 改 | 文件头那份「三条偏差全部偏安全方向」是**假的**,改成按方向分栏;`hooksNotInBarrel` 补作用域说明;新增 `findHookShapedExportsOutsideHooksDir` |
+| `tests/hookWiring.test.ts` | 改 | 新增桶外 hook 白名单断言(`['useAuth']`) |
+| `tests/hookWiringScan.test.ts` | 改 | describe 改名点明两个方向;新增遮蔽/反向两条对照 |
+
+`tests/deckListPagePolling.test.tsx` 是对照组,**一个字符未动**,sha256 在 P0 与收尾两次核对相同。
+
+### 5.6.2 搬迁是逐字节的(可复现)
+
+搬走的 75 行 = `DeckListPage.tsx` HEAD 版本的 621-695 行。改写规则**只有三条 sed**:
+
+```bash
+sed -n '621,695p' src/pages/DeckListPage.tsx | \
+  sed -e 's/^  //' -e 's/paged\.items/pagedItems/g' -e 's/manifestState\.bySlug/manifestBySlug/g'
+```
+
+- `s/^  //` —— 少一层缩进(从组件方法体变成模块顶层函数体),不改任何 token
+- `paged.items` → `pagedItems` —— 参数化,该 token 全文**恰好出现 1 次**
+- `manifestState.bySlug` → `manifestBySlug` —— 同上,**恰好 1 次**
+
+两个 sha256 在动手前就算好了,事后无法倒填:
+
+```
+搬迁前(HEAD 621-695 行)  fd8734a4a96f7354317b94f30bdc870004046d8dec47ab474ff3ae1d3f32b11a
+落地后(函数体)          abde1fc2fceec2d162241e39dcfc85e7c6eb8cd90ff0297f6b6a8fbdb6190dac
+```
+
+deps 数组逐字符未变:
+`}, [listMode, paged.items, decks, manifestState.bySlug, q, statusFilter, typeFilter]);`
+
+### 5.6.3 顺序证据:网确实先于抽取(一条命令链,一个时间戳)
+
+```
+Sun Aug 16 14:13:42 UTC 2026
+
+ Test Files  17 passed (17)
+      Tests  195 passed (195)
+   Start at  02:13:43
+   Duration  1.13s (transform 1.06s, setup 0ms, import 2.81s, tests 1.15s, environment 3.85s)
+
+[src diff end]
+b4370ea6f13e6083a8845a375cc9df433c2312115945e7918cd4d61f5957524d  frontend/src/pages/DeckListPage.tsx
+696c1e83de6ae636d9185e3c323126950808464d25ffe1cfebb54c645ab5059f  frontend/tests/deckListPagePolling.test.tsx
+```
+
+`git diff --stat -- frontend/src` 在 `[src diff end]` 之前**没有输出任何一行**,
+且两个 sha256 与 P0 基线逐字节相同 —— 空 diff 单独不能排除「改了又改回来」,
+sha256 与之并排才能。15 条新测试是对着**未修改的** `DeckListPage.tsx` 写红→绿的。
+
+### 5.6.4 变异矩阵(抽取之前,对着未修改的 `DeckListPage.tsx`)
+
+每次:注入 → 跑全量 → 记录 → `cp` 还原 → `git diff --exit-code` 核对(不用 checkout,已禁)。
+
+| 变异 | 改了什么 | 变红的用例 | polling |
+| --- | --- | --- | --- |
+| M1 | legacy `d.deckType !== 1` → `isStarterLike` (**「顺手修 bug」**) | V2, V3 | 6 绿 |
+| M2 | 徽章 `:1064` → `row.deckType === 1` | V1, V3, V4 | 6 绿 |
+| M3 | paginated `isStarterLike` → `row.deckType === 1` | V4, V5 | 6 绿 |
+| M4 | 给 paginated 分支加客户端 q 过滤 | V7 | 6 绿 |
+| M5 | 删 legacy 的 `if (query) {...}` | V6 | 6 绿 |
+| M6a | 删 legacy 的 `statusFilter !== 'all'` 守卫 | V8a | 6 绿 |
+| M6b | 删 paginated 的 `statusFilter !== 'all'` 守卫 | V8b | 6 绿 |
+| M7 | `999999` → `0` | V9a | 6 绿 |
+| M8 | 删 `.sort(...)` | V8a, V9a | 6 绿 |
+| M9 | 集合里删掉 `'FORBIDDEN'` | **仅** F1 | 6 绿 |
+| M10 | 集合里删掉 `'NOT_FOUND'` | **仅** F2 | 6 绿 |
+| M11 | 删 `void loadAll(false)` | F1, F2, F3, L2 | 6 绿 |
+| M12 | 删 `listModeRef.current = 'legacy';`(`:348`) | **仅** F3 | 6 绿 |
+
+两条值得单独说:
+
+- **M1 是本步最关键的一行。** 它正是「凌晨抽函数时顺手把两个谓词统一掉」那个编辑。
+  V2/V3 变红是唯一阻止这条产品语义被静默抹平的机制。
+- **M12 在 195 条测试里只打红 F3 一条**,证明 `:348` 在本步之前**完全无人守卫**;
+  失败信息是 `expected "vi.fn()" to be called 1 times, but got 2 times`,
+  机制与预测一致(ref 留在 `'paginated'` → `[debouncedQ]` effect 不再提前 return
+  → 又打了一次已经 403 的端点)。没有 `pagedRequestSeq` 或批处理吞掉第二次请求。
+
+M9 只杀 F1、M10 只杀 F2 —— 两条**不互相顶替**。
+
+### 5.6.5 焊点矩阵(抽取之后,证明页面真的在跑这个模块)
+
+| 变异(改 `deckListRows.ts`) | 变红的用例 | polling |
+| --- | --- | --- |
+| (a) `buildViewRows` 直接 `return []` | V1-V9b 全部 13 条 + F1/F2/F3 + L1/L2 | 6 绿 |
+| (b) 两个 `.filter(...)` 都改成恒真 | V2, V5, V6, V8a, V8b | 6 绿 |
+| (c) legacy 谓词换成 `isStarterLike`(**跨模块重跑 M1**) | **V2, V3** | 6 绿 |
+| (d) 删 `.sort(...)` | V8a, V9a | 6 绿 |
+
+(a) 是存在性检查:本仓库「功能写了但没人调用」已出现 8 次,抽出一个干净模块然后页面悄悄不用它正是这个形状。
+(c) 更重要:它证明那条不自洽**跨过模块边界之后仍然被钉着**,不是只在搬家前钉着。
+
+W1-W4 也被证伪过(四条变异各跑一次、各自还原):把对象字面量提到 factory 外 → W1-W4 全红;
+加一个 `superAdmin,` 字段 → W3/W4 红 **且** `tsc -b` 报 `TS2353`(两把独立的锁);
+`paged.items` → `paged.items ?? []` → **仅** W4 红;deps 里删掉 `q` → W3/W4 红。
+另外单独确认 Lock C 真实存在:把一个解构绑定改名让函数体读不到它 → `tsc -b` 报
+`TS6133: 'unusedQ' is declared but its value is never read`。
+
+### 5.6.6 本步发现的两件事(都不是本步引入的)
+
+**(1) `npx tsc --noEmit` 是空操作,一个文件都没检查。**
+`frontend/tsconfig.json` 是 solution 壳:`"files": []` + 两个 `references`,
+而不带 `-b` 的 `tsc` **不会跟随 project references**。
+`npx tsc --noEmit --listFiles | wc -l` = **0**。
+它在 HEAD 上就一直是 exit 0,因为它无事可做。
+真正的类型闸门是 `npm run build` 里的 `tsc -b`:把一个多余字段塞进 `buildViewRows` 的入参,
+`tsc --noEmit` 静默通过,`tsc -b` 报 `TS2353`。
+**第 6 步的验收命令必须写 `tsc -b`,或者 standalone tsconfig,不能写 `tsc --noEmit`。**
+
+**(2) Tailwind 的候选扫描会读 `src/` 下 `.ts` 文件里的散文注释。**
+新模块的 JSDoc 里写了一个恰好与某个 Tailwind 布局工具类同名的普通英文名词,
+构建产物里就真的多出了一条工具类规则,css 从 32.55 kB 涨到 32.84 kB。
+改掉措辞后 css 与基线**逐字节相同**。
+(第一版解释这件事的注释因为写出了那个类名,又把它带了回来 —— 已一并改掉。)
+
+体积结论:js `520.94 kB → 521.05 kB`(**+0.11 kB**,约 110 字节;gzip `154.79 → 154.86 kB`),
+css 逐字节不变(vite 报的是两位小数,所以这里不宣称更高精度)。
+这 0.11 kB 是模块边界本身:导出函数壳 + 解构语句 + 跨模块 import。本步不新增任何依赖。
+
+### 5.6.7 守卫的自述被修正了
+
+`tests/support/hookWiringScan.ts` 文件头原本写「三条已知偏差,**全部**偏安全方向」。
+这句话被它自己的第 3 条推翻了:「不可达分支里的调用仍然算调用」不是把活 hook 误报成孤儿,
+而是**替一个没人调用的 hook 背书**——正是不安全的那个方向。
+再加上遮蔽同名局部函数(第 4 条,方向同样不安全),原文既不完整、结论也为假。
+现改为按**方向分两栏**:SAFE(别名调用、动态 import)/ UNSAFE(不可达分支、同名遮蔽),
+并从文件头交叉引用 `calledIdentifiers` 上那段一直写对了、但埋在 150 行之下的注释。
+`tests/hookWiringScan.test.ts` 的 describe 改名点明两个方向,并新增一条遮蔽用例
+**外加它的反向用例**(去掉遮蔽后落进 `orphans`)—— 没有反向用例,那条断言可能只是
+「输入里碰巧存在某个 `useCards()` 调用」的同义反复。
+
+`hooksNotInBarrel` 的作用域也说准了:它**只**看路径含 `src/hooks/` 的文件,
+`src/utils`、`src/auth` 里的 hook 对它完全不可见。
+今天这个盲区里恰好只有 `src/auth/AuthContext.tsx` 的 `useAuth`,而且它有 4 个真实调用点
+(`RequireAuth.tsx:7`、`RequireGroup.tsx:12`、`LoginPage.tsx:13`、`AuthCallbackPage.tsx:9`),
+**是盲区不是欠债**——只写「useAuth 在守卫之外」而不写这 4 个调用点,是拿一个不准换另一个不准。
+不能直接扩大 `hooksNotInBarrel` 的作用域:`hookWiring.test.ts` 断言它等于 `[]`,
+`useAuth` 会掉进去,把一个接好了的 hook 判红。
+所以另起一条断言:桶外 hook 形状导出 === `['useAuth']`。
+已证伪:临时在 `src/lib/` 放一个零调用 hook → 该断言变红
+(`expected [ Array(2) ] to deeply equal [ 'useAuth' ]`),删掉 → 恢复绿。
+
+`scan.orphans` 未变:`hookWiring.test.ts` 的两条方向断言(孤儿 ⊆ 白名单、白名单 ⊆ 孤儿)
+合起来等价于「orphans 恰好等于白名单键集」,两条在基线与现在都是绿的。
+
+### 5.6.8 本步刻意砍掉的东西
+
+1. **不给 `buildViewRows` 单独写纯函数测试文件。** 它已被 12 条页面级用例 + 4 行焊点矩阵覆盖;
+   `manifestOrder` 在 DOM 里通过 `#-` 徽标可见,真正 DOM 不可见的只有 `key` / `id`。
+   记为已知缺口。
+2. **不做 useMemo 重算账本**(`vi.mock('react')` 数 hook 调用次数)。
+   deps 数组逐字节未变 ⇒ `Object.is` 看到的输入序列按构造不变;
+   W1/W4 又排除了唯一两种能改变缓存行为的写法。为一个已被钉住的性质引入 react mock,风险大于收益。
+3. **不做「解析相对 specifier,给桶外 hook 做真实调用点分析」。** 那需要现场发明一套模块解析。
+   文档写准作用域 + 一条可证伪的单条白名单,已经交付了诚实性要求。
+4. `tests/deckListPageFallback.test.tsx` 与 `tests/deckListPageLegacyPath.test.tsx`
+   **重复了约 40 行 fixture**,是刻意的:后者文件头对 L1-L3 的来源做了具体承诺,
+   稀释它的代价大于这 40 行。
+
 
 ---
 
@@ -411,9 +644,14 @@ AssertionError: expected [ Array(1) ] to deeply equal []
 1. **localStorage 缓存路径。** `getCache` / `setCache` / `CACHE_TTL` /
    `CACHE_KEY_DECKS` / `CACHE_KEY_MANIFEST` 全部零覆盖:缓存命中时的免 loading 渲染、
    TTL 过期后的清除、`forceRefresh` 绕过缓存、以及第五节第 1 条那个静默失败。
-2. **`statusFilter` / `typeFilter` / 搜索过滤,以及第 603-606 行手写的 300ms debounce。**
-   要特别注意 **双路径不对称**:paginated 模式下 `q` 经 debounce 走服务端,
-   legacy 模式下是客户端过滤全量列表。同一个输入框,两套语义,零测试。
+2. ~~**`statusFilter` / `typeFilter` / 搜索过滤,以及手写的 300ms debounce。**~~
+   **【第 5.6 步:部分补齐】** 已覆盖的:`statusFilter` 四个取值 × 两条路径
+   (V8a/V8b,断言的是**完整可见 slug 列表**而非包含关系)、`typeFilter` 三个取值 × 两条路径
+   (V1-V5)、`manifestOrder` 排序与 999999 兜底(V9a/V9b),
+   以及**双路径不对称本身**(V6:legacy 下 `q` 即刻客户端过滤且不发请求;
+   V7:paginated 下 `q` 不本地过滤,300ms 后带 `q` 回服务端)。
+   **仍然没覆盖的:300ms 这个常数本身。** 把 `300` 改成 `30000` 在本步之后依然全绿 ——
+   V6/V7 钉的是 debounce 两侧的两种语义,不是 debounce 的时长。
 3. **删除 / 发布 / `ERR_RESOLVE_ID` 三条链路。** `ERR_DELETE_DECK`、`ERR_PUBLISH_DECK`、
    `ERR_RESOLVE_ID` 三个 key 没有任何页面级测试。这三条都会写 `window.confirm`
    与错误面,补网时要先想清楚 jsdom 下怎么 stub。
@@ -431,12 +669,27 @@ AssertionError: expected [ Array(1) ] to deeply equal []
 
 ### 第 6 步:拆 DeckListPage 的组件结构
 
+> **【第 5.6 步修正:范围已收窄,原文保留在下面】**
+> 第 5.6 步**只**抽了 `viewRows` 这一个纯函数(→ `src/pages/deckListRows.ts`),
+> **没有拆任何 JSX、没有抽任何子组件、没有提任何 hook**。
+> 原因写在当时的越界清单里:先拆 `<tr>` 那 70 行看着更爽,
+> 但会立刻踩进 `navigateWithDeckId` / `handlePublish` / `publishingSlug` / `superAdmin`
+> 四个闭包,而第六节第 5 条(闭包语义盲区)这张网**至今没补**。
+> 所以下面第 1、2、3 条**一条都还没做**,别把「已经拆好了」当成前提。
+> 另外:第 6 步的验收命令**必须**用 `tsc -b`(或 standalone tsconfig),
+> 不能用 `tsc --noEmit` —— 后者在本仓库是空操作,理由见 5.6.6。
+
 前提:第六节列的网**全部补齐**之后才能动。做的事:
 
 1. 把 manifest 数据路径与 paginated 数据路径各自提进一个 hook
    (`useLegacyDeckList` / `usePagedDeckList`),模式切换留在页面里。
+   ⚠️ 提 hook 时最自然的动作是「把 `listMode` 与 `listModeRef` 合并成一个 state」——
+   那会重新引入「回退之后每次搜索都再打一次已经 403 的端点」。
+   现在有 `tests/deckListPageFallback.test.tsx` 的 F3 守着这一行了。
 2. 表格行、筛选栏、发布任务面板抽成子组件。
 3. `statusBadge` / `typeBadge` 跟着行组件走,届时一并裁决要不要独立模块。
+   ⚠️ `typeBadge` 的调用点(`:1064`)是第五节缺陷 7 那条不自洽的一条腿,
+   动它之前先读那一条,并确认 V1/V3/V4 仍然绿。
 4. 手写的 localStorage 缓存与 `CACHE_TTL` 是否让位给 react-query —— 独立裁决,不夹带。
 
 ### 第 7 步:代码分割

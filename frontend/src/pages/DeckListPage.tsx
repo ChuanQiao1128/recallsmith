@@ -30,7 +30,6 @@ import { ErrorBanner, ErrorBannerList } from '../components/ui/ErrorBanner';
 import {
   DECKS_PAGE_SIZE,
   applyDecksPage,
-  derivePagedDeckStatus,
   emptyDeckPageListState,
   isStarterLike,
   removeDeckBySlug,
@@ -38,12 +37,13 @@ import {
 import type { DeckPageListState, DeckStatus } from './deckListPagination';
 import {
   extractDecksArray,
-  getDeckStatusFromManifest,
   parseManifestMeta,
   safeDateTime,
   toManifestDeckLite,
 } from './deckListManifest';
 import type { ManifestDeckLite, ManifestMeta } from './deckListManifest';
+import { buildViewRows } from './deckListRows';
+import type { ConsoleDeckRow, ListMode } from './deckListRows';
 
 import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
@@ -106,8 +106,6 @@ type ManifestState = {
   raw: unknown | null;
 };
 
-type ListMode = 'paginated' | 'legacy';
-
 // Error codes that mean "the paginated endpoint is unusable here" → fall back
 // to the legacy full-list load (404 = not deployed yet, 403 = not permitted).
 const PAGINATED_FALLBACK_CODES = new Set<string>([
@@ -115,21 +113,6 @@ const PAGINATED_FALLBACK_CODES = new Set<string>([
   'NOT_FOUND',
   'FORBIDDEN',
 ]);
-
-// Unified row shape rendered by the table, produced by both the paginated
-// (/api/v1/admin/decks) and legacy (full fetchDecks + manifest) data paths.
-type ConsoleDeckRow = {
-  key: string;
-  id: number | null;
-  slug: string;
-  title: string;
-  deckType: number | null;
-  tier: string | null;
-  manifestOrder: number | null;
-  cardCount: number;
-  status: DeckStatus;
-  updatedAt: string | number | null;
-};
 
 function statusBadge(status: DeckStatus) {
   if (status === 'published') {
@@ -618,81 +601,15 @@ export function DeckListPage() {
   const decks = useMemo<Deck[]>(() => deckState.decks ?? [], [deckState.decks]);
 
   const viewRows = useMemo<ConsoleDeckRow[]>(() => {
-    if (listMode === 'paginated') {
-      // Server already applied q (ILIKE on slug/title) and ordering
-      // (updated_at DESC, slug); status/type filters remain client-side
-      // refinements over the loaded pages.
-      return paged.items
-        .map<ConsoleDeckRow>(item => ({
-          key: item.slug,
-          id: item.id ?? null,
-          slug: item.slug,
-          title: item.title ?? '',
-          deckType: item.deckType ?? null,
-          tier: item.tier ?? null,
-          manifestOrder: null,
-          cardCount: item.totalCards ?? 0,
-          status: derivePagedDeckStatus(item),
-          updatedAt: item.updatedAtMs ?? null,
-        }))
-        .filter(row => {
-          if (statusFilter !== 'all' && row.status !== statusFilter) return false;
-          if (typeFilter !== 'all') {
-            const starter = isStarterLike(row.deckType, row.tier);
-            if (typeFilter === 'starter' && !starter) return false;
-            if (typeFilter === 'paid' && starter) return false;
-          }
-          return true;
-        });
-    }
-
-    const query = q.trim().toLowerCase();
-
-    return decks
-      .map(d => {
-        const m = manifestState.bySlug[String(d.slug || '').trim()];
-        const cardCount = d.totalCards ?? 0;
-        const status = getDeckStatusFromManifest(d, m, cardCount);
-        return { deck: d, status, cardCount };
-      })
-      .filter(row => {
-        const d = row.deck;
-
-        if (query) {
-          const s = `${d.slug ?? ''} ${d.title ?? ''}`.toLowerCase();
-          if (!s.includes(query)) return false;
-        }
-
-        if (statusFilter !== 'all' && row.status !== statusFilter) return false;
-
-        if (typeFilter !== 'all') {
-          if (typeFilter === 'starter' && d.deckType !== 1) return false;
-          if (typeFilter === 'paid' && d.deckType === 1) return false;
-        }
-
-        return true;
-      })
-      .sort((a, b) => {
-        const oA = typeof (a.deck as Deck & { manifestOrder?: number }).manifestOrder === 'number' ? (a.deck as Deck & { manifestOrder?: number }).manifestOrder! : 999999;
-        const oB = typeof (b.deck as Deck & { manifestOrder?: number }).manifestOrder === 'number' ? (b.deck as Deck & { manifestOrder?: number }).manifestOrder! : 999999;
-        return oA - oB;
-      })
-      .map<ConsoleDeckRow>(({ deck: d, status, cardCount }) => {
-        const withDates = d as Deck & { updatedAt?: string | null; createdAt?: string | null };
-        const idNum = Number(d.id);
-        return {
-          key: String(d.id),
-          id: Number.isFinite(idNum) ? idNum : null,
-          slug: String(d.slug ?? ''),
-          title: String(d.title ?? ''),
-          deckType: typeof d.deckType === 'number' ? d.deckType : null,
-          tier: d.tier ?? null,
-          manifestOrder: typeof d.manifestOrder === 'number' ? d.manifestOrder : null,
-          cardCount,
-          status,
-          updatedAt: withDates.updatedAt ?? withDates.createdAt ?? null,
-        };
-      });
+    return buildViewRows({
+      listMode,
+      pagedItems: paged.items,
+      decks,
+      manifestBySlug: manifestState.bySlug,
+      q,
+      statusFilter,
+      typeFilter,
+    });
   }, [listMode, paged.items, decks, manifestState.bySlug, q, statusFilter, typeFilter]);
 
 

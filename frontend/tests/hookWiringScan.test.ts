@@ -8,7 +8,7 @@
 // be called an orphan, and a hook that is not used must be.
 
 import { describe, expect, it } from 'vitest';
-import { scanHookWiring } from './support/hookWiringScan';
+import { findHookShapedExportsOutsideHooksDir, scanHookWiring } from './support/hookWiringScan';
 import type { SourceFile } from './support/hookWiringScan';
 
 const INDEX_PATH = 'src/hooks/index.ts';
@@ -302,14 +302,19 @@ describe('a dynamic import of the barrel', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Two deliberate inaccuracies, pinned so a later change cannot quietly widen
-// them into the hole they resemble. Both err toward calling a live hook an
-// orphan, which turns the ratchet red and brings a human; the opposite error
-// shrinks the ratchet in silence.
+// Deliberate inaccuracies, pinned so a later change cannot quietly widen them
+// into the hole they resemble.
+//
+// They do not all lean the same way, and the previous version of this comment
+// said they did. Two err toward calling a live hook an orphan: wrong, but the
+// ratchet goes red and a human looks. Two err the other way and credit a hook
+// nothing really calls — nothing goes red, and that is the direction that
+// shrinks a guard in silence. Both directions are named below so a reader
+// cannot mistake the second kind for the first.
 // ---------------------------------------------------------------------------
 
-describe('the conservative bias, held in place', () => {
-  it('still counts a call that sits in a branch nothing can reach', () => {
+describe('the scanner bias: safe in two places, unsafe in two others', () => {
+  it('UNSAFE: still counts a call that sits in a branch nothing can reach', () => {
     // Reachability is not the question being asked. Answering it would need
     // control-flow analysis, and the wrong answer would be a false orphan.
     const scan = scanHookWiring(
@@ -327,7 +332,7 @@ describe('the conservative bias, held in place', () => {
     expect(scan.calledHooks).toContain('useCards');
   });
 
-  it('calls a hook an orphan when it is only ever invoked through an alias', () => {
+  it('SAFE: calls a hook an orphan when it is only ever invoked through an alias', () => {
     // Following `const h = useCards` would mean tracking assignments. The scan
     // reports the orphan instead and lets a person look.
     const scan = scanHookWiring(
@@ -341,5 +346,97 @@ describe('the conservative bias, held in place', () => {
       }),
     );
     expect(scan.orphans).toContain('useCards');
+  });
+
+  it('UNSAFE: credits the import when a local function shadows the same name', () => {
+    // The only call in this file resolves to the LOCAL useCards, not to the
+    // barrel's. The scanner says the barrel's hook is called anyway, because
+    // it matches identifiers in callee position without a binder.
+    //
+    // This case describes what the scanner does TODAY, not what it should do.
+    // If it goes red, the scanner got stricter — which is an improvement in the
+    // safe direction, but a human must adjudicate before this assertion is
+    // edited: flipping it to `expect(scan.orphans).toContain(...)` without
+    // checking why is how a guard gets rewritten to agree with a regression.
+    //
+    // The import is referenced through `registry` so the file stays realistic;
+    // a bare unused import would not survive noUnusedLocals in real source.
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/Shadowed.tsx',
+        source: `
+          import { useCards } from '../hooks';
+          const registry = { useCards };
+          export function Page() {
+            function useCards() { return 1; }
+            return [registry, useCards()];
+          }
+        `,
+      }),
+    );
+    expect(scan.calledHooks).toContain('useCards');
+    expect(scan.orphans).not.toContain('useCards');
+  });
+
+  it('and the inverse: the same import with nothing in callee position is an orphan', () => {
+    // Without this, the case above could be green for a boring reason — that
+    // some `useCards()` exists somewhere in the input. Removing only the local
+    // declaration and its call leaves the import and the mention in place, and
+    // the verdict flips. So the shadowed call really is what earned the
+    // "called" verdict above.
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/Shadowed.tsx',
+        source: `
+          import { useCards } from '../hooks';
+          const registry = { useCards };
+          export function Page() { return [registry]; }
+        `,
+      }),
+    );
+    expect(scan.orphans).toContain('useCards');
+    expect(scan.calledHooks).not.toContain('useCards');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The scope of hooksNotInBarrel, driven in both directions.
+//
+// hooksNotInBarrel only looks inside src/hooks/. findHookShapedExportsOutsideHooksDir
+// is the other half — it reports hooks living anywhere else under src/, which
+// hookWiring.test.ts holds against a one-entry allowlist. Synthetic controls
+// here; the real-repo assertion lives beside the disk-reading harness.
+// ---------------------------------------------------------------------------
+
+describe('hook-shaped exports outside the hooks folder', () => {
+  it('reports a hook declared somewhere else under src', () => {
+    const found = findHookShapedExportsOutsideHooksDir(
+      withIndex({
+        path: 'src/utils/useNobodyCallsThis.ts',
+        source: `export function useNobodyCallsThis() { return 1; }`,
+      }),
+    );
+
+    expect(found).toEqual([
+      { name: 'useNobodyCallsThis', path: 'src/utils/useNobodyCallsThis.ts' },
+    ]);
+  });
+
+  it('does not report hooks that live inside src/hooks', () => {
+    // Otherwise the out-of-barrel allowlist would have to enumerate the whole
+    // barrel, and the two guards would overlap into one useless number.
+    const found = findHookShapedExportsOutsideHooksDir([
+      { path: 'src/hooks/useCards.ts', source: `export function useCards() { return 1; }` },
+    ]);
+
+    expect(found).toEqual([]);
+  });
+
+  it('does not report a non-hook-shaped export', () => {
+    const found = findHookShapedExportsOutsideHooksDir([
+      { path: 'src/utils/format.ts', source: `export function formatDate() { return ''; }` },
+    ]);
+
+    expect(found).toEqual([]);
   });
 });
