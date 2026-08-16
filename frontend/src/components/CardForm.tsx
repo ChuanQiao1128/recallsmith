@@ -65,6 +65,29 @@ function slugifyForStableUid(input: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+/**
+ * The same normalisation, minus the one rule that cannot run mid-keystroke.
+ *
+ * The field re-slugifies its whole value on every keypress, so stripping
+ * trailing separators there deleted each hyphen the instant it was typed and
+ * the next character closed the gap: `cs-async-001` typed by hand arrived as
+ * `csasync001`, while the identical string pasted in one go survived. The .md
+ * file carries the hyphenated spelling, and deckImport reconciles on uid alone,
+ * so the next import read the hand-typed card as a stranger and created a
+ * duplicate rather than updating it.
+ *
+ * Leading separators are still stripped: a uid may not start with one, and
+ * removing it costs the typist nothing, because there is no keystroke it could
+ * be on the way to. A trailing one is every hyphen at the moment it is typed,
+ * which is why it has to wait for blur.
+ */
+function slugifyWhileTyping(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '');
+}
+
 function mapToHlLanguage(codeLang: string): string | null {
   if (!codeLang) return null;
   switch (codeLang) {
@@ -201,14 +224,19 @@ export function CardForm(props: CardFormProps) {
         </label>
         <input
           type="text"
-          className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
-                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+          className={`block w-full rounded-md border px-3 py-2 text-sm font-mono
+                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+                     ${mode === 'edit' ? 'border-slate-200 bg-slate-100 text-slate-500' : 'border-slate-300'}`}
           value={values.stableUid}
-          onChange={e => handleChange('stableUid', slugifyForStableUid(e.target.value))}
+          readOnly={mode === 'edit'}
+          onChange={e => handleChange('stableUid', slugifyWhileTyping(e.target.value))}
+          onBlur={e => handleChange('stableUid', slugifyForStableUid(e.target.value))}
           placeholder="js-basics-let-const-var"
         />
         <p className="mt-1 text-xs text-slate-500">
-          每个 Deck 内唯一的稳定 ID。默认根据 Question 自动生成，可以手动调整。
+          {mode === 'edit'
+            ? '这张卡的稳定 ID 不能改。它是这张卡在全系统里的身份：复习进度按它归档，导入也按它对账。改掉等于把这张卡上已有的学习记录全部弃掉，再当成一张新卡重新开始。'
+            : '每个 Deck 内唯一的稳定 ID。默认根据 Question 自动生成，可以手动调整。'}
         </p>
       </div>
 
