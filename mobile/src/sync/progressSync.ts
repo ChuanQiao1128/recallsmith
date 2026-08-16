@@ -17,9 +17,7 @@ import { clampStage, MAX_NEXT_REVIEW_HORIZON_MS } from '../review/model';
 import type { CardProgress } from '../review/model';
 
 /**
- * ============================
- *  Progress Sync 设计（面试讲法）
- * ============================
+ * Progress Sync 的设计
  *
  * 核心目标：Offline-first + Eventual Consistency
  *

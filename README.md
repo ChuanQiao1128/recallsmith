@@ -17,10 +17,17 @@ This is a personal project, written and maintained by one person.
 | `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` | 126 |
 | `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver | 3 |
 | `snowflake/` | SQL | Warehouse setup and the marts that model card quality | 4 |
-| `docs/` | Markdown | Design and refactor notes | 18 |
+| `docs/` | Markdown | Design notes and refactor plans | 11 |
 | `.github/` | YAML | CI workflow | 1 |
 
-File counts are `git ls-files <dir> | wc -l` as of this commit.
+File counts are `git ls-files <dir> | wc -l` as of this commit, and
+`frontend/tests/rootReadmePaths.test.ts` fails if they drift.
+
+Test counts are deliberately not quoted anywhere here. They change with almost
+every commit, and the only honest way to keep such a number true is a check that
+runs the suite — which cannot live inside the suite it measures. A number nothing
+keeps true is worse than no number: it reads as verified and falsifies in one
+command. Run the commands below and read the real output.
 
 `src_C/` is the one directory name that misleads. It is the entire backend:
 `Vpc/` holds the Lambdas that sit inside the VPC and talk to PostgreSQL,
@@ -87,10 +94,10 @@ and `backend`.
 
 | Command | Result |
 | --- | --- |
-| `cd frontend && npx vitest run` | 31 files, 289 tests |
+| `cd frontend && npx vitest run` | All green |
 | `cd frontend && npx eslint src tests vitest.config.ts` | 0 errors, 1 warning |
 | `cd frontend && npm run build` | `dist/assets/index-*.js` ≈ 274 kB |
-| `cd src_C && dotnet test Tests/RecallSmith.Lambda.IntegrationTests` | 128 tests |
+| `cd src_C && dotnet test Tests/RecallSmith.Lambda.IntegrationTests` | All green |
 
 Every number above was produced by running that exact command while writing this
 file.

@@ -408,7 +408,7 @@ staleTime 分层(列表 30 s、manifest 5 min);`prefetchQuery` 在鼠标悬停�
 
 - **测什么**:进入编辑页到表单可交互的时间;这条路径上的请求数与响应字节数。
 - **工具**:DevTools Network 看 `/authoring/cards?deckId=` 的 Size 与 Time,
-  **把 Waterfall 的串行台阶截图作为前后对比证据**(这张图面试里最直观);
+  **把 Waterfall 的串行台阶截图作为前后对比证据**(这张图最直观);
   第 0 条埋 `deckedit:open→ready` 跑 10 次取 p75。
 - **预算**:编辑页打开的请求数 ≤ 1(或并行 2);
   `deckedit:open→ready` p75 ≤ 400 ms(Slow 4G);单页下载字节 ≤ 50 kB。
@@ -539,7 +539,7 @@ cards 端点补上与 admin decks 同款的 keyset 分页(前端已有 `pages/de
   导入期间的 commit 次数;单卡写入 p50/p95;预览分段(fetch / parse / plan)。
 - **工具**:React DevTools Profiler 记录一次挂载的 commit duration,
   按 100 / 200 / 500 / 1000 行做一组曲线(本地 mock 数据放大规模),
-  **画出"行数 vs 首屏渲染毫秒"的斜率图**,这张图是面试里最好用的一页;
+  **画出"行数 vs 首屏渲染毫秒"的斜率图**,这张图最能说明问题;
   Intl 部分用 `performance.mark` 包住 map 阶段单独量;
   写入段在每次 onProgress 里记时间戳,跑完 `console.table` 打直方图。
 - **预算**:
@@ -610,7 +610,7 @@ cards 端点补上与 admin decks 同款的 keyset 分页(前端已有 `pages/de
 2. `saveDeckProgress` 改成 write-behind coalescer:内存里存 `dirtyProgress[slug]`
    (就是 `nextState.updatedProgress`,本来就是新数组),trailing timer 400 ms 合并;
    打分路径**不 await 它**,只 await 已有的 `recordReviewEvent`。
-3. **强制 flush 点(这是取舍的核心,面试里要能一口气讲清)**:
+3. **强制 flush 点(这是取舍的核心)**:
    AppState 转 background、屏幕 blur / unmount、
    会话结束导航前(`SessionCardScreen.tsx:449-451` 的 `navigation.replace('Settlement')` 之前)、
    `scheduleProgressSync` 触发前。
@@ -701,7 +701,7 @@ Home / Library / 调度器只吃索引(几百 KB 级),卡片正文按 chunk 懒�
 - **测什么**:`{slug, cards, readMs, parseMs, mapMs}`;每次 Home focus 的 `resolveDeckBySlug` 调用次数。
 - **工具**:在 `resolveDeckBySlug` 内用第 0 条的 mark 打点;调用次数用一个模块级计数器。
   用 200 卡和一个人造 10k 卡 deck 各测一次,**把耗时对卡数的曲线画出来**,
-  这是"O(N) 是不是真的"的证据,也是面试里最好讲的一张图。
+  这是"O(N) 是不是真的"的证据,也是最能说明问题的一张图。
 - **预算**:Home focus 的 deck 解码总耗时 p95 < 50 ms;
   每副牌每次 focus 的 `resolveDeckBySlug` 调用次数 = 1(现在是 2)。
 
@@ -1010,25 +1010,3 @@ counts 变成 O(1) 读、筛选变成 O(结果集),progress 变更只增量更�
     `LibraryScreen.tsx:42` 已经有一个 1.5 s 的 `REFRESH_DEBOUNCE_MS` 在做这件事,
     它治的是症状。真正的病在 M2(每次 focus 全量解析两遍)。
     **把每次 focus 变便宜,比减少 focus 次数正确。**
-
----
-
-# TRV 面试提要
-
-先讲第 0 条,再讲任意两条。每条一句中文要点加一句英文短句,英文全部用简单句。
-
-| # | 中文一句话 | English one-liner |
-|---|---|---|
-| 0 | 两端客户端测量命中数是零,所以第一件事是装表:LCP、INP、两条业务旅程、冷启动 TTI、评分响应、帧率占比,每个都配预算。 | I found zero client-side timers, so I added them first. |
-| C1 | 构建产物是单个 501 kB chunk,里面有 15.9 kB gzip 的高亮库和 13.7 kB gzip 从未被调用的缓存库,路由分割加懒加载能把首屏 gzip 压到 110 kB 以内。 | One 501 kB bundle ships code no first screen ever runs. |
-| C2 | 轮询只在成功分支重排下一次,一次软失败就永久停摆,用户以为是后端慢,其实是前端不再去看结果了。 | A soft failure stops the poller forever, so the delay is unbounded. |
-| C3 | 缓存库装了、包在根上、hooks 写好了,但零调用,同时手写了两套半成品缓存,导致返回导航每次都重新请求。 | The cache library is installed but never called, so every back navigation refetches. |
-| C4 | 编辑页为了显示一个卡片数量,串行等一个额外往返并下载整份卡片数组,而那个数字后端已经在 deck 里给了。 | It waits a full round trip and downloads every card just to show a count. |
-| C5 | 搜索框每敲一个字就整页重渲染,折叠面板里还藏着一次全量 JSON 序列化,而它是否展开对 React 没有区别。 | Every keystroke repaints the page, including a collapsed panel nobody opened. |
-| C6 | 卡片页每行新建两个日期格式化器,导入预览表算了两遍,导入时每写一张卡就整页重画,真正要产出的是那张行数对毫秒的斜率图。 | The real deliverable is the slope of rows against milliseconds. |
-| M1 | 评分时事实必须同步落盘,这条不动;但投影可以从事实重建,所以它能延迟并合并,代价是启动多一次重放,而重放函数已经写好并测过。 | Facts stay synchronous, projections can be rebuilt, so only projections get deferred. |
-| M2 | 每次回首页都把每副牌全量读盘、解析、逐卡重建,而且同一副牌做了两遍,一个按 buildId 的内存缓存就够。 | Every return to home parses every deck twice from disk. |
-| M3 | 启动时 72 个屏幕全部静态导入并求值,先量 20 次冷启动的 p50 和 p95,再开 inline requires,测出来没用就撤回。 | Seventy-two screens are evaluated before the first one is shown. |
-| M4 | 抽卡仪式用 33 毫秒定时器驱动 setState 逐帧动画,换成原生驱动的 Animated 就能让 React 退出逐帧,但先量 baseline,可能结论是不做。 | A 33 ms timer drives the animation through React instead of the native thread. |
-| M5 | Library 的 FlatList 一个性能属性都没配,行高其实已知却没喂给它,这条是未来投资,今天 200 卡看不出差别。 | The list knows its row height but never tells the list component. |
-| M6 | 同步上行载荷有四处冗余字段,但先称重再决定,估算只有 11 KB,预期结论是不裁,真正的改动是把批大小从写死条数改成按字节预算。 | I expect the measurement to say "leave it alone", and that answer is still worth having. |

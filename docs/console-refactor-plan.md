@@ -1121,7 +1121,7 @@ cd frontend && npx vitest run tests/hookWiring.test.ts
   22 个产物里 20 个逐字节相同,变的只有
   `ContentIntelligencePage-*.js`(+54,修 lint)和 `index.css`(**−20**)。
 - **CSS 那 20 字节值得单独说**:`.resize{resize:both}`。Tailwind 的 content 扫描
-  扫到了 `useDebounce.ts` 注释里一句编造的面试话术(「窗口 resize」),
+  扫到了 `useDebounce.ts` 注释里一句编造的宣传语(「窗口 resize」),
   于是一句假话真的在给全站每个用户发字节。
 
 ### 9.3 新增 `tests/apiSurfaceCensus.test.ts`
@@ -1175,7 +1175,7 @@ ESLint 没有跨文件规则,rollup 把死导出摇掉所以产物里也看不�
 
 ### 9.6 剩下的债:src/ 里仍有 20 个文件、1,297 行从 main.tsx 不可达
 
-CI 会绿、lint 0 error、tsc 过,但面试官点开 `src/components/ui/` 会看到九个没人用的组件。
+CI 会绿、lint 0 error、tsc 过,但任何人点开 `src/components/ui/` 都会看到九个没人用的组件。
 **本步没有删它们,因为它们不是同一类东西**:
 
 | 目录 | 文件 | 行 | 为什么留着 |

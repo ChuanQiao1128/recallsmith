@@ -10,7 +10,7 @@ API Gateway. See the [root README](../README.md) for the rest of the system.
 | --- | --- |
 | `npm run dev` | Vite dev server on port 5173 |
 | `npm run build` | `tsc -b && vite build` — this is also the type-check step |
-| `npm test` | `vitest run` — 31 files, 289 tests |
+| `npm test` | `vitest run` |
 | `npm run lint` | `eslint .` — 0 errors, 1 known warning |
 | `npm run preview` | Serves an already-built `dist/` |
 
