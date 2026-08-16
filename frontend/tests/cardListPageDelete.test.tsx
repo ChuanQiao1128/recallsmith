@@ -22,15 +22,16 @@
 //      write may well have landed.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
+import type { QueryClient } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
 
 import type { Card } from '../src/types/card';
 import type { Deck } from '../src/types/deck';
 import type { ApiResult } from '../src/types/api';
 import { KIND_HINT, KIND_LABEL } from '../src/lib/errorFeed';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
+import { renderWithQuery } from './support/queryTestClient';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
@@ -89,15 +90,14 @@ function refused(): ApiResult<null> {
   };
 }
 
-async function mountCards(): Promise<void> {
-  render(
-    <MemoryRouter initialEntries={[`/decks/cards?deckId=${DECK_ID}`]}>
-      <CardListPage />
-    </MemoryRouter>,
-  );
+async function mountCards(): Promise<QueryClient> {
+  const { client } = renderWithQuery(<CardListPage />, [
+    `/decks/cards?deckId=${DECK_ID}`,
+  ]);
   // The page renders a loading screen until both fetches resolve; waiting on
   // the row is what tells us the table is real before anything is clicked.
   await screen.findByText(CARD_QUESTION);
+  return client;
 }
 
 /** Press Delete the way a user does, through the row's own button. */
@@ -199,5 +199,35 @@ describe('a refusal and a dropped request give opposite advice', () => {
     expect(text).not.toContain(KIND_LABEL.business);
     expect(text).not.toContain(KIND_HINT.business);
     expect(screen.queryByText(CARD_QUESTION)).not.toBeNull();
+  });
+});
+
+// A lock on the render helper itself, not on the page.
+//
+// Cache bleed between cases fails in shapes a human does not spot by reading:
+// "green alone, red in a full run", or the worse "green in a full run, red
+// alone". Two consecutive mounts of the same deck make it an assertion instead.
+let firstMountClient: QueryClient | null = null;
+
+describe('every mount gets its own query cache', () => {
+  it('mounts the deck once and remembers which client served it', async () => {
+    firstMountClient = await mountCards();
+    expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(1);
+    expect(firstMountClient).not.toBeNull();
+  });
+
+  it('mounts the same deck again without inheriting the previous case', async () => {
+    const client = await mountCards();
+
+    // Behavioural half: this mount reached the network stub itself rather than
+    // being served out of a cache that outlived the previous case. Counts are
+    // reset in afterEach, so 1 means "fetched here", 0 would mean "inherited".
+    expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(1);
+    expect(api.fetchDeckById).toHaveBeenCalledTimes(1);
+
+    // Structural half: the mounts did not share a client at all. This is the
+    // half that stays sharp even if the hooks are later allowed to cache, at
+    // which point the count above would go quiet while the bleed came back.
+    expect(client).not.toBe(firstMountClient);
   });
 });
