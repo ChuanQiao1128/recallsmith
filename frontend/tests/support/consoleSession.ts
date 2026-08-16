@@ -48,7 +48,41 @@ export function signInAsSuperAdmin(): void {
   });
 }
 
-/** Drop the session, so no test can inherit another test's permissions. */
+/**
+ * Put a non-expired session in sessionStorage that is *not* super_admin.
+ *
+ * DeckListPage branches on this at mount: super admins start against the
+ * cursor-paged admin endpoint, everyone else starts on the legacy full-list
+ * path. Reaching that path by signing in as an editor exercises the same
+ * decision the app makes; forcing listMode some other way would test a state
+ * no session can produce.
+ */
+export function signInAsEditor(): void {
+  const token = fakeJwt({
+    email: TEST_ADMIN_EMAIL,
+    'cognito:username': 'console-tests-editor',
+    'cognito:groups': ['editor'],
+  });
+
+  setStoredTokens({
+    accessToken: token,
+    idToken: token,
+    expiresIn: 24 * 60 * 60,
+  });
+}
+
+/**
+ * Drop the session, so no test can inherit another test's permissions.
+ *
+ * The localStorage.clear() is load-bearing beyond permissions: DeckListPage
+ * keeps its own five-minute deck and manifest caches under
+ * recallsmith_decks_cache / recallsmith_manifest_cache, and a test that
+ * inherited one would render a previous test's rows without issuing a single
+ * request. Tests that mount that page rely on this call to start cold. A
+ * helper naming those two keys directly was considered and rejected: it would
+ * go silently stale the day a key is renamed, whereas clearing everything
+ * cannot.
+ */
 export function signOut(): void {
   sessionStorage.clear();
   localStorage.clear();

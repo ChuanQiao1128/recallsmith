@@ -36,6 +36,14 @@ import {
   removeDeckBySlug,
 } from './deckListPagination';
 import type { DeckPageListState, DeckStatus } from './deckListPagination';
+import {
+  extractDecksArray,
+  getDeckStatusFromManifest,
+  parseManifestMeta,
+  safeDateTime,
+  toManifestDeckLite,
+} from './deckListManifest';
+import type { ManifestDeckLite, ManifestMeta } from './deckListManifest';
 
 import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
@@ -89,36 +97,6 @@ interface DeckListState {
   decks: Deck[];
 }
 
-type ManifestDeckLite = {
-  slug: string;
-  title?: string;
-  locale?: string;
-
-  availability?: string;
-  tier?: string;
-  downloadMode?: string;
-
-  version?: string;
-  buildId?: string | null;
-
-  totalCards?: number | null;
-
-  path?: string | null;
-
-  previewCards?: number | null;
-  previewBuildId?: string | null;
-  previewPath?: string | null;
-};
-
-type ManifestMeta = {
-  schemaVersion?: number;
-  prefix?: string;
-  generatedAtMs?: number;
-  publishedAt?: string;
-  generatedAt?: string;
-  deckCount?: number;
-};
-
 type ManifestState = {
   loading: boolean;
   error: string | null;
@@ -152,162 +130,6 @@ type ConsoleDeckRow = {
   status: DeckStatus;
   updatedAt: string | number | null;
 };
-
-function safeDateTime(value: unknown): string {
-  if (value === undefined || value === null || value === '') return '—';
-  const d = new Date(value as string | number | Date);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString();
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
-}
-
-function isNonEmptyString(v: unknown): v is string {
-  return typeof v === 'string' && v.trim().length > 0;
-}
-
-function toOptionalString(v: unknown): string | undefined {
-  if (!isNonEmptyString(v)) return undefined;
-  return v.trim();
-}
-
-function toOptionalNumber(v: unknown): number | undefined {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  if (typeof v === 'string' && v.trim()) {
-    const n = Number(v);
-    if (Number.isFinite(n)) return n;
-  }
-  return undefined;
-}
-
-function toOptionalNullableNumber(v: unknown): number | null | undefined {
-  if (v === undefined) return undefined;
-  if (v === null) return null;
-  const n = toOptionalNumber(v);
-  return n === undefined ? null : n;
-}
-
-function pick(o: Record<string, unknown>, keys: string[]): unknown {
-  for (const k of keys) {
-    if (k in o) return o[k];
-  }
-  return undefined;
-}
-
-// ✅ 核心修复：自动剥离外层的 { manifest: { ... } } 包装
-function getManifestTarget(raw: unknown): Record<string, unknown> {
-  if (!isRecord(raw)) return {};
-  if (isRecord(raw.manifest)) return raw.manifest as Record<string, unknown>;
-  if (isRecord(raw.data) && isRecord(raw.data.manifest)) return raw.data.manifest as Record<string, unknown>;
-  if (isRecord(raw.data)) return raw.data as Record<string, unknown>;
-  return raw;
-}
-
-function extractDecksArray(raw: unknown): unknown[] {
-  if (Array.isArray(raw)) return raw;
-
-  const target = getManifestTarget(raw);
-  const decks = target['decks'] ?? target['Decks'];
-  if (Array.isArray(decks)) return decks;
-  return [];
-}
-
-function toManifestDeckLite(input: unknown): ManifestDeckLite | null {
-  if (!isRecord(input)) return null;
-
-  const slugV = pick(input, ['slug', 'Slug']);
-  const slug = toOptionalString(slugV) ?? '';
-  if (!slug) return null;
-
-  const title = toOptionalString(pick(input, ['title', 'Title']));
-  const locale = toOptionalString(pick(input, ['locale', 'Locale']));
-
-  const availability = toOptionalString(pick(input, ['availability', 'Availability']));
-  const tier = toOptionalString(pick(input, ['tier', 'Tier']));
-  const downloadMode = toOptionalString(pick(input, ['downloadMode', 'DownloadMode']));
-
-  const version = toOptionalString(pick(input, ['version', 'Version']));
-
-  const buildIdRaw = pick(input, ['buildId', 'BuildId']);
-  const buildId =
-    buildIdRaw === null ? null : isNonEmptyString(buildIdRaw) ? String(buildIdRaw).trim() : undefined;
-
-  const pathRaw = pick(input, ['path', 'Path']);
-  const path = pathRaw === null ? null : isNonEmptyString(pathRaw) ? String(pathRaw).trim() : undefined;
-
-  const totalCards = toOptionalNullableNumber(pick(input, ['totalCards', 'TotalCards']));
-
-  const previewCards = toOptionalNullableNumber(pick(input, ['previewCards', 'PreviewCards']));
-
-  const previewBuildIdRaw = pick(input, ['previewBuildId', 'PreviewBuildId']);
-  const previewBuildId =
-    previewBuildIdRaw === null
-      ? null
-      : isNonEmptyString(previewBuildIdRaw)
-        ? String(previewBuildIdRaw).trim()
-        : undefined;
-
-  const previewPathRaw = pick(input, ['previewPath', 'PreviewPath']);
-  const previewPath =
-    previewPathRaw === null
-      ? null
-      : isNonEmptyString(previewPathRaw)
-        ? String(previewPathRaw).trim()
-        : undefined;
-
-  return {
-    slug,
-    ...(title ? { title } : {}),
-    ...(locale ? { locale } : {}),
-
-    ...(availability ? { availability } : {}),
-    ...(tier ? { tier } : {}),
-    ...(downloadMode ? { downloadMode } : {}),
-
-    ...(version ? { version } : {}),
-    ...(buildId !== undefined ? { buildId } : {}),
-    ...(path !== undefined ? { path } : {}),
-    ...(totalCards !== undefined ? { totalCards } : {}),
-
-    ...(previewCards !== undefined ? { previewCards } : {}),
-    ...(previewBuildId !== undefined ? { previewBuildId } : {}),
-    ...(previewPath !== undefined ? { previewPath } : {}),
-  };
-}
-
-function parseManifestMeta(raw: unknown): ManifestMeta {
-  const target = getManifestTarget(raw);
-
-  const schemaVersion = toOptionalNumber(pick(target, ['schemaVersion', 'SchemaVersion']));
-  const prefix = toOptionalString(pick(target, ['prefix', 'Prefix']));
-  const generatedAtMs = toOptionalNumber(pick(target, ['generatedAtMs', 'GeneratedAtMs']));
-  const publishedAt = toOptionalString(pick(target, ['publishedAt', 'PublishedAt']));
-  const generatedAt = toOptionalString(pick(target, ['generatedAt', 'GeneratedAt']));
-
-  const decksRaw = pick(target, ['decks', 'Decks']);
-  const deckCount = Array.isArray(decksRaw) ? decksRaw.length : undefined;
-
-  return {
-    ...(schemaVersion !== undefined ? { schemaVersion } : {}),
-    ...(prefix ? { prefix } : {}),
-    ...(generatedAtMs !== undefined ? { generatedAtMs } : {}),
-    ...(publishedAt ? { publishedAt } : {}),
-    ...(generatedAt ? { generatedAt } : {}),
-    ...(deckCount !== undefined ? { deckCount } : {}),
-  };
-}
-
-function getDeckStatusFromManifest(deck: Deck, m?: ManifestDeckLite, cardCount?: number): DeckStatus {
-  const isPublished = !!(m && (m.buildId || m.path));
-  const count = cardCount ?? deck.totalCards ?? 0;
-
-  if (isPublished) return 'published';
-  if (count > 0) return 'needs_publish';
-  
-  return 'unpublished';
-}
 
 function statusBadge(status: DeckStatus) {
   if (status === 'published') {

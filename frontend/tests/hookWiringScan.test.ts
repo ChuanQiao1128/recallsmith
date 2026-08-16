@@ -135,3 +135,211 @@ describe('the file count the disk-reading half is judged on', () => {
     expect(scanHookWiring(withIndex()).scannedFileCount).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Mentioned is not called.
+//
+// The scan above asks whether the file body contains the identifier anywhere.
+// That is a text search, and a text search cannot tell a call site from a
+// comment, a string, a type position or a property name. Every case below is a
+// file where nothing renders through the hook, and the pre-AST scanner said it
+// was wired.
+//
+// Why this matters more here than it would elsewhere: hookWiring.test.ts
+// asserts the allowlist and the orphan set are the *same* set, in both
+// directions. So a hook that leaves `orphans` for a bogus reason turns the
+// staleness assertion red, and the only edit that makes it green again is
+// striking that hook off the ratchet. A single comment is enough to do it, and
+// the comment is permanent. The freshness half of the guard becomes the lever
+// that shrinks the guard — the wired-on-paper disease it was written to catch,
+// caught in the catcher.
+// ---------------------------------------------------------------------------
+
+describe('a mention that is not a call', () => {
+  it('does not count a name that appears only in a line comment', () => {
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/Commented.tsx',
+        source: `
+          import { useDecks } from '../hooks';
+          export function Page() {
+            // TODO: wire useDecks here
+            return null;
+          }
+        `,
+      }),
+    );
+    expect(scan.calledHooks).not.toContain('useDecks');
+    expect(scan.orphans).toContain('useDecks');
+  });
+
+  it('does not count a name that appears only in a block comment', () => {
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/BlockCommented.tsx',
+        source: `
+          import { useDecks } from '../hooks';
+          /* useDecks */
+          export function Page() { return null; }
+        `,
+      }),
+    );
+    expect(scan.calledHooks).not.toContain('useDecks');
+    expect(scan.orphans).toContain('useDecks');
+  });
+
+  it('does not count a name that appears only inside a string literal', () => {
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/Stringy.tsx',
+        source: `
+          import { useCards } from '../hooks';
+          export const label = 'useCards';
+        `,
+      }),
+    );
+    expect(scan.calledHooks).not.toContain('useCards');
+    expect(scan.orphans).toContain('useCards');
+  });
+
+  it('does not count a clause-level type-only import', () => {
+    // `import type { x }` erases at compile time; the specifier-level filter
+    // upstream only sees `{ type x }`, which is the other spelling.
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/TypeOnly.tsx',
+        source: `
+          import type { useCards } from '../hooks';
+          export type T = typeof useCards;
+        `,
+      }),
+    );
+    expect(scan.calledHooks).not.toContain('useCards');
+    expect(scan.orphans).toContain('useCards');
+  });
+
+  it('does not count a binding that is referenced but never invoked', () => {
+    // Putting a hook in a registry object renders exactly nothing.
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/Registry.tsx',
+        source: `
+          import { useCards } from '../hooks';
+          export const registry = { useCards };
+        `,
+      }),
+    );
+    expect(scan.calledHooks).not.toContain('useCards');
+    expect(scan.orphans).toContain('useCards');
+  });
+
+  it('does not count a same-named property on some other object', () => {
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/Shadowed.tsx',
+        source: `
+          import { useDecks } from '../hooks';
+          const other = { useDecks: () => 1 };
+          export function Page() { return other.useDecks(); }
+        `,
+      }),
+    );
+    expect(scan.calledHooks).not.toContain('useDecks');
+    expect(scan.orphans).toContain('useDecks');
+  });
+
+  it('does not accept a same-named export from a module that is not the hooks folder', () => {
+    // A substring test for '/hooks' also matches '../vendor/hooks-compat',
+    // which lets an unrelated package vouch for the barrel's symbols.
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/Impostor.tsx',
+        source: `
+          import { useCards } from '../vendor/hooks-compat';
+          export function Page() { return useCards(7); }
+        `,
+      }),
+    );
+    expect(scan.calledHooks).not.toContain('useCards');
+    expect(scan.orphans).toContain('useCards');
+  });
+});
+
+describe('hooks that never reach the barrel', () => {
+  it('reports a hook file that index.ts does not re-export', () => {
+    // The ratchet judges the barrel. A hook that is never re-exported is not
+    // an orphan, not an allowlist entry, and not a failure — it is invisible,
+    // so "the debt cannot grow" only holds inside the barrel.
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/hooks/useOrphanProbe.ts',
+        source: `export function useOrphanProbe() { return 1; }`,
+      }),
+    );
+    expect(scan.hooksNotInBarrel).toContain('useOrphanProbe');
+  });
+});
+
+describe('a dynamic import of the barrel', () => {
+  it('is reported rather than passing unseen', () => {
+    // Same blind spot as `import * as hooks`, and previously not reported at
+    // all: the statement scan only matches the static `... from '...'` form.
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/Lazy.tsx',
+        source: `
+          export async function Page() {
+            const m = await import('../hooks');
+            return m.useDecks();
+          }
+        `,
+      }),
+    );
+    expect(scan.namespaceImports).toHaveLength(1);
+    expect(scan.namespaceImports[0].specifier).toBe('../hooks');
+    expect(scan.namespaceImports[0].path).toBe('src/pages/Lazy.tsx');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Two deliberate inaccuracies, pinned so a later change cannot quietly widen
+// them into the hole they resemble. Both err toward calling a live hook an
+// orphan, which turns the ratchet red and brings a human; the opposite error
+// shrinks the ratchet in silence.
+// ---------------------------------------------------------------------------
+
+describe('the conservative bias, held in place', () => {
+  it('still counts a call that sits in a branch nothing can reach', () => {
+    // Reachability is not the question being asked. Answering it would need
+    // control-flow analysis, and the wrong answer would be a false orphan.
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/DeadBranch.tsx',
+        source: `
+          import { useCards } from '../hooks';
+          export function Page() {
+            if (false) { useCards(1); }
+            return null;
+          }
+        `,
+      }),
+    );
+    expect(scan.calledHooks).toContain('useCards');
+  });
+
+  it('calls a hook an orphan when it is only ever invoked through an alias', () => {
+    // Following `const h = useCards` would mean tracking assignments. The scan
+    // reports the orphan instead and lets a person look.
+    const scan = scanHookWiring(
+      withIndex({
+        path: 'src/pages/Aliased.tsx',
+        source: `
+          import { useCards } from '../hooks';
+          const h = useCards;
+          export function Page() { return h(1); }
+        `,
+      }),
+    );
+    expect(scan.orphans).toContain('useCards');
+  });
+});
