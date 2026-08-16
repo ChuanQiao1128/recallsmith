@@ -1,7 +1,3 @@
-# Both suites run the plain command a human would type after cloning, on
-# purpose. The test counts this repo claims are only worth anything if a
-# stranger can reproduce them, and an automation with no observable success
-# signal does not exist.
 name: CI
 
 on:
@@ -39,44 +35,20 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      # Lint first: eslint fails in seconds, so there is no reason to spend a
-      # test run and a bundle on finding out. Same reasoning as the ordering
-      # note below.
+      # `npm run lint` (= `eslint .`) rather than an explicit path list, because
+      # `.` is a strict superset (102 files vs 98 today) and cannot be defeated
+      # by adding a top-level file and forgetting to extend the list.
       #
-      # `npm run lint` (= `eslint .`) rather than an explicit path list. Both
-      # report the same problems today, but `.` reads 112 files where
-      # `src tests vitest.config.ts` reads 108 — the superset costs nothing and
-      # cannot be defeated by someone adding a top-level file and forgetting to
-      # extend the list. That failure mode is the one this repo keeps hitting.
-      #
-      # NO `--max-warnings 0`, deliberately. There is exactly one warning,
+      # NO `--max-warnings 0`, deliberately. The one warning is
       # DeckListPage.tsx:590 (react-hooks/exhaustive-deps on the publish-jobs
-      # poller). Fixing it means touching the polling code that
-      # tests/deckListPagePolling.test.tsx pins character-for-character, so
-      # adding the flag today would turn this job red on its first ever run and
-      # the only way out would be a change nobody has budgeted. The bar here is
-      # 0 ERRORS, not 0 problems. Raise it when that warning is genuinely fixed,
-      # not by silencing it.
+      # poller); fixing it means touching polling code that
+      # tests/deckListPagePolling.test.tsx pins character-for-character. The bar
+      # here is 0 ERRORS, not 0 problems.
       - run: npm run lint
-      # Tests before build: the import reconciler is pure and fails in
-      # milliseconds, so there is no reason to spend a bundle on finding out.
       - run: npx vitest run
-      # This IS the type-check step; there is deliberately no separate
-      # `tsc` run. `npm run build` is `tsc -b && vite build`, and `&&` means a
-      # type error stops the job before vite starts — verified by planting a
-      # real type error in src/, which exits 2 and produces no dist/.
-      # `tsc -b`'s incremental cache lives in node_modules/.tmp, and
-      # actions/setup-node's `cache: npm` caches ~/.npm rather than
-      # node_modules, which `npm ci` deletes anyway — so there is never a stale
-      # buildinfo here and `tsc -b` is always a full check on the runner.
+      # This IS the type-check step. `npm run build` is `tsc -b && vite build`,
+      # so a type error stops the job before vite starts.
       #
-      # TWO THINGS THIS DOES NOT COVER, written down so this comment does not
-      # quietly become false:
-      #   * tests/ is outside tsconfig.app.json's include (which is src/) and
-      #     outside tsconfig.node.json's (which is vite.config.ts alone), so the
-      #     31 test files are type-checked by nothing. Only eslint reads them.
-      #   * Locally, plain `tsc -b` will skip work when a buildinfo is present.
-      #     Use `tsc -b --force` to reproduce what this job does.
       # And never `tsc --noEmit`: tsconfig.json here is references-only with no
       # include, so it checks ZERO files — `--listFiles` prints nothing and it
       # exits 0 with a real type error sitting in src/. It is not a check.
@@ -93,9 +65,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      # The test project is named explicitly rather than letting `dotnet test`
-      # pick up the solution: RecallSmith.Lambda.sln does not reference
-      # Tests/RecallSmith.Lambda.IntegrationTests, so a bare `dotnet test` here
-      # restores, discovers zero test projects and exits 0. A green job that
-      # asserts nothing is worse than no job at all.
+      # The test project is named explicitly so this step is pinned to one
+      # known project: src_C's root holds both RecallSmith.Lambda.sln and
+      # RecallSmith.Lambda.csproj, so a bare `dotnet test` here depends on
+      # which of the two MSBuild picks.
       - run: dotnet test Tests/RecallSmith.Lambda.IntegrationTests

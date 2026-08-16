@@ -49,3 +49,10 @@ android/app/build/
 
 # Coverage
 coverage/
+
+# Local tooling output. These are scratch directories written by editors and by
+# the screenshot-quality scripts in mobile/scripts; the logs alone reach 86 MB.
+.releaseguard/
+mobile/docs/qa/autopilot-logs/
+.claude/
+mobile/docs/qa/agents/draw-v9/runs/

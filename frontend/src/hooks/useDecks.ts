@@ -1,10 +1,7 @@
-// src/hooks/useDecks.ts
 import { useQuery } from '@tanstack/react-query';
 import { fetchDeckById } from '../api/authoring';
 import { QueryKeys } from '../api/queryClient';
 
-// 获取单个 Deck
-//
 // 这里的每一项都是照着「迁移前的 CardListPage 手写 useEffect」逐条抄来的，
 // 不是 react-query 的推荐默认值。共享 queryClient 的默认值会在接线的一瞬间
 // 塞进四个这个页面今天没有的行为：窗口重新聚焦自动刷新、失败自动重试一次
@@ -34,11 +31,8 @@ export function useDeck(id: number) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     retry: false,
-    // Same reason as useCards, and the same failure the enabled comment above
-    // is already guarding against from the other direction: react-query's
-    // default networkMode 'online' parks the query instead of running it when
-    // the browser reports offline, so status never leaves 'pending' and the
-    // page spins forever. The useEffect this replaced always fired.
+    // 见 useCards：默认的 networkMode 'online' 在浏览器报离线时不跑 queryFn，
+    // status 停在 'pending'，页面就永远转圈。
     networkMode: 'always',
   });
 }

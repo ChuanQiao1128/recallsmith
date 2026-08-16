@@ -1,33 +1,19 @@
-// tests/support/hookWiringScan.ts
-//
 // Answers one question about a set of source files: which hooks does
 // src/hooks/index.ts publish that nothing outside src/hooks ever calls.
 //
-// Why this is a pure function over { path, source } instead of a test that
-// reads the disk itself: a guard against dead code fails in a direction that
-// looks like success. Point a glob at the wrong directory and it finds zero
-// consumers, declares every hook an orphan, agrees perfectly with a full
-// allowlist, and goes green — the guard against "the feature exists but is not
-// wired" would itself be present and not wired. Split in two, the judgement can
-// be driven with synthetic inputs in both directions, and the file-reading half
-// is held down separately by a floor on how many files it found.
+// It is a pure function over { path, source } rather than a test that reads the
+// disk, because a guard against dead code fails in a direction that looks like
+// success: point a glob at the wrong directory and it finds zero consumers,
+// declares every hook an orphan, agrees perfectly with a full allowlist, and
+// goes green. Split in two, the judgement can be driven with synthetic inputs
+// in both directions, and the file-reading half is held down separately by a
+// floor on how many files it found.
 //
 // Not collected as a test: the runner's include globs only match *.test.ts and
 // *.test.tsx.
 //
 // ---------------------------------------------------------------------------
 // Why the TypeScript parser and not a regular expression
-//
-// The question is "is this hook called", and the first version answered "does
-// this identifier appear in the file text". Those differ on a comment, a
-// string, a type position, a property name and a bare reference — five shapes
-// that all mean *not called*. Each one let a hook out of `orphans`, and
-// hookWiring.test.ts asserts the allowlist and the orphan set are the same set
-// in both directions, so leaving `orphans` turns the staleness assertion red
-// and the only edit that clears it is striking that hook off the ratchet. One
-// comment was enough. The half of the guard that keeps the list fresh was the
-// lever that shrank the guard, permanently and quietly — the wired-on-paper
-// disease this file exists to detect, running inside the detector.
 //
 // Text cannot be made to answer the real question. Comments and strings cannot
 // be stripped reliably (template literals nest expressions, regex literals hold
@@ -38,14 +24,9 @@
 // nothing is installed to get this.
 //
 // ---------------------------------------------------------------------------
-// Four inaccuracies kept on purpose — and they do NOT all lean the same way
-//
-// This block used to be titled "three inaccuracies" and claimed all three
-// erred toward calling a live hook an orphan. That summary was refuted by its
-// own third entry before shadowing was ever considered: a call in an
-// unreachable branch does not over-report an orphan, it vouches for one. A
-// guard whose self-description is wrong is running the disease it exists to
-// detect, so the list is split by DIRECTION instead of counted.
+// Four inaccuracies kept on purpose — and they do NOT all lean the same way.
+// The list is split by DIRECTION rather than counted, because the two
+// directions have opposite consequences: one goes red, the other stays green.
 //
 // SAFE DIRECTION — over-reports an orphan. Lands in hookWiring.test.ts's first
 // assertion, goes red, and brings a person. Wrong, but loudly wrong.
@@ -68,15 +49,14 @@
 //      import: `import { useCards } from '../hooks'` beside a local
 //      `function useCards()` reports the barrel's useCards as called even
 //      though the only call site resolves to the local. Resolving it needs a
-//      binder over the whole program. See the note on `calledIdentifiers`
-//      below, which has said this correctly all along — ~150 lines further
-//      down, where nobody reads first.
+//      binder over the whole program. The note on `calledIdentifiers` below
+//      states the same limit.
 //
-// A fourth gap is left to a different assertion: `export * from './useDecks'`
+// A fifth gap is left to a different assertion: `export * from './useDecks'`
 // in the barrel would publish hooks this file never lists, emptying
 // `exportedHooks`. That is caught by hookWiring.test.ts's "found the barrel it
-// is judging" (which floors the count against the allowlist size) together
-// with the staleness assertion, so it is not re-checked here.
+// is judging", which compares `exportedHooks` against a hardcoded list of the
+// three wired hooks, so it is not re-checked here.
 
 import ts from 'typescript';
 
@@ -124,11 +104,11 @@ export interface HookWiringScan {
    * scanHookWiring) are considered. A hook declared anywhere else under src/ —
    * src/utils, src/auth, a page file — is invisible to this field. Today that
    * blind spot holds exactly one hook and no debt: `useAuth`
-   * (src/auth/AuthContext.tsx) has four call sites — RequireAuth.tsx:7,
-   * RequireGroup.tsx:12, LoginPage.tsx:13, AuthCallbackPage.tsx:9 — so it is
-   * correctly wired, merely unguarded. Do NOT widen this field's scope to
-   * cover it: hookWiring.test.ts asserts `hooksNotInBarrel` equals [], and
-   * useAuth would land there and turn a correctly-wired hook red.
+   * (src/auth/AuthContext.tsx) has three call sites — RequireAuth.tsx:7,
+   * LoginPage.tsx:13, AuthCallbackPage.tsx:9 — so it is correctly wired,
+   * merely unguarded. Widening this field's scope to cover it turns a
+   * correctly-wired hook red: hookWiring.test.ts asserts `hooksNotInBarrel`
+   * equals [], and useAuth would land there.
    * `hookShapedExportsOutsideHooksDir` below is the separate, allowlisted
    * assertion that keeps the blind spot from silently acquiring a second
    * occupant.
@@ -144,8 +124,8 @@ const DYNAMIC_IMPORT_LOCAL = '(dynamic import)';
 
 /**
  * A specifier that resolves into the hooks folder: some path segment is
- * exactly `hooks`. Substring matching was the earlier rule, and it also
- * accepted `../vendor/hooks-compat`, letting an unrelated module vouch for the
+ * exactly `hooks`. Segment-exact rather than substring, because substring also
+ * accepts `../vendor/hooks-compat`, letting an unrelated module vouch for the
  * barrel's symbols. Subpaths stay in — `../hooks/useCards` is how the pages
  * that are wired up actually import.
  */
@@ -221,15 +201,15 @@ interface HooksBinding {
  * Value bindings a file pulls out of the hooks folder. Type-only imports are
  * dropped at both levels — `import type { x }` (whole clause) and
  * `import { type x }` (one specifier) are different nodes carrying the same
- * meaning, and only the second was visible in the old specifier-text filter.
+ * meaning, so a filter over specifier text alone sees only the second.
  *
  * Both of those checks are redundant and knowingly kept. In valid TypeScript a
  * type-only binding cannot appear in callee position, so the call-position rule
  * below already rejects every case they cover — deleting either one leaves the
  * whole suite green, which was measured rather than assumed. They stay because
  * this scanner reads text that no type checker has vetted, where the illegal
- * combination is expressible. Do not read their presence as evidence that a
- * test is holding them down; none is.
+ * combination is expressible. No test holds them down, so their presence is
+ * not evidence that one does.
  */
 function bindingsFrom(source: ts.SourceFile, from: RegExp): {
   bindings: HooksBinding[];
@@ -273,8 +253,7 @@ function bindingsFrom(source: ts.SourceFile, from: RegExp): {
  *
  * A local that shadows an imported name would be miscredited here. That errs
  * toward "called", which is the unsafe direction, but resolving it needs a
- * binder and a type checker over the whole program; the shapes that actually
- * shrank the ratchet were comments and bare references, and those are gone.
+ * binder and a type checker over the whole program.
  *
  * This is item 4 of the UNSAFE DIRECTION list in the file header, and
  * hookWiringScan.test.ts's "shadowing is credited to the import" case pins it
@@ -462,12 +441,10 @@ export function findHookShapedExportsOutsideHooksDir(files: SourceFile[]): Outsi
 // The same call-site question, asked of the api layer instead of the barrel.
 //
 // hookWiring.test.ts's allowlist carries a reason per entry, and a reason is
-// prose until something can contradict it. The one that needed contradicting
-// read "aimed at an endpoint no page currently uses" — a note that says the
-// hook is not wired because there is nothing to wire it to. For seven of the
-// eight entries carrying it the opposite was true: a page imports the very api
-// function the hook wraps and calls it inline. That is this repo's own disease,
-// wearing a label that says it is not.
+// prose until something can contradict it. "Aimed at an endpoint no page
+// currently uses" and "a page reaches past this hook and calls the api function
+// inline" are opposite states that read identically in an allowlist, and only
+// the second is debt.
 //
 // Distinguishing those two states needs exactly the primitive above: is this
 // imported name in callee position anywhere. Sharing it is the point — a
@@ -527,14 +504,12 @@ export function findApiCallSites(files: SourceFile[]): ApiCallSite[] {
 // The same question again, one level down: which of a module's exports does
 // nobody import.
 //
-// Added when 19 uncalled hooks were deleted. Deleting the hooks turned three
-// exports of src/api/authoring.ts — fetchDashboard, rebuildManifest and the
-// DashboardData interface — into dangling exports with no importer anywhere.
-// Nothing in the toolchain notices that: tsconfig.app.json's noUnusedLocals is
-// scoped to locals by construction, an export is by definition consumed from
-// outside the file, and ESLint has no cross-file rule. The whole suite stayed
-// green with all three still sitting there. Cascade dead code is exactly the
-// shape that survives a deletion, so it gets a check of its own.
+// Deleting a hook can turn the api function it wrapped into an export with no
+// importer anywhere. Nothing in the toolchain notices: tsconfig.app.json's
+// noUnusedLocals is scoped to locals by construction, an export is by
+// definition consumed from outside the file, and ESLint has no cross-file rule.
+// Cascade dead code is exactly the shape that survives a deletion with the
+// suite still green, so it gets a check of its own.
 //
 // WHY "imported" AND NOT "called", which is the opposite of the rule above.
 // findApiCallSites asks about callee position because its question is whether a

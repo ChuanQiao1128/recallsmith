@@ -1,11 +1,8 @@
-// src/hooks/useCards.ts
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchCardsByDeck, deleteCard } from '../api/authoring';
 import { QueryKeys } from '../api/queryClient';
 import type { Card } from '../types/card';
 
-// 获取 Deck 的所有 Cards
-//
 // 配置项与 useDeck 逐条一致，理由见 useDecks.ts 里 useDeck 上方那段注释：
 // 全都是照着迁移前 CardListPage 的手写 useEffect 抄的，不是 react-query 的默认值。
 export function useCards(deckId: number) {
@@ -24,18 +21,14 @@ export function useCards(deckId: number) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     retry: false,
-    // The sixth option, and the one that is easy to miss because it has no
-    // counterpart in the hand-written useEffect this replaced. react-query
-    // defaults to networkMode 'online': offline, it never calls queryFn at
-    // all and parks the query at fetchStatus 'paused' while status stays
-    // 'pending'. The page reads isPending, so that renders as a spinner that
-    // never resolves. The useEffect always fired the request and let it fail,
-    // which is what puts the error screen on screen. 'always' keeps that.
+    // 唯一一条在手写 useEffect 里没有对应物的配置。react-query 默认 networkMode
+    // 'online'：离线时根本不调 queryFn，query 停在 fetchStatus 'paused' 而 status
+    // 仍是 'pending'；页面读的是 isPending，于是渲染成一个永不结束的 spinner。
+    // 'always' 让请求照发照失败，错误屏才出得来。
     networkMode: 'always',
   });
 }
 
-// 删除 Card
 export function useDeleteCard() {
   const queryClient = useQueryClient();
 

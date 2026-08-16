@@ -1,42 +1,13 @@
 // A ratchet on the gap between "the hook exists" and "something renders
 // through it".
 //
-// HISTORY, kept because it is the reason this file is shaped the way it is.
-//
-// src/hooks/index.ts used to publish 22 hooks. At the time this file was
-// written, pages and components called none of them: every page fetched with
-// its own useState + useEffect, while a QueryClientProvider sat mounted in
-// main.tsx with nothing underneath it that ever asked it for anything. That is
-// not visible from any single file, so it survived eight rounds of review.
-//
-// This file made it visible and made it a one-way street, via an allowlist of
-// hooks permitted to sit unused. CardListPage was then wired to useDeck,
-// useCards and useDeleteCard, taking three off the list. In 2026-08 the
-// remaining 19 were deleted outright rather than wired up, because a hook with
-// no caller is not a feature waiting for a caller — it is code a reader has to
-// rule out. The allowlist is now empty and the barrel publishes exactly the
-// three hooks a page renders through.
-//
-// WHAT AN EMPTY ALLOWLIST DOES TO THE TWO ORIGINAL ASSERTIONS — read before
-// editing, because one of them is now doing all the work and the other is
-// doing none.
-//
-//   * "the debt cannot grow" (orphans must be empty) is now the entire ratchet.
-//     With nothing excused, any hook the barrel publishes that no one calls
-//     fails immediately.
-//   * "the list cannot go stale" was the interesting half when the list had
-//     entries: it forced a hook that got wired up to be struck off. Over an
-//     empty list it reduces to expect([]).toEqual([]) and can never fail. It is
-//     deleted rather than kept as a passing test, because a test that cannot
-//     fail is indistinguishable from one that is broken.
-//
-// The same collapse hit the self-check further down, and that one was dangerous
-// rather than merely useless: "found the barrel it is judging" floored
-// exportedHooks.length against the ALLOWLIST size, so emptying the allowlist
-// turned it into `>= 0` — true even if src/hooks/index.ts were deleted
-// entirely, which is the exact failure it exists to catch. It is now floored
-// against a hardcoded 3 and pinned by name. Do not re-derive that number from
-// another value in this file; deriving it is what broke it.
+// The allowlist below is empty, so "orphans must be empty" is the entire
+// ratchet: any hook the barrel publishes that nobody calls fails immediately.
+// That empties the assertions that were phrased relative to the allowlist —
+// over an empty list they reduce to expect([]).toEqual([]) and can never fail —
+// which is why the numbers in this file are hardcoded rather than derived from
+// ALLOWLIST. A check that collapses to an unfailable form when a list empties
+// is indistinguishable from a broken one.
 
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -52,12 +23,10 @@ import type { SourceFile } from './support/hookWiringScan';
 const SRC_ROOT = fileURLToPath(new URL('../src', import.meta.url));
 
 /**
- * Hooks allowed to sit in the barrel with no caller.
- *
- * Empty, and that is the point — it is the balance, and the balance is zero.
- * Adding an entry is allowed but it is a debt, not a fix: write why the hook
- * cannot be wired up and why deleting it is wrong, because "someone might want
- * it later" was the reasoning behind all 19 that were eventually deleted.
+ * Hooks allowed to sit in the barrel with no caller. Empty, and that is the
+ * point. Adding an entry is a debt rather than a fix, so an entry has to say
+ * why the hook cannot be wired up AND why deleting it is wrong — "someone
+ * might want it later" is what kept 19 uncalled hooks alive here.
  */
 const ALLOWLIST: Record<string, string> = {};
 
@@ -129,18 +98,18 @@ describe('the scan itself is still looking at something', () => {
   });
 
   it('found a plausible number of source files', () => {
-    // 75 when this floor was written, 73 after the hook deletion. The floor is
-    // what turns "scanned nothing and agreed with the allowlist" from a pass
+    // 62 files under src/ today; the floor is deliberately far below that. It
+    // is what turns "scanned nothing and agreed with the allowlist" from a pass
     // into a failure.
     expect(scan.scannedFileCount).toBeGreaterThanOrEqual(20);
   });
 
   it('found the barrel it is judging, and it publishes exactly the wired three', () => {
-    // Hardcoded on purpose. This assertion previously read
-    //   expect(scan.exportedHooks.length).toBeGreaterThanOrEqual(ALLOWLIST.size)
-    // which was a real floor of 22 while the allowlist was full and became `>= 0`
-    // — unfailable — the moment it was emptied. Deleting src/hooks/index.ts
-    // would have passed. Naming the hooks removes the coupling entirely.
+    // Hardcoded on purpose, and re-deriving either line from ALLOWLIST breaks
+    // it: `toBeGreaterThanOrEqual(ALLOWLIST.size)` is a real floor of 22 while
+    // the allowlist is full and silently becomes `>= 0` — unfailable, passing
+    // even if src/hooks/index.ts were deleted — the moment it is emptied.
+    // Naming the hooks removes the coupling entirely.
     expect(scan.exportedHooks).toEqual(EXPECTED_BARREL_HOOKS);
     expect(scan.exportedHooks.length).toBeGreaterThanOrEqual(3);
   });
@@ -165,9 +134,9 @@ describe('the scan itself is still looking at something', () => {
     // asserted to be empty, and useAuth — which is correctly wired — would
     // land in it and turn a working hook red.
     //
-    // useAuth is real and called from four places, hand-verified:
-    //   src/auth/RequireAuth.tsx:7, src/auth/RequireGroup.tsx:12,
-    //   src/pages/LoginPage.tsx:13, src/pages/AuthCallbackPage.tsx:9
+    // useAuth is real and called from three places, hand-verified:
+    //   src/auth/RequireAuth.tsx:7, src/pages/LoginPage.tsx:13,
+    //   src/pages/AuthCallbackPage.tsx:9
     // It is listed here because it is UNGUARDED, not because it is debt. This
     // scan deliberately does not judge call sites for out-of-barrel hooks —
     // that would need relative specifiers resolved to files — so a second
