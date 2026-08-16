@@ -13,8 +13,11 @@ import {
   publishDeck,
 } from '../api/authoring';
 import { getContentManifestUrl } from '../api/contentManifest';
+import { markEnd, markStart } from '../perf/journey';
 import type { Deck } from '../types/deck';
 import type { PublishJob } from '../api/authoring';
+import { nextPollDelay } from '../lib/publishJobsPolling';
+import type { PollOutcome } from '../lib/publishJobsPolling';
 import {
   DECKS_PAGE_SIZE,
   applyDecksPage,
@@ -359,7 +362,13 @@ export function DeckListPage() {
 
   // Publish Jobs state
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
+  // Job id of the publish currently being timed, if any.
+  const pendingPublishJobIdRef = useRef<string | null>(null);
   const [activeTab, setActiveTab] = useState<'decks' | 'publishJobs'>('decks');
+  const [publishJobsError, setPublishJobsError] = useState<string | null>(null);
+  // Derived from the timer rather than set by a branch, so a future path that
+  // forgets to reschedule surfaces as a visible banner instead of silence.
+  const [pollingStopped, setPollingStopped] = useState(false);
 
   // 轮询使用的 Ref
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -617,6 +626,10 @@ export function DeckListPage() {
     );
     if (!ok) return;
 
+    // The journey starts once the user has committed, so the time the dialog
+    // sat open is not counted as our latency.
+    markStart('publish');
+
     try {
       setPublishingSlug(row.slug);
       const deckId = await resolveDeckId(row);
@@ -627,6 +640,7 @@ export function DeckListPage() {
         alert(pub.error?.message ?? 'Publish failed.');
         return;
       }
+      pendingPublishJobIdRef.current = pub.data?.jobId ?? null;
 
       // 发布成功后强制刷新，确保数据最新
       if (listModeRef.current === 'paginated') {
@@ -642,7 +656,30 @@ export function DeckListPage() {
     }
   }
 
-  // 加载发布任务并结合退避轮询（Exponential Backoff Polling）
+  // Publish is only done, from the user's point of view, when the new job is
+  // on screen, so the measure closes on the render that first shows it rather
+  // than when the POST resolves.
+  useEffect(() => {
+    const pending = pendingPublishJobIdRef.current;
+    if (!pending) return;
+    if (publishJobs.some(job => job.jobId === pending)) {
+      pendingPublishJobIdRef.current = null;
+      markEnd('publish');
+    }
+  }, [publishJobs]);
+
+  // Loads publish jobs and reschedules itself with a backoff.
+  //
+  // Invariant: every path leaving this function either schedules the next poll
+  // or tells the user that auto refresh has stopped. The third state, quietly
+  // not polling, is invisible to both the user and the developer, which makes
+  // it the worst of the three: the page keeps rendering stale rows and a
+  // publish that already finished still looks stuck. That is exactly what a
+  // resolved-but-unsuccessful response used to produce here, because the
+  // success branch owned the rescheduling and had no else.
+  //
+  // The scheduling decision itself lives in nextPollDelay so each branch is
+  // testable without a DOM; this function only wires it to state and timers.
   async function loadPublishJobs() {
     // 每次调用前清除旧定时器，防止并行请求竞态
     if (pollTimerRef.current) {
@@ -650,37 +687,32 @@ export function DeckListPage() {
       pollTimerRef.current = null;
     }
 
+    let outcome: PollOutcome;
     try {
-      const res = await fetchPublishJobs();
-      if (!mountedRef.current) return;
-
-      if (res.success && res.data) {
-        setPublishJobs(res.data);
-
-        // 检查是否有仍在处理中的任务
-        const hasActive = res.data.some(j => j.status === 'PENDING' || j.status === 'PROCESSING');
-        let nextDelay = 30000; // 默认空闲时每 30 秒查一次
-
-        if (hasActive) {
-          activePollsRef.current += 1;
-          const attempts = activePollsRef.current;
-          // 动态退避算法：前 2 次等待 2 秒，接着 5 秒，最后上限 10 秒
-          if (attempts <= 2) nextDelay = 2000;
-          else if (attempts <= 5) nextDelay = 5000;
-          else nextDelay = 10000;
-        } else {
-          activePollsRef.current = 0; // 没有活跃任务，重置计数器
-        }
-
-        // 安排下一次轮询
-        pollTimerRef.current = setTimeout(() => void loadPublishJobs(), nextDelay);
-      }
+      outcome = { kind: 'response', result: await fetchPublishJobs() };
     } catch (err) {
-      if (!mountedRef.current) return;
-      console.error('Failed to load publish jobs:', err);
-      // 出错时回退到较慢的轮询（30秒）
-      pollTimerRef.current = setTimeout(() => void loadPublishJobs(), 30000);
+      outcome = { kind: 'exception', error: err };
     }
+
+    // Unmounted is the one legitimate stop: the effect cleanup already owns
+    // the timer, and there is no longer a user to tell.
+    if (!mountedRef.current) return;
+
+    const decision = nextPollDelay(outcome, activePollsRef.current);
+    activePollsRef.current = decision.nextActivePolls;
+
+    if (decision.jobs) setPublishJobs(decision.jobs);
+    setPublishJobsError(decision.showError);
+    if (decision.showError) console.error('Failed to load publish jobs:', decision.showError);
+
+    if (!decision.stopped) {
+      pollTimerRef.current = setTimeout(() => void loadPublishJobs(), decision.delayMs);
+    }
+
+    // Backstop for the invariant: the flag is read back off the timer instead
+    // of being set by whichever branch ran, so a branch added later that
+    // forgets to reschedule still turns the banner on rather than going quiet.
+    setPollingStopped(pollTimerRef.current === null);
   }
 
   // 初次挂载时启动轮询，卸载时清理
@@ -933,6 +965,31 @@ export function DeckListPage() {
             <div>
               <h3 className="text-sm font-semibold text-red-800">Manifest Sync Error</h3>
               <p className="text-xs text-red-700 mt-1">Failed to load manifest.json from S3. Decks may incorrectly show as Unpublished. Error: {String(manifestState.error)}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Publish Jobs Refresh Banner. A failed refresh has to be visible:
+            silently stale job rows read as "the publish is stuck". */}
+        {superAdmin && (!!publishJobsError || pollingStopped) && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 shadow-sm">
+            <svg className="w-5 h-5 text-red-600 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-red-800">Publish Jobs Not Refreshing</h3>
+              <p className="text-xs text-red-700 mt-1">
+                {publishJobsError ?? 'Could not refresh publish jobs.'} Job statuses shown below may be out of date.
+              </p>
+              {pollingStopped && (
+                <button
+                  type="button"
+                  onClick={() => void loadPublishJobs()}
+                  className="mt-2 text-xs font-semibold text-red-800 underline underline-offset-2 hover:text-red-900"
+                >
+                  Auto-refresh stopped. Click to retry.
+                </button>
+              )}
             </div>
           </div>
         )}

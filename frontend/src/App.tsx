@@ -1,6 +1,7 @@
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 
 import { RequireAuth } from './auth/RequireAuth';
+import { PerfOverlay } from './perf/PerfOverlay';
 
 import { LoginPage } from './pages/LoginPage';
 import { AuthCallbackPage } from './pages/AuthCallbackPage';
@@ -18,31 +19,36 @@ import { ContentIntelligencePage } from './pages/ContentIntelligencePage';
 
 function App() {
   return (
-    <Routes>
-      {/* Public */}
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/auth/callback" element={<AuthCallbackPage />} />
+    <>
+      <Routes>
+        {/* Public */}
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
-      {/* Protected */}
-      <Route element={<RequireAuth><Outlet /></RequireAuth>}>
-        <Route path="/" element={<DeckListPage />} />
-        <Route path="/decks/new" element={<NewDeckPage />} />
+        {/* Protected */}
+        <Route element={<RequireAuth><Outlet /></RequireAuth>}>
+          <Route path="/" element={<DeckListPage />} />
+          <Route path="/decks/new" element={<NewDeckPage />} />
 
-        {/* ✅ Query-param routes */}
-        <Route path="/decks/cards" element={<CardListPage />} />
-        <Route path="/decks/cards/new" element={<NewCardPage />} />
-        <Route path="/decks/cards/edit" element={<EditCardPage />} />
-        <Route path="/decks/cards/import" element={<DeckImportPage />} />
+          {/* ✅ Query-param routes */}
+          <Route path="/decks/cards" element={<CardListPage />} />
+          <Route path="/decks/cards/new" element={<NewCardPage />} />
+          <Route path="/decks/cards/edit" element={<EditCardPage />} />
+          <Route path="/decks/cards/import" element={<DeckImportPage />} />
 
-        <Route path="/decks/preview" element={<DeckPreviewPage />} />
+          <Route path="/decks/preview" element={<DeckPreviewPage />} />
 
-        <Route path="/admin/users" element={<AdminUsersPage />} />
-        <Route path="/content-intelligence" element={<ContentIntelligencePage />} />
-        <Route path="/decks/edit" element={<DeckEditPage />} />
-      </Route>
+          <Route path="/admin/users" element={<AdminUsersPage />} />
+          <Route path="/content-intelligence" element={<ContentIntelligencePage />} />
+          <Route path="/decks/edit" element={<DeckEditPage />} />
+        </Route>
 
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+
+      {/* Renders null unless DEV or ?perf=1, so production pays one boolean. */}
+      <PerfOverlay />
+    </>
   );
 }
 

@@ -27,6 +27,7 @@ import {
   type ImportAction,
   type ImportRunResult,
 } from '../lib/deckImportRunner';
+import { markEnd, markStart } from '../perf/journey';
 import type { Deck } from '../types/deck';
 
 type Step = 'input' | 'preview' | 'result';
@@ -191,6 +192,7 @@ export function DeckImportPage() {
     setRunResult(null);
 
     try {
+      markStart('import:preview');
       const parsed = parseDeckMarkdown(text);
       const cardsResult = await fetchCardsByDeck(deck.id);
 
@@ -206,6 +208,7 @@ export function DeckImportPage() {
 
       setPreview({ parsed, plan, slugMismatch });
       setStep('preview');
+      markEnd('import:preview');
     } catch (err: unknown) {
       setPreviewError(err instanceof Error ? err.message : 'Network error.');
     } finally {
