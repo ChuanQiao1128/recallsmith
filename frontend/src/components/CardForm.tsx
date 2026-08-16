@@ -286,6 +286,17 @@ export function CardForm(props: CardFormProps) {
             <option value={1}>Easy</option>
             <option value={2}>Medium</option>
             <option value={3}>Hard</option>
+            {/* The importer accepts difficulty 0..4, this list offers 1..3. A
+                select handed a value it does not list falls back to rendering
+                its first option, so a card holding 0 or 4 appeared as "Easy" —
+                the screen stating a difficulty the card does not have. Adding
+                the actual value keeps the display honest without inventing a
+                meaning for 0 and 4 that the rest of the system does not have.
+                It appears only for the card that already holds such a value, so
+                it cannot be picked for a new one. */}
+            {![1, 2, 3].includes(values.difficulty) && (
+              <option value={values.difficulty}>{values.difficulty}（导入时写入，不在常用范围）</option>
+            )}
           </select>
         </div>
 

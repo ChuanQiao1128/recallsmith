@@ -348,7 +348,7 @@ export function DeckPreviewPage() {
                   setTimeout(() => setCopied(null), 1200);
                 }
               }}
-              disabled={!exportJson}
+              disabled={!exportJson || errors.length > 0}
             >
               Copy JSON
             </button>
@@ -357,12 +357,25 @@ export function DeckPreviewPage() {
               type="button"
               className="text-sm px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
               onClick={() => downloadText(`${deck.slug}-deck.json`, exportJson)}
-              disabled={!exportJson}
+              disabled={!exportJson || errors.length > 0}
             >
               Download deck.json
             </button>
 
             {copied ? <span className="text-xs text-slate-500">{copied}</span> : null}
+
+            {/* A disabled button with no reason next to it is its own small
+                defect. The buttons used to check only for an empty payload, so
+                the console would hand out a deck.json its own validator had
+                already rejected — a file that fails later, on a device, with no
+                validator attached. Warnings do not block: they are advice, and
+                gating on them would make the gate constant and therefore
+                meaningless. */}
+            {exportJson && errors.length > 0 ? (
+              <span className="text-xs text-red-700">
+                有 {errors.length} 条校验错误，先修好才能导出。
+              </span>
+            ) : null}
           </div>
         </div>
 

@@ -1,7 +1,7 @@
 // src/pages/NewCardPage.tsx
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { createCard, fetchDeckById } from '../api/authoring';
+import { createCard, fetchCardsByDeck, fetchDeckById } from '../api/authoring';
 import type { Deck } from '../types/deck';
 import { CardForm, type CardFormValues } from '../components/CardForm';
 
@@ -9,6 +9,31 @@ interface PageState {
   loadingDeck: boolean;
   deck: Deck | null;
   error: string | null;
+}
+
+/**
+ * Where the next card goes in the deck's running order.
+ *
+ * Every new card used to be created at 1. The second one collided with the
+ * first, and from there the export validation this same console runs reported
+ * "Duplicate OrderInDeck: 1" for the rest of the deck — a defect the console
+ * both caused and then complained about.
+ *
+ * Steps of ten match what the markdown importer does (`cards.length * 10`) and
+ * leave room to slot a card between two others without renumbering. An empty
+ * deck starts at 10 rather than the importer's 0, because the export validator
+ * warns on OrderInDeck <= 0 and there is no reason to create a card it will
+ * complain about.
+ */
+const ORDER_STEP = 10;
+
+function nextOrderInDeck(existing: readonly { orderInDeck?: number | null }[]): number {
+  const highest = existing.reduce((max, card) => {
+    const n = card.orderInDeck;
+    return typeof n === 'number' && Number.isFinite(n) && n > max ? n : max;
+  }, 0);
+
+  return highest + ORDER_STEP;
 }
 
 export function NewCardPage() {
@@ -25,6 +50,13 @@ export function NewCardPage() {
     error: invalidDeckId ? 'Missing or invalid deckId.' : null,
   });
 
+  // Kept out of PageState on purpose: knowing the next number is a convenience,
+  // not a precondition for writing a card. A failed or slow card list must not
+  // hold the form shut, so this settles on its own and the form opens either
+  // way. ORDER_STEP is the fallback, which is also the right answer for a deck
+  // whose cards could not be read but which is in fact empty.
+  const [nextOrder, setNextOrder] = useState<number>(ORDER_STEP);
+
   useEffect(() => {
     if (invalidDeckId) return;
 
@@ -34,7 +66,13 @@ export function NewCardPage() {
       try {
         setState(prev => ({ ...prev, loadingDeck: true, error: null }));
 
-        const result = await fetchDeckById(numericDeckId);
+        // Both at once, and both awaited before the form is allowed to mount.
+        // CardForm copies initialValues into its own state on first render, so
+        // a card list that lands after that would be a number nobody sees.
+        const [result, cards] = await Promise.all([
+          fetchDeckById(numericDeckId),
+          fetchCardsByDeck(numericDeckId),
+        ]);
         if (cancelled) return;
 
         if (!result.success || !result.data) {
@@ -45,6 +83,11 @@ export function NewCardPage() {
           });
           return;
         }
+
+        // A card list that failed leaves nextOrder at its default. The deck
+        // itself loaded, so the person can still write a card; the only thing
+        // lost is the suggestion, and they can type over it.
+        if (cards.success && cards.data) setNextOrder(nextOrderInDeck(cards.data));
 
         setState({
           loadingDeck: false,
@@ -126,7 +169,7 @@ export function NewCardPage() {
     codeSnippet: '',
     codeLanguage: 'js',
     difficulty: 2,
-    orderInDeck: 1, // ✅ 默认用 1，更安全
+    orderInDeck: nextOrder,
     revision: 1,
   };
 
