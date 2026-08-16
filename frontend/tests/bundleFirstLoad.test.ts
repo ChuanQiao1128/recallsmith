@@ -51,6 +51,14 @@ const FRONTEND = fileURLToPath(new URL('..', import.meta.url));
 const FIRST_LOAD_BUDGET_BYTES = 320_000;
 
 /**
+ * The login page's real download, static closure plus the module-scope prefetch.
+ * Measured at 383,911 B when written; the headroom is deliberately small so a
+ * new dependency on the deck-list path has to be noticed and argued for rather
+ * than absorbed.
+ */
+const EAGER_BUDGET_BYTES = 400_000;
+
+/**
  * Floor, so a parser that degenerates to an empty or near-empty set cannot make
  * the budget assertion vacuously true. React alone is far above this.
  */
@@ -61,6 +69,25 @@ interface BuildResult {
   /** Absolute paths in the first-load closure. */
   closure: string[];
   closureBytes: number;
+  /**
+   * What an anonymous visitor to /login actually downloads.
+   *
+   * The closure above follows static edges only, which is the right definition
+   * of "first load" and the wrong definition of "what the browser fetches".
+   * App.tsx kicks off `import('./pages/DeckListPage')` at module scope so the
+   * console's front door is warm by the time React mounts, and that request
+   * fires on the login page too, for someone who has not signed in and may
+   * never do so. Measured in a real browser against this build: the login page
+   * pulls six extra chunks, axios among them.
+   *
+   * Reported separately rather than folded into closureBytes because the two
+   * answer different questions and both are worth keeping honest. Nothing here
+   * argues the prefetch is wrong — everyone who reaches this login page is
+   * about to sign in — only that the smaller number must not be quoted as if
+   * it were the whole story.
+   */
+  eagerClosure: string[];
+  eagerBytes: number;
   entry: string;
   allFiles: string[];
   stderr: string;
@@ -127,24 +154,35 @@ function buildAndMeasure(): BuildResult {
   }
 
   // Transitive closure over static edges, JS only (CSS has no import graph here).
-  const closure = new Set<string>(seeds);
-  const queue = [...seeds].filter(file => file.endsWith('.js'));
-  while (queue.length > 0) {
-    const file = queue.pop() as string;
-    for (const spec of staticEdges(readFileSync(file, 'utf8'))) {
-      const resolved = join(file, '..', spec);
-      if (!closure.has(resolved)) {
-        closure.add(resolved);
-        if (resolved.endsWith('.js')) queue.push(resolved);
+  const walk = (from: Iterable<string>): Set<string> => {
+    const seen = new Set<string>(from);
+    const queue = [...seen].filter(file => file.endsWith('.js'));
+    while (queue.length > 0) {
+      const file = queue.pop() as string;
+      for (const spec of staticEdges(readFileSync(file, 'utf8'))) {
+        const resolved = join(file, '..', spec);
+        if (!seen.has(resolved)) {
+          seen.add(resolved);
+          if (resolved.endsWith('.js')) queue.push(resolved);
+        }
       }
     }
-  }
+    return seen;
+  };
 
+  const closure = walk(seeds);
   const files = [...closure];
+
+  // The module-scope prefetch, resolved the same way the browser would: the
+  // deck-list chunk plus everything it statically pulls in behind it.
+  const prefetched = listFiles(dir).filter(file => /\/DeckListPage-[^/]*\.js$/.test(file));
+  const eager = walk([...closure, ...prefetched]);
   return {
     dir,
     closure: files,
     closureBytes: files.reduce((sum, file) => sum + statSync(file).size, 0),
+    eagerClosure: [...eager],
+    eagerBytes: [...eager].reduce((sum, file) => sum + statSync(file).size, 0),
     entry,
     allFiles: listFiles(dir),
     stderr,
@@ -182,6 +220,55 @@ describe('the production build', () => {
     // assertion or it is not a gate. A module on both edges is silently merged
     // back into the importer, undoing the split with no other visible signal.
     expect(built.stderr).not.toMatch(/but also statically imported/);
+  });
+});
+
+describe('what the login page actually downloads', () => {
+  it('is only a real number while App still prefetches at module scope', () => {
+    // The eager closure is assembled by finding the deck-list chunk by name and
+    // walking it, which describes the browser's behaviour only for as long as
+    // something actually requests that chunk on load. Delete the prefetch and
+    // the two assertions below would keep reporting 384 kB for a login page
+    // that fetches 306 kB — a measurement that outlived its premise. So the
+    // premise is asserted rather than assumed.
+    const app = readFileSync(join(FRONTEND, 'src', 'App.tsx'), 'utf8');
+    expect(app).toMatch(/const loadDeckList\s*=\s*\(\)\s*=>\s*import\(['"]\.\/pages\/DeckListPage['"]\)/);
+    expect(app).toMatch(/void loadDeckList\(\)/);
+  });
+
+  it('costs more than the first-load closure, and the gap is the prefetch', () => {
+    // Verified in a real browser on this build, not inferred: loading /login
+    // while signed out fetched the entry and stylesheet, then DeckListPage,
+    // authoring, http, ErrorBanner, sessionUser and ConsoleShell.
+    expect(built.eagerBytes).toBeGreaterThan(built.closureBytes);
+
+    const extra = built.eagerClosure.filter(file => !built.closure.includes(file));
+    expect(extra.length).toBeGreaterThan(0);
+  });
+
+  it('stays under its own budget, so the prefetch chain cannot grow unnoticed', () => {
+    const report = built.eagerClosure
+      .map(file => `${statSync(file).size}\t${file.slice(built.dir.length + 1)}`)
+      .sort()
+      .join('\n');
+
+    // The first-load budget guards the split; this one guards the decision to
+    // warm the front door. Without it, anything new that DeckListPage imports
+    // lands on the login page silently, and the number quoted in the docs keeps
+    // saying 305 kB while the browser fetches more every release.
+    expect(
+      built.eagerBytes,
+      `eager (login page) closure was ${built.eagerBytes} B, budget ${EAGER_BUDGET_BYTES} B\n${report}`,
+    ).toBeLessThanOrEqual(EAGER_BUDGET_BYTES);
+  });
+
+  it('still keeps the expensive editor dependency out of it', () => {
+    // highlight.js rides with CardForm, which is two navigations away. If it
+    // ever reaches the prefetch chain the login page doubles and this says so.
+    const hits = built.eagerClosure.filter(
+      file => file.endsWith('.js') && readFileSync(file, 'utf8').includes('Illegal lexeme'),
+    );
+    expect(hits).toEqual([]);
   });
 });
 
