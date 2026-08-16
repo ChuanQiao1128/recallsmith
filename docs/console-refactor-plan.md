@@ -911,12 +911,22 @@ getDerivedStateFromError" src/ tests/` **零命中**,所以异常会一路冒到
 
   ⚠️ **只修了从今天起的新输入。** 已经用手敲方式录进去、uid 里缺横线的历史卡片
   不会被这次改动碰到。自查办法见 8.7。
-- **F2** 编辑页 difficulty 越界时,`<select>` 的显示值与实际提交值不一致
-  (界面只有 1/2/3)。
-- **F3** `NewCardPage.tsx:129` 硬编码 `orderInDeck = 1`,没有「下一个序号」计算,
-  所以从第二张手录卡起导出校验必报 Duplicate OrderInDeck;而 Download/Copy 只
-  disabled 在 `!exportJson` 上、**不看 errors**。
-- **F4** `EditCardPage` 调 `updateCard` 时不传 `realWorldUsage`。
+- **F2** ✅ **已修(`86dafe5`)**。编辑页 difficulty 越界时 `<select>` 显示值与实际值不符
+  (界面只有 1/2/3,而导入接受 0..4;select 拿到没列出的值会回落到第一个选项,
+  于是 difficulty=0 的卡显示成 Easy)。修法是补一个显示真实值的选项,
+  **不给 0 和 4 编造系统里并不存在的语义**;它只在卡片已持有这种值时出现。
+- **F3** ✅ **已修(`86dafe5`)**。`NewCardPage` 硬编码 `orderInDeck = 1`
+  (注释还写着「默认用 1,更安全」),从第二张手录卡起导出校验必报
+  Duplicate OrderInDeck —— **一个由控制台自己制造、再由它自己抱怨的缺陷**。
+  改成读现有卡片算下一个号,步长 10 与导入通道一致;空卡组从 10 起而非导入的 0,
+  因为导出校验会对 `OrderInDeck <= 0` 报警告。取卡片失败不挡录题。
+  Download/Copy 改成有 error 就禁用并写明原因;**warning 不挡**——
+  warning 是建议,拿它当门会让这道门恒常关闭因而失去意义。
+- **F4** ✅ **已修(`86dafe5`)**。`EditCardPage` 调 `updateCard` 时不传
+  `realWorldUsage`。API 层对 `undefined` 的键不发送,所以**不是数据丢失,
+  而是一次悄悄没发生的编辑**,更难察觉。导入在判断 update / unchanged 时会比较
+  这个字段,所以编辑落不了地也意味着这个卡组永远重新 replan。
+  和隔壁 stable uid 是同一个毛病、相反的修法:uid 是身份不能改,usage 本该能改。
 - **F5** `EditCardPage` 提交用的是 `card.stableUid` 而不是 `values.stableUid` ——
   **编辑页那个 uid 输入框改了等于没改**。
 
@@ -929,7 +939,12 @@ getDerivedStateFromError" src/ tests/` **零命中**,所以异常会一路冒到
   也就是说这不是「提交时把修改弄丢了」,而是**「界面承诺了一件系统给不了的事」**
   —— 数据通路本来是对的,撒谎的是那个可编辑的输入框。
   修法是编辑模式下把该字段改成只读并写明原因,而不是让它「生效」。
-- **F6** 表单校验 `revision > 0`,而 `revision` 从未被任何页面发给服务器。
+- **F6** ✅ **已修(`91117b5`)**。表单校验 `revision > 0`,而它从未被发给服务器
+  ——后端一直是接的(`Cards.cs` 创建时解析、更新字段表里也有),连客户端请求类型里
+  都没有这个字段。**校验一个从不送出的值是个记号:一条什么都不保护的规则
+  不是安全网,是一句「这里有东西被保护着」的宣称。**
+  同一次提交还补齐了五个缺 `htmlFor` 的 label(点标题不聚焦、读屏说不出用途),
+  以及 `tests/authoringRequestBody.test.ts` —— 见 8.8。
 - **F7** `validateCards` 的 `BAD_DIFFICULTY` / `MISSING_QUESTION` / `MISSING_ANSWER`
   三条分支**经唯一生产入口 `parseDeckMarkdown` 不可达**:越界 difficulty 在 header
   解析阶段就被拦下并 `continue`,空 Q/A 被 `finishCard` 先丢掉。它们只在
@@ -997,3 +1012,28 @@ F1 的修复只作用于新输入。已经录进去的卡不会被改动,需要�
 
 同一条注意事项对 `.md` 与库不一致的情况同样成立:导入按 uid 对账,
 **对不上就是新建而不是更新**。
+
+### 8.8 一条本轮反复出现、且我自己犯了两次的教训
+
+「功能存在和功能生效之间隔着一次调用」在这个仓库出现了十一次。前九次是既有代码,
+后两次是**在修前一次的过程中新造出来的**,都由变异测试当场抓住:
+
+1. **ErrorBoundary 的 `resetKey`**(第 7 步补漏)。prop 写了、复位逻辑对了、
+   行为测试也有,但把 `resetKey={location.pathname}` 从 `App.tsx` 删掉,
+   257 条测试全绿 —— 没有任何东西证明 App 真的传了它。
+   `tsc` 也盖不住,因为该 prop 是可选的(边界要能在没有 router 时被单独测)。
+   补了一条读 `App.tsx` 语法树的断言。
+2. **`revision` 的请求体**(F6)。页面级测试断言的是「页面传给 `createCard`
+   的参数」,读的是一个被 mock 掉的函数的入参。所以从 API 层删掉
+   `body.revision = params.revision` 之后 280 条全绿。
+
+第二条给出了可推广的规则:
+
+> **页面级测试只能看到它 mock 的那道缝为止。**
+> 链条是 表单 → 函数入参 → 请求体;在 `api` 那层打 mock 的测试,
+> 天然看不见 `api` 层内部把参数丢掉。要覆盖整条链,必须有一层测试把 mock
+> 打在**更下面那道缝**(这里是 `http`)。
+
+`tests/authoringRequestBody.test.ts` 就是那一层,它同时钉住了另一件容易被
+「顺手清理」掉的事:**没传的字段必须从 body 里缺席,而不是发一个 undefined**。
+局部更新的语义(「这项别动」)完全建立在这个区别上。
