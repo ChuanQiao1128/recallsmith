@@ -13,9 +13,17 @@
 // One question — "is this a starter deck?" — is answered at three call sites
 // by two different predicates:
 //
-//   :641  paginated type filter  isStarterLike(row.deckType, row.tier)
-//   :669  legacy type filter     d.deckType !== 1  /  d.deckType === 1
-//   :1064 the Type badge (JSX)   isStarterLike(row.deckType, row.tier)
+//   deckListRows.ts, buildViewRows paginated branch, the typeFilter block:
+//     isStarterLike(row.deckType, row.tier)
+//   deckListRows.ts, buildViewRows legacy branch, the typeFilter block:
+//     d.deckType !== 1  /  d.deckType === 1
+//   DeckListPage.tsx, the Type cell of the table body:
+//     typeBadge(isStarterLike(row.deckType, row.tier) ? 1 : 2)
+//
+// Deliberately named by symbol rather than by line: these three references are
+// the only record of why V2 and V3 must not be "tidied up", and the first
+// version of this header cited line numbers that were already stale by the time
+// the extraction landed in the same commit.
 //
 // isStarterLike (deckListPagination.ts:79-85) returns `deckType === 1` when
 // deckType is a number, and otherwise falls back to `tier !== 'premium'`. So
@@ -397,7 +405,8 @@ describe('viewRows: the starter/paid divergence, pinned not repaired', () => {
     await mountLegacy();
     await selectFilter('Filter by type', 'starter');
 
-    // Excluded by `d.deckType !== 1` at :669, despite the badge in V1.
+    // Excluded by `d.deckType !== 1` in buildViewRows' legacy typeFilter
+    // block, despite the badge in V1.
     expect(visibleSlugs()).not.toContain(AMB);
     // The control proves the filter kept working rather than emptying the table.
     expect(visibleSlugs()).toContain(CTRL_STARTER);
@@ -543,7 +552,8 @@ describe('viewRows: manifest order', () => {
   it('V9b: paginated — manifestOrder is hard-coded null, so every chip reads #-', async () => {
     await mountPaginated();
 
-    // :633 sets manifestOrder: null unconditionally on this path, so the
+    // buildViewRows' paginated branch sets manifestOrder: null unconditionally
+    // on this path, so the
     // column is decoration in paginated mode no matter what the server sent.
     for (const slug of [AMB, CTRL_STARTER, CTRL_PAID]) {
       expect(orderChip(slug)).toBe('#-');

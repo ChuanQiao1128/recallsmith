@@ -10,7 +10,8 @@
 // was an all-green edit — and 403 is the common case in the field: a session
 // that is not super_admin refused at the gateway.
 //
-// F3 guards a single line, :348:
+// F3 guards a single line, the `listModeRef.current = 'legacy'` assignment in
+// DeckListPage's paginated-to-legacy fallback:
 //
 //     listModeRef.current = 'legacy';
 //     setListMode('legacy');
@@ -230,7 +231,8 @@ describe('after a fallback, the search box stays off the paginated endpoint', ()
     });
     await settle();
 
-    // The whole point of :348. With listModeRef left on 'paginated', the
+    // The whole point of that assignment. With listModeRef left on
+    // 'paginated', the
     // [debouncedQ] effect would call loadPagedFirst('fallback') and the console
     // would re-ask an endpoint that already refused — once per search burst.
     expect(api.fetchAdminDecksPage).toHaveBeenCalledTimes(1);
