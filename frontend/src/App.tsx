@@ -1,5 +1,5 @@
 import { Suspense, lazy } from 'react';
-import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 
 import { RequireAuth } from './auth/RequireAuth';
 import { PerfOverlay } from './perf/PerfOverlay';
@@ -55,13 +55,18 @@ if (typeof window !== 'undefined') {
 }
 
 function App() {
+  // Feeds the boundary its reset signal. Read here rather than inside the
+  // boundary so the boundary stays a plain component with no router dependency,
+  // which is what lets its tests mount it without one.
+  const location = useLocation();
+
   return (
     <>
       {/* Splitting the routes created a way for navigation to fail that did not
           exist when every page shipped in one chunk: a 404'd or timed-out chunk
           rejects, and without this boundary the whole tree unmounts to a blank
           page. See ChunkErrorBoundary for why its button reloads. */}
-      <ChunkErrorBoundary>
+      <ChunkErrorBoundary resetKey={location.pathname}>
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             {/* Public */}
