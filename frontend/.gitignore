@@ -27,3 +27,12 @@ dist-ssr
 .releaseguard/
 artifacts/releaseguard/
 _archive_duplicates/
+
+# macOS and iCloud conflict copies. These appear as "Foo 2.tsx" next to the
+# real file and are indistinguishable from source to every tool that globs by
+# extension: tsconfig compiled them and broke the build once already. Ignoring
+# them keeps a sync artefact from becoming a committed file.
+* [0-9].ts
+* [0-9].tsx
+* [0-9].js
+* [0-9].json
