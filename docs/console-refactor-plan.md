@@ -895,13 +895,22 @@ getDerivedStateFromError" src/ tests/` **零命中**,所以异常会一路冒到
 2. fallback 用 CSS 延迟 250ms 淡入 → 快的不闪、慢的有反馈,代价是新 CSS + 一个要调的阈值。
 3. 用 `useNavigation()` 之类在导航期间给链接一个 pending 态,不动 Suspense 结构。
 
-### 8.6 已知缺陷(本步只钉住,一条都没修)
+### 8.6 已知缺陷(第 7 步只钉住;F1 与 F5 已在 `c074277` 修掉,其余仍未修)
 
-- **F1 uid 靠打字打不出横线,但粘贴可以**。`slugifyForStableUid` 每次按键都对整个
-  输入重新 slug 并 strip 首尾横线,所以逐字符敲 `cs-async-001` 得到的是
+- **F1 uid 靠打字打不出横线,但粘贴可以**。~~`slugifyForStableUid` 每次按键都对整个
+  输入重新 slug 并 strip 首尾横线~~,所以逐字符敲 `cs-async-001` 得到的是
   **`csasync001`**;而把同一个字符串**粘贴**进去得到的是 **`cs-async-001`**。
   同一个意图、两种输入方式、两个不同的 uid —— 而 `.md` 里写的是后者,
   于是下次导入不是 update,是**多出一张重复卡**。(已实测验证,非推测。)
+
+  **✅ 已修(`c074277`)**:把打字期归一化与最终归一化拆开
+  (`slugifyWhileTyping` / `slugifyForStableUid`)。打字时不剥尾部分隔符,
+  离开输入框时才剥;前导分隔符仍当场剥掉,因为 uid 不能以它开头,
+  而删掉它不会挡住任何一次按键 —— 尾部那个才是「每一个刚打出来的横线」。
+  由 `tests/cardFormStableUid.test.tsx` 守住,四个变异各自变红。
+
+  ⚠️ **只修了从今天起的新输入。** 已经用手敲方式录进去、uid 里缺横线的历史卡片
+  不会被这次改动碰到。自查办法见 8.7。
 - **F2** 编辑页 difficulty 越界时,`<select>` 的显示值与实际提交值不一致
   (界面只有 1/2/3)。
 - **F3** `NewCardPage.tsx:129` 硬编码 `orderInDeck = 1`,没有「下一个序号」计算,
@@ -910,6 +919,16 @@ getDerivedStateFromError" src/ tests/` **零命中**,所以异常会一路冒到
 - **F4** `EditCardPage` 调 `updateCard` 时不传 `realWorldUsage`。
 - **F5** `EditCardPage` 提交用的是 `card.stableUid` 而不是 `values.stableUid` ——
   **编辑页那个 uid 输入框改了等于没改**。
+
+  **✅ 已修(`c074277`),但修的方向和第一眼想的相反。** 追查后端发现
+  `stableUid` 是全系统的身份键:进度按 `(user_sub, deck_slug, stable_uid)` 归档
+  (`src_C/Vpc/Runtime/ProgressEvents.cs:426`),调度状态的键是
+  `deck_slug || ':' || stable_uid`(:379),`deckImport` 的对账只看 uid、
+  从不看题面或行号。所以**改 uid = 把这张卡上所有用户的复习历史全部弃掉**,
+  卡片当成新卡从头开始。
+  也就是说这不是「提交时把修改弄丢了」,而是**「界面承诺了一件系统给不了的事」**
+  —— 数据通路本来是对的,撒谎的是那个可编辑的输入框。
+  修法是编辑模式下把该字段改成只读并写明原因,而不是让它「生效」。
 - **F6** 表单校验 `revision > 0`,而 `revision` 从未被任何页面发给服务器。
 - **F7** `validateCards` 的 `BAD_DIFFICULTY` / `MISSING_QUESTION` / `MISSING_ANSWER`
   三条分支**经唯一生产入口 `parseDeckMarkdown` 不可达**:越界 difficulty 在 header
@@ -950,3 +969,31 @@ JSX 能工作是 oxc 的默认行为)。本步不改,但那段注释目前在骗
 `tests/` 至今不在任何 project 的 include 里,所以额外在 scratchpad 造了一次性
 standalone tsconfig(extends `tsconfig.app.json`,include `src` + `tests` +
 `vitest.config.ts`)单独跑了一遍类型检查,exit 0,用完即删。
+
+### 8.7 历史卡片自查:哪些 uid 可能在手敲时丢了横线
+
+F1 的修复只作用于新输入。已经录进去的卡不会被改动,需要人工核对。
+
+现在 AWS 凭证已过期,无法直接查库。不需要凭证的办法:控制台的卡片列表本来就
+显示 `stableUid`(`CardListPage.tsx` 的等宽字体那一列),登录后逐个卡组扫一眼即可。
+
+要找的形态:**整串没有任何分隔符、但读起来像是多个词粘在一起**,
+例如 `csasync001`(应为 `cs-async-001`)、`jsbasicsletconstvar`
+(应为 `js-basics-let-const-var`)。粘贴录入的卡不受影响,只有手敲的会中招。
+
+在卡片列表页的浏览器控制台粘这段,可以把可疑的挑出来:
+
+```js
+[...document.querySelectorAll('tbody tr')]
+  .map(tr => tr.querySelector('td.font-mono')?.textContent?.trim())
+  .filter(uid => uid && !uid.includes('-') && uid.length > 8)
+```
+
+**发现之后不要直接改 uid**,原因见 F5:改 uid 会弃掉该卡已有的复习进度。
+正确做法是先确认这张卡有没有真实的复习历史:
+- 没有(比如刚录进去还没在手机上练过)→ 删掉重建,代价为零;
+- 有 → 要么接受当前 uid 并把 `.md` 改成与它一致,要么需要一次带进度迁移的
+  改名操作,那需要后端配合,不是控制台能做的事。
+
+同一条注意事项对 `.md` 与库不一致的情况同样成立:导入按 uid 对账,
+**对不上就是新建而不是更新**。
