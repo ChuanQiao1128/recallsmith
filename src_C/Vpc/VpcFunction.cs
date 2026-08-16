@@ -9,7 +9,13 @@ public sealed class VpcFunction
   public VpcFunction()
   {
     // SnapStart runtime hooks must be registered during init (before snapshot).
+    // Note these never fire while SnapStart is off on this function, which is why the
+    // warmup below hangs off the constructor rather than off a restore hook.
     SnapStartHooks.RegisterOnce();
+
+    // The constructor is the real INIT phase mount point: it runs once per container,
+    // before any request, with the init phase CPU burst. RunOnce never throws.
+    Warmup.RunOnce();
   }
 
   public async Task<APIGatewayProxyResponse> Handler(JsonElement evt)
