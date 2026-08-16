@@ -522,3 +522,112 @@ export function findApiCallSites(files: SourceFile[]): ApiCallSite[] {
 
   return sites;
 }
+
+// ---------------------------------------------------------------------------
+// The same question again, one level down: which of a module's exports does
+// nobody import.
+//
+// Added when 19 uncalled hooks were deleted. Deleting the hooks turned three
+// exports of src/api/authoring.ts — fetchDashboard, rebuildManifest and the
+// DashboardData interface — into dangling exports with no importer anywhere.
+// Nothing in the toolchain notices that: tsconfig.app.json's noUnusedLocals is
+// scoped to locals by construction, an export is by definition consumed from
+// outside the file, and ESLint has no cross-file rule. The whole suite stayed
+// green with all three still sitting there. Cascade dead code is exactly the
+// shape that survives a deletion, so it gets a check of its own.
+//
+// WHY "imported" AND NOT "called", which is the opposite of the rule above.
+// findApiCallSites asks about callee position because its question is whether a
+// page reaches past a hook to the request the hook wraps. This question is
+// whether a symbol has any consumer at all, and `DashboardData` is an interface
+// — it can never appear in callee position, so a call-site rule would report
+// every type in the file as dead. Import position is the right net here, and it
+// is the conservative one: a name that is imported and then unused still counts
+// as consumed, so this under-reports rather than over-reports.
+//
+// The primitives are the ones above (parse, bindingsFrom) rather than a second
+// copy, for the reason the header already gives: a second implementation drifts,
+// and it drifts toward vouching for fictions.
+// ---------------------------------------------------------------------------
+
+/** Every top-level exported name, whatever its shape: function, const, class,
+ *  interface, type alias, enum, or a bare `export { x }` re-export of a local.
+ *  Not filtered to hook names — the point is the whole surface. */
+export function topLevelExportedNames(file: SourceFile): string[] {
+  const names: string[] = [];
+  const source = parse(file);
+
+  for (const statement of source.statements) {
+    if (!isExported(statement)) {
+      // `export { a, b }` carries no export modifier of its own.
+      if (
+        ts.isExportDeclaration(statement)
+        && specifierOf(statement) === null
+        && statement.exportClause !== undefined
+        && ts.isNamedExports(statement.exportClause)
+      ) {
+        for (const element of statement.exportClause.elements) names.push(element.name.text);
+      }
+      continue;
+    }
+
+    if (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) {
+      const name = statement.name?.text;
+      if (name !== undefined) names.push(name);
+    } else if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)
+      || ts.isEnumDeclaration(statement)) {
+      names.push(statement.name.text);
+    } else if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) names.push(declaration.name.text);
+      }
+    }
+  }
+
+  return sortedUnique(names);
+}
+
+/**
+ * Names any file imports from a module whose specifier ends in `/<moduleName>`
+ * (or is exactly it). Type-only imports COUNT — importing a type is consuming
+ * the export, and dropping them is how an interface with real consumers gets
+ * reported as dead.
+ *
+ * `self` is the module's own path suffix, excluded so the file cannot vouch for
+ * itself through a self-import.
+ */
+export function namesImportedFrom(files: SourceFile[], moduleName: string, self: string): Set<string> {
+  const specifier = new RegExp(`(^|/)${moduleName}$`);
+  const imported = new Set<string>();
+
+  for (const file of files) {
+    if (toPosix(file.path).endsWith(self)) continue;
+
+    const source = parse(file);
+    // bindingsFrom drops type-only clauses, which is wrong for this question,
+    // so the import clauses are read directly here — the one place the shared
+    // primitive answers a different question than the one being asked.
+    for (const statement of source.statements) {
+      if (!ts.isImportDeclaration(statement)) continue;
+      const from = specifierOf(statement);
+      if (from === null || !specifier.test(from)) continue;
+
+      const clause = statement.importClause;
+      if (clause === undefined) continue;
+      const bindings = clause.namedBindings;
+      if (bindings === undefined) continue;
+
+      if (ts.isNamespaceImport(bindings)) {
+        // `import * as api` consumes everything; recording it as such would be
+        // a lie in the safe direction only if the caller checks. It does.
+        imported.add('*');
+        continue;
+      }
+      for (const element of bindings.elements) {
+        imported.add((element.propertyName ?? element.name).text);
+      }
+    }
+  }
+
+  return imported;
+}

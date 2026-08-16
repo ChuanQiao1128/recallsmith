@@ -98,23 +98,74 @@ export function ContentIntelligencePage() {
   const [state, setState] = useState<PageState>({ loading: true, error: null, data: null });
   const [selectedCardKey, setSelectedCardKey] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  /**
+   * Mark the page busy. Called by the things that ASK for a fetch, not by the
+   * fetch itself.
+   *
+   * This used to be the first line of `load`, which made the effect below call
+   * setState synchronously on every mount — the cascading-render shape
+   * react-hooks/set-state-in-effect rejects. Moving it out is not a way around
+   * the rule, it is what the rule is pointing at: entering the loading state is
+   * a response to a user action (change the deck, change the window, press
+   * Refresh), and the first paint gets `loading: true` from useState's initial
+   * value instead of from an effect.
+   *
+   * MAINTENANCE NOTE: a new control that changes `days` or `deckSlug` has to
+   * call this too, or it will fetch without showing a spinner. There are three
+   * call sites today and they are all in the toolbar below.
+   */
+  const beginLoading = useCallback(() => {
     setState((prev) => ({ ...prev, loading: true, error: null }));
-    const res = await fetchContentIntelligence({
-      deckSlug: deckSlug || null,
-      days,
-      limit: 100,
-    });
-    if (!res.success || !res.data) {
-      setState({ loading: false, error: res.error?.message ?? 'Failed to load content intelligence', data: null });
-      return;
-    }
-    setState({ loading: false, error: null, data: res.data });
-  }, [days, deckSlug]);
+  }, []);
 
+  /**
+   * Bumped by Refresh. The fetch lives in one place — the effect below — and
+   * everything that wants a fetch changes one of its dependencies rather than
+   * calling it. Refresh is the only trigger that does not already change a
+   * parameter, so it needs a dependency of its own.
+   */
+  const [refreshNonce, setRefreshNonce] = useState(0);
+
+  // The page's only content fetch. Three things run it: first mount, a change
+  // to `deckSlug` or `days`, and Refresh (via refreshNonce).
+  //
+  // WHY THE BODY IS INLINE AND NOT A useCallback THE EFFECT CALLS.
+  // It used to be `const load = useCallback(...)` with `useEffect(() => void
+  // load(), [load])`, and react-hooks/set-state-in-effect rejected it: the
+  // analyzer inlines the callback and sees setState reachable from the effect
+  // body. Two ways to silence that were tried and rejected before this one:
+  //
+  //   * Wrapping the call — `async function run() { await load(); } void run()`
+  //     — makes the rule pass while changing nothing at all. That is an
+  //     eslint-disable with extra steps, and the next reader has no way to
+  //     tell it was deliberate.
+  //   * Duplicating the fetch body into the effect and keeping `load` for the
+  //     Refresh button leaves two copies of one request to drift apart.
+  //
+  // Folding the body into the effect keeps a single implementation and makes
+  // the dependency array the honest list of what causes a refetch.
+  //
+  // NOT ADDED HERE, on purpose: a `cancelled` flag like the deck-loading effect
+  // below has. This effect has no cancellation today, so switching decks twice
+  // quickly can let the older response land last. That is a real bug, but it is
+  // a behaviour change, this page has no test covering it, and this edit was
+  // scoped to clearing a lint error. Fixing it needs its own change with a test
+  // that fails first.
   useEffect(() => {
-    void load();
-  }, [load]);
+    async function run() {
+      const res = await fetchContentIntelligence({
+        deckSlug: deckSlug || null,
+        days,
+        limit: 100,
+      });
+      if (!res.success || !res.data) {
+        setState({ loading: false, error: res.error?.message ?? 'Failed to load content intelligence', data: null });
+        return;
+      }
+      setState({ loading: false, error: null, data: res.data });
+    }
+    void run();
+  }, [days, deckSlug, refreshNonce]);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,7 +217,10 @@ export function ContentIntelligencePage() {
               Deck
               <select
                 value={deckSlug}
-                onChange={(e) => setDeckSlug(e.target.value)}
+                onChange={(e) => {
+                  beginLoading();
+                  setDeckSlug(e.target.value);
+                }}
                 className="mt-1 block h-9 min-w-48 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-900"
               >
                 <option value="">All readable decks</option>
@@ -181,7 +235,10 @@ export function ContentIntelligencePage() {
               Window
               <select
                 value={days}
-                onChange={(e) => setDays(Number(e.target.value))}
+                onChange={(e) => {
+                  beginLoading();
+                  setDays(Number(e.target.value));
+                }}
                 className="mt-1 block h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-900"
               >
                 <option value={30}>30 days</option>
@@ -192,7 +249,10 @@ export function ContentIntelligencePage() {
             </label>
             <button
               type="button"
-              onClick={() => void load()}
+              onClick={() => {
+                beginLoading();
+                setRefreshNonce((n) => n + 1);
+              }}
               className="h-9 self-end rounded-md bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
             >
               Refresh

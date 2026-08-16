@@ -589,62 +589,6 @@ export async function fetchAdminManifest(): Promise<ApiResult<Record<string, unk
   });
 }
 
-export async function rebuildManifest(): Promise<ApiResult<{ ok: boolean; generatedAtMs?: number; deckCount?: number }>> {
-  try {
-    const resp = await http.post<ApiResult<{ ok: boolean; generatedAtMs?: number; deckCount?: number }>>('/api/v1/admin/manifest/rebuild');
-    return resp.data;
-  } catch (err) {
-    return fail(toApiErrorMessage(err));
-  }
-}
-
-// ---------------------- dashboard (合并 API，减少请求次数) ----------------------
-
-export interface DashboardData {
-  decks: Deck[];
-  manifest: {
-    meta: {
-      schemaVersion?: number;
-      prefix?: string;
-      generatedAtMs?: number;
-      deckCount?: number;
-    };
-    decks: Array<{
-      slug: string;
-      title?: string;
-      locale?: string;
-      deckType?: number;
-      tier?: string;
-      availability?: string;
-      version?: string;
-      buildId?: string | null;
-      totalCards?: number;
-      path?: string | null;
-      previewCards?: number | null;
-      previewPath?: string | null;
-    }>;
-  };
-}
-
-export async function fetchDashboard(): Promise<ApiResult<DashboardData>> {
-  try {
-    const resp = await http.get<ApiResult<DashboardData>>('/api/v1/authoring/dashboard');
-    const raw = resp.data;
-
-    if (!raw.success) return raw;
-
-    // Normalize decks (filter out nulls)
-    const data = raw.data;
-    if (data?.decks) {
-      data.decks = data.decks.map(normalizeDeck).filter((d): d is Deck => d !== null);
-    }
-
-    return { ...raw, data };
-  } catch (err) {
-    return fail<DashboardData>(toApiErrorMessage(err));
-  }
-}
-
 // ---------------------- Content Intelligence ----------------------
 
 export interface ContentIntelligenceCard {

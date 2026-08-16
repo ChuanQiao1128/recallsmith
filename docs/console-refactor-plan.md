@@ -1067,3 +1067,136 @@ React 挂载完之前就热好。这句在**登录页也会跑**——对一个�
 因为 eager 闭包是靠文件名找到 DeckListPage 再走出来的,
 **一旦有人删掉那句预取,这个测量就会继续为一个只下载 306 kB 的登录页报 384 kB**,
 一个活得比自己前提更久的测量。所以前提本身也被断言了:删掉预取,测试变红。
+
+---
+
+## 第 9 步(2026-08-17)—— 删掉 19 个零调用 hook,并让 CI 第一次能跑绿
+
+### 9.0 先更正上面几处会被读成现在时的数字
+
+本文档开头写「`src/hooks/index.ts` 导出 22 个 hook」,4.1 A 的探针快照写
+`exportedHooks.length = 22` / `orphans.length = 19` / `scannedFileCount = 75`。
+**那些是写下时的实测值,保留原样是因为它们是历史记录,改掉等于伪造。**
+但它们已经不是现在的事实。今天的值:
+
+```
+exportedHooks  = ["useCards","useDeck","useDeleteCard"]   ← 3 个,全部有页面在调
+orphans        = []                                        ← 0 个
+scannedFileCount = 73
+hooksNotInBarrel = []
+```
+
+复跑方式(数字会烂,命令不会):
+
+```bash
+cd frontend && npx vitest run tests/hookWiring.test.ts
+```
+
+### 9.1 删了什么
+
+19 个从来没有任何页面调用过的 hook。7 个整文件删除
+(`useManifest` / `useDashboard` / `useAsync` / `useLocalStorage` / `useDebounce` /
+`usePrevious` / `useIntersectionObserver`),另外 6 个是 `useDecks.ts` 与
+`useCards.ts` 里的函数级删除——这两个文件里的 `useDeck` / `useCards` /
+`useDeleteCard` 是 `CardListPage` 真正在用的,所以删函数不删文件。
+
+**级联死代码**:hook 删掉之后,`src/api/authoring.ts` 的
+`fetchDashboard`、`rebuildManifest` 和 `interface DashboardData` 变成零 importer
+的悬空导出。三个一并删除。
+
+`useDashboard.ts` 同时是 `cacheDuplicationCensus` 记的三份五分钟 TTL 之一,
+所以那份普查从三缩到二——不是合并,是删除。
+
+### 9.2 这一步暴露的一个方法论问题:删除型改动天然假绿
+
+删的全是零调用代码,所以「删完测试还是绿的」什么都不证明——绿→绿说明没测到。
+真正的收据是**状态发生改变**的检查。本步实际拿到的:
+
+- **先删源码、不改测试**跑一次,`tests/hookWiring.test.ts` 的「the list cannot go
+  stale」逐个点名了 19 个 hook,且**测试总数仍是 288**(3 失败 285 通过)——
+  证明删除没有蒸发掉任何测试。
+- **产物同一性**:`dist/assets/authoring-*.js` 在丢掉 3 个导出之后**字节数一个都没变**
+  (8,343 → 8,343),`index-*.js` 同样纹丝不动(274,557 → 274,557)。
+  这正是「删的确实是死代码」的证明:它们从来没进过产物,rollup 早就摇掉了。
+  22 个产物里 20 个逐字节相同,变的只有
+  `ContentIntelligencePage-*.js`(+54,修 lint)和 `index.css`(**−20**)。
+- **CSS 那 20 字节值得单独说**:`.resize{resize:both}`。Tailwind 的 content 扫描
+  扫到了 `useDebounce.ts` 注释里一句编造的面试话术(「窗口 resize」),
+  于是一句假话真的在给全站每个用户发字节。
+
+### 9.3 新增 `tests/apiSurfaceCensus.test.ts`
+
+补的是所有现有工具共同的盲区:`noUnusedLocals` 按定义管不到 export,
+ESLint 没有跨文件规则,rollup 把死导出摇掉所以产物里也看不出来。
+于是「删了 hook 忘了删 `fetchDashboard`」是一个全套绿灯的状态。
+
+它守 `src/api/authoring.ts` 的顶层导出中零 importer 的集合,做等值断言。
+**这条测试的存在意义是靠「在中间状态变红」证明的**:只删 hook、没删 api 时它必须
+红并点名 `fetchDashboard` / `rebuildManifest` / `DashboardData`——实测确实红了。
+清单不为空(4 条既有死导出:`fetchPermissions` / `updatePermission` /
+`bulkUpdatePermissions` / `checkPublishJobStatus`),那是与本步无关的既有债,
+**如实记录而不是顺手删**。
+
+### 9.4 一个差点发生的静默退化:棘轮给自己打麻药
+
+`hookWiring.test.ts` 原来有一条自检
+`expect(scan.exportedHooks.length).toBeGreaterThanOrEqual(ALLOWLIST 的条数)`。
+白名单满的时候它是一条真实的下限(22)。**白名单清空之后右边变成 0,这条断言恒真——
+把 `src/hooks/index.ts` 整个删掉它也照样绿。**
+
+已实测复现:把 barrel 清成 `export {}`,用旧断言跑 → **通过**;换成写死具名的
+`expect(scan.exportedHooks).toEqual(['useCards','useDeck','useDeleteCard'])` → 红。
+「功能存在 ≠ 功能生效」这次差一点发生在检测器自己身上,而且全程绿灯。
+
+同理,白名单清空后「the list cannot go stale」退化成 `expect([]).toEqual([])`,
+以及两条 REASON 分类断言退化成空集循环——**一并删除**。
+一个不会失败的测试和一个坏掉的测试从外面看一模一样。
+
+### 9.5 CI 第一次能跑绿
+
+`frontend/package.json` 里有一条
+`releaseguard: file:../../../../Documents/Claude/.../releaseguard-0.7.6.tgz`,
+**只在原作者本机存在,代码里零 import**。GitHub runner 上 `npm ci` 必然 ENOENT。
+已确认这是 frontend job 今天唯一的必红原因,并已删除
+(`npm uninstall --package-lock-only`,diff 恰好 25 行,只含它和它私有的 zod)。
+
+`.github/workflows/ci.yml` 的 frontend job 加了 `npm run lint`。
+**没有加独立的 `tsc` 步骤**,因为 `npm run build` 就是 `tsc -b && vite build`,
+已实测:往 `src/` 塞一个真类型错,`npm run build` exit 2 且 vite 根本没开始构建。
+理由与边界都写进了 ci.yml 的注释——特别是这条,任何人都不该再踩:
+
+> **`npx tsc --noEmit` 在本仓库检查 0 个文件**(`tsconfig.json` 只有 references
+> 没有 include),`--listFiles` 输出 0 行,塞任何类型错它都 exit 0。
+> 本地要复现 CI 的类型检查请用 `npx tsc -b --force`。
+
+顺带记下一个仍然成立的边界:**`tests/` 至今不被任何类型检查覆盖**
+(不在 `tsconfig.app.json` 也不在 `tsconfig.node.json` 的 include 里),
+只有 eslint 读它们。那是另一个任务。
+
+### 9.6 剩下的债:src/ 里仍有 20 个文件、1,297 行从 main.tsx 不可达
+
+CI 会绿、lint 0 error、tsc 过,但面试官点开 `src/components/ui/` 会看到九个没人用的组件。
+**本步没有删它们,因为它们不是同一类东西**:
+
+| 目录 | 文件 | 行 | 为什么留着 |
+|---|---:|---:|---|
+| `components/ui/` | 9 | 809 | 通用组件库,删了要重写;需要单独决定是接线还是删 |
+| `components/decks/` | 5 | 350 | **下一步拆 `DeckListPage` 的预置零件**,删了就得重写 |
+| `auth/` | 4 | 108 | `RequireGroup` / `RequireSuperAdmin` / `hostedUi` / `jwt` |
+| `hooks/index.ts` | 1 | 30 | 见下 |
+
+复跑这个数字的办法:从 `src/main.tsx` 出发做 import 图遍历(静态 + 动态 `import()`),
+比对 `src/**/*.ts(x)` 全集。删除前后的**可达数都是 54**,这是不变量——
+少一个就说明有活文件掉出了图。
+
+### 9.7 `src/hooks/index.ts` 现在的角色
+
+**src/ 里没有任何文件 import 这个 barrel。** `CardListPage` 走的是子路径
+(`../hooks/useDecks`、`../hooks/useCards`),所以 barrel 一个字节都进不了产物。
+它今天唯一的消费者是 `tests/hookWiring.test.ts` ——那条棘轮扫它来判定「哪些 hook
+没人调」。删了 barrel 棘轮就塌,所以留着,但**它不是给页面用的便利导入**,
+文件头已经写清楚了。
+
+```bash
+grep -rn "from '\.\./hooks'" frontend/src/    # 零命中
+```

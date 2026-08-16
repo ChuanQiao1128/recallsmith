@@ -1,13 +1,12 @@
 // A census of one number: 5 * 60 * 1000.
 //
-// Three files in src/ hold that literal, and each is a separate, hand-rolled
+// Two files in src/ hold that literal, and each is a separate, hand-rolled
 // answer to the same question — how long may this console show data it already
 // has:
 //
 //   src/api/queryClient.ts   staleTime on the shared QueryClient.
 //   src/pages/DeckListPage.tsx  TTL on a localStorage cache the page reads and
 //                               writes itself, on its legacy non-paginated path.
-//   src/hooks/useDashboard.ts   TTL on a second, unrelated localStorage cache.
 //
 // They are not merged here, and merging them is not a tidying job: the
 // DeckListPage copy guards a code path that no test currently executes, and
@@ -15,9 +14,18 @@
 // in front of someone deciding what to publish.
 //
 // So this file does the other thing a duplication can be held to — it caps it.
-// A fourth copy fails. Removing one of the three also fails, until whoever
-// removed it says so here. The list is the outstanding balance, and it can only
-// be changed deliberately.
+// A third copy fails. Removing one of the two also fails, until whoever removed
+// it says so here. The list is the outstanding balance, and it can only be
+// changed deliberately.
+//
+// PAID DOWN, 2026-08 — saying so here because the header above required it.
+// There was a third holder, src/hooks/useDashboard.ts: a 212-line hook with its
+// own localStorage cache and its own five-minute TTL, and the only caller of
+// the api layer's fetchDashboard. Nothing in the app ever called the hook. It
+// was deleted along with the other 18 uncalled hooks in src/hooks/, and
+// fetchDashboard with it, so the third copy of this number is gone rather than
+// merged. The balance went from three to two by deletion, which is the cheapest
+// way a duplication is ever retired.
 
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -31,7 +39,6 @@ const TTL_LITERAL = '5 * 60 * 1000';
 
 const EXPECTED_HOLDERS = [
   'api/queryClient.ts',
-  'hooks/useDashboard.ts',
   'pages/DeckListPage.tsx',
 ];
 
@@ -63,8 +70,8 @@ const holders = scannedFiles
   .sort();
 
 describe('the five-minute cache window', () => {
-  it('is still written out in exactly three places', () => {
-    // Equality, not containment, in both directions on purpose: a fourth copy
+  it('is still written out in exactly two places', () => {
+    // Equality, not containment, in both directions on purpose: a third copy
     // is new debt, and a vanished copy means someone paid some down and owes
     // this list an update.
     expect(holders).toEqual(EXPECTED_HOLDERS);
