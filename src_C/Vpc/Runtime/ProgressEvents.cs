@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -57,18 +58,35 @@ public static class ProgressEvents
   // (mobile/src/sync/progressSync.ts) for rows an older server already stored.
   private const long MaxNextReviewHorizonMs = 90L * 24 * 60 * 60 * 1000;
 
+  // Latency instrumentation for the ingest, which is the only write path a user
+  // waits on. The phases are split because they fail for different reasons and
+  // are fixed in different places: connection acquisition is a cold-container /
+  // pool problem, parse is CPU that grows with batch size, SQL is the network
+  // round trip to Postgres. A single total would hide which one moved.
+  //
+  // Stopwatch is a monotonic tick counter, so it cannot go backwards the way a
+  // wall clock can, and reading it is a few nanoseconds against the milliseconds
+  // being measured, which keeps the instrument off the scale it measures.
+  private const string ProgressEventsImpl = "progressEvents-v1";
+
   public static async Task<APIGatewayProxyResponse> HandleProgressEvents(LambdaRequest req, Res res, AuthContext auth)
   {
+    var swTotal = Stopwatch.StartNew();
+
     var deny = Auth.RequireUser(auth, res);
     if (deny is not null) return deny;
 
     if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
 
+    var beforeConnMs = swTotal.Elapsed.TotalMilliseconds;
     await using var conn = await Pg.OpenConnectionOrNullAsync();
+    var connMs = swTotal.Elapsed.TotalMilliseconds - beforeConnMs;
     if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
     try
     {
+      var swParse = Stopwatch.StartNew();
+
       using var doc = Validation.ParseJsonBody(req);
       if (doc is null) return res.BadRequest("BAD_REQUEST", "Invalid JSON body");
 
@@ -220,8 +238,14 @@ public static class ProgressEvents
           SchedulerVersion: schedulerVersion));
       }
 
+      // Parse phase ends here: JSON decode plus per-event validation and
+      // normalization. Everything after this point is statement assembly and
+      // database round trips.
+      var parseMs = swParse.Elapsed.TotalMilliseconds;
+
       var allEventIds = normalized.Select(x => x.EventId).ToList();
 
+      var swSql = Stopwatch.StartNew();
       await using var tx = await conn.BeginTransactionAsync();
       try
       {
@@ -531,8 +555,16 @@ public static class ProgressEvents
           from ins;
           """;
 
+        // Timed on its own because this is the claim the design rests on: the
+        // whole ingest (event insert, outbox, aggregate, last-writer-wins merge)
+        // is ONE statement, so it is one round trip. If that number ever drifts
+        // apart from sql_ms, something grew extra trips around it.
+        var swStatement = Stopwatch.StartNew();
         var rows = await DbUtil.QueryAsync(conn, tx, sql, parameters);
+        var statementMs = swStatement.Elapsed.TotalMilliseconds;
+
         await tx.CommitAsync();
+        var sqlMs = swSql.Elapsed.TotalMilliseconds;
 
         var insertedIds = rows.Count > 0
           ? ParseStringArrayFromJson(rows[0].TryGetValue("inserted_event_ids", out var iev) ? iev : null)
@@ -540,6 +572,26 @@ public static class ProgressEvents
 
         var acceptedSet = new HashSet<string>(insertedIds, StringComparer.Ordinal);
         var duplicateEventIds = allEventIds.Where(id => !acceptedSet.Contains(id)).ToList();
+
+        // One line, emitted only on the success path, so the numbers all
+        // describe the same complete ingest. total_ms stops before response
+        // serialization because that is the last thing the handler does and it
+        // cannot be measured from inside itself; the gap between total_ms and
+        // the sum of the phases is the handler's own overhead, and leaving it
+        // visible is the point.
+        Log.Info(JsonSerializer.Serialize(new
+        {
+          traceId = req.TraceId,
+          impl = ProgressEventsImpl,
+          step = "ingest_timing",
+          batchSize = allEventIds.Count,
+          acceptedCount = insertedIds.Count,
+          connMs = Math.Round(connMs, 3),
+          parseMs = Math.Round(parseMs, 3),
+          statementMs = Math.Round(statementMs, 3),
+          sqlMs = Math.Round(sqlMs, 3),
+          totalMs = Math.Round(swTotal.Elapsed.TotalMilliseconds, 3),
+        }));
 
         return res.Ok(new
         {
