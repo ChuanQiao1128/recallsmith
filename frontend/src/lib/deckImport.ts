@@ -28,6 +28,7 @@
 //    keeps "insert a blank line to make it readable" a safe edit for authors.
 
 import type { Card } from '../types/card';
+import { hasContent, isValidDifficulty, isValidStableUid } from './cardRules';
 
 // ---------------------- types ----------------------
 
@@ -140,14 +141,18 @@ const CODE_MARKER = /^CODE:[ \t]?(.*)$/;
 const USAGE_MARKER = /^USAGE:[ \t]?(.*)$/;
 
 /**
- * Accepts kebab uids (`cs-async-001`) and the `card_<ts>_<rand>` shape that
- * api/authoring.ts ensureStableUid falls back to, so a card created in the
- * single card form can round trip through an export and back in.
+ * The card uid rule moved to cardRules.ts (UID_PATTERN + MAX_UID_LENGTH,
+ * reached here through isValidStableUid) so the hand-entry form can share the
+ * same predicates. It still accepts kebab uids (`cs-async-001`) and the
+ * `card_<ts>_<rand>` shape that api/authoring.ts ensureStableUid falls back to,
+ * so a card created in the single card form can round trip through an export
+ * and back in.
+ *
+ * SLUG_PATTERN stays here. It is the DECK slug rule, which no card form has an
+ * opinion about; it only looks identical to the uid rule by coincidence, and
+ * merging the two would couple a deck-level rule to a card-level one.
  */
-const UID_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 const SLUG_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
-
-const MAX_UID_LENGTH = 128;
 
 type SectionKind = 'question' | 'answer' | 'code' | 'usage';
 
@@ -457,7 +462,7 @@ export function validateCards(cards: readonly ParsedCard[]): ImportIssue[] {
   const firstSeen = new Map<string, number>();
 
   for (const card of cards) {
-    if (!card.stableUid || card.stableUid.length > MAX_UID_LENGTH || !UID_PATTERN.test(card.stableUid)) {
+    if (!isValidStableUid(card.stableUid)) {
       issues.push({
         code: 'BAD_UID_FORMAT',
         line: card.sourceLine,
@@ -478,7 +483,7 @@ export function validateCards(cards: readonly ParsedCard[]): ImportIssue[] {
       firstSeen.set(card.stableUid, card.sourceLine);
     }
 
-    if (!Number.isInteger(card.difficulty) || card.difficulty < 0 || card.difficulty > 4) {
+    if (!isValidDifficulty(card.difficulty)) {
       issues.push({
         code: 'BAD_DIFFICULTY',
         line: card.sourceLine,
@@ -487,7 +492,7 @@ export function validateCards(cards: readonly ParsedCard[]): ImportIssue[] {
       });
     }
 
-    if (!card.question.trim()) {
+    if (!hasContent(card.question)) {
       issues.push({
         code: 'MISSING_QUESTION',
         line: card.sourceLine,
@@ -495,7 +500,7 @@ export function validateCards(cards: readonly ParsedCard[]): ImportIssue[] {
         stableUid: card.stableUid,
       });
     }
-    if (!card.explanation.trim()) {
+    if (!hasContent(card.explanation)) {
       issues.push({
         code: 'MISSING_ANSWER',
         line: card.sourceLine,

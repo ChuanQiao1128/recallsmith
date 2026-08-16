@@ -702,3 +702,251 @@ css 逐字节不变(vite 报的是两位小数,所以这里不宣称更高精度
 
 `dist/assets/index-*.js` 目前 520.94 kB(gzip 154.80 kB),超过 vite 500 kB 警告线。
 按路由做 `React.lazy` 分割,控制台与学习端分包。**本步不做。**
+
+---
+
+## 八、第 7 步(卡片规则收敛 + 路由代码分割)实际结果
+
+两件事:**A** 把两扇门共用的校验规则抽成 `src/lib/cardRules.ts` 并把分歧钉成测试;
+**B** 做路由级 `React.lazy` 分割。A 是零行为改变,B 改变了每条路由的运行时行为。
+
+开工快照(9 个文件 sha256 全部与预期逐字节一致,`git diff -- src` 为空):
+`npx vitest run` 19 files / 213 tests 全绿;`npx tsc -b --force` exit 0;
+`npx eslint src tests vitest.config.ts` 恰好 36 problems(35E+1W);
+`npm run build` 单 chunk js **521,053 B** + css **32,553 B**。
+
+> ⚠️ 方案预估的 js 是 521,048 B,实测 521,053 B,差 5 B。同一份源码在本机连跑两次
+> 产物内容哈希完全相同(`index-DcPDWIRM.js`),且 9 个 sha256 与 `git status` 都证明
+> 工作区未被污染,所以这 5 B 是环境差异(依赖 patch 版本)而非改动。**下文所有前后
+> 对比一律以本机实测的 521,053 / 32,553 为锚**,不使用方案里的预估值。
+
+### 8.1 A:分歧表 D1-D7 与共识 C1-C2
+
+同一个 fixture 穿过两个适配器(`docFor` → markdown / `valuesFor` → 表单初值),
+两侧断言并排写在同一个 `it()` 里,全部在 `tests/cardRuleDivergence.test.tsx`。
+
+| # | 输入 | 导入门(`parseDeckMarkdown`) | 表单门(`CardForm`) |
+|---|---|---|---|
+| D1 | `explanation = ''` | `MISSING_ANSWER`,**整张卡被丢弃** | 接受,提交 `''` |
+| D2 | `stableUid = 'A_B'` | `BAD_UID_FORMAT` | 接受,原样提交 `'A_B'` |
+| D3 | `stableUid` = 129 个字符 | `BAD_UID_FORMAT`(超 `MAX_UID_LENGTH`) | 接受,全长提交 |
+| D4 | `difficulty = 9` | `BAD_DIFFICULTY`,**卡在 header 阶段就没生成** | 接受,提交 `9` |
+| D5 | 同一 uid 两张卡 | `DUPLICATE_UID` | **没有这条代码路径**,两次都成功 |
+| D6 ↔ | `orderInDeck = 0` | 这正是导入**自己给每篇文档第一张卡分配的值** | **拒绝**:`orderInDeck must be a positive number` |
+| D7 ↔ | `difficulty = 0` 或 `4` | 合法 | `<select>` 只有 1/2/3,**人在界面上选不到** |
+| C1 | 空 / 纯空白 question | 拒绝 | 拒绝(`Question is required.`) |
+| C2 | 空 stableUid | `BAD_CARD_HEADER` | 拒绝(`StableUid is required.`) |
+
+**D6/D7 是反向的**:表单比导入更严。所以「把表单收紧到跟导入一样」根本不是一个
+完整答案 —— 那两条它一条也解决不了。
+
+C1/C2 不是分歧,是共识。它们在文件里的唯一理由:**D1-D7 没有任何一条会向表单提交
+空 question 或空 uid**,所以如果没有 C1/C2,把 `hasContent` 改成 `return true`
+时表单那半边会全绿,抽取在「每天真正被用的那扇门」上等于没被验证过。
+
+### 8.2 A:如果要统一,有哪几种选择,各自会拒绝掉什么今天能存进去的东西
+
+**裁决权在人。下面只列选项与代价。本步一条都没做。**
+
+**选项 1:表单向导入看齐(最直觉,代价最尖锐)**
+会开始拒绝:空 Explanation 的卡;非 `[a-z0-9]`+`-_` 形状的 uid;超过 128 字的 uid;
+0..4 之外的 difficulty。
+**最尖锐的代价不在新建,在编辑**:库里已经存在的、由这个表单自己创建的空 Explanation
+卡,从此**改不动了** —— 只想修一个错别字,却被一条自己从没碰过的历史条件挡在门外,
+而且没有任何绕过去的路。**解决不了 D6/D7。**
+
+**选项 2:导入向表单看齐**
+要删掉 `MISSING_ANSWER` 与 uid 的格式/长度检查。
+`BAD_UID_FORMAT` 是作者手滑与 gacha 重复发卡之间**唯一的墙**——
+`deckImport.ts` 里那段事故注释记着那次:一个重复的 StableUid 让一次抽卡发了两张同样的卡,
+玩家付了钱却少一张。**不推荐,列出只为完整。**
+
+**选项 3:一个内核,两种严重度**
+导入侧全部阻断(不变);表单侧一律降级为不挡提交的内联提示。
+**按构造拒绝不了任何今天被接受的输入** —— 这是唯一一个零破坏的选项。
+代价:`CardForm` 要长出一整套目前不存在的「提示但不阻断」UI。
+
+**选项 4:归一化而不是拒绝(四个里可能最坏)**
+静默改写用户的数据。而 `planImport` 是**按 uid 对账**的:一个被静默改写过的 uid,
+下次导入不会被认成 update,而是**多出一张重复卡**。安静地制造 D5。
+
+**统一也解决不了的**:D6/D7 是导入更松的方向;另外第三扇门
+`validateDeckExportLikeMobile`(`DeckPreviewPage.tsx:74`)对 `orderInDeck` 唯一性有
+独家意见,而它**从不回流给作者**。
+
+### 8.3 A:抽取本身的证据
+
+`src/lib/cardRules.ts`:零 import,7 个导出(4 常量 + 3 纯谓词)。
+不含消息文本、不含唯一性检查、不含 `validateCards`、不含 `slugifyForStableUid`、
+不含 orderInDeck/revision 规则 —— 理由写在文件头。
+
+- **逐字节**:`UID_PATTERN` 与 `MAX_UID_LENGTH` 两行搬走前后 sha256 相同
+  (`53ad568c…` / `6821a2b9…`),唯一参数化改写是加了 `export ` 前缀。
+- **德摩根改写的 4 处**无法用 sha256 验收,改为把**改写前的原表达式逐字复制**进
+  `tests/cardRulesEquivalence.test.ts` 当 `legacyUidExpr` / `legacyDifficultyExpr` /
+  `legacyContentExpr`,用 fast-check(固定 seed)+ 手列边界语料断言逐点一致。
+- ⚠️ **偏离方案的一点**:`UID_PATTERN` / `MAX_UID_LENGTH` **没有**被 import 回
+  `deckImport.ts`。它们在那里的唯一使用点就是被改写掉的那一行,再 import 回去就是
+  未使用导入,`tsconfig.app.json` 的 `noUnusedLocals` 会直接让 `tsc -b` 失败。
+  它们现在只在 `cardRules.ts` 内部被谓词使用,并导出给等价性测试持有原表达式副本。
+
+**焊点声明**在 `tests/cardRulesWiring.test.ts`。该文件第一句就写明:
+**`isValidStableUid` / `isValidDifficulty` 的消费者集合里没有 `CardForm`,这是分歧
+本身,不是待办**;哪天表单开始调用它,那张表必须有人动手改,而那需要人工点头。
+
+### 8.4 B:体积报告
+
+**首屏下载量:553,606 B → 305,670 B(−44.8%,省下 247,936 B)。**
+(553,606 = 开工基线 521,053 + 32,553;A 落地后基线为 553,688,B 从该值降至 305,670。)
+
+分割后 22 个 chunk 的精确字节数:
+
+| chunk | bytes | gzip |
+|---|---|---|
+| `index-*.js`(**首屏**) | 273,719 | 87.19 kB |
+| `index-*.css`(**首屏**) | 31,951 | 5.97 kB |
+| `CardForm-*.js`(含 highlight.js) | 57,714 | 18.24 kB |
+| `http-*.js`(含 axios) | 37,687 | 15.09 kB |
+| `DeckListPage-*.js` | 26,470 | 7.67 kB |
+| `DeckImportPage-*.js` | 22,390 | 6.59 kB |
+| `AdminUsersPage-*.js` | 20,312 | 5.38 kB |
+| `CardListPage-*.js` | 19,156 | 6.05 kB |
+| `ContentIntelligencePage-*.js` | 13,765 | 3.84 kB |
+| `DeckEditPage-*.js` | 13,294 | 3.39 kB |
+| `NewDeckPage-*.js` | 9,179 | 2.58 kB |
+| `DeckPreviewPage-*.js` | 8,501 | 2.83 kB |
+| `authoring-*.js` | 8,253 | 2.41 kB |
+| `EditCardPage-*.js` | 4,411 | 1.43 kB |
+| `NewCardPage-*.js` | 3,775 | 1.23 kB |
+| `ErrorBanner-*.js` | 3,029 | 1.42 kB |
+| `RarityDistribution-*.js` | 2,370 | 0.95 kB |
+| `ConsoleShell-*.js` | 1,691 | 0.60 kB |
+| `CardForm-*.css`(hljs 主题) | 857 | 0.40 kB |
+| `sessionUser-*.js` | 809 | 0.47 kB |
+| `cardRules-*.js` | 204 | 0.17 kB |
+
+**highlight.js 现在在懒加载边界之后**:它由 `CardForm.tsx` 顶层 import 进来,
+随 `CardForm-*.js`(57,714 B)一起走,首屏不再下载。axios 同理进了 `http-*.js`。
+两者都用内容标记做了断言(`"Illegal lexeme"` / `"ERR_BAD_REQUEST"`),
+且**先断言该标记在整个 dist 里至少出现一次**,否则依赖升级换了字面量之后
+「不在首屏」会静默地恒真。
+
+**每条路由首次进入的额外成本**(该路由闭包减去首屏闭包):
+
+| 路由 | 首次进入额外下载 |
+|---|---|
+| `/decks/cards/edit`(EditCardPage) | **108,269 B** |
+| `/decks/cards/new`(NewCardPage) | **107,633 B** |
+| `/`(DeckListPage) | 77,939 B(**已预取,见下**) |
+| `/decks/cards`(CardListPage) | 71,304 B |
+| `/decks/cards/import`(DeckImportPage) | 70,904 B |
+| `/content-intelligence` | 62,205 B |
+| `/decks/edit`(DeckEditPage) | 61,734 B |
+| `/admin/users`(AdminUsersPage) | 60,499 B |
+| `/decks/new`(NewDeckPage) | 55,119 B |
+| `/decks/preview`(DeckPreviewPage) | 54,441 B |
+
+> ⚠️ **这个 tradeoff 必须由所有者本人认**:最贵的两条路由恰好是**录题页**,
+> 而他的日常工作流就是手动录题。首屏省下的 hljs,会在他第一次点进录题页时补回来。
+> 好消息是每个 chunk 只下一次(之后走 HTTP 缓存),坏消息是每次发新版本都要重下。
+
+**预取**:只给 `DeckListPage` 加了模块作用域预取(`void loadDeckList()`)。
+它是登录后的门面,不预取的话每次冷启动都要盯着 fallback。已验证它仍是独立 chunk
+(没有被 Rollup 当静态边合回入口)。**其余 9 条路由都没有预取** —— 每加一条,
+就吃掉一部分刚省下来的首屏。
+
+**地板**:把仅剩的两个同步页(LoginPage / AuthCallbackPage)也改成 lazy,首屏只从
+273,719 B 降到 270,133 B —— 只省 3,586 B。也就是说**剩下的 ~270 kB 基本全是
+react-dom + react + react-router + react-query**,再怎么切页面都动不了它。
+下一步真正的杠杆在 vendor 层(react-query 是否延到登录后 / react-dom 是否换
+preact-compat),那是需要人点头的另一刀,本步不做。
+
+**没有配 `manualChunks`,`vite.config.ts` 一字未改(sha256 仍是 `271d4ccf…`)。**
+天真的 `manualChunks: id => id.includes('node_modules') ? 'vendor' : undefined`
+实测让真实首屏**变差到 404,376 B**,同时让 vite 的 reporter 打印一个骗人的小 entry。
+本步的最优解就是不配。
+
+### 8.5 B:新增的失败路径与新增的 UX 后果
+
+**新失败路径(已处理)**:分割之前导航不可能失败,分割之后 chunk 404 / 断网会让
+`React.lazy` 的 thenable reject。开工前 `grep -rn "componentDidCatch|ErrorBoundary|
+getDerivedStateFromError" src/ tests/` **零命中**,所以异常会一路冒到根、整棵树卸载成
+纯白页。`src/components/ChunkErrorBoundary.tsx` 接住它。
+
+按钮是 **`window.location.reload()` 而不是 setState 重试**:React 把 lazy 的 rejection
+永久缓存在 payload 上(`_status = 2`),只做 setState 的「重试」会永远抛同一个错 ——
+一个**存在但不生效**的按钮。`tests/chunkErrorBoundary.test.tsx` 第三条测试专门把这个
+语义钉住:不点按钮、强制 rerender,仍然显示错误 UI。
+
+**新 UX 后果(未处理,如实记录)** —— `tests/routeSuspenseBehavior.test.tsx`:
+
+- 直接落在某条 lazy 路由上(冷启动 / 刷新)→ **fallback 正常显示**。
+- **客户端导航**到一条 chunk 未缓存的路由 → **fallback 不显示,上一页继续留在屏幕上**,
+  直到 chunk 到达。
+
+也就是说:**点了导航链接之后,屏幕在若干百毫秒内毫无反应**。这比闪一下更难受,
+而且在任何构建产物、任何 lint 规则里都不显形,只能靠驱动 router 才观测得到。
+原因是 react-router 把导航状态更新包在 `startTransition` 里,React 不会用 fallback
+替换**已经显示过的**内容。**实测在 MemoryRouter 下同样复现**,所以不是某个 history
+实现的怪癖。
+
+可选的修法(都需要人裁决,本步不做):
+1. 每条路由各包一层 `<Suspense>` → 每次导航立刻出 fallback,但小 chunk 会闪。
+2. fallback 用 CSS 延迟 250ms 淡入 → 快的不闪、慢的有反馈,代价是新 CSS + 一个要调的阈值。
+3. 用 `useNavigation()` 之类在导航期间给链接一个 pending 态,不动 Suspense 结构。
+
+### 8.6 已知缺陷(本步只钉住,一条都没修)
+
+- **F1 uid 靠打字打不出横线,但粘贴可以**。`slugifyForStableUid` 每次按键都对整个
+  输入重新 slug 并 strip 首尾横线,所以逐字符敲 `cs-async-001` 得到的是
+  **`csasync001`**;而把同一个字符串**粘贴**进去得到的是 **`cs-async-001`**。
+  同一个意图、两种输入方式、两个不同的 uid —— 而 `.md` 里写的是后者,
+  于是下次导入不是 update,是**多出一张重复卡**。(已实测验证,非推测。)
+- **F2** 编辑页 difficulty 越界时,`<select>` 的显示值与实际提交值不一致
+  (界面只有 1/2/3)。
+- **F3** `NewCardPage.tsx:129` 硬编码 `orderInDeck = 1`,没有「下一个序号」计算,
+  所以从第二张手录卡起导出校验必报 Duplicate OrderInDeck;而 Download/Copy 只
+  disabled 在 `!exportJson` 上、**不看 errors**。
+- **F4** `EditCardPage` 调 `updateCard` 时不传 `realWorldUsage`。
+- **F5** `EditCardPage` 提交用的是 `card.stableUid` 而不是 `values.stableUid` ——
+  **编辑页那个 uid 输入框改了等于没改**。
+- **F6** 表单校验 `revision > 0`,而 `revision` 从未被任何页面发给服务器。
+- **F7** `validateCards` 的 `BAD_DIFFICULTY` / `MISSING_QUESTION` / `MISSING_ANSWER`
+  三条分支**经唯一生产入口 `parseDeckMarkdown` 不可达**:越界 difficulty 在 header
+  解析阶段就被拦下并 `continue`,空 Q/A 被 `finishCard` 先丢掉。它们只在
+  `tests/deckImport.test.ts` 直接调用 `validateCards` 时才被执行到。
+  (这正是分歧表必须走 `parseDeckMarkdown` 而不是 `validateCards` 的原因 ——
+  照着 `validateCards` 造表会高估导入门实际执行的规则。)
+
+**第三扇门 `validateDeckExportLikeMobile`(`DeckPreviewPage.tsx:74`)本步没写测试**:
+它是模块私有、未导出,要钉住它必须先导出它,而 `DeckPreviewPage.tsx` 本步必须保持
+sha256 = `4736169d…` 逐字节不变。它那套第三规则(Difficulty 1..3 只是 warning、
+OrderInDeck 唯一性是 error、OrderInDeck<=0 只是 warning、Question 空只是 warning、
+Explanation 完全不查)只在此处以散文记录。
+
+**顺手发现**:`vitest.config.ts` 里那段带大段注释的 `esbuild: { jsx, jsxImportSource }`
+在 vitest 4 下**完全无效**(跑测试时会打印 `Both esbuild and oxc options were set...`,
+JSX 能工作是 oxc 的默认行为)。本步不改,但那段注释目前在骗人。
+
+### 8.7 本步新增/修改的文件与门禁
+
+修改:`src/lib/deckImport.ts`、`src/components/CardForm.tsx`、`src/App.tsx`、
+本文档。
+新增:`src/lib/cardRules.ts`、`src/components/RouteFallback.tsx`、
+`src/components/ChunkErrorBoundary.tsx`、
+`tests/cardRuleDivergence.test.tsx`、`tests/cardRulesEquivalence.test.ts`、
+`tests/cardRulesWiring.test.ts`、`tests/bundleFirstLoad.test.ts`、
+`tests/routeFallback.test.tsx`、`tests/chunkErrorBoundary.test.tsx`、
+`tests/routeSuspenseBehavior.test.tsx`。
+
+**一字未动(收工 sha256 与开工逐字节相同)**:`DeckPreviewPage.tsx` `4736169d…`、
+`NewCardPage.tsx` `cce0ebd2…`、`EditCardPage.tsx` `6c9ccddf…`、
+`DeckListPage.tsx` `5b19b8e5…`、`vite.config.ts` `271d4ccf…`、
+`tests/deckListPagePolling.test.tsx` `696c1e83…`。
+
+收工门禁:`npx vitest run` **26 files / 252 tests 全绿**(213 → 252,+39);
+`npx tsc -b --force` exit 0;`npx eslint src tests vitest.config.ts` **仍恰好
+36 problems(35E+1W)**,新增文件贡献 0 条;`npm run build` 通过。
+`tests/` 至今不在任何 project 的 include 里,所以额外在 scratchpad 造了一次性
+standalone tsconfig(extends `tsconfig.app.json`,include `src` + `tests` +
+`vitest.config.ts`)单独跑了一遍类型检查,exit 0,用完即删。

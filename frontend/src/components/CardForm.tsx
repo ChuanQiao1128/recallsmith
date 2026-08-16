@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Deck } from '../types/deck';
+import { hasContent } from '../lib/cardRules';
 
 // highlight.js core + languages
 import hljs from 'highlight.js/lib/core';
@@ -104,11 +105,11 @@ export function CardForm(props: CardFormProps) {
     const trimmedQuestion = values.question.trim();
     const trimmedUid = values.stableUid.trim();
 
-    if (!trimmedQuestion) {
+    if (!hasContent(values.question)) {
       setState(prev => ({ ...prev, error: 'Question is required.' }));
       return;
     }
-    if (!trimmedUid) {
+    if (!hasContent(values.stableUid)) {
       setState(prev => ({ ...prev, error: 'StableUid is required.' }));
       return;
     }
