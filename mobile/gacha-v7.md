@@ -4,13 +4,10 @@
 >
 > **优先级**：v7 > v6.1 > v6。冲突一律以本文为准。
 >
-> **适用对象**：Claude Code 自动改 / 我手动改 / 任何在 `recallsmith/mobile/` 上动 UI 的人。
+> **适用对象**：任何在 `recallsmith/mobile/` 上动 UI 的人。
 >
-> **配套文档**：
-> - 基线：[gacha-v6.1.md](./gacha-v6.1.md)
-> - 现状审计：[gacha-v6.1-audit-checklist.md](./gacha-v6.1-audit-checklist.md)
-> - 历史草案：[gacha-v6.md](./gacha-v6.md)（仅作为想法库，不参与决策）
-> - 实施约束：[AGENTS.md](./AGENTS.md)（执行规则，需另文维护）
+> 早期版本（v3 到 v6.1）与它们的任务清单、审计表、diff 已经删除。
+> 本文是唯一的现行规格，历史仍在 git 里。
 
 ---
 
@@ -462,8 +459,6 @@ DeckScreen 当前承担 gate + library + launchpad 三职责。v7 把它收敛�
 | `src/features/gacha/home/HomeDeckRow.tsx` | 折叠 deck row 渲染 |
 | `src/features/gacha/components/RewardSummaryCard.tsx` | Summary 上半屏奖励视觉 |
 | `src/features/gacha/components/SummaryProgressBlock.tsx` | Summary 中段进展 |
-| `AGENTS.md` | Claude Code 执行规则与路径优先级 |
-| `gacha-v7-diff-from-v6.1.md` | 本文 §1 的扩写 + 每条 diff 的代码 hint |
 | `gacha-v7-audit-checklist.md` | 本文 §6 的人工版 |
 | `docs/plans/2026-05-xx-v7-mobile-fix.md` | 实施计划文件（按 phase 拆批次） |
 
@@ -621,7 +616,7 @@ v7 总共 4 个 phase，按顺序执行，不允许并行。
 - 不在本范围内的其他 screen
 
 要求：
-1. 先读 gacha-v7.md §[相关章节] 与 gacha-v6.1.md 对应章节
+1. 先读 gacha-v7.md §[相关章节]
 2. 给出 ≤ 10 行实施计划
 3. 直接修改代码
 4. 跑 npm run test:typecheck && npm run test:unit

@@ -56,3 +56,11 @@ coverage/
 mobile/docs/qa/autopilot-logs/
 .claude/
 mobile/docs/qa/agents/draw-v9/runs/
+
+# iCloud conflict copies. This repository lives in an iCloud-synced folder, which
+# renames a losing copy to "name 2.ext" instead of prompting. There are 196 of
+# them on disk right now and none are tracked; ignoring the pattern keeps a
+# `git add -A` from ever picking one up and committing a stale duplicate of a
+# file that is also being edited for real.
+* [0-9].*
+* [0-9]

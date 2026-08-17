@@ -1,7 +1,7 @@
 # RecallSmith Screen Quality Rubric (v7)
 
 ## 1) Scope 与基线
-- Source of truth: `gacha-v7.md` > `gacha-v6.1.md` > 历史版本。
+- Source of truth: `gacha-v7.md`。早期版本已删除，历史在 git 里。
 - 本 rubric 覆盖 `src/screens/*.tsx` 与其直接依赖的 `src/features/gacha/components/*.tsx`。
 - 本 rubric 默认用于 v7 phase 内“单 phase + 单 screen”修复循环。
 
@@ -64,7 +64,7 @@
 - `P0-LOSS-WORDING`: 出现 `lost|missed|forfeit|wasted|expired|gone`。
 - `P0-STATE-MISSING`: 缺失 loading/empty/error 任一态。
 - `P0-TESTID-MISSING`: 主链路关键 testID 缺失。
-- `P0-FORBIDDEN-PATH`: 修改 `AGENTS.md §3` 禁止路径。
+- `P0-FORBIDDEN-PATH`: 改动了本 rubric §1 Scope 之外的路径。
 - `P0-FILE-SIZE`: 非 `ReviewScreen.tsx` screen 文件 `>=800` 行。
 - `P0-ANIM-COMMERCIAL`: 抽奖动画未达 `animation-quality-rubric.md` 商业级阈值。
 

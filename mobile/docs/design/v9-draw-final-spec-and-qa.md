@@ -148,7 +148,7 @@ On iPhone-class simulator devices:
 2. No repeated jank spikes across two consecutive runs.
 3. JS thread should not show sustained long tasks through ceremony core.
 
-## 4.2 Automated proxy metrics (for CI/autopilot)
+## 4.2 Automated proxy metrics
 
 1. Phase timers fire in expected order and windows.
 2. No dropped transition to result after sequence completion.
@@ -207,17 +207,3 @@ All conditions below must be true:
 2. Frontend web app (`frontend/`) changes
 3. Native rebuild orchestration in this pass
 4. Unrelated screen redesign outside the five targets
-
-## 8) Autopilot Handoff
-
-Use this document as the review source:
-
-`/Users/qc/Desktop/DeveloperCards/recallsmith/mobile/scripts/run-v9-draw-5h-agent-loop.sh`
-
-Recommended command:
-
-```bash
-cd /Users/qc/Desktop/DeveloperCards/recallsmith/mobile
-HOURS=5 CODEX_MODEL=gpt-5.3-codex MAX_ROUNDS_PER_SCREEN=2 PASS_STREAK_REQUIRED=2 \
-bash scripts/run-v9-draw-5h-agent-loop.sh docs/design/v9-draw-final-spec-and-qa.md
-```
