@@ -946,6 +946,12 @@ counts 变成 O(1) 读、筛选变成 O(结果集),progress 变更只增量更�
    确实难读,但"重写成 hooks + 组件拆分"没有任何延迟数字支撑。
    而且仓库里已经有一份别人做到一半的拆分产物(`DeckListPage 2.tsx` + `components/decks/*`,
    引用了不存在的 `hooks/useDeckListData`),正是这类改造的失败样本。
+   ⚠️ **2026-08-18 补注**:上面那句写这份文档时是现在时,现在只是历史。
+   `frontend/src/components/decks/` 已在 7ae7b29 删除,拆分后来由
+   `frontend/src/components/deckList/` 下新写的 5 个组件完成。
+   句中的 `hooks/useDeckListData` **故意保持裸路径**:那半句的全部论点就是它从来不存在,
+   写成完全限定形式会让 `frontend/tests/docsPaths.test.ts` 去要求创建一个
+   "不存在"本身就是论据的文件。
    移动端同理:Expo 54 + RN 0.81.5 + React 19 + Zustand 全部保留。
    本文档全部方案都是在现有结构上做点状改动。
 
@@ -1010,3 +1016,15 @@ counts 变成 O(1) 读、筛选变成 O(结果集),progress 变更只增量更�
     `LibraryScreen.tsx:42` 已经有一个 1.5 s 的 `REFRESH_DEBOUNCE_MS` 在做这件事,
     它治的是症状。真正的病在 M2(每次 focus 全量解析两遍)。
     **把每次 focus 变便宜,比减少 focus 次数正确。**
+
+<!-- paths-not-on-disk
+     本文档里出现、但磁盘上确实没有的仓库路径，逐条登记在这里。
+     一条 = 一行 "- 路径"；其余文字是说明，不会被读成条目。
+     规则与核对方式见 frontend 的 tests/docsPaths.test.ts 文件头。
+     登记 ≠ 改写历史：上文的句子与时态都保持原样。
+
+     - mobile/src/features/gacha/ceremony/   :60 把它当作【错的】路径引用
+       （"DrawCeremonyScreen.tsx 在 mobile/src/screens/ 而非 …"），它本来就不该存在。
+     - mobile/src/perf/marks.ts              :111 是一条"新增 …"的提案，从未建成。
+     - frontend/src/components/decks/        已在 7ae7b29 删除；:947 那段是失败样本的历史记录。
+-->

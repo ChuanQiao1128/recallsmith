@@ -21,9 +21,12 @@
     // on the css import), all in src/ rather than tests/.
     //
     // Deliberately NOT "vitest/globals": vitest.config.ts sets globals: false
-    // and all 43 test files import describe/it/expect explicitly. Adding the
+    // and every test file imports describe/it/expect explicitly. Adding the
     // globals types would make a test that forgot its imports type-check here
     // and then fail at runtime, which is strictly worse than the status quo.
+    // (This sentence used to carry a file count. It drifted the moment a test
+    // was added, which is the same defect the file-set assertion below exists
+    // to stop; a number that nothing checks does not belong in prose.)
     "types": ["node", "vite/client"],
     "skipLibCheck": true,
 
@@ -52,39 +55,40 @@
   // "include" above is a directory glob, such a file is compiled the moment it
   // appears, and it has broken this build before (see the root .gitignore).
   //
-  // The enumeration below is ugly on purpose. TypeScript's glob dialect has no
-  // character classes, so the pattern that reads most naturally is a total
-  // no-op. Every line below was measured by planting four real conflict-copy
-  // shapes and reading --listFiles, not reasoned about:
+  // One pattern, resting on two invariants that were measured rather than
+  // assumed:
   //
-  //   **/* [0-9].test.ts  -> matches NOTHING. "[0-9]" is matched literally.
-  //                          This is the trap: it looks like the right answer.
-  //   **/*2.test.ts       -> only the "x 2.test.ts" shape, and only digit 2.
-  //   tests/*2*           -> only digit 2, and only files sitting directly in
-  //                          tests/ - "*" does not cross "/", so anything in
-  //                          tests/support/ escapes it.
+  //   1. Every conflict copy macOS produces contains a SPACE. That is the whole
+  //      signature - "cardForm 2.tsx", "cardForm.test 2.tsx",
+  //      "deckImport 2.test.ts", "vitest.config 2.ts" (the one real example
+  //      currently sitting in frontend/, gitignored). The digit's position
+  //      varies; the space does not.
+  //   2. No legitimate path in this repository contains a space. Checked with
+  //      `find . -name '* *'` over frontend/ outside node_modules/ and dist/:
+  //      the only hits are that conflict copy and a scratch directory.
   //
-  // "*" DOES cross ".", so "**/*?2.ts" already covers "cardForm.test 2.ts" as
-  // well as "cardForm 2.ts". What it does not cover is "cardForm 2.test.ts",
-  // where the digit is not adjacent to the final extension. Both placements
-  // exist in the wild (the one real example in this repo, "vitest.config 2.ts",
-  // inserts before the last dot), so all four spellings are enumerated.
+  // So "any path containing a space" is exactly the set to drop, and TypeScript
+  // globs take a literal space. Measured in a fixture with planted files and
+  // --listFilesOnly: this drops "cardForm 2.tsx", "cardForm.test 2.tsx",
+  // "deckImport 2.test.ts", "deckImport.test 2.ts", "vitest.config 2.ts",
+  // "support/helper 2.ts" and anything inside a spaced DIRECTORY, while keeping
+  // "apiV2.test.ts", "helper2.ts", "typeGateFileSet2.test.ts", "a1.ts", "b10.ts".
+  // Against the real tree it drops zero files.
   //
-  // So: "?" absorbs the space, the digit is enumerated 2-9, and each of the
-  // four extensions is spelled out. Verified to drop all four planted shapes
-  // while leaving all 46 real files in the program.
+  // It replaces a 32-entry enumeration of "**/*?2.ts" ... "**/*?9.test.tsx",
+  // whose reasoning was wrong in a way that mattered: "?" was believed to
+  // absorb the space, but "?" matches ANY character, so those patterns also
+  // swallowed ordinary files whose basename ended in a digit 2-9 - measured:
+  // "apiV2.test.ts" and "helper2.ts" vanished from the program while vitest
+  // went on running them. A file in that state is type-checked by nothing.
   //
-  // (These globs are listed with // rather than inside a /* */ block on
-  // purpose: a glob beginning "**/" contains the sequence "*/", which would
-  // close a block comment early and make this file unparseable.)
-  "exclude": [
-    "**/*?2.ts", "**/*?2.tsx", "**/*?2.test.ts", "**/*?2.test.tsx",
-    "**/*?3.ts", "**/*?3.tsx", "**/*?3.test.ts", "**/*?3.test.tsx",
-    "**/*?4.ts", "**/*?4.tsx", "**/*?4.test.ts", "**/*?4.test.tsx",
-    "**/*?5.ts", "**/*?5.tsx", "**/*?5.test.ts", "**/*?5.test.tsx",
-    "**/*?6.ts", "**/*?6.tsx", "**/*?6.test.ts", "**/*?6.test.tsx",
-    "**/*?7.ts", "**/*?7.tsx", "**/*?7.test.ts", "**/*?7.test.tsx",
-    "**/*?8.ts", "**/*?8.tsx", "**/*?8.test.ts", "**/*?8.test.tsx",
-    "**/*?9.ts", "**/*?9.tsx", "**/*?9.test.ts", "**/*?9.test.tsx"
-  ]
+  // That class of hole is no longer a matter of anyone reading this comment
+  // carefully: tests/typeGateFileSet2.test.ts compares the file set this config
+  // resolves to against the files actually on disk, and its own name is on the
+  // wrong side of the old bug on purpose.
+  //
+  // (This glob is listed with // rather than inside a /* */ block on purpose:
+  // a glob beginning "**/" contains the sequence "*/", which would close a
+  // block comment early and make this file unparseable.)
+  "exclude": ["**/* *"]
 }

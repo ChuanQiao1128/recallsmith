@@ -12,7 +12,7 @@ This is a personal project, written and maintained by one person.
 
 | Directory | Stack | Responsibility | Files |
 | --- | --- | --- | --- |
-| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 140 |
+| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 151 |
 | `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in | 319 |
 | `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` | 126 |
 | `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver | 3 |
@@ -112,10 +112,18 @@ compiler reports.
 The test files are type-checked, at the same strictness as `src/`.
 `frontend/tsconfig.test.json` covers `tests/` and is referenced from
 `frontend/tsconfig.json`, so `tsc -b` — and therefore `npm run build` and CI —
-compiles all 46 files under `tests/` alongside the app. This was not always
+compiles every file under `tests/` alongside the app. This was not always
 true: `tests/` used to sit outside the `include` of every tsconfig, so a type
 error in a test was visible to nothing but ESLint. `frontend/tests/tsconfigTestProject.test.ts`
-fails if that reference is removed again.
+fails if that reference is removed again, and
+`frontend/tests/typeGateFileSet2.test.ts` fails if the set of files the project
+resolves to stops matching the files actually on disk — which is how "every
+file" stopped being true once before, silently, when an `exclude` glob meant to
+skip iCloud conflict copies also swallowed ordinary filenames.
+
+(That sentence used to give a file count. It was wrong by the time anyone read
+it, because nothing kept it true. Counts belong in assertions, which recheck
+themselves; prose gets the claim that does not expire.)
 
 ## 5. Known limitations
 

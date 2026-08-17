@@ -17,6 +17,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
@@ -90,3 +91,66 @@ describe('the tests/ type-check project', () => {
     expect(config.include).toEqual(['tests']);
   });
 });
+
+// The one check the three above cannot make: what tsc actually resolved.
+//
+// Every assertion so far reads the config file. That is one level too high, and
+// the gap is not theoretical, it shipped. The first version of this project
+// excluded iCloud conflict copies with `**/*?2.ts`, meaning to let `?` absorb
+// the space in `name 2.ts`. But `?` matches any character, so `apiV2.test.ts`,
+// an ordinary filename, was excluded too: invisible to tsc, still collected and
+// run by vitest. Measured, not imagined. Reading `exclude` back out of the file
+// would have agreed with itself and said nothing.
+//
+// So this one asks tsc. `--listFiles` prints the resolved program, and comparing
+// it against the directory listing is the only form of the claim that cannot be
+// satisfied by a config that merely looks right.
+describe('what tsc actually resolved under tests/', () => {
+  it('is exactly the files on disk, no more and no fewer', () => {
+    const testsDir = `${FRONTEND}tests`;
+
+    const onDisk = new Set(
+      filesUnder(testsDir)
+        // Conflict copies are excluded on purpose. The iCloud check above is
+        // what keeps that exclusion from quietly widening past them.
+        .filter(name => !name.includes(' ')),
+    );
+
+    const listed = execFileSync(
+      'npx',
+      ['tsc', '-p', 'tsconfig.test.json', '--noEmit', '--listFiles'],
+      { cwd: FRONTEND, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+
+    const resolved = new Set(
+      listed
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.startsWith(`${testsDir}/`))
+        .map(line => line.slice(testsDir.length + 1)),
+    );
+
+    // Anti-vacuity. A broken walk and an empty program would satisfy the
+    // set comparison together; this refuses to call that agreement.
+    expect(onDisk.size).toBeGreaterThan(50);
+
+    expect({
+      missing: [...onDisk].filter(f => !resolved.has(f)).sort(),
+      extra: [...resolved].filter(f => !onDisk.has(f)).sort(),
+    }).toEqual({ missing: [], extra: [] });
+  });
+});
+
+/** Every .ts/.tsx path under `dir`, relative to it. Hoisted so both describes share it. */
+function filesUnder(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (current: string, prefix: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const label = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) walk(`${current}/${entry.name}`, label);
+      else if (/\.tsx?$/.test(entry.name)) found.push(label);
+    }
+  };
+  walk(dir, '');
+  return found;
+}

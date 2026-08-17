@@ -1226,6 +1226,16 @@ ESLint 没有跨文件规则,rollup 把死导出摇掉所以产物里也看不�
 (不在 `tsconfig.app.json` 也不在 `tsconfig.node.json` 的 include 里),
 只有 eslint 读它们。那是另一个任务。
 
+⚠️ **2026-08-18 已改**:上面这段是本文档里唯一一处**自称"仍然成立"却已经变假**的
+陈述,单独标出来。那个"另一个任务"已经做完:`frontend/tsconfig.test.json` 现在以
+`"include": ["tests"]` 覆盖整个 `tests/` 目录,并从 `frontend/tsconfig.json` 的
+references 里被 `tsc -b` 走到,所以测试文件与 `src/` 同一套 strict 选项一起编译。
+上面关于 `npx tsc --noEmit` 检查 0 个文件的引文**没有变**,仍然是对的——真正的门禁
+是 `tsc -b`。这条更正只能靠人写:它是关于配置的散文,不含任何路径,
+`frontend/tests/docsPaths.test.ts` 那类路径守卫永远抓不到它。
+两条能自动核对的替代品是 `frontend/tests/tsconfigTestProject.test.ts`(守配置文本)
+与 `frontend/tests/typeGateFileSet2.test.ts`(守解析出的文件集合与磁盘一致)。
+
 ### 9.6 剩下的债:src/ 里仍有 20 个文件、1,297 行从 main.tsx 不可达
 
 CI 会绿、lint 0 error、tsc 过,但任何人点开 `src/components/ui/` 都会看到九个没人用的组件。
@@ -1234,7 +1244,7 @@ CI 会绿、lint 0 error、tsc 过,但任何人点开 `src/components/ui/` 都�
 | 目录 | 文件 | 行 | 为什么留着 |
 |---|---:|---:|---|
 | `components/ui/` | 9 | 809 | 通用组件库,删了要重写;需要单独决定是接线还是删 ⚠️ **第 10 步已改**:`ConfirmDialog.tsx` / `ConfirmDialogContext.ts` / `Button.tsx` 三个已接线并进入产物,见 9.8 |
-| `components/decks/` | 5 | 350 | **下一步拆 `DeckListPage` 的预置零件**,删了就得重写 |
+| `components/decks/` | 5 | 350 | **下一步拆 `DeckListPage` 的预置零件**,删了就得重写 ⚠️ **2026-08-18 已改**:这条现在时的说法已经不成立。`frontend/src/components/decks/` 里的 5 个文件已在 7ae7b29「拆掉 DeckListPage 的 JSX」一并删除(`git log --diff-filter=D` 核对,不是凭记忆);那次拆分没有复用这批预置零件,而是新写了 `frontend/src/components/deckList/` 下的 5 个组件 |
 | `auth/` | 4 | 108 | `RequireGroup` / `RequireSuperAdmin` / `hostedUi` / `jwt` |
 | `hooks/index.ts` | 1 | 30 | 见下 |
 
@@ -1434,3 +1444,16 @@ legacy-mount(4)」,因为 hook 的 effect 在它被调用的位置注册。逐�
 `index-*.js` **279,304 B → 279,304 B** 逐字节相同(文件名 hash 变了,因为它内嵌了
 DeckListPage chunk 的名字)。eager 闭包 387,464 → 387,874(**+410 B**),
 差额**全部**在 `DeckListPage-*.js`(26,646 → 27,056),即已经 lazy 的边界之后。
+
+<!-- paths-not-on-disk
+     本文档里出现、但磁盘上确实没有的仓库路径，逐条登记在这里。
+     一条 = 一行 "- 路径"；其余文字是说明，不会被读成条目。
+     核对方式见 frontend 的 tests/docsPaths.test.ts 文件头，双向：
+       (a) 文中引用的完全限定路径必须存在，或者出现在本块里；
+       (b) 本块里的每一条都必须【不存在】——哪天有人把它重新建出来，
+           上文那句历史陈述就又变假了，那条断言会喊。
+     只登记事实，不要求改写历史：上文的时态一个字都不用动。
+
+     - frontend/src/components/decks/   已在 7ae7b29「拆掉 DeckListPage 的 JSX」删除（5 个文件）；
+       9.6 的表格行是当时的现在时记录，保留原样，更正另起。
+-->
