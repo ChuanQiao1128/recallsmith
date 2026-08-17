@@ -1,7 +1,16 @@
 {
+  /* This file is references-only: "files" is empty on purpose, so in non-build
+     mode it resolves to a project containing zero files. That means
+     `tsc --noEmit` here type-checks NOTHING and exits 0 even with a real error
+     sitting in src/ - it was measured at 0 files via `tsc --noEmit --listFiles`.
+     Only `tsc -b` walks the references below.
+
+     The type gate is therefore `tsc -b` (as used by `npm run build`). Do not
+     "simplify" it back to `tsc --noEmit`: that silently checks nothing. */
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.test.json" }
   ]
 }

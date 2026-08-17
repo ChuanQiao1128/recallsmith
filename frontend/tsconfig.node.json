@@ -22,5 +22,8 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["vite.config.ts"]
+  /* An explicit file list, not a glob. A glob such as "*.config.ts" would also
+     pick up "vitest.config 2.ts", the iCloud conflict copy sitting in this
+     directory right now. */
+  "include": ["vite.config.ts", "vitest.config.ts"]
 }

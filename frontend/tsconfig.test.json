@@ -1,0 +1,90 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+
+    // Both entries are load-bearing; each was verified by removing it and
+    // counting the errors that appeared.
+    //
+    // "node": 11 test files import node builtins (node:fs x11, node:url x11,
+    // node:path x6, node:child_process x2, node:os x1) because the census and
+    // wiring tests read the repo off disk. Dropping it yields 34 errors, all
+    // in tests/.
+    //
+    // "vite/client": tests import src, and src reads import.meta.env in
+    // src/api/http.ts, src/api/contentManifest.ts, src/auth/authConfig.ts and
+    // src/perf/journey.ts; src/components/CardForm.tsx imports a .css file.
+    // Dropping it yields 11 errors (10x TS2339 on import.meta.env, 1x TS2307
+    // on the css import), all in src/ rather than tests/.
+    //
+    // Deliberately NOT "vitest/globals": vitest.config.ts sets globals: false
+    // and all 43 test files import describe/it/expect explicitly. Adding the
+    // globals types would make a test that forgot its imports type-check here
+    // and then fail at runtime, which is strictly worse than the status quo.
+    "types": ["node", "vite/client"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting - deliberately identical to tsconfig.app.json. Test files are
+       held to the same strictness as src; relaxing any of these here would let
+       a test paper over a type it is supposed to be pinning down. */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["tests"],
+
+  // iCloud conflict copies. This repo lives in an iCloud-synced folder, which
+  // resolves a conflict by renaming the losing copy to "name 2.ext". Because
+  // "include" above is a directory glob, such a file is compiled the moment it
+  // appears, and it has broken this build before (see the root .gitignore).
+  //
+  // The enumeration below is ugly on purpose. TypeScript's glob dialect has no
+  // character classes, so the pattern that reads most naturally is a total
+  // no-op. Every line below was measured by planting four real conflict-copy
+  // shapes and reading --listFiles, not reasoned about:
+  //
+  //   **/* [0-9].test.ts  -> matches NOTHING. "[0-9]" is matched literally.
+  //                          This is the trap: it looks like the right answer.
+  //   **/*2.test.ts       -> only the "x 2.test.ts" shape, and only digit 2.
+  //   tests/*2*           -> only digit 2, and only files sitting directly in
+  //                          tests/ - "*" does not cross "/", so anything in
+  //                          tests/support/ escapes it.
+  //
+  // "*" DOES cross ".", so "**/*?2.ts" already covers "cardForm.test 2.ts" as
+  // well as "cardForm 2.ts". What it does not cover is "cardForm 2.test.ts",
+  // where the digit is not adjacent to the final extension. Both placements
+  // exist in the wild (the one real example in this repo, "vitest.config 2.ts",
+  // inserts before the last dot), so all four spellings are enumerated.
+  //
+  // So: "?" absorbs the space, the digit is enumerated 2-9, and each of the
+  // four extensions is spelled out. Verified to drop all four planted shapes
+  // while leaving all 46 real files in the program.
+  //
+  // (These globs are listed with // rather than inside a /* */ block on
+  // purpose: a glob beginning "**/" contains the sequence "*/", which would
+  // close a block comment early and make this file unparseable.)
+  "exclude": [
+    "**/*?2.ts", "**/*?2.tsx", "**/*?2.test.ts", "**/*?2.test.tsx",
+    "**/*?3.ts", "**/*?3.tsx", "**/*?3.test.ts", "**/*?3.test.tsx",
+    "**/*?4.ts", "**/*?4.tsx", "**/*?4.test.ts", "**/*?4.test.tsx",
+    "**/*?5.ts", "**/*?5.tsx", "**/*?5.test.ts", "**/*?5.test.tsx",
+    "**/*?6.ts", "**/*?6.tsx", "**/*?6.test.ts", "**/*?6.test.tsx",
+    "**/*?7.ts", "**/*?7.tsx", "**/*?7.test.ts", "**/*?7.test.tsx",
+    "**/*?8.ts", "**/*?8.tsx", "**/*?8.test.ts", "**/*?8.test.tsx",
+    "**/*?9.ts", "**/*?9.tsx", "**/*?9.test.ts", "**/*?9.test.tsx"
+  ]
+}
