@@ -29,6 +29,7 @@ import {
   renderWithQuery,
 } from './support/queryTestClient';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
+import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
@@ -90,8 +91,19 @@ function refusedWithoutMessage<T>(): ApiResult<T> {
   return { success: false, data: null, error: null, traceId: 'trace-refused' };
 }
 
+// Wrapped in the provider because one case below deletes a card, and after the
+// window.confirm replacement saying yes means clicking a button in a rendered
+// dialog. The three `renderWithClient(makeAppDefaultsQueryClient(), ...)` calls
+// further down stay deliberately bare: they are about react-query defaults, they
+// never open a dialog, and mounting them without the provider keeps proving
+// that this page renders on its own.
 function mount(search: string) {
-  return renderWithQuery(<CardListPage />, [`/decks/cards${search}`]);
+  return renderWithQuery(
+    <ConfirmDialogProvider>
+      <CardListPage />
+    </ConfirmDialogProvider>,
+    [`/decks/cards${search}`],
+  );
 }
 
 beforeEach(() => {
@@ -99,7 +111,6 @@ beforeEach(() => {
   signInAsSuperAdmin();
   api.fetchDeckById.mockResolvedValue(ok(deck));
   api.fetchCardsByDeck.mockResolvedValue(ok([card]));
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -147,6 +158,11 @@ describe('the rows come from the shared query cache', () => {
     await userEvent.click(
       within(row as HTMLTableRowElement).getByRole('button', { name: 'Delete' }),
     );
+    // Mechanism only: the row's button opens the confirmation, and the answer
+    // is a click inside it. Scoped to the dialog so it cannot pick up the row's
+    // own button again.
+    const dialog = await screen.findByRole('alertdialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete card' }));
 
     await waitFor(() => expect(screen.queryByText(CARD_QUESTION)).toBeNull());
     // The row leaving the screen is not the claim. The claim is that the

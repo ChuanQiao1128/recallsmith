@@ -32,6 +32,7 @@ import type { ApiResult } from '../src/types/api';
 import { KIND_HINT, KIND_LABEL } from '../src/lib/errorFeed';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { renderWithQuery } from './support/queryTestClient';
+import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
@@ -90,21 +91,43 @@ function refused(): ApiResult<null> {
   };
 }
 
+// The provider is the mechanism change this file absorbed when the four
+// window.confirm calls became ConfirmDialog. Every assertion below is
+// unchanged; what changed is that saying "yes" is now a click on a rendered
+// button instead of a stubbed return value.
+//
+// Worth recording because the prediction was wrong in an informative way: this
+// file did NOT go red on its own. useConfirm falls back to window.confirm when
+// no provider is above it, so the old `vi.spyOn(window, 'confirm')` kept
+// working and every case stayed green through the whole change. Leaving it
+// that way was the tempting option and the wrong one — it would have left the
+// delete path covered only along a route the application never takes.
 async function mountCards(): Promise<QueryClient> {
-  const { client } = renderWithQuery(<CardListPage />, [
-    `/decks/cards?deckId=${DECK_ID}`,
-  ]);
+  const { client } = renderWithQuery(
+    <ConfirmDialogProvider>
+      <CardListPage />
+    </ConfirmDialogProvider>,
+    [`/decks/cards?deckId=${DECK_ID}`],
+  );
   // The page renders a loading screen until both fetches resolve; waiting on
   // the row is what tells us the table is real before anything is clicked.
   await screen.findByText(CARD_QUESTION);
   return client;
 }
 
-/** Press Delete the way a user does, through the row's own button. */
+/** Press Delete the way a user does, through the row's own button, and say yes. */
 async function clickDelete(): Promise<void> {
   const row = screen.getByText(CARD_QUESTION).closest('tr');
   expect(row).not.toBeNull();
   await userEvent.click(within(row as HTMLTableRowElement).getByRole('button', { name: 'Delete' }));
+
+  // findByRole('alertdialog'), not 'dialog': dom-testing-library does not
+  // resolve ARIA subclasses, and a destructive dialog is an alertdialog. The
+  // second click is scoped inside it so it cannot resolve back to the row's
+  // own Delete button — which is also why the dialog's button is labelled
+  // "Delete card" rather than "Delete".
+  const dialog = await screen.findByRole('alertdialog');
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Delete card' }));
 }
 
 function bannerText(): string {
@@ -118,10 +141,6 @@ beforeEach(() => {
   signInAsSuperAdmin();
   api.fetchDeckById.mockResolvedValue(ok(deck));
   api.fetchCardsByDeck.mockResolvedValue(ok([card]));
-  // jsdom's window.confirm is a "not implemented" stub that returns undefined,
-  // which would make every delete bail out before it reached the API. Saying
-  // yes here is what puts the code under test on the path.
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
 afterEach(() => {

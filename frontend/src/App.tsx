@@ -4,6 +4,7 @@ import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { RequireAuth } from './auth/RequireAuth';
 import { PerfOverlay } from './perf/PerfOverlay';
 import { ChunkErrorBoundary } from './components/ChunkErrorBoundary';
+import { ConfirmDialogProvider } from './components/ui/ConfirmDialog';
 import { RouteFallback } from './components/RouteFallback';
 
 // Login and the OAuth callback stay eager. They are the only two routes an
@@ -67,33 +68,64 @@ function App() {
           rejects, and without this boundary the whole tree unmounts to a blank
           page. See ChunkErrorBoundary for why its button reloads. */}
       <ChunkErrorBoundary resetKey={location.pathname}>
-        <Suspense fallback={<RouteFallback />}>
-          <Routes>
-            {/* Public */}
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/auth/callback" element={<AuthCallbackPage />} />
+        {/* Confirmation dialogs for the whole application, mounted here rather
+            than in main.tsx and in this exact slot.
 
-            {/* Protected */}
-            <Route element={<RequireAuth><Outlet /></RequireAuth>}>
-              <Route path="/" element={<DeckListPage />} />
-              <Route path="/decks/new" element={<NewDeckPage />} />
+            Not main.tsx: the providers there — QueryClient, Auth, Router — are
+            the ones that have to exist before App renders at all, and main.tsx
+            calls createRoot at module scope, so importing it from a test mounts
+            the entire application into #root. A provider that cannot be mounted
+            in a test cannot be *proved* to be reached by the pages under it,
+            and unreachable-but-present is the failure this repository keeps
+            finding. App is an ordinary component; tests/confirmWiring.test.tsx
+            mounts it and clicks a real row.
 
-              {/* ✅ Query-param routes */}
-              <Route path="/decks/cards" element={<CardListPage />} />
-              <Route path="/decks/cards/new" element={<NewCardPage />} />
-              <Route path="/decks/cards/edit" element={<EditCardPage />} />
-              <Route path="/decks/cards/import" element={<DeckImportPage />} />
+            Inside ChunkErrorBoundary, not outside: a chunk that fails to load
+            should replace the whole screen, an open dialog included — a modal
+            floating over a crash screen is asking about an action whose page no
+            longer exists. Keeping the boundary outermost also means
+            tests/appBoundaryWiring.test.ts and chunkErrorBoundary.test.tsx do
+            not change by one character.
 
-              <Route path="/decks/preview" element={<DeckPreviewPage />} />
+            Outside Suspense, not inside: a dialog has to survive a route
+            suspending underneath it. Inside, React would swap the subtree for
+            RouteFallback, unmount the dialog mid-question, and leave the
+            awaiting handler with a promise that supersede logic never gets to
+            answer.
 
-              <Route path="/admin/users" element={<AdminUsersPage />} />
-              <Route path="/content-intelligence" element={<ContentIntelligencePage />} />
-              <Route path="/decks/edit" element={<DeckEditPage />} />
-            </Route>
+            One known overlap, named here rather than discovered later: the
+            overlay is z-50 and PerfOverlay is also z-50 and comes later in DOM
+            order, so it paints on top. Acceptable — PerfOverlay renders null
+            outside DEV unless ?perf=1 is set. */}
+        <ConfirmDialogProvider>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              {/* Public */}
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
+              {/* Protected */}
+              <Route element={<RequireAuth><Outlet /></RequireAuth>}>
+                <Route path="/" element={<DeckListPage />} />
+                <Route path="/decks/new" element={<NewDeckPage />} />
+
+                {/* ✅ Query-param routes */}
+                <Route path="/decks/cards" element={<CardListPage />} />
+                <Route path="/decks/cards/new" element={<NewCardPage />} />
+                <Route path="/decks/cards/edit" element={<EditCardPage />} />
+                <Route path="/decks/cards/import" element={<DeckImportPage />} />
+
+                <Route path="/decks/preview" element={<DeckPreviewPage />} />
+
+                <Route path="/admin/users" element={<AdminUsersPage />} />
+                <Route path="/content-intelligence" element={<ContentIntelligencePage />} />
+                <Route path="/decks/edit" element={<DeckEditPage />} />
+              </Route>
+
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </ConfirmDialogProvider>
       </ChunkErrorBoundary>
 
       {/* Renders null unless DEV or ?perf=1, so production pays one boolean. */}

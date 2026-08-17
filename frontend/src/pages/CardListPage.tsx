@@ -6,6 +6,7 @@ import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { RarityBadge } from '../components/RarityBadge';
 import { RarityDistribution } from '../components/RarityDistribution';
 import { ErrorBannerList } from '../components/ui/ErrorBanner';
+import { useConfirm } from '../components/ui/ConfirmDialogContext';
 import {
   emptyErrorFeed,
   clearNotice,
@@ -67,11 +68,22 @@ export function CardListPage() {
   const deleteCardMutation = useDeleteCard();
 
   const [errors, setErrors] = useState<ErrorNotice[]>(emptyErrorFeed);
+  const confirm = useConfirm();
 
   async function handleDelete(cardId: number) {
     if (!superAdmin) return;
 
-    const ok = window.confirm('Are you sure you want to delete this card?');
+    // The old string was 'Are you sure you want to delete this card?'. The
+    // question mark was doing work that window.confirm could not: its buttons
+    // are OK and Cancel, which name no action, so the sentence had to carry the
+    // whole meaning. Here the button says "Delete card", so the question moves
+    // to the title and the sentence is spent on the consequence instead.
+    const ok = await confirm({
+      title: 'Delete this card?',
+      body: 'This cannot be undone.',
+      destructive: true,
+      confirmLabel: 'Delete card',
+    });
     if (!ok) return;
 
     // Clearing up front is what makes a successful retry remove the banner,
