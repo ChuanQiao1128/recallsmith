@@ -12,7 +12,7 @@ This is a personal project, written and maintained by one person.
 
 | Directory | Stack | Responsibility | Files |
 | --- | --- | --- | --- |
-| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 124 |
+| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 140 |
 | `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in | 319 |
 | `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` | 126 |
 | `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver | 3 |
@@ -96,7 +96,7 @@ and `backend`.
 | --- | --- |
 | `cd frontend && npx vitest run` | All green |
 | `cd frontend && npx eslint src tests vitest.config.ts` | 0 errors, 1 warning |
-| `cd frontend && npm run build` | `dist/assets/index-*.js` ≈ 274 kB |
+| `cd frontend && npm run build` | `dist/assets/index-*.js` is 279,304 bytes |
 | `cd src_C && dotnet test Tests/RecallSmith.Lambda.IntegrationTests` | All green |
 
 Every number above was produced by running that exact command while writing this
@@ -109,23 +109,34 @@ cites a test file that does not exist. They were written because this codebase's
 recurring failure was code that was present but not wired to anything, which no
 compiler reports.
 
+The test files are type-checked, at the same strictness as `src/`.
+`frontend/tsconfig.test.json` covers `tests/` and is referenced from
+`frontend/tsconfig.json`, so `tsc -b` — and therefore `npm run build` and CI —
+compiles all 46 files under `tests/` alongside the app. This was not always
+true: `tests/` used to sit outside the `include` of every tsconfig, so a type
+error in a test was visible to nothing but ESLint. `frontend/tests/tsconfigTestProject.test.ts`
+fails if that reference is removed again.
+
 ## 5. Known limitations
 
-- **The test files are not type-checked.** `tests/` is outside the `include` of
-  every tsconfig — `frontend/tsconfig.app.json` covers `src/`,
-  `frontend/tsconfig.node.json` covers `vite.config.ts` — so all 43 frontend test files are read only by ESLint and
-  Vitest's own transform. A type error in a test does not fail the build.
 - **`tsc --noEmit` is not a check in this repo.** `frontend/tsconfig.json` is
   references-only with no `include`, so it checks zero files and exits 0 with a
-  real type error sitting in `src/`. Use `tsc -b --force`.
-- **One known lint warning**, at `frontend/src/pages/DeckListPage.tsx:527`
+  real type error sitting in `src/`. Use `tsc -b`, which is what `npm run build`
+  runs and therefore what CI enforces.
+- **One known lint warning**, at `frontend/src/pages/DeckListPage.tsx:511`
   (`react-hooks/exhaustive-deps` on the publish-jobs poller). CI does not use
   `--max-warnings 0`, so the bar is 0 errors rather than 0 problems. Fixing it
   means changing polling code that `frontend/tests/deckListPagePolling.test.tsx` pins
   character-for-character.
-- **`DeckListPage.tsx` is 1031 lines** and does filtering, table rendering, stats
-  and publish polling in one component. The pieces it would split into already
-  exist under `frontend/src/components/decks/`, unused.
+- **`DeckListPage.tsx` is 736 lines.** Its JSX now lives in five presentational
+  components under `frontend/src/components/deckList/`, but the page still owns
+  deck fetching, the five-minute localStorage cache, the search debounce, the
+  publish-jobs poller and both row actions, so it remains the largest file in
+  `src/`. An earlier, unused set of five components in a sibling `decks/`
+  directory (deleted, no longer in the tree) was not adopted during that split:
+  it rendered different markup, and its `DeckTable` called `useNavigate()`
+  internally, which `frontend/tests/deckListHookOrder.test.ts` now forbids for
+  the components the page does use.
 - **One deliberate `window.confirm` remains**, in
   `frontend/src/components/ui/ConfirmDialogContext.ts`. The four confirmations
   that used to call it directly (`CardListPage`, `AdminUsersPage`,

@@ -235,3 +235,44 @@ describe('a lookup that fails says so and stays put', () => {
     expect(locationText()).toBe('/');
   });
 });
+
+// ---------------------------------------------------------------------------
+// N1/N2 — the two navigation targets the T3 block never exercised.
+//
+// T3a-T3d above all press "Cards" or "Edit", so the `to` lambdas they cover are
+// the ones on the two links in the Actions cell. Two more call sites pass their
+// own lambda and were never pressed by any test: the card-count button in the
+// Cards column (which navigates to the SAME place as the "Cards" link, so a
+// wrong target there is invisible from the Actions cell) and Preview, which is
+// the only route of the four that no other control reaches at all.
+//
+// Appended rather than folded into the T3 cases on purpose: those four are
+// about resolveDeckId's caching and failure behaviour, and adding a navigation
+// target to them would blur what each one is evidence for.
+// ---------------------------------------------------------------------------
+
+describe('the two row targets no other case presses', () => {
+  beforeEach(() => {
+    api.fetchAdminDecksPage.mockResolvedValue(ok(onePage([item('deck-3', 12)])));
+  });
+
+  it('N1: the card-count button opens that deck’s cards', async () => {
+    await mountConsole();
+    expect(locationText()).toBe('/');
+
+    // The button is labelled with the count itself — `totalCards: 3` from the
+    // item() helper above — which is why it is pressed by that name here.
+    await clickRowAction('deck-3', '3');
+
+    expect(locationText()).toBe('/decks/cards?deckId=12');
+    expect(api.fetchDeckBySlug).not.toHaveBeenCalled();
+  });
+
+  it('N2: Preview opens that deck’s preview', async () => {
+    await mountConsole();
+
+    await clickRowAction('deck-3', 'Preview');
+
+    expect(locationText()).toBe('/decks/preview?deckId=12');
+  });
+});
