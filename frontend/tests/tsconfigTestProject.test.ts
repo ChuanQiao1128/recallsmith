@@ -106,7 +106,10 @@ describe('the tests/ type-check project', () => {
 // it against the directory listing is the only form of the claim that cannot be
 // satisfied by a config that merely looks right.
 describe('what tsc actually resolved under tests/', () => {
-  it('is exactly the files on disk, no more and no fewer', () => {
+  // Shells out to a real tsc build, which is seconds rather than milliseconds
+  // and is slower still on a cold CI runner with no incremental cache. The
+  // default 5s budget was enough locally and timed out on the first CI run.
+  it('is exactly the files on disk, no more and no fewer', { timeout: 180_000 }, () => {
     const testsDir = `${FRONTEND}tests`;
 
     const onDisk = new Set(
