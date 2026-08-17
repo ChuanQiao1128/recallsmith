@@ -9,11 +9,11 @@ export function showTrialUpsellDialog(
   const { deckTitle, previewCount, totalCards } = opts;
 
   Alert.alert(
-    '免费试学已完成',
-    `你已学完「${deckTitle}」可免费学习的前 ${previewCount} 张卡片（共 ${totalCards} 张）。\n\n你仍可无限复习这 ${previewCount} 张。\n升级 Premium 解锁剩余内容并继续进度。`,
+    'Free preview complete',
+    `You've finished the free preview of ${deckTitle} — the first ${previewCount} of ${totalCards} cards.\n\nYou can keep reviewing these ${previewCount} cards forever.\nUpgrade to Premium to unlock the rest and continue your progress.`,
     [
-      { text: '继续复习', style: 'cancel' },
-      { text: '升级 Premium', onPress: () => navigation.navigate('Paywall' as any) },
+      { text: 'Keep reviewing', style: 'cancel' },
+      { text: 'Upgrade to Premium', onPress: () => navigation.navigate('Paywall' as any) },
     ],
   );
 }

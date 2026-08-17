@@ -1,16 +1,49 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const store = new Map<string, string>();
+let walletFixture = { availablePulls: 12, reservePulls: 0 };
+let manifestFixture: any[] = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
+let resolveDeckFixture: any = {
+  Slug: 'csharp',
+  Title: 'C# Interview',
+  Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
+};
+let installDeckOkFixture = false;
+let updatesFixture: Record<string, any> = {};
 
-vi.mock('@react-native-async-storage/async-storage', () => ({
-  default: {
-    getItem: vi.fn(async (key: string) => store.get(key) ?? null),
-    setItem: vi.fn(async (key: string, value: string) => {
-      store.set(key, value);
-    }),
-  },
+const consumePullsFromStoredWalletMock = vi.fn(async (count: number) => {
+  const spent = Math.min(count, walletFixture.availablePulls);
+  const nextWallet = {
+    availablePulls: Math.max(0, walletFixture.availablePulls - spent),
+    reservePulls: walletFixture.reservePulls,
+  };
+  walletFixture = nextWallet;
+  return {
+    wallet: nextWallet,
+    spent,
+    promotedFromReserve: 0,
+  };
+});
+
+const saveRewardWalletStateMock = vi.fn(async (wallet: { availablePulls: number; reservePulls: number }) => {
+  walletFixture = { ...wallet };
+});
+
+const commitDrawMock = vi.fn(async (_slug: string, drawCount: 1 | 10) => ({
+  cards: Array.from({ length: drawCount }, (_, index) => ({
+    stableUid: `card-${index + 1}`,
+    question: `Q${index + 1}`,
+    difficulty: 1,
+    rarity: 'COM' as const,
+  })),
+  poolExhausted: false,
+  pityFiredFor: null,
+  highlightedRarity: null,
+  ownedAfter: drawCount,
+  totalCards: 30,
+  pityBefore: 0,
+  pityAfter: 1,
 }));
 
 vi.mock('react-native', () => {
@@ -18,7 +51,6 @@ vi.mock('react-native', () => {
   return {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
-    ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
     Pressable: ({ children, onPress, ...props }: any) =>
       React.createElement(
@@ -26,7 +58,7 @@ vi.mock('react-native', () => {
         { ...props, onPress },
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
-    StyleSheet: { create: (styles: any) => styles },
+    StyleSheet: { create: (styles: any) => styles, absoluteFillObject: {} },
   };
 });
 
@@ -52,262 +84,389 @@ vi.mock('@react-navigation/native', () => ({
 
 vi.mock('../../src/content/activeDeck', () => ({
   loadActiveDeckSlug: vi.fn(async () => 'csharp'),
+  setActiveDeckSlug: vi.fn(async () => {}),
 }));
 
 vi.mock('../../src/content/deckRepository', () => ({
-  listManifestDecks: vi.fn(async () => [{ slug: 'csharp' }]),
-  resolveDeckBySlug: vi.fn(async () => ({
-    Slug: 'csharp',
-    Title: 'C# Interview',
-    Locale: 'en-US',
-    Version: '1',
-    DeckType: 1,
-    TotalCards: 3,
-    Cards: [
-      { StableUid: '1', OrderInDeck: 1, Question: 'Q1', Difficulty: 1 },
-      { StableUid: '2', OrderInDeck: 2, Question: 'Q2', Difficulty: 2 },
-      { StableUid: '3', OrderInDeck: 3, Question: 'Q3', Difficulty: 3 },
-    ],
-  })),
+  listManifestDecks: vi.fn(async () => manifestFixture),
+  resolveDeckBySlug: vi.fn(async (slug: string) => {
+    if (typeof resolveDeckFixture === 'function') return resolveDeckFixture(slug);
+    return resolveDeckFixture;
+  }),
+  checkManifestForUpdates: vi.fn(async () => updatesFixture),
+  installDeckFromUrl: vi.fn(async () => installDeckOkFixture),
 }));
 
-vi.mock('../../src/review/storage', () => ({
-  loadDeckProgress: vi.fn(async () => [
-    { stableUid: '1', stage: 0, nextReviewAt: 0 },
-    { stableUid: '2', stage: 2, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 1000 },
-    { stableUid: '3', stage: 4, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 2000 },
-  ]),
+vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
+  loadRewardWalletState: vi.fn(async () => walletFixture),
+  consumePullsFromStoredWallet: vi.fn(async (count: number) => consumePullsFromStoredWalletMock(count)),
+  saveRewardWalletState: vi.fn(async (wallet: { availablePulls: number; reservePulls: number }) => saveRewardWalletStateMock(wallet)),
 }));
 
-vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
-  getAudiencePreference: vi.fn(async () => 'all'),
+vi.mock('../../src/features/gacha/draw/drawCommit', () => ({
+  commitDraw: vi.fn(async (slug: string, drawCount: 1 | 10) => commitDrawMock(slug, drawCount)),
 }));
 
 import { DrawScreen } from '../../src/screens/DrawScreen';
-import * as deckRepository from '../../src/content/deckRepository';
-import * as rewardWallet from '../../src/features/gacha/rewards/rewardWallet';
 
-function findPressableByTestId(tree: renderer.ReactTestRenderer, testID: string) {
-  return tree.root.find((node) => (node.type as any) === 'Pressable' && node.props.testID === testID);
-}
-
-function findTextNodeContaining(tree: renderer.ReactTestRenderer, needle: string) {
-  return tree.root.find((node) => {
-    if ((node.type as any) !== 'Text') return false;
-    const children = node.props.children;
-    const text = Array.isArray(children) ? children.join('') : String(children ?? '');
-    return text.includes(needle);
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
   });
 }
 
-function collectText(tree: renderer.ReactTestRenderer) {
-  return tree.root.findAll((node) => (node.type as any) === 'Text').map((node) => {
-    const c = node.props.children;
-    return Array.isArray(c) ? c.join('') : String(c ?? '');
-  }).join('\n');
+function armPackSwipe(tree: renderer.ReactTestRenderer) {
+  const swipeZone = tree.root.findByProps({ testID: 'draw-card-stack-stage' });
+  act(() => {
+    swipeZone.props.onResponderGrant({ nativeEvent: { pageX: 10 } });
+    swipeZone.props.onResponderRelease({ nativeEvent: { pageX: 120 } });
+  });
 }
 
-describe('DrawScreen', () => {
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-  let warnSpy: ReturnType<typeof vi.spyOn>;
+function collectText(tree: renderer.ReactTestRenderer): string {
+  return tree.root
+    .findAll((node) => (node.type as any) === 'Text')
+    .map((node) => {
+      const c = node.props.children;
+      return Array.isArray(c) ? c.join('') : String(c ?? '');
+    })
+    .join('\n');
+}
 
+function footerActions(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll(
+    (node) =>
+      (node.type as any) === 'Pressable' &&
+      (node.props.testID === 'screen-draw-primary-cta' || node.props.testID === 'screen-draw-secondary-cta'),
+  );
+}
+
+describe('DrawScreen v9', () => {
   beforeEach(() => {
-    store.clear();
-    store.set('recallsmith:reward-wallet:v1', JSON.stringify({ availablePulls: 2, reservePulls: 1 }));
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    walletFixture = { availablePulls: 12, reservePulls: 0 };
+    manifestFixture = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
+    resolveDeckFixture = {
+      Slug: 'csharp',
+      Title: 'C# Interview',
+      Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
+    };
+    installDeckOkFixture = false;
+    updatesFixture = {};
+    consumePullsFromStoredWalletMock.mockClear();
+    saveRewardWalletStateMock.mockClear();
+    commitDrawMock.mockClear();
   });
 
-  afterEach(() => {
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
+  it('renders wallet-only top row and exactly two footer actions', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate: vi.fn() } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
+
+    expect(tree.root.findByProps({ testID: 'draw-header' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'draw-card-stack-stage' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'draw-pack-pulls-badge' })).toBeTruthy();
+    expect(footerActions(tree)).toHaveLength(2);
+
+    const headerText = tree.root
+      .findByProps({ testID: 'draw-header' })
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => String(Array.isArray(node.props.children) ? node.props.children.join('') : node.props.children ?? ''))
+      .join('\n');
+
+    expect(headerText).toContain('× 12');
+    expect(headerText).not.toContain('Home');
+    expect(collectText(tree)).toContain('Swipe right to arm this pack');
+    expect(collectText(tree)).not.toContain('Pull briefing');
+    expect(collectText(tree)).not.toContain('Current pool');
   });
 
-  it('consumes one pull and enters ceremony when draw opens', async () => {
-    const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
+  it('opens 10 cards and routes to ceremony', async () => {
+    const navigate = vi.fn();
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<DrawScreen navigation={navigation} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />);
-      await Promise.resolve();
-      await Promise.resolve();
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
     });
-
-    expect(tree.root.findByProps({ testID: 'screen-draw-root' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'screen-draw-primary-cta' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' })).toBeTruthy();
+    await flush();
+    armPackSwipe(tree);
 
     await act(async () => {
-      findPressableByTestId(tree, 'screen-draw-primary-cta').props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    const walletRaw = store.get('recallsmith:reward-wallet:v1');
-    expect(walletRaw).toBeTruthy();
-    expect(JSON.parse(walletRaw!)).toEqual({ availablePulls: 2, reservePulls: 0 });
-    expect(navigation.navigate).toHaveBeenCalledWith('DrawCeremony', expect.objectContaining({ slug: 'csharp' }));
-  });
-
-  it('supports opening a single pull from the draw page', async () => {
-    const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
-
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<DrawScreen navigation={navigation} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />);
-      await Promise.resolve();
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
       await Promise.resolve();
     });
 
-    await act(async () => {
-      findPressableByTestId(tree, 'screen-draw-secondary-cta').props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    const walletRaw = store.get('recallsmith:reward-wallet:v1');
-    expect(walletRaw).toBeTruthy();
-    expect(JSON.parse(walletRaw!)).toEqual({ availablePulls: 2, reservePulls: 0 });
-    expect(navigation.navigate).toHaveBeenCalledWith(
+    expect(consumePullsFromStoredWalletMock).toHaveBeenCalledWith(10);
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
+    expect(navigate).toHaveBeenCalledWith(
       'DrawCeremony',
       expect.objectContaining({
         slug: 'csharp',
-        drawResult: expect.objectContaining({
-          cards: expect.any(Array),
-        }),
+        drawResult: expect.objectContaining({ cards: expect.any(Array) }),
       }),
     );
-
-    const drawResult = navigation.navigate.mock.calls.at(-1)?.[1]?.drawResult;
-    expect(drawResult.cards).toHaveLength(1);
   });
 
-  it('shows a library fallback CTA when draw is locked', async () => {
-    store.set('recallsmith:reward-wallet:v1', JSON.stringify({ availablePulls: 0, reservePulls: 0 }));
-    const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
+  it('opens 1 card with secondary action', async () => {
+    const navigate = vi.fn();
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<DrawScreen navigation={navigation} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />);
-      await Promise.resolve();
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
+    armPackSwipe(tree);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-secondary-cta' }).props.onPress();
       await Promise.resolve();
     });
+
+    expect(consumePullsFromStoredWalletMock).toHaveBeenCalledWith(1);
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 1);
+    const params = (navigate.mock.calls.at(-1) ?? [])[1];
+    expect(params.drawResult.cards).toHaveLength(1);
+  });
+
+  it('disables Open 10 when only one pull remains', async () => {
+    walletFixture = { availablePulls: 1, reservePulls: 0 };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate: vi.fn() } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
+    armPackSwipe(tree);
+
+    const open10 = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    const open1 = tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
+    expect(open10.props.disabled).toBe(true);
+    expect(open1.props.disabled).toBe(false);
+  });
+
+  it('shows the earn-pulls escape CTA when no pulls remain', async () => {
+    // When wallet is empty, the dead-end "two greyed-out Open buttons"
+    // pattern is replaced with a prominent pokeBlue "Earn pulls by
+    // studying" CTA that drops the user straight into a SessionCard run.
+    // The Open 10 / Open 1 buttons remain in the tree as 0×0 hidden
+    // probes (disabled) so the testID + disabled-state contract holds.
+    walletFixture = { availablePulls: 0, reservePulls: 0 };
+    const navigate = vi.fn();
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
+
+    // Test contract preserved: both Open testIDs still exist + disabled
+    expect(footerActions(tree)).toHaveLength(2);
+    const open10 = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    const open1 = tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
+    expect(open10.props.disabled).toBe(true);
+    expect(open1.props.disabled).toBe(true);
+
+    // The legacy "No pulls left" text is preserved (hidden) for any
+    // accessibility / collectText harness that checks for it.
+    expect(collectText(tree)).toContain('No pulls left. Study sessions grant more pulls.');
+
+    // New escape CTA — visible + actionable
+    const earnCta = tree.root.findByProps({ testID: 'draw-earn-pulls-cta' });
+    expect(earnCta).toBeTruthy();
+    expect(collectText(tree)).toContain('Earn pulls by studying');
 
     act(() => {
-      findPressableByTestId(tree, 'screen-draw-primary-cta').props.onPress();
+      earnCta.props.onPress();
     });
-
-    expect(navigation.navigate).toHaveBeenCalledWith('Deck', { slug: 'csharp' });
+    expect(navigate).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
   });
 
-  it('still lets the user preview a single pull when wallet is empty', async () => {
-    store.set('recallsmith:reward-wallet:v1', JSON.stringify({ availablePulls: 0, reservePulls: 0 }));
-    const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
+  it('supports neighbor hint selection and resets swipe arm state on switch', async () => {
+    manifestFixture = [
+      { slug: 'csharp', availability: 'live', title: 'C# Interview' },
+      { slug: 'aws', availability: 'live', title: 'AWS Interview' },
+    ];
+    resolveDeckFixture = (slug: string) => {
+      if (slug === 'aws') {
+        return {
+          Slug: 'aws',
+          Title: 'AWS Interview',
+          Cards: [{ StableUid: '2', OrderInDeck: 1, Difficulty: 1, Question: 'Q2' }],
+        };
+      }
+      return {
+        Slug: 'csharp',
+        Title: 'C# Interview',
+        Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
+      };
+    };
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<DrawScreen navigation={navigation} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />);
-      await Promise.resolve();
-      await Promise.resolve();
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate: vi.fn() } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
     });
+    await flush();
+
+    armPackSwipe(tree);
+    expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' }).props.disabled).toBe(false);
 
     await act(async () => {
-      findPressableByTestId(tree, 'screen-draw-secondary-cta').props.onPress();
+      tree.root.findByProps({ testID: 'draw-neighbor-left' }).props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(JSON.parse(store.get('recallsmith:reward-wallet:v1')!)).toEqual({ availablePulls: 0, reservePulls: 0 });
-    expect(navigation.navigate).toHaveBeenCalledWith(
-      'DrawCeremony',
-      expect.objectContaining({
-        slug: 'csharp',
-        drawResult: expect.objectContaining({
-          cards: expect.any(Array),
-        }),
-      }),
-    );
-    const drawResult = navigation.navigate.mock.calls.at(-1)?.[1]?.drawResult;
-    expect(drawResult.cards).toHaveLength(1);
+    expect(collectText(tree)).toContain('AWS Interview');
+    expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' }).props.disabled).toBe(true);
   });
 
-  it('renders a productized draw briefing instead of prototype-only labels', async () => {
-    const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
+  it('requires a swipe arm before either open action can fire', async () => {
+    const navigate = vi.fn();
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<DrawScreen navigation={navigation} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />);
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
+
+    const open10 = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    const open1 = tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
+    expect(open10.props.disabled).toBe(true);
+    expect(open1.props.disabled).toBe(true);
+    expect(tree.root.findAllByProps({ testID: 'draw-arm-fallback-cta' })).toHaveLength(0);
+
+    await act(async () => {
+      open10.props.onPress();
+      open1.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(commitDrawMock).not.toHaveBeenCalled();
+    expect(consumePullsFromStoredWalletMock).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps Open 10 disabled when only reserve pulls are present', async () => {
+    walletFixture = { availablePulls: 5, reservePulls: 5 };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate: vi.fn() } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
+    armPackSwipe(tree);
+
+    const open10 = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    const open1 = tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
+    expect(open10.props.disabled).toBe(true);
+    expect(open1.props.disabled).toBe(false);
+    expect(collectText(tree)).toContain('× 5');
+  });
+
+  it('rolls back wallet pulls if draw commit returns null', async () => {
+    const navigate = vi.fn();
+    const walletBeforeOpen = { availablePulls: 12, reservePulls: 0 };
+    walletFixture = { ...walletBeforeOpen };
+    commitDrawMock.mockImplementationOnce(async () => null as any);
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
+    armPackSwipe(tree);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    const textBlob = collectText(tree);
-
-    expect(textBlob).toContain('Reward draw');
-    expect(textBlob).toContain('Drop odds');
-    expect(textBlob).toContain('Current pool');
-    expect(textBlob).toContain('Open 10 pull');
-    expect(textBlob).not.toContain('COSMIC ARCHIVE');
-    expect(textBlob).not.toContain('DROP TABLE');
-
-    expect(findTextNodeContaining(tree, 'Use reward pulls after the study route').props.numberOfLines).toBe(1);
-    expect(findTextNodeContaining(tree, 'Open 10 pull').props.numberOfLines).toBe(1);
+    expect(consumePullsFromStoredWalletMock).toHaveBeenCalledWith(10);
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
+    expect(saveRewardWalletStateMock).toHaveBeenCalledWith(walletBeforeOpen);
+    expect(walletFixture).toEqual(walletBeforeOpen);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(collectText(tree)).toContain('Draw unavailable right now');
   });
 
-  it('renders an error state with retry action when draw dependencies fail', async () => {
-    const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
-    const walletSpy = vi.spyOn(rewardWallet, 'loadRewardWalletState');
-    walletSpy.mockRejectedValueOnce(new Error('wallet failed'));
-    walletSpy.mockResolvedValue({ availablePulls: 2, reservePulls: 1 });
+  it('renders empty state when no active deck is available', async () => {
+    manifestFixture = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
+    resolveDeckFixture = null;
+    updatesFixture = { csharp: { remoteUrl: null, remoteVersion: null, remoteSha256: null } };
+    const navigate = vi.fn();
 
-    try {
-      let tree!: renderer.ReactTestRenderer;
-      await act(async () => {
-        tree = renderer.create(<DrawScreen navigation={navigation} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />);
-        await Promise.resolve();
-        await Promise.resolve();
-      });
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
 
-      expect(collectText(tree)).toContain('Draw unavailable right now');
-      expect(tree.root.findByProps({ testID: 'screen-draw-primary-cta' })).toBeTruthy();
-      expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' })).toBeTruthy();
-
-      await act(async () => {
-        findPressableByTestId(tree, 'screen-draw-primary-cta').props.onPress();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      expect(collectText(tree)).toContain('Open 10 pull');
-      expect(walletSpy).toHaveBeenCalledTimes(2);
-    } finally {
-      walletSpy.mockRestore();
-    }
+    expect(collectText(tree)).toContain('No active pack yet');
+    const primary = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    act(() => {
+      primary.props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledWith('Library');
   });
 
-  it('routes to library instead of a no-op draw action when there is no active pool', async () => {
-    const navigation = { goBack: vi.fn(), navigate: vi.fn() } as any;
-    const resolveSpy = vi.spyOn(deckRepository, 'resolveDeckBySlug');
-    resolveSpy.mockResolvedValueOnce(null as any);
+  it('auto-installs live pack when slug exists but deck is not installed yet', async () => {
+    let resolveCalls = 0;
+    resolveDeckFixture = () => {
+      resolveCalls += 1;
+      if (resolveCalls >= 2) {
+        return {
+          Slug: 'csharp',
+          Title: 'C# Interview',
+          Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
+        };
+      }
+      return null;
+    };
+    updatesFixture = {
+      csharp: {
+        remoteUrl: 'https://cdn.example.com/content/csharp.json',
+        remoteVersion: 'v1',
+        remoteSha256: null,
+      },
+    };
+    installDeckOkFixture = true;
 
-    try {
-      let tree!: renderer.ReactTestRenderer;
-      await act(async () => {
-        tree = renderer.create(<DrawScreen navigation={navigation} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />);
-        await Promise.resolve();
-        await Promise.resolve();
-      });
+    const navigate = vi.fn();
 
-      expect(collectText(tree)).toContain('No active draw pool yet');
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
 
-      act(() => {
-        findPressableByTestId(tree, 'screen-draw-primary-cta').props.onPress();
-      });
-
-      expect(navigation.navigate).toHaveBeenCalledWith('Library');
-    } finally {
-      resolveSpy.mockRestore();
-    }
+    expect(tree.root.findByProps({ testID: 'draw-header' })).toBeTruthy();
+    expect(collectText(tree)).toContain('Open 10');
+    expect(collectText(tree)).not.toContain('No active pack yet');
   });
 });

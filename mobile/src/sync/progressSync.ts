@@ -1,16 +1,23 @@
 // mobile/src/sync/progressSync.ts
 import * as Crypto from 'expo-crypto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
 import { apiJson } from '../api/apiClient';
 import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../review/storage';
+import { syncDrawStateNow } from './drawStateSync';
+import {
+  getCachedQueue,
+  setCachedQueue,
+  invalidateProgressQueueCache,
+} from './progressQueueCache';
+import { clampStage, MAX_NEXT_REVIEW_HORIZON_MS } from '../review/model';
 import type { CardProgress } from '../review/model';
 
 /**
- * ============================
- *  Progress Sync 设计（面试讲法）
- * ============================
+ * Progress Sync 的设计
  *
  * 核心目标：Offline-first + Eventual Consistency
  *
@@ -74,6 +81,11 @@ type ProgressItem = {
   // Phase 3
   nextReviewAtMs?: number | string | null;
 
+  // The scheduler ladder position the server kept from the winning review.
+  // Absent/null on rows merged before the server stored stage (and on old
+  // servers), which is what keeps inferStageFromIntervalMs alive as a fallback.
+  srsStage?: number | string | null;
+
   updatedAtMs: number | string | null;
 };
 
@@ -81,10 +93,16 @@ type ProgressGetResp = {
   serverTimeMs: number;
   sinceMs: number | null;
   items: ProgressItem[];
+
+  // ✅ Keyset pagination (additive; absent on old servers — feature-detect)
+  nextCursor?: string | null;
+  hasMore?: boolean;
 };
 
 export type ProgressEvent = {
   eventId: string;
+  schemaVersion?: number;
+  eventType?: 'card_reviewed';
   deckSlug: string;
   deckVersion: string | null;
   stableUid: string;
@@ -92,7 +110,26 @@ export type ProgressEvent = {
   reviewedAtMs: number;
   progressAfter?: any;
   lastSeenRevision: number | null;
+  sessionId?: string | null;
+  cardRevision?: number | null;
+  statedDifficulty?: number | null;
+  reviewStage?: 'first_review' | 'repeat_review' | string | null;
+  reviewCountForCard?: number | null;
+  dwellTimeMs?: number | null;
+  offlineQueueDelayMs?: number | null;
+  schedulerVersion?: string | null;
 };
+
+/**
+ * Which scheduler produced progressAfter.stage / nextReviewAt.
+ *
+ * A name, not a number: the server stores this without interpreting it, so the
+ * only thing it has to support is "tell old rows from new ones". A version
+ * number invites arithmetic (`>= 2`), and arithmetic on a label nobody
+ * compares is how a compatibility bug gets written. Change the name when the
+ * ladder changes meaning, never bump it for a bugfix.
+ */
+const SCHEDULER_VERSION = 'ladder-v1';
 
 /**
  * ----------------------------
@@ -120,6 +157,15 @@ let _accessTokenMem: string | null = null;
  */
 function kCursor(userSub: string) {
   return `${userPrefix(userSub)}sync:cursorMs:v1`;
+}
+/**
+ * ✅ v2 cursor: opaque server-issued keyset cursor (base64url tuple).
+ * Stored in a NEW key — the v1 key must stay a plain ms number, because
+ * getCursorMs() parses it with toMs() and a base64 string would silently
+ * read back as null (full re-pull).
+ */
+function kCursorToken(userSub: string) {
+  return `${userPrefix(userSub)}sync:cursor:v2`;
 }
 function kLastSync(userSub: string) {
   return `${userPrefix(userSub)}sync:last:v1`;
@@ -186,6 +232,50 @@ function mapRatingToNumber(r: any): number {
   if (s === 'good') return 3;
   if (s === 'easy') return 4;
   return 3;
+}
+
+function optionalFiniteNumber(v: any): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function optionalPositiveInt(v: any): number | null {
+  const n = optionalFiniteNumber(v);
+  if (n == null) return null;
+  const i = Math.floor(n);
+  return i > 0 ? i : null;
+}
+
+function optionalNonNegativeInt(v: any): number | null {
+  const n = optionalFiniteNumber(v);
+  if (n == null) return null;
+  const i = Math.floor(n);
+  return i >= 0 ? i : null;
+}
+
+/**
+ * A remote stage, or null when the server has none for that row.
+ *
+ * null and 0 are different answers and must stay different: 0 is a real rung
+ * (a card that keeps getting `again`), while null means "this row predates the
+ * server storing stage, infer it from the interval". Collapsing them would
+ * quietly reset those cards to the bottom of the ladder.
+ */
+function optionalRemoteStage(v: any): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return clampStage(n);
+}
+
+function optionalString(v: any): string | null {
+  const s = v == null ? '' : String(v).trim();
+  return s ? s : null;
+}
+
+function getClientVersion(): string {
+  return Constants.expoConfig?.version ?? 'unknown';
 }
 
 function pickDeckSlugFromAny(obj: any): string | null {
@@ -272,7 +362,109 @@ function kQueue(userSub: string) {
   return `${userPrefix(userSub)}sync:progressQueue:v1`;
 }
 
-async function readQueue(userSub: string): Promise<ProgressEvent[]> {
+/**
+ * The queue partition used while nobody is signed in.
+ *
+ * A review done signed out is still a fact, and facts are not allowed to depend
+ * on whether an account happened to be attached at the time. There is no real
+ * userSub to namespace the queue with, so the events go to a reserved one and
+ * get adopted by the next account that signs in on this device (see
+ * adoptPendingProgressEvents). The name is deliberately not a legal Cognito sub,
+ * so it can never collide with a real user's partition.
+ */
+const PENDING_SUB = '__pending__';
+
+/**
+ * Queue cap, shared by the rating path and the adoption path.
+ *
+ * Both append to a queue, so both need the same ceiling: adopting an unbounded
+ * pending queue into a user queue would otherwise be the one way past it.
+ */
+const MAX_QUEUE_EVENTS = 3000;
+
+/**
+ * How many events this partition has dropped at the cap, ever.
+ *
+ * The cap itself is fine (an unbounded queue would eventually break
+ * AsyncStorage), but until now it discarded the OLDEST reviews with no counter,
+ * no log line and no UI: the events the server never received were exactly the
+ * ones nobody could find out about. Every layer reported success. A number that
+ * survives restarts is the cheapest thing that turns "we think this never
+ * happens" into something checkable, and it is per partition (the __pending__
+ * signed-out queue included) because a cap hit there means something different
+ * from a cap hit on a signed-in queue.
+ *
+ * Stored separately from the queue so a drop is still counted when the queue is
+ * later flushed to empty.
+ */
+function kDropped(userSub: string) {
+  return `${userPrefix(userSub)}sync:droppedEvents:v1`;
+}
+
+async function readDroppedCount(userSub: string): Promise<number> {
+  try {
+    const raw = await AsyncStorage.getItem(kDropped(userSub));
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function addDroppedCount(userSub: string, n: number): Promise<void> {
+  if (!Number.isFinite(n) || n <= 0) return;
+  try {
+    const prev = await readDroppedCount(userSub);
+    await AsyncStorage.setItem(kDropped(userSub), String(prev + Math.floor(n)));
+  } catch {}
+}
+
+/**
+ * ----------------------------
+ * Write-through queue cache
+ * ----------------------------
+ *
+ * The parsed queue, per partition. Absent means "not read from storage yet in
+ * this process", which is a different statement from "empty".
+ *
+ * The waste it removes: every queue mutation used to be a full round trip
+ * through JSON. Enqueue read the whole queue back from AsyncStorage, JSON.parse
+ * of every event ever queued, pushed ONE event, and JSON.stringify the whole
+ * thing again. That put an O(depth) parse on the rating path, where depth grows
+ * with everything the user does offline, so the cost of grading a card depended
+ * on how long they had been out of signal. Measured on this laptop with
+ * scripts/bench-hot-paths.ts, a single enqueue cost ~1.5 ms at depth 1000 and
+ * ~4.5 ms at depth 3000 (the cap), against ~38 µs of fixed cost. That is a
+ * frame budget spent re-reading data the process just wrote.
+ *
+ * Why a cache is safe here, specifically:
+ *   1. readQueue and writeQueue are the ONLY doors to the queue key, and every
+ *      caller of both runs inside withQueueLock. That promise chain is a single
+ *      writer, so there is no interleaving that could observe a half-updated
+ *      cache, and no second writer whose disk write the cache could miss.
+ *   2. AsyncStorage is process-local. Nothing outside this module writes the
+ *      queue key, so "storage changed behind our back" is not a case that
+ *      exists, with the two exceptions handled by invalidateQueueCache below
+ *      (the debug reset and the disabled wipe, both of which delete keys
+ *      directly rather than through writeQueue).
+ *
+ * What it deliberately does NOT change: the event is still serialised and
+ * handed to AsyncStorage on the rating path, awaited, before recordReviewEvent
+ * resolves. See the durability note on writeQueue.
+ */
+// The cache itself lives in ./progressQueueCache so the debug reset can
+// invalidate it without importing this module (and expo along with it).
+
+/**
+ * The cold read: the one JSON.parse of a partition per app launch.
+ *
+ * The parse did not become free, it became once. On a cold start with a full
+ * queue the first enqueue still pays it (~4.5 ms at depth 3000 in the bench),
+ * and that is the honest shape of this optimisation: the cost moved off the
+ * per-rating path and onto the launch path, where it happens once and competes
+ * with app startup rather than with a tap.
+ */
+async function loadQueueFromStorage(userSub: string): Promise<ProgressEvent[]> {
   try {
     const raw = await AsyncStorage.getItem(kQueue(userSub));
     if (!raw) return [];
@@ -284,41 +476,197 @@ async function readQueue(userSub: string): Promise<ProgressEvent[]> {
   }
 }
 
-async function writeQueue(userSub: string, arr: ProgressEvent[]): Promise<void> {
-  try {
-    await AsyncStorage.setItem(kQueue(userSub), JSON.stringify(arr));
-  } catch {}
+/**
+ * The cached array itself is returned, not a copy.
+ *
+ * Copying would put an O(depth) allocation back on the path this change exists
+ * to make O(1). The contract for callers is therefore: treat the result as
+ * owned by the cache. Mutate it only if you write it back through writeQueue in
+ * the same critical section (enqueueProgressEvent does exactly that), and
+ * otherwise derive a new array (slice/filter, as peek/remove/adopt do).
+ * Everything here runs under withQueueLock, so "the same critical section" is a
+ * real boundary and not a hope.
+ */
+async function readQueue(userSub: string): Promise<ProgressEvent[]> {
+  const cached = getCachedQueue(userSub);
+  if (cached) return cached;
+
+  const loaded = await loadQueueFromStorage(userSub);
+  setCachedQueue(userSub, loaded);
+  return loaded;
 }
 
+/**
+ * Durability vs latency, written down because it is a deliberate choice and not
+ * an oversight.
+ *
+ * The cache removes the READ. The WRITE stays exactly where it was: one
+ * serialise plus one awaited AsyncStorage.setItem, on the rating path, before
+ * recordReviewEvent resolves and the UI moves on. It would be easy to make
+ * enqueue look ~40x faster again by batching writes or deferring them to an
+ * idle callback, and it would be wrong: this queue is the durable log of facts,
+ * the local deck progress is only a projection of it, and an event that exists
+ * solely in memory is lost to a crash, an OS kill or a battery pull. The system
+ * is offline-first, so "the network will have it" is not a fallback either.
+ *
+ * The same trade-off with a different name is fsync policy in a trading or
+ * database system: write-behind buys throughput and pays with a window of
+ * acknowledged-but-lost writes. Here the window is set to zero on purpose. What
+ * this change eliminated is pure waste, work whose removal costs no durability
+ * at all, which is the only kind of optimisation that needs no justification.
+ *
+ * Cache before disk, not after: both are inside the lock, so no reader can ever
+ * see them disagree.
+ *
+ * A failed write drops the cache instead of keeping the value that never
+ * landed. The cache's whole claim is "this is what the queue key holds", and
+ * after a rejected setItem this process does not know what the key holds, so
+ * the only safe answer is to forget and re-read. That restores exactly the
+ * pre-cache behaviour, where every read reflected storage, including the bad
+ * cases (a rejected enqueue write loses that event, as it always did).
+ */
+async function writeQueue(userSub: string, arr: ProgressEvent[]): Promise<void> {
+  setCachedQueue(userSub, arr);
+  try {
+    await AsyncStorage.setItem(kQueue(userSub), JSON.stringify(arr));
+  } catch {
+    invalidateProgressQueueCache(userSub);
+  }
+}
+
+// Every queue mutation below is a read-modify-write over one AsyncStorage key,
+// and single-threaded JS does not make that safe: a race needs two awaits, not
+// two threads. The push-ack path (removeProgressEventsById, inside a sync round)
+// and the rating path (enqueueProgressEvent) routinely overlap, and whoever read
+// first writes last, silently deleting the other's event. That loss is invisible
+// locally because deck progress was already saved, so it only surfaces as a
+// missing review on another device. This promise chain is the mutex: each
+// critical section runs to completion before the next one gets to read.
+let _queueLockTail: Promise<unknown> = Promise.resolve();
+
+function withQueueLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = _queueLockTail.then(fn);
+  // The tail must never carry a rejection forward, or one failed section would
+  // reject every later one. Callers still see the real outcome through `run`.
+  _queueLockTail = run.catch(() => undefined);
+  return run;
+}
+
+// The lock deliberately does NOT span peek -> push -> remove: holding it across
+// a network call would block rating for the length of a request. Re-delivering
+// an already-pushed event is safe (eventId is the server-side idempotency key);
+// dropping a never-pushed one is not.
 async function enqueueProgressEvent(userSub: string, ev: ProgressEvent): Promise<void> {
-  const q = await readQueue(userSub);
-  q.push(ev);
+  return withQueueLock(async () => {
+    // Append in place on the cached array and write that same array back. This
+    // is the one caller allowed to mutate what readQueue returned (see its
+    // contract note), and it is why the common case is an O(1) push instead of
+    // parse-copy-serialise.
+    const q = await readQueue(userSub);
+    q.push(ev);
 
-  // 保护上限：最多保留 3000 条（避免极端情况下 AsyncStorage 膨胀）
-  const MAX = 3000;
-  const out = q.length > MAX ? q.slice(q.length - MAX) : q;
+    // 保护上限：最多保留 3000 条（避免极端情况下 AsyncStorage 膨胀）
+    const out = q.length > MAX_QUEUE_EVENTS ? q.slice(q.length - MAX_QUEUE_EVENTS) : q;
 
-  await writeQueue(userSub, out);
+    await writeQueue(userSub, out);
+    // Count what the slice above threw away. Written inside the lock with the
+    // queue, so the counter can never disagree with what was actually dropped.
+    await addDroppedCount(userSub, q.length - out.length);
+  });
+}
+
+/**
+ * Move every signed-out event into the queue of the account that just signed in.
+ *
+ * Merge policy (this is the decision the old known-limitation comment was
+ * waiting on): the next account to sign in on this device adopts ALL pending
+ * events. Rationale: on a personal device, the person who reviewed before
+ * signing in and the person who then signs in are the same person. The shared
+ * device case can mis-attribute reviews, and that risk is accepted and recorded
+ * here: events are UUID-keyed idempotent facts, so a mis-adoption cannot break
+ * a server invariant, it only files those reviews under the adopter.
+ *
+ * Local progress from the anonymous period is NOT migrated: only the events
+ * move. The adopter's projection realigns through push, server merge and pull,
+ * which is this system's whole thesis in one code path, facts come first and the
+ * projection is rebuildable from them.
+ *
+ * Crash safety: copy first, clear second, never the other way around. A crash
+ * between the two leaves duplicates, not losses, and duplicates are absorbed
+ * twice over: this function skips eventIds already in the user queue, and the
+ * server keys events by event_id (already-pushed ones come back in
+ * duplicateEventIds). The reverse order would trade a recoverable duplicate for
+ * an unrecoverable loss.
+ */
+async function adoptPendingProgressEvents(userSub: string): Promise<number> {
+  if (!userSub || userSub === PENDING_SUB) return 0;
+
+  const adopted = await withQueueLock(async () => {
+    const pending = await readQueue(PENDING_SUB);
+    if (pending.length === 0) return 0;
+
+    const own = await readQueue(userSub);
+    const seen = new Set(own.map((ev) => String(ev?.eventId ?? '')));
+
+    // Append rather than interleave: order inside each partition is preserved,
+    // and the server orders by reviewedAtMs anyway, so queue order only decides
+    // push batching.
+    const merged = own.slice();
+    let added = 0;
+
+    for (const ev of pending) {
+      const id = String(ev?.eventId ?? '');
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(ev);
+      added += 1;
+    }
+
+    const out =
+      merged.length > MAX_QUEUE_EVENTS ? merged.slice(merged.length - MAX_QUEUE_EVENTS) : merged;
+
+    await writeQueue(userSub, out);
+    // Adoption is the other way past the cap, so it counts its losses too, and
+    // it counts them against the account that ended up owning the events.
+    await addDroppedCount(userSub, merged.length - out.length);
+    await writeQueue(PENDING_SUB, []);
+
+    return added;
+  });
+
+  if (adopted > 0) {
+    // The adopted events are only durable locally so far, so ask for a push now
+    // instead of waiting for the next focus event.
+    scheduleProgressSync({ delayMs: 0, reason: 'pending_adopted' });
+  }
+
+  return adopted;
 }
 
 async function peekProgressEvents(userSub: string, limit: number): Promise<ProgressEvent[]> {
-  const q = await readQueue(userSub);
-  return q.slice(0, Math.max(0, limit));
+  return withQueueLock(async () => {
+    const q = await readQueue(userSub);
+    return q.slice(0, Math.max(0, limit));
+  });
 }
 
 async function removeProgressEventsById(userSub: string, ids: string[]): Promise<void> {
   if (!ids || ids.length === 0) return;
   const idSet = new Set(ids.map(String));
-  const q = await readQueue(userSub);
-  const out = q.filter((ev) => !idSet.has(String(ev?.eventId)));
-  if (out.length !== q.length) {
-    await writeQueue(userSub, out);
-  }
+  return withQueueLock(async () => {
+    const q = await readQueue(userSub);
+    const out = q.filter((ev) => !idSet.has(String(ev?.eventId)));
+    if (out.length !== q.length) {
+      await writeQueue(userSub, out);
+    }
+  });
 }
 
 async function progressQueueSize(userSub: string): Promise<number> {
-  const q = await readQueue(userSub);
-  return q.length;
+  return withQueueLock(async () => {
+    const q = await readQueue(userSub);
+    return q.length;
+  });
 }
 
 /**
@@ -355,6 +703,12 @@ export async function setSyncAccessToken(token: string | null): Promise<void> {
 
   if (!t) {
     await setActiveUserSub(null);
+    // Sign-out is a session boundary, so nothing from the previous session is
+    // answered out of memory afterwards. setActiveUserSub already drops the
+    // cache when the sub actually changes, but signing out with no sub resolved
+    // yet (token expired before the sub was ever read) takes its no-op branch,
+    // and that is precisely the case where signed-out events are queued.
+    invalidateProgressQueueCache();
     // token 被清除 -> 取消任何 pending 的 sync
     if (_timer) clearTimeout(_timer);
     _timer = null;
@@ -380,6 +734,13 @@ export async function setActiveUserSub(userSub: string | null): Promise<void> {
 
     // ✅ 关键：同步刷新 review/storage.ts 的内存缓存（绕过 TTL）
     setActiveUserSubForStorage(next);
+
+    // Not a no-op branch any more: re-signing in as the sub already stored from
+    // a previous session lands here (the token expired, reviews went pending,
+    // the user signed back in as themselves), which is precisely when there is
+    // something to adopt. Adoption is idempotent, so running it on every
+    // same-sub call is cheap and cannot double-count.
+    if (next) await adoptPendingProgressEvents(next);
     return;
   }
 
@@ -468,12 +829,24 @@ async function wipeLocalStudyStateBestEffort(): Promise<void> {
       await AsyncStorage.multiRemove(toRemove);
     }
   } catch {}
+  // shouldWipeKey matches the queue keys (they contain "progress"), so this
+  // deletes queue data without going through writeQueue. Every partition is
+  // dropped because the filter is a prefix/substring match, not a per-user one.
+  invalidateProgressQueueCache();
 }
 
 async function onUserChanged(prevSub: string | null, nextSub: string | null): Promise<void> {
   // 清掉内存状态
   _lastPullAtMs = 0;
   _healedOnce = false;
+
+  // The queue cache is per partition, so a switch cannot mix two accounts'
+  // events even without this line. It is dropped anyway for two reasons: the
+  // signed-out partition is about to be rewritten by adoption below, and an
+  // account the user has left has no claim on this process's memory. Dropping
+  // it costs one re-parse on the next enqueue and removes a whole class of
+  // "stale partition" reasoning from the account-switch path.
+  invalidateProgressQueueCache();
 
   // 清掉 pending timer
   if (_timer) clearTimeout(_timer);
@@ -486,6 +859,9 @@ async function onUserChanged(prevSub: string | null, nextSub: string | null): Pr
   if (ENABLE_WIPE_ON_USER_CHANGE) {
     await wipeLocalStudyStateBestEffort();
   }
+
+  // Sign-in / account switch: the arriving account takes the signed-out events.
+  if (nextSub) await adoptPendingProgressEvents(nextSub);
 }
 
 /**
@@ -494,11 +870,15 @@ async function onUserChanged(prevSub: string | null, nextSub: string | null): Pr
  * ----------------------------
  */
 export async function recordReviewEvent(...args: any[]): Promise<string | null> {
+  // No token (signed out), or a token we cannot read a sub out of: the event is
+  // still produced, it just goes to the PENDING_SUB partition instead of a
+  // user's. It rides the same withQueueLock serializer and the same cap, because
+  // the lock is one global chain rather than one per sub, so pending and user
+  // queues can never be mid-write at the same time. Adoption on sign-in
+  // (adoptPendingProgressEvents) is what eventually gets these to the server.
   const accessToken = await getSyncAccessToken();
-  if (!accessToken) return null;
-
-  const userSub = await ensureUserSubReady(accessToken);
-  if (!userSub) return null;
+  const resolvedSub = accessToken ? await ensureUserSubReady(accessToken) : null;
+  const queueSub = resolvedSub ?? PENDING_SUB;
 
   let deckSlug: string | null = null;
   let stableUid: string | null = null;
@@ -508,6 +888,12 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
   let deckVersion: string | null | undefined = undefined;
   let progressAfter: any = undefined;
   let lastSeenRevision: number | null | undefined = undefined;
+  let sessionId: string | null | undefined = undefined;
+  let cardRevision: number | null | undefined = undefined;
+  let statedDifficulty: number | null | undefined = undefined;
+  let reviewStage: string | null | undefined = undefined;
+  let reviewCountForCard: number | null | undefined = undefined;
+  let dwellTimeMs: number | null | undefined = undefined;
 
   if (typeof args[0] === 'string') {
     deckSlug = String(args[0]).trim();
@@ -530,12 +916,23 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
     if (obj.lastSeenRevision != null && Number.isFinite(Number(obj.lastSeenRevision))) {
       lastSeenRevision = Number(obj.lastSeenRevision);
     }
+
+    sessionId = optionalString(obj.sessionId);
+    cardRevision = optionalPositiveInt(obj.cardRevision);
+    statedDifficulty = optionalPositiveInt(obj.statedDifficulty);
+    reviewStage = optionalString(obj.reviewStage);
+    reviewCountForCard = optionalPositiveInt(obj.reviewCountForCard);
+    dwellTimeMs = optionalNonNegativeInt(obj.dwellTimeMs);
   }
 
   if (!deckSlug || !stableUid) return null;
 
+  const resolvedRevision = cardRevision ?? lastSeenRevision ?? optionalPositiveInt(progressAfter?.lastSeenRevision);
+
   const ev: ProgressEvent = {
     eventId: Crypto.randomUUID(),
+    schemaVersion: 1,
+    eventType: 'card_reviewed',
     deckSlug,
     deckVersion: deckVersion ?? null,
     stableUid,
@@ -543,9 +940,20 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
     reviewedAtMs,
     progressAfter,
     lastSeenRevision: lastSeenRevision ?? null,
+    sessionId: sessionId ?? null,
+    cardRevision: resolvedRevision ?? null,
+    statedDifficulty: statedDifficulty ?? null,
+    reviewStage: reviewStage ?? null,
+    reviewCountForCard: reviewCountForCard ?? null,
+    dwellTimeMs: dwellTimeMs ?? null,
+    offlineQueueDelayMs: 0,
+    // Stamped at record time, not at push time: an event that sat in the queue
+    // across an app upgrade was still produced by the scheduler that was
+    // running when the user rated the card.
+    schedulerVersion: SCHEDULER_VERSION,
   };
 
-  await enqueueProgressEvent(userSub, ev);
+  await enqueueProgressEvent(queueSub, ev);
   return ev.eventId;
 }
 
@@ -572,6 +980,28 @@ async function setCursorMs(userSub: string, ms: number): Promise<void> {
 async function clearCursorMs(userSub: string): Promise<void> {
   try {
     await AsyncStorage.removeItem(kCursor(userSub));
+  } catch {}
+}
+
+async function getCursorToken(userSub: string): Promise<string | null> {
+  try {
+    const raw = await AsyncStorage.getItem(kCursorToken(userSub));
+    const t = raw && raw.trim() ? raw.trim() : null;
+    return t;
+  } catch {
+    return null;
+  }
+}
+
+async function setCursorToken(userSub: string, token: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(kCursorToken(userSub), token);
+  } catch {}
+}
+
+async function clearCursorToken(userSub: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(kCursorToken(userSub));
   } catch {}
 }
 
@@ -624,7 +1054,8 @@ async function healCursorIfCacheMissing(userSub: string): Promise<void> {
   _healedOnce = true;
 
   const cursor = await getCursorMs(userSub);
-  if (cursor == null) return;
+  const cursorToken = await getCursorToken(userSub);
+  if (cursor == null && cursorToken == null) return;
 
   try {
     const keys = await AsyncStorage.getAllKeys();
@@ -632,7 +1063,9 @@ async function healCursorIfCacheMissing(userSub: string): Promise<void> {
     const hasAnyCache = keys.some((k) => k.startsWith(prefix));
     if (!hasAnyCache) {
       console.warn('[progressSync] heal: cursor exists but no remote cache keys; reset cursor', { cursor, userSub });
+      // heal 的语义是“重新全量拉取”，v1 ms cursor 和 v2 keyset cursor 必须一起清
       await clearCursorMs(userSub);
+      await clearCursorToken(userSub);
     }
   } catch {
     // ignore
@@ -653,8 +1086,13 @@ function getDeckUidSet(deck: any): Set<string> {
 
 /**
  * Merge remote progress items into local CardProgress[].
+ *
+ * Exported only so the multi-device simulator
+ * (tests/unit/multiDeviceSync.sim.test.ts) can drive the real merge instead of
+ * a copy of it. A re-implementation in the test would assert that the copy
+ * converges, which is exactly the claim nobody needs.
  */
-function mergeRemoteIntoLocalProgress(
+export function mergeRemoteIntoLocalProgress(
   local: CardProgress[],
   remoteRows: ProgressItem[],
 ): { merged: CardProgress[]; changed: boolean; appliedCount: number } {
@@ -665,8 +1103,24 @@ function mergeRemoteIntoLocalProgress(
     updatedAt: number;
     hasNext: boolean;
     nextReviewAt: number;
+    srsStage: number | null;
     row: ProgressItem;
   };
+
+  /** Total order on remote snapshots of one card. See the tie note below. */
+  function compareRemoteBest(a: RemoteBest, b: RemoteBest): number {
+    if (a.updatedAt !== b.updatedAt) return a.updatedAt - b.updatedAt;
+    if (a.lastReviewedAt !== b.lastReviewedAt) return a.lastReviewedAt - b.lastReviewedAt;
+    if (a.nextReviewAt !== b.nextReviewAt) return a.nextReviewAt - b.nextReviewAt;
+    // stage entered the payload, so it has to enter the order too: two rows
+    // alike on the timestamps but differing on the rung would otherwise be a
+    // tie, and a tie is exactly where "first row in the array wins" comes back.
+    // -1 sorts a missing stage below every real rung (0..6).
+    if ((a.srsStage ?? -1) !== (b.srsStage ?? -1)) return (a.srsStage ?? -1) - (b.srsStage ?? -1);
+    const au = String(a.row?.stableUid ?? '');
+    const bu = String(b.row?.stableUid ?? '');
+    return au < bu ? -1 : au > bu ? 1 : 0;
+  }
 
   const bestRemote = new Map<string, RemoteBest>();
 
@@ -680,11 +1134,41 @@ function mergeRemoteIntoLocalProgress(
 
     const serverNext = toMs((r as any).nextReviewAtMs);
     const hasNext = serverNext != null;
-    const nextReviewAt = hasNext ? (serverNext as number) : lastReviewedAt;
+    // Mirror of the ingest clamp in src_C/Vpc/Runtime/ProgressEvents.cs. It is
+    // not redundant with it: this device may be talking to a server that has
+    // not shipped that clamp, or reading a row stored before it existed (those
+    // are repaired by migration 015, but only once the migration has run). A
+    // due date past the horizon removes the card from the product with no error
+    // anywhere, and the client is the last place that can refuse it.
+    const nextReviewAt = hasNext
+      ? Math.min(serverNext as number, lastReviewedAt + MAX_NEXT_REVIEW_HORIZON_MS)
+      : lastReviewedAt;
+
+    const srsStage = optionalRemoteStage((r as any).srsStage);
 
     const prev = bestRemote.get(uid);
-    if (!prev || updatedAt > prev.updatedAt) {
-      bestRemote.set(uid, { lastReviewedAt, updatedAt, hasNext, nextReviewAt, row: r });
+    const candidate: RemoteBest = { lastReviewedAt, updatedAt, hasNext, nextReviewAt, srsStage, row: r };
+
+    // remoteRows is a BAG, not a sequence: pages of one drain, a replay of the
+    // remote cache, a retried request. A strict `updatedAt > prev.updatedAt`
+    // means "the first row seen wins the tie", so the answer depended on array
+    // order and the merge was not commutative.
+    //
+    // Counterexample, from tests/unit/multiDeviceSync.sim.test.ts:
+    //   rows = [ {uid, updatedAt: T, lastReviewedAt: T-300},
+    //            {uid, updatedAt: T, lastReviewedAt: T} ]
+    //   merge(local, rows) kept T-300, merge(local, reversed) kept T.
+    // updatedAt ties are not exotic: the server stamps updated_at from a single
+    // now() per transaction and toMs() floors it to milliseconds, the same
+    // ms-granularity collision the keyset cursor already had to fix at
+    // microsecond precision.
+    //
+    // So compare a tuple that totally orders the rows instead. stableUid is the
+    // documented last component and is included for completeness, but it is
+    // constant inside a group (it is the map key), which is why the timestamps
+    // have to carry the tiebreak.
+    if (!prev || compareRemoteBest(candidate, prev) > 0) {
+      bestRemote.set(uid, candidate);
     }
   }
 
@@ -705,24 +1189,60 @@ function mergeRemoteIntoLocalProgress(
     const remoteLast = remote.lastReviewedAt;
     const remoteNext = remote.nextReviewAt > 0 ? remote.nextReviewAt : remote.lastReviewedAt;
 
+    // The client mirror of the server's atomic group: wherever we accept the
+    // remote due date we accept the remote stage in the same assignment, so a
+    // card's rung and its next review always come from one device's review.
+    // A null remote stage is left alone rather than written: that is a legacy
+    // row, and storage.ts still infers its stage from the interval.
+    const remoteStagePatch = remote.srsStage != null ? { stage: remote.srsStage } : {};
+
+    // A deck revision pulled this card back to due (see reconcileProgressWithDeck
+    // in review/storage.ts) AFTER the review the remote row describes. The
+    // server is not wrong, it is just answering an older question: its due date
+    // was computed from content the user has since not seen. Adopting it undoes
+    // the relearn, and it undoes it silently, on every pull, so the content
+    // update never reaches the user at all.
+    //
+    // While the mark stands, the local schedule wins. Both nextReviewAt and
+    // stage stay local, because the demotion is one verdict about one card and
+    // splitting it would leave the rung from one device next to the due date
+    // from another, the same stitched state the server-side merge comment warns
+    // about. lastReviewedAt is still taken from the remote row: that review did
+    // happen, and pinning it forward is what stops this branch from re-running
+    // forever. The local intent expires the moment a real review arrives, since
+    // scheduleNextReview clears the mark.
+    const demotedAt = toMs((p as any).revisionDemotedAt) ?? 0;
+    const keepLocalSchedule = demotedAt > remoteLast;
+
     // Case A: 远端更“新”
     if (remoteLast > localLast) {
       changed = true;
       appliedCount += 1;
+      if (keepLocalSchedule) {
+        return { ...p, lastReviewedAt: remoteLast } as any;
+      }
       return {
         ...p,
         lastReviewedAt: remoteLast,
         nextReviewAt: remoteNext,
+        ...remoteStagePatch,
       } as any;
     }
 
     // Case B: lastReviewedAt 相同，但远端带 nextReviewAtMs（Phase3）
-    if (remote.hasNext && remoteLast === localLast && remoteNext > 0 && remoteNext !== localNext) {
+    if (
+      !keepLocalSchedule &&
+      remote.hasNext &&
+      remoteLast === localLast &&
+      remoteNext > 0 &&
+      remoteNext !== localNext
+    ) {
       changed = true;
       appliedCount += 1;
       return {
         ...p,
         nextReviewAt: remoteNext,
+        ...remoteStagePatch,
       } as any;
     }
 
@@ -742,6 +1262,9 @@ function mergeRemoteIntoLocalProgress(
       stableUid: uid,
       lastReviewedAt: remote.lastReviewedAt,
       nextReviewAt: Math.max(next, remote.lastReviewedAt),
+      // Same rule as above: adopt the server's rung when it has one, and stay
+      // silent when it does not, so the interval fallback keeps its job.
+      ...(remote.srsStage != null ? { stage: remote.srsStage } : {}),
     } as any);
   }
 
@@ -753,27 +1276,96 @@ function mergeRemoteIntoLocalProgress(
  * Pull
  * ----------------------------
  */
+
+/**
+ * ✅ 排水环硬上限（安全阀）：
+ * - 正常情况下 hasMore=false 会提前 break；
+ * - 上限用来兜底“服务端 bug / cursor 不前进 / 恶意 hasMore=true”导致的死循环。
+ * - 20 页 × 5000 行 = 单次 sync 最多 10 万行，远超真实 backlog；
+ *   剩余数据（如有）会在下一次 sync 继续收敛，不会丢。
+ */
+const MAX_PULL_PAGES_PER_SYNC = 20;
+
 async function pullProgressAndApply(
   userSub: string,
   accessToken: string,
 ): Promise<{ pulled: number; applied: number }> {
   await healCursorIfCacheMissing(userSub);
 
+  let pulled = 0;
+  let applied = 0;
+
+  // while(hasMore) 排水环：每页走完整的 fetch -> cache -> merge -> advance-cursor 流程，
+  // cursor 只在该页成功应用后才持久化（沿用原“advance only after success”原则）。
+  for (let page = 0; page < MAX_PULL_PAGES_PER_SYNC; page++) {
+    const r = await pullProgressPageAndApply(userSub, accessToken);
+    pulled += r.pulled;
+    applied += r.applied;
+    if (!r.hasMore) break;
+  }
+
+  _lastPullAtMs = Date.now();
+  return { pulled, applied };
+}
+
+/**
+ * 拉取并应用“一页”进度。
+ * - 老服务端（无 nextCursor/hasMore 字段）：行为与历史版本完全一致（单页、legacy ms cursor）。
+ * - 新服务端：请求带上 opaque keyset cursor（v2），响应的 nextCursor 在本页成功应用后持久化。
+ */
+async function pullProgressPageAndApply(
+  userSub: string,
+  accessToken: string,
+): Promise<{ pulled: number; applied: number; hasMore: boolean }> {
   const cursorBefore = await getCursorMs(userSub);
+  const cursorToken = await getCursorToken(userSub);
 
   const qs: string[] = ['limit=5000'];
+  // 新 keyset cursor（服务端签发的 base64url 元组）。老服务端会忽略未知参数并回退用 sinceMs。
+  if (cursorToken != null) qs.push(`cursor=${encodeURIComponent(cursorToken)}`);
+  // legacy ms cursor 继续发送：兼容老服务端 / 服务端回滚的场景。
   if (cursorBefore != null) qs.push(`sinceMs=${encodeURIComponent(String(cursorBefore))}`);
   const url = `/api/v1/sync/progress?${qs.join('&')}`;
 
-  const resp = await apiJson<ApiOk<ProgressGetResp>>(url, {
-    method: 'GET',
-    accessToken,
-    timeoutMs: 15000,
-  });
+  let resp: ApiOk<ProgressGetResp>;
+  try {
+    resp = await apiJson<ApiOk<ProgressGetResp>>(url, {
+      method: 'GET',
+      accessToken,
+      timeoutMs: 15000,
+    });
+  } catch (e: any) {
+    // 自愈：v2 keyset cursor 被服务端 400 拒绝（畸形/版本不认——AsyncStorage 损坏或
+    // 未来 cursor 版本演进）。若不清除，之后每次 sync 都会原样重发同一个坏 cursor，
+    // pull 将永久瘫痪。处置：清掉 v2 cursor，本页立即用 legacy sinceMs 重试一次。
+    if (cursorToken != null && e?.status === 400) {
+      console.warn('[progressSync] pull cursor rejected (400); clearing v2 cursor, retrying with sinceMs', {
+        userSub,
+        message: e?.message ?? String(e),
+      });
+      await clearCursorToken(userSub);
+      const legacyQs: string[] = ['limit=5000'];
+      if (cursorBefore != null) legacyQs.push(`sinceMs=${encodeURIComponent(String(cursorBefore))}`);
+      resp = await apiJson<ApiOk<ProgressGetResp>>(`/api/v1/sync/progress?${legacyQs.join('&')}`, {
+        method: 'GET',
+        accessToken,
+        timeoutMs: 15000,
+      });
+    } else {
+      throw e;
+    }
+  }
 
-  const items: ProgressItem[] = resp?.data?.items ?? [];
+  const data = resp?.data;
+  const items: ProgressItem[] = data?.items ?? [];
+
+  // 特性探测：老服务端没有 nextCursor/hasMore -> hasMore=false -> 单页，与今天完全一致。
+  const nextCursor =
+    typeof data?.nextCursor === 'string' && data.nextCursor.trim() ? data.nextCursor.trim() : null;
+  const hasMore = data?.hasMore === true && nextCursor != null;
+
   if (!Array.isArray(items) || items.length === 0) {
-    return { pulled: 0, applied: 0 };
+    return { pulled: 0, applied: 0, hasMore: false };
   }
 
   const byDeck = new Map<string, ProgressItem[]>();
@@ -842,12 +1434,20 @@ async function pullProgressAndApply(
   }
 
   // 3) advance cursor only if caching succeeded
-  if (cacheAllOk && maxUpdatedAt > (cursorBefore ?? 0)) {
-    await setCursorMs(userSub, maxUpdatedAt);
+  if (cacheAllOk) {
+    if (maxUpdatedAt > (cursorBefore ?? 0)) {
+      await setCursorMs(userSub, maxUpdatedAt);
+    }
+    // ✅ 无论 hasMore 与否都持久化 nextCursor：
+    // 最后一页的 cursor 是精确的 keyset 元组，下一次 sync 从它续拉，
+    // 才能修复“同一 updated_at 跨页/跨 sync 边界被 strict > 永久跳过”的 bug。
+    if (nextCursor != null) {
+      await setCursorToken(userSub, nextCursor);
+    }
   }
 
-  _lastPullAtMs = Date.now();
-  return { pulled: items.length, applied };
+  // 缓存失败时不推进 cursor，也不要继续排水（否则会在同一页上打转）。
+  return { pulled: items.length, applied, hasMore: cacheAllOk ? hasMore : false };
 }
 
 /**
@@ -892,19 +1492,35 @@ async function syncProgressOnce(
       accessToken,
       body: {
         deviceId,
+        clientPlatform: Platform.OS,
+        clientVersion: getClientVersion(),
         events: batch.map((ev: any) => ({
           eventId: ev.eventId,
+          schemaVersion: ev.schemaVersion ?? 1,
+          eventType: ev.eventType ?? 'card_reviewed',
           type: 'review',
           deckSlug: ev.deckSlug,
           deckVersion: ev.deckVersion ?? null,
           stableUid: ev.stableUid,
           rating: ev.rating,
+          sessionId: ev.sessionId ?? null,
+          cardRevision: ev.cardRevision ?? ev.lastSeenRevision ?? null,
+          statedDifficulty: ev.statedDifficulty ?? null,
+          reviewStage: ev.reviewStage ?? null,
+          reviewCountForCard: ev.reviewCountForCard ?? null,
+          dwellTimeMs: ev.dwellTimeMs ?? null,
+          offlineQueueDelayMs: Math.max(0, Date.now() - Number(ev.reviewedAtMs ?? Date.now())),
 
           reviewedAtMs: ev.reviewedAtMs,
           eventTimeMs: ev.reviewedAtMs,
 
           // Phase3：直接发 nextReviewAtMs（避免新设备把 future 卡当 due）
           nextReviewAtMs: toMs(ev.progressAfter?.nextReviewAt) ?? null,
+
+          // Events queued before this field existed carry no version; the
+          // current one is the honest guess for them (they came from this
+          // install, running this ladder).
+          schedulerVersion: ev.schedulerVersion ?? SCHEDULER_VERSION,
 
           progressAfter: ev.progressAfter ?? null,
           lastSeenRevision: ev.lastSeenRevision ?? null,
@@ -1005,6 +1621,24 @@ async function runSyncNow(reason: string): Promise<void> {
       _pending = false;
       scheduleProgressSync({ delayMs: 300, reason: 'pending_flush' });
     }
+
+    // Gamification state rides the same trigger points (app_start / manual /
+    // token_set / user_changed / rating flush) instead of growing a scheduler of
+    // its own: one thing decides when this device talks to the server.
+    //
+    // It runs in `finally`, after the flags are cleared, for two reasons. A
+    // failed review sync (offline, 5xx) must not skip it, because the two have
+    // independent failure modes and the draw state may be the half that can get
+    // through. And nothing above may wait on it: syncDrawStateNow swallows its
+    // own errors, and the review sync's success, error record and in-flight
+    // state are all already settled by the time it starts.
+    try {
+      const drawToken = await getSyncAccessToken();
+      if (drawToken) await syncDrawStateNow(drawToken);
+    } catch {
+      // Unreachable by contract (syncDrawStateNow never throws); belt and
+      // braces, because the one thing this call may never do is fail a review.
+    }
   }
 }
 
@@ -1087,13 +1721,19 @@ export async function getProgressSyncDebugState(): Promise<any> {
   const token = await getSyncAccessToken();
   const userSub = token ? await ensureUserSubReady(token) : null;
 
-  const [cursorMs, lastRaw, err, deviceId, qSize] = await Promise.all([
-    userSub ? getCursorMs(userSub) : Promise.resolve(null),
-    userSub ? AsyncStorage.getItem(kLastSync(userSub)) : Promise.resolve(null),
-    userSub ? AsyncStorage.getItem(kLastError(userSub)) : Promise.resolve(null),
-    getDeviceId(),
-    userSub ? progressQueueSize(userSub) : Promise.resolve(0),
-  ]);
+  const [cursorMs, lastRaw, err, deviceId, qSize, dropped, pendingSize, pendingDropped] =
+    await Promise.all([
+      userSub ? getCursorMs(userSub) : Promise.resolve(null),
+      userSub ? AsyncStorage.getItem(kLastSync(userSub)) : Promise.resolve(null),
+      userSub ? AsyncStorage.getItem(kLastError(userSub)) : Promise.resolve(null),
+      getDeviceId(),
+      userSub ? progressQueueSize(userSub) : Promise.resolve(0),
+      userSub ? readDroppedCount(userSub) : Promise.resolve(0),
+      // The signed-out partition is reported whether or not anyone is signed in:
+      // events stranded there are precisely the ones no account can see.
+      progressQueueSize(PENDING_SUB),
+      readDroppedCount(PENDING_SUB),
+    ]);
 
   let last = null;
   try {
@@ -1105,6 +1745,11 @@ export async function getProgressSyncDebugState(): Promise<any> {
     userSub: userSub ?? null,
     cursorMs,
     queueSize: qSize,
+    // Reviews this device threw away at the queue cap and can never send. Not
+    // folded into one total: the two partitions fail for different reasons.
+    droppedCount: dropped,
+    pendingQueueSize: pendingSize,
+    pendingDroppedCount: pendingDropped,
     last,
     lastError: err || null,
   };
@@ -1153,15 +1798,27 @@ export async function resetProgressSyncState(): Promise<void> {
   const userSub = await ensureUserSubReady(token);
   if (!userSub) return;
 
-  try {
-    const keys = await AsyncStorage.getAllKeys();
-    const prefix = userPrefix(userSub);
+  // Held under the queue lock so this cannot land between another section's
+  // read and its write: that section would otherwise write its snapshot back
+  // and resurrect the queue this call just deleted. Before the cache the same
+  // race existed against the snapshot in flight; now it would also leave a
+  // cache entry describing keys that no longer exist, so the deletion and the
+  // invalidation belong in one critical section.
+  await withQueueLock(async () => {
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const prefix = userPrefix(userSub);
 
-    const toRemove = keys.filter((k) => k.startsWith(prefix));
-    if (toRemove.length > 0) {
-      await AsyncStorage.multiRemove(toRemove);
-    }
-  } catch {}
+      const toRemove = keys.filter((k) => k.startsWith(prefix));
+      if (toRemove.length > 0) {
+        await AsyncStorage.multiRemove(toRemove);
+      }
+    } catch {}
+
+    // Only this user's partition: the signed-out queue lives outside userPrefix
+    // and was not deleted, so dropping its cache would be a pointless re-parse.
+    invalidateProgressQueueCache(userSub);
+  });
 
   _lastPullAtMs = 0;
   _healedOnce = false;

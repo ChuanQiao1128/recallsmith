@@ -5,6 +5,13 @@ import type { HomeDeckActionHint } from '../selectors/homeSelectors';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
 
+const HOME_DECK_ROW_TOKENS = {
+  border: colors.hairline,
+  surface: colors.softCream,
+  selectedBorder: colors.gold,
+  selectedSurface: colors.softPeach,
+} as const;
+
 export type HomeDeckRowProps = {
   deck: DeckSummary;
   action: HomeDeckActionHint;
@@ -85,11 +92,11 @@ export function HomeDeckRow(props: HomeDeckRowProps) {
 
 const styles = StyleSheet.create({
   row: {
-    minHeight: 52,
+    minHeight: 56,
     borderRadius: spacing.cardRadius,
     borderWidth: 1,
-    borderColor: 'rgba(90,75,56,0.16)',
-    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderColor: HOME_DECK_ROW_TOKENS.border,
+    backgroundColor: HOME_DECK_ROW_TOKENS.surface,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -98,8 +105,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   rowSelected: {
-    borderColor: 'rgba(200,136,58,0.35)',
-    backgroundColor: 'rgba(232,184,90,0.14)',
+    borderColor: HOME_DECK_ROW_TOKENS.selectedBorder,
+    backgroundColor: HOME_DECK_ROW_TOKENS.selectedSurface,
   },
   rowPressed: {
     opacity: 0.9,

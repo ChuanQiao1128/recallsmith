@@ -34,7 +34,8 @@ import {
   recordReviewEvent,
   scheduleProgressSync,
 } from '../sync/progressSync';
-import { countDueToday, pickNextCard } from '../features/gacha/planner/sessionPlanner';
+import { countDueToday, pickNextCard, planChallengeRoute } from '../features/gacha/planner/sessionPlanner';
+import { computeSessionRewardPulls } from '../features/gacha/rewards/rewardResolver';
 import {
   buildRatedSessionState,
   buildSessionProgressVM,
@@ -46,8 +47,6 @@ import {
   showTrialUpsellDialog,
   sortCards,
 } from '../features/gacha/session/reviewContentHelpers';
-import { resolveRouteRole } from '../features/gacha/planner/sessionRoles';
-import type { RoutePreviewNode } from '../features/gacha/contracts';
 import { resetSessionStore, useSessionStore } from '../features/gacha/session/sessionStore';
 import SessionProgressHeader from '../features/gacha/components/SessionProgressHeader';
 import RatingBar from '../features/gacha/components/RatingBar';
@@ -64,46 +63,10 @@ type TrialInfo = {
   previewCount: number;
   totalCards: number;
 };
+const EMPTY_TRIAL_INFO: TrialInfo = { isTrial: false, previewCount: 0, totalCards: 0 };
+
 function isLearned(progress: CardProgress): boolean {
   return typeof progress.lastReviewedAt === 'number' && progress.lastReviewedAt > 0;
-}
-function buildSessionRouteNodes(limit: number): RoutePreviewNode[] {
-  const total = Math.max(1, limit);
-  const hasBoss = total >= 4;
-  const hasElite = total >= 2;
-  return Array.from({ length: total }).map((_, index) => {
-    const role = resolveRouteRole({ index, total, hasElite, hasBoss });
-    if (role === 'warmup') {
-      return {
-        id: `warmup-${index}`,
-        role,
-        title: 'Warm-up node',
-        subtitle: 'Start with one low-friction recall win.',
-      };
-    }
-    if (role === 'elite') {
-      return {
-        id: `elite-${index}`,
-        role,
-        title: 'Elite recall',
-        subtitle: 'A sharper mid-run check.',
-      };
-    }
-    if (role === 'boss') {
-      return {
-        id: `boss-${index}`,
-        role,
-        title: 'Boss check',
-        subtitle: 'Close the run with a clean recap test.',
-      };
-    }
-    return {
-      id: `normal-${index}`,
-      role,
-      title: 'Normal node',
-      subtitle: 'Standard learning / recall step.',
-    };
-  });
 }
 function computePremiumActive(customerInfo: any): boolean {
   try {
@@ -127,7 +90,13 @@ function computePremiumActive(customerInfo: any): boolean {
 }
 export function SessionCardScreen({ navigation, route }: Props) {
   const slugFromRoute = route.params?.slug ?? null;
-  const { mode = 'mixed', limit = 20, completionRoute = 'summary' } = route.params ?? {};
+  const { mode = 'mixed', completionRoute = 'summary' } = route.params ?? {};
+  // Route-supplied limit is now optional. When the caller doesn't
+  // explicitly pass one, sessionLimit derives from planChallengeRoute
+  // (which respects SESSION_MAIN_ROUTE_DEFAULT = 5 + actual due/new
+  // card availability). Was hard-coded to 20 — the source of "Run 0/20"
+  // headers showing on decks that only had 3 due cards.
+  const routeLimit = route.params?.limit;
   const previewLimitRaw = Number((route.params as any)?.previewLimit ?? 0);
   const previewLimit = Number.isFinite(previewLimitRaw) ? previewLimitRaw : 0;
   const [slug, setSlug] = useState<string | null>(slugFromRoute);
@@ -140,11 +109,19 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [reviewing, setReviewing] = useState(false);
   const [sessionDone, setSessionDone] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
-  const sessionLimit = limit;
+  const [plannedMinimumGoal, setPlannedMinimumGoal] = useState<number | null>(null);
+  // Cached planner-derived limit. Loaded after planChallengeRoute runs.
+  // null until first plan, then sticks. Falls back to routeLimit (when
+  // caller passes one explicitly), then to 5 (the new default cap).
+  const [plannedLimit, setPlannedLimit] = useState<number | null>(null);
+  const [trialInfo, setTrialInfo] = useState<TrialInfo>(EMPTY_TRIAL_INFO);
+  const sessionLimit = plannedLimit ?? routeLimit ?? 5;
   const isPremiumUser = usePremiumUser();
   const insets = useSafeAreaInsets();
-  const trialRef = useRef<TrialInfo>({ isTrial: false, previewCount: 0, totalCards: 0 });
+  const trialRef = useRef<TrialInfo>(EMPTY_TRIAL_INFO);
   const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport> } | null>(null);
+  const cardShownAtRef = useRef(Date.now());
+  const sessionId = useSessionStore((state) => state.sessionId);
   const sessionRoute = useSessionStore((state) => state.route);
   const sessionRouteIndex = useSessionStore((state) => state.currentIndex);
   const startSession = useSessionStore((state) => state.startSession);
@@ -155,6 +132,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
       resetSessionStore();
     };
   }, []);
+  useEffect(() => {
+    if (current?.card?.StableUid) {
+      cardShownAtRef.current = Date.now();
+    }
+  }, [current?.card?.StableUid]);
   useFocusEffect(
     useCallback(() => {
       if (slugFromRoute) {
@@ -204,6 +186,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setProgress([]);
         setDailyStats(null);
         setCurrent(null);
+        setPlannedMinimumGoal(null);
+        setPlannedLimit(null);
+        trialRef.current = EMPTY_TRIAL_INFO;
+        setTrialInfo(EMPTY_TRIAL_INFO);
         return;
       }
       let cancelled = false;
@@ -214,6 +200,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setLoadError(null);
         setSessionDone(0);
         setShowAnswer(false);
+        setPlannedMinimumGoal(null);
+        setPlannedLimit(null);
+        trialRef.current = EMPTY_TRIAL_INFO;
+        setTrialInfo(EMPTY_TRIAL_INFO);
         const now = new Date();
         let premiumActive = isPremiumUser;
         let verifiedPremium = false;
@@ -286,11 +276,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
             cards: sortCards(deckForStudy),
             cardMap: buildCardMap(deckForStudy),
           };
-          trialRef.current = {
+          const nextTrialInfo = {
             isTrial,
             previewCount: isTrial ? (deckForStudy.Cards?.length ?? previewCount) : 0,
             totalCards: fullCount,
           };
+          trialRef.current = nextTrialInfo;
+          setTrialInfo(nextTrialInfo);
           setDeck(deckForStudy);
           void setActiveDeckSlug(resolved.Slug);
           try {
@@ -315,6 +307,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
           }
           const stats = await loadOrInitDailyStats(deckForStudy, nextProgress);
           if (cancelled) return;
+          const plannedChallenge = planChallengeRoute({ deck: deckForStudy, progress: nextProgress, now });
+          setPlannedMinimumGoal(plannedChallenge.minimumGoal);
+          // Sync sessionLimit to the planner's actual route length so
+          // the header reads "Run 0/3" when the deck has 3 due cards
+          // (was always "Run 0/20" because of the hard-coded default).
+          setPlannedLimit(plannedChallenge.limit);
           const nextCurrent = pickNextCard({
             deck: deckForStudy,
             progress: nextProgress,
@@ -323,15 +321,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
             avoidUid: null,
             index: cardIndexRef.current,
           });
-          const routeNodes = buildSessionRouteNodes(
-            sessionLimit > 0
-              ? sessionLimit
-              : Math.max(1, cardIndexRef.current?.cards.length ?? 1),
-          );
           startSession({
             sessionId: `${deckForStudy.Slug}-${now.getTime()}`,
             slug: deckForStudy.Slug,
-            route: routeNodes,
+            route: plannedChallenge.nodes,
             startedAt: now.getTime(),
           });
           setProgress(nextProgress);
@@ -346,6 +339,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
           setProgress([]);
           setDailyStats(null);
           setCurrent(null);
+          setPlannedMinimumGoal(null);
+          trialRef.current = EMPTY_TRIAL_INFO;
+          setTrialInfo(EMPTY_TRIAL_INFO);
           setLoadError(e?.message ?? 'Failed to load deck.');
           setLoading(false);
         }
@@ -354,7 +350,16 @@ export function SessionCardScreen({ navigation, route }: Props) {
       return () => {
         cancelled = true;
       };
-    }, [isPremiumUser, mode, navigation, previewLimit, sessionLimit, slug]),
+      // sessionLimit is INTENTIONALLY excluded from the dep array.
+      // Including it caused an infinite reload loop:
+      //   load() → setPlannedLimit(null)        → sessionLimit changes
+      //          → effect re-fires → setPlannedLimit(planned.limit) → changes again
+      //          → effect re-fires → ...
+      // The visual symptom on Home → SessionCard was a loading card
+      // that flashed continuously. sessionLimit is derived state we
+      // SET inside this effect, so it must not gate the effect itself.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isPremiumUser, mode, navigation, previewLimit, slug]),
   );
   const now = new Date();
   const dueTodayCount = countDueToday(progress, now);
@@ -388,7 +393,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
         now: nowAtRating,
         cardIndex: cardIndexRef.current,
       });
-      await saveDeckProgress(deck, nextState.updatedProgress);
+      // Events are facts, progress is a projection; facts must land first. A
+      // queued event can rebuild the progress on the next sync, but a saved
+      // progress with no event means the server never learns this review
+      // happened, so a kill between the two writes must not land on that side.
       try {
         const eventId = await recordReviewEvent({
           deckSlug: deck.Slug,
@@ -396,6 +404,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
           stableUid: nextState.updatedOne.stableUid,
           rating,
           reviewedAtMs: nowMs,
+          sessionId,
+          cardRevision: typeof current.card.Revision === 'number' ? current.card.Revision : 1,
+          statedDifficulty: typeof current.card.Difficulty === 'number' ? current.card.Difficulty : null,
+          reviewStage: isLearned(current.progress) ? 'repeat_review' : 'first_review',
+          dwellTimeMs: Math.max(0, nowMs - cardShownAtRef.current),
           progressAfter: nextState.updatedOne,
           lastSeenRevision: nextState.updatedOne.lastSeenRevision,
         });
@@ -405,6 +418,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       } catch (e) {
         console.warn('[SessionCard] recordReviewEvent failed:', (e as any)?.message ?? e);
       }
+      await saveDeckProgress(deck, nextState.updatedProgress);
       const trial = trialRef.current;
       if (trial.isTrial && (mode === 'learn-new' || mode === 'mixed') && trial.previewCount > 0) {
         const nextLearnedCount = nextState.updatedProgress.filter(isLearned).length;
@@ -421,6 +435,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
       }
       recordSessionRating({ stableUid: current.card.StableUid, rating });
       advanceSession();
+      const minimumGoal =
+        plannedMinimumGoal ??
+        planChallengeRoute({ deck, progress: nextState.updatedProgress, now: nowAtRating }).minimumGoal;
       setSessionDone(nextState.nextDone);
       setProgress(nextState.updatedProgress);
       setCurrent(nextState.nextCurrent);
@@ -435,7 +452,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
             slug: deck.Slug,
             deckTitle: deck.Title,
             sessionDone: nextState.nextDone,
-            rewardPulls: nextState.nextDone >= sessionLimit ? 2 : nextState.nextDone >= 1 ? 1 : 0,
+            rewardPulls: computeSessionRewardPulls({
+              sessionDone: nextState.nextDone,
+              sessionLimit,
+              minimumGoal,
+            }),
             masteredCount: Math.max(
               0,
               nextState.updatedProgress.filter((item) => item.stage >= 4).length -
@@ -450,7 +471,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           deckTitle: deck.Title,
           sessionDone: nextState.nextDone,
           sessionLimit,
-          minimumGoal: 1,
+          minimumGoal,
           dueCount: nextState.remainingDueCount,
           streakEarned: useSessionStore.getState().streakEarned,
         });
@@ -507,7 +528,42 @@ export function SessionCardScreen({ navigation, route }: Props) {
       </SafeAreaView>
     );
   }
+  function requestPause() {
+    Alert.alert('Pause this run?', 'Your ratings are saved.', [
+      { text: 'Keep reviewing', style: 'cancel' },
+      { text: 'Pause', onPress: () => navigation.goBack() },
+    ]);
+  }
   const ratingDockHeight = 164 + Math.max(insets.bottom, 8);
+  const doneMinimumGoal =
+    plannedMinimumGoal ?? planChallengeRoute({ deck, progress, now }).minimumGoal;
+  const doneRewardPulls = computeSessionRewardPulls({
+    sessionDone,
+    sessionLimit,
+    minimumGoal: doneMinimumGoal,
+  });
+  // Reward shown to user as motivation if they finish the run. Computed
+  // assuming sessionDone === sessionLimit so the value reflects the
+  // "full clear" outcome regardless of where they currently are.
+  const fullClearReward = computeSessionRewardPulls({
+    sessionDone: sessionLimit,
+    sessionLimit,
+    minimumGoal: doneMinimumGoal,
+  });
+  // Only show the stake pill while there's still room to full-clear and
+  // a meaningful reward exists. Also hides on trivial sessions (≤2
+  // cards, e.g. preview runs) where the "FULL CLEAR · +1 PULL" copy
+  // looks silly and adds visual noise. 3+ cards is the threshold where
+  // "full clear" feels like an actual goal.
+  const showFullClearStake =
+    !!current
+    && sessionLimit >= 3
+    && sessionDone < sessionLimit
+    && fullClearReward > 0;
+  const previewChecked = trialInfo.isTrial
+    ? Math.min(trialInfo.previewCount, progress.filter(isLearned).length)
+    : 0;
+  const previewRemaining = Math.max(trialInfo.previewCount - previewChecked, 0);
   return (
     <SafeAreaView style={styles.safeArea} testID="screen-session-card-root">
       <LinearGradient
@@ -519,11 +575,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
         <View style={styles.container}>
           <View style={styles.headerRow}>
             <Pressable
-              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-              onPress={() => navigation.goBack()}
+              style={({ pressed }) => [styles.pauseButton, pressed && styles.pressed]}
+              onPress={requestPause}
             >
-              <Text style={styles.backText} numberOfLines={1}>
-                ← Challenge
+              <Text style={styles.pauseText} numberOfLines={1}>
+                Pause
               </Text>
             </Pressable>
             <View style={styles.headerTextWrap}>
@@ -535,6 +591,25 @@ export function SessionCardScreen({ navigation, route }: Props) {
               </Text>
             </View>
           </View>
+          {/* Full-clear reward stake — gold uppercase pill. Two states:
+              • Mid-session: "FULL CLEAR · +N PULLS" (the goal)
+              • Final stretch (≤3 cards left): "{remaining} TO GO · +N PULLS"
+                — finish-line framing, gives the user a sprint feeling
+                without animating (Animated.loop is battery-expensive). */}
+          {showFullClearStake ? (
+            <View style={styles.fullClearStakePill} testID="session-card-fullclear-stake">
+              <Text style={styles.fullClearStakeText} numberOfLines={1}>
+                {(() => {
+                  const remaining = sessionLimit - sessionDone;
+                  const pullLabel = fullClearReward === 1 ? 'PULL' : 'PULLS';
+                  if (remaining <= 3 && sessionDone > 0) {
+                    return `${remaining} TO GO · +${fullClearReward} ${pullLabel}`;
+                  }
+                  return `FULL CLEAR · +${fullClearReward} ${pullLabel}`;
+                })()}
+              </Text>
+            </View>
+          ) : null}
           <SessionProgressHeader vm={sessionVm} />
           <ScrollView
             testID="screen-session-card-primary-surface"
@@ -545,6 +620,16 @@ export function SessionCardScreen({ navigation, route }: Props) {
             ]}
             showsVerticalScrollIndicator={false}
           >
+            {trialInfo.isTrial && trialInfo.previewCount > 0 ? (
+              <View style={styles.trialPreview} testID="session-card-trial-preview">
+                <Text style={styles.trialPreviewLabel} numberOfLines={1}>
+                  Preview run
+                </Text>
+                <Text style={styles.trialPreviewBody} numberOfLines={1}>
+                  {previewRemaining} of {trialInfo.previewCount} preview cards remaining
+                </Text>
+              </View>
+            ) : null}
             {!current ? (
               <View style={styles.doneCard}>
                 <Text style={styles.doneTitle} numberOfLines={1}>
@@ -561,7 +646,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                           slug: deck.Slug,
                           deckTitle: deck.Title,
                           sessionDone,
-                          rewardPulls: sessionDone >= sessionLimit ? 2 : sessionDone >= 1 ? 1 : 0,
+                          rewardPulls: doneRewardPulls,
                           masteredCount: progress.filter((item) => item.stage >= 4).length,
                         })
                       : navigation.replace('SessionSummary', {
@@ -569,14 +654,14 @@ export function SessionCardScreen({ navigation, route }: Props) {
                           deckTitle: deck.Title,
                           sessionDone,
                           sessionLimit,
-                          minimumGoal: 1,
+                          minimumGoal: doneMinimumGoal,
                           dueCount: dueTodayCount,
                           streakEarned: useSessionStore.getState().streakEarned,
                         })
                   }
                 >
                   <Text style={styles.doneButtonText} numberOfLines={1}>
-                    View summary
+                    Continue
                   </Text>
                 </Pressable>
               </View>
@@ -659,6 +744,34 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.82)',
     marginRight: spacing.xs,
   },
+  // Pause button — strengthened to read as a real escape control.
+  // Bigger touch target (48), softCream fill (matches brand), hairline
+  // gold border, bolder ink text. Data is auto-saved on every rating
+  // so swipe-back is also safe, but explicit Pause is more discoverable.
+  pauseButton: {
+    minHeight: 48,
+    minWidth: 64,
+    paddingHorizontal: 14,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.softCream,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    marginRight: spacing.sm,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  pauseText: {
+    color: colors.inkSoft,
+    fontSize: typography.bodySmall,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
   backText: {
     color: colors.ink,
     fontSize: typography.bodySmall,
@@ -682,17 +795,63 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingTop: spacing.xs,
   },
+  trialPreview: {
+    marginBottom: spacing.xs,
+    borderRadius: spacing.buttonRadius,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    backgroundColor: 'rgba(255,255,255,0.62)',
+    borderWidth: 1,
+    borderColor: 'rgba(42,34,24,0.1)',
+  },
+  trialPreviewLabel: {
+    fontSize: typography.caption,
+    color: colors.gold,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 1.2,
+  },
+  // Full-clear reward stake pill — gold accent, low-key but always
+  // visible during the run.
+  fullClearStakePill: {
+    alignSelf: 'center',
+    marginTop: spacing.xs,
+    marginBottom: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(232,184,90,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(232,184,90,0.35)',
+  },
+  fullClearStakeText: {
+    color: colors.gold,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.0,
+  },
+  trialPreviewBody: {
+    marginTop: 2,
+    fontSize: typography.caption,
+    color: colors.inkSecondary,
+    fontWeight: '700',
+  },
   doneCard: {
     borderRadius: spacing.cardRadius,
     padding: spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: 'rgba(255,255,255,0.94)',
     borderWidth: 1,
-    borderColor: 'rgba(42,34,24,0.12)',
+    borderColor: colors.hairline,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   doneTitle: {
     fontSize: typography.title3,
     color: colors.ink,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   doneBody: {
     marginTop: spacing.xs,
@@ -702,16 +861,23 @@ const styles = StyleSheet.create({
   },
   doneButton: {
     marginTop: spacing.md,
-    minHeight: 44,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.ink,
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    shadowColor: 'rgba(44,156,192,0.4)',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
   doneButtonText: {
-    color: colors.parchmentBg,
+    color: '#FFFFFF',
     fontSize: typography.button,
-    fontWeight: '800',
+    fontWeight: '900',
+    letterSpacing: 0.4,
   },
   ratingDock: {
     position: 'absolute',

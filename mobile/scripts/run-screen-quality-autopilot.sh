@@ -6,11 +6,12 @@ cd "$ROOT_DIR"
 
 PHASE="${1:-}"
 SCREEN="${2:-}"
+REVIEW_MD="${3:-${REVIEW_MD:-design-review-round3.md}}"
 MAX_ROUNDS="${MAX_ROUNDS:-5}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 
 if [[ -z "$PHASE" || -z "$SCREEN" ]]; then
-  echo "Usage: scripts/run-screen-quality-autopilot.sh <phase:A|B|C|D> <screen:HomeScreen|...>"
+  echo "Usage: scripts/run-screen-quality-autopilot.sh <phase:A|B|C|D> <screen:HomeScreen|...> [review-md]"
   exit 2
 fi
 
@@ -21,6 +22,11 @@ fi
 
 if [[ ! -f "src/screens/${SCREEN}.tsx" ]]; then
   echo "Target screen not found: src/screens/${SCREEN}.tsx"
+  exit 2
+fi
+
+if [[ ! -f "$REVIEW_MD" ]]; then
+  echo "Review markdown not found: $REVIEW_MD"
   exit 2
 fi
 
@@ -207,14 +213,16 @@ You are the Screen Quality Critic for RecallSmith mobile.
 Context:
 - Phase: ${PHASE}
 - Target screen: ${SCREEN}
+- Latest review checklist: ${REVIEW_MD}
 - Gate status file: ${GATE_STATUS_FILE}
 - Rubrics:
   - docs/qa/screen-quality-rubric.md
   - docs/qa/screen-quality-matrix.md
   - docs/qa/animation-quality-rubric.md
-- Must follow: AGENTS.md, gacha-v7.md, gacha-v7-diff-from-v6.1.md.
+- Must follow: AGENTS.md, gacha-v7.md, gacha-v7-diff-from-v6.1.md, ${REVIEW_MD}.
 
 Task:
+0. Read ${REVIEW_MD} first, then evaluate this screen against its P0/P1/P2 checklist.
 1. Evaluate only this target screen and directly related shared components.
 2. Output STRICT JSON matching schema.
 3. If any gate failed, include at least one finding tied to gate failure.
@@ -224,13 +232,21 @@ PROMPT
 
   write_critic_schema
 
-  if ! "$CODEX_BIN" -a never exec \
-    -s workspace-write \
-    -C "$ROOT_DIR" \
-    "${MODEL_ARGS[@]}" \
-    --output-schema "$LOG_DIR/critic-schema.json" \
-    --output-last-message "$critic_out" \
-    - <"$critic_prompt" >/dev/null; then
+  local codex_cmd=(
+    "$CODEX_BIN" -a never exec
+    -s workspace-write
+    -C "$ROOT_DIR"
+  )
+  if (( ${#MODEL_ARGS[@]} > 0 )); then
+    codex_cmd+=("${MODEL_ARGS[@]}")
+  fi
+  codex_cmd+=(
+    --output-schema "$LOG_DIR/critic-schema.json"
+    --output-last-message "$critic_out"
+    -
+  )
+
+  if ! "${codex_cmd[@]}" <"$critic_prompt" >"$LOG_DIR/${ROUND}-critic-stdout.log" 2>"$LOG_DIR/${ROUND}-critic-stderr.log"; then
     echo "FAIL critic-exec" >>"$GATE_STATUS_FILE"
     return 1
   fi
@@ -287,10 +303,12 @@ You are the Screen Quality Repair agent.
 Target:
 - Phase: ${PHASE}
 - Screen: ${SCREEN}
+- Latest review checklist: ${REVIEW_MD}
 - Maximize quality to pass docs/qa/screen-quality-rubric.md and docs/qa/screen-quality-matrix.md for this screen.
 
 Hard constraints:
 - Do NOT modify forbidden paths from AGENTS.md §3.
+- Read ${REVIEW_MD} first and execute only this screen's checklist items (P0 first, then P1, then P2).
 - Focus only on this screen and directly related helpers/tests.
 - Keep architecture surgical; do not rewrite app shell.
 - Do not run git commit, git push, or any destructive git command.
@@ -305,12 +323,20 @@ Expected work:
 4. Stop after edits and provide a concise summary.
 PROMPT
 
-  if ! "$CODEX_BIN" -a never exec \
-    -s workspace-write \
-    -C "$ROOT_DIR" \
-    "${MODEL_ARGS[@]}" \
-    --output-last-message "$LOG_DIR/${ROUND}-repair-output.txt" \
-    - <"$repair_prompt" >/dev/null; then
+  local codex_cmd=(
+    "$CODEX_BIN" -a never exec
+    -s workspace-write
+    -C "$ROOT_DIR"
+  )
+  if (( ${#MODEL_ARGS[@]} > 0 )); then
+    codex_cmd+=("${MODEL_ARGS[@]}")
+  fi
+  codex_cmd+=(
+    --output-last-message "$LOG_DIR/${ROUND}-repair-output.txt"
+    -
+  )
+
+  if ! "${codex_cmd[@]}" <"$repair_prompt" >"$LOG_DIR/${ROUND}-repair-stdout.log" 2>"$LOG_DIR/${ROUND}-repair-stderr.log"; then
     echo "[autopilot] repair step failed"
     return 1
   fi

@@ -169,6 +169,8 @@ export function ReviewScreen({ navigation, route }: Props) {
   const sessionLimit = limit;
 
   const avoidUidRef = useRef<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const cardShownAtRef = useRef(Date.now());
 
   const { height: winH } = useWindowDimensions();
   const flipHeight = useMemo(() => {
@@ -188,6 +190,12 @@ export function ReviewScreen({ navigation, route }: Props) {
     inputRange: [0, 89.9, 90, 180],
     outputRange: [0, 0, 1, 1],
   });
+
+  useEffect(() => {
+    if (current?.card?.StableUid) {
+      cardShownAtRef.current = Date.now();
+    }
+  }, [current?.card?.StableUid]);
 
   function animateFlip(toBack: boolean) {
     Animated.spring(flipAnim, {
@@ -219,7 +227,7 @@ export function ReviewScreen({ navigation, route }: Props) {
     navAny.navigate('Paywall' as any);
 
     // fallback: if user comes back, show a clear message instead of spinner
-    setLoadError(reason ?? '需要 Premium 才能继续。');
+    setLoadError(reason ?? 'Premium is required to continue.');
     setLoading(false);
     setDeck(null);
     setDailyStats(null);
@@ -332,7 +340,7 @@ export function ReviewScreen({ navigation, route }: Props) {
 
           // ✅ If premium deck, not premium, and no trial => paywall
           if (isPremiumDeck && !premiumActive && !isTrial) {
-            goPaywall('需要 Premium 才能开始该卡组。');
+            goPaywall('Premium is required to start this deck.');
             return;
           }
 
@@ -397,6 +405,7 @@ export function ReviewScreen({ navigation, route }: Props) {
             index: cardIndexRef.current,
           });
 
+          sessionIdRef.current = `${deckForStudy.Slug}-${now.getTime()}`;
           setProgress(p);
           setDailyStats(stats);
           setCurrent(next);
@@ -497,8 +506,11 @@ export function ReviewScreen({ navigation, route }: Props) {
         cardIndex: cardIndexRef.current,
       });
 
-      await saveDeckProgress(deck, nextState.updatedProgress);
-
+      // Events are facts, progress is a projection; facts must land first. If we
+      // are killed between the two writes, a queued event still rebuilds the
+      // progress on the next sync, but a saved progress with no event means the
+      // server never learns this review happened. Ordering the cheap write after
+      // the durable one is the only ordering that degrades safely.
       try {
         const eventId = await recordReviewEvent({
           deckSlug: deck.Slug,
@@ -506,6 +518,11 @@ export function ReviewScreen({ navigation, route }: Props) {
           stableUid: nextState.updatedOne.stableUid,
           rating: uiRating,
           reviewedAtMs: nowMs,
+          sessionId: sessionIdRef.current,
+          cardRevision: typeof current.card.Revision === 'number' ? current.card.Revision : 1,
+          statedDifficulty: typeof current.card.Difficulty === 'number' ? current.card.Difficulty : null,
+          reviewStage: isLearned(current.progress) ? 'repeat_review' : 'first_review',
+          dwellTimeMs: Math.max(0, nowMs - cardShownAtRef.current),
           progressAfter: nextState.updatedOne,
           lastSeenRevision: nextState.updatedOne.lastSeenRevision,
         });
@@ -516,6 +533,8 @@ export function ReviewScreen({ navigation, route }: Props) {
       } catch (e) {
         console.warn('[Review] recordReviewEvent failed:', (e as any)?.message ?? e);
       }
+
+      await saveDeckProgress(deck, nextState.updatedProgress);
 
       {
         const t = trialRef.current;

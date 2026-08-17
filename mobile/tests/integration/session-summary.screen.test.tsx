@@ -62,6 +62,13 @@ function flattenStyle(style: any): Record<string, unknown> {
   return list.filter(Boolean).reduce((acc, item) => Object.assign(acc, item), {});
 }
 
+function formatDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = `${date.getMonth() + 1}`.padStart(2, '0');
+  const d = `${date.getDate()}`.padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 describe('SessionSummaryScreen', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -141,8 +148,9 @@ describe('SessionSummaryScreen', () => {
     expect(secondaryTextStyle.fontSize).toBeLessThan(primaryTextStyle.fontSize as number);
 
     const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
-    expect(texts).toContain('+2 free pulls');
-    expect(texts).toContain('2 ready to use');
+    // v3 reward calibration: full clear → +1 free pull (was +2).
+    expect(texts).toContain('+1 free pull');
+    expect(texts).toContain('1 ready to use');
     expect(texts).toContain('Daily streak');
     expect(texts).toContain('First day complete');
 
@@ -170,9 +178,12 @@ describe('SessionSummaryScreen', () => {
       await Promise.resolve();
     });
 
-    const walletRaw = store.get('recallsmith:reward-wallet:v1');
+    // Wallet keys are user-scoped; no user is signed in under test, so
+    // the scope resolves to "anon".
+    const walletRaw = store.get('devcards:u:anon:recallsmith:reward-wallet:v1');
     expect(walletRaw).toBeTruthy();
-    expect(JSON.parse(walletRaw!)).toEqual({ availablePulls: 2, reservePulls: 0 });
+    // v3: full clear → +1 pull persisted to wallet (was +2).
+    expect(JSON.parse(walletRaw!)).toEqual({ availablePulls: 1, reservePulls: 0 });
 
     act(() => {
       findPressableByTestID(tree, 'summary-reward-use-pulls-cta').props.onPress();
@@ -305,5 +316,95 @@ describe('SessionSummaryScreen', () => {
     expect(texts).not.toContain('Updating...');
     expect(applyRewardSpy).toHaveBeenCalledTimes(1);
     applyRewardSpy.mockRestore();
+  });
+
+  it('uses neutral empty-state library copy without session setup language', async () => {
+    const navigation = {
+      navigate: vi.fn(),
+    } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionSummaryScreen
+          navigation={navigation}
+          route={{
+            key: 'summary',
+            name: 'SessionSummary',
+            params: {
+              slug: 'csharp',
+              deckTitle: 'C# Interview',
+              sessionDone: 0,
+              sessionLimit: 4,
+              minimumGoal: 1,
+              dueCount: 0,
+            },
+          } as any}
+        />,
+      );
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
+    expect(texts).toContain("Browse your library while we wait for tomorrow's run.");
+    expect(texts.toLowerCase()).not.toContain('choose cards');
+    expect(texts.toLowerCase()).not.toContain('session launch');
+
+    act(() => {
+      findPressableByTestID(tree, 'screen-session-summary-primary-cta').props.onPress();
+    });
+    expect(navigation.navigate).toHaveBeenCalledWith('Library');
+  });
+
+  it('shows an extra milestone count when multiple milestones unlock', async () => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    store.set(
+      'recallsmith:streaks:snapshot:v1',
+      JSON.stringify({
+        currentDailyStreak: 2,
+        longestDailyStreak: 2,
+        weekCompletedDays: 0,
+        totalQualifiedSessions: 2,
+        lastQualifiedDateKey: formatDateKey(yesterday),
+        currentWeekKey: null,
+      }),
+    );
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionSummaryScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{
+            key: 'summary',
+            name: 'SessionSummary',
+            params: {
+              sessionId: 'sess-milestone-stack',
+              slug: 'csharp',
+              deckTitle: 'C# Interview',
+              sessionDone: 1,
+              sessionLimit: 4,
+              minimumGoal: 1,
+              dueCount: 1,
+              streakEarned: true,
+            },
+          } as any}
+        />,
+      );
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
+    expect(texts).toContain('Three clean runs');
+    expect(texts).toContain('+1 more milestone unlocked');
   });
 });

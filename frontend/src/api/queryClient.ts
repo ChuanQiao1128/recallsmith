@@ -22,12 +22,10 @@ export const queryClient = new QueryClient({
   },
 });
 
-// Query keys 定义 - 统一管理缓存 key
+// 缓存 key 的唯一来源。`as const` 不只是风格：它让 QueryKeys 的成员进入类型，
+// 所以删掉一个还有人用的 key 会在 tsc 里报 TS2339 —— noUnusedLocals 看不见
+// 对象成员，这是这里唯一会挡住级联死代码的机制。
 export const QueryKeys = {
-  decks: () => ['decks'] as const,
   deck: (id: number) => ['decks', id] as const,
   cards: (deckId: number) => ['cards', deckId] as const,
-  manifest: () => ['manifest'] as const,
-  permissions: () => ['permissions'] as const,
-  publishJobs: () => ['publishJobs'] as const,
 } as const;

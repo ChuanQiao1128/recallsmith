@@ -1,13 +1,32 @@
 // src/components/decks/DeckFilters.tsx
 // Deck 筛选工具栏
 
+/**
+ * The two filter vocabularies, named so the <select> handlers below can assert
+ * to them instead of to `any`.
+ *
+ * They were already written out inline in the props; naming them is what makes
+ * the assertion at the call site say something. `e.target.value` is typed
+ * `string` by the DOM lib, so *some* narrowing has to happen there — the choice
+ * is between `as any` (which also switches off checking of the surrounding
+ * expression) and `as DeckStatusFilter` (which stays wrong only if the option
+ * values below stop matching the union).
+ *
+ * Deliberately NOT a runtime guard that falls back on an unknown value. This
+ * component has no caller yet, so a fallback branch would be a code path that
+ * has never executed, added to satisfy a linter; and the values are supplied by
+ * the <option> elements in this same file, not by user input.
+ */
+export type DeckStatusFilter = 'all' | 'published' | 'needs_publish' | 'unpublished';
+export type DeckTypeFilter = 'all' | 'starter' | 'paid';
+
 interface DeckFiltersProps {
   searchQuery: string;
   onSearchChange: (value: string) => void;
-  statusFilter: 'all' | 'published' | 'needs_publish' | 'unpublished';
-  onStatusChange: (value: 'all' | 'published' | 'needs_publish' | 'unpublished') => void;
-  typeFilter: 'all' | 'starter' | 'paid';
-  onTypeChange: (value: 'all' | 'starter' | 'paid') => void;
+  statusFilter: DeckStatusFilter;
+  onStatusChange: (value: DeckStatusFilter) => void;
+  typeFilter: DeckTypeFilter;
+  onTypeChange: (value: DeckTypeFilter) => void;
   onRefresh: () => void;
   onNewDeck: () => void;
   isLoading?: boolean;
@@ -36,7 +55,7 @@ export function DeckFilters({
 
         <select
           value={statusFilter}
-          onChange={(e) => onStatusChange(e.target.value as any)}
+          onChange={(e) => onStatusChange(e.target.value as DeckStatusFilter)}
           className="px-3 py-2 rounded border border-slate-300 text-sm bg-white"
         >
           <option value="all">All Status</option>
@@ -47,7 +66,7 @@ export function DeckFilters({
 
         <select
           value={typeFilter}
-          onChange={(e) => onTypeChange(e.target.value as any)}
+          onChange={(e) => onTypeChange(e.target.value as DeckTypeFilter)}
           className="px-3 py-2 rounded border border-slate-300 text-sm bg-white"
         >
           <option value="all">All Types</option>

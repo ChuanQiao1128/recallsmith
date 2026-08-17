@@ -2,16 +2,61 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { deleteDeck, fetchAdminManifest, fetchDecks, fetchPublishJobs, publishDeck} from '../api/authoring';
+import {
+  ADMIN_DECKS_ENDPOINT_MISSING,
+  deleteDeck,
+  fetchAdminDecksPage,
+  fetchAdminManifest,
+  fetchDeckBySlug,
+  fetchDecks,
+  fetchPublishJobs,
+  publishDeck,
+} from '../api/authoring';
 import { getContentManifestUrl } from '../api/contentManifest';
+import { markEnd, markStart } from '../perf/journey';
 import type { Deck } from '../types/deck';
 import type { PublishJob } from '../api/authoring';
+import { nextPollDelay } from '../lib/publishJobsPolling';
+import type { PollOutcome } from '../lib/publishJobsPolling';
+import {
+  emptyErrorFeed,
+  clearNotice,
+  pollingNotice,
+  reportBusinessFailure,
+  reportThrownFailure,
+} from '../lib/errorFeed';
+import type { ErrorNotice, PollFailure } from '../lib/errorFeed';
+import { ErrorBanner, ErrorBannerList } from '../components/ui/ErrorBanner';
+import {
+  DECKS_PAGE_SIZE,
+  applyDecksPage,
+  emptyDeckPageListState,
+  isStarterLike,
+  removeDeckBySlug,
+} from './deckListPagination';
+import type { DeckPageListState, DeckStatus } from './deckListPagination';
+import {
+  extractDecksArray,
+  parseManifestMeta,
+  safeDateTime,
+  toManifestDeckLite,
+} from './deckListManifest';
+import type { ManifestDeckLite, ManifestMeta } from './deckListManifest';
+import { buildViewRows } from './deckListRows';
+import type { ConsoleDeckRow, ListMode } from './deckListRows';
 
 import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin, type SessionUser } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
+
+// Error feed keys. One per operation, because "one slot per operation" is what
+// keeps a repeated failure from stacking and a publish failure from erasing a
+// delete failure the user has not read yet.
+const ERR_RESOLVE_ID = 'deck.resolveId';
+const ERR_DELETE_DECK = 'deck.delete';
+const ERR_PUBLISH_DECK = 'deck.publish';
 
 // ==================== 缓存工具 ====================
 const CACHE_KEY_DECKS = 'recallsmith_decks_cache';
@@ -52,36 +97,6 @@ interface DeckListState {
   decks: Deck[];
 }
 
-type ManifestDeckLite = {
-  slug: string;
-  title?: string;
-  locale?: string;
-
-  availability?: string;
-  tier?: string;
-  downloadMode?: string;
-
-  version?: string;
-  buildId?: string | null;
-
-  totalCards?: number | null;
-
-  path?: string | null;
-
-  previewCards?: number | null;
-  previewBuildId?: string | null;
-  previewPath?: string | null;
-};
-
-type ManifestMeta = {
-  schemaVersion?: number;
-  prefix?: string;
-  generatedAtMs?: number;
-  publishedAt?: string;
-  generatedAt?: string;
-  deckCount?: number;
-};
-
 type ManifestState = {
   loading: boolean;
   error: string | null;
@@ -91,163 +106,13 @@ type ManifestState = {
   raw: unknown | null;
 };
 
-type DeckStatus = 'published' | 'needs_publish' | 'unpublished';
-
-function safeDateTime(value: unknown): string {
-  if (value === undefined || value === null || value === '') return '—';
-  const d = new Date(value as string | number | Date);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString();
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
-}
-
-function isNonEmptyString(v: unknown): v is string {
-  return typeof v === 'string' && v.trim().length > 0;
-}
-
-function toOptionalString(v: unknown): string | undefined {
-  if (!isNonEmptyString(v)) return undefined;
-  return v.trim();
-}
-
-function toOptionalNumber(v: unknown): number | undefined {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  if (typeof v === 'string' && v.trim()) {
-    const n = Number(v);
-    if (Number.isFinite(n)) return n;
-  }
-  return undefined;
-}
-
-function toOptionalNullableNumber(v: unknown): number | null | undefined {
-  if (v === undefined) return undefined;
-  if (v === null) return null;
-  const n = toOptionalNumber(v);
-  return n === undefined ? null : n;
-}
-
-function pick(o: Record<string, unknown>, keys: string[]): unknown {
-  for (const k of keys) {
-    if (k in o) return o[k];
-  }
-  return undefined;
-}
-
-// ✅ 核心修复：自动剥离外层的 { manifest: { ... } } 包装
-function getManifestTarget(raw: unknown): Record<string, unknown> {
-  if (!isRecord(raw)) return {};
-  if (isRecord(raw.manifest)) return raw.manifest as Record<string, unknown>;
-  if (isRecord(raw.data) && isRecord(raw.data.manifest)) return raw.data.manifest as Record<string, unknown>;
-  if (isRecord(raw.data)) return raw.data as Record<string, unknown>;
-  return raw;
-}
-
-function extractDecksArray(raw: unknown): unknown[] {
-  if (Array.isArray(raw)) return raw;
-
-  const target = getManifestTarget(raw);
-  const decks = target['decks'] ?? target['Decks'];
-  if (Array.isArray(decks)) return decks;
-  return [];
-}
-
-function toManifestDeckLite(input: unknown): ManifestDeckLite | null {
-  if (!isRecord(input)) return null;
-
-  const slugV = pick(input, ['slug', 'Slug']);
-  const slug = toOptionalString(slugV) ?? '';
-  if (!slug) return null;
-
-  const title = toOptionalString(pick(input, ['title', 'Title']));
-  const locale = toOptionalString(pick(input, ['locale', 'Locale']));
-
-  const availability = toOptionalString(pick(input, ['availability', 'Availability']));
-  const tier = toOptionalString(pick(input, ['tier', 'Tier']));
-  const downloadMode = toOptionalString(pick(input, ['downloadMode', 'DownloadMode']));
-
-  const version = toOptionalString(pick(input, ['version', 'Version']));
-
-  const buildIdRaw = pick(input, ['buildId', 'BuildId']);
-  const buildId =
-    buildIdRaw === null ? null : isNonEmptyString(buildIdRaw) ? String(buildIdRaw).trim() : undefined;
-
-  const pathRaw = pick(input, ['path', 'Path']);
-  const path = pathRaw === null ? null : isNonEmptyString(pathRaw) ? String(pathRaw).trim() : undefined;
-
-  const totalCards = toOptionalNullableNumber(pick(input, ['totalCards', 'TotalCards']));
-
-  const previewCards = toOptionalNullableNumber(pick(input, ['previewCards', 'PreviewCards']));
-
-  const previewBuildIdRaw = pick(input, ['previewBuildId', 'PreviewBuildId']);
-  const previewBuildId =
-    previewBuildIdRaw === null
-      ? null
-      : isNonEmptyString(previewBuildIdRaw)
-        ? String(previewBuildIdRaw).trim()
-        : undefined;
-
-  const previewPathRaw = pick(input, ['previewPath', 'PreviewPath']);
-  const previewPath =
-    previewPathRaw === null
-      ? null
-      : isNonEmptyString(previewPathRaw)
-        ? String(previewPathRaw).trim()
-        : undefined;
-
-  return {
-    slug,
-    ...(title ? { title } : {}),
-    ...(locale ? { locale } : {}),
-
-    ...(availability ? { availability } : {}),
-    ...(tier ? { tier } : {}),
-    ...(downloadMode ? { downloadMode } : {}),
-
-    ...(version ? { version } : {}),
-    ...(buildId !== undefined ? { buildId } : {}),
-    ...(path !== undefined ? { path } : {}),
-    ...(totalCards !== undefined ? { totalCards } : {}),
-
-    ...(previewCards !== undefined ? { previewCards } : {}),
-    ...(previewBuildId !== undefined ? { previewBuildId } : {}),
-    ...(previewPath !== undefined ? { previewPath } : {}),
-  };
-}
-
-function parseManifestMeta(raw: unknown): ManifestMeta {
-  const target = getManifestTarget(raw);
-
-  const schemaVersion = toOptionalNumber(pick(target, ['schemaVersion', 'SchemaVersion']));
-  const prefix = toOptionalString(pick(target, ['prefix', 'Prefix']));
-  const generatedAtMs = toOptionalNumber(pick(target, ['generatedAtMs', 'GeneratedAtMs']));
-  const publishedAt = toOptionalString(pick(target, ['publishedAt', 'PublishedAt']));
-  const generatedAt = toOptionalString(pick(target, ['generatedAt', 'GeneratedAt']));
-
-  const decksRaw = pick(target, ['decks', 'Decks']);
-  const deckCount = Array.isArray(decksRaw) ? decksRaw.length : undefined;
-
-  return {
-    ...(schemaVersion !== undefined ? { schemaVersion } : {}),
-    ...(prefix ? { prefix } : {}),
-    ...(generatedAtMs !== undefined ? { generatedAtMs } : {}),
-    ...(publishedAt ? { publishedAt } : {}),
-    ...(generatedAt ? { generatedAt } : {}),
-    ...(deckCount !== undefined ? { deckCount } : {}),
-  };
-}
-
-function getDeckStatusFromManifest(deck: Deck, m?: ManifestDeckLite, cardCount?: number): DeckStatus {
-  const isPublished = !!(m && (m.buildId || m.path));
-  const count = cardCount ?? deck.totalCards ?? 0;
-
-  if (isPublished) return 'published';
-  if (count > 0) return 'needs_publish';
-  
-  return 'unpublished';
-}
+// Error codes that mean "the paginated endpoint is unusable here" → fall back
+// to the legacy full-list load (404 = not deployed yet, 403 = not permitted).
+const PAGINATED_FALLBACK_CODES = new Set<string>([
+  ADMIN_DECKS_ENDPOINT_MISSING,
+  'NOT_FOUND',
+  'FORBIDDEN',
+]);
 
 function statusBadge(status: DeckStatus) {
   if (status === 'published') {
@@ -296,12 +161,42 @@ export function DeckListPage() {
     raw: null,
   });
 
-  const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [publishingId, setPublishingId] = useState<number | null>(null);
+  const [deletingSlug, setDeletingSlug] = useState<string | null>(null);
+  const [publishingSlug, setPublishingSlug] = useState<string | null>(null);
+
+  // Paginated deck list state (GET /api/v1/admin/decks). Falls back to the
+  // legacy full-list load when the endpoint is unavailable (feature-detect).
+  // Non-superadmin sessions start in legacy mode directly: the paginated
+  // endpoint is super_admin-gated, so probing it would be a guaranteed 403.
+  const [listMode, setListMode] = useState<ListMode>(() => (superAdmin ? 'paginated' : 'legacy'));
+  const listModeRef = useRef<ListMode>(superAdmin ? 'paginated' : 'legacy');
+  const [paged, setPaged] = useState<DeckPageListState>(emptyDeckPageListState);
+  const [pagedInitialized, setPagedInitialized] = useState(false);
+  const [pagedLoading, setPagedLoading] = useState(true);
+  const [pagedLoadingMore, setPagedLoadingMore] = useState(false);
+  const [pagedError, setPagedError] = useState<string | null>(null);
+  const pagedRequestSeq = useRef(0);
+  // slug → deck id cache: the paginated contract does not guarantee ids, but
+  // every row action needs one; resolved lazily via GET /authoring/decks?slug=.
+  const resolvedIdsRef = useRef<Map<string, number>>(new Map());
+  const [debouncedQ, setDebouncedQ] = useState('');
 
   // Publish Jobs state
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
+  // Job id of the publish currently being timed, if any.
+  const pendingPublishJobIdRef = useRef<string | null>(null);
   const [activeTab, setActiveTab] = useState<'decks' | 'publishJobs'>('decks');
+  // Message and kind travel together: two useState calls could drift apart and
+  // label a transport failure as a refusal, which gives the opposite advice.
+  const [pollFailure, setPollFailure] = useState<PollFailure | null>(null);
+  // Derived from the timer rather than set by a branch, so a future path that
+  // forgets to reschedule surfaces as a visible banner instead of silence.
+  const [pollingStopped, setPollingStopped] = useState(false);
+
+  // One feed for every action that can fail on this page. Keyed by operation,
+  // so a retry loop replaces its own notice instead of stacking copies.
+  const [errors, setErrors] = useState<ErrorNotice[]>(emptyErrorFeed);
+  const pollNotice = pollingNotice(pollFailure, pollingStopped);
 
   // 轮询使用的 Ref
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -415,34 +310,164 @@ export function DeckListPage() {
     }
   }
 
-  useEffect(() => {
-    // 初始加载：优先使用缓存，避免 loading 闪烁
-    void loadAll(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifestUrl]);
+  // ==================== paginated loading (new admin decks endpoint) ====================
 
-  async function handleDeleteDeck(deckId: number) {
+  async function loadPagedFirst(query: string) {
+    const seq = ++pagedRequestSeq.current;
+    setPagedLoading(true);
+    setPagedLoadingMore(false);
+    setPagedError(null);
+
+    const res = await fetchAdminDecksPage({ limit: DECKS_PAGE_SIZE, q: query });
+    if (!mountedRef.current || seq !== pagedRequestSeq.current) return;
+
+    if (!res.success) {
+      // Feature-detect: endpoint not deployed (404) or not permitted (403) →
+      // fall back to the legacy full-list load and stay in legacy mode.
+      if (res.error && PAGINATED_FALLBACK_CODES.has(res.error.code)) {
+        console.warn(
+          `[DeckListPage] GET /api/v1/admin/decks unavailable (${res.error.code}); falling back to legacy deck list load.`,
+        );
+        listModeRef.current = 'legacy';
+        setListMode('legacy');
+        setPagedLoading(false);
+        void loadAll(false);
+        return;
+      }
+      setPagedLoading(false);
+      setPagedInitialized(true);
+      setPagedError(res.error?.message ?? 'Failed to load decks.');
+      return;
+    }
+
+    setPaged(
+      applyDecksPage(
+        emptyDeckPageListState,
+        res.data ?? { items: [], nextCursor: null, hasMore: false },
+        'reset',
+      ),
+    );
+    setPagedLoading(false);
+    setPagedInitialized(true);
+  }
+
+  async function loadPagedMore() {
+    if (pagedLoading || pagedLoadingMore || !paged.hasMore || !paged.nextCursor) return;
+
+    const seq = ++pagedRequestSeq.current;
+    setPagedLoadingMore(true);
+    setPagedError(null);
+
+    const res = await fetchAdminDecksPage({
+      limit: DECKS_PAGE_SIZE,
+      cursor: paged.nextCursor,
+      q: debouncedQ,
+    });
+    if (!mountedRef.current) return;
+    setPagedLoadingMore(false);
+    if (seq !== pagedRequestSeq.current) return; // superseded by a newer load
+
+    if (!res.success) {
+      setPagedError(res.error?.message ?? 'Failed to load more decks.');
+      return;
+    }
+    const page = res.data ?? { items: [], nextCursor: null, hasMore: false };
+    setPaged(prev => applyDecksPage(prev, page, 'append'));
+  }
+
+  async function resolveDeckId(row: ConsoleDeckRow): Promise<number | null> {
+    if (row.id !== null && Number.isFinite(row.id)) return row.id;
+    const cached = resolvedIdsRef.current.get(row.slug);
+    if (cached !== undefined) return cached;
+
+    setErrors(prev => clearNotice(prev, ERR_RESOLVE_ID));
+    const res = await fetchDeckBySlug(row.slug);
+    const id = res.success && res.data ? Number(res.data.id) : Number.NaN;
+    if (Number.isFinite(id)) {
+      resolvedIdsRef.current.set(row.slug, id);
+      return id;
+    }
+    setErrors(prev =>
+      reportBusinessFailure(
+        prev,
+        ERR_RESOLVE_ID,
+        `Could not look up deck "${row.slug}"`,
+        res.error?.message,
+      ),
+    );
+    return null;
+  }
+
+  async function navigateWithDeckId(row: ConsoleDeckRow, to: (id: number) => string) {
+    const id = await resolveDeckId(row);
+    if (id === null) return;
+    navigate(to(id));
+  }
+
+  // Debounce the search box → server-side q for the paginated endpoint.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  // Sessions that START in legacy mode (non-superadmin) load the legacy list on
+  // mount — the paginated effect below never fires for them, and the 403
+  // fallback path (which normally triggers loadAll) is deliberately skipped.
+  useEffect(() => {
+    if (listModeRef.current === 'legacy') void loadAll(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Initial load + search-driven reloads. Paginated mode only: legacy mode
+  // filters client-side over the already-loaded full list.
+  useEffect(() => {
+    if (listModeRef.current === 'legacy') return;
+    void loadPagedFirst(debouncedQ);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQ]);
+
+  async function handleDeleteDeck(row: ConsoleDeckRow) {
     if (!superAdmin) return;
 
     const ok = window.confirm('Delete deck is destructive.\n\nContinue?');
     if (!ok) return;
 
+    // Clearing before the attempt is what makes a success wipe the banner:
+    // every success path would otherwise have to remember to do it.
+    setErrors(prev => clearNotice(prev, ERR_DELETE_DECK));
+
     try {
-      setDeletingId(deckId);
+      setDeletingSlug(row.slug);
+      const deckId = await resolveDeckId(row);
+      if (deckId === null) return;
+
       const res = await deleteDeck(deckId);
       if (!res.success) {
-        alert(res.error?.message ?? 'Delete deck failed.');
+        setErrors(prev =>
+          reportBusinessFailure(
+            prev,
+            ERR_DELETE_DECK,
+            `Deleting deck "${row.slug}" failed`,
+            res.error?.message,
+          ),
+        );
         return;
       }
-      setDeckState(prev => ({ ...prev, decks: prev.decks.filter(d => Number(d.id) !== deckId) }));
+      if (listModeRef.current === 'paginated') {
+        setPaged(prev => removeDeckBySlug(prev, row.slug));
+      } else {
+        setDeckState(prev => ({ ...prev, decks: prev.decks.filter(d => String(d.slug) !== row.slug) }));
+      }
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Network error.');
+      setErrors(prev =>
+        reportThrownFailure(prev, ERR_DELETE_DECK, `Deleting deck "${row.slug}" failed`, err),
+      );
     } finally {
-      setDeletingId(null);
+      setDeletingSlug(null);
     }
   }
 
-  async function handlePublish(deckId: number) {
+  async function handlePublish(row: ConsoleDeckRow) {
     if (!superAdmin) return;
 
     const ok = window.confirm(
@@ -450,25 +475,70 @@ export function DeckListPage() {
     );
     if (!ok) return;
 
+    // The journey starts once the user has committed, so the time the dialog
+    // sat open is not counted as our latency.
+    markStart('publish');
+    setErrors(prev => clearNotice(prev, ERR_PUBLISH_DECK));
+
     try {
-      setPublishingId(deckId);
+      setPublishingSlug(row.slug);
+      const deckId = await resolveDeckId(row);
+      if (deckId === null) return;
 
       const pub = await publishDeck(deckId);
       if (!pub.success) {
-        alert(pub.error?.message ?? 'Publish failed.');
+        setErrors(prev =>
+          reportBusinessFailure(
+            prev,
+            ERR_PUBLISH_DECK,
+            `Publishing deck "${row.slug}" failed`,
+            pub.error?.message,
+          ),
+        );
         return;
       }
+      pendingPublishJobIdRef.current = pub.data?.jobId ?? null;
 
       // 发布成功后强制刷新，确保数据最新
-      await loadAll(true);
+      if (listModeRef.current === 'paginated') {
+        void loadPublishJobs();
+        await loadPagedFirst(debouncedQ);
+      } else {
+        await loadAll(true);
+      }
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Network error.');
+      setErrors(prev =>
+        reportThrownFailure(prev, ERR_PUBLISH_DECK, `Publishing deck "${row.slug}" failed`, err),
+      );
     } finally {
-      setPublishingId(null);
+      setPublishingSlug(null);
     }
   }
 
-  // 加载发布任务并结合退避轮询（Exponential Backoff Polling）
+  // Publish is only done, from the user's point of view, when the new job is
+  // on screen, so the measure closes on the render that first shows it rather
+  // than when the POST resolves.
+  useEffect(() => {
+    const pending = pendingPublishJobIdRef.current;
+    if (!pending) return;
+    if (publishJobs.some(job => job.jobId === pending)) {
+      pendingPublishJobIdRef.current = null;
+      markEnd('publish');
+    }
+  }, [publishJobs]);
+
+  // Loads publish jobs and reschedules itself with a backoff.
+  //
+  // Invariant: every path leaving this function either schedules the next poll
+  // or tells the user that auto refresh has stopped. The third state, quietly
+  // not polling, is invisible to both the user and the developer, which makes
+  // it the worst of the three: the page keeps rendering stale rows and a
+  // publish that already finished still looks stuck. That is exactly what a
+  // resolved-but-unsuccessful response used to produce here, because the
+  // success branch owned the rescheduling and had no else.
+  //
+  // The scheduling decision itself lives in nextPollDelay so each branch is
+  // testable without a DOM; this function only wires it to state and timers.
   async function loadPublishJobs() {
     // 每次调用前清除旧定时器，防止并行请求竞态
     if (pollTimerRef.current) {
@@ -476,37 +546,39 @@ export function DeckListPage() {
       pollTimerRef.current = null;
     }
 
+    let outcome: PollOutcome;
     try {
-      const res = await fetchPublishJobs();
-      if (!mountedRef.current) return;
-
-      if (res.success && res.data) {
-        setPublishJobs(res.data);
-
-        // 检查是否有仍在处理中的任务
-        const hasActive = res.data.some(j => j.status === 'PENDING' || j.status === 'PROCESSING');
-        let nextDelay = 30000; // 默认空闲时每 30 秒查一次
-
-        if (hasActive) {
-          activePollsRef.current += 1;
-          const attempts = activePollsRef.current;
-          // 动态退避算法：前 2 次等待 2 秒，接着 5 秒，最后上限 10 秒
-          if (attempts <= 2) nextDelay = 2000;
-          else if (attempts <= 5) nextDelay = 5000;
-          else nextDelay = 10000;
-        } else {
-          activePollsRef.current = 0; // 没有活跃任务，重置计数器
-        }
-
-        // 安排下一次轮询
-        pollTimerRef.current = setTimeout(() => void loadPublishJobs(), nextDelay);
-      }
+      outcome = { kind: 'response', result: await fetchPublishJobs() };
     } catch (err) {
-      if (!mountedRef.current) return;
-      console.error('Failed to load publish jobs:', err);
-      // 出错时回退到较慢的轮询（30秒）
-      pollTimerRef.current = setTimeout(() => void loadPublishJobs(), 30000);
+      outcome = { kind: 'exception', error: err };
     }
+
+    // Unmounted is the one legitimate stop: the effect cleanup already owns
+    // the timer, and there is no longer a user to tell.
+    if (!mountedRef.current) return;
+
+    const decision = nextPollDelay(outcome, activePollsRef.current);
+    activePollsRef.current = decision.nextActivePolls;
+
+    if (decision.jobs) setPublishJobs(decision.jobs);
+    // The outcome is the only place that still knows whether the server
+    // answered or the transport threw, so the kind is captured here and not
+    // guessed from the message text later.
+    setPollFailure(
+      decision.showError === null
+        ? null
+        : { kind: outcome.kind === 'exception' ? 'network' : 'business', message: decision.showError },
+    );
+    if (decision.showError) console.error('Failed to load publish jobs:', decision.showError);
+
+    if (!decision.stopped) {
+      pollTimerRef.current = setTimeout(() => void loadPublishJobs(), decision.delayMs);
+    }
+
+    // Backstop for the invariant: the flag is read back off the timer instead
+    // of being set by whichever branch ran, so a branch added later that
+    // forgets to reschedule still turns the banner on rather than going quiet.
+    setPollingStopped(pollTimerRef.current === null);
   }
 
   // 初次挂载时启动轮询，卸载时清理
@@ -528,43 +600,29 @@ export function DeckListPage() {
 
   const decks = useMemo<Deck[]>(() => deckState.decks ?? [], [deckState.decks]);
 
-  const viewRows = useMemo<{ deck: Deck; manifest: ManifestDeckLite | undefined; status: DeckStatus; cardCount: number }[]>(() => {
-    const query = q.trim().toLowerCase();
-
-    return decks
-      .map(d => {
-        const m = manifestState.bySlug[String(d.slug || '').trim()];
-        const cardCount = d.totalCards ?? 0;
-        const status = getDeckStatusFromManifest(d, m, cardCount);
-        return { deck: d, manifest: m, status, cardCount };
-      })
-      .filter(row => {
-        const d = row.deck;
-
-        if (query) {
-          const s = `${d.slug ?? ''} ${d.title ?? ''}`.toLowerCase();
-          if (!s.includes(query)) return false;
-        }
-
-        if (statusFilter !== 'all' && row.status !== statusFilter) return false;
-
-        if (typeFilter !== 'all') {
-          if (typeFilter === 'starter' && d.deckType !== 1) return false;
-          if (typeFilter === 'paid' && d.deckType === 1) return false;
-        }
-
-        return true;
-      })
-      .sort((a, b) => {
-        const oA = typeof (a.deck as Deck & { manifestOrder?: number }).manifestOrder === 'number' ? (a.deck as Deck & { manifestOrder?: number }).manifestOrder! : 999999;
-        const oB = typeof (b.deck as Deck & { manifestOrder?: number }).manifestOrder === 'number' ? (b.deck as Deck & { manifestOrder?: number }).manifestOrder! : 999999;
-        return oA - oB;
-      });
-  }, [decks, manifestState.bySlug, q, statusFilter, typeFilter]);
+  const viewRows = useMemo<ConsoleDeckRow[]>(() => {
+    return buildViewRows({
+      listMode,
+      pagedItems: paged.items,
+      decks,
+      manifestBySlug: manifestState.bySlug,
+      q,
+      statusFilter,
+      typeFilter,
+    });
+  }, [listMode, paged.items, decks, manifestState.bySlug, q, statusFilter, typeFilter]);
 
 
 
-  if (deckState.loading) {
+  const initialLoading = listMode === 'paginated' ? !pagedInitialized : deckState.loading;
+  const fatalError =
+    listMode === 'paginated'
+      ? pagedInitialized && !pagedLoading && paged.items.length === 0 && pagedError
+        ? pagedError
+        : null
+      : deckState.error;
+
+  if (initialLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
         <div className="text-slate-600 text-lg">Loading console…</div>
@@ -572,16 +630,19 @@ export function DeckListPage() {
     );
   }
 
-  if (deckState.error) {
+  if (fatalError) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded shadow-sm max-w-md">
           <div className="font-semibold mb-1">Failed to load decks</div>
-          <div className="text-sm">{String(deckState.error)}</div>
+          <div className="text-sm">{String(fatalError)}</div>
           <button
             type="button"
             className="mt-3 text-sm px-3 py-1.5 rounded-md border border-red-200 text-red-800 hover:bg-red-100"
-            onClick={() => void loadAll(true)}
+            onClick={() => {
+              if (listMode === 'paginated') void loadPagedFirst(debouncedQ);
+              else void loadAll(true);
+            }}
           >
             Retry
           </button>
@@ -601,6 +662,7 @@ export function DeckListPage() {
       }
       superAdmin={superAdmin}
       onSignOut={handleSignOut}
+      onGoContentIntelligence={() => navigate('/content-intelligence')}
       onGoAdminUsers={superAdmin ? () => navigate('/admin/users') : undefined}
     >
       <div className="w-full mx-auto space-y-6">
@@ -657,7 +719,10 @@ export function DeckListPage() {
               <button
                 type="button"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 shadow-sm transition-all active:scale-95"
-                onClick={() => void loadAll(false)}
+                onClick={() => {
+                  if (listModeRef.current === 'paginated') void loadPagedFirst(debouncedQ);
+                  else void loadAll(false);
+                }}
               >
                 <svg className="w-4 h-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -702,6 +767,26 @@ export function DeckListPage() {
               <p className="text-xs text-red-700 mt-1">Failed to load manifest.json from S3. Decks may incorrectly show as Unpublished. Error: {String(manifestState.error)}</p>
             </div>
           </div>
+        )}
+
+        {/* Failed actions on this page. Non-blocking by construction: the
+            banners sit in the flow, so nothing about a failure parks the main
+            thread the way window.alert did. */}
+        <ErrorBannerList
+          notices={errors}
+          onDismiss={key => setErrors(prev => clearNotice(prev, key))}
+        />
+
+        {/* Publish Jobs Refresh Banner. A failed refresh has to be visible:
+            silently stale job rows read as "the publish is stuck". It is not
+            dismissible, because it is derived from live poll state and would
+            come straight back; it leaves when the poll recovers. */}
+        {superAdmin && pollNotice && (
+          <ErrorBanner
+            notice={pollNotice}
+            onRetry={pollingStopped ? () => void loadPublishJobs() : undefined}
+            retryLabel="Auto-refresh stopped. Click to retry."
+          />
         )}
 
         {/* <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -855,111 +940,140 @@ export function DeckListPage() {
             </thead>
 
             <tbody className="divide-y divide-slate-100">
-              {viewRows.length === 0 ? (
+              {listMode === 'paginated' && pagedLoading ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-16 text-center text-slate-500 text-sm">
-                    No decks match your filters.
+                    Loading decks…
+                  </td>
+                </tr>
+              ) : viewRows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-16 text-center text-slate-500 text-sm">
+                    {q.trim() ? 'No decks match your search.' : 'No decks match your filters.'}
                   </td>
                 </tr>
               ) : (
-                viewRows.map(row => {
-                  const deck = row.deck as Deck & { updatedAt?: string | null; createdAt?: string | null; manifestOrder?: number };
-                  const updatedAt = deck.updatedAt ?? deck.createdAt ?? null;
-
-                  return (
-                    <tr key={String(deck.id)} className="hover:bg-slate-50/60 transition-colors group">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 shadow-sm" title="Manifest Order">
-                            #{String(deck.manifestOrder ?? '-')}
-                          </span>
-                          <div>
-                            <div className="text-slate-900 font-medium">{String(deck.title ?? '')}</div>
-                            <div className="text-[11px] text-slate-500 font-mono">{String(deck.slug ?? '')}</div>
-                          </div>
+                viewRows.map(row => (
+                  <tr key={row.key} className="hover:bg-slate-50/60 transition-colors group">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 shadow-sm" title="Manifest Order">
+                          #{String(row.manifestOrder ?? '-')}
+                        </span>
+                        <div>
+                          <div className="text-slate-900 font-medium">{row.title}</div>
+                          <div className="text-[11px] text-slate-500 font-mono">{row.slug}</div>
                         </div>
-                      </td>
+                      </div>
+                    </td>
 
-                      <td className="px-6 py-4">
+                    <td className="px-6 py-4">
+                      <button
+                        type="button"
+                        onClick={() => void navigateWithDeckId(row, id => `/decks/cards?deckId=${id}`)}
+                        className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-mono border shadow-sm transition-colors bg-slate-100 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 cursor-pointer"
+                        title="Manage Cards"
+                      >
+                        {row.cardCount}
+                      </button>
+                    </td>
+
+                    <td className="px-6 py-4">{typeBadge(isStarterLike(row.deckType, row.tier) ? 1 : 2)}</td>
+
+                    <td className="px-6 py-4">{statusBadge(row.status)}</td>
+
+                    <td className="px-6 py-4 text-slate-500 text-xs">{safeDateTime(row.updatedAt)}</td>
+
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
                         <button
                           type="button"
-                          onClick={() => navigate(`/decks/cards?deckId=${deck.id}`)}
-                          className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-mono border shadow-sm transition-colors bg-slate-100 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 cursor-pointer"
-                          title="Manage Cards"
+                          onClick={() => void navigateWithDeckId(row, id => `/decks/cards?deckId=${id}`)}
+                          className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
                         >
-                          {row.cardCount}
+                          Cards
                         </button>
-                      </td>
 
-                      <td className="px-6 py-4">{typeBadge(deck.deckType)}</td>
+                        <button
+                          type="button"
+                          onClick={() => void navigateWithDeckId(row, id => `/decks/edit?deckId=${id}`)}
+                          className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+                        >
+                          Edit
+                        </button>
 
-                      <td className="px-6 py-4">{statusBadge(row.status)}</td>
+                        <button
+                          type="button"
+                          onClick={() => void navigateWithDeckId(row, id => `/decks/preview?deckId=${id}`)}
+                          className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors"
+                        >
+                          Preview
+                        </button>
 
-                      <td className="px-6 py-4 text-slate-500 text-xs">{safeDateTime(updatedAt)}</td>
-
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/decks/cards?deckId=${deck.id}`)}
-                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
-                          >
-                            Cards
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/decks/edit?deckId=${deck.id}`)}
-                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
-                          >
-                            Edit
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/decks/preview?deckId=${deck.id}`)}
-                            className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors"
-                          >
-                            Preview
-                          </button>
-
-                          {superAdmin ? (
-                            <>
-                              <span className="w-px h-4 bg-slate-200 mx-1"></span>
-                              <button
-                                type="button"
-                                disabled={publishingId === Number(deck.id)}
-                                onClick={() => void handlePublish(Number(deck.id))}
-                                className={`text-xs px-3 py-1.5 rounded-lg border ${
-                                  row.status === 'needs_publish'
-                                    ? 'bg-amber-500 border-transparent text-white hover:bg-amber-600 shadow-sm font-semibold'
-                                    : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-                                } disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
-                              >
-                                {publishingId === Number(deck.id) ? 'Publishing…' : 'Publish'}
-                              </button>
-                            </>
-                          ) : null}
-
-                          {superAdmin ? (
+                        {superAdmin ? (
+                          <>
+                            <span className="w-px h-4 bg-slate-200 mx-1"></span>
                             <button
                               type="button"
-                              disabled={deletingId === Number(deck.id)}
-                              onClick={() => void handleDeleteDeck(Number(deck.id))}
-                              className="text-xs font-medium px-2 text-red-500 hover:text-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                              disabled={publishingSlug === row.slug}
+                              onClick={() => void handlePublish(row)}
+                              className={`text-xs px-3 py-1.5 rounded-lg border ${
+                                row.status === 'needs_publish'
+                                  ? 'bg-amber-500 border-transparent text-white hover:bg-amber-600 shadow-sm font-semibold'
+                                  : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                              } disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
                             >
-                              {deletingId === Number(deck.id) ? 'Deleting…' : 'Delete'}
+                              {publishingSlug === row.slug ? 'Publishing…' : 'Publish'}
                             </button>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
+                          </>
+                        ) : null}
+
+                        {superAdmin ? (
+                          <button
+                            type="button"
+                            disabled={deletingSlug === row.slug}
+                            onClick={() => void handleDeleteDeck(row)}
+                            className="text-xs font-medium px-2 text-red-500 hover:text-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {deletingSlug === row.slug ? 'Deleting…' : 'Delete'}
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
         </div>
+
+        {/* Pagination footer (paginated mode only) */}
+        {listMode === 'paginated' && (
+          <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/50 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-xs text-slate-500">
+              {pagedLoading
+                ? 'Loading…'
+                : `Loaded ${paged.items.length} deck${paged.items.length === 1 ? '' : 's'}${
+                    !paged.hasMore && paged.items.length > 0 ? ' · end of list' : ''
+                  }`}
+            </span>
+            <div className="flex items-center gap-3">
+              {pagedError && paged.items.length > 0 ? (
+                <span className="text-xs text-red-600">{pagedError}</span>
+              ) : null}
+              {paged.hasMore ? (
+                <button
+                  type="button"
+                  disabled={pagedLoadingMore || pagedLoading}
+                  onClick={() => void loadPagedMore()}
+                  className="text-xs font-semibold px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                >
+                  {pagedLoadingMore ? 'Loading more…' : 'Load more'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        )}
         </div>
         )}
 

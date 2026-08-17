@@ -6,24 +6,27 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { setAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
 import { completeOnboarding } from '../features/gacha/onboarding/onboardingPrefs';
+import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AudienceSurvey'>;
 
+// Outcome-driven copy — was internal jargon ("balanced across easier
+// and harder content", "stretch cards"). Now uses the user's perspective.
 const OPTIONS: Array<{ key: AudiencePreference; label: string; body: string }> = [
-  { key: 'junior', label: 'Junior', body: 'Prioritize simpler cards and clearer first wins.' },
-  { key: 'both', label: 'Both', body: 'Keep the route balanced across easier and harder content.' },
-  { key: 'all', label: 'All', body: 'Bias toward stretch cards when new content is selected.' },
+  { key: 'junior', label: 'Just starting', body: 'Easier cards first to build confidence.' },
+  { key: 'both', label: 'Mix it up', body: 'A balance of easy and hard cards.' },
+  { key: 'all', label: 'Push me', body: 'Lean toward harder cards when new content arrives.' },
 ];
 
 export function AudienceSurveyScreen({ navigation }: Props) {
   const [selected, setSelected] = useState<AudiencePreference>('both');
   const [saving, setSaving] = useState(false);
 
-  async function finish() {
+  async function finish(preferenceOverride?: AudiencePreference) {
     if (saving) return;
     setSaving(true);
     try {
-      await setAudiencePreference(selected);
+      await setAudiencePreference(preferenceOverride ?? selected);
       await completeOnboarding();
       navigation.replace('PermissionPrompt');
     } finally {
@@ -31,11 +34,21 @@ export function AudienceSurveyScreen({ navigation }: Props) {
     }
   }
 
+  // Skip = use the balanced default ('both') — matches the visible
+  // pre-selected option in the survey, so skipping is functionally
+  // identical to "I'm fine with the default, just continue". Was 'all'
+  // (stretch bias) which silently steered new users toward harder
+  // content — wrong default for someone who didn't express a preference.
+  async function skip() {
+    if (saving) return;
+    await finish('both');
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={['#FAF3E0', '#F5F3FF']} style={styles.gradient}>
+      <LinearGradient colors={[colors.parchmentBg, colors.parchmentBgDeep]} style={styles.gradient}>
         <View style={styles.container}>
-          <Text style={styles.eyebrow}>Content preference</Text>
+          <Text style={styles.eyebrow}>CONTENT PREFERENCE</Text>
           <Text style={styles.title}>Which lane should new content favor?</Text>
           <Text style={styles.body}>This only shapes new supply and draw recommendations. Due review stays intact.</Text>
 
@@ -54,6 +67,19 @@ export function AudienceSurveyScreen({ navigation }: Props) {
           <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, saving && styles.buttonDisabled]} disabled={saving} onPress={() => void finish()}>
             <Text style={styles.primaryButtonText}>{saving ? 'Saving…' : 'Finish setup'}</Text>
           </Pressable>
+
+          {/* Skip escape hatch — picks 'all' (most permissive) and
+              advances. Lets users reach Home in 1 tap if they don't
+              care about the survey. */}
+          <Pressable
+            style={({ pressed }) => [styles.skipLink, pressed && styles.pressed]}
+            onPress={() => void skip()}
+            disabled={saving}
+            accessibilityRole="button"
+            accessibilityLabel="Skip survey for now"
+          >
+            <Text style={styles.skipLinkText}>Skip for now</Text>
+          </Pressable>
         </View>
       </LinearGradient>
     </SafeAreaView>
@@ -63,20 +89,75 @@ export function AudienceSurveyScreen({ navigation }: Props) {
 export default AudienceSurveyScreen;
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#FAF3E0' },
+  safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
   container: { flex: 1, paddingHorizontal: 20, paddingTop: 28, paddingBottom: 32 },
-  eyebrow: { fontSize: 12, fontWeight: '900', color: '#C8883A', textTransform: 'uppercase', letterSpacing: 0.6 },
-  title: { marginTop: 12, fontSize: 28, lineHeight: 34, fontWeight: '900', color: '#2A2218' },
-  body: { marginTop: 12, fontSize: 14, lineHeight: 21, color: '#5A4B38' },
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: colors.gold,
+    textTransform: 'uppercase',
+    letterSpacing: 1.4,
+  },
+  title: { marginTop: 12, fontSize: 28, lineHeight: 34, fontWeight: '900', color: colors.ink },
+  body: { marginTop: 12, fontSize: 14, lineHeight: 21, color: colors.inkSecondary, fontWeight: '600' },
   optionList: { marginTop: 24, gap: 12 },
-  optionCard: { borderRadius: 18, padding: 16, backgroundColor: 'rgba(255,255,255,0.86)', borderWidth: 1, borderColor: 'rgba(42,34,24,0.08)' },
-  optionCardActive: { borderColor: 'rgba(200,136,58,0.32)', backgroundColor: 'rgba(255,255,255,0.96)' },
-  optionTitle: { fontSize: 15, fontWeight: '800', color: '#2A2218' },
-  optionTitleActive: { color: '#C8883A' },
-  optionBody: { marginTop: 6, fontSize: 12, lineHeight: 18, color: '#6B7280' },
-  primaryButton: { marginTop: 'auto', borderRadius: 14, backgroundColor: '#2A2218', paddingVertical: 16, alignItems: 'center' },
-  primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  optionCard: {
+    borderRadius: 18,
+    padding: 16,
+    backgroundColor: colors.softCream,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  optionCardActive: {
+    borderColor: colors.gold,
+    backgroundColor: '#FFFFFF',
+  },
+  optionTitle: { fontSize: 15, fontWeight: '900', color: colors.ink },
+  optionTitleActive: { color: colors.gold },
+  optionBody: { marginTop: 6, fontSize: 12, lineHeight: 18, color: colors.inkMuted, fontWeight: '600' },
+  // Primary CTA — pokeBlue 56pt to match the rest of the app
+  primaryButton: {
+    marginTop: 'auto',
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: 'rgba(44,156,192,0.4)',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
+  // Skip pill — upgraded from a quiet text link to a ghost-style
+  // button, more clearly an alternative action. Same height as
+  // primary's secondary peer, transparent + hairline border so it
+  // doesn't compete with the primary visually.
+  skipLink: {
+    marginTop: 12,
+    minHeight: 48,
+    borderRadius: 999,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  skipLinkText: {
+    color: colors.inkSoft,
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
   pressed: { opacity: 0.92 },
   buttonDisabled: { opacity: 0.65 },
 });

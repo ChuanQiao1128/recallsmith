@@ -35,5 +35,7 @@ internal static class SnapStartHooks
     try { Vpc.Authoring.Publish.Reset(); } catch { /* best-effort */ }
     try { Vpc.Authoring.ManifestRebuild.Reset(); } catch { /* best-effort */ }
     try { Vpc.Runtime.PremiumDeckUrl.Reset(); } catch { /* best-effort */ }
+    try { Vpc.Analytics.OutboxPublisher.Reset(); } catch { /* best-effort */ }
+    try { Vpc.Analytics.ContentIntelligenceSnapshotImport.Reset(); } catch { /* best-effort */ }
   }
 }

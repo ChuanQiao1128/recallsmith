@@ -11,6 +11,16 @@ namespace RecallSmith.Lambda.Vpc.Authoring;
 
 public static class ManifestRebuild
 {
+  /// <summary>
+  /// 最近一次 SUCCESS 构建（content_sha256 / package_key 在 migration 011 之前为 null）
+  /// </summary>
+  private sealed record LatestBuildInfo(string BuildId, string? ContentSha256, string? PackageKey);
+
+  /// <summary>
+  /// deck_build_patches 的一条补丁边（RelPath 为 manifest 相对路径）
+  /// </summary>
+  private sealed record PatchEdgeRow(string FromBuildId, string ToBuildId, string RelPath, string? Sha256);
+
   private static readonly string? ContentBucket = Environment.GetEnvironmentVariable("CONTENT_BUCKET");
 
   private static string NormalizePrefix(string? p, string defName)
@@ -139,34 +149,114 @@ public static class ManifestRebuild
 
     var decks = await DbUtil.QueryAsync(conn, null, decksSql, []);
 
-    var latest = new Dictionary<string, string>(StringComparer.Ordinal);
+    var latest = new Dictionary<string, LatestBuildInfo>(StringComparer.Ordinal);
     try
     {
-      const string latestSql = """
-        select distinct on (deck_slug)
-          deck_slug,
-          build_id,
-          s3_key,
-          created_at
-        from deck_publishes
-        where status = 'SUCCESS'
-        order by deck_slug, created_at desc;
-        """;
+      List<Dictionary<string, object?>> rows;
+      try
+      {
+        // Content delivery v3: extended columns (migration 011)
+        const string latestSqlV3 = """
+          select distinct on (deck_slug)
+            deck_slug,
+            build_id,
+            s3_key,
+            content_sha256,
+            package_key,
+            created_at
+          from deck_publishes
+          where status = 'SUCCESS'
+          order by deck_slug, created_at desc;
+          """;
 
-      var rows = await DbUtil.QueryAsync(conn, null, latestSql, []);
+        rows = await DbUtil.QueryAsync(conn, null, latestSqlV3, []);
+      }
+      catch (PostgresException pg) when (pg.SqlState == "42703")
+      {
+        // migration 011 not applied yet — fall back to the legacy column list
+        const string latestSqlLegacy = """
+          select distinct on (deck_slug)
+            deck_slug,
+            build_id,
+            s3_key,
+            created_at
+          from deck_publishes
+          where status = 'SUCCESS'
+          order by deck_slug, created_at desc;
+          """;
+
+        rows = await DbUtil.QueryAsync(conn, null, latestSqlLegacy, []);
+      }
+
       foreach (var r in rows)
       {
         var slug = Convert.ToString(r["deck_slug"], CultureInfo.InvariantCulture) ?? string.Empty;
         var buildId = Convert.ToString(r["build_id"], CultureInfo.InvariantCulture) ?? string.Empty;
         if (!string.IsNullOrEmpty(slug) && !string.IsNullOrEmpty(buildId))
         {
-          latest[slug] = buildId;
+          var contentSha256 = r.TryGetValue("content_sha256", out var cs) ? Convert.ToString(cs, CultureInfo.InvariantCulture) : null;
+          var packageKey = r.TryGetValue("package_key", out var pk) ? Convert.ToString(pk, CultureInfo.InvariantCulture) : null;
+          latest[slug] = new LatestBuildInfo(
+            buildId,
+            string.IsNullOrEmpty(contentSha256) ? null : contentSha256,
+            string.IsNullOrEmpty(packageKey) ? null : packageKey);
         }
       }
     }
     catch (PostgresException pg) when (pg.SqlState == "42P01")
     {
       // deck_publishes missing in some envs
+    }
+    catch
+    {
+      // allow system continue
+    }
+
+    // Content delivery v3: newest <= 4 patch edges per slug (42P01-tolerant: migration 011 may not be applied)
+    var patchEdges = new Dictionary<string, List<PatchEdgeRow>>(StringComparer.Ordinal);
+    try
+    {
+      const string patchesSql = """
+        select deck_slug, from_build_id, to_build_id, rel_path, sha256
+        from (
+          select
+            deck_slug,
+            from_build_id,
+            to_build_id,
+            rel_path,
+            sha256,
+            created_at,
+            row_number() over (partition by deck_slug order by created_at desc) as rn
+          from deck_build_patches
+        ) t
+        where rn <= 4
+        order by deck_slug, created_at desc;
+        """;
+
+      var rows = await DbUtil.QueryAsync(conn, null, patchesSql, []);
+      foreach (var r in rows)
+      {
+        var slug = Convert.ToString(r["deck_slug"], CultureInfo.InvariantCulture) ?? string.Empty;
+        var fromBuildId = Convert.ToString(r["from_build_id"], CultureInfo.InvariantCulture) ?? string.Empty;
+        var toBuildId = Convert.ToString(r["to_build_id"], CultureInfo.InvariantCulture) ?? string.Empty;
+        var relPath = Convert.ToString(r["rel_path"], CultureInfo.InvariantCulture) ?? string.Empty;
+        if (string.IsNullOrEmpty(slug) || string.IsNullOrEmpty(fromBuildId) || string.IsNullOrEmpty(toBuildId) || string.IsNullOrEmpty(relPath))
+        {
+          continue;
+        }
+
+        var sha256 = r.TryGetValue("sha256", out var sh) ? Convert.ToString(sh, CultureInfo.InvariantCulture) : null;
+        if (!patchEdges.TryGetValue(slug, out var list))
+        {
+          list = new List<PatchEdgeRow>();
+          patchEdges[slug] = list;
+        }
+        list.Add(new PatchEdgeRow(fromBuildId, toBuildId, relPath, string.IsNullOrEmpty(sha256) ? null : sha256));
+      }
+    }
+    catch (PostgresException pg) when (pg.SqlState == "42P01")
+    {
+      // deck_build_patches missing before migration 011
     }
     catch
     {
@@ -184,7 +274,8 @@ public static class ManifestRebuild
       var totalCards = Math.Max(0, ToInt(d.TryGetValue("totalCards", out var tc) ? tc : null, 0));
 
       var downloadMode = DeriveDownloadMode(tier, availability);
-      var buildId = availability == "live" && latest.TryGetValue(slug, out var b) ? b : null;
+      var latestBuild = availability == "live" && latest.TryGetValue(slug, out var b) ? b : null;
+      var buildId = latestBuild?.BuildId;
 
       // ✅ Filter out draft decks:
       // If a deck is 'live' but has no corresponding build_id in deck_publishes,
@@ -233,7 +324,9 @@ public static class ManifestRebuild
         buildId,
 
         path,
-        sha256 = (string?)null,
+        // Content delivery v3: only free live decks (path != null) carry integrity/patch/package info
+        sha256 = path is not null ? latestBuild?.ContentSha256 : null,
+        packagePath = path is not null ? latestBuild?.PackageKey : null,
 
         previewCards = previewPath is not null ? previewCards : null,
         previewVersion = previewBuildId,
@@ -241,7 +334,15 @@ public static class ManifestRebuild
         previewPath,
         previewSha256 = (string?)null,
 
-        patches = (object?)null,
+        patches = path is not null && patchEdges.TryGetValue(slug, out var slugEdges) && slugEdges.Count > 0
+          ? (object?)slugEdges.Select(e => new
+            {
+              fromVersion = e.FromBuildId,
+              toVersion = e.ToBuildId,
+              path = e.RelPath,
+              sha256 = e.Sha256,
+            }).ToList()
+          : null,
         previewPatches = (object?)null,
       };
     }).Where(x => x is not null).ToList();

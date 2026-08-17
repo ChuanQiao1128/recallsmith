@@ -67,6 +67,20 @@ async function getUserScopePrefix(): Promise<string> {
 }
 
 /**
+ * Builds a storage key inside the current user's partition.
+ *
+ * Exported so subsystems outside review (gacha draw state, reward
+ * wallet) partition against the exact same notion of "who is signed in"
+ * instead of deriving their own. One definition is what makes
+ * setActiveUserSubForStorage() able to switch the whole app's storage
+ * scope in one call: a second copy of this rule would keep serving the
+ * previous account's data for the length of its own cache.
+ */
+export async function getUserScopedKey(baseKey: string): Promise<string> {
+  return `${await getUserScopePrefix()}${baseKey}`;
+}
+
+/**
  * ---- Key builders (user-scoped) ----
  */
 async function progressKey(slug: string): Promise<string> {
@@ -122,6 +136,18 @@ function normalizeNumber(v: any, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 }
 
+function normalizeNonNegative(v: any): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
+}
+
+/**
+ * This function is the AsyncStorage schema. Adding a field to CardProgress
+ * without adding it here creates a field that exists only in memory: the entry
+ * is rebuilt from the whitelist below on every load, so anything missing is
+ * dropped on the next read with no error and no log. A counter that resets on
+ * every app start is worse than no counter, because the code that reads it
+ * looks correct.
+ */
 function normalizeProgressEntry(raw: any): CardProgress | null {
   const stableUid = raw?.stableUid;
   if (typeof stableUid !== 'string' || stableUid.length === 0) return null;
@@ -142,7 +168,24 @@ function normalizeProgressEntry(raw: any): CardProgress | null {
       ? raw.lastSeenRevision
       : undefined;
 
-  return { stableUid, stage, lastReviewedAt, nextReviewAt, lastSeenRevision };
+  // Scheduler feedback counters and the revision-demotion mark. All three are
+  // optional and non-negative: absent means "never happened yet", which is a
+  // different statement from 0 only for revisionDemotedAt, where 0 is not a
+  // reachable timestamp anyway.
+  const lapses = normalizeNonNegative(raw.lapses);
+  const hardStreak = normalizeNonNegative(raw.hardStreak);
+  const revisionDemotedAt = normalizeNonNegative(raw.revisionDemotedAt);
+
+  return {
+    stableUid,
+    stage,
+    lastReviewedAt,
+    nextReviewAt,
+    lastSeenRevision,
+    lapses,
+    hardStreak,
+    revisionDemotedAt,
+  };
 }
 
 function cardRevision(card: any): number {
@@ -322,6 +365,15 @@ function reconcileProgressWithDeck(
           ...p,
           nextReviewAt: nowMs,
           stage: Math.max(clampStage(p.stage ?? 0) - 1, 0),
+          // Record WHEN this demotion happened, not just that the card is due.
+          // Without the timestamp the next pull silently undid the whole thing:
+          // the server still holds the pre-update due date from the last real
+          // review, the merge saw a row it had no reason to distrust, and the
+          // relearn this branch exists to force never happened. The sync merge
+          // reads this mark to tell "a due date from before the content
+          // changed" apart from "a genuinely newer review", and
+          // scheduleNextReview clears it once a real review arrives.
+          revisionDemotedAt: nowMs,
         };
         changed = true;
       }

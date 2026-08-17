@@ -89,6 +89,7 @@ import { configureAmplifyOnce } from './src/auth/amplify';
 import { useAuthStore } from './src/auth/authStore';
 import { scheduleProgressSync } from './src/sync/progressSync';
 import { fetchRemoteConfig, getCurrentAppVersion, resolveIosUpdate, type RemoteConfig } from './src/config/remoteConfig';
+import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
 
 configureAmplifyOnce();
 
@@ -154,6 +155,11 @@ export default function App() {
 
   useEffect(() => {
     void useAuthStore.getState().init();
+    // Seed the brand-new-user starter wallet on first boot. Idempotent
+    // (guarded by its own AsyncStorage flag), so safe to fire on every
+    // launch — pre-existing users with non-empty wallets are skipped,
+    // and we never re-grant after a user has spent their pulls.
+    void seedStarterPullsIfNeeded();
   }, []);
 
   useEffect(() => {
@@ -277,8 +283,18 @@ export default function App() {
         <Stack.Screen name="OfflineBanner" component={OfflineBannerScreen} />
         <Stack.Screen name="DebugMenu" component={DebugMenuScreen} />
         <Stack.Screen name="Level" component={LevelScreen} />
-        <Stack.Screen name="DrawCeremony" component={DrawCeremonyScreen} />
-        <Stack.Screen name="DrawResult" component={DrawResultScreen} />
+        {/* Draw flow uses cross-fade transitions so the pack art continuity
+            from Draw → Ceremony → Result feels like a single moment. */}
+        <Stack.Screen
+          name="DrawCeremony"
+          component={DrawCeremonyScreen}
+          options={{ animation: 'fade', animationDuration: 320, gestureEnabled: false }}
+        />
+        <Stack.Screen
+          name="DrawResult"
+          component={DrawResultScreen}
+          options={{ animation: 'fade', animationDuration: 280, gestureEnabled: false }}
+        />
         <Stack.Screen name="Settlement" component={SettlementScreen} />
         <Stack.Screen name="MasteredCelebration" component={MasteredCelebrationScreen} />
         <Stack.Screen name="CollectionMilestone" component={CollectionMilestoneScreen} />
@@ -287,7 +303,11 @@ export default function App() {
         <Stack.Screen name="Deck" component={DeckScreen} />
         <Stack.Screen name="Review" component={ReviewScreen} />
         <Stack.Screen name="SessionCard" component={SessionCardScreen} />
-        <Stack.Screen name="Draw" component={DrawScreen} />
+        <Stack.Screen
+          name="Draw"
+          component={DrawScreen}
+          options={{ animation: 'fade_from_bottom', animationDuration: 240 }}
+        />
         <Stack.Screen name="SessionSummary" component={SessionSummaryScreen} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="SignIn" component={SignInScreen} />

@@ -1,73 +1,52 @@
-# React + TypeScript + Vite
+# RecallSmith admin console
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The React admin console: authoring decks and cards, publishing them, and
+administering users. It talks to the .NET Lambda backend in `src_C/` through
+API Gateway. See the [root README](../README.md) for the rest of the system.
 
-Currently, two official plugins are available:
+## Scripts
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Vite dev server on port 5173 |
+| `npm run build` | `tsc -b && vite build` — this is also the type-check step |
+| `npm test` | `vitest run` |
+| `npm run lint` | `eslint .` — 0 errors, 1 known warning |
+| `npm run preview` | Serves an already-built `dist/` |
 
-## React Compiler
+Two things about type-checking that are easy to get wrong here:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `npx tsc --noEmit` is **not** a check. `tsconfig.json` is references-only with
+  no `include`, so it checks zero files and exits 0 even with a real type error
+  in `src/`. Use `npx tsc -b --force`.
+- Plain `tsc -b` skips work when an incremental buildinfo is present. `--force`
+  reproduces what CI does.
 
-## Expanding the ESLint configuration
+`tests/` is outside the `include` of every tsconfig, so the test files are not
+type-checked at all — only ESLint and Vitest's transform read them.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Environment
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+`.env.development` is committed, so `npm ci && npm run dev` runs with no
+configuration step. Vite loads it automatically by filename, and the five values
+in it are public by construction — a dev API Gateway URL, a Cognito app client
+id, and localhost redirect/scope settings — all of which are visible in any
+shipped browser bundle. No secret is stored in this repository.
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+| Variable | Purpose |
+| --- | --- |
+| `VITE_API_BASE` | Backend base URL. `VITE_API_BASE_URL` overrides it if set; with neither, requests go same-origin through the Vite dev proxy |
+| `VITE_COGNITO_DOMAIN` | Cognito hosted-UI domain |
+| `VITE_COGNITO_CLIENT_ID` | Cognito app client id |
+| `VITE_COGNITO_REDIRECT_URI` | OAuth callback, `http://localhost:5173/auth/callback` |
+| `VITE_COGNITO_LOGOUT_URI` | Where the hosted UI returns after sign-out |
+| `VITE_COGNITO_SCOPES` | Requested OAuth scopes |
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+**The dev port is not negotiable.** The Cognito app client has
+`http://localhost:5173/auth/callback` registered as its callback URL, so a dev
+server on any other port gets through the login screen and then fails the
+callback.
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+`src/api/contentManifest.ts` also reads `VITE_CONTENT_MANIFEST_URL` (falling back
+to `VITE_MANIFEST_URL`). Neither is set in `.env.development`; that feature
+reports a "not set" error until one is provided.

@@ -23,6 +23,7 @@ import {
   isPremiumActive,
 } from '../premium/revenuecat';
 import { useAuthStore } from '../auth/authStore';
+import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Paywall'>;
 
@@ -158,7 +159,7 @@ export function PaywallScreen({ navigation }: Props) {
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient
-          colors={['#F5F3FF', '#E0F2FE']}
+          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
@@ -298,7 +299,7 @@ function Bullet({ text }: { text: string }) {
 export default PaywallScreen;
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
 
   container: {
@@ -311,66 +312,78 @@ const styles = StyleSheet.create({
 
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   backButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.86)',
+    backgroundColor: colors.softCream,
     marginRight: 10,
     borderWidth: 1,
-    borderColor: 'rgba(17,24,39,0.08)',
+    borderColor: colors.hairline,
   },
-  backText: { fontSize: 13, color: '#111827', fontWeight: '800' },
+  backText: { fontSize: 13, color: colors.inkSoft, fontWeight: '800' },
 
-  title: { fontSize: 22, fontWeight: '900', color: '#111827' },
-  subtitle: { marginTop: 4, fontSize: 12, color: '#6B7280' },
+  title: { fontSize: 24, fontWeight: '900', color: colors.ink },
+  subtitle: { marginTop: 4, fontSize: 12, color: colors.inkMuted, fontWeight: '600' },
 
   sectionCard: {
-    borderRadius: 22,
+    borderRadius: 18,
     paddingVertical: 14,
     paddingHorizontal: 14,
-    backgroundColor: 'rgba(255,255,255,0.86)',
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 10 },
+    backgroundColor: colors.softCream,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
     marginBottom: 14,
   },
-  sectionTitle: { fontSize: 15, fontWeight: '900', color: '#111827' },
-  sectionSubtitle: { marginTop: 6, fontSize: 12, color: '#6B7280', lineHeight: 16 },
+  sectionTitle: { fontSize: 15, fontWeight: '900', color: colors.ink },
+  sectionSubtitle: { marginTop: 6, fontSize: 12, color: colors.inkMuted, lineHeight: 16, fontWeight: '600' },
 
   divider: {
     marginTop: 12,
     marginBottom: 10,
     height: 1,
-    backgroundColor: 'rgba(17,24,39,0.08)',
+    backgroundColor: colors.hairline,
   },
 
   kvRow: { marginTop: 8, flexDirection: 'row', justifyContent: 'space-between' },
-  kLabel: { fontSize: 12, color: '#6B7280' },
-  kValue: { fontSize: 13, color: '#111827', fontWeight: '700' },
+  kLabel: { fontSize: 12, color: colors.inkMuted, fontWeight: '600' },
+  kValue: { fontSize: 13, color: colors.inkSoft, fontWeight: '800' },
 
+  // Premium bullets — gold dots reinforce the premium accent
   bulletRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
-  bulletDot: { width: 18, fontSize: 16, color: '#374151', lineHeight: 18 },
-  bulletText: { flex: 1, fontSize: 13, color: '#374151', lineHeight: 18 },
+  bulletDot: { width: 18, fontSize: 16, color: colors.gold, lineHeight: 18, fontWeight: '900' },
+  bulletText: { flex: 1, fontSize: 13, color: colors.inkSoft, lineHeight: 18, fontWeight: '600' },
 
+  // Premium CTA = GOLD (not pokeBlue) — this is the upgrade tier
   primaryButton: {
     marginTop: 12,
+    minHeight: 56,
     borderRadius: 999,
-    backgroundColor: '#4F46E5',
-    paddingVertical: 12,
+    backgroundColor: colors.gold,
+    paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: 'rgba(200,136,58,0.45)',
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 5,
   },
-  primaryButtonText: { fontSize: 14, fontWeight: '900', color: '#FFFFFF' },
+  primaryButtonText: { fontSize: 15, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.4 },
   buttonPressed: { opacity: 0.9 },
-  buttonDisabled: { opacity: 0.6 },
+  buttonDisabled: { opacity: 0.55 },
 
   rowInline: { flexDirection: 'row', alignItems: 'center' },
 
-  linkBtn: { marginTop: 10, alignItems: 'center', paddingVertical: 6 },
-  linkBtnText: { fontSize: 12, color: '#4F46E5', fontWeight: '900' },
+  linkBtn: { marginTop: 12, alignItems: 'center', paddingVertical: 8 },
+  linkBtnText: { fontSize: 13, color: colors.pokeBlueDeep, fontWeight: '900' },
 
-  mutedNote: { marginTop: 10, fontSize: 11, color: '#6B7280', lineHeight: 15 },
+  mutedNote: { marginTop: 10, fontSize: 11, color: colors.inkMuted, lineHeight: 15, fontWeight: '600' },
 
   footerBox: { marginTop: 6, alignItems: 'center' },
-  footerText: { fontSize: 11, color: '#9CA3AF', textAlign: 'center' },
+  footerText: { fontSize: 11, color: colors.inkMuted, textAlign: 'center', fontWeight: '600' },
 });

@@ -12,7 +12,7 @@ export function SettingsMainScreen({ navigation }: Props) {
     <AppInfoScreen
       eyebrow="Settings"
       title="Preferences and account"
-      body="Adjust reminders, content preferences, pools, appearance, and account details without changing your main study route. Each section should support the learner quietly in the background, not compete with the route itself."
+      body="Manage notifications, content preferences, account, and appearance."
       chips={['Preferences', 'Support', 'Safety']}
       stats={[
         { label: 'Pools', value: String(SETTINGS_SNAPSHOT.pools.length) },

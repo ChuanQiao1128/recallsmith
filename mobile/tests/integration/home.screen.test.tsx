@@ -1,11 +1,13 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-let progressFixture: any[] = [];
-const setActiveDeckSlugMock = vi.fn(async (_slug?: string) => {});
-const loadActiveDeckSlugMock = vi.fn(async () => 'csharp');
+let walletFixture = { availablePulls: 0, reservePulls: 0 };
+let activeSlugFixture: string | null = 'csharp';
+let deckSummariesFixture: any[] = [];
+
 const navigateMock = vi.fn();
+const setActiveDeckSlugMock = vi.fn(async (_slug: string) => {});
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -14,13 +16,13 @@ vi.mock('react-native', () => {
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
-    Modal: ({ children, visible }: any) => (visible ? React.createElement('Modal', null, children) : null),
     Pressable: ({ children, onPress, ...props }: any) =>
       React.createElement(
         'Pressable',
         { ...props, onPress },
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
+    useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
     Alert: { alert: vi.fn() },
     StyleSheet: { create: (styles: any) => styles },
   };
@@ -45,55 +47,29 @@ vi.mock('@react-navigation/native', () => ({
   useFocusEffect: (callback: any) => {
     React.useEffect(() => callback(), [callback]);
   },
-  useNavigation: () => ({ navigate: navigateMock }),
-}));
-
-vi.mock('@react-native-async-storage/async-storage', () => ({
-  default: {
-    getItem: vi.fn(async () => null),
-    setItem: vi.fn(async () => {}),
-    removeItem: vi.fn(async () => {}),
-  },
 }));
 
 vi.mock('../../src/content/activeDeck', () => ({
-  loadActiveDeckSlug: () => loadActiveDeckSlugMock(),
-  setActiveDeckSlug: (slug: string) => setActiveDeckSlugMock(slug),
+  loadActiveDeckSlug: vi.fn(async () => activeSlugFixture),
+  setActiveDeckSlug: vi.fn(async (slug: string) => setActiveDeckSlugMock(slug)),
 }));
 
-vi.mock('../../src/content/deckRepository', () => ({
-  checkManifestForUpdates: vi.fn(async () => ({})),
-  listManifestDecks: vi.fn(async () => [
-    { slug: 'csharp', title: 'C# Interview', locale: 'en-US', version: '1', deckType: 1, totalCards: 1, availability: 'live' },
-  ]),
-  resolveDeckBySlug: vi.fn(async () => ({
-    Slug: 'csharp',
-    Title: 'C# Interview',
-    Locale: 'en-US',
-    Version: '1',
-    DeckType: 1,
-    TotalCards: 1,
-    Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' }],
-  })),
-  installDeckFromUrl: vi.fn(async () => true),
-}));
-
-vi.mock('../../src/review/storage', () => ({
-  loadDeckProgress: vi.fn(async () => progressFixture),
-}));
-
-vi.mock('../../src/notifications/reminders', () => ({
-  syncDailyReminders: vi.fn(async () => {}),
-}));
-
-vi.mock('../../src/sync/progressSync', () => ({
-  forceProgressSync: vi.fn(async () => {}),
-  applyCachedRemoteProgress: vi.fn(async () => {}),
-}));
-
-vi.mock('../../src/premium/premiumStore', () => ({
-  usePremiumUser: () => false,
-  setIsPremiumUser: vi.fn(),
+vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
+  loadHomeDeckSummaries: vi.fn(async () => {
+    const now = Date.now();
+    const totalDue = deckSummariesFixture.reduce((sum, deck) => sum + Number(deck.dueToday ?? 0), 0);
+    return {
+      deckSummaries: deckSummariesFixture,
+      updates: {},
+      allUpcoming30: Array.from({ length: 30 }, (_, i) => ({
+        dateKey: new Date(now + i * 86_400_000).toISOString(),
+        count: i === 0 ? totalDue : 0,
+      })),
+      asOfISO: new Date(now).toISOString(),
+    };
+  }),
+  resolveDeckAction: vi.fn(async () => ({ kind: 'open', slug: 'csharp' })),
+  executeDeckAction: vi.fn(async () => ({ activeSlug: 'csharp' })),
 }));
 
 vi.mock('../../src/auth/authStore', () => ({
@@ -103,57 +79,35 @@ vi.mock('../../src/auth/authStore', () => ({
       accessToken: '',
       init: vi.fn(async () => {}),
       userSub: null,
-      loading: false,
     }),
 }));
 
-vi.mock('../../src/features/gacha/components/HomeHero', () => {
-  const React = require('react');
-  return {
-    __esModule: true,
-    default: ({ hero, onPress }: any) =>
-      React.createElement(
-        'Pressable',
-        { onPress },
-        React.createElement('Text', null, hero.ctaLabel),
-      ),
-  };
-});
-
-vi.mock('../../src/features/gacha/components/TodayPressureCard', () => {
-  const React = require('react');
-  return {
-    __esModule: true,
-    default: () => React.createElement('View', null, React.createElement('Text', null, 'TodayPressureCard')),
-  };
-});
-
-vi.mock('../../src/features/gacha/components/RoutePreview', () => {
-  const React = require('react');
-  return {
-    __esModule: true,
-    default: () => React.createElement('View', null, React.createElement('Text', null, 'RoutePreview')),
-  };
-});
+vi.mock('../../src/premium/premiumStore', () => ({
+  usePremiumUser: () => false,
+  setIsPremiumUser: vi.fn(async () => {}),
+}));
 
 vi.mock('../../src/features/gacha/home/homeRemote', () => ({
-  fetchPremiumDeckUrl: vi.fn(async () => null),
   fetchServerPremium: vi.fn(async () => false),
 }));
 
 vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
-  loadRewardWalletState: vi.fn(async () => ({ availablePulls: 2, reservePulls: 0 })),
+  loadRewardWalletState: vi.fn(async () => walletFixture),
 }));
 
 vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
   loadStreakSnapshot: vi.fn(async () => ({
-    currentDailyStreak: 4,
-    longestDailyStreak: 4,
-    weekCompletedDays: 5,
-    totalQualifiedSessions: 9,
-    lastQualifiedDateKey: '2026-04-24',
-    currentWeekKey: '2026-W17',
+    currentDailyStreak: 2,
+    longestDailyStreak: 2,
+    weekCompletedDays: 2,
+    totalQualifiedSessions: 3,
+    lastQualifiedDateKey: '2026-01-01',
+    currentWeekKey: '2026-W01',
   })),
+}));
+
+vi.mock('../../src/sync/progressSync', () => ({
+  forceProgressSync: vi.fn(async () => {}),
 }));
 
 import { HomeScreen } from '../../src/screens/HomeScreen';
@@ -165,142 +119,163 @@ async function flush() {
   });
 }
 
-function findPressableByLabel(tree: renderer.ReactTestRenderer, label: string) {
-  return tree.root.find(
-    (node) =>
-      (node.type as any) === 'Pressable' &&
-      node.findAll((child) => (child.type as any) === 'Text' && child.props.children === label).length > 0,
-  );
-}
-
-describe('HomeScreen', () => {
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-  let warnSpy: ReturnType<typeof vi.spyOn>;
-  let logSpy: ReturnType<typeof vi.spyOn>;
-
+describe('HomeScreen v9', () => {
   beforeEach(() => {
-    progressFixture = [];
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    walletFixture = { availablePulls: 2, reservePulls: 0 };
+    activeSlugFixture = 'csharp';
+    deckSummariesFixture = [
+      {
+        slug: 'csharp',
+        title: 'C# Interview',
+        locale: 'en-US',
+        version: '1',
+        deckType: 1,
+        totalCards: 10,
+        localCards: 10,
+        studyCards: 10,
+        canStudy: true,
+        dueToday: 1,
+        plannedToday: 1,
+        newToday: 1,
+        masteredApprox: 4,
+        percent: 0.4,
+      },
+      {
+        slug: 'aws',
+        title: 'AWS Core',
+        locale: 'en-US',
+        version: '1',
+        deckType: 1,
+        totalCards: 8,
+        localCards: 8,
+        studyCards: 8,
+        canStudy: true,
+        dueToday: 2,
+        plannedToday: 2,
+        newToday: 0,
+        masteredApprox: 5,
+        percent: 0.62,
+      },
+    ];
     navigateMock.mockReset();
     setActiveDeckSlugMock.mockClear();
-    loadActiveDeckSlugMock.mockClear();
-    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
-  afterEach(() => {
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
-    logSpy.mockRestore();
-  });
-
-  it('opens Challenge when today has work', async () => {
-    progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
-
+  it('renders root shell with one primary CTA surface', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />);
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
     });
     await flush();
 
-    act(() => {
-      findPressableByLabel(tree, 'Start today’s challenge').props.onPress();
-    });
-
-    expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
-    expect(navigateMock).toHaveBeenCalledWith('Challenge', { slug: 'csharp' });
+    expect(tree.root.findByProps({ testID: 'screen-home-root' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'screen-home-primary-cta' })).toBeTruthy();
+    expect(
+      tree.root.findAll(
+        (node) =>
+          node.props?.testID === 'home-primary-cta' && (node.type as any) === 'Pressable',
+      ),
+    ).toHaveLength(1);
+    expect(tree.root.findByProps({ testID: 'home-pack-visual' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'home-draw-status-badge' })).toBeTruthy();
   });
 
-  it('opens Library when there is no pressure today', async () => {
-    progressFixture = [{ stableUid: '1', stage: 1, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 86400000 }];
-
+  it('shows due-card study link and routes it directly to SessionCard', async () => {
+    // The Home daily-study path bypasses the Challenge route-preview
+    // interstitial and drops users straight into the first review card.
+    // Saves a tap on the highest-volume daily action.
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />);
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
     });
     await flush();
 
+    const studyLink = tree.root.findByProps({ testID: 'home-study-due-link' });
+    expect(studyLink).toBeTruthy();
+
     act(() => {
-      findPressableByLabel(tree, 'Open library').props.onPress();
+      studyLink.props.onPress();
     });
 
-    expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
-    expect(navigateMock).toHaveBeenCalledWith('Library');
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', expect.objectContaining({}));
+    const lastCall = navigateMock.mock.calls.find((c) => c[0] === 'SessionCard');
+    expect(lastCall?.[0]).toBe('SessionCard');
   });
 
-  it('keeps draw as a secondary entry without replacing the main CTA', async () => {
-    progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
+  it('hides due-card study link when no deck has due work', async () => {
+    deckSummariesFixture = deckSummariesFixture.map((deck) => ({
+      ...deck,
+      dueToday: 0,
+      plannedToday: 0,
+      newToday: 0,
+    }));
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />);
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
     });
     await flush();
 
-    act(() => {
-      findPressableByLabel(tree, 'Draw support').props.onPress();
-    });
-
-    act(() => {
-      findPressableByLabel(tree, 'Peek at reward draw').props.onPress();
-    });
-
-    expect(navigateMock).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
+    expect(tree.root.findAllByProps({ testID: 'home-study-due-link' })).toHaveLength(0);
   });
 
-  it('keeps home focused on the main route instead of support clutter', async () => {
-    progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
-
+  it('keeps settings button accessible and opens first draw coach link when enabled', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />);
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home', params: { firstDrawCoach: true } } as any}
+        />,
+      );
     });
     await flush();
 
-    const textBlob = tree.root.findAll((node) => (node.type as any) === 'Text').map((node) => {
-      const c = node.props.children;
-      return Array.isArray(c) ? c.join('') : String(c ?? '');
-    }).join('\n');
+    const settings = tree.root.find(
+      (node) => (node.type as any) === 'Pressable' && node.props?.accessibilityLabel === 'Settings',
+    );
+    expect(settings).toBeTruthy();
 
-    expect(textBlob).toContain('C# Interview');
-    expect(textBlob).toContain('TodayPressureCard');
-    expect(textBlob).not.toContain('Week summary');
-    expect(textBlob).not.toContain('Milestones');
-    expect(textBlob).not.toContain('QUIET ROUTE CARD');
-    expect(textBlob).not.toContain('Reward draw');
+    const firstDrawLink = tree.root.findByProps({ testID: 'home-first-draw-link' });
+    act(() => {
+      firstDrawLink.props.onPress();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('Draw', {
+      slug: 'csharp',
+      rewardPending: true,
+    });
   });
 
-  it('shows first draw coach and routes into draw', async () => {
+  // Ready pulls no longer outrank due cards. The primary button is the app's
+  // daily answer to "why are you here", and while there is study work left
+  // that answer is study.
+  it('routes primary CTA to study even when pulls are available', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home', params: { firstDrawCoach: true } } as any} />);
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
     });
     await flush();
 
-    act(() => {
-      findPressableByLabel(tree, 'Draw support').props.onPress();
-    });
-
-    act(() => {
-      findPressableByLabel(tree, 'Start first draw').props.onPress();
-    });
-
-    expect(navigateMock).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
-  });
-
-  it('renders churned state copy when mockState override is provided', async () => {
-    let tree!: renderer.ReactTestRenderer;
+    const primary = tree.root.find(
+      (node) =>
+        node.props?.testID === 'home-primary-cta' && (node.type as any) === 'Pressable',
+    );
     await act(async () => {
-      tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home', params: { mockState: 'churned' } } as any} />);
+      primary.props.onPress();
+      await Promise.resolve();
     });
-    await flush();
 
-    const textBlob = tree.root.findAll((node) => (node.type as any) === 'Text').map((node) => {
-      const c = node.props.children;
-      return Array.isArray(c) ? c.join('') : String(c ?? '');
-    }).join('\n');
-
-    expect(textBlob).toContain('Fresh start is available');
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
+    expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
   });
 });

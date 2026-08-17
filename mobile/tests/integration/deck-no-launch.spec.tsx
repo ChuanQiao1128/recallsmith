@@ -9,6 +9,12 @@ const listManifestDecksMock = vi.fn();
 const resolveDeckBySlugMock = vi.fn();
 const checkManifestForUpdatesMock = vi.fn();
 const installDeckFromUrlMock = vi.fn();
+// Hoisted on purpose. DeckScreen feeds authStore.init into a useCallback that
+// useFocusEffect depends on, so a mock that minted a fresh vi.fn() per render
+// gave the effect a new identity every pass and spun an infinite
+// render/refresh loop (the run OOM'd instead of failing). A stable identity is
+// part of the contract this mock has to honour.
+const authInitMock = vi.fn(async () => {});
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -50,7 +56,7 @@ vi.mock('@react-navigation/native', () => ({
 }));
 
 vi.mock('../../src/auth/authStore', () => ({
-  useAuthStore: (selector: any) => selector({ init: vi.fn(async () => {}) }),
+  useAuthStore: (selector: any) => selector({ init: authInitMock }),
   useAuthUser: () => ({ status: 'signed_out', isSignedIn: false, email: null, loading: false }),
 }));
 
@@ -142,9 +148,20 @@ describe('DeckScreen v7 gate', () => {
       expect(modeSelector).toHaveLength(0);
       expect(grid).toHaveLength(0);
 
-      const routeRoots = tree.root.findAll((node) => node.props?.testID === 'screen-deck-root');
-      const primaryAnchors = tree.root.findAll((node) => node.props?.testID === 'screen-deck-primary-cta');
-      const gatePrimary = tree.root.findAll((node) => node.props?.testID === 'deck-gate-primary-cta');
+      // Host-type filters are load bearing: the react-native mocks are function
+      // components that forward props to a host element of the same name, so a
+      // bare testID predicate matches the composite and the host and counts
+      // every anchor twice. The .test.tsx siblings already do this; these
+      // assertions are about "exactly one anchor in the tree", not node kinds.
+      const routeRoots = tree.root.findAll(
+        (node) => node.props?.testID === 'screen-deck-root' && (node.type as any) === 'SafeAreaView',
+      );
+      const primaryAnchors = tree.root.findAll(
+        (node) => node.props?.testID === 'screen-deck-primary-cta' && (node.type as any) === 'View',
+      );
+      const gatePrimary = tree.root.findAll(
+        (node) => node.props?.testID === 'deck-gate-primary-cta' && (node.type as any) === 'Pressable',
+      );
 
       expect(routeRoots).toHaveLength(1);
       expect(primaryAnchors).toHaveLength(1);
@@ -164,9 +181,17 @@ describe('DeckScreen v7 gate', () => {
 
     const { tree, navigate } = await renderDeck(undefined);
 
-    const routeRoots = tree.root.findAll((node) => node.props?.testID === 'screen-deck-root');
-    const primaryAnchors = tree.root.findAll((node) => node.props?.testID === 'screen-deck-primary-cta');
-    const gatePrimary = tree.root.findAll((node) => node.props?.testID === 'deck-gate-primary-cta');
+    // In the empty state the primary CTA anchor sits on the Pressable itself
+    // rather than on a wrapper View, so the host filter differs from the gate case.
+    const routeRoots = tree.root.findAll(
+      (node) => node.props?.testID === 'screen-deck-root' && (node.type as any) === 'SafeAreaView',
+    );
+    const primaryAnchors = tree.root.findAll(
+      (node) => node.props?.testID === 'screen-deck-primary-cta' && (node.type as any) === 'Pressable',
+    );
+    const gatePrimary = tree.root.findAll(
+      (node) => node.props?.testID === 'deck-gate-primary-cta' && (node.type as any) === 'Pressable',
+    );
 
     expect(routeRoots).toHaveLength(1);
     expect(primaryAnchors).toHaveLength(1);
@@ -181,7 +206,9 @@ describe('DeckScreen v7 gate', () => {
       .join('\n');
     expect(textBlob).toContain('No deck ready yet');
 
-    const emptyPrimary = tree.root.find((node) => node.props?.testID === 'screen-deck-primary-cta');
+    const emptyPrimary = tree.root.find(
+      (node) => node.props?.testID === 'screen-deck-primary-cta' && (node.type as any) === 'Pressable',
+    );
     const emptyPrimaryText = emptyPrimary.find(
       (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
     );

@@ -74,6 +74,7 @@ describe('buildLibraryVM', () => {
     const rows = buildLibraryCardRows({ deck: sampleDeck, progress: sampleProgress, now: NOW });
 
     expect(rows.map((row) => row.status)).toEqual(['new', 'learning', 'mastered', 'new']);
+    expect(rows.map((row) => row.badgeTone)).toEqual(['new', 'learning', 'mastered', 'new']);
     expect(rows[1].isDueToday).toBe(true);
     expect(rows[1].isUpdated).toBe(true);
   });
@@ -83,6 +84,10 @@ describe('buildLibraryVM', () => {
     { filter: 'new', expected: ['1', '4'] },
     { filter: 'learning', expected: ['2'] },
     { filter: 'mastered', expected: ['3'] },
+    // Rarity-tier filters — independent dimension from SRS state.
+    // Sample deck: card 1=COM(d1), 2=RAR(d2), 3=LEG(d3), 4=RAR(d2)
+    { filter: 'rare', expected: ['2', '4'] },
+    { filter: 'legendary', expected: ['3'] },
   ] as const)('filters cards by %s', ({ filter, expected }) => {
     const vm = buildLibraryVM({
       deck: sampleDeck,
@@ -92,5 +97,34 @@ describe('buildLibraryVM', () => {
     });
 
     expect(vm.cards.map((item) => item.stableUid)).toEqual(expected);
+  });
+
+  it('exposes six filter chips including rarity tiers (all/new/learning/mastered/rare/legendary)', () => {
+    const vm = buildLibraryVM({
+      deck: sampleDeck,
+      progress: sampleProgress,
+      now: NOW,
+      filter: 'all',
+    });
+
+    expect(vm.filters.map((item) => item.key)).toEqual([
+      'all',
+      'new',
+      'learning',
+      'mastered',
+      'rare',
+      'legendary',
+    ]);
+    // Counts reflect the deck's distribution, regardless of SRS state
+    const rareChip = vm.filters.find((item) => item.key === 'rare');
+    const legendaryChip = vm.filters.find((item) => item.key === 'legendary');
+    expect(rareChip?.count).toBe(2); // cards 2 and 4 (both Difficulty 2)
+    expect(legendaryChip?.count).toBe(1); // card 3 (Difficulty 3)
+  });
+
+  it('populates per-card rarity from card difficulty', () => {
+    const rows = buildLibraryCardRows({ deck: sampleDeck, progress: sampleProgress, now: NOW });
+
+    expect(rows.map((row) => row.rarity)).toEqual(['COM', 'RAR', 'LEG', 'RAR']);
   });
 });

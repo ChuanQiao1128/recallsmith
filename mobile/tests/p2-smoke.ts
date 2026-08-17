@@ -131,8 +131,9 @@ const reward = resolveSessionReward({
   wallet: { availablePulls: 0, reservePulls: 0 },
 });
 assert.equal(reward.completedFullRun, true);
-assert.equal(reward.rewardPulls, 2);
-assert.match(reward.rewardMessage, /\+2 free pulls/i);
+// v3 reward calibration: full clear → +1 pull (was 2). See rewardResolver.
+assert.equal(reward.rewardPulls, 1);
+assert.match(reward.rewardMessage, /\+1 free pull/i);
 
 const minimumReward = resolveSessionReward({
   sessionDone: 1,

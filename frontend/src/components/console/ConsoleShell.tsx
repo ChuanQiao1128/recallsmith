@@ -8,6 +8,8 @@ type Props = {
   superAdmin: boolean;
   onSignOut: () => void;
 
+  onGoDecks?: () => void;
+  onGoContentIntelligence?: () => void;
   onGoAdminUsers?: () => void;
 
   children: React.ReactNode;
@@ -21,6 +23,8 @@ export function ConsoleShell({
   userLabel,
   superAdmin,
   onSignOut,
+  onGoDecks,
+  onGoContentIntelligence,
   onGoAdminUsers,
   children,
 }: Props) {
@@ -37,6 +41,26 @@ export function ConsoleShell({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            {onGoDecks ? (
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                onClick={onGoDecks}
+              >
+                Decks
+              </button>
+            ) : null}
+
+            {onGoContentIntelligence ? (
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                onClick={onGoContentIntelligence}
+              >
+                Content Intelligence
+              </button>
+            ) : null}
+
             <span className="text-xs px-2 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-700">
               {userLabel}
             </span>

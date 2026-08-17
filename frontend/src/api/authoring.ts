@@ -148,9 +148,32 @@ export async function fetchDeckById(id: number): Promise<ApiResult<Deck>> {
   }
 }
 
-export async function createDeck(params: { 
-  title: string; 
-  slug?: string; 
+export async function fetchDeckBySlug(slug: string): Promise<ApiResult<Deck>> {
+  try {
+    const resp = await http.get<ApiResult<Deck[]>>('/api/v1/authoring/decks', {
+      params: { slug },
+    });
+    const raw = resp.data;
+
+    if (!raw.success) return { ...raw, data: null };
+
+    const list = raw.data ?? [];
+    if (list.length === 0) {
+      return fail<Deck>('Deck not found', 'NOT_FOUND');
+    }
+    const normalized = normalizeDeck(list[0]);
+    if (!normalized) {
+      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+    }
+    return { ...raw, data: normalized };
+  } catch (err) {
+    return fail<Deck>(toApiErrorMessage(err));
+  }
+}
+
+export async function createDeck(params: {
+  title: string;
+  slug?: string;
   description?: string;
   author?: string;
 }): Promise<ApiResult<Deck>> {
@@ -231,11 +254,108 @@ export async function updateDeck(
 
 export async function deleteDeck(id: number): Promise<ApiResult<null>> {
   try {
-    // 统一使用 JSON body 传递参数
-    const resp = await http.delete<ApiResult<null>>('/api/v1/authoring/decks', { data: { id } });
+    // Backend reads id from the query string only (same as deleteCard);
+    // a JSON body is ignored by the DELETE handler.
+    const resp = await http.delete<ApiResult<null>>(
+      `/api/v1/authoring/decks?id=${encodeURIComponent(id)}`,
+    );
     return resp.data;
   } catch (err) {
     return fail<null>(toApiErrorMessage(err));
+  }
+}
+
+// ---------------------- admin decks (keyset-paginated) ----------------------
+
+/** error.code returned when GET /api/v1/admin/decks is not deployed (HTTP 404). */
+export const ADMIN_DECKS_ENDPOINT_MISSING = 'ENDPOINT_NOT_FOUND';
+
+export interface AdminDeckListItem {
+  slug: string;
+  title: string;
+  /** Numeric deck id if the server includes it (not guaranteed by the contract). */
+  id?: number | null;
+  /** Present only if the server includes it; UI falls back to `tier`. */
+  deckType?: number | null;
+  tier?: string | null;
+  availability?: string | null;
+  totalCards?: number | null;
+  version?: number | null;
+  updatedAtMs?: number | null;
+  latestBuildId?: string | null;
+}
+
+export interface AdminDecksPage {
+  items: AdminDeckListItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+function normalizeAdminDeckItem(v: unknown): AdminDeckListItem | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as UnknownRecord;
+
+  const slug = typeof o.slug === 'string' ? o.slug.trim() : '';
+  if (!slug) return null;
+
+  return {
+    slug,
+    title: typeof o.title === 'string' ? o.title : '',
+    id: toOptionalInt(o.id) ?? null,
+    deckType: toOptionalInt(o.deckType) ?? null,
+    tier: typeof o.tier === 'string' && o.tier ? o.tier : null,
+    availability: typeof o.availability === 'string' && o.availability ? o.availability : null,
+    totalCards: toOptionalInt(o.totalCards) ?? null,
+    version: toOptionalInt(o.version) ?? null,
+    updatedAtMs: toOptionalInt(o.updatedAtMs) ?? null,
+    latestBuildId:
+      typeof o.latestBuildId === 'string' && o.latestBuildId.trim()
+        ? o.latestBuildId.trim()
+        : null,
+  };
+}
+
+function normalizeAdminDecksPage(raw: unknown): AdminDecksPage {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as UnknownRecord;
+  const itemsRaw = Array.isArray(o.items) ? o.items : [];
+  const items = itemsRaw
+    .map(normalizeAdminDeckItem)
+    .filter((i): i is AdminDeckListItem => i !== null);
+  const nextCursor = typeof o.nextCursor === 'string' && o.nextCursor ? o.nextCursor : null;
+  return { items, nextCursor, hasMore: o.hasMore === true };
+}
+
+/**
+ * GET /api/v1/admin/decks?limit=&cursor=&q= — keyset-paginated deck list.
+ * Returns error.code ADMIN_DECKS_ENDPOINT_MISSING on HTTP 404 so callers can
+ * feature-detect and fall back to the legacy full-list load.
+ */
+export async function fetchAdminDecksPage(
+  params: { limit?: number; cursor?: string | null; q?: string } = {},
+): Promise<ApiResult<AdminDecksPage>> {
+  try {
+    const query: Record<string, string | number> = {};
+    if (params.limit !== undefined) query.limit = params.limit;
+    if (params.cursor) query.cursor = params.cursor;
+    const q = params.q?.trim();
+    if (q) query.q = q;
+
+    const resp = await http.get<ApiResult<unknown>>('/api/v1/admin/decks', { params: query });
+    const raw = resp.data;
+
+    if (!raw.success) return { ...raw, data: null };
+    return { ...raw, data: normalizeAdminDecksPage(raw.data) };
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 404) {
+      return fail<AdminDecksPage>(
+        'Paginated decks endpoint is not available (HTTP 404).',
+        ADMIN_DECKS_ENDPOINT_MISSING,
+      );
+    }
+    if (axios.isAxiosError(err) && err.response?.status === 403) {
+      return fail<AdminDecksPage>(toApiErrorMessage(err), 'FORBIDDEN');
+    }
+    return fail<AdminDecksPage>(toApiErrorMessage(err));
   }
 }
 
@@ -267,6 +387,9 @@ export async function createCard(params: {
   codeLanguage?: string;
   difficulty?: number;
   orderInDeck?: number;
+  // See the note on updateCard: the backend has parsed this since Cards.cs was
+  // written, and the form has always collected it.
+  revision?: number;
   stableUid?: string;
   realWorldUsage?: string;
 }): Promise<ApiResult<Card>> {
@@ -281,6 +404,7 @@ export async function createCard(params: {
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
     if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
+    if (params.revision !== undefined) body.revision = params.revision;
     body.stableUid = ensureStableUid(params.stableUid);
 
     // 统一使用单条记录返回格式
@@ -306,8 +430,19 @@ export async function updateCard(params: {
   explanation?: string;
   codeSnippet?: string;
   codeLanguage?: string;
+  // The PUT handler has always accepted realWorldUsage (Vpc/Authoring/Cards.cs
+  // update spec); this client just never forwarded it, so the field could be
+  // written on create and never changed again. The markdown importer compares
+  // it when deciding update vs unchanged, so leaving it out here would make a
+  // USAGE edit replan forever and break the "re-import is a no-op" promise.
+  realWorldUsage?: string;
   difficulty?: number;
   orderInDeck?: number;
+  // Distinct from expectedVersion. That one is the optimistic-concurrency
+  // token the server compares; this one is an author-controlled content
+  // revision the backend has parsed since Cards.cs was written. The form
+  // collected it and validated it and no client ever forwarded it.
+  revision?: number;
   stableUid?: string;
   expectedVersion?: number;
 }): Promise<ApiResult<Card>> {
@@ -321,8 +456,10 @@ export async function updateCard(params: {
     if (params.explanation !== undefined) body.explanation = params.explanation;
     if (params.codeSnippet !== undefined) body.codeSnippet = params.codeSnippet;
     if (params.codeLanguage !== undefined) body.codeLanguage = params.codeLanguage;
+    if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
+    if (params.revision !== undefined) body.revision = params.revision;
     if (params.stableUid !== undefined) body.stableUid = params.stableUid;
     if (params.deckId !== undefined) body.deckId = params.deckId;
 
@@ -452,58 +589,84 @@ export async function fetchAdminManifest(): Promise<ApiResult<Record<string, unk
   });
 }
 
-export async function rebuildManifest(): Promise<ApiResult<{ ok: boolean; generatedAtMs?: number; deckCount?: number }>> {
-  try {
-    const resp = await http.post<ApiResult<{ ok: boolean; generatedAtMs?: number; deckCount?: number }>>('/api/v1/admin/manifest/rebuild');
-    return resp.data;
-  } catch (err) {
-    return fail(toApiErrorMessage(err));
-  }
+// ---------------------- Content Intelligence ----------------------
+
+export interface ContentIntelligenceCard {
+  deckSlug: string;
+  deckTitle: string;
+  cardStableUid: string;
+  cardQuestion: string;
+  revision: number;
+  statedDifficulty: number;
+  reviewCount: number;
+  uniqueUserCount: number;
+  firstReviewCount: number;
+  observedDifficultyRaw: number | null;
+  expectedDifficulty: number | null;
+  difficultyGap: number | null;
+  difficultyGapZ: number | null;
+  easyRate: number | null;
+  goodRate: number | null;
+  hardRate: number | null;
+  againRate: number | null;
+  struggleRate: number | null;
+  failureRate: number | null;
+  firstReviewEasyRate: number | null;
+  repeatFailureRate: number | null;
+  medianDwellTimeMs: number | null;
+  expectedDwellTimeMs: number | null;
+  dwellTimeGapZ: number | null;
+  highLevelUserFailureRate: number | null;
+  reviewCountToMastery: number | null;
+  postCardDropoutRate: number | null;
+  difficultyCalibrationStatus:
+    | 'Correctly Calibrated'
+    | 'Difficulty Overstated'
+    | 'Difficulty Understated'
+    | 'Needs More Data';
+  contentQualityStatus:
+    | 'Healthy'
+    | 'Productive Challenge'
+    | 'Too Shallow'
+    | 'Possibly Unclear'
+    | 'Possible Prerequisite Gap'
+    | 'Needs More Data';
+  confidenceLevel: 'Low' | 'Medium' | 'High';
+  fixPriorityScore: number | null;
 }
 
-// ---------------------- dashboard (合并 API，减少请求次数) ----------------------
-
-export interface DashboardData {
-  decks: Deck[];
-  manifest: {
-    meta: {
-      schemaVersion?: number;
-      prefix?: string;
-      generatedAtMs?: number;
-      deckCount?: number;
-    };
-    decks: Array<{
-      slug: string;
-      title?: string;
-      locale?: string;
-      deckType?: number;
-      tier?: string;
-      availability?: string;
-      version?: string;
-      buildId?: string | null;
-      totalCards?: number;
-      path?: string | null;
-      previewCards?: number | null;
-      previewPath?: string | null;
-    }>;
+export interface ContentIntelligenceData {
+  generatedAtMs: number;
+  windowDays: number;
+  deckSlug?: string | null;
+  cards: ContentIntelligenceCard[];
+  summary: {
+    cardCount: number;
+    needsMoreData: number;
+    possiblyUnclear: number;
+    tooShallow: number;
+    productiveChallenge: number;
+    difficultyUnderstated: number;
+    difficultyOverstated: number;
   };
 }
 
-export async function fetchDashboard(): Promise<ApiResult<DashboardData>> {
+export async function fetchContentIntelligence(params?: {
+  deckSlug?: string | null;
+  days?: number;
+  limit?: number;
+}): Promise<ApiResult<ContentIntelligenceData>> {
   try {
-    const resp = await http.get<ApiResult<DashboardData>>('/api/v1/authoring/dashboard');
-    const raw = resp.data;
+    const qs = new URLSearchParams();
+    if (params?.deckSlug) qs.set('deckSlug', params.deckSlug);
+    if (params?.days) qs.set('days', String(params.days));
+    if (params?.limit) qs.set('limit', String(params.limit));
 
-    if (!raw.success) return raw;
-
-    // Normalize decks (filter out nulls)
-    const data = raw.data;
-    if (data?.decks) {
-      data.decks = data.decks.map(normalizeDeck).filter((d): d is Deck => d !== null);
-    }
-
-    return { ...raw, data };
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const resp = await http.get<ApiResult<ContentIntelligenceData>>(`/api/v1/authoring/content-intelligence${suffix}`);
+    return resp.data;
   } catch (err) {
-    return fail<DashboardData>(toApiErrorMessage(err));
+    return fail<ContentIntelligenceData>(toApiErrorMessage(err));
   }
 }
+// experiment: tweak

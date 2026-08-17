@@ -145,17 +145,61 @@ const styles = StyleSheet.create({
   itemRow: { marginTop: spacing.sm, paddingTop: spacing.sm, borderTopWidth: 1 },
   itemTitle: { fontSize: typography.bodySmall, lineHeight: 18, fontWeight: '700' },
   itemSubtitle: { marginTop: 4, fontSize: typography.caption, lineHeight: 16 },
-  primaryButton: { marginTop: spacing.lg, borderRadius: 18, backgroundColor: colors.ink, paddingVertical: 16, alignItems: 'center' },
-  primaryButtonCosmic: { backgroundColor: colors.glowGold },
-  primaryButtonText: { color: '#FFFFFF', fontSize: typography.button, fontWeight: '800' },
+  // ─── Brand-aligned button stack ────────────────────────────────────
+  // Default mode: pokeBlue primary 56pt pill + transparent ghost
+  // secondary + gold-text outlined tertiary. Matches Home / Draw /
+  // Session / Welcome action language. One file change cascades to 19
+  // secondary screens (Settings, Errors, About, Help, Profile, etc.).
+  primaryButton: {
+    marginTop: spacing.lg,
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    shadowColor: 'rgba(44,156,192,0.4)',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  // Cosmic primary stays gold (premium-feel deep theme)
+  primaryButtonCosmic: { backgroundColor: colors.glowGold, shadowColor: 'rgba(232,184,90,0.5)' },
+  primaryButtonText: { color: '#FFFFFF', fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
   primaryButtonTextCosmic: { color: colors.ink },
-  secondaryButton: { marginTop: spacing.sm, borderRadius: 18, backgroundColor: 'rgba(42,34,24,0.08)', paddingVertical: 16, alignItems: 'center' },
-  secondaryButtonCosmic: { backgroundColor: 'rgba(255,255,255,0.08)' },
-  secondaryButtonText: { color: colors.ink, fontSize: typography.bodySmall, fontWeight: '800' },
+  // Secondary = ghost button (transparent + hairline border), matching
+  // the Draw screen's "Open 1" demoted style.
+  secondaryButton: {
+    marginTop: spacing.sm,
+    minHeight: 48,
+    borderRadius: 999,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  // Cosmic secondary uses the same ghost language as default — fully
+  // transparent + warm-cream hairline border. Replaces the slight gray
+  // fill so both themes share one visual vocabulary.
+  secondaryButtonCosmic: { backgroundColor: 'transparent', borderColor: 'rgba(245,236,196,0.22)' },
+  secondaryButtonText: { color: colors.inkSoft, fontSize: typography.bodySmall, fontWeight: '800', letterSpacing: 0.3 },
   secondaryButtonTextCosmic: { color: colors.cosmicInk },
-  tertiaryButton: { marginTop: spacing.sm, borderRadius: 18, alignItems: 'center', justifyContent: 'center', paddingVertical: 16, borderWidth: 1, borderColor: 'rgba(42,34,24,0.08)' },
-  tertiaryButtonCosmic: { borderColor: 'rgba(245,236,196,0.12)' },
-  tertiaryButtonText: { color: colors.gold, fontSize: typography.bodySmall, fontWeight: '800' },
+  // Tertiary stays as outlined gold-text (premium-leaning low-emphasis)
+  tertiaryButton: {
+    marginTop: spacing.sm,
+    minHeight: 48,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(200,136,58,0.32)',
+  },
+  tertiaryButtonCosmic: { borderColor: 'rgba(245,236,196,0.18)' },
+  tertiaryButtonText: { color: colors.gold, fontSize: typography.bodySmall, fontWeight: '800', letterSpacing: 0.3 },
   tertiaryButtonTextCosmic: { color: colors.glowGold },
   footerWrap: { marginTop: spacing.md },
 });

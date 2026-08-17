@@ -48,6 +48,15 @@ public static class Publish
     return _sqs;
   }
 
+  // Warmup hooks. These deliberately expose the existing lazy factory instead of replacing
+  // it: the client must still be creatable on demand so that a skipped or failed warmup
+  // leaves the request path working exactly as before.
+  internal static AmazonSQSClient SqsForWarmup() => SQS();
+
+  // Warmup reads the same captured value the handler reads, so a missing env var is seen
+  // identically in both places.
+  internal static string? WarmupQueueUrl => PublishJobQueueUrl;
+
   // Used by SnapStart runtime hooks to ensure we don't reuse pre-snapshot network state.
   public static void Reset()
   {

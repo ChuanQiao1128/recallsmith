@@ -129,7 +129,10 @@ vi.mock('../../src/features/gacha/session/sessionReviewHelpers', () => ({
 
 vi.mock('../../src/features/gacha/session/reviewContentHelpers', () => ({
   buildCardMap: vi.fn(() => new Map()),
-  buildPreviewDeck: vi.fn((deck: any) => deck),
+  buildPreviewDeck: vi.fn((deck: any, previewCount: number) => ({
+    ...deck,
+    Cards: (deck.Cards ?? []).slice(0, previewCount),
+  })),
   normalizeCodeLanguage: vi.fn(() => 'text'),
   renderSimpleMarkdown: vi.fn(() => []),
   showTrialUpsellDialog: vi.fn(),
@@ -142,9 +145,22 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
     card: { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' },
     progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
   })),
+  planChallengeRoute: vi.fn(() => ({
+    slug: 'csharp',
+    deckTitle: 'C# Interview',
+    mode: 'mixed',
+    limit: 1,
+    minimumGoal: 1,
+    dueCount: 0,
+    newCount: 1,
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    summary: 'C# Interview',
+  })),
 }));
 
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
+import { resolveDeckBySlug } from '../../src/content/deckRepository';
+import { pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
 import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
 
 async function flush() {
@@ -162,13 +178,52 @@ function findPressableByLabel(tree: renderer.ReactTestRenderer, label: string) {
   );
 }
 
+function findTextByLabel(tree: renderer.ReactTestRenderer, label: string) {
+  return tree.root.findAll((node) => (node.type as any) === 'Text' && node.props.children === label);
+}
+
+function buildDeck(overrides: Record<string, unknown> = {}) {
+  return {
+    Slug: 'csharp',
+    Title: 'C# Interview',
+    Locale: 'en-US',
+    Version: '1',
+    DeckType: 1,
+    TotalCards: 1,
+    Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' }],
+    ...overrides,
+  };
+}
+
+function buildChallengeRoute(overrides: Record<string, unknown> = {}) {
+  return {
+    slug: 'csharp',
+    deckTitle: 'C# Interview',
+    mode: 'mixed',
+    limit: 1,
+    minimumGoal: 1,
+    dueCount: 0,
+    newCount: 1,
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    summary: 'C# Interview',
+    ...overrides,
+  };
+}
+
 describe('SessionCardScreen', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     resetSessionStore();
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck() as any);
+    vi.mocked(pickNextCard).mockReturnValue({
+      card: { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' },
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+    });
+    vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute() as any);
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -222,6 +277,135 @@ describe('SessionCardScreen', () => {
       dueCount: 0,
       streakEarned: true,
     });
+  });
+
+  it('passes the planner minimum goal to SessionSummary', async () => {
+    vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ minimumGoal: 2 }) as any);
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{
+            key: 'session-card',
+            name: 'SessionCard',
+            params: { slug: 'csharp', mode: 'mixed', limit: 1 },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Reveal answer').props.onPress();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Good').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({
+      minimumGoal: 2,
+    }));
+  });
+
+  it('computes settlement reward pulls through the reward resolver', async () => {
+    vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 3, minimumGoal: 2 }) as any);
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{
+            key: 'session-card',
+            name: 'SessionCard',
+            params: { slug: 'csharp', mode: 'mixed', limit: 3, completionRoute: 'settlement' },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Reveal answer').props.onPress();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Good').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(navigation.replace).toHaveBeenCalledWith('Settlement', expect.objectContaining({
+      rewardPulls: 0,
+      sessionDone: 1,
+    }));
+  });
+
+  it('uses Continue in the route-complete state', async () => {
+    vi.mocked(pickNextCard).mockReturnValue(null);
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{
+            key: 'session-card',
+            name: 'SessionCard',
+            params: { slug: 'csharp', mode: 'mixed', limit: 1 },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    expect(findTextByLabel(tree, 'Continue')).toHaveLength(1);
+    expect(findTextByLabel(tree, 'View summary')).toHaveLength(0);
+  });
+
+  it('shows passive trial preview progress without adding another action', async () => {
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck({
+      DeckType: 2,
+      TotalCards: 3,
+      Cards: [
+        { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' },
+        { StableUid: '2', OrderInDeck: 2, Difficulty: 1, Question: 'Q2', Answer: 'A2' },
+        { StableUid: '3', OrderInDeck: 3, Difficulty: 1, Question: 'Q3', Answer: 'A3' },
+      ],
+    }) as any);
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{
+            key: 'session-card',
+            name: 'SessionCard',
+            params: { slug: 'csharp', mode: 'mixed', limit: 1, previewLimit: 2 },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const preview = tree.root.findAll(
+      (node) => (node.type as any) === 'View' && node.props?.testID === 'session-card-trial-preview',
+    );
+    expect(preview).toHaveLength(1);
+    expect(findTextByLabel(tree, 'Preview run')).toHaveLength(1);
+    expect(findTextByLabel(tree, 'Unlock Premium')).toHaveLength(0);
   });
 
   it('keeps rating dock mounted while content scrolls', async () => {

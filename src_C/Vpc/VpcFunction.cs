@@ -9,7 +9,13 @@ public sealed class VpcFunction
   public VpcFunction()
   {
     // SnapStart runtime hooks must be registered during init (before snapshot).
+    // Note these never fire while SnapStart is off on this function, which is why the
+    // warmup below hangs off the constructor rather than off a restore hook.
     SnapStartHooks.RegisterOnce();
+
+    // The constructor is the real INIT phase mount point: it runs once per container,
+    // before any request, with the init phase CPU burst. RunOnce never throws.
+    Warmup.RunOnce();
   }
 
   public async Task<APIGatewayProxyResponse> Handler(JsonElement evt)
@@ -93,6 +99,10 @@ public sealed class VpcFunction
       {
         return await Vpc.Db.Migrate.HandleDbMigrate(req, res, auth);
       }
+      if (p.EndsWith("/api/v1/admin/db/content-intelligence-demo", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Db.ContentIntelligenceDemo.HandleContentIntelligenceDemo(req, res, auth);
+      }
       if (p.EndsWith("/api/v1/admin/db/migrations", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Db.Migrate.HandleDbMigrationsList(req, res, auth);
@@ -121,6 +131,14 @@ public sealed class VpcFunction
       {
         return await Vpc.Db.QueryRcEvents.HandleDbRcEvents(req, res, auth);
       }
+      if (p.EndsWith("/api/v1/admin/analytics/outbox/publish", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Analytics.OutboxPublisher.HandlePublishOutbox(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/analytics/content-intelligence/import", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Analytics.ContentIntelligenceSnapshotImport.HandleImportSnapshot(req, res, auth);
+      }
 
       // Authoring
       if (p.EndsWith("/api/v1/authoring/decks", StringComparison.OrdinalIgnoreCase))
@@ -146,6 +164,10 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/v1/authoring/publish/jobs", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Authoring.PublishJobs.HandleFetchPublishJobs(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/authoring/content-intelligence", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.ContentIntelligence.HandleContentIntelligence(req, res, auth);
       }
       if (p.EndsWith("/api/v1/admin/manifest/rebuild", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {
@@ -173,6 +195,11 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/v1/admin/manifest", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Runtime.AdminManifest.HandleAdminManifest(req, res, auth);
+      }
+      // Keyset-paginated console deck list (replaces loading the whole manifest/catalog).
+      if (p.EndsWith("/api/v1/admin/decks", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.AdminDecks.HandleAdminDecks(req, res, auth);
       }
 
       if (
@@ -202,6 +229,15 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/v1/sync/progress", StringComparison.OrdinalIgnoreCase) || p.EndsWith("/api/v1/sync/pull", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Runtime.ProgressGet.HandleProgressGet(req, res, auth);
+      }
+
+      // Gamification state (collection, pity, wallet). Deliberately its own
+      // route and not a field on the review sync: it is snapshot-shaped rather
+      // than event-shaped, and keeping it separate is what lets a failure here
+      // be silently skipped by the client without touching review sync.
+      if (p.EndsWith("/api/v1/draw-state/sync", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Runtime.DrawStateSync.HandleDrawStateSync(req, res, auth);
       }
 
       // Admin users placeholders

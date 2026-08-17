@@ -1,18 +1,9 @@
-// src/hooks/index.ts
-// 统一导出所有自定义 Hooks
+// Nothing in src/ imports this barrel — pages import the concrete files — so it
+// is not a convenience import and adding a hook here wires it to nothing. It is
+// the hook inventory that tests/hookWiring.test.ts reads off disk: that ratchet
+// fails a hook listed here with no caller, and separately asserts no hook under
+// src/hooks/ is missing from the list. Both halves are needed, so the rule is:
+// every hook in this folder appears here, and every hook here has a caller.
 
-// React Query 相关 Hooks
-export { useDecks, useDeck, useCreateDeck, useUpdateDeck, useDeleteDeck } from './useDecks';
-export { useCards, useCreateCard, useUpdateCard, useDeleteCard } from './useCards';
-export { useManifest, useRebuildManifest } from './useManifest';
-export { useDashboard } from './useDashboard';
-
-// 通用自定义 Hooks（面试重点展示）
-export { useLocalStorage } from './useLocalStorage';
-export { useDebounce, useDebouncedCallback } from './useDebounce';
-export { useAsync } from './useAsync';
-export { usePrevious, usePreviousDistinct, useHistory } from './usePrevious';
-export { useIntersectionObserver, useInfiniteScroll, useCountUp } from './useIntersectionObserver';
-
-// 重新导出 QueryClient
-export { queryClient, QueryKeys } from '../api/queryClient';
+export { useDeck } from './useDecks';
+export { useCards, useDeleteCard } from './useCards';

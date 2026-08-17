@@ -17,6 +17,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import { useAuthStore } from '../auth/authStore';
+import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignIn'>;
 
@@ -71,10 +72,11 @@ export default function SignInScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* Background gradient (doesn't capture touches) */}
+      {/* Background gradient — aligned with the rest of the app's
+          parchment palette (was indigo→cyan, off-brand). */}
       <LinearGradient
         pointerEvents="none"
-        colors={['#F5F3FF', '#E0F2FE']}
+        colors={[colors.parchmentBg, colors.parchmentBgDeep]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}
@@ -119,7 +121,7 @@ export default function SignInScreen({ navigation, route }: Props) {
                 autoCorrect={false}
                 keyboardType="email-address"
                 placeholder="you@example.com"
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor={colors.inkMuted}
                 style={styles.input}
                 editable={!loading}
                 returnKeyType="next"
@@ -135,7 +137,7 @@ export default function SignInScreen({ navigation, route }: Props) {
                 autoCorrect={false}
                 secureTextEntry={!showPwd}
                 placeholder="Your password"
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor={colors.inkMuted}
                 style={styles.input}
                 editable={!loading}
                 returnKeyType="done"
@@ -196,92 +198,104 @@ export default function SignInScreen({ navigation, route }: Props) {
   );
 }
 
-const CARD_BG = 'rgba(255,255,255,0.92)';
-const CARD_BORDER = 'rgba(255,255,255,0.55)';
-
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
+  safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   flex: { flex: 1 },
   scrollContent: { paddingHorizontal: 18, paddingTop: 16, paddingBottom: 24 },
 
   pressed: { opacity: 0.9 },
-  disabled: { opacity: 0.6 },
+  disabled: { opacity: 0.55 },
 
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
   backButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.8)',
+    backgroundColor: colors.softCream,
+    borderWidth: 1,
+    borderColor: colors.hairline,
     marginRight: 10,
   },
-  backText: { fontSize: 13, color: '#111827', fontWeight: '700' },
+  backText: { fontSize: 13, color: colors.inkSoft, fontWeight: '800' },
 
-  title: { fontSize: 20, fontWeight: '800', color: '#111827' },
-  subtitle: { marginTop: 2, fontSize: 12, color: '#6B7280' },
+  title: { fontSize: 22, fontWeight: '900', color: colors.ink },
+  subtitle: { marginTop: 4, fontSize: 13, color: colors.inkMuted, lineHeight: 18, fontWeight: '600' },
 
   card: {
     borderRadius: 24,
     paddingVertical: 18,
     paddingHorizontal: 16,
-    backgroundColor: CARD_BG,
+    backgroundColor: colors.softCream,
     borderWidth: 1,
-    borderColor: CARD_BORDER,
-    shadowColor: '#000',
-    shadowOpacity: 0.10,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 12 },
+    borderColor: colors.hairline,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
   },
-  cardTitle: { fontSize: 18, fontWeight: '800', color: '#111827' },
-  cardHint: { marginTop: 4, fontSize: 12, color: '#6B7280' },
+  cardTitle: { fontSize: 18, fontWeight: '900', color: colors.ink },
+  cardHint: { marginTop: 4, fontSize: 12, color: colors.inkMuted, fontWeight: '600' },
 
-  label: { marginTop: 14, fontSize: 12, fontWeight: '800', color: '#374151' },
+  label: { marginTop: 14, fontSize: 12, fontWeight: '900', color: colors.inkSoft, letterSpacing: 0.4 },
 
   inputWrap: {
     marginTop: 8,
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(17,24,39,0.10)',
+    borderColor: colors.hairline,
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 12,
     paddingVertical: 2,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  input: { flex: 1, paddingVertical: 10, fontSize: 14, color: '#111827' },
+  input: { flex: 1, paddingVertical: 12, fontSize: 14, color: colors.inkSoft },
 
+  // Show/Hide password pill — pokeBlue brand color, no more indigo
   pill: {
     marginLeft: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: 'rgba(79,70,229,0.10)',
+    backgroundColor: colors.pokeBlueFaint,
   },
-  pillText: { color: '#4F46E5', fontWeight: '800', fontSize: 12 },
+  pillText: { color: colors.pokeBlueDeep, fontWeight: '900', fontSize: 12 },
 
+  // Primary CTA — pokeBlue 56pt pill matching the rest of the app
   primaryBtn: {
     marginTop: 16,
-    borderRadius: 16,
-    backgroundColor: '#4F46E5',
-    paddingVertical: 13,
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
+    paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: 'rgba(44,156,192,0.4)',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
-  primaryText: { fontSize: 14, fontWeight: '900', color: '#FFFFFF' },
+  primaryText: { fontSize: 15, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.4 },
   rowCenter: { flexDirection: 'row', alignItems: 'center' },
 
   dividerRow: { flexDirection: 'row', alignItems: 'center', marginTop: 14, marginBottom: 10 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: 'rgba(17,24,39,0.10)' },
-  dividerText: { marginHorizontal: 10, fontSize: 12, color: '#6B7280', fontWeight: '700' },
+  dividerLine: { flex: 1, height: 1, backgroundColor: colors.hairline },
+  dividerText: { marginHorizontal: 10, fontSize: 12, color: colors.inkMuted, fontWeight: '700' },
 
+  // Secondary "Create an account" — ghost button matching DrawScreen ghost
   secondaryBtn: {
-    borderRadius: 16,
-    backgroundColor: 'rgba(17,24,39,0.04)',
+    minHeight: 48,
+    borderRadius: 999,
+    backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: 'rgba(17,24,39,0.10)',
-    paddingVertical: 12,
+    borderColor: colors.hairline,
+    paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  secondaryText: { fontSize: 14, fontWeight: '800', color: '#111827' },
+  secondaryText: { fontSize: 14, fontWeight: '800', color: colors.inkSoft },
 
-  footnote: { marginTop: 12, fontSize: 11, color: '#6B7280', lineHeight: 16 },
+  footnote: { marginTop: 12, fontSize: 11, color: colors.inkMuted, lineHeight: 16, fontWeight: '600' },
 });

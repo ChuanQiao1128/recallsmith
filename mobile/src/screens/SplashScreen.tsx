@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { getOnboardingStage } from '../features/gacha/onboarding/onboardingPrefs';
+import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Splash'>;
 
@@ -25,11 +26,14 @@ export function SplashScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <LinearGradient colors={['#0B1030', '#1E1B4B']} style={styles.gradient}>
+      <LinearGradient colors={[colors.parchmentBg, colors.parchmentBgDeep]} style={styles.gradient}>
         <View style={styles.center}>
-          <Text style={styles.brand}>RecallSmith</Text>
-          <Text style={styles.tagline}>Adaptive study, wrapped like a ritual.</Text>
-          <ActivityIndicator color="#E8B85A" style={{ marginTop: 16 }} />
+          {/* Soft gold halo behind the brand text — matches the warm
+              backlight technique used on Home/Draw screens. */}
+          <View pointerEvents="none" style={styles.halo} />
+          <Text style={styles.brand}>DeveloperCards</Text>
+          <Text style={styles.tagline}>Open packs. Learn cards. Master the deck.</Text>
+          <ActivityIndicator color={colors.gold} style={{ marginTop: 16 }} />
         </View>
       </LinearGradient>
     </SafeAreaView>
@@ -39,9 +43,23 @@ export function SplashScreen({ navigation }: Props) {
 export default SplashScreen;
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#0B1030' },
+  safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
-  brand: { fontSize: 32, fontWeight: '900', color: '#F5ECC4' },
-  tagline: { marginTop: 8, fontSize: 14, lineHeight: 20, color: '#D6C79A', textAlign: 'center' },
+  halo: {
+    position: 'absolute',
+    width: 280,
+    height: 280,
+    borderRadius: 280,
+    backgroundColor: 'rgba(232,184,90,0.18)', // glowGold @ 18%
+  },
+  brand: { fontSize: 34, fontWeight: '900', color: colors.ink, letterSpacing: -0.5 },
+  tagline: {
+    marginTop: 10,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.inkMuted,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
 });

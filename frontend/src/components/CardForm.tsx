@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Deck } from '../types/deck';
+import { hasContent } from '../lib/cardRules';
 
 // highlight.js core + languages
 import hljs from 'highlight.js/lib/core';
@@ -64,6 +65,29 @@ function slugifyForStableUid(input: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+/**
+ * The same normalisation, minus the one rule that cannot run mid-keystroke.
+ *
+ * The field re-slugifies its whole value on every keypress, so stripping
+ * trailing separators there deleted each hyphen the instant it was typed and
+ * the next character closed the gap: `cs-async-001` typed by hand arrived as
+ * `csasync001`, while the identical string pasted in one go survived. The .md
+ * file carries the hyphenated spelling, and deckImport reconciles on uid alone,
+ * so the next import read the hand-typed card as a stranger and created a
+ * duplicate rather than updating it.
+ *
+ * Leading separators are still stripped: a uid may not start with one, and
+ * removing it costs the typist nothing, because there is no keystroke it could
+ * be on the way to. A trailing one is every hyphen at the moment it is typed,
+ * which is why it has to wait for blur.
+ */
+function slugifyWhileTyping(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '');
+}
+
 function mapToHlLanguage(codeLang: string): string | null {
   if (!codeLang) return null;
   switch (codeLang) {
@@ -104,11 +128,11 @@ export function CardForm(props: CardFormProps) {
     const trimmedQuestion = values.question.trim();
     const trimmedUid = values.stableUid.trim();
 
-    if (!trimmedQuestion) {
+    if (!hasContent(values.question)) {
       setState(prev => ({ ...prev, error: 'Question is required.' }));
       return;
     }
-    if (!trimmedUid) {
+    if (!hasContent(values.stableUid)) {
       setState(prev => ({ ...prev, error: 'StableUid is required.' }));
       return;
     }
@@ -179,13 +203,14 @@ export function CardForm(props: CardFormProps) {
 
       {/* Question */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">
+        <label htmlFor="question" className="block text-sm font-medium text-slate-700 mb-1">
           Question <span className="text-red-500">*</span>
         </label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      min-h-[80px]"
+          id="question"
           value={values.question}
           onChange={e => handleChange('question', e.target.value)}
           onBlur={handleQuestionBlur}
@@ -195,29 +220,36 @@ export function CardForm(props: CardFormProps) {
 
       {/* StableUid */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">
+        <label htmlFor="stableUid" className="block text-sm font-medium text-slate-700 mb-1">
           Stable UID <span className="text-red-500">*</span>
         </label>
         <input
           type="text"
-          className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
-                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+          className={`block w-full rounded-md border px-3 py-2 text-sm font-mono
+                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+                     ${mode === 'edit' ? 'border-slate-200 bg-slate-100 text-slate-500' : 'border-slate-300'}`}
+          id="stableUid"
           value={values.stableUid}
-          onChange={e => handleChange('stableUid', slugifyForStableUid(e.target.value))}
+          readOnly={mode === 'edit'}
+          onChange={e => handleChange('stableUid', slugifyWhileTyping(e.target.value))}
+          onBlur={e => handleChange('stableUid', slugifyForStableUid(e.target.value))}
           placeholder="js-basics-let-const-var"
         />
         <p className="mt-1 text-xs text-slate-500">
-          每个 Deck 内唯一的稳定 ID。默认根据 Question 自动生成，可以手动调整。
+          {mode === 'edit'
+            ? '这张卡的稳定 ID 不能改。它是这张卡在全系统里的身份：复习进度按它归档，导入也按它对账。改掉等于把这张卡上已有的学习记录全部弃掉，再当成一张新卡重新开始。'
+            : '每个 Deck 内唯一的稳定 ID。默认根据 Question 自动生成，可以手动调整。'}
         </p>
       </div>
 
       {/* Explanation */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">Explanation</label>
+        <label htmlFor="explanation" className="block text-sm font-medium text-slate-700 mb-1">Explanation</label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      min-h-[100px]"
+          id="explanation"
           value={values.explanation}
           onChange={e => handleChange('explanation', e.target.value)}
           placeholder="A concise but clear explanation of the answer..."
@@ -257,6 +289,17 @@ export function CardForm(props: CardFormProps) {
             <option value={1}>Easy</option>
             <option value={2}>Medium</option>
             <option value={3}>Hard</option>
+            {/* The importer accepts difficulty 0..4, this list offers 1..3. A
+                select handed a value it does not list falls back to rendering
+                its first option, so a card holding 0 or 4 appeared as "Easy" —
+                the screen stating a difficulty the card does not have. Adding
+                the actual value keeps the display honest without inventing a
+                meaning for 0 and 4 that the rest of the system does not have.
+                It appears only for the card that already holds such a value, so
+                it cannot be picked for a new one. */}
+            {![1, 2, 3].includes(values.difficulty) && (
+              <option value={values.difficulty}>{values.difficulty}（导入时写入，不在常用范围）</option>
+            )}
           </select>
         </div>
 
@@ -289,11 +332,12 @@ export function CardForm(props: CardFormProps) {
 
       {/* Code Snippet + Preview */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">Code Snippet</label>
+        <label htmlFor="codeSnippet" className="block text-sm font-medium text-slate-700 mb-1">Code Snippet</label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      min-h-[140px]"
+          id="codeSnippet"
           value={values.codeSnippet}
           onChange={e => handleChange('codeSnippet', e.target.value)}
           placeholder={`function makeCounter() {\n  let count = 0;\n  return function () {\n    count++;\n    return count;\n  };\n}`}
@@ -318,11 +362,12 @@ export function CardForm(props: CardFormProps) {
 
         {/* RealWorldUsage */}
       <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">RealWorldUsage</label>
+        <label htmlFor="realWorldUsage" className="block text-sm font-medium text-slate-700 mb-1">RealWorldUsage</label>
         <textarea
           className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                      focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                      min-h-[90px]"
+          id="realWorldUsage"
           value={values.realWorldUsage}
           onChange={e => handleChange('realWorldUsage', e.target.value)}
           placeholder="Where would you use this in real projects? Any pitfalls?"

@@ -1,18 +1,48 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { deleteCard, fetchCardsByDeck, fetchDeckById } from '../api/authoring';
-import type { Deck } from '../types/deck';
-import type { Card } from '../types/card';
+import { useDeck } from '../hooks/useDecks';
+import { useCards, useDeleteCard } from '../hooks/useCards';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { RarityBadge } from '../components/RarityBadge';
 import { RarityDistribution } from '../components/RarityDistribution';
+import { ErrorBannerList } from '../components/ui/ErrorBanner';
+import {
+  emptyErrorFeed,
+  clearNotice,
+  reportBusinessFailure,
+  reportThrownFailure,
+} from '../lib/errorFeed';
+import type { ErrorNotice } from '../lib/errorFeed';
 
-interface CardListState {
-  deckId: number;
-  loading: boolean;
-  error: string | null;
-  deck: Deck | null;
-  cards: Card[];
+// One key for the delete action: a user who retries against a server that is
+// still refusing gets the latest verdict, not a growing stack of copies.
+const ERR_DELETE_CARD = 'card.delete';
+
+/**
+ * The page's one failure surface. Both the "no deckId in the URL" case and a
+ * load that came back wrong land here, exactly as they did when a single
+ * `state.error` string drove this block.
+ */
+function LoadFailureScreen({ message }: { message: string }) {
+  return (
+    <div className="min-h-screen bg-slate-100">
+      <header className="bg-white border-b border-slate-200">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+          <h1 className="text-xl font-semibold text-slate-800">Deck Cards</h1>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← Back to Decks
+          </Link>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-4 py-6">
+        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
+          <div className="font-semibold mb-1">Failed to load cards</div>
+          <div className="text-sm">{message}</div>
+        </div>
+      </main>
+    </div>
+  );
 }
 
 export function CardListPage() {
@@ -26,75 +56,17 @@ export function CardListPage() {
   const user = useMemo(() => readSessionUser(), []);
   const superAdmin = useMemo(() => isSuperAdmin(user), [user]);
 
-  const [state, setState] = useState<CardListState>(() => ({
-    deckId,
-    loading: !invalidDeckId,
-    error: invalidDeckId ? 'Missing or invalid deckId.' : null,
-    deck: null,
-    cards: [],
-  }));
+  // The read path. Both requests are keyed by deckId, which is what replaces
+  // the two guards this page used to keep by hand — a `cancelled` flag captured
+  // by the fetch effect, and a `state.deckId !== deckId` comparison — so a
+  // response for a deck the user already left cannot repaint the current one.
+  // tests/cardListPageRace.test.tsx is the same pair of assertions, written and
+  // made green against the hand-guarded version before this rewrite.
+  const deckQuery = useDeck(deckId);
+  const cardsQuery = useCards(deckId);
+  const deleteCardMutation = useDeleteCard();
 
-  useEffect(() => {
-    if (invalidDeckId) return;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const [deckResult, cardsResult] = await Promise.all([
-          fetchDeckById(deckId),
-          fetchCardsByDeck(deckId),
-        ]);
-        if (cancelled) return;
-
-        if (!deckResult.success || !deckResult.data) {
-          setState({
-            deckId,
-            loading: false,
-            error: deckResult.error?.message ?? 'Deck not found.',
-            deck: null,
-            cards: [],
-          });
-          return;
-        }
-
-        if (!cardsResult.success) {
-          setState({
-            deckId,
-            loading: false,
-            error: cardsResult.error?.message ?? 'Failed to load cards.',
-            deck: deckResult.data,
-            cards: [],
-          });
-          return;
-        }
-
-        setState({
-          deckId,
-          loading: false,
-          error: null,
-          deck: deckResult.data,
-          cards: cardsResult.data ?? [],
-        });
-      } catch (err: unknown) {
-        if (cancelled) return;
-
-        setState({
-          deckId,
-          loading: false,
-          error: err instanceof Error ? err.message : 'Network error.',
-          deck: null,
-          cards: [],
-        });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [deckId, invalidDeckId]);
-
-  const effectiveLoading = state.loading || state.deckId !== deckId;
+  const [errors, setErrors] = useState<ErrorNotice[]>(emptyErrorFeed);
 
   async function handleDelete(cardId: number) {
     if (!superAdmin) return;
@@ -102,23 +74,45 @@ export function CardListPage() {
     const ok = window.confirm('Are you sure you want to delete this card?');
     if (!ok) return;
 
+    // Clearing up front is what makes a successful retry remove the banner,
+    // instead of every success path having to remember to.
+    setErrors(prev => clearNotice(prev, ERR_DELETE_CARD));
+
     try {
-      const result = await deleteCard(cardId);
+      // The mutation hands back the ApiResult rather than throwing on a
+      // refusal, so the two failures stay distinguishable here: a server that
+      // said no reaches the line below, a request that never came back reaches
+      // the catch. They recommend opposite things.
+      const { result } = await deleteCardMutation.mutateAsync({ cardId, deckId });
       if (!result.success) {
-        alert(result.error?.message ?? 'Delete card failed.');
+        setErrors(prev =>
+          reportBusinessFailure(
+            prev,
+            ERR_DELETE_CARD,
+            `Deleting card #${cardId} failed`,
+            result.error?.message,
+          ),
+        );
         return;
       }
-
-      setState(prev => ({
-        ...prev,
-        cards: prev.cards.filter(c => c.id !== cardId),
-      }));
+      // The deleted row leaves the screen because the mutation removed it from
+      // the cards query's cache, not because this page filtered a local array.
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Network error.');
+      setErrors(prev =>
+        reportThrownFailure(prev, ERR_DELETE_CARD, `Deleting card #${cardId} failed`, err),
+      );
     }
   }
 
-  if (effectiveLoading) {
+  // This has to come before the pending check, not after it. In react-query v5
+  // a disabled query reports status 'pending' forever — idle only shows up in
+  // fetchStatus — so reading isPending first would leave a URL with no deckId
+  // on "Loading cards..." for good, where today it says so immediately.
+  if (invalidDeckId) {
+    return <LoadFailureScreen message="Missing or invalid deckId." />;
+  }
+
+  if (deckQuery.isPending || cardsQuery.isPending) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-slate-600 text-lg">Loading cards...</div>
@@ -126,30 +120,26 @@ export function CardListPage() {
     );
   }
 
-  if (state.error || !state.deck) {
-    return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">Deck Cards</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
+  const deck = deckQuery.data ?? null;
 
-        <main className="max-w-4xl mx-auto px-4 py-6">
-          <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
-            <div className="font-semibold mb-1">Failed to load cards</div>
-            <div className="text-sm">{state.error ?? 'Unknown error'}</div>
-          </div>
-        </main>
-      </div>
-    );
+  // Same precedence as before: whatever went wrong with the deck is what the
+  // user hears about, and a deck that came back empty is "not found" rather
+  // than an error, because a successful response carrying no deck is exactly
+  // what the old `!deckResult.data` branch treated as not found.
+  const loadError =
+    deckQuery.error instanceof Error
+      ? deckQuery.error.message
+      : deck === null
+        ? 'Deck not found.'
+        : cardsQuery.error instanceof Error
+          ? cardsQuery.error.message
+          : null;
+
+  if (loadError !== null || deck === null) {
+    return <LoadFailureScreen message={loadError ?? 'Unknown error'} />;
   }
 
-  const deck = state.deck;
-  const cards = state.cards;
+  const cards = cardsQuery.data ?? [];
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -180,6 +170,15 @@ export function CardListPage() {
 
             <button
               type="button"
+              className="text-sm px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+              onClick={() => navigate(`/decks/cards/import?deckId=${deck.id}`)}
+              title="Paste or load a markdown deck document and reconcile it against this deck"
+            >
+              Import Markdown
+            </button>
+
+            <button
+              type="button"
               className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium
                          bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800
                          focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -192,6 +191,16 @@ export function CardListPage() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-6">
+        {/* Failed deletes land here rather than in a modal dialog, so the row
+            the user was working on stays visible and clickable. */}
+        {errors.length > 0 && (
+          <div className="mb-4">
+            <ErrorBannerList
+              notices={errors}
+              onDismiss={key => setErrors(prev => clearNotice(prev, key))}
+            />
+          </div>
+        )}
         <RarityDistribution cards={cards} />
         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">

@@ -247,11 +247,16 @@ function inferStatusKind(input: {
     return 'first_run';
   }
 
-  if (draw.state === 'wallet-full') {
+  const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
+
+  // A full wallet is a nudge about a reward, never a verdict about the day.
+  // Ranking it above the clear states used to hide "today is done" behind
+  // "wallet is full", and now that the primary button follows the kind into
+  // study, that masking would point the button at work that does not exist.
+  if (draw.state === 'wallet-full' && hasTodayWork) {
     return 'wallet_full';
   }
 
-  const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
   if (completedRouteToday || (qualifiedToday && !hasTodayWork)) {
     return 'today_full_clear';
   }
@@ -275,7 +280,28 @@ function inferStatusKind(input: {
   return 'nothing_to_learn';
 }
 
-function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
+// Only these two kinds mean "today's learning is settled". They are the only
+// ones allowed to hand the primary button to the reward draw: ready pulls are
+// a reward for study, and a reward that can outrank study makes the main
+// button answer a question the user did not ask. The whitelist is over the
+// kind alone because the kind already encodes the answer, so no extra flag has
+// to be threaded through the view model to reach this decision.
+const DRAW_PRIMARY_KINDS: ReadonlySet<HomeCtaKind> = new Set<HomeCtaKind>([
+  'today_full_clear',
+  'nothing_to_learn',
+]);
+
+// The primary button names the screen it opens. It used to render
+// "Open <deck title>" and then navigate to the draw chamber, so the one
+// sentence Home says to a user every day misdescribed its own destination.
+// Wording follows drawState.ts, which calls this surface a draw and never
+// borrows a deck title for it.
+const DRAW_CTA_LABEL = 'Open reward draw';
+
+function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCtaVM {
+  const { kind, draw } = params;
+  const drawTakesPrimary = draw.state !== 'locked' && DRAW_PRIMARY_KINDS.has(kind);
+
   switch (kind) {
     case 'first_run':
       return {
@@ -304,16 +330,25 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
     case 'today_done':
       return {
         kind,
-        label: 'Minimum goal reached',
-        nav: 'draw',
+        label: 'Continue today’s challenge',
+        nav: 'challenge',
         testID: 'home-primary-cta',
         disabled: false,
       };
     case 'today_full_clear':
+      if (drawTakesPrimary) {
+        return {
+          kind,
+          label: DRAW_CTA_LABEL,
+          nav: 'draw',
+          testID: 'home-primary-cta',
+          disabled: false,
+        };
+      }
       return {
         kind,
-        label: 'Full clear completed',
-        nav: 'draw',
+        label: 'Open library',
+        nav: 'library',
         testID: 'home-primary-cta',
         disabled: false,
       };
@@ -326,6 +361,15 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
         disabled: false,
       };
     case 'nothing_to_learn':
+      if (drawTakesPrimary) {
+        return {
+          kind,
+          label: DRAW_CTA_LABEL,
+          nav: 'draw',
+          testID: 'home-primary-cta',
+          disabled: false,
+        };
+      }
       return {
         kind,
         label: 'Open library',
@@ -334,10 +378,13 @@ function mapStatusToCta(kind: HomeCtaKind): HomeCtaVM {
         disabled: false,
       };
     case 'wallet_full':
+      // Reachable only while today still has work (see inferStatusKind), so
+      // study is the honest destination and the full wallet stays a hero-copy
+      // nudge instead of taking the button.
       return {
         kind,
-        label: 'Spend reward pulls',
-        nav: 'draw',
+        label: 'Start today’s challenge',
+        nav: 'challenge',
         testID: 'home-primary-cta',
         disabled: false,
       };
@@ -375,6 +422,15 @@ function buildHeroCopy(params: {
   hasSignedInUser: boolean;
 }): { eyebrow: string; title: string; subtitle: string; helper: string } {
   const { statusKind, selectedDeck, counts, hasSignedInUser } = params;
+
+  if (statusKind === 'error') {
+    return {
+      eyebrow: 'Home',
+      title: 'Could not refresh Home right now',
+      subtitle: 'Your local progress is safe. Retry to sync state.',
+      helper: 'If this keeps happening, reopen the app after network stabilizes.',
+    };
+  }
 
   if (!selectedDeck) {
     return {
@@ -438,15 +494,11 @@ function buildHeroCopy(params: {
       return {
         eyebrow: 'Today',
         title: 'Reward wallet is full',
-        subtitle: 'Spend pulls first, then continue the study loop.',
+        // The primary button now sends this state into study, so the nudge
+        // has to agree with it. Telling the user to spend pulls first while
+        // the button starts a session is the same label deception in copy.
+        subtitle: 'Clear today’s route first, then spend pulls so reserve can flow.',
         helper: `${FREE_PULL_CAP} ready and ${FREE_PULL_OVERFLOW_CAP} reserve are currently occupied.`,
-      };
-    case 'error':
-      return {
-        eyebrow: 'Home',
-        title: 'Could not refresh Home right now',
-        subtitle: 'Your local progress is safe. Retry to sync state.',
-        helper: 'If this keeps happening, reopen the app after network stabilizes.',
       };
     default: {
       const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
@@ -591,8 +643,11 @@ export function buildHomeVM(params: {
     errorMessage,
     runtimeStatus,
   });
-  let cta = mapStatusToCta(statusKind);
-  if (!selectedDeck) {
+  let cta = mapStatusToCta({
+    kind: statusKind,
+    draw,
+  });
+  if (!selectedDeck && statusKind !== 'error') {
     cta = {
       kind: 'first_run',
       label: 'Open library',
@@ -600,7 +655,7 @@ export function buildHomeVM(params: {
       testID: 'home-primary-cta',
       disabled: false,
     };
-  } else if (!selectedDeck.canStudy && statusKind === 'first_run') {
+  } else if (selectedDeck && !selectedDeck.canStudy && statusKind === 'first_run') {
     cta = {
       ...cta,
       label: 'Open library',
@@ -673,4 +728,39 @@ export function buildHomeVM(params: {
   }
 
   return vm;
+}
+
+type BuildHomeVMParams = Parameters<typeof buildHomeVM>[0];
+
+export type HomeScreenVMInput =
+  | { state: 'empty' }
+  | { state: 'ready'; params: BuildHomeVMParams }
+  | {
+      state: 'error';
+      hasSignedInUser: boolean;
+      wallet?: RewardWalletState | null;
+      message: string;
+    };
+
+export function buildHomeScreenVM(input: HomeScreenVMInput): HomeViewModel {
+  switch (input.state) {
+    case 'empty':
+      return buildHomeVM({
+        deckSummaries: [],
+        selectedSlug: null,
+        hasSignedInUser: false,
+      });
+    case 'error':
+      return buildHomeVM({
+        deckSummaries: [],
+        selectedSlug: null,
+        hasSignedInUser: input.hasSignedInUser,
+        wallet: input.wallet,
+        statusHint: 'error',
+        errorMessage: input.message,
+      });
+    case 'ready':
+    default:
+      return buildHomeVM(input.params);
+  }
 }

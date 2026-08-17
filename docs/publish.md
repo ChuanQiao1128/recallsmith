@@ -139,16 +139,3 @@ await SQS().SendMessageAsync(request);
     *   *(运维注意：确保 SQS 可见性超时 Visibility Timeout 设置为 Lambda Timeout 的 6 倍以上，防止活还没干完就被 SQS 提前判死刑。)*
 
 ---
-
-## 💡 附录：面试实战精要 (Interview Q&A)
-
-当你向面试官讲解这套架构时，可主动抛出以下高价值亮点：
-
-1. **"我是怎么处理分布式双写失败的？"**
-   *“在往数据库插入 PENDING 并向 SQS 发消息时，由于这不是强一致性事务。我用 try-catch 包裹了 SQS API 并在 catch 中将数据库记录标为 FAILED 进行了回退补偿，防止产生永远卡死的孤儿任务。”*
-2. **"我是怎么处理用户狂点刷新导致资源浪费的？"**
-   *“除了前端的 loading 防抖，我在 API 层加入了基于时间窗口的 15 分钟幂等性锁。一旦发现卡组正在处理中，不再发起新任务，而是顺滑地将老任务 jobId 返给前端让其恢复轮询。”*
-3. **"我是怎么处理 Serverless 大数据量 OOM 问题的？"**
-   *“绝对不在 Lambda 内存中拼接大型 JSON String。我使用了 IAsyncEnumerable 与 SerializeAsync 组合，将几千张卡片的数据如流水线般写入 Lambda 的临时磁盘，配合 AWS S3 的分块流式上传，将内存占用严格压制在个位数 MB。”*
-4. **"Sqs At-Least-Once 的坑我是怎么填的？"**
-   *“利用 PostgreSQL 单行事务的原子性，写了一条带有影响行数校验的 CAS 乐观锁语句。并在锁里内置了时间戳心跳，如果前一个 Lambda OOM 猝死，新的重试 Lambda 可以在 15 分钟后强行窃取僵尸任务。”*

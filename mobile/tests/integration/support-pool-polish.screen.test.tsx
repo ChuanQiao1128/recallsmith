@@ -81,6 +81,13 @@ describe('support and pool polish screens', () => {
       settingsTree = renderer.create(<SettingsMainScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'settings', name: 'SettingsMain' } as any} />);
     });
     const settingsBlob = textBlob(settingsTree);
-    expect(settingsBlob).toContain('support the learner quietly in the background');
+    // The hero body was previously asserted via the dev-language phrase
+    // "support the learner quietly in the background" — that string was
+    // removed as part of v3 (user-voice copy). The "support rail" framing
+    // is still preserved through the Support chip in the hero.
+    expect(settingsBlob).toContain('Support');
+    // Settings should not duplicate Home content — guard that the
+    // primary daily-study CTA copy doesn't leak in.
+    expect(settingsBlob).not.toContain("Start today's challenge");
   });
 });

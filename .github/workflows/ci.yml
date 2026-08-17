@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  mobile:
+    name: mobile (vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npx vitest run
+
+  frontend:
+    name: frontend (vitest + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # `npm run lint` (= `eslint .`) rather than an explicit path list, because
+      # `.` is a strict superset (102 files vs 98 today) and cannot be defeated
+      # by adding a top-level file and forgetting to extend the list.
+      #
+      # NO `--max-warnings 0`, deliberately. The one warning is
+      # DeckListPage.tsx:590 (react-hooks/exhaustive-deps on the publish-jobs
+      # poller); fixing it means touching polling code that
+      # tests/deckListPagePolling.test.tsx pins character-for-character. The bar
+      # here is 0 ERRORS, not 0 problems.
+      - run: npm run lint
+      - run: npx vitest run
+      # This IS the type-check step. `npm run build` is `tsc -b && vite build`,
+      # so a type error stops the job before vite starts.
+      #
+      # And never `tsc --noEmit`: tsconfig.json here is references-only with no
+      # include, so it checks ZERO files — `--listFiles` prints nothing and it
+      # exits 0 with a real type error sitting in src/. It is not a check.
+      - run: npm run build
+
+  backend:
+    name: backend (dotnet test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src_C
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      # The test project is named explicitly so this step is pinned to one
+      # known project: src_C's root holds both RecallSmith.Lambda.sln and
+      # RecallSmith.Lambda.csproj, so a bare `dotnet test` here depends on
+      # which of the two MSBuild picks.
+      - run: dotnet test Tests/RecallSmith.Lambda.IntegrationTests

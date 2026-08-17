@@ -9,6 +9,7 @@ import { RewardSummaryCard } from '../features/gacha/components/RewardSummaryCar
 import { SummaryProgressBlock } from '../features/gacha/components/SummaryProgressBlock';
 import { buildDrawState } from '../features/gacha/draw/drawState';
 import { resolveNewMilestones, type Milestone } from '../features/gacha/milestones/milestoneTracker';
+import { computeSessionRewardPulls } from '../features/gacha/rewards/rewardResolver';
 import { applySessionRewardToWallet, loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { buildSessionSummaryVM } from '../features/gacha/session/summaryMapper';
 import { applySessionStreak, loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
@@ -61,7 +62,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
     (async () => {
       try {
         if (sessionId) {
-          const rewardPulls = sessionLimit > 0 && sessionDone >= sessionLimit ? 2 : sessionDone >= minimumGoal ? 1 : 0;
+          const rewardPulls = computeSessionRewardPulls({ sessionDone, sessionLimit, minimumGoal });
           const [rewardResult, streakResult] = await Promise.all([
             applySessionRewardToWallet(sessionId, rewardPulls),
             applySessionStreak({ sessionId, earned: streakEarned }),
@@ -132,6 +133,8 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
   );
 
   const latestMilestone = newMilestones[0] ?? null;
+  const extraMilestonesCount = Math.max(0, newMilestones.length - 1);
+  const extraMilestonesLabel = extraMilestonesCount > 0 ? `+${extraMilestonesCount} more milestone${extraMilestonesCount === 1 ? '' : 's'} unlocked` : null;
 
   const streakBefore = streakBeforeSnapshot?.currentDailyStreak ?? streakAfterSnapshot?.currentDailyStreak ?? 0;
   const streakAfter = streakAfterSnapshot?.currentDailyStreak ?? streakBefore;
@@ -141,20 +144,25 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
   const isSummaryLoading = summaryResolveStatus === 'loading';
   const isSummaryEmpty = summaryResolveStatus === 'ready' && !summaryHasActivity;
 
-  const actionTitle = isSummaryError ? 'Refresh summary' : isSummaryEmpty ? 'No run logged yet' : 'Next action';
+  const actionTitle = isSummaryError ? 'Refresh summary' : summary.vm.nextAction.title;
 
   const actionBody =
     isSummaryError
       ? (summaryResolveError ?? 'Unable to refresh reward and streak details right now.')
       : isSummaryLoading
         ? 'Wrapping up reward and streak details...'
-        : isSummaryEmpty
-          ? 'Open your library to choose cards for the next run.'
-          : summary.vm.nextAction.primary.kind === 'nothing_to_learn'
-            ? "Open your library to review today's updates."
-            : drawVm.canOpen
-              ? 'Continue your day, then open draw when you want to spend pulls.'
-              : 'Continue to Home for the next run.';
+        : summary.vm.nextAction.body;
+
+  // ─── Instant-reward CTA gating ─────────────────────────────────────
+  // When the user just earned pulls AND the wallet can accept them,
+  // we surface a prominent gold "Use N pulls now" CTA at the top of
+  // the page. This closes the study → reward → spend loop in one tap
+  // (previously: SessionSummary → Home → pack → Draw = 3 taps).
+  // When this CTA is showing, the bottom actionCard primary demotes
+  // to a quieter "Back to Home" button to avoid dual-CTA confusion.
+  const earnedPulls = summary.resolvedReward.rewardPulls;
+  const showRewardCallout =
+    summaryResolveStatus === 'ready' && earnedPulls > 0 && drawVm.canOpen;
 
   const primaryActionLabel = isSummaryLoading
     ? 'Updating...'
@@ -162,7 +170,9 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
       ? 'Retry'
       : isSummaryEmpty
         ? 'Open library'
-        : summary.vm.nextAction.primary.label;
+        : showRewardCallout
+          ? 'Back to Home'
+          : summary.vm.nextAction.primary.label;
   const isPrimaryActionDisabled = isSummaryLoading;
 
   return (
@@ -175,6 +185,11 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
       >
         <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCard}>
+            {/* Gold uppercase celebration eyebrow — reinforces the achievement
+                feeling. Reward badge moves to a pokeBlue accent pill. */}
+            <Text numberOfLines={1} style={styles.heroEyebrow}>
+              SESSION COMPLETE
+            </Text>
             <View style={styles.heroTopRow}>
               <Text numberOfLines={1} style={styles.heroBadge}>
                 {summary.vm.reward.badge}
@@ -191,12 +206,46 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
             </Text>
           </View>
 
+          {/* Instant-reward CTA — visible only when the user just earned
+              pulls. Gold pill with the badge count + "Use now →". This
+              closes the daily learn-to-spend loop in one tap. */}
+          {showRewardCallout ? (
+            <Pressable
+              // Reuses the same testID the RewardSummaryCard's internal
+              // CTA used to expose. The two CTAs are mutually exclusive
+              // (showRewardCallout gates which one renders), so the
+              // single-handle test contract remains intact.
+              testID="summary-reward-use-pulls-cta"
+              accessibilityRole="button"
+              accessibilityLabel={`Use ${earnedPulls} new ${earnedPulls === 1 ? 'pull' : 'pulls'} now`}
+              style={({ pressed }) => [styles.usePullsButton, pressed && styles.buttonPressed]}
+              onPress={() =>
+                navigation.navigate('Draw', {
+                  slug,
+                  rewardPending: drawVm.state === 'reward-pending',
+                })
+              }
+            >
+              <View style={styles.usePullsBadge}>
+                <Text style={styles.usePullsBadgeText} numberOfLines={1}>
+                  {`+${earnedPulls}`}
+                </Text>
+              </View>
+              <Text style={styles.usePullsLabel} numberOfLines={1}>
+                {`Use ${earnedPulls} new ${earnedPulls === 1 ? 'pull' : 'pulls'} now`}
+              </Text>
+              <Text style={styles.usePullsArrow} numberOfLines={1}>
+                →
+              </Text>
+            </Pressable>
+          ) : null}
+
           <RewardSummaryCard
             testID="summary-reward-block"
             reward={summary.vm.reward}
-            ctaLabel={drawVm.canOpen ? drawVm.ctaLabel : null}
+            ctaLabel={drawVm.canOpen && !showRewardCallout ? drawVm.ctaLabel : null}
             onPressUsePulls={
-              drawVm.canOpen
+              drawVm.canOpen && !showRewardCallout
                 ? () => navigation.navigate('Draw', { slug, rewardPending: drawVm.state === 'reward-pending' })
                 : null
             }
@@ -225,6 +274,11 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
               <Text numberOfLines={2} style={styles.cardBody}>
                 {latestMilestone.body}
               </Text>
+              {extraMilestonesLabel ? (
+                <Text numberOfLines={1} style={styles.cardMeta}>
+                  {extraMilestonesLabel}
+                </Text>
+              ) : null}
             </View>
           ) : null}
 
@@ -242,7 +296,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
               accessibilityState={{ disabled: isPrimaryActionDisabled }}
               disabled={isPrimaryActionDisabled}
               style={({ pressed }) => [
-                styles.primaryButton,
+                showRewardCallout ? styles.primaryButtonDemoted : styles.primaryButton,
                 isPrimaryActionDisabled && styles.primaryButtonDisabled,
                 pressed && styles.buttonPressed,
               ]}
@@ -261,6 +315,13 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
                   return;
                 }
 
+                // When the gold reward CTA is showing, this button is
+                // demoted to "Back to Home" so the two CTAs don't compete.
+                if (showRewardCallout) {
+                  navigation.navigate('Home');
+                  return;
+                }
+
                 navigateFromActionKind({
                   kind: summary.vm.nextAction.primary.kind,
                   slug,
@@ -269,7 +330,13 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
                 });
               }}
             >
-              <Text numberOfLines={1} style={styles.primaryButtonText}>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.primaryButtonText,
+                  showRewardCallout && styles.primaryButtonTextDemoted,
+                ]}
+              >
                 {primaryActionLabel}
               </Text>
             </Pressable>
@@ -313,22 +380,36 @@ const styles = StyleSheet.create({
   heroCard: {
     borderRadius: spacing.lg,
     padding: spacing.md,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    shadowColor: colors.ink,
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 9 },
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
     marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  // Gold uppercase eyebrow — celebration accent above hero copy
+  heroEyebrow: {
+    color: colors.gold,
+    fontSize: typography.caption,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: 4,
   },
   heroTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  // Reward badge — gold accent pill instead of muted brown gravel
   heroBadge: {
     borderRadius: 999,
     paddingHorizontal: spacing.sm,
     paddingVertical: 5,
-    backgroundColor: 'rgba(42, 34, 24, 0.08)',
-    color: colors.ink,
+    backgroundColor: 'rgba(232,184,90,0.20)',
+    color: colors.inkSoft,
     fontSize: typography.caption,
-    fontWeight: '800',
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    overflow: 'hidden',
   },
   heroCompletion: { color: colors.inkSecondary, fontSize: typography.caption, fontWeight: '700' },
   title: { marginTop: 8, color: colors.ink, fontSize: typography.title2, lineHeight: 28, fontWeight: '900' },
@@ -350,6 +431,7 @@ const styles = StyleSheet.create({
   },
   cardTitle: { marginTop: 4, color: colors.ink, fontSize: typography.title3, lineHeight: 22, fontWeight: '800' },
   cardBody: { marginTop: 6, color: colors.inkSecondary, fontSize: typography.bodySmall, lineHeight: 18 },
+  cardMeta: { marginTop: 8, color: colors.mint, fontSize: typography.caption, lineHeight: 16, fontWeight: '800' },
   actionCard: {
     borderRadius: spacing.lg,
     padding: spacing.md,
@@ -363,17 +445,90 @@ const styles = StyleSheet.create({
   actionBody: { marginTop: 6, color: colors.inkSecondary, fontSize: typography.bodySmall, lineHeight: 18 },
   primaryButton: {
     marginTop: spacing.sm,
-    minHeight: a11y.minTouch,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.ink,
+    minHeight: 56,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    shadowColor: 'rgba(44,156,192,0.4)',
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  // Demoted variant — used when the gold "Use pulls" CTA is the
+  // dominant action. Keeps the button accessible (the user can still
+  // tap "Back to Home") but visually quiet so the gold pill leads.
+  primaryButtonDemoted: {
+    marginTop: spacing.sm,
+    minHeight: 48,
+    borderRadius: 999,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.hairline,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
   },
   primaryButtonDisabled: {
-    opacity: 0.65,
+    opacity: 0.55,
   },
-  primaryButtonText: { color: colors.parchmentBg, fontSize: typography.body, fontWeight: '800' },
+  primaryButtonText: { color: '#FFFFFF', fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+  // Demoted text — pairs with primaryButtonDemoted. Keeps button-sized
+  // fontSize (visual hierarchy primary > secondary still holds for the
+  // contract test); the demotion comes from the muted color + transparent
+  // background + hairline border on the container itself.
+  primaryButtonTextDemoted: {
+    color: colors.inkMuted,
+    fontSize: typography.button,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  // ─── Instant-reward gold CTA ───────────────────────────────────────
+  // Visually loudest element on the page when shown. Gold pill with
+  // a circular badge for the earned count, label, and arrow chevron.
+  usePullsButton: {
+    marginBottom: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    minHeight: 60,
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    backgroundColor: colors.gold,
+    shadowColor: 'rgba(200,136,58,0.45)',
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  usePullsBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  usePullsBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+  usePullsLabel: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
+  usePullsArrow: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '900',
+  },
   secondaryButton: {
     marginTop: spacing.xs,
     minHeight: a11y.minTouch,

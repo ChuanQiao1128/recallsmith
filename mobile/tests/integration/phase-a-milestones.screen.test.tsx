@@ -57,8 +57,14 @@ describe('phase A milestone and support routes', () => {
     await act(async () => {
       tree = renderer.create(<PermissionPromptScreen navigation={{ replace } as any} route={{ key: 'permission', name: 'PermissionPrompt' } as any} />);
     });
-    act(() => {
-      findPressableByText(tree, 'Allow and continue').props.onPress();
+    await act(async () => {
+      // PermissionPrompt v3 — Allow reminders now triggers the real
+      // expo-notifications permission request before navigating, so
+      // the press handler is async. We await the microtasks so the
+      // navigation.replace gets called inside `act`.
+      findPressableByText(tree, 'Allow reminders').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
     });
     expect(replace).toHaveBeenCalledWith('Home', { firstDrawCoach: true });
   });

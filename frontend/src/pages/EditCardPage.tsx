@@ -199,10 +199,23 @@ export function EditCardPage() {
       deckId: Number(card.deckId),
       question: values.question.trim(),
       explanation: values.explanation?.trim() || undefined,
+      // Forwarded rather than omitted. updateCard has accepted this field all
+      // along and drops undefined keys from the body, so leaving it out was not
+      // data loss — it was an edit that silently did not happen. The markdown
+      // importer compares realWorldUsage when deciding update vs unchanged, so
+      // an edit that never lands also means the deck never stops re-planning.
+      realWorldUsage: values.realWorldUsage ?? '',
       codeSnippet: values.codeSnippet || undefined,
       codeLanguage: values.codeLanguage || undefined,
       difficulty,
       orderInDeck,
+      // Forwarded now that the client type carries it. The form has validated
+      // this field all along; a rule that guards a value nobody sends is not a
+      // safety net, it is a claim that something is being protected.
+      revision:
+        typeof values.revision === 'number' && Number.isFinite(values.revision)
+          ? values.revision
+          : 1,
       stableUid: card.stableUid,
       expectedVersion: card.version,
     });

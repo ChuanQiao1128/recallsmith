@@ -15,14 +15,14 @@ export function AboutScreen({ navigation }: Props) {
         {
           title: 'Version',
           items: [
-            { title: 'Build', subtitle: 'RecallSmith mobile v6 candidate build' },
+            { title: 'Build', subtitle: 'DeveloperCards mobile v6 candidate build' },
             { title: 'Design language', subtitle: 'Parchment core with cosmic ceremony surfaces' },
           ],
         },
         {
           title: 'Credits',
           items: [
-            { title: 'Product', subtitle: 'RecallSmith v6' },
+            { title: 'Product', subtitle: 'DeveloperCards v6' },
             { title: 'Platform', subtitle: 'React Native + Expo' },
           ],
         },
