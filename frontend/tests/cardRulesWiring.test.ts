@@ -1,14 +1,23 @@
-// READ THIS BEFORE "FINISHING" THE WIRING.
+// THE WIRING WAS FINISHED ON PURPOSE, AND IT DID NOT COST WHAT WAS FEARED.
 //
-// isValidStableUid and isValidDifficulty have exactly one consumer, the
-// importer. CardForm is NOT in their consumer set. That absence is the
-// divergence itself — it is not a to-do, and it is not a half-finished
-// extraction. Wiring either predicate into CardForm would make the form start
-// refusing cards it accepts today (see tests/cardRuleDivergence.test.tsx, D2/D3/
-// D4), which is a product decision with a real cost and needs a human to say
-// yes. If you came here because the table below looked incomplete: the table is
-// the point. Changing it means changing what the owner of this project can type
-// into his own card form.
+// This file used to say that isValidStableUid and isValidDifficulty had exactly
+// one consumer, the importer, and that wiring either of them into CardForm
+// "would make the form start refusing cards it accepts today". A human ruled on
+// the divergence on 2026-08-17 and chose option 3 (docs/console-refactor-plan.md
+// 8.2): share the PREDICATES, split the SEVERITY. CardForm now imports both, and
+// the form refuses nothing new — the predicates drive advisory hints, not the
+// four hard checks in handleSubmit, which were not touched.
+//
+// That old worry was not hand-waved away, it was ARMED. If importing the
+// predicates ever does start narrowing what the form accepts, the assertions
+// that go red are the `expect(outcome.accepted).toBe(true)` lines in D1-D4 of
+// tests/cardRuleDivergence.test.tsx — the same cases the warning named. Those
+// four ran green against the new CardForm before any hint assertion existed,
+// which is the evidence the fear did not materialise rather than a claim that it
+// could not. tests/cardFormHints.test.tsx covers the advisory behaviour itself.
+//
+// So the table below is no longer "the point"; it is now just a record. What
+// still needs a human is the reverse move: making a predicate BLOCK in the form.
 //
 // ---------------------------------------------------------------------------
 // WHAT THIS FILE IS AND IS NOT EVIDENCE OF
@@ -162,16 +171,26 @@ describe('src/lib/cardRules.ts', () => {
 
 describe('who consumes each shared rule today', () => {
   it('matches the declared table, including the deliberately empty sets', () => {
-    // Empty sets are listed explicitly. MAX_UID_LENGTH / UID_PATTERN /
-    // MIN_DIFFICULTY / MAX_DIFFICULTY are consumed only INSIDE cardRules.ts by
-    // the predicates; they are exported so tests/cardRulesEquivalence.test.ts
-    // can hold a verbatim copy of the pre-extraction expression next to the new
-    // one. deckImport.ts no longer names them: it would have been an unused
-    // import, which tsconfig.app.json's noUnusedLocals rejects.
+    // All three predicates now have both doors as consumers — that is what the
+    // 2026-08-17 ruling did, and the entry to watch is CardForm's, because it
+    // arrived without changing what the form accepts.
+    //
+    // The three CONSTANTS are consumed by CardForm alone. That looks lopsided
+    // and is deliberate: the predicates already enforce the limits, so the
+    // importer has no reason to name them (an unused import, which
+    // tsconfig.app.json's noUnusedLocals rejects), while CardForm's hint text
+    // has to STATE the limits to a human and reads them from here rather than
+    // hard-coding "128" and "0..4" into a sentence that would then rot silently
+    // the day either changes. UID_PATTERN stays consumed only inside
+    // cardRules.ts; it is exported so tests/cardRulesEquivalence.test.ts can
+    // hold a verbatim copy of the pre-extraction expression beside the new one.
     expect(consumerMap()).toEqual({
+      MAX_DIFFICULTY: ['src/components/CardForm.tsx'],
+      MAX_UID_LENGTH: ['src/components/CardForm.tsx'],
+      MIN_DIFFICULTY: ['src/components/CardForm.tsx'],
       hasContent: ['src/components/CardForm.tsx', 'src/lib/deckImport.ts'],
-      isValidDifficulty: ['src/lib/deckImport.ts'],
-      isValidStableUid: ['src/lib/deckImport.ts'],
+      isValidDifficulty: ['src/components/CardForm.tsx', 'src/lib/deckImport.ts'],
+      isValidStableUid: ['src/components/CardForm.tsx', 'src/lib/deckImport.ts'],
     });
   });
 });

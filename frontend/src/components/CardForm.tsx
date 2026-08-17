@@ -3,7 +3,14 @@
 import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Deck } from '../types/deck';
-import { hasContent } from '../lib/cardRules';
+import {
+  MAX_DIFFICULTY,
+  MAX_UID_LENGTH,
+  MIN_DIFFICULTY,
+  hasContent,
+  isValidDifficulty,
+  isValidStableUid,
+} from '../lib/cardRules';
 
 // highlight.js core + languages
 import hljs from 'highlight.js/lib/core';
@@ -56,6 +63,103 @@ const CODE_LANG_OPTIONS = [
   { value: 'sql', label: 'SQL' },
   { value: 'bash', label: 'Shell / Bash' },
 ];
+
+// ---------------------------------------------------------------------------
+// ADVISORY HINTS: ONE KERNEL, TWO SEVERITIES
+// ---------------------------------------------------------------------------
+// The import door (deckImport.ts) and this form have never asked a card the same
+// questions. tests/cardRuleDivergence.test.tsx records seven differences; the
+// ruling on them (docs/console-refactor-plan.md 8.2, option 3) was to share the
+// PREDICATES and split the SEVERITY: the importer keeps blocking, this form only
+// says the same thing out loud. Nothing below can refuse a submission, and the
+// four hard checks in handleSubmit are untouched.
+//
+// Why not simply tighten the form to match the importer (option 1): the uid
+// shape, the uid length and the difficulty range are all but unreachable while
+// CREATING a card — the uid input re-slugifies on every keypress and blur strips
+// the trailing separator, and the difficulty widget offers only 1/2/3 — so the
+// whole cost of that option lands on EDITING an existing card, where a typo fix
+// would be blocked by a condition the editor never touched and has no way past.
+// Why not normalise silently (option 4): deckImport reconciles on uid alone, so
+// a rewritten uid makes the next import create a duplicate instead of updating.
+//
+// The message TEXT is deliberately not shared with the importer. The importer's
+// wording carries line numbers, addresses a deck author, is asserted literally
+// by tests/deckImport.test.ts — and, in the uid case, is stale: it says
+// "lowercase kebab-case" while UID_PATTERN also admits `_` (see cardRules.ts).
+// Copying it here would propagate that inaccuracy to a different audience.
+//
+// The three hints are nowhere near equally reachable, and the next person should
+// not read three symmetrical branches as three equal risks:
+//
+//   explanation   The only one an ordinary day reaches. Saving a card with no
+//                 answer is easy and the consequence is invisible until the
+//                 deck is exported and re-imported, where the card is dropped.
+//   stableUid     Unreachable by construction while creating. Its real audience
+//                 is a historical uid on a card being edited — where the field
+//                 is readOnly, which is why the wording states a consequence and
+//                 never asks for a change that cannot be made here.
+//   difficulty    Nearly unreachable from either side: the widget cannot produce
+//                 an out-of-range value and the importer rejects one at
+//                 header-parse time. Only a value already in the database lights
+//                 it.
+//
+// tests/cardFormHints.test.tsx pins the behaviour; the appended `hints`
+// assertions in tests/cardRuleDivergence.test.tsx pin that it stayed advisory.
+
+type HintField = 'explanation' | 'stableUid' | 'difficulty';
+
+interface CardHint {
+  field: HintField;
+  id: string;
+  text: string;
+}
+
+/**
+ * Which fields would give the import door trouble, phrased for a person typing.
+ *
+ * Module-private on purpose: cardRules.ts holds the predicates and nothing else,
+ * and tests/cardRulesWiring.test.ts enumerates its exports precisely so a new
+ * one with no consumer cannot appear. Hint wording is this component's business.
+ *
+ * Note that each condition is guarded by the matching HARD check rather than
+ * being a bare negation of the predicate. `hasContent(uid) && !isValid(uid)`
+ * means an empty uid produces the blocking banner alone — otherwise the form
+ * would state the same problem twice, in two colours, about one field.
+ */
+function hintsFor(values: CardFormValues): CardHint[] {
+  const hints: CardHint[] = [];
+
+  if (!hasContent(values.explanation)) {
+    hints.push({
+      field: 'explanation',
+      id: 'explanation-hint',
+      text: '留空可以存下。代价在之后：这张卡导出成 .md 再导入时会被判为没有答案，整张卡不会进入 deck。',
+    });
+  }
+
+  if (hasContent(values.stableUid) && !isValidStableUid(values.stableUid)) {
+    hints.push({
+      field: 'stableUid',
+      id: 'stableUid-hint',
+      text:
+        `导入门接受的 uid 由小写字母和数字组成，中间可以用单个 - 或 _ 分隔，长度不超过 ${MAX_UID_LENGTH} 个字符。` +
+        '当前这个不符合，所以这张卡随 .md 重新导入时会被判为 BAD_UID_FORMAT。',
+    });
+  }
+
+  if (!isValidDifficulty(values.difficulty)) {
+    hints.push({
+      field: 'difficulty',
+      id: 'difficulty-hint',
+      text:
+        `导入门接受的难度是 ${MIN_DIFFICULTY}..${MAX_DIFFICULTY} 之间的整数。` +
+        '当前这个在范围外，所以这张卡随 .md 重新导入时会被整张丢掉。',
+    });
+  }
+
+  return hints;
+}
 
 function slugifyForStableUid(input: string): string {
   return input
@@ -111,9 +215,45 @@ export function CardForm(props: CardFormProps) {
     error: null,
   });
 
+  // Hint timing only. None of these three can change what is submitted.
+  const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [touched, setTouched] = useState<readonly string[]>([]);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+
   function handleChange(field: keyof CardFormValues, value: string | number) {
     setValues(prev => ({ ...prev, [field]: value }));
   }
+
+  /** Every field leaves focus through here, so the two effects cannot drift. */
+  function handleFieldBlur(field: string) {
+    setFocusedField(null);
+    setTouched(prev => (prev.includes(field) ? prev : [...prev, field]));
+  }
+
+  /**
+   * A hint waits for the caret to leave the field it is about.
+   *
+   * The uid input re-slugifies on every keypress and keeps a trailing separator
+   * until blur, so `cs-async-` — a value on the way to every correct uid this
+   * form can produce — fails UID_PATTERN for as long as the person is still
+   * typing. Showing hints mid-keystroke would light that field up during normal,
+   * correct use. Blur is also where the value is repaired, so by the time a hint
+   * is allowed to speak it is describing the value that would actually be sent.
+   *
+   * `mode === 'edit'` shows from mount: those values arrived from the database,
+   * nobody is part-way through typing them, and the uid field is readOnly.
+   */
+  const visibleHints = hintsFor(values).filter(
+    hint =>
+      focusedField !== hint.field &&
+      (mode === 'edit' || touched.includes(hint.field) || submitAttempted),
+  );
+  const hintFor = (field: HintField): CardHint | null =>
+    visibleHints.find(hint => hint.field === field) ?? null;
+
+  const explanationHint = hintFor('explanation');
+  const stableUidHint = hintFor('stableUid');
+  const difficultyHint = hintFor('difficulty');
 
   function handleQuestionBlur() {
     if (!values.stableUid.trim() && values.question.trim()) {
@@ -124,6 +264,10 @@ export function CardForm(props: CardFormProps) {
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+
+    // Before the hard checks, so a submission refused by one of them still shows
+    // whatever else is worth knowing rather than one problem at a time.
+    setSubmitAttempted(true);
 
     const trimmedQuestion = values.question.trim();
     const trimmedUid = values.stableUid.trim();
@@ -213,7 +357,14 @@ export function CardForm(props: CardFormProps) {
           id="question"
           value={values.question}
           onChange={e => handleChange('question', e.target.value)}
-          onBlur={handleQuestionBlur}
+          onFocus={() => setFocusedField('question')}
+          // handleQuestionBlur runs first and unchanged: it is what fills an
+          // empty uid from the question, and tests/cardFormStableUid.test.tsx
+          // pins that. Focus bookkeeping is appended, never substituted.
+          onBlur={() => {
+            handleQuestionBlur();
+            handleFieldBlur('question');
+          }}
           placeholder="Explain the difference between var, let and const."
         />
       </div>
@@ -231,10 +382,22 @@ export function CardForm(props: CardFormProps) {
           id="stableUid"
           value={values.stableUid}
           readOnly={mode === 'edit'}
+          aria-describedby={stableUidHint ? stableUidHint.id : undefined}
           onChange={e => handleChange('stableUid', slugifyWhileTyping(e.target.value))}
-          onBlur={e => handleChange('stableUid', slugifyForStableUid(e.target.value))}
+          onFocus={() => setFocusedField('stableUid')}
+          // The normalising blur runs first and unchanged; the trailing-separator
+          // strip it performs is precisely why a hint may only look after it.
+          onBlur={e => {
+            handleChange('stableUid', slugifyForStableUid(e.target.value));
+            handleFieldBlur('stableUid');
+          }}
           placeholder="js-basics-let-const-var"
         />
+        {stableUidHint && (
+          <p id={stableUidHint.id} data-card-hint="stableUid" className="mt-1 text-xs text-amber-700">
+            {stableUidHint.text}
+          </p>
+        )}
         <p className="mt-1 text-xs text-slate-500">
           {mode === 'edit'
             ? '这张卡的稳定 ID 不能改。它是这张卡在全系统里的身份：复习进度按它归档，导入也按它对账。改掉等于把这张卡上已有的学习记录全部弃掉，再当成一张新卡重新开始。'
@@ -251,9 +414,17 @@ export function CardForm(props: CardFormProps) {
                      min-h-[100px]"
           id="explanation"
           value={values.explanation}
+          aria-describedby={explanationHint ? explanationHint.id : undefined}
           onChange={e => handleChange('explanation', e.target.value)}
+          onFocus={() => setFocusedField('explanation')}
+          onBlur={() => handleFieldBlur('explanation')}
           placeholder="A concise but clear explanation of the answer..."
         />
+        {explanationHint && (
+          <p id={explanationHint.id} data-card-hint="explanation" className="mt-1 text-xs text-amber-700">
+            {explanationHint.text}
+          </p>
+        )}
       </div>
 
     
@@ -284,7 +455,10 @@ export function CardForm(props: CardFormProps) {
             className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm bg-white
                        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             value={values.difficulty}
+            aria-describedby={difficultyHint ? difficultyHint.id : undefined}
             onChange={e => handleChange('difficulty', Number(e.target.value))}
+            onFocus={() => setFocusedField('difficulty')}
+            onBlur={() => handleFieldBlur('difficulty')}
           >
             <option value={1}>Easy</option>
             <option value={2}>Medium</option>
@@ -301,6 +475,11 @@ export function CardForm(props: CardFormProps) {
               <option value={values.difficulty}>{values.difficulty}（导入时写入，不在常用范围）</option>
             )}
           </select>
+          {difficultyHint && (
+            <p id={difficultyHint.id} data-card-hint="difficulty" className="mt-1 text-xs text-amber-700">
+              {difficultyHint.text}
+            </p>
+          )}
         </div>
 
         <div>

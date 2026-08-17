@@ -59,6 +59,38 @@
 // docs/console-refactor-plan.md) and it needs a human. If a change makes a D1-D5
 // form-side assertion go red, that change silently narrowed what the owner of
 // this project can type into his own card form.
+//
+// ---------------------------------------------------------------------------
+// THE RULING (2026-08-17), AND WHAT IT DID NOT CHANGE
+// ---------------------------------------------------------------------------
+// A human ruled on the divergence: option 3, one kernel and two severities. The
+// import door keeps blocking; the form door now says the same thing WITHOUT
+// blocking. Concretely:
+//
+//   import side   Not touched. Every import-side assertion below is byte for
+//                 byte what it was, and tests/deckImport.test.ts is untouched.
+//   form side     Its ACCEPTANCE SURFACE is not touched either — that is the
+//                 load-bearing claim, and the `accepted` assertions in D1-D4 are
+//                 what hold it. CardForm now imports isValidStableUid and
+//                 isValidDifficulty, and the obvious risk of doing that is that
+//                 the form starts refusing what it used to store. Those four
+//                 assertions go red the moment it does.
+//   what is new   One `hints` assertion appended to each case. Nothing was
+//                 rewritten and nothing was deleted; every expect that existed
+//                 before the ruling still reads exactly as it did, and all ten
+//                 cases passed against the new CardForm before a single one of
+//                 the appended lines was written.
+//
+// The appended assertions come in two flavours and the empty ones matter most.
+// `[]` is how "the form did NOT grow an opinion here" is written down: D5 pins
+// that uniqueness is still not asked (it is a property of a set and answering it
+// would take a network call), and D6/C1/C2 pin that a submission refused by a
+// HARD check does not additionally sprout advisory noise about the same field.
+// A hint's wording is never asserted here — only which field raised it. The
+// wording is CardForm's and is not shared with the importer, whose messages
+// carry line numbers, address a deck author, and are asserted literally
+// elsewhere. tests/cardFormHints.test.tsx covers the hints' own behaviour
+// (timing, focus, accessibility); this file only checks they stayed advisory.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
@@ -138,6 +170,11 @@ interface FormOutcome {
   submitted: CardFormValues | null;
   /** The rendered error banner text, or null when there is no banner. */
   error: string | null;
+  /**
+   * Which fields raised an advisory hint, sorted. Field names only: the wording
+   * belongs to CardForm and is deliberately not shared with the importer.
+   */
+  hints: string[];
 }
 
 /** Mount the real CardForm on a fixture and really click Create Card. */
@@ -162,11 +199,19 @@ async function submitThroughForm(shape: CardShape): Promise<FormOutcome> {
     screen.getByText('Create Card').click();
   });
 
-  const banner = container.querySelector('.bg-red-50');
+  // Narrowed from '.bg-red-50' when hints arrived. The hints are amber and
+  // could not match it, but a one-class selector for "the refusal banner" is a
+  // trap now that the form has a second kind of note: the day someone reaches
+  // for a red tint on an advisory line, every `error` assertion below would
+  // start reading that note as a refusal and stay green while doing it.
+  const banner = container.querySelector('.bg-red-50.text-red-800');
   return {
     accepted: received.length > 0,
     submitted: received[0] ?? null,
     error: banner ? banner.textContent : null,
+    hints: [...container.querySelectorAll('[data-card-hint]')]
+      .map(node => node.getAttribute('data-card-hint') ?? '')
+      .sort(),
   };
 }
 
@@ -183,6 +228,9 @@ describe('D1: an empty Explanation', () => {
     const outcome = await submitThroughForm(shape);
     expect(outcome.accepted).toBe(true);
     expect(outcome.submitted?.explanation).toBe('');
+
+    // Appended by the ruling: still stored, but no longer stored in silence.
+    expect(outcome.hints).toEqual(['explanation']);
   });
 });
 
@@ -200,6 +248,10 @@ describe('D2: a stableUid the uid pattern rejects', () => {
     const outcome = await submitThroughForm(shape);
     expect(outcome.accepted).toBe(true);
     expect(outcome.submitted?.stableUid).toBe('A_B');
+
+    // The shape rule and the length rule share one hint, because the import
+    // door does not distinguish them either — both emit BAD_UID_FORMAT.
+    expect(outcome.hints).toEqual(['stableUid']);
   });
 });
 
@@ -215,6 +267,9 @@ describe('D3: a stableUid past MAX_UID_LENGTH', () => {
     expect(outcome.accepted).toBe(true);
     expect(outcome.submitted?.stableUid).toBe(overlong);
     expect(outcome.submitted?.stableUid).toHaveLength(129);
+
+    // Same hint as D2 by design; see the note there.
+    expect(outcome.hints).toEqual(['stableUid']);
   });
 });
 
@@ -234,6 +289,10 @@ describe('D4: a difficulty outside 0..4', () => {
     // select whose value matches no option (the spec says -1, jsdom answers 0),
     // so asserting on the widget would pin a jsdom quirk instead of a rule.
     expect(outcome.submitted?.difficulty).toBe(9);
+
+    // The hint reaches the same conclusion the importer does, from the same
+    // predicate, and does not act on it.
+    expect(outcome.hints).toEqual(['difficulty']);
   });
 });
 
@@ -256,6 +315,12 @@ describe('D5: the same stableUid used twice', () => {
     expect(first.accepted).toBe(true);
     expect(second.accepted).toBe(true);
     expect(first.submitted?.stableUid).toBe(second.submitted?.stableUid);
+
+    // The ruling did NOT add uniqueness, not even as advice. Answering it needs
+    // the whole set, which the form does not hold, so a hint here would have to
+    // make a network call — a behaviour change wearing an advisory costume.
+    expect(first.hints).toEqual([]);
+    expect(second.hints).toEqual([]);
   });
 });
 
@@ -271,6 +336,10 @@ describe('D6 (reversed): orderInDeck = 0', () => {
     const outcome = await submitThroughForm({ ...BASE, orderInDeck: 0 });
     expect(outcome.accepted).toBe(false);
     expect(outcome.error).toBe('orderInDeck must be a positive number (e.g. 10, 20, 30).');
+
+    // A refusal is not an excuse to also start advising. This submission was
+    // blocked, and the rest of the card is fine, so there is nothing to add.
+    expect(outcome.hints).toEqual([]);
   });
 });
 
@@ -298,6 +367,7 @@ describe('C1: an empty question', () => {
     const outcome = await submitThroughForm(shape);
     expect(outcome.accepted).toBe(false);
     expect(outcome.error).toBe('Question is required.');
+    expect(outcome.hints).toEqual([]);
   });
 
   it('is refused by both doors when it is only whitespace', async () => {
@@ -311,6 +381,7 @@ describe('C1: an empty question', () => {
     const outcome = await submitThroughForm(shape);
     expect(outcome.accepted).toBe(false);
     expect(outcome.error).toBe('Question is required.');
+    expect(outcome.hints).toEqual([]);
   });
 });
 
@@ -326,6 +397,11 @@ describe('C2: an empty stableUid', () => {
     const outcome = await submitThroughForm(shape);
     expect(outcome.accepted).toBe(false);
     expect(outcome.error).toBe('StableUid is required.');
+
+    // No uid hint, deliberately. An empty uid already has a banner; the hint
+    // condition is guarded by hasContent precisely so the form does not state
+    // one problem twice about one field, in two colours.
+    expect(outcome.hints).toEqual([]);
   });
 });
 
@@ -336,6 +412,18 @@ describe('D7 (reversed): difficulty 0 and 4', () => {
       expect(parsed.errors.map(issue => issue.code)).not.toContain('BAD_DIFFICULTY');
       expect(parsed.cards).toHaveLength(1);
       expect(parsed.cards[0].difficulty).toBe(difficulty);
+    }
+
+    // Appended by the ruling: the form AGREES with the importer about 0 and 4.
+    // Unreachable through the widget is not the same as invalid, and the shared
+    // predicate is what decides — so neither value raises a hint, even though
+    // neither can be chosen. Had the hint been written against the widget's
+    // 1/2/3 instead of against isValidDifficulty, this is where it would show.
+    for (const difficulty of [0, 4]) {
+      const outcome = await submitThroughForm({ ...BASE, difficulty });
+      expect(outcome.accepted).toBe(true);
+      expect(outcome.hints).toEqual([]);
+      cleanup();
     }
 
     // Form side: the widget only offers 1/2/3, so a human at the keyboard can
