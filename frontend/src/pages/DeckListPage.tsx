@@ -3,9 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import {
-  ADMIN_DECKS_ENDPOINT_MISSING,
   deleteDeck,
-  fetchAdminDecksPage,
   fetchAdminManifest,
   fetchDeckBySlug,
   fetchDecks,
@@ -27,14 +25,12 @@ import {
 } from '../lib/errorFeed';
 import type { ErrorNotice, PollFailure } from '../lib/errorFeed';
 import { ErrorBanner, ErrorBannerList } from '../components/ui/ErrorBanner';
+import { useConfirm } from '../components/ui/ConfirmDialogContext';
 import {
-  DECKS_PAGE_SIZE,
-  applyDecksPage,
-  emptyDeckPageListState,
   isStarterLike,
   removeDeckBySlug,
 } from './deckListPagination';
-import type { DeckPageListState, DeckStatus } from './deckListPagination';
+import type { DeckStatus } from './deckListPagination';
 import {
   extractDecksArray,
   parseManifestMeta,
@@ -43,7 +39,8 @@ import {
 } from './deckListManifest';
 import type { ManifestDeckLite, ManifestMeta } from './deckListManifest';
 import { buildViewRows } from './deckListRows';
-import type { ConsoleDeckRow, ListMode } from './deckListRows';
+import type { ConsoleDeckRow } from './deckListRows';
+import { useDeckPagination } from './useDeckPagination';
 
 import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
@@ -106,14 +103,6 @@ type ManifestState = {
   raw: unknown | null;
 };
 
-// Error codes that mean "the paginated endpoint is unusable here" → fall back
-// to the legacy full-list load (404 = not deployed yet, 403 = not permitted).
-const PAGINATED_FALLBACK_CODES = new Set<string>([
-  ADMIN_DECKS_ENDPOINT_MISSING,
-  'NOT_FOUND',
-  'FORBIDDEN',
-]);
-
 function statusBadge(status: DeckStatus) {
   if (status === 'published') {
     return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm">Published</span>;
@@ -161,21 +150,14 @@ export function DeckListPage() {
     raw: null,
   });
 
+  // Deliberately above the paginated block below, not inside it: that block is
+  // lifted into a hook in the next step, and a hook call that had drifted into
+  // the middle of it would travel with the move.
+  const confirm = useConfirm();
+
   const [deletingSlug, setDeletingSlug] = useState<string | null>(null);
   const [publishingSlug, setPublishingSlug] = useState<string | null>(null);
 
-  // Paginated deck list state (GET /api/v1/admin/decks). Falls back to the
-  // legacy full-list load when the endpoint is unavailable (feature-detect).
-  // Non-superadmin sessions start in legacy mode directly: the paginated
-  // endpoint is super_admin-gated, so probing it would be a guaranteed 403.
-  const [listMode, setListMode] = useState<ListMode>(() => (superAdmin ? 'paginated' : 'legacy'));
-  const listModeRef = useRef<ListMode>(superAdmin ? 'paginated' : 'legacy');
-  const [paged, setPaged] = useState<DeckPageListState>(emptyDeckPageListState);
-  const [pagedInitialized, setPagedInitialized] = useState(false);
-  const [pagedLoading, setPagedLoading] = useState(true);
-  const [pagedLoadingMore, setPagedLoadingMore] = useState(false);
-  const [pagedError, setPagedError] = useState<string | null>(null);
-  const pagedRequestSeq = useRef(0);
   // slug → deck id cache: the paginated contract does not guarantee ids, but
   // every row action needs one; resolved lazily via GET /authoring/decks?slug=.
   const resolvedIdsRef = useRef<Map<string, number>>(new Map());
@@ -213,6 +195,23 @@ export function DeckListPage() {
       mountedRef.current = false;
     };
   }, []);
+
+  // Called HERE, immediately after the mountedRef effect, rather than up beside
+  // the other state declarations: `mountedRef` is a const and would still be in
+  // its temporal dead zone up there, while `loadAll` is a hoisted function
+  // declaration and so is safe to name before its body appears below.
+  const {
+    listMode,
+    listModeRef,
+    paged,
+    setPaged,
+    pagedInitialized,
+    pagedLoading,
+    pagedLoadingMore,
+    pagedError,
+    loadPagedFirst,
+    loadPagedMore,
+  } = useDeckPagination({ superAdmin, debouncedQ, mountedRef, loadAll });
 
   async function loadAll(forceRefresh = false) {
     // 💡 缓存优化：先检查缓存
@@ -310,71 +309,6 @@ export function DeckListPage() {
     }
   }
 
-  // ==================== paginated loading (new admin decks endpoint) ====================
-
-  async function loadPagedFirst(query: string) {
-    const seq = ++pagedRequestSeq.current;
-    setPagedLoading(true);
-    setPagedLoadingMore(false);
-    setPagedError(null);
-
-    const res = await fetchAdminDecksPage({ limit: DECKS_PAGE_SIZE, q: query });
-    if (!mountedRef.current || seq !== pagedRequestSeq.current) return;
-
-    if (!res.success) {
-      // Feature-detect: endpoint not deployed (404) or not permitted (403) →
-      // fall back to the legacy full-list load and stay in legacy mode.
-      if (res.error && PAGINATED_FALLBACK_CODES.has(res.error.code)) {
-        console.warn(
-          `[DeckListPage] GET /api/v1/admin/decks unavailable (${res.error.code}); falling back to legacy deck list load.`,
-        );
-        listModeRef.current = 'legacy';
-        setListMode('legacy');
-        setPagedLoading(false);
-        void loadAll(false);
-        return;
-      }
-      setPagedLoading(false);
-      setPagedInitialized(true);
-      setPagedError(res.error?.message ?? 'Failed to load decks.');
-      return;
-    }
-
-    setPaged(
-      applyDecksPage(
-        emptyDeckPageListState,
-        res.data ?? { items: [], nextCursor: null, hasMore: false },
-        'reset',
-      ),
-    );
-    setPagedLoading(false);
-    setPagedInitialized(true);
-  }
-
-  async function loadPagedMore() {
-    if (pagedLoading || pagedLoadingMore || !paged.hasMore || !paged.nextCursor) return;
-
-    const seq = ++pagedRequestSeq.current;
-    setPagedLoadingMore(true);
-    setPagedError(null);
-
-    const res = await fetchAdminDecksPage({
-      limit: DECKS_PAGE_SIZE,
-      cursor: paged.nextCursor,
-      q: debouncedQ,
-    });
-    if (!mountedRef.current) return;
-    setPagedLoadingMore(false);
-    if (seq !== pagedRequestSeq.current) return; // superseded by a newer load
-
-    if (!res.success) {
-      setPagedError(res.error?.message ?? 'Failed to load more decks.');
-      return;
-    }
-    const page = res.data ?? { items: [], nextCursor: null, hasMore: false };
-    setPaged(prev => applyDecksPage(prev, page, 'append'));
-  }
-
   async function resolveDeckId(row: ConsoleDeckRow): Promise<number | null> {
     if (row.id !== null && Number.isFinite(row.id)) return row.id;
     const cached = resolvedIdsRef.current.get(row.slug);
@@ -418,18 +352,15 @@ export function DeckListPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Initial load + search-driven reloads. Paginated mode only: legacy mode
-  // filters client-side over the already-loaded full list.
-  useEffect(() => {
-    if (listModeRef.current === 'legacy') return;
-    void loadPagedFirst(debouncedQ);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQ]);
-
   async function handleDeleteDeck(row: ConsoleDeckRow) {
     if (!superAdmin) return;
 
-    const ok = window.confirm('Delete deck is destructive.\n\nContinue?');
+    const ok = await confirm({
+      title: `Delete deck "${row.slug}"?`,
+      body: 'The deck and its cards are removed from the console. This cannot be undone.',
+      destructive: true,
+      confirmLabel: 'Delete deck',
+    });
     if (!ok) return;
 
     // Clearing before the attempt is what makes a success wipe the banner:
@@ -470,9 +401,15 @@ export function DeckListPage() {
   async function handlePublish(row: ConsoleDeckRow) {
     if (!superAdmin) return;
 
-    const ok = window.confirm(
-      'Publish will:\n1) Upload deck.json to S3\n2) Rebuild manifest.json\n\nContinue?',
-    );
+    // Not destructive: publishing uploads a new deck.json and rebuilds the
+    // manifest. It can be run again, and running it again is the fix for having
+    // run it too early. So this one is role="dialog", not "alertdialog", and it
+    // opens with focus on Publish rather than on Cancel.
+    const ok = await confirm({
+      title: `Publish deck "${row.slug}"?`,
+      body: 'Publish will:\n1) Upload deck.json to S3\n2) Rebuild manifest.json',
+      confirmLabel: 'Publish',
+    });
     if (!ok) return;
 
     // The journey starts once the user has committed, so the time the dialog

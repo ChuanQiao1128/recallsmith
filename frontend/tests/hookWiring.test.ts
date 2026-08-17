@@ -143,7 +143,35 @@ describe('the scan itself is still looking at something', () => {
     // entry appearing here is a prompt for a person, not a verdict: barrel it
     // so the real ratchet covers it, or add it with its call sites verified
     // the same way.
+    //
+    // useConfirm is the second entry, and the prompt was answered rather than
+    // silenced. Call sites, hand-verified the same way:
+    //   src/pages/CardListPage.tsx:71, src/pages/DeckListPage.tsx:168,
+    //   src/pages/AdminUsersPage.tsx:118
+    // Not added to src/hooks/index.ts: that barrel publishes the data-fetching
+    // hooks, and this one reads a React context that only exists because a
+    // provider is mounted above it. Its wiring question is not "does anything
+    // call it" — three pages do — but "is the provider an ancestor", which no
+    // barrel can answer. tests/appConfirmWiring.test.ts and
+    // tests/confirmWiring.test.tsx are what answer it.
+    //
+    // useDeckPagination is the third entry, and the prompt was likewise
+    // answered rather than silenced. It has exactly ONE call site, hand-verified
+    // the same way:
+    //   src/pages/DeckListPage.tsx:214 — the `} = useDeckPagination({
+    //   superAdmin, debouncedQ, mountedRef, loadAll });` that closes the
+    //   destructuring begun at :203
+    // That statement is not left to a hand count either:
+    // tests/deckPaginationHookWiring.test.ts W-a asserts there is exactly one
+    // call to it in that file, W-d asserts the callee is the imported binding
+    // rather than a same-named local, and W-b/W-c assert that every field the
+    // hook returns is destructured there and that the page kept no duplicate
+    // copy of its own. Not added to src/hooks/index.ts: that barrel publishes
+    // the reusable data-fetching hooks, and this one is private to a single
+    // page — it takes four values that page owns, one of them a ref, and hands
+    // back a setter that page needs. Publishing it would advertise a reuse that
+    // would be wrong to attempt.
     const outside = findHookShapedExportsOutsideHooksDir(sources).map(entry => entry.name);
-    expect(outside).toEqual(['useAuth']);
+    expect(outside).toEqual(['useAuth', 'useConfirm', 'useDeckPagination']);
   });
 });

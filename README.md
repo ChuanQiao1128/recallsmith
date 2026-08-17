@@ -12,7 +12,7 @@ This is a personal project, written and maintained by one person.
 
 | Directory | Stack | Responsibility | Files |
 | --- | --- | --- | --- |
-| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 112 |
+| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 124 |
 | `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in | 319 |
 | `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` | 126 |
 | `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver | 3 |
@@ -113,22 +113,29 @@ compiler reports.
 
 - **The test files are not type-checked.** `tests/` is outside the `include` of
   every tsconfig — `frontend/tsconfig.app.json` covers `src/`,
-  `frontend/tsconfig.node.json` covers `vite.config.ts` — so all 31 frontend test files are read only by ESLint and
+  `frontend/tsconfig.node.json` covers `vite.config.ts` — so all 43 frontend test files are read only by ESLint and
   Vitest's own transform. A type error in a test does not fail the build.
 - **`tsc --noEmit` is not a check in this repo.** `frontend/tsconfig.json` is
   references-only with no `include`, so it checks zero files and exits 0 with a
   real type error sitting in `src/`. Use `tsc -b --force`.
-- **One known lint warning**, at `frontend/src/pages/DeckListPage.tsx:590`
+- **One known lint warning**, at `frontend/src/pages/DeckListPage.tsx:527`
   (`react-hooks/exhaustive-deps` on the publish-jobs poller). CI does not use
   `--max-warnings 0`, so the bar is 0 errors rather than 0 problems. Fixing it
   means changing polling code that `frontend/tests/deckListPagePolling.test.tsx` pins
   character-for-character.
-- **`DeckListPage.tsx` is 1094 lines** and does filtering, table rendering, stats
+- **`DeckListPage.tsx` is 1031 lines** and does filtering, table rendering, stats
   and publish polling in one component. The pieces it would split into already
   exist under `frontend/src/components/decks/`, unused.
-- **Four confirmation dialogs still use the browser's `window.confirm`**
-  (`CardListPage`, `AdminUsersPage`, `DeckListPage` twice). A `ConfirmDialog`
-  component exists under `frontend/src/components/ui/` and is not wired to them.
+- **One deliberate `window.confirm` remains**, in
+  `frontend/src/components/ui/ConfirmDialogContext.ts`. The four confirmations
+  that used to call it directly (`CardListPage`, `AdminUsersPage`,
+  `DeckListPage` twice) now go through `ConfirmDialogProvider`, mounted in
+  `frontend/src/App.tsx` inside the chunk boundary and outside `Suspense`;
+  `frontend/tests/confirmWiring.test.tsx` mounts the real `<App/>` and presses a
+  real row's Delete button, with `window.confirm` stubbed to throw so the
+  fallback cannot pass for the real thing. The fallback itself is what lets page
+  tests mount a page with no application shell above it, and it is asserted in
+  `frontend/tests/confirmDialogA11y.test.tsx` rather than left implicit.
 - **The console has no automated end-to-end test.** Nothing exercises a real
   browser against a real API; the frontend suite runs against mocked HTTP.
 

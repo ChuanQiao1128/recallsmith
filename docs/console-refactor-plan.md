@@ -658,9 +658,16 @@ css 逐字节不变(vite 报的是两位小数,所以这里不宣称更高精度
    **一份声称「没有验收命令的条目算未交付」的文档,自己写了一条没验收的断言。**
    V7 用假计时器推进到 debounce 之后才断言请求发出,所以时长确实被间接钉住了;
    真正没被钉住的是「300 是不是合适的时长」,那不是测试能回答的问题。
-3. **删除 / 发布 / `ERR_RESOLVE_ID` 三条链路。** `ERR_DELETE_DECK`、`ERR_PUBLISH_DECK`、
-   `ERR_RESOLVE_ID` 三个 key 没有任何页面级测试。这三条都会写 `window.confirm`
-   与错误面,补网时要先想清楚 jsdom 下怎么 stub。
+3. ~~**删除 / 发布 / `ERR_RESOLVE_ID` 三条链路。**~~
+   **【第 10 步:部分补齐,`window.confirm` 那句已过期】** 删除与发布两条的
+   *确认闸门* 现在由 `tests/deckListPageConfirm.test.tsx` 覆盖(取消不调 API、
+   确认调 `deleteDeck` / `publishDeck`、两个对话框的 role 一个 `alertdialog`
+   一个 `dialog`、取消后焦点回到那一行自己的触发按钮)。
+   「补网时要先想清楚 jsdom 下怎么 stub `window.confirm`」这句话本身已经过期:
+   第 10 步把这两处换成了 `ConfirmDialog`,页面不再调 `window.confirm`,
+   测试里说「是」变成点一个渲染出来的按钮,不再需要 stub。
+   **仍然没补的**:`ERR_DELETE_DECK` / `ERR_PUBLISH_DECK` 两个 key 的**错误面**
+   (服务端拒绝时横幅长什么样),以及 `ERR_RESOLVE_ID` 整条。那三条留给第 11 步。
 4. **翻页与滚动位置。**
 5. **闭包语义盲区(最容易被忽略的一条)。** `DeckListPage` 里**零 `useCallback`**。
    `loadPublishJobs` 被一个 `[]` 依赖的 effect 抓住、靠 `setTimeout` 自递归,
@@ -692,6 +699,13 @@ css 逐字节不变(vite 报的是两位小数,所以这里不宣称更高精度
    ⚠️ 提 hook 时最自然的动作是「把 `listMode` 与 `listModeRef` 合并成一个 state」——
    那会重新引入「回退之后每次搜索都再打一次已经 403 的端点」。
    现在有 `tests/deckListPageFallback.test.tsx` 的 F3 守着这一行了。
+
+   > ⚠️ **过期标注(第 11 步,2026-08-17)**:这一条**做了一半**。paginated 通道
+   > 已提成 `src/pages/useDeckPagination.ts`,但名字是 `useDeckPagination` 而不是
+   > `usePagedDeckList`,legacy 通道(`loadAll` + manifest)**一行未动**,仍在页面里。
+   > 上面那条警告是对的,而且**兑现了**:`listMode` 与 `listModeRef` 双双保留,
+   > 两者都从 hook 返回,`listModeRef` 以 **ref 对象**返回而不是 `.current` 快照。
+   > 详见第 11 步小节。原文保留,因为它是这个决定的理由。
 2. 表格行、筛选栏、发布任务面板抽成子组件。
 3. `statusBadge` / `typeBadge` 跟着行组件走,届时一并裁决要不要独立模块。
    ⚠️ `typeBadge` 的调用点(`:1064`)是第五节缺陷 7 那条不自洽的一条腿,
@@ -727,15 +741,25 @@ css 逐字节不变(vite 报的是两位小数,所以这里不宣称更高精度
 
 | # | 输入 | 导入门(`parseDeckMarkdown`) | 表单门(`CardForm`) |
 |---|---|---|---|
-| D1 | `explanation = ''` | `MISSING_ANSWER`,**整张卡被丢弃** | 接受,提交 `''` |
-| D2 | `stableUid = 'A_B'` | `BAD_UID_FORMAT` | 接受,原样提交 `'A_B'` |
-| D3 | `stableUid` = 129 个字符 | `BAD_UID_FORMAT`(超 `MAX_UID_LENGTH`) | 接受,全长提交 |
-| D4 | `difficulty = 9` | `BAD_DIFFICULTY`,**卡在 header 阶段就没生成** | 接受,提交 `9` |
+| D1 | `explanation = ''` | `MISSING_ANSWER`,**整张卡被丢弃** | 接受,提交 `''` ⚠️ |
+| D2 | `stableUid = 'A_B'` | `BAD_UID_FORMAT` | 接受,原样提交 `'A_B'` ⚠️ |
+| D3 | `stableUid` = 129 个字符 | `BAD_UID_FORMAT`(超 `MAX_UID_LENGTH`) | 接受,全长提交 ⚠️ |
+| D4 | `difficulty = 9` | `BAD_DIFFICULTY`,**卡在 header 阶段就没生成** | 接受,提交 `9` ⚠️ |
 | D5 | 同一 uid 两张卡 | `DUPLICATE_UID` | **没有这条代码路径**,两次都成功 |
 | D6 ↔ | `orderInDeck = 0` | 这正是导入**自己给每篇文档第一张卡分配的值** | **拒绝**:`orderInDeck must be a positive number` |
 | D7 ↔ | `difficulty = 0` 或 `4` | 合法 | `<select>` 只有 1/2/3,**人在界面上选不到** |
 | C1 | 空 / 纯空白 question | 拒绝 | 拒绝(`Question is required.`) |
 | C2 | 空 stableUid | `BAD_CARD_HEADER` | 拒绝(`StableUid is required.`) |
+
+> ⚠️ **2026-08-17 起,表单列多了一件事,少了零件事。** 8.2 的裁决(选项 3)落地后,
+> D1-D4 这四行的表单门**除了「接受」还会就地给一条不阻断的提示**;
+> 「接受什么」一个字没变 —— 表格里表单列的每一句话仍然逐字为真。
+> D5 无提示(唯一性要整个集合,表单只握一张卡),D6/C1/C2 也无提示
+> (它们已经被硬校验挡住,同一件事不说两遍)。
+> 提示本身归 `tests/cardFormHints.test.tsx` 管;
+> `tests/cardRuleDivergence.test.tsx` 里每条 `it()` 追加了一句 `hints` 断言,
+> 它守的是**提示没有偷偷变成阻断**,而 D1-D4 的 `expect(outcome.accepted).toBe(true)`
+> 一个都没动 —— 那四句才是「没有滑向选项 1」的真正看守。
 
 **D6/D7 是反向的**:表单比导入更严。所以「把表单收紧到跟导入一样」根本不是一个
 完整答案 —— 那两条它一条也解决不了。
@@ -746,7 +770,28 @@ C1/C2 不是分歧,是共识。它们在文件里的唯一理由:**D1-D7 没有�
 
 ### 8.2 A:如果要统一,有哪几种选择,各自会拒绝掉什么今天能存进去的东西
 
-**裁决权在人。下面只列选项与代价。本步一条都没做。**
+> ✅ **已裁决(2026-08-17):采用选项 3。** 下面四个选项与代价原样保留,因为它们是
+> 这个决定的理由,不是待办清单。落地范围:`src/components/CardForm.tsx` 引入
+> `isValidStableUid` / `isValidDifficulty`(以及三个常量,只为让提示文案里的
+> 「128」「0..4」不被私抄一份),渲染三条 `data-card-hint` 内联提示;
+> **导入侧一行未动,`handleSubmit` 里那四条硬校验一行未动。**
+>
+> 证据(不是「测试绿了」,是「钉子扛住了改动」):
+> - `tests/cardRuleDivergence.test.tsx` 在实现穿过它的时候**一个字符都没改**
+>   (sha256 `edd15fc9…`)就 10/10 全绿,之后才追加 `hints` 断言。
+>   现有断言在改动前后逐字相同,所以「表单接受面没变」不是解释,是载荷。
+> - 变异 M7(让提示阻断提交,也就是把选项 3 改成选项 1)使 D1-D4 的
+>   `accepted` 断言全部变红 —— 这是「实现的是选项 3」的机器可验证形式。
+> - 变异 M3(把 `MAX_UID_LENGTH` 改成 4)让表单侧断言跟着红,
+>   证明表单读的是 `cardRules.ts` 而不是私抄了一份规则。
+>
+> 提示行为本身:`tests/cardFormHints.test.tsx`(时机、抗闪烁、可及性)。
+> **诚实交代可达性**:三条提示热度天差地别。只有 explanation 一条日常真能踩到;
+> uid 提示在新建时按构造不可达(每次按键 slugify、blur 削尾),
+> 它的真实受众是编辑既有卡时那个 **readOnly** 的历史 uid,
+> 所以文案只陈述后果、不含祈使句;difficulty 提示只有库里已有的越界值才点得亮。
+
+**下面四个选项是当时的备选与代价,保留原文。**
 
 **选项 1:表单向导入看齐(最直觉,代价最尖锐)**
 会开始拒绝:空 Explanation 的卡;非 `[a-z0-9]`+`-_` 形状的 uid;超过 128 字的 uid;
@@ -790,9 +835,17 @@ C1/C2 不是分歧,是共识。它们在文件里的唯一理由:**D1-D7 没有�
   未使用导入,`tsconfig.app.json` 的 `noUnusedLocals` 会直接让 `tsc -b` 失败。
   它们现在只在 `cardRules.ts` 内部被谓词使用,并导出给等价性测试持有原表达式副本。
 
-**焊点声明**在 `tests/cardRulesWiring.test.ts`。该文件第一句就写明:
-**`isValidStableUid` / `isValidDifficulty` 的消费者集合里没有 `CardForm`,这是分歧
-本身,不是待办**;哪天表单开始调用它,那张表必须有人动手改,而那需要人工点头。
+**焊点声明**在 `tests/cardRulesWiring.test.ts`。
+
+> ⚠️ **这一段在 2026-08-17 之后已经过期,保留是为了让改动可读。**
+> 它原本写着「`isValidStableUid` / `isValidDifficulty` 的消费者集合里没有 `CardForm`,
+> 这是分歧本身,不是待办」,并预言「哪天表单开始调用它,那张表必须有人动手改,
+> 而那需要人工点头」。**点头发生了(8.2 选项 3),表也动了**:三个谓词现在的消费者
+> 都是 `[CardForm.tsx, deckImport.ts]`,三个常量的消费者是 `[CardForm.tsx]`。
+> 该文件的文件头散文已连同表格一起重写 —— 它当时的前提(「表单一旦调用谓词就会开始
+> 拒绝今天能存的卡」)恰恰是这次要证伪的东西,而证伪它的是 D1-D4 的 `accepted` 断言。
+> `cardRules.ts` **没有新增任何导出**(sha256 仍是 `5d2e95d3…`),
+> 所以那条枚举导出面的断言一字未动。
 
 ### 8.4 B:体积报告
 
@@ -1180,7 +1233,7 @@ CI 会绿、lint 0 error、tsc 过,但任何人点开 `src/components/ui/` 都�
 
 | 目录 | 文件 | 行 | 为什么留着 |
 |---|---:|---:|---|
-| `components/ui/` | 9 | 809 | 通用组件库,删了要重写;需要单独决定是接线还是删 |
+| `components/ui/` | 9 | 809 | 通用组件库,删了要重写;需要单独决定是接线还是删 ⚠️ **第 10 步已改**:`ConfirmDialog.tsx` / `ConfirmDialogContext.ts` / `Button.tsx` 三个已接线并进入产物,见 9.8 |
 | `components/decks/` | 5 | 350 | **下一步拆 `DeckListPage` 的预置零件**,删了就得重写 |
 | `auth/` | 4 | 108 | `RequireGroup` / `RequireSuperAdmin` / `hostedUi` / `jwt` |
 | `hooks/index.ts` | 1 | 30 | 见下 |
@@ -1200,3 +1253,184 @@ CI 会绿、lint 0 error、tsc 过,但任何人点开 `src/components/ui/` 都�
 ```bash
 grep -rn "from '\.\./hooks'" frontend/src/    # 零命中
 ```
+
+---
+
+## 第 10 步(2026-08-17)—— 四处 `window.confirm` 换成 `ConfirmDialog`
+
+### 10.1 裁决:是,只有 DROP TABLES 那一处需要更高的摩擦
+
+四个调用点里,`AdminUsersPage` 的 reset 是唯一加了输入确认门
+(`confirmPhrase: 'RESET'`)的。三条理由:
+
+1. **爆炸半径不是同一类。** 其余三处分别销毁一张卡、一个 deck、或什么都不销毁
+   (publish 幂等,重跑就是修复手段)。这一处 DROP 并重建
+   decks/cards/progress/logs/permissions —— 所有人的数据,无撤销、无逐行恢复。
+2. **误点距离是一个按钮。** `Reset & migrate (DEV only)` 与
+   `Run migrate (no reset)` 在同一个 flex 行里,只差颜色。
+3. **对话框自己的文案说 "Only use this in DEV",但这个按钮在每个构建里都发货**,
+   指向控制台被配置到的任何 API。散文不是门。
+
+**为什么不全都加:** 输入确认只在稀有时才买得到注意力。四处都要打字,
+用户学会不看就打,严格比一次点击更糟 —— 它制造关心的错觉。
+**为什么是 'RESET' 而不是二次对话框:** 令牌对目标是特定的;再来一个是/否对话框
+只增加习惯化、不增加特定性。
+**明确不做:** 重新认证、时间延迟、服务端确认令牌 —— 都需要后端改动。
+
+`tests/adminUsersConfirm.test.tsx` 的第一个用例把这条裁决钉在原地:
+「`Run migrate (no reset)` 不开对话框且直接调 `runMigrate(false)`」。
+哪天有人给所有操作都加输入门,红的就是这一条。
+
+### 10.2 Provider 挂在 `App.tsx`,在 `ChunkErrorBoundary` 内、`Suspense` 外
+
+- **不挂 `main.tsx`:** 那一层的 provider(QueryClient / Auth / Router)是
+  App 渲染前就必须存在的;而且 `main.tsx` 在模块作用域调 `createRoot`,
+  测试里 import 它等于把整个应用挂进 `#root`,**接线因此无法被证明**。
+  `App` 是普通组件,`tests/confirmWiring.test.tsx` 挂得起来。
+- **在 boundary 内:** chunk 加载失败应当替换整屏(含开着的对话框)。
+  顺带让 `tests/appBoundaryWiring.test.ts` 与 `chunkErrorBoundary.test.tsx`
+  一个字符都不用改。
+- **在 Suspense 外:** 开着的对话框必须挺过一次路由挂起,
+  而不是被 fallback 替换时卸载、把等待中的 promise 永远挂住。
+
+`tests/appConfirmWiring.test.ts` 用 AST 把这三条位置关系断言成范围包含,
+不是「标签存在」。
+
+### 10.3 `useConfirm()` 无 provider 时回退到 `window.confirm`,不抛
+
+这是**给第 11 步的接口**,不是疏忽。本仓库大量页面级测试是裸挂的
+(`<MemoryRouter><DeckListPage /></MemoryRouter>`,没有应用外壳),
+`tests/deckListPagePolling.test.tsx` 也是。抛错会让它们全红,
+而最省事的修法是给它们全都包一层 provider —— 那会静默删掉
+「这个页面能独立工作」与「这个页面在应用里能工作」的区别。
+
+回退在 `tests/confirmDialogA11y.test.tsx` 里被显式断言。
+「真实应用不走这条路」是另一个主张,由
+`tests/appConfirmWiring.test.ts`(AST 位置)与
+`tests/confirmWiring.test.tsx`(挂真 `<App/>`,并把 `window.confirm` stub 成抛异常)
+分别回答。
+
+### 10.4 可及性:改的不是「不完整」,是**错的**
+
+旧 `ConfirmDialog.tsx` 顶着注释 `// Focus trap: keep focus within dialog`,
+而那个 handler 只处理 Escape,没有 trap;`autoFocus` 放在 **CONFIRM** 按钮上,
+破坏性对话框的默认焦点正落在 "Delete" 上;`aria-modal` 完全缺失;
+`aria-describedby="confirm-body"` 无条件输出而 `<p id="confirm-body">` 只在有 body 时渲染。
+Escape 今天能工作纯属侥幸 —— `autoFocus` 恰好把焦点放进了持有 React `onKeyDown` 的子树。
+
+现在:初始焦点落在**破坏性最低**的控件(destructive → Cancel,
+非破坏 → 确认按钮,有 phrase → 输入框);手写 Tab / Shift+Tab 双向环绕 +
+document 级 `focusin` 守卫;Escape 走 document 级 keydown,且与点击 overlay
+解析出**同一个值**;overlay 从 mousedown 起算;destructive → `alertdialog`,
+否则 `dialog`,两者都 `aria-modal="true"`;id 用 `useId`;
+`aria-describedby` 只在真有 body 时输出。
+
+⚠️ **写测试的人注意:** dom-testing-library **不解析 ARIA 子类**,
+`getByRole('dialog')` 找不到 `alertdialog`。写错的表现像「对话框没打开」,
+而自然的「修法」是把所有对话框都改成 `role="dialog"` —— 那会静默丢掉
+`alertdialog` 语义。`tests/confirmDialogA11y.test.tsx` 两个方向各钉了一条。
+
+### 10.5 一条**没有牙齿**的实现细节,如实记下来
+
+焦点恢复用了 `trigger.isConnected` 守卫。开工前的假设是
+「对已卸载节点 `focus()` 会静默把焦点丢给 body」。**实测这是错的**:
+jsdom(以及规范)里 `focus()` 作用在已断开的元素上是 no-op ——
+节点被移除时 `activeElement` 就已经变了,再调一次不改变任何东西。
+所以这行**无法被测试给出牙齿**,也没有任何用例假装覆盖它;
+它留着只是因为「只把焦点还给还在页面上的东西」是意图。
+`tests/confirmDialogA11y.test.tsx` 里那条「不假装恢复一个被删掉的触发者」
+是**记录行为**的用例,不是守卫,文件头写明了。
+
+### 10.6 体积:预测 +4.0~5.5 kB,实测见收工报告
+
+`ConfirmDialog.tsx` 与 `Button.tsx` 本步之前**一个字节都不在产物里**
+(production 构建后没有任何 chunk 含 `confirm-title`,也没有含
+`focus-visible:ring-indigo-500`)。所以这不是「已下载的代码获得调用者」,
+而是把两个文件作为全新的**首屏**字节引入。
+
+
+---
+
+## 第 11 步(2026-08-17)—— paginated 数据通道提成 `useDeckPagination`
+
+一件事:把 DeckListPage 的分页取数通道整块搬进 `src/pages/useDeckPagination.ts`。
+**零行为改变**,而且这次「零」是按构造成立的:搬走的五段文本 sha256 与落地后
+逐字节相同,一个参数化改写都不需要。
+
+### 11.1 先补网,再动 src —— 顺序有硬证据
+
+四个表征文件全部**对着未修改的 `DeckListPage.tsx`** 写到绿,那一刻同时留下两样证据:
+`git diff --stat -- frontend/src` 打印为空,**且** `DeckListPage.tsx` 的 sha256 仍是
+`c7055d4f…`(第 10 步的收工值)。空 diff 单独不能区分「没动过」与「动了又改回来」。
+
+- `tests/deckPaginationLoadMore.test.tsx` —— `loadPagedMore` 此前**零覆盖**。
+  三页夹具而不是两页:两页在 cursor 被重复发送的情况下照样通过。
+- `tests/deckPaginationRace.test.tsx` —— `pagedRequestSeq` 守卫,此前**零覆盖**。
+  到达顺序由 deferred promise 决定,不依赖 fake timers 或微任务调度。
+- `tests/deckPaginationRowActions.test.tsx` —— `resolveDeckId` 的两条分支。
+- `tests/deckPaginationErrorSurface.test.tsx` —— `pagedError` 的两种渲染面。
+  其中致命面上的 **Retry 按钮此前从没有任何测试按过**,正是本仓库那个反复出现的
+  缺陷形状:一个存在却从不被调用的控件。
+
+`tests/deckPaginationHookWiring.test.ts` 是**提取之后**才写的,它的出处在文件头
+写清楚了:提取前它以「模块不存在」失败,那是关于文件系统的证据,不是关于代码的。
+
+### 11.2 搬迁验收:五段 sha256 全部逐字节相同
+
+| 段 | 内容 | 原位置 | 落点 | sha256 |
+| --- | --- | --- | --- | --- |
+| A | 分页状态声明块(6 state + 2 ref) | `DeckListPage.tsx:173-184` | `useDeckPagination.ts:127-138` | `c6c240b2…` |
+| B | `loadPagedFirst` + 分节横幅 | `:319-358` | `:140-179` | `f2bd87ca…` |
+| C | `loadPagedMore` | `:360-382` | `:181-203` | `cb0a26dd…` |
+| D | `[debouncedQ]` effect | `:427-433` | `:205-211` | `02e8ffbc…` |
+| E | `PAGINATED_FALLBACK_CODES` | `:110-116` | `:69-75` | `3842f5ee…` |
+
+一个参数化改写都没有,原因是签名的四个参数**以它们所替换的标识符命名**:
+`superAdmin` / `debouncedQ` / `mountedRef` / `loadAll`。
+
+**没搬走的东西,以及为什么**:`resolvedIdsRef` 紧挨在 A 段下面,但它只被
+`resolveDeckId` 读,而后者写页面的错误反馈(`ERR_RESOLVE_ID`);`debouncedQ` 与
+它的 300ms 防抖 effect 被三个页面调用点读(Retry、Refresh、handlePublish)。
+搬走任何一个都会把切口扩进错误反馈或被禁的防抖常数。
+
+### 11.3 两条不许动的实现细节,各有一条测试盯着
+
+1. **两个 loader 保持普通 `async function`,不加 `useCallback`。** 它们每次渲染重建,
+   因此永远闭合最新的 `paged`。变异 `useCallback(…, [paged.hasMore, pagedLoading])`
+   —— 一个**看起来很合理**的 deps 数组 —— 让第二次 load more 重发 `cur-1`,
+   而**只有第三页那条断言**看得见它(实测报错:`expected { cursor: 'cur-1' } to
+   deeply equal { cursor: 'cur-2' }`)。
+2. **`pagedRequestSeq` 保持 `useRef`。** 变异成每次渲染重建的普通对象 → R1、R2 精确变红。
+   变异成真正的 `useState`(getter/setter 包装)→ **32 条红横跨 9 个文件**,
+   连不许修改的对照组 `tests/deckListPagePolling.test.tsx` 都会被逼红。
+
+### 11.4 effect 顺序确实变了,变化不可观测
+
+挂载时的 effect 顺序从「mountedRef(1)、`[q]` 防抖(2)、legacy-mount(3)、
+`[debouncedQ]`(4)」变成「mountedRef(1)、`[debouncedQ]`(2)、`[q]` 防抖(3)、
+legacy-mount(4)」,因为 hook 的 effect 在它被调用的位置注册。逐对论证:
+旧的 2 只是安排一个 300ms 定时器,同一个 commit 内不碰任何状态;
+旧的 3 与旧的 4 各自开头就测 `listModeRef.current`,互斥,相对顺序不可观测。
+`mountedRef` 仍是第一个 —— 那是唯一不能动的一条,两个 loader 都在 await 之后读它。
+证据:`tests/deckListPagePolling.test.tsx`(指定对照组,**零编辑**)与
+`tests/deckListPageFallback.test.tsx` 的 F1/F2/F3(**断言零编辑**,只改了文件头的
+行号引用)全绿。
+
+### 11.5 `listModeRef` 必须以 **ref 对象**返回,不是 `.current` 快照
+
+这在第 10 步之后从洁癖升级成正确性要求:`handleDeleteDeck` 与 `handlePublish`
+都在 **`await` 之后**读它,而第 10 步把阻塞的 `window.confirm` 换成了
+`await confirm(...)` —— 对话框开着的那几秒里,`[debouncedQ]` effect 可以跑完
+一整轮 `loadPagedFirst` 并把模式从 paginated 翻成 legacy。快照会让这两个 handler
+读到渲染时的值。
+
+⚠️ **这个 post-await 读取今天零覆盖**,`deckListPageFallback` 与
+`deckListPagePolling` 都没有覆盖它。本步**没有补**:补它要造「对话框开着时后台
+翻模式」的场景,会牵进本步禁区里的轮询代码。**记在这里,不当作已解决。**
+
+### 11.6 体积:首屏 ±0,全部落在已经 lazy 的 chunk 里
+
+前后各构建一次实测(不是推算):首屏静态闭包 **309,259 B → 309,259 B**,
+`index-*.js` **279,304 B → 279,304 B** 逐字节相同(文件名 hash 变了,因为它内嵌了
+DeckListPage chunk 的名字)。eager 闭包 387,464 → 387,874(**+410 B**),
+差额**全部**在 `DeckListPage-*.js`(26,646 → 27,056),即已经 lazy 的边界之后。

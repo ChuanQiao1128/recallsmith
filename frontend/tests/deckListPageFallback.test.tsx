@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 //
-// Characterization tests for the paginated -> legacy fallback in
-// DeckListPage.tsx (:341-353), covering the two branches nothing pinned.
+// Characterization tests for the paginated -> legacy fallback, which now lives
+// in src/pages/useDeckPagination.ts (:151-168) after that channel was lifted
+// out of DeckListPage.tsx. Covers the two branches nothing pinned.
 //
-// PAGINATED_FALLBACK_CODES (:113-117) holds three genuinely distinct codes:
+// PAGINATED_FALLBACK_CODES (useDeckPagination.ts:71-75) holds three genuinely
+// distinct codes:
 // ADMIN_DECKS_ENDPOINT_MISSING resolves to 'ENDPOINT_NOT_FOUND', which is NOT
 // the same string as 'NOT_FOUND'. Only the first was covered
 // (deckListPageLegacyPath.test.tsx L2), so deleting 'FORBIDDEN' from that set
@@ -11,7 +13,7 @@
 // that is not super_admin refused at the gateway.
 //
 // F3 guards a single line, the `listModeRef.current = 'legacy'` assignment in
-// DeckListPage's paginated-to-legacy fallback:
+// the paginated-to-legacy fallback (useDeckPagination.ts:158):
 //
 //     listModeRef.current = 'legacy';
 //     setListMode('legacy');
@@ -19,14 +21,18 @@
 // The ref and the state say the same thing, which makes the ref look
 // redundant, and merging them into one useState is the most natural move when
 // this page is lifted into a hook. It is not redundant. The debounced-search
-// effect (:440-441) reads listModeRef.current synchronously to decide whether
+// effect (useDeckPagination.ts:207-211) reads listModeRef.current synchronously
+// to decide whether
 // to re-query the paginated endpoint, and no existing test types into the
 // search box after a fallback — so today that line is written and never read
 // by any test. Delete it and the console goes back to hammering an endpoint
 // that already answered 403, once per search keystroke burst.
 //
 // These were written and run green against a completely unmodified
-// DeckListPage.tsx, before anything was moved out of it.
+// DeckListPage.tsx, before anything was moved out of it. They then survived the
+// useDeckPagination extraction with the assertions untouched — only the line
+// references in this header changed, and only because the code they point at
+// moved file. The bodies below are byte-for-byte what they were.
 //
 // This file duplicates ~40 lines of fixture from deckListPageLegacyPath.test.tsx
 // rather than appending cases there. That file's header makes a specific
