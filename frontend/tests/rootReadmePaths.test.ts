@@ -81,6 +81,15 @@ describe('the file counts in the README table', () => {
       return { dir, count: listed.split('\n').filter(Boolean).length };
     });
 
-    expect(actual).toEqual(rows.map(r => ({ dir: r.dir, count: r.claimed })));
+    expect(
+      actual,
+      // Read this before hunting for the discrepancy: `git ls-files` reports the
+      // INDEX, not the working tree. Delete a file and run the suite without
+      // staging first and this fails against a count that is already correct for
+      // what will be committed. It has cost two rounds of confusion already,
+      // once in CI. Stage, then re-run.
+      'file counts disagree with `git ls-files`. If files were just added or ' +
+        'deleted, stage them first — this reads the index, not the working tree.',
+    ).toEqual(rows.map(r => ({ dir: r.dir, count: r.claimed })));
   });
 });
