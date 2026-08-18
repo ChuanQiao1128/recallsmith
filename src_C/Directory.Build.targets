@@ -1,0 +1,22 @@
+<Project>
+  <!-- This repository lives in an iCloud-synced folder. On sync conflicts,
+       iCloud silently renames the losing copy to "Name 2.cs" instead of
+       prompting, and MSBuild's default **/*.cs glob then compiles both copies:
+       CS0111 duplicate members, locally only,, while CI (a clean checkout) stays
+       green. The frontend hit the same class of problem and answered it in
+       tsconfig/.gitignore; this is the MSBuild spelling of the same answer.
+
+       It lives in Directory.Build.targets, not Directory.Build.props, and the
+       distinction is load-bearing: .props imports before the SDK declares the
+       default Compile items, so a Remove there runs against an empty list and
+       silently does nothing (measured here, not read about). .targets imports
+       after.
+
+       MSBuild wildcards have no character classes, so the pattern leans on the
+       one invariant that holds: no legitimate source file here has a space in
+       its name. -->
+  <ItemGroup>
+    <Compile Remove="**/* ?.cs" />
+    <Compile Remove="**/* ??.cs" />
+  </ItemGroup>
+</Project>
