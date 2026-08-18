@@ -6,6 +6,11 @@ namespace RecallSmith.Lambda;
 
 public sealed class VpcFunction
 {
+  // One spelling of this function's name, used both as the `lambda` field of the structured
+  // logs and as the Service dimension of the metrics. They have to be the same string for
+  // anyone to join an alarm to the log lines behind it, and two literals cannot promise that.
+  private const string ServiceName = "core-vpc";
+
   public VpcFunction()
   {
     // SnapStart runtime hooks must be registered during init (before snapshot).
@@ -21,13 +26,27 @@ public sealed class VpcFunction
   public async Task<APIGatewayProxyResponse> Handler(JsonElement evt)
   {
     var req = new LambdaRequest(evt);
-    var res = new Res(req.TraceId);
+    // The origin travels with the response builder, not with a route: every response this
+    // function can produce -- including the OPTIONS preflight and the 500 from the catch
+    // below -- has to carry the same CORS answer, or the browser reports the wrong failure.
+    var res = new Res(req.TraceId, req.Origin);
 
+    // The whole dispatch, wrapped once. Deliberately the only statement in this method that
+    // can produce a response: there is no early return above it and no route below it, so a
+    // route added tomorrow is measured without anyone deciding to measure it. That is the
+    // entire difference between this and a Stopwatch inside each handler, and it is why the
+    // 404 branch and the unhandled-exception branch -- the two that matter most and get
+    // instrumented last -- are covered here for free.
+    return await RouteMetrics.MeasureAsync(ServiceName, req, () => DispatchAsync(req, res));
+  }
+
+  private static async Task<APIGatewayProxyResponse> DispatchAsync(LambdaRequest req, Res res)
+  {
     Log.Info(
       JsonSerializer.Serialize(new
       {
         tag = "boot",
-        lambda = "core-vpc",
+        lambda = ServiceName,
         version = Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_VERSION"),
         apiEnv = Environment.GetEnvironmentVariable("API_ENV"),
         allowDevPremium = Environment.GetEnvironmentVariable("ALLOW_DEV_PREMIUM"),
@@ -62,7 +81,7 @@ public sealed class VpcFunction
       JsonSerializer.Serialize(new
       {
         traceId = req.TraceId,
-        lambda = "core-vpc",
+        lambda = ServiceName,
         method = req.Method,
         path = req.Path,
         userSub = auth.UserSub,
@@ -144,6 +163,16 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/v1/authoring/decks", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Authoring.Decks.HandleAuthoringDecks(req, res, auth);
+      }
+      // Keyset-paginated card list. Additive: the unpaged route below keeps its
+      // exact behaviour for the console and the mobile app. Ordering matters
+      // less than it looks — "/api/v1/authoring/cards/page" does not end with
+      // "/api/v1/authoring/cards", so the two never shadow each other — but the
+      // more specific path stays first anyway, so a future prefix match cannot
+      // quietly swallow it.
+      if (p.EndsWith("/api/v1/authoring/cards/page", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.CardsPage.HandleAuthoringCardsPage(req, res, auth);
       }
       if (p.EndsWith("/api/v1/authoring/cards", StringComparison.OrdinalIgnoreCase))
       {
