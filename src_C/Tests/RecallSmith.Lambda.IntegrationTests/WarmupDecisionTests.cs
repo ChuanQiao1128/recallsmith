@@ -6,6 +6,14 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// which is the part that must never let a missing or disabled configuration
 /// turn into an error during container init.
 /// </summary>
+/// <remarks>
+/// In the postgres collection despite touching neither, and the fixture is deliberately not
+/// injected. RunOnce below now also runs the database probe, which means it writes to
+/// Console and to Pg's static data source. Left in its own collection it would run in
+/// parallel with DbWarmupTests, whose assertions read Console back through a process-global
+/// redirect -- a warmup line emitted here would land in that buffer.
+/// </remarks>
+[Collection(PostgresCollection.Name)]
 public class WarmupDecisionTests
 {
   [Theory]
@@ -52,8 +60,12 @@ public class WarmupDecisionTests
   [Fact]
   public void RunOnce_IsSafeAndIdempotentWhenUnconfigured()
   {
-    // Guard: only assert the no-op path. With a real queue URL present this would attempt
-    // an actual AWS call, which these tests must not do.
+    // Guard: only assert the no-op path for SQS. With a real queue URL present this would
+    // attempt an actual AWS call, which these tests must not do.
+    //
+    // The database half is NOT unconfigured here -- the fixture has PG env vars set
+    // process-wide by the time this runs -- so this now also asserts that a real probe
+    // against a real container cannot throw into a constructor.
     if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PUBLISH_JOB_QUEUE_URL"))) return;
 
     var ex = Record.Exception(() =>

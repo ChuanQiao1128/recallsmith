@@ -16,6 +16,16 @@ public sealed class LambdaRequest
   public bool IsBase64Encoded { get; }
   public string RawBody { get; }
 
+  /// <summary>The caller's Origin header, or null when it is absent or empty.</summary>
+  /// <remarks>
+  /// A property here rather than a header lookup at each call site, so the one thing that
+  /// decides which origins the API answers for is not spelled out as a magic string in every
+  /// handler. Empty collapses to null deliberately: <see cref="ReadStringMap"/> turns a JSON
+  /// null header value into "", and "" is not an origin — passing it on would put an empty
+  /// access-control-allow-origin on the response.
+  /// </remarks>
+  public string? Origin => Headers.TryGetValue("origin", out var v) && v.Length > 0 ? v : null;
+
   public LambdaRequest(JsonElement rawEvent)
   {
     RawEvent = rawEvent;

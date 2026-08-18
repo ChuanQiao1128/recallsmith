@@ -6,6 +6,10 @@ namespace RecallSmith.Lambda;
 
 public sealed class PublicFunction
 {
+  // Matches the `lambda` field these logs already carry, so an alarm on the Service
+  // dimension and a Logs Insights query on the log lines name the same thing.
+  private const string ServiceName = "edge-public";
+
   public PublicFunction()
   {
     // SnapStart runtime hooks must be registered during init (before snapshot).
@@ -15,8 +19,22 @@ public sealed class PublicFunction
   public async Task<APIGatewayProxyResponse> Handler(JsonElement evt)
   {
     var req = new LambdaRequest(evt);
-    var res = new Res(req.TraceId);
+    // Same wiring as core-vpc, and needed here for the same reason: once CORS_ORIGIN names a
+    // list, a Res built without the request's origin allows nobody. Leaving this handler on
+    // the one-argument constructor would not have failed a build or a test -- it would have
+    // silently taken edge-public out of the browser on the day the env var changed.
+    var res = new Res(req.TraceId, req.Origin);
 
+    // Wrapped for the same reason as core-vpc, and it is the same kind of omission risk that
+    // the CORS wiring above was: the test project cannot reference this assembly (it and
+    // RecallSmith.Lambda.Vpc both build an assembly called RecallSmith.Lambda), so nothing
+    // here fails a build or a test if it is forgotten. Billing and the AI route would simply
+    // be the two paths with no latency series, discovered the first time one of them got slow.
+    return await RouteMetrics.MeasureAsync(ServiceName, req, () => DispatchAsync(req, res));
+  }
+
+  private static async Task<APIGatewayProxyResponse> DispatchAsync(LambdaRequest req, Res res)
+  {
     // SAFE auth parsing (webhooks / custom Authorization header may NOT be JWT)
     AuthContext auth;
     try
@@ -44,7 +62,7 @@ public sealed class PublicFunction
       JsonSerializer.Serialize(new
       {
         traceId = req.TraceId,
-        lambda = "edge-public",
+        lambda = ServiceName,
         method = req.Method,
         path = req.Path,
         userSub = auth.UserSub,
