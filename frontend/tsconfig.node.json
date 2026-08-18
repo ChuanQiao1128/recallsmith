@@ -24,6 +24,12 @@
   },
   /* An explicit file list, not a glob. A glob such as "*.config.ts" would also
      pick up "vitest.config 2.ts", the iCloud conflict copy sitting in this
-     directory right now. */
-  "include": ["vite.config.ts", "vitest.config.ts"]
+     directory right now.
+
+     playwright.config.ts is listed for the reason the README gives for tests/:
+     a config file that no project includes is type-checked by NOTHING, and this
+     one is the only place the preview port, the build mode and the testMatch
+     glob are written down. It was added here in the same change that created
+     it; tests/runnerSeparation.test.ts fails if it drops out again. */
+  "include": ["vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
 }

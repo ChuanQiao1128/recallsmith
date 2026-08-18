@@ -23,6 +23,18 @@ dist-ssr
 *.sln
 *.sw?
 
+# Playwright output. Both directories are written by a run, not by a person:
+# test-results/ holds traces and screenshots kept only for a failure,
+# playwright-report/ the HTML report. Ignored rather than cleaned up by hand
+# because tests/rootReadmePaths.test.ts counts `git ls-files frontend`, so an
+# unignored artefact directory would make a passing run change the README's
+# file count. Browser binaries live in ~/Library/Caches/ms-playwright and never
+# enter the repository.
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
 # ReleaseGuard scanner artifacts (auto-generated, not source)
 .releaseguard/
 artifacts/releaseguard/

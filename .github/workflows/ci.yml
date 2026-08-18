@@ -35,6 +35,25 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      # Dependency advisories, as a gate rather than as a thing someone might
+      # read. This job already installs the exact tree the browser gets, so the
+      # check costs one command and no extra state.
+      #
+      # `--omit=dev` because the two trees have genuinely different threat
+      # models. A prod advisory is code this app ships to a browser and runs
+      # against a user's session; a dev advisory is vite, postcss or a lint
+      # plugin, which runs on a developer's machine and in this runner and
+      # reaches no user. Auditing everything would mean either a red CI that
+      # says nothing about the product, or an ignore-list that quietly grows
+      # until it covers the advisory that mattered.
+      #
+      # `--audit-level=high` sets where it fails, not what it reports: moderate
+      # and low findings are still printed. When this was added the prod tree
+      # had four high findings — react-router 7.13.1 sat inside an open-redirect
+      # advisory, and axios 1.13.6 pulled a CRLF-injection in form-data — and
+      # both were upgraded in the same change, so this starts green rather than
+      # starting with an exemption.
+      - run: npm audit --omit=dev --audit-level=high
       # `npm run lint` (= `eslint .`) rather than an explicit path list, because
       # `.` is a strict superset (102 files vs 98 today) and cannot be defeated
       # by adding a top-level file and forgetting to extend the list.
@@ -53,6 +72,69 @@ jobs:
       # include, so it checks ZERO files — `--listFiles` prints nothing and it
       # exits 0 with a real type error sitting in src/. It is not a check.
       - run: npm run build
+        env:
+          # Baked into the bundle by Vite and attached to every report
+          # frontend/src/lib/reportError.ts sends. Set here rather than
+          # defaulted in code because a build id has to come from outside the
+          # build: anything the source could compute about itself is the same
+          # string in every deploy. With this unset the module falls back to
+          # import.meta.env.MODE, which is useless but true — a fabricated
+          # sha-shaped placeholder would send someone looking for a commit that
+          # does not exist.
+          VITE_BUILD_ID: ${{ github.sha }}
+
+  e2e:
+    name: frontend (playwright smoke)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    # Its own job rather than three more steps on `frontend`, and therefore
+    # parallel with it. Two reasons, both measured rather than stylistic: it
+    # needs a ~180 MB browser download that the other job has no use for, and a
+    # browser failure and a unit failure should be able to be reported
+    # separately — appending it would mean a red smoke test hides which of the
+    # five existing gates were even reached.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # `--with-deps` installs the shared libraries headless Chromium needs on
+      # a bare ubuntu runner (fonts, nss, libdrm and friends). Without it the
+      # browser downloads fine and then fails to launch, which reads as a test
+      # failure rather than as a missing package.
+      #
+      # `chromium` only, matching the single project in playwright.config.ts. A
+      # bare `playwright install` pulls Firefox and WebKit as well — roughly a
+      # gigabyte — to run nothing.
+      - run: npx playwright install --with-deps chromium
+      # The webServer in playwright.config.ts builds the app first
+      # (`vite build --mode e2e`) and serves dist/ on port 5173, so this step
+      # exercises the real bundle rather than a dev server. It does NOT set
+      # VITE_BUILD_ID: that build is thrown away when the job ends, and a smoke
+      # run is not a deploy whose reports anyone will look up by sha.
+      - run: npx playwright test
+      # Only on failure, because a browser failure is the one kind in this
+      # repository that cannot be reproduced by reading the log: the trace has
+      # the DOM, the network and a screenshot at the failing step.
+      #
+      # `test-results/`, not `playwright-report/`. The reporters configured for
+      # CI are `github` and `list`, neither of which writes an HTML report, so
+      # that directory does not exist — an upload step pointed at it would warn
+      # and produce nothing, which is the shape of a diagnostic that is only
+      # discovered to be empty on the day it is needed. `trace:
+      # 'retain-on-failure'` and `screenshot: 'only-on-failure'` both write
+      # here. Open one with `npx playwright show-trace <the zip>`.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: frontend/test-results/
+          retention-days: 7
 
   backend:
     name: backend (dotnet test)
