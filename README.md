@@ -14,7 +14,7 @@ This is a personal project, written and maintained by one person.
 | --- | --- | --- | --- |
 | `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 177 |
 | `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in | 319 |
-| `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` | 126 |
+| `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` | 135 |
 | `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver | 3 |
 | `snowflake/` | SQL | Warehouse setup and the marts that model card quality | 4 |
 | `docs/` | Markdown | Design notes and refactor plans | 11 |
