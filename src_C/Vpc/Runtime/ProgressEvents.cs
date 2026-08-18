@@ -246,12 +246,128 @@ public static class ProgressEvents
       var allEventIds = normalized.Select(x => x.EventId).ToList();
 
       var swSql = Stopwatch.StartNew();
-      await using var tx = await conn.BeginTransactionAsync();
-      try
+      var values = new List<string>();
+      var parameters = new List<object?>();
+      var idx = 1;
+
+      static string P(ref int i) => "$" + i++;
+
+      // The users upsert used to be a statement of its own, wrapped together
+      // with the event insert in an explicit transaction. Measured on the
+      // production ingest (128MB arm64, batch=1, p50): the CTE statement cost
+      // 19.9ms and the shell around it -- BEGIN, this upsert, COMMIT -- cost
+      // 30.6ms. The wrapper was more expensive than the work it wrapped,
+      // because each of those three is a full round trip across the VPC and
+      // the work is one.
+      //
+      // So the upsert moves inside as a CTE and the explicit transaction goes
+      // away: a single statement is already atomic. BEGIN/COMMIT was never
+      // what made "all of it or none of it" true here, it only made it true
+      // across more round trips.
+      //
+      // Ordering looks like a hazard and is not. user_progress_events.user_sub
+      // is `references users(user_sub)`, CTEs have no defined execution order,
+      // and this one is not referenced by the main query at all, so "will the
+      // parent row exist yet?" is a fair question. What answers it is WHEN the
+      // constraint is checked, not the order: a foreign key is an AFTER ROW
+      // trigger that fires at the end of the statement, and a data-modifying
+      // CTE always runs to completion whether or not anything reads it.
+      // Checked against postgres:16-alpine with the users CTE written last and
+      // unreferenced, on a user_sub that did not exist: the insert succeeds.
+      var userSubParam = P(ref idx);
+      parameters.Add(userSub);
+      var emailParam = P(ref idx);
+      parameters.Add(email);
+      var platformParam = P(ref idx);
+      parameters.Add(clientPlatform);
+      var versionParam = P(ref idx);
+      parameters.Add(clientVersion);
+      var deviceIdParam = P(ref idx);
+      parameters.Add(deviceId);
+
+      foreach (var ev in normalized)
       {
-        const string upsertUser = """
+        values.Add($"""
+          (
+            {P(ref idx)}::uuid,
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            to_timestamp({P(ref idx)}/1000.0),
+            {P(ref idx)},
+            {P(ref idx)},
+            to_timestamp({P(ref idx)}/1000.0),
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            to_timestamp({P(ref idx)}/1000.0),
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)},
+            {P(ref idx)}
+          )
+          """);
+
+        parameters.Add(ev.EventId);
+        parameters.Add(userSub);
+        parameters.Add(ev.DeckSlug);
+        parameters.Add(ev.StableUid);
+        parameters.Add(ev.Rating);
+        parameters.Add(ev.EventTimeMs);
+        parameters.Add(deviceId);
+        parameters.Add(clientVersion);
+        parameters.Add(ev.NextReviewAtMs);
+        parameters.Add(ev.LastSeenRevision);
+        parameters.Add(ev.DeckVersion);
+        parameters.Add(ev.SchemaVersion);
+        parameters.Add(ev.EventType);
+        parameters.Add(ev.SessionId);
+        parameters.Add(clientPlatform);
+        parameters.Add(ev.EventTimeMs);
+        parameters.Add(ev.OfflineQueueDelayMs);
+        parameters.Add(ev.DwellTimeMs);
+        parameters.Add(ev.ReviewStage);
+        parameters.Add(ev.ReviewCountForCard);
+        parameters.Add(ev.CardRevision);
+        parameters.Add(ev.StatedDifficulty);
+        parameters.Add(ev.SchedulerVersion);
+      }
+
+      // srs_stage rides alongside the batch as an inline VALUES list joined
+      // on event_id, instead of becoming a column of user_progress_events.
+      // The events table records what the client REPORTED about a review;
+      // the ladder position is state, and its home is user_progress. Joining
+      // here keeps the ingest one statement (the merge stays atomic with the
+      // event insert) without adding a seventh CTE.
+      //
+      // Deduped on event_id because the join must be a function of it: a
+      // batch that repeats one eventId inserts a single row (ON CONFLICT DO
+      // NOTHING), and a VALUES side listing that id twice would fan that row
+      // out and let `distinct on` pick between two stages at random.
+      var stageRows = new List<string>();
+      var stageSeen = new HashSet<string>(StringComparer.Ordinal);
+      foreach (var ev in normalized)
+      {
+        if (!stageSeen.Add(ev.EventId)) continue;
+        stageRows.Add($"({P(ref idx)}::uuid, {P(ref idx)}::smallint)");
+        parameters.Add(ev.EventId);
+        parameters.Add(ev.SrsStage);
+      }
+
+      var userHashParam = P(ref idx);
+      parameters.Add(userIdHash);
+
+      var sql = $"""
+        with ensure_user as (
           insert into users (user_sub, email, last_seen_at, last_platform, last_version, last_device_id)
-          values ($1, $2, now(), $3, $4, $5)
+          values ({userSubParam}, {emailParam}, now(), {platformParam}, {versionParam}, {deviceIdParam})
           on conflict (user_sub)
           do update set
             email = coalesce(excluded.email, users.email),
@@ -259,354 +375,263 @@ public static class ProgressEvents
             last_platform = coalesce(excluded.last_platform, users.last_platform),
             last_version = coalesce(excluded.last_version, users.last_version),
             last_device_id = coalesce(excluded.last_device_id, users.last_device_id)
-          """;
-
-        await DbUtil.ExecuteAsync(conn, tx, upsertUser, [userSub, email, clientPlatform, clientVersion, deviceId]);
-
-        var values = new List<string>();
-        var parameters = new List<object?>();
-        var idx = 1;
-
-        static string P(ref int i) => "$" + i++;
-
-        foreach (var ev in normalized)
-        {
-          values.Add($"""
-            (
-              {P(ref idx)}::uuid,
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              to_timestamp({P(ref idx)}/1000.0),
-              {P(ref idx)},
-              {P(ref idx)},
-              to_timestamp({P(ref idx)}/1000.0),
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              to_timestamp({P(ref idx)}/1000.0),
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)},
-              {P(ref idx)}
-            )
-            """);
-
-          parameters.Add(ev.EventId);
-          parameters.Add(userSub);
-          parameters.Add(ev.DeckSlug);
-          parameters.Add(ev.StableUid);
-          parameters.Add(ev.Rating);
-          parameters.Add(ev.EventTimeMs);
-          parameters.Add(deviceId);
-          parameters.Add(clientVersion);
-          parameters.Add(ev.NextReviewAtMs);
-          parameters.Add(ev.LastSeenRevision);
-          parameters.Add(ev.DeckVersion);
-          parameters.Add(ev.SchemaVersion);
-          parameters.Add(ev.EventType);
-          parameters.Add(ev.SessionId);
-          parameters.Add(clientPlatform);
-          parameters.Add(ev.EventTimeMs);
-          parameters.Add(ev.OfflineQueueDelayMs);
-          parameters.Add(ev.DwellTimeMs);
-          parameters.Add(ev.ReviewStage);
-          parameters.Add(ev.ReviewCountForCard);
-          parameters.Add(ev.CardRevision);
-          parameters.Add(ev.StatedDifficulty);
-          parameters.Add(ev.SchedulerVersion);
-        }
-
-        // srs_stage rides alongside the batch as an inline VALUES list joined
-        // on event_id, instead of becoming a column of user_progress_events.
-        // The events table records what the client REPORTED about a review;
-        // the ladder position is state, and its home is user_progress. Joining
-        // here keeps the ingest one statement (the merge stays atomic with the
-        // event insert) without adding a seventh CTE.
-        //
-        // Deduped on event_id because the join must be a function of it: a
-        // batch that repeats one eventId inserts a single row (ON CONFLICT DO
-        // NOTHING), and a VALUES side listing that id twice would fan that row
-        // out and let `distinct on` pick between two stages at random.
-        var stageRows = new List<string>();
-        var stageSeen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var ev in normalized)
-        {
-          if (!stageSeen.Add(ev.EventId)) continue;
-          stageRows.Add($"({P(ref idx)}::uuid, {P(ref idx)}::smallint)");
-          parameters.Add(ev.EventId);
-          parameters.Add(ev.SrsStage);
-        }
-
-        var userHashParam = P(ref idx);
-        parameters.Add(userIdHash);
-
-        var sql = $"""
-          with ins as (
-            insert into user_progress_events (
-              event_id, user_sub, deck_slug, stable_uid, rating, event_time, device_id, client_version,
-              next_review_at, last_seen_revision, deck_version,
-              schema_version, event_type, session_id, client_platform, client_event_time,
-              offline_queue_delay_ms, dwell_time_ms, review_stage, review_count_for_card,
-              card_revision, stated_difficulty, scheduler_version
-            )
-            values {string.Join(", ", values)}
-            on conflict (event_id) do nothing
-            returning
-              event_id, user_sub, deck_slug, stable_uid,
-              rating, event_time,
-              next_review_at, last_seen_revision, deck_version,
-              schema_version, event_type, session_id, device_id, client_version, client_platform,
-              client_event_time, server_received_at, offline_queue_delay_ms, dwell_time_ms,
-              review_stage, review_count_for_card, card_revision, stated_difficulty,
-              scheduler_version
-          ),
-          outbox as (
-            insert into analytics_event_outbox (
-              event_id, event_type, aggregate_type, aggregate_id, payload
-            )
-            select
-              event_id,
-              event_type,
-              'card',
-              deck_slug || ':' || stable_uid,
-              jsonb_strip_nulls(jsonb_build_object(
-                'event_id', event_id::text,
-                'schema_version', schema_version,
-                'event_type', event_type,
-                'user_id_hash', {userHashParam},
-                'deck_slug', deck_slug,
-                'card_stable_uid', stable_uid,
-                'card_revision', card_revision,
-                'stated_difficulty', stated_difficulty,
-                'rating', case rating
-                  when 1 then 'again'
-                  when 2 then 'hard'
-                  when 3 then 'good'
-                  when 4 then 'easy'
-                  else null
-                end,
-                'rating_value', rating,
-                'response_score', case rating
-                  when 1 then 4
-                  when 2 then 3
-                  when 3 then 1
-                  when 4 then 0
-                  else null
-                end,
-                'session_id', session_id,
-                'review_stage', review_stage,
-                'review_count_for_card', review_count_for_card,
-                'dwell_time_ms', dwell_time_ms,
-                'client_event_ts', client_event_time,
-                'server_received_ts', server_received_at,
-                'device_id', device_id,
-                'platform', client_platform,
-                'app_version', client_version,
-                'offline_queue_delay_ms', offline_queue_delay_ms,
-                'deck_version', deck_version
-              ))
-            from ins
-            on conflict (event_id) do nothing
-            returning 1
-          ),
-          agg as (
-            select
-              user_sub, deck_slug, stable_uid,
-              count(*)::int as inc,
-              max(event_time) as last_reviewed_at
-            from ins
-            group by user_sub, deck_slug, stable_uid
-          ),
-          last_row as (
-            select distinct on (i.user_sub, i.deck_slug, i.stable_uid)
-              i.user_sub, i.deck_slug, i.stable_uid,
-              i.rating as last_rating,
-              i.event_time as last_reviewed_at,
-              coalesce(i.next_review_at, i.event_time) as next_review_at,
-              i.last_seen_revision,
-              i.deck_version,
-              s.srs_stage,
-              i.scheduler_version
-            from ins i
-            join (values {string.Join(", ", stageRows)}) as s(event_id, srs_stage)
-              on s.event_id = i.event_id
-            -- event_id is the last-resort tiebreak, and it is not decoration.
-            -- `distinct on` returns an UNSPECIFIED row among ties, so with
-            -- event_time alone two events on one card in the same millisecond
-            -- let the plan (parallel scan, index choice, row order) decide which
-            -- rating, due date and rung the user ends up with. Ties are not
-            -- exotic either: the eventTimeMs clamp above maps every event from a
-            -- skewed clock onto the SAME bound, which turns a rare collision
-            -- into a systematic one. Any total order beats none; event_id is
-            -- already unique, already indexed as the primary key, and does not
-            -- vary with the plan.
-            --
-            -- The TS replica in mobile/tests/unit/multiDeviceSync.sim.test.ts
-            -- mirrors this exact rule. That replica can only prove the rule is
-            -- consistent with itself: whether Postgres really honours it here
-            -- needs a live database, so the SQL-side proof waits on
-            -- Testcontainers.
-            order by i.user_sub, i.deck_slug, i.stable_uid, i.event_time desc, i.event_id desc
-          ),
-          merged as (
-            select
-              a.user_sub, a.deck_slug, a.stable_uid,
-              a.inc,
-              l.last_rating,
-              l.last_reviewed_at,
-              l.next_review_at,
-              l.last_seen_revision,
-              l.deck_version,
-              l.srs_stage,
-              l.scheduler_version
-            from agg a
-            join last_row l using (user_sub, deck_slug, stable_uid)
-          ),
-          upsert as (
-            insert into user_progress (
-              user_sub, deck_slug, stable_uid,
-              status, last_rating, last_reviewed_at,
-              review_count, due_at,
-              last_seen_revision,
-              srs_stage, last_scheduler_version,
-              updated_at
-            )
-            select
-              user_sub, deck_slug, stable_uid,
-              1 as status,
-              last_rating,
-              last_reviewed_at,
-              inc as review_count,
-              next_review_at as due_at,
-              last_seen_revision,
-              srs_stage,
-              scheduler_version as last_scheduler_version,
-              now() as updated_at
-            from merged
-            on conflict (user_sub, deck_slug, stable_uid)
-            do update set
-              status = greatest(user_progress.status, excluded.status),
-              review_count = user_progress.review_count + excluded.review_count,
-
-              last_reviewed_at = greatest(
-                coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz),
-                excluded.last_reviewed_at
-              ),
-
-              last_rating = case
-                when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
-                  then excluded.last_rating
-                else user_progress.last_rating
-              end,
-
-              due_at = case
-                when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
-                  then excluded.due_at
-                else user_progress.due_at
-              end,
-
-              -- srs_stage and last_scheduler_version join last_rating/due_at
-              -- under the SAME predicate on purpose: those four columns are one
-              -- atomic verdict, "the state as of the most recent review". Any
-              -- per-column choice here (greatest, coalesce) would let stage come
-              -- from device A while due_at came from device B, and that stitched
-              -- pair describes a review that nobody ever did.
-              --
-              -- Not greatest(): stage is "which rung the last review left the
-              -- card on", not "the highest rung ever reached". The day `again`
-              -- demotes a card, a monotonic merge would make the demotion
-              -- permanently unable to propagate.
-              --
-              -- The winner writing null (an old client that sends no stage)
-              -- is deliberate: null means "unknown, infer it from the interval",
-              -- which is honest, while keeping the previous stage next to a new
-              -- due_at is exactly the stitched state above.
-              srs_stage = case
-                when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
-                  then excluded.srs_stage
-                else user_progress.srs_stage
-              end,
-
-              last_scheduler_version = case
-                when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
-                  then excluded.last_scheduler_version
-                else user_progress.last_scheduler_version
-              end,
-
-              last_seen_revision = greatest(
-                coalesce(user_progress.last_seen_revision, 0),
-                coalesce(excluded.last_seen_revision, 0)
-              ),
-
-              updated_at = now()
-            returning 1
+          returning 1
+        ),
+        ins as (
+          insert into user_progress_events (
+            event_id, user_sub, deck_slug, stable_uid, rating, event_time, device_id, client_version,
+            next_review_at, last_seen_revision, deck_version,
+            schema_version, event_type, session_id, client_platform, client_event_time,
+            offline_queue_delay_ms, dwell_time_ms, review_stage, review_count_for_card,
+            card_revision, stated_difficulty, scheduler_version
+          )
+          values {string.Join(", ", values)}
+          on conflict (event_id) do nothing
+          returning
+            event_id, user_sub, deck_slug, stable_uid,
+            rating, event_time,
+            next_review_at, last_seen_revision, deck_version,
+            schema_version, event_type, session_id, device_id, client_version, client_platform,
+            client_event_time, server_received_at, offline_queue_delay_ms, dwell_time_ms,
+            review_stage, review_count_for_card, card_revision, stated_difficulty,
+            scheduler_version
+        ),
+        outbox as (
+          insert into analytics_event_outbox (
+            event_id, event_type, aggregate_type, aggregate_id, payload
           )
           select
-            coalesce(json_agg(ins.event_id::text), '[]'::json) as inserted_event_ids,
-            count(*)::int as inserted_count
-          from ins;
-          """;
+            event_id,
+            event_type,
+            'card',
+            deck_slug || ':' || stable_uid,
+            jsonb_strip_nulls(jsonb_build_object(
+              'event_id', event_id::text,
+              'schema_version', schema_version,
+              'event_type', event_type,
+              'user_id_hash', {userHashParam},
+              'deck_slug', deck_slug,
+              'card_stable_uid', stable_uid,
+              'card_revision', card_revision,
+              'stated_difficulty', stated_difficulty,
+              'rating', case rating
+                when 1 then 'again'
+                when 2 then 'hard'
+                when 3 then 'good'
+                when 4 then 'easy'
+                else null
+              end,
+              'rating_value', rating,
+              'response_score', case rating
+                when 1 then 4
+                when 2 then 3
+                when 3 then 1
+                when 4 then 0
+                else null
+              end,
+              'session_id', session_id,
+              'review_stage', review_stage,
+              'review_count_for_card', review_count_for_card,
+              'dwell_time_ms', dwell_time_ms,
+              'client_event_ts', client_event_time,
+              'server_received_ts', server_received_at,
+              'device_id', device_id,
+              'platform', client_platform,
+              'app_version', client_version,
+              'offline_queue_delay_ms', offline_queue_delay_ms,
+              'deck_version', deck_version
+            ))
+          from ins
+          on conflict (event_id) do nothing
+          returning 1
+        ),
+        agg as (
+          select
+            user_sub, deck_slug, stable_uid,
+            count(*)::int as inc,
+            max(event_time) as last_reviewed_at
+          from ins
+          group by user_sub, deck_slug, stable_uid
+        ),
+        last_row as (
+          select distinct on (i.user_sub, i.deck_slug, i.stable_uid)
+            i.user_sub, i.deck_slug, i.stable_uid,
+            i.rating as last_rating,
+            i.event_time as last_reviewed_at,
+            coalesce(i.next_review_at, i.event_time) as next_review_at,
+            i.last_seen_revision,
+            i.deck_version,
+            s.srs_stage,
+            i.scheduler_version
+          from ins i
+          join (values {string.Join(", ", stageRows)}) as s(event_id, srs_stage)
+            on s.event_id = i.event_id
+          -- event_id is the last-resort tiebreak, and it is not decoration.
+          -- `distinct on` returns an UNSPECIFIED row among ties, so with
+          -- event_time alone two events on one card in the same millisecond
+          -- let the plan (parallel scan, index choice, row order) decide which
+          -- rating, due date and rung the user ends up with. Ties are not
+          -- exotic either: the eventTimeMs clamp above maps every event from a
+          -- skewed clock onto the SAME bound, which turns a rare collision
+          -- into a systematic one. Any total order beats none; event_id is
+          -- already unique, already indexed as the primary key, and does not
+          -- vary with the plan.
+          --
+          -- The TS replica in mobile/tests/unit/multiDeviceSync.sim.test.ts
+          -- mirrors this exact rule. That replica can only prove the rule is
+          -- consistent with itself: whether Postgres really honours it here
+          -- needs a live database, so the SQL-side proof waits on
+          -- Testcontainers.
+          order by i.user_sub, i.deck_slug, i.stable_uid, i.event_time desc, i.event_id desc
+        ),
+        merged as (
+          select
+            a.user_sub, a.deck_slug, a.stable_uid,
+            a.inc,
+            l.last_rating,
+            l.last_reviewed_at,
+            l.next_review_at,
+            l.last_seen_revision,
+            l.deck_version,
+            l.srs_stage,
+            l.scheduler_version
+          from agg a
+          join last_row l using (user_sub, deck_slug, stable_uid)
+        ),
+        upsert as (
+          insert into user_progress (
+            user_sub, deck_slug, stable_uid,
+            status, last_rating, last_reviewed_at,
+            review_count, due_at,
+            last_seen_revision,
+            srs_stage, last_scheduler_version,
+            updated_at
+          )
+          select
+            user_sub, deck_slug, stable_uid,
+            1 as status,
+            last_rating,
+            last_reviewed_at,
+            inc as review_count,
+            next_review_at as due_at,
+            last_seen_revision,
+            srs_stage,
+            scheduler_version as last_scheduler_version,
+            now() as updated_at
+          from merged
+          on conflict (user_sub, deck_slug, stable_uid)
+          do update set
+            status = greatest(user_progress.status, excluded.status),
+            review_count = user_progress.review_count + excluded.review_count,
 
-        // Timed on its own because this is the claim the design rests on: the
-        // whole ingest (event insert, outbox, aggregate, last-writer-wins merge)
-        // is ONE statement, so it is one round trip. If that number ever drifts
-        // apart from sql_ms, something grew extra trips around it.
-        var swStatement = Stopwatch.StartNew();
-        var rows = await DbUtil.QueryAsync(conn, tx, sql, parameters);
-        var statementMs = swStatement.Elapsed.TotalMilliseconds;
+            last_reviewed_at = greatest(
+              coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz),
+              excluded.last_reviewed_at
+            ),
 
-        await tx.CommitAsync();
-        var sqlMs = swSql.Elapsed.TotalMilliseconds;
+            last_rating = case
+              when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
+                then excluded.last_rating
+              else user_progress.last_rating
+            end,
 
-        var insertedIds = rows.Count > 0
-          ? ParseStringArrayFromJson(rows[0].TryGetValue("inserted_event_ids", out var iev) ? iev : null)
-          : [];
+            due_at = case
+              when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
+                then excluded.due_at
+              else user_progress.due_at
+            end,
 
-        var acceptedSet = new HashSet<string>(insertedIds, StringComparer.Ordinal);
-        var duplicateEventIds = allEventIds.Where(id => !acceptedSet.Contains(id)).ToList();
+            -- srs_stage and last_scheduler_version join last_rating/due_at
+            -- under the SAME predicate on purpose: those four columns are one
+            -- atomic verdict, "the state as of the most recent review". Any
+            -- per-column choice here (greatest, coalesce) would let stage come
+            -- from device A while due_at came from device B, and that stitched
+            -- pair describes a review that nobody ever did.
+            --
+            -- Not greatest(): stage is "which rung the last review left the
+            -- card on", not "the highest rung ever reached". The day `again`
+            -- demotes a card, a monotonic merge would make the demotion
+            -- permanently unable to propagate.
+            --
+            -- The winner writing null (an old client that sends no stage)
+            -- is deliberate: null means "unknown, infer it from the interval",
+            -- which is honest, while keeping the previous stage next to a new
+            -- due_at is exactly the stitched state above.
+            srs_stage = case
+              when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
+                then excluded.srs_stage
+              else user_progress.srs_stage
+            end,
 
-        // One line, emitted only on the success path, so the numbers all
-        // describe the same complete ingest. total_ms stops before response
-        // serialization because that is the last thing the handler does and it
-        // cannot be measured from inside itself; the gap between total_ms and
-        // the sum of the phases is the handler's own overhead, and leaving it
-        // visible is the point.
-        Log.Info(JsonSerializer.Serialize(new
-        {
-          traceId = req.TraceId,
-          impl = ProgressEventsImpl,
-          step = "ingest_timing",
-          batchSize = allEventIds.Count,
-          acceptedCount = insertedIds.Count,
-          connMs = Math.Round(connMs, 3),
-          parseMs = Math.Round(parseMs, 3),
-          statementMs = Math.Round(statementMs, 3),
-          sqlMs = Math.Round(sqlMs, 3),
-          totalMs = Math.Round(swTotal.Elapsed.TotalMilliseconds, 3),
-        }));
+            last_scheduler_version = case
+              when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
+                then excluded.last_scheduler_version
+              else user_progress.last_scheduler_version
+            end,
 
-        return res.Ok(new
-        {
-          serverTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-          receivedCount = allEventIds.Count,
-          acceptedCount = insertedIds.Count,
-          acceptedEventIds = insertedIds,
-          duplicateEventIds,
-        });
-      }
-      catch
+            last_seen_revision = greatest(
+              coalesce(user_progress.last_seen_revision, 0),
+              coalesce(excluded.last_seen_revision, 0)
+            ),
+
+            updated_at = now()
+          returning 1
+        )
+        select
+          coalesce(json_agg(ins.event_id::text), '[]'::json) as inserted_event_ids,
+          count(*)::int as inserted_count
+        from ins;
+        """;
+
+      // Timed on its own because this is the claim the design rests on: the
+      // whole ingest (users upsert, event insert, outbox, aggregate,
+      // last-writer-wins merge) is ONE statement, so it is one round trip.
+      //
+      // sql_ms now brackets nothing but this statement and the string building
+      // in front of it, so the two numbers should sit on top of each other in
+      // production. A gap opening between them is the shell growing back, and
+      // that is the whole reason both are still emitted.
+      var swStatement = Stopwatch.StartNew();
+      var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
+      var statementMs = swStatement.Elapsed.TotalMilliseconds;
+
+      var sqlMs = swSql.Elapsed.TotalMilliseconds;
+
+      var insertedIds = rows.Count > 0
+        ? ParseStringArrayFromJson(rows[0].TryGetValue("inserted_event_ids", out var iev) ? iev : null)
+        : [];
+
+      var acceptedSet = new HashSet<string>(insertedIds, StringComparer.Ordinal);
+      var duplicateEventIds = allEventIds.Where(id => !acceptedSet.Contains(id)).ToList();
+
+      // One line, emitted only on the success path, so the numbers all
+      // describe the same complete ingest. total_ms stops before response
+      // serialization because that is the last thing the handler does and it
+      // cannot be measured from inside itself; the gap between total_ms and
+      // the sum of the phases is the handler's own overhead, and leaving it
+      // visible is the point.
+      Log.Info(JsonSerializer.Serialize(new
       {
-        try { await tx.RollbackAsync(); } catch { /* ignore */ }
-        throw;
-      }
+        traceId = req.TraceId,
+        impl = ProgressEventsImpl,
+        step = "ingest_timing",
+        batchSize = allEventIds.Count,
+        acceptedCount = insertedIds.Count,
+        connMs = Math.Round(connMs, 3),
+        parseMs = Math.Round(parseMs, 3),
+        statementMs = Math.Round(statementMs, 3),
+        sqlMs = Math.Round(sqlMs, 3),
+        totalMs = Math.Round(swTotal.Elapsed.TotalMilliseconds, 3),
+      }));
+
+      return res.Ok(new
+      {
+        serverTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        receivedCount = allEventIds.Count,
+        acceptedCount = insertedIds.Count,
+        acceptedEventIds = insertedIds,
+        duplicateEventIds,
+      });
     }
     catch (Exception ex) when (ex is ValidationError)
     {

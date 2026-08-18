@@ -61,6 +61,14 @@ public sealed class PostgresFixture : Xunit.IAsyncLifetime
     Environment.SetEnvironmentVariable("PGPASSWORD", Password);
     // The container speaks plaintext; Pg defaults to SslMode.Require.
     Environment.SetEnvironmentVariable("PGSSLMODE", "disable");
+    // Production runs PG_MAX=1 because a Lambda container serves one request at
+    // a time, so one pooled connection is exactly right there. In-process that
+    // default would silently defeat the concurrency tests: two handler calls
+    // racing for the same brand-new user would queue on Npgsql's pool and reach
+    // Postgres one after the other, and the test would "pass" without the race
+    // ever happening. Raising it here models what production actually does with
+    // concurrency -- runs N containers, therefore N independent connections.
+    Environment.SetEnvironmentVariable("PG_MAX", "8");
     Pg.Reset();
   }
 
@@ -88,6 +96,18 @@ public sealed class PostgresFixture : Xunit.IAsyncLifetime
     await using var conn = await OpenAsync();
     return await DbUtil.ExecuteScalarAsync(conn, null, sql, parameters);
   }
+
+  /// <summary>
+  /// The server's own view of what it was asked to run.
+  ///
+  /// Round trips are the thing issue #5 is about, and no client-side assertion
+  /// can settle how many of them there were: the handler could open a
+  /// transaction, or split one statement into two, and every state assertion in
+  /// this suite would still pass. Postgres writing down each statement it
+  /// executes is the only witness that is not the code under test.
+  /// </summary>
+  public Task<(string Stdout, string Stderr)> ContainerLogsAsync(DateTime sinceUtc) =>
+    _container.GetLogsAsync(sinceUtc, default, timestampsEnabled: false);
 
   /// <summary>
   /// A second database inside the same container, for tests that need a schema
