@@ -18,6 +18,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
+// Stubbed before imports for the reason tests/authCallbackPage.test.tsx
+// documents at length: authConfig reads import.meta.env at module scope, and
+// locally a .env.local supplies these while CI has nothing. Without the stub
+// this file answers differently on the two machines — the exact trap an
+// earlier phase wrote into its out-of-scope list, reproduced here anyway.
+vi.hoisted(() => {
+  vi.stubEnv('VITE_COGNITO_DOMAIN', 'https://auth.login-tests.invalid');
+  vi.stubEnv('VITE_COGNITO_CLIENT_ID', 'login-tests-client');
+  vi.stubEnv('VITE_COGNITO_REDIRECT_URI', 'http://localhost:5173/auth/callback');
+  vi.stubEnv('VITE_COGNITO_SCOPES', 'openid email profile');
+});
+
 import { LoginPage } from '../src/pages/LoginPage';
 import { AuthProvider } from '../src/auth/AuthContext';
 import { signOut } from './support/consoleSession';

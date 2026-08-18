@@ -277,7 +277,7 @@ themselves; prose gets the claim that does not expire.)
   its reasoning is in §4; it is why those two tests are called smoke tests
   rather than end-to-end coverage. The server side is exercised against a real
   database by `src_C/Tests/RecallSmith.Lambda.IntegrationTests`.
-- **`frontend/.env.local` is untracked and changes what the unit suite sees.**
+- **An untracked `.env.local` under frontend/ changes what the unit suite sees.**
   It is a copy of the committed `frontend/.env.development`, and vitest loads it
   in mode `test`, so on a developer machine `AUTH_CONFIG` is populated while on
   a CI runner it is empty. No test depends on that today — the ones that need a
