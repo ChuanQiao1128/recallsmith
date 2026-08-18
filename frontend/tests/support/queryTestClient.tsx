@@ -3,16 +3,24 @@
 // Render helper for pages that read through react-query.
 //
 // Why a fresh QueryClient per render instead of importing the app's singleton
-// from src/api/queryClient: that singleton is configured for a browser session
-// (staleTime 5min, gcTime 10min, retry 1, refetchOnWindowFocus true). Sharing
-// it across test cases lets the second test read the first test's cache, so a
-// page can render data while its mocked fetcher is never called — a green test
-// that proves nothing. That is the test-suite shape of the exact bug class this
+// from src/api/queryClient: SHARING A CACHE, not the settings. One client across
+// test cases lets the second test read the first test's cache, so a page can
+// render data while its mocked fetcher is never called — a green test that
+// proves nothing. That is the test-suite shape of the exact bug class this
 // console keeps hitting: the feature looks present but is not wired.
 //
-// retry is off on purpose too. With the default retry: 1 plus a 1000ms backoff,
-// every error-path assertion would have to outwait a retry that the page under
-// test does not want, and waitFor's 1000ms default would expire first.
+// The settings are a secondary reason and are no longer much of one. The app's
+// defaults were staleTime 5min / gcTime 10min / retry 1 / refetchOnWindowFocus
+// true when this file was written, and are now the same conservative values
+// spelled out below — so makeTestQueryClient() and makeAppDefaultsQueryClient()
+// differ today only in networkMode. They are still two functions, because the
+// difference that matters is which of them is a WITNESS: see the comment on
+// makeAppDefaultsQueryClient.
+//
+// retry is off here for a reason of its own that survives all of that: with
+// retry: 1 plus a 1000ms backoff, every error-path assertion would have to
+// outwait a retry the page under test does not want, and waitFor's 1000ms
+// default would expire first.
 //
 // Not collected as a test: the runner's include globs only match *.test.ts and
 // *.test.tsx.
@@ -45,11 +53,12 @@ export function makeTestQueryClient(): QueryClient {
  * A fresh client carrying the *application's* defaults.
  *
  * Needed because makeTestQueryClient above is a poor witness for one specific
- * class of claim. A hook that turns off retrying, refetch-on-focus or caching
- * is overriding what the real app would otherwise do — and under a test client
- * that already has all of those off, deleting the override changes nothing and
- * the test stays green. Anything asserting "this page still fetches the way it
- * did before react-query" has to run against the settings it is overriding.
+ * class of claim: it hard-codes an answer to every question a test might be
+ * asking about ambient fetching, so any case that means "the application does
+ * not refetch here" passes under it whether the application does or not.
+ * Anything asserting "this page still fetches the way it did before
+ * react-query" has to run against the settings the application actually ships,
+ * whichever layer they now come from.
  *
  * The defaults are read off the app's own singleton rather than copied, so the
  * two cannot drift apart; only the options are borrowed, never the cache.

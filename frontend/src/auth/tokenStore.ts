@@ -1,4 +1,6 @@
 // src/auth/tokenStore.ts
+import { clearSessionCaches } from '../lib/sessionCache';
+
 export type StoredTokens = {
   accessToken: string;
   idToken: string;
@@ -55,14 +57,37 @@ export function isExpired(tokens: StoredTokens): boolean {
 
 export function clearTokens(): void {
   sessionStorage.removeItem(TOKEN_KEY);
+  // The session's cached data dies with the session's tokens.
+  //
+  // Here rather than in the two sign-out buttons because this function is the
+  // narrow waist every ending passes through: the buttons on DeckListPage and
+  // DeckEditPage, the interceptor in src/api/http.ts when a refresh token will
+  // not refresh or a 401 arrives, and getTokens() below when what is left in
+  // storage cannot be revived. Clearing at the buttons would have covered two
+  // of five, and the three it missed are exactly the endings nobody chose --
+  // the ones after which the next person to open this browser is most likely to
+  // be somebody else.
+  //
+  // What it clears is DeckListPage's localStorage deck and manifest lists. They
+  // are keyed by the owner's `sub` as well, so this is the second of two
+  // independent guards rather than the only one.
+  clearSessionCaches();
 }
 
-/** ✅ 兼容旧名字 */
+/** Legacy name for clearTokens(). */
 export function clearStoredTokens(): void {
   clearTokens();
 }
 
-export function getTokens(): StoredTokens | null {
+/**
+ * Whatever is in storage, whether or not the access token is still alive.
+ *
+ * Split out of getTokens because the refresh path needs the refresh token at
+ * exactly the moment the access token is dead, and getTokens used to answer
+ * that case by deleting the record. Malformed JSON is still cleared here:
+ * there is nothing in it to revive a session with.
+ */
+export function readStoredTokens(): StoredTokens | null {
   const raw = sessionStorage.getItem(TOKEN_KEY);
   if (!raw) return null;
 
@@ -72,7 +97,29 @@ export function getTokens(): StoredTokens | null {
     return null;
   }
 
-  if (isExpired(parsed)) {
+  return parsed;
+}
+
+/**
+ * The session, if there is one that can still be used or still be revived.
+ *
+ * This used to wipe storage the moment the access token aged out, which threw
+ * away the refresh token sitting beside it — the one value that could have
+ * kept the session going — and so turned every one-hour expiry into a hard
+ * sign-out that lost whatever was being edited. An expired access token with a
+ * refresh token next to it is a session that needs one round trip, not a
+ * session that is over: the record survives, and the request interceptor in
+ * src/api/http.ts refreshes it before the next call goes out. Only a session
+ * with no way back is deleted here.
+ *
+ * Read the non-null result as "there is a session", NOT as "this string is a
+ * valid bearer token" — those stopped being the same answer here.
+ */
+export function getTokens(): StoredTokens | null {
+  const parsed = readStoredTokens();
+  if (!parsed) return null;
+
+  if (isExpired(parsed) && !parsed.refreshToken) {
     clearTokens();
     return null;
   }
@@ -80,13 +127,28 @@ export function getTokens(): StoredTokens | null {
   return parsed;
 }
 
-/** ✅ 兼容旧名字：直接拿 access token（没有或过期则 null） */
+/**
+ * The bearer token, or null. Never returns an expired one.
+ *
+ * Say plainly what this is now: nothing in src/ calls it. It used to be how
+ * src/api/http.ts filled the Authorization header, and that caller moved to
+ * readStoredTokens() because deciding whether to refresh needs expiresAt and
+ * refreshToken, not just the string. What it is kept for is the other half of
+ * the split above — getTokens() is only allowed to hand back an expired
+ * session because the accessor that produces a credential refuses one — and
+ * tests/tokenStoreExpiry.test.ts holds it to that. getIdToken() below has had
+ * no caller since before this change.
+ */
 export function getAccessToken(): string | null {
-  return getTokens()?.accessToken ?? null;
+  const tokens = getTokens();
+  if (!tokens || isExpired(tokens)) return null;
+  return tokens.accessToken;
 }
 
 export function getIdToken(): string | null {
-  return getTokens()?.idToken ?? null;
+  const tokens = getTokens();
+  if (!tokens || isExpired(tokens)) return null;
+  return tokens.idToken;
 }
 
 export function saveTokens(input: {
@@ -116,10 +178,9 @@ export function saveTokens(input: {
 }
 
 /**
- * ✅ 兼容旧名字：setStoredTokens
- * 允许两种输入：
- * 1) 已经是 StoredTokens（包含 expiresAt）
- * 2) token + expiresIn（自动计算 expiresAt）
+ * Legacy name for saveTokens(). Accepts either shape:
+ * 1) a StoredTokens that already carries expiresAt, or
+ * 2) tokens + expiresIn, from which expiresAt is computed.
  */
 export function setStoredTokens(input: StoredTokens | {
   accessToken: string;
@@ -146,7 +207,7 @@ export function setStoredTokens(input: StoredTokens | {
   return saveTokens(i);
 }
 
-/** ⚠️ 常见坑：groups 可能在 access token，不一定在 id token */
+/** Watch out: groups may live on the access token, not necessarily the id token. */
 export function getUserGroups(tokens?: StoredTokens | null): string[] {
   const t = tokens ?? getTokens();
   if (!t) return [];

@@ -1,4 +1,4 @@
-// src/pages/deckListManifest.ts
+// src/features/deckList/deckListManifest.ts
 //
 // Turning the published content manifest into something the deck table can
 // render.
@@ -19,7 +19,7 @@
 // would make this a .tsx file, and they hold no logic worth an assertion — a
 // Tailwind class string and nothing else.
 
-import type { Deck } from '../types/deck';
+import type { Deck } from '../../types/deck';
 import type { DeckStatus } from './deckListPagination';
 
 export type ManifestDeckLite = {
@@ -95,7 +95,7 @@ export function pick(o: Record<string, unknown>, keys: string[]): unknown {
   return undefined;
 }
 
-// ✅ 核心修复：自动剥离外层的 { manifest: { ... } } 包装
+// Strips the outer { manifest: { ... } } wrapper when the payload carries one.
 export function getManifestTarget(raw: unknown): Record<string, unknown> {
   if (!isRecord(raw)) return {};
   if (isRecord(raw.manifest)) return raw.manifest as Record<string, unknown>;

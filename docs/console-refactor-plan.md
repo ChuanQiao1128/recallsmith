@@ -1445,6 +1445,97 @@ legacy-mount(4)」,因为 hook 的 effect 在它被调用的位置注册。逐�
 DeckListPage chunk 的名字)。eager 闭包 387,464 → 387,874(**+410 B**),
 差额**全部**在 `DeckListPage-*.js`(26,646 → 27,056),即已经 lazy 的边界之后。
 
+## 第 12 步(2026-08-18)—— 目录按领域收拢,并把目录约定写成可核对的一段
+
+一件事:`src/pages/` 里躺着的四个非页面模块和 `src/components/deckList/` 下的五个组件,
+整体搬进 `frontend/src/features/deckList/`。**纯 git mv + import 路径改写,零逻辑改动**,
+验收就是 `tsc -b` 与整套 vitest——搬错一个符号,两者都会先说话。
+
+| 原位置 | 新位置 |
+|---|---|
+| `frontend/src/pages/deckListPagination.ts` | `frontend/src/features/deckList/deckListPagination.ts` |
+| `frontend/src/pages/deckListManifest.ts` | `frontend/src/features/deckList/deckListManifest.ts` |
+| `frontend/src/pages/deckListRows.ts` | `frontend/src/features/deckList/deckListRows.ts` |
+| `frontend/src/pages/useDeckPagination.ts` | `frontend/src/features/deckList/useDeckPagination.ts` |
+| `frontend/src/components/deckList/` 下 5 个组件 | `frontend/src/features/deckList/components/` |
+
+`tailwind.config.js` 的 content glob 是 `./src/**/*.{ts,tsx,js,jsx}`,新目录仍在其中,
+样式覆盖不受影响(实际构建核对过,不是推断)。
+
+### 12.1 目录约定(这一段是本步真正的产出)
+
+- **`frontend/src/pages/`——只放路由入口。** 一个文件 = 一条 `<Route>` 指向的组件,
+  由 `frontend/src/App.tsx` 直接引用。这里不放纯函数、不放 hook、不放展示组件。
+  这条约定过去只存在于口头,于是四个模块因为"跟 DeckListPage 有关"就在这里住了下来,
+  谁也没觉得不对。
+- **`frontend/src/features/<领域>/`——按领域聚合。** 一个领域自己的纯函数、hook 与
+  只服务于它的展示组件放在一起,模块平铺在目录下,展示组件收在 `components/` 子目录。
+  判据是"删掉这个领域,这些文件会不会一起消失"——会,就属于这里。
+- **`frontend/src/components/ui/`——跨领域原子件。** 反过来:被两个以上领域用、
+  或者天生与领域无关的东西(`Button`、`ErrorBanner`、`ConfirmDialog`)。
+  `frontend/src/components/console/ConsoleShell.tsx` 是同一类里的外壳件,不属于任何领域。
+- **`frontend/src/lib/`——纯函数。** 不导入 React、不碰 DOM、不发请求。
+  `frontend/src/lib/cardRules.ts`、`frontend/src/lib/parseDeckId.ts` 是标准形状。
+- **`frontend/src/hooks/`——跨页面复用的取数 hook**,由 `frontend/src/hooks/index.ts`
+  这个 barrel 发布,`frontend/tests/hookWiring.test.ts` 盯着"发布了却没人调"。
+  只服务一个领域的 hook 不进这里,进 `features/`——`useDeckPagination` 就是这么定的。
+
+### 12.2 这段约定不是只写在文档里
+
+`frontend/tests/consoleDirectoryLayout.test.ts` 把上面第一条钉住:`src/pages/` 下的每个
+文件都必须是 `App.tsx` 真正引用的路由组件。第 12 步之前它会红——四个非页面模块正是它要找的东西。
+写成断言而不是写成约定,理由跟这个仓库里其它几处一样:约定不会在第二个人往 `pages/`
+放一个 helper 的那天说话,断言会。
+
+### 12.3 最小错误上报:三个入口一个漏斗,没配端点就一个请求都不发
+
+`frontend/src/lib/reportError.ts`,零新依赖。汇进来的三条:
+window 的 `error` 事件、`unhandledrejection`、以及 `frontend/src/components/ChunkErrorBoundary.tsx`
+的 `componentDidCatch`。第三条是这次唯一不可替代的一条——渲染期抛出的异常永远到不了
+window,而这恰恰是这个应用处理得最好、却从来没上报过的一类失败。
+
+三个决定,都写进了文件:
+
+1. **没有 `VITE_ERROR_REPORT_URL` 就零网络调用。** 本仓库今天没有收集端。
+   常见的两种写法(留个 TODO / 先 POST 到一个占位域名)都比沉默差:前者永远不会被接上,
+   后者会在占位域名解析失败的那天变成每页都在失败的请求。
+   `frontend/tests/errorReporting.test.tsx` 用**数 sendBeacon 调用次数**来钉这条沉默,
+   并用同样三个入口在设了端点时必须发出来做对照——否则"三条都没发"可以被"三条都断了"满足。
+2. **route 只发 `location.pathname`,绝不发 query。** `/auth/callback` 的 query 里是
+   Cognito 的授权 `code`,而那条路由上出错正是最可能触发上报的时刻;发 `location.href`
+   就是把一份活凭证送到端点所在的主机。
+3. **build id 从 `import.meta.env.VITE_BUILD_ID` 注入**,CI 在 `npm run build` 那步传
+   `github.sha`(见 `.github/workflows/ci.yml`)。没设时回落到 `import.meta.env.MODE`,
+   而不是回落到一个 sha 形状的占位符——"development" 没用但是真的,假 sha 会让人去 checkout
+   一个不存在的 commit。
+
+### 12.4 三处小清理,其中一处的前提不成立
+
+- **`frontend/src/components/ui/Button.tsx` 没有删。** 计划写的是"零引用死代码,grep 全仓确认后删",
+  grep 的结果是它**有**引用:`frontend/src/components/ui/ConfirmDialog.tsx` 用它渲染
+  Cancel / Confirm 两个按钮。本文档 9.6 与 9.8 自己就记着第 10 步把它接上了线。
+  前提不成立,所以不删。
+- **`dark:` 变体全部摘掉,`ConfirmDialog.tsx` 与 `Button.tsx` 两个文件。**
+  `frontend/tailwind.config.js` 没有配 `darkMode`,默认就是 `media`,所以这些变体跟着操作系统走,
+  而整个控制台其余部分是写死的浅色:macOS 深色模式下对话框自己变深、背后每一页仍是浅色。
+  这不是没做完的深色主题,是一个只有深色模式用户才看得见的 bug。
+  `frontend/tests/singleTheme.test.ts` 扫 `src/` 全量,顺带钉住 tailwind 没有 `darkMode` 配置——
+  哪天有人配了 `darkMode: 'class'`,这条规则的前提就变了,应该是被一个人决定而不是被一个还在绿的测试掩盖。
+  (计划只点了 `ConfirmDialog.tsx`;`Button.tsx` 一起做,是因为它渲染的正是那个对话框里的两个按钮,
+  只摘一半等于把同一个 bug 缩小后留在原地。)
+- **`frontend/src/components/console/ConsoleShell.tsx` 的三个导航控件换成 `<Link>`**,
+  props 从 `onGoX?: () => void` 变成 `xHref?: string`——传目的地而不是传回调,是这条改动的全部内容:
+  拿回 cmd-click / 中键 / "复制链接地址" / 状态栏目标 / 读屏时的 "link" 而不是 "button"。
+  三个链接收进一个 `<nav aria-label="Console sections">` 里成为 landmark,
+  代价是用户名 pill 从"夹在两个导航控件中间"移到了它们之后(那个位置本来就是顺手排的)。
+  Sign out 仍然是 `<button>`:它是一个有副作用的动作,不是一个目的地。
+  `frontend/tests/deckListSplitParity.test.tsx` 的 9 条 markup 哈希因此重测,
+  重测前先 diff 过旧新 markup 确认差异只有这一处;两条早返回场景(147 B / 421 B)的哈希逐字节未变,
+  这正是"差异被限制住了"的证据。
+- **`frontend/src/pages/NewDeckPage.tsx` 的校验改成一次收集全部。**
+  原来六个检查各自 early return,一个填了四个空的表单要提交四次才能知道四个空;
+  现在一次提交列全。单条仍然渲染成一句话,多条才变成列表。
+
 <!-- paths-not-on-disk
      本文档里出现、但磁盘上确实没有的仓库路径，逐条登记在这里。
      一条 = 一行 "- 路径"；其余文字是说明，不会被读成条目。
@@ -1456,4 +1547,13 @@ DeckListPage chunk 的名字)。eager 闭包 387,464 → 387,874(**+410 B**),
 
      - frontend/src/components/decks/   已在 7ae7b29「拆掉 DeckListPage 的 JSX」删除（5 个文件）；
        9.6 的表格行是当时的现在时记录，保留原样，更正另起。
+     - frontend/src/components/deckList/   第 12 步整体搬进
+       frontend/src/features/deckList/components/（纯 git mv）；9.6 表格行末尾那条
+       2026-08-18 补注是当时的现在时记录，保留原样，更正见第 12 步。
+     - frontend/src/pages/deckListPagination.ts   第 12 步搬到 features/deckList/ 下(纯 git mv)。
+     - frontend/src/pages/deckListManifest.ts     同上。
+     - frontend/src/pages/deckListRows.ts         同上。
+     - frontend/src/pages/useDeckPagination.ts    同上。
+       这四条来自第 12 步搬迁表的「原位置」列与更早几步的现在时记录；
+       「原位置」按定义就该不存在，登记而不改写。
 -->

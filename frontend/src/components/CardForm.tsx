@@ -48,6 +48,22 @@ interface CardFormProps {
   initialValues: CardFormValues;
   onSubmit: (values: CardFormValues) => Promise<{ ok: boolean; error?: string }>;
   onCancel: () => void;
+
+  /**
+   * A second submit button, shown beside the error, when the page has something
+   * specific to offer for the failure it just reported. Absent by default, and
+   * absent is the right answer for a failure with no recovery: an offer that
+   * changes nothing is worse than no offer, because the user spends a press
+   * finding that out.
+   *
+   * It is `type="submit"` on purpose, and that is the whole design. The values
+   * live in this component's state, so a recovery button OUTSIDE the form could
+   * only re-send whatever the page had captured at the moment the failure
+   * arrived -- correct until the user touches a field, and silently wrong from
+   * then on. Submitting the form instead sends what is on screen when it is
+   * pressed, which is what "retry" means to the person pressing it.
+   */
+  recoveryLabel?: string | null;
 }
 
 interface InternalState {
@@ -134,7 +150,7 @@ function hintsFor(values: CardFormValues): CardHint[] {
     hints.push({
       field: 'explanation',
       id: 'explanation-hint',
-      text: '留空可以存下。代价在之后：这张卡导出成 .md 再导入时会被判为没有答案，整张卡不会进入 deck。',
+      text: 'You can save without one. The cost lands later: exported to .md and imported back, this card reads as having no answer and never enters the deck.',
     });
   }
 
@@ -143,8 +159,8 @@ function hintsFor(values: CardFormValues): CardHint[] {
       field: 'stableUid',
       id: 'stableUid-hint',
       text:
-        `导入门接受的 uid 由小写字母和数字组成，中间可以用单个 - 或 _ 分隔，长度不超过 ${MAX_UID_LENGTH} 个字符。` +
-        '当前这个不符合，所以这张卡随 .md 重新导入时会被判为 BAD_UID_FORMAT。',
+        `The import door takes lowercase letters and digits, split by a single - or _, up to ${MAX_UID_LENGTH} characters. ` +
+        'This one does not fit, so re-importing the .md would refuse the card as BAD_UID_FORMAT.',
     });
   }
 
@@ -153,8 +169,8 @@ function hintsFor(values: CardFormValues): CardHint[] {
       field: 'difficulty',
       id: 'difficulty-hint',
       text:
-        `导入门接受的难度是 ${MIN_DIFFICULTY}..${MAX_DIFFICULTY} 之间的整数。` +
-        '当前这个在范围外，所以这张卡随 .md 重新导入时会被整张丢掉。',
+        `The import door takes whole numbers from ${MIN_DIFFICULTY} to ${MAX_DIFFICULTY}. ` +
+        'This one sits outside that range, so re-importing the .md would drop the whole card.',
     });
   }
 
@@ -207,7 +223,7 @@ function mapToHlLanguage(codeLang: string): string | null {
 }
 
 export function CardForm(props: CardFormProps) {
-  const { mode, deck, initialValues, onSubmit, onCancel } = props;
+  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel } = props;
 
   const [values, setValues] = useState<CardFormValues>(initialValues);
   const [state, setState] = useState<InternalState>({
@@ -336,7 +352,19 @@ export function CardForm(props: CardFormProps) {
     >
       {state.error && (
         <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
-          {state.error}
+          <div>{state.error}</div>
+
+          {recoveryLabel ? (
+            <button
+              type="submit"
+              disabled={state.submitting}
+              className="mt-2 inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium
+                         border border-red-300 text-red-800 hover:bg-red-100
+                         disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {recoveryLabel}
+            </button>
+          ) : null}
         </div>
       )}
 
@@ -400,8 +428,8 @@ export function CardForm(props: CardFormProps) {
         )}
         <p className="mt-1 text-xs text-slate-500">
           {mode === 'edit'
-            ? '这张卡的稳定 ID 不能改。它是这张卡在全系统里的身份：复习进度按它归档，导入也按它对账。改掉等于把这张卡上已有的学习记录全部弃掉，再当成一张新卡重新开始。'
-            : '每个 Deck 内唯一的稳定 ID。默认根据 Question 自动生成，可以手动调整。'}
+            ? 'This stable ID is fixed. It is how the card is known everywhere: review progress files under it and imports reconcile against it. Changing it would discard every study record this card has and start it over as a new card.'
+            : 'Unique within this deck. Generated from the Question, and yours to adjust.'}
         </p>
       </div>
 
@@ -472,7 +500,7 @@ export function CardForm(props: CardFormProps) {
                 It appears only for the card that already holds such a value, so
                 it cannot be picked for a new one. */}
             {![1, 2, 3].includes(values.difficulty) && (
-              <option value={values.difficulty}>{values.difficulty}（导入时写入，不在常用范围）</option>
+              <option value={values.difficulty}>{values.difficulty} (came from an import, outside the usual range)</option>
             )}
           </select>
           {difficultyHint && (
@@ -492,7 +520,7 @@ export function CardForm(props: CardFormProps) {
             value={values.orderInDeck}
             onChange={e => handleChange('orderInDeck', Number(e.target.value))}
           />
-          <p className="mt-1 text-xs text-slate-500">建议用 10, 20, 30 间隔，方便插题。</p>
+          <p className="mt-1 text-xs text-slate-500">Leave gaps &mdash; 10, 20, 30 &mdash; so a later card can slot between two of these.</p>
         </div>
 
         <div>
@@ -505,7 +533,7 @@ export function CardForm(props: CardFormProps) {
             value={values.revision}
             onChange={e => handleChange('revision', Number(e.target.value))}
           />
-          <p className="mt-1 text-xs text-slate-500">内容修订号（可选但建议保持）。</p>
+          <p className="mt-1 text-xs text-slate-500">Content revision number. Optional, but worth bumping as you edit.</p>
         </div>
       </div>
 

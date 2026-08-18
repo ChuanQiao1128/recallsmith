@@ -1,4 +1,4 @@
-// src/pages/deckListRows.ts
+// src/features/deckList/deckListRows.ts
 //
 // One function: turn either of DeckListPage's two data paths into the row list
 // the deck table renders. Lifted verbatim out of the viewRows useMemo
@@ -30,8 +30,8 @@
 // behaviour of both paths; V2 and V3 are the ones that go red if anyone
 // unifies them. Deciding which predicate wins belongs to a human.
 
-import type { AdminDeckListItem } from '../api/authoring';
-import type { Deck } from '../types/deck';
+import type { AdminDeckListItem } from '../../api/authoring';
+import type { Deck } from '../../types/deck';
 import { derivePagedDeckStatus, isStarterLike } from './deckListPagination';
 import type { DeckStatus } from './deckListPagination';
 import { getDeckStatusFromManifest } from './deckListManifest';

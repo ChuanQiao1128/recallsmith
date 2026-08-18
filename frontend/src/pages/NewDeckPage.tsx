@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { createDeck } from '../api/authoring';
+import { useCreateDeck } from '../hooks/useDecks';
 
 interface NewDeckForm {
   title: string;
@@ -12,26 +12,38 @@ interface NewDeckForm {
   locale: string;
   deckType: number; // 1 Starter, 2 Paid
 
-  // ✅ mobile/publish 相关（先录入，后续 publish/preview 会用到）
+  // mobile / publish fields: captured here, used later by publish and preview
   contentVersion: string; // e.g. 1.0.0
-  freeCardCount: number; // paid 试用/preview 卡数（例如 50）
+  freeCardCount: number; // cards a Paid deck opens for preview, e.g. 50
 }
 
 interface FormState {
   submitting: boolean;
-  error: string | null;
+  /**
+   * Everything wrong with this attempt, not the first thing wrong with it.
+   *
+   * This used to be one `error: string | null` set by five guards that each
+   * returned early, so a form with four empty required fields took four
+   * submits to find out — and each one reported a single problem as if it were
+   * the only one. Collecting them costs nothing (the checks are pure and
+   * already all written) and turns four round trips into one.
+   *
+   * The server's refusal lands in the same list as a single entry, so there is
+   * one banner and one place that renders it rather than two that can drift.
+   */
+  errors: string[];
 }
 
 function slugify(input: string): string {
   return input
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-') // 非字母数字替换成 -
-    .replace(/^-+|-+$/g, ''); // 去掉头尾的 -
+    .replace(/[^a-z0-9]+/g, '-') // anything not a letter or digit becomes -
+    .replace(/^-+|-+$/g, ''); // and leading/trailing separators go
 }
 
 function isValidSemver(v: string): boolean {
-  // 接受：1.0.0 / 1.0.0-alpha / 1.0.0+build
+  // Accepts 1.0.0 / 1.0.0-alpha / 1.0.0+build
   return /^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(v.trim());
 }
 
@@ -52,11 +64,15 @@ export function NewDeckPage() {
 
   const [state, setState] = useState<FormState>({
     submitting: false,
-    error: null,
+    errors: [],
   });
 
+  // The write goes through react-query so that a created deck invalidates the
+  // deck list rather than relying on the list refusing to cache.
+  const createDeckMutation = useCreateDeck();
+
   const isStarter = form.deckType === 1;
-  const isFreeStarter = isStarter; // ✅ 规则：Starter 一定是 free starter
+  const isFreeStarter = isStarter; // the rule: a Starter deck is always a free starter
 
   function handleChange(field: keyof NewDeckForm, value: string | number) {
     setForm(prev => ({
@@ -68,10 +84,10 @@ export function NewDeckPage() {
   function setDeckType(next: 1 | 2) {
     setForm(prev => {
       if (next === 1) {
-        // Starter: free starter + freeCardCount 不参与（发布/预览时会 = totalCards）
+        // Starter: a free starter, and freeCardCount does not apply (publish/preview set it to totalCards)
         return { ...prev, deckType: 1 };
       }
-      // Paid: 默认试用 50
+      // Paid: 50 preview cards by default
       return {
         ...prev,
         deckType: 2,
@@ -98,38 +114,35 @@ export function NewDeckPage() {
     const trimmedAuthor = form.author.trim();
     const trimmedVersion = form.contentVersion.trim();
 
-    if (!trimmedTitle) {
-      setState({ submitting: false, error: 'Title is required.' });
-      return;
+    const problems: string[] = [];
+
+    if (!trimmedTitle) problems.push('Title is required.');
+    if (!trimmedSlug) problems.push('Slug is required.');
+    if (!trimmedAuthor) problems.push('Author is required.');
+    // One message per field, still. An empty version fails both checks, and
+    // "Content version is required." followed by "must be semver like 1.0.0"
+    // would be two complaints about one blank box — which is the noise that
+    // makes people stop reading a list.
+    if (!trimmedVersion) problems.push('Content version is required.');
+    else if (!isValidSemver(trimmedVersion))
+      problems.push('Content version must be semver like 1.0.0');
+
+    // Only a Paid deck has a preview count to get wrong: a Starter deck opens
+    // every card, so a stale negative left over from switching type is not a
+    // reason to refuse the submit.
+    if (!isStarter && (!Number.isFinite(form.freeCardCount) || form.freeCardCount < 0)) {
+      problems.push('Free card count must be a non-negative number.');
     }
-    if (!trimmedSlug) {
-      setState({ submitting: false, error: 'Slug is required.' });
-      return;
-    }
-    if (!trimmedAuthor) {
-      setState({ submitting: false, error: 'Author is required.' });
-      return;
-    }
-    if (!trimmedVersion) {
-      setState({ submitting: false, error: 'Content version is required.' });
-      return;
-    }
-    if (!isValidSemver(trimmedVersion)) {
-      setState({ submitting: false, error: 'Content version must be semver like 1.0.0' });
+
+    if (problems.length > 0) {
+      setState({ submitting: false, errors: problems });
       return;
     }
 
-    if (!isStarter) {
-      if (!Number.isFinite(form.freeCardCount) || form.freeCardCount < 0) {
-        setState({ submitting: false, error: 'Free card count must be a non-negative number.' });
-        return;
-      }
-    }
-
-    setState({ submitting: true, error: null });
+    setState({ submitting: true, errors: [] });
 
     try {
-      const result = await createDeck({
+      const result = await createDeckMutation.mutateAsync({
         slug: trimmedSlug,
         title: trimmedTitle,
         author: trimmedAuthor,
@@ -139,7 +152,7 @@ export function NewDeckPage() {
       if (!result.success) {
         setState({
           submitting: false,
-          error: result.error?.message ?? 'Create deck failed.',
+          errors: [result.error?.message ?? 'Create deck failed.'],
         });
         return;
       }
@@ -148,7 +161,7 @@ export function NewDeckPage() {
     } catch (err: unknown) {
       setState({
         submitting: false,
-        error: err instanceof Error ? err.message : 'Network error.',
+        errors: [err instanceof Error ? err.message : 'Network error.'],
       });
     }
   }
@@ -160,7 +173,7 @@ export function NewDeckPage() {
           <div>
             <h1 className="text-xl font-semibold text-slate-800">New Deck</h1>
             <p className="text-xs text-slate-500 mt-1">
-              在这里创建一个新的题库，比如 <span className="font-mono">js-core-basics</span>。
+              Start a new deck &mdash; something like <span className="font-mono">js-core-basics</span>.
             </p>
           </div>
           <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
@@ -174,9 +187,23 @@ export function NewDeckPage() {
           onSubmit={handleSubmit}
           className="bg-white border border-slate-200 rounded-lg shadow-sm px-6 py-6 space-y-4"
         >
-          {state.error && (
-            <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
-              {state.error}
+          {state.errors.length > 0 && (
+            <div
+              className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm"
+              role="alert"
+            >
+              {/* A single problem stays a sentence. Wrapping one item in a
+                  bulleted list makes the commonest case — the server refusing
+                  the slug — read like a checklist with one box on it. */}
+              {state.errors.length === 1 ? (
+                state.errors[0]
+              ) : (
+                <ul className="list-disc pl-5 space-y-1">
+                  {state.errors.map(problem => (
+                    <li key={problem}>{problem}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
 
@@ -194,7 +221,7 @@ export function NewDeckPage() {
               onBlur={handleTitleBlur}
               placeholder="JavaScript Core Basics"
             />
-            <p className="mt-1 text-xs text-slate-500">用于展示的题库名称。</p>
+            <p className="mt-1 text-xs text-slate-500">The name shown wherever this deck appears.</p>
           </div>
 
           {/* Slug */}
@@ -211,7 +238,7 @@ export function NewDeckPage() {
               placeholder="js-core-basics"
             />
             <p className="mt-1 text-xs text-slate-500">
-              稳定 ID，不含空格。后续发布 / S3 / RN 都会用这个标识。
+              Stable ID, no spaces. Publishing, S3 and the mobile app all address the deck by this.
             </p>
           </div>
 
@@ -245,7 +272,7 @@ export function NewDeckPage() {
                 <option value="en-US">en-US</option>
                 <option value="zh-CN">zh-CN</option>
               </select>
-              <p className="mt-1 text-xs text-slate-500">题库内容语言。英文/中文可并存。</p>
+              <p className="mt-1 text-xs text-slate-500">The language of the cards inside. English and Chinese decks can sit side by side.</p>
             </div>
 
             {/* DeckType */}
@@ -261,7 +288,7 @@ export function NewDeckPage() {
                     onChange={() => setDeckType(1)}
                     className="text-indigo-600 focus:ring-indigo-500 border-slate-300"
                   />
-                  <span>Starter（永久免费）</span>
+                  <span>Starter (always free)</span>
                 </label>
 
                 <label className="inline-flex items-center gap-1 text-sm text-slate-700">
@@ -273,17 +300,17 @@ export function NewDeckPage() {
                     onChange={() => setDeckType(2)}
                     className="text-indigo-600 focus:ring-indigo-500 border-slate-300"
                   />
-                  <span>Paid（收费题库）</span>
+                  <span>Paid (subscription)</span>
                 </label>
               </div>
 
               <div className="mt-2 text-xs text-slate-500">
-                {isStarter ? 'Starter 会在 mobile 端全量免费。' : 'Paid 将用于订阅/试用逻辑。'}
+                {isStarter ? 'Every card is free in the mobile app.' : 'Cards are gated by the subscription and trial rules.'}
               </div>
             </div>
           </div>
 
-          {/* ✅ Mobile / Publish fields */}
+          {/* Mobile / Publish fields */}
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm font-semibold text-slate-800 mb-2">Mobile / Publish settings</div>
 
@@ -301,7 +328,7 @@ export function NewDeckPage() {
                   onChange={e => handleChange('contentVersion', e.target.value.trim())}
                   placeholder="1.0.0"
                 />
-                <p className="mt-1 text-xs text-slate-500">deck.json 的 Version（建议严格 semver）。</p>
+                <p className="mt-1 text-xs text-slate-500">The Version written into deck.json. Keep it strict semver.</p>
               </div>
 
               {/* isFreeStarter (derived) */}
@@ -310,7 +337,7 @@ export function NewDeckPage() {
                 <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
                   {isFreeStarter ? 'true' : 'false'}
                 </div>
-                <p className="mt-1 text-xs text-slate-500">由 DeckType 推导：Starter=true，Paid=false。</p>
+                <p className="mt-1 text-xs text-slate-500">Derived from Deck Type: Starter is true, Paid is false.</p>
               </div>
 
               {/* freeCardCount */}
@@ -336,7 +363,7 @@ export function NewDeckPage() {
                 )}
 
                 <p className="mt-1 text-xs text-slate-500">
-                  Paid deck 的试用/preview 卡数（以后你要做“前 50 题免费体验”就是靠它）。
+                  How many cards of a Paid deck open without buying it. This is what a &ldquo;first 50 free&rdquo; trial is built on.
                 </p>
               </div>
             </div>

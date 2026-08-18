@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import {
-  deleteDeck,
   fetchAdminManifest,
   fetchDeckBySlug,
   fetchDecks,
   fetchPublishJobs,
-  publishDeck,
 } from '../api/authoring';
+import { useDeleteDeck, usePublishDeck } from '../hooks/useDecks';
+import { readSessionCache, writeSessionCache } from '../lib/sessionCache';
 import { getContentManifestUrl } from '../api/contentManifest';
 import { markEnd, markStart } from '../perf/journey';
 import type { Deck } from '../types/deck';
@@ -26,28 +26,28 @@ import {
 import type { ErrorNotice, PollFailure } from '../lib/errorFeed';
 import { ErrorBanner, ErrorBannerList } from '../components/ui/ErrorBanner';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
-import { removeDeckBySlug } from './deckListPagination';
-import type { DeckStatus } from './deckListPagination';
+import { removeDeckBySlug } from '../features/deckList/deckListPagination';
+import type { DeckStatus } from '../features/deckList/deckListPagination';
 import {
   extractDecksArray,
   parseManifestMeta,
   toManifestDeckLite,
-} from './deckListManifest';
-import type { ManifestDeckLite, ManifestMeta } from './deckListManifest';
-import { buildViewRows } from './deckListRows';
-import type { ConsoleDeckRow } from './deckListRows';
-import { useDeckPagination } from './useDeckPagination';
+} from '../features/deckList/deckListManifest';
+import type { ManifestDeckLite, ManifestMeta } from '../features/deckList/deckListManifest';
+import { buildViewRows } from '../features/deckList/deckListRows';
+import type { ConsoleDeckRow } from '../features/deckList/deckListRows';
+import { useDeckPagination } from '../features/deckList/useDeckPagination';
 
 import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin, type SessionUser } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
-import { DeckConsoleHeader } from '../components/deckList/DeckConsoleHeader';
-import { PublishJobsPanel } from '../components/deckList/PublishJobsPanel';
-import { DeckFilterBar } from '../components/deckList/DeckFilterBar';
-import { DeckRowsTable } from '../components/deckList/DeckRowsTable';
-import { DeckPaginationFooter } from '../components/deckList/DeckPaginationFooter';
+import { DeckConsoleHeader } from '../features/deckList/components/DeckConsoleHeader';
+import { PublishJobsPanel } from '../features/deckList/components/PublishJobsPanel';
+import { DeckFilterBar } from '../features/deckList/components/DeckFilterBar';
+import { DeckRowsTable } from '../features/deckList/components/DeckRowsTable';
+import { DeckPaginationFooter } from '../features/deckList/components/DeckPaginationFooter';
 
 // Error feed keys. One per operation, because "one slot per operation" is what
 // keeps a repeated failure from stacking and a publish failure from erasing a
@@ -56,38 +56,13 @@ const ERR_RESOLVE_ID = 'deck.resolveId';
 const ERR_DELETE_DECK = 'deck.delete';
 const ERR_PUBLISH_DECK = 'deck.publish';
 
-// ==================== 缓存工具 ====================
-const CACHE_KEY_DECKS = 'recallsmith_decks_cache';
-const CACHE_KEY_MANIFEST = 'recallsmith_manifest_cache';
-const CACHE_TTL = 5 * 60 * 1000; // 5分钟
-
-interface CacheItem<T> {
-  data: T;
-  timestamp: number;
-}
-
-function getCache<T>(key: string): T | null {
-  try {
-    const item = localStorage.getItem(key);
-    if (!item) return null;
-    const parsed: CacheItem<T> = JSON.parse(item);
-    if (Date.now() - parsed.timestamp > CACHE_TTL) {
-      localStorage.removeItem(key);
-      return null;
-    }
-    return parsed.data;
-  } catch {
-    return null;
-  }
-}
-
-function setCache<T>(key: string, data: T) {
-  try {
-    localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
-  } catch {
-    // 忽略存储错误
-  }
-}
+// The five-minute localStorage cache this page reads on its legacy path now
+// lives in src/lib/sessionCache.ts, keyed by the signed-in user. It moved out
+// of this file for two reasons that are not tidiness: it had to be reachable
+// from src/auth/tokenStore.ts, which clears it when a session ends, and a page
+// module cannot be imported from there without dragging the console's largest
+// component into the auth path. The bug it was carrying -- one cache for the
+// browser, not one per account -- is described where it now lives.
 
 interface DeckListState {
   loading: boolean;
@@ -117,6 +92,10 @@ export function DeckListPage() {
   const user = useMemo<SessionUser | null>(() => readSessionUser(), []);
   const superAdmin = useMemo<boolean>(() => isSuperAdmin(user), [user]);
 
+  // Whose cached list this is. Null means "no identity", and sessionCache
+  // answers that by holding nothing at all rather than by sharing one bucket.
+  const ownerSub = user?.sub ?? null;
+
   const manifestUrl = useMemo(() => getContentManifestUrl(), []);
 
   const [deckState, setDeckState] = useState<DeckListState>({
@@ -138,6 +117,14 @@ export function DeckListPage() {
   // lifted into a hook in the next step, and a hook call that had drifted into
   // the middle of it would travel with the move.
   const confirm = useConfirm();
+
+  // Both row actions write through react-query. What they buy is not the
+  // request -- that was already one line -- but what happens after it: the deck
+  // queries are invalidated and the localStorage list is dropped, so the row
+  // the user just deleted cannot come back on the next paint from a cache
+  // nobody told.
+  const deleteDeckMutation = useDeleteDeck();
+  const publishDeckMutation = usePublishDeck();
 
   const [deletingSlug, setDeletingSlug] = useState<string | null>(null);
   const [publishingSlug, setPublishingSlug] = useState<string | null>(null);
@@ -164,7 +151,7 @@ export function DeckListPage() {
   const [errors, setErrors] = useState<ErrorNotice[]>(emptyErrorFeed);
   const pollNotice = pollingNotice(pollFailure, pollingStopped);
 
-  // 轮询使用的 Ref
+  // Refs owned by the polling loop.
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activePollsRef = useRef(0);
 
@@ -198,11 +185,11 @@ export function DeckListPage() {
   } = useDeckPagination({ superAdmin, debouncedQ, mountedRef, loadAll });
 
   async function loadAll(forceRefresh = false) {
-    // 💡 缓存优化：先检查缓存
-    const cachedDecks = getCache<Deck[]>(CACHE_KEY_DECKS);
-    const cachedManifest = getCache<{ meta: ManifestMeta; bySlug: Record<string, ManifestDeckLite>; raw: unknown }>(CACHE_KEY_MANIFEST);
+    // Cache first.
+    const cachedDecks = readSessionCache<Deck[]>('decks', ownerSub);
+    const cachedManifest = readSessionCache<{ meta: ManifestMeta; bySlug: Record<string, ManifestDeckLite>; raw: unknown }>('manifest', ownerSub);
     
-    // 如果有缓存且不强刷，立即显示缓存（无 loading），然后后台刷新
+    // With a cache and no forced refresh, show it at once (no loading state) and refresh behind it.
     const hasCache = cachedDecks && cachedManifest;
     if (hasCache && !forceRefresh) {
       setDeckState({ loading: false, error: null, decks: cachedDecks });
@@ -215,13 +202,13 @@ export function DeckListPage() {
         raw: cachedManifest.raw,
       });
     } else {
-      // 无缓存或强制刷新时显示 loading
+      // No cache, or a forced refresh: show the loading state.
       setDeckState(prev => ({ ...prev, loading: true, error: null }));
       setManifestState(prev => ({ ...prev, loading: true, error: null, url: manifestUrl }));
     }
 
     try {
-      // 并行请求 decks 和 manifest
+      // decks and manifest go out in parallel.
       const [decksRes, manifestRes] = await Promise.all([
         fetchDecks(),
         fetchAdminManifest(),
@@ -235,7 +222,7 @@ export function DeckListPage() {
         }
       } else {
         const decks = decksRes.data ?? [];
-        setCache(CACHE_KEY_DECKS, decks);
+        writeSessionCache('decks', ownerSub, decks);
         setDeckState({ loading: false, error: null, decks });
       }
 
@@ -265,7 +252,7 @@ export function DeckListPage() {
           if (lite) bySlug[lite.slug] = lite;
         }
 
-        setCache(CACHE_KEY_MANIFEST, { meta, bySlug, raw });
+        writeSessionCache('manifest', ownerSub, { meta, bySlug, raw });
         setManifestState({
           loading: false,
           error: null,
@@ -276,16 +263,16 @@ export function DeckListPage() {
         });
       }
 
-      // ✅ 卡片数量直接使用 DB 中的 total_cards，不再逐个调 API
+      // Card counts come straight from total_cards in the DB, not one API call per deck.
 
-      // 同时刷新 publish jobs（强制刷新时）
+      // Publish jobs are refreshed alongside, but only on a forced refresh.
       if (forceRefresh) {
         void loadPublishJobs();
       }
     } catch (err: unknown) {
       if (!mountedRef.current) return;
       const message = err instanceof Error ? err.message : 'Network error.';
-      // 如果有缓存，不显示错误
+      // With cached data already on screen, the error is not shown.
       if (!cachedDecks) {
         setDeckState({ loading: false, error: message, decks: [] });
         setManifestState({ loading: false, error: message, url: manifestUrl, meta: {}, bySlug: {}, raw: null });
@@ -356,7 +343,7 @@ export function DeckListPage() {
       const deckId = await resolveDeckId(row);
       if (deckId === null) return;
 
-      const res = await deleteDeck(deckId);
+      const { result: res } = await deleteDeckMutation.mutateAsync({ id: deckId });
       if (!res.success) {
         setErrors(prev =>
           reportBusinessFailure(
@@ -406,7 +393,7 @@ export function DeckListPage() {
       const deckId = await resolveDeckId(row);
       if (deckId === null) return;
 
-      const pub = await publishDeck(deckId);
+      const pub = await publishDeckMutation.mutateAsync({ id: deckId });
       if (!pub.success) {
         setErrors(prev =>
           reportBusinessFailure(
@@ -420,7 +407,7 @@ export function DeckListPage() {
       }
       pendingPublishJobIdRef.current = pub.data?.jobId ?? null;
 
-      // 发布成功后强制刷新，确保数据最新
+      // Force a refresh after a successful publish so the list is current.
       if (listModeRef.current === 'paginated') {
         void loadPublishJobs();
         await loadPagedFirst(debouncedQ);
@@ -461,7 +448,7 @@ export function DeckListPage() {
   // The scheduling decision itself lives in nextPollDelay so each branch is
   // testable without a DOM; this function only wires it to state and timers.
   async function loadPublishJobs() {
-    // 每次调用前清除旧定时器，防止并行请求竞态
+    // Clear the previous timer on every call, so two polls cannot race.
     if (pollTimerRef.current) {
       clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
@@ -502,7 +489,7 @@ export function DeckListPage() {
     setPollingStopped(pollTimerRef.current === null);
   }
 
-  // 初次挂载时启动轮询，卸载时清理
+  // Start polling on mount, clear the timer on unmount.
   useEffect(() => {
     void loadPublishJobs();
     return () => {
@@ -583,8 +570,8 @@ export function DeckListPage() {
       }
       superAdmin={superAdmin}
       onSignOut={handleSignOut}
-      onGoContentIntelligence={() => navigate('/content-intelligence')}
-      onGoAdminUsers={superAdmin ? () => navigate('/admin/users') : undefined}
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
       <div className="w-full mx-auto space-y-6">
         {/* Header Section */}

@@ -1,5 +1,5 @@
 // src/api/admin.ts
-// 管理后台 API - 使用 /api/v1/ 路径
+// Admin console API, served under /api/v1/.
 import type { ApiResult } from '../types/api';
 import { http } from './http';
 import axios from 'axios';
@@ -83,8 +83,8 @@ export async function runMigrate(reset: boolean): Promise<ApiResult<{ migrated: 
 // ==================== Users ====================
 
 export async function listAdminUsers(): Promise<ApiResult<AdminUser[]>> {
-  // users 走 cognito-admin-lambda
-  // permissions 走 vpc-lambda
+  // users comes from cognito-admin-lambda,
+  // permissions from vpc-lambda.
   const [usersRes, permsRes] = await Promise.all([
     apiGet<AdminUser[]>('/api/v1/admin/users'),
     apiGet<Array<{ adminSub?: string; deckId?: unknown; deckSlug?: string; deckTitle?: string; locale?: string; canRead?: boolean; canWrite?: boolean }>>('/api/v1/admin/permissions'),

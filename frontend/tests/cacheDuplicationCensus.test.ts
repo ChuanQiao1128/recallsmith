@@ -18,6 +18,28 @@
 // it says so here. The list is the outstanding balance, and it can only be
 // changed deliberately.
 //
+// PAID DOWN AGAIN, 2026-08 — the balance is now ONE, and the header above
+// required saying so.
+//
+// The queryClient copy is gone, and not by being merged with the other one.
+// Those five minutes were the shared QueryClient's `staleTime`, and every hook
+// that read through that client overrode it to 0, line by line — so the number
+// described nothing that ever happened. It was removed by changing the global
+// default to the conservative value the system actually runs on (staleTime 0),
+// which is a different repair from "the two copies were reconciled": there was
+// only ever one live answer to the question, and the dead copy has stopped
+// pretending to be a second one.
+//
+// The survivor moved from src/pages/DeckListPage.tsx to src/lib/sessionCache.ts
+// in the same change, for a reason unrelated to this census: src/auth/tokenStore.ts
+// clears that cache when a session ends and cannot import a page module to do
+// it. Same cache, same five minutes, new address.
+//
+// So one holder is the correct balance today, and it is asserted as an equality
+// in both directions like the two before it: a second copy is new debt, and the
+// last one vanishing means somebody retired the hand-rolled cache entirely and
+// owes this list an update.
+//
 // PAID DOWN, 2026-08 — saying so here because the header above required it.
 // There was a third holder, src/hooks/useDashboard.ts: a 212-line hook with its
 // own localStorage cache and its own five-minute TTL, and the only caller of
@@ -38,8 +60,7 @@ const SRC_ROOT = fileURLToPath(new URL('../src', import.meta.url));
 const TTL_LITERAL = '5 * 60 * 1000';
 
 const EXPECTED_HOLDERS = [
-  'api/queryClient.ts',
-  'pages/DeckListPage.tsx',
+  'lib/sessionCache.ts',
 ];
 
 function collect(dir: string, into: string[] = []): string[] {
@@ -70,8 +91,8 @@ const holders = scannedFiles
   .sort();
 
 describe('the five-minute cache window', () => {
-  it('is still written out in exactly two places', () => {
-    // Equality, not containment, in both directions on purpose: a third copy
+  it('is still written out in exactly one place', () => {
+    // Equality, not containment, in both directions on purpose: a second copy
     // is new debt, and a vanished copy means someone paid some down and owes
     // this list an update.
     expect(holders).toEqual(EXPECTED_HOLDERS);

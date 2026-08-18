@@ -540,10 +540,19 @@ describe('choosing which card the detail panel describes', () => {
 });
 
 describe('what the header offers each role', () => {
-  it('gives a super admin the Admin Management button and says so in the pill', async () => {
+  // The role moved from 'button' to 'link' when ConsoleShell's navigation
+  // controls became <Link>s. The two absence assertions had to move with it or
+  // they would pass vacuously forever: there is no button by that name for
+  // ANY role now, so "no such button" stopped being a statement about
+  // permissions the moment the markup changed.
+  it('gives a super admin the Admin Management link and says so in the pill', async () => {
     await mountLoaded();
 
-    expect(screen.queryByRole('button', { name: 'Admin Management' })).not.toBeNull();
+    const link = screen.queryByRole('link', { name: 'Admin Management' });
+    expect(link).not.toBeNull();
+    // The href is the half a button never had, and the reason for the change:
+    // cmd-click, middle-click and "copy link address" all need a real target.
+    expect(link?.getAttribute('href')).toBe('/admin/users');
     expect(userLabel().endsWith(' · super_admin')).toBe(true);
   });
 
@@ -552,7 +561,7 @@ describe('what the header offers each role', () => {
     signInAsEditor();
     await mountLoaded();
 
-    expect(screen.queryByRole('button', { name: 'Admin Management' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Admin Management' })).toBeNull();
     expect(userLabel().endsWith(' · editor')).toBe(true);
   });
 
@@ -561,6 +570,33 @@ describe('what the header offers each role', () => {
     await mountLoaded();
 
     expect(userLabel()).toBe('—');
-    expect(screen.queryByRole('button', { name: 'Admin Management' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Admin Management' })).toBeNull();
+  });
+
+  it('points Decks back at the deck list with a real href', async () => {
+    // This page is the only one that passes decksHref, so it is the only place
+    // that link can be checked. An href is what a <button onClick={navigate}>
+    // never had: without it cmd-click and middle-click do nothing, and the
+    // browser has no target to show or copy.
+    await mountLoaded();
+
+    const link = screen.queryByRole('link', { name: 'Decks' });
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href')).toBe('/');
+  });
+
+  it('groups the section links into one navigation landmark', async () => {
+    // The third thing the buttons cost, after the two click gestures: a header
+    // full of buttons is not navigation to anything that reads structure, so
+    // there was no landmark to jump to.
+    await mountLoaded();
+
+    const nav = screen.getByRole('navigation', { name: 'Console sections' });
+    const names = Array.from(nav.querySelectorAll('a')).map(a => (a.textContent ?? '').trim());
+    expect(names).toEqual(['Decks', 'Admin Management']);
+    // Sign out is an action, not a destination, so it stays a button and stays
+    // outside the landmark.
+    expect(nav.querySelector('button')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeNull();
   });
 });

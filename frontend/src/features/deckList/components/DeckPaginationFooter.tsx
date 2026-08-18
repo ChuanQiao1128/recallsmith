@@ -1,4 +1,4 @@
-// src/components/deckList/DeckPaginationFooter.tsx
+// src/features/deckList/components/DeckPaginationFooter.tsx
 //
 // The "Loaded N decks" strip and Load more. Lifted from DeckListPage.tsx lines
 // 989-1012.

@@ -62,8 +62,8 @@ import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 // B3's instrument. The REAL buildViewRows is called through, so this changes
 // nothing the other two instruments observe — it only counts.
 const rowsSpy = vi.hoisted(() => ({ count: 0 }));
-vi.mock('../src/pages/deckListRows', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/pages/deckListRows')>();
+vi.mock('../src/features/deckList/deckListRows', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/features/deckList/deckListRows')>();
   return {
     ...actual,
     buildViewRows: (...args: Parameters<typeof actual.buildViewRows>) => {
@@ -148,25 +148,43 @@ interface Baseline {
   bytes: number;
 }
 
+// RE-MEASURED ONCE, 2026-08-18, and this is the record of why.
+//
+// Nine of the eleven moved when ConsoleShell's three navigation controls became
+// <Link>s inside a <nav> landmark — see src/components/console/ConsoleShell.tsx
+// for the argument. That is a deliberate markup change to a component every one
+// of these scenarios renders, so these hashes going red was this instrument
+// working, not failing.
+//
+// The change was verified BEFORE the numbers were touched, by diffing the old
+// recorded markup against the new: the only delta is two <button>s becoming
+// <a href> inside a new <nav>, and the user pill moving after them. Nothing
+// else in the page differs by one character.
+//
+// The two that did NOT move are the evidence that the diff was confined:
+// initialLoading (147 B) and fatalErrorRetry (421 B) are the early returns,
+// which never render the shell at all, and their hashes are unchanged to the
+// character. editorLegacy moved by +109 B against +126 B for every super-admin
+// scenario, which is exactly the Admin Management link an editor does not see.
 const B1: Record<string, Baseline> = {
   // The three reachable role/mode cells.
-  superAdminPaginated: { hash: 'c2228b57898b0e0ef13f900e0002f0a542be22cc9bdf3583e1d9f848d6f30c93', bytes: 11220 },
-  superAdminLegacyFallback: { hash: '046edb57b0ed0c52973983ffecc21eab571cc7d69c6e0f6cc133af089b14fd55', bytes: 11466 },
-  editorLegacy: { hash: 'f4373c64765c7998990dba2d97ed0b563789b650fc0bd717526f4eb8aaa32255', bytes: 8658 },
+  superAdminPaginated: { hash: 'ac1ec307f87cf5f0e187c42694f4cb85f1e24cc339f753250ae2d4738d5baf33', bytes: 11346 },
+  superAdminLegacyFallback: { hash: '747ec255c12a1a4bf5b1be7ad3069f6f31a7189ea6d714801d28d7783df0e5fd', bytes: 11592 },
+  editorLegacy: { hash: '81a3e47b71ee16b24a799d3c43ba6179446bd0aa37ed43c2fdb853a0cb5a4115', bytes: 8767 },
   // The two early returns, which never reach the main tree at all.
   initialLoading: { hash: 'da5e91db42c7895c31e1fba36b34c6aaeb456d4ef2efde3a425f5b5066a52974', bytes: 147 },
   fatalErrorRetry: { hash: '22809bb57f98a29737e080c405194d891a62ee389911aae33891f12b55c1c396', bytes: 421 },
   // Both halves of the empty-state ternary. These two differ by ONE WORD, and
   // the split turns that ternary into an `emptyMessage` prop — which is exactly
   // the kind of change that keeps one branch and loses the other.
-  emptySearchResult: { hash: 'cabb158dd209ca06d4cac9a1842b5cc85f3098732762708a21ffdf695c0bc6a0', bytes: 5204 },
-  emptyWithNoQuery: { hash: '9417f937c531c78a19e691c8e578d79333b06cb07883e13b4838a95775910091', bytes: 5194 },
+  emptySearchResult: { hash: 'df44fb4505dabfe79eb4493d5fe6a8ebb2ffa7f0a0d300e5740b165e35fb767d', bytes: 5330 },
+  emptyWithNoQuery: { hash: '39bc473d68c93b6058ae204e70f1c32438d9ee4982f54cf64de18d983e72b6f4', bytes: 5320 },
   // The three banners/panels that only appear in one state each.
-  manifestErrorBanner: { hash: 'f4e24faa3ec364bd758717b59c0a40d5eee73cf5a957353ab1a2ba42e2b98d91', bytes: 11718 },
-  publishJobsTab: { hash: '450019086c251d9c54be621e1d001d2c5bc17bb83394cab111b205b59fd2c4cf', bytes: 4103 },
-  pollFailureBanner: { hash: '9ebbc33adda41bd390228c832cbd28014d54e262369bee8babafd92e20ed68bf', bytes: 12105 },
+  manifestErrorBanner: { hash: '12a1459c8b341ecfd2c3e4e8b801078739ef998494bd1c06fd28e9b325f7493b', bytes: 11844 },
+  publishJobsTab: { hash: 'e35439ad985a03b5c42ee92838c5f9e6f958c608d8351efb6cf50d7b672e6890', bytes: 4229 },
+  pollFailureBanner: { hash: '0de61b70fff301afc550ded6f0d569b49ab62e1c55e6ca1f77b97acfe561c9e8', bytes: 12231 },
   // A row mid-publish, so the pending markup is inside a hash too.
-  publishingRow: { hash: '4d5005ef8b27b15b7d3b79ae5ca929acc089b44a4829a01061add97a92499082', bytes: 11236 },
+  publishingRow: { hash: '3ae183dc00937a0fecca0e472f66c7671ecdba95f23b1f6860db61acab55ea68', bytes: 11362 },
 };
 
 // B2: one Profiler onRender entry per commit of the profiled subtree.

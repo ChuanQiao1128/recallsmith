@@ -49,6 +49,8 @@
 import { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 
+import { reportError } from '../lib/reportError';
+
 interface Props {
   children: ReactNode;
   /**
@@ -102,6 +104,12 @@ export class ChunkErrorBoundary extends Component<Props, State> {
     // cause the screen does not.
     const label = isChunkLoadError(error) ? 'Route chunk failed to load' : 'Route crashed while rendering';
     console.error(label, error, info.componentStack);
+
+    // The third entry point of src/lib/reportError.ts. A render-time throw
+    // never reaches window.onerror — React catches it here — so without this
+    // line the one class of failure this application handles best would be the
+    // one class it never reports.
+    reportError(error, 'react', info.componentStack ?? undefined);
   }
 
   private handleReload = (): void => {
@@ -125,12 +133,12 @@ export class ChunkErrorBoundary extends Component<Props, State> {
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded shadow-sm max-w-md">
           <div className="font-semibold mb-1">
-            {chunk ? '页面资源加载失败' : '这个页面出错了'}
+            {chunk ? 'This page did not finish loading' : 'This page hit an error'}
           </div>
           <div className="text-sm">
             {chunk
-              ? '可能是网络中断，或者网站刚发布了新版本、旧的页面文件已经不存在。重新加载即可。'
-              : '页面在渲染时抛出了异常，具体原因已记录在浏览器控制台。重新加载不一定能解决，可以先回到卡组列表。'}
+              ? 'Its files could not be downloaded. Usually a dropped connection, or a new version shipped and the old files are gone. Reloading picks up the new ones.'
+              : 'It threw while rendering, and the details are in the browser console. Reloading may land you right back here, so leaving the page is the surer way out.'}
           </div>
           <div className="mt-3 flex gap-2">
             <button
@@ -138,7 +146,7 @@ export class ChunkErrorBoundary extends Component<Props, State> {
               className="text-sm px-3 py-1.5 rounded-md border border-red-200 text-red-800 hover:bg-red-100"
               onClick={this.handleReload}
             >
-              重新加载
+              Reload
             </button>
             {!chunk && (
               <button
@@ -146,7 +154,7 @@ export class ChunkErrorBoundary extends Component<Props, State> {
                 className="text-sm px-3 py-1.5 rounded-md border border-red-200 text-red-800 hover:bg-red-100"
                 onClick={this.handleLeave}
               >
-                回到卡组列表
+                Back to decks
               </button>
             )}
           </div>

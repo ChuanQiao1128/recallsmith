@@ -18,7 +18,7 @@ export async function pkceChallenge(verifier: string): Promise<string> {
   return base64UrlEncode(new Uint8Array(digest));
 }
 
-/** ✅ 兼容旧名字 */
+/** Legacy name for randomVerifier(64). */
 export function generateCodeVerifier(): string {
   return randomVerifier(64);
 }

@@ -19,6 +19,6 @@ export interface Card {
   createdAt: string;
   updatedAt: string;
 
-  // 🎮 Gacha: 虚拟字段，由 difficulty 映射
+  // Gacha: a virtual field, derived from difficulty.
   rarity?: 'common' | 'rare' | 'epic';
 }

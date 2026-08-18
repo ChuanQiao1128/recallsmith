@@ -82,3 +82,13 @@ to pick hunks per wave, or commit v3 + wave-2 together after reviewing. Pure-new
 - `RequireAdmin`+permission-join variant of `/api/v1/admin/decks` if editors should use the paginated list.
 - Server-side status/tier filters for the console (client-side only today, per loaded pages).
 - Console test infrastructure (vitest) — pagination logic is already extracted pure for it.
+
+<!-- paths-not-on-disk
+     本文档里出现、但磁盘上确实没有的仓库路径，逐条登记在这里。
+     一条 = 一行 "- 路径"；其余文字是说明，不会被读成条目。
+     规则与双向核对方式见 frontend 的 tests/docsPaths.test.ts 文件头。
+     登记 ≠ 改写历史：上文那句记的是这一波改了哪些文件，时态与措辞保持原样。
+
+     - frontend/src/pages/deckListPagination.ts   2026-08-18 阶段 D 搬到
+       frontend/src/features/deckList/deckListPagination.ts（纯 git mv，内容未改）。
+-->

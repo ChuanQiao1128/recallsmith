@@ -2,9 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <!-- Inlined as a data URI rather than a file in public/. The previous href
+         named the scaffold's own icon, and frontend/ has no public/ directory,
+         so every page load fetched it and got a 404. A data URI cannot rot that
+         way, costs no request, and adds no dependency. -->
+    <!-- tests/uiLanguage.test.ts asserts the scaffold filename appears nowhere
+         in this file, so do not name it here. -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Crect x='6' y='10' width='14' height='16' rx='2.5' fill='%23a5b4fc'/%3E%3Crect x='11' y='6' width='15' height='17' rx='2.5' fill='%23ffffff'/%3E%3Cg stroke='%234f46e5' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M14.5 11h9'/%3E%3Cpath d='M14.5 14.6h9'/%3E%3Cpath d='M14.5 18.2h5'/%3E%3C/g%3E%3C/svg%3E"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>RecallSmith Console</title>
   </head>
   <body>
     <div id="root"></div>

@@ -1,7 +1,9 @@
 // src/pages/NewCardPage.tsx
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { createCard, fetchCardsByDeck, fetchDeckById } from '../api/authoring';
+import { fetchCardsByDeck, fetchDeckById } from '../api/authoring';
+import { useCreateCard } from '../hooks/useCards';
+import { parseDeckId } from '../lib/parseDeckId';
 import type { Deck } from '../types/deck';
 import { CardForm, type CardFormValues } from '../components/CardForm';
 
@@ -40,9 +42,16 @@ export function NewCardPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const deckIdRaw = searchParams.get('deckId') ?? '';
-  const numericDeckId = Number(deckIdRaw);
-  const invalidDeckId = Number.isNaN(numericDeckId) || numericDeckId <= 0;
+  // Shared with CardListPage and EditCardPage now, and adopting it CHANGES what
+  // this page does with a negative id: `?deckId=-5` used to be refused here
+  // before any request went out, and now goes to the server and comes back as
+  // whatever the server says about deck -5. That is the point rather than a
+  // side effect -- the same URL used to produce "Missing or invalid deckId." on
+  // this page and the server's own 404 wording one route away, and only one of
+  // those two can be the console's answer.
+  const deckId = parseDeckId(searchParams.get('deckId'));
+  const invalidDeckId = deckId === null;
+  const numericDeckId = deckId ?? Number.NaN;
 
   const [state, setState] = useState<PageState>({
     loadingDeck: !invalidDeckId,
@@ -56,6 +65,12 @@ export function NewCardPage() {
   // way. ORDER_STEP is the fallback, which is also the right answer for a deck
   // whose cards could not be read but which is in fact empty.
   const [nextOrder, setNextOrder] = useState<number>(ORDER_STEP);
+
+  // The write goes through react-query so the list this card belongs to is
+  // invalidated when it lands. Before this, creating a card told nothing in the
+  // application that anything had changed: CardListPage could only avoid
+  // showing a stale list by refusing to cache at all.
+  const createCardMutation = useCreateCard();
 
   useEffect(() => {
     if (invalidDeckId) return;
@@ -176,7 +191,7 @@ export function NewCardPage() {
   async function handleSubmit(
     values: CardFormValues,
   ): Promise<{ ok: boolean; error?: string }> {
-    // ✅ 前端确保这些是 number，避免字符串导致奇怪的校验问题
+    // Coerced to numbers here, so a string never reaches validation.
     const difficulty =
       typeof values.difficulty === 'number'
         ? values.difficulty
@@ -185,7 +200,7 @@ export function NewCardPage() {
       typeof values.orderInDeck === 'number'
         ? values.orderInDeck
         : Number(values.orderInDeck) || 1;
-    const result = await createCard({
+    const { result } = await createCardMutation.mutateAsync({
       deckId: Number(deck.id),
       stableUid: values.stableUid,
       question: values.question.trim(),

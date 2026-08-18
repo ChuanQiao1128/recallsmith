@@ -176,7 +176,7 @@ describe('the uid of a card that already exists is not offered for editing', () 
 
     // Whatever the wording, it has to name the consequence rather than just
     // report that the field is locked.
-    const help = screen.getByText(/复习进度|学习记录|历史/);
+    const help = screen.getByText(/review progress|study record|study history/i);
     expect(help).not.toBeNull();
   });
 

@@ -2,6 +2,23 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import { Button } from './Button';
 import { ConfirmContext, type ConfirmOptions } from './ConfirmDialogContext';
 
+// ---------------------------------------------------------------------------
+// NO dark: VARIANTS HERE, OR IN Button.tsx. DO NOT ADD THEM BACK.
+// ---------------------------------------------------------------------------
+// This file and Button.tsx were the only two in src/ that carried them, and
+// they were not an unfinished dark theme — they were a visible bug. Tailwind's
+// default darkMode is 'media' and tailwind.config.js sets no strategy, so those
+// variants fire on `prefers-color-scheme: dark` with nothing else in the
+// console reacting: on a Mac in dark mode the overlay and panel went dark while
+// every page behind them stayed white. A dark dialog floating on a light
+// application is worse than either theme.
+//
+// The console is single-theme (light) on purpose. Making it genuinely
+// dark-capable is a whole-application decision — every page, every table, every
+// badge — not something two components can opt into for themselves.
+// tests/singleTheme.test.ts fails on the next `dark:` that appears anywhere
+// under src/, so this is checked rather than agreed.
+
 /**
  * Everything a dialog of this shape can contain that takes focus.
  *
@@ -174,14 +191,14 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
       onMouseDown={handleOverlayMouseDown}
       role="presentation"
     >
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg max-w-sm w-full p-6 focus:outline-none"
+        className="bg-white rounded-xl border border-slate-200 shadow-lg max-w-sm w-full p-6 focus:outline-none"
         onKeyDown={handlePanelKeyDown}
         // alertdialog is for an interruption that needs an answer before the
         // user can go on, which is what destroying something is; a publish that
@@ -198,13 +215,13 @@ export function ConfirmDialog({
         // rendered only when `body` was set, leaving a dangling IDREF.
         aria-describedby={body ? bodyId : undefined}
       >
-        <h2 id={titleId} className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+        <h2 id={titleId} className="text-lg font-semibold text-slate-900">
           {title}
         </h2>
         {body && (
           <p
             id={bodyId}
-            className="mt-2 text-sm text-slate-600 dark:text-slate-400 whitespace-pre-line"
+            className="mt-2 text-sm text-slate-600 whitespace-pre-line"
           >
             {body}
           </p>
@@ -214,7 +231,7 @@ export function ConfirmDialog({
           <div className="mt-4">
             <label
               htmlFor={phraseInputId}
-              className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1"
+              className="block text-sm font-medium text-slate-700 mb-1"
             >
               Type <span className="font-mono font-semibold">{confirmPhrase}</span> to continue
             </label>

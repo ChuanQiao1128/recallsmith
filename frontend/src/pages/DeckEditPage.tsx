@@ -5,8 +5,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   fetchDeckById,
   fetchCardsByDeck,
-  updateDeck,
 } from '../api/authoring';
+
+import { useUpdateDeck } from '../hooks/useDecks';
 
 import type { Deck, DeckAvailability, DeckTier } from '../types/deck';
 
@@ -108,6 +109,10 @@ export function DeckEditPage() {
     previewCards: '',
     retiredAtMs: '',
   });
+
+  // The write goes through react-query so a saved deck invalidates both the
+  // list and this deck's own cache entry.
+  const updateDeckMutation = useUpdateDeck();
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -230,7 +235,10 @@ export function DeckEditPage() {
         previewCards: effectiveTier(deckType, form.tier) === 'premium' ? parseNullableInt(form.previewCards) : null,
       };
 
-      const res = await updateDeck(load.deck.id, payload);
+      const { result: res } = await updateDeckMutation.mutateAsync({
+        id: load.deck.id,
+        params: payload,
+      });
 
       if (!res.success || !res.data) {
         setSaveError(res.error?.message ?? 'Save failed.');
@@ -299,7 +307,7 @@ export function DeckEditPage() {
       }
       superAdmin={superAdmin}
       onSignOut={handleSignOut}
-      onGoAdminUsers={superAdmin ? () => navigate('/admin/users') : undefined}
+      adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -424,7 +432,7 @@ export function DeckEditPage() {
               value={form.version}
               onChange={e => setForm(prev => ({ ...prev, version: e.target.value }))}
             />
-            <div className="text-[11px] text-slate-500 mt-1">DB draft version（不是 buildId）。建议内容改动就 +1。</div>
+            <div className="text-[11px] text-slate-500 mt-1">The draft version held in the DB, not the buildId. Bump it whenever the content changes.</div>
           </label>
         </div>
 

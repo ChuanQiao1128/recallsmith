@@ -55,7 +55,7 @@ vi.mock('../src/api/authoring', async importOriginal => {
 });
 
 const { DeckListPage } = await import('../src/pages/DeckListPage');
-const { DECKS_PAGE_SIZE } = await import('../src/pages/deckListPagination');
+const { DECKS_PAGE_SIZE } = await import('../src/features/deckList/deckListPagination');
 
 /** The four slugs this file can render. Chosen so no one is a substring of
  *  another, which is what lets rowSlugs() read a row by its text. */

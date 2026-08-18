@@ -1,5 +1,5 @@
 // src/api/dedupe.ts
-// 请求去重：避免相同请求在短时间内重复发出
+// Request de-duplication: stops the same request going out twice in quick succession.
 
 interface PendingRequest<T> {
   promise: Promise<T>;
@@ -7,13 +7,13 @@ interface PendingRequest<T> {
 }
 
 const pendingRequests = new Map<string, PendingRequest<unknown>>();
-const DEFAULT_TTL = 100; // 100ms 内相同请求共用同一个 promise
+const DEFAULT_TTL = 100; // identical requests within 100ms share one promise
 
 /**
- * 对异步请求进行去重
- * @param key 请求唯一标识
- * @param fetcher 实际请求函数
- * @param ttl 去重时间窗口（毫秒）
+ * De-duplicates an async request.
+ * @param key unique identifier for the request
+ * @param fetcher the function that actually performs it
+ * @param ttl de-duplication window, in milliseconds
  */
 export function dedupeRequest<T>(
   key: string,
@@ -23,14 +23,14 @@ export function dedupeRequest<T>(
   const now = Date.now();
   const pending = pendingRequests.get(key);
 
-  // 如果有进行中的请求且在 TTL 内，直接返回
+  // A request already in flight and still inside the TTL is returned as is.
   if (pending && now - pending.timestamp < ttl) {
     return pending.promise as Promise<T>;
   }
 
-  // 创建新请求
+  // Otherwise start a new one.
   const promise = fetcher().finally(() => {
-    // 完成后延迟清理（给其他并行调用机会复用）
+    // Cleared on a delay, so parallel callers still get to reuse it.
     setTimeout(() => {
       const current = pendingRequests.get(key);
       if (current?.promise === promise) {
@@ -44,7 +44,7 @@ export function dedupeRequest<T>(
 }
 
 /**
- * 手动清除指定请求的去重缓存
+ * Clears the de-duplication entry for one key, or all of them.
  */
 export function clearDedupe(key?: string) {
   if (key) {
@@ -54,7 +54,7 @@ export function clearDedupe(key?: string) {
   }
 }
 
-// 常用请求的 key 生成器
+// Key builders for the requests that use this.
 export const DedupeKeys = {
   decks: () => 'decks:list',
   deck: (id: number) => `deck:${id}`,

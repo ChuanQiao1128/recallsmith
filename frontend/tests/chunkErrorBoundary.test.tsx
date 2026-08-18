@@ -57,7 +57,7 @@ describe('a route chunk that fails to load', () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByText('页面资源加载失败')).not.toBeNull();
+    expect(screen.queryByText('This page did not finish loading')).not.toBeNull();
     // The whole point: the tree is still there. An unhandled lazy rejection
     // empties the container completely.
     expect(container.innerHTML.length).toBeGreaterThan(0);
@@ -76,7 +76,7 @@ describe('a route chunk that fails to load', () => {
     });
 
     await act(async () => {
-      screen.getByText('重新加载').click();
+      screen.getByText('Reload').click();
     });
 
     // Asserting the count, not just "was called": a button wired to the wrong
@@ -90,7 +90,7 @@ describe('a route chunk that fails to load', () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByText('页面资源加载失败')).not.toBeNull();
+    expect(screen.queryByText('This page did not finish loading')).not.toBeNull();
 
     // React caches the rejection on the lazy payload, so re-rendering cannot
     // retry the import. A state-resetting "Retry" button would land right back
@@ -109,7 +109,7 @@ describe('a route chunk that fails to load', () => {
       );
     });
 
-    expect(screen.queryByText('页面资源加载失败')).not.toBeNull();
+    expect(screen.queryByText('This page did not finish loading')).not.toBeNull();
     expect(screen.queryByText('recovered')).toBeNull();
   });
 });
@@ -132,8 +132,8 @@ describe('an ordinary crash is not reported as a failed download', () => {
     // The wording matters more than it looks. Telling someone their connection
     // dropped sends them to fix a thing that is not broken, and buries a real
     // defect under an infrastructure story.
-    expect(screen.queryByText('页面资源加载失败')).toBeNull();
-    expect(screen.queryByText('这个页面出错了')).not.toBeNull();
+    expect(screen.queryByText('This page did not finish loading')).toBeNull();
+    expect(screen.queryByText('This page hit an error')).not.toBeNull();
   });
 
   it('offers a way out of the route, because reloading would replay the crash', () => {
@@ -146,7 +146,7 @@ describe('an ordinary crash is not reported as a failed download', () => {
     // A missing chunk is usually gone for one request; a component that
     // dereferences undefined will do it again on every reload. The escape has
     // to leave the route, not repeat it.
-    expect(screen.queryByRole('button', { name: '回到卡组列表' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back to decks' })).not.toBeNull();
   });
 
   it('still calls a genuine chunk failure what it is', async () => {
@@ -155,10 +155,10 @@ describe('an ordinary crash is not reported as a failed download', () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByText('页面资源加载失败')).not.toBeNull();
+    expect(screen.queryByText('This page did not finish loading')).not.toBeNull();
     // No escape hatch here: reloading is the action that can actually succeed,
     // and a second button would dilute it.
-    expect(screen.queryByRole('button', { name: '回到卡组列表' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back to decks' })).toBeNull();
   });
 });
 
@@ -173,7 +173,7 @@ describe('the error screen does not outlive the route that caused it', () => {
         <Crashes />
       </ChunkErrorBoundary>,
     );
-    expect(screen.queryByText('这个页面出错了')).not.toBeNull();
+    expect(screen.queryByText('This page hit an error')).not.toBeNull();
 
     // Without this, one flaky chunk request pins the error screen for the rest
     // of the session — including routes whose chunks were cached long ago.
@@ -185,7 +185,7 @@ describe('the error screen does not outlive the route that caused it', () => {
       </ChunkErrorBoundary>,
     );
 
-    expect(screen.queryByText('这个页面出错了')).toBeNull();
+    expect(screen.queryByText('This page hit an error')).toBeNull();
     expect(screen.queryByText('deck list')).not.toBeNull();
   });
 
@@ -204,6 +204,6 @@ describe('the error screen does not outlive the route that caused it', () => {
       </ChunkErrorBoundary>,
     );
 
-    expect(screen.queryByText('这个页面出错了')).not.toBeNull();
+    expect(screen.queryByText('This page hit an error')).not.toBeNull();
   });
 });

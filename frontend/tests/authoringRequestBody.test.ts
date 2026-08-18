@@ -136,4 +136,22 @@ describe('updateCard puts the fields it accepts into the request', () => {
     }
     expect(body.expectedVersion).toBe(4);
   });
+
+  it('sends no expectedVersion at all when the caller did not supply one', async () => {
+    // This used to read `params.expectedVersion ?? 1`, which is the one default
+    // that cannot be safe: expectedVersion is the optimistic-concurrency token
+    // the server compares against the stored row, so a forgotten argument did
+    // not fail — it asserted "this card is at version 1" and produced a
+    // VERSION_CONFLICT on every card that had ever been edited. A caller that
+    // omits it now gets whatever the server does with a missing token, which is
+    // the server's decision to make; the client no longer invents an answer.
+    //
+    // Object.hasOwn rather than a value check, for the reason the create case
+    // gives above: `expectedVersion: undefined` serialises away to the same
+    // request and reads the same in a value assertion, so only the key test
+    // distinguishes "omitted" from "sent as nothing".
+    await updateCard({ id: 101, deckId: 7, question: 'q' });
+
+    expect(Object.hasOwn(bodyOf(httpMock.put), 'expectedVersion')).toBe(false);
+  });
 });

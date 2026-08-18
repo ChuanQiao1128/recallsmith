@@ -57,7 +57,7 @@ function describeGroups(groups: string[] | null | undefined): string {
 function deriveRole(groups: string[] | null | undefined): 'super_admin' | 'editor' | 'unknown' {
   const g = (groups ?? []).map(x => String(x).toLowerCase());
   if (g.includes('super_admin')) return 'super_admin';
-  if (g.includes('editor') || g.some(x => x.startsWith('editor_'))) return 'editor'; // 兼容旧 editor_en/editor_zh
+  if (g.includes('editor') || g.some(x => x.startsWith('editor_'))) return 'editor'; // tolerates the legacy editor_en / editor_zh groups
   return 'unknown';
 }
 
@@ -421,7 +421,7 @@ export function AdminUsersPage() {
       userLabel={sessionUser ? `${sessionUser.email ?? sessionUser.username ?? 'Signed in'} · super_admin` : '—'}
       superAdmin={true}
       onSignOut={handleSignOut}
-      onGoAdminUsers={() => navigate('/admin/users')}
+      adminUsersHref="/admin/users"
     >
       {!AUTH_CONFIGURED ? (
         <Callout tone="warning" title="Auth not configured">

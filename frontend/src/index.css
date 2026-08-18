@@ -3,7 +3,7 @@
 @import 'tailwindcss/components';
 @import 'tailwindcss/utilities';
 
-/* 你可以顺便加一点全局自定义样式 */
+/* Global defaults, applied under the Tailwind layers above. */
 body {
   background-color: #f1f5f9; /* bg-slate-100 */
   color: #0f172a; /* text-slate-900 */

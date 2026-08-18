@@ -1,4 +1,4 @@
-// src/components/deckList/DeckConsoleHeader.tsx
+// src/features/deckList/components/DeckConsoleHeader.tsx
 //
 // The page title, the Decks / Publish Jobs tab switcher, Refresh, and New Deck.
 // Lifted from DeckListPage.tsx lines 607-694.
@@ -35,7 +35,7 @@
 // to it. It is also exactly why the older src/components/decks/DeckTable.tsx
 // could not be reused — it calls useNavigate() internally.
 
-import type { PublishJob } from '../../api/authoring';
+import type { PublishJob } from '../../../api/authoring';
 
 export interface DeckConsoleHeaderProps {
   activeTab: 'decks' | 'publishJobs';
@@ -69,7 +69,7 @@ export function DeckConsoleHeader({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            {/* Tab Switcher - 横向开关样式 */}
+            {/* Tab switcher, styled as a horizontal segmented control */}
             {superAdmin && (
               <div className="flex items-center bg-white border border-slate-300 rounded-xl p-1 shadow-sm">
                 <button
@@ -104,7 +104,7 @@ export function DeckConsoleHeader({
               </div>
             )}
 
-            {/* Refresh 按钮 - 两个标签页都有 */}
+            {/* Refresh button, present on both tabs */}
             {activeTab === 'decks' ? (
               <button
                 type="button"

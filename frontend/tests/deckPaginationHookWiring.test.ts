@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const PAGE_PATH = fileURLToPath(new URL('../src/pages/DeckListPage.tsx', import.meta.url));
-const HOOK_PATH = fileURLToPath(new URL('../src/pages/useDeckPagination.ts', import.meta.url));
+const HOOK_PATH = fileURLToPath(new URL('../src/features/deckList/useDeckPagination.ts', import.meta.url));
 
 /**
  * The ten values the paginated channel hands back to the page.
@@ -231,14 +231,18 @@ describe('the page and useDeckPagination agree on exactly one set of fields', ()
     expect(leftBehind).toEqual([]);
   });
 
-  it('W-d: the identifier it calls is the one imported from ./useDeckPagination', () => {
+  it('W-d: the identifier it calls is the one imported from the feature module', () => {
     const source = parsePage();
     const imported: string[] = [];
 
     walk(source, node => {
       if (!ts.isImportDeclaration(node)) return;
       const specifier = node.moduleSpecifier;
-      if (!ts.isStringLiteral(specifier) || specifier.text !== './useDeckPagination') return;
+      if (
+        !ts.isStringLiteral(specifier) ||
+        specifier.text !== '../features/deckList/useDeckPagination'
+      )
+        return;
 
       const bindings = node.importClause?.namedBindings;
       if (bindings === undefined || !ts.isNamedImports(bindings)) return;

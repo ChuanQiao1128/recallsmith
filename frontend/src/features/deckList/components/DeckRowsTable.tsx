@@ -1,4 +1,4 @@
-// src/components/deckList/DeckRowsTable.tsx
+// src/features/deckList/components/DeckRowsTable.tsx
 //
 // The deck table. Lifted from DeckListPage.tsx lines 866-985, together with the
 // two module-private badge helpers from lines 106-121.
@@ -44,10 +44,10 @@
 // to it. It is also exactly why the older src/components/decks/DeckTable.tsx
 // could not be reused — it calls useNavigate() internally.
 
-import { isStarterLike } from '../../pages/deckListPagination';
-import type { DeckStatus } from '../../pages/deckListPagination';
-import { safeDateTime } from '../../pages/deckListManifest';
-import type { ConsoleDeckRow } from '../../pages/deckListRows';
+import { isStarterLike } from '../deckListPagination';
+import type { DeckStatus } from '../deckListPagination';
+import { safeDateTime } from '../deckListManifest';
+import type { ConsoleDeckRow } from '../deckListRows';
 
 function statusBadge(status: DeckStatus) {
   if (status === 'published') {

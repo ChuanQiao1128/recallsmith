@@ -172,11 +172,19 @@ describe('the rows come from the shared query cache', () => {
   });
 });
 
-// These three run against the application's real QueryClient defaults —
-// staleTime 5min, gcTime 10min, retry 1, refetchOnWindowFocus true — because
-// each one is about an override the hooks apply to exactly those settings.
-// Under the permissive test client they would all pass whether the overrides
-// were there or not.
+// These three run against the application's real QueryClient defaults, because
+// each one is about a setting that used to be dangerous there. Under the
+// permissive test client they would all pass either way.
+//
+// WHAT THEY WITNESS CHANGED, and it is worth stating rather than letting the
+// wording rot. The defaults used to be staleTime 5min / gcTime 10min / retry 1
+// / refetchOnWindowFocus true, and these cases proved the HOOKS overrode them
+// one by one. The defaults are now the conservative set and the hooks state
+// none of the four, so the same three cases prove the DEFAULT is safe. Neither
+// the assertions nor the numbers below moved; the thing standing behind them
+// did. tests/queryClientDefaults.test.tsx holds the hooks out of it, because a
+// hook that restated `staleTime: 0` would make all three green again while the
+// shared client went back to five minutes.
 describe('fetching still behaves the way it did before react-query', () => {
   it('ignores the window regaining focus', async () => {
     renderWithClient(makeAppDefaultsQueryClient(), <CardListPage />, [
@@ -209,11 +217,14 @@ describe('fetching still behaves the way it did before react-query', () => {
     renderWithClient(client, <CardListPage />, [`/decks/cards?deckId=${DECK_ID}`]);
     await screen.findByText(CARD_QUESTION);
 
-    // This is the regression a five-minute staleTime would introduce today:
-    // NewCardPage and EditCardPage still call the API directly and invalidate
-    // nothing, so a user who adds a card and comes back here would be shown the
-    // list as it was before they added it, for up to five minutes, with no way
-    // to tell that is what they are looking at.
+    // This is the regression a five-minute staleTime would introduce today.
+    // The reason has narrowed and has not gone away: NewCardPage and
+    // EditCardPage do now invalidate ['cards', deckId] when they write, so the
+    // list would eventually be told — but only for the writes that go through
+    // this console. A deck edited by the importer, by another tab, or by
+    // anybody else is still invisible to it, and re-entering this page is the
+    // only moment the console has to find out. Raising it is a decision, not a
+    // default.
     expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(2);
   });
 

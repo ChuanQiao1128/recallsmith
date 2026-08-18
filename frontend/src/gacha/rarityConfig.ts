@@ -1,15 +1,22 @@
 // ============================================
-// RecallSmith 稀有度配置
+// RecallSmith rarity configuration
 // ============================================
-
+//
+// `label` used to be Chinese with a parallel `labelEn` beside it, and `label`
+// is the one that reaches the screen -- RarityBadge and RarityDistribution both
+// read it, so all three tiers rendered as Chinese inside two otherwise English
+// panels. Now that the console is English-only the two fields would be the same
+// string twice, which is the shape where one of them gets edited and the other
+// does not, so `labelEn` is gone rather than left as a synonym. Nothing read it:
+// `as const` puts these members in the type, so a surviving reader would be a
+// TS2339 under `tsc -b`, which is what was used to check.
 export const RARITY_MAP = {
   1: {
     key: 'common' as const,
-    label: '普通',
-    labelEn: 'Common',
+    label: 'Common',
     stars: '⭐',
     starCount: 1,
-    // 蓝色系
+    // blues
     color: '#3B82F6',
     colorLight: '#60A5FA',
     colorDark: '#2563EB',
@@ -20,11 +27,10 @@ export const RARITY_MAP = {
   },
   2: {
     key: 'rare' as const,
-    label: '稀有',
-    labelEn: 'Rare',
+    label: 'Rare',
     stars: '⭐⭐',
     starCount: 2,
-    // 紫色系
+    // purples
     color: '#8B5CF6',
     colorLight: '#A78BFA',
     colorDark: '#7C3AED',
@@ -35,11 +41,10 @@ export const RARITY_MAP = {
   },
   3: {
     key: 'epic' as const,
-    label: '史诗',
-    labelEn: 'Epic',
+    label: 'Epic',
     stars: '⭐⭐⭐',
     starCount: 3,
-    // 金色系
+    // golds
     color: '#F59E0B',
     colorLight: '#FBBF24',
     colorDark: '#D97706',

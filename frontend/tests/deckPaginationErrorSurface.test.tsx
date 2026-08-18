@@ -43,7 +43,7 @@ vi.mock('../src/api/authoring', async importOriginal => {
 });
 
 const { DeckListPage } = await import('../src/pages/DeckListPage');
-const { DECKS_PAGE_SIZE } = await import('../src/pages/deckListPagination');
+const { DECKS_PAGE_SIZE } = await import('../src/features/deckList/deckListPagination');
 
 const ALL_SLUGS = ['deck-1', 'deck-2', 'deck-3'];
 const REBUILDING = 'deck index is rebuilding';

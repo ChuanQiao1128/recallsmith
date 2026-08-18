@@ -98,7 +98,7 @@ function normalizeCard(c: Card): Card {
   };
 }
 
-// 小工具：确保一定有 stableUid
+// Small helper: guarantees a stableUid is present.
 function ensureStableUid(input?: string): string {
   const v = (input ?? '').trim();
   if (v) return v;
@@ -178,7 +178,7 @@ export async function createDeck(params: {
   author?: string;
 }): Promise<ApiResult<Deck>> {
   try {
-    // 统一使用 JSON body，与 updateDeck 保持一致
+    // A JSON body throughout, matching updateDeck.
     const body: Record<string, unknown> = { title: params.title };
     if (params.slug) body.slug = params.slug;
     if (params.description) body.description = params.description;
@@ -407,7 +407,7 @@ export async function createCard(params: {
     if (params.revision !== undefined) body.revision = params.revision;
     body.stableUid = ensureStableUid(params.stableUid);
 
-    // 统一使用单条记录返回格式
+    // One single-record response shape throughout.
     const resp = await http.post<ApiResult<Card>>('/api/v1/authoring/cards', body);
     const raw = resp.data;
 
@@ -447,11 +447,21 @@ export async function updateCard(params: {
   expectedVersion?: number;
 }): Promise<ApiResult<Card>> {
   try {
-    // Backend expects id and expectedVersion in JSON body, not query string
-    const body: Record<string, unknown> = {
-      id: params.id,
-      expectedVersion: params.expectedVersion ?? 1,
-    };
+    // Backend expects id and expectedVersion in JSON body, not query string.
+    //
+    // expectedVersion is omitted when the caller did not supply one, rather
+    // than defaulted to 1. A default cannot be right here: it is the
+    // optimistic-concurrency token the server compares against the row, so on
+    // any card that has been edited once — version 2 or higher — sending 1
+    // manufactures a VERSION_CONFLICT out of an edit that had no conflict in
+    // it, and does so silently, for a caller whose only mistake was forgetting
+    // a field. Leaving the key out gives the server the chance to answer for
+    // itself. Both callers today pass it explicitly and neither can pass
+    // undefined: EditCardPage forwards card.version (required on Card) and
+    // deckImportRunner forwards the plan's expectedVersion (required on
+    // ImportUpdate).
+    const body: Record<string, unknown> = { id: params.id };
+    if (params.expectedVersion !== undefined) body.expectedVersion = params.expectedVersion;
     if (params.question !== undefined) body.question = params.question;
     if (params.explanation !== undefined) body.explanation = params.explanation;
     if (params.codeSnippet !== undefined) body.codeSnippet = params.codeSnippet;
@@ -501,7 +511,7 @@ export async function fetchPermissions(): Promise<ApiResult<{ adminSub: string; 
 
 export async function updatePermission(params: { adminSub: string; deckId: number; canRead?: boolean; canWrite?: boolean }): Promise<ApiResult<null>> {
   try {
-    // 统一使用 JSON body 传递参数
+    // Parameters go in a JSON body, as everywhere else here.
     const body: Record<string, unknown> = {
       adminSub: params.adminSub,
       deckId: params.deckId,

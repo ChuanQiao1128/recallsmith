@@ -224,7 +224,7 @@ describe('editing a card keeps the edit to its usage note', () => {
     await user.clear(usage);
     await user.type(usage, 'Polled by a background worker.');
 
-    await user.click(screen.getByRole('button', { name: /save|保存|update/i }));
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
 
     await waitFor(() => expect(api.updateCard).toHaveBeenCalled());
     // The api layer omits undefined keys, so leaving it out is not data loss —
@@ -319,7 +319,7 @@ describe('the revision the form insists on is the revision that gets stored', ()
     await user.type(question, 'What is a span?');
     await user.tab();
 
-    await user.click(screen.getByRole('button', { name: /create|save|保存/i }));
+    await user.click(screen.getByRole('button', { name: /create|save/i }));
 
     await waitFor(() => expect(api.createCard).toHaveBeenCalled());
     expect(api.createCard.mock.calls[0][0]).toMatchObject({ revision: 3 });
@@ -337,14 +337,14 @@ describe('the revision the form insists on is the revision that gets stored', ()
     await user.clear(revision);
     await user.type(revision, '7');
 
-    await user.click(screen.getByRole('button', { name: /save|保存|update/i }));
+    await user.click(screen.getByRole('button', { name: /save|update/i }));
 
     await waitFor(() => expect(api.updateCard).toHaveBeenCalled());
     expect(api.updateCard.mock.calls[0][0]).toMatchObject({ revision: 7 });
   });
 });
 
-// --- 可及性：每个 label 都要真的连着它的控件 --------------------------------
+// --- Accessibility: every label must really be attached to its control ------
 
 // Found by a test that could not locate the Question field by its label. Four
 // of the nine labels carried htmlFor and five did not, so a screen reader had

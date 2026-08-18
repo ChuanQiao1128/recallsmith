@@ -1,4 +1,4 @@
-// src/components/deckList/DeckFilterBar.tsx
+// src/features/deckList/components/DeckFilterBar.tsx
 //
 // Search box plus the status and type selects. Lifted from DeckListPage.tsx
 // lines 827-864.
@@ -31,7 +31,7 @@
 // to it. It is also exactly why the older src/components/decks/DeckTable.tsx
 // could not be reused — it calls useNavigate() internally.
 
-import type { DeckStatus } from '../../pages/deckListPagination';
+import type { DeckStatus } from '../deckListPagination';
 
 export interface DeckFilterBarProps {
   q: string;

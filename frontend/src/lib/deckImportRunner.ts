@@ -21,6 +21,7 @@
 //    would plan the same update forever. Idempotence is the whole point of
 //    reconciling, so it has to survive deletions too.
 
+import { VERSION_CONFLICT } from '../api/errors';
 import type { ApiResult } from '../types/api';
 import type { Card } from '../types/card';
 import type { ImportCreate, ImportUpdate, ParsedCard } from './deckImport';
@@ -84,8 +85,11 @@ export interface ImportProgress {
   current: ImportAction;
 }
 
-/** error.code the authoring API returns when expectedVersion is stale. */
-export const VERSION_CONFLICT = 'VERSION_CONFLICT';
+// error.code the authoring API returns when expectedVersion is stale. Declared
+// in src/api/errors.ts now that EditCardPage branches on it too, and re-exported
+// from here so this module's existing importers do not have to care where it
+// moved.
+export { VERSION_CONFLICT };
 
 /**
  * Optional text is stored trimmed by the server and read back as either null

@@ -5,5 +5,5 @@
 // src/hooks/ is missing from the list. Both halves are needed, so the rule is:
 // every hook in this folder appears here, and every hook here has a caller.
 
-export { useDeck } from './useDecks';
-export { useCards, useDeleteCard } from './useCards';
+export { useDeck, useCreateDeck, useUpdateDeck, useDeleteDeck, usePublishDeck } from './useDecks';
+export { useCards, useCreateCard, useUpdateCard, useDeleteCard } from './useCards';

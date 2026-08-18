@@ -42,14 +42,20 @@ import { describe, expect, it } from 'vitest';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND = path.resolve(HERE, '..');
 const PAGE = path.join(FRONTEND, 'src/pages/DeckListPage.tsx');
-const SPLIT_DIR = path.join(FRONTEND, 'src/components/deckList');
+const SPLIT_DIR = path.join(FRONTEND, 'src/features/deckList/components');
 
 /**
  * The hook calls DeckListPage makes directly, in source order.
  *
- * Recorded against the unmodified page. `useDeckPagination` sits at index 24 and
- * is the one entry that is not a React built-in; the two useMemos at the end are
- * `decks` and `viewRows`.
+ * Recorded against the unmodified page and updated once since, deliberately:
+ * `useDeleteDeck` and `usePublishDeck` were added immediately after
+ * `useConfirm` when the two row actions moved onto react-query mutations. That
+ * placement is not arbitrary — they sit with the other thing the row actions
+ * need, and above the paginated block, which is the block the comment at the
+ * useDeckPagination call warns must be liftable as a unit.
+ *
+ * `useDeckPagination` now sits at index 26; the two useMemos at the end are
+ * still `decks` and `viewRows`.
  */
 const EXPECTED_HOOK_SEQUENCE = [
   'useNavigate',
@@ -59,6 +65,8 @@ const EXPECTED_HOOK_SEQUENCE = [
   'useState',
   'useState',
   'useConfirm',
+  'useDeleteDeck',
+  'usePublishDeck',
   'useState',
   'useState',
   'useRef',
@@ -170,7 +178,7 @@ describe('C1: the page calls its hooks in a fixed order', () => {
     // A scanner that silently found nothing would agree with an empty literal
     // forever. Three independent floors: the length, the presence of the one
     // non-React hook, and the fact that more than one distinct hook appears.
-    expect(EXPECTED_HOOK_SEQUENCE.length).toBe(31);
+    expect(EXPECTED_HOOK_SEQUENCE.length).toBe(33);
     expect(EXPECTED_HOOK_SEQUENCE).toContain('useDeckPagination');
     expect(new Set(EXPECTED_HOOK_SEQUENCE).size).toBeGreaterThan(4);
   });

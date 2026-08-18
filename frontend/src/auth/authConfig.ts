@@ -25,7 +25,7 @@ export const AUTH_CONFIG: AuthConfig = {
   scopes: parseScopes(import.meta.env.VITE_COGNITO_SCOPES),
 };
 
-/** ✅ 兼容旧名字：cognitoConfig */
+/** Legacy name for AUTH_CONFIG, kept for callers that still use it. */
 export const cognitoConfig = AUTH_CONFIG;
 
 export const AUTH_CONFIGURED =

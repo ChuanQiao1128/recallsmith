@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // Characterization tests for the paginated -> legacy fallback, which now lives
-// in src/pages/useDeckPagination.ts (:151-168) after that channel was lifted
+// in src/features/deckList/useDeckPagination.ts (:151-168) after that channel was lifted
 // out of DeckListPage.tsx. Covers the two branches nothing pinned.
 //
 // PAGINATED_FALLBACK_CODES (useDeckPagination.ts:71-75) holds three genuinely

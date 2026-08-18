@@ -1,4 +1,4 @@
-// src/pages/useDeckPagination.ts
+// src/features/deckList/useDeckPagination.ts
 //
 // The paginated deck channel of DeckListPage, lifted out whole: six pieces of
 // state, two refs, the two loaders, and the effect that re-runs the first one
@@ -57,7 +57,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 
-import { ADMIN_DECKS_ENDPOINT_MISSING, fetchAdminDecksPage } from '../api/authoring';
+import { ADMIN_DECKS_ENDPOINT_MISSING, fetchAdminDecksPage } from '../../api/authoring';
 import {
   DECKS_PAGE_SIZE,
   applyDecksPage,

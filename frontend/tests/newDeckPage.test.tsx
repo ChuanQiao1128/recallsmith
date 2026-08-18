@@ -242,15 +242,63 @@ describe('the slug the title suggests', () => {
   });
 });
 
-describe('the five guards, in the order they fire', () => {
-  it('asks for a title first, even when the slug is missing too', async () => {
-    // Both are empty. Only the ORDER of the guards decides which message
-    // appears, so this is the case that pins it.
+describe('the guards, all of which now report together', () => {
+  // EVOLVED, and the evolution is the point. This block used to be called "the
+  // five guards, in the order they fire", and its first case asserted that with
+  // both Title and Slug empty only the Title message appeared — because the
+  // guards returned early and the ORDER decided which single problem a user was
+  // told about. The page now collects every problem and renders them in one
+  // pass, so the case that pinned the ordering is the case that had to change.
+  // Nothing was dropped: it asserts more than it did, and the four
+  // one-problem-at-a-time cases below still hold, because a form with exactly
+  // one thing wrong still produces exactly one message.
+  it('reports every empty required field at once, not just the first', async () => {
+    // Title and Slug are both empty; Author and Content Version are prefilled,
+    // so exactly two of the six checks fail here.
     mount();
     await userEvent.click(submitButton());
 
     expect(await screen.findByText('Title is required.')).not.toBeNull();
-    expect(screen.queryByText('Slug is required.')).toBeNull();
+    expect(screen.queryByText('Slug is required.')).not.toBeNull();
+    expect(api.createDeck).toHaveBeenCalledTimes(0);
+  });
+
+  it('lists them, so two problems do not read as one sentence', async () => {
+    // The rendering split is deliberate: one problem stays a sentence, several
+    // become list items. Asserted because "shows both strings" would also pass
+    // if they were concatenated into one unreadable line.
+    mount();
+    await userEvent.click(submitButton());
+
+    await screen.findByText('Title is required.');
+    const items = Array.from(document.querySelectorAll('[role="alert"] li')).map(li =>
+      (li.textContent ?? '').trim(),
+    );
+    expect(items).toEqual(['Title is required.', 'Slug is required.']);
+  });
+
+  it('finds every broken field in one submit, including the Paid-only one', async () => {
+    // The widest case: five of the six checks fail together. Before the change
+    // this took five submits, each one reporting a single problem as if it were
+    // the only one.
+    mount();
+    fireEvent.change(authorBox(), { target: { value: '' } });
+    fireEvent.change(versionBox(), { target: { value: '1.0' } });
+    await userEvent.click(paidRadio());
+    fireEvent.change(freeCardBox(), { target: { value: '-1' } });
+
+    submitPastConstraintValidation();
+
+    const items = Array.from(document.querySelectorAll('[role="alert"] li')).map(li =>
+      (li.textContent ?? '').trim(),
+    );
+    expect(items).toEqual([
+      'Title is required.',
+      'Slug is required.',
+      'Author is required.',
+      'Content version must be semver like 1.0.0',
+      'Free card count must be a non-negative number.',
+    ]);
     expect(api.createDeck).toHaveBeenCalledTimes(0);
   });
 
@@ -269,6 +317,11 @@ describe('the five guards, in the order they fire', () => {
     await userEvent.click(submitButton());
 
     expect(await screen.findByText('Slug is required.')).not.toBeNull();
+    // And as a sentence, not as a one-item bulleted list. The single/plural
+    // split in the banner is deliberate — the commonest banner on this page is
+    // the server refusing the slug, and a checklist with one box on it reads
+    // like a form with something else still hidden.
+    expect(document.querySelectorAll('[role="alert"] li')).toHaveLength(0);
     expect(api.createDeck).toHaveBeenCalledTimes(0);
   });
 
@@ -290,6 +343,12 @@ describe('the five guards, in the order they fire', () => {
     await userEvent.click(submitButton());
 
     expect(await screen.findByText('Content version is required.')).not.toBeNull();
+    // A blank version fails "is required" AND "is not semver", and now that
+    // the checks no longer return early, both would be pushed. Two complaints
+    // about one blank box is the noise that makes a list stop being read, so
+    // the semver check is an else-if — asserted here rather than left to the
+    // reader of the source.
+    expect(screen.queryByText('Content version must be semver like 1.0.0')).toBeNull();
     expect(api.createDeck).toHaveBeenCalledTimes(0);
   });
 

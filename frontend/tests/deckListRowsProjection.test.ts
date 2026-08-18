@@ -20,8 +20,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { buildViewRows } from '../src/pages/deckListRows';
-import type { BuildViewRowsInput, ConsoleDeckRow } from '../src/pages/deckListRows';
+import { buildViewRows } from '../src/features/deckList/deckListRows';
+import type { BuildViewRowsInput, ConsoleDeckRow } from '../src/features/deckList/deckListRows';
 import type { Deck } from '../src/types/deck';
 import type { AdminDeckListItem } from '../src/api/authoring';
 

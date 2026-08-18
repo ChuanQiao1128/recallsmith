@@ -10,7 +10,7 @@
 // in front of each one. Adding `export` cannot alter runtime behaviour, so
 // every assertion below describes the code as it was before it moved — which
 // is the only way a move can afterwards be shown not to have changed anything.
-// When the functions moved to src/pages/deckListManifest.ts the import path
+// When the functions moved to src/features/deckList/deckListManifest.ts the import path
 // changed and not one character of the assertions did.
 //
 // Node environment on purpose: nothing here touches a DOM.
@@ -24,7 +24,7 @@ import {
   parseManifestMeta,
   safeDateTime,
   toManifestDeckLite,
-} from '../src/pages/deckListManifest';
+} from '../src/features/deckList/deckListManifest';
 import type { Deck } from '../src/types/deck';
 
 function deck(overrides: Partial<Deck> = {}): Deck {

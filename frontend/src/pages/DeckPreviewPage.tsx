@@ -197,7 +197,7 @@ export function DeckPreviewPage() {
 
     const totalCards = liveCards.length;
 
-    // ✅ 你要求：Preview 永远固定 0.0.0
+    // Preview is pinned to 0.0.0 by decision: it is not a published build.
     const version = '0.0.0';
 
     const isFreeStarter =
@@ -373,7 +373,7 @@ export function DeckPreviewPage() {
                 meaningless. */}
             {exportJson && errors.length > 0 ? (
               <span className="text-xs text-red-700">
-                有 {errors.length} 条校验错误，先修好才能导出。
+                {errors.length} validation {errors.length === 1 ? 'error' : 'errors'} to fix before this can be exported.
               </span>
             ) : null}
           </div>

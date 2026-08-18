@@ -2,20 +2,29 @@ import { useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { AUTH_CONFIGURED, AUTH_CONFIG } from '../auth/authConfig';
 import { useAuth } from '../auth/AuthContext';
-
-function sanitizeNextUrl(next: string | null): string {
-  const v = (next ?? '').trim();
-  if (!v.startsWith('/')) return '/';
-  return v;
-}
+// Was a four-line local copy that let `//evil.com` through. It now lives in
+// src/auth/safeRedirect.ts so this page and the OAuth callback share one
+// answer; see that file for what the leading-slash test missed.
+import { sanitizeNextUrl } from '../auth/safeRedirect';
 
 export function LoginPage() {
   const auth = useAuth();
   const [searchParams] = useSearchParams();
 
   const nextUrl = useMemo(() => sanitizeNextUrl(searchParams.get('next')), [searchParams]);
-  const err = searchParams.get('error') ?? '';
-  const errDesc = searchParams.get('error_description') ?? '';
+  // The error code arrives via the URL, and anyone can put anything in a URL.
+  // Rendering it verbatim let a plain link place attacker-chosen text inside
+  // this page's official red box. React escapes it, so it was never XSS, but a
+  // phishing sentence in the product's own voice does not need script tags to
+  // do damage. Codes map to fixed copy; anything unrecognised gets the generic
+  // sentence, and error_description is never read at all.
+  const ERROR_COPY: Record<string, string> = {
+    access_denied: 'Sign-in was cancelled before it finished.',
+    missing_code: 'The sign-in response was incomplete. Please try again.',
+    exchange_failed: 'Sign-in could not be completed. Please try again.',
+  };
+  const errCode = searchParams.get('error');
+  const err = errCode ? (ERROR_COPY[errCode] ?? 'Something went wrong during sign-in. Please try again.') : '';
 
   const [loading, setLoading] = useState(false);
   const config = AUTH_CONFIGURED ? AUTH_CONFIG : null;
@@ -31,10 +40,7 @@ export function LoginPage() {
         {err ? (
           <div className="mt-4 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
             <div className="font-semibold">Sign-in failed</div>
-            <div className="text-xs mt-1">
-              {err}
-              {errDesc ? `: ${errDesc}` : ''}
-            </div>
+            <div className="text-xs mt-1">{err}</div>
           </div>
         ) : null}
 

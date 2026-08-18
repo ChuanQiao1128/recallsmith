@@ -32,7 +32,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [tokens, setTokens] = useState<StoredTokens | null>(() => getTokens());
   const user = useMemo(() => getSessionUser(tokens), [tokens]);
 
-  // ✅ 如果没配置 Cognito，默认当作“本地模式已登录”，不阻塞页面
+  // With no Cognito configured, treat the session as signed in locally rather
+  // than blocking every page behind an auth stack that does not exist.
   const status: AuthStatus =
     AUTH_CONFIGURED ? (tokens ? 'authenticated' : 'unauthenticated') : 'authenticated';
 

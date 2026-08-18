@@ -1,4 +1,4 @@
-// src/components/deckList/PublishJobsPanel.tsx
+// src/features/deckList/components/PublishJobsPanel.tsx
 //
 // The Publish Jobs tab's table. Lifted from DeckListPage.tsx lines 775-823.
 //
@@ -24,8 +24,8 @@
 // to it. It is also exactly why the older src/components/decks/DeckTable.tsx
 // could not be reused — it calls useNavigate() internally.
 
-import type { PublishJob } from '../../api/authoring';
-import { safeDateTime } from '../../pages/deckListManifest';
+import type { PublishJob } from '../../../api/authoring';
+import { safeDateTime } from '../deckListManifest';
 
 export interface PublishJobsPanelProps {
   jobs: PublishJob[];

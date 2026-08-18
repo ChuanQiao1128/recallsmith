@@ -1,3 +1,11 @@
+// src/components/ui/Button.tsx
+//
+// The console's one shared button. Its only caller today is ConfirmDialog,
+// which renders Cancel and Confirm through it — so a `dark:` variant here lands
+// inside that dialog. See the note at the top of ConfirmDialog.tsx for why this
+// application is deliberately single-theme; tests/singleTheme.test.ts enforces
+// it across src/.
+
 import type { ReactNode, Ref } from 'react';
 import { forwardRef } from 'react';
 
@@ -39,12 +47,12 @@ const ButtonComponent = (
 
   const variantClasses =
     variant === 'primary'
-      ? 'bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-indigo-600 dark:bg-indigo-700 dark:hover:bg-indigo-600 dark:active:bg-indigo-800'
+      ? 'bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-indigo-600'
       : variant === 'secondary'
-        ? 'bg-slate-100 text-slate-900 hover:bg-slate-200 active:bg-slate-300 dark:bg-slate-800 dark:text-slate-50 dark:hover:bg-slate-700 dark:active:bg-slate-600'
+        ? 'bg-slate-100 text-slate-900 hover:bg-slate-200 active:bg-slate-300'
         : variant === 'ghost'
-          ? 'bg-transparent text-slate-600 hover:bg-slate-50 active:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900 dark:active:bg-slate-800'
-          : 'bg-red-50 text-red-700 hover:bg-red-100 active:bg-red-200 dark:bg-red-950 dark:text-red-200 dark:hover:bg-red-900 dark:active:bg-red-800';
+          ? 'bg-transparent text-slate-600 hover:bg-slate-50 active:bg-slate-100'
+          : 'bg-red-50 text-red-700 hover:bg-red-100 active:bg-red-200';
 
   const finalClasses = `${baseClasses} ${sizeClasses} ${variantClasses} ${className || ''}`;
 

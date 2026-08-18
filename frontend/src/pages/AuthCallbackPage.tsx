@@ -16,10 +16,12 @@ export function AuthCallbackPage() {
     const err = searchParams.get('error');
     const errDesc = searchParams.get('error_description');
     if (err) {
-      const qs = new URLSearchParams();
-      qs.set('error', err);
-      if (errDesc) qs.set('error_description', errDesc);
-      navigate(`/login?${qs.toString()}`, { replace: true });
+      // Only the code travels on. The description is free text from a URL and
+      // the login page maps codes to its own fixed copy anyway, so forwarding
+      // it would hand an attacker a string that ends up rendered. It still
+      // matters for debugging, so it goes to the console instead.
+      if (errDesc) console.error('Sign-in was refused:', err, errDesc);
+      navigate(`/login?error=${encodeURIComponent(err)}`, { replace: true });
       return;
     }
 
@@ -36,8 +38,11 @@ export function AuthCallbackPage() {
         auth.completeSignIn(tokenResp);
         navigate(consumePostLoginRedirect(), { replace: true });
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : 'Sign-in failed.';
-        navigate(`/login?error=${encodeURIComponent(msg)}`, { replace: true });
+        // The real reason goes to the console; the URL carries a stable code.
+        // An exception message here can quote the server or the network layer,
+        // and whatever rides the URL ends up on the login screen.
+        console.error('Token exchange failed:', e);
+        navigate('/login?error=exchange_failed', { replace: true });
       }
     })();
   }, [auth, navigate, searchParams]);

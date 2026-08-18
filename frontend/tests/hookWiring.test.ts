@@ -34,11 +34,36 @@ const ALLOWLIST: Record<string, string> = {};
  * What the barrel is expected to publish, by name.
  *
  * Written out rather than counted so that swapping one hook for another fails.
- * These three are the ones CardListPage renders through — it imports them from
- * the concrete files (`../hooks/useDecks`, `../hooks/useCards`), not from the
- * barrel, so this list is the barrel's inventory and not a bundle fact.
+ * Every page imports these from the concrete files (`../hooks/useDecks`,
+ * `../hooks/useCards`), not from the barrel, so this list is the barrel's
+ * inventory and not a bundle fact.
+ *
+ * It was three — the read pair plus useDeleteCard — and is now nine. The six
+ * added are the write path: every submit and every row action in the console
+ * now goes through a mutation that invalidates what it changed, instead of
+ * issuing a bare request and leaving the rest of the app to find out on its
+ * own. Sorted, because scanHookWiring sorts.
+ *
+ * Call sites, one each and all in src/ (the "orphans are empty" assertion above
+ * is what actually enforces this; the list is here so a swap is visible):
+ *   useCards / useDeck / useDeleteCard  src/pages/CardListPage.tsx
+ *   useCreateCard                       src/pages/NewCardPage.tsx
+ *   useUpdateCard                       src/pages/EditCardPage.tsx
+ *   useCreateDeck                       src/pages/NewDeckPage.tsx
+ *   useUpdateDeck                       src/pages/DeckEditPage.tsx
+ *   useDeleteDeck / usePublishDeck      src/pages/DeckListPage.tsx
  */
-const EXPECTED_BARREL_HOOKS = ['useCards', 'useDeck', 'useDeleteCard'];
+const EXPECTED_BARREL_HOOKS = [
+  'useCards',
+  'useCreateCard',
+  'useCreateDeck',
+  'useDeck',
+  'useDeleteCard',
+  'useDeleteDeck',
+  'usePublishDeck',
+  'useUpdateCard',
+  'useUpdateDeck',
+];
 
 /**
  * A missing directory returns nothing rather than throwing, so a wrong root
@@ -104,7 +129,7 @@ describe('the scan itself is still looking at something', () => {
     expect(scan.scannedFileCount).toBeGreaterThanOrEqual(20);
   });
 
-  it('found the barrel it is judging, and it publishes exactly the wired three', () => {
+  it('found the barrel it is judging, and it publishes exactly the wired nine', () => {
     // Hardcoded on purpose, and re-deriving either line from ALLOWLIST breaks
     // it: `toBeGreaterThanOrEqual(ALLOWLIST.size)` is a real floor of 22 while
     // the allowlist is full and silently becomes `>= 0` — unfailable, passing
@@ -171,7 +196,27 @@ describe('the scan itself is still looking at something', () => {
     // page — it takes four values that page owns, one of them a ref, and hands
     // back a setter that page needs. Publishing it would advertise a reuse that
     // would be wrong to attempt.
+    //
+    // useAppQueryClient is the fourth entry, and the prompt was answered rather
+    // than silenced. It is declared in src/api/queryClient.ts beside the client
+    // it hands out, and its call sites are the six mutation hooks in
+    // src/hooks/useCards.ts and src/hooks/useDecks.ts — hand-verified the same
+    // way, one call at the top of each of useCreateCard, useUpdateCard,
+    // useDeleteCard, useCreateDeck, useUpdateDeck, useDeleteDeck and
+    // usePublishDeck. Deliberately NOT added to src/hooks/index.ts, and the
+    // reason is mechanical rather than stylistic: this scan treats a call made
+    // from inside src/hooks/ as plumbing rather than as a consumer, so a hook
+    // that only the other hooks call would be published by the barrel, counted
+    // as called by nobody, and land in `orphans` — turning a correctly-wired
+    // hook into a permanent failure. It also does not belong there on merits:
+    // that barrel publishes the data-fetching hooks pages render through, and
+    // this one answers "which client", which no page asks.
     const outside = findHookShapedExportsOutsideHooksDir(sources).map(entry => entry.name);
-    expect(outside).toEqual(['useAuth', 'useConfirm', 'useDeckPagination']);
+    expect(outside).toEqual([
+      'useAppQueryClient',
+      'useAuth',
+      'useConfirm',
+      'useDeckPagination',
+    ]);
   });
 });

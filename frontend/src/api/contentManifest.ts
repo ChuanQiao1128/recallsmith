@@ -202,7 +202,7 @@ export function getContentManifestUrl(): string {
 
   if (isNonEmptyString(fromEnv)) return fromEnv.trim();
 
-  // 本地默认（你也可以改成 /content/manifest.json）
+  // Local default; /content/manifest.json also works.
   return '/manifest/index.json';
 }
 
@@ -219,7 +219,7 @@ export async function fetchContentManifest(opts?: {
     const resp = await fetch(finalUrl, {
       method: 'GET',
       signal: opts?.signal,
-      // ✅ 不要加 Cache-Control 这种会触发 preflight 的 header
+      // Do not add headers such as Cache-Control here: they trigger a preflight.
       headers: { accept: 'application/json' },
     });
 

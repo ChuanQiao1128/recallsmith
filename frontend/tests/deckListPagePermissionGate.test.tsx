@@ -85,7 +85,14 @@ function legacyDeck(slug: string, id: number): Deck {
  */
 function inventory(): string[] {
   const out: string[] = [];
-  document.querySelectorAll('button, summary, select, input').forEach(el => {
+  // `a[href]` joined the selector when ConsoleShell's navigation controls became
+  // <Link>s. Without it those two controls would have dropped out of the census
+  // silently, and "an editor does not get Admin Management" — one of the eight
+  // differences this file exists to record — would have become a statement
+  // about a control that no longer exists in any role. The tag is part of the
+  // recorded identity, so the change shows up as a:Admin Management rather than
+  // as a disappearance.
+  document.querySelectorAll('button, summary, select, input, a[href]').forEach(el => {
     const parts = [
       (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
       el.getAttribute('aria-label') ?? '',
@@ -100,13 +107,18 @@ function inventory(): string[] {
 // entries are the per-row card-count buttons (totalCards: 4); "Content
 // Intelligence" and "Sign out" come from ConsoleShell, "Admin Management" is
 // ConsoleShell's own super-admin control.
+//
+// Re-measured once, when ConsoleShell's two navigation controls here became
+// <Link>s: `button:Content Intelligence` and `button:Admin Management` are now
+// `a:...`. Nothing else in either list moved — `button:Decks` is the page's own
+// tab switcher, not a link, and it is unchanged.
 const SUPER_ADMIN_CONTROLS = [
+  'a:Admin Management',
+  'a:Content Intelligence',
   'button:4',
   'button:4',
-  'button:Admin Management',
   'button:Cards',
   'button:Cards',
-  'button:Content Intelligence',
   'button:Decks',
   'button:Delete',
   'button:Delete',
@@ -129,11 +141,11 @@ const SUPER_ADMIN_CONTROLS = [
 // (Decks / Publish Jobs), New Deck, two Publish, two Delete, and ConsoleShell's
 // Admin Management. Nothing else changes between the roles.
 const EDITOR_CONTROLS = [
+  'a:Content Intelligence',
   'button:4',
   'button:4',
   'button:Cards',
   'button:Cards',
-  'button:Content Intelligence',
   'button:Edit',
   'button:Edit',
   'button:Preview',

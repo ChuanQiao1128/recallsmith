@@ -305,6 +305,16 @@ describe('the preview table', () => {
 
     expect(screen.queryByText('Rarity Distribution')).not.toBeNull();
     expect(screen.queryByText('Total: 2 cards')).not.toBeNull();
+
+    // The per-tier lines, which are the mix this case is named after; the two
+    // assertions above only prove the panel mounted. They are also the only
+    // rendered assertion on the rarity labels themselves, which were '普通' /
+    // '稀有' / '史诗' sitting inside an otherwise English panel. The label is
+    // read straight from RARITY_MAP, so this fails if that map goes back to
+    // carrying two spellings of one label and the wrong one is rendered.
+    expect(screen.queryByText('Common: 0 (0%)')).not.toBeNull();
+    expect(screen.queryByText('Rare: 1 (50%)')).not.toBeNull();
+    expect(screen.queryByText('Epic: 1 (50%)')).not.toBeNull();
   });
 
   it('re-reads the deck when asked to refresh the reconciliation', async () => {

@@ -1,10 +1,10 @@
-// src/pages/deckListPagination.ts
+// src/features/deckList/deckListPagination.ts
 // Pure state helpers for DeckListPage's keyset pagination over
 // GET /api/v1/admin/decks. Deliberately React-free so the logic is
 // unit-testable; the frontend currently has no test runner configured
 // (gates are build + lint only), so if vitest is ever added, start here.
 
-import type { AdminDeckListItem, AdminDecksPage } from '../api/authoring';
+import type { AdminDeckListItem, AdminDecksPage } from '../../api/authoring';
 
 export type DeckStatus = 'published' | 'needs_publish' | 'unpublished';
 

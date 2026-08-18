@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useDeck } from '../hooks/useDecks';
 import { useCards, useDeleteCard } from '../hooks/useCards';
+import { ApiFailureError, NOT_FOUND } from '../api/errors';
+import { parseDeckId } from '../lib/parseDeckId';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { RarityBadge } from '../components/RarityBadge';
 import { RarityDistribution } from '../components/RarityDistribution';
@@ -23,8 +25,29 @@ const ERR_DELETE_CARD = 'card.delete';
  * The page's one failure surface. Both the "no deckId in the URL" case and a
  * load that came back wrong land here, exactly as they did when a single
  * `state.error` string drove this block.
+ *
+ * The two optional props are what the failure's `code` and `traceId` buy, and
+ * they are the reason those fields are carried instead of being flattened into
+ * a sentence:
+ *
+ *   onRetry  is offered for a failure that MIGHT come out differently, and
+ *            withheld for one that cannot. A deck that is not there is not
+ *            going to be there on the second press, and a button that re-asks
+ *            an answered question teaches people to press it at every failure.
+ *   traceId  is the only string on this screen that a server log can be
+ *            searched for. It is printed rather than swallowed because the
+ *            alternative -- asking someone to reproduce the failure while
+ *            somebody watches the logs -- is what its absence costs.
  */
-function LoadFailureScreen({ message }: { message: string }) {
+function LoadFailureScreen({
+  message,
+  traceId,
+  onRetry,
+}: {
+  message: string;
+  traceId?: string;
+  onRetry?: () => void;
+}) {
   return (
     <div className="min-h-screen bg-slate-100">
       <header className="bg-white border-b border-slate-200">
@@ -40,6 +63,20 @@ function LoadFailureScreen({ message }: { message: string }) {
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
           <div className="font-semibold mb-1">Failed to load cards</div>
           <div className="text-sm">{message}</div>
+
+          {traceId ? (
+            <div className="text-xs mt-2 font-mono text-red-700">Trace {traceId}</div>
+          ) : null}
+
+          {onRetry ? (
+            <button
+              type="button"
+              className="mt-3 text-sm px-3 py-1.5 rounded-md border border-red-200 text-red-800 hover:bg-red-100"
+              onClick={onRetry}
+            >
+              Try again
+            </button>
+          ) : null}
         </div>
       </main>
     </div>
@@ -50,9 +87,13 @@ export function CardListPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const deckIdRaw = searchParams.get('deckId') ?? '';
-  const deckId = Number(deckIdRaw);
-  const invalidDeckId = !deckId || Number.isNaN(deckId);
+  // The rule this page used to spell out inline now lives in one place, because
+  // NewCardPage and EditCardPage each had their own and the three disagreed.
+  // The semantics are unchanged HERE -- it is the other two that move. NaN
+  // stands in for "no id" when handing the value to the hooks, which keep the
+  // same predicate for callers that have not parsed anything.
+  const deckId = parseDeckId(searchParams.get('deckId'));
+  const numericDeckId = deckId ?? Number.NaN;
 
   const user = useMemo(() => readSessionUser(), []);
   const superAdmin = useMemo(() => isSuperAdmin(user), [user]);
@@ -63,8 +104,8 @@ export function CardListPage() {
   // response for a deck the user already left cannot repaint the current one.
   // tests/cardListPageRace.test.tsx is the same pair of assertions, written and
   // made green against the hand-guarded version before this rewrite.
-  const deckQuery = useDeck(deckId);
-  const cardsQuery = useCards(deckId);
+  const deckQuery = useDeck(numericDeckId);
+  const cardsQuery = useCards(numericDeckId);
   const deleteCardMutation = useDeleteCard();
 
   const [errors, setErrors] = useState<ErrorNotice[]>(emptyErrorFeed);
@@ -95,7 +136,10 @@ export function CardListPage() {
       // refusal, so the two failures stay distinguishable here: a server that
       // said no reaches the line below, a request that never came back reaches
       // the catch. They recommend opposite things.
-      const { result } = await deleteCardMutation.mutateAsync({ cardId, deckId });
+      const { result } = await deleteCardMutation.mutateAsync({
+        cardId,
+        deckId: numericDeckId,
+      });
       if (!result.success) {
         setErrors(prev =>
           reportBusinessFailure(
@@ -120,7 +164,7 @@ export function CardListPage() {
   // a disabled query reports status 'pending' forever — idle only shows up in
   // fetchStatus — so reading isPending first would leave a URL with no deckId
   // on "Loading cards..." for good, where today it says so immediately.
-  if (invalidDeckId) {
+  if (deckId === null) {
     return <LoadFailureScreen message="Missing or invalid deckId." />;
   }
 
@@ -132,26 +176,39 @@ export function CardListPage() {
     );
   }
 
-  const deck = deckQuery.data ?? null;
-
   // Same precedence as before: whatever went wrong with the deck is what the
-  // user hears about, and a deck that came back empty is "not found" rather
-  // than an error, because a successful response carrying no deck is exactly
-  // what the old `!deckResult.data` branch treated as not found.
-  const loadError =
-    deckQuery.error instanceof Error
-      ? deckQuery.error.message
-      : deck === null
-        ? 'Deck not found.'
-        : cardsQuery.error instanceof Error
-          ? cardsQuery.error.message
-          : null;
+  // user hears about, and only if the deck is fine does a cards failure get to
+  // speak.
+  //
+  // What is gone is the middle rung that precedence used to have. A deck that
+  // came back empty was reported by testing `deck === null` after a query that
+  // had not errored -- reasoning backwards from a missing value to a verdict,
+  // in a page that cannot see whether the value is missing because the deck
+  // does not exist or because something else went quiet. useDeck now throws
+  // that case as an ApiFailureError carrying NOT_FOUND, so there is one failure
+  // channel and the branch reads the code instead of inferring it.
+  if (deckQuery.isError || cardsQuery.isError) {
+    const failure = deckQuery.error ?? cardsQuery.error;
+    const known = failure instanceof ApiFailureError ? failure : null;
 
-  if (loadError !== null || deck === null) {
-    return <LoadFailureScreen message={loadError ?? 'Unknown error'} />;
+    return (
+      <LoadFailureScreen
+        message={failure instanceof Error ? failure.message : 'Unknown error'}
+        traceId={known?.traceId ? known.traceId : undefined}
+        onRetry={
+          known?.code === NOT_FOUND
+            ? undefined
+            : () => {
+                void deckQuery.refetch();
+                void cardsQuery.refetch();
+              }
+        }
+      />
+    );
   }
 
-  const cards = cardsQuery.data ?? [];
+  const deck = deckQuery.data;
+  const cards = cardsQuery.data;
 
   return (
     <div className="min-h-screen bg-slate-100">

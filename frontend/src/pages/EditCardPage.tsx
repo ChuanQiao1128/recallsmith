@@ -1,10 +1,36 @@
 // src/pages/EditCardPage.tsx
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { fetchDeckById, fetchCardsByDeck, updateCard } from '../api/authoring';
+import { fetchDeckById, fetchCardsByDeck } from '../api/authoring';
+import { VERSION_CONFLICT } from '../api/errors';
+import { useUpdateCard } from '../hooks/useCards';
+import { parseDeckId } from '../lib/parseDeckId';
 import type { Deck } from '../types/deck';
 import type { Card } from '../types/card';
 import { CardForm, type CardFormValues } from '../components/CardForm';
+
+/**
+ * The label on the recovery button, and the sentence that explains it.
+ *
+ * Kept beside each other because they are one message: the button is the verb
+ * and the sentence is what pressing it will do. Splitting them across the page
+ * is how the two drift into describing different actions.
+ */
+const RETRY_WITH_LATEST = 'Retry with latest version';
+
+const CONFLICT_HINT =
+  `Your edits are still here. Press "${RETRY_WITH_LATEST}" to apply them to the ` +
+  'copy that is on the server now.';
+
+/**
+ * What is said when the conflict cannot be recovered from, because the reread
+ * that would have supplied the current version did not come back. No button is
+ * offered in this state: the page has nothing newer to send than what it just
+ * sent, so a retry would fail identically.
+ */
+const CONFLICT_UNRECOVERABLE =
+  'Reload the page before trying again — this console could not read the ' +
+  'current version of the card.';
 
 interface PageState {
   loading: boolean;
@@ -17,17 +43,21 @@ export function EditCardPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const deckIdRaw = searchParams.get('deckId') ?? '';
   const cardIdRaw = searchParams.get('cardId') ?? '';
 
-  const numericDeckId = Number(deckIdRaw);
+  // deckId goes through the shared rule; see the note in NewCardPage for what
+  // adopting it changes (a negative deck id now reaches the server instead of
+  // being refused here).
+  //
+  // cardId keeps its own `<= 0` check, deliberately and narrowly: the shared
+  // rule is about deck ids, this page is the only holder of the card-id rule,
+  // and widening it here would be a second behaviour change smuggled in beside
+  // the first with nothing asking for it.
+  const deckId = parseDeckId(searchParams.get('deckId'));
   const numericCardId = Number(cardIdRaw);
 
-  const invalidId =
-    Number.isNaN(numericDeckId) ||
-    numericDeckId <= 0 ||
-    Number.isNaN(numericCardId) ||
-    numericCardId <= 0;
+  const invalidId = deckId === null || Number.isNaN(numericCardId) || numericCardId <= 0;
+  const numericDeckId = deckId ?? Number.NaN;
 
   const [state, setState] = useState<PageState>({
     loading: !invalidId,
@@ -35,6 +65,22 @@ export function EditCardPage() {
     card: null,
     error: invalidId ? 'Missing or invalid deckId/cardId.' : null,
   });
+
+  // The write goes through react-query, so a saved card invalidates the list it
+  // belongs to instead of leaving every other reader to guess.
+  const updateCardMutation = useUpdateCard();
+
+  /**
+   * Whether the last save lost a version race AND a newer version was read back.
+   *
+   * Both halves matter. Without the reread this flag would offer a retry that
+   * re-sends the version the server has already rejected once, which is what
+   * this page did before: the banner appeared, the user pressed Save Changes,
+   * and the identical request failed identically, forever. A conflict is the
+   * one failure on this page that CANNOT be cleared by trying the same thing
+   * again, and it was the only one whose UI implied it could.
+   */
+  const [conflictRecoverable, setConflictRecoverable] = useState(false);
 
   useEffect(() => {
     if (invalidId) return;
@@ -73,7 +119,7 @@ export function EditCardPage() {
         }
 
         const cards = cardsResult.data as Card[];
-        // ⚠️ 后端 id 可能是字符串，这里统一转成 number 再比较
+        // The backend id may arrive as a string, so compare as numbers.
         const target = cards.find(c => Number(c.id) === numericCardId);
 
         if (!target) {
@@ -183,6 +229,23 @@ export function EditCardPage() {
       (card as unknown as { revision?: number | null }).revision ?? 1,
   };
 
+  /**
+   * The card as the server holds it right now, or null if it could not be read.
+   *
+   * Same request the initial load makes -- there is no single-card endpoint --
+   * so this is one extra list read on the one path that needs it, rather than a
+   * new API surface for a recovery that happens rarely.
+   */
+  async function readCurrentCard(): Promise<Card | null> {
+    try {
+      const cardsResult = await fetchCardsByDeck(numericDeckId);
+      if (!cardsResult.success || !cardsResult.data) return null;
+      return cardsResult.data.find(c => Number(c.id) === numericCardId) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async function handleSubmit(
     values: CardFormValues,
   ): Promise<{ ok: boolean; error?: string }> {
@@ -194,7 +257,7 @@ export function EditCardPage() {
       typeof values.orderInDeck === 'number'
         ? values.orderInDeck
         : Number(values.orderInDeck) || 1;
-    const result = await updateCard({
+    const { result } = await updateCardMutation.mutateAsync({
       id: Number(card.id),
       deckId: Number(card.deckId),
       question: values.question.trim(),
@@ -221,12 +284,33 @@ export function EditCardPage() {
     });
 
     if (!result.success) {
-      return {
-        ok: false,
-        error:
-          result.error?.message ??
-          'Update card failed (possible version conflict).',
-      };
+      const message =
+        result.error?.message ?? 'Update card failed (possible version conflict).';
+
+      if (result.error?.code === VERSION_CONFLICT) {
+        // Read the row back, so the next attempt carries the version the server
+        // is actually holding. The card's CONTENT is deliberately not copied
+        // into the form: the user's edits stay exactly as they typed them, and
+        // pressing the recovery button applies them on top of whatever is there
+        // now. That is last-writer-wins, stated plainly, and it is the same
+        // resolution the markdown importer offers -- the alternative, showing
+        // both versions and asking which to keep, is a feature rather than a
+        // recovery path, and pretending otherwise by silently merging would be
+        // the worst of the three.
+        const latest = await readCurrentCard();
+
+        if (latest === null) {
+          setConflictRecoverable(false);
+          return { ok: false, error: `${message} ${CONFLICT_UNRECOVERABLE}` };
+        }
+
+        setState(prev => ({ ...prev, card: latest }));
+        setConflictRecoverable(true);
+        return { ok: false, error: `${message} ${CONFLICT_HINT}` };
+      }
+
+      setConflictRecoverable(false);
+      return { ok: false, error: message };
     }
 
     navigate(`/decks/cards?deckId=${deck.id}`, { replace: true });
@@ -259,6 +343,7 @@ export function EditCardPage() {
           initialValues={initialValues}
           onSubmit={handleSubmit}
           onCancel={() => navigate(-1)}
+          recoveryLabel={conflictRecoverable ? RETRY_WITH_LATEST : null}
         />
       </main>
     </div>

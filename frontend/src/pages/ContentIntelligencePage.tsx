@@ -203,8 +203,8 @@ export function ContentIntelligencePage() {
       userLabel={user ? `${user.email ?? user.username ?? 'Signed in'}${superAdmin ? ' · super_admin' : ' · editor'}` : '—'}
       superAdmin={superAdmin}
       onSignOut={handleSignOut}
-      onGoDecks={() => navigate('/')}
-      onGoAdminUsers={superAdmin ? () => navigate('/admin/users') : undefined}
+      decksHref="/"
+      adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
       <div className="space-y-6">
         <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-end sm:justify-between">

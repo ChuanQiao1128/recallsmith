@@ -1,6 +1,13 @@
 import { getTokens } from './tokenStore';
 
 export type SessionUser = {
+  /**
+   * The Cognito subject: the one claim that identifies the account rather than
+   * describing it. Read for cache scoping in src/lib/sessionCache.ts, where an
+   * email would have been the wrong choice -- it is mutable and it is not
+   * guaranteed to be present, so two accounts can share the absence of one.
+   */
+  sub?: string;
   email?: string;
   username?: string;
   groups: string[];
@@ -38,7 +45,7 @@ export function readSessionUser(): SessionUser | null {
   const idPayload = decodeJwtPayload(tokens.idToken);
   const accessPayload = decodeJwtPayload(tokens.accessToken);
 
-  // ✅ groups：先读 idToken，没有就 fallback 到 accessToken
+  // groups: read the idToken first, fall back to the accessToken.
   const groupsFromId = extractGroups(idPayload);
   const groups = groupsFromId.length > 0 ? groupsFromId : extractGroups(accessPayload);
 
@@ -57,7 +64,14 @@ export function readSessionUser(): SessionUser | null {
 
   const username = typeof usernameClaim === 'string' ? usernameClaim : undefined;
 
-  return { email, username, groups };
+  // idToken first for the same reason as the rest: it is the token that carries
+  // identity claims. A token with no `sub` at all leaves this undefined, and
+  // every caller has to have an answer for that -- sessionCache's is to hold
+  // nothing rather than to invent a shared bucket.
+  const subClaim = idPayload?.sub ?? accessPayload?.sub;
+  const sub = typeof subClaim === 'string' ? subClaim : undefined;
+
+  return { sub, email, username, groups };
 }
 
 export function isSuperAdmin(user: SessionUser | null | undefined): boolean {

@@ -1027,4 +1027,7 @@ counts 变成 O(1) 读、筛选变成 O(结果集),progress 变更只增量更�
        （"DrawCeremonyScreen.tsx 在 mobile/src/screens/ 而非 …"），它本来就不该存在。
      - mobile/src/perf/marks.ts              :111 是一条"新增 …"的提案，从未建成。
      - frontend/src/components/decks/        已在 7ae7b29 删除；:947 那段是失败样本的历史记录。
+     - frontend/src/components/deckList/     :951 那条 2026-08-18 补注写的是当时的位置；
+       2026-08-18 阶段 D 又把这 5 个组件整体搬进 frontend/src/features/deckList/components/。
+       补注本身是历史记录，原样保留。
 -->
