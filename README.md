@@ -12,7 +12,7 @@ This is a personal project, written and maintained by one person.
 
 | Directory | Stack | Responsibility | Files |
 | --- | --- | --- | --- |
-| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 176 |
+| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 177 |
 | `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in | 319 |
 | `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` | 126 |
 | `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver | 3 |
@@ -67,6 +67,36 @@ cd frontend && npm ci && npx vitest run
 cd mobile   && npm ci && npx vitest run
 cd src_C    && dotnet test Tests/RecallSmith.Lambda.IntegrationTests
 ```
+
+## Deployment
+
+The console is deployed at https://d12pfy1rhi3ekm.cloudfront.net — a private S3
+bucket behind CloudFront, reachable only through the distribution (Origin
+Access Control; the bucket blocks all public access and its policy names one
+distribution ARN). Three things about the setup carry the reasoning:
+
+- **SPA fallback.** S3 answers 403 for keys that do not exist, so CloudFront
+  maps 403/404 to `/index.html` with a 200 — that is what makes
+  `/decks/cards?deckId=7` a working deep link instead of an error page.
+- **Cache split.** Hashed assets ship with `max-age=31536000, immutable`;
+  `index.html` ships with `no-cache`. A new build changes the hashes, the
+  fresh `index.html` points at them, and the old chunks stop being referenced
+  — which is exactly the failure window `ChunkErrorBoundary` exists for.
+- **Build-time config.** `frontend/.env.production` is committed and carries
+  the deployed callback URLs; Vite's mode-specific files outrank `.env.local`,
+  so a developer's local overrides cannot leak into a deploy artifact.
+
+Deploying is two commands from `frontend/`:
+
+```bash
+npm run build
+aws s3 sync dist s3://recallsmith-console-622994489535 --delete \
+  --exclude index.html --cache-control "public,max-age=31536000,immutable"
+```
+
+then upload `index.html` with `no-cache` and invalidate the distribution.
+CI does not deploy: shipping on green is a decision, not a default, and this
+project has exactly one person to make it.
 
 ## 3. How one request flows
 
