@@ -9,6 +9,7 @@ import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress } from '../review/storage';
 import { planChallengeRoute } from '../features/gacha/planner/sessionPlanner';
+import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import RoutePreview from '../features/gacha/components/RoutePreview';
 import type { ChallengeRoute } from '../features/gacha/contracts';
 import { colors } from '../theme/colors';
@@ -61,7 +62,11 @@ export function ChallengeScreen({ navigation, route }: Props) {
           }
           await setActiveDeckSlug(slug);
           const progress = await loadDeckProgress(deck);
-          const planned = planChallengeRoute({ deck, progress });
+          // The route this screen advertises has to be the route SessionCard
+          // can actually deal: both sides plan from the same collection, or
+          // the preview promises nodes the session then refuses to fill.
+          const ownedSet = await resolveEffectiveOwned(slug, progress);
+          const planned = planChallengeRoute({ deck, progress, ownedSet });
           if (cancelled) return;
           setChallengeRoute(planned);
           setLoading(false);
