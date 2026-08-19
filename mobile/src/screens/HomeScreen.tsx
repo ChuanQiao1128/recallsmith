@@ -29,6 +29,7 @@ import {
 } from '../features/gacha/home/deckActionResolver';
 import HomeDeckRow from '../features/gacha/home/HomeDeckRow';
 import { fetchServerPremium } from '../features/gacha/home/homeRemote';
+import { applyEconomyFloorIfStarved } from '../features/gacha/rewards/economyFloor';
 import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { loadStreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import { formatDateKey } from '../review/model';
@@ -215,7 +216,7 @@ export function HomeScreen({ navigation, route }: Props) {
   const refreshHome = useCallback(async () => {
     setHomeState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const [summary, wallet, streak] = await Promise.all([
+      const [summary, walletBeforeFloor, streak] = await Promise.all([
         loadHomeDeckSummaries({ premium: isPremiumUser }),
         loadRewardWalletState(),
         loadStreakSnapshot(),
@@ -228,6 +229,25 @@ export function HomeScreen({ navigation, route }: Props) {
       }
       const session = useSessionStore.getState();
       const now = new Date(summary.asOfISO);
+      // The economy floor lives here, and only here, because this is the one
+      // point in the app where its three inputs are in hand at the same
+      // instant: the deck summaries brought owned-new and due, the wallet read
+      // brought the balance. Pushing it down into loadHomeDeckSummaries would
+      // put the grant on the far side of a Promise.all from the wallet read
+      // that renders it -- the write would land after the read that the view
+      // model uses, so the load that granted a pull would still draw "Clear
+      // today's route to unlock pulls" and the user would be told they are
+      // stuck on the very screen that just unstuck them. Sequencing it after
+      // the join costs one storage round-trip on starved loads only (the
+      // predicate short-circuits before touching storage otherwise) and buys
+      // the guarantee that the wallet Home renders is the wallet Home wrote.
+      const { wallet } = await applyEconomyFloorIfStarved({
+        ownedNewCount: summary.totalNewAllDecks,
+        dueCount: summary.totalDueAllDecks,
+        wallet: walletBeforeFloor,
+        now,
+      });
+      if (!isMountedRef.current) return;
       const todayKey = formatDateKey(now);
       const sessionStartDay =
         typeof session.startedAt === 'number' && session.startedAt > 0
