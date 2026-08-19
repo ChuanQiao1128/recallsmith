@@ -3,7 +3,7 @@
     "jsEngine": "hermes",
     "name": "DeveloperCards",
     "slug": "recallsmith",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -19,7 +19,7 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
-      "buildNumber": "14"
+      "buildNumber": "15"
     },
     "android": {
       "adaptiveIcon": {
