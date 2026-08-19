@@ -18,5 +18,17 @@
   <ItemGroup>
     <Compile Remove="**/* ?.cs" />
     <Compile Remove="**/* ??.cs" />
+    <!-- Same disease, second organ. Compile was excluded first, and the shadow
+         copies then shipped anyway: the Vpc csproj publishes Db/Migrations/*.sql
+         as None items, "009_x 2.sql" rode into the Lambda zip, and the migration
+         runner threw "Duplicate migration version: 9" in production while every
+         local test stayed green. Content and EmbeddedResource get the same
+         treatment before they get their own incident. -->
+    <None Remove="**/* ?.*" />
+    <None Remove="**/* ??.*" />
+    <Content Remove="**/* ?.*" />
+    <Content Remove="**/* ??.*" />
+    <EmbeddedResource Remove="**/* ?.*" />
+    <EmbeddedResource Remove="**/* ??.*" />
   </ItemGroup>
 </Project>
