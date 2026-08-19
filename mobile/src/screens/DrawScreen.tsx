@@ -16,9 +16,10 @@ import { buildPityProgressLabelV9, normalizePityState } from '../features/gacha/
 import {
   consumePullsFromStoredWallet,
   loadRewardWalletState,
-  saveRewardWalletState,
+  refundPullsToStoredWallet,
   type RewardWalletState,
 } from '../features/gacha/rewards/rewardWallet';
+import { scheduleProgressSync } from '../sync/progressSync';
 import { a11y } from '../theme/a11y';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
@@ -50,6 +51,7 @@ type DrawReady = {
   canPullMulti: boolean;
   deckOptions: DeckOption[];
   pityLabel: string;
+  collectionComplete: boolean;
 };
 
 const SWIPE_ARM_DISTANCE = 72;
@@ -67,9 +69,11 @@ function normalizeTitle(raw: any, fallback: string): string {
 }
 
 function buildDeckOptions(manifest: any[]): DeckOption[] {
+  const live = manifest.filter((item: any) => String(item?.availability ?? '').toLowerCase() === 'live');
+  const source = live.length > 0 ? live : manifest;
   const out: DeckOption[] = [];
   const seen = new Set<string>();
-  for (const item of manifest) {
+  for (const item of source) {
     const slug = String(item?.slug ?? '').trim();
     if (!slug || seen.has(slug)) continue;
     seen.add(slug);
@@ -78,11 +82,28 @@ function buildDeckOptions(manifest: any[]): DeckOption[] {
   return out;
 }
 
+// The open pack's own title comes from the installed deck file, which is
+// more current than the manifest row; and a deck can be installed that the
+// manifest no longer lists, in which case it still has to appear in the rail.
+function mergeSelectedDeck(options: DeckOption[], slug: string, deckTitle: string): DeckOption[] {
+  return options.some((item) => item.slug === slug)
+    ? options.map((item) => (item.slug === slug ? { ...item, title: deckTitle } : item))
+    : [{ slug, title: deckTitle }, ...options];
+}
+
 // The guarantee's whole product value is that a player can see it coming.
 // buildPityProgressLabelV9 shipped with the counter persisted, capped and
 // tested, and zero callers, so the cost was paid and none of the benefit
 // collected. This is the caller.
-async function loadPityLabel(slug: string, deckCards: any[]): Promise<string> {
+//
+// Reads the owned set once and answers both questions that depend on it.
+// They used to be one read for the pity label and no read at all for "is
+// there anything left to draw", which is why the screen went on offering a
+// pull it could not fill.
+async function loadDrawStatus(
+  slug: string,
+  deckCards: any[],
+): Promise<{ pityLabel: string; collectionComplete: boolean }> {
   try {
     const state = await loadDrawState(slug);
     const owned = new Set(state.owned);
@@ -92,11 +113,19 @@ async function loadPityLabel(slug: string, deckCards: any[]): Promise<string> {
     const missingLegCount = deckCards.filter(
       (card) => rarityOfCard(card) === 'LEG' && !owned.has(card?.StableUid),
     ).length;
-    return buildPityProgressLabelV9(normalizePityState(state.pity), missingLegCount);
+    // An empty deck is not a completed collection. Treating it as one would
+    // put the "you own everything" copy in front of a user who owns nothing.
+    const collectionComplete =
+      deckCards.length > 0 && deckCards.every((card) => owned.has(card?.StableUid));
+    return {
+      pityLabel: buildPityProgressLabelV9(normalizePityState(state.pity), missingLegCount),
+      collectionComplete,
+    };
   } catch {
     // A storage failure must not cost the user the pack. A missing progress
-    // line is a smaller loss than an unopenable draw screen.
-    return '';
+    // line is a smaller loss than an unopenable draw screen, and claiming
+    // "complete" on a failed read would lock the pack for no reason.
+    return { pityLabel: '', collectionComplete: false };
   }
 }
 
@@ -345,10 +374,14 @@ export function DrawScreen({ navigation, route }: Props) {
         setLoadState('loading');
         setError(null);
         try {
-          const manifest = await listManifestDecks({ preferRemote: true });
-          const live = manifest.filter((item: any) => String(item?.availability ?? '').toLowerCase() === 'live');
-          const manifestForOptions = live.length > 0 ? live : manifest;
-          const deckOptions = buildDeckOptions(manifestForOptions);
+          // Cache first. `{ preferRemote: true }` put a manifest fetch in
+          // front of the spinner, so opening the Draw tab on a slow network
+          // showed "Preparing draw..." for as long as the network took --
+          // to decide which packs to list, a question this device already
+          // had a good enough answer to. The revalidation below still runs;
+          // it just no longer holds the tab hostage.
+          const manifest = await listManifestDecks();
+          const deckOptions = buildDeckOptions(manifest);
 
           const firstSlug = deckOptions[0]?.slug ?? null;
           let slug = selectedSlug ?? route.params?.slug ?? (await loadActiveDeckSlug()) ?? firstSlug;
@@ -379,11 +412,32 @@ export function DrawScreen({ navigation, route }: Props) {
 
           const wallet = await loadRewardWalletState();
           const pulls = spendablePulls(wallet);
-          const pityLabel = await loadPityLabel(slug, (deck as any)?.Cards ?? []);
+          const status = await loadDrawStatus(slug, (deck as any)?.Cards ?? []);
           const deckTitle = normalizeTitle(deck, slug);
-          const mergedOptions = deckOptions.some((item) => item.slug === slug)
-            ? deckOptions.map((item) => (item.slug === slug ? { ...item, title: deckTitle } : item))
-            : [{ slug, title: deckTitle }, ...deckOptions];
+          const mergedOptions = mergeSelectedDeck(deckOptions, slug, deckTitle);
+
+          // Background revalidation. Nothing awaits it and nothing fails
+          // because of it: at worst the deck rail keeps showing the packs
+          // this device already knew about. It only ever replaces the
+          // neighbour list, never the open pack or the wallet, so a slow
+          // response cannot pull the screen out from under a pull in
+          // progress.
+          const revalidatedSlug = slug;
+          void (async () => {
+            try {
+              const fresh = await listManifestDecks({ preferRemote: true });
+              if (cancelled) return;
+              const freshOptions = buildDeckOptions(fresh);
+              if (freshOptions.length === 0) return;
+              setReady((prev) =>
+                prev && prev.slug === revalidatedSlug
+                  ? { ...prev, deckOptions: mergeSelectedDeck(freshOptions, prev.slug, prev.deckTitle) }
+                  : prev,
+              );
+            } catch {
+              // Offline: the cached rail on screen is the right thing to keep.
+            }
+          })();
 
           if (!cancelled) {
             setReady({
@@ -393,7 +447,8 @@ export function DrawScreen({ navigation, route }: Props) {
               canPullSingle: pulls >= 1,
               canPullMulti: pulls >= 10,
               deckOptions: mergedOptions,
-              pityLabel,
+              pityLabel: status.pityLabel,
+              collectionComplete: status.collectionComplete,
             });
             setSelectedSlug(slug);
             setSwipePrimed(false);
@@ -430,23 +485,54 @@ export function DrawScreen({ navigation, route }: Props) {
   const open = useCallback(
     async (drawCount: 1 | 10) => {
       if (!ready || opening || !swipePrimed) return;
+      // Belt to the disabled button's braces. The screen's owned set is a
+      // snapshot from focus time; another device can empty the pool between
+      // that read and this press, and the press must not cost anything then
+      // either.
+      if (ready.collectionComplete) return;
       if ((drawCount === 1 && !ready.canPullSingle) || (drawCount === 10 && !ready.canPullMulti)) return;
 
       clearSwipeResetTimer();
       setSwipePrimed(false);
       setSwipeDelta(0);
       setOpening(true);
-      let walletBefore: RewardWalletState | null = null;
+      // How much was actually taken, not how much we asked for. A refund
+      // driven by the request would invent pulls when the charge itself was
+      // the thing that failed.
+      let chargedPulls = 0;
       try {
-        walletBefore = await loadRewardWalletState();
-        const spent = await consumePullsFromStoredWallet(drawCount);
+        // Draw first, charge second. AsyncStorage gives us no transaction, so
+        // the only thing we choose is which side a kill lands on: charging
+        // first loses the user a pull (charged, no cards), charging second
+        // can hand out a free pull (cards, no charge). Same call the reward
+        // wallet's dedupe ordering makes -- fail toward the user, because a
+        // free pull is recoverable and "where did my pull go" is not.
         const result = await commitDraw(ready.slug, drawCount);
-        if (!result) {
-          await saveRewardWalletState(walletBefore).catch(() => {});
+        // An exhausted pool is not an error return: selectDrawCards answers
+        // `{ cards: [], poolExhausted: true }`, which is non-null, so the old
+        // `!result` guard let it through -- wallet debited, ceremony played
+        // over nothing. Zero cards and no result are the same event as far as
+        // the wallet is concerned: nothing was bought.
+        if (!result || result.cards.length === 0) {
           setLoadState('error');
-          setError('Unable to open this pack right now.');
+          setError(
+            result
+              ? 'Every card in this pack is already yours.'
+              : 'Unable to open this pack right now.',
+          );
           return;
         }
+
+        const spent = await consumePullsFromStoredWallet(drawCount);
+        chargedPulls = spent.spent;
+
+        // The gacha half of the sync had no trigger of its own: draw state
+        // only ever rode along in runSyncNow's finally, so a draw made and
+        // an app closed meant a collection that existed on exactly one
+        // device. 'draw_committed' is on the pull whitelist for the same
+        // reason -- right after a draw is when a second device is most
+        // worth reconciling.
+        scheduleProgressSync({ delayMs: 0, reason: 'draw_committed' });
 
         const latestPulls = spendablePulls(spent.wallet);
         setReady((prev) =>
@@ -470,8 +556,8 @@ export function DrawScreen({ navigation, route }: Props) {
           totalCards: result.totalCards,
         });
       } catch {
-        if (walletBefore) {
-          await saveRewardWalletState(walletBefore).catch(() => {});
+        if (chargedPulls > 0) {
+          await refundPullsToStoredWallet(chargedPulls).catch(() => {});
         }
         setLoadState('error');
         setError('Unable to open this pack right now.');
@@ -672,7 +758,42 @@ export function DrawScreen({ navigation, route }: Props) {
                   and show a prominent pokeBlue "Earn pulls by studying"
                   CTA that navigates straight to SessionCard. Restores
                   actionability instead of the dead-end grey buttons. */}
-          {!ready.canPullSingle ? (
+          {ready.collectionComplete ? (
+            /* Nothing left to draw. The pack used to stay openable here and
+               charge a pull for an empty reveal; the button now says why it
+               is dead, and the escape hatch points at the thing the user
+               actually earned. */
+            <View style={styles.footerActions}>
+              <Pressable
+                testID="screen-draw-primary-cta"
+                accessibilityRole="button"
+                accessibilityLabel={`Collection complete for ${ready.deckTitle}`}
+                disabled={true}
+                style={[styles.primaryCta, styles.ctaDisabled]}
+                onPress={() => {
+                  void open(10);
+                }}
+              >
+                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                  Collection complete
+                </Text>
+              </Pressable>
+              <Pressable
+                testID="screen-draw-secondary-cta"
+                accessibilityRole="button"
+                accessibilityLabel={`See your ${ready.deckTitle} collection`}
+                disabled={false}
+                style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]}
+                onPress={() => {
+                  navigation.navigate('Library', { focusSlug: ready.slug });
+                }}
+              >
+                <Text style={styles.secondaryCtaText} numberOfLines={1}>
+                  See your collection
+                </Text>
+              </Pressable>
+            </View>
+          ) : !ready.canPullSingle ? (
             <View style={styles.footerActions}>
               <Pressable
                 testID="draw-earn-pulls-cta"

@@ -1,9 +1,8 @@
 import 'react-native-gesture-handler';
 import 'react-native-url-polyfill/auto';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -75,7 +74,6 @@ import CollectionMilestoneScreen from './src/screens/CollectionMilestoneScreen';
 import MasteryMilestoneScreen from './src/screens/MasteryMilestoneScreen';
 import ChallengeScreen from './src/screens/ChallengeScreen';
 import DeckScreen from './src/screens/DeckScreen';
-import ReviewScreen from './src/screens/ReviewScreen';
 import SessionCardScreen from './src/screens/SessionCardScreen';
 import DrawScreen from './src/screens/DrawScreen';
 import SessionSummaryScreen from './src/screens/SessionSummaryScreen';
@@ -88,7 +86,7 @@ import ConfirmSignUpScreen from './src/screens/ConfirmSignUpScreen';
 import { configureAmplifyOnce } from './src/auth/amplify';
 import { useAuthStore } from './src/auth/authStore';
 import { scheduleProgressSync } from './src/sync/progressSync';
-import { fetchRemoteConfig, getCurrentAppVersion, resolveIosUpdate, type RemoteConfig } from './src/config/remoteConfig';
+import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
 
 configureAmplifyOnce();
@@ -107,50 +105,43 @@ const REMOTE_CONFIG_URL = 'https://raw.githubusercontent.com/ChuanQiao1128/recal
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
-type GateState =
-  | { status: 'checking' }
-  | { status: 'ready' }
-  | {
-      status: 'forceUpdate';
-      message: string;
-      updateUrl: string | null;
-      currentVersion: string;
-      minSupportedVersion: string | null;
-    };
-
-function ForceUpdateScreen(props: { message: string; updateUrl: string | null; currentVersion: string; minSupportedVersion: string | null }) {
+/**
+ * Opaque, absolutely-positioned, and mounted last so it sits above the whole
+ * shell. It replaced a `return <ForceUpdateScreen/>` early-exit: that shape
+ * forced the app to know whether it was gated *before* it could render
+ * anything at all, which is where the cold-start block came from. An overlay
+ * blocks just as completely (it covers the screen and swallows the touches)
+ * but the decision can arrive late.
+ */
+function ForceUpdateOverlay(props: ForceUpdateGate) {
   async function openUpdate() {
     if (!props.updateUrl) return;
     await Linking.openURL(props.updateUrl);
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <SafeAreaView style={styles.safeArea}>
-          <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
-            <View style={styles.updateCard}>
-              <Text style={styles.updateTitle}>Update Required</Text>
-              <Text style={styles.updateBody}>{props.message}</Text>
-              <View style={{ height: 10 }} />
-              <Text style={styles.updateMeta}>
-                Current: {props.currentVersion}
-                {props.minSupportedVersion ? ` · Required: ${props.minSupportedVersion}+` : ''}
-              </Text>
-              <Pressable style={({ pressed }) => [styles.updateButton, pressed && { opacity: 0.9 }, !props.updateUrl && { opacity: 0.6 }]} disabled={!props.updateUrl} onPress={openUpdate}>
-                <Text style={styles.updateButtonText}>{props.updateUrl ? 'Open App Store' : 'Update link not set'}</Text>
-              </Pressable>
-              {!props.updateUrl ? <Text style={styles.updateHint}>(Set updateUrl or appStoreId in remote config JSON)</Text> : null}
-            </View>
-          </LinearGradient>
-        </SafeAreaView>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <View style={styles.updateOverlay} accessibilityViewIsModal>
+      <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
+        <View style={styles.updateCard}>
+          <Text style={styles.updateTitle}>Update Required</Text>
+          <Text style={styles.updateBody}>{props.message}</Text>
+          <View style={{ height: 10 }} />
+          <Text style={styles.updateMeta}>
+            Current: {props.currentVersion}
+            {props.minSupportedVersion ? ` · Required: ${props.minSupportedVersion}+` : ''}
+          </Text>
+          <Pressable style={({ pressed }) => [styles.updateButton, pressed && { opacity: 0.9 }, !props.updateUrl && { opacity: 0.6 }]} disabled={!props.updateUrl} onPress={openUpdate}>
+            <Text style={styles.updateButtonText}>{props.updateUrl ? 'Open App Store' : 'Update link not set'}</Text>
+          </Pressable>
+          {!props.updateUrl ? <Text style={styles.updateHint}>(Set updateUrl or appStoreId in remote config JSON)</Text> : null}
+        </View>
+      </LinearGradient>
+    </View>
   );
 }
 
 export default function App() {
-  const [gate, setGate] = useState<GateState>({ status: 'checking' });
+  const forceUpdate = useForceUpdateGate(REMOTE_CONFIG_URL);
   const [currentRouteName, setCurrentRouteName] = useState<keyof RootStackParamList | undefined>(undefined);
 
   useEffect(() => {
@@ -169,52 +160,6 @@ export default function App() {
     });
     return () => sub.remove();
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function check() {
-      const currentVersion = getCurrentAppVersion();
-      const config: RemoteConfig | null = await fetchRemoteConfig(REMOTE_CONFIG_URL);
-      if (cancelled) return;
-      if (!config) {
-        setGate({ status: 'ready' });
-        return;
-      }
-      const ios = resolveIosUpdate(config, currentVersion);
-      if (ios.forceUpdate) {
-        setGate({
-          status: 'forceUpdate',
-          message: ios.message,
-          updateUrl: ios.updateUrl,
-          currentVersion,
-          minSupportedVersion: ios.minSupportedVersion,
-        });
-        return;
-      }
-      setGate({ status: 'ready' });
-    }
-    void check();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (gate.status === 'checking') {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient colors={['#F5F3FF', '#E0F2FE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
-          <View style={styles.checking}>
-            <ActivityIndicator size="large" color="#6366F1" />
-            <Text style={styles.checkingText}>Checking for updates...</Text>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  }
-
-  if (gate.status === 'forceUpdate') {
-    return <ForceUpdateScreen message={gate.message} updateUrl={gate.updateUrl} currentVersion={gate.currentVersion} minSupportedVersion={gate.minSupportedVersion} />;
-  }
 
   const activeMainTab = getMainTabForRouteName(currentRouteName);
 
@@ -301,7 +246,6 @@ export default function App() {
         <Stack.Screen name="MasteryMilestone" component={MasteryMilestoneScreen} />
         <Stack.Screen name="Challenge" component={ChallengeScreen} />
         <Stack.Screen name="Deck" component={DeckScreen} />
-        <Stack.Screen name="Review" component={ReviewScreen} />
         <Stack.Screen name="SessionCard" component={SessionCardScreen} />
         <Stack.Screen
           name="Draw"
@@ -330,6 +274,8 @@ export default function App() {
           </View>
         </SafeAreaView>
       ) : null}
+
+      {forceUpdate ? <ForceUpdateOverlay {...forceUpdate} /> : null}
     </View>
   );
 }
@@ -346,10 +292,14 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     backgroundColor: '#F5F3FF',
   },
-  safeArea: { flex: 1, backgroundColor: '#F5F3FF' },
   gradient: { flex: 1 },
-  checking: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  checkingText: { marginTop: 10, color: '#6B7280' },
+  updateOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    // Opaque, so the app underneath is neither visible nor tappable.
+    backgroundColor: '#F5F3FF',
+    zIndex: 100,
+    elevation: 100,
+  },
   updateCard: {
     marginTop: 120,
     marginHorizontal: 18,

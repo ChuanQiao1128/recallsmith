@@ -25,6 +25,7 @@ import {
 import { LibraryHeader } from '../features/gacha/library/LibraryHeader';
 import { LibraryCardTile } from '../features/gacha/library/LibraryCardTile';
 import { libraryStyles as styles } from '../features/gacha/library/libraryScreenStyles';
+import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
@@ -47,9 +48,15 @@ export function LibraryScreen({ navigation, route }: Props) {
   const [deckOptions, setDeckOptions] = useState<LibraryDeckOption[]>([]);
   const [deck, setDeck] = useState<DeckExport | null>(null);
   const [progress, setProgress] = useState<CardProgress[]>([]);
+  // Which cards this account holds, drawn plus grandfathered. Kept next to
+  // `progress` and replaced with it in the same refresh, because the VM reads
+  // both and a half-updated pair renders a deck from one account against a
+  // collection from another for a frame.
+  const [ownedSet, setOwnedSet] = useState<Set<string> | null>(null);
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [filterOpen, setFilterOpen] = useState(false);
-  const [highlightedUid, setHighlightedUid] = useState<string | null>(null);
+  // A pull grants ten cards; highlighting one of them was never the ask.
+  const [highlightedUids, setHighlightedUids] = useState<readonly string[]>([]);
   // Wallet state — drives the empty-collection banner's CTA target.
   // wallet=0 → banner sends user to SessionCard (earn pulls first);
   // wallet>0 → banner sends user to Draw (open the pack now).
@@ -100,15 +107,18 @@ export function LibraryScreen({ navigation, route }: Props) {
         }
 
         const resolvedProgress = await loadDeckProgress(resolvedDeck);
+        const resolvedOwned = await resolveEffectiveOwned(currentSlug, resolvedProgress);
         await setActiveDeckSlug(currentSlug);
 
         setSelectedSlug(currentSlug);
         setDeck(resolvedDeck);
         setProgress(resolvedProgress);
+        setOwnedSet(resolvedOwned);
       } catch (loadErr: any) {
         setDeckOptions([]);
         setDeck(null);
         setProgress([]);
+        setOwnedSet(null);
         setError(loadErr?.message ?? 'Failed to load library.');
       } finally {
         setLoading(false);
@@ -141,23 +151,45 @@ export function LibraryScreen({ navigation, route }: Props) {
       now: new Date(),
       decks: deckOptions,
       selectedDeckSlug: selectedSlug,
+      ownedSet,
     });
-  }, [deck, progress, filter, deckOptions, selectedSlug]);
+  }, [deck, progress, filter, deckOptions, selectedSlug, ownedSet]);
 
   const visibleCards = vm?.cards ?? [];
 
+  const requestedUids = route.params?.highlightUids;
+
   useEffect(() => {
-    if (!vm || !route.params?.scrollToNew) return;
-    const targetIndex = visibleCards.findIndex((card) => card.status === 'new');
+    if (!vm) return;
+
+    // Caller-named cards win. The status-based search below is a guess about
+    // what the caller meant, and after a draw it guesses wrong: "first card
+    // with status 'new'" means first *unstudied* card, which in a fresh deck
+    // is #001 whatever you just pulled.
+    const named = (Array.isArray(requestedUids) ? requestedUids : []).filter(
+      (uid): uid is string => typeof uid === 'string' && uid.length > 0,
+    );
+    const present = named.filter((uid) => visibleCards.some((card) => card.stableUid === uid));
+
+    let targets: string[] = present;
+    if (named.length === 0) {
+      // No names given (deep link, tab swap): keep the old heuristic, which
+      // is still the best available answer to "show me something new".
+      if (!route.params?.scrollToNew) return;
+      const firstNew = visibleCards.find((card) => card.status === 'new');
+      targets = firstNew ? [firstNew.stableUid] : [];
+    }
+    if (targets.length === 0) return;
+
+    // Scroll to the first named card that survived the current filter, not
+    // to the first named card outright: a filtered-out uid has no row.
+    const targetIndex = visibleCards.findIndex((card) => card.stableUid === targets[0]);
     // Guard against the FlatList not having rendered the new data yet —
     // findIndex returns an index into our new array, but RN's internal
     // ListView may still be on the old (smaller) dataset for one frame.
     if (targetIndex < 0 || targetIndex >= visibleCards.length) return;
 
-    const targetUid = visibleCards[targetIndex]?.stableUid;
-    if (!targetUid) return;
-
-    setHighlightedUid(targetUid);
+    setHighlightedUids(targets);
     // Defer the scroll one tick — by the time this runs, the FlatList has
     // committed the new data prop and scrollToIndex's internal range matches.
     const scrollTimer = setTimeout(() => {
@@ -173,17 +205,30 @@ export function LibraryScreen({ navigation, route }: Props) {
     }, 60);
 
     const highlightTimer = setTimeout(() => {
-      setHighlightedUid((prev) => (prev === targetUid ? null : prev));
+      setHighlightedUids((prev) => (prev === targets ? [] : prev));
     }, 1500);
     return () => {
       clearTimeout(scrollTimer);
       clearTimeout(highlightTimer);
     };
-  }, [route.params?.scrollToNew, visibleCards, vm]);
+  }, [requestedUids, route.params?.scrollToNew, visibleCards, vm]);
 
-  const ownedCount = vm ? vm.counts.learningCount + vm.counts.masteredCount : 0;
-  const totalCount = vm ? vm.counts.newCount + vm.counts.learningCount + vm.counts.masteredCount : 0;
-  const isCollectionComplete = filter === 'new' && vm?.counts.newCount === 0;
+  // Both read straight off the VM now. The old arithmetic ("learned + mastered
+  // over everything") was a proxy from before the app knew what a collection
+  // was, and it answered the header's question wrong in both directions: a card
+  // you had just pulled did not count as owned until you studied it, and once
+  // gated the same sum would have excluded every missing card from the total
+  // as well, pinning the ring at 100%.
+  const ownedCount = vm?.counts.ownedCount ?? 0;
+  const totalCount = vm?.counts.totalCount ?? 0;
+  // "You've got every card in this pack" now has to mean it. An empty New
+  // filter used to imply a finished deck, because ungated every card was either
+  // new or studied; gated it only says "nothing you hold is unstudied", which
+  // is true of someone holding two cards of a hundred. The second clause is
+  // what keeps the empty state from congratulating them on a collection they
+  // have barely started.
+  const isCollectionComplete =
+    filter === 'new' && vm?.counts.newCount === 0 && ownedCount === totalCount && totalCount > 0;
 
   if (loading) {
     return (
@@ -332,7 +377,7 @@ export function LibraryScreen({ navigation, route }: Props) {
               <LibraryCardTile
                 item={item}
                 numColumns={numColumns}
-                highlighted={highlightedUid === item.stableUid}
+                highlighted={highlightedUids.includes(item.stableUid)}
                 deckSlug={vm.selectedDeckSlug}
                 onPress={(stableUid) => navigation.navigate('CardDetail', { cardId: stableUid })}
               />

@@ -172,7 +172,16 @@ export function DrawResultScreen({ navigation, route }: Props) {
       navigation.navigate('Draw', { slug: params.slug });
       return;
     }
-    navigation.navigate('Library', { focusSlug: params.slug, scrollToNew: true });
+    // Name the cards. Library's fallback is "scroll to the first card with
+    // status 'new'", which is the first card the user has not *studied* --
+    // in a fresh deck that is card #1 every time, so the highlight landed on
+    // something the user did not just pull. The uids are right here; the
+    // screen simply never passed them.
+    navigation.navigate('Library', {
+      focusSlug: params.slug,
+      scrollToNew: true,
+      highlightUids: cards.map((card) => card.stableUid),
+    });
   };
 
   // Loading state override

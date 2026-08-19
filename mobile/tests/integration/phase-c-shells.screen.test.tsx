@@ -64,16 +64,24 @@ describe('phase C shells', () => {
     expect(navigate).toHaveBeenCalledWith('Profile');
   });
 
-  it('opens achievements from profile shell', async () => {
+  it('no longer opens achievements from profile shell', async () => {
+    // Was "opens achievements from profile shell". Same flip as its twin in
+    // phase-c-complete: the Achievements screen is a hardcoded badge list,
+    // and Profile stopped advertising it. Route and file both stay.
     const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(<ProfileScreen navigation={{ navigate } as any} route={{ key: 'profile', name: 'Profile' } as any} />);
     });
+    expect(tree.root.findAll(
+      (node) =>
+        (node.type as any) === 'Pressable' &&
+        node.findAll((child) => (child.type as any) === 'Text' && child.props.children === 'Achievements').length > 0,
+    )).toHaveLength(0);
     act(() => {
-      findPressableByText(tree, 'Achievements').props.onPress();
+      findPressableByText(tree, 'Edit profile').props.onPress();
     });
-    expect(navigate).toHaveBeenCalledWith('Achievements');
+    expect(navigate).toHaveBeenCalledWith('EditProfile');
   });
 
   it('opens notifications from settings main shell', async () => {
