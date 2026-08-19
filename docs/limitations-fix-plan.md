@@ -25,7 +25,7 @@
 ## Fix A · stage 上云 + schedulerVersion(2-3 晚)
 
 **事实底座(已核实)**:客户端事件的 `progressAfter` 是完整 CardProgress
-(ReviewScreen.tsx:526 / SessionCardScreen.tsx:412 发 `nextState.updatedOne`),
+(SessionCardScreen.tsx:412 发 `nextState.updatedOne`),
 **stage 一直在 wire 上**;服务端 ProgressEvents.cs:112-125 只读了
 `progressAfter.nextReviewAt` 和 `progressAfter.lastSeenRevision`,stage 读完即丢。
 所以这不是协议变更,是**让服务端别再扔掉已经收到的东西**。

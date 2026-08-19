@@ -90,7 +90,7 @@ function inputArb(cards: fc.Arbitrary<CardExport> = cardArb): fc.Arbitrary<Input
 }
 
 function call(input: Input) {
-  return selectDrawCards({ ...input, progress: [] });
+  return selectDrawCards(input);
 }
 
 // Mirrors the selector's own pool rule: unowned, deduplicated by uid,

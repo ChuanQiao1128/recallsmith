@@ -1,12 +1,18 @@
-import type { CardProgress } from '../../../review/model';
 import type { CardExport } from '../../../types/deckExport';
 import { RARITY_RANK, rarityOfCard } from './cardRarity';
 import type { PityState } from './pity';
 
+// No `progress` field, deliberately. This input used to carry the
+// caller's review history for the 3x previously-reviewed weighting
+// described below; that weighting was deleted, the field was not, and
+// it went on being loaded and passed for nothing. Keeping a parameter
+// the function never reads is not free: it makes the type say gacha
+// depends on review, which is the opposite of the rule we want
+// (review may read owned; gacha never reads review), and the next
+// person to add weighting would find the wire already run.
 export type SelectionInput = {
   deckCards: CardExport[];
   ownedSet: Set<string>;
-  progress: CardProgress[];
   drawCount: number;
   pityState: PityState;
   seed: number;

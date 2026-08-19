@@ -167,7 +167,11 @@ describe('home primary CTA target', () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   });
 
-  it('navigates to Challenge when today has pending work', async () => {
+  // Named "navigates to Challenge" until issue #11. It has asserted
+  // SessionCard since the Challenge interstitial was taken out of the daily
+  // flow; the name survived the change and was the only thing in the repo
+  // still claiming Home goes through Challenge.
+  it('navigates straight into SessionCard when today has pending work', async () => {
     progressFixture = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
 
     let tree!: renderer.ReactTestRenderer;

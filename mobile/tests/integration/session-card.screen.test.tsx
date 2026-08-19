@@ -373,6 +373,56 @@ describe('SessionCardScreen', () => {
     expect(findTextByLabel(tree, 'View summary')).toHaveLength(0);
   });
 
+  // Ported from tests/integration/review-summary.flow.test.tsx, deleted with
+  // ReviewScreen (issue #11). That file pressed the dead screen's done-state
+  // button and pinned the SessionSummary payload; the live screen only had a
+  // test that the button *renders*, so pressing it was genuinely unpinned.
+  it('routes to SessionSummary when Continue is pressed in the route-complete state', async () => {
+    vi.mocked(pickNextCard).mockReturnValue(null);
+    // minimumGoal 2, not the default 1. The deleted ReviewScreen hard-coded
+    // `minimumGoal: 1` here, and with a fixture of 1 this assertion cannot
+    // tell the planner's answer from that hard-code -- mutation-checked:
+    // swapping doneMinimumGoal for a literal 1 left the 1-fixture version of
+    // this test green. The sibling test above only covers the post-rating
+    // branch, so the done-state branch was genuinely unpinned.
+    vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ minimumGoal: 2 }) as any);
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{
+            key: 'session-card',
+            name: 'SessionCard',
+            params: { slug: 'csharp', mode: 'mixed', limit: 1 },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    act(() => {
+      findPressableByLabel(tree, 'Continue').props.onPress();
+    });
+
+    // Exact object, not objectContaining: this branch deliberately differs
+    // from the post-rating one above -- it carries no sessionId, because a
+    // run that ended with nothing to review never started a rating. Pinning
+    // the whole shape is what makes a future change to either branch show up
+    // as a decision rather than as drift.
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', {
+      slug: 'csharp',
+      deckTitle: 'C# Interview',
+      sessionDone: 0,
+      sessionLimit: 1,
+      minimumGoal: 2,
+      dueCount: 0,
+      streakEarned: false,
+    });
+  });
+
   it('shows passive trial preview progress without adding another action', async () => {
     vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck({
       DeckType: 2,

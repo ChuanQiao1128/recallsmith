@@ -13,7 +13,10 @@
   - `npm run test:unit`
   - `npm run test:integration`
 - 静态 gate 全绿：
-  - `wc -l src/screens/*.tsx | awk '$2 != "total" && $2 != "src/screens/ReviewScreen.tsx" && $1 >= 800'` 输出为空
+  - `wc -l src/screens/*.tsx | awk '$2 != "total" && $1 >= 800'` 输出为空
+    （原先额外排除 `src/screens/ReviewScreen.tsx`；该文件已随 issue #11 删除，
+    排除项一并去掉。注意这条 gate 目前仍然不过：DrawCeremony/Draw/Home/SessionCard
+    四个 screen 超限，删 ReviewScreen 并没有让它变绿，也不该被当成变绿）
   - `grep -nE "#[0-9A-Fa-f]{6}" src/screens/*.tsx src/features/gacha/components/*.tsx` 无命中
   - `grep -nE "(lost|missed|forfeit|wasted|expired|gone)" src/features/gacha/session/summaryMapper.ts` 无命中
 
@@ -65,7 +68,7 @@
 - `P0-STATE-MISSING`: 缺失 loading/empty/error 任一态。
 - `P0-TESTID-MISSING`: 主链路关键 testID 缺失。
 - `P0-FORBIDDEN-PATH`: 改动了本 rubric §1 Scope 之外的路径。
-- `P0-FILE-SIZE`: 非 `ReviewScreen.tsx` screen 文件 `>=800` 行。
+- `P0-FILE-SIZE`: screen 文件 `>=800` 行。（`ReviewScreen.tsx` 的豁免随该文件删除而取消）
 - `P0-ANIM-COMMERCIAL`: 抽奖动画未达 `animation-quality-rubric.md` 商业级阈值。
 
 ## 5) Mobile Width Checks（统一编码）

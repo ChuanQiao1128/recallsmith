@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
@@ -16,6 +16,13 @@ export default defineConfig({
       'tests/integration/**/*.spec.ts',
       'tests/integration/**/*.spec.tsx',
     ],
+    // iCloud renames a sync-conflict loser to "name 2.test.ts", which the
+    // include globs above happily collect -- a stale duplicate suite running
+    // against current code, failing locally while CI (a clean checkout) stays
+    // green. No legitimate test file here has a space in its name. Spread the
+    // defaults first: `exclude` REPLACES them, and losing node_modules from the
+    // list is a far worse day than the one this entry prevents.
+    exclude: [...configDefaults.exclude, '**/* *'],
     environment: 'node',
     globals: true,
     // Defines __DEV__, which expo-modules-core reads at module scope. See the

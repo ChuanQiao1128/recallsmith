@@ -32,17 +32,19 @@ function buildDrawId(slug: string, ts: number, seed: number): string {
 }
 
 export async function commitDraw(slug: string, drawCount: 1 | 10): Promise<DrawCommitResult | null> {
-  const [{ resolveDeckBySlug }, { loadDeckProgress }] = await Promise.all([
-    import('../../../content/deckRepository'),
-    import('../../../review/storage'),
-  ]);
+  // review/storage is deliberately absent from this import. A draw used
+  // to load the deck's review progress and hand it to selectDrawCards,
+  // which stopped reading it when the review-history weighting was
+  // deleted. The load stayed: a storage round-trip on every pull whose
+  // result was discarded, and a dependency edge from gacha to review
+  // that nothing justified. The direction is now one-way by
+  // construction -- review may read the owned set, gacha never reads
+  // review -- which is what lets the two be reasoned about separately.
+  const { resolveDeckBySlug } = await import('../../../content/deckRepository');
   const deck = await resolveDeckBySlug(slug);
   if (!deck) return null;
 
-  const [progress, drawState] = await Promise.all([
-    loadDeckProgress(deck),
-    loadDrawState(slug),
-  ]);
+  const drawState = await loadDrawState(slug);
   const ownedSet = new Set(drawState.owned);
   const pityState = normalizePityState(drawState.pity);
 
@@ -56,7 +58,6 @@ export async function commitDraw(slug: string, drawCount: 1 | 10): Promise<DrawC
   const selection = selectDrawCards({
     deckCards: deck.Cards,
     ownedSet,
-    progress,
     drawCount,
     pityState,
     seed,
@@ -139,15 +140,18 @@ export type DrawReplayResult = {
  * large and already versioned elsewhere. The consequence is honest -- a
  * replay against a different deck revision is not the same draw, and a
  * mismatch there means the content changed, not that the RNG did.
+ *
+ * What makes a replay possible at all is that every input to a draw is
+ * either in the record or in the deck. Selection is uniform over the
+ * missing pool and reads no review history, so nothing about the user's
+ * study state has to be recorded. If weighting by review history ever
+ * comes back, that state joins DrawHistoryEntry in the same change or
+ * replay quietly stops being a replay.
  */
 export function replayDraw(record: DrawHistoryEntry, deckCards: CardExport[]): DrawReplayResult {
   const selection = selectDrawCards({
     deckCards,
     ownedSet: new Set(record.ownedBefore),
-    // Empty on purpose: selection is uniform over the missing pool and
-    // does not read review history. If that ever changes, progress has
-    // to join the recorded inputs or replay stops being a replay.
-    progress: [],
     drawCount: record.drawCount,
     pityState: record.pityBefore,
     seed: record.seed,

@@ -114,7 +114,7 @@ App 侧,新增 `mobile/src/perf/marks.ts`:`mark(name)` / `measure(from, to)`,
 
 1. `mobile/index.ts` 模块顶端记 t0 → `mobile/src/screens/HomeScreen.tsx:282` 的
    `useFocusEffect` 首次回调结束 = **冷启动 TTI**;
-2. `mobile/src/screens/ReviewScreen.tsx:488` `handleRating` 入口 →
+2. `mobile/src/screens/SessionCardScreen.tsx:377` `handleRating` 入口 →
    `setCurrent(nextState.nextCurrent)` 之后一个 `requestAnimationFrame` 回调
    = **评分到下一张卡可交互**;
 3. 一个 `useFrameSampler()` hook,连续 `requestAnimationFrame` 记 delta,
@@ -588,8 +588,8 @@ cards 端点补上与 admin decks 同款的 keyset 分页(前端已有 `pages/de
 
 | 事实 | 证据 |
 |---|---|
-| 评分路径:先 `recordReviewEvent`(事实),再 `await saveDeckProgress`(投影) | `ReviewScreen.tsx:515` → `:537`;`SessionCardScreen.tsx:401` → `:421` |
-| 写序的理由已写在注释里,是刻意设计,不许动 | `ReviewScreen.tsx:509-513` |
+| 评分路径:先 `recordReviewEvent`(事实),再 `await saveDeckProgress`(投影) | `SessionCardScreen.tsx:401` → `:421` |
+| 写序的理由已写在注释里,是刻意设计,不许动 | `SessionCardScreen.tsx:396-399` |
 | `saveDeckProgress` 每次把整个 progress 数组 filter 一遍再全量 `JSON.stringify` 写 | `review/storage.ts:565-570` |
 | 紧接着还调 `upsertDeckMeta`,这是**第二次** `setItem`,只为写一个时间戳 | `storage.ts:571` → `:402-409` |
 | 而 `loadDeckProgress` 已经写过一次同样的 meta | `storage.ts:561` |
@@ -996,7 +996,7 @@ counts 变成 O(1) 读、筛选变成 O(结果集),progress 变更只增量更�
 ## 移动端
 
 10. **不动"事实必须同步落盘"。** `recordReviewEvent` 的 await 保持原样。
-    `ReviewScreen.tsx:509-513` 与 `progressSync.ts:505-521` 的注释已经把取舍写清楚了
+    `SessionCardScreen.tsx:396-399` 与 `progressSync.ts:505-521` 的注释已经把取舍写清楚了
     (窗口被刻意设为零,并类比了数据库与交易系统的 fsync 策略),那个判断是对的。
     任何"把队列写也 defer 掉"的提案都是拿丢数据换毫秒。
     M1 恰恰是它的反面:**只动可重建的那一半**。
