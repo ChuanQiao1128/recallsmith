@@ -52,6 +52,18 @@ describe('drawState', () => {
     expect(picks.map((item: any) => item.stableUid)).toEqual(['1', '2']);
   });
 
+  it('prioritizes cards outside the collection ahead of owned ones', () => {
+    // 'missing' only exists once a caller gates the library rows, and it has to
+    // outrank 'new': a preview of a draw should show what a pull could still
+    // give you, and an owned-but-unstudied card is not that.
+    const rows = [
+      { stableUid: '1', orderInDeck: 1, question: 'Q1', difficulty: 1, status: 'new', statusLabel: 'New', isMissing: false, isDueToday: false, isUpdated: false },
+      { stableUid: '2', orderInDeck: 2, question: 'Q2', difficulty: 2, status: 'missing', statusLabel: 'Missing', isMissing: true, isDueToday: false, isUpdated: false },
+    ] as any;
+
+    expect(pickDrawPreviewCards(rows, 1).map((item: any) => item.stableUid)).toEqual(['2']);
+  });
+
   it('marks draw as wallet-full-with-reserve when reserve is waiting behind a full wallet', () => {
     const state = buildDrawState({
       wallet: { availablePulls: 30, reservePulls: 2 },

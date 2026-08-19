@@ -26,7 +26,11 @@ function statusDotColor(status: LibraryCardRow['status']): string {
 }
 
 export function LibraryCardTile({ item, numColumns, highlighted, deckSlug, onPress }: Props) {
-  const isMissing = item.status === 'new';
+  // item.isMissing, not `status === 'new'`: once the gate is on, 'new' means
+  // "drawn, not studied yet" -- a card the user owns and is entitled to read.
+  // Reading the status string here would keep hiding the question text behind a
+  // "?" on cards the user just pulled.
+  const isMissing = item.isMissing;
   const slotNumber = String(item.orderInDeck ?? 0).padStart(3, '0');
   const palette = packPaletteFromSlug(deckSlug);
   const dotColor = statusDotColor(item.status);

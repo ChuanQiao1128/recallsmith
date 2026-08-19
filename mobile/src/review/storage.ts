@@ -193,6 +193,25 @@ function cardRevision(card: any): number {
   return typeof r === 'number' && Number.isFinite(r) ? r : 1;
 }
 
+/**
+ * Deliberately full-deck, and it must stay that way now that a study gate
+ * exists.
+ *
+ * Seeding only the cards a user owns looks like the tidy way to implement "you
+ * study what you draw", and it is a data-loss bug. The gate is a read-time
+ * predicate; this array is the durable record. saveDeckProgress overwrites the
+ * whole key with whatever array it is handed, and the session screen hands it
+ * the entire array back after every rating -- so a row that is missing from
+ * memory is a row erased from disk on the next tap. reconcileProgressWithDeck
+ * then rebuilds the absent uids as stage-0, which means a filtered-out card
+ * comes back looking untouched: weeks of scheduling gone, silently, with no
+ * error and nothing to restore from.
+ *
+ * So ownership is never allowed to decide what is persisted. It decides what is
+ * counted, picked and listed, in the pure functions that read this array
+ * (sessionPlanner, libraryMapper), where being wrong costs a wrong number on a
+ * screen instead of somebody's study history.
+ */
 function createInitialProgress(deck: DeckExport): CardProgress[] {
   const cards = deck.Cards ?? [];
   return cards.map((c) => ({
@@ -564,6 +583,9 @@ export async function loadDeckProgress(deck: DeckExport): Promise<CardProgress[]
 
 export async function saveDeckProgress(deck: DeckExport, progress: CardProgress[]): Promise<void> {
   // do not reconcile here (avoid side-effects while writing)
+  // This is a wholesale overwrite, not a merge: the only membership test it
+  // applies is "is this uid still in the deck". Never hand it an ownership-
+  // filtered array -- see createInitialProgress for what that costs.
   const allowed = new Set((deck.Cards ?? []).map((c: any) => String(c?.StableUid)));
   const filtered = progress.filter((p) => allowed.has(p.stableUid));
 
