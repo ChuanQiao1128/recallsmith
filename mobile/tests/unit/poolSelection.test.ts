@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import type { CardProgress } from '../../src/review/model';
 import type { CardExport } from '../../src/types/deckExport';
 import { selectDrawCards } from '../../src/features/gacha/draw/poolSelection';
 
@@ -12,22 +11,12 @@ function buildCard(stableUid: string, difficulty: number): CardExport {
   };
 }
 
-function buildProgress(partial: Partial<CardProgress> & { stableUid: string }): CardProgress {
-  return {
-    stableUid: partial.stableUid,
-    stage: partial.stage ?? 0,
-    lastReviewedAt: partial.lastReviewedAt,
-    nextReviewAt: partial.nextReviewAt ?? 0,
-  };
-}
-
 describe('poolSelection', () => {
   it('excludes owned cards from output', () => {
     const cards = [buildCard('a', 1), buildCard('b', 2), buildCard('c', 3)];
     const result = selectDrawCards({
       deckCards: cards,
       ownedSet: new Set(['b']),
-      progress: [],
       drawCount: 3,
       pityState: { draws: 0, threshold: 10 },
       seed: 123,
@@ -41,7 +30,6 @@ describe('poolSelection', () => {
     const result = selectDrawCards({
       deckCards: cards,
       ownedSet: new Set(),
-      progress: [],
       drawCount: 2,
       pityState: { draws: 0, threshold: 10 },
       seed: 123,
@@ -55,7 +43,6 @@ describe('poolSelection', () => {
     const result = selectDrawCards({
       deckCards: cards,
       ownedSet: new Set(),
-      progress: [],
       drawCount: 5,
       pityState: { draws: 0, threshold: 10 },
       seed: 123,
@@ -70,7 +57,6 @@ describe('poolSelection', () => {
     const result = selectDrawCards({
       deckCards: cards,
       ownedSet: new Set(['a', 'b']),
-      progress: [],
       drawCount: 1,
       pityState: { draws: 3, threshold: 10 },
       seed: 123,
@@ -86,7 +72,6 @@ describe('poolSelection', () => {
     const result = selectDrawCards({
       deckCards: cards,
       ownedSet: new Set(),
-      progress: [],
       drawCount: 1,
       pityState: { draws: 10, threshold: 10 },
       seed: 123,
@@ -102,7 +87,6 @@ describe('poolSelection', () => {
     const result = selectDrawCards({
       deckCards: cards,
       ownedSet: new Set(),
-      progress: [],
       drawCount: 1,
       pityState: { draws: 10, threshold: 10 },
       seed: 123,
@@ -118,7 +102,6 @@ describe('poolSelection', () => {
     const result = selectDrawCards({
       deckCards: cards,
       ownedSet: new Set(),
-      progress: [],
       drawCount: 1,
       pityState: { draws: 10, threshold: 10 },
       seed: 123,
@@ -143,7 +126,6 @@ describe('poolSelection', () => {
     const input = {
       deckCards: cards,
       ownedSet: new Set<string>(),
-      progress: [],
       drawCount: 3,
       pityState: { draws: 0, threshold: 10 },
       seed: 777,
@@ -155,14 +137,21 @@ describe('poolSelection', () => {
     expect(first.cards.map((card) => card.StableUid)).toEqual(second.cards.map((card) => card.StableUid));
   });
 
-  it('samples uniformly from the missing pool regardless of review history', () => {
+  it('samples uniformly from the missing pool', () => {
     // Real gacha pulls are uniform random from the unowned pool. The
     // "spaced repetition through pulls" weighting was removed because it
     // made the Library look like a contiguous block at the front (the
     // user always re-pulled cards they'd already studied). Reinforcement
     // now lives only in study sessions, not in pulls.
+    //
+    // This used to be titled "...regardless of review history" and fed a
+    // progress fixture in to prove it. It cannot any more: SelectionInput
+    // no longer has a progress field, so "review history does not move
+    // the odds" is a fact about the signature rather than something a
+    // sample can observe. What is left is the half a sample CAN observe
+    // and nothing else pins -- that the pool itself is unweighted -- so
+    // the test keeps that and drops the claim it can no longer make.
     const deckCards = [buildCard('seen', 1), buildCard('never', 1)];
-    const progress = [buildProgress({ stableUid: 'seen', stage: 2, lastReviewedAt: 2000, nextReviewAt: 9000 })];
 
     let seenHits = 0;
     let neverHits = 0;
@@ -170,7 +159,6 @@ describe('poolSelection', () => {
       const result = selectDrawCards({
         deckCards,
         ownedSet: new Set(),
-        progress,
         drawCount: 1,
         pityState: { draws: 0, threshold: 10 },
         seed,
@@ -202,7 +190,6 @@ describe('poolSelection', () => {
     const result = selectDrawCards({
       deckCards,
       ownedSet: new Set(),
-      progress: [],
       drawCount: 30,
       pityState: { draws: 0, threshold: 999 },
       seed: 42,

@@ -226,6 +226,35 @@ export async function consumePullsFromStoredWallet(count: number): Promise<{
   return result;
 }
 
+/**
+ * Gives `count` pulls back to whatever the wallet holds *now*.
+ *
+ * The caller that needed this used to undo a spend by writing back a
+ * snapshot taken before it. That is not an undo, it is a rollback of the
+ * whole key: any pull granted between the snapshot and the failure -- a
+ * settlement landing, a streak milestone -- is silently erased, and the
+ * user's evidence for it (a toast they already saw) is gone.
+ *
+ * Reading first and adding on top is the difference between "restore the
+ * balance I remember" and "return what I took". It routes through
+ * applyRewardToWallet so a refund obeys the same caps as a grant; the
+ * overflow that implies is the honest one, because a refund arriving at a
+ * full wallet is indistinguishable from a reward arriving at a full wallet.
+ */
+export async function refundPullsToStoredWallet(count: number): Promise<RewardWalletState> {
+  const safeCount = Math.max(0, Math.floor(count));
+  const current = await loadRewardWalletState();
+  if (safeCount === 0) return current;
+
+  const applied = applyRewardToWallet(current, safeCount);
+  const next: RewardWalletState = {
+    availablePulls: applied.availablePulls,
+    reservePulls: applied.reservePulls,
+  };
+  await saveRewardWalletState(next);
+  return next;
+}
+
 export async function applySessionRewardToWallet(sessionId: string, rewardPulls: number): Promise<{
   walletBefore: RewardWalletState;
   walletAfter: RewardWalletState;

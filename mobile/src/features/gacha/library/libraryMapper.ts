@@ -1,13 +1,16 @@
 import type { DeckExport } from '../../../types/deckExport';
 import type { CardProgress } from '../../../review/model';
-import type { LibraryVM } from '../contracts';
+import type { LibraryVM, OwnedGate } from '../contracts';
 import { isLearnedProgress, isMasteredProgress, isNewProgress, isScheduledProgress, startOfToday } from '../selectors/progressSelectors';
 import { formatDateKey } from '../../../review/model';
 import { rarityFromDifficulty, type Rarity } from '../draw/cardRarity';
 import { cardIconFor } from '../../../theme/cardIcon';
 
-export type LibraryCardStatus = 'new' | 'learning' | 'mastered';
-export type LibraryCardBadgeTone = 'new' | 'learning' | 'mastered';
+// 'missing' is reachable only when a caller passes an ownedSet. Ungated there
+// is no way to know a card was never drawn, so the shipped three-value split
+// (and its labels) stays exactly as it is -- see buildLibraryCardRows.
+export type LibraryCardStatus = 'missing' | 'new' | 'learning' | 'mastered';
+export type LibraryCardBadgeTone = LibraryCardStatus;
 // Now includes the gacha rarity dimension. Real Pokedex players
 // also want to slice by COM/RAR/LEG, not just by SRS state.
 export type LibraryFilter = 'all' | 'new' | 'learning' | 'mastered' | 'rare' | 'legendary';
@@ -26,8 +29,17 @@ export type LibraryCardRow = {
   // "rows of identical text rectangles" feel.
   icon: string;
   status: LibraryCardStatus;
-  statusLabel: 'Missing' | 'Learning' | 'Mastered';
+  statusLabel: 'Missing' | 'New' | 'Learning' | 'Mastered';
   badgeTone: LibraryCardBadgeTone;
+  /**
+   * "Not in the collection, as far as this call can tell" -- the one predicate
+   * the silhouette presentation should key off. It exists because `status`
+   * alone cannot answer the question in both modes: gated, missing is its own
+   * status; ungated, the answer is the legacy proxy (unstudied stands in for
+   * uncollected) and the status is 'new'. A renderer that tests the status
+   * string directly is correct in one mode and wrong in the other.
+   */
+  isMissing: boolean;
   isDueToday: boolean;
   isUpdated: boolean;
 };
@@ -71,11 +83,14 @@ function getSeenRevision(progress: CardProgress): number {
   return isLearnedProgress(progress) ? 1 : 0;
 }
 
-export function countUpdatedCards(cards: any[], progress: CardProgress[]): number {
+export function countUpdatedCards(cards: any[], progress: CardProgress[], ownedSet: OwnedGate = null): number {
   const progressMap = new Map(progress.map((item) => [item.stableUid, item]));
   let count = 0;
 
   for (const card of cards) {
+    // A card you do not hold cannot be "updated for you" -- the badge invites a
+    // re-read of content the gate will not open.
+    if (ownedSet && !ownedSet.has(card?.StableUid)) continue;
     const progressEntry = progressMap.get(card?.StableUid);
     if (!progressEntry) continue;
     if (!isLearnedProgress(progressEntry)) continue;
@@ -91,8 +106,9 @@ export function buildLibraryCardRows(params: {
   now?: Date;
   isTrial?: boolean;
   previewTotal?: number;
+  ownedSet?: OwnedGate;
 }): LibraryCardRow[] {
-  const { deck, progress, now = new Date(), isTrial = false, previewTotal = 0 } = params;
+  const { deck, progress, now = new Date(), isTrial = false, previewTotal = 0, ownedSet = null } = params;
   const cards = isTrial ? (deck.Cards ?? []).slice(0, previewTotal) : deck.Cards ?? [];
   const progressMap = new Map(progress.map((item) => [item.stableUid, item]));
 
@@ -100,11 +116,26 @@ export function buildLibraryCardRows(params: {
     .sort((a, b) => a.OrderInDeck - b.OrderInDeck)
     .map((card) => {
       const progressEntry = progressMap.get(card.StableUid) ?? { stableUid: card.StableUid, stage: 0, nextReviewAt: 0 };
-      const status: LibraryCardStatus = isMasteredProgress(progressEntry)
-        ? 'mastered'
-        : isLearnedProgress(progressEntry)
-          ? 'learning'
-          : 'new';
+      // Three-valued on purpose: true, false, and "this call has no gate, so
+      // ownership is not a question it can answer".
+      const owned = ownedSet === null ? null : ownedSet.has(card.StableUid);
+      // Missing outranks every SRS state. Gated, a card that is somehow both
+      // studied and unowned is still a card the user cannot open, and calling
+      // it Learning would advertise a door that does not exist.
+      const status: LibraryCardStatus =
+        owned === false
+          ? 'missing'
+          : isMasteredProgress(progressEntry)
+            ? 'mastered'
+            : isLearnedProgress(progressEntry)
+              ? 'learning'
+              : 'new';
+      // Ungated, "unstudied" is the only proxy for "uncollected" the app has
+      // ever had, and it is the proxy the shipped silhouette tile is built on.
+      // Keeping it means an ungated caller renders exactly what it renders
+      // today; the moment a real set arrives, the proxy is replaced by the
+      // truth and a drawn-but-unstudied card stops being a "?" placeholder.
+      const isMissing = owned === null ? status === 'new' : !owned;
 
       return {
         stableUid: card.StableUid,
@@ -114,10 +145,24 @@ export function buildLibraryCardRows(params: {
         rarity: rarityFromDifficulty(card.Difficulty),
         icon: cardIconFor(card),
         status,
-        statusLabel: status === 'mastered' ? 'Mastered' : status === 'learning' ? 'Learning' : 'Missing',
+        statusLabel: isMissing
+          ? 'Missing'
+          : status === 'mastered'
+            ? 'Mastered'
+            : status === 'learning'
+              ? 'Learning'
+              : 'New',
         badgeTone: status,
-        isDueToday: isDueToday(progressEntry as CardProgress, now),
-        isUpdated: getCardRevision(card) > getSeenRevision(progressEntry as CardProgress) && isLearnedProgress(progressEntry as CardProgress),
+        isMissing,
+        // A card outside the collection is neither due nor updated: both of
+        // those are invitations to study, and the gate refuses the invitation.
+        // Ungated this changes nothing -- an unstudied card is never scheduled
+        // and never counts as updated.
+        isDueToday: !isMissing && isDueToday(progressEntry as CardProgress, now),
+        isUpdated:
+          !isMissing &&
+          getCardRevision(card) > getSeenRevision(progressEntry as CardProgress) &&
+          isLearnedProgress(progressEntry as CardProgress),
       };
     });
 }
@@ -131,6 +176,7 @@ export function buildLibraryVM(params: {
   previewTotal?: number;
   decks?: LibraryDeckOption[];
   selectedDeckSlug?: string | null;
+  ownedSet?: OwnedGate;
 }): LibraryViewModel {
   const {
     deck,
@@ -141,11 +187,19 @@ export function buildLibraryVM(params: {
     previewTotal = 0,
     decks = [{ slug: deck.Slug, title: deck.Title }],
     selectedDeckSlug,
+    ownedSet = null,
   } = params;
-  const rows = buildLibraryCardRows({ deck, progress, now, isTrial, previewTotal });
+  const rows = buildLibraryCardRows({ deck, progress, now, isTrial, previewTotal, ownedSet });
+  // Gated, these three read "of the cards you hold" -- an unowned card carries
+  // status 'missing' and so falls out of all three on its own, no second gate
+  // needed here.
   const newCount = rows.filter((item) => item.status === 'new').length;
   const masteredCount = rows.filter((item) => item.status === 'mastered').length;
   const learningCount = rows.filter((item) => item.status === 'learning').length;
+  // Ungated this equals learningCount + masteredCount, which is the formula
+  // LibraryScreen computes by hand today -- so a caller can move to this field
+  // before it has a set to pass, and see no change until it does.
+  const ownedCount = rows.filter((item) => !item.isMissing).length;
   // Rarity counts — independent of SRS state. Counts ALL cards (owned
   // + missing) of each tier so the filter chips show the deck's rarity
   // distribution, not just what the user owns.
@@ -155,6 +209,7 @@ export function buildLibraryVM(params: {
   const updatedCount = countUpdatedCards(
     isTrial ? (deck.Cards ?? []).slice(0, previewTotal) : deck.Cards ?? [],
     progress,
+    ownedSet,
   );
   const drawStatusLabel =
     dueTodayCount > 0
@@ -199,6 +254,8 @@ export function buildLibraryVM(params: {
       masteredCount,
       dueTodayCount,
       updatedCount,
+      ownedCount,
+      totalCount: rows.length,
     },
     decks,
     selectedDeckSlug: decks.some((item) => item.slug === selectedDeckSlug) && selectedDeckSlug ? selectedDeckSlug : deck.Slug,

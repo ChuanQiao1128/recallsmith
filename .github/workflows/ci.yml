@@ -6,7 +6,7 @@ on:
 
 jobs:
   mobile:
-    name: mobile (vitest)
+    name: mobile (typecheck + vitest)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -19,6 +19,20 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci
+      # `tsc --noEmit`, and unlike the frontend job that IS a real check here:
+      # mobile/tsconfig.json extends expo/tsconfig.base and has no `include`,
+      # so tsc falls back to "every .ts/.tsx under the project root" — 315
+      # files, App.tsx, src/, tests/ and scripts/ included.
+      #
+      # It earns its place because vitest cannot see what it covers. When the
+      # unused `progress` field came off SelectionInput, all 73 suites stayed
+      # green and scripts/bench-hot-paths.ts still passed the dead field —
+      # nothing in tests/ imports that file, so only the compiler found it.
+      #
+      # Before the tests, not after: a type error is a cheaper and more precise
+      # failure than whatever runtime shape it turns into, and it needs no
+      # test run to report.
+      - run: npm run test:typecheck
       - run: npx vitest run
 
   frontend:

@@ -286,14 +286,12 @@ async function runPureCoreSection(): Promise<string[]> {
 
   const deckCards = makeDeckCards(200);
   const ownedSet = new Set<string>();
-  const emptyProgress: CardProgress[] = [];
 
   const drawOneStat = benchSync(
     (i) => {
       const out = pool.selectDrawCards({
         deckCards,
         ownedSet,
-        progress: emptyProgress,
         drawCount: 1,
         pityState: { draws: i % 10, threshold: 10 },
         seed: i * 2654435761,
@@ -308,7 +306,6 @@ async function runPureCoreSection(): Promise<string[]> {
       const out = pool.selectDrawCards({
         deckCards,
         ownedSet,
-        progress: emptyProgress,
         drawCount: 10,
         pityState: { draws: i % 10, threshold: 10 },
         seed: i * 2654435761,

@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { invalidateDrawStateCache } from '../gacha/draw/drawStateCache';
 import { invalidateProgressQueueCache } from '../../sync/progressQueueCache';
 
 // Progress-only keys (always wiped). Auth tokens, premium cache,
@@ -55,6 +56,11 @@ export async function resetAllProgress(opts: ResetOptions = {}): Promise<ResetPr
   // keeps the parsed queue in memory. Without this, the next rating would
   // serialise that in-memory copy back to storage and undo the reset.
   invalidateProgressQueueCache();
+  // Same reason, different cache: `devcards:u:` also covers every deck's draw
+  // state, which drawStateStore keeps in memory. Skipping this would let the
+  // next draw read the pre-reset collection out of memory and write it
+  // straight back -- the reset would appear to work and then undo itself.
+  invalidateDrawStateCache();
   return {
     removedKeyCount: matchedKeys.length,
     matchedKeys,

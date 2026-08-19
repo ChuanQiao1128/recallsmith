@@ -148,7 +148,7 @@ describe('DrawResultScreen v9', () => {
     expect(navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp' });
   });
 
-  it('routes primary action to Library with focusSlug + scrollToNew when pulls are empty', async () => {
+  it('routes primary action to Library naming the cards just drawn when pulls are empty', async () => {
     walletFixture = { availablePulls: 0, reservePulls: 0 };
     const navigate = vi.fn();
 
@@ -166,7 +166,14 @@ describe('DrawResultScreen v9', () => {
     });
 
     expect(collectText(tree)).toContain('Go to Library');
-    expect(navigate).toHaveBeenCalledWith('Library', { focusSlug: 'csharp', scrollToNew: true });
+    // Was `{ focusSlug, scrollToNew }` only, which left Library guessing and
+    // guessing wrong (it highlighted the first *unstudied* card). The uids
+    // of the cards this screen is showing are now part of the ask.
+    expect(navigate).toHaveBeenCalledWith('Library', {
+      focusSlug: 'csharp',
+      scrollToNew: true,
+      highlightUids: ['1', '2'],
+    });
   });
 
   it('keeps primary CTA non-routable until wallet pulls resolve', async () => {
@@ -206,7 +213,11 @@ describe('DrawResultScreen v9', () => {
     act(() => {
       resolvedPrimary.props.onPress();
     });
-    expect(navigate).toHaveBeenCalledWith('Library', { focusSlug: 'csharp', scrollToNew: true });
+    expect(navigate).toHaveBeenCalledWith('Library', {
+      focusSlug: 'csharp',
+      scrollToNew: true,
+      highlightUids: ['1', '2'],
+    });
   });
 
   it('routes done link back to Home', async () => {

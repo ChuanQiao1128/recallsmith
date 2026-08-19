@@ -19,7 +19,12 @@
 | DrawResultScreen | 抽卡结果确认并回流学习 | `Start studying drawn cards` / `Study this reward now` | `P0-CTA-WRAP,P0-TEXT-OVERLAP,P0-STATE-MISSING` | `screen-draw-result-root`, `screen-draw-result-primary-cta`, `screen-draw-result-detail-close` | `W-BASE,W-CTA,W-MODAL` | `src/screens/DrawResultScreen.tsx`, `tests/integration/draw-result.screen.test.tsx` |
 | LevelScreen | Daily/Draw 驱动的轻量学习流程 | `Start level`（流程中为 `See answer` / `Real-world check`） | `P0-CTA-WRAP,P0-TAP-SIZE,P0-TEXT-OVERLAP` | `screen-level-root`, `screen-level-primary-cta` | `W-BASE,W-CTA,W-SCROLL-ACTION` | `src/screens/LevelScreen.tsx`, `tests/unit/level-flow.test.ts`, `tests/integration/level.screen.test.tsx` |
 | SettlementScreen | session 结算页并引导后续分支 | `Return home` | `P0-CTA-MULTI,P0-CTA-WRAP,P0-TEXT-OVERLAP` | `screen-settlement-root`, `screen-settlement-primary-cta`, `screen-settlement-draw-cta` | `W-BASE,W-CTA` | `src/screens/SettlementScreen.tsx`, `tests/unit/settlement-vm.test.ts` |
-| ReviewScreen | 旧版 review fallback（deprecated） | 评分行（无新增主按钮） | `P0-RATING-UNREACHABLE,P0-TAP-SIZE,P0-TESTID-MISSING` | `screen-review-root`, `screen-review-primary-surface` | `W-BASE,W-RATING` | `src/screens/ReviewScreen.tsx`, `tests/integration/review-summary.flow.test.tsx` |
+<!-- ReviewScreen 行已删除（issue #11）。它是 SessionCardScreen 的第二份实现，
+repo 内没有任何 navigate('Review')，Review tab 直接路由到 'SessionCard'，
+也没有 linking 配置，所以那一行描述的是一个用户永远到不了的屏。
+它的 `screen-review-root` / `screen-review-primary-surface` testID
+没有对应替代物——SessionCardScreen 用的是 `screen-session-card-root`
+和 `screen-session-card-primary-surface`（已在上面 SessionCardScreen 行登记）。 -->
 
 ## Onboarding & Auth
 | Screen | purpose | primary CTA | P0 fail conditions | expected testIDs | mobile width checks | repair scope |

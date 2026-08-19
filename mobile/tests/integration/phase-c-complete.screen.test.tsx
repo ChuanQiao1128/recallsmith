@@ -64,16 +64,27 @@ describe('phase C completed surfaces', () => {
     expect(navigate).toHaveBeenCalledWith('Profile');
   });
 
-  it('opens achievements from profile', async () => {
+  it('no longer opens achievements from profile', async () => {
+    // Was "opens achievements from profile", pinning a CTA into a screen
+    // whose badge list is hardcoded. Profile is two taps from the Me tab, so
+    // that CTA was the shortest route from a real user to fabricated data.
+    // The screen and its route stay; the advertisement is gone.
     const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(<ProfileScreen navigation={{ navigate } as any} route={{ key: 'profile', name: 'Profile' } as any} />);
     });
+    expect(tree.root.findAll(
+      (node) =>
+        (node.type as any) === 'Pressable' &&
+        node.findAll((child) => (child.type as any) === 'Text' && child.props.children === 'Achievements').length > 0,
+    )).toHaveLength(0);
+    // Edit profile is still reachable -- this is not passing because the
+    // screen stopped rendering buttons.
     act(() => {
-      findPressableByText(tree, 'Achievements').props.onPress();
+      findPressableByText(tree, 'Edit profile').props.onPress();
     });
-    expect(navigate).toHaveBeenCalledWith('Achievements');
+    expect(navigate).toHaveBeenCalledWith('EditProfile');
   });
 
   it('opens notifications from settings main', async () => {

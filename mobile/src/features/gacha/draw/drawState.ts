@@ -12,7 +12,11 @@ export type DrawStateVM = {
 };
 
 export function pickDrawPreviewCards(rows: LibraryCardRow[], take: number = 3): LibraryCardRow[] {
-  const priority = { new: 0, learning: 1, mastered: 2 } as const;
+  // 'missing' sorts ahead of everything: a draw preview is a picture of what a
+  // pull could still give you, and once the gate is on, missing cards are the
+  // only ones it can. Ungated no row ever carries that status, so this line
+  // changes no existing ordering.
+  const priority = { missing: 0, new: 1, learning: 2, mastered: 3 } as const;
   return [...rows]
     .sort((a, b) => {
       const pa = priority[a.status];

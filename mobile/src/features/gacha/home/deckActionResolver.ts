@@ -11,8 +11,10 @@ import { syncDailyReminders } from '../../../notifications/reminders';
 import { loadDeckProgress } from '../../../review/storage';
 import { applyCachedRemoteProgress } from '../../../sync/progressSync';
 import type { CalendarDay, DeckSummary } from '../contracts';
+import { resolveEffectiveOwned } from '../draw/effectiveOwned';
+import { countLearned, countNewAvailable } from '../planner/sessionPlanner';
 import type { HomeDeckActionHint } from '../selectors/homeSelectors';
-import { buildUpcoming, clamp01, isLearnedProgress } from '../selectors/progressSelectors';
+import { buildUpcoming, clamp01 } from '../selectors/progressSelectors';
 
 export type DeckAction =
   | { kind: 'open'; slug: string }
@@ -53,6 +55,16 @@ export type HomeDeckSummarySnapshot = {
   updates: Record<string, UpdateInfo>;
   allUpcoming30: CalendarDay[];
   asOfISO: string;
+  // Two of the economy floor's three starvation inputs, summed here because
+  // this is where they are born -- the per-deck fresh/due numbers are already
+  // being computed for the summaries and for syncDailyReminders, and a caller
+  // re-deriving them from `deckSummaries` would be a second copy of the
+  // "which decks count" rule (skip coming-soon, skip not-installed) that can
+  // drift from this one. Deliberately across all decks and not the selected
+  // one: a user with work waiting in another deck is not in a dead end, and
+  // the floor exists only for dead ends.
+  totalDueAllDecks: number;
+  totalNewAllDecks: number;
 };
 
 function toDeckEntriesFromUpdates(rawUpdates: Record<string, unknown>): ManifestDeckEntry[] {
@@ -112,6 +124,7 @@ export async function loadHomeDeckSummaries(params: {
   const allUpcoming30 = buildUpcoming([], now, 30);
   const deckSummaries: DeckSummary[] = [];
   let totalDueAllDecks = 0;
+  let totalNewAllDecks = 0;
 
   for (const entry of deckEntries) {
     const availability = String(entry.availability ?? 'live').toLowerCase();
@@ -184,11 +197,29 @@ export async function loadHomeDeckSummaries(params: {
     }
 
     const progress = await loadDeckProgress(deck as any);
-    const learned = progress.filter(isLearnedProgress).length;
-    const denom = Math.max(1, localCards);
-    const upcoming = buildUpcoming(progress, now, 30);
+    // One resolve per deck per Home load, served by the drawState read model
+    // after the first hit. It has to be per deck: ownership is stored per
+    // slug, and a union built from another deck's progress would grandfather
+    // uids that mean nothing here.
+    const ownedSet = await resolveEffectiveOwned(String((deck as any).Slug), progress);
+    const learned = countLearned(progress, ownedSet);
+    // "Fresh" stops meaning "a card in the deck file you have not studied" and
+    // starts meaning "a card you hold and have not studied". This is the whole
+    // point of the phase and the number that visibly moves: a new account with
+    // a 100-card deck installed goes from 100 fresh to however many the last
+    // pull granted -- usually 0, which is what hands Home's primary button to
+    // the draw (see homeSelectors' nothing_to_learn).
+    const fresh = countNewAvailable(progress, ownedSet);
+    // Denominator is the collection, not the deck file. Against the deck file
+    // a full collection of ten cards out of a hundred reads 10% forever, which
+    // describes the shop rather than the user's work. learned + fresh is the
+    // owned slice of this deck: every owned card is either studied or not.
+    const collectionSize = learned + fresh;
+    const denom = Math.max(1, collectionSize);
+    const upcoming = buildUpcoming(progress, now, 30, ownedSet);
     const dueToday = upcoming[0]?.count ?? 0;
     totalDueAllDecks += dueToday;
+    totalNewAllDecks += fresh;
 
     for (let i = 0; i < allUpcoming30.length; i++) {
       allUpcoming30[i].count += upcoming[i]?.count ?? 0;
@@ -211,7 +242,7 @@ export async function loadHomeDeckSummaries(params: {
       order: entry.order,
       dueToday,
       plannedToday: dueToday,
-      newToday: Math.max(0, denom - learned),
+      newToday: fresh,
       masteredApprox: learned,
       percent: clamp01(learned / denom),
     });
@@ -223,6 +254,8 @@ export async function loadHomeDeckSummaries(params: {
     updates,
     allUpcoming30,
     asOfISO: now.toISOString(),
+    totalDueAllDecks,
+    totalNewAllDecks,
   };
 }
 

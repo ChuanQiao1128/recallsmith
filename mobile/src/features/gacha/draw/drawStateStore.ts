@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getUserScopedKey } from '../../../review/storage';
+import { getCachedDrawState, setCachedDrawState } from './drawStateCache';
 import type { PityState } from './pity';
 
 // One deck's whole draw-mutable state lives under one key, and a draw
@@ -196,17 +197,44 @@ async function claimGlobalDrawState(slug: string): Promise<DrawStateRecord | nul
   return record;
 }
 
+/**
+ * The read model. Backed by memory after the first read of a partition.
+ *
+ * Uncached, this was an AsyncStorage getItem plus a JSON.parse per call, and
+ * a *miss* cost four reads: the scoped key plus the three pre-partition keys
+ * the legacy claim looks for. That was affordable while the only readers were
+ * a draw and the draw screen. The ownership gate makes every card list a
+ * reader, so the same call now happens per screen render rather than per
+ * pull, and the amplification is what would have shown up as jank.
+ *
+ * Nothing about the answer changes: the cache is only ever filled with what
+ * storage just returned. saveDrawState is the only writer and writes through;
+ * the three paths that *delete* these keys without passing through it each
+ * call invalidateDrawStateCache (the debug progress reset, the sync debug
+ * reset, and the deck-retire purge). Anything new that removes a
+ * `devcards:draw-state:` key has to do the same, or its deletion will be
+ * undone by the next read-modify-write.
+ */
 export async function loadDrawState(slug: string): Promise<DrawStateRecord> {
+  let key: string;
   let raw: string | null = null;
   try {
-    raw = await AsyncStorage.getItem(await stateKey(slug));
+    key = await stateKey(slug);
+    const cached = getCachedDrawState(key);
+    if (cached) return cached;
+    raw = await AsyncStorage.getItem(key);
   } catch {
+    // Deliberately not cached. A transient read failure must not pin an empty
+    // collection in memory for the rest of the session -- that would turn one
+    // bad read into "your cards are gone until you restart the app".
     return { owned: [], pity: null };
   }
 
   if (raw) {
     try {
-      return parseDrawStateRecord(raw);
+      const record = parseDrawStateRecord(raw);
+      setCachedDrawState(key, record);
+      return record;
     } catch {
       // A corrupt scoped key falls through to the legacy claim rather
       // than to empty: an old collection is a better answer than none.
@@ -214,7 +242,17 @@ export async function loadDrawState(slug: string): Promise<DrawStateRecord> {
   }
 
   try {
-    return (await claimGlobalDrawState(slug)) ?? { owned: [], pity: null };
+    const claimed = await claimGlobalDrawState(slug);
+    // A successful claim is cached by the saveDrawState inside it, and a
+    // failed one is deliberately left uncached so the next load retries the
+    // migration -- the write-through *is* the signal that the copy is
+    // durable. Only "there was nothing to claim" is cached here, and it has
+    // to be: without it every load of a never-drawn deck re-runs the
+    // three-key legacy scan forever.
+    if (claimed) return claimed;
+    const empty: DrawStateRecord = { owned: [], pity: null };
+    setCachedDrawState(key, empty);
+    return empty;
   } catch {
     return { owned: [], pity: null };
   }
@@ -251,10 +289,14 @@ export async function listDrawStateSlugs(): Promise<string[]> {
  * setItem next to this call.
  */
 export async function saveDrawState(slug: string, record: DrawStateRecord): Promise<void> {
-  await AsyncStorage.setItem(
-    await stateKey(slug),
-    JSON.stringify({ owned: record.owned, pity: record.pity }),
-  );
+  const key = await stateKey(slug);
+  await AsyncStorage.setItem(key, JSON.stringify({ owned: record.owned, pity: record.pity }));
+  // After the write, never before. A cache primed ahead of a setItem that
+  // then throws would serve a collection that does not exist on disk -- the
+  // draw would look committed until the next launch silently took it back.
+  // In this order a failed write leaves memory and disk agreeing on the old
+  // value, which is the state the caller's error handling already expects.
+  setCachedDrawState(key, record);
 }
 
 function parseDrawHistory(raw: string): DrawHistoryEntry[] {

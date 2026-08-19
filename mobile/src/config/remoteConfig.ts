@@ -1,6 +1,20 @@
 // mobile/src/config/remoteConfig.ts
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Application from 'expo-application';
+
+// Last successfully parsed config. It exists so the version gate survives a
+// launch with no network, which matters in both directions: a user who is
+// offline is not silently un-gated, and a user who is offline is not made to
+// wait for a timeout before the app appears.
+//
+// The cost, stated plainly: a config that once said "force update" keeps
+// saying it while offline. That is the correct reading of a
+// minSupportedVersion (the old client is broken against the server, and
+// losing wifi does not fix it), but it does mean a mis-published gate is
+// harder to walk back than a mis-served one. resolveIosUpdate compares
+// against the *current* app version, so upgrading always clears it.
+const REMOTE_CONFIG_CACHE_KEY = 'recallsmith:remote-config:last-good:v1';
 
 export type IosRemoteConfig = {
   minSupportedVersion?: string;
@@ -49,16 +63,32 @@ export function getCurrentAppVersion(): string {
   return '0.0.0';
 }
 
+export async function loadCachedRemoteConfig(): Promise<RemoteConfig | null> {
+  try {
+    const raw = await AsyncStorage.getItem(REMOTE_CONFIG_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed as RemoteConfig;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchRemoteConfig(
   url: string,
   timeoutMs: number = 4500,
 ): Promise<RemoteConfig | null> {
-  const cacheBustedUrl = url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`;
+  // No `?t=${Date.now()}`. A unique query string per launch makes every
+  // request a cache miss all the way to the origin -- which is exactly the
+  // latency this file was paying for on a cold start -- and it buys nothing
+  // the 'cache-control: no-cache' header below does not already ask for.
+  // Revalidation is what we want; a permanent cache bypass is not.
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const resp = await fetch(cacheBustedUrl, {
+    const resp = await fetch(url, {
       method: 'GET',
       headers: { 'cache-control': 'no-cache' },
       signal: controller.signal,
@@ -69,12 +99,33 @@ export async function fetchRemoteConfig(
     const json = (await resp.json()) as unknown;
     if (!json || typeof json !== 'object') return null;
 
+    // Cache only what parsed. A 500 body or a truncated response must not
+    // become the config this device believes in for the next month.
+    try {
+      await AsyncStorage.setItem(REMOTE_CONFIG_CACHE_KEY, JSON.stringify(json));
+    } catch {
+      // A config we could not persist is still valid for this launch.
+    }
+
     return json as RemoteConfig;
   } catch {
     return null;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Network first, last-good second. Returns null only when this device has
+ * never successfully read the config.
+ */
+export async function loadRemoteConfig(
+  url: string,
+  timeoutMs: number = 4500,
+): Promise<RemoteConfig | null> {
+  const fresh = await fetchRemoteConfig(url, timeoutMs);
+  if (fresh) return fresh;
+  return loadCachedRemoteConfig();
 }
 
 export function resolveIosUpdate(config: RemoteConfig, currentVersion: string): {

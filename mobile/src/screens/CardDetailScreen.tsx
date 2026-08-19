@@ -14,35 +14,55 @@ import { packPaletteFromSlug } from '../theme/packArt';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CardDetail'>;
 
-// Lazy + guarded loaders. The transitive dependency chain pulls
-// expo-modules-core which references __DEV__; that global is undefined under
-// vitest. Dynamic require keeps the modules out of the test import graph so
-// the screen still renders (with empty data) in tests.
-function loadActiveDeckSlugSafe(): Promise<string | null> {
+// Lazy + guarded loaders. The transitive dependency chain reaches
+// expo-file-system, expo-crypto and aws-amplify, none of which this screen
+// needs in order to render; deferring them keeps a card page from paying for
+// the whole content stack at import time, and the guards keep an environment
+// that cannot load them (a test runner) rendering an empty card instead of
+// throwing.
+//
+// `import()`, not `require()`. The require form looked equivalent and was not:
+// under the test runner it threw on every call and the catch swallowed it, so
+// the screen silently had no deck, no progress and no way to observe the
+// difference -- three loaders that could never load. Dynamic import defers the
+// same way and stays a real module reference the runner can resolve.
+async function loadActiveDeckSlugSafe(): Promise<string | null> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require('../content/activeDeck');
-    return mod?.loadActiveDeckSlug?.() ?? Promise.resolve(null);
+    const mod = await import('../content/activeDeck');
+    return (await mod?.loadActiveDeckSlug?.()) ?? null;
   } catch {
-    return Promise.resolve(null);
+    return null;
   }
 }
-function resolveDeckBySlugSafe(slug: string): Promise<DeckExport | null> {
+async function resolveDeckBySlugSafe(slug: string): Promise<DeckExport | null> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require('../content/deckRepository');
-    return mod?.resolveDeckBySlug?.(slug) ?? Promise.resolve(null);
+    const mod = await import('../content/deckRepository');
+    return (await mod?.resolveDeckBySlug?.(slug)) ?? null;
   } catch {
-    return Promise.resolve(null);
+    return null;
   }
 }
-function loadDeckProgressSafe(deck: DeckExport): Promise<CardProgress[]> {
+async function loadDeckProgressSafe(deck: DeckExport): Promise<CardProgress[]> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require('../review/storage');
-    return mod?.loadDeckProgress?.(deck) ?? Promise.resolve([]);
+    const mod = await import('../review/storage');
+    return (await mod?.loadDeckProgress?.(deck)) ?? [];
   } catch {
-    return Promise.resolve([]);
+    return [];
+  }
+}
+async function resolveEffectiveOwnedSafe(
+  slug: string,
+  progress: CardProgress[],
+): Promise<Set<string> | null> {
+  try {
+    const mod = await import('../features/gacha/draw/effectiveOwned');
+    return (await mod?.resolveEffectiveOwned?.(slug, progress)) ?? null;
+  } catch {
+    // null is "this screen could not find out", which renders the card the way
+    // 1.4.0 did. Failing the other way -- treating an unreadable collection as
+    // an empty one -- would lock a user out of cards they own because one
+    // storage read went wrong.
+    return null;
   }
 }
 
@@ -50,6 +70,7 @@ function loadDeckProgressSafe(deck: DeckExport): Promise<CardProgress[]> {
 function useDeckCard(cardId: string) {
   const [deck, setDeck] = useState<DeckExport | null>(null);
   const [progress, setProgress] = useState<CardProgress[]>([]);
+  const [ownedSet, setOwnedSet] = useState<Set<string> | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -62,8 +83,15 @@ function useDeckCard(cardId: string) {
         if (!d || cancelled) return;
         const p = await loadDeckProgressSafe(d);
         if (cancelled) return;
+        // Resolved before the card is published to the tree, not alongside it.
+        // Two setStates a tick apart would render one frame of the unlocked
+        // card -- the question text of a card the user does not hold, which is
+        // exactly the thing the lock exists to withhold.
+        const owned = await resolveEffectiveOwnedSafe(slug, p);
+        if (cancelled) return;
         setDeck(d);
         setProgress(p);
+        setOwnedSet(owned);
       } catch {
         /* fall through to fallback below */
       } finally {
@@ -77,7 +105,10 @@ function useDeckCard(cardId: string) {
 
   const card = deck?.Cards?.find((c) => c.StableUid === cardId) ?? null;
   const cardProgress = progress.find((p) => p.stableUid === cardId) ?? null;
-  return { card, cardProgress, deck, loading };
+  // Three-valued, like the Library mapper: a null set means the question was
+  // never answered, and an unanswered question is not a "no".
+  const isLocked = !!card && ownedSet !== null && !ownedSet.has(card.StableUid);
+  return { card, cardProgress, deck, loading, isLocked };
 }
 
 // Rarity labels aligned with the rest of the app (Library tile stars,
@@ -138,10 +169,13 @@ function formatNextReview(nextReviewAt: number | undefined): string {
 }
 
 export function CardDetailScreen({ navigation, route }: Props) {
-  const { card, cardProgress, deck, loading } = useDeckCard(route.params.cardId);
+  const { card, cardProgress, deck, loading, isLocked } = useDeckCard(route.params.cardId);
 
   const fallbackTitle = 'Card details';
-  const title = card?.Question ?? fallbackTitle;
+  // A locked card shows its slot and nothing else it could be recognised by.
+  // The Library's silhouette tile makes the same trade: the registry admits
+  // the card exists, the pull is still the moment you learn what it says.
+  const title = isLocked ? 'Not in your collection yet' : (card?.Question ?? fallbackTitle);
   const slot = card?.OrderInDeck ?? 0;
   const difficulty = card?.Difficulty ?? 1;
   const rarity = rarityFromDifficulty(difficulty);
@@ -184,17 +218,23 @@ export function CardDetailScreen({ navigation, route }: Props) {
                   <Text style={styles.heroRarityChipText} numberOfLines={1}>
                     {/* Stars proportional to rarity tier — same language
                         as Library tile (RAR=1, LEG=3, COM=none). Common
-                        cards get just the label, no decorative star. */}
-                    {rarity.label === 'Legendary'
-                      ? '★★★ Legendary'
-                      : rarity.label === 'Rare'
-                        ? '★ Rare'
-                        : 'Common'}
+                        cards get just the label, no decorative star.
+                        Locked cards name no tier at all: the Library tile
+                        already withholds the stars, and a page that leaks
+                        "Legendary" for an unowned slot turns the grid into a
+                        map of where the good pulls are. */}
+                    {isLocked
+                      ? 'Locked'
+                      : rarity.label === 'Legendary'
+                        ? '★★★ Legendary'
+                        : rarity.label === 'Rare'
+                          ? '★ Rare'
+                          : 'Common'}
                   </Text>
                 </View>
-                <View style={[styles.heroStatusChip, status === 'Mastered' && styles.heroStatusMastered]}>
+                <View style={[styles.heroStatusChip, !isLocked && status === 'Mastered' && styles.heroStatusMastered]}>
                   <Text style={styles.heroStatusChipText} numberOfLines={1}>
-                    {status}
+                    {isLocked ? 'Missing' : status}
                   </Text>
                 </View>
               </View>
@@ -262,16 +302,32 @@ export function CardDetailScreen({ navigation, route }: Props) {
               card practice but actually launched the full deck session.
               No real single-card mode exists yet, so we're honest:
               "Open deck session" is what the button actually does. */}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open deck session"
-            style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}
-            onPress={() =>
-              navigation.navigate('SessionCard', { slug: deck?.Slug ?? undefined })
-            }
-          >
-            <Text style={styles.primaryActionText}>Open deck session</Text>
-          </Pressable>
+          {isLocked ? (
+            // No study entry, and no disabled button either. A dead control is
+            // a dead end; the draw is the one action that can actually change
+            // this card's state, so it takes the primary slot. The label does
+            // not promise this card: a pull grants what the pool grants.
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open reward draw"
+              testID="card-detail-locked-cta"
+              style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}
+              onPress={() => navigation.navigate('Draw', { slug: deck?.Slug ?? undefined })}
+            >
+              <Text style={styles.primaryActionText}>Open reward draw</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open deck session"
+              style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}
+              onPress={() =>
+                navigation.navigate('SessionCard', { slug: deck?.Slug ?? undefined })
+              }
+            >
+              <Text style={styles.primaryActionText}>Open deck session</Text>
+            </Pressable>
+          )}
           <Pressable
             accessibilityRole="button"
             style={({ pressed }) => [styles.secondaryAction, pressed && styles.pressed]}

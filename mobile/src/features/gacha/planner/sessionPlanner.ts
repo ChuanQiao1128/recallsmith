@@ -1,5 +1,6 @@
 import type { DeckExport, CardExport } from '../../../types/deckExport';
 import type { CardProgress } from '../../../review/model';
+import type { OwnedGate } from '../contracts';
 import { buildChallengeRoute } from './sessionBuilder';
 import { isLearnedProgress, isNewProgress, isScheduledProgress, startOfToday } from '../selectors/progressSelectors';
 import { formatDateKey } from '../../../review/model';
@@ -29,16 +30,34 @@ function isDueTodayBucket(progress: CardProgress, now: Date): boolean {
   return formatDateKey(effective) === todayKey;
 }
 
-export function countDueToday(progressList: CardProgress[], now: Date): number {
-  return progressList.filter((progress) => isDueTodayBucket(progress, now)).length;
+function isOwned(stableUid: string, ownedSet: OwnedGate): boolean {
+  return ownedSet === null || ownedSet.has(stableUid);
 }
 
-export function countNewAvailable(progressList: CardProgress[]): number {
-  return progressList.filter((progress) => isNewProgress(progress)).length;
+/*
+ * Every entry point below takes the same OwnedGate, and it is optional on all
+ * of them on purpose.
+ *
+ * A required parameter would make the compiler enumerate the call sites, which
+ * is worth something -- but it would also force this change to edit every
+ * screen and every existing test with a placeholder the next phase immediately
+ * replaces, and a `null` typed in to silence a compiler is not a decision
+ * anybody made. So the gate arrives one caller at a time: each starts ungated,
+ * is switched over deliberately, and gets a test that fails if the switch is
+ * ever undone. Nothing here changes behaviour until a caller passes a set.
+ */
+
+export function countDueToday(progressList: CardProgress[], now: Date, ownedSet: OwnedGate = null): number {
+  return progressList.filter((progress) => isOwned(progress.stableUid, ownedSet) && isDueTodayBucket(progress, now))
+    .length;
 }
 
-export function countLearned(progressList: CardProgress[]): number {
-  return progressList.filter((progress) => isLearnedProgress(progress)).length;
+export function countNewAvailable(progressList: CardProgress[], ownedSet: OwnedGate = null): number {
+  return progressList.filter((progress) => isOwned(progress.stableUid, ownedSet) && isNewProgress(progress)).length;
+}
+
+export function countLearned(progressList: CardProgress[], ownedSet: OwnedGate = null): number {
+  return progressList.filter((progress) => isOwned(progress.stableUid, ownedSet) && isLearnedProgress(progress)).length;
 }
 
 function getCardRevision(card: CardExport): number {
@@ -64,8 +83,9 @@ export function pickNextCard(params: {
   mode: 'review-due' | 'learn-new' | 'mixed';
   avoidUid?: string | null;
   index?: { cards: CardExport[]; cardMap: Map<string, CardExport> } | null;
+  ownedSet?: OwnedGate;
 }): CurrentCardLike | null {
-  const { deck, progress, now, mode, avoidUid, index } = params;
+  const { deck, progress, now, mode, avoidUid, index, ownedSet = null } = params;
   const cardMap = index?.cardMap ?? (deck ? buildCardMap(deck) : null);
   const cards = index?.cards ?? (deck ? sortCards(deck) : null);
   if (!cardMap || !cards) return null;
@@ -95,9 +115,19 @@ export function pickNextCard(params: {
     return null;
   };
 
-  const pickDue = () => pickWith((_card, progressEntry) => isDueTodayBucket(progressEntry, now));
-  const pickUpdated = () => pickWith((card, progressEntry) => isUpdatedCard(card, progressEntry));
-  const pickNew = () => pickWith((_card, progressEntry) => isNewProgress(progressEntry));
+  // The owned check sits inside each predicate rather than in pickWith's loop.
+  // Two reasons, one structural and one about evidence. Structural: pickWith
+  // scans twice -- once honouring avoidUid, once ignoring it -- and a check
+  // hoisted into the loop body would have to be written into both scans, so the
+  // predicate is the DRY position, not the loop. Evidence: with three separate
+  // conjuncts, deleting any one of them turns exactly one test red, which is
+  // what proves each entry path is guarded on its own instead of all three
+  // riding on a single shared line. The cost is that a fourth pick added later
+  // must remember `owns` -- if you are adding one, add it.
+  const owns = (card: CardExport) => isOwned(card.StableUid, ownedSet);
+  const pickDue = () => pickWith((card, progressEntry) => owns(card) && isDueTodayBucket(progressEntry, now));
+  const pickUpdated = () => pickWith((card, progressEntry) => owns(card) && isUpdatedCard(card, progressEntry));
+  const pickNew = () => pickWith((card, progressEntry) => owns(card) && isNewProgress(progressEntry));
 
   if (mode === 'review-due') return pickDue();
   if (mode === 'learn-new') return pickNew();
@@ -108,10 +138,11 @@ export function planChallengeRoute(params: {
   deck: DeckExport;
   progress: CardProgress[];
   now?: Date;
+  ownedSet?: OwnedGate;
 }) {
-  const { deck, progress, now = new Date() } = params;
-  const dueCount = countDueToday(progress, now);
-  const newCount = countNewAvailable(progress);
+  const { deck, progress, now = new Date(), ownedSet = null } = params;
+  const dueCount = countDueToday(progress, now, ownedSet);
+  const newCount = countNewAvailable(progress, ownedSet);
 
   return buildChallengeRoute({
     slug: deck.Slug,

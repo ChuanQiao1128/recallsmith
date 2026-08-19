@@ -49,6 +49,9 @@ vi.mock('../../src/content/deckRepository', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  // Kept in the mock even though the draw path no longer calls it: the
+  // "never reads review progress" test below asserts on its call count,
+  // and an absent export would make that test pass for the wrong reason.
   loadDeckProgress: vi.fn(async () => []),
   // Draw state is user-scoped through this helper now. The mock returns
   // the same shape the real helper produces while signed out, so the key
@@ -57,9 +60,21 @@ vi.mock('../../src/review/storage', () => ({
 }));
 
 import { commitDraw, replayDraw } from '../../src/features/gacha/draw/drawCommit';
-import { loadDrawHistory } from '../../src/features/gacha/draw/drawStateStore';
-import { loadOwnedSet } from '../../src/features/gacha/draw/ownedStore';
+import { loadDrawHistory, loadDrawState } from '../../src/features/gacha/draw/drawStateStore';
+// Clearing `store` below wipes the keys behind the store's back, the same way
+// the debug reset does in production -- and, like production, the in-memory
+// read model has to be told or one test's collection leaks into the next.
+import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { loadPityState } from '../../src/features/gacha/draw/pity';
+
+// Was ownedStore.loadOwnedSet, a module with no callers in src/ that was
+// deleted with issue #11. Inlined rather than replaced with a plain
+// loadDrawState call at each site so the assertions below still read as
+// "what does the collection look like", which is what they are about --
+// and so the pity half stays visibly untouched by the owned-half reads.
+async function loadOwnedSet(slug: string): Promise<Set<string>> {
+  return new Set((await loadDrawState(slug)).owned);
+}
 
 const STATE_KEY = `${SCOPE}devcards:draw-state:${SLUG}`;
 const HISTORY_KEY = `${SCOPE}devcards:draw-history:${SLUG}`;
@@ -71,6 +86,7 @@ const LEGACY_PITY_KEY = `devcards:draw-pity:${SLUG}`;
 describe('draw commit atomicity', () => {
   beforeEach(() => {
     store.clear();
+    invalidateDrawStateCache();
     setItemCalls.length = 0;
     failSetItemFor = null;
   });
@@ -143,9 +159,36 @@ describe('draw commit atomicity', () => {
   });
 });
 
+describe('gacha does not depend on review', () => {
+  beforeEach(() => {
+    store.clear();
+    invalidateDrawStateCache();
+    setItemCalls.length = 0;
+    failSetItemFor = null;
+  });
+
+  it('never reads review progress while committing a draw', async () => {
+    const { loadDeckProgress } = await import('../../src/review/storage');
+    vi.mocked(loadDeckProgress).mockClear();
+
+    const result = await commitDraw(SLUG, 10);
+
+    // The draw still happened -- this is not passing because nothing ran.
+    expect(result!.cards).toHaveLength(10);
+    // The edge only ever pointed this way by accident: selectDrawCards
+    // stopped reading `progress` when the review-history weighting was
+    // deleted, but drawCommit went on loading it. Asserting the call
+    // count rather than deleting the mock keeps the failure legible --
+    // re-adding the load turns this red with "expected 0 calls", not
+    // with a TypeError three frames deep.
+    expect(vi.mocked(loadDeckProgress)).not.toHaveBeenCalled();
+  });
+});
+
 describe('draw replay', () => {
   beforeEach(() => {
     store.clear();
+    invalidateDrawStateCache();
     setItemCalls.length = 0;
     failSetItemFor = null;
   });

@@ -19,8 +19,16 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 // makes, which is the only way a test can prove the switch takes effect
 // without waiting out the sub cache TTL.
 import { setActiveUserSubForStorage } from '../../src/review/storage';
-import { loadDrawState, loadDrawHistory, appendDrawHistory } from '../../src/features/gacha/draw/drawStateStore';
-import { loadOwnedSet, markCardsOwned } from '../../src/features/gacha/draw/ownedStore';
+import {
+  loadDrawState,
+  loadDrawHistory,
+  appendDrawHistory,
+  saveDrawState,
+} from '../../src/features/gacha/draw/drawStateStore';
+// store.clear() below wipes the keys behind the store's back, the same way the
+// debug reset does in production -- and, like production, the in-memory read
+// model has to be told or one account's collection leaks into the next test.
+import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import {
   applySessionRewardToWallet,
   loadRewardWalletState,
@@ -30,6 +38,23 @@ import {
 } from '../../src/features/gacha/rewards/rewardWallet';
 
 const SLUG = 'csharp';
+
+// Was ownedStore.markCardsOwned / loadOwnedSet, a module with no callers
+// in src/ that was deleted with issue #11. Reproduced here rather than
+// swapped for a bare saveDrawState, because the read-modify-write shape
+// is load-bearing for what these tests check: the write has to resolve
+// the *active* scope's key at call time, and a blind overwrite would
+// still pass a broken-scoping build in the additive cases below.
+async function markCardsOwned(slug: string, stableUids: string[]): Promise<void> {
+  const state = await loadDrawState(slug);
+  const owned = new Set(state.owned);
+  for (const uid of stableUids) owned.add(uid);
+  await saveDrawState(slug, { owned: [...owned], pity: state.pity });
+}
+
+async function loadOwnedSet(slug: string): Promise<Set<string>> {
+  return new Set((await loadDrawState(slug)).owned);
+}
 
 const GLOBAL_DRAW_STATE_KEY = `devcards:draw-state:${SLUG}`;
 const GLOBAL_DRAW_HISTORY_KEY = `devcards:draw-history:${SLUG}`;
@@ -52,6 +77,7 @@ function historyEntry(drawId: string) {
 describe('gacha state is partitioned by user', () => {
   beforeEach(() => {
     store.clear();
+    invalidateDrawStateCache();
     setActiveUserSubForStorage(null);
   });
 
@@ -109,6 +135,7 @@ describe('gacha state is partitioned by user', () => {
 describe('pre-partition gacha keys are claimed once', () => {
   beforeEach(() => {
     store.clear();
+    invalidateDrawStateCache();
     setActiveUserSubForStorage(null);
   });
 
@@ -194,6 +221,7 @@ describe('pre-partition gacha keys are claimed once', () => {
 describe('session settlement receipts never fall back across partitions', () => {
   beforeEach(() => {
     store.clear();
+    invalidateDrawStateCache();
     setActiveUserSubForStorage(null);
   });
 

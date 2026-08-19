@@ -79,6 +79,13 @@ vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
   saveRewardWalletState: vi.fn(async () => {}),
 }));
 
+// DrawScreen schedules a sync after a committed draw (issue #12 item 6a).
+// Mocked here rather than mocked away: progressSync pulls in Platform,
+// expo-crypto and the API client, none of which this screen test is about.
+vi.mock('../../src/sync/progressSync', () => ({
+  scheduleProgressSync: vi.fn(),
+}));
+
 vi.mock('../../src/features/gacha/draw/drawCommit', () => ({
   commitDraw: vi.fn(async () => null),
 }));

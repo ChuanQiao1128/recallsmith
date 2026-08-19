@@ -35,6 +35,7 @@ import {
   scheduleProgressSync,
 } from '../sync/progressSync';
 import { countDueToday, pickNextCard, planChallengeRoute } from '../features/gacha/planner/sessionPlanner';
+import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import { computeSessionRewardPulls } from '../features/gacha/rewards/rewardResolver';
 import {
   buildRatedSessionState,
@@ -104,6 +105,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [progress, setProgress] = useState<CardProgress[]>([]);
+  // The gate for this deck, resolved once per load and then held. It is state
+  // rather than a ref because the render path counts due cards with it, and it
+  // never changes mid-session: rating a card cannot make you own or stop
+  // owning one, and a draw cannot happen without leaving this screen.
+  const [ownedSet, setOwnedSet] = useState<Set<string> | null>(null);
   const [dailyStats, setDailyStats] = useState<DailyStats | null>(null);
   const [current, setCurrent] = useState<CurrentCardLike | null>(null);
   const [reviewing, setReviewing] = useState(false);
@@ -292,6 +298,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
           }
           const nextProgress = await loadDeckProgress(deckForStudy);
           if (cancelled) return;
+          // Resolved against the deck's own slug, not deckForStudy's, so a
+          // trial preview (which is a synthesised deck object with the same
+          // slug) reads the same collection as the full deck would.
+          const nextOwned = await resolveEffectiveOwned(resolved.Slug, nextProgress);
+          if (cancelled) return;
           if (isTrial && trialRef.current.previewCount > 0) {
             const learnedCount = nextProgress.filter(isLearned).length;
             const previewDone = learnedCount >= trialRef.current.previewCount;
@@ -307,7 +318,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
           }
           const stats = await loadOrInitDailyStats(deckForStudy, nextProgress);
           if (cancelled) return;
-          const plannedChallenge = planChallengeRoute({ deck: deckForStudy, progress: nextProgress, now });
+          const plannedChallenge = planChallengeRoute({
+            deck: deckForStudy,
+            progress: nextProgress,
+            now,
+            ownedSet: nextOwned,
+          });
           setPlannedMinimumGoal(plannedChallenge.minimumGoal);
           // Sync sessionLimit to the planner's actual route length so
           // the header reads "Run 0/3" when the deck has 3 due cards
@@ -320,6 +336,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             mode,
             avoidUid: null,
             index: cardIndexRef.current,
+            ownedSet: nextOwned,
           });
           startSession({
             sessionId: `${deckForStudy.Slug}-${now.getTime()}`,
@@ -328,10 +345,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
             startedAt: now.getTime(),
           });
           setProgress(nextProgress);
+          setOwnedSet(nextOwned);
           setDailyStats(stats);
           setCurrent(nextCurrent);
           setLoading(false);
-          const remainingDueCount = countDueToday(nextProgress, now);
+          const remainingDueCount = countDueToday(nextProgress, now, nextOwned);
           void syncDailyReminders({ remainingDueCount, now });
         } catch (e: any) {
           if (cancelled) return;
@@ -339,6 +357,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           setProgress([]);
           setDailyStats(null);
           setCurrent(null);
+          setOwnedSet(null);
           setPlannedMinimumGoal(null);
           trialRef.current = EMPTY_TRIAL_INFO;
           setTrialInfo(EMPTY_TRIAL_INFO);
@@ -362,7 +381,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
     }, [isPremiumUser, mode, navigation, previewLimit, slug]),
   );
   const now = new Date();
-  const dueTodayCount = countDueToday(progress, now);
+  const dueTodayCount = countDueToday(progress, now, ownedSet);
   const sessionVm = useMemo(
     () =>
       buildSessionProgressVM({
@@ -392,6 +411,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         sessionLimit,
         now: nowAtRating,
         cardIndex: cardIndexRef.current,
+        ownedSet,
       });
       // Events are facts, progress is a projection; facts must land first. A
       // queued event can rebuild the progress on the next sync, but a saved
@@ -418,6 +438,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
       } catch (e) {
         console.warn('[SessionCard] recordReviewEvent failed:', (e as any)?.message ?? e);
       }
+      // The whole array, every time. nextState.updatedProgress is the deck's
+      // full progress with one entry replaced -- never an owned-filtered view.
+      // saveDeckProgress is a wholesale overwrite, so handing it a gated slice
+      // would delete the progress of every card the gate happened to exclude,
+      // and the gate's own grandfather rule reads that progress back.
       await saveDeckProgress(deck, nextState.updatedProgress);
       const trial = trialRef.current;
       if (trial.isTrial && (mode === 'learn-new' || mode === 'mixed') && trial.previewCount > 0) {
@@ -437,7 +462,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
       advanceSession();
       const minimumGoal =
         plannedMinimumGoal ??
-        planChallengeRoute({ deck, progress: nextState.updatedProgress, now: nowAtRating }).minimumGoal;
+        planChallengeRoute({
+          deck,
+          progress: nextState.updatedProgress,
+          now: nowAtRating,
+          ownedSet,
+        }).minimumGoal;
       setSessionDone(nextState.nextDone);
       setProgress(nextState.updatedProgress);
       setCurrent(nextState.nextCurrent);
@@ -536,7 +566,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   }
   const ratingDockHeight = 164 + Math.max(insets.bottom, 8);
   const doneMinimumGoal =
-    plannedMinimumGoal ?? planChallengeRoute({ deck, progress, now }).minimumGoal;
+    plannedMinimumGoal ?? planChallengeRoute({ deck, progress, now, ownedSet }).minimumGoal;
   const doneRewardPulls = computeSessionRewardPulls({
     sessionDone,
     sessionLimit,

@@ -8,6 +8,10 @@
 >
 > 早期版本（v3 到 v6.1）与它们的任务清单、审计表、diff 已经删除。
 > 本文是唯一的现行规格，历史仍在 git 里。
+>
+> **本文与实现不一致处，一律以 `docs/design/gacha-gate-decision-log.md` 为准**：
+> 那里逐条记着 ownership gate（issue #11–#16）落地时留下的偏差、当时的取舍、
+> 以及什么条件下要复议。本文中已被推翻的行会就地划掉并指向对应条目。
 
 ---
 
@@ -243,7 +247,12 @@ v6.1 §2 “唯一规则真表”继续有效，v7 不引入新规则、不修�
   - `src/features/gacha/session/sessionReviewHelpers.ts`（已存在，扩展）
   - `src/features/gacha/session/reviewContentHelpers.tsx`（已存在，扩展）
   - 渲染长内容的子组件可放 `src/features/gacha/components/ReviewBody.tsx`（**按需新增**）
-- 旧 `ReviewScreen.tsx` 在 v7 中**显式标记为 deprecated**，并在 navigation 中不再被任何主链路指向（可保留为 fallback 路由）
+- ~~旧 `ReviewScreen.tsx` 在 v7 中**显式标记为 deprecated**，并在 navigation 中不再被任何主链路指向（可保留为 fallback 路由）~~
+  **已作废（issue #11）**：该文件已删除。「保留为 fallback 路由」这条在实践中的结果是：
+  一份 904 行、用户永远到不了、却要跟着 SessionCardScreen 一起被审的第二实现。
+  删除前逐条比对过两边逻辑，dead 侧没有任何 live 侧缺的修复（差异全部是
+  SessionCard 更严格或更新：`!showAnswer` 评分门、`await setIsPremiumUser`、
+  planner 算出的 minimumGoal、settlement 分支）。
 
 #### 3.3.4 测试
 
@@ -358,7 +367,12 @@ DeckScreen 当前承担 gate + library + launchpad 三职责。v7 把它收敛�
 
 #### 3.6.2 测试
 
-- 集成：从 Home 主 CTA 不会进入 DeckScreen（只能进 ChallengeScreen）
+- ~~集成：从 Home 主 CTA 不会进入 DeckScreen（只能进 ChallengeScreen）~~
+  **半条作废（issue #16 记账）**：「不进 DeckScreen」仍然成立且仍被测试钉着；
+  「只能进 ChallengeScreen」已不成立 —— Home 主 CTA 现在直接进 SessionCard，
+  Challenge 只留在底部 Review tab 与深链入口。理由与复议条件见
+  `docs/design/gacha-gate-decision-log.md` D3。现行落点由
+  `tests/integration/home-cta-target.test.tsx` 钉住（钉的是产品，不是本行规格）。
 - 集成：DeckScreen 不再渲染任何卡片网格
 
 ---
@@ -473,10 +487,22 @@ DeckScreen 当前承担 gate + library + launchpad 三职责。v7 把它收敛�
 - `src/components/CodeBlock.tsx`
 - `src/theme/*`（v7 不动 token）
 - `src/navigation/types.ts` 的现有 route（**仅允许新增**，不允许删/改字段）
+  - **例外一处，已记账（issue #11）**：`Review` 条目随 `ReviewScreen.tsx` 一起删除。
+    留着它并不是「保守」——`RootStackParamList` 里有 `Review` 而 `App.tsx` 里没有
+    对应 `Stack.Screen`，意味着 `navigate('Review', ...)` 能通过类型检查、到运行时才
+    炸。删掉是把一个运行时故障换成编译期错误。该条目全仓零引用，删除不影响任何调用点。
+  - **第二处例外，同样记账（issue #11）**：`src/sync/progressSync.ts` 顶部注释第 43 行
+    的 `ReviewScreen` 改成 `SessionCardScreen`。只改了注释里的一个标识符，零行为变化；
+    改它是因为 #11 的验收条件是「全仓 grep 对已删文件零引用」，而那行注释是在教下一个
+    人去看一个不存在的文件。除此之外 `src/sync/*` 一行未动。
 
 ### 5.4 弃用
 
-- `src/screens/ReviewScreen.tsx` — 标 deprecated 注释，首行加 `@deprecated v7 - replaced by SessionCardScreen`，但保留可运行直到 v7 全部 phase 完成
+- ~~`src/screens/ReviewScreen.tsx` — 标 deprecated 注释，首行加 `@deprecated v7 - replaced by SessionCardScreen`，但保留可运行直到 v7 全部 phase 完成~~
+  **已执行完毕（issue #11）**：文件、`App.tsx` 注册、`RootStackParamList.Review`
+  与 `tests/integration/review-summary.flow.test.tsx` 一并删除。该测试唯一的断言
+  （done 态 → `SessionSummary` 的 payload）已移植到
+  `tests/integration/session-card.screen.test.tsx`，而不是随文件消失。
 
 ---
 
