@@ -22,6 +22,10 @@ vi.mock('../../src/api/apiClient', () => ({
 
 import { setActiveUserSubForStorage } from '../../src/review/storage';
 import { loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
+// store.clear() below wipes the keys behind the store's back, the same way the
+// debug reset does in production -- and, like production, the in-memory read
+// model has to be told or one test's collection leaks into the next.
+import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import {
   loadRewardWalletState,
   saveRewardWalletState,
@@ -43,6 +47,7 @@ function okResponse(data: any) {
 describe('draw state cloud sync', () => {
   beforeEach(() => {
     store.clear();
+    invalidateDrawStateCache();
     apiJson.mockReset();
     setActiveUserSubForStorage('user-a');
   });

@@ -8,6 +8,7 @@ import { apiJson } from '../api/apiClient';
 import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../review/storage';
 import { syncDrawStateNow } from './drawStateSync';
+import { invalidateDrawStateCache } from '../features/gacha/draw/drawStateCache';
 import {
   getCachedQueue,
   setCachedQueue,
@@ -36,11 +37,11 @@ import type { CardProgress } from '../review/model';
  *
  * 4) 触发策略（省流量的关键）
  *    - rating：debounce（默认 10s），把连续刷题合成一次 push
- *    - home_focus/review_focus/app_start/manual/token_set：立即同步（0ms）
+ *    - app_foreground/draw_committed/manual/token_set/user_changed：立即同步（0ms）
  *    - 注意：MIN_PULL_INTERVAL_MS 只是“防抖”，不是“2s 定时任务”
  *
  * 5) Crash-safety
- *    - ReviewScreen 要 await recordReviewEvent()，确保事件先落盘
+ *    - SessionCardScreen 要 await recordReviewEvent()，确保事件先落盘
  *    - app 被杀/无网：队列仍在，下次打开会继续 push
  *
  * ✅ 额外：多账号隔离
@@ -1546,10 +1547,38 @@ async function syncProgressOnce(
   const msSinceLastPull = _lastPullAtMs > 0 ? now - _lastPullAtMs : Number.POSITIVE_INFINITY;
   const pullAllowed = msSinceLastPull >= MIN_PULL_INTERVAL_MS;
 
+  // Every name in this list must have a caller. The previous version
+  // listed 'home_focus', 'review_focus' and 'app_start', none of which is
+  // passed anywhere in the repo, and omitted 'app_foreground', which
+  // App.tsx fires on every AppState 'active' transition. The list was
+  // therefore documentation of an intent, not a description of behaviour.
+  //
+  // The hole it left is narrow but is exactly the multi-device case:
+  // `pushed === 0` below already forces a pull when the outbox is empty,
+  // so the only sync that skipped the pull was a foreground sync that had
+  // local work to send. Study on phone A, open phone B while B still has
+  // queued ratings, and B pushes its own work without ever learning about
+  // A's — self-healing only on some later foreground that finds an empty
+  // queue.
+  //
+  // Of the two fixes the issue offered, this takes "whitelist the trigger
+  // that actually fires" over "wire the documented focus triggers up".
+  // Screen focus fires many times per session (every tab swap through
+  // Home or Review), and MIN_PULL_INTERVAL_MS is only 2s, so per-screen
+  // triggers would buy a pull rate the server has not been asked for.
+  // Foreground is both rarer and better correlated with the thing we are
+  // trying to notice: time has passed during which another device could
+  // have written. It also covers cold start, because AppState settles to
+  // 'active' shortly after mount, which is what 'app_start' was for.
+  //
+  // 'draw_committed' is a gacha commit landing (see DrawScreen). A draw
+  // queues no review events, so it would reach the pull through
+  // `pushed === 0` today; it is named explicitly because a future traffic
+  // policy would key on the reason string, and because a draw is exactly
+  // when the user most wants their other devices reconciled.
   const wantPull =
-    reason === 'home_focus' ||
-    reason === 'review_focus' ||
-    reason === 'app_start' ||
+    reason === 'app_foreground' ||
+    reason === 'draw_committed' ||
     reason === 'manual' ||
     reason === 'token_set' ||
     reason === 'user_changed' ||
@@ -1622,9 +1651,10 @@ async function runSyncNow(reason: string): Promise<void> {
       scheduleProgressSync({ delayMs: 300, reason: 'pending_flush' });
     }
 
-    // Gamification state rides the same trigger points (app_start / manual /
-    // token_set / user_changed / rating flush) instead of growing a scheduler of
-    // its own: one thing decides when this device talks to the server.
+    // Gamification state rides the same trigger points (app_foreground /
+    // draw_committed / manual / token_set / user_changed / rating flush) instead
+    // of growing a scheduler of its own: one thing decides when this device
+    // talks to the server.
     //
     // It runs in `finally`, after the flags are cleared, for two reasons. A
     // failed review sync (offline, 5xx) must not skip it, because the two have
@@ -1645,7 +1675,7 @@ async function runSyncNow(reason: string): Promise<void> {
 /**
  * ✅ 省流量策略：
  * - rating 默认 10s debounce（连续打分合并成一次 push）
- * - home_focus/review_focus/app_start/manual/token_set 默认立即 sync
+ * - app_foreground/draw_committed/manual/token_set/user_changed 默认立即 sync
  */
 export function scheduleProgressSync(arg?: any): void {
   // ✅ No token -> skip scheduling
@@ -1670,9 +1700,12 @@ export function scheduleProgressSync(arg?: any): void {
     if (reason === 'rating') delayMs = 10_000;
     else if (reason === 'pending_flush') delayMs = 300;
     else if (
-      reason === 'home_focus' ||
-      reason === 'review_focus' ||
-      reason === 'app_start' ||
+      // Same rule as the wantPull list below: only reasons with real
+      // callers are named. The three focus reasons that used to sit here
+      // never reached this function, so the branch was unreachable and
+      // read as if the app had per-screen sync triggers it does not have.
+      reason === 'app_foreground' ||
+      reason === 'draw_committed' ||
       reason === 'manual' ||
       reason === 'token_set' ||
       reason === 'user_changed'
@@ -1818,6 +1851,16 @@ export async function resetProgressSyncState(): Promise<void> {
     // Only this user's partition: the signed-out queue lives outside userPrefix
     // and was not deleted, so dropping its cache would be a pointless re-parse.
     invalidateProgressQueueCache(userSub);
+
+    // The prefix sweep above is wider than its name suggests: `devcards:u:{sub}:`
+    // also covers this account's draw state, so this debug reset deletes the
+    // collection along with the sync bookkeeping. Whether it should is a
+    // separate question; while it does, the in-memory read model has to be
+    // dropped too, or the next draw would rebuild the deleted collection from
+    // memory. Cleared wholesale because this cache is keyed by storage key,
+    // not by sub -- filtering here would duplicate the key layout that
+    // drawStateStore owns.
+    invalidateDrawStateCache();
   });
 
   _lastPullAtMs = 0;

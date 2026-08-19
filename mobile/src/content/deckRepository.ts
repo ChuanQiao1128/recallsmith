@@ -7,6 +7,9 @@ import { fetchAuthSession } from 'aws-amplify/auth';
 import type { DeckExport } from '../types/deckExport';
 import { getIsPremiumUser } from '../premium/premiumStore';
 import { installDeckFromChunkedPackage } from './chunkedInstall';
+// Leaf module, no runtime imports of its own: the retire path needs to drop
+// the draw-state read model without taking a dependency on the gacha store.
+import { invalidateDrawStateCache } from '../features/gacha/draw/drawStateCache';
 
 /**
  * v2 Content repository (CloudFront -> manifest.json -> deck.json)
@@ -137,6 +140,24 @@ async function downloadToFileViaFetch(url: string, fileUri: string): Promise<voi
 let _premiumServerCache = { atMs: 0, value: false };
 const PREMIUM_SERVER_CACHE_TTL_MS = 60_000;
 
+// Both remote reads on this file's local-read paths now carry a deadline.
+// A fetch() with no signal has no upper bound: on a captive-portal wifi that
+// accepts the connection and never answers, the promise simply never settles,
+// and every caller awaiting it -- including the ones that only wanted to read
+// a file already on this phone -- waits forever.
+const ENTITLEMENTS_TIMEOUT_MS = 4_000;
+const MANIFEST_TIMEOUT_MS = 6_000;
+
+async function fetchWithTimeout(url: string, init: any, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function tokenToStringAny(t: any): string | null {
   if (!t) return null;
   if (typeof t === 'string') return t;
@@ -144,11 +165,26 @@ function tokenToStringAny(t: any): string | null {
   return null;
 }
 
-async function getIsPremiumUserWithServerFallback(): Promise<boolean> {
+/**
+ * `resolved: false` means "we could not find out", which is a different fact
+ * from "this user is not premium" and must not be spelled the same way.
+ *
+ * The distinction earns its keep at exactly one call site: resolveDeckBySlug
+ * deletes the local deck file when the gate says no. Collapsing a timeout
+ * into `false` there means a premium user on a bad train wifi loses a deck
+ * they already downloaded -- silently, and with no way to tell it apart from
+ * a real entitlement change. Refusing the gate on an unresolved lookup fails
+ * toward the user; the install path below still refuses to *add* content on
+ * an unresolved lookup, which fails toward the business. Neither direction is
+ * right in general; they are right for what each path can undo.
+ */
+type PremiumEntitlement = { isPremium: boolean; resolved: boolean };
+
+async function resolvePremiumEntitlement(): Promise<PremiumEntitlement> {
   // 1) local store (may lag)
   try {
     const local = await getIsPremiumUser();
-    if (local) return true;
+    if (local) return { isPremium: true, resolved: true };
   } catch {
     // ignore
   }
@@ -156,7 +192,7 @@ async function getIsPremiumUserWithServerFallback(): Promise<boolean> {
   // 2) short TTL cache
   const now = Date.now();
   if (now - _premiumServerCache.atMs < PREMIUM_SERVER_CACHE_TTL_MS) {
-    return _premiumServerCache.value;
+    return { isPremium: _premiumServerCache.value, resolved: true };
   }
 
   // 3) server truth via /api/v1/entitlements
@@ -164,30 +200,49 @@ async function getIsPremiumUserWithServerFallback(): Promise<boolean> {
     const session: any = await fetchAuthSession();
     const at = tokenToStringAny(session?.tokens?.accessToken) ?? null;
     if (!at || !at.trim()) {
+      // Signed out is an answer, not a failure: nobody is entitled.
       _premiumServerCache = { atMs: now, value: false };
-      return false;
+      return { isPremium: false, resolved: true };
     }
 
     const u = new URL('/api/v1/entitlements', API_BASE_URL);
-    const resp = await fetch(u.toString(), {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${at.trim()}`,
-        accept: 'application/json',
-        'cache-control': 'no-cache',
+    const resp = await fetchWithTimeout(
+      u.toString(),
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${at.trim()}`,
+          accept: 'application/json',
+          'cache-control': 'no-cache',
+        },
       },
-    });
+      ENTITLEMENTS_TIMEOUT_MS,
+    );
+
+    if (!resp.ok) {
+      // A 5xx is the server failing to answer, not the server saying no.
+      // Only a 401/403 is an answer about this user.
+      const isAuthAnswer = resp.status === 401 || resp.status === 403;
+      if (isAuthAnswer) _premiumServerCache = { atMs: now, value: false };
+      return { isPremium: false, resolved: isAuthAnswer };
+    }
 
     const json = await resp.json().catch(() => null);
     const tier = String(json?.data?.tier || '').toLowerCase();
-    const ok = resp.ok && tier === 'premium';
+    const ok = tier === 'premium';
 
     _premiumServerCache = { atMs: now, value: ok };
-    return ok;
+    return { isPremium: ok, resolved: true };
   } catch {
-    _premiumServerCache = { atMs: now, value: false };
-    return false;
+    // Aborted, offline, or DNS failure. Deliberately not cached: caching a
+    // failure as `false` would keep answering "not premium" for a minute
+    // after the network came back.
+    return { isPremium: false, resolved: false };
   }
+}
+
+async function getIsPremiumUserWithServerFallback(): Promise<boolean> {
+  return (await resolvePremiumEntitlement()).isPremium;
 }
 
 /**
@@ -550,14 +605,22 @@ export async function resolveDeckBySlug(slug: string): Promise<DeckContent | nul
     }
   }
 
-  const isPremiumUser = await getIsPremiumUserWithServerFallback();
   const tier = String(entry?.tier || '').toLowerCase();
   const previewVersion = normalizeVersion(entry?.previewVersion ?? entry?.previewBuildId) ?? null;
 
-  if (tier === 'premium' && !isPremiumUser) {
-    if (!previewVersion || meta.buildId !== previewVersion) {
-      await purgeLocalDeckForGate(safeSlug, userKey);
-      return null;
+  // Inside the branch, not above it. Reading a free deck off this phone is a
+  // file read, and it used to sit behind a network call to /entitlements
+  // whose answer it then ignored -- every Library open, every Draw open, on
+  // every launch. Free decks are the overwhelming majority of reads.
+  if (tier === 'premium') {
+    const entitlement = await resolvePremiumEntitlement();
+    // See resolvePremiumEntitlement: an unresolved lookup is not a "no", and
+    // the next line deletes the user's file.
+    if (entitlement.resolved && !entitlement.isPremium) {
+      if (!previewVersion || meta.buildId !== previewVersion) {
+        await purgeLocalDeckForGate(safeSlug, userKey);
+        return null;
+      }
     }
   }
 
@@ -1264,6 +1327,16 @@ async function purgeLocalDeckForRetired(
       await AsyncStorage.multiRemove(allPurge);
     }
 
+    // The `devcards:*:{slug}` sweep above also takes this deck's draw state,
+    // in every account partition, and drawStateStore keeps that in memory.
+    // Left cached, a retired deck's collection would outlive its keys and the
+    // next draw against a reinstall would read the pre-purge owned set and
+    // write it straight back. Dropping every partition rather than this
+    // slug's keys is deliberate: retirement is rare, a re-read costs one
+    // getItem, and a prefix filter here would have to re-derive the key
+    // layout that drawStateStore owns.
+    invalidateDrawStateCache();
+
     console.log('[content] retiredDeckLocalState_v3', {
       slug,
       retiredAtMs: retiredAt,
@@ -1406,7 +1479,11 @@ async function fetchRemoteManifest(): Promise<RawManifest | null> {
     const headers: Record<string, string> = { 'cache-control': 'no-cache' };
     if (etag) headers['if-none-match'] = etag;
 
-    const resp = await fetch(MANIFEST_URL, { method: 'GET', headers });
+    // Deadline, then the cache. Every caller of this has a local fallback
+    // (loadManifestPreferRemote drops to loadManifestCached, and the catch
+    // below returns null so the same fallback applies) -- but only if this
+    // call is allowed to give up.
+    const resp = await fetchWithTimeout(MANIFEST_URL, { method: 'GET', headers }, MANIFEST_TIMEOUT_MS);
 
     if (resp.status === 304) {
       const cached = await loadManifestCached();

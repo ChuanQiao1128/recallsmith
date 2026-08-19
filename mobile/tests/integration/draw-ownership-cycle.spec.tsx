@@ -42,10 +42,15 @@ vi.mock('../../src/review/storage', () => ({
 }));
 
 import { commitDraw } from '../../src/features/gacha/draw/drawCommit';
+// store.clear() below wipes the keys behind the store's back, the same way the
+// debug reset does in production -- and, like production, the in-memory read
+// model has to be told or one test's collection leaks into the next.
+import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 
 describe('draw ownership cycle', () => {
   beforeEach(() => {
     store.clear();
+    invalidateDrawStateCache();
   });
 
   it('grows ownership until the pool is exhausted', async () => {
