@@ -523,7 +523,15 @@ export function DrawScreen({ navigation, route }: Props) {
           return;
         }
 
-        const spent = await consumePullsFromStoredWallet(drawCount);
+        // Charge for what arrived, not for what was asked. The guard above
+        // reads `length === 0` because that is where the previous fix stopped,
+        // and a pool with 4 cards left answers an Open 10 with four of them --
+        // a normal return (poolSelection stops at `remaining.length > 0` and
+        // reports it as `poolExhausted`, not as an error). Passing drawCount
+        // here spent all ten. The near-complete collector, who is exactly who
+        // this pack is for by then, paid six pulls for nothing and was told
+        // nothing about it.
+        const spent = await consumePullsFromStoredWallet(Math.min(drawCount, result.cards.length));
         chargedPulls = spent.spent;
 
         // The gacha half of the sync had no trigger of its own: draw state

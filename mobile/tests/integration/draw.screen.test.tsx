@@ -495,6 +495,59 @@ describe('DrawScreen v9', () => {
     expect(collectText(tree)).toContain('Every card in this pack is already yours.');
   });
 
+  it('charges only for the cards a partly-drained pool actually handed over', async () => {
+    // The sibling test above covers the pool that is exactly empty. This is the
+    // interior the previous fix skipped: `cards.length === 0` was promoted to an
+    // error, and 1..9 cards for an Open 10 stayed a success that billed ten.
+    // selectDrawCards stops at `remaining.length > 0` and reports the short pack
+    // as `poolExhausted`, not as a failure, so nothing downstream objected.
+    //
+    // Four cards left, twelve pulls banked. The wallet must fall by four.
+    const navigate = vi.fn();
+    walletFixture = { availablePulls: 12, reservePulls: 0 };
+    commitDrawMock.mockImplementationOnce(async () =>
+      ({
+        cards: Array.from({ length: 4 }, (_, index) => ({
+          stableUid: `card-${index + 1}`,
+          question: `Q${index + 1}`,
+          difficulty: 1,
+          rarity: 'COM' as const,
+        })),
+        poolExhausted: true,
+        pityFiredFor: null,
+        highlightedRarity: null,
+        ownedAfter: 30,
+        totalCards: 30,
+        pityBefore: 0,
+        pityAfter: 0,
+      }) as any,
+    );
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
+    armPackSwipe(tree);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
+    // The number on the wire, not only the resulting balance. Charging ten
+    // against a wallet holding twelve leaves eight either way once the mock
+    // clamps, so a test watching the balance alone would pass on the bug.
+    expect(consumePullsFromStoredWalletMock).toHaveBeenCalledWith(4);
+    expect(walletFixture.availablePulls).toBe(8);
+    // A short pack is still a pack: real cards came out, so the ceremony runs.
+    expect(navigate).toHaveBeenCalled();
+  });
+
   it('renders empty state when no active deck is available', async () => {
     manifestFixture = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
     resolveDeckFixture = null;
