@@ -50,46 +50,13 @@ describe('the root README', () => {
   });
 });
 
-// The file counts in the same table, checked against git rather than trusted.
+// The file-count column that used to sit in the same table is gone, and so is the
+// assertion that guarded it. It never caught a defect. It failed four times on
+// count drift alone -- three of those in CI, the last one leaving main red for
+// twenty days -- because `git ls-files` reads the index, so any commit that adds
+// a file without restaging the README breaks a check that was only ever
+// restating what git already knows.
 //
-// The paths above were guarded from the start; the numbers beside them were not,
-// and by the time this was noticed one had already drifted — the table said 111
-// for frontend/ while the tree held 112, because a file was added after the
-// count was taken. A number in a document with nothing keeping it true is the
-// shape of defect this repository has spent a long time removing from its code.
-// It applies to prose as well.
-//
-// `git ls-files` is the same command the README says it used, so the assertion
-// and the claim cannot drift apart by using different definitions of "file".
-describe('the file counts in the README table', () => {
-  it('match what git actually tracks', () => {
-    const markdown = readFileSync(README, 'utf8');
-
-    // | `frontend/` | React 19, … | Admin console… | 112 |
-    const rows = [
-      ...markdown.matchAll(/\|\s*`([\w.\-/]+?)\/?`\s*\|[^|]*\|[^|]*\|\s*(\d+)\s*\|/g),
-    ].map(m => ({ dir: m[1], claimed: Number(m[2]) }));
-
-    // Anti-vacuity: a regex that stops matching would otherwise pass silently.
-    expect(rows.map(r => r.dir).sort()).toEqual([...TOP_LEVEL].sort());
-
-    const actual = rows.map(({ dir }) => {
-      const listed = execFileSync('git', ['ls-files', dir], {
-        cwd: REPO_ROOT,
-        encoding: 'utf8',
-      });
-      return { dir, count: listed.split('\n').filter(Boolean).length };
-    });
-
-    expect(
-      actual,
-      // Read this before hunting for the discrepancy: `git ls-files` reports the
-      // INDEX, not the working tree. Delete a file and run the suite without
-      // staging first and this fails against a count that is already correct for
-      // what will be committed. It has cost two rounds of confusion already,
-      // once in CI. Stage, then re-run.
-      'file counts disagree with `git ls-files`. If files were just added or ' +
-        'deleted, stage them first — this reads the index, not the working tree.',
-    ).toEqual(rows.map(r => ({ dir: r.dir, count: r.claimed })));
-  });
-});
+// The paths above are kept for the opposite reason: a README naming a file that
+// no longer exists is wrong in a way nothing else in the toolchain would catch.
+// That check has a job. Counting files was arithmetic with a maintenance bill.

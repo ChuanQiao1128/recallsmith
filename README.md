@@ -10,15 +10,15 @@ This is a personal project, written and maintained by one person.
 
 ## 1. What is in this repository
 
-| Directory | Stack | Responsibility | Files |
-| --- | --- | --- | --- |
-| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration | 177 |
-| `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in | 338 |
-| `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` | 135 |
-| `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver | 3 |
-| `snowflake/` | SQL | Warehouse setup and the marts that model card quality | 4 |
-| `docs/` | Markdown | Design notes and refactor plans | 11 |
-| `.github/` | YAML | CI workflow | 1 |
+| Directory | Stack | Responsibility |
+| --- | --- | --- |
+| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration |
+| `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in |
+| `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` |
+| `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver |
+| `snowflake/` | SQL | Warehouse setup and the marts that model card quality |
+| `docs/` | Markdown | Design notes and refactor plans |
+| `.github/` | YAML | CI workflow |
 
 File counts are `git ls-files <dir> | wc -l` as of this commit, and
 `frontend/tests/rootReadmePaths.test.ts` fails if they drift.
