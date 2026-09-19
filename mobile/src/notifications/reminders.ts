@@ -24,7 +24,7 @@ export type ReminderPrefs = {
 const DEFAULT_PREFS: ReminderPrefs = {
   morningEnabled: true,
   morningTime: '09:00',
-  eveningEnabled: true,
+  eveningEnabled: false,
   eveningTime: '20:00',
 };
 
@@ -105,11 +105,11 @@ export async function setReminderPrefs(patch: Partial<ReminderPrefs>): Promise<R
   return next;
 }
 
-async function ensurePermission(): Promise<boolean> {
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  if (existingStatus === 'granted') return true;
-
-  const { status } = await Notifications.requestPermissionsAsync();
+// Read-only: the OS permission request lives solely in PermissionPromptScreen.
+// syncDailyReminders runs on every Home refresh (deckActionResolver.ts:251),
+// so requesting here re-prompted users who had just tapped "Not now".
+async function hasPermission(): Promise<boolean> {
+  const { status } = await Notifications.getPermissionsAsync();
   return status === 'granted';
 }
 
@@ -158,7 +158,7 @@ async function ensureMorningDaily(prefs: ReminderPrefs): Promise<void> {
 
   const id = await Notifications.scheduleNotificationAsync({
     content: {
-      title: 'DevCards',
+      title: 'DeveloperCards',
       body: 'Good morning — time for a quick review to keep your recall sharp.',
       sound: false,
     },
@@ -272,7 +272,7 @@ export async function syncDailyReminders(args: { remainingDueCount: number; now?
     // cache last due for "apply now" use
     await AsyncStorage.setItem(KEY_LAST_DUE, String(remainingDueCount));
 
-    const ok = await ensurePermission();
+    const ok = await hasPermission();
     if (!ok) return;
 
     await ensureAndroidChannel();

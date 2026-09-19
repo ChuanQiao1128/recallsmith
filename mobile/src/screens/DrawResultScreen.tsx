@@ -14,6 +14,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { clearPermissionPromptPending, isPermissionPromptPending } from './PermissionPromptScreen';
 import { colors } from '../theme/colors';
 import {
   PAGE_GRADIENT_LIGHT,
@@ -85,6 +86,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
   const [detailUid, setDetailUid] = useState<string | null>(null);
   const [isAllCardsOpen, setIsAllCardsOpen] = useState(false);
   const [registerVisible, setRegisterVisible] = useState(true);
+  const [permissionPromptPending, setPermissionPromptPending] = useState(false);
 
   const cards = drawResult?.cards ?? [];
   const featured = useMemo(
@@ -155,6 +157,18 @@ export function DrawResultScreen({ navigation, route }: Props) {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    isPermissionPromptPending()
+      .then((pending) => {
+        if (!cancelled) setPermissionPromptPending(pending);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const isWalletLoading = remainingPulls === null;
   // Substring "Continue draw" / "Go to Library" preserved (test contract);
   // we just append context so the user knows what'll happen.
@@ -182,6 +196,19 @@ export function DrawResultScreen({ navigation, route }: Props) {
       scrollToNew: true,
       highlightUids: cards.map((card) => card.stableUid),
     });
+  };
+
+  // The first pack the user walks away from is where we ask for
+  // notifications (home-review §3.2 通知权限时机). Consumed once; Continue
+  // draw / Library exits are left alone so the flag survives until a Done.
+  const handleDone = () => {
+    if (permissionPromptPending) {
+      setPermissionPromptPending(false);
+      void clearPermissionPromptPending();
+      navigation.navigate('PermissionPrompt');
+      return;
+    }
+    navigation.navigate('Home');
   };
 
   // Loading state override
@@ -601,7 +628,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
               accessibilityRole="button"
               accessibilityLabel="Done. Back to home."
               style={({ pressed }) => [styles.doneLink, pressed && styles.pressed]}
-              onPress={() => navigation.navigate('Home')}
+              onPress={handleDone}
             >
               <Text style={styles.doneText} numberOfLines={1}>
                 Done
