@@ -88,7 +88,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   title: { fontSize: typography.bodySmall, fontWeight: '800', color: colors.ink },
-  subtitle: { marginTop: 2, fontSize: 10, color: colors.inkSecondary },
+  subtitle: { marginTop: 2, fontSize: typography.caption, color: colors.inkSecondary },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8, justifyContent: 'space-between' },
   metric: {
     borderRadius: 12,
@@ -104,9 +104,9 @@ const styles = StyleSheet.create({
   metricElite: { backgroundColor: TODAY_PRESSURE_TOKENS.metricElite },
   metricBoss: { backgroundColor: TODAY_PRESSURE_TOKENS.metricBoss },
   metricTotal: { backgroundColor: TODAY_PRESSURE_TOKENS.metricTotal },
-  metricValue: { fontSize: 18, fontWeight: '900', color: colors.ink },
-  metricLabel: { marginTop: 2, fontSize: 9, fontWeight: '800', color: colors.inkSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
-  footnote: { marginTop: 8, fontSize: 10, color: colors.inkSecondary },
+  metricValue: { fontSize: typography.title3, fontWeight: '900', color: colors.ink },
+  metricLabel: { marginTop: 2, fontSize: typography.caption, fontWeight: '800', color: colors.inkSecondary, letterSpacing: 0.5 },
+  footnote: { marginTop: 8, fontSize: typography.caption, color: colors.inkSecondary },
 });
 
 export default TodayPressureCard;
