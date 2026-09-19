@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { applyRemoteFeatures } from './featureFlags';
 import { getCurrentAppVersion, loadRemoteConfig, resolveIosUpdate } from './remoteConfig';
 
 export type ForceUpdateGate = {
@@ -40,6 +41,8 @@ export function useForceUpdateGate(url: string): ForceUpdateGate | null {
     void (async () => {
       const currentVersion = getCurrentAppVersion();
       const config = await loadRemoteConfig(url);
+      // Apply flags before gate exits so a non-gating config still feeds the store.
+      applyRemoteFeatures(config);
       if (cancelled || !config) return;
 
       const ios = resolveIosUpdate(config, currentVersion);
