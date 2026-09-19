@@ -192,6 +192,8 @@ describe('HomeScreen v9', () => {
     ).toHaveLength(1);
     expect(tree.root.findByProps({ testID: 'home-pack-visual' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'home-draw-status-badge' })).toBeTruthy();
+    const goal = tree.root.findByProps({ testID: 'home-goal-line' });
+    expect(String(goal.props.children)).toContain('Full clear: 2 cards');
   });
 
   it('shows due-card study link and routes it directly to SessionCard', async () => {
@@ -288,6 +290,59 @@ describe('HomeScreen v9', () => {
 
     expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
     expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
+  });
+
+  it('routes the hero pack to study, not Draw, when work is due and pulls are available', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const featuredPack = tree.root.find(
+      (node) =>
+        (node.type as any) === 'Pressable' && node.props?.testID === 'home-featured-pack',
+    );
+    expect(featuredPack.props.accessibilityLabel).toBe('Start today’s challenge');
+
+    await act(async () => {
+      featuredPack.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
+    expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
+  });
+
+  it('routes the hero pack to Draw when the first-draw coach is on', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home', params: { firstDrawCoach: true } } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const featuredPack = tree.root.find(
+      (node) =>
+        (node.type as any) === 'Pressable' && node.props?.testID === 'home-featured-pack',
+    );
+    expect(featuredPack.props.accessibilityLabel).toBe('Open reward draw');
+
+    await act(async () => {
+      featuredPack.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('Draw', {
+      slug: 'csharp',
+      rewardPending: true,
+    });
   });
 
   it('lists only real packs under Your packs', async () => {
