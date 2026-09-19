@@ -53,7 +53,7 @@ export function HomeDeckRow(props: HomeDeckRowProps) {
   const subtitle =
     progressLabel ??
     (deck.canStudy
-      ? `${deck.dueToday} due · ${deck.newToday} fresh`
+      ? `${deck.dueToday} due · ${deck.newToday} new`
       : `${deck.totalCards} cards`);
 
   return (

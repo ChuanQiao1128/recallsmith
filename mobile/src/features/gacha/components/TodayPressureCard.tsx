@@ -19,54 +19,61 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
   const { width } = useWindowDimensions();
   const useCompactMetrics = width < 390;
   const metricSizeStyle = useCompactMetrics ? styles.metricCompact : styles.metricWide;
+  const nothingYet =
+    counts.selectedDue === 0 &&
+    counts.selectedNew === 0 &&
+    counts.selectedMastered === 0 &&
+    counts.totalDueAllDecks === 0;
 
   return (
     <View style={styles.card}>
       <Text style={styles.title} numberOfLines={2}>
-        Today’s pressure
+        Today
       </Text>
       <Text style={styles.subtitle} numberOfLines={1}>
-        {selectedDeckTitle ? `${selectedDeckTitle} · ${counts.selectedDue} due · ${counts.selectedNew} fresh` : 'No active deck selected'}
+        {selectedDeckTitle ?? 'No active deck selected'}
       </Text>
 
-      <View testID="home-today-count-grid" style={styles.row}>
-        <View testID="home-today-count-normal" style={[styles.metric, metricSizeStyle, styles.metricNormal]}>
-          <Text style={styles.metricValue} numberOfLines={1}>
-            {counts.normalCount}
-          </Text>
-          <Text style={styles.metricLabel} numberOfLines={1}>
-            Normal
-          </Text>
+      {nothingYet ? (
+        <Text testID="home-today-empty" style={styles.subtitle} numberOfLines={2}>
+          Nothing to review yet — open a pack to get your first cards.
+        </Text>
+      ) : (
+        <View testID="home-today-count-grid" style={styles.row}>
+          <View testID="home-today-count-normal" style={[styles.metric, metricSizeStyle, styles.metricNormal]}>
+            <Text style={styles.metricValue} numberOfLines={1}>
+              {counts.selectedDue}
+            </Text>
+            <Text style={styles.metricLabel} numberOfLines={1}>
+              Due
+            </Text>
+          </View>
+          <View testID="home-today-count-elite" style={[styles.metric, metricSizeStyle, styles.metricElite]}>
+            <Text style={styles.metricValue} numberOfLines={1}>
+              {counts.selectedNew}
+            </Text>
+            <Text style={styles.metricLabel} numberOfLines={1}>
+              New
+            </Text>
+          </View>
+          <View testID="home-today-count-boss" style={[styles.metric, metricSizeStyle, styles.metricBoss]}>
+            <Text style={styles.metricValue} numberOfLines={1}>
+              {counts.selectedMastered}
+            </Text>
+            <Text style={styles.metricLabel} numberOfLines={1}>
+              Learned
+            </Text>
+          </View>
+          <View testID="home-today-count-total" style={[styles.metric, metricSizeStyle, styles.metricTotal]}>
+            <Text style={styles.metricValue} numberOfLines={1}>
+              {counts.totalDueAllDecks}
+            </Text>
+            <Text style={styles.metricLabel} numberOfLines={1}>
+              Total
+            </Text>
+          </View>
         </View>
-        <View testID="home-today-count-elite" style={[styles.metric, metricSizeStyle, styles.metricElite]}>
-          <Text style={styles.metricValue} numberOfLines={1}>
-            {counts.eliteCount}
-          </Text>
-          <Text style={styles.metricLabel} numberOfLines={1}>
-            Elite
-          </Text>
-        </View>
-        <View testID="home-today-count-boss" style={[styles.metric, metricSizeStyle, styles.metricBoss]}>
-          <Text style={styles.metricValue} numberOfLines={1}>
-            {counts.bossCount}
-          </Text>
-          <Text style={styles.metricLabel} numberOfLines={1}>
-            Boss
-          </Text>
-        </View>
-        <View testID="home-today-count-total" style={[styles.metric, metricSizeStyle, styles.metricTotal]}>
-          <Text style={styles.metricValue} numberOfLines={1}>
-            {counts.totalDueAllDecks}
-          </Text>
-          <Text style={styles.metricLabel} numberOfLines={1}>
-            Total
-          </Text>
-        </View>
-      </View>
-
-      <Text style={styles.footnote} numberOfLines={1}>
-        Mastered in selected deck: {counts.selectedMastered}
-      </Text>
+      )}
     </View>
   );
 }
@@ -106,7 +113,6 @@ const styles = StyleSheet.create({
   metricTotal: { backgroundColor: TODAY_PRESSURE_TOKENS.metricTotal },
   metricValue: { fontSize: typography.title3, fontWeight: '900', color: colors.ink },
   metricLabel: { marginTop: 2, fontSize: typography.caption, fontWeight: '800', color: colors.inkSecondary, letterSpacing: 0.5 },
-  footnote: { marginTop: 8, fontSize: typography.caption, color: colors.inkSecondary },
 });
 
 export default TodayPressureCard;

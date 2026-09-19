@@ -261,9 +261,9 @@ describe('home primary CTA uniqueness', () => {
         .join('\n');
       expect(textBlob).not.toContain('Peek at reward draw');
       expect(textBlob).not.toContain('Start first draw');
-      expect(textBlob).toContain('Normal');
-      expect(textBlob).toContain('Elite');
-      expect(textBlob).toContain('Boss');
+      expect(textBlob).toContain('Due');
+      expect(textBlob).toContain('New');
+      expect(textBlob).toContain('Learned');
       expect(textBlob).toContain('Total');
 
       const metricStyle = tree.root.findByProps({ testID: 'home-today-count-total' }).props.style;
@@ -280,7 +280,7 @@ describe('home primary CTA uniqueness', () => {
       label: 'locked',
       wallet: { availablePulls: 0, reservePulls: 0 },
       expectedPrimaryCta: 'Start today’s challenge',
-      expectedDrawBadge: 'Clear today’s route to unlock pulls',
+      expectedDrawBadge: 'Review today’s cards to earn a pull',
       expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },
@@ -299,7 +299,7 @@ describe('home primary CTA uniqueness', () => {
       label: 'reserve',
       wallet: { availablePulls: 1, reservePulls: 2 },
       expectedPrimaryCta: 'Start today’s challenge',
-      expectedDrawBadge: '1 ready · 2 in reserve',
+      expectedDrawBadge: '1 pull ready · 2 more waiting',
       expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },
