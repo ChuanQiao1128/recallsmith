@@ -42,18 +42,7 @@ import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 import { packImageForSlug, packPaletteFromSlug } from '../theme/packArt';
 
-// ─── Mocked deck shelf for the home carousel ─────────────────────────────
-// Real backend decks (manifest) may differ. These are visual placeholders
-// for the upcoming C# / AI / Cloud launches — tap a pack to navigate to
-// the Draw flow with that slug. Once those decks ship, this constant goes
-// away and we read from `homeState.vm` instead.
-const MOCKED_HOME_DECKS = [
-  { slug: 'csharp', title: 'C#', tagline: 'Interview core' },
-  { slug: 'ai', title: 'AI', tagline: 'ML & prompt engineering' },
-  { slug: 'cloud', title: 'Cloud', tagline: 'AWS / GCP / Azure' },
-] as const;
-
-// Vitest mocks react-native without Image — guarded lookup so tests don't crash.
+// Vitest supplies react-native without Image — guarded lookup so tests don't crash.
 function readRN<T = any>(key: string, fallback: T): T {
   try {
     const value = (RN as any)[key];
@@ -63,7 +52,9 @@ function readRN<T = any>(key: string, fallback: T): T {
   }
 }
 const RNImage: any = readRN('Image', null);
-// Safe Animated lookup — vitest's RN mock proxy throws on missing exports.
+const AI: any = readRN('AccessibilityInfo', null);
+const RNEasing: any = readRN('Easing', null);
+// Safe Animated lookup — vitest's RN facade throws on missing exports.
 // Mirrors the pattern used in DrawScreen.tsx: `A` is a tolerant facade and
 // `hasAnimated` flips animations off during tests so JSX still renders.
 const A: any = readRN('Animated', {});
@@ -74,6 +65,17 @@ type HomeState = {
   loading: boolean;
   error: string | null;
   vm: HomeViewModel;
+};
+type HomeVisualDeck = {
+  slug: string;
+  title: string;
+  realRow: HomeDeckVM | null;
+  cover: ReturnType<typeof packImageForSlug>;
+  palette: ReturnType<typeof packPaletteFromSlug>;
+  status: string;
+  isFullyMastered: boolean;
+  disabled: boolean;
+  selected: boolean;
 };
 const EMPTY_VM = buildHomeScreenVM({ state: 'empty' });
 const HOME_TOKENS = {
@@ -123,31 +125,33 @@ export function HomeScreen({ navigation, route }: Props) {
     return () => clearTimeout(t);
   }, [incomingNotice]);
   // ─── Idle hero animations ──────────────────────────────────────────
-  // Pack bobs gently up/down (3px) on a 3s loop — gives the hero a
-  // pulse without distracting from content. Kicker breathes in opacity
-  // (0.6 ↔ 1) on a faster 2.2s loop. Both are guarded by hasAnimated so
-  // vitest stays happy.
+  // The pack bobs gently up/down (3px), unless reduced motion is enabled.
+  // The guarded Animated facade keeps the static hero available in tests.
   const packBobRef = useRef<any>(hasAnimated ? new A.Value(0) : null);
-  const kickerBreathRef = useRef<any>(hasAnimated ? new A.Value(1) : null);
   useEffect(() => {
     if (!hasAnimated) return;
+    const easing = RNEasing?.inOut ? RNEasing.inOut(RNEasing.ease) : undefined;
     const bob = A.loop(
       A.sequence([
-        A.timing(packBobRef.current, { toValue: 1, duration: 1500, useNativeDriver: true }),
-        A.timing(packBobRef.current, { toValue: 0, duration: 1500, useNativeDriver: true }),
+        A.timing(packBobRef.current, { toValue: 1, duration: 2400, easing, useNativeDriver: true }),
+        A.timing(packBobRef.current, { toValue: 0, duration: 2400, easing, useNativeDriver: true }),
       ]),
     );
-    const breath = A.loop(
-      A.sequence([
-        A.timing(kickerBreathRef.current, { toValue: 0.6, duration: 1100, useNativeDriver: true }),
-        A.timing(kickerBreathRef.current, { toValue: 1, duration: 1100, useNativeDriver: true }),
-      ]),
-    );
-    bob.start();
-    breath.start();
+    let stopped = false;
+    const apply = (enabled: boolean) => {
+      if (enabled) {
+        try { bob.stop(); } catch { /* noop */ }
+        packBobRef.current?.setValue?.(0.5);
+      } else if (!stopped) {
+        bob.start();
+      }
+    };
+    AI?.isReduceMotionEnabled?.().then(apply).catch(() => bob.start()) ?? bob.start();
+    const sub = AI?.addEventListener?.('reduceMotionChanged', apply);
     return () => {
+      stopped = true;
       try { bob.stop(); } catch { /* noop */ }
-      try { breath.stop(); } catch { /* noop */ }
+      sub?.remove?.();
     };
   }, []);
   const packTranslateY = hasAnimated && packBobRef.current
@@ -526,22 +530,14 @@ export function HomeScreen({ navigation, route }: Props) {
                 Pack now FLOATS on the page background — no frame, no
                 border, no parchmentBg backing. Just shadow + a soft gold
                 halo positioned behind it for ambient light. The pack
-                also bobs gently (3px translateY, 3s loop) and the gold
-                kicker breathes in opacity. Hero copy is action-driven,
-                NOT a duplicate of the pack name. */}
+                also bobs gently (3px translateY) when motion is enabled.
+                Hero copy is action-driven, not a duplicate of the pack name. */}
             {(() => {
-              // Build deck list — REAL installed decks first (using
-              // their actual slugs from the backend manifest), then
-              // fill remaining slots with MOCKED entries that aren't
-              // already represented (for "Coming soon" packs we plan
-              // to ship). This avoids the bug where a slug mismatch
-              // (e.g. real slug 'cs-dotnet' vs mock 'csharp') made the
-              // featured pack tap show "Coming soon" even though the
-              // user had the deck installed.
+              // Build the shelf from real manifest rows only. Rows with
+              // availability: 'coming' render as disabled "Soon" tiles.
               const realRows = homeState.vm.decks.rows;
-              const realSlugSet = new Set(realRows.map((r) => r.deck.slug));
 
-              const realVisualDecks = realRows.map((realRow) => {
+              const realVisualDecks: HomeVisualDeck[] = realRows.map((realRow) => {
                 const slug = realRow.deck.slug;
                 const cover = packImageForSlug(slug);
                 const palette = packPaletteFromSlug(slug);
@@ -555,7 +551,8 @@ export function HomeScreen({ navigation, route }: Props) {
                 const isFullyMastered =
                   totalCards > 0 && masteredApprox >= totalCards && dueCount === 0;
                 let status = 'Ready';
-                if (realRow.actionHint === 'paywall') status = 'Locked';
+                if (realRow.actionHint === 'none') status = 'Soon';
+                else if (realRow.actionHint === 'paywall') status = 'Locked';
                 else if (realRow.actionHint === 'install' || realRow.actionHint === 'trial-start') status = 'Install';
                 else if (realRow.actionHint === 'update') status = 'Update';
                 else if (isFullyMastered) status = 'Mastered ✓';
@@ -563,43 +560,38 @@ export function HomeScreen({ navigation, route }: Props) {
                 return {
                   slug,
                   title: realRow.deck.title ?? slug,
-                  tagline: '',
                   realRow,
                   cover,
                   palette,
                   status,
                   isFullyMastered,
-                  disabled: false,
+                  disabled: realRow.actionHint === 'none',
                   selected: slug === homeState.vm.selectedDeckSlug,
                 };
               });
 
-              const mockedFillerDecks = MOCKED_HOME_DECKS
-                .filter((d) => !realSlugSet.has(d.slug))
-                .map((d) => ({
-                  ...d,
-                  realRow: undefined as any,
-                  cover: packImageForSlug(d.slug),
-                  palette: packPaletteFromSlug(d.slug),
-                  status: 'Coming soon',
-                  disabled: true,
-                  selected: false,
-                }));
-
-              const visualDecks = [...realVisualDecks, ...mockedFillerDecks];
-              const featuredDeck =
-                visualDecks.find((d) => d.selected) ??
-                visualDecks.find((d) => d.realRow) ??
-                visualDecks[0];
+              const visualDecks = realVisualDecks;
+              const EMPTY_FEATURED: HomeVisualDeck = {
+                slug: 'default',
+                title: 'Your first pack',
+                realRow: null,
+                cover: packImageForSlug('default'),
+                palette: packPaletteFromSlug('default'),
+                status: 'Soon',
+                isFullyMastered: false,
+                disabled: true,
+                selected: false,
+              };
+              const featuredDeck: HomeVisualDeck =
+                visualDecks.find((d) => d.selected)
+                ?? visualDecks.find((d) => !d.disabled)
+                ?? visualDecks[0]
+                ?? EMPTY_FEATURED;
 
               // Action-driven hero title — NEVER duplicate the pack name.
               // Priority: deck-mastered celebration → due count →
               // reward draw ready → vm fallback.
-              const featuredDeckProvisional =
-                visualDecks.find((d) => d.selected)
-                ?? visualDecks.find((d) => d.realRow)
-                ?? visualDecks[0];
-              const isFeaturedMastered = !!(featuredDeckProvisional as any)?.isFullyMastered;
+              const isFeaturedMastered = featuredDeck.isFullyMastered;
               const heroTitle =
                 isFeaturedMastered
                   ? 'Deck mastered 🎉'
@@ -610,8 +602,8 @@ export function HomeScreen({ navigation, route }: Props) {
                       : homeState.vm.hero.headline;
 
               // Status dot color for selector tiles (replaces text badge)
-              const statusDotColor = (deck: typeof visualDecks[number]) => {
-                if (!deck.realRow) return colors.inkMuted; // coming soon
+              const statusDotColor = (deck: HomeVisualDeck) => {
+                if (!deck.realRow || deck.status === 'Soon') return colors.inkMuted;
                 if (deck.status === 'Locked') return colors.inkMuted;
                 if (deck.status === 'Install' || deck.status === 'Update') return colors.pokeBlue;
                 if (deck.status.endsWith(' due')) return colors.gold;
@@ -620,7 +612,7 @@ export function HomeScreen({ navigation, route }: Props) {
 
               // Featured-pack press handler — pack is now tappable.
               // Resolves to the most natural intent for each state:
-              //   • mocked-only (no realRow) → Coming soon alert
+              //   • no real deck (empty manifest) → refresh
               //   • paywall / install / update / trial → resolver
               //     (handleDeckPress routes to Paywall / installs the pack / etc)
               //   • installed + has pulls → straight to Draw
@@ -630,10 +622,7 @@ export function HomeScreen({ navigation, route }: Props) {
                 drawState === 'available' || drawState === 'reserve' || drawState === 'wallet-full';
               const handleFeaturedPackPress = () => {
                 if (!featuredDeck.realRow) {
-                  Alert.alert(
-                    `${featuredDeck.title} — Coming soon`,
-                    'This pack will be available shortly.',
-                  );
+                  void refreshHome();
                   return;
                 }
                 const hint = featuredDeck.realRow.actionHint;
@@ -672,7 +661,7 @@ export function HomeScreen({ navigation, route }: Props) {
                     <Pressable
                       testID="home-featured-pack"
                       accessibilityRole="button"
-                      accessibilityLabel={`Open ${featuredDeck.title} pack`}
+                      accessibilityLabel={featuredDeck.realRow ? `Open ${featuredDeck.title} pack` : 'Connect to load packs'}
                       onPress={handleFeaturedPackPress}
                       hitSlop={8}
                     >
@@ -703,28 +692,10 @@ export function HomeScreen({ navigation, route }: Props) {
                       </AnimatedView>
                     </Pressable>
 
-                    {/* Breathing kicker — gold uppercase status of the
-                        featured pack (e.g. "12 DUE" / "READY"). Sits ABOVE
-                        the title because it's the smallest text and the
-                        title needs to be the visual landing. */}
-                    <AnimatedView
-                      style={[
-                        styles.heroKickerWrap,
-                        hasAnimated ? { opacity: kickerBreathRef.current ?? 1 } : null,
-                      ]}
-                    >
-                      <Text style={styles.heroKicker} numberOfLines={1}>
-                        {featuredDeck.status}
-                      </Text>
-                    </AnimatedView>
-
                     {/* Action-driven title — never duplicates the pack
                         name. "12 cards waiting" beats "C#" every time. */}
-                    <Text style={styles.heroTitle} numberOfLines={2}>
+                    <Text style={styles.heroTitle} numberOfLines={1}>
                       {heroTitle}
-                    </Text>
-                    <Text style={styles.heroSupport} numberOfLines={2}>
-                      {homeState.vm.hero.subline}
                     </Text>
                   </View>
 
@@ -782,7 +753,7 @@ export function HomeScreen({ navigation, route }: Props) {
                   {/* ─── SELECTOR v4 — small thumbnails + status dots ──── */}
                   <View style={styles.selectorBlock}>
                     <Text style={styles.sectionLabel} numberOfLines={1}>
-                      Choose a pack
+                      Your packs
                     </Text>
                     <ScrollView
                       horizontal
@@ -795,20 +766,22 @@ export function HomeScreen({ navigation, route }: Props) {
                           key={d.slug}
                           accessibilityRole="button"
                           accessibilityLabel={`${d.title} pack — ${d.status}`}
+                          disabled={d.disabled}
                           style={({ pressed }) => [
                             styles.selectorTile,
                             d.selected && styles.selectorTileSelected,
                             pressed && styles.pressed,
                           ]}
                           onPress={() => {
-                            if (d.realRow) {
-                              void handleDeckPress(d.realRow);
-                            } else {
-                              Alert.alert(
-                                `${d.title} — Coming soon`,
-                                'This pack will be available shortly.',
-                              );
+                            if (!d.realRow) return;
+                            const hint = d.realRow.actionHint;
+                            if (hint === 'open' || hint === 'none') {
+                              void setActiveDeckSlug(d.slug);
+                              setSelectedSlug(d.slug);
+                              void refreshHome();
+                              return;
                             }
+                            void handleDeckPress(d.realRow);
                           }}
                         >
                           {/* Two-layer thumbnail: outer = shadow, inner = clip */}
@@ -987,8 +960,7 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.9 },
   headerRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.sm },
   headerTextWrap: { flex: 1, paddingRight: spacing.sm },
-  kicker: { fontSize: typography.caption, fontWeight: '800', color: colors.inkSecondary, letterSpacing: 1 },
-  title: { marginTop: 4, fontSize: typography.title1, fontWeight: '900', color: colors.ink },
+  title: { fontSize: typography.title3, fontWeight: '900', letterSpacing: 0.4, color: colors.inkSecondary },
   subtitle: { marginTop: 4, fontSize: typography.bodySmall, color: colors.inkSecondary },
   // Functional brand subtitle — replaces marketing copy with what's actually
   // waiting today (e.g. "12 cards waiting today")
@@ -1006,7 +978,7 @@ const styles = StyleSheet.create({
     borderColor: colors.hairline,
   },
   homeNoticeText: {
-    fontSize: 12,
+    fontSize: typography.bodySmall,
     lineHeight: 17,
     color: colors.inkSoft,
     fontWeight: '700',
@@ -1024,7 +996,7 @@ const styles = StyleSheet.create({
   heroBand: {
     alignItems: 'center',
     paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
+    paddingBottom: spacing.md,
   },
   // Soft gold halo positioned BEHIND the pack — gives an ambient-light
   // feel without adding any structural framing. Sits 220×220 centered.
@@ -1067,18 +1039,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textAlign: 'center',
   },
-  heroKickerWrap: {
-    marginTop: spacing.md,
-    alignItems: 'center',
-  },
-  // gold uppercase, breathes in opacity
-  heroKicker: {
-    fontSize: typography.caption,
-    fontWeight: '900',
-    color: colors.gold,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
   heroTitle: {
     marginTop: 6,
     fontSize: typography.title1,
@@ -1088,18 +1048,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: spacing.md,
   },
-  heroSupport: {
-    marginTop: 6,
-    fontSize: typography.caption,
-    lineHeight: 18,
-    color: colors.inkMuted,
-    textAlign: 'center',
-    paddingHorizontal: spacing.md,
-  },
   // ─── ACTION GROUP — pressure + CTA + draw status ────────────────────
   // Wider top margin from heroBand → makes hero clearly the visual lead.
   actionGroup: {
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
   },
 
   // Hidden test probe — 0×0 view kept in tree so home-collapse-decks-toggle
@@ -1127,11 +1079,10 @@ const styles = StyleSheet.create({
   primaryCtaText: { color: '#FFFFFF', fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
   // Draw status sits under the CTA as a quiet centered line — no pill, no
   // dot, no extra color. The CTA is loud, this is a label.
-  rewardStatusRow: {
-    marginTop: spacing.sm,
-    alignItems: 'center',
-  },
   rewardStatusText: {
+    marginTop: spacing.sm,
+    alignSelf: 'center',
+    textAlign: 'center',
     fontSize: typography.caption,
     fontWeight: '800',
     color: colors.inkSecondary,
@@ -1248,7 +1199,7 @@ const styles = StyleSheet.create({
   },
   errorRetryText: {
     color: '#FFFFFF',
-    fontSize: 12,
+    fontSize: typography.bodySmall,
     fontWeight: '900',
     letterSpacing: 0.4,
   },
