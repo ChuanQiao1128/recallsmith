@@ -211,7 +211,7 @@ function buildDrawVM(wallet?: RewardWalletState | null): HomeDrawVM {
   if (safeWallet.reservePulls > 0) {
     return {
       state: 'reserve',
-      label: `${safeWallet.availablePulls} ready · ${safeWallet.reservePulls} in reserve`,
+      label: `${safeWallet.availablePulls} pull${safeWallet.availablePulls === 1 ? '' : 's'} ready · ${safeWallet.reservePulls} more waiting`,
     };
   }
 
@@ -224,7 +224,7 @@ function buildDrawVM(wallet?: RewardWalletState | null): HomeDrawVM {
 
   return {
     state: 'locked',
-    label: 'Clear today’s route to unlock pulls',
+    label: 'Review today’s cards to earn a pull',
   };
 }
 
@@ -455,7 +455,7 @@ function buildHeroCopy(params: {
       return {
         eyebrow: 'Today',
         title: `${selectedDeck.title} is in progress`,
-        subtitle: 'You already started today. Finish the remaining route.',
+        subtitle: 'You started today. Finish the remaining cards.',
         helper: `${counts.selectedDue} due · ${counts.selectedNew} fresh still waiting.`,
       };
     case 'today_done': {
@@ -485,7 +485,7 @@ function buildHeroCopy(params: {
       return {
         eyebrow: 'Today',
         title: `You are clear for now in ${selectedDeck.title}`,
-        subtitle: 'No due cards and no fresh cards queued right now.',
+        subtitle: 'No due cards and no new cards queued right now.',
         helper: hasSignedInUser
           ? 'Browse another deck or come back later today.'
           : 'Sign in later for backup and cross-device continuity.',
@@ -497,7 +497,7 @@ function buildHeroCopy(params: {
         // The primary button now sends this state into study, so the nudge
         // has to agree with it. Telling the user to spend pulls first while
         // the button starts a session is the same label deception in copy.
-        subtitle: 'Clear today’s route first, then spend pulls so reserve can flow.',
+        subtitle: 'Pulls are full. Today’s review still comes first; spend a pull afterwards.',
         helper: `${FREE_PULL_CAP} ready and ${FREE_PULL_OVERFLOW_CAP} reserve are currently occupied.`,
       };
     default: {
@@ -506,14 +506,14 @@ function buildHeroCopy(params: {
         selectedDeck.dueToday > 0
           ? `${selectedDeck.dueToday} due today in ${selectedDeck.title}`
           : selectedDeck.newToday > 0
-            ? `A short fresh run is ready in ${selectedDeck.title}`
+            ? `A few new cards are ready in ${selectedDeck.title}`
             : `You are clear for now in ${selectedDeck.title}`;
       return {
         eyebrow: 'Today',
         title,
         subtitle: hasTodayWork
-          ? `${counts.normalCount} normal · ${counts.eliteCount} elite · ${counts.bossCount} boss max`
-          : 'No pressure day; review later or browse your decks.',
+          ? `Review today’s cards to earn pulls · at most ${SESSION_MAIN_ROUTE_DEFAULT} cards.`
+          : 'Nothing due today; review later or browse your decks.',
         helper: hasTodayWork
           ? `Clear ${SESSION_MIN_GOAL} node to keep momentum. Full run stays capped at ${SESSION_MAIN_ROUTE_DEFAULT} nodes.`
           : hasSignedInUser
@@ -581,7 +581,7 @@ function buildDeckRows(params: {
                 : 'Ready';
 
     const progressLabel = deck.canStudy
-      ? `${deck.dueToday} due · ${deck.newToday} fresh`
+      ? `${deck.dueToday} due · ${deck.newToday} new`
       : `0 due · ${deck.totalCards} cards`;
 
     return {

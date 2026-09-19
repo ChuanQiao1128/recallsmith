@@ -279,3 +279,67 @@ describe('buildHomeVM CTA kinds', () => {
     expect(vm.selectedDeckSlug).toBeNull();
   });
 });
+
+describe('Home copy glossary', () => {
+  it('hero subline no longer names route roles', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 3, newToday: 1 })],
+      wallet: { availablePulls: 0, reservePulls: 0 },
+    });
+
+    expect(vm.hero.subline).toBe(
+      'Review today’s cards to earn pulls · at most 5 cards.',
+    );
+    expect(vm.hero.subline).not.toMatch(/normal|elite|boss|pressure|route|node/i);
+  });
+
+  it('hero subline for a clear day drops the pressure wording', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 0, newToday: 0 })],
+      wallet: { availablePulls: 0, reservePulls: 0 },
+      statusHint: 'today_pending',
+    });
+
+    expect(vm.hero.subline).toBe('Nothing due today; review later or browse your decks.');
+  });
+
+  it('draw badge speaks in pulls, not reserve', () => {
+    const onePull = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck()],
+      wallet: { availablePulls: 1, reservePulls: 2 },
+    });
+    const twoPulls = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck()],
+      wallet: { availablePulls: 2, reservePulls: 3 },
+    });
+    const locked = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck()],
+      wallet: { availablePulls: 0, reservePulls: 0 },
+    });
+
+    expect(onePull.draw.label).toBe('1 pull ready · 2 more waiting');
+    expect(twoPulls.draw.label).toBe('2 pulls ready · 3 more waiting');
+    expect(locked.draw.label).toBe('Review today’s cards to earn a pull');
+  });
+
+  it('deck rows say new, not fresh', () => {
+    const vm = buildHomeVM({
+      selectedSlug: 'csharp',
+      hasSignedInUser: true,
+      deckSummaries: [makeDeck({ dueToday: 3, newToday: 2 })],
+      wallet: { availablePulls: 0, reservePulls: 0 },
+    });
+
+    expect(vm.decks.rows[0].progressLabel).toBe('3 due · 2 new');
+  });
+});
