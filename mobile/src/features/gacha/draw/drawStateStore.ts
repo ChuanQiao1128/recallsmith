@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getUserScopedKey } from '../../../review/storage';
-import { getCachedDrawState, setCachedDrawState } from './drawStateCache';
+import { getCachedDrawState, setCachedDrawState, invalidateDrawStateCache } from './drawStateCache';
 import type { PityState } from './pity';
 
 // One deck's whole draw-mutable state lives under one key, and a draw
@@ -19,6 +19,14 @@ import type { PityState } from './pity';
 // deck size. We take write amplification over torn state because the
 // bytes are cheap and the corruption is user-visible and permanent.
 const DRAW_STATE_PREFIX = 'devcards:draw-state:';
+
+// The reserved partition getUserScopedKey() builds while signed out.
+// Mirrors review/storage.ts:24 (USER_SCOPE_PREFIX) plus the 'anon'
+// fallback at :65. It is defined here rather than imported from
+// review/storage so this module does not depend on that module's
+// internal scope constants; the unit test in drawStateAdoption.test.ts
+// pins it to getUserScopedKey('') so the two definitions cannot drift.
+export const ANON_USER_SCOPE_PREFIX = 'devcards:u:anon:';
 
 // Draw history is deliberately NOT part of the atomic value. It is
 // diagnostics, not state: keeping it out means the write that must
@@ -44,11 +52,12 @@ const LEGACY_PITY_PREFIX = 'devcards:draw-pity:';
 // unscoped key is removed, the same claim-then-delete shape
 // review/storage.ts uses for its own pre-partition keys.
 //
-// Known consequence, accepted: if the first load after upgrading
-// happens while signed out, the collection lands in the "anon"
-// partition and signing in afterwards starts empty. Adopting anon
-// gacha state at sign-in is a separate change (see the pending-events
-// adoption work), not something to bolt onto a key migration.
+// If the first load after upgrading happens while signed out, the
+// collection lands in the "anon" partition. That partition is no longer
+// stranded: adoptAnonDrawState() below unions it into the account that
+// next signs in (driven through adoptAnonGachaState in
+// sync/drawStateSync.ts, ahead of the first cloud push), so this key
+// migration only has to reason about the unscoped legacy keys.
 
 // Ring buffer size. 50 draws is enough to replay any "this pull was
 // wrong" report that arrives while the user still remembers it, and
@@ -297,6 +306,104 @@ export async function saveDrawState(slug: string, record: DrawStateRecord): Prom
   // In this order a failed write leaves memory and disk agreeing on the old
   // value, which is the state the caller's error handling already expects.
   setCachedDrawState(key, record);
+}
+
+function samePityState(a: PityState | null, b: PityState | null): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return a.draws === b.draws && a.threshold === b.threshold;
+}
+
+export type AnonDrawStateAdoption = { decks: number; ownedAdded: number; pityRaised: number };
+
+/**
+ * Unions the "anon" partition's draw state into the current account, once,
+ * at sign-in. A collection drawn before signing in lands in the reserved
+ * anon partition (see the note above stateKey); without this it would be
+ * invisible to the account -- and, because listDrawStateSlugs only scans the
+ * current partition, invisible to the server's union too.
+ *
+ * Owned is unioned (a reveal is forever, so the merge cannot lose), pity keeps
+ * the higher counter, and the anon key is removed afterwards. The removal is
+ * the "adopted" marker: a second run finds nothing and returns zeros, and a
+ * collection drawn after a later sign-out is adopted afresh by the next
+ * sign-in. Copy-then-clear, never the reverse. Never throws: a storage failure
+ * during adoption must not fail sign-in, so it returns the counts so far.
+ */
+export async function adoptAnonDrawState(): Promise<AnonDrawStateAdoption> {
+  const result: AnonDrawStateAdoption = { decks: 0, ownedAdded: 0, pityRaised: 0 };
+  try {
+    const userPrefix = await stateKey('');
+    // Signed out: the current partition IS the anon partition, so there is
+    // nothing to adopt into. (init() reaches here too, before a sub is known.)
+    if (userPrefix.startsWith(ANON_USER_SCOPE_PREFIX)) return result;
+
+    const anonPrefix = `${ANON_USER_SCOPE_PREFIX}${DRAW_STATE_PREFIX}`;
+    const keys = await AsyncStorage.getAllKeys();
+    const slugs = keys
+      .filter((key) => key.startsWith(anonPrefix))
+      .map((key) => key.slice(anonPrefix.length))
+      .filter((slug) => slug.length > 0);
+
+    for (const slug of slugs) {
+      const anonKey = `${anonPrefix}${slug}`;
+
+      // A corrupt anon value adopts nothing but its key is still removed, the
+      // same reasoning as the legacy claim: a corrupt key left behind is
+      // re-scanned on every future adoption forever.
+      let anon: DrawStateRecord = { owned: [], pity: null };
+      const raw = await AsyncStorage.getItem(anonKey);
+      if (raw) {
+        try {
+          anon = parseDrawStateRecord(raw);
+        } catch {
+          anon = { owned: [], pity: null };
+        }
+      }
+
+      const current = await loadDrawState(slug);
+
+      // Union: user order first, anon uids appended in anon order, no dupes,
+      // empty strings skipped. Same semantics as unionOwned in
+      // sync/drawStateSync, re-implemented locally because this module must
+      // not import from sync/ -- that would be an import cycle.
+      const seen = new Set(current.owned);
+      const mergedOwned = [...current.owned];
+      for (const uid of anon.owned) {
+        if (!uid || seen.has(uid)) continue;
+        seen.add(uid);
+        mergedOwned.push(uid);
+      }
+      const grew = mergedOwned.length - current.owned.length;
+
+      let mergedPity: PityState | null;
+      if (current.pity == null || anon.pity == null) {
+        mergedPity = current.pity ?? anon.pity;
+      } else {
+        mergedPity = {
+          draws: Math.max(current.pity.draws, anon.pity.draws),
+          threshold: current.pity.threshold > 0 ? current.pity.threshold : anon.pity.threshold,
+        };
+      }
+      const drawsRose = (mergedPity?.draws ?? 0) > (current.pity?.draws ?? 0);
+
+      if (grew > 0 || !samePityState(current.pity, mergedPity)) {
+        await saveDrawState(slug, { owned: mergedOwned, pity: mergedPity });
+        result.ownedAdded += grew;
+        if (drawsRose) result.pityRaised += 1;
+      }
+
+      // User partition written first, anon key removed second. Removing the
+      // draw-state key without going through saveDrawState means its cache
+      // entry has to be dropped by hand (see loadDrawState's cache note).
+      await AsyncStorage.removeItem(anonKey);
+      invalidateDrawStateCache(anonKey);
+      result.decks += 1;
+    }
+  } catch {
+    // Return whatever was adopted before the failure; the next sign-in retries
+    // any anon keys still present.
+  }
+  return result;
 }
 
 function parseDrawHistory(raw: string): DrawHistoryEntry[] {

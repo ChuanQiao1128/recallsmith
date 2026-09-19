@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getUserScopedKey } from '../../../review/storage';
+import { ANON_USER_SCOPE_PREFIX } from '../draw/drawStateStore';
 import { FREE_PULL_CAP, FREE_PULL_OVERFLOW_CAP } from '../constants';
 
 // All three bases below are now built through getUserScopedKey(): a
@@ -193,6 +194,69 @@ export async function seedStarterPullsIfNeeded(): Promise<{
     // regular load gives us. The next successful boot will retry.
     return { wallet: await loadRewardWalletState(), seeded: false };
   }
+}
+
+export type AnonWalletAdoption = { addedPulls: number; dropped: number };
+
+/**
+ * Adds the "anon" partition's wallet into the current account at sign-in, then
+ * removes the anon wallet key. Pulls drawn before signing in are added under
+ * the normal FREE_PULL caps (via applyRewardToWallet), so a full wallet drops
+ * the overflow the same way a reward would. The starter-grant flag is carried
+ * forward but never removed. Never throws.
+ */
+export async function adoptAnonRewardWallet(): Promise<AnonWalletAdoption> {
+  const result: AnonWalletAdoption = { addedPulls: 0, dropped: 0 };
+  try {
+    const userKey = await walletKey();
+    // Signed out: the current partition IS the anon partition, nothing to do.
+    if (userKey.startsWith(ANON_USER_SCOPE_PREFIX)) return result;
+
+    const anonWalletKey = `${ANON_USER_SCOPE_PREFIX}${REWARD_WALLET_KEY}`;
+    const raw = await AsyncStorage.getItem(anonWalletKey);
+    if (raw != null) {
+      let anon: RewardWalletState = { availablePulls: 0, reservePulls: 0 };
+      try {
+        anon = parseWallet(raw);
+      } catch {
+        // A corrupt anon wallet adds nothing, but its key is still removed.
+        anon = { availablePulls: 0, reservePulls: 0 };
+      }
+      const pulls = anon.availablePulls + anon.reservePulls;
+      if (pulls > 0) {
+        const current = await loadRewardWalletState();
+        const applied = applyRewardToWallet(current, pulls);
+        // User wallet written first, anon key removed second. Accepted crash
+        // window: a kill between this write and the removeItem below replays
+        // the add on the next run. It is bounded by the caps and points the
+        // same safe direction as the boot-seed timing caveat above (:10-17) --
+        // a signed-in user can be over-granted a few pulls, never under.
+        await saveRewardWalletState({
+          availablePulls: applied.availablePulls,
+          reservePulls: applied.reservePulls,
+        });
+        result.addedPulls = applied.appliedToAvailable + applied.appliedToReserve;
+        result.dropped = applied.dropped;
+      }
+      await AsyncStorage.removeItem(anonWalletKey);
+    }
+
+    // The person who took the anon starter grant is the person signing in, so
+    // carry the "seeded" mark forward: without it a user who already spent the
+    // 3 anon pulls before signing in would be seeded a second time. The anon
+    // flag itself is deliberately left in place -- a later signed-out session
+    // must not be re-granted either.
+    const anonSeededKey = `${ANON_USER_SCOPE_PREFIX}${WALLET_SEEDED_KEY}`;
+    const anonSeeded = await AsyncStorage.getItem(anonSeededKey);
+    if (anonSeeded) {
+      const scopedKey = await seededKey();
+      const scopedSeeded = await AsyncStorage.getItem(scopedKey);
+      if (!scopedSeeded) await AsyncStorage.setItem(scopedKey, '1');
+    }
+  } catch {
+    // Never throw: adoption must not fail sign-in. Return the counts so far.
+  }
+  return result;
 }
 
 export function consumePullsFromWallet(current: RewardWalletState, count: number): {
