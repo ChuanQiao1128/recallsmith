@@ -24,8 +24,25 @@ export type IosRemoteConfig = {
   message?: string;
 };
 
+export type McqRemoteFeatures = {
+  enabled?: boolean;
+  recallFirst?: boolean;
+  maxPerRun?: number;
+  answerTelemetry?: boolean;
+};
+
+export type PaywallRemoteFeatures = {
+  hidden?: boolean;
+};
+
+export type RemoteFeatures = {
+  mcq?: McqRemoteFeatures;
+  paywall?: PaywallRemoteFeatures;
+};
+
 export type RemoteConfig = {
   ios?: IosRemoteConfig;
+  features?: RemoteFeatures;
 };
 
 function parseSemver(v: string): [number, number, number] {
