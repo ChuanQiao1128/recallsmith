@@ -46,8 +46,6 @@ export function SettingsMainScreen({ navigation }: Props) {
       onPrimary={() => navigation.navigate('SettingsNotifications')}
       secondaryLabel="Content preferences"
       onSecondary={() => navigation.navigate('SettingsAudience')}
-      tertiaryLabel="Account & billing"
-      onTertiary={() => navigation.navigate('SettingsAccount')}
       footer={
         <View style={styles.footerGrid}>
           <Pressable style={styles.footerCard} onPress={() => navigation.navigate('SettingsPools')}>
