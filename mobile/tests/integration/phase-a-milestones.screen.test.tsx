@@ -51,11 +51,11 @@ describe('phase A milestone and support routes', () => {
     warnSpy.mockRestore();
   });
 
-  it('hands permission prompt into first-draw home', async () => {
-    const replace = vi.fn();
+  it('hands permission prompt back into Home without the first-draw coach', async () => {
+    const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<PermissionPromptScreen navigation={{ replace } as any} route={{ key: 'permission', name: 'PermissionPrompt' } as any} />);
+      tree = renderer.create(<PermissionPromptScreen navigation={{ navigate } as any} route={{ key: 'permission', name: 'PermissionPrompt' } as any} />);
     });
     await act(async () => {
       // PermissionPrompt v3 — Allow reminders now triggers the real
@@ -66,7 +66,9 @@ describe('phase A milestone and support routes', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(replace).toHaveBeenCalledWith('Home', { firstDrawCoach: true });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate.mock.calls[0][0]).toBe('Home');
+    expect(navigate.mock.calls[0][1]?.firstDrawCoach).toBeUndefined();
   });
 
   it('switches pools back into home', async () => {

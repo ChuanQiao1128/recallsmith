@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 
@@ -28,10 +29,27 @@ function safeRequestNotificationPermission(): Promise<'granted' | 'denied' | 'un
   }
 }
 
+// One-shot gate: AudienceSurvey marks it when onboarding completes; the
+// first DrawResult the user leaves via "Done" consumes it and pushes this
+// screen. Existing users (flag never set) are never prompted again.
+export const PERMISSION_PROMPT_PENDING_KEY = 'notifications:permission-prompt:pending:v1';
+
+export async function markPermissionPromptPending(): Promise<void> {
+  try { await AsyncStorage.setItem(PERMISSION_PROMPT_PENDING_KEY, '1'); } catch {}
+}
+
+export async function isPermissionPromptPending(): Promise<boolean> {
+  try { return (await AsyncStorage.getItem(PERMISSION_PROMPT_PENDING_KEY)) === '1'; } catch { return false; }
+}
+
+export async function clearPermissionPromptPending(): Promise<void> {
+  try { await AsyncStorage.removeItem(PERMISSION_PROMPT_PENDING_KEY); } catch {}
+}
+
 // PermissionPrompt v3 — actually requests the iOS notification permission
 // when the user taps "Allow reminders" (was just navigating, which was
-// misleading). "Not now" still skips without asking. Either path lands
-// in Home with the firstDrawCoach hint so onboarding completes the same.
+// misleading). "Not now" still skips without asking. Either path returns
+// to the existing Home screen beneath the first-draw flow.
 export function PermissionPromptScreen({ navigation }: Props) {
   const [busy, setBusy] = useState(false);
 
@@ -47,8 +65,7 @@ export function PermissionPromptScreen({ navigation }: Props) {
       // tap was ignored.
       resultStatus = await safeRequestNotificationPermission();
     } finally {
-      navigation.replace('Home', {
-        firstDrawCoach: true,
+      navigation.navigate('Home', {
         notice: resultStatus === 'denied' ? 'notifications-denied' : undefined,
       });
     }
@@ -56,8 +73,7 @@ export function PermissionPromptScreen({ navigation }: Props) {
 
   function handleSkip() {
     if (busy) return;
-    navigation.replace('Home', {
-      firstDrawCoach: true,
+    navigation.navigate('Home', {
       notice: 'notifications-skipped',
     });
   }

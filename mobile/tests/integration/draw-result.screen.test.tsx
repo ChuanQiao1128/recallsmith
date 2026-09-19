@@ -40,6 +40,13 @@ vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
   loadRewardWalletState: vi.fn(() => walletLoader()),
 }));
 
+let permissionPromptPendingFixture = false;
+const clearPermissionPromptPendingMock = vi.fn(async () => {});
+vi.mock('../../src/screens/PermissionPromptScreen', () => ({
+  isPermissionPromptPending: vi.fn(async () => permissionPromptPendingFixture),
+  clearPermissionPromptPending: () => clearPermissionPromptPendingMock(),
+}));
+
 import { DrawResultScreen } from '../../src/screens/DrawResultScreen';
 
 const DRAW_RESULT_FIXTURE = {
@@ -88,6 +95,8 @@ describe('DrawResultScreen v9', () => {
     walletFixture = { availablePulls: 2, reservePulls: 0 };
     walletLoader = async () => walletFixture;
     viewportWidth = 390;
+    permissionPromptPendingFixture = false;
+    clearPermissionPromptPendingMock.mockClear();
   });
 
   it('renders collection bar, featured card, single primary CTA and done link', async () => {
@@ -236,6 +245,27 @@ describe('DrawResultScreen v9', () => {
     });
 
     expect(navigate).toHaveBeenCalledWith('Home');
+  });
+
+  it('routes the first Done into PermissionPrompt once when the onboarding flag is pending', async () => {
+    permissionPromptPendingFixture = true;
+    const navigate = vi.fn();
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen navigation={{ navigate } as any} route={{ key: 'result', name: 'DrawResult', params: makeParams() } as any} />,
+      );
+    });
+    await flush();
+
+    act(() => {
+      tree.root.findByProps({ testID: 'draw-result-done-link' }).props.onPress();
+    });
+
+    expect(navigate).toHaveBeenCalledWith('PermissionPrompt');
+    expect(navigate).not.toHaveBeenCalledWith('Home');
+    expect(clearPermissionPromptPendingMock).toHaveBeenCalledTimes(1);
   });
 
   it('opens and closes detail modal from grid card', async () => {
