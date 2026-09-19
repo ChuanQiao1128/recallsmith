@@ -4,13 +4,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiJson } from '../api/apiClient';
 import { getUserScopedKey } from '../review/storage';
 import {
+  adoptAnonDrawState,
   listDrawStateSlugs,
   loadDrawState,
   saveDrawState,
+  type AnonDrawStateAdoption,
 } from '../features/gacha/draw/drawStateStore';
 import {
+  adoptAnonRewardWallet,
   loadRewardWalletState,
   saveRewardWalletState,
+  type AnonWalletAdoption,
   type RewardWalletState,
 } from '../features/gacha/rewards/rewardWallet';
 import type { PityState } from '../features/gacha/draw/pity';
@@ -54,6 +58,11 @@ import type { PityState } from '../features/gacha/draw/pity';
  * them would add a way to LOSE money instead: any bug that let one device's
  * receipt answer for another's session would silently swallow a reward, which
  * is exactly the failure the local key partitioning had to fix.
+ *
+ * Anon adoption runs first: syncDrawStateNow unions the anonymous-period
+ * partition (collection, pity, wallet) into the account before it reads local
+ * state, so a card drawn before sign-in is pushed in the same run. The adopted
+ * wallet pulls fall under the wallet LWW known-loss noted above.
  *
  * Failure policy: this never throws to its caller and never blocks review sync.
  * A skipped run costs a few minutes of staleness; a run that took review sync
@@ -221,6 +230,32 @@ const SKIPPED: DrawStateSyncResult = {
   appliedWallet: false,
 };
 
+export type AnonGachaAdoption = AnonDrawStateAdoption & AnonWalletAdoption;
+
+// One adoption at a time. Two callers race in production: the sign-in path in
+// authStore calls adoptAnonGachaState directly, and the 'user_changed' progress
+// sync that setActiveUserSub schedules reaches syncDrawStateNow (which calls it
+// again). Without coalescing the wallet add could land twice, once per caller.
+let _adopting: Promise<AnonGachaAdoption> | null = null;
+
+/**
+ * Adopts the anonymous-period partition into the account that just signed in:
+ * union the anon collection and pity, add the anon wallet under the caps, then
+ * clear the anon keys. Idempotent (a second run finds nothing) and never throws.
+ * Concurrent callers share one in-flight run.
+ */
+export function adoptAnonGachaState(): Promise<AnonGachaAdoption> {
+  if (_adopting) return _adopting;
+  _adopting = (async () => {
+    const draw = await adoptAnonDrawState();
+    const wallet = await adoptAnonRewardWallet();
+    return { ...draw, ...wallet };
+  })().finally(() => {
+    _adopting = null;
+  });
+  return _adopting;
+}
+
 /**
  * Push local gamification state, then adopt the server's verdict.
  *
@@ -234,6 +269,11 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
 
   _inFlight = true;
   try {
+    // Adopt any anonymous-period state into this account BEFORE reading local
+    // state, so an adopted deck is new to stamps.decks and is pushed with
+    // UNKNOWN_STAMP_MS in this same run -- this is what makes the anon
+    // collection reach the server's union on the first sync.
+    await adoptAnonGachaState();
     const stamps = await readStamps();
     const nowMs = Date.now();
 

@@ -15,6 +15,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { setSyncAccessToken, forceProgressSync, setActiveUserSub } from '../sync/progressSync';
+import { adoptAnonGachaState } from '../sync/drawStateSync';
 import { invalidateProgressQueueCache } from '../sync/progressQueueCache';
 import { invalidateDrawStateCache } from '../features/gacha/draw/drawStateCache';
 
@@ -115,6 +116,12 @@ async function applySessionToState(set: any) {
 
   // ✅ 关键：立刻设置 activeUserSub（让 Home 读取正确的 user-scoped progress）
   await setActiveUserSub(userSub);
+
+  // Union any anonymous-period collection/pity/wallet into this account before
+  // the first signed-in render (Library/Home read draw state on that render)
+  // and before the first cloud push. A no-op when the anon partition is empty,
+  // including the init() path.
+  if (userSub) await adoptAnonGachaState();
 
   set({
     status: at ? 'signed_in' : 'anonymous',
