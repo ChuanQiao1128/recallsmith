@@ -16,6 +16,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import { getCurrentAppVersion } from '../config/remoteConfig';
+import { useFeatureFlags } from '../config/featureFlags';
 import { useAuthStore } from '../auth/authStore';
 import {
   getReminderPrefs,
@@ -92,6 +93,8 @@ async function openExternalLink(url: string): Promise<void> {
 
 export function SettingsScreen({ navigation }: Props) {
   const appVersion = getCurrentAppVersion();
+  const featureFlags = useFeatureFlags();
+  const paywallHidden = featureFlags.paywall.hidden === true;
 
   const status = useAuthStore((state) => state.status);
   const authLoading = useAuthStore((state) => state.loading);
@@ -323,22 +326,24 @@ export function SettingsScreen({ navigation }: Props) {
 
           <AppearanceSection />
 
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle} numberOfLines={1}>
-              {PREMIUM_COPY.title}
-            </Text>
-            <Text style={styles.sectionBody} numberOfLines={1}>
-              {PREMIUM_COPY.body}
-            </Text>
-            <Pressable
-              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-              onPress={() => navigation.navigate('Paywall')}
-            >
-              <Text style={styles.secondaryButtonText} numberOfLines={1}>
-                {PREMIUM_COPY.action}
+          {paywallHidden ? null : (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle} numberOfLines={1}>
+                {PREMIUM_COPY.title}
               </Text>
-            </Pressable>
-          </View>
+              <Text style={styles.sectionBody} numberOfLines={1}>
+                {PREMIUM_COPY.body}
+              </Text>
+              <Pressable
+                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+                onPress={() => navigation.navigate('Paywall')}
+              >
+                <Text style={styles.secondaryButtonText} numberOfLines={1}>
+                  {PREMIUM_COPY.action}
+                </Text>
+              </Pressable>
+            </View>
+          )}
 
           <AboutSection
             appVersion={appVersion}
