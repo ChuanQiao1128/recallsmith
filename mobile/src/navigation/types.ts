@@ -65,8 +65,6 @@ export type RootStackParamList = {
   SettingsNotifications: undefined;
   SettingsPools: undefined;
   SettingsAppearance: undefined;
-  SettingsAccount: undefined;
-  DeleteAccountConfirm: undefined;
   About: undefined;
   HelpFAQ: undefined;
   ErrorNetwork: undefined;
