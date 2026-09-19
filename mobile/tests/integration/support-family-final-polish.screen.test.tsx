@@ -67,7 +67,7 @@ describe('support family final polish', () => {
       faqTree = renderer.create(<HelpFAQScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'faq', name: 'HelpFAQ' } as any} />);
     });
     const faqBlob = textBlob(faqTree);
-    expect(faqBlob).toContain('support companion');
+    expect(faqBlob).not.toContain('support companion');
 
     let aboutTree!: renderer.ReactTestRenderer;
     await act(async () => {

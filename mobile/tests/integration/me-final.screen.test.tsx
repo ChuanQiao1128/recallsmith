@@ -84,7 +84,7 @@ describe('me final flow', () => {
     expect(moreBlob).toContain('Profile');
     expect(moreBlob).toContain('Settings');
     expect(moreBlob).toContain('Help');
-    expect(moreBlob).toContain('Developer tools');
+    expect(moreBlob).not.toContain('Developer tools');
     expect(moreBlob).not.toContain('Profile, settings, support, and QA');
     expect(moreBlob).not.toContain('Phase C');
     expect(moreBlob).not.toContain('QA lane');
@@ -101,9 +101,9 @@ describe('me final flow', () => {
     const profileBlob = textBlob(profileTree);
     expect(profileBlob).toContain('Your study profile');
     expect(profileBlob).toContain('Current setup');
-    expect(profileBlob).toContain('Study identity');
+    expect(profileBlob).not.toContain('Learner #local');
     expect(profileBlob).toContain('Momentum this week');
-    expect(profileBlob).toContain('Next best return point');
+    expect(profileBlob).not.toContain('Next best return point');
     expect(profileBlob).not.toContain('premium learner card');
 
     let achievementsTree!: renderer.ReactTestRenderer;

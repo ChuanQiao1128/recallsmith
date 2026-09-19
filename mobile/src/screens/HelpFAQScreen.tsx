@@ -2,7 +2,7 @@ import React from 'react';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import AppInfoScreen from '../components/AppInfoScreen';
-import { FAQ_LIST } from '../mock/faq';
+import { FAQ_LIST } from '../content/faq';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'HelpFAQ'>;
 
@@ -11,7 +11,7 @@ export function HelpFAQScreen({ navigation }: Props) {
     <AppInfoScreen
       eyebrow="FAQ"
       title="Help and answers"
-      body="Get quick answers for draw rules, resets, reminders, and other product questions without leaving the app. Treat help like a support companion that gets the learner back on track fast."
+      body="Short answers to what people ask most: pulls, pity, locked cards, offline, Android and dark mode. Missing something? Open Support from the Me tab."
       cosmic
       chips={['Support', 'Answers']}
       stats={[
