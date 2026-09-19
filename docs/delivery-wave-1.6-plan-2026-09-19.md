@@ -42,7 +42,7 @@
 |---|---|---|
 | 1 | **Codex 二进制坏了**：`codex login status` 报 `ENOENT`（`@openai/codex-darwin-arm64` 的 vendor 二进制缺失） | `npm i -g @openai/codex` 重装并 `codex login`；或改用同目录的 `claude-delivery-wave`（Claude `-p` 作 worker，机制相同）。**这是 preflight 会拦下的第一件事** |
 | 2 | **三个根，不是一个**：driver 的 Gate 2 假设单根前端（worktree 根目录 `npm run typecheck` / `npm run test`）和一个 `DOTNET_DIR` | 给 driver 加一个**按路径前缀的验证表**（小改，加法）：`mobile/*` → `cd mobile && npm run test:typecheck && npx vitest run`；`frontend/*` → `cd frontend && npm run lint && npx vitest run && npm run build`；`src_C/*` → `cd src_C && dotnet test Tests/RecallSmith.Lambda.IntegrationTests`（CI 就是这条，`DOTNET_DIR` 直接指 `src_C` 但命令要钉到这个项目，否则 `dotnet test` 不知道选 sln 还是 csproj）；`snowflake/*`、`docs/*` → 非空检查 |
-| 3 | **node_modules 符号链接**：driver 只在 worktree 根链接 `$REPO/node_modules` | 同一处补 `mobile/node_modules` 和 `frontend/node_modules` 两条链接 |
+| 3 | **node_modules 符号链接**：driver 只在 worktree 根链接 `$REPO/node_modules` | 同一处补 mobile 与 frontend 各自 node_modules 的两条链接 |
 | 4 | **后端测试要 Docker**：`IntegrationTestBase.cs` 用 Testcontainers 拉 `postgres:16-alpine` | 启动前 Docker Desktop 必须在跑；preflight 加一条 `docker info` |
 | 5 | **brief 级验收**：driver 只跑通用门禁，不跑 brief 里的 `verify:` 命令 | 加 Gate 2b（加法）：若存在 `$BRIEF_DIR/<TAG>.verify.sh` 就执行；每个 issue 的 AC 写成这个脚本，Codex 和 driver 各跑一次 |
 | 6 | **iCloud**：仓库在 `~/Desktop/2026年9月/…`（iCloud） | 控制目录用默认的 `~/.rimv-delivery/r16-*/`（iCloud 之外）；`.git` 留在原处；197 个 " 2.*" 冲突副本**没有一个被 git 跟踪**（已核），worktree 里不会出现 |
@@ -93,7 +93,7 @@
 | B11 | 清理：`CeremonyLottie.tsx` → `ceremonyStyles.ts` + `FeaturedCard.tsx`；删 SparkleField/ParticleBurst/MultiPackFlyIn、`assets/lottie/*`、`scripts/gen_lottie.py`、15 处 shadowRadius | 上述文件 | typecheck + vitest；grep：无 `shadowRadius: [1-9][6-9]\|[2-9][0-9]` | B09 | 40 |
 | B12 | 素材生成脚本：`gen_card_frames.py`（3 稀有度框 + 箔 LUT）、`gen_card_back.py`（每卡组卡背 ≤ 200 KB）、粒子精灵表、9-slice 光晕；`packArt.ts` 注册 + `normalizeSlugForPack aws-saa-c03 → aws` | `mobile/scripts/*.py`, `mobile/assets/packs/*`, `assets/ui/*`, `src/theme/packArt.ts` | `python3 scripts/gen_*.py` 退出 0 且 PNG 尺寸符合（`sips -g pixelWidth`）；vitest packArt 单测 | B01 | 60 |
 | B13 | Dev 工具：`CeremonyTuning` 屏（DEVICE 时长滑块 + 帧间隔探针）+ DebugMenu 种子（钱包 30/5、只剩 Legendary、强制 fallback、强制 repeat） | `src/screens/dev/CeremonyTuning.tsx`, `DebugMenuScreen.tsx` | typecheck + vitest；断言 `__DEV__` 门 | B09 | 40 |
-| B14 | 文档：重写 `docs/qa/animation-quality-rubric.md`（7 阶段、DEVICE 表 + 上限）、新 `docs/design/v10-ceremony-seam-of-light.md`、v9 标记 superseded；`LICENSE-ASSETS` + `assets/sfx/LICENSES.md` 模板 | `mobile/docs/**`, `LICENSE-ASSETS` | 非空 + 链接存在 | B09 | 20 |
+| B14 | 文档：重写 `mobile/docs/qa/animation-quality-rubric.md`（7 阶段、DEVICE 表 + 上限）、新 `docs/design/v10-ceremony-seam-of-light.md`、v9 标记 superseded；`LICENSE-ASSETS` + `assets/sfx/LICENSES.md` 模板 | `mobile/docs/**`, `LICENSE-ASSETS` | 非空 + 链接存在 | B09 | 20 |
 | B15 | C4 分享抽卡图（view-shot + expo-sharing，DrawResult 按钮）+ R7 评分弹窗触发（首次 LEG / 7 天连续，一次）+ deep-link `linking` 配置 | `DrawResultScreen.tsx`, `src/features/gacha/share/*`, `App.tsx`, `src/features/gacha/milestones/*` | typecheck + vitest（mock sharing/store-review） | B10 | 60 |
 
 **Wave B 结束你要做的（这是最长的一次出面，约 1 天）**：EAS dev-client 构建（iOS + Android）→ 真机：单抽 COM / 单抽 LEG / 十连 LEG 都能到铺桌且不崩，帧间隔探针 p95 < 22 ms，减弱动态、VoiceOver 各过一遍，对照 Pocket/Hearthstone 参考签字 → 放入 AWS 封面插画和音效文件（B12/B14 留了位置）→ 内容清理（27 条修补 + 2 张退役 + `total_cards`）和商标声明 → 生产构建 → TestFlight → App Store Connect 元数据、隐私标签、8 张截图 → 提交审核。
@@ -218,7 +218,14 @@ FRONTEND_PATHS='mobile frontend'       # 适配 #2/#3 按根分派
 ## 8. 批准后我会按这个顺序做（仍不改产品代码）
 
 1. 修 Codex 安装 / 确认 Docker；给 `driver.sh` 打第 2 节的三处加法并在空 diff 上干跑。
-2. 起草经济修正案（`docs/economy-v2-learn-to-earn-2026-09-2x.md`）给你签。
+2. 起草经济修正案（`docs/economy-v2-learn-to-earn-2026-09-19.md`）给你签。
 3. 创建 Wave A 的 10 个 issue + 10 份 brief + `queue.tsv`，输出分解摘要 → **停，等你 "go"**。
 4. `preflight.sh` → `start.sh`；之后我只在事件时出现。
 5. 每波结束：汇总 STATUS、开 → main 的 PR、准备下一波的 issue 和摘要。
+
+<!-- paths-not-on-disk
+计划中、尚未创建的文件（frontend/tests/docsPaths.test.ts 的守卫要求在此登记）：
+     - docs/design/v10-ceremony-seam-of-light.md
+     - frontend/tests/deckImport.mcq.test.ts
+     - mobile/src/components/ceremony/reanimatedGuard.ts
+-->

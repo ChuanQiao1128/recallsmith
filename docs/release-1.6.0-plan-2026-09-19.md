@@ -48,7 +48,7 @@
 ### 契约（重做时必须保住或明确改动的）
 
 - `tests/integration/draw-ceremony.screen.test.tsx`：TIMING_SCALE=1 时的基础时长逐个断言（单 300/140–220/360/220/200，十连 620/220–300/940/280/300；总时长单 1100–1400、十连 2100–2600）；阶段文案 testID；"Show result" 在 settle 前必须不存在；orbit-* testID；减弱动态下 CTA 在 180 ms、跳转在 420 ms；Lottie 的 `onAnimationFinish` 在 settle 前必须被忽略。
-- `docs/qa/animation-quality-rubric.md`：≥ 90 分、A-P0 为 0、减弱动态 ≤ 450 ms、p95 帧间隔 < 22 ms——但它的阶段名（orbit/charge/stabilize）已经和代码对不上，要重写。
+- `mobile/docs/qa/animation-quality-rubric.md`：≥ 90 分、A-P0 为 0、减弱动态 ≤ 450 ms、p95 帧间隔 < 22 ms——但它的阶段名（orbit/charge/stabilize）已经和代码对不上，要重写。
 - 产品规则：保留 tap-to-flip；不显示概率/价格；不做老虎机式包装；尊重减弱动态。
 
 ---

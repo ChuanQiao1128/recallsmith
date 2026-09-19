@@ -277,7 +277,7 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 
 ### 5.1 原则
 
-不做第二个调度器，不加第五档评分，不加进度字段。`scheduleNextReview` / `foldProgress`（`review/model.ts:85-140, 213-219`）、`CardProgress` 白名单、`SCHEDULER_VERSION 'ladder-v1'`（`progressSync.ts:133`）、连续天数规则（`sessionStore.ts:54-58`）、奖励（`rewardResolver.ts:19-29`）、`ProgressEvents.cs:417-431`、`snowflake/001:66-72,115` 全部保持。MCQ 屏幕产出一个判定 + 三个"反馈前"信号，纯函数 `mapMcqVerdictToRating`（新 `features/gacha/mcq/mcqVerdict.ts`，fast-check 测试）在 `handleRating`（`SessionCardScreen.tsx:396`）之前把它变成 `again|hard|good|easy` 之一。永远不传非评分字符串（`progressSync.ts:223-236` 会把未知值强转成 3 = good）。
+不做第二个调度器，不加第五档评分，不加进度字段。`scheduleNextReview` / `foldProgress`（`review/model.ts:85-140, 213-219`）、`CardProgress` 白名单、`SCHEDULER_VERSION 'ladder-v1'`（`progressSync.ts:133`）、连续天数规则（`sessionStore.ts:54-58`）、奖励（`rewardResolver.ts:19-29`）、`ProgressEvents.cs:417-431`、`snowflake/001_content_intelligence_setup.sql:66-72,115` 全部保持。MCQ 屏幕产出一个判定 + 三个"反馈前"信号，纯函数 `mapMcqVerdictToRating`（新 `features/gacha/mcq/mcqVerdict.ts`，fast-check 测试）在 `handleRating`（`SessionCardScreen.tsx:396`）之前把它变成 `again|hard|good|easy` 之一。永远不传非评分字符串（`progressSync.ts:223-236` 会把未知值强转成 3 = good）。
 
 ### 5.2 输入
 
@@ -304,7 +304,7 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 
 ### 5.4 为什么是这个形状
 
-- `again` 是阶梯里唯一的失败信号，也是 Content Intelligence 里唯一算进 `failure_rate` / `again_rate` 的值（`snowflake/001:166-168`）；把答错映射成更软的东西会同时污染两者。
+- `again` 是阶梯里唯一的失败信号，也是 Content Intelligence 里唯一算进 `failure_rate` / `again_rate` 的值（`snowflake/001_content_intelligence_setup.sql:166-168`）；把答错映射成更软的东西会同时污染两者。
 - 提交时选自信度，零额外点击就抵消了 25% 的蒙对底线；反馈后再问"我是猜的吗"会被事后诸葛污染（备选见第 11 节）。
 - 慢但对、改过但对**永远不产生 hard**：把它们喂进 hardStreak 会让一张学习者连续答对的卡在第 3 次被降级（`HARD_STREAK_TO_DEMOTE = 3`）。
 - partial = 恰好错一个，不是"有一个对"：3 选 6 只对 1 个低于随机期望 1.5，属于失败桶。SAA-C03 本身没有部分分，但产品目标是记忆不是模拟分数。
@@ -425,7 +425,7 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 | 手机 MCQ UI | `McqReviewBody`、`McqActionDock`、`McqCoachLine` | 新 | M |
 | 手机会话屏 | 状态 + 三个 handler + 分支 + 重置；`navigation/types.ts`；`SessionSummaryScreen` | 同名 | M |
 | 手机卡面（Phase 4） | `DrawnCardVm.tag`、CardDetail 芯片、Library 字样 | `drawCommit.ts`、`CardDetailScreen.tsx`、`LibraryCardTile.tsx` | S |
-| Snowflake + 控制台分区（Phase 3） | `answer_mode` 投影、基线分组、Q/A 规则限定、横幅 | `snowflake/001…sql`、`ContentIntelligence.cs`、`ContentIntelligencePage.tsx` | S |
+| Snowflake + 控制台分区（Phase 3） | `answer_mode` 投影、基线分组、Q/A 规则限定、横幅 | `snowflake/001_content_intelligence_setup.sql`、`ContentIntelligence.cs`、`ContentIntelligencePage.tsx` | S |
 | 行为数据（Phase 5） | `answer` payload、ingest side list、`002_mcq_marts.sql`、迁移 019、快照 + 控制台 | `progressSync.ts`、`ProgressEvents.cs`、snowflake、`ContentIntelligenceSnapshotImport.cs` | S+M+L |
 | 文档 | `content-delivery-v3.md`、`console-import-plan.md`、`aws-saa-mcq-authoring-guide.md`（新）、上架文案 | — | S |
 
@@ -491,3 +491,10 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 - 4 个设计的评委总分：学习科学（recall-first + 自信加权映射到四档）21 > 内容优先 19 > 产品体验 18 > 最小改动 17。最终方案以学习科学版为骨架，数据模型取最小改动版（一列 jsonb + 一个字段），录题格式取内容优先版，三屏 UI 和话术取产品体验版。
 - 我自己核过的：PDF 结构与统计（第 1 节）、`deckExport.ts`、`review/model.ts`、`ReviewBody` / `RatingBar`、`recordReviewEvent` 的入参、`001_init.sql` 的 cards 列、导入器的标记正则。
 - 没有二次核验的：Worker / DeckDiff / ContentArtifactsGenerator 的具体行号、Snowflake mart 的行号、`useForceUpdateGate` 的调用链——实现时以代码为准。
+
+<!-- paths-not-on-disk
+计划中、尚未创建的文件（frontend/tests/docsPaths.test.ts 的守卫要求在此登记）：
+     - docs/aws-saa-mcq-authoring-guide.md
+     - snowflake/002_mcq_marts.sql
+     - src_C/Vpc/Db/Migrations/018_cards_mcq.sql
+-->
