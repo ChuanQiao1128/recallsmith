@@ -611,40 +611,52 @@ export function HomeScreen({ navigation, route }: Props) {
               };
 
               // Featured-pack press handler — pack is now tappable.
-              // Resolves to the most natural intent for each state:
-              //   • no real deck (empty manifest) → refresh
-              //   • paywall / install / update / trial → resolver
-              //     (handleDeckPress routes to Paywall / installs the pack / etc)
-              //   • installed + has pulls → straight to Draw
-              //   • installed + no pulls → SessionCard (earn pulls path)
+              // Its destination follows the same primary decision shown below,
+              // except setup actions still use the existing deck resolver.
               const drawState = homeState.vm.draw.state;
-              const walletHasPulls =
-                drawState === 'available' || drawState === 'reserve' || drawState === 'wallet-full';
+              const featuredHint = featuredDeck.realRow?.actionHint ?? null;
+              const resolvesFeaturedDeck =
+                featuredHint === 'paywall'
+                || featuredHint === 'update'
+                || featuredHint === 'trial-start'
+                || (featuredHint === 'install' && drawState === 'locked');
+              const featuredPackAccessibilityLabel = !featuredDeck.realRow
+                ? 'Connect to load packs'
+                : firstDrawCoach
+                  ? 'Open reward draw'
+                  : resolvesFeaturedDeck
+                    ? `${featuredDeck.status} ${featuredDeck.title}`
+                    : homeState.vm.cta.label;
               const handleFeaturedPackPress = () => {
                 if (!featuredDeck.realRow) {
                   void refreshHome();
                   return;
                 }
+                if (firstDrawCoach) {
+                  navigation.navigate('Draw', {
+                    slug: featuredDeck.slug,
+                    rewardPending: true,
+                  });
+                  return;
+                }
                 const hint = featuredDeck.realRow.actionHint;
                 if (
                   hint === 'paywall'
-                  || hint === 'install'
                   || hint === 'update'
                   || hint === 'trial-start'
+                  || (hint === 'install' && drawState === 'locked')
                 ) {
                   void handleDeckPress(featuredDeck.realRow);
                   return;
                 }
-                if (walletHasPulls) {
+                if (hint === 'install' && drawState !== 'locked') {
                   navigation.navigate('Draw', {
                     slug: featuredDeck.slug,
                     rewardPending: drawState !== 'wallet-full',
                   });
                   return;
                 }
-                // Installed + no pulls → drop straight into a session
-                // (matches the empty-pulls escape CTA in DrawScreen)
-                navigation.navigate('SessionCard', { slug: featuredDeck.slug });
+                void handlePrimaryCta();
               };
 
               return (
@@ -661,7 +673,7 @@ export function HomeScreen({ navigation, route }: Props) {
                     <Pressable
                       testID="home-featured-pack"
                       accessibilityRole="button"
-                      accessibilityLabel={featuredDeck.realRow ? `Open ${featuredDeck.title} pack` : 'Connect to load packs'}
+                      accessibilityLabel={featuredPackAccessibilityLabel}
                       onPress={handleFeaturedPackPress}
                       hitSlop={8}
                     >
@@ -705,6 +717,9 @@ export function HomeScreen({ navigation, route }: Props) {
                       counts={homeState.vm.counts}
                       selectedDeckTitle={homeState.vm.selectedDeckTitle}
                     />
+                    <Text testID="home-goal-line" style={styles.goalLine} numberOfLines={1}>
+                      {`${homeState.vm.goal.minimum} · ${homeState.vm.goal.fullClear}`}
+                    </Text>
                     <View testID="screen-home-primary-cta">
                       <Pressable
                         testID={homeState.vm.cta.testID}
@@ -1052,6 +1067,12 @@ const styles = StyleSheet.create({
   // Wider top margin from heroBand → makes hero clearly the visual lead.
   actionGroup: {
     marginTop: spacing.sm,
+  },
+  goalLine: {
+    marginBottom: spacing.xs,
+    color: colors.inkSecondary,
+    fontSize: 13,
+    textAlign: 'center',
   },
 
   // Hidden test probe — 0×0 view kept in tree so home-collapse-decks-toggle

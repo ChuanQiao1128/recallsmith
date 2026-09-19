@@ -415,6 +415,7 @@ function buildGoalVM(selectedDeck: DeckSummary | null): HomeGoalVM {
   };
 }
 
+/** @deprecated `helper` is never rendered on Home (HomeHero.tsx removed in A04); keep for HomeHeroVM shape only. */
 function buildHeroCopy(params: {
   statusKind: HomeCtaKind;
   selectedDeck: DeckSummary | null;
@@ -656,12 +657,27 @@ export function buildHomeVM(params: {
       disabled: false,
     };
   } else if (selectedDeck && !selectedDeck.canStudy && statusKind === 'first_run') {
-    cta = {
-      ...cta,
-      label: 'Open library',
-      nav: 'library',
-      disabled: false,
-    };
+    const selectedDeckHint = actionHintForDeck({
+      deck: selectedDeck,
+      updateInfo: updates[selectedDeck.slug] ?? null,
+      premium,
+      signedIn: hasSignedInUser,
+    });
+    cta = draw.state !== 'locked' && selectedDeckHint === 'install'
+      ? {
+          kind: 'first_run',
+          label: DRAW_CTA_LABEL,
+          nav: 'draw',
+          testID: 'home-primary-cta',
+          disabled: false,
+        }
+      : {
+          kind: 'first_run',
+          label: 'Open library',
+          nav: 'library',
+          testID: 'home-primary-cta',
+          disabled: false,
+        };
   }
   const heroCopy = buildHeroCopy({
     statusKind,
