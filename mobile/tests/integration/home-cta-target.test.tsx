@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 let progressFixture: any[] = [];
 let deckSummariesFixture: any[] | null = null;
+let updatesFixture: Record<string, any> = {};
 let walletFixture = { availablePulls: 0, reservePulls: 0 };
 const setActiveDeckSlugMock = vi.fn(async (_slug: string) => {});
 const navigateMock = vi.fn();
@@ -81,7 +82,7 @@ vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
             percent: 1,
           },
         ],
-      updates: {},
+      updates: updatesFixture,
       allUpcoming30: Array.from({ length: 30 }, (_, i) => ({
         dateKey: new Date(now + i * 86_400_000).toISOString(),
         count: i === 0 ? dueToday : 0,
@@ -149,6 +150,7 @@ vi.mock('../../src/features/gacha/components/TodayPressureCard', () => {
   };
 });
 
+import { executeDeckAction } from '../../src/features/gacha/home/deckActionResolver';
 import { HomeScreen } from '../../src/screens/HomeScreen';
 
 async function flush() {
@@ -162,7 +164,9 @@ describe('home primary CTA target', () => {
   beforeEach(() => {
     setActiveDeckSlugMock.mockClear();
     navigateMock.mockClear();
+    vi.mocked(executeDeckAction).mockClear();
     deckSummariesFixture = null;
+    updatesFixture = {};
     walletFixture = { availablePulls: 0, reservePulls: 0 };
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   });
@@ -260,6 +264,126 @@ describe('home primary CTA target', () => {
       .find((node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number')
       .props.children;
     expect(ctaLabel).toBe('Start today’s challenge');
+  });
+
+  it('sends a brand-new user with starter pulls straight to Draw', async () => {
+    progressFixture = [];
+    deckSummariesFixture = [
+      {
+        slug: 'csharp',
+        title: 'C# Interview',
+        locale: 'en-US',
+        version: '1',
+        deckType: 1,
+        totalCards: 40,
+        localCards: 0,
+        studyCards: 0,
+        canStudy: false,
+        dueToday: 0,
+        plannedToday: 0,
+        newToday: 0,
+        masteredApprox: 0,
+        percent: 0,
+      },
+    ];
+    updatesFixture = {
+      csharp: {
+        slug: 'csharp',
+        installedVersion: null,
+        remoteVersion: '1',
+        hasUpdate: true,
+        remoteUrl: 'https://example.test/csharp.json',
+        remoteSha256: null,
+      },
+    };
+    walletFixture = { availablePulls: 3, reservePulls: 0 };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home' } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const cta = tree.root.find((node) => node.props?.testID === 'home-primary-cta');
+    const ctaLabel = cta
+      .find((node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number')
+      .props.children;
+    expect(ctaLabel).toBe('Open reward draw');
+
+    await act(async () => {
+      cta.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('Draw', {
+      slug: 'csharp',
+      rewardPending: true,
+    });
+    expect(navigateMock).not.toHaveBeenCalledWith('Library');
+    expect(executeDeckAction).not.toHaveBeenCalled();
+  });
+
+  it('keeps the library CTA for an installable deck when the wallet is empty', async () => {
+    progressFixture = [];
+    deckSummariesFixture = [
+      {
+        slug: 'csharp',
+        title: 'C# Interview',
+        locale: 'en-US',
+        version: '1',
+        deckType: 1,
+        totalCards: 40,
+        localCards: 0,
+        studyCards: 0,
+        canStudy: false,
+        dueToday: 0,
+        plannedToday: 0,
+        newToday: 0,
+        masteredApprox: 0,
+        percent: 0,
+      },
+    ];
+    updatesFixture = {
+      csharp: {
+        slug: 'csharp',
+        installedVersion: null,
+        remoteVersion: '1',
+        hasUpdate: true,
+        remoteUrl: 'https://example.test/csharp.json',
+        remoteSha256: null,
+      },
+    };
+    walletFixture = { availablePulls: 0, reservePulls: 0 };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home' } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const cta = tree.root.find((node) => node.props?.testID === 'home-primary-cta');
+    const ctaLabel = cta
+      .find((node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number')
+      .props.children;
+    expect(ctaLabel).toBe('Open library');
+
+    await act(async () => {
+      cta.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('Library');
+    expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
   });
 
   it('navigates to Library when no deck is available', async () => {

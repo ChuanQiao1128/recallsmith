@@ -74,7 +74,7 @@ describe('support and pool polish screens', () => {
       moreTree = renderer.create(<MoreScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'more', name: 'More' } as any} />);
     });
     const moreBlob = textBlob(moreTree);
-    expect(moreBlob).toContain('support rail');
+    expect(moreBlob).not.toContain('support rail');
 
     let settingsTree!: renderer.ReactTestRenderer;
     await act(async () => {

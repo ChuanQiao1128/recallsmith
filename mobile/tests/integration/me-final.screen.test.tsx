@@ -30,10 +30,8 @@ import { HelpFAQScreen } from '../../src/screens/HelpFAQScreen';
 import { SettingsMainScreen } from '../../src/screens/SettingsMainScreen';
 import { SettingsAudienceScreen } from '../../src/screens/SettingsAudienceScreen';
 import { SettingsNotificationsScreen } from '../../src/screens/SettingsNotificationsScreen';
-import { SettingsAccountScreen } from '../../src/screens/SettingsAccountScreen';
 import { SettingsPoolsScreen } from '../../src/screens/SettingsPoolsScreen';
 import { SettingsAppearanceScreen } from '../../src/screens/SettingsAppearanceScreen';
-import { DeleteAccountConfirmScreen } from '../../src/screens/DeleteAccountConfirmScreen';
 
 function collectText(node: renderer.ReactTestInstance): string {
   const parts: string[] = [];
@@ -86,7 +84,7 @@ describe('me final flow', () => {
     expect(moreBlob).toContain('Profile');
     expect(moreBlob).toContain('Settings');
     expect(moreBlob).toContain('Help');
-    expect(moreBlob).toContain('Developer tools');
+    expect(moreBlob).not.toContain('Developer tools');
     expect(moreBlob).not.toContain('Profile, settings, support, and QA');
     expect(moreBlob).not.toContain('Phase C');
     expect(moreBlob).not.toContain('QA lane');
@@ -103,9 +101,9 @@ describe('me final flow', () => {
     const profileBlob = textBlob(profileTree);
     expect(profileBlob).toContain('Your study profile');
     expect(profileBlob).toContain('Current setup');
-    expect(profileBlob).toContain('Study identity');
+    expect(profileBlob).not.toContain('Learner #local');
     expect(profileBlob).toContain('Momentum this week');
-    expect(profileBlob).toContain('Next best return point');
+    expect(profileBlob).not.toContain('Next best return point');
     expect(profileBlob).not.toContain('premium learner card');
 
     let achievementsTree!: renderer.ReactTestRenderer;
@@ -138,7 +136,6 @@ describe('me final flow', () => {
     expect(mainBlob).toContain('Preferences and account');
     expect(mainBlob).toContain('Content preferences');
     expect(mainBlob).toContain('Notifications & reminders');
-    expect(mainBlob).toContain('Account & billing');
     expect(mainBlob).toContain('Pools and availability');
     expect(mainBlob).toContain('Theme and reading density');
     expect(mainBlob).toContain('Daily rhythm');
@@ -166,16 +163,6 @@ describe('me final flow', () => {
     expect(notificationsBlob).toContain('Evening rescue');
     expect(notificationsBlob).not.toContain('real page');
 
-    let accountTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      accountTree = renderer.create(<SettingsAccountScreen navigation={{ navigate } as any} route={{ key: 'settings-account', name: 'SettingsAccount' } as any} />);
-    });
-    const accountBlob = textBlob(accountTree);
-    expect(accountBlob).toContain('Account and billing');
-    expect(accountBlob).toContain('Delete account');
-    expect(accountBlob).toContain('Sync and recovery posture');
-    expect(accountBlob).not.toContain('concrete front-end page');
-
     let poolsTree!: renderer.ReactTestRenderer;
     await act(async () => {
       poolsTree = renderer.create(<SettingsPoolsScreen navigation={{ navigate } as any} route={{ key: 'settings-pools', name: 'SettingsPools' } as any} />);
@@ -193,15 +180,6 @@ describe('me final flow', () => {
     expect(appearanceBlob).toContain('Theme and reading density');
     expect(appearanceBlob).toContain('Motion and ceremony');
     expect(appearanceBlob).not.toContain('real design tokens');
-
-    let deleteTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      deleteTree = renderer.create(<DeleteAccountConfirmScreen navigation={{ navigate } as any} route={{ key: 'delete', name: 'DeleteAccountConfirm' } as any} />);
-    });
-    const deleteBlob = textBlob(deleteTree);
-    expect(deleteBlob).toContain('Delete account');
-    expect(deleteBlob).toContain('This removes your account data');
-    expect(deleteBlob).not.toContain('Final destructive confirmation');
   });
 
   it('preserves the me-route navigation chain across the key actions', async () => {
@@ -221,11 +199,6 @@ describe('me final flow', () => {
       findPressableByText(tree, 'Content preferences').props.onPress();
     });
     expect(navigate).toHaveBeenCalledWith('SettingsAudience');
-
-    act(() => {
-      findPressableByText(tree, 'Account & billing').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('SettingsAccount');
 
     act(() => {
       findPressableByText(tree, 'Pools and availability').props.onPress();

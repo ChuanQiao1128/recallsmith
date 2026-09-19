@@ -10,10 +10,3 @@ export const SETTINGS_SNAPSHOT = {
   ],
   accountLinked: false,
 };
-
-export const DELETE_PREVIEW = {
-  cards: 133,
-  streak: 4,
-  milestones: 6,
-  studyHours: 18,
-};

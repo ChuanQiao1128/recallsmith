@@ -110,6 +110,7 @@ describe('phase A onboarding screens', () => {
 
     expect(store.get('recallsmith:audience-preference:v1')).toBe('all');
     expect(store.get('recallsmith:onboarding:stage:v1')).toBe('done');
-    expect(replace).toHaveBeenCalledWith('PermissionPrompt');
+    expect(replace).toHaveBeenCalledWith('Home', { firstDrawCoach: true });
+    expect(store.get('notifications:permission-prompt:pending:v1')).toBe('1');
   });
 });

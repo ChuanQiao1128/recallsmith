@@ -110,6 +110,7 @@ vi.mock('../../src/sync/progressSync', () => ({
   forceProgressSync: vi.fn(async () => {}),
 }));
 
+import { Alert } from 'react-native';
 import { HomeScreen } from '../../src/screens/HomeScreen';
 
 async function flush() {
@@ -118,6 +119,16 @@ async function flush() {
     await Promise.resolve();
   });
 }
+
+const textBlob = (tree: renderer.ReactTestRenderer) =>
+  tree.root
+    .findAll((node) => (node.type as any) === 'Text')
+    .map((node) =>
+      Array.isArray(node.props.children)
+        ? node.props.children.join('')
+        : String(node.props.children ?? ''),
+    )
+    .join('\n');
 
 describe('HomeScreen v9', () => {
   beforeEach(() => {
@@ -181,6 +192,8 @@ describe('HomeScreen v9', () => {
     ).toHaveLength(1);
     expect(tree.root.findByProps({ testID: 'home-pack-visual' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'home-draw-status-badge' })).toBeTruthy();
+    const goal = tree.root.findByProps({ testID: 'home-goal-line' });
+    expect(String(goal.props.children)).toContain('Full clear: 2 cards');
   });
 
   it('shows due-card study link and routes it directly to SessionCard', async () => {
@@ -277,5 +290,206 @@ describe('HomeScreen v9', () => {
 
     expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
     expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
+  });
+
+  it('routes the hero pack to study, not Draw, when work is due and pulls are available', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const featuredPack = tree.root.find(
+      (node) =>
+        (node.type as any) === 'Pressable' && node.props?.testID === 'home-featured-pack',
+    );
+    expect(featuredPack.props.accessibilityLabel).toBe('Start today’s challenge');
+
+    await act(async () => {
+      featuredPack.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
+    expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
+  });
+
+  it('routes the hero pack to Draw when the first-draw coach is on', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home', params: { firstDrawCoach: true } } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const featuredPack = tree.root.find(
+      (node) =>
+        (node.type as any) === 'Pressable' && node.props?.testID === 'home-featured-pack',
+    );
+    expect(featuredPack.props.accessibilityLabel).toBe('Open reward draw');
+
+    await act(async () => {
+      featuredPack.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('Draw', {
+      slug: 'csharp',
+      rewardPending: true,
+    });
+  });
+
+  it('lists only real packs under Your packs', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const tiles = tree.root.findByProps({ testID: 'home-pack-visual' }).findAll(
+      (node) =>
+        (node.type as any) === 'Pressable'
+        && typeof node.props.accessibilityLabel === 'string'
+        && node.props.accessibilityLabel.includes(' pack — '),
+    );
+    const copy = textBlob(tree);
+
+    expect(tiles).toHaveLength(2);
+    expect(copy).toContain('Your packs');
+    expect(copy).not.toContain('Choose a pack');
+    expect(tiles.every((tile) => !tile.props.accessibilityLabel.includes('Coming'))).toBe(true);
+  });
+
+  it('selects an installed pack in place without leaving Home', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const tiles = tree.root.findByProps({ testID: 'home-pack-visual' }).findAll(
+      (node) =>
+        (node.type as any) === 'Pressable'
+        && typeof node.props.accessibilityLabel === 'string'
+        && node.props.accessibilityLabel.includes(' pack — '),
+    );
+    const awsTile = tiles.find((tile) => tile.props.accessibilityLabel.startsWith('AWS Core pack'));
+    expect(awsTile).toBeTruthy();
+
+    await act(async () => {
+      awsTile!.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(setActiveDeckSlugMock).toHaveBeenCalledWith('aws');
+    expect(navigateMock).not.toHaveBeenCalledWith('Library');
+  });
+
+  it('renders the hero and pack shelf with zero decks', async () => {
+    deckSummariesFixture = [];
+    activeSlugFixture = null;
+    (Alert.alert as any).mockClear();
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const shelf = tree.root.findByProps({ testID: 'home-pack-visual' });
+    const tiles = shelf.findAll(
+      (node) =>
+        (node.type as any) === 'Pressable'
+        && typeof node.props.accessibilityLabel === 'string'
+        && node.props.accessibilityLabel.includes(' pack — '),
+    );
+    const featuredPack = tree.root.find(
+      (node) => (node.type as any) === 'Pressable' && node.props?.testID === 'home-featured-pack',
+    );
+
+    expect(shelf).toBeTruthy();
+    expect(featuredPack).toBeTruthy();
+    expect(tiles).toHaveLength(0);
+    expect(featuredPack.props.accessibilityLabel).toBe('Connect to load packs');
+
+    await act(async () => {
+      featuredPack.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('renders a manifest coming deck as a disabled Soon tile', async () => {
+    deckSummariesFixture.push({
+      slug: 'aws-saa-c03',
+      title: 'AWS SAA-C03',
+      locale: 'en-US',
+      version: '1',
+      deckType: 1,
+      availability: 'coming',
+      totalCards: 120,
+      localCards: 0,
+      studyCards: 0,
+      canStudy: false,
+      dueToday: 0,
+      plannedToday: 0,
+      newToday: 0,
+      masteredApprox: 0,
+      percent: 0,
+    });
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const tiles = tree.root.findByProps({ testID: 'home-pack-visual' }).findAll(
+      (node) =>
+        (node.type as any) === 'Pressable'
+        && typeof node.props.accessibilityLabel === 'string'
+        && node.props.accessibilityLabel.includes(' pack — '),
+    );
+    const comingTile = tiles.find(
+      (tile) => tile.props.accessibilityLabel === 'AWS SAA-C03 pack — Soon',
+    );
+
+    expect(tiles).toHaveLength(3);
+    expect(comingTile).toBeTruthy();
+    expect(comingTile!.props.disabled).toBe(true);
+  });
+
+  it('centers the draw status label under the CTA', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const badge = tree.root.find(
+      (node) => node.props?.testID === 'home-draw-status-badge' && (node.type as any) === 'Text',
+    );
+
+    expect(badge.props.style).toEqual(
+      expect.objectContaining({ textAlign: 'center', alignSelf: 'center' }),
+    );
   });
 });

@@ -1,5 +1,5 @@
-import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../../../../theme/colors';
 import { spacing } from '../../../../theme/spacing';
 import { typography } from '../../../../theme/typography';
@@ -14,7 +14,19 @@ export const ACCOUNT_COPY = {
   freshStartTitle: 'Fresh Start',
   freshStartBody: 'Clear today’s schedule. Keeps your owned cards.',
   resetSchedule: 'Reset review schedule',
+  deleteTitle: 'Delete account',
+  deleteBody:
+    'Permanently deletes your sign-in and removes the progress, cards and streak stored on this device for it. This cannot be undone.',
+  deleteOpen: 'Delete account',
+  deleteConfirmPrompt: 'Type DELETE to confirm',
+  deleteConfirmCta: 'Delete my account',
+  deleteCancel: 'Keep my account',
+  deleting: 'Deleting...',
+  deleteError: 'Could not delete your account. Check your connection and try again.',
+  deletedNotice: 'Your account was deleted and you are signed out.',
 } as const;
+
+export const DELETE_CONFIRM_TOKEN = 'DELETE';
 
 export function AccountSection(props: {
   signedIn: boolean;
@@ -34,6 +46,31 @@ export function AccountSection(props: {
     onResetReviewSchedule,
     primaryCtaTestID,
   } = props;
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleted, setDeleted] = useState(false);
+
+  const armed = confirmText.trim() === DELETE_CONFIRM_TOKEN;
+
+  async function onConfirmDelete() {
+    if (deleting || confirmText.trim() !== DELETE_CONFIRM_TOKEN) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const { useAuthStore } = await import('../../../../auth/authStore');
+      await useAuthStore.getState().deleteAccountNow();
+      setDeleted(true);
+      setConfirmOpen(false);
+      setConfirmText('');
+    } catch {
+      setDeleteError(ACCOUNT_COPY.deleteError);
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   return (
     <View style={styles.sectionCard}>
@@ -76,6 +113,71 @@ export function AccountSection(props: {
           {resetting ? 'Resetting...' : ACCOUNT_COPY.resetSchedule}
         </Text>
       </Pressable>
+
+      {deleted || signedIn ? <View style={styles.rule} /> : null}
+
+      {deleted ? (
+        <Text style={styles.noticeText}>{ACCOUNT_COPY.deletedNotice}</Text>
+      ) : signedIn && !confirmOpen ? (
+        <>
+          <Text style={styles.sectionTitle} numberOfLines={1}>
+            {ACCOUNT_COPY.deleteTitle}
+          </Text>
+          <Text style={styles.sectionBody}>{ACCOUNT_COPY.deleteBody}</Text>
+          <Pressable
+            style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+            onPress={() => setConfirmOpen(true)}
+            testID="settings-delete-account-open"
+          >
+            <Text style={styles.secondaryButtonText} numberOfLines={1}>
+              {ACCOUNT_COPY.deleteOpen}
+            </Text>
+          </Pressable>
+        </>
+      ) : signedIn && confirmOpen ? (
+        <>
+          <Text style={styles.sectionBody}>{ACCOUNT_COPY.deleteConfirmPrompt}</Text>
+          <TextInput
+            testID="settings-delete-account-input"
+            style={styles.confirmInput}
+            value={confirmText}
+            onChangeText={setConfirmText}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            placeholder={DELETE_CONFIRM_TOKEN}
+            editable={!deleting}
+          />
+          <Pressable
+            style={({ pressed }) => [
+              styles.dangerButton,
+              (!armed || deleting) && styles.disabledButton,
+              pressed && styles.pressed,
+            ]}
+            onPress={onConfirmDelete}
+            disabled={!armed || deleting}
+            testID="settings-delete-account-confirm"
+          >
+            <Text style={styles.dangerButtonText} numberOfLines={1}>
+              {deleting ? ACCOUNT_COPY.deleting : ACCOUNT_COPY.deleteConfirmCta}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+            onPress={() => {
+              setConfirmOpen(false);
+              setConfirmText('');
+              setDeleteError(null);
+            }}
+            disabled={deleting}
+            testID="settings-delete-account-cancel"
+          >
+            <Text style={styles.secondaryButtonText} numberOfLines={1}>
+              {ACCOUNT_COPY.deleteCancel}
+            </Text>
+          </Pressable>
+          {deleteError !== null ? <Text style={styles.errorText}>{deleteError}</Text> : null}
+        </>
+      ) : null}
     </View>
   );
 }
@@ -138,6 +240,42 @@ const styles = StyleSheet.create({
     marginVertical: spacing.sm,
     height: 1,
     backgroundColor: 'rgba(42,34,24,0.12)',
+  },
+  dangerButton: {
+    marginTop: spacing.sm,
+    minHeight: 44,
+    borderRadius: spacing.buttonRadius,
+    backgroundColor: '#B42318',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dangerButtonText: {
+    fontSize: typography.button,
+    fontWeight: '800',
+    color: colors.parchmentBg,
+  },
+  disabledButton: {
+    opacity: 0.45,
+  },
+  confirmInput: {
+    marginTop: spacing.sm,
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: 'rgba(42,34,24,0.18)',
+    borderRadius: spacing.buttonRadius,
+    paddingHorizontal: spacing.sm,
+    fontSize: typography.body,
+    color: colors.ink,
+  },
+  errorText: {
+    marginTop: spacing.xs,
+    fontSize: typography.caption,
+    color: '#B42318',
+  },
+  noticeText: {
+    marginTop: spacing.xs,
+    fontSize: typography.bodySmall,
+    color: colors.inkSecondary,
   },
   pressed: {
     opacity: 0.9,

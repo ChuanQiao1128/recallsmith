@@ -218,7 +218,7 @@ describe('HomeScreen — economy floor wiring', () => {
 
     const tree = await renderHome();
 
-    expect(badgeText(tree)).toBe('Clear today’s route to unlock pulls');
+    expect(badgeText(tree)).toBe('Review today’s cards to earn a pull');
     expect(await loadRewardWalletState()).toEqual({ availablePulls: 0, reservePulls: 0 });
     expect(store.has('devcards:u:anon:recallsmith:economy-floor:v1')).toBe(false);
   });

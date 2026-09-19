@@ -7,6 +7,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { setAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
 import { completeOnboarding } from '../features/gacha/onboarding/onboardingPrefs';
 import { colors } from '../theme/colors';
+import { markPermissionPromptPending } from './PermissionPromptScreen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AudienceSurvey'>;
 
@@ -28,7 +29,8 @@ export function AudienceSurveyScreen({ navigation }: Props) {
     try {
       await setAudiencePreference(preferenceOverride ?? selected);
       await completeOnboarding();
-      navigation.replace('PermissionPrompt');
+      await markPermissionPromptPending();
+      navigation.replace('Home', { firstDrawCoach: true });
     } finally {
       setSaving(false);
     }

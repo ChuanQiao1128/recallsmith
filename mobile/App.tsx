@@ -55,8 +55,6 @@ import SettingsAudienceScreen from './src/screens/SettingsAudienceScreen';
 import SettingsNotificationsScreen from './src/screens/SettingsNotificationsScreen';
 import SettingsPoolsScreen from './src/screens/SettingsPoolsScreen';
 import SettingsAppearanceScreen from './src/screens/SettingsAppearanceScreen';
-import SettingsAccountScreen from './src/screens/SettingsAccountScreen';
-import DeleteAccountConfirmScreen from './src/screens/DeleteAccountConfirmScreen';
 import AboutScreen from './src/screens/AboutScreen';
 import HelpFAQScreen from './src/screens/HelpFAQScreen';
 import ErrorNetworkScreen from './src/screens/ErrorNetworkScreen';
@@ -217,8 +215,6 @@ export default function App() {
         <Stack.Screen name="SettingsNotifications" component={SettingsNotificationsScreen} />
         <Stack.Screen name="SettingsPools" component={SettingsPoolsScreen} />
         <Stack.Screen name="SettingsAppearance" component={SettingsAppearanceScreen} />
-        <Stack.Screen name="SettingsAccount" component={SettingsAccountScreen} />
-        <Stack.Screen name="DeleteAccountConfirm" component={DeleteAccountConfirmScreen} />
         <Stack.Screen name="About" component={AboutScreen} />
         <Stack.Screen name="HelpFAQ" component={HelpFAQScreen} />
         <Stack.Screen name="ErrorNetwork" component={ErrorNetworkScreen} />

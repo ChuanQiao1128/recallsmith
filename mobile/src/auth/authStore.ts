@@ -9,9 +9,15 @@ import {
   signOut,
   fetchAuthSession,
   getCurrentUser,
+  deleteUser,
 } from 'aws-amplify/auth';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import { setSyncAccessToken, forceProgressSync, setActiveUserSub } from '../sync/progressSync';
+import { adoptAnonGachaState } from '../sync/drawStateSync';
+import { invalidateProgressQueueCache } from '../sync/progressQueueCache';
+import { invalidateDrawStateCache } from '../features/gacha/draw/drawStateCache';
 
 type AuthStatus = 'unknown' | 'anonymous' | 'signed_in';
 
@@ -36,7 +42,30 @@ type AuthState = {
 
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signOutNow: () => Promise<void>;
+  deleteAccountNow: () => Promise<void>;
 };
+
+const DEVICE_STREAK_PREFIX = 'recallsmith:streaks:';
+export async function purgeUserScopedStorage(userSub: string | null): Promise<string[]> {
+  const scoped = userSub ? `devcards:u:${userSub}:` : null;
+  let keys: readonly string[] = [];
+  try {
+    keys = await AsyncStorage.getAllKeys();
+  } catch {
+    return [];
+  }
+  const doomed = keys.filter(
+    (k) => (scoped !== null && k.startsWith(scoped)) || k.startsWith(DEVICE_STREAK_PREFIX),
+  );
+  if (doomed.length > 0) {
+    try {
+      await AsyncStorage.multiRemove(doomed);
+    } catch {}
+  }
+  invalidateProgressQueueCache(userSub ?? undefined);
+  invalidateDrawStateCache();
+  return doomed;
+}
 
 function normEmail(v: string) {
   return String(v || '').trim().toLowerCase();
@@ -88,6 +117,12 @@ async function applySessionToState(set: any) {
   // ✅ 关键：立刻设置 activeUserSub（让 Home 读取正确的 user-scoped progress）
   await setActiveUserSub(userSub);
 
+  // Union any anonymous-period collection/pity/wallet into this account before
+  // the first signed-in render (Library/Home read draw state on that render)
+  // and before the first cloud push. A no-op when the anon partition is empty,
+  // including the init() path.
+  if (userSub) await adoptAnonGachaState();
+
   set({
     status: at ? 'signed_in' : 'anonymous',
     userId: userSub,
@@ -105,7 +140,7 @@ async function applySessionToState(set: any) {
   if (at) void forceProgressSync('token_set');
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   status: 'unknown',
   userId: null,
 
@@ -271,6 +306,25 @@ export const useAuthStore = create<AuthState>((set) => ({
         lastError: null,
       });
     }
+  },
+
+  deleteAccountNow: async () => {
+    const sub = get().userSub;
+    set({ lastError: null });
+    try {
+      await deleteUser();
+    } catch (err: any) {
+      // Account still exists: keep the session, surface the error, purge nothing.
+      const msg = err?.message ?? 'Delete account failed';
+      set({ lastError: msg });
+      throw new Error(msg);
+    }
+    try {
+      await signOut();
+    } catch {}
+    await setSyncAccessToken(null); // clears activeUserSub + cancels pending sync (frozen helper, unchanged)
+    await purgeUserScopedStorage(sub);
+    set({ status: 'anonymous', userId: null, email: null, userSub: null, accessToken: null, idToken: null, lastError: null });
   },
 }));
 

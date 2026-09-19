@@ -47,8 +47,8 @@ export function ProfileScreen({ navigation }: Props) {
     <AppInfoScreen
       eyebrow="Profile"
       title="Your study profile"
-      body="Keep your learner identity, momentum, and longer-run progress in one place before you dive back into studying."
-      chips={['Momentum', 'Identity', 'Progress']}
+      body="Your streak, your week and the preferences that shape what you study."
+      chips={['Momentum', 'Progress']}
       stats={[
         { label: 'Daily streak', value: dailyStreak },
         { label: 'Days this week', value: daysThisWeek },
@@ -62,7 +62,6 @@ export function ProfileScreen({ navigation }: Props) {
         },
         {
           title: 'Momentum this week',
-          body: 'A compact read on whether this learner is simply keeping the habit warm or still carrying enough energy for a full route.',
           items: [
             {
               title: 'Qualified runs',
@@ -76,20 +75,6 @@ export function ProfileScreen({ navigation }: Props) {
                 ? 'Reading this week'
                 : `${snapshot.weekCompletedDays} of 7 days completed this week · best run ${snapshot.longestDailyStreak}`,
             },
-          ],
-        },
-        {
-          title: 'Study identity',
-          items: [
-            { title: 'Nickname', subtitle: 'Learner #local' },
-            { title: 'Status', subtitle: 'On-device progress with optional account linking later' },
-          ],
-        },
-        {
-          title: 'Next best return point',
-          body: 'Profile should always hand the learner back to a sensible next move rather than becoming a dead-end account page.',
-          items: [
-            { title: 'Best next action', subtitle: 'Return to today’s route if due pressure exists; otherwise inspect milestones or adjust preferences.' },
           ],
         },
       ]}

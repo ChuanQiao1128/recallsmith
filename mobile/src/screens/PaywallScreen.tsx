@@ -1,5 +1,5 @@
 // mobile/src/screens/PaywallScreen.tsx
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
+  Linking,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,17 +21,44 @@ import {
   rcPurchaseMonthly,
   rcRestore,
   rcGetCustomerInfoSafe,
+  rcGetMonthlyPackageSafe,
   isPremiumActive,
 } from '../premium/revenuecat';
 import { useAuthStore } from '../auth/authStore';
 import { colors } from '../theme/colors';
 
+const TERMS_OF_USE_URL = 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/';
+const PRIVACY_URL =
+  'https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Privacy-Policy-2bfa758eb54580db99a3ed89369f9a13?pvs=74';
+
 type Props = NativeStackScreenProps<RootStackParamList, 'Paywall'>;
+type PricingState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; label: string }
+  | { kind: 'unavailable' };
 
 export function PaywallScreen({ navigation }: Props) {
   const isPremium = usePremiumUser();
   const isSignedIn = useAuthStore((s) => s.status === 'signed_in');
   const [busy, setBusy] = React.useState(false);
+  const [pricing, setPricing] = React.useState<PricingState>({ kind: 'loading' });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPrice() {
+      const pkg = await rcGetMonthlyPackageSafe();
+      if (cancelled) return;
+
+      const price = String(pkg?.product?.priceString ?? '').trim();
+      setPricing(price ? { kind: 'ready', label: `${price} / month` } : { kind: 'unavailable' });
+    }
+
+    void loadPrice();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ✅ 更鲁棒：Paywall 打开时自动刷新一次订阅状态，避免“其实已经 Premium 但 UI 还显示未订阅”
   useFocusEffect(
@@ -208,7 +236,13 @@ export function PaywallScreen({ navigation }: Props) {
 
               <View style={styles.kvRow}>
                 <Text style={styles.kLabel}>Billing</Text>
-                <Text style={styles.kValue}>Monthly subscription</Text>
+                <Text style={styles.kValue} testID="paywall-billing-value">
+                  {pricing.kind === 'ready'
+                    ? pricing.label
+                    : pricing.kind === 'loading'
+                      ? 'Loading price…'
+                      : 'Not available right now'}
+                </Text>
               </View>
             </View>
 
@@ -231,32 +265,35 @@ export function PaywallScreen({ navigation }: Props) {
               <Text style={styles.sectionTitle}>Upgrade</Text>
               <Text style={styles.sectionSubtitle}>Purchase is handled through Apple In-App Purchase via RevenueCat, so premium access can be restored later on the same account.</Text>
 
-              <Pressable
-                style={({ pressed }) => [
-                  styles.primaryButton,
-                  pressed && styles.buttonPressed,
-                  (busy || isPremium) && styles.buttonDisabled,
-                ]}
-                disabled={busy || isPremium}
-                onPress={() => {
-                  if (!isSignedIn) {
-                    goSignIn();
-                    return;
-                  }
-                  void handleSubscribe();
-                }}
-              >
-                {busy ? (
-                  <View style={styles.rowInline}>
-                    <ActivityIndicator />
-                    <Text style={[styles.primaryButtonText, { marginLeft: 10 }]}>Processing…</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.primaryButtonText}>
-                    {isPremium ? 'Premium active' : isSignedIn ? 'Unlock Premium' : 'Sign in to continue'}
-                  </Text>
-                )}
-              </Pressable>
+              {pricing.kind === 'ready' ? (
+                <Pressable
+                  testID="paywall-subscribe"
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    pressed && styles.buttonPressed,
+                    (busy || isPremium) && styles.buttonDisabled,
+                  ]}
+                  disabled={busy || isPremium}
+                  onPress={() => {
+                    if (!isSignedIn) {
+                      goSignIn();
+                      return;
+                    }
+                    void handleSubscribe();
+                  }}
+                >
+                  {busy ? (
+                    <View style={styles.rowInline}>
+                      <ActivityIndicator />
+                      <Text style={[styles.primaryButtonText, { marginLeft: 10 }]}>Processing…</Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.primaryButtonText}>
+                      {isPremium ? 'Premium active' : isSignedIn ? 'Unlock Premium' : 'Sign in to continue'}
+                    </Text>
+                  )}
+                </Pressable>
+              ) : null}
 
               <Pressable
                 style={({ pressed }) => [styles.linkBtn, pressed && styles.pressed, busy && styles.buttonDisabled]}
@@ -277,6 +314,22 @@ export function PaywallScreen({ navigation }: Props) {
 
             <View style={styles.footerBox}>
               <Text style={styles.footerText}>Free decks stay available even if you never upgrade.</Text>
+            </View>
+
+            <View style={styles.legalRow}>
+              <Pressable
+                testID="paywall-terms-link"
+                onPress={() => void Linking.openURL(TERMS_OF_USE_URL)}
+              >
+                <Text style={styles.legalLinkText}>Terms of Use</Text>
+              </Pressable>
+              <Text style={styles.legalDot}>·</Text>
+              <Pressable
+                testID="paywall-privacy-link"
+                onPress={() => void Linking.openURL(PRIVACY_URL)}
+              >
+                <Text style={styles.legalLinkText}>Privacy Policy</Text>
+              </Pressable>
             </View>
 
             <View style={{ height: 10 }} />
@@ -386,4 +439,7 @@ const styles = StyleSheet.create({
 
   footerBox: { marginTop: 6, alignItems: 'center' },
   footerText: { fontSize: 11, color: colors.inkMuted, textAlign: 'center', fontWeight: '600' },
+  legalRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 12, gap: 8 },
+  legalLinkText: { fontSize: 12, color: colors.pokeBlueDeep, fontWeight: '800' },
+  legalDot: { fontSize: 12, color: colors.inkMuted },
 });

@@ -14,7 +14,12 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
-import { listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
+import {
+  checkManifestForUpdates,
+  installDeckFromUrl,
+  listManifestDecks,
+  resolveDeckBySlug,
+} from '../content/deckRepository';
 import { loadDeckProgress } from '../review/storage';
 import {
   buildLibraryVM,
@@ -101,9 +106,23 @@ export function LibraryScreen({ navigation, route }: Props) {
           throw new Error('No deck available yet. Install one first.');
         }
 
-        const resolvedDeck = await resolveDeckBySlug(currentSlug);
+        let resolvedDeck = await resolveDeckBySlug(currentSlug);
         if (!resolvedDeck) {
-          throw new Error('Deck is not installed yet. Open Deck to install or update.');
+          const updates = await checkManifestForUpdates(false);
+          const update = updates[currentSlug];
+          if (!update?.remoteUrl) {
+            throw new Error('This deck is not available on this device yet.');
+          }
+          const installed = await installDeckFromUrl(
+            currentSlug,
+            update.remoteUrl,
+            update.remoteVersion,
+            update.remoteSha256,
+          ).catch(() => false);
+          resolvedDeck = installed ? await resolveDeckBySlug(currentSlug) : null;
+          if (!resolvedDeck) {
+            throw new Error('Install failed. Check your connection and retry.');
+          }
         }
 
         const resolvedProgress = await loadDeckProgress(resolvedDeck);
@@ -259,7 +278,7 @@ export function LibraryScreen({ navigation, route }: Props) {
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
         >
-          <View style={styles.centerState}>
+          <View style={styles.centerState} testID="library-unavailable-state">
             <Text style={styles.errorTitle} numberOfLines={2}>
               Library unavailable
             </Text>
@@ -271,9 +290,19 @@ export function LibraryScreen({ navigation, route }: Props) {
               onPress={() => {
                 void refresh();
               }}
+              testID="library-unavailable-retry"
             >
               <Text style={styles.retryText} numberOfLines={1}>
                 Retry
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+              onPress={() => navigation.navigate('Home')}
+              testID="library-unavailable-home-cta"
+            >
+              <Text style={styles.retryText} numberOfLines={1}>
+                Go to Home
               </Text>
             </Pressable>
           </View>
