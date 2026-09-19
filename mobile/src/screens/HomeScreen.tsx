@@ -36,6 +36,7 @@ import { formatDateKey } from '../review/model';
 import { forceProgressSync } from '../sync/progressSync';
 import { useAuthStore } from '../auth/authStore';
 import { setIsPremiumUser, usePremiumUser } from '../premium/premiumStore';
+import { useFeatureFlags } from '../config/featureFlags';
 import { useSessionStore } from '../features/gacha/session/sessionStore';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
@@ -111,6 +112,7 @@ export function HomeScreen({ navigation, route }: Props) {
   const [serverPremium, setServerPremium] = useState(false);
   const [serverPremiumLoaded, setServerPremiumLoaded] = useState(false);
   const isPremiumUser = serverPremiumLoaded ? serverPremium : cachedPremium;
+  const paywallHidden = useFeatureFlags().paywall.hidden === true;
   const firstDrawCoach = route.params?.firstDrawCoach ?? false;
   // ─── One-shot notice toast ─────────────────────────────────────────
   // Set by PermissionPrompt when the user denied/skipped notifications.
@@ -391,6 +393,10 @@ export function HomeScreen({ navigation, route }: Props) {
           updates,
         });
         if (action.kind === 'paywall') {
+          if (paywallHidden) {
+            Alert.alert('Not available right now', 'Premium packs are not available yet. Free packs stay open.');
+            return;
+          }
           navigation.navigate('Paywall');
           return;
         }
@@ -411,7 +417,7 @@ export function HomeScreen({ navigation, route }: Props) {
         }
       }
     },
-    [isPremiumUser, isSignedIn, navigation, refreshHome],
+    [isPremiumUser, isSignedIn, navigation, paywallHidden, refreshHome],
   );
   const renderCalendar = useMemo(() => {
     return homeState.vm.calendar.compact.next7.map((day) => {

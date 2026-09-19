@@ -405,6 +405,18 @@ export async function rcPurchaseMonthly(): Promise<CustomerInfo> {
   return fresh;
 }
 
+/** Paywall display only: current monthly package, or null when RC is not configured / no offering / network error. Never throws. */
+export async function rcGetMonthlyPackageSafe(): Promise<PurchasesPackage | null> {
+  try {
+    await ensureConfigured();
+    const offerings = await Purchases.getOfferings();
+    return pickMonthlyPackage(offerings);
+  } catch (e) {
+    if (__DEV__) console.warn('[rc] getOfferings failed (non-fatal):', (e as any)?.message ?? e);
+    return null;
+  }
+}
+
 export async function rcRestore(): Promise<CustomerInfo> {
   await ensureConfigured();
   await rcLoginWithCognitoSub();
