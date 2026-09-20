@@ -365,4 +365,105 @@ describe('DrawResultScreen v9', () => {
       expect(tree.root.findByProps({ testID: 'screen-draw-result-detail-close' })).toBeTruthy();
     },
   );
+
+  it('marks cards missing from revealedUids with a Not flipped chip', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'result', name: 'DrawResult', params: makeParams({ revealedUids: ['1'] }) } as any}
+        />,
+      );
+    });
+    await flush();
+
+    expect(tree.root.findByProps({ testID: 'draw-result-unrevealed-chip-1' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-0' })).toHaveLength(0);
+    expect(collectText(tree)).toContain('Not flipped');
+
+    expect(tree.root.findByProps({ testID: 'draw-result-header' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'draw-result-collection-bar' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'screen-draw-result-featured-card' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'draw-result-done-link' })).toBeTruthy();
+  });
+
+  it('shows no unrevealed chips when revealedUids is absent', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'result', name: 'DrawResult', params: makeParams() } as any}
+        />,
+      );
+    });
+    await flush();
+
+    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-0' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-1' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'draw-result-featured-unrevealed-chip' })).toHaveLength(0);
+    expect(collectText(tree)).not.toContain('Not flipped');
+  });
+
+  it('shows no unrevealed chips when every card was flipped', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'result', name: 'DrawResult', params: makeParams({ revealedUids: ['1', '2'] }) } as any}
+        />,
+      );
+    });
+    await flush();
+
+    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-0' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-1' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'draw-result-featured-unrevealed-chip' })).toHaveLength(0);
+    expect(collectText(tree)).not.toContain('Not flipped');
+  });
+
+  it('marks a single unflipped pull on the featured card', async () => {
+    const singleParams = makeParams({
+      drawResult: { ...DRAW_RESULT_FIXTURE, cards: [DRAW_RESULT_FIXTURE.cards[0]] },
+      revealedUids: [],
+    });
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'result', name: 'DrawResult', params: singleParams } as any}
+        />,
+      );
+    });
+    await flush();
+
+    expect(tree.root.findByProps({ testID: 'draw-result-featured-unrevealed-chip' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'screen-draw-result-featured-card' })).toBeTruthy();
+
+    let flipped!: renderer.ReactTestRenderer;
+    await act(async () => {
+      flipped = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{
+            key: 'result',
+            name: 'DrawResult',
+            params: makeParams({
+              drawResult: { ...DRAW_RESULT_FIXTURE, cards: [DRAW_RESULT_FIXTURE.cards[0]] },
+              revealedUids: ['1'],
+            }),
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    expect(flipped.root.findAllByProps({ testID: 'draw-result-featured-unrevealed-chip' })).toHaveLength(0);
+    expect(flipped.root.findByProps({ testID: 'screen-draw-result-featured-card' })).toBeTruthy();
+  });
 });

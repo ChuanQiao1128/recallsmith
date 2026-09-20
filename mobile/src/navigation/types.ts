@@ -98,6 +98,12 @@ export type RootStackParamList = {
     deckTitle?: string;
     ownedAfter?: number;
     totalCards?: number;
+    /** Test hook (design §3.3): forces tap-to-flip on/off; undefined → motionAvailable && cards.length > 0. */
+    tapFlow?: boolean;
+    pityThreshold?: number;
+    /** Slot whose card the guarantee paid out on, null when it did not fire this pull. */
+    pityCardIndex?: number | null;
+    poolExhausted?: boolean;
   };
   DrawResult: {
     slug: string;
@@ -117,9 +123,12 @@ export type RootStackParamList = {
       seedLabel?: string;
     };
     deckTitle?: string;
+    /** stableUids the player flipped on the table; absent = no reveal information (pre-table exits). */
+    revealedUids?: string[];
     ceremonyEcho?: {
       rarity: 'COM' | 'RAR' | 'LEG';
       phaseCue: string;
+      tableReached?: boolean;
     } | null;
     ownedAfter?: number;
     totalCards?: number;

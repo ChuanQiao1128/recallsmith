@@ -69,10 +69,12 @@ export const CEREMONY_COPY_V9 = {
   approach: {
     title: 'Pack inbound',
     body: 'Your pack is moving into focus.',
+    // Rarity is withheld from every channel including copy (design §3.2):
+    // the colour temperature during hold is the single learnable tell.
     rareTitles: {
       COM: 'Pack inbound',
-      RAR: 'Rare inbound',
-      LEG: 'Legendary inbound',
+      RAR: 'Pack inbound',
+      LEG: 'Pack inbound',
     },
   },
   hold: {
@@ -84,8 +86,8 @@ export const CEREMONY_COPY_V9 = {
     body: 'Ten cards are spinning into place.',
   },
   'flash-reveal': {
-    title: 'Card revealed',
-    body: 'The featured card is visible. Final settle comes next.',
+    title: 'Pack open',
+    body: 'Your cards are sliding out.',
   },
   settle: {
     title: 'Cards in place',
@@ -96,6 +98,11 @@ export const CEREMONY_COPY_V9 = {
 const CEREMONY_TEAR_FLIP_SINGLE = {
   title: 'Opening reveal',
   body: 'Your card is spinning into place.',
+} as const;
+
+const CEREMONY_FLASH_REVEAL_SINGLE = {
+  title: 'Pack open',
+  body: 'Your card is sliding out.',
 } as const;
 
 const CEREMONY_CARDS_ON_TABLE = {
@@ -111,6 +118,9 @@ export function getCeremonyPhaseCopy(phase: CeremonyPhaseExtended, isMulti: bool
   if (phase === 'tear-flip') {
     return isMulti ? CEREMONY_COPY_V9['tear-flip'] : CEREMONY_TEAR_FLIP_SINGLE;
   }
+  if (phase === 'flash-reveal') {
+    return isMulti ? CEREMONY_COPY_V9['flash-reveal'] : CEREMONY_FLASH_REVEAL_SINGLE;
+  }
   if (phase === 'cards-on-table') {
     return CEREMONY_CARDS_ON_TABLE;
   }
@@ -120,3 +130,19 @@ export function getCeremonyPhaseCopy(phase: CeremonyPhaseExtended, isMulti: bool
 export function getCeremonyRarityLabel(rarity: CeremonyRarity) {
   return CEREMONY_COPY.rarity[rarity];
 }
+
+export const CEREMONY_COPY_V10 = {
+  packA11yLabel: 'Reward pack',
+  packA11yHint: 'Swipe right or double-tap to open',
+  activateAction: 'Open pack',
+  leaveCeremony: 'Leave ceremony',
+  speedUp: 'Speed up',
+  showResult: 'Show result',
+  continueCta: 'Continue',
+  skipProgress: (revealed: number, total: number) => `Skip · ${revealed}/${total}`,
+  cardFaceDown: (n: number, total: number) => `Card ${n} of ${total}, face down`,
+  cardRevealed: (n: number, total: number, rarity: string) => `Card ${n} of ${total}, ${rarity} revealed`,
+  dealing: (percent: number) => `Dealing cards, ${percent} percent`,
+  unrevealedChip: 'Not flipped',
+  shareCta: 'Share this pull',
+} as const;
