@@ -28,7 +28,8 @@ Client: `mobile/src/content/deckRepository.ts`.
 - Delta file (`DeckDelta`):
   `{ schemaVersion: 2, slug, fromVersion, toVersion, generatedAtMs, deck?: { slug, title, locale, deckType, version, totalCards }, added?: Card[], updated?: Card[], deleted?: string[] }`
 - Card JSON shape (camelCase):
-  `{ stableUid, orderInDeck, difficulty, question, explanation, codeLanguage, codeSnippet, realWorldUsage, revision }`
+  `{ stableUid, orderInDeck, difficulty, question, explanation, codeLanguage, codeSnippet, realWorldUsage, revision, topic?, mcq? }`
+  - `topic?` (string; Wave C 2026-09: server C05, mobile C07) and `mcq?` (object in the MCQ plan §3.2 shape; server C08 → C09) are optional, omitted when null (`JsonIgnoreCondition.WhenWritingNull` on `CardExportData`), appended last in that order. A deck with neither serializes byte-identically to the 9-field shape; the golden `CardJson` in `ContentSerializationContractTests.cs` is unchanged.
 - Client applies patches only when the local file parses as the flat deck shape and walks a BFS chain of at most
   `MAX_PATCH_HOPS = 4` edges; any failure falls back to full download.
 - Full-download validation requires `deck.json .version === manifest entry .version (buildId)`.
@@ -47,7 +48,7 @@ For a free-deck publish `content/decks/{slug}/builds/{buildId}/deck.json`:
      `orderInDeck, id` order (same as deck.json).
 3. **Delta patch** vs the previous SUCCESS build of the same slug (if any):
    - `content/decks/{slug}/patches/{fromBuildId}-{toBuildId}.json` in the `DeckDelta` shape above.
-   - `updated` = stableUid present in both builds with ANY of the 9 card fields differing; `added` = new uids;
+   - `updated` = stableUid present in both builds with ANY of the 11 card fields differing (`DeckDiff.CardChanged`: `topic` by ordinal string compare, `mcq` by `DeckDiff.McqEquals` = `JsonNode.DeepEquals`, so PG jsonb spacing alone never marks a card updated); `added` = new uids;
      `deleted` = uids that disappeared. Skip the patch entirely if its serialized size ≥ the full deck.json size.
 4. **Hashes**: sha256 = lowercase hex over the exact serialized UTF-8 bytes uploaded. Whole-file sha256 for
    deck.json; per-chunk sha256 in package.json; patch sha256 on the manifest edge.
@@ -108,7 +109,7 @@ migration runs = logged skip, publish still succeeds).
 ## Deployment (manual, owner-run — no CI in this repo)
 
 1. Package + deploy Worker and Vpc lambdas (`src_C/package_lambda_zip.sh`, console upload as usual).
-2. `POST /api/v1/admin/db/migrate` (superadmin) → applies 011. (Deploy order is safe either way: artifact
+2. `POST /api/v1/admin/db/migrate` (superadmin) → applies 011; Wave C's `018_cards_topic.sql` (`cards.topic`) and `019_cards_mcq.sql` (`cards.mcq`) are applied as 018/019 via the same runner. (Deploy order is safe either way: artifact
    generation is skip-on-missing-table, manifest rebuild is column-fallback.)
 3. Republish each live deck from the console → generates package/chunks/patch + fixes deck.json version.
 4. `POST /api/v1/admin/manifest/rebuild` → manifest now carries `sha256`/`packagePath`/`patches`.
