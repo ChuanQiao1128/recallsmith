@@ -1,5 +1,7 @@
 # v9 Copy Delta (vs v8)
 
+> **Superseded — 2026-09-20.** §7 的仪式阶段文案已被 1.6.0 改写：approach 三档统一为 `Pack inbound`，flash-reveal 为 `Pack open`（`Legendary inbound` / `Rare inbound` / `Card revealed` 不再存在）。现行规范见 [v10-ceremony-seam-of-light.md](./v10-ceremony-seam-of-light.md)。其余章节沿用。
+
 继承 `v8-copy-guide.md` 的全部规则（语气、长度预算、大小写、标点、a11y label、i18n 准备）。本文档**仅列改动**：v9 五屏中与 v8 字符串不同的项。
 
 未列出的字符串 = 沿用 v8。
