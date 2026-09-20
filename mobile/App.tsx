@@ -10,6 +10,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Notifications from 'expo-notifications';
 
 import type { RootStackParamList } from './src/navigation/types';
+import { linking } from './src/navigation/linking';
 import BottomTabBar from './src/components/BottomTabBar';
 import { RootErrorBoundary } from './src/components/RootErrorBoundary';
 import { getMainTabForRouteName } from './src/navigation/mainTabs';
@@ -184,6 +185,7 @@ export default function App() {
       <View style={styles.navigatorShell}>
         <NavigationContainer
           ref={navigationRef}
+          linking={linking}
           onReady={() => setCurrentRouteName(navigationRef.getCurrentRoute()?.name as keyof RootStackParamList | undefined)}
           onStateChange={() => setCurrentRouteName(navigationRef.getCurrentRoute()?.name as keyof RootStackParamList | undefined)}
         >
