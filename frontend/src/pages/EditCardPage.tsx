@@ -344,6 +344,7 @@ export function EditCardPage() {
           onSubmit={handleSubmit}
           onCancel={() => navigate(-1)}
           recoveryLabel={conflictRecoverable ? RETRY_WITH_LATEST : null}
+          mcq={card.mcq ?? null}
         />
       </main>
     </div>

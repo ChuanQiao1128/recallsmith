@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Deck } from '../types/deck';
+import type { McqBlob } from '../types/mcq';
 import {
   MAX_DIFFICULTY,
   MAX_UID_LENGTH,
@@ -64,6 +65,15 @@ interface CardFormProps {
    * pressed, which is what "retry" means to the person pressing it.
    */
   recoveryLabel?: string | null;
+
+  /**
+   * The card's MCQ block as the server holds it, shown read-only below the
+   * text fields. The form never edits or sends it: options, answers and WHY
+   * notes are authored through the deck Markdown import (OPT:/WHY:/QUALIFIER:)
+   * and validated there and at the API. Absent or null on a Q/A card and on
+   * the create page.
+   */
+  mcq?: McqBlob | null;
 }
 
 interface InternalState {
@@ -223,7 +233,9 @@ function mapToHlLanguage(codeLang: string): string | null {
 }
 
 export function CardForm(props: CardFormProps) {
-  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel } = props;
+  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq } = props;
+
+  const mcqRequiredCount = mcq ? mcq.options.filter(option => option.correct).length : 0;
 
   const [values, setValues] = useState<CardFormValues>(initialValues);
   const [state, setState] = useState<InternalState>({
@@ -580,6 +592,42 @@ export function CardForm(props: CardFormProps) {
           placeholder="Where would you use this in real projects? Any pitfalls?"
         />
       </div>
+
+      {mcq ? (
+        <fieldset
+          data-testid="card-form-mcq"
+          className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+        >
+          <legend className="px-1 text-sm font-medium text-slate-700">Multiple choice</legend>
+          <p className="text-xs text-slate-500">
+            Read-only here. Options, answers and WHY notes change through the deck Markdown import.
+          </p>
+          <p data-testid="card-form-mcq-required" className="mt-1 text-xs text-slate-600">
+            {mcqRequiredCount === 1 ? 'Single answer' : `Choose ${mcqRequiredCount}`}
+          </p>
+          {mcq.qualifier ? (
+            <p data-testid="card-form-mcq-qualifier" className="mt-1 text-xs text-slate-600">
+              Qualifier: {mcq.qualifier}
+            </p>
+          ) : null}
+          <ol className="mt-2 space-y-1">
+            {mcq.options.map(option => (
+              <li key={option.key} data-testid={`card-form-mcq-option-${option.key}`} className="text-slate-800">
+                <span className="font-mono text-xs text-slate-500">{option.key}</span> {option.text}
+                {option.correct ? (
+                  <span
+                    data-testid="card-form-mcq-correct"
+                    className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border bg-emerald-50 text-emerald-800 border-emerald-200"
+                  >
+                    correct
+                  </span>
+                ) : null}
+                {option.why ? <div className="text-xs text-slate-500">Why: {option.why}</div> : null}
+              </li>
+            ))}
+          </ol>
+        </fieldset>
+      ) : null}
 
       <div className="pt-2 flex items-center justify-between">
         <button type="button" onClick={onCancel} className="text-sm text-slate-600 hover:text-slate-800">

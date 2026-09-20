@@ -1,3 +1,5 @@
+import type { McqBlob } from './mcq';
+
 export interface Card {
   id: number;
   deckId: number;
@@ -12,6 +14,7 @@ export interface Card {
   codeSnippet?: string | null;
   codeLanguage?: string | null;
   topic?: string | null;
+  mcq?: McqBlob | null;
   revision?: number | null;
 
   version: number;

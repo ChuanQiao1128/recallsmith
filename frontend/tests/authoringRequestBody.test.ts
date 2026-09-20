@@ -14,6 +14,18 @@
 // the whole chain: form -> function arguments -> request body.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { McqBlob } from '../src/types/mcq';
+
+const MCQ: McqBlob = {
+  v: 1,
+  qualifier: null,
+  shuffle: true,
+  options: [
+    { key: 'a', text: 'First option', why: 'Why the first option is wrong.', correct: false },
+    { key: 'b', text: 'Second option', why: null, correct: true },
+    { key: 'c', text: 'Third option', why: 'Why the third option is wrong.', correct: false },
+  ],
+};
 
 const httpMock = vi.hoisted(() => ({
   post: vi.fn(),
@@ -64,6 +76,7 @@ describe('createCard puts the fields it accepts into the request', () => {
       orderInDeck: 30,
       revision: 3,
       stableUid: 'cs-span-001',
+      mcq: MCQ,
     });
 
     expect(bodyOf(httpMock.post)).toMatchObject({
@@ -78,6 +91,7 @@ describe('createCard puts the fields it accepts into the request', () => {
       orderInDeck: 30,
       revision: 3,
       stableUid: 'cs-span-001',
+      mcq: MCQ,
     });
   });
 
@@ -88,7 +102,7 @@ describe('createCard puts the fields it accepts into the request', () => {
     // Omission is how a partial update says "do not change this". Sending an
     // explicit undefined would serialise away to the same thing here, but the
     // two stop being equivalent the moment anything reads Object.keys.
-    for (const absent of ['explanation', 'realWorldUsage', 'codeSnippet', 'codeLanguage', 'difficulty', 'orderInDeck', 'revision', 'topic']) {
+    for (const absent of ['explanation', 'realWorldUsage', 'codeSnippet', 'codeLanguage', 'difficulty', 'orderInDeck', 'revision', 'topic', 'mcq']) {
       expect(Object.hasOwn(body, absent)).toBe(false);
     }
   });
@@ -110,6 +124,7 @@ describe('updateCard puts the fields it accepts into the request', () => {
       revision: 7,
       stableUid: 'cs-a-001',
       expectedVersion: 4,
+      mcq: MCQ,
     });
 
     expect(bodyOf(httpMock.put)).toMatchObject({
@@ -126,6 +141,7 @@ describe('updateCard puts the fields it accepts into the request', () => {
       revision: 7,
       stableUid: 'cs-a-001',
       expectedVersion: 4,
+      mcq: MCQ,
     });
   });
 
@@ -135,10 +151,21 @@ describe('updateCard puts the fields it accepts into the request', () => {
     const body = bodyOf(httpMock.put);
     // This is what makes a partial edit safe: EditCardPage does not send
     // fields the form has no control for, and the server keeps whatever it had.
-    for (const absent of ['explanation', 'realWorldUsage', 'codeSnippet', 'codeLanguage', 'difficulty', 'orderInDeck', 'revision', 'stableUid', 'topic']) {
+    for (const absent of ['explanation', 'realWorldUsage', 'codeSnippet', 'codeLanguage', 'difficulty', 'orderInDeck', 'revision', 'stableUid', 'topic', 'mcq']) {
       expect(Object.hasOwn(body, absent)).toBe(false);
     }
     expect(body.expectedVersion).toBe(4);
+  });
+
+  it('sends mcq: null as an own key with value null, which is how a clear reaches the server', async () => {
+    // An absent body key is "leave alone" on the server (Helpers.cs:58 skips a
+    // field the body has no own property for), so `null` is the only spelling of
+    // "clear": the key must be present with value null, never dropped.
+    await updateCard({ id: 101, deckId: 7, question: 'q', expectedVersion: 4, mcq: null });
+
+    const body = bodyOf(httpMock.put);
+    expect(Object.hasOwn(body, 'mcq')).toBe(true);
+    expect(body.mcq).toBeNull();
   });
 
   it('sends no expectedVersion at all when the caller did not supply one', async () => {
