@@ -239,9 +239,22 @@ for s in \
 done
 [ "$(grep -cE "^\s*it\(" "$CT" || true)" -ge 9 ] || fail "clientCapabilities.test.ts needs >= 9 it() blocks"
 [ "$(grep -cE "^\s*it\(" "$ET" || true)" -ge 3 ] || fail "progressSyncEnvelopeBytes.test.ts needs >= 3 it() blocks"
-# 2g. suppression / gutting across every scope file
-grep -Eq "\.skip\(|\.only\(|@ts-ignore|@ts-expect-error|eslint-disable" "$CAP" "$PS" "$CT" "$ET" "$PE" "$SST" "$CFT" \
+# 2g. suppression / gutting across every scope file. progressSync.ts is frozen
+# and its canonical blob (7393f532) already carries four pre-existing, load-bearing
+# `// @ts-ignore` comments (:319-327, guarding globalThis.atob / Buffer under strict
+# TS) that C14 may neither remove nor alter — step 5a pins it to +4/-0 and removing
+# them fails test:typecheck. Scanning that frozen file whole-file therefore
+# contradicts 5a for every C14 tree, so its suppressions are checked diff-scoped
+# (C00 §0: "no @ts-ignore in any DIFF") — the same scope the driver's own
+# suppression gate uses. Every other scope file is new or fully owned by C14 and
+# stays whole-file.
+grep -Eq "\.skip\(|\.only\(|@ts-ignore|@ts-expect-error|eslint-disable" "$CAP" "$CT" "$ET" "$PE" "$SST" "$CFT" \
   && fail "test gutting / suppression found"
+g2mb="$(git merge-base HEAD "$BASE_REF" 2>/dev/null || git merge-base HEAD "origin/$BASE_REF" 2>/dev/null)" \
+  || fail "cannot resolve base ref $BASE_REF (set BASE_REF / BASE) for the progressSync.ts suppression scan"
+git diff -U0 "$g2mb" -- "$PS" | grep '^+' | grep -v '^+++' \
+  | grep -Eq "\.skip\(|\.only\(|@ts-ignore|@ts-expect-error|eslint-disable" \
+  && fail "test gutting / suppression found in progressSync.ts added lines"
 # 2h. Existing suites are zero-diff against the base (C00 §3.1: C14 edits only Batch())
 mb="$(git merge-base HEAD "$BASE_REF" 2>/dev/null || git merge-base HEAD "origin/$BASE_REF" 2>/dev/null)" \
   || fail "cannot resolve base ref $BASE_REF (set BASE_REF / BASE); refusing to diff the tree against itself"
