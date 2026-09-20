@@ -671,6 +671,7 @@ export interface ContentIntelligenceData {
     productiveChallenge: number;
     difficultyUnderstated: number;
     difficultyOverstated: number;
+    mcqCardCount?: number;
   };
 }
 

@@ -39,6 +39,17 @@ Run `001_content_intelligence_setup.sql` after replacing placeholders:
 - `<ANALYTICS_PREFIX>`
 - `<STORAGE_INTEGRATION_NAME>`
 
+There is no runner or CI step for this file: the owner applies it by hand, and it must be
+**re-run after every edit**. Every view and dynamic table is `create or replace`, so re-running
+the whole file is idempotent. The 2026-09 edit added `card_format`, `answer_mode`,
+`client_features`, and `update_id` to `staging.stg_review_events` and projected them through
+`staging.card_observations`. `answer_mode` is `'mcq'` only when `card_format = 'mcq'` **and** the
+event's `client_features` array contains `'mcq'`; otherwise it is `'qa'` (a Wave C client sends no
+`client_features`, so everything reads `'qa'`). The quality mart's user and difficulty baselines now
+group by `answer_mode`, MCQ rows carry `content_quality_status = 'MCQ · Not Assessed'`,
+`mart_card_revision_impact` reads `answer_mode = 'qa'` rows only, and `mart_deck_health_daily` gains
+an `mcq_not_assessed_count` column.
+
 The script creates:
 
 - `raw.review_events_json`
