@@ -18,12 +18,12 @@
     },
     "ios": {
       "icon": "./assets/icon.png",
-      "supportsTablet": false,
+      "supportsTablet": true,
       "bundleIdentifier": "com.timeawake.recallsmith",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
-      "buildNumber": "17"
+      "buildNumber": "18"
     },
     "android": {
       "adaptiveIcon": {
