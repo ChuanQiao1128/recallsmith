@@ -156,13 +156,13 @@ For developers prepping a .NET interview or the AWS SAA-C03 who would rather col
 | 字段 | 内容 | 长度 |
 |---|---|---|
 | Subtitle（≤30） | C# & AWS SAA-C03 flashcards | 27 |
-| Promotional text（≤170） | Two free decks: 81 C# / .NET interview cards, 154 scenario-style AWS SAA-C03 cards. Clear a short daily review, earn a pull, rip a pack. Never a dupe, never for sale. | 166 |
+| Promotional text（≤170） | Two free decks: 81 C# / .NET interview cards, 154 scenario-style AWS SAA-C03 cards. Learn a new card, earn a pull, rip a pack. Never a dupe, never for sale. | 156 |
 | Keywords（≤100） | `csharp,dotnet,net,interview,srs,spaced,repetition,exam,quiz,gacha,study,cloud,architect,collect` | 95 |
 
 **Description**
 
 ```text
-Prepping a .NET interview or the AWS SAA-C03? DeveloperCards turns the prep into a collection you build by showing up. The loop in one sentence: clear today's 1–5 card review, earn one pull, rip a pack, and what you draw becomes what you study.
+Prepping a .NET interview or the AWS SAA-C03? DeveloperCards turns the prep into a collection you build by showing up. The loop in one sentence: learn a new card, earn a pull, rip a pack, and what you draw becomes what you study.
 
 WHAT'S INSIDE
 Two free decks, both in English:
@@ -171,11 +171,11 @@ Two free decks, both in English:
 Every card is a question with a written explanation. Rarity is difficulty: Common, Rare and Legendary map to how hard the question is, so a Legendary is one of the hardest questions in the deck.
 
 HOW PULLS WORK
-• Pulls are earned, never sold. Fully clear the day's route and one pull lands in your wallet, no claim button. New players start with 3 pulls, so the first pack opens in seconds.
+• Pulls are earned, never sold. Learn a new card, earn a pull: the first time you rate a card Hard, Good or Easy, one pull lands in your wallet, no claim button. Clearing everything due for the day adds one more, once a day. New players start with 3 pulls, so the first pack opens in seconds.
 • Never a duplicate. The draw pool is only the cards missing from your collection.
 • Pity: after 10 Commons in a row, the next card is guaranteed Rare or better, as long as an unowned Rare or Legendary is still in the pack.
 • Open 1 or Open 10. You are only charged for cards you actually receive.
-• Your wallet holds up to 30 pulls plus a 5-pull reserve. If you ever have nothing left to study and no pulls, you get 1 pull a day.
+• Your wallet holds up to 60 pulls plus a 5-pull reserve. If you ever have nothing left to study and no pulls, you get 1 pull a day.
 • Every draw is seeded and replayable, so the app can show why you got what you got.
 • Rip the foil, watch the cards drop, tap to flip. Rare and Legendary reveals get their own sound and haptics.
 
@@ -199,13 +199,13 @@ DeveloperCards is an indie project: one person built the app and the backend and
 
 ### 2.4 短帖（英文，≤280 字符，8 条）
 
-**[earned-gacha, core pitch]**（267 字符）
+**[earned-gacha, core pitch]**（249 字符）
 
-> I built a flashcard app where you can't buy pulls. Finish today's review (1–5 cards), get one pull, rip a pack. Every card is one you don't own yet, so no dupes, ever. Rarity = difficulty, so Legendary means the hardest questions. DeveloperCards, iOS, 235 free cards.
+> I built a flashcard app where you can't buy pulls. Learn a new card, earn a pull, rip a pack. Every card is one you don't own yet, so no dupes, ever. Rarity = difficulty, so Legendary means the hardest questions. DeveloperCards, iOS, 235 free cards.
 
-**[thread opener, economy numbers]**（249 字符）
+**[thread opener, economy numbers]**（257 字符）
 
-> Thread: gacha economies are usually tuned to find the whale. I wanted one tuned to find your study habit. How the pull economy in DeveloperCards works, with the actual numbers (30+5 wallet, 10-Common pity, 3 starter pulls, 1 pull per full clear). 1/
+> Thread: gacha economies are usually tuned to find the whale. I wanted one tuned to find your study habit. How the pull economy in DeveloperCards works, with the actual numbers (60+5 wallet, 10-Common pity, 3 starter pulls, one pull per new card learned). 1/
 
 **[AWS SAA-C03, certification-community safe]**（279 字符）
 
@@ -215,11 +215,11 @@ DeveloperCards is an indie project: one person built the app and the backend and
 
 > .NET interview coming up? 81 C# / .NET cards, fundamentals to intermediate (async/await, boxing, controllers, OOP) with a code snippet on essentially every one. Rate Again/Hard/Good/Easy; cards return at 1, 2, 4, 8, 15, 30, 60 days, Mastered at the 15-day stage. Free, iOS, written by one indie dev.
 
-**[dev-humor, Anki contrast (social only, never App Store)]**（265 字符）
+**[dev-humor, Anki contrast (social only, never App Store)]**（266 字符）
 
 > Anki: here are 500 cards, good luck.
 > 
-> DeveloperCards: here are 3 pulls. Open a pack, study what you drew, clear the route, earn the next pull. 1–5 cards a day, streak survives on 1 review. Intervals 1 → 60 days.
+> DeveloperCards: here are 3 pulls. Open a pack, study what you drew, learn a new card, earn the next pull. 1–5 cards a day, streak survives on 1 review. Intervals 1 → 60 days.
 > 
 > 235 free cards: 81 C# / .NET + 154 AWS SAA-C03. iOS.
 
@@ -240,11 +240,11 @@ DeveloperCards is an indie project: one person built the app and the backend and
 
 **[核心卖点：抽卡靠学不靠氪]**
 
-> 做了个给开发者的抽卡背题 App：DeveloperCards（iOS）。抽数不卖，只能靠学：每天清完 1–5 张复习就得 1 抽。卡池里只有你还没拥有的卡，永远不重复。稀有度＝难度，Legendary 就是整套里最难的那一档题。现在两套免费卡组：C# / .NET 81 张、AWS SAA-C03 154 张，内容全英文。
+> 做了个给开发者的抽卡背题 App：DeveloperCards（iOS）。抽数不卖，只能靠学：每学会一张新卡赚一抽（第一次评到 Hard 以上就算学会），清空当天到期再加一抽。卡池里只有你还没拥有的卡，永远不重复。稀有度＝难度，Legendary 就是整套里最难的那一档题。现在两套免费卡组：C# / .NET 81 张、AWS SAA-C03 154 张，内容全英文。
 
 **[经济系统：保底、钱包、兜底]**
 
-> 把 gacha 的保底逻辑搬进 SRS：连出 10 张 Common，下一张保底 Rare 或更高（前提是包里还有你没拥有的 Rare / Legendary）；钱包上限 30 抽 + 5 抽备用；没卡可学又没抽数时，每天自动送 1 抽。你永远不会卡死，也永远不用花钱。
+> 把 gacha 的保底逻辑搬进 SRS：连出 10 张 Common，下一张保底 Rare 或更高（前提是包里还有你没拥有的 Rare / Legendary）；钱包上限 60 抽 + 5 抽备用；没卡可学又没抽数时，每天自动送 1 抽。你永远不会卡死，也永远不用花钱。
 
 **[AWS SAA-C03 备考]**
 
@@ -256,7 +256,7 @@ DeveloperCards is an indie project: one person built the app and the backend and
 
 **[程序员幽默：稀有度就是难度]**
 
-> 稀有度就是难度，抽到 Legendary 不是欧皇，是这题真的难。每一抽必是你还没拥有的卡，所以十连就是十道你还没学过的题。DeveloperCards，iOS，235 张免费英文卡，抽数买不到，只能靠今天学完那几张。
+> 稀有度就是难度，抽到 Legendary 不是欧皇，是这题真的难。每一抽必是你还没拥有的卡，所以十连就是十道你还没学过的题。DeveloperCards，iOS，235 张免费英文卡，抽数买不到，只能靠学会新卡。
 
 
 ### 2.6 长帖（英文，3 篇）
@@ -272,11 +272,11 @@ I'm a solo developer and I built DeveloperCards end to end: the React Native app
 
 The idea: spaced-repetition flashcards for developers, except new cards come out of card packs, and the only way to earn a pull is to study. The rules:
 
-- Pulls can't be bought. You earn one by fully clearing today's review, which is 1–5 cards sized from what is actually due. You start with 3 pulls so the first pack opens in seconds.
+- Pulls can't be bought. Learn a new card, earn a pull: the first time you rate a card Hard, Good or Easy, one pull lands, and clearing everything due for the day adds one more, once a day. You start with 3 pulls so the first pack opens in seconds.
 - Every pull is new. The draw pool is only the cards you don't own yet, so duplicates are impossible.
 - Rarity is difficulty. Common / Rare / Legendary map to difficulty 1 / 2 / 3, so a Legendary drop is one of the hardest questions in the deck, not a shinier copy.
 - Pity: 10 Commons in a row and the next card is guaranteed Rare or better, as long as an unowned Rare or Legendary is still in the pack. It can fire mid-pull.
-- The wallet caps at 30 pulls plus a 5-pull reserve, and if you hit zero pulls with nothing left to study, the app grants 1 a day.
+- The wallet caps at 60 pulls plus a 5-pull reserve, and if you hit zero pulls with nothing left to study, the app grants 1 a day.
 - You're only charged for cards you actually receive; a fully collected pack costs nothing.
 - Every draw is seeded and replayable, so the app can explain exactly why you got what you got.
 
@@ -300,7 +300,7 @@ The deck: 81 cards aimed at interview prep, from fundamentals up to intermediate
 
 How you study it: a short daily route of 1–5 cards sized from what's actually due. Four buttons, Again / Hard / Good / Easy. Again brings the card back in 10 minutes and drops it two stages; Hard shortens the interval to 70%; Good moves up one stage; Easy jumps two. Intervals are 1, 2, 4, 8, 15, 30 and 60 days, and a card is Mastered once it reaches the 15-day stage. Reviewing one card keeps the streak alive. Works offline; no account needed.
 
-How you get the cards, which is the odd part: they come out of card packs. Clear the day's route and you earn one pull. Rip the foil, cards drop, tap to flip; Rare and Legendary reveals get their own sound and haptics. Rarity is difficulty, so a Legendary is one of the hardest questions in the deck, not a cosmetic. Every pull is a card you don't own yet, so no duplicates, and after 10 Commons in a row the next card is guaranteed Rare or better (while an unowned Rare or Legendary remains). You only study what you've drawn. Pulls cannot be bought; you start with 3 and earn one per cleared day.
+How you get the cards, which is the odd part: they come out of card packs. Learn a new card, earn a pull. Rip the foil, cards drop, tap to flip; Rare and Legendary reveals get their own sound and haptics. Rarity is difficulty, so a Legendary is one of the hardest questions in the deck, not a cosmetic. Every pull is a card you don't own yet, so no duplicates, and after 10 Commons in a row the next card is guaranteed Rare or better (while an unowned Rare or Legendary remains). You only study what you've drawn. Pulls cannot be bought; you start with 3 and earn one per new card learned, plus one a day for clearing what's due.
 
 Full disclosure on the stack, since it's relevant here: the backend is C#/.NET on AWS Lambda with PostgreSQL, the admin console is React, the app is React Native. One person, all of it, including writing or editing every one of the 81 cards.
 
@@ -318,9 +318,9 @@ What's on the cards: scenario questions in the style of the exam, across S3 stor
 
 How the studying works: each day you get a short route of 1–5 cards sized from what's actually due. Rate each one Again / Hard / Good / Easy and it returns on a 1, 2, 4, 8, 15, 30 or 60-day interval; reach the 15-day stage and it's Mastered. One card a day keeps your streak. Works offline, no account needed; sign in only if you want cloud backup.
 
-What's different: new cards come out of card packs, and pulls are earned only by clearing the day's route (you start with 3). Every pull is a card you don't own yet, so duplicates are impossible. Rarity is difficulty, so a Legendary is one of the hardest scenarios in the deck. After 10 Commons in a row the next card is guaranteed Rare or better, while an unowned Rare or Legendary remains. Pulls cannot be bought and nothing random is sold.
+What's different: new cards come out of card packs, and pulls are earned only by learning new cards (you start with 3). Every pull is a card you don't own yet, so duplicates are impossible. Rarity is difficulty, so a Legendary is one of the hardest scenarios in the deck. After 10 Commons in a row the next card is guaranteed Rare or better, while an unowned Rare or Legendary remains. Pulls cannot be bought and nothing random is sold.
 
-One honest note on pacing: at one pull per cleared day, the deck reveals itself over months, not in a weekend. It's built to be the thing you open every day alongside your main course and practice exams, not a cram dump the night before.
+One honest note on pacing: at one pull per new card learned, the deck reveals itself at the pace you actually learn it, not in a weekend. It's built to be the thing you open every day alongside your main course and practice exams, not a cram dump the night before.
 
 If you hold the cert and spot a scenario that's wrong or outdated, I'd genuinely like to hear it; I can patch cards and the app only downloads what changed.
 ```
@@ -334,11 +334,11 @@ If you hold the cert and spot a scenario that's wrong or outdated, I'd genuinely
 我一个人在做 DeveloperCards（iOS），给开发者用的间隔重复背题 App。和 Anki 最大的区别：新卡不是导入的，是从卡包里开出来的；抽数不卖，只能靠学。整条链路都是我：React Native 客户端、React 管理后台、C#/.NET Lambda + PostgreSQL 后端、Snowflake 做分析，每张卡都是我自己写或逐张改过的。
 
 规则很简单：
-- 每天一条 1–5 张的复习路线，按实际到期量生成。全部清完得 1 抽，新手送 3 抽。
+- 每天一条 1–5 张的复习路线，按实际到期量生成。每学会一张新卡得 1 抽，清空当天到期再得 1 抽，新手送 3 抽。
 - 每抽必新：卡池里只有你还没拥有的卡，绝不重复。
 - 稀有度就是难度：Common / Rare / Legendary 对应难度 1 / 2 / 3，抽到 Legendary 不是欧皇，是这题真的难。
 - 保底：连续 10 张 Common，下一张保底 Rare 或更高，前提是包里还有你没拥有的 Rare / Legendary。
-- 钱包上限 30 抽 + 5 抽备用；没卡可学又没抽数时，每天自动给 1 抽，不会卡死。
+- 钱包上限 60 抽 + 5 抽备用；没卡可学又没抽数时，每天自动给 1 抽，不会卡死。
 - 按实收扣费：包里剩的没拥有的卡不够你要的数量，只扣实际发到手的；全收集的包不扣。
 - 每次抽卡都记录种子，可以精确重放，App 能解释你为什么抽到这几张。
 
@@ -361,7 +361,7 @@ If you hold the cert and spot a scenario that's wrong or outdated, I'd genuinely
 | 0–2s | Draw tab. The purple C# foil pack with the owl wizard and glowing quill fills the frame on the cream parchment background; the pull count and the pokeBlue button are visible. Crop tightly; never show the Home tab's 'Coming soon' filler tiles. | Flashcards for devs. The cards come in packs. |
 | 2–5s | Thumb swipes across the pack; the foil rips (rip sound), cards drop onto the table one by one (card-drop sound). | Every pull is a card you don't own yet. |
 | 5–7s | Tap to flip; a Legendary reveals with the gold shimmer, the legendary sound and a haptic shown as a quick shake. Hold on the card face for a beat, question readable, no specific topic called out in the caption. | Rarity is difficulty. Legendary = the hardest questions. |
-| 7–10s | Review tab. A C# card with a code snippet; thumb taps Good, next card, Easy; the route (3 cards) clears and the wallet ticks up +1 with no claim button. | Clear today's route, 1–5 cards. +1 pull. Pulls can't be bought. |
+| 7–10s | Review tab. A C# card with a code snippet; thumb taps Good on a new card and the wallet ticks up +1 with no claim button, next card, Easy. | Learn a new card, earn a pull. Pulls can't be bought. |
 | 10–12s | Back on Draw: an Open 10 after a run of Commons; caption overlay lands on the card that flips Rare. (Stage this from a real replay; do not fake the card.) | 10 Commons in a row? The next card is Rare or better, while the pack still has one. |
 | 12–14s | Library tab: New / Learning / Mastered filters, the fresh card sliding into the collection, quick pan across the C# and AWS decks. Do not show a deck total in frame if it reads 115; it must read 81 or be cropped. | No duplicates. Ever. 81 C# / .NET + 154 AWS SAA-C03. |
 | 14–15s | End card on parchment with the gold accent: app icon, wordmark, one line. | DeveloperCards. 235 free cards. iOS. |
@@ -373,7 +373,7 @@ If you hold the cert and spot a scenario that's wrong or outdated, I'd genuinely
 - **版本 B（只有在 3.1 第 1 条清理完、且属实时才用）**：No. I write each card by hand in the admin console I built. There's no AI generation anywhere in the pipeline. If you find a mistake, tell me and I'll patch the card.
 
 **Q: Why gacha? Isn't that manipulative?**
-The usual gacha economy is tuned to find the whale. This one can't be: pulls are never sold, the only ways to get them are clearing today's review (+1), the 3-pull starter grant and a 1-pull daily floor when you've run out of both cards and pulls. Every pull is a card you don't own yet, so there are no duplicates to farm, and rarity is just difficulty. The ceremony is there to get you to open the app on day 9, not to open your wallet.
+The usual gacha economy is tuned to find the whale. This one can't be: pulls are never sold, the only ways to get them are learning a new card (+1 each, on its first Hard, Good or Easy), clearing everything due for the day (+1, once a day), the 3-pull starter grant and a 1-pull daily floor when you've run out of both cards and pulls. Every pull is a card you don't own yet, so there are no duplicates to farm, and rarity is just difficulty. The ceremony is there to get you to open the app on day 9, not to open your wallet.
 
 **Q: Is it free?**
 Yes. Both decks (81 C# / .NET, 154 AWS SAA-C03), drawing, studying, streaks, offline use and cloud backup for signed-in users are all free. There's a monthly Premium subscription in the app meant for future premium decks, but no premium deck exists yet, so today it unlocks nothing. I'm not asking anyone to buy it.
@@ -410,7 +410,8 @@ Not yet — the app is light-only today (`userInterfaceStyle: light`). 老实答
 | "10 连必出 Legendary" / 固定掉率 70/25/5 | 保底是 Rare+，且只在包里还有未拥有 Rare+ 时；抽取是未拥有池均匀随机 | "after 10 Commons, next is Rare or better while the pack has one" |
 | 买抽 / 补充钱包 / Epic 品级 / 30 抽硬保底 / Premium 更好保底 | 都没实现 | — |
 | "premium decks available" / 免费试用 | manifest 里 0 个付费卡组；无试用定义 | "a Premium subscription exists but there's nothing premium yet" |
-| 部分完成也给抽 / 每场 2 抽 | full clear = 1，否则 0 | "1 pull per fully cleared review" |
+| 部分完成也给抽 / 每场 2 抽 | R1：每张新卡首次 hard/good/easy +1；R2：清空当天到期卡每天 +1 一次；正确率与 minimumGoal 不改变抽数 | "one pull per new card learned" |
+| full clear +1 / "1 pull per cleared review" | 2026-09-21 起由 R1/R2 替换（`docs/economy-v2-learn-to-earn-2026-09-19.md` §2） | "learn a new card, earn a pull" |
 | 所有人都云备份 | 只有登录用户；且匿名期抽到的卡登录后不迁移 | "sign in for cloud backup"（修好 3.2 第 5 条前少提） |
 | 掌握庆祝 / 收藏里程碑仪式 | 是 mock 壳子 | "streaks and milestones are tracked" |
 | App 内删账号 | 是不可达的 mock | — |
