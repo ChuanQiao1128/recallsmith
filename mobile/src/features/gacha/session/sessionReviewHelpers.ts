@@ -21,6 +21,7 @@ export type SessionProgressVM = {
 export function modeLabel(mode: string) {
   if (mode === 'review-due') return 'Review Due';
   if (mode === 'learn-new') return 'Learn';
+  if (mode === 'sweep') return 'Review all';
   return 'Mixed';
 }
 
@@ -48,7 +49,7 @@ export function buildRatedSessionState(params: {
   current: CurrentCardLike;
   progress: CardProgress[];
   rating: ReviewRating;
-  mode: 'review-due' | 'learn-new' | 'mixed';
+  mode: 'review-due' | 'learn-new' | 'mixed' | 'sweep';
   sessionDone: number;
   sessionLimit: number;
   now: Date;

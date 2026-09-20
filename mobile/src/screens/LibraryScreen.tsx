@@ -383,6 +383,8 @@ export function LibraryScreen({ navigation, route }: Props) {
                   }
                 }}
                 openFirstPackHasPulls={walletPulls > 0}
+                sweepCount={vm.counts.learningCount + vm.counts.masteredCount}
+                onStartSweep={() => navigation.navigate('SessionCard', { slug: vm.selectedDeckSlug, mode: 'sweep' })}
               />
             }
             ListEmptyComponent={

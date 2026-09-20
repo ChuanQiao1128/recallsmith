@@ -1,5 +1,5 @@
 // mobile/src/navigation/types.ts
-export type StudyMode = 'learn-new' | 'review-due' | 'mixed';
+export type StudyMode = 'learn-new' | 'review-due' | 'mixed' | 'sweep';
 
 import type { MockHomeState } from '../mock/types';
 import type { RewardOutcome } from '../features/gacha/rewards/rewardResolver';

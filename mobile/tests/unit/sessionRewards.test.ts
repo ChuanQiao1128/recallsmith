@@ -195,4 +195,61 @@ describe('sessionRewards', () => {
     const { ledger } = await readNewCardLedger('csharp');
     expect('c1' in ledger).toBe(true);
   });
+
+  it('never pays a new-card pull in sweep mode however the cards are rated, and pays the due clear at most once', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(fc.constantFrom<ReviewRating>('again', 'hard', 'good', 'easy'), { minLength: 1, maxLength: 8 }),
+        async (ratings) => {
+          store.clear();
+          setActiveUserSubForStorage(null);
+          const now = new Date(2026, 0, 15, 12, 0, 0);
+
+          for (const rating of ratings) {
+            const step = await settleRatingReward({
+              slug: 'csharp',
+              stableUid: 'c1',
+              rating,
+              // c1 is new here (no learned entry), so the seed writes nothing for it.
+              progressBefore: [],
+              newCardEligible: false,
+              dueBefore: 0,
+              remainingDueCount: 0,
+              now,
+            });
+            expect(step.newCardPaid).toBe(false);
+            expect(step.pulls).toBe(0);
+          }
+
+          // R8 never stamps the uid, so R1 stays available to a later eligible run.
+          expect((await readNewCardLedger('csharp')).ledger['c1']).toBeUndefined();
+
+          const cleared = await settleRatingReward({
+            slug: 'csharp',
+            stableUid: 'c1',
+            rating: 'good',
+            progressBefore: [],
+            newCardEligible: false,
+            dueBefore: 2,
+            remainingDueCount: 0,
+            now,
+          });
+          expect(cleared.dueClearPaid).toBe(true);
+          expect(cleared.pulls).toBe(1);
+
+          const repeat = await settleRatingReward({
+            slug: 'csharp',
+            stableUid: 'c1',
+            rating: 'good',
+            progressBefore: [],
+            newCardEligible: false,
+            dueBefore: 2,
+            remainingDueCount: 0,
+            now,
+          });
+          expect(repeat.dueClearPaid).toBe(false);
+        },
+      ),
+    );
+  });
 });

@@ -356,4 +356,39 @@ describe('LibraryScreen v9', () => {
     expect(collectText(tree)).toContain('Nothing matches');
     expect(tree.root.findByProps({ testID: 'library-empty-cta' })).toBeTruthy();
   });
+
+  it('shows the Review all CTA with the learned count and starts a sweep', async () => {
+    // Default fixture: card 2 is learning, card 3 is mastered → 2 owned learned cards.
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+
+    const cta = tree.root.findByProps({ testID: 'library-sweep-cta' });
+    expect(cta.props.accessibilityLabel).toBe('Review all learned cards');
+    const label = cta.find((child: any) => (child.type as any) === 'Text').props.children;
+    expect(label).toBe('Review all · 2');
+
+    act(() => cta.props.onPress());
+    expect(navigate).toHaveBeenCalledWith('SessionCard', { slug: 'csharp', mode: 'sweep' });
+  });
+
+  it('hides the Review all CTA when nothing has been learned', async () => {
+    mockDecksBySlug.csharp = makeDeck('csharp', 'C# Interview', [{ uid: '9', order: 1, difficulty: 1, question: 'Q9' }]);
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+
+    expect(tree.root.findAllByProps({ testID: 'library-sweep-cta' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'library-card-9' })).toBeTruthy();
+  });
 });

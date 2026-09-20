@@ -134,4 +134,19 @@ describe('countDueToday / pickNextCard', () => {
 
     expect(next?.card.StableUid).toBe('2');
   });
+
+  it('picks the longest-unseen learned card in sweep mode even when another card is due', () => {
+    const sweepProgress = [
+      { stableUid: '1', stage: 0, nextReviewAt: 0 },
+      { stableUid: '2', stage: 2, lastReviewedAt: TODAY_MS - 1000, nextReviewAt: YESTERDAY_MS, lastSeenRevision: 1 },
+      { stableUid: '3', stage: 4, lastReviewedAt: TODAY_MS - 5000, nextReviewAt: TOMORROW_MS, lastSeenRevision: 1 },
+      { stableUid: '4', stage: 0, nextReviewAt: 0 },
+    ] as any;
+
+    expect(pickNextCard({ deck: sampleDeck, progress: sweepProgress, now: NOW, mode: 'sweep' })?.card.StableUid).toBe('3');
+    expect(pickNextCard({ deck: sampleDeck, progress: sweepProgress, now: NOW, mode: 'review-due' })?.card.StableUid).toBe('2');
+    expect(
+      pickNextCard({ deck: sampleDeck, progress: sweepProgress, now: NOW, mode: 'sweep', avoidUid: '3' })?.card.StableUid,
+    ).toBe('2');
+  });
 });

@@ -117,6 +117,10 @@ type Props = {
   topics: LibraryTopicChip[];
   topicFilter: string | null;
   onSelectTopic: (key: string) => void;
+  /** "Review all · N" sweep entry (economy-v2 R8). Rendered only when both are
+   *  given and sweepCount > 0; the button starts a 'sweep' SessionCard run. */
+  onStartSweep?: () => void;
+  sweepCount?: number;
   /** Called when the brand-new-user banner CTA fires. Only invoked when
    *  ownedCount === 0 (i.e. user hasn't pulled any cards yet). When
    *  undefined, the banner is hidden regardless of state. */
@@ -142,6 +146,8 @@ export function LibraryHeader({
   topics,
   topicFilter,
   onSelectTopic,
+  onStartSweep,
+  sweepCount = 0,
   onOpenFirstPack,
   openFirstPackHasPulls = false,
 }: Props) {
@@ -208,6 +214,20 @@ export function LibraryHeader({
           </Text>
         </View>
       </View>
+
+      {onStartSweep && sweepCount > 0 ? (
+        <Pressable
+          testID="library-sweep-cta"
+          accessibilityRole="button"
+          accessibilityLabel="Review all learned cards"
+          style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+          onPress={onStartSweep}
+        >
+          <Text style={styles.retryText} numberOfLines={1}>
+            {`Review all · ${sweepCount}`}
+          </Text>
+        </Pressable>
+      ) : null}
 
       {/* Deck switcher — horizontal scroll instead of wrap-grid */}
       {deckOptions.length > 1 ? (
