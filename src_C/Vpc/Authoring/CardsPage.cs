@@ -79,6 +79,9 @@ public static class CardsPage
       var (sql, parameters) = BuildPageQuery(deckIdInt, includeDeleted, permissionAdminSub, cursor, limit);
       var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
 
+      // jsonb arrives from DbUtil as PG text; the console reads an object (C08's JsonbCell).
+      foreach (var row in rows) Helpers.JsonbCell(row, "mcq");
+
       // Same rule as the paged deck list: a full page means "ask again", and the
       // last page of an exactly-divisible walk therefore costs one extra empty
       // request. The alternative (fetch limit + 1 and trim) is a different wire
@@ -143,7 +146,8 @@ public static class CardsPage
         c.is_deleted    as "isDeleted",
         c.created_at    as "createdAt",
         c.updated_at    as "updatedAt",
-        c.topic
+        c.topic,
+        c.mcq
       from cards c
       """;
 

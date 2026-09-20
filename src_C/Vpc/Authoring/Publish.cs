@@ -84,6 +84,62 @@ public static class Publish
     return deckType == 1 ? "free" : "premium";
   }
 
+  /// <summary>
+  /// First card whose stored MCQ blob fails the publish rules, or null when every row passes.
+  /// Pure (no IO). Rows arrive in order_in_deck order, so the first failure is deterministic.
+  /// Order of checks per row (C00 §2.9.4): Canonicalize against the stem, then explanation
+  /// non-blank (MCQ_EXPLANATION_REQUIRED), then difficulty 1..3 (MCQ_DIFFICULTY_RANGE).
+  /// </summary>
+  internal static (string StableUid, string Code)? FirstMcqGateFailure(IReadOnlyList<Dictionary<string, object?>> cardRows)
+  {
+    foreach (var c in cardRows)
+    {
+      var mcq = Helpers.JsonbElement(c, "mcq");
+      if (mcq is null) continue;
+
+      var stableUid = Convert.ToString(c["stableUid"], CultureInfo.InvariantCulture) ?? string.Empty;
+      var question = Convert.ToString(c["question"], CultureInfo.InvariantCulture);
+      var explanation = Convert.ToString(c.TryGetValue("explanation", out var ex) ? ex : null, CultureInfo.InvariantCulture);
+      var difficulty = Convert.ToInt32(c.TryGetValue("difficulty", out var dif) ? (dif ?? 2) : 2, CultureInfo.InvariantCulture);
+
+      try
+      {
+        McqValidation.Canonicalize(mcq.Value, question);
+      }
+      catch (McqValidationError mex)
+      {
+        return (stableUid, mex.Code);
+      }
+
+      if (string.IsNullOrWhiteSpace(explanation)) return (stableUid, "MCQ_EXPLANATION_REQUIRED");
+      if (!McqValidation.IsMcqDifficulty(difficulty)) return (stableUid, "MCQ_DIFFICULTY_RANGE");
+    }
+
+    return null;
+  }
+
+  /// <summary>
+  /// The cards a publish exports, in export order. Internal so the gate test reads rows with
+  /// the exact production text (jsonb comes back as PG text, and that is what the gate parses).
+  /// </summary>
+  internal const string CardsSql = """
+    select
+      stable_uid as "stableUid",
+      order_in_deck as "orderInDeck",
+      difficulty,
+      question,
+      explanation,
+      code_language as "codeLanguage",
+      code_snippet as "codeSnippet",
+      real_world_usage as "realWorldUsage",
+      revision,
+      topic,
+      mcq
+    from cards
+    where deck_id = $1 and is_deleted = 0
+    order by order_in_deck asc, id asc
+    """;
+
   public static async Task<APIGatewayProxyResponse> HandleAuthoringPublish(LambdaRequest req, Res res, AuthContext auth)
   {
     var deny = Auth.RequireAdmin(auth, res);
@@ -151,24 +207,7 @@ public static class Publish
         throw new ValidationError("deck.slug contains invalid characters", "deckSlug");
       }
 
-      const string cardsSql = """
-        select
-          stable_uid as "stableUid",
-          order_in_deck as "orderInDeck",
-          difficulty,
-          question,
-          explanation,
-          code_language as "codeLanguage",
-          code_snippet as "codeSnippet",
-          real_world_usage as "realWorldUsage",
-          revision,
-          topic
-        from cards
-        where deck_id = $1 and is_deleted = 0
-        order by order_in_deck asc, id asc
-        """;
-
-      var cardRows = await DbUtil.QueryAsync(conn, null, cardsSql, [deckIdInt]);
+      var cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckIdInt]);
 
       var deckType = Convert.ToInt64(deck["deckType"], CultureInfo.InvariantCulture);
       var tier = InferTier(deckType, deck.TryGetValue("tier", out var tv) ? tv : null);
@@ -190,6 +229,7 @@ public static class Publish
         realWorldUsage = Convert.ToString(c.TryGetValue("realWorldUsage", out var rw) ? rw : null, CultureInfo.InvariantCulture) ?? string.Empty,
         revision = Convert.ToInt32(c.TryGetValue("revision", out var rv) ? (rv ?? 1) : 1, CultureInfo.InvariantCulture),
         topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
+        mcq = Helpers.JsonbElement(c, "mcq"),
       }).ToList();
 
       var baseDeckJson = new
@@ -215,6 +255,12 @@ public static class Publish
           export = baseDeckJson,
         });
       }
+
+      // Pre-enqueue gate (publish only — the preview above has already returned). A stored MCQ
+      // blob that no longer satisfies the API rules must not reach the Worker, which serialises
+      // it verbatim into deck.json / chunks / patches.
+      var gate = FirstMcqGateFailure(cardRows);
+      if (gate is not null) return res.BadRequest("MCQ_PUBLISH_GATE", $"{gate.Value.StableUid}: {gate.Value.Code}");
 
       // --- ASYNC PUBLISH LOGIC ---
 
