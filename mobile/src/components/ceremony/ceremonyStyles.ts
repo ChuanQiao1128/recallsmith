@@ -116,7 +116,10 @@ export const ceremonyStyles = StyleSheet.create({
   pressed: { opacity: 0.9 },
 
   // B08: rarity frame PNG over the face (B12 asset, 9-slice inset 40) and the focus lift layer.
-  tapCardFrame: { ...StyleSheet.absoluteFillObject },
+  // width/height are explicit on purpose: RN gives a bundled (require'd) image its intrinsic
+  // 400×560 size when the style names neither, and that beats the absolute insets — the frame
+  // then renders at natural size clipped to the card's top-left corner (seen 2026-09-20).
+  tapCardFrame: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
   tapCardFocusLayer: { ...StyleSheet.absoluteFillObject, borderRadius: 10, overflow: 'hidden' },
   tapCardStreak: { position: 'absolute', top: -20, bottom: -20, width: 18, backgroundColor: 'rgba(255,255,255,0.85)', opacity: 0 },
   tapCardShadow: { shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 6, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
@@ -184,6 +187,7 @@ export const ceremonyStyles = StyleSheet.create({
   leaveButton: { position: 'absolute', top: 8, left: 8, width: 1, height: 1, opacity: 0 }, // VoiceOver-only; never accessibilityElementsHidden
   fallbackStage: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   fallbackRim: { position: 'absolute', left: -14, top: -14, right: -14, bottom: -14, opacity: 0.55 },
+  fallbackRimImage: { width: '100%', height: '100%' },
   spillCard: { position: 'absolute', borderRadius: 10, borderWidth: 2, backgroundColor: '#10143A' },
   deckEdge: { position: 'absolute', width: 240, minHeight: 336, borderRadius: 22, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', backgroundColor: 'rgba(16,20,58,0.35)' },
   pitySeal: { position: 'absolute', top: 10, right: 10, width: 28, height: 28, borderRadius: 14, backgroundColor: '#F5C95E', borderWidth: 2, borderColor: '#FFF7EC' },
