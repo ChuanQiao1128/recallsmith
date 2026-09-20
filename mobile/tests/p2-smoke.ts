@@ -41,7 +41,7 @@ const challenge = buildChallengeRoute({
   newCount: 2,
 });
 assert.equal(challenge.minimumGoal, 1);
-assert.equal(challenge.limit, 4);
+assert.equal(challenge.limit, 5);
 assert.equal(challenge.nodes[challenge.nodes.length - 1]?.role, 'boss');
 assert.match(challenge.summary, /keep momentum/i);
 
@@ -62,7 +62,7 @@ const plannedChallenge = planChallengeRoute({
 });
 assert.equal(plannedChallenge.dueCount, 1);
 assert.equal(plannedChallenge.newCount, 2);
-assert.equal(plannedChallenge.limit, 2);
+assert.equal(plannedChallenge.limit, 3);
 
 assert.equal(countDueToday(sampleProgress, NOW), 1);
 

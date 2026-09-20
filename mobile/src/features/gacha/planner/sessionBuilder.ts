@@ -38,13 +38,11 @@ export function buildChallengeRoute(params: {
 }): ChallengeRoute {
   const { slug, deckTitle, dueCount, newCount } = params;
   const hasTodayWork = dueCount > 0 || newCount > 0;
-  const effectiveNew = dueCount > 0 ? Math.min(newCount, 1) : Math.min(newCount, 2);
-  const limit = hasTodayWork
-    ? Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, Math.max(dueCount, 1) + effectiveNew))
-    : 1;
+  // R6/F10: one fresh card should plan a one-node route the user can full-clear.
+  const limit = hasTodayWork ? Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, dueCount + newCount)) : 1;
 
   const hasBoss = dueCount >= 3;
-  const hasElite = dueCount >= 2 || effectiveNew >= 1;
+  const hasElite = dueCount >= 2 || newCount >= 1;
 
   const nodes: RoutePreviewNode[] = Array.from({ length: limit }).map((_, index) => {
     const role = resolveRouteRole({ index, total: limit, hasElite, hasBoss });

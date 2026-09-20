@@ -504,11 +504,11 @@ describe('economy floor', () => {
       for (const question of strangerQuestions) {
         expect(blob).not.toContain(question);
       }
-      // One owned card plus the warm-up slot planChallengeRoute always adds:
-      // the same 2-node shape the phase-4 fixture pins for a one-card
-      // collection. Asserted so a regression that re-opens the route to the
-      // whole deck file (3 cards) fails here too.
-      expect(blob).toContain('Run 0/2');
+      // One owned new card plans a one-node route: R6 removed the padded
+      // warm-up slot, so due 0 / new 1 is a single node the user can full-clear.
+      // Asserted so a regression that re-opens the route to the whole deck file
+      // (3 cards) fails here too.
+      expect(blob).toContain('Run 0/1');
 
       // 5. The floor does not fire again: the user now has work to do, which
       //    is a different reason from "already granted today" and the one that

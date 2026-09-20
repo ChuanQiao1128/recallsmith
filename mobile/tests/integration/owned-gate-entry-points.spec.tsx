@@ -369,10 +369,10 @@ describe('ownership gate — every entry point', () => {
         <ChallengeScreen navigation={nav()} route={{ key: 'k', name: 'Challenge', params: {} } as any} />,
       );
 
-      // One owned unstudied card -> a one-new route (plus the warm-up slot the
-      // builder always adds). Ungated all three unstudied cards count and the
-      // route is a card longer.
-      expect(textBlob(tree)).toContain('Clear today’s run (2 cards) for +2 free pulls.');
+      // One owned unstudied card -> a one-node route (R6 dropped the padded
+      // warm-up slot). Ungated all three unstudied cards count and the route is
+      // two cards longer.
+      expect(textBlob(tree)).toContain('Clear today’s run (1 cards) for +2 free pulls.');
     });
   });
 
