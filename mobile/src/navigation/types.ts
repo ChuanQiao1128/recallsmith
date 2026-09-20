@@ -73,6 +73,7 @@ export type RootStackParamList = {
   CoachOverlay: undefined;
   OfflineBanner: undefined;
   DebugMenu: undefined;
+  CeremonyTuning: undefined;
   Level: {
     slug: string;
     source: 'daily-dose' | 'draw';

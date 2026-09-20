@@ -4,6 +4,10 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import AppInfoScreen from '../components/AppInfoScreen';
 import { resetAllProgress } from '../features/debug/resetProgress';
+import { saveRewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { loadDrawState, saveDrawState } from '../features/gacha/draw/drawStateStore';
+import { rarityOfCard } from '../features/gacha/draw/cardRarity';
+import { getCeremonyDevOverrides, setCeremonyDevOverride } from '../features/gacha/draw/ceremonyPrefs';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DebugMenu'>;
 const scenarios = [
@@ -19,6 +23,61 @@ const scenarios = [
 export function DebugMenuScreen({ navigation }: Props) {
   const [busy, setBusy] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
+  const [devOverrides, setDevOverrides] = useState(() => getCeremonyDevOverrides());
+
+  async function handleSeedWallet() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await saveRewardWalletState({ availablePulls: 30, reservePulls: 5 });
+      setLastResult('Wallet seeded 30/5.');
+    } catch (e: any) {
+      setLastResult(`Seed failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleOnlyLegendary() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { loadActiveDeckSlug } = await import('../content/activeDeck');
+      const { resolveDeckBySlug } = await import('../content/deckRepository');
+      const slug = await loadActiveDeckSlug();
+      if (!slug) {
+        setLastResult('No active deck.');
+        return;
+      }
+      const deck = await resolveDeckBySlug(slug);
+      const cards = deck?.Cards ?? [];
+      if (cards.length === 0) {
+        setLastResult(`Deck ${slug} is not installed.`);
+        return;
+      }
+      const current = await loadDrawState(slug);
+      const owned = new Set(current.owned);
+      let added = 0;
+      for (const card of cards) {
+        if (rarityOfCard(card) !== 'LEG' && !owned.has(card.StableUid)) {
+          owned.add(card.StableUid);
+          added += 1;
+        }
+      }
+      await saveDrawState(slug, { owned: [...owned], pity: current.pity });
+      const legendaryLeft = cards.filter((card) => rarityOfCard(card) === 'LEG' && !owned.has(card.StableUid)).length;
+      setLastResult(`Owned +${added} non-Legendary in ${slug}; ${legendaryLeft} Legendary left.`);
+    } catch (e: any) {
+      setLastResult(`Seed failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleToggle(key: 'forceFallback' | 'forceRepeat') {
+    setCeremonyDevOverride(key, !devOverrides[key]);
+    setDevOverrides(getCeremonyDevOverrides());
+  }
 
   async function performReset(resetOnboarding: boolean) {
     setBusy(true);
@@ -78,6 +137,61 @@ export function DebugMenuScreen({ navigation }: Props) {
       tertiaryLabel="Back to more"
       onTertiary={() => navigation.navigate('More')}
       footer={
+        <>
+        {__DEV__ ? (
+          <View style={styles.ceremonyTools} testID="debug-ceremony-tools">
+            <Text style={styles.ceremonyEyebrow} numberOfLines={1}>
+              CEREMONY
+            </Text>
+            <Pressable
+              testID="debug-seed-wallet"
+              accessibilityRole="button"
+              accessibilityLabel="Seed wallet 30/5"
+              disabled={busy}
+              style={({ pressed }) => [styles.ceremonyButton, busy && styles.dangerButtonDisabled, pressed && styles.dangerButtonPressed]}
+              onPress={() => void handleSeedWallet()}
+            >
+              <Text style={styles.ceremonyButtonText}>Seed wallet 30/5</Text>
+            </Pressable>
+            <Pressable
+              testID="debug-only-legendary"
+              accessibilityRole="button"
+              accessibilityLabel="Only Legendary left"
+              disabled={busy}
+              style={({ pressed }) => [styles.ceremonyButton, busy && styles.dangerButtonDisabled, pressed && styles.dangerButtonPressed]}
+              onPress={() => void handleOnlyLegendary()}
+            >
+              <Text style={styles.ceremonyButtonText}>Only Legendary left</Text>
+            </Pressable>
+            <Pressable
+              testID="debug-force-fallback"
+              accessibilityRole="button"
+              accessibilityState={{ checked: devOverrides.forceFallback }}
+              style={({ pressed }) => [styles.ceremonyButton, pressed && styles.dangerButtonPressed]}
+              onPress={() => handleToggle('forceFallback')}
+            >
+              <Text style={styles.ceremonyButtonText}>{`Force fallback renderer: ${devOverrides.forceFallback ? 'ON' : 'OFF'}`}</Text>
+            </Pressable>
+            <Pressable
+              testID="debug-force-repeat"
+              accessibilityRole="button"
+              accessibilityState={{ checked: devOverrides.forceRepeat }}
+              style={({ pressed }) => [styles.ceremonyButton, pressed && styles.dangerButtonPressed]}
+              onPress={() => handleToggle('forceRepeat')}
+            >
+              <Text style={styles.ceremonyButtonText}>{`Force repeat ceremony: ${devOverrides.forceRepeat ? 'ON' : 'OFF'}`}</Text>
+            </Pressable>
+            <Pressable
+              testID="debug-ceremony-tuning"
+              accessibilityRole="button"
+              accessibilityLabel="Open ceremony tuning"
+              style={({ pressed }) => [styles.ceremonyButton, pressed && styles.dangerButtonPressed]}
+              onPress={() => navigation.navigate('CeremonyTuning')}
+            >
+              <Text style={styles.ceremonyButtonText}>Ceremony tuning</Text>
+            </Pressable>
+          </View>
+        ) : null}
         <View style={styles.dangerZone}>
           <Text style={styles.dangerEyebrow} numberOfLines={1}>
             DANGER ZONE
@@ -109,6 +223,7 @@ export function DebugMenuScreen({ navigation }: Props) {
             </Text>
           ) : null}
         </View>
+        </>
       }
     />
   );
@@ -117,6 +232,37 @@ export function DebugMenuScreen({ navigation }: Props) {
 export default DebugMenuScreen;
 
 const styles = StyleSheet.create({
+  ceremonyTools: {
+    marginTop: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: 'rgba(245,236,196,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,236,196,0.22)',
+  },
+  ceremonyEyebrow: {
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.6,
+    color: 'rgba(245,236,196,0.85)',
+    textTransform: 'uppercase',
+  },
+  ceremonyButton: {
+    marginTop: 12,
+    minHeight: 48,
+    borderRadius: 999,
+    backgroundColor: 'rgba(245,236,196,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  ceremonyButtonText: {
+    color: '#F5ECC4',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
   dangerZone: {
     marginTop: 12,
     paddingVertical: 16,

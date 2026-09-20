@@ -65,6 +65,7 @@ import ToastHostScreen from './src/screens/ToastHostScreen';
 import CoachOverlayScreen from './src/screens/CoachOverlayScreen';
 import OfflineBannerScreen from './src/screens/OfflineBannerScreen';
 import DebugMenuScreen from './src/screens/DebugMenuScreen';
+import CeremonyTuningScreen from './src/screens/dev/CeremonyTuning';
 import LevelScreen from './src/screens/LevelScreen';
 import DrawCeremonyScreen from './src/screens/DrawCeremonyScreen';
 import DrawResultScreen from './src/screens/DrawResultScreen';
@@ -240,6 +241,7 @@ export default function App() {
         <Stack.Screen name="CoachOverlay" component={CoachOverlayScreen} />
         <Stack.Screen name="OfflineBanner" component={OfflineBannerScreen} />
         <Stack.Screen name="DebugMenu" component={DebugMenuScreen} />
+        {__DEV__ ? <Stack.Screen name="CeremonyTuning" component={CeremonyTuningScreen} /> : null}
         <Stack.Screen name="Level" component={LevelScreen} />
         {/* Draw flow uses cross-fade transitions so the pack art continuity
             from Draw → Ceremony → Result feels like a single moment. */}
