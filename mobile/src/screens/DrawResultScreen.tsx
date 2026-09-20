@@ -92,7 +92,7 @@ const FEATURED_GRADIENT_BY_RARITY: Record<
 } as const;
 
 const localStyles = StyleSheet.create({
-  featuredFrame: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 },
+  featuredFrame: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
   unrevealedChip: { alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, backgroundColor: 'rgba(58,35,5,0.10)' },
   unrevealedChipText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.4, color: colors.inkMuted },
   featuredUnrevealedChip: { marginLeft: 8, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.85)' },

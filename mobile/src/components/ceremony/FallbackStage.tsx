@@ -129,7 +129,7 @@ export function FallbackStage(props: FallbackStageProps): React.JSX.Element {
                   ]}
                 >
                   {glowNineSlice && RNImage ? (
-                    <RNImage source={glowNineSlice} style={ceremonyStyles.fallbackRim} tintColor={accent} resizeMode="stretch" />
+                    <View pointerEvents="none" style={ceremonyStyles.fallbackRim}><RNImage source={glowNineSlice} style={ceremonyStyles.fallbackRimImage} tintColor={accent} resizeMode="stretch" /></View>
                   ) : null}
                 </View>
               );
