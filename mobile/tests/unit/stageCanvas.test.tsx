@@ -135,7 +135,11 @@ describe('StageCanvas', () => {
     // flash last
     const last = rects[rects.length - 1];
     expect(last.props.opacity).toBe(props.timeline.flash);
-    expect(last.props.color).toBe(FLASH_COLORS.LEG);
+    // The flash is a radial gradient (bright at the pack, transparent at the canvas edge) so it
+    // never flashes as a hard-edged box on the light page; the LEG colour is the gradient's centre.
+    const flashGradient = descendants(last, 'Skia.RadialGradient')[0];
+    expect(flashGradient.props.colors[0]).toBe(FLASH_COLORS.LEG);
+    expect(flashGradient.props.colors[1]).toBe('rgba(245,201,94,0)');
   });
 
   it('has exactly one plus-blended rect (the seam light-leak)', () => {

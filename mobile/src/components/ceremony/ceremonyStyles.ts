@@ -120,6 +120,12 @@ export const ceremonyStyles = StyleSheet.create({
   // 400×560 size when the style names neither, and that beats the absolute insets — the frame
   // then renders at natural size clipped to the card's top-left corner (seen 2026-09-20).
   tapCardFrame: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  // Frame-window layout (percentages of CARD_FRAME_SIZE 400×560: art window 28,64 → 344×296;
+  // text slab starts at y≈380). Used only when a frameImage is supplied.
+  tapCardArtWindow: { position: 'absolute', left: '7%', top: '11.4%', width: '86%', height: '52.9%', overflow: 'hidden', borderRadius: 3 },
+  tapCardArtGradient: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  tapCardChipInWindow: { position: 'absolute', left: 4, top: 4 },
+  tapCardSlab: { position: 'absolute', left: '9%', top: '69%', width: '82%', height: '25%', justifyContent: 'center' },
   tapCardFocusLayer: { ...StyleSheet.absoluteFillObject, borderRadius: 10, overflow: 'hidden' },
   tapCardStreak: { position: 'absolute', top: -20, bottom: -20, width: 18, backgroundColor: 'rgba(255,255,255,0.85)', opacity: 0 },
   tapCardShadow: { shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 6, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
@@ -131,6 +137,8 @@ export const ceremonyStyles = StyleSheet.create({
   // Soft wash over the page gradient.
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(255,255,255,0.18)' },
   content: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg },
+  // Full-screen LEG dim (opacity driven by timeline.dim; 0 for COM/RAR).
+  dimOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: '#08041A' },
   // The 280×360 stage that hosts the renderer.
   stage: { marginTop: spacing.md, width: 280, height: 360, alignItems: 'center', justifyContent: 'center' },
   swipePack: { width: 260, minHeight: 360, alignItems: 'center', justifyContent: 'center' },

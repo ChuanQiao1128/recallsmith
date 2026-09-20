@@ -334,11 +334,16 @@ export function StageCanvas(props: StageCanvasProps): React.JSX.Element | null {
       testID={testID ?? STAGE_TESTID}
     >
       {/* 1 vignette */}
+      {/* The canvas is a 280×360 island on a light page, so this layer must be transparent at
+          its own edges or it reads as a grey box (seen on the simulator, 2026-09-20). It is now
+          a soft dark ring around the pack; the screen-wide LEG dim is a full-screen overlay in
+          DrawCeremonyScreen driven by the same `dim` value. */}
       <Rect x={0} y={0} width={width} height={height} opacity={dim}>
         <RadialGradient
-          c={vec(width / 2, height / 2)}
-          r={Math.max(width, height) * 0.75}
-          colors={['rgba(8,4,20,0)', 'rgba(8,4,20,1)']}
+          c={vec(width / 2, packCentreY)}
+          r={Math.min(width, height) * 0.72}
+          colors={['rgba(8,4,20,0)', 'rgba(8,4,20,0.35)', 'rgba(8,4,20,0)']}
+          positions={[0, 0.62, 1]}
         />
       </Rect>
       {/* 2 rays — not mounted under reduceMotion */}
@@ -394,7 +399,14 @@ export function StageCanvas(props: StageCanvasProps): React.JSX.Element | null {
       ) : null}
       {/* 7 flash — never mounted under reduceMotion */}
       {!reduceMotion ? (
-        <Rect x={0} y={0} width={width} height={height} color={FLASH_COLORS[peakRarity]} opacity={flash} />
+        <Rect x={0} y={0} width={width} height={height} opacity={flash}>
+          {/* radial, transparent at the canvas edge — a solid rect flashed as a hard-edged box */}
+          <RadialGradient
+            c={vec(width / 2, packCentreY)}
+            r={Math.max(width, height) * 0.7}
+            colors={[FLASH_COLORS[peakRarity], FLASH_COLORS[peakRarity].replace(/,\s*[\d.]+\)$/, ',0)')]}
+          />
+        </Rect>
       ) : null}
     </Canvas>
   );

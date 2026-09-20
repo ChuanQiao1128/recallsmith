@@ -235,13 +235,35 @@ export function TapCard(props: TapCardProps): React.JSX.Element {
       {/* CARD FRONT */}
       <Reanimated.View style={[ceremonyStyles.tapCardSide, frontStyle]}>
         <View style={[ceremonyStyles.tapCardFace, { borderColor: accent, shadowColor: accent }]}>
-          <View style={[ceremonyStyles.tapCardChip, { backgroundColor: accent }]}>
-            <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>★ {card.rarity}</Text>
-          </View>
-          <Text style={ceremonyStyles.tapCardQuestion} numberOfLines={3}>{card.question}</Text>
           {frameImage && RNImage ? (
-            <RNImage pointerEvents="none" source={frameImage} resizeMode="stretch" style={ceremonyStyles.tapCardFrame} />
-          ) : null}
+            // With a rarity frame the face is laid out to the frame's windows (B12 geometry:
+            // art window y 11–64 %, text slab y 68–95 %, both x 7–93 %) so nothing sits under
+            // the frame's opaque bands. The chip lives inside the art window.
+            <>
+              <View style={ceremonyStyles.tapCardArtWindow}>
+                <LinearGradient
+                  colors={[accent, '#141737'] as const}
+                  start={{ x: 0.1, y: 0 }}
+                  end={{ x: 0.9, y: 1 }}
+                  style={ceremonyStyles.tapCardArtGradient}
+                />
+                <View style={[ceremonyStyles.tapCardChip, ceremonyStyles.tapCardChipInWindow, { backgroundColor: accent }]}>
+                  <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>★ {card.rarity}</Text>
+                </View>
+              </View>
+              <View style={ceremonyStyles.tapCardSlab}>
+                <Text style={ceremonyStyles.tapCardQuestion} numberOfLines={3}>{card.question}</Text>
+              </View>
+              <RNImage pointerEvents="none" source={frameImage} resizeMode="stretch" style={ceremonyStyles.tapCardFrame} />
+            </>
+          ) : (
+            <>
+              <View style={[ceremonyStyles.tapCardChip, { backgroundColor: accent }]}>
+                <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>★ {card.rarity}</Text>
+              </View>
+              <Text style={ceremonyStyles.tapCardQuestion} numberOfLines={3}>{card.question}</Text>
+            </>
+          )}
           <Reanimated.View pointerEvents="none" style={[ceremonyStyles.tapCardStreak, streakStyle]} />
           {focused && card.rarity !== 'COM' ? (
             <PanHost gesture={tiltGesture}>
