@@ -14,7 +14,7 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// direct SQL insert reproduces — must be refused before it reaches the Worker.
 ///
 /// Publishing is exercised in preview mode only: mode=publish answers CONFIG_ERROR
-/// before the gate whenever PUBLISH_JOB_QUEUE_URL is empty, and setting that env
+/// before the gate whenever the publish queue env var is empty, and setting that env
 /// var would make Warmup fire a real SQS call — so the gate is verified through the
 /// pure function and preview is verified for the object echo.
 /// </summary>
