@@ -66,11 +66,7 @@ export async function seedNewCardLedgerIfAbsent(slug: string, progress: CardProg
 
 /** paid=false when the uid is already present (any value, including 0) or storage fails; otherwise
  *  writes ledger[uid] = nowMs FIRST and returns paid=true. Never throws. Does not seed. */
-export async function payNewCardIfUnpaid(
-  slug: string,
-  stableUid: string,
-  nowMs: number,
-): Promise<{ paid: boolean; ledger: NewCardLedger }> {
+export async function payNewCardIfUnpaid(slug: string, stableUid: string, nowMs: number): Promise<{ paid: boolean; ledger: NewCardLedger }> {
   let ledger: NewCardLedger = {};
   try {
     const read = await readNewCardLedger(slug);

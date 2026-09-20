@@ -2,9 +2,9 @@ import type { AppliedRewardWalletState, RewardWalletState } from './rewardWallet
 import { applyRewardToWallet, getRewardWalletMessage } from './rewardWallet';
 import type { RatingRewardStep } from './sessionRewards';
 
-// Duplicated here on purpose: rewardResolver must not import summaryMapper (the mapper
-// imports the resolver, so the dependency runs one way only). COPY.reward.noPull
-// (summaryMapper.ts:22) carries the same literal and stays unchanged.
+// Duplicated here on purpose: this module must not import the summary mapper (the
+// mapper imports the resolver, so the dependency runs one way only). COPY.reward.noPull
+// in that mapper carries the same literal and stays unchanged.
 const NO_PULL_LINE = 'No free pulls this run';
 
 export type RewardOutcome = {
@@ -52,7 +52,7 @@ export function accumulateRewardOutcome(prev: RewardOutcome, step: RatingRewardS
  *  newCardPulls>0, dueClearPulls=0 → `+${n} pull${n===1?'':'s'} · ${n} new card${n===1?'':'s'} learned`
  *  newCardPulls=0, dueClearPulls=1 → `+1 · cleared today's due`
  *  both                            → `+${n+1} pulls · ${n} new card${n===1?'':'s'} learned · cleared today's due`
- *  none                            → 'No free pulls this run' (same literal as COPY.reward.noPull, summaryMapper.ts:22, unchanged) */
+ *  none                            → 'No free pulls this run' (same literal as COPY.reward.noPull, unchanged) */
 export function rewardLine(outcome: RewardOutcome): string {
   const n = outcome.newCardPulls;
   if (n > 0 && outcome.dueClearPulls === 0) {
@@ -67,7 +67,7 @@ export function rewardLine(outcome: RewardOutcome): string {
   return NO_PULL_LINE;
 }
 
-/** `+${rewardPulls} pull${…}` or 'Progress saved' — same shape as COPY.reward.badge (summaryMapper.ts:20). */
+/** `+${rewardPulls} pull${…}` or 'Progress saved' — same shape as COPY.reward.badge. */
 export function rewardBadge(outcome: RewardOutcome): string {
   const n = outcome.rewardPulls;
   return n > 0 ? `+${n} pull${n === 1 ? '' : 's'}` : 'Progress saved';
