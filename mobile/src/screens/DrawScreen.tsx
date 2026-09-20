@@ -924,7 +924,7 @@ const styles = StyleSheet.create({
   loadingText: { marginTop: spacing.sm, color: colors.inkSoft, fontSize: typography.bodySmall, fontWeight: '700' },
   stateCard: {
     width: '100%', borderRadius: spacing.cardRadius, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.softMist,
-    padding: spacing.md, shadowColor: colors.shadowSoft, shadowOpacity: 1, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 4,
+    padding: spacing.md, shadowColor: colors.shadowSoft, shadowOpacity: 1, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 4,
   },
   stateTitle: { color: colors.inkSoft, fontSize: typography.title3, lineHeight: 24, fontWeight: '900', textAlign: 'center' },
   stateBody: { marginTop: spacing.xs, color: colors.inkMuted, fontSize: typography.bodySmall, lineHeight: 18, textAlign: 'center' },
@@ -1024,7 +1024,7 @@ const styles = StyleSheet.create({
   neighborTitle: { marginTop: 6, color: colors.inkMuted, fontSize: 9, fontWeight: '800', textAlign: 'center', width: '100%' },
   packStage: { width: '100%', alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm },
   packShadow: {
-    shadowColor: 'rgba(58,35,5,0.32)', shadowOpacity: 0.6, shadowRadius: 22, shadowOffset: { width: 0, height: 14 }, elevation: 10, borderRadius: 22,
+    shadowColor: 'rgba(58,35,5,0.32)', shadowOpacity: 0.6, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 4, borderRadius: 22,
   },
   // 5px wide vertical strip glued to the right side of the pack, rotated 90°
   // outward — invisible when viewed straight on, appears as a thick edge when
