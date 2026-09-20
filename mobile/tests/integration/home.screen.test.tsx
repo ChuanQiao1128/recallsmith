@@ -540,6 +540,15 @@ describe('HomeScreen v9', () => {
   });
 
   it('celebrates a mastered deck only when every card reached the mastery stage', async () => {
+    // The hero title 'Deck mastered 🎉' renders as visible Text; the per-deck
+    // 'Mastered ✓' status only surfaces on the selector tile's accessibility
+    // label (the tile shows a color dot, not a text badge), so it is read there.
+    const masteredLabelCount = (tree: renderer.ReactTestRenderer) =>
+      tree.root.findAll(
+        (node) =>
+          typeof node.props?.accessibilityLabel === 'string' &&
+          node.props.accessibilityLabel.includes('Mastered ✓'),
+      ).length;
     const clear = (extra: Record<string, unknown>) =>
       deckSummariesFixture.map((deck) =>
         deck.slug === 'csharp'
@@ -556,7 +565,7 @@ describe('HomeScreen v9', () => {
     });
     await flush();
     expect(textBlob(tree)).not.toContain('Deck mastered 🎉');
-    expect(textBlob(tree)).not.toContain('Mastered ✓');
+    expect(masteredLabelCount(tree)).toBe(0);
 
     deckSummariesFixture = clear({ masteredCount: 10 });
     let tree2!: renderer.ReactTestRenderer;
@@ -567,7 +576,7 @@ describe('HomeScreen v9', () => {
     });
     await flush();
     expect(textBlob(tree2)).toContain('Deck mastered 🎉');
-    expect(textBlob(tree2)).toContain('Mastered ✓');
+    expect(masteredLabelCount(tree2)).toBeGreaterThan(0);
 
     deckSummariesFixture = clear({ masteredCount: 10, dueToday: 1, plannedToday: 1 });
     let tree3!: renderer.ReactTestRenderer;
@@ -578,6 +587,6 @@ describe('HomeScreen v9', () => {
     });
     await flush();
     expect(textBlob(tree3)).not.toContain('Deck mastered 🎉');
-    expect(textBlob(tree3)).not.toContain('Mastered ✓');
+    expect(masteredLabelCount(tree3)).toBe(0);
   });
 });
