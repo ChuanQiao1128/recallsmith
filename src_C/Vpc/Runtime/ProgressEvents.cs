@@ -95,6 +95,8 @@ public static class ProgressEvents
       var deviceId = body.TryGetProperty("deviceId", out var d) ? d.ToString().Trim() : null;
       var clientVersion = body.TryGetProperty("clientVersion", out var cv) ? cv.ToString().Trim() : null;
       var clientPlatform = body.TryGetProperty("clientPlatform", out var cp) ? cp.ToString().Trim() : null;
+      var clientFeatures = ReadClientFeatures(body); // JSON array text such as ["mcq"], or null
+      var updateId = ReadUpdateId(body);             // trimmed, or null
 
       if (!body.TryGetProperty("events", out var eventsEl) || eventsEl.ValueKind != JsonValueKind.Array)
       {
@@ -363,6 +365,10 @@ public static class ProgressEvents
 
       var userHashParam = P(ref idx);
       parameters.Add(userIdHash);
+      var featuresParam = P(ref idx);
+      parameters.Add(clientFeatures);
+      var updateIdParam = P(ref idx);
+      parameters.Add(updateId);
 
       // The outbox tag `card_format` reads cards.mcq (migration 019). Until that
       // migration has run on a database, Postgres answers 42703 for this text;
@@ -452,7 +458,9 @@ public static class ProgressEvents
               'platform', client_platform,
               'app_version', client_version,
               'offline_queue_delay_ms', offline_queue_delay_ms,
-              'deck_version', deck_version{cardFormatKey}
+              'deck_version', deck_version{cardFormatKey},
+              'client_features', {featuresParam}::jsonb,
+              'update_id', {updateIdParam}::text
             ))
           from ins{cardFormatJoin}
           on conflict (event_id) do nothing
@@ -675,6 +683,38 @@ public static class ProgressEvents
     {
       return res.Error500(ex);
     }
+  }
+
+  private static readonly Regex FeatureTokenRegex = new("^[a-z][a-z0-9_-]{0,31}$", RegexOptions.Compiled);
+  private const int MaxClientFeatures = 16;
+  private const int MaxUpdateIdLength = 64;
+
+  /// <summary>
+  /// clientFeatures → the JSON text of a sorted, distinct array of feature tokens, or null.
+  /// Anything but an array → null. Items that are not strings, or that fail the token grammar
+  /// after trim + lower-case, are ignored; at most 16 survive. An empty result → null, so the
+  /// key is stripped from the payload exactly as when the client sent nothing.
+  /// </summary>
+  private static string? ReadClientFeatures(JsonElement body)
+  {
+    if (!body.TryGetProperty("clientFeatures", out var el) || el.ValueKind != JsonValueKind.Array) return null;
+    var tokens = new SortedSet<string>(StringComparer.Ordinal);
+    foreach (var item in el.EnumerateArray())
+    {
+      if (item.ValueKind != JsonValueKind.String) continue;
+      var token = (item.GetString() ?? "").Trim().ToLowerInvariant();
+      if (FeatureTokenRegex.IsMatch(token)) tokens.Add(token);
+    }
+    if (tokens.Count == 0) return null;
+    return JsonSerializer.Serialize(tokens.Take(MaxClientFeatures));
+  }
+
+  /// <summary>updateId → trimmed string when it is a non-blank JSON string of ≤ 64 chars; otherwise null.</summary>
+  private static string? ReadUpdateId(JsonElement body)
+  {
+    if (!body.TryGetProperty("updateId", out var el) || el.ValueKind != JsonValueKind.String) return null;
+    var id = (el.GetString() ?? "").Trim();
+    return id.Length > 0 && id.Length <= MaxUpdateIdLength ? id : null;
   }
 
   private static string RequireString(JsonElement obj, string prop, string fieldName)
