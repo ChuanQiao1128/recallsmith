@@ -142,7 +142,8 @@ public static class CardsPage
         c.version,
         c.is_deleted    as "isDeleted",
         c.created_at    as "createdAt",
-        c.updated_at    as "updatedAt"
+        c.updated_at    as "updatedAt",
+        c.topic
       from cards c
       """;
 

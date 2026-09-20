@@ -161,7 +161,8 @@ public static class Publish
           code_language as "codeLanguage",
           code_snippet as "codeSnippet",
           real_world_usage as "realWorldUsage",
-          revision
+          revision,
+          topic
         from cards
         where deck_id = $1 and is_deleted = 0
         order by order_in_deck asc, id asc
@@ -188,6 +189,7 @@ public static class Publish
         codeSnippet = Convert.ToString(c.TryGetValue("codeSnippet", out var cs) ? cs : null, CultureInfo.InvariantCulture) ?? string.Empty,
         realWorldUsage = Convert.ToString(c.TryGetValue("realWorldUsage", out var rw) ? rw : null, CultureInfo.InvariantCulture) ?? string.Empty,
         revision = Convert.ToInt32(c.TryGetValue("revision", out var rv) ? (rv ?? 1) : 1, CultureInfo.InvariantCulture),
+        topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
       }).ToList();
 
       var baseDeckJson = new

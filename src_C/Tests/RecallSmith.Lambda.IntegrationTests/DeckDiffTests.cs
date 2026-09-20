@@ -17,7 +17,8 @@ public class DeckDiffTests
     string? codeLanguage = "csharp",
     string codeSnippet = "snippet",
     string realWorldUsage = "usage",
-    int revision = 1)
+    int revision = 1,
+    string? topic = null)
   {
     return new CardExportData
     {
@@ -30,6 +31,7 @@ public class DeckDiffTests
       CodeSnippet = codeSnippet,
       RealWorldUsage = realWorldUsage,
       Revision = revision,
+      Topic = topic,
     };
   }
 
@@ -114,7 +116,7 @@ public class DeckDiffTests
 
   public static IEnumerable<object[]> SingleFieldMutations()
   {
-    // 除 stableUid 之外的 8 个字段，逐一变化都必须触发 updated
+    // 除 stableUid 之外的 9 个字段，逐一变化都必须触发 updated
     yield return new object[] { "orderInDeck", MakeCard("a", orderInDeck: 99) };
     yield return new object[] { "difficulty", MakeCard("a", difficulty: 3) };
     yield return new object[] { "question", MakeCard("a", question: "changed") };
@@ -123,6 +125,7 @@ public class DeckDiffTests
     yield return new object[] { "codeSnippet", MakeCard("a", codeSnippet: "changed") };
     yield return new object[] { "realWorldUsage", MakeCard("a", realWorldUsage: "changed") };
     yield return new object[] { "revision", MakeCard("a", revision: 9) };
+    yield return new object[] { "topic", MakeCard("a", topic: "changed") };
   }
 
   [Theory]
@@ -144,6 +147,17 @@ public class DeckDiffTests
   {
     var prev = new List<CardExportData> { MakeCard("a", codeLanguage: null) };
     var next = new List<CardExportData> { MakeCard("a", codeLanguage: "go") };
+
+    var diff = DeckDiff.Compute(prev, next);
+
+    Assert.Single(diff.Updated);
+  }
+
+  [Fact]
+  public void Compute_TopicNullToValue_TriggersUpdated()
+  {
+    var prev = new List<CardExportData> { MakeCard("a", topic: null) };
+    var next = new List<CardExportData> { MakeCard("a", topic: "t") };
 
     var diff = DeckDiff.Compute(prev, next);
 
