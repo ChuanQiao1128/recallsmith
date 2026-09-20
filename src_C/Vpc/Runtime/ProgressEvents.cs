@@ -364,7 +364,20 @@ public static class ProgressEvents
       var userHashParam = P(ref idx);
       parameters.Add(userIdHash);
 
-      var sql = $"""
+      // The outbox tag `card_format` reads cards.mcq (migration 019). Until that
+      // migration has run on a database, Postgres answers 42703 for this text;
+      // withCardFormat=false is then today's statement, re-run as is. One text
+      // per shape, so auto-prepare (Pg.cs) keeps one plan per shape.
+      string BuildIngestSql(bool withCardFormat)
+      {
+        var cardFormatKey = withCardFormat
+          ? ",\n              'card_format', case when c.mcq is not null then 'mcq' else 'qa' end"
+          : "";
+        var cardFormatJoin = withCardFormat
+          ? "\n          left join decks d on d.slug = ins.deck_slug and d.is_deleted = 0"
+            + "\n          left join cards c on c.deck_id = d.id and c.stable_uid = ins.stable_uid and c.is_deleted = 0"
+          : "";
+        return $"""
         with ensure_user as (
           insert into users (user_sub, email, last_seen_at, last_platform, last_version, last_device_id)
           values ({userSubParam}, {emailParam}, now(), {platformParam}, {versionParam}, {deviceIdParam})
@@ -404,14 +417,14 @@ public static class ProgressEvents
             event_id,
             event_type,
             'card',
-            deck_slug || ':' || stable_uid,
+            deck_slug || ':' || ins.stable_uid,
             jsonb_strip_nulls(jsonb_build_object(
               'event_id', event_id::text,
               'schema_version', schema_version,
               'event_type', event_type,
               'user_id_hash', {userHashParam},
               'deck_slug', deck_slug,
-              'card_stable_uid', stable_uid,
+              'card_stable_uid', ins.stable_uid,
               'card_revision', card_revision,
               'stated_difficulty', stated_difficulty,
               'rating', case rating
@@ -439,9 +452,9 @@ public static class ProgressEvents
               'platform', client_platform,
               'app_version', client_version,
               'offline_queue_delay_ms', offline_queue_delay_ms,
-              'deck_version', deck_version
+              'deck_version', deck_version{cardFormatKey}
             ))
-          from ins
+          from ins{cardFormatJoin}
           on conflict (event_id) do nothing
           returning 1
         ),
@@ -582,17 +595,38 @@ public static class ProgressEvents
           count(*)::int as inserted_count
         from ins;
         """;
+      }
 
       // Timed on its own because this is the claim the design rests on: the
       // whole ingest (users upsert, event insert, outbox, aggregate,
       // last-writer-wins merge) is ONE statement, so it is one round trip.
+      // The 42703 fallback below is a second statement only on a database that
+      // has not run migration 019.
       //
       // sql_ms now brackets nothing but this statement and the string building
       // in front of it, so the two numbers should sit on top of each other in
       // production. A gap opening between them is the shell growing back, and
       // that is the whole reason both are still emitted.
       var swStatement = Stopwatch.StartNew();
-      var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
+      List<Dictionary<string, object?>> rows;
+      try
+      {
+        rows = await DbUtil.QueryAsync(conn, null, BuildIngestSql(withCardFormat: true), parameters);
+      }
+      catch (PostgresException pg) when (pg.SqlState == "42703")
+      {
+        // cards.mcq is not there yet: the failed statement wrote nothing (one
+        // statement, no shell), so today's text is run in its place. Logged so a
+        // production database that has not had migration 019 is visible.
+        Log.Warn(JsonSerializer.Serialize(new
+        {
+          traceId = req.TraceId,
+          impl = ProgressEventsImpl,
+          step = "ingest_card_format_fallback",
+          sqlState = pg.SqlState,
+        }));
+        rows = await DbUtil.QueryAsync(conn, null, BuildIngestSql(withCardFormat: false), parameters);
+      }
       var statementMs = swStatement.Elapsed.TotalMilliseconds;
 
       var sqlMs = swSql.Elapsed.TotalMilliseconds;
