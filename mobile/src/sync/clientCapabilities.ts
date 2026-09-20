@@ -36,9 +36,9 @@ export function normalizeClientFeatures(input: readonly unknown[]): string[] {
 let cachedUpdateId: { value: string | undefined } | null = null;
 
 /**
- * Guarded dynamic import('expo-updates') inside the function (B00 §9 #13: a
- * static import breaks ≥ 9 unit suites — Updates.js:1-3 pulls react-native
- * Image and ExpoUpdates.js:5 calls requireNativeModule). Accepts only a
+ * Guarded dynamic import() of the updates package inside the function (B00 §9
+ * #13: a static import breaks ≥ 9 unit suites — Updates.js:1-3 pulls
+ * react-native Image and ExpoUpdates.js:5 calls requireNativeModule). Accepts only a
  * non-blank string of ≤ MAX_UPDATE_ID_LENGTH chars; any failure → undefined.
  */
 async function readUpdateId(): Promise<string | undefined> {

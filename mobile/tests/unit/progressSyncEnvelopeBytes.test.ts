@@ -154,12 +154,7 @@ describe('progressSync envelope bytes', () => {
       events: expectedEvents(id),
     };
     expect(JSON.stringify(body)).toBe(JSON.stringify(expected));
-    expect(Object.keys(JSON.parse(JSON.stringify(body)))).toEqual([
-      'deviceId',
-      'clientPlatform',
-      'clientVersion',
-      'events',
-    ]);
+    expect(Object.keys(JSON.parse(JSON.stringify(body)))).toEqual(['deviceId', 'clientPlatform', 'clientVersion', 'events']);
     expect(JSON.stringify(body)).not.toContain('clientFeatures');
     expect(JSON.stringify(body)).not.toContain('updateId');
   });
@@ -168,14 +163,7 @@ describe('progressSync envelope bytes', () => {
     capsState.value = { clientFeatures: ['mcq'], updateId: 'abc' };
     const { id, body } = await pushOne('uid-golden');
 
-    expect(Object.keys(JSON.parse(JSON.stringify(body)))).toEqual([
-      'deviceId',
-      'clientPlatform',
-      'clientVersion',
-      'clientFeatures',
-      'updateId',
-      'events',
-    ]);
+    expect(Object.keys(JSON.parse(JSON.stringify(body)))).toEqual(['deviceId', 'clientPlatform', 'clientVersion', 'clientFeatures', 'updateId', 'events']);
     expect(body.clientFeatures).toEqual(['mcq']);
     expect(body.updateId).toBe('abc');
     expect(JSON.stringify(body.events)).toBe(JSON.stringify(expectedEvents(id)));
@@ -185,13 +173,7 @@ describe('progressSync envelope bytes', () => {
     capsState.value = { updateId: 'abc' };
     const { body } = await pushOne('uid-golden');
 
-    expect(Object.keys(JSON.parse(JSON.stringify(body)))).toEqual([
-      'deviceId',
-      'clientPlatform',
-      'clientVersion',
-      'updateId',
-      'events',
-    ]);
+    expect(Object.keys(JSON.parse(JSON.stringify(body)))).toEqual(['deviceId', 'clientPlatform', 'clientVersion', 'updateId', 'events']);
     expect(JSON.stringify(body)).not.toContain('clientFeatures');
     expect(JSON.stringify(body)).not.toContain('"updateId":null');
   });
