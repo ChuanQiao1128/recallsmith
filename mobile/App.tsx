@@ -1,4 +1,5 @@
 import 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-url-polyfill/auto';
 import React, { useEffect, useState } from 'react';
 import { AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -10,6 +11,7 @@ import * as Notifications from 'expo-notifications';
 
 import type { RootStackParamList } from './src/navigation/types';
 import BottomTabBar from './src/components/BottomTabBar';
+import { RootErrorBoundary } from './src/components/RootErrorBoundary';
 import { getMainTabForRouteName } from './src/navigation/mainTabs';
 import SplashScreen from './src/screens/SplashScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
@@ -89,6 +91,19 @@ import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWal
 
 configureAmplifyOnce();
 
+if (__DEV__) {
+  // Reanimated 4 needs react-native-worklets/plugin (applied by babel-preset-expo when the package is
+  // installed). `_WORKLET` is only true on the UI runtime; on the JS runtime a workletized function
+  // carries `__workletHash`. No hash = the plugin did not run and ceremony motion will fall back.
+  const workletProbe = () => {
+    'worklet';
+    return (globalThis as { _WORKLET?: boolean })._WORKLET === true;
+  };
+  if (typeof (workletProbe as unknown as { __workletHash?: number }).__workletHash !== 'number') {
+    console.warn('[recallsmith] react-native-worklets babel plugin is not active');
+  }
+}
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -162,7 +177,9 @@ export default function App() {
   const activeMainTab = getMainTabForRouteName(currentRouteName);
 
   return (
-    <View style={styles.appShell}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <RootErrorBoundary>
+        <View style={styles.appShell}>
       <View style={styles.navigatorShell}>
         <NavigationContainer
           ref={navigationRef}
@@ -272,7 +289,9 @@ export default function App() {
       ) : null}
 
       {forceUpdate ? <ForceUpdateOverlay {...forceUpdate} /> : null}
-    </View>
+        </View>
+      </RootErrorBoundary>
+    </GestureHandlerRootView>
   );
 }
 

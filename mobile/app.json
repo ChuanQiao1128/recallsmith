@@ -3,10 +3,14 @@
     "jsEngine": "hermes",
     "name": "DeveloperCards",
     "slug": "recallsmith",
-    "version": "1.5.0",
+    "scheme": "recallsmith",
+    "version": "1.6.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "plugins": [
+      ["expo-audio", { "microphonePermission": false }]
+    ],
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -14,12 +18,12 @@
     },
     "ios": {
       "icon": "./assets/icon.png",
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "com.timeawake.recallsmith",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
-      "buildNumber": "15"
+      "buildNumber": "16"
     },
     "android": {
       "adaptiveIcon": {
