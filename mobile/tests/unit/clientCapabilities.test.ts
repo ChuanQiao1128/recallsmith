@@ -27,6 +27,15 @@ describe('clientCapabilities', () => {
   beforeEach(() => {
     mockState.reads = 0;
     mockState.updateId = 'ABC-Def';
+    // Re-arm the getter for every case: the real-module case below unmocks
+    // expo-updates and that registration would otherwise persist and starve the
+    // statically-imported module of the counting getter.
+    vi.doMock('expo-updates', () => ({
+      get updateId() {
+        mockState.reads += 1;
+        return mockState.updateId;
+      },
+    }));
     resetClientCapabilitiesForTests();
   });
 
