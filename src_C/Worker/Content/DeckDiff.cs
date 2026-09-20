@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using RecallSmith.Lambda.Worker.S3;
 
 namespace RecallSmith.Lambda.Worker.Content;
@@ -14,7 +16,7 @@ public sealed class DeckDiffResult
 
 /// <summary>
 /// 纯逻辑卡组差异计算（无 IO，可单测）。
-/// updated = stableUid 同时存在于新旧两版且 10 个卡片字段任一不同。
+/// updated = stableUid 同时存在于新旧两版且 11 个卡片字段任一不同。
 /// </summary>
 public static class DeckDiff
 {
@@ -68,6 +70,18 @@ public static class DeckDiff
       || !string.Equals(a.CodeSnippet, b.CodeSnippet, StringComparison.Ordinal)
       || !string.Equals(a.RealWorldUsage, b.RealWorldUsage, StringComparison.Ordinal)
       || a.Revision != b.Revision
-      || !string.Equals(a.Topic, b.Topic, StringComparison.Ordinal);
+      || !string.Equals(a.Topic, b.Topic, StringComparison.Ordinal)
+      || !McqEquals(a.Mcq, b.Mcq);
+  }
+
+  /// <summary>
+  /// Structural jsonb equality. The current side comes from DbUtil as PG text (": " spacing),
+  /// the previous side from compact deck.json — raw strings never match, so compare as trees.
+  /// </summary>
+  public static bool McqEquals(JsonElement? a, JsonElement? b)
+  {
+    if (a is null && b is null) return true;
+    if (a is null || b is null) return false;
+    return JsonNode.DeepEquals(JsonNode.Parse(a.Value.GetRawText()), JsonNode.Parse(b.Value.GetRawText()));
   }
 }

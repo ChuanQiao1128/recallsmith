@@ -1,3 +1,4 @@
+using System.Text.Json;
 using RecallSmith.Lambda.Worker.Content;
 using RecallSmith.Lambda.Worker.S3;
 
@@ -18,7 +19,8 @@ public class DeckDiffTests
     string codeSnippet = "snippet",
     string realWorldUsage = "usage",
     int revision = 1,
-    string? topic = null)
+    string? topic = null,
+    JsonElement? mcq = null)
   {
     return new CardExportData
     {
@@ -32,8 +34,21 @@ public class DeckDiffTests
       RealWorldUsage = realWorldUsage,
       Revision = revision,
       Topic = topic,
+      Mcq = mcq,
     };
   }
+
+  // Compact deck.json bytes, PG-spaced text, and a why-only edit; the helper owns each element.
+  private const string McqCompact =
+    """{"v":1,"options":[{"key":"a","why":null,"text":"queue","correct":true},{"key":"b","why":"no buffer","text":"resize","correct":false},{"key":"c","why":"one shard","text":"stream","correct":false}],"shuffle":true,"qualifier":null}""";
+
+  private const string McqPgSpaced =
+    """{"v": 1, "options": [{"key": "a", "why": null, "text": "queue", "correct": true}, {"key": "b", "why": "no buffer", "text": "resize", "correct": false}, {"key": "c", "why": "one shard", "text": "stream", "correct": false}], "shuffle": true, "qualifier": null}""";
+
+  private const string McqWhyChanged =
+    """{"v":1,"options":[{"key":"a","why":null,"text":"queue","correct":true},{"key":"b","why":"no queue","text":"resize","correct":false},{"key":"c","why":"one shard","text":"stream","correct":false}],"shuffle":true,"qualifier":null}""";
+
+  private static JsonElement Mcq(string json) => JsonSerializer.Deserialize<JsonElement>(json);
 
   [Fact]
   public void Compute_IdenticalDecks_IsNoOp()
@@ -116,7 +131,7 @@ public class DeckDiffTests
 
   public static IEnumerable<object[]> SingleFieldMutations()
   {
-    // 除 stableUid 之外的 9 个字段，逐一变化都必须触发 updated
+    // 除 stableUid 之外的 10 个字段，逐一变化都必须触发 updated
     yield return new object[] { "orderInDeck", MakeCard("a", orderInDeck: 99) };
     yield return new object[] { "difficulty", MakeCard("a", difficulty: 3) };
     yield return new object[] { "question", MakeCard("a", question: "changed") };
@@ -126,6 +141,7 @@ public class DeckDiffTests
     yield return new object[] { "realWorldUsage", MakeCard("a", realWorldUsage: "changed") };
     yield return new object[] { "revision", MakeCard("a", revision: 9) };
     yield return new object[] { "topic", MakeCard("a", topic: "changed") };
+    yield return new object[] { "mcq", MakeCard("a", mcq: Mcq(McqCompact)) };
   }
 
   [Theory]
@@ -186,5 +202,42 @@ public class DeckDiffTests
     Assert.Empty(diff.Added);
     Assert.Empty(diff.Updated);
     Assert.Equal(new[] { "a", "b" }, diff.Deleted);
+  }
+
+  [Fact]
+  public void Compute_SameMcqDifferentSpacing_IsUnchanged()
+  {
+    var prev = new List<CardExportData> { MakeCard("a", mcq: Mcq(McqCompact)) };
+    var next = new List<CardExportData> { MakeCard("a", mcq: Mcq(McqPgSpaced)) };
+
+    var diff = DeckDiff.Compute(prev, next);
+
+    Assert.Empty(diff.Added);
+    Assert.Empty(diff.Updated);
+    Assert.Empty(diff.Deleted);
+  }
+
+  [Fact]
+  public void Compute_McqOptionWhyChange_TriggersUpdated()
+  {
+    var prev = new List<CardExportData> { MakeCard("a", mcq: Mcq(McqCompact)) };
+    var next = new List<CardExportData> { MakeCard("a", mcq: Mcq(McqWhyChanged)) };
+
+    var diff = DeckDiff.Compute(prev, next);
+
+    Assert.Empty(diff.Added);
+    Assert.Single(diff.Updated);
+    Assert.Empty(diff.Deleted);
+  }
+
+  [Fact]
+  public void McqEquals_BothNullEqual_OneNullDifferent()
+  {
+    var x = Mcq(McqCompact);
+
+    Assert.True(DeckDiff.McqEquals(null, null));
+    Assert.False(DeckDiff.McqEquals(null, x));
+    Assert.False(DeckDiff.McqEquals(x, null));
+    Assert.True(DeckDiff.McqEquals(Mcq(McqCompact), Mcq(McqPgSpaced)));
   }
 }
