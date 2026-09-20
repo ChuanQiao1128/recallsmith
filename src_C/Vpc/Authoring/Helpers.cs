@@ -99,6 +99,37 @@ public static class Helpers
     return Validation.EnsureInteger(el.ToString(), fieldName);
   }
 
+  /// <summary>Upper bound on cards.topic in UTF-16 code units; the console's TOPIC_MAX_LENGTH (C06) is the same 80.</summary>
+  public const int TopicMaxLength = 80;
+
+  /// <summary>
+  /// POST body → cards.topic. absent / JSON null / blank → null; string → Trim();
+  /// > 80 chars → ValidationError("topic too long (max 80)");
+  /// any other ValueKind → ValidationError("topic must be a string").
+  /// </summary>
+  public static string? ParseOptionalTopic(JsonElement body)
+  {
+    return body.TryGetProperty("topic", out var el) ? NormalizeTopic(el) : null;
+  }
+
+  /// <summary>Same rules for one element (the PUT spec transform).</summary>
+  public static string? NormalizeTopic(JsonElement el)
+  {
+    switch (el.ValueKind)
+    {
+      case JsonValueKind.Undefined:
+      case JsonValueKind.Null:
+        return null;
+      case JsonValueKind.String:
+        var s = (el.GetString() ?? string.Empty).Trim();
+        if (s.Length == 0) return null;
+        if (s.Length > TopicMaxLength) throw new ValidationError("topic too long (max 80)", "topic");
+        return s;
+      default:
+        throw new ValidationError("topic must be a string", "topic");
+    }
+  }
+
   private static async Task<bool> DeckPerm(NpgsqlConnection conn, string adminSub, long deckId, string column)
   {
     var sql = $"""

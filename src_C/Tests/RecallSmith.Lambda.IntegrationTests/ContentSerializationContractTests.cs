@@ -155,4 +155,31 @@ public class ContentSerializationContractTests
       """{"slug":"s","title":"T","locale":"en-US","deckType":1,"version":"20260428T075215Z-5ba0392a","totalCards":1,"cards":[""" + CardJson + "]}",
       json);
   }
+
+  [Fact]
+  public void Card_WithTopic_AppendsTopicLast()
+  {
+    var card = MakeCard();
+    card.Topic = "t";
+
+    var json = ContentJson.Serialize(card);
+
+    Assert.Equal(
+      """{"stableUid":"u1","orderInDeck":1,"difficulty":2,"question":"q","explanation":"e","codeLanguage":"csharp","codeSnippet":"c","realWorldUsage":"r","revision":1,"topic":"t"}""",
+      json);
+    // The golden card plus one appended key — nothing in front of it moved.
+    Assert.Equal(CardJson[..^1] + ""","topic":"t"}""", json);
+  }
+
+  [Fact]
+  public void Card_NullTopic_KeepsGoldenBytes()
+  {
+    var card = MakeCard();
+    card.Topic = null;
+
+    Assert.Equal(CardJson, ContentJson.Serialize(card));
+
+    var chunk = new DeckChunkModel { SchemaVersion = 1, Slug = "s", Version = "to-2", Seq = 0, Cards = new List<CardExportData> { card } };
+    Assert.DoesNotContain("topic", ContentJson.Serialize(chunk), StringComparison.Ordinal);
+  }
 }

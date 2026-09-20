@@ -126,7 +126,8 @@ public class PublishJobProcessor : IPublishJobProcessor
         code_language as "codeLanguage",
         code_snippet as "codeSnippet",
         real_world_usage as "realWorldUsage",
-        revision
+        revision,
+        topic
       FROM cards
       WHERE deck_id = $1 AND is_deleted = 0
       ORDER BY order_in_deck ASC, id ASC
@@ -145,6 +146,7 @@ public class PublishJobProcessor : IPublishJobProcessor
       CodeSnippet = Convert.ToString(c.TryGetValue("codeSnippet", out var cs) ? cs : null, CultureInfo.InvariantCulture) ?? string.Empty,
       RealWorldUsage = Convert.ToString(c.TryGetValue("realWorldUsage", out var rw) ? rw : null, CultureInfo.InvariantCulture) ?? string.Empty,
       Revision = Convert.ToInt32(c.TryGetValue("revision", out var rv) ? (rv ?? 1) : 1, CultureInfo.InvariantCulture),
+      Topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
     }).ToList();
 
     return new DeckExportData

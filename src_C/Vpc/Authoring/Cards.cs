@@ -49,7 +49,8 @@ public static class Cards
             c.version,
             c.is_deleted    as "isDeleted",
             c.created_at    as "createdAt",
-            c.updated_at    as "updatedAt"
+            c.updated_at    as "updatedAt",
+            c.topic
           from cards c
           """;
 
@@ -131,18 +132,20 @@ public static class Cards
         var difficultyInt = body.TryGetProperty("difficulty", out var difEl) ? Helpers.ParseOptionalInteger(difEl, "difficulty") : null;
         var revisionInt = body.TryGetProperty("revision", out var revEl) ? Helpers.ParseOptionalInteger(revEl, "revision") : null;
         var versionInt = body.TryGetProperty("version", out var verEl) ? Helpers.ParseOptionalInteger(verEl, "version") : null;
+        var topic = Helpers.ParseOptionalTopic(body);
 
         const string sql = """
           insert into cards (
             deck_id, stable_uid, question, explanation, code_snippet, code_language,
-            real_world_usage, difficulty, order_in_deck, revision, version
+            real_world_usage, difficulty, order_in_deck, revision, version, topic
           )
           values (
             $1,$2,$3,$4,$5,$6,$7,
             coalesce($8,2),
             $9,
             coalesce($10,1),
-            coalesce($11,1)
+            coalesce($11,1),
+            $12
           )
           returning
             id,
@@ -159,7 +162,8 @@ public static class Cards
             version,
             is_deleted    as "isDeleted",
             created_at    as "createdAt",
-            updated_at    as "updatedAt";
+            updated_at    as "updatedAt",
+            topic;
           """;
 
         var parameters = new object?[]
@@ -175,6 +179,7 @@ public static class Cards
           orderInDeckInt,
           revisionInt,
           versionInt,
+          topic,
         };
 
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
@@ -245,6 +250,7 @@ public static class Cards
           new("difficulty", "difficulty", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "difficulty")),
           new("orderInDeck", "order_in_deck", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "orderInDeck")),
           new("revision", "revision", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "revision")),
+          new("topic", "topic", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.NormalizeTopic(v)),
           new("isDeleted", "is_deleted", v => Helpers.ParseBoolean(v, false) ? 1 : 0),
         };
 
@@ -280,7 +286,8 @@ public static class Cards
             version,
             is_deleted    as "isDeleted",
             created_at    as "createdAt",
-            updated_at    as "updatedAt";
+            updated_at    as "updatedAt",
+            topic;
           """;
 
         parameters.Add(idInt);
