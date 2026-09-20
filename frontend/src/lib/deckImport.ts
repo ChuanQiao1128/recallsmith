@@ -8,6 +8,7 @@
 //   # deck: csharp-backend-fundamentals
 //
 //   ## cs-async-001 | d2
+//   TOPIC: <one line, optional, max 80 chars>
 //   Q:
 //   <question lines>
 //   A:
@@ -41,6 +42,8 @@ export interface DeckCardContent {
   codeSnippet: string | null;
   codeLanguage: string | null;
   realWorldUsage: string | null;
+  /** Optional grouping label (server column cards.topic). ABSENT, never null, when the card has no TOPIC: line. */
+  topic?: string;
 }
 
 export interface ParsedCard extends DeckCardContent {
@@ -63,7 +66,9 @@ export type ImportIssueCode =
   | 'MISSING_QUESTION'
   | 'MISSING_ANSWER'
   | 'TEXT_BEFORE_CARD'
-  | 'TEXT_BEFORE_SECTION';
+  | 'TEXT_BEFORE_SECTION'
+  | 'BAD_TOPIC'
+  | 'DUPLICATE_TOPIC';
 
 export interface ImportIssue {
   code: ImportIssueCode;
@@ -95,7 +100,8 @@ export type ComparableField =
   | 'explanation'
   | 'codeSnippet'
   | 'codeLanguage'
-  | 'realWorldUsage';
+  | 'realWorldUsage'
+  | 'topic';
 
 export interface ImportCreate {
   kind: 'create';
@@ -139,6 +145,12 @@ const QUESTION_MARKER = /^Q:[ \t]?(.*)$/;
 const ANSWER_MARKER = /^A:[ \t]?(.*)$/;
 const CODE_MARKER = /^CODE:[ \t]?(.*)$/;
 const USAGE_MARKER = /^USAGE:[ \t]?(.*)$/;
+// Loose on purpose (MCQ plan §4.4): a column-0 "TOPIC:" line is always this marker,
+// and the payload is validated afterwards, so a bad topic is reported instead of being
+// glued to the open section by the catch-all at the end of the loop.
+const TOPIC_MARKER = /^TOPIC:(.*)$/;
+/** Same limit as the server's Helpers.ParseOptionalTopic (C05): measured on the trimmed payload. */
+export const TOPIC_MAX_LENGTH = 80;
 
 /**
  * The card uid rule moved to cardRules.ts (UID_PATTERN + MAX_UID_LENGTH,
@@ -167,6 +179,9 @@ interface CardDraft {
   difficulty: number;
   sections: Partial<Record<SectionKind, Section>>;
   codeLanguage: string | null;
+  topic: string | null;
+  topicSeen: boolean;
+  topicInvalid: boolean;
 }
 
 function isBlank(line: string): boolean {
@@ -240,7 +255,7 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
         d.stableUid,
       );
     }
-    if (!question || !explanation) return;
+    if (!question || !explanation || d.topicInvalid) return;
 
     const codeSnippet = sectionText(d.sections.code) || null;
     const realWorldUsage = sectionText(d.sections.usage) || null;
@@ -255,6 +270,7 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       // language is legal (the format allows a bare `CODE:`).
       codeLanguage: codeSnippet ? d.codeLanguage : null,
       realWorldUsage,
+      ...(d.topic !== null ? { topic: d.topic } : {}),
       orderInDeck: cards.length * 10,
       sourceLine: d.headerLine,
     });
@@ -339,6 +355,9 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
         difficulty,
         sections: {},
         codeLanguage: null,
+        topic: null,
+        topicSeen: false,
+        topicInvalid: false,
       };
       currentSection = null;
       continue;
@@ -377,6 +396,38 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
           'Text outside any card. Cards start with "## <stable-uid> | d<0-4>".',
         );
       }
+      continue;
+    }
+
+    const topicMatch = TOPIC_MARKER.exec(raw);
+    if (topicMatch) {
+      const topic = topicMatch[1].trim();
+      if (draft.topicSeen) {
+        pushIssue(
+          'DUPLICATE_TOPIC',
+          lineNo,
+          `Card "${draft.stableUid}" repeats the TOPIC: line; the first one wins.`,
+          draft.stableUid,
+        );
+        continue;
+      }
+      draft.topicSeen = true;
+      if (!topic) {
+        pushIssue('BAD_TOPIC', lineNo, `Card "${draft.stableUid}" has an empty TOPIC: line.`, draft.stableUid);
+        draft.topicInvalid = true;
+        continue;
+      }
+      if (topic.length > TOPIC_MAX_LENGTH) {
+        pushIssue(
+          'BAD_TOPIC',
+          lineNo,
+          `Card "${draft.stableUid}" has a topic that is longer than ${TOPIC_MAX_LENGTH} characters.`,
+          draft.stableUid,
+        );
+        draft.topicInvalid = true;
+        continue;
+      }
+      draft.topic = topic;
       continue;
     }
 
@@ -523,6 +574,7 @@ const COMPARABLE_FIELDS: readonly ComparableField[] = [
   'codeSnippet',
   'codeLanguage',
   'realWorldUsage',
+  'topic',
 ];
 
 /**
@@ -660,6 +712,7 @@ export function serializeDeckMarkdown(
 
   for (const card of cards) {
     out.push(`## ${card.stableUid} | d${card.difficulty}`);
+    if (card.topic) out.push(`TOPIC: ${card.topic}`);
     out.push('Q:');
     out.push(card.question);
     out.push('A:');

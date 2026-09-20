@@ -392,6 +392,7 @@ export async function createCard(params: {
   revision?: number;
   stableUid?: string;
   realWorldUsage?: string;
+  topic?: string;
 }): Promise<ApiResult<Card>> {
   try {
     const body: Record<string, unknown> = {
@@ -404,6 +405,7 @@ export async function createCard(params: {
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
     if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
+    if (params.topic !== undefined) body.topic = params.topic;
     if (params.revision !== undefined) body.revision = params.revision;
     body.stableUid = ensureStableUid(params.stableUid);
 
@@ -436,6 +438,7 @@ export async function updateCard(params: {
   // it when deciding update vs unchanged, so leaving it out here would make a
   // USAGE edit replan forever and break the "re-import is a no-op" promise.
   realWorldUsage?: string;
+  topic?: string;
   difficulty?: number;
   orderInDeck?: number;
   // Distinct from expectedVersion. That one is the optimistic-concurrency
@@ -467,6 +470,7 @@ export async function updateCard(params: {
     if (params.codeSnippet !== undefined) body.codeSnippet = params.codeSnippet;
     if (params.codeLanguage !== undefined) body.codeLanguage = params.codeLanguage;
     if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
+    if (params.topic !== undefined) body.topic = params.topic;
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
     if (params.revision !== undefined) body.revision = params.revision;
