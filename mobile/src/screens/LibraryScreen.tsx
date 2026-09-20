@@ -60,6 +60,7 @@ export function LibraryScreen({ navigation, route }: Props) {
   const [ownedSet, setOwnedSet] = useState<Set<string> | null>(null);
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [filterOpen, setFilterOpen] = useState(false);
+  const [topicFilter, setTopicFilter] = useState<string | null>(null);
   // A pull grants ten cards; highlighting one of them was never the ask.
   const [highlightedUids, setHighlightedUids] = useState<readonly string[]>([]);
   // Wallet state — drives the empty-collection banner's CTA target.
@@ -171,8 +172,9 @@ export function LibraryScreen({ navigation, route }: Props) {
       decks: deckOptions,
       selectedDeckSlug: selectedSlug,
       ownedSet,
+      topicFilter,
     });
-  }, [deck, progress, filter, deckOptions, selectedSlug, ownedSet]);
+  }, [deck, progress, filter, deckOptions, selectedSlug, ownedSet, topicFilter]);
 
   const visibleCards = vm?.cards ?? [];
 
@@ -323,7 +325,7 @@ export function LibraryScreen({ navigation, route }: Props) {
           <FlatList
             ref={listRef}
             data={visibleCards}
-            key={`${numColumns}-${filter}-${selectedSlug ?? 'none'}`}
+            key={`${numColumns}-${filter}-${topicFilter ?? 'all'}-${selectedSlug ?? 'none'}`}
             numColumns={numColumns}
             testID="library-card-grid"
             contentContainerStyle={styles.container}
@@ -364,6 +366,9 @@ export function LibraryScreen({ navigation, route }: Props) {
                   setFilter(nextFilter);
                   setFilterOpen(false);
                 }}
+                topics={vm.topics}
+                topicFilter={vm.topicFilter}
+                onSelectTopic={(key) => setTopicFilter(key === 'all' ? null : key)}
                 // Brand-new user CTA — banner only renders when
                 // ownedCount === 0. Wallet-aware routing:
                 //   wallet > 0 → Draw (open the pack right now)
@@ -392,7 +397,7 @@ export function LibraryScreen({ navigation, route }: Props) {
                 </Text>
                 <Pressable
                   style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
-                  onPress={() => setFilter('all')}
+                  onPress={() => { setFilter('all'); setTopicFilter(null); }}
                   testID="library-empty-cta"
                 >
                   <Text style={styles.retryText} numberOfLines={1}>
