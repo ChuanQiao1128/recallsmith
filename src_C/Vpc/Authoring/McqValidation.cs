@@ -22,7 +22,7 @@ public sealed class McqValidationError : Exception
 }
 
 /// <summary>
-/// Pure validator / canonicaliser for the optional MCQ overlay (C00 §2.9.1). No Npgsql, no DbUtil,
+/// Pure validator / canonicaliser for the optional MCQ overlay (C00 §2.9.1). No database access and
 /// no I/O: it turns a client blob into the pinned compact JSON in PostgreSQL's jsonb key order so a
 /// round trip through the column changes only PG's spacing.
 /// </summary>

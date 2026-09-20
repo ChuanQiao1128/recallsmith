@@ -180,8 +180,8 @@ public static class Helpers
 
   /// <summary>
   /// A jsonb column arrives from DbUtil.QueryAsync as a .NET string in PG text form (DbUtil.cs:24 GetValue;
-  /// parameters bind via AddWithValue, :63-68). Returns an OWN copy (JsonSerializer.Deserialize&lt;JsonElement&gt;(s)),
-  /// never JsonDocument.Parse(...).RootElement. null / absent → null; an already-converted JsonElement is returned as is.
+  /// parameters bind via AddWithValue, :63-68). Returns an OWN copy via JsonSerializer.Deserialize&lt;JsonElement&gt;(s),
+  /// not a RootElement off a disposed document. null / absent → null; an already-converted JsonElement is returned as is.
   /// </summary>
   public static JsonElement? JsonbElement(IReadOnlyDictionary<string, object?> row, string key)
   {

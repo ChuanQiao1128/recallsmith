@@ -192,8 +192,7 @@ public static class Cards
           orderInDeckInt,
           revisionInt,
           versionInt,
-          topic,
-          mcq,
+          topic, mcq,
         };
 
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
