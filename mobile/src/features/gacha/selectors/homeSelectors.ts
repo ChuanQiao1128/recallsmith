@@ -112,16 +112,11 @@ function buildRoutePreview(selectedDeck: DeckSummary | null): RoutePreviewNode[]
   }
 
   const due = selectedDeck.dueToday;
-  const fresh = Math.min(selectedDeck.newToday, 2);
-  const total = Math.max(
-    1,
-    Math.min(
-      SESSION_MAIN_ROUTE_DEFAULT,
-      Math.max(due, 1) + (due === 0 ? fresh : Math.min(fresh, 1)),
-    ),
-  );
+  // Same formula as buildChallengeRoute (planner/sessionBuilder.ts): R6 removed the 1–2 new-card
+  // quota, so Home must preview the length the session will actually have.
+  const total = Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, due + selectedDeck.newToday));
   const hasBoss = due >= 3;
-  const hasElite = due >= 2 || fresh >= 1;
+  const hasElite = due >= 2 || selectedDeck.newToday >= 1;
 
   const nodes: RoutePreviewNode[] = [];
 
@@ -195,7 +190,7 @@ function toWalletState(wallet?: RewardWalletState | null): RewardWalletState {
   };
 }
 
-function buildDrawVM(wallet?: RewardWalletState | null): HomeDrawVM {
+function buildDrawVM(wallet?: RewardWalletState | null, selectedDeck?: DeckSummary | null): HomeDrawVM {
   const safeWallet = toWalletState(wallet);
 
   if (
@@ -222,9 +217,19 @@ function buildDrawVM(wallet?: RewardWalletState | null): HomeDrawVM {
     };
   }
 
+  // F10 / R1 / R2. `state` stays 'locked' in all three: the label is the only thing the day
+  // changes. The first line is honest because the economy floor (economyFloor.ts, ECONOMY_FLOOR_GRANT)
+  // pays exactly one pull on the next day a caught-up account with an empty wallet loads Home.
+  const deck = selectedDeck?.canStudy ? selectedDeck : null;
+  const caughtUp = !!deck && deck.dueToday + deck.newToday === 0;
+  const dueOnly = !!deck && deck.newToday === 0 && deck.dueToday > 0;
   return {
     state: 'locked',
-    label: 'Review today’s cards to earn a pull',
+    label: caughtUp
+      ? 'No cards due · a free pull returns tomorrow'
+      : dueOnly
+        ? 'Clear today’s due cards to earn a pull'
+        : 'Learn a new card to earn a pull',
   };
 }
 
@@ -421,8 +426,9 @@ function buildHeroCopy(params: {
   selectedDeck: DeckSummary | null;
   counts: TodayCounts;
   hasSignedInUser: boolean;
+  draw: HomeDrawVM;
 }): { eyebrow: string; title: string; subtitle: string; helper: string } {
-  const { statusKind, selectedDeck, counts, hasSignedInUser } = params;
+  const { statusKind, selectedDeck, counts, hasSignedInUser, draw } = params;
 
   if (statusKind === 'error') {
     return {
@@ -464,7 +470,10 @@ function buildHeroCopy(params: {
       return {
         eyebrow: 'Today',
         title: 'Minimum goal already done',
-        subtitle: 'You can stop here or spend pulls and keep momentum.',
+        subtitle:
+          draw.state === 'locked'
+            ? 'Minimum goal done. Each new card you learn earns a pull.'
+            : 'You can stop here or spend pulls and keep momentum.',
         helper: `${remaining} card${remaining === 1 ? '' : 's'} still available for full clear.`,
       };
     }
@@ -472,7 +481,10 @@ function buildHeroCopy(params: {
       return {
         eyebrow: 'Today',
         title: 'Full clear completed',
-        subtitle: 'Great close. Pulls are ready when you want them.',
+        subtitle:
+          draw.state === 'locked'
+            ? 'Route done. Learn a new card to earn your next pull.'
+            : 'Great close. Pulls are ready when you want them.',
         helper: 'No remaining route pressure in this deck.',
       };
     case 'due_only':
@@ -513,7 +525,7 @@ function buildHeroCopy(params: {
         eyebrow: 'Today',
         title,
         subtitle: hasTodayWork
-          ? `Review today’s cards to earn pulls · at most ${SESSION_MAIN_ROUTE_DEFAULT} cards.`
+          ? `Each new card you learn earns a pull · up to ${SESSION_MAIN_ROUTE_DEFAULT} cards a run.`
           : 'Nothing due today; review later or browse your decks.',
         helper: hasTodayWork
           ? `Clear ${SESSION_MIN_GOAL} node to keep momentum. Full run stays capped at ${SESSION_MAIN_ROUTE_DEFAULT} nodes.`
@@ -636,7 +648,7 @@ export function buildHomeVM(params: {
     deckSummaries.find((deck) => deck.slug === selectedSlug) ?? deckSummaries[0] ?? null;
   const counts = buildCounts(deckSummaries, selectedDeck);
   const routePreview = buildRoutePreview(selectedDeck);
-  const draw = buildDrawVM(wallet);
+  const draw = buildDrawVM(wallet, selectedDeck);
   const statusKind = inferStatusKind({
     selectedDeck,
     draw,
@@ -684,6 +696,7 @@ export function buildHomeVM(params: {
     selectedDeck,
     counts,
     hasSignedInUser,
+    draw,
   });
 
   const decks = buildDeckRows({
