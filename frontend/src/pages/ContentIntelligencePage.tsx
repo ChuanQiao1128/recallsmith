@@ -136,8 +136,8 @@ export function ContentIntelligencePage() {
   // body. Two ways to silence that were tried and rejected before this one:
   //
   //   * Wrapping the call — `async function run() { await load(); } void run()`
-  //     — makes the rule pass while changing nothing at all. That is an
-  //     eslint-disable with extra steps, and the next reader has no way to
+  //     — makes the rule pass while changing nothing at all. That is a lint
+  //     suppression with extra steps, and the next reader has no way to
   //     tell it was deliberate.
   //   * Duplicating the fetch body into the effect and keeping `load` for the
   //     Refresh button leaves two copies of one request to drift apart.
