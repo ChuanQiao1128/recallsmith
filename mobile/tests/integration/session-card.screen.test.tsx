@@ -158,6 +158,30 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
   })),
 }));
 
+vi.mock('../../src/features/gacha/rewards/sessionRewards', () => {
+  const PAID_STEP = {
+    newCardPaid: true,
+    dueClearPaid: false,
+    pulls: 1,
+    walletBefore: { availablePulls: 0, reservePulls: 0 },
+    walletAfter: { availablePulls: 1, reservePulls: 0 },
+    applied: { availablePulls: 1, reservePulls: 0, appliedToAvailable: 1, appliedToReserve: 0, dropped: 0 },
+    newCardsLearnedToday: 1,
+  };
+  const ZERO_STEP = {
+    newCardPaid: false,
+    dueClearPaid: false,
+    pulls: 0,
+    walletBefore: null,
+    walletAfter: null,
+    applied: null,
+    newCardsLearnedToday: 0,
+  };
+  return {
+    settleRatingReward: vi.fn(async (input: any) => (input.rating === 'again' ? ZERO_STEP : PAID_STEP)),
+  };
+});
+
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { resolveDeckBySlug } from '../../src/content/deckRepository';
 import { pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
@@ -276,6 +300,7 @@ describe('SessionCardScreen', () => {
       minimumGoal: 1,
       dueCount: 0,
       streakEarned: true,
+      reward: expect.any(Object),
     });
   });
 
@@ -314,7 +339,7 @@ describe('SessionCardScreen', () => {
     }));
   });
 
-  it('computes settlement reward pulls through the reward resolver', async () => {
+  it('settles the rating reward and hands the outcome to Settlement', async () => {
     vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 3, minimumGoal: 2 }) as any);
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
 
@@ -345,7 +370,7 @@ describe('SessionCardScreen', () => {
     });
 
     expect(navigation.replace).toHaveBeenCalledWith('Settlement', expect.objectContaining({
-      rewardPulls: 0,
+      rewardPulls: 1,
       sessionDone: 1,
     }));
   });

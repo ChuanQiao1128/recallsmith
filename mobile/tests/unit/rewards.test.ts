@@ -24,7 +24,7 @@ import {
   seedStarterPullsIfNeeded,
   STARTER_PULL_GRANT,
 } from '../../src/features/gacha/rewards/rewardWallet';
-import { computeSessionRewardPulls, resolveSessionReward } from '../../src/features/gacha/rewards/rewardResolver';
+import { resolveSessionReward } from '../../src/features/gacha/rewards/rewardResolver';
 
 describe('reward wallet', () => {
   beforeEach(() => {
@@ -32,10 +32,10 @@ describe('reward wallet', () => {
   });
 
   it('fills available pulls first, then reserve, then drops overflow', () => {
-    const wallet = applyRewardToWallet({ availablePulls: 29, reservePulls: 4 }, 3);
+    const wallet = applyRewardToWallet({ availablePulls: 59, reservePulls: 4 }, 3);
 
     expect(wallet).toMatchObject({
-      availablePulls: 30,
+      availablePulls: 60,
       reservePulls: 5,
       appliedToAvailable: 1,
       appliedToReserve: 1,
@@ -44,9 +44,9 @@ describe('reward wallet', () => {
   });
 
   it('drops rewards when both available and reserve are already full', () => {
-    const wallet = applyRewardToWallet({ availablePulls: 30, reservePulls: 5 }, 2);
+    const wallet = applyRewardToWallet({ availablePulls: 60, reservePulls: 5 }, 2);
 
-    expect(wallet.availablePulls).toBe(30);
+    expect(wallet.availablePulls).toBe(60);
     expect(wallet.reservePulls).toBe(5);
     expect(wallet.dropped).toBe(2);
   });
@@ -57,32 +57,17 @@ describe('reward wallet', () => {
       sessionLimit: 4,
       minimumGoal: 1,
       wallet: { availablePulls: 3, reservePulls: 0 },
+      reward: null,
     });
 
     expect(reward.rewardPulls).toBe(0);
-    expect(reward.rewardMessage).toMatch(/progress saved/i);
-  });
-
-  // v3 reward calibration: only full clear earns pulls (was tiered
-  // formula with 1 pull for min, 2 for full). With 5-card sessions the
-  // run is short enough that completion is the right unit of reward.
-  it('computes no pulls when the session is empty', () => {
-    expect(computeSessionRewardPulls({ sessionDone: 0, sessionLimit: 5, minimumGoal: 1 })).toBe(0);
-  });
-
-  it('computes no pulls for a partial run (below full clear)', () => {
-    expect(computeSessionRewardPulls({ sessionDone: 3, sessionLimit: 5, minimumGoal: 1 })).toBe(0);
-    expect(computeSessionRewardPulls({ sessionDone: 4, sessionLimit: 5, minimumGoal: 1 })).toBe(0);
-  });
-
-  it('computes one pull for a full clear', () => {
-    expect(computeSessionRewardPulls({ sessionDone: 5, sessionLimit: 5, minimumGoal: 1 })).toBe(1);
+    expect(reward.rewardMessage).toMatch(/no free pulls this run/i);
   });
 
   it('reports whether the wallet can still accept more pulls', () => {
     expect(canAcceptMorePulls({ availablePulls: 0, reservePulls: 0 })).toBe(true);
-    expect(canAcceptMorePulls({ availablePulls: 30, reservePulls: 4 })).toBe(true);
-    expect(canAcceptMorePulls({ availablePulls: 30, reservePulls: 5 })).toBe(false);
+    expect(canAcceptMorePulls({ availablePulls: 60, reservePulls: 4 })).toBe(true);
+    expect(canAcceptMorePulls({ availablePulls: 60, reservePulls: 5 })).toBe(false);
   });
 
   // Brand-new-user starter grant — seeds 3 pulls on first boot so a

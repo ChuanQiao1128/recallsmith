@@ -48,7 +48,7 @@ describe('buildHomeVM CTA kinds', () => {
       errorMessage: kind === 'error' ? 'boom' : null,
       wallet:
         kind === 'wallet_full'
-          ? { availablePulls: 30, reservePulls: 5 }
+          ? { availablePulls: 60, reservePulls: 5 }
           : { availablePulls: 0, reservePulls: 0 },
     });
 
@@ -132,7 +132,7 @@ describe('buildHomeVM CTA kinds', () => {
       selectedSlug: 'csharp',
       hasSignedInUser: true,
       deckSummaries: [makeDeck({ dueToday: 2, newToday: 1 })],
-      wallet: { availablePulls: 30, reservePulls: 5 },
+      wallet: { availablePulls: 60, reservePulls: 5 },
     });
 
     expect(vm.cta.kind).toBe('wallet_full');
@@ -236,7 +236,7 @@ describe('buildHomeVM CTA kinds', () => {
       selectedSlug: 'csharp',
       hasSignedInUser: true,
       deckSummaries: [makeDeck({ dueToday: 0, newToday: 0 })],
-      wallet: { availablePulls: 30, reservePulls: 5 },
+      wallet: { availablePulls: 60, reservePulls: 5 },
     });
 
     expect(vm.draw.state).toBe('wallet-full');

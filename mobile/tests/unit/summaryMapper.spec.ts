@@ -16,6 +16,7 @@ describe('summaryMapper wallet scenarios', () => {
       minimumGoal: 1,
       dueCount: 2,
       wallet: { availablePulls: 0, reservePulls: 0 },
+      reward: null,
     });
 
     expect(summary.vm.reward.walletBefore).toEqual({ available: 0, reserve: 0 });
@@ -25,7 +26,7 @@ describe('summaryMapper wallet scenarios', () => {
     expect(summary.vm.reward.body).toContain('0 ready to use');
   });
 
-  it('maps mid-wallet state (1-29) with no pull on a partial run', () => {
+  it('maps mid-wallet state with no pull when the run earned nothing', () => {
     const summary = buildSessionSummaryVM({
       deckTitle: 'C# Interview',
       sessionDone: 1,
@@ -33,6 +34,7 @@ describe('summaryMapper wallet scenarios', () => {
       minimumGoal: 1,
       dueCount: 1,
       wallet: { availablePulls: 12, reservePulls: 0 },
+      reward: null,
     });
 
     expect(summary.vm.reward.walletAfter).toEqual({ available: 12, reserve: 0 });
@@ -40,21 +42,31 @@ describe('summaryMapper wallet scenarios', () => {
     expect(summary.vm.reward.usePullsLabel).toBe('Use 12 pulls');
   });
 
-  it('maps 29 → 30 with full-clear copy', () => {
+  it('maps 59 → 60 with one new card learned', () => {
     const summary = buildSessionSummaryVM({
       deckTitle: 'C# Interview',
       sessionDone: 4,
       sessionLimit: 4,
       minimumGoal: 1,
       dueCount: 0,
-      wallet: { availablePulls: 29, reservePulls: 0 },
+      wallet: { availablePulls: 59, reservePulls: 0 },
+      reward: {
+        newCardPulls: 1,
+        newCardUids: ['u1'],
+        dueClearPulls: 0,
+        rewardPulls: 1,
+        applied: 1,
+        dropped: 0,
+        walletBefore: { availablePulls: 59, reservePulls: 0 },
+        walletAfter: { availablePulls: 60, reservePulls: 0 },
+      },
     });
 
     expect(summary.vm.progress.completionLabel).toBe("Cleared today's run.");
     // +1 fits exactly in the remaining available room, so nothing spills into reserve.
-    expect(summary.vm.reward.walletAfter).toEqual({ available: 30, reserve: 0 });
-    expect(summary.vm.reward.body).toContain('+1 free pull added');
-    expect(summary.vm.reward.body).toContain('30 ready to use');
+    expect(summary.vm.reward.walletAfter).toEqual({ available: 60, reserve: 0 });
+    expect(summary.vm.reward.body).toContain('+1 pull · 1 new card learned');
+    expect(summary.vm.reward.body).toContain('60 ready to use');
   });
 
   it('maps wallet-full state with reserve-pending copy', () => {
@@ -64,10 +76,20 @@ describe('summaryMapper wallet scenarios', () => {
       sessionLimit: 4,
       minimumGoal: 1,
       dueCount: 0,
-      wallet: { availablePulls: 30, reservePulls: 5 },
+      wallet: { availablePulls: 60, reservePulls: 5 },
+      reward: {
+        newCardPulls: 1,
+        newCardUids: ['u1'],
+        dueClearPulls: 0,
+        rewardPulls: 1,
+        applied: 0,
+        dropped: 1,
+        walletBefore: { availablePulls: 60, reservePulls: 5 },
+        walletAfter: { availablePulls: 60, reservePulls: 5 },
+      },
     });
 
-    expect(summary.vm.reward.walletAfter).toEqual({ available: 30, reserve: 5 });
+    expect(summary.vm.reward.walletAfter).toEqual({ available: 60, reserve: 5 });
     expect(summary.vm.reward.body).toContain('Free pulls full · 5 pending in reserve');
   });
 
@@ -122,7 +144,7 @@ describe('summaryMapper wallet scenarios', () => {
     for (const scenario of scenarios) {
       const summary = buildSessionSummaryVM({
         deckTitle: 'C# Interview',
-        wallet: { availablePulls: 30, reservePulls: 5 },
+        wallet: { availablePulls: 60, reservePulls: 5 },
         ...scenario,
       });
       expect(summary.vm.nextAction.primary.label.length).toBeLessThanOrEqual(22);
