@@ -105,8 +105,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(200, 136, 58, 0.28)',
     shadowColor: colors.ink,
     shadowOpacity: 0.16,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
     marginBottom: spacing.sm,
   },
   topRow: {

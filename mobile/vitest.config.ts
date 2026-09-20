@@ -27,7 +27,7 @@ export default defineConfig({
     globals: true,
     // Defines __DEV__, which expo-modules-core reads at module scope. See the
     // file for why this is a setup file rather than a `define` entry.
-    setupFiles: ['./tests/setup/globals.ts'],
+    setupFiles: ['./tests/setup/globals.ts', './tests/setup/ceremony.ts'],
     passWithNoTests: false,
     coverage: {
       reporter: ['text', 'html'],

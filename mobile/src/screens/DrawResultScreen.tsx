@@ -4,6 +4,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   View,
 } from 'react-native';
@@ -18,22 +19,33 @@ import { clearPermissionPromptPending, isPermissionPromptPending } from './Permi
 import { colors } from '../theme/colors';
 import {
   PAGE_GRADIENT_LIGHT,
+  cardFrameForRarity,
+  GLOW_9SLICE,
+  GLOW_9SLICE_INSET,
   packPaletteFromSlug,
   rarityAccentColor,
   rarityHaloColor,
 } from '../theme/packArt';
+import { CEREMONY_COPY_V10 } from '../features/gacha/draw/ceremonyCopy';
 import { drawResultStyles as styles } from '../features/gacha/components/drawResultStyles';
+import { SHARE_DRAW_TESTID, shareDrawImage, type ShareDrawResult } from '../features/gacha/share/shareDraw';
+import { RATING_PROMPT_DELAY_MS, maybeRequestRating, resolveRatingTrigger } from '../features/gacha/milestones/ratingPrompt';
+import { loadStreakSnapshot } from '../features/gacha/streaks/streakTracker';
 
-// ─── Animated guard ─────────────────────────────────────────────────────────
+// ─── react-native facade ────────────────────────────────────────────────────
 // Vitest mocks use a strict Proxy that throws on missing exports — wrap access.
-function readAnimated(): any {
+// Image is absent from the test mocks, so it is read through the facade and
+// only rendered when non-null.
+function readRN<T = any>(key: string, fallback: T): T {
   try {
-    return (RN as any).Animated ?? {};
+    const value = (RN as any)[key];
+    return (value ?? fallback) as T;
   } catch {
-    return {};
+    return fallback;
   }
 }
-const A: any = readAnimated();
+const A: any = readRN('Animated', {});
+const RNImage: any = readRN('Image', null);
 const AnimatedView: any = A.View ?? View;
 const hasAnimated = typeof A.Value === 'function';
 
@@ -79,6 +91,13 @@ const FEATURED_GRADIENT_BY_RARITY: Record<
   COM: [colors.softPeach, colors.rarityCommon, colors.gold],
 } as const;
 
+const localStyles = StyleSheet.create({
+  featuredFrame: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 },
+  unrevealedChip: { alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, backgroundColor: 'rgba(58,35,5,0.10)' },
+  unrevealedChipText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.4, color: colors.inkMuted },
+  featuredUnrevealedChip: { marginLeft: 8, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.85)' },
+});
+
 export function DrawResultScreen({ navigation, route }: Props) {
   const params = route.params as DrawResultRouteParams;
   const drawResult = params.drawResult ?? null;
@@ -87,8 +106,16 @@ export function DrawResultScreen({ navigation, route }: Props) {
   const [isAllCardsOpen, setIsAllCardsOpen] = useState(false);
   const [registerVisible, setRegisterVisible] = useState(true);
   const [permissionPromptPending, setPermissionPromptPending] = useState(false);
+  const shareTargetRef = useRef<View>(null);
+  const [shareStatus, setShareStatus] = useState<ShareDrawResult['status'] | 'idle' | 'sharing'>('idle');
 
   const cards = drawResult?.cards ?? [];
+  // Absent = the ceremony left before the table (or an old caller): no reveal
+  // information, so no chips. An empty array means "table reached, nothing flipped".
+  const revealedUids = params.revealedUids;
+  const hasRevealInfo = Array.isArray(revealedUids);
+  const revealedSet = useMemo(() => new Set(revealedUids ?? []), [revealedUids]);
+  const isUnrevealed = (uid: string) => hasRevealInfo && !revealedSet.has(uid);
   const featured = useMemo(
     () =>
       cards.find((card) => card.rarity === 'LEG') ??
@@ -169,6 +196,22 @@ export function DrawResultScreen({ navigation, route }: Props) {
     };
   }, []);
 
+  // R7: one store-review request per install, at a natural pause. First Legendary wins over the
+  // streak trigger; ratingPrompt.ts guarantees once-ever, this effect only decides the moment.
+  useEffect(() => {
+    if (cards.length === 0) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const snapshot = await loadStreakSnapshot();
+        const trigger = resolveRatingTrigger({ hasLegendary, currentDailyStreak: snapshot.currentDailyStreak });
+        if (!trigger || cancelled) return;
+        await maybeRequestRating(trigger);
+      })().catch(() => {});
+    }, RATING_PROMPT_DELAY_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
+
   const isWalletLoading = remainingPulls === null;
   // Substring "Continue draw" / "Go to Library" preserved (test contract);
   // we just append context so the user knows what'll happen.
@@ -209,6 +252,13 @@ export function DrawResultScreen({ navigation, route }: Props) {
       return;
     }
     navigation.navigate('Home');
+  };
+
+  const handleShare = async () => {
+    if (shareStatus === 'sharing') return;
+    setShareStatus('sharing');
+    const result = await shareDrawImage(shareTargetRef, { slug: params.slug, deckTitle: params.deckTitle });
+    setShareStatus(result.status === 'cancelled' ? 'idle' : result.status);
   };
 
   // Loading state override
@@ -327,6 +377,12 @@ export function DrawResultScreen({ navigation, route }: Props) {
           contentContainerStyle={styles.container}
           showsVerticalScrollIndicator={false}
         >
+          <View
+            ref={shareTargetRef}
+            collapsable={false}
+            testID="draw-result-share-target"
+            style={{ backgroundColor: PAGE_GRADIENT_LIGHT[0] }}
+          >
           <View style={styles.header} testID="draw-result-header">
             <View style={styles.headerTitleColumn}>
               {/* Gold uppercase eyebrow — reinforces the +N feeling
@@ -373,10 +429,21 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   : null,
               ]}
             >
-              <View
-                pointerEvents="none"
-                style={[styles.featuredHalo, { backgroundColor: featuredHalo }]}
-              />
+              {RNImage ? (
+                <RNImage
+                  testID="draw-result-featured-glow"
+                  pointerEvents="none"
+                  source={GLOW_9SLICE}
+                  resizeMode="stretch"
+                  capInsets={{ top: GLOW_9SLICE_INSET, left: GLOW_9SLICE_INSET, bottom: GLOW_9SLICE_INSET, right: GLOW_9SLICE_INSET }}
+                  style={[styles.featuredHalo, { tintColor: featuredHalo }]}
+                />
+              ) : (
+                <View
+                  pointerEvents="none"
+                  style={[styles.featuredHalo, { backgroundColor: featuredHalo }]}
+                />
+              )}
               <Pressable
                 testID="screen-draw-result-featured-card"
                 style={({ pressed }) => [styles.featured, pressed && styles.pressed]}
@@ -397,6 +464,13 @@ export function DrawResultScreen({ navigation, route }: Props) {
                         ★ {rarityLabel(featured.rarity)}
                       </Text>
                     </View>
+                    {cards.length === 1 && isUnrevealed(featured.stableUid) ? (
+                      <View testID="draw-result-featured-unrevealed-chip" style={localStyles.featuredUnrevealedChip}>
+                        <Text style={localStyles.unrevealedChipText} numberOfLines={1}>
+                          {CEREMONY_COPY_V10.unrevealedChip}
+                        </Text>
+                      </View>
+                    ) : null}
                   </View>
 
                   {/* Pack-themed art window — uses the pack's palette as a
@@ -430,6 +504,18 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
                   {/* Decorative diagonal shine */}
                   <View pointerEvents="none" style={styles.featuredShine} />
+
+                  {/* B12 rarity frame PNG — transparent art window + lower slab,
+                      stretched over the 260×364 (5:7) card. */}
+                  {RNImage ? (
+                    <RNImage
+                      testID="draw-result-featured-frame"
+                      pointerEvents="none"
+                      source={cardFrameForRarity(featured.rarity)}
+                      resizeMode="stretch"
+                      style={localStyles.featuredFrame}
+                    />
+                  ) : null}
                 </LinearGradient>
               </Pressable>
             </AnimatedView>
@@ -460,6 +546,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
                 {`${summary.LEG} LEG`}
               </Text>
             </View>
+          </View>
           </View>
 
           {cards.length > 1 ? (
@@ -503,6 +590,13 @@ export function DrawResultScreen({ navigation, route }: Props) {
                           {card.rarity}
                         </Text>
                       </View>
+                      {isUnrevealed(card.stableUid) ? (
+                        <View testID={`draw-result-unrevealed-chip-${index}`} style={localStyles.unrevealedChip}>
+                          <Text style={localStyles.unrevealedChipText} numberOfLines={1}>
+                            {CEREMONY_COPY_V10.unrevealedChip}
+                          </Text>
+                        </View>
+                      ) : null}
                     </Pressable>
                   );
                 })}
@@ -604,6 +698,24 @@ export function DrawResultScreen({ navigation, route }: Props) {
                 {primaryLabel}
               </Text>
             </Pressable>
+            <Pressable
+              testID={SHARE_DRAW_TESTID}
+              accessibilityRole="button"
+              accessibilityLabel={CEREMONY_COPY_V10.shareCta}
+              accessibilityState={{ disabled: shareStatus === 'sharing' }}
+              disabled={shareStatus === 'sharing'}
+              style={({ pressed }) => [styles.earnPullsPill, pressed && styles.pressed]}
+              onPress={() => void handleShare()}
+            >
+              <Text style={styles.earnPullsText} numberOfLines={1}>
+                {shareStatus === 'sharing' ? 'Preparing image…' : CEREMONY_COPY_V10.shareCta}
+              </Text>
+            </Pressable>
+            {shareStatus === 'unavailable' || shareStatus === 'failed' ? (
+              <Text testID="draw-result-share-status" style={styles.doneText} numberOfLines={1}>
+                {shareStatus === 'unavailable' ? 'Sharing is not available on this device' : 'Could not prepare the image'}
+              </Text>
+            ) : null}
             {/* Secondary action — only visible when wallet hit zero
                 (primary now suggests Library). Gives the user a direct
                 path back to earning more pulls instead of bouncing

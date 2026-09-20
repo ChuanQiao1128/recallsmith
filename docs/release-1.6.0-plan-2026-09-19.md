@@ -312,3 +312,8 @@ Target devices: iPhone 11 (A13, 414 pt) and a 2020 mid-range Android (Adreno 618
 - 三种方案的评委总分：Seam of Light（Skia + Reanimated）21，Foil Seam（Animated + 真 Lottie，零新原生依赖）19，Foil Strip（Rive 混合）15。Rive 输在库成熟度和多一个设计器工具链；Animated + Lottie 输在做不了真的撕包、箔膜和倾斜，且 Lottie 素材要么买要么学 After Effects。最终方案从 A 嫁接了"任何阶段切换不依赖原生回调"和"首次仪式不可跳"，从 C 嫁接了时长表拆成纯模块和 Genshin 的"紫→金两段变色"。
 - 反方 26 条里最重要的修正：expo-audio 的插件也会默认注入麦克风权限字符串，必须显式 `microphonePermission: false` 并在 prebuild 后 grep 生成的 Info.plist；版本号升到 1.6.0 必须和装 Reanimated 在同一个 commit，否则 OTA 通道会在中间状态分叉；MCQ 分析的分区不能按 app_version（分不出 OTA 前后的 1.6.0 设备），要在事件里加显式的客户端能力标记；学一张赚一抽必须先定义账本（每卡只付一次）再写代码；E2（拆新卡额度）和 E3（20 张/天护栏）绑定为一项，永远不单独发 E2；写题轨道要有小时数，否则备考承诺是空的。
 - 我自己没核的：真机上"桌子到不了"是按定时器数学推出来的，要跑一次真机确认；Reanimated 4 在 New Arch 上 babel 插件是否自动生效（M2 spike 第一天验证）；expo-audio 的循环和 duck 行为；各评委给的天数（判断类估算）。
+
+<!-- paths-not-on-disk
+历史引用：Lottie 时代的仪式文件已在 Wave B（B11，2026-09-20）删除；上文的行号审计是对旧代码的记录，不改。
+- mobile/src/components/CeremonyLottie.tsx
+-->

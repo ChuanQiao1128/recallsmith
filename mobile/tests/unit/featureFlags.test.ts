@@ -80,6 +80,7 @@ describe('feature flags', () => {
         answerTelemetry: false,
       },
       paywall: { hidden: false },
+      ceremony: { seamOfLight: true, forceFallback: false },
     });
     expect(Object.isFrozen(getFeatureFlags())).toBe(true);
     expect(Object.isFrozen(getFeatureFlags().mcq)).toBe(true);
@@ -108,6 +109,7 @@ describe('feature flags', () => {
         answerTelemetry: true,
       },
       paywall: { hidden: true },
+      ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
     });
   });
 
@@ -115,6 +117,7 @@ describe('feature flags', () => {
     expect(applyRemoteFeatures({ features: { paywall: { hidden: true } } })).toEqual({
       mcq: DEFAULT_FEATURE_FLAGS.mcq,
       paywall: { hidden: true },
+      ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
     });
 
     expect(applyRemoteFeatures({ features: { mcq: { maxPerRun: 0 } } })).toEqual({
@@ -125,6 +128,7 @@ describe('feature flags', () => {
         answerTelemetry: false,
       },
       paywall: DEFAULT_FEATURE_FLAGS.paywall,
+      ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
     });
   });
 
@@ -139,7 +143,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true } });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony });
     expect(
       applyRemoteFeatures(
         asRemoteConfig({
@@ -152,6 +156,7 @@ describe('feature flags', () => {
     ).toEqual({
       mcq: { ...DEFAULT_FEATURE_FLAGS.mcq, enabled: false },
       paywall: DEFAULT_FEATURE_FLAGS.paywall,
+      ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
     });
 
     expect(
@@ -168,7 +173,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true } });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony });
 
     for (const maxPerRun of [null, 1.5, -1, Number.NaN]) {
       expect(
@@ -228,6 +233,7 @@ describe('feature flags', () => {
     expect(renders.at(-1)).toEqual({
       mcq: DEFAULT_FEATURE_FLAGS.mcq,
       paywall: { hidden: true },
+      ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
     });
 
     await unmount(tree);
@@ -256,6 +262,7 @@ describe('feature flags', () => {
         answerTelemetry: false,
       },
       paywall: { hidden: true },
+      ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
     });
 
     await unmount(tree);
@@ -277,5 +284,47 @@ describe('feature flags', () => {
     expect(getFeatureFlags()).toEqual(DEFAULT_FEATURE_FLAGS);
 
     await unmount(tree);
+  });
+
+  it('ships the ceremony defaults frozen: seamOfLight on, forceFallback off', () => {
+    expect(getFeatureFlags().ceremony).toEqual({ seamOfLight: true, forceFallback: false });
+    expect(Object.isFrozen(getFeatureFlags().ceremony)).toBe(true);
+    expect(DEFAULT_FEATURE_FLAGS.ceremony).toEqual({ seamOfLight: true, forceFallback: false });
+  });
+
+  it('applies boolean ceremony overrides and falls back per field on anything else', () => {
+    const applied = applyRemoteFeatures(
+      asRemoteConfig({ features: { ceremony: { seamOfLight: false, forceFallback: true } } }),
+    );
+    expect(applied.ceremony).toEqual({ seamOfLight: false, forceFallback: true });
+    expect(applied.mcq).toEqual(DEFAULT_FEATURE_FLAGS.mcq);
+    expect(applied.paywall).toEqual(DEFAULT_FEATURE_FLAGS.paywall);
+
+    expect(
+      applyRemoteFeatures(asRemoteConfig({ features: { ceremony: { seamOfLight: 'off', forceFallback: 1 } } })).ceremony,
+    ).toEqual(DEFAULT_FEATURE_FLAGS.ceremony);
+    expect(
+      applyRemoteFeatures(asRemoteConfig({ features: { ceremony: [] } })).ceremony,
+    ).toEqual(DEFAULT_FEATURE_FLAGS.ceremony);
+    expect(
+      applyRemoteFeatures(asRemoteConfig({ features: { ceremony: { seamOfLight: false } } })).ceremony,
+    ).toEqual({ seamOfLight: false, forceFallback: false });
+  });
+
+  it('notifies subscribers when only a ceremony flag changes', () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeFeatureFlags(listener);
+
+    applyRemoteFeatures(asRemoteConfig({ features: { ceremony: { seamOfLight: false } } }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    const changed = getFeatureFlags();
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { ceremony: { seamOfLight: false } } }))).toBe(changed);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    applyRemoteFeatures(null);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
   });
 });

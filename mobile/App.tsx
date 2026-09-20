@@ -1,4 +1,5 @@
 import 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-url-polyfill/auto';
 import React, { useEffect, useState } from 'react';
 import { AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -9,7 +10,9 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Notifications from 'expo-notifications';
 
 import type { RootStackParamList } from './src/navigation/types';
+import { linking } from './src/navigation/linking';
 import BottomTabBar from './src/components/BottomTabBar';
+import { RootErrorBoundary } from './src/components/RootErrorBoundary';
 import { getMainTabForRouteName } from './src/navigation/mainTabs';
 import SplashScreen from './src/screens/SplashScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
@@ -63,6 +66,7 @@ import ToastHostScreen from './src/screens/ToastHostScreen';
 import CoachOverlayScreen from './src/screens/CoachOverlayScreen';
 import OfflineBannerScreen from './src/screens/OfflineBannerScreen';
 import DebugMenuScreen from './src/screens/DebugMenuScreen';
+import CeremonyTuningScreen from './src/screens/dev/CeremonyTuning';
 import LevelScreen from './src/screens/LevelScreen';
 import DrawCeremonyScreen from './src/screens/DrawCeremonyScreen';
 import DrawResultScreen from './src/screens/DrawResultScreen';
@@ -88,6 +92,19 @@ import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpda
 import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
 
 configureAmplifyOnce();
+
+if (__DEV__) {
+  // Reanimated 4 needs react-native-worklets/plugin (applied by babel-preset-expo when the package is
+  // installed). `_WORKLET` is only true on the UI runtime; on the JS runtime a workletized function
+  // carries `__workletHash`. No hash = the plugin did not run and ceremony motion will fall back.
+  const workletProbe = () => {
+    'worklet';
+    return (globalThis as { _WORKLET?: boolean })._WORKLET === true;
+  };
+  if (typeof (workletProbe as unknown as { __workletHash?: number }).__workletHash !== 'number') {
+    console.warn('[recallsmith] react-native-worklets babel plugin is not active');
+  }
+}
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -162,10 +179,13 @@ export default function App() {
   const activeMainTab = getMainTabForRouteName(currentRouteName);
 
   return (
-    <View style={styles.appShell}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <RootErrorBoundary>
+        <View style={styles.appShell}>
       <View style={styles.navigatorShell}>
         <NavigationContainer
           ref={navigationRef}
+          linking={linking}
           onReady={() => setCurrentRouteName(navigationRef.getCurrentRoute()?.name as keyof RootStackParamList | undefined)}
           onStateChange={() => setCurrentRouteName(navigationRef.getCurrentRoute()?.name as keyof RootStackParamList | undefined)}
         >
@@ -223,6 +243,7 @@ export default function App() {
         <Stack.Screen name="CoachOverlay" component={CoachOverlayScreen} />
         <Stack.Screen name="OfflineBanner" component={OfflineBannerScreen} />
         <Stack.Screen name="DebugMenu" component={DebugMenuScreen} />
+        {__DEV__ ? <Stack.Screen name="CeremonyTuning" component={CeremonyTuningScreen} /> : null}
         <Stack.Screen name="Level" component={LevelScreen} />
         {/* Draw flow uses cross-fade transitions so the pack art continuity
             from Draw → Ceremony → Result feels like a single moment. */}
@@ -272,7 +293,9 @@ export default function App() {
       ) : null}
 
       {forceUpdate ? <ForceUpdateOverlay {...forceUpdate} /> : null}
-    </View>
+        </View>
+      </RootErrorBoundary>
+    </GestureHandlerRootView>
   );
 }
 

@@ -1,0 +1,4 @@
+• A new pack-opening ceremony. Tear the seal, watch the light spill, and flip each card yourself — rarity is only revealed when you hold it.
+• Home is cleaner: one clear next step, your real packs only, and the draw status right under the button.
+• Respects Reduce Motion with a calmer version of the ceremony, and works with VoiceOver.
+• Fixes: the card table after a draw is now always reachable, and rare-card foil no longer crashes on some devices.

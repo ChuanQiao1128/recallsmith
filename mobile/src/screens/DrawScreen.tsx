@@ -12,7 +12,7 @@ import { checkManifestForUpdates, installDeckFromUrl, listManifestDecks, resolve
 import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
 import { loadDrawState } from '../features/gacha/draw/drawStateStore';
-import { buildPityProgressLabelV9, normalizePityState } from '../features/gacha/draw/pity';
+import { buildPityProgressLabelV9, DEFAULT_PITY_STATE, normalizePityState } from '../features/gacha/draw/pity';
 import {
   consumePullsFromStoredWallet,
   loadRewardWalletState,
@@ -25,6 +25,8 @@ import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 import { PAGE_GRADIENT_LIGHT, packImageForSlug, packPaletteFromSlug, type PackPalette } from '../theme/packArt';
+import { prewarmCeremonyAudio } from '../components/ceremonyAudio';
+import { prewarmFoilShader } from '../components/ceremony/FoilLayer';
 
 function readRN<T = any>(key: string, fallback: T): T {
   try {
@@ -52,6 +54,7 @@ type DrawReady = {
   deckOptions: DeckOption[];
   pityLabel: string;
   collectionComplete: boolean;
+  pityThreshold: number;
 };
 
 const SWIPE_ARM_DISTANCE = 72;
@@ -103,7 +106,7 @@ function mergeSelectedDeck(options: DeckOption[], slug: string, deckTitle: strin
 async function loadDrawStatus(
   slug: string,
   deckCards: any[],
-): Promise<{ pityLabel: string; collectionComplete: boolean }> {
+): Promise<{ pityLabel: string; collectionComplete: boolean; pityThreshold: number }> {
   try {
     const state = await loadDrawState(slug);
     const owned = new Set(state.owned);
@@ -120,12 +123,13 @@ async function loadDrawStatus(
     return {
       pityLabel: buildPityProgressLabelV9(normalizePityState(state.pity), missingLegCount),
       collectionComplete,
+      pityThreshold: normalizePityState(state.pity).threshold,
     };
   } catch {
     // A storage failure must not cost the user the pack. A missing progress
     // line is a smaller loss than an unopenable draw screen, and claiming
     // "complete" on a failed read would lock the pack for no reason.
-    return { pityLabel: '', collectionComplete: false };
+    return { pityLabel: '', collectionComplete: false, pityThreshold: DEFAULT_PITY_STATE.threshold };
   }
 }
 
@@ -289,6 +293,24 @@ function PackArt({
   );
 }
 
+// Mirrors poolSelection.ts:106-152 — the guarantee is checked before every
+// slot, a COM advances the counter (capped at threshold), anything else
+// resets it — so the ceremony can seal the exact card it paid out on.
+function pityCardIndexFor(
+  cards: ReadonlyArray<{ rarity: 'COM' | 'RAR' | 'LEG' }>,
+  pityBefore: number,
+  threshold: number,
+  pityFiredFor: 'LEG' | 'RAR' | null,
+): number | null {
+  if (pityFiredFor === null || threshold <= 0) return null;
+  let draws = pityBefore;
+  for (let index = 0; index < cards.length; index += 1) {
+    if (draws >= threshold && cards[index].rarity !== 'COM') return index;
+    draws = cards[index].rarity === 'COM' ? Math.min(draws + 1, threshold) : 0;
+  }
+  return null;
+}
+
 export function DrawScreen({ navigation, route }: Props) {
   const [loadState, setLoadState] = useState<DrawLoadState>('loading');
   const [ready, setReady] = useState<DrawReady | null>(null);
@@ -351,6 +373,14 @@ export function DrawScreen({ navigation, route }: Props) {
       bob.stop?.();
       shine.stop?.();
     };
+  }, []);
+
+  // Design §3.8: the first LEG flip must stall < 50 ms, so the samples and
+  // the foil SkSL are warmed while the player is still choosing a pack.
+  // Both are no-ops when their native module is absent and never throw.
+  useEffect(() => {
+    try { prewarmCeremonyAudio(); } catch { /* audio stays cold; the ceremony plays silent */ }
+    try { prewarmFoilShader(); } catch { /* shader compiles lazily on the first foil frame */ }
   }, []);
 
   useEffect(() => clearSwipeResetTimer, [clearSwipeResetTimer]);
@@ -449,6 +479,7 @@ export function DrawScreen({ navigation, route }: Props) {
               deckOptions: mergedOptions,
               pityLabel: status.pityLabel,
               collectionComplete: status.collectionComplete,
+              pityThreshold: status.pityThreshold,
             });
             setSelectedSlug(slug);
             setSwipePrimed(false);
@@ -562,6 +593,9 @@ export function DrawScreen({ navigation, route }: Props) {
           deckTitle: ready.deckTitle,
           ownedAfter: result.ownedAfter,
           totalCards: result.totalCards,
+          poolExhausted: result.poolExhausted,
+          pityThreshold: ready.pityThreshold,
+          pityCardIndex: pityCardIndexFor(result.cards, result.pityBefore, ready.pityThreshold, result.pityFiredFor),
         });
       } catch {
         if (chargedPulls > 0) {
@@ -890,7 +924,7 @@ const styles = StyleSheet.create({
   loadingText: { marginTop: spacing.sm, color: colors.inkSoft, fontSize: typography.bodySmall, fontWeight: '700' },
   stateCard: {
     width: '100%', borderRadius: spacing.cardRadius, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.softMist,
-    padding: spacing.md, shadowColor: colors.shadowSoft, shadowOpacity: 1, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 4,
+    padding: spacing.md, shadowColor: colors.shadowSoft, shadowOpacity: 1, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 4,
   },
   stateTitle: { color: colors.inkSoft, fontSize: typography.title3, lineHeight: 24, fontWeight: '900', textAlign: 'center' },
   stateBody: { marginTop: spacing.xs, color: colors.inkMuted, fontSize: typography.bodySmall, lineHeight: 18, textAlign: 'center' },
@@ -990,7 +1024,7 @@ const styles = StyleSheet.create({
   neighborTitle: { marginTop: 6, color: colors.inkMuted, fontSize: 9, fontWeight: '800', textAlign: 'center', width: '100%' },
   packStage: { width: '100%', alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm },
   packShadow: {
-    shadowColor: 'rgba(58,35,5,0.32)', shadowOpacity: 0.6, shadowRadius: 22, shadowOffset: { width: 0, height: 14 }, elevation: 10, borderRadius: 22,
+    shadowColor: 'rgba(58,35,5,0.32)', shadowOpacity: 0.6, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 4, borderRadius: 22,
   },
   // 5px wide vertical strip glued to the right side of the pack, rotated 90°
   // outward — invisible when viewed straight on, appears as a thick edge when

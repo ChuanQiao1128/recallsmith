@@ -96,6 +96,8 @@ export function packPaletteFromSlug(slug: string | null | undefined, fallbackInd
     canonical = 'csharp';
   } else if (lower === 'ai' || lower.startsWith('ai-') || lower.endsWith('-ai')) {
     canonical = 'ai';
+  } else if (lower === 'aws' || lower.startsWith('aws-')) {
+    canonical = 'aws';
   } else if (
     lower === 'cloud' || lower.startsWith('cloud-')
     || lower.includes('aws') || lower.includes('gcp') || lower.includes('azure')
@@ -131,7 +133,8 @@ export const PAGE_GRADIENT_LIGHT = [
 export const PAGE_GRADIENT_CEREMONY = [
   '#FFFFFF',
   '#F4F1FA',
-  '#E8E2F2',
+  // design §3.1 S0: darkened bottom stop so the seam light reads against it.
+  '#D9D2E6',
 ] as const;
 
 // Rarity glow tints used during the ceremony reveal.
@@ -165,10 +168,28 @@ import defaultPack from '../../assets/packs/default.png';
 // gold-ring + R-monogram card back during the gacha tap-to-flip phase
 // in DrawCeremonyScreen. When a deck has its own back PNG, players
 // see "this card came from the C# pack" the moment cards land on the
-// table — building visual identity and collection feeling. Decks
-// without a registered back fall back to the procedural card back,
-// so this is purely additive.
+// table — building visual identity and collection feeling. Every
+// shipped deck now has a back; unregistered slugs still return
+// undefined so the procedural back stays canonical for un-themed decks.
 import csharpCardBack from '../../assets/packs/csharp-back.png';
+import aiCardBack from '../../assets/packs/ai-back.png';
+import cloudCardBack from '../../assets/packs/cloud-back.png';
+import awsCardBack from '../../assets/packs/aws-back.png';
+import premiumCardBack from '../../assets/packs/premium-deck-back.png';
+// Generic back for callers that want one (exported as DEFAULT_CARD_BACK); it
+// is deliberately NOT a key of CARD_BACK_IMAGES so unregistered slugs miss.
+import defaultCardBack from '../../assets/packs/default-back.png';
+
+// Stage assets for the Seam of Light ceremony (B00 §6 contract names).
+// Rarity frames + foil LUT: scripts/gen_card_frames.py. Particle sheet +
+// glow 9-slice: scripts/gen_particles.py. Card backs: scripts/gen_card_back.py.
+import type { Rarity } from '../features/gacha/draw/cardRarity';
+import frameCom from '../../assets/ui/frame-com.png';
+import frameRar from '../../assets/ui/frame-rar.png';
+import frameLeg from '../../assets/ui/frame-leg.png';
+import foilLut from '../../assets/ui/foil-lut.png';
+import particleSheet from '../../assets/ui/particles.png';
+import glowNineSlice from '../../assets/ui/glow-9slice.png';
 
 const PACK_IMAGES: Record<string, ImageSourcePropType> = {
   // Active deck slugs (mocked for Home until real decks land)
@@ -183,11 +204,34 @@ const PACK_IMAGES: Record<string, ImageSourcePropType> = {
 
 // Card-back PNG registry. UNLIKE PACK_IMAGES, there's no `default` entry —
 // missing slugs return undefined, signaling the caller to render the
-// procedural fallback. This keeps the rollout incremental: ship one
-// deck's card back at a time without touching the others.
+// procedural fallback (or DEFAULT_CARD_BACK if they want a generic one).
+// Every shipped deck has a back; un-themed decks still miss on purpose.
 const CARD_BACK_IMAGES: Record<string, ImageSourcePropType> = {
   csharp: csharpCardBack,
+  ai: aiCardBack,
+  cloud: cloudCardBack,
+  aws: awsCardBack,
+  'premium-deck': premiumCardBack,
 };
+
+// ─── Ceremony stage asset registry (B00 §6 contract names) ─────────────────
+// Consumed by B05 StageCanvas (PARTICLE_SHEET, GLOW_9SLICE), B08 TapCard /
+// FoilLayer (cardFrameForRarity, FOIL_LUT), B09 FallbackStage (DEFAULT_CARD_BACK)
+// and B10 DrawResult (cardFrameForRarity, GLOW_9SLICE, GLOW_9SLICE_INSET).
+export const DEFAULT_CARD_BACK: ImageSourcePropType = defaultCardBack;
+export const CARD_FRAME_SIZE = { width: 400, height: 560 } as const;
+export const CARD_FRAME_ART_WINDOW = { x: 28, y: 64, width: 344, height: 296 } as const;
+export const CARD_FRAME_NINE_SLICE_INSET = 40;
+export const CARD_FRAME_IMAGES: Record<Rarity, ImageSourcePropType> = { COM: frameCom, RAR: frameRar, LEG: frameLeg };
+export function cardFrameForRarity(rarity: Rarity): ImageSourcePropType {
+  return CARD_FRAME_IMAGES[rarity] ?? CARD_FRAME_IMAGES.COM;
+}
+export const FOIL_LUT: ImageSourcePropType = foilLut;
+export const PARTICLE_SHEET: ImageSourcePropType = particleSheet;
+export const PARTICLE_SPRITE_SIZE = 64;
+export const PARTICLE_SPRITES = { dot: 0, star: 64, fleck: 128, shard: 192 } as const;
+export const GLOW_9SLICE: ImageSourcePropType = glowNineSlice;
+export const GLOW_9SLICE_INSET = 32;
 
 // Fuzzy slug normalization for pack-art lookup. Real backend manifest
 // slugs may differ from the registered PNG keys (e.g. 'cs-dotnet' /
@@ -211,6 +255,8 @@ function normalizeSlugForPack(slug: string): string {
   }
   // AI variants
   if (s === 'ai' || s.startsWith('ai-') || s.endsWith('-ai')) return 'ai';
+  // aws-saa-c03 is a live deck with its own cover, docs/aws-saa-demo-deck-plan-2026-09-16.md
+  if (s === 'aws' || s.startsWith('aws-')) return 'aws';
   // Cloud variants — covers aws/gcp/azure too
   if (
     s === 'cloud'
@@ -248,3 +294,4 @@ export function cardBackImageForSlug(slug: string | null | undefined): ImageSour
   const normalized = normalizeSlugForPack(safe);
   return CARD_BACK_IMAGES[normalized];
 }
+export const SEAM_BAND_RATIO = 0.18;
