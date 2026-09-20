@@ -248,3 +248,4 @@ export function cardBackImageForSlug(slug: string | null | undefined): ImageSour
   const normalized = normalizeSlugForPack(safe);
   return CARD_BACK_IMAGES[normalized];
 }
+export const SEAM_BAND_RATIO = 0.18;
