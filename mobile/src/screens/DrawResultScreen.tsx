@@ -4,6 +4,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   View,
 } from 'react-native';
@@ -18,22 +19,30 @@ import { clearPermissionPromptPending, isPermissionPromptPending } from './Permi
 import { colors } from '../theme/colors';
 import {
   PAGE_GRADIENT_LIGHT,
+  cardFrameForRarity,
+  GLOW_9SLICE,
+  GLOW_9SLICE_INSET,
   packPaletteFromSlug,
   rarityAccentColor,
   rarityHaloColor,
 } from '../theme/packArt';
+import { CEREMONY_COPY_V10 } from '../features/gacha/draw/ceremonyCopy';
 import { drawResultStyles as styles } from '../features/gacha/components/drawResultStyles';
 
-// ─── Animated guard ─────────────────────────────────────────────────────────
+// ─── react-native facade ────────────────────────────────────────────────────
 // Vitest mocks use a strict Proxy that throws on missing exports — wrap access.
-function readAnimated(): any {
+// Image is absent from the test mocks, so it is read through the facade and
+// only rendered when non-null.
+function readRN<T = any>(key: string, fallback: T): T {
   try {
-    return (RN as any).Animated ?? {};
+    const value = (RN as any)[key];
+    return (value ?? fallback) as T;
   } catch {
-    return {};
+    return fallback;
   }
 }
-const A: any = readAnimated();
+const A: any = readRN('Animated', {});
+const RNImage: any = readRN('Image', null);
 const AnimatedView: any = A.View ?? View;
 const hasAnimated = typeof A.Value === 'function';
 
@@ -79,6 +88,13 @@ const FEATURED_GRADIENT_BY_RARITY: Record<
   COM: [colors.softPeach, colors.rarityCommon, colors.gold],
 } as const;
 
+const localStyles = StyleSheet.create({
+  featuredFrame: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 },
+  unrevealedChip: { alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, backgroundColor: 'rgba(58,35,5,0.10)' },
+  unrevealedChipText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.4, color: colors.inkMuted },
+  featuredUnrevealedChip: { marginLeft: 8, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.85)' },
+});
+
 export function DrawResultScreen({ navigation, route }: Props) {
   const params = route.params as DrawResultRouteParams;
   const drawResult = params.drawResult ?? null;
@@ -89,6 +105,12 @@ export function DrawResultScreen({ navigation, route }: Props) {
   const [permissionPromptPending, setPermissionPromptPending] = useState(false);
 
   const cards = drawResult?.cards ?? [];
+  // Absent = the ceremony left before the table (or an old caller): no reveal
+  // information, so no chips. An empty array means "table reached, nothing flipped".
+  const revealedUids = params.revealedUids;
+  const hasRevealInfo = Array.isArray(revealedUids);
+  const revealedSet = useMemo(() => new Set(revealedUids ?? []), [revealedUids]);
+  const isUnrevealed = (uid: string) => hasRevealInfo && !revealedSet.has(uid);
   const featured = useMemo(
     () =>
       cards.find((card) => card.rarity === 'LEG') ??
@@ -373,10 +395,21 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   : null,
               ]}
             >
-              <View
-                pointerEvents="none"
-                style={[styles.featuredHalo, { backgroundColor: featuredHalo }]}
-              />
+              {RNImage ? (
+                <RNImage
+                  testID="draw-result-featured-glow"
+                  pointerEvents="none"
+                  source={GLOW_9SLICE}
+                  resizeMode="stretch"
+                  capInsets={{ top: GLOW_9SLICE_INSET, left: GLOW_9SLICE_INSET, bottom: GLOW_9SLICE_INSET, right: GLOW_9SLICE_INSET }}
+                  style={[styles.featuredHalo, { tintColor: featuredHalo }]}
+                />
+              ) : (
+                <View
+                  pointerEvents="none"
+                  style={[styles.featuredHalo, { backgroundColor: featuredHalo }]}
+                />
+              )}
               <Pressable
                 testID="screen-draw-result-featured-card"
                 style={({ pressed }) => [styles.featured, pressed && styles.pressed]}
@@ -397,6 +430,13 @@ export function DrawResultScreen({ navigation, route }: Props) {
                         ★ {rarityLabel(featured.rarity)}
                       </Text>
                     </View>
+                    {cards.length === 1 && isUnrevealed(featured.stableUid) ? (
+                      <View testID="draw-result-featured-unrevealed-chip" style={localStyles.featuredUnrevealedChip}>
+                        <Text style={localStyles.unrevealedChipText} numberOfLines={1}>
+                          {CEREMONY_COPY_V10.unrevealedChip}
+                        </Text>
+                      </View>
+                    ) : null}
                   </View>
 
                   {/* Pack-themed art window — uses the pack's palette as a
@@ -430,6 +470,18 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
                   {/* Decorative diagonal shine */}
                   <View pointerEvents="none" style={styles.featuredShine} />
+
+                  {/* B12 rarity frame PNG — transparent art window + lower slab,
+                      stretched over the 260×364 (5:7) card. */}
+                  {RNImage ? (
+                    <RNImage
+                      testID="draw-result-featured-frame"
+                      pointerEvents="none"
+                      source={cardFrameForRarity(featured.rarity)}
+                      resizeMode="stretch"
+                      style={localStyles.featuredFrame}
+                    />
+                  ) : null}
                 </LinearGradient>
               </Pressable>
             </AnimatedView>
@@ -503,6 +555,13 @@ export function DrawResultScreen({ navigation, route }: Props) {
                           {card.rarity}
                         </Text>
                       </View>
+                      {isUnrevealed(card.stableUid) ? (
+                        <View testID={`draw-result-unrevealed-chip-${index}`} style={localStyles.unrevealedChip}>
+                          <Text style={localStyles.unrevealedChipText} numberOfLines={1}>
+                            {CEREMONY_COPY_V10.unrevealedChip}
+                          </Text>
+                        </View>
+                      ) : null}
                     </Pressable>
                   );
                 })}

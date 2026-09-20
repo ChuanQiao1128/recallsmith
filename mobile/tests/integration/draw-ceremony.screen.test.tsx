@@ -149,7 +149,7 @@ describe('DrawCeremonyScreen v9', () => {
     expect(collectText(tree)).toContain('Swipe to open');
     expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
     armCeremonySwipe(tree);
-    expect(collectText(tree)).toContain('Legendary inbound');
+    expect(collectText(tree)).toContain('Pack inbound');
     const multiTotal =
       MULTI_TIMING.approach +
       MULTI_TIMING.hold +
@@ -163,7 +163,7 @@ describe('DrawCeremonyScreen v9', () => {
       vi.advanceTimersByTime(MULTI_TIMING.approach - 1);
       await Promise.resolve();
     });
-    expect(phaseTitle(tree)).toContain('Legendary inbound');
+    expect(phaseTitle(tree)).toContain('Pack inbound');
 
     await act(async () => {
       vi.advanceTimersByTime(1);
@@ -194,14 +194,14 @@ describe('DrawCeremonyScreen v9', () => {
       vi.advanceTimersByTime(1);
       await Promise.resolve();
     });
-    expect(phaseTitle(tree)).toContain('Card revealed');
+    expect(phaseTitle(tree)).toContain('Pack open');
     expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
 
     await act(async () => {
       vi.advanceTimersByTime(MULTI_TIMING.flashReveal - 1);
       await Promise.resolve();
     });
-    expect(phaseTitle(tree)).toContain('Card revealed');
+    expect(phaseTitle(tree)).toContain('Pack open');
     expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
 
     await act(async () => {
@@ -240,7 +240,7 @@ describe('DrawCeremonyScreen v9', () => {
     });
 
     armCeremonySwipe(tree);
-    expect(phaseTitle(tree)).toContain('Rare inbound');
+    expect(phaseTitle(tree)).toContain('Pack inbound');
 
     const singleTotal =
       SINGLE_TIMING.approach +
@@ -255,7 +255,7 @@ describe('DrawCeremonyScreen v9', () => {
       vi.advanceTimersByTime(SINGLE_TIMING.approach - 1);
       await Promise.resolve();
     });
-    expect(phaseTitle(tree)).toContain('Rare inbound');
+    expect(phaseTitle(tree)).toContain('Pack inbound');
 
     await act(async () => {
       vi.advanceTimersByTime(1);
@@ -285,7 +285,7 @@ describe('DrawCeremonyScreen v9', () => {
       vi.advanceTimersByTime(1);
       await Promise.resolve();
     });
-    expect(phaseTitle(tree)).toContain('Card revealed');
+    expect(phaseTitle(tree)).toContain('Pack open');
     expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
 
     await act(async () => {
@@ -375,13 +375,13 @@ describe('DrawCeremonyScreen v9', () => {
       );
     });
 
-    expect(collectText(tree)).toContain('Card revealed');
+    expect(collectText(tree)).toContain('Pack open');
     expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
 
     await act(async () => {
       vi.advanceTimersByTime(REDUCED_TIMING.flashReveal - 1);
     });
-    expect(phaseTitle(tree)).toContain('Card revealed');
+    expect(phaseTitle(tree)).toContain('Pack open');
     expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
     expect(replace).not.toHaveBeenCalled();
 
@@ -664,7 +664,7 @@ describe('DrawCeremonyScreen v9', () => {
 
     expect(phaseTitle(tree)).toContain('Swipe to open');
     armCeremonySwipe(tree);
-    expect(phaseTitle(tree)).toContain('Legendary inbound');
+    expect(phaseTitle(tree)).toContain('Pack inbound');
 
     await act(async () => {
       vi.advanceTimersByTime(620);
