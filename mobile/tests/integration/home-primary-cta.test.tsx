@@ -280,7 +280,7 @@ describe('home primary CTA uniqueness', () => {
       label: 'locked',
       wallet: { availablePulls: 0, reservePulls: 0 },
       expectedPrimaryCta: 'Start today’s challenge',
-      expectedDrawBadge: 'Review today’s cards to earn a pull',
+      expectedDrawBadge: 'Learn a new card to earn a pull',
       expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },

@@ -290,7 +290,7 @@ describe('Home copy glossary', () => {
     });
 
     expect(vm.hero.subline).toBe(
-      'Review today’s cards to earn pulls · at most 5 cards.',
+      'Each new card you learn earns a pull · up to 5 cards a run.',
     );
     expect(vm.hero.subline).not.toMatch(/normal|elite|boss|pressure|route|node/i);
   });
@@ -329,7 +329,7 @@ describe('Home copy glossary', () => {
 
     expect(onePull.draw.label).toBe('1 pull ready · 2 more waiting');
     expect(twoPulls.draw.label).toBe('2 pulls ready · 3 more waiting');
-    expect(locked.draw.label).toBe('Review today’s cards to earn a pull');
+    expect(locked.draw.label).toBe('Learn a new card to earn a pull');
   });
 
   it('deck rows say new, not fresh', () => {
