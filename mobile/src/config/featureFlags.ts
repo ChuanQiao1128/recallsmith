@@ -12,6 +12,10 @@ export type FeatureFlags = {
   paywall: {
     hidden: boolean;
   };
+  // seamOfLight = remote kill switch: flips the renderer to fallback (timings unchanged) for a
+  // post-release shader/GPU crash class without an OTA. forceFallback = diagnostic twin of the
+  // DebugMenu's in-memory override, published remotely.
+  ceremony: { seamOfLight: boolean; forceFallback: boolean };
 };
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
@@ -24,6 +28,7 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
   paywall: Object.freeze({
     hidden: false,
   }),
+  ceremony: Object.freeze({ seamOfLight: true, forceFallback: false }),
 });
 
 let snapshot = DEFAULT_FEATURE_FLAGS;
@@ -40,6 +45,8 @@ function snapshotsEqual(left: FeatureFlags, right: FeatureFlags): boolean {
     && left.mcq.maxPerRun === right.mcq.maxPerRun
     && left.mcq.answerTelemetry === right.mcq.answerTelemetry
     && left.paywall.hidden === right.paywall.hidden
+    && left.ceremony.seamOfLight === right.ceremony.seamOfLight
+    && left.ceremony.forceFallback === right.ceremony.forceFallback
   );
 }
 
@@ -58,8 +65,10 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
   const features = isRecord(remoteFeatures) ? remoteFeatures : undefined;
   const remoteMcq = features?.mcq;
   const remotePaywall = features?.paywall;
+  const remoteCeremony = features?.ceremony;
   const mcq = isRecord(remoteMcq) ? remoteMcq : undefined;
   const paywall = isRecord(remotePaywall) ? remotePaywall : undefined;
+  const ceremony = isRecord(remoteCeremony) ? remoteCeremony : undefined;
 
   const maxPerRun = mcq?.maxPerRun;
   const nextSnapshot: FeatureFlags = Object.freeze({
@@ -86,6 +95,16 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
         typeof paywall?.hidden === 'boolean'
           ? paywall.hidden
           : DEFAULT_FEATURE_FLAGS.paywall.hidden,
+    }),
+    ceremony: Object.freeze({
+      seamOfLight:
+        typeof ceremony?.seamOfLight === 'boolean'
+          ? ceremony.seamOfLight
+          : DEFAULT_FEATURE_FLAGS.ceremony.seamOfLight,
+      forceFallback:
+        typeof ceremony?.forceFallback === 'boolean'
+          ? ceremony.forceFallback
+          : DEFAULT_FEATURE_FLAGS.ceremony.forceFallback,
     }),
   });
 
