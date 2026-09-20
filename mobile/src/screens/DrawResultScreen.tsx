@@ -28,6 +28,9 @@ import {
 } from '../theme/packArt';
 import { CEREMONY_COPY_V10 } from '../features/gacha/draw/ceremonyCopy';
 import { drawResultStyles as styles } from '../features/gacha/components/drawResultStyles';
+import { SHARE_DRAW_TESTID, shareDrawImage, type ShareDrawResult } from '../features/gacha/share/shareDraw';
+import { RATING_PROMPT_DELAY_MS, maybeRequestRating, resolveRatingTrigger } from '../features/gacha/milestones/ratingPrompt';
+import { loadStreakSnapshot } from '../features/gacha/streaks/streakTracker';
 
 // ─── react-native facade ────────────────────────────────────────────────────
 // Vitest mocks use a strict Proxy that throws on missing exports — wrap access.
@@ -103,6 +106,8 @@ export function DrawResultScreen({ navigation, route }: Props) {
   const [isAllCardsOpen, setIsAllCardsOpen] = useState(false);
   const [registerVisible, setRegisterVisible] = useState(true);
   const [permissionPromptPending, setPermissionPromptPending] = useState(false);
+  const shareTargetRef = useRef<View>(null);
+  const [shareStatus, setShareStatus] = useState<ShareDrawResult['status'] | 'idle' | 'sharing'>('idle');
 
   const cards = drawResult?.cards ?? [];
   // Absent = the ceremony left before the table (or an old caller): no reveal
@@ -191,6 +196,22 @@ export function DrawResultScreen({ navigation, route }: Props) {
     };
   }, []);
 
+  // R7: one store-review request per install, at a natural pause. First Legendary wins over the
+  // streak trigger; ratingPrompt.ts guarantees once-ever, this effect only decides the moment.
+  useEffect(() => {
+    if (cards.length === 0) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const snapshot = await loadStreakSnapshot();
+        const trigger = resolveRatingTrigger({ hasLegendary, currentDailyStreak: snapshot.currentDailyStreak });
+        if (!trigger || cancelled) return;
+        await maybeRequestRating(trigger);
+      })().catch(() => {});
+    }, RATING_PROMPT_DELAY_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
+
   const isWalletLoading = remainingPulls === null;
   // Substring "Continue draw" / "Go to Library" preserved (test contract);
   // we just append context so the user knows what'll happen.
@@ -231,6 +252,13 @@ export function DrawResultScreen({ navigation, route }: Props) {
       return;
     }
     navigation.navigate('Home');
+  };
+
+  const handleShare = async () => {
+    if (shareStatus === 'sharing') return;
+    setShareStatus('sharing');
+    const result = await shareDrawImage(shareTargetRef, { slug: params.slug, deckTitle: params.deckTitle });
+    setShareStatus(result.status === 'cancelled' ? 'idle' : result.status);
   };
 
   // Loading state override
@@ -349,6 +377,12 @@ export function DrawResultScreen({ navigation, route }: Props) {
           contentContainerStyle={styles.container}
           showsVerticalScrollIndicator={false}
         >
+          <View
+            ref={shareTargetRef}
+            collapsable={false}
+            testID="draw-result-share-target"
+            style={{ backgroundColor: PAGE_GRADIENT_LIGHT[0] }}
+          >
           <View style={styles.header} testID="draw-result-header">
             <View style={styles.headerTitleColumn}>
               {/* Gold uppercase eyebrow — reinforces the +N feeling
@@ -513,6 +547,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
               </Text>
             </View>
           </View>
+          </View>
 
           {cards.length > 1 ? (
             <>
@@ -663,6 +698,24 @@ export function DrawResultScreen({ navigation, route }: Props) {
                 {primaryLabel}
               </Text>
             </Pressable>
+            <Pressable
+              testID={SHARE_DRAW_TESTID}
+              accessibilityRole="button"
+              accessibilityLabel={CEREMONY_COPY_V10.shareCta}
+              accessibilityState={{ disabled: shareStatus === 'sharing' }}
+              disabled={shareStatus === 'sharing'}
+              style={({ pressed }) => [styles.earnPullsPill, pressed && styles.pressed]}
+              onPress={() => void handleShare()}
+            >
+              <Text style={styles.earnPullsText} numberOfLines={1}>
+                {shareStatus === 'sharing' ? 'Preparing image…' : CEREMONY_COPY_V10.shareCta}
+              </Text>
+            </Pressable>
+            {shareStatus === 'unavailable' || shareStatus === 'failed' ? (
+              <Text testID="draw-result-share-status" style={styles.doneText} numberOfLines={1}>
+                {shareStatus === 'unavailable' ? 'Sharing is not available on this device' : 'Could not prepare the image'}
+              </Text>
+            ) : null}
             {/* Secondary action — only visible when wallet hit zero
                 (primary now suggests Library). Gives the user a direct
                 path back to earning more pulls instead of bouncing

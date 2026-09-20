@@ -47,7 +47,27 @@ vi.mock('../../src/screens/PermissionPromptScreen', () => ({
   clearPermissionPromptPending: () => clearPermissionPromptPendingMock(),
 }));
 
+let shareResultFixture: { status: 'shared' | 'unavailable' | 'cancelled' | 'failed' } = { status: 'shared' };
+// Rest parameters on the vi.fn: the wrapper below spreads whatever the screen passed
+// (ref, opts). Spreading into a zero-parameter vi.fn is TS2556 ("A spread argument must
+// either have a tuple type or be passed to a rest parameter") under tsc, which covers tests.
+const shareDrawImageMock = vi.fn(async (..._args: unknown[]) => shareResultFixture);
+vi.mock('../../src/features/gacha/share/shareDraw', () => ({
+  SHARE_DRAW_TESTID: 'draw-result-share-button',
+  shareDrawImage: (...args: unknown[]) => shareDrawImageMock(...args),
+}));
+let streakFixture = { currentDailyStreak: 0 };
+vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
+  loadStreakSnapshot: vi.fn(async () => streakFixture),
+}));
+const maybeRequestRatingMock = vi.fn(async (..._args: unknown[]) => 'requested' as const);
+vi.mock('../../src/features/gacha/milestones/ratingPrompt', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/features/gacha/milestones/ratingPrompt')>()),
+  maybeRequestRating: (...args: unknown[]) => maybeRequestRatingMock(...args),
+}));
+
 import { DrawResultScreen } from '../../src/screens/DrawResultScreen';
+import { RATING_PROMPT_DELAY_MS } from '../../src/features/gacha/milestones/ratingPrompt';
 
 const DRAW_RESULT_FIXTURE = {
   poolId: 'csharp',
@@ -97,6 +117,10 @@ describe('DrawResultScreen v9', () => {
     viewportWidth = 390;
     permissionPromptPendingFixture = false;
     clearPermissionPromptPendingMock.mockClear();
+    shareResultFixture = { status: 'shared' };
+    streakFixture = { currentDailyStreak: 0 };
+    shareDrawImageMock.mockClear();
+    maybeRequestRatingMock.mockClear();
   });
 
   it('renders collection bar, featured card, single primary CTA and done link', async () => {
@@ -465,5 +489,152 @@ describe('DrawResultScreen v9', () => {
 
     expect(flipped.root.findAllByProps({ testID: 'draw-result-featured-unrevealed-chip' })).toHaveLength(0);
     expect(flipped.root.findByProps({ testID: 'screen-draw-result-featured-card' })).toBeTruthy();
+  });
+
+  it('shares the pull image from the share button and reports unavailable inline', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    let tree2!: renderer.ReactTestRenderer;
+    try {
+      await act(async () => {
+        tree = renderer.create(
+          <DrawResultScreen
+            navigation={{ navigate: vi.fn() } as any}
+            route={{ key: 'result', name: 'DrawResult', params: makeParams() } as any}
+          />,
+          { createNodeMock: () => ({}) },
+        );
+      });
+      await flush();
+
+      const target = tree.root.findByProps({ testID: 'draw-result-share-target' });
+      expect(target.props.collapsable).toBe(false);
+
+      await act(async () => {
+        tree.root.findByProps({ testID: 'draw-result-share-button' }).props.onPress();
+      });
+      await flush();
+
+      expect(shareDrawImageMock).toHaveBeenCalledTimes(1);
+      expect(shareDrawImageMock).toHaveBeenCalledWith(
+        expect.objectContaining({ current: expect.anything() }),
+        { slug: 'csharp', deckTitle: 'C# Interview' },
+      );
+      expect(tree.root.findAllByProps({ testID: 'draw-result-share-status' })).toHaveLength(0);
+
+      shareResultFixture = { status: 'unavailable' };
+      await act(async () => {
+        tree2 = renderer.create(
+          <DrawResultScreen
+            navigation={{ navigate: vi.fn() } as any}
+            route={{ key: 'result', name: 'DrawResult', params: makeParams() } as any}
+          />,
+          { createNodeMock: () => ({}) },
+        );
+      });
+      await flush();
+
+      await act(async () => {
+        tree2.root.findByProps({ testID: 'draw-result-share-button' }).props.onPress();
+      });
+      await flush();
+
+      const status = tree2.root.findByProps({ testID: 'draw-result-share-status' });
+      expect(status.props.children).toBe('Sharing is not available on this device');
+      expect(collectText(tree2)).toContain('Share this pull');
+    } finally {
+      await act(async () => {
+        tree?.unmount();
+        tree2?.unmount();
+      });
+    }
+  });
+
+  it('requests a store review once for a Legendary pull after the delay', async () => {
+    vi.useFakeTimers();
+    maybeRequestRatingMock.mockClear();
+    let tree!: renderer.ReactTestRenderer;
+    try {
+      await act(async () => {
+        tree = renderer.create(
+          <DrawResultScreen
+            navigation={{ navigate: vi.fn() } as any}
+            route={{ key: 'result', name: 'DrawResult', params: makeParams() } as any}
+          />,
+        );
+      });
+      await flush();
+
+      expect(maybeRequestRatingMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RATING_PROMPT_DELAY_MS);
+      });
+
+      expect(maybeRequestRatingMock).toHaveBeenCalledWith('first-legendary');
+      expect(maybeRequestRatingMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => {
+        tree?.unmount();
+      });
+      vi.useRealTimers();
+    }
+  });
+
+  it('requests a store review on a seven-day streak when no Legendary was pulled', async () => {
+    vi.useFakeTimers();
+    maybeRequestRatingMock.mockClear();
+    const noLegParams = makeParams({
+      drawResult: {
+        ...DRAW_RESULT_FIXTURE,
+        cards: [
+          { stableUid: '1', question: 'Q1', difficulty: 3, rarity: 'COM' as const, tag: 'Core' },
+          { stableUid: '2', question: 'Q2', difficulty: 2, rarity: 'RAR' as const },
+        ],
+      },
+    });
+    let tree!: renderer.ReactTestRenderer;
+    let tree2!: renderer.ReactTestRenderer;
+    try {
+      streakFixture = { currentDailyStreak: 7 };
+      await act(async () => {
+        tree = renderer.create(
+          <DrawResultScreen
+            navigation={{ navigate: vi.fn() } as any}
+            route={{ key: 'result', name: 'DrawResult', params: noLegParams } as any}
+          />,
+        );
+      });
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RATING_PROMPT_DELAY_MS);
+      });
+      expect(maybeRequestRatingMock).toHaveBeenCalledWith('streak-7');
+
+      await act(async () => {
+        tree.unmount();
+      });
+      maybeRequestRatingMock.mockClear();
+      streakFixture = { currentDailyStreak: 6 };
+      await act(async () => {
+        tree2 = renderer.create(
+          <DrawResultScreen
+            navigation={{ navigate: vi.fn() } as any}
+            route={{ key: 'result', name: 'DrawResult', params: noLegParams } as any}
+          />,
+        );
+      });
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RATING_PROMPT_DELAY_MS);
+      });
+      expect(maybeRequestRatingMock).not.toHaveBeenCalledWith('streak-7');
+      expect(maybeRequestRatingMock).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        tree?.unmount();
+        tree2?.unmount();
+      });
+      vi.useRealTimers();
+    }
   });
 });
