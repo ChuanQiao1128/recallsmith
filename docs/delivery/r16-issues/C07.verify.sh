@@ -200,10 +200,17 @@ grep -Fq '"expo-updates": "~29.0.15"' mobile/package.json || fail "expo-updates 
 grep -Fq '"version": "1.6.0"' mobile/app.json             || fail "app.json version changed (OTA runtime 1.6.0)"
 grep -Fq '"vite": "7.2.4"' mobile/package.json             || fail "vite pin changed"
 if grep -rq "@sentry" mobile/src; then fail "@sentry reference under mobile/src (out of 1.6.0)"; fi
-# 5c. Every changed or untracked path is one of the eight scope files. Untracked scan is
+# 5b2. libraryCardTile.test.tsx: the LibraryCardRow fixture gains exactly one line (topic: null,).
+tile_ns="$(git diff --numstat "$mb" -- mobile/tests/unit/libraryCardTile.test.tsx | awk '{print $1"\t"$2}')"
+if [ -n "$tile_ns" ]; then
+  [ "$tile_ns" = "$(printf '1\t0')" ] || fail "libraryCardTile.test.tsx numstat is '$tile_ns', expected 1 added / 0 removed"
+  tile_add="$(git diff "$mb" -- mobile/tests/unit/libraryCardTile.test.tsx | grep -E '^\+[^+]' | sed 's/^+//' | sed 's/^[[:space:]]*//')"
+  [ "$tile_add" = "topic: null," ] || fail "libraryCardTile.test.tsx: the only added line must be 'topic: null,' (got: $tile_add)"
+fi
+# 5c. Every changed or untracked path is one of the nine scope files. Untracked scan is
 # pathspec-scoped: the driver symlinks mobile/node_modules into the worktree and the
 # `node_modules/` gitignore rule does not match a symlink.
-outside="$( { git diff --name-only "$mb"; git ls-files --others --exclude-standard -- mobile/src mobile/tests mobile/App.tsx mobile/app.json mobile/package.json mobile/package-lock.json mobile/eas.json mobile/vitest.config.ts mobile/tsconfig.json; } | sort -u | grep -Ev '^(mobile/src/types/deckExport\.ts|mobile/src/content/deckRepository\.ts|mobile/src/features/gacha/library/topics\.ts|mobile/src/features/gacha/library/libraryMapper\.ts|mobile/src/features/gacha/library/LibraryHeader\.tsx|mobile/src/screens/LibraryScreen\.tsx|mobile/tests/unit/libraryTopics\.test\.ts|mobile/tests/unit/deckRepositoryTopic\.test\.ts|docs/delivery/r16-issues/.*)$' || true )"
+outside="$( { git diff --name-only "$mb"; git ls-files --others --exclude-standard -- mobile/src mobile/tests mobile/App.tsx mobile/app.json mobile/package.json mobile/package-lock.json mobile/eas.json mobile/vitest.config.ts mobile/tsconfig.json; } | sort -u | grep -Ev '^(mobile/src/types/deckExport\.ts|mobile/src/content/deckRepository\.ts|mobile/src/features/gacha/library/topics\.ts|mobile/src/features/gacha/library/libraryMapper\.ts|mobile/src/features/gacha/library/LibraryHeader\.tsx|mobile/src/screens/LibraryScreen\.tsx|mobile/tests/unit/libraryTopics\.test\.ts|mobile/tests/unit/deckRepositoryTopic\.test\.ts|mobile/tests/unit/libraryCardTile\.test\.tsx|docs/delivery/r16-issues/.*)$' || true )"
 [ -z "$outside" ] || { echo "$outside" >&2; fail "files changed outside C07 scope"; }
 
 echo "C07 VERIFY OK"
