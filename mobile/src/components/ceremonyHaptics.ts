@@ -1,64 +1,123 @@
-// useCeremonyHaptics — exposes 3 vibration helpers wrapping expo-haptics.
-//
-// `expo-haptics` is OPTIONAL. Without it, every call is a no-op. Same wrapping
-// pattern as useCeremonyAudio.
-//
-// To activate:
-//   npx expo install expo-haptics
-//   npx expo prebuild
-//   # rebuild dev client
-//
-// Mapping recommendation:
-//   'tick'    — small selection feedback (per-card flip)
-//   'impact'  — pack rip moment
-//   'success' — Legendary card revealed
+// ceremonyHaptics — one haptic vocabulary with a rolling rate limit (≤ 3 events per
+// 1000 ms across every kind), Success at most once per ceremony and a Reduce-Motion
+// mode. Guarded require of expo-haptics; every call is a silent no-op without it.
+import { useMemo } from 'react';
 
-import { useCallback } from 'react';
+export type HapticImpact = 'light' | 'medium' | 'heavy' | 'soft' | 'rigid';
+export const HAPTIC_RATE_LIMIT = Object.freeze({ maxEvents: 3, windowMs: 1000 });
 
-function loadHapticsModule(): { Haptics: any | null } {
-  let Haptics: any = null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    Haptics = require('expo-haptics');
-  } catch {
-    Haptics = null;
-  }
-  return { Haptics };
+/** Pure rolling-window limiter. allow() records the event when it returns true. */
+export function createHapticLimiter(now: () => number = Date.now): { allow(): boolean; reset(): void } {
+  const stamps: number[] = [];
+  return {
+    allow(): boolean {
+      const t = now();
+      while (stamps.length > 0 && t - stamps[0] >= HAPTIC_RATE_LIMIT.windowMs) stamps.shift();
+      if (stamps.length >= HAPTIC_RATE_LIMIT.maxEvents) return false;
+      stamps.push(t);
+      return true;
+    },
+    reset(): void {
+      stamps.length = 0;
+    },
+  };
 }
 
-const { Haptics } = loadHapticsModule();
-export const ceremonyHapticsAvailable = !!Haptics;
+/** Minimal surface of expo-haptics this module touches. */
+export type ExpoHapticsLike = {
+  impactAsync(style: unknown): Promise<void>;
+  selectionAsync(): Promise<void>;
+  notificationAsync(type: unknown): Promise<void>;
+  ImpactFeedbackStyle: Record<string, unknown>;
+  NotificationFeedbackType: Record<string, unknown>;
+};
 
-export function useCeremonyHaptics() {
-  const tick = useCallback(() => {
-    if (!Haptics) return;
+export type CeremonyHapticsController = {
+  tick(): void;                                 // selectionAsync
+  impact(style?: HapticImpact): void;           // impactAsync(ImpactFeedbackStyle[Capitalised]); default 'medium'
+  success(): void;                              // notificationAsync(NotificationFeedbackType.Success) — at most ONCE per reset()
+  reset(opts?: { reduceMotion?: boolean }): void;
+  available: boolean;
+};
+
+// guarded require('expo-haptics') — a device mechanism only. Under vitest this is
+// never redirected by vi.mock, which is why the controller is dependency-injected.
+export function loadExpoHaptics(): ExpoHapticsLike | null {
+  try {
+    const mod = require('expo-haptics');
+    return mod ? (mod as ExpoHapticsLike) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function createCeremonyHapticsController(deps: {
+  haptics: ExpoHapticsLike | null;
+  now?: () => number;
+}): CeremonyHapticsController {
+  const { haptics } = deps;
+  const limiter = createHapticLimiter(deps.now);
+  let successUsed = false;
+  let rmLightUsed = false;
+  let reduceMotion = false;
+
+  function tick(): void {
+    if (!haptics) return;
+    if (reduceMotion) return;
+    if (!limiter.allow()) return;
     try {
-      Haptics.selectionAsync?.();
-    } catch {
-      /* noop */
-    }
-  }, []);
+      Promise.resolve(haptics.selectionAsync()).catch(() => {});
+    } catch {}
+  }
 
-  const impact = useCallback((style: 'light' | 'medium' | 'heavy' = 'medium') => {
-    if (!Haptics) return;
+  function impact(style: HapticImpact = 'medium'): void {
+    if (!haptics) return;
+    let markRmLight = false;
+    if (reduceMotion) {
+      if (style === 'light') {
+        if (rmLightUsed) return;
+        markRmLight = true;
+      } else if (style !== 'soft') {
+        return;
+      }
+    }
+    if (!limiter.allow()) return;
+    if (markRmLight) rmLightUsed = true;
+    const key = style.charAt(0).toUpperCase() + style.slice(1);
+    const mapped = haptics.ImpactFeedbackStyle[key] ?? haptics.ImpactFeedbackStyle.Medium;
     try {
-      const styles = Haptics.ImpactFeedbackStyle ?? {};
-      const mapped = styles[style.charAt(0).toUpperCase() + style.slice(1)] ?? styles.Medium;
-      Haptics.impactAsync?.(mapped);
-    } catch {
-      /* noop */
-    }
-  }, []);
+      Promise.resolve(haptics.impactAsync(mapped)).catch(() => {});
+    } catch {}
+  }
 
-  const success = useCallback(() => {
-    if (!Haptics) return;
+  function success(): void {
+    if (!haptics) return;
+    if (successUsed) return;
+    if (!limiter.allow()) return;
+    successUsed = true;
     try {
-      const types = Haptics.NotificationFeedbackType ?? {};
-      Haptics.notificationAsync?.(types.Success);
-    } catch {
-      /* noop */
-    }
-  }, []);
+      Promise.resolve(haptics.notificationAsync(haptics.NotificationFeedbackType.Success)).catch(() => {});
+    } catch {}
+  }
 
-  return { tick, impact, success, available: ceremonyHapticsAvailable };
+  function reset(opts?: { reduceMotion?: boolean }): void {
+    limiter.reset();
+    successUsed = false;
+    rmLightUsed = false;
+    reduceMotion = !!opts?.reduceMotion;
+  }
+
+  return { tick, impact, success, reset, available: haptics !== null };
+}
+
+export const ceremonyHapticsAvailable = loadExpoHaptics() !== null;
+
+let singleton: CeremonyHapticsController | null = null;
+export function getCeremonyHaptics(): CeremonyHapticsController {
+  if (!singleton) singleton = createCeremonyHapticsController({ haptics: loadExpoHaptics() });
+  return singleton;
+}
+
+export function useCeremonyHaptics(): CeremonyHapticsController {
+  return useMemo(() => getCeremonyHaptics(), []);
 }
