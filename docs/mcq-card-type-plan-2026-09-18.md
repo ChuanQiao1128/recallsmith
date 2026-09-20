@@ -61,7 +61,7 @@
 
 ## 3. 数据模型
 
-### 3.1 PostgreSQL（新迁移 `src_C/Vpc/Db/Migrations/018_cards_mcq.sql`，一条语句）
+### 3.1 PostgreSQL（新迁移 `src_C/Vpc/Db/Migrations/019_cards_mcq.sql`，一条语句）
 
 ```sql
 alter table cards add column if not exists mcq jsonb null;
@@ -93,7 +93,7 @@ PG jsonb 的键顺序是"先长度后字节"，所以存进去再读出来是 `{
 
 ### 3.3 Worker 导出（`src_C/Worker/S3/IS3DeckUploader.cs:50-61` `CardExportData`）
 
-作为**最后一个**属性追加，现有 9 个键的字节保持一致：
+在 `Topic` 之后追加（`Topic` 由 Wave C 的 C05 先落地，C00 §6 #2）；现有 9 个键与 `topic` 的字节保持一致：
 
 ```csharp
 [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -109,7 +109,7 @@ public JsonElement? Mcq { get; set; }
  "mcq":{"v":1,"options":[…],"shuffle":true,"qualifier":"LEAST operational overhead"}}
 ```
 
-`mcq` 缺席 = Q/A。deck.json 的 `version`（= buildId）、package.json `schemaVersion 1`、delta `schemaVersion 2`、manifest `schemaVersion 2` **都不升**（`content-delivery-v3.md:34`；`deckRepository.ts:912-922, 1158-1166`；`chunkedInstall.ts:106`）。manifest 不加新键（`ManifestRebuild` 从不读 `cards`，加 `mcqCount` 要新聚合查询而且没人用——否决）。
+有 `topic`（Wave C C05）时它排在 `revision` 之后、`mcq` 之前；`mcq` 缺席 = Q/A。deck.json 的 `version`（= buildId）、package.json `schemaVersion 1`、delta `schemaVersion 2`、manifest `schemaVersion 2` **都不升**（`content-delivery-v3.md:34`；`deckRepository.ts:912-922, 1158-1166`；`chunkedInstall.ts:106`）。manifest 不加新键（`ManifestRebuild` 从不读 `cards`，加 `mcqCount` 要新聚合查询而且没人用——否决）。
 
 ### 3.5 DeckDiff / 补丁
 
@@ -372,8 +372,8 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 ## 7. 分析
 
 - **Phase 1（只改服务端）**：`ProgressEvents.cs` 的 outbox CTE（`:400-443`）`left join decks / cards`（和 `ContentIntelligence.cs:131-136` 同样的 join），payload 加一个键 `'card_format', case when c.mcq is not null then 'mcq' else 'qa' end`。带 42703 容错（列不存在就重试不带这个键），保持单语句 ingest。客户端不改、隐私标签不改（这是内容元数据，不是行为数据）。
-- **Phase 3（内容上线前）**：Snowflake `stg_review_events` 投影 `card_format`（缺省 'qa'）并推导 `answer_mode`（card_format + app_version ≥ 1.6.0）；`user_baseline`（`001:131-137`）和 `expected_by_difficulty`（`:139-151`）的 GROUP BY 加 `answer_mode`；四条 Q/A 状态规则（`:204-218`）限定 `answer_mode='qa'`；MCQ 行显示 "MCQ · Not Assessed"。反方指出：如果等到 Phase 5 才分区，Phase 3–5 之间的历史会把 MCQ 和 Q/A 混在同一基线里，"人人答错的那张卡"会被标成 "Possibly Unclear" 并拿最高 fixPriorityScore。
-- **Phase 5（隐私标签更新 + 你对冻结文件 `src/sync` 签字之后）**：`ProgressEvent` 加可选 `answer` 对象（选中 key、正确 key、展示顺序、responseMs、changedPick、confidence），`schemaVersion 2`，由 `features.mcq.answerTelemetry`（默认 false）门控；后端用 side list `::jsonb` 进 outbox，不加列；`snowflake/002_mcq_marts.sql`：`mcq_option_picks`、`mart_mcq_option_daily`（**干扰项质量**：哪个错误选项最常被选）、`mart_mcq_card_quality_daily`（Guessable / Lure Trap / Contested）、`mart_mcq_domain_daily`（按域的答题时间）、校准（自信 vs 正确）、调度器验证查询；迁移 019 给快照表加可空列；控制台加 "Exam items" 列。
+- **Phase 3（内容上线前）**：Snowflake `stg_review_events` 投影 `card_format`（缺省 'qa'）并推导 `answer_mode`（`card_format = 'mcq'` 且事件信封 `client_features` 含 `'mcq'` 时为 `'mcq'`，否则 `'qa'`；`client_features` / `update_id` 由 C14 的信封字段 `clientFeatures` / `updateId` 落到 outbox payload，Snowflake 用 `array_contains('mcq'::variant, client_features)` 判断——不再看 `app_version`）；`user_baseline`（`001:131-137`）和 `expected_by_difficulty`（`:139-151`）的 GROUP BY 加 `answer_mode`；四条 Q/A 状态规则（`:204-218`）限定 `answer_mode='qa'`；MCQ 行显示 "MCQ · Not Assessed"。反方指出：如果等到 Phase 5 才分区，Phase 3–5 之间的历史会把 MCQ 和 Q/A 混在同一基线里，"人人答错的那张卡"会被标成 "Possibly Unclear" 并拿最高 fixPriorityScore。
+- **Phase 5（隐私标签更新 + 你对冻结文件 `src/sync` 签字之后）**：`ProgressEvent` 加可选 `answer` 对象（选中 key、正确 key、展示顺序、responseMs、changedPick、confidence），`schemaVersion 2`，由 `features.mcq.answerTelemetry`（默认 false）门控；后端用 side list `::jsonb` 进 outbox，不加列；`snowflake/002_mcq_marts.sql`：`mcq_option_picks`、`mart_mcq_option_daily`（**干扰项质量**：哪个错误选项最常被选）、`mart_mcq_card_quality_daily`（Guessable / Lure Trap / Contested）、`mart_mcq_domain_daily`（按域的答题时间）、校准（自信 vs 正确）、调度器验证查询；迁移 020 给快照表加可空列；控制台加 "Exam items" 列。
 - **不做**：新的 eventType（`card_observations` 会丢掉它）；把判定字符串当 `rating` 传；用 MCQ 的 dwell 和 Q/A 的比较。
 
 ---
@@ -399,11 +399,11 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 | 阶段 | 范围 | 退出条件 | 工作量 |
 |---|---|---|---|
 | **Phase 0 裁决 + 黄金内容**（和 Phase 1 并行） | 你在本文里回答第 11 节；写 5 张原创 MCQ（四个域各 1 + 1 张 choose-two）；建 ledger；加 AWS 商标 / 非关联声明 | 12 条裁决有答案；5 张卡追加到完整 AWS 文件后在 Phase 1 的导入器里零问题；每张有不含字母的 `A:`、d1–d3、ledger 行 | 1 天文档 + 3 小时写题 |
-| **Phase 1 服务端 + 控制台**（线上不可见） | 迁移 018；`Cards.cs` / `Helpers.cs` 的 cast + `JsonbCell` + `McqValidation` + explanation 门禁；`CardsPage` / `Publish` 的 select 与门禁；Worker `CardExportData.Mcq`（WhenWritingNull，最后一个属性）+ `PublishJobProcessor` 42703 容错 select + `DeckDiff.McqEquals` + `PreviousCardDocument`；`ProgressEvents` 的 `card_format` 标签；控制台类型 + API client + runner 守卫；Markdown 导入器（标记、校验、往返、fast-check）；文档 | **建 staging 行之前**：重新发布两个线上卡组，deck.json / chunks / manifest 除 buildId / sha 外字节一致；`ContentSerializationContractTests` 绿；API 测试 `mcq` 是 Object；导入器 40+ 用例绿；staging 卡组（retired）发布成功并从 staging manifest 可安装 | **9 天** |
+| **Phase 1 服务端 + 控制台**（线上不可见） | 迁移 019；`Cards.cs` / `Helpers.cs` 的 cast + `JsonbCell` + `McqValidation` + explanation 门禁；`CardsPage` / `Publish` 的 select 与门禁；Worker `CardExportData.Mcq`（WhenWritingNull，`Topic` 之后）+ `PublishJobProcessor` 42703 容错 select + `DeckDiff.McqEquals` + `PreviousCardDocument`；`ProgressEvents` 的 `card_format` 标签；控制台类型 + API client + runner 守卫；Markdown 导入器（标记、校验、往返、fast-check）；文档 | **建 staging 行之前**：重新发布两个线上卡组，deck.json / chunks / manifest 除 buildId / sha 外字节一致；`ContentSerializationContractTests` 绿；API 测试 `mcq` 是 Object；导入器 40+ 用例绿；staging 卡组（retired）发布成功并从 staging manifest 可安装 | **9 天** |
 | **Phase 2 手机端 1.6.0** | `deckExport` 类型、`normalizeMcq` / `isMcqCard`、mapper 各一行、`remoteConfig` + `featureFlags` + `useForceUpdateGate` 接入；`mcqVerdict` / `mcqShuffle` / `mcqConstants` + 性质测试；`sessionPlanner` 的 `kindHint` + `maxPerRun`；`McqReviewBody` / `McqActionDock` / 引导行；`SessionCardScreen` 分支 + 状态重置；SessionSummary 可选参数 | 现有全部套件不动仍绿；新测试绿；用**内部构建**（`EXPO_PUBLIC_CONTENT_BASE_URL` 指 staging）在 375pt 设备上过 Dynamic Type XL 和 VoiceOver；kill switch 三个开关各验一次；提交 App Store（只需通过审核，内容还没上） | **10 天** |
 | **Phase 3 分析分区 → 内容上线** | 先：Snowflake 分区 + `ContentIntelligence.cs` 的 live 回退限制 + 控制台横幅。然后，当 1.6.0 上架 ≥ 14 天**或** 7 日活跃里 ≥ 80% 是 1.6.0+：把黄金 5 + 10 张追加导入、发布、手动 rebuild manifest | 两个线上卡组的 Q/A 状态分区前后一致；1.5.0 设备上新卡显示为场景 Q/A 卡、delta 补丁生效、不崩；1.6.0 上三屏流程完整；含 ≥ 3 张 MCQ 的场次完成率和 dwell 中位数在可接受范围（否则 `maxPerRun` 降到 1） | 2 天 + 8 小时写题 |
 | **Phase 4 打磨 + 录题 lint + 节奏** | CardList 徽章、CardForm 只读面板、`describeMcqDiff`；`DrawnCardVm.tag`、CardDetail 芯片、Library 字样；导入器非阻断警告层；按频率表每次发布 5–10 张直到 ~40 | 警告不阻断；黄金 5 重导零警告；≥ 40 张 MCQ 上线且有 ledger；现有控制台和卡面测试绿 | 3 天 + 每题 30 分钟 |
-| **Phase 5 行为数据**（隐私标签更新 + `src/sync` 签字之后） | 可选 `answer` payload（flag 默认关）；ingest side list；`002_mcq_marts.sql`；迁移 019；快照导入 + 控制台 "Exam items" 列 | 标签先更新再开 flag；ingest 单语句测试绿；老形状事件不变；demo 卡组的 Q/A 状态前后一致 | 6 天 |
+| **Phase 5 行为数据**（隐私标签更新 + `src/sync` 签字之后） | 可选 `answer` payload（flag 默认关）；ingest side list；`002_mcq_marts.sql`；迁移 020；快照导入 + 控制台 "Exam items" 列 | 标签先更新再开 flag；ingest 单语句测试绿；老形状事件不变；demo 卡组的 Q/A 状态前后一致 | 6 天 |
 | **Phase 6 评估**（Phase 3 后 6–8 周，每卡 ≥ 30 次作答） | 重写 Guessable / Lure Trap / Contested 的卡（同 uid 升 revision）；跑调度验证和场次时长查询；决定要不要 `mcq-ladder-v1` 分支、要不要限制到期桶、`maxPerRun` 默认值、MCQ 占比要不要涨 | `docs/` 里一份带查询结果的决定记录 | 1–2 天 |
 
 反方修正了原估算（Phase 1 原写 6 天、Phase 2 原写 8 天）：把 CardForm 面板、CardList 徽章、`describeMcqDiff`、`drawCommit.tag`、CardDetail 芯片、Library 字样挪到 Phase 4 后，重估为 9 / 10。
@@ -412,7 +412,7 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 
 | 层 | 改动 | 文件 | 量 |
 |---|---|---|---|
-| DB | 018 迁移一列 | `src_C/Vpc/Db/Migrations/018_cards_mcq.sql` | S |
+| DB | 019 迁移一列 | `src_C/Vpc/Db/Migrations/019_cards_mcq.sql` | S |
 | Authoring API | GET/POST/PUT 读写 `mcq`（`$n::jsonb`）、`UpdateField` 加 `Cast`、`McqValidation.Canonicalize`、explanation 门禁、editor 允许键 | `Cards.cs`、`Helpers.cs`、`McqValidation.cs`（新） | M |
 | Authoring API（列表 / 预览 / 门禁） | `CardsPage.cs`、`Publish.cs` 的 select + `JsonbCell` + 入队前门禁 | 同名 | S |
 | Worker | `CardExportData.Mcq`、mapper 的 `Deserialize<JsonElement>`、`DeckDiff.McqEquals`、`PreviousCardDocument` | `IS3DeckUploader.cs`、`PublishJobProcessor.cs`、`DeckDiff.cs`、`ContentArtifactsGenerator.cs` | M |
@@ -426,7 +426,7 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 | 手机会话屏 | 状态 + 三个 handler + 分支 + 重置；`navigation/types.ts`；`SessionSummaryScreen` | 同名 | M |
 | 手机卡面（Phase 4） | `DrawnCardVm.tag`、CardDetail 芯片、Library 字样 | `drawCommit.ts`、`CardDetailScreen.tsx`、`LibraryCardTile.tsx` | S |
 | Snowflake + 控制台分区（Phase 3） | `answer_mode` 投影、基线分组、Q/A 规则限定、横幅 | `snowflake/001_content_intelligence_setup.sql`、`ContentIntelligence.cs`、`ContentIntelligencePage.tsx` | S |
-| 行为数据（Phase 5） | `answer` payload、ingest side list、`002_mcq_marts.sql`、迁移 019、快照 + 控制台 | `progressSync.ts`、`ProgressEvents.cs`、snowflake、`ContentIntelligenceSnapshotImport.cs` | S+M+L |
+| 行为数据（Phase 5） | `answer` payload、ingest side list、`002_mcq_marts.sql`、迁移 020、快照 + 控制台 | `progressSync.ts`、`ProgressEvents.cs`、snowflake、`ContentIntelligenceSnapshotImport.cs` | S+M+L |
 | 文档 | `content-delivery-v3.md`、`console-import-plan.md`、`aws-saa-mcq-authoring-guide.md`（新）、上架文案 | — | S |
 
 ---
@@ -496,5 +496,4 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 计划中、尚未创建的文件（frontend/tests/docsPaths.test.ts 的守卫要求在此登记）：
      - docs/aws-saa-mcq-authoring-guide.md
      - snowflake/002_mcq_marts.sql
-     - src_C/Vpc/Db/Migrations/018_cards_mcq.sql
 -->

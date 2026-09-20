@@ -27,6 +27,7 @@ DeveloperCards 的差异化不是“又一个题库”，而是把新知识变�
 4. AWS 卡片独立创作并由 AWS 官方资料核验；C# / .NET 卡片由 Microsoft 官方资料核验。
 5. 不销售随机抽卡币，不做重复卡碎片、付费正确率、付费掌握度或断签惩罚。
 6. 当前奖励政策保持“真实 full clear 得 1 抽”；本轮不借修 bug 改成分档奖励。
+   > 2026-09-21：裁决 6 已由 `docs/economy-v2-learn-to-earn-2026-09-19.md` §2（R1–R10，学一张赚一抽）替换；本条保留为历史。
 7. 到期学习是主任务，抽卡是奖励与新内容入口，不能让“继续抽”长期压过“开始学习”。
 
 ### 文档优先级
@@ -382,6 +383,7 @@ P0 中 `SETTLEMENT_PENDING` 只是进程内的逻辑状态，不是可恢复的�
 2. `sessionLimit`、进度 UI 与奖励分母来自同一 eligible uid 集合。
 3. `EXHAUSTED_EARLY` 不能成为发布后的合法用户终态。
 4. 当前奖励规则唯一：full clear +1；minimumGoal 不改变抽数。
+   > 2026-09-21：不变量 4 已由 `docs/economy-v2-learn-to-earn-2026-09-19.md` §3 的不变量 4' 替换；本条保留为历史。
 5. 新版成功 settlement 满足 `reward = available增量 + reserve增量`，且 `dropped=0`。
 6. Floor grant 与 session-earned reward 在存储、文案和 analytics 中可区分。
 7. 收藏、Difficulty、视觉 rarity、Coverage 与 Mastery 互不替代。
