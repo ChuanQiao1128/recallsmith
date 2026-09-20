@@ -22,4 +22,5 @@ export interface CardExport {
   CodeLanguage?: string | null; // 'js' | 'ts' | 'cs' | 'sql' | ...
   Difficulty: number;           // 1 / 2 / 3
   OrderInDeck: number;
+  Topic?: string | null;        // C05 cards.topic; absent in pre-018 files, null when untagged
 }
