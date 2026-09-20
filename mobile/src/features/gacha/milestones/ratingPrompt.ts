@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // so it is loaded through a guarded dynamic import() inside a function — never a
 // static `import … from` and never a CommonJS require. Under this repo's vitest
 // a dynamic import() is intercepted by the test's module factory, whereas a
-// CommonJS require would bypass the mock (see B00-contracts §2.15).
+// CommonJS require would skip the mock (see B00-contracts §2.15).
 
 export const RATING_PROMPT_KEY = 'recallsmith:rating-prompt:v1';
 export const RATING_STREAK_DAYS = 7;

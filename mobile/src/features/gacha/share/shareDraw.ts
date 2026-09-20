@@ -7,7 +7,7 @@ import type React from 'react';
 // guarded dynamic import() inside a function — never a static `import … from`
 // and never a CommonJS require. Under this repo's vitest a dynamic import() is
 // intercepted by the test's module factory, whereas a CommonJS require would
-// bypass the mock and reach Node's own resolver (see B00-contracts §2.15).
+// skip the mock and reach Node's own resolver (see B00-contracts §2.15).
 //
 // The sharing package cannot report whether the user dismissed the share sheet,
 // so a 'cancelled' status is only ever the re-entrant tap guarded by `inFlight`.
