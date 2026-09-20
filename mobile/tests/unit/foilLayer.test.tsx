@@ -25,7 +25,6 @@ vi.mock('expo-linear-gradient', () => {
 });
 
 import { FoilLayer, foilAvailable, prewarmFoilShader, FOIL_SKSL } from '../../src/components/ceremony/FoilLayer';
-import { HolographicLayer, skiaAvailable } from '../../src/components/HolographicLayer';
 
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -53,23 +52,5 @@ describe('FoilLayer', () => {
     expect(FOIL_SKSL).toContain('u_res');
     expect(FOIL_SKSL).toContain('u_lut');
     expect(FOIL_SKSL).toContain('half4 main');
-  });
-
-  it('HolographicLayer shim forwards to FoilLayer', () => {
-    expect(skiaAvailable).toBe(false);
-    let shimmer: any;
-    act(() => {
-      shimmer = renderer.create(
-        React.createElement(HolographicLayer, { variant: 'shimmer', width: 80, height: 116, accentColor: '#fff' }),
-      );
-    });
-    expect(shimmer.toJSON()).toBeNull();
-    let burst: any;
-    act(() => {
-      burst = renderer.create(
-        React.createElement(HolographicLayer, { variant: 'burst', width: 80, height: 116, accentColor: '#fff' }),
-      );
-    });
-    expect(burst.toJSON()).toBeNull();
   });
 });

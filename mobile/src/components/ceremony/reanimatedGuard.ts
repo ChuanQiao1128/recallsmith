@@ -1,7 +1,7 @@
 // reanimatedGuard — the single discriminant `motionAvailable` and the one
 // deterministic no-op surface every Wave B module reads animation from.
 //
-// This file exists to design out the crash at HolographicLayer.tsx:65-78, where a
+// This file exists to design out the crash in the old holographic renderer, where a
 // renderer destructured a Skia clock hook and a derived-value hook straight off the
 // Skia module — the derived-value hook is not a Skia export and the clock hook goes
 // through Skia's Reanimated proxy, so the table crashed at mount on any RAR/LEG card.

@@ -15,7 +15,7 @@
 // Animation comes only from the guard (B00 §2.1): Skia primitives from
 // SkiaModule, Reanimated hooks from the Reanimated surface — never the Skia
 // clock hook, never a derived-value hook off SkiaModule (the crash designed out
-// of HolographicLayer).
+// of the old holographic renderer).
 
 import React, { useEffect, useMemo } from 'react';
 import type { ImageSourcePropType } from 'react-native';

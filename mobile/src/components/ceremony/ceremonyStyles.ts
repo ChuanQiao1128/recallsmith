@@ -1,6 +1,6 @@
 // ceremonyStyles — the ceremony's shared StyleSheet. B08 seeds it with the
-// tap-to-flip table subset copied verbatim from CeremonyLottie (which B11 later
-// deletes); B09 appends the screen-level entries and B11 trims the leftovers.
+// tap-to-flip table subset from the old ceremony tree; B09 appends the
+// screen-level entries and B11 trims the leftovers.
 import { StyleSheet } from 'react-native';
 import { a11y } from '../../theme/a11y';
 import { colors } from '../../theme/colors';
@@ -104,19 +104,6 @@ export const ceremonyStyles = StyleSheet.create({
     lineHeight: 11,
     fontWeight: '700',
   },
-  tapCardHoloOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    opacity: 0.18,
-  },
-  tapCardBurst: {
-    position: 'absolute',
-    width: 80,
-    height: 80,
-    borderRadius: 999,
-    shadowColor: '#FFFFFF',
-    shadowOpacity: 0.9,
-    shadowRadius: 14,
-  },
   // Stays visible after the flip — soft accent-colored radial that gives
   // RAR/LEG cards continuous radiance. Sized w+28 × h+28 so it bleeds out
   // beyond the card edges. Low opacity keeps it ambient, not loud.
@@ -157,13 +144,7 @@ export const ceremonyStyles = StyleSheet.create({
     shadowColor: 'rgba(58,35,5,0.4)', shadowOpacity: 0.65, shadowRadius: 8, shadowOffset: { width: 0, height: 12 },
     elevation: 8, overflow: 'hidden',
   },
-  stageCardBack: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', padding: spacing.md },
   stageCardTear: { transform: [{ rotate: '8deg' }] },
-  flipWrap: { width: 200, height: 280 },
-  flipFace: {
-    ...StyleSheet.absoluteFillObject, borderRadius: 22, borderWidth: 3, borderColor: 'rgba(255,255,255,0.6)',
-    backgroundColor: colors.softMist, overflow: 'hidden',
-  },
   flipBackGradient: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', padding: spacing.md },
   flipFront: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.md },
   flipCard: {
@@ -175,8 +156,6 @@ export const ceremonyStyles = StyleSheet.create({
     backgroundColor: colors.softMist, borderWidth: 4, shadowColor: 'rgba(58,35,5,0.4)', shadowOpacity: 0.6,
     shadowRadius: 8, shadowOffset: { width: 0, height: 14 }, elevation: 10,
   },
-  // Kept for the styles contract; the leaf uses spillSampler instead.
-  orbitStage: { width: 248, height: 260, alignItems: 'center', justifyContent: 'center' },
   cardBackText: { color: colors.shine, fontSize: typography.bodySmall, fontWeight: '800' },
   cardRarityChip: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
   cardRarity: { color: colors.shine, fontSize: typography.caption, fontWeight: '900', letterSpacing: 0.6 },
