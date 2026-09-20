@@ -327,6 +327,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             progress: nextProgress,
             now,
             ownedSet: nextOwned,
+            mode,
           });
           setPlannedMinimumGoal(plannedChallenge.minimumGoal);
           // Sync sessionLimit to the planner's actual route length so
@@ -453,7 +454,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         stableUid: current.card.StableUid,
         rating,
         progressBefore: progress,
-        newCardEligible: true,
+        newCardEligible: mode !== 'sweep',
         dueBefore: dueTodayCount,
         remainingDueCount: nextState.remainingDueCount,
         now: nowAtRating,
@@ -461,7 +462,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       recordRewardStep(rewardStep, current.card.StableUid);
       const outcome = useSessionStore.getState().rewardOutcome;
       setLoadForecast(
-        forecastLine(
+        mode === 'sweep' ? null : forecastLine(
           computeTomorrowLoad({
             progress: nextState.updatedProgress,
             now: nowAtRating,
@@ -493,6 +494,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           progress: nextState.updatedProgress,
           now: nowAtRating,
           ownedSet,
+          mode,
         }).minimumGoal;
       setSessionDone(nextState.nextDone);
       setProgress(nextState.updatedProgress);
@@ -589,7 +591,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   }
   const ratingDockHeight = 164 + Math.max(insets.bottom, 8);
   const doneMinimumGoal =
-    plannedMinimumGoal ?? planChallengeRoute({ deck, progress, now, ownedSet }).minimumGoal;
+    plannedMinimumGoal ?? planChallengeRoute({ deck, progress, now, ownedSet, mode }).minimumGoal;
   const previewChecked = trialInfo.isTrial
     ? Math.min(trialInfo.previewCount, progress.filter(isLearned).length)
     : 0;

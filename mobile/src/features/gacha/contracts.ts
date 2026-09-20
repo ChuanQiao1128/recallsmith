@@ -68,7 +68,7 @@ export type HomeVM = {
 export type ChallengeRoute = {
   slug: string;
   deckTitle: string;
-  mode: 'mixed' | 'review-due' | 'learn-new';
+  mode: 'mixed' | 'review-due' | 'learn-new' | 'sweep';
   limit: number;
   minimumGoal: number;
   dueCount: number;

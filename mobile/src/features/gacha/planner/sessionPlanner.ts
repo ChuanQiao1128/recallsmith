@@ -1,9 +1,10 @@
 import type { DeckExport, CardExport } from '../../../types/deckExport';
 import type { CardProgress } from '../../../review/model';
-import type { OwnedGate } from '../contracts';
-import { buildChallengeRoute } from './sessionBuilder';
+import type { ChallengeRoute, OwnedGate } from '../contracts';
+import { buildChallengeRoute, buildSweepRoute } from './sessionBuilder';
 import { isLearnedProgress, isNewProgress, isScheduledProgress, startOfToday } from '../selectors/progressSelectors';
 import { formatDateKey } from '../../../review/model';
+import type { StudyMode } from '../../../navigation/types';
 
 export type CurrentCardLike = {
   card: CardExport;
@@ -80,7 +81,7 @@ export function pickNextCard(params: {
   deck?: DeckExport | null;
   progress: CardProgress[];
   now: Date;
-  mode: 'review-due' | 'learn-new' | 'mixed';
+  mode: 'review-due' | 'learn-new' | 'mixed' | 'sweep';
   avoidUid?: string | null;
   index?: { cards: CardExport[]; cardMap: Map<string, CardExport> } | null;
   ownedSet?: OwnedGate;
@@ -129,6 +130,26 @@ export function pickNextCard(params: {
   const pickUpdated = () => pickWith((card, progressEntry) => owns(card) && isUpdatedCard(card, progressEntry));
   const pickNew = () => pickWith((card, progressEntry) => owns(card) && isNewProgress(progressEntry));
 
+  // Sweep: every owned learned card, longest-unseen first, deck order as the
+  // tie-break; the due bucket is deliberately ignored (economy-v2 R8). A card
+  // just rated carries lastReviewedAt = now and so sinks to the end on its own.
+  const pickSweep = () => {
+    const ranked = cards
+      .map((card) => ({ card, progressEntry: progressMap.get(card.StableUid) }))
+      .filter(
+        (entry): entry is { card: CardExport; progressEntry: CardProgress } =>
+          !!entry.progressEntry && owns(entry.card) && isLearnedProgress(entry.progressEntry),
+      )
+      .sort(
+        (a, b) =>
+          (a.progressEntry.lastReviewedAt ?? 0) - (b.progressEntry.lastReviewedAt ?? 0) ||
+          a.card.OrderInDeck - b.card.OrderInDeck,
+      );
+    const first = ranked.find((entry) => !avoidUid || entry.card.StableUid !== avoidUid) ?? ranked[0] ?? null;
+    return first ? { card: cardMap.get(first.card.StableUid)!, progress: first.progressEntry } : null;
+  };
+
+  if (mode === 'sweep') return pickSweep();
   if (mode === 'review-due') return pickDue();
   if (mode === 'learn-new') return pickNew();
   return pickDue() ?? pickUpdated() ?? pickNew();
@@ -139,10 +160,21 @@ export function planChallengeRoute(params: {
   progress: CardProgress[];
   now?: Date;
   ownedSet?: OwnedGate;
-}) {
-  const { deck, progress, now = new Date(), ownedSet = null } = params;
+  mode?: StudyMode;
+}): ChallengeRoute {
+  const { deck, progress, now = new Date(), ownedSet = null, mode } = params;
   const dueCount = countDueToday(progress, now, ownedSet);
   const newCount = countNewAvailable(progress, ownedSet);
+
+  if (mode === 'sweep') {
+    return buildSweepRoute({
+      slug: deck.Slug,
+      deckTitle: deck.Title,
+      learnedCount: countLearned(progress, ownedSet),
+      dueCount,
+      newCount,
+    });
+  }
 
   return buildChallengeRoute({
     slug: deck.Slug,
