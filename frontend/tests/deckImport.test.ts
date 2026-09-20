@@ -49,6 +49,7 @@ function toExistingCard(card: ParsedCard, id: number, version: number): Card {
     realWorldUsage: card.realWorldUsage,
     codeSnippet: card.codeSnippet,
     codeLanguage: card.codeLanguage,
+    topic: card.topic ?? null,
     revision: 1,
     version,
     isDeleted: 0,
@@ -67,6 +68,7 @@ function contentOf(deck: ParsedDeck): Array<DeckCardContent & { orderInDeck: num
     codeSnippet: card.codeSnippet,
     codeLanguage: card.codeLanguage,
     realWorldUsage: card.realWorldUsage,
+    ...(card.topic !== undefined ? { topic: card.topic } : {}),
     orderInDeck: card.orderInDeck,
   }));
 }
@@ -463,6 +465,9 @@ const lineArb = fc
 
 const textArb = fc.array(lineArb, { minLength: 1, maxLength: 3 }).map((lines) => lines.join('\n'));
 
+// Topics are single line, trim-stable and far below TOPIC_MAX_LENGTH (4 words of WORDS ≤ 23 chars).
+const topicArb = fc.array(fc.constantFrom(...WORDS), { minLength: 1, maxLength: 4 }).map((words) => words.join(' '));
+
 // Code bodies may be indented, which the column 0 marker rule must preserve.
 const codeArb = fc
   .array(
@@ -488,6 +493,7 @@ const cardArb: fc.Arbitrary<DeckCardContent> = fc
       { nil: null },
     ),
     realWorldUsage: fc.option(textArb, { nil: null }),
+    topic: fc.option(topicArb, { nil: undefined }),
   })
   .map((r) => ({
     stableUid: r.stableUid,
@@ -497,6 +503,7 @@ const cardArb: fc.Arbitrary<DeckCardContent> = fc
     codeSnippet: r.code ? r.code.snippet : null,
     codeLanguage: r.code ? r.code.language : null,
     realWorldUsage: r.realWorldUsage,
+    ...(r.topic !== undefined ? { topic: r.topic } : {}),
   }));
 
 const deckArb = fc.record({

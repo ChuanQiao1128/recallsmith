@@ -57,6 +57,7 @@ describe('createCard puts the fields it accepts into the request', () => {
       question: 'What is a span?',
       explanation: 'A view over memory.',
       realWorldUsage: 'Parsing without allocating.',
+      topic: 'Networking',
       codeSnippet: 'var s = span[1..];',
       codeLanguage: 'csharp',
       difficulty: 3,
@@ -70,6 +71,7 @@ describe('createCard puts the fields it accepts into the request', () => {
       question: 'What is a span?',
       explanation: 'A view over memory.',
       realWorldUsage: 'Parsing without allocating.',
+      topic: 'Networking',
       codeSnippet: 'var s = span[1..];',
       codeLanguage: 'csharp',
       difficulty: 3,
@@ -86,7 +88,7 @@ describe('createCard puts the fields it accepts into the request', () => {
     // Omission is how a partial update says "do not change this". Sending an
     // explicit undefined would serialise away to the same thing here, but the
     // two stop being equivalent the moment anything reads Object.keys.
-    for (const absent of ['explanation', 'realWorldUsage', 'codeSnippet', 'codeLanguage', 'difficulty', 'orderInDeck', 'revision']) {
+    for (const absent of ['explanation', 'realWorldUsage', 'codeSnippet', 'codeLanguage', 'difficulty', 'orderInDeck', 'revision', 'topic']) {
       expect(Object.hasOwn(body, absent)).toBe(false);
     }
   });
@@ -100,6 +102,7 @@ describe('updateCard puts the fields it accepts into the request', () => {
       question: 'q',
       explanation: 'e',
       realWorldUsage: 'u',
+      topic: 'Networking',
       codeSnippet: 'c',
       codeLanguage: 'csharp',
       difficulty: 2,
@@ -115,6 +118,7 @@ describe('updateCard puts the fields it accepts into the request', () => {
       question: 'q',
       explanation: 'e',
       realWorldUsage: 'u',
+      topic: 'Networking',
       codeSnippet: 'c',
       codeLanguage: 'csharp',
       difficulty: 2,
@@ -131,7 +135,7 @@ describe('updateCard puts the fields it accepts into the request', () => {
     const body = bodyOf(httpMock.put);
     // This is what makes a partial edit safe: EditCardPage does not send
     // fields the form has no control for, and the server keeps whatever it had.
-    for (const absent of ['explanation', 'realWorldUsage', 'codeSnippet', 'codeLanguage', 'difficulty', 'orderInDeck', 'revision', 'stableUid']) {
+    for (const absent of ['explanation', 'realWorldUsage', 'codeSnippet', 'codeLanguage', 'difficulty', 'orderInDeck', 'revision', 'stableUid', 'topic']) {
       expect(Object.hasOwn(body, absent)).toBe(false);
     }
     expect(body.expectedVersion).toBe(4);
