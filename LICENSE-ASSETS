@@ -1,0 +1,42 @@
+RecallSmith asset licence — 2026-09-20
+
+The MIT licence in `LICENSE` covers the RecallSmith source code and documentation
+ONLY. It does NOT grant any rights to the visual or audio assets shipped with the
+app. Everything under `mobile/assets/` — the app icon and splash, pack covers,
+card backs, rarity frames, the foil LUT, the particle sheet, the glow sprite, and
+the sound effects — is excluded from the MIT grant.
+
+- Project-made art (icons, splash, frames, particles, glow, card backs, and the
+  project-generated pack covers): All rights reserved, Leo Qiao, 2026.
+- Third-party audio: licensed under the terms recorded per file in
+  `mobile/assets/sfx/LICENSES.md`. Nothing in this file overrides those per-file terms.
+
+## Inventory
+
+| Path | What | Origin | Licence |
+|---|---|---|---|
+| `mobile/assets/icon.png`, `mobile/assets/adaptive-icon.png`, `mobile/assets/splash-icon.png`, `mobile/assets/favicon.png` | App icon, adaptive icon, splash, favicon | project-made | All rights reserved, Leo Qiao, 2026 |
+| `mobile/assets/packs/` | Pack covers | project-made via `mobile/scripts/gen_packs.py` or commissioned | All rights reserved, Leo Qiao, 2026 |
+| `mobile/assets/packs/aws.png` (AWS pack cover) | AWS deck cover | TBD | TBD |
+| `mobile/assets/packs/*-back.png` | Card backs | project-made via `mobile/scripts/gen_card_back.py` | All rights reserved, Leo Qiao, 2026 |
+| `mobile/assets/ui/` | Rarity frames, foil LUT, particle sheet, glow sprite | project-made via `mobile/scripts/gen_card_frames.py` and `mobile/scripts/gen_particles.py` | All rights reserved, Leo Qiao, 2026 |
+| `mobile/assets/sfx/` | Sound effects | six synthetic placeholders from `mobile/scripts/gen_sfx.py`; replacements per `mobile/assets/sfx/LICENSES.md` | see `mobile/assets/sfx/LICENSES.md` |
+
+The AWS pack cover's origin is left `TBD` until the owner confirms whether it was
+project-generated or commissioned.
+
+## Third-party names
+
+Some deck titles name a vendor exam or a programming language (for example
+AWS SAA-C03, C#). Those names are used descriptively to identify the study
+material. RecallSmith is not affiliated with, sponsored by, or endorsed by any of
+those vendors, and it is not an official exam simulator.
+
+## How to add an asset
+
+1. Put the file in the correct directory under `mobile/assets/`.
+2. Add a row here (for art) or in `mobile/assets/sfx/LICENSES.md` (for audio).
+3. Never commit audio under CC-BY-NC, CC-BY-SA, "free for personal use", or an
+   unknown licence.
+4. Record Sonniss GDC-bundle files as "Sonniss royalty-free (GDC bundle licence)",
+   not CC0.

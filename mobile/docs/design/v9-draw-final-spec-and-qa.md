@@ -1,5 +1,7 @@
 # v9 Draw Final Spec + Quantitative QA Gates (Full Contract)
 
+> **Superseded — 2026-09-20.** 1.6.0 的 Seam of Light 仪式取代了本契约（阶段时长窗口、编排门、性能门、测试矩阵）。现行规范见 [v10-ceremony-seam-of-light.md](./v10-ceremony-seam-of-light.md)，评分见 [animation-quality-rubric.md](../qa/animation-quality-rubric.md)。以下内容仅作历史记录，不再是需求。
+
 Last updated: 2026-05-06  
 Scope: `mobile` only  
 Target screens: `HomeScreen`, `DrawScreen`, `DrawCeremonyScreen`, `DrawResultScreen`, `LibraryScreen`
