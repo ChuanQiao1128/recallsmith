@@ -185,6 +185,8 @@ vi.mock('../../src/features/gacha/rewards/sessionRewards', () => {
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { resolveDeckBySlug } from '../../src/content/deckRepository';
 import { pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
+import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
+import type { RatingRewardStep } from '../../src/features/gacha/rewards/sessionRewards';
 import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
 
 async function flush() {
@@ -520,5 +522,69 @@ describe('SessionCardScreen', () => {
     expect(bar).toHaveLength(1);
     expect(root).toHaveLength(1);
     expect(primarySurface).toHaveLength(1);
+  });
+
+  it('shows the tomorrow-load forecast line on the 20th new card and not on the 19th', async () => {
+    const stepWith = (newCardsLearnedToday: number): RatingRewardStep => ({
+      newCardPaid: false,
+      dueClearPaid: false,
+      pulls: 0,
+      walletBefore: null,
+      walletAfter: null,
+      applied: null,
+      newCardsLearnedToday,
+    });
+
+    const findForecast = (tree: renderer.ReactTestRenderer) =>
+      tree.root.findAll(
+        (node) => (node.type as any) === 'Text' && node.props?.testID === 'session-card-load-forecast',
+      );
+
+    async function rateOnce(count: number) {
+      const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+      let tree!: renderer.ReactTestRenderer;
+      await act(async () => {
+        tree = renderer.create(
+          <SessionCardScreen
+            navigation={navigation}
+            route={{
+              key: 'session-card',
+              name: 'SessionCard',
+              params: { slug: 'csharp', mode: 'mixed', limit: 1 },
+            } as any}
+          />,
+        );
+      });
+      await flush();
+
+      expect(findForecast(tree)).toHaveLength(0);
+
+      vi.mocked(settleRatingReward).mockResolvedValueOnce(stepWith(count));
+
+      await act(async () => {
+        findPressableByLabel(tree, 'Reveal answer').props.onPress();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        findPressableByLabel(tree, 'Good').props.onPress();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      return tree;
+    }
+
+    const before = await rateOnce(19);
+    expect(findForecast(before)).toHaveLength(0);
+    await act(async () => {
+      before.unmount();
+    });
+
+    const after = await rateOnce(20);
+    const line = findForecast(after);
+    expect(line).toHaveLength(1);
+    expect(String(line[0].props.children)).toMatch(/^At this pace, about \d+ cards? comes? due tomorrow\.$/);
   });
 });

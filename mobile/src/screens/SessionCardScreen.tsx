@@ -35,6 +35,7 @@ import {
   scheduleProgressSync,
 } from '../sync/progressSync';
 import { countDueToday, pickNextCard, planChallengeRoute } from '../features/gacha/planner/sessionPlanner';
+import { computeTomorrowLoad, forecastLine } from '../features/gacha/planner/loadForecast';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import { settleRatingReward } from '../features/gacha/rewards/sessionRewards';
 import {
@@ -121,6 +122,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   // caller passes one explicitly), then to 5 (the new default cap).
   const [plannedLimit, setPlannedLimit] = useState<number | null>(null);
   const [trialInfo, setTrialInfo] = useState<TrialInfo>(EMPTY_TRIAL_INFO);
+  const [loadForecast, setLoadForecast] = useState<string | null>(null);
   const sessionLimit = plannedLimit ?? routeLimit ?? 5;
   const isPremiumUser = usePremiumUser();
   const insets = useSafeAreaInsets();
@@ -207,6 +209,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setLoadError(null);
         setSessionDone(0);
         setShowAnswer(false);
+        setLoadForecast(null);
         setPlannedMinimumGoal(null);
         setPlannedLimit(null);
         trialRef.current = EMPTY_TRIAL_INFO;
@@ -457,6 +460,16 @@ export function SessionCardScreen({ navigation, route }: Props) {
       });
       recordRewardStep(rewardStep, current.card.StableUid);
       const outcome = useSessionStore.getState().rewardOutcome;
+      setLoadForecast(
+        forecastLine(
+          computeTomorrowLoad({
+            progress: nextState.updatedProgress,
+            now: nowAtRating,
+            ownedSet,
+            newCardsLearnedToday: rewardStep.newCardsLearnedToday,
+          }),
+        ),
+      );
       const trial = trialRef.current;
       if (trial.isTrial && (mode === 'learn-new' || mode === 'mixed') && trial.previewCount > 0) {
         const nextLearnedCount = nextState.updatedProgress.filter(isLearned).length;
@@ -609,6 +622,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
             </View>
           </View>
           <SessionProgressHeader vm={sessionVm} />
+          {loadForecast ? (
+            <Text testID="session-card-load-forecast" numberOfLines={2} style={styles.forecastLine}>
+              {loadForecast}
+            </Text>
+          ) : null}
           <ScrollView
             testID="screen-session-card-primary-surface"
             style={styles.scroll}
@@ -792,6 +810,14 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingTop: spacing.xs,
+  },
+  forecastLine: {
+    marginTop: spacing.xs,
+    marginBottom: 4,
+    fontSize: typography.caption,
+    color: colors.inkSecondary,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   trialPreview: {
     marginBottom: spacing.xs,
