@@ -198,6 +198,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const cameraStyle = Reanimated.useAnimatedStyle(() => ({
     transform: [{ scale: timeline.cameraScale.value }, { rotate: `${timeline.cameraRot.value}deg` }],
   }));
+  // Screen-wide dim for the LEG tell (§3.2 "backdrop dims 30 %"). Lives here, not in the
+  // 280×360 stage canvas: dimming only the canvas rectangle drew a grey box on the light page.
+  const dimStyle = Reanimated.useAnimatedStyle(() => ({ opacity: timeline.dim.value }));
 
   const goResult = useCallback(() => {
     navigation.replace('DrawResult', {
@@ -552,6 +555,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
           </Pressable>
         ) : null}
 
+        <Reanimated.View pointerEvents="none" style={[styles.dimOverlay, dimStyle]} />
         <Reanimated.View style={[styles.content, cameraStyle]}>
           <Text
             style={styles.phaseCopyHidden}
