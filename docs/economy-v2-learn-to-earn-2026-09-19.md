@@ -1,6 +1,6 @@
 # 经济规则修正案 v2：学一张赚一抽（2026-09-19）
 
-> 状态：**待 owner 签字**（签字方式：把下面"签字"一节的三个 `[ ]` 改成 `[x]` 并提交）。签字前不得写任何经济相关代码——否则会出现第二套没有文档的经济。
+> 状态：**已签字（2026-09-21）**——owner 以聊天指令「开始 Wave C」授权，由 Claude 代为勾选并随 Wave C 的 setup commit 提交；实现见 `docs/delivery/r16-issues/C00-contracts.md`。签字前不得写任何经济相关代码——否则会出现第二套没有文档的经济。
 > 修正对象：`docs/gacha-acquisition-learning-loop-plan.md` 裁决 6 与不变量 4；`mobile/gacha-v7.md` §2.2。
 > 实现归属：`docs/delivery-wave-1.6-plan-2026-09-19.md` Wave C 的 C01（奖励 + 账本）、C02（拆额度 + 预估提示）、C04（总复习）。
 
@@ -61,6 +61,6 @@
 
 ## 6. 签字
 
-- [ ] 我同意用第 2 节的规则表替换裁决 6 与不变量 4，并在 `gacha-acquisition-learning-loop-plan.md` 与 `gacha-v7.md` 各加一行指向本文件。
-- [ ] 总复习模式不给抽（R8）。
-- [ ] 允许对冻结文件做以下例外：`src/content/deckRepository.ts` 两个 mapper 各加一行（`Topic`，之后 `Mcq`）；`src/sync/progressSync.ts` 加 `clientFeatures` / `updateId` 两个可选字段（Wave C 的 C14）。除此之外冻结继续有效。
+- [x] 我同意用第 2 节的规则表替换裁决 6 与不变量 4，并在 `gacha-acquisition-learning-loop-plan.md` 与 `gacha-v7.md` 各加一行指向本文件。
+- [x] 总复习模式不给抽（R8）。
+- [x] 允许对冻结文件做以下例外：`src/content/deckRepository.ts` 两个 mapper 各加一行（`Topic`，之后 `Mcq`）；`src/sync/progressSync.ts` 加 `clientFeatures` / `updateId` 两个可选字段（Wave C 的 C14）。除此之外冻结继续有效。
