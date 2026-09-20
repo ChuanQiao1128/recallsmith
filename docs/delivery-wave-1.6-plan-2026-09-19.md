@@ -226,5 +226,4 @@ FRONTEND_PATHS='mobile frontend'       # 适配 #2/#3 按根分派
 <!-- paths-not-on-disk
 计划中、尚未创建的文件（frontend/tests/docsPaths.test.ts 的守卫要求在此登记）：
      - docs/design/v10-ceremony-seam-of-light.md
-     - frontend/tests/deckImport.mcq.test.ts
 -->

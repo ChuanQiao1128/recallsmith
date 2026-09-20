@@ -13,6 +13,7 @@ import {
   type ParsedDeck,
 } from '../src/lib/deckImport';
 import type { Card } from '../src/types/card';
+import type { McqBlob, McqOption } from '../src/types/mcq';
 
 // The document from docs/console-import-plan.md, copied verbatim. If the shared
 // format ever drifts, this is the test that notices.
@@ -50,6 +51,7 @@ function toExistingCard(card: ParsedCard, id: number, version: number): Card {
     codeSnippet: card.codeSnippet,
     codeLanguage: card.codeLanguage,
     topic: card.topic ?? null,
+    ...(card.mcq !== undefined ? { mcq: card.mcq } : {}),
     revision: 1,
     version,
     isDeleted: 0,
@@ -69,6 +71,7 @@ function contentOf(deck: ParsedDeck): Array<DeckCardContent & { orderInDeck: num
     codeLanguage: card.codeLanguage,
     realWorldUsage: card.realWorldUsage,
     ...(card.topic !== undefined ? { topic: card.topic } : {}),
+    ...(card.mcq !== undefined ? { mcq: card.mcq } : {}),
     orderInDeck: card.orderInDeck,
   }));
 }
@@ -479,6 +482,39 @@ const codeArb = fc
   )
   .map((lines) => lines.join('\n'));
 
+// A local copy of the MCQ generator (tests/support/* is out of scope). Generates
+// only cards for which validateMcq returns [], and hands back the difficulty and
+// question stem the card must carry so the blob validates.
+const mcqArb: fc.Arbitrary<{ mcq: McqBlob; difficulty: number; question: string }> = fc
+  .integer({ min: 3, max: 6 })
+  .chain((n) =>
+    fc
+      .record({
+        difficulty: fc.integer({ min: 1, max: 3 }),
+        stem: lineArb,
+        qualifier: fc.option(fc.constantFrom('LEAST operational overhead', 'MOST cost-effective'), { nil: null }),
+        texts: fc.uniqueArray(lineArb, { minLength: n, maxLength: n }),
+        correctIdx: fc.subarray([...Array(n).keys()], { minLength: 1, maxLength: Math.min(3, n - 1) }),
+        correctWhy: fc.array(fc.option(lineArb, { nil: null }), { minLength: n, maxLength: n }),
+        wrongWhy: fc.array(lineArb, { minLength: n, maxLength: n }),
+      })
+      .map((r) => {
+        const correctSet = new Set(r.correctIdx);
+        const options: McqOption[] = r.texts.map((text, i) => {
+          const correct = correctSet.has(i);
+          return { key: String.fromCharCode(97 + i), text, why: correct ? r.correctWhy[i] : r.wrongWhy[i], correct };
+        });
+        const required = r.correctIdx.length;
+        const chooseSuffix = required === 2 ? ' (Choose two.)' : required === 3 ? ' (Choose three.)' : '';
+        const qualifierSentence = r.qualifier ? ` We want the ${r.qualifier} here.` : '';
+        return {
+          mcq: { v: 1, qualifier: r.qualifier, shuffle: true, options } as McqBlob,
+          difficulty: r.difficulty,
+          question: `${r.stem}${qualifierSentence}${chooseSuffix}`,
+        };
+      }),
+  );
+
 const cardArb: fc.Arbitrary<DeckCardContent> = fc
   .record({
     stableUid: uidArb,
@@ -494,17 +530,25 @@ const cardArb: fc.Arbitrary<DeckCardContent> = fc
     ),
     realWorldUsage: fc.option(textArb, { nil: null }),
     topic: fc.option(topicArb, { nil: undefined }),
+    mcq: fc.option(mcqArb, { nil: null }),
   })
-  .map((r) => ({
-    stableUid: r.stableUid,
-    difficulty: r.difficulty,
-    question: r.question,
-    explanation: r.explanation,
-    codeSnippet: r.code ? r.code.snippet : null,
-    codeLanguage: r.code ? r.code.language : null,
-    realWorldUsage: r.realWorldUsage,
-    ...(r.topic !== undefined ? { topic: r.topic } : {}),
-  }));
+  .map((r) => {
+    const base = {
+      stableUid: r.stableUid,
+      explanation: r.explanation,
+      codeSnippet: r.code ? r.code.snippet : null,
+      codeLanguage: r.code ? r.code.language : null,
+      realWorldUsage: r.realWorldUsage,
+      ...(r.topic !== undefined ? { topic: r.topic } : {}),
+    };
+    if (r.mcq) {
+      // An MCQ card takes its difficulty (1-3) and stem from the generator so the
+      // blob validates; the mcq key is spread in.
+      return { ...base, difficulty: r.mcq.difficulty, question: r.mcq.question, mcq: r.mcq.mcq };
+    }
+    // A Q/A card is exactly today's object, with no mcq key.
+    return { ...base, difficulty: r.difficulty, question: r.question };
+  });
 
 const deckArb = fc.record({
   slug: fc.constantFrom('csharp-backend-fundamentals', 'deck-two', 'x1', 'net-core-002'),
