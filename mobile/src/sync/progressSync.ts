@@ -9,6 +9,7 @@ import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../review/storage';
 import { syncDrawStateNow } from './drawStateSync';
 import { invalidateDrawStateCache } from '../features/gacha/draw/drawStateCache';
+import { getClientCapabilities } from './clientCapabilities';
 import {
   getCachedQueue,
   setCachedQueue,
@@ -1483,6 +1484,7 @@ async function syncProgressOnce(
   let pushed = 0;
 
   const deviceId = await getDeviceId();
+  const caps = await getClientCapabilities();
 
   for (let round = 0; round < 20; round++) {
     const batch = await peekProgressEvents(userSub, BATCH);
@@ -1495,6 +1497,8 @@ async function syncProgressOnce(
         deviceId,
         clientPlatform: Platform.OS,
         clientVersion: getClientVersion(),
+        clientFeatures: caps.clientFeatures,
+        updateId: caps.updateId,
         events: batch.map((ev: any) => ({
           eventId: ev.eventId,
           schemaVersion: ev.schemaVersion ?? 1,
