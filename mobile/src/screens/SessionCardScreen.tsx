@@ -36,7 +36,7 @@ import {
 } from '../sync/progressSync';
 import { countDueToday, pickNextCard, planChallengeRoute } from '../features/gacha/planner/sessionPlanner';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
-import { computeSessionRewardPulls } from '../features/gacha/rewards/rewardResolver';
+import { settleRatingReward } from '../features/gacha/rewards/sessionRewards';
 import {
   buildRatedSessionState,
   buildSessionProgressVM,
@@ -132,6 +132,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const sessionRouteIndex = useSessionStore((state) => state.currentIndex);
   const startSession = useSessionStore((state) => state.startSession);
   const recordSessionRating = useSessionStore((state) => state.recordRating);
+  const recordRewardStep = useSessionStore((state) => state.recordRewardStep);
   const advanceSession = useSessionStore((state) => state.advanceSession);
   useEffect(() => {
     return () => {
@@ -444,6 +445,18 @@ export function SessionCardScreen({ navigation, route }: Props) {
       // would delete the progress of every card the gate happened to exclude,
       // and the gate's own grandfather rule reads that progress back.
       await saveDeckProgress(deck, nextState.updatedProgress);
+      const rewardStep = await settleRatingReward({
+        slug: deck.Slug,
+        stableUid: current.card.StableUid,
+        rating,
+        progressBefore: progress,
+        newCardEligible: true,
+        dueBefore: dueTodayCount,
+        remainingDueCount: nextState.remainingDueCount,
+        now: nowAtRating,
+      });
+      recordRewardStep(rewardStep, current.card.StableUid);
+      const outcome = useSessionStore.getState().rewardOutcome;
       const trial = trialRef.current;
       if (trial.isTrial && (mode === 'learn-new' || mode === 'mixed') && trial.previewCount > 0) {
         const nextLearnedCount = nextState.updatedProgress.filter(isLearned).length;
@@ -482,11 +495,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             slug: deck.Slug,
             deckTitle: deck.Title,
             sessionDone: nextState.nextDone,
-            rewardPulls: computeSessionRewardPulls({
-              sessionDone: nextState.nextDone,
-              sessionLimit,
-              minimumGoal,
-            }),
+            rewardPulls: outcome.rewardPulls,
             masteredCount: Math.max(
               0,
               nextState.updatedProgress.filter((item) => item.stage >= 4).length -
@@ -504,6 +513,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           minimumGoal,
           dueCount: nextState.remainingDueCount,
           streakEarned: useSessionStore.getState().streakEarned,
+          reward: outcome,
         });
       }
     } finally {
@@ -567,29 +577,6 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const ratingDockHeight = 164 + Math.max(insets.bottom, 8);
   const doneMinimumGoal =
     plannedMinimumGoal ?? planChallengeRoute({ deck, progress, now, ownedSet }).minimumGoal;
-  const doneRewardPulls = computeSessionRewardPulls({
-    sessionDone,
-    sessionLimit,
-    minimumGoal: doneMinimumGoal,
-  });
-  // Reward shown to user as motivation if they finish the run. Computed
-  // assuming sessionDone === sessionLimit so the value reflects the
-  // "full clear" outcome regardless of where they currently are.
-  const fullClearReward = computeSessionRewardPulls({
-    sessionDone: sessionLimit,
-    sessionLimit,
-    minimumGoal: doneMinimumGoal,
-  });
-  // Only show the stake pill while there's still room to full-clear and
-  // a meaningful reward exists. Also hides on trivial sessions (≤2
-  // cards, e.g. preview runs) where the "FULL CLEAR · +1 PULL" copy
-  // looks silly and adds visual noise. 3+ cards is the threshold where
-  // "full clear" feels like an actual goal.
-  const showFullClearStake =
-    !!current
-    && sessionLimit >= 3
-    && sessionDone < sessionLimit
-    && fullClearReward > 0;
   const previewChecked = trialInfo.isTrial
     ? Math.min(trialInfo.previewCount, progress.filter(isLearned).length)
     : 0;
@@ -621,25 +608,6 @@ export function SessionCardScreen({ navigation, route }: Props) {
               </Text>
             </View>
           </View>
-          {/* Full-clear reward stake — gold uppercase pill. Two states:
-              • Mid-session: "FULL CLEAR · +N PULLS" (the goal)
-              • Final stretch (≤3 cards left): "{remaining} TO GO · +N PULLS"
-                — finish-line framing, gives the user a sprint feeling
-                without animating (Animated.loop is battery-expensive). */}
-          {showFullClearStake ? (
-            <View style={styles.fullClearStakePill} testID="session-card-fullclear-stake">
-              <Text style={styles.fullClearStakeText} numberOfLines={1}>
-                {(() => {
-                  const remaining = sessionLimit - sessionDone;
-                  const pullLabel = fullClearReward === 1 ? 'PULL' : 'PULLS';
-                  if (remaining <= 3 && sessionDone > 0) {
-                    return `${remaining} TO GO · +${fullClearReward} ${pullLabel}`;
-                  }
-                  return `FULL CLEAR · +${fullClearReward} ${pullLabel}`;
-                })()}
-              </Text>
-            </View>
-          ) : null}
           <SessionProgressHeader vm={sessionVm} />
           <ScrollView
             testID="screen-session-card-primary-surface"
@@ -676,7 +644,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                           slug: deck.Slug,
                           deckTitle: deck.Title,
                           sessionDone,
-                          rewardPulls: doneRewardPulls,
+                          rewardPulls: useSessionStore.getState().rewardOutcome.rewardPulls,
                           masteredCount: progress.filter((item) => item.stage >= 4).length,
                         })
                       : navigation.replace('SessionSummary', {
@@ -840,25 +808,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textTransform: 'uppercase',
     letterSpacing: 1.2,
-  },
-  // Full-clear reward stake pill — gold accent, low-key but always
-  // visible during the run.
-  fullClearStakePill: {
-    alignSelf: 'center',
-    marginTop: spacing.xs,
-    marginBottom: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: 'rgba(232,184,90,0.16)',
-    borderWidth: 1,
-    borderColor: 'rgba(232,184,90,0.35)',
-  },
-  fullClearStakeText: {
-    color: colors.gold,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 1.0,
   },
   trialPreviewBody: {
     marginTop: 2,

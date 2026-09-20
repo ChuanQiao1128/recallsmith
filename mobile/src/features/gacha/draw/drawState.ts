@@ -1,5 +1,6 @@
 import type { RewardWalletState } from '../rewards/rewardWallet';
 import type { LibraryCardRow } from '../library/libraryMapper';
+import { FREE_PULL_CAP } from '../constants';
 
 export type DrawStateKind = 'locked' | 'available' | 'reward-pending' | 'wallet-full-with-reserve';
 
@@ -57,7 +58,7 @@ export function buildDrawState(params: {
     };
   }
 
-  if (wallet.availablePulls >= 30 && wallet.reservePulls > 0) {
+  if (wallet.availablePulls >= FREE_PULL_CAP && wallet.reservePulls > 0) {
     return {
       state: 'wallet-full-with-reserve',
       title: 'Wallet full, reserve waiting',
@@ -81,8 +82,8 @@ export function buildDrawState(params: {
     state: 'locked',
     title: 'Draw locked for now',
     helper: hasTodayWork
-      ? 'Clear today’s route first, then come back for new pulls.'
-      : 'No reward pulls are waiting yet. Finish another short run to earn one.',
+      ? 'Learn a new card or clear today’s due cards, then come back for new pulls.'
+      : 'No reward pulls are waiting yet. Learn a new card to earn one.',
     ctaLabel: 'View library',
     canOpen: false,
   };

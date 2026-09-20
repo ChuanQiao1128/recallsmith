@@ -29,8 +29,8 @@ export function DebugMenuScreen({ navigation }: Props) {
     if (busy) return;
     setBusy(true);
     try {
-      await saveRewardWalletState({ availablePulls: 30, reservePulls: 5 });
-      setLastResult('Wallet seeded 30/5.');
+      await saveRewardWalletState({ availablePulls: 60, reservePulls: 5 });
+      setLastResult('Wallet seeded 60/5.');
     } catch (e: any) {
       setLastResult(`Seed failed: ${e?.message ?? String(e)}`);
     } finally {
@@ -146,12 +146,12 @@ export function DebugMenuScreen({ navigation }: Props) {
             <Pressable
               testID="debug-seed-wallet"
               accessibilityRole="button"
-              accessibilityLabel="Seed wallet 30/5"
+              accessibilityLabel="Seed wallet 60/5"
               disabled={busy}
               style={({ pressed }) => [styles.ceremonyButton, busy && styles.dangerButtonDisabled, pressed && styles.dangerButtonPressed]}
               onPress={() => void handleSeedWallet()}
             >
-              <Text style={styles.ceremonyButtonText}>Seed wallet 30/5</Text>
+              <Text style={styles.ceremonyButtonText}>Seed wallet 60/5</Text>
             </Pressable>
             <Pressable
               testID="debug-only-legendary"

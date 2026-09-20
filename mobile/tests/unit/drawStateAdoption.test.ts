@@ -51,7 +51,7 @@ function okResponse(data: any) {
   return { success: true, data, error: null, traceId: 't', version: '1' };
 }
 
-const ZERO = { decks: 0, ownedAdded: 0, pityRaised: 0, addedPulls: 0, dropped: 0 };
+const ZERO = { decks: 0, ownedAdded: 0, pityRaised: 0, addedPulls: 0, dropped: 0, ledgerDecks: 0, uidsAdded: 0 };
 
 describe('anon gacha state adoption', () => {
   beforeEach(() => {
@@ -95,11 +95,11 @@ describe('anon gacha state adoption', () => {
     await saveRewardWalletState({ availablePulls: 10, reservePulls: 0 });
     store.set(ANON_SEEDED_KEY, '1');
     setActiveUserSubForStorage('user-a');
-    await saveRewardWalletState({ availablePulls: 28, reservePulls: 0 });
+    await saveRewardWalletState({ availablePulls: 58, reservePulls: 0 });
 
     const result = await adoptAnonGachaState();
 
-    expect(await loadRewardWalletState()).toEqual({ availablePulls: 30, reservePulls: 5 });
+    expect(await loadRewardWalletState()).toEqual({ availablePulls: 60, reservePulls: 5 });
     expect(result.addedPulls).toBe(7);
     expect(result.dropped).toBe(3);
     expect(store.has(ANON_WALLET_KEY)).toBe(false);

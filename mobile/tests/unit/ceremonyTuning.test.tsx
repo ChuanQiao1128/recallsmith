@@ -225,7 +225,7 @@ describe('CeremonyTuning screen + DebugMenu ceremony seeds', () => {
     expect((globalThis as any).cancelAnimationFrame).toHaveBeenCalled();
   });
 
-  it('DebugMenu seeds the wallet at 30/5 and reports it', async () => {
+  it('DebugMenu seeds the wallet at 60/5 and reports it', async () => {
     const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -235,8 +235,8 @@ describe('CeremonyTuning screen + DebugMenu ceremony seeds', () => {
       tree.root.findByProps({ testID: 'debug-seed-wallet' }).props.onPress();
     });
     await act(async () => {});
-    expect(saveRewardWalletState).toHaveBeenCalledWith({ availablePulls: 30, reservePulls: 5 });
-    expect(allText(tree)).toContain('Wallet seeded 30/5');
+    expect(saveRewardWalletState).toHaveBeenCalledWith({ availablePulls: 60, reservePulls: 5 });
+    expect(allText(tree)).toContain('Wallet seeded 60/5');
   });
 
   it('DebugMenu owns every non-Legendary card of the active deck and leaves Legendary unowned', async () => {

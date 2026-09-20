@@ -305,9 +305,9 @@ describe('home primary CTA uniqueness', () => {
     },
     {
       label: 'wallet-full',
-      wallet: { availablePulls: 30, reservePulls: 5 },
+      wallet: { availablePulls: 60, reservePulls: 5 },
       expectedPrimaryCta: 'Start today’s challenge',
-      expectedDrawBadge: 'Wallet full (30 + 5)',
+      expectedDrawBadge: 'Wallet full (60 + 5)',
       expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },

@@ -66,7 +66,7 @@ describe('drawState', () => {
 
   it('marks draw as wallet-full-with-reserve when reserve is waiting behind a full wallet', () => {
     const state = buildDrawState({
-      wallet: { availablePulls: 30, reservePulls: 2 },
+      wallet: { availablePulls: 60, reservePulls: 2 },
       hasTodayWork: false,
     });
 
@@ -90,9 +90,9 @@ describe('drawState', () => {
 
 describe('consumePulls', () => {
   it('spends one available pull and backfills from reserve', () => {
-    const result = consumePullsFromWallet({ availablePulls: 30, reservePulls: 2 }, 1);
+    const result = consumePullsFromWallet({ availablePulls: 60, reservePulls: 2 }, 1);
 
-    expect(result.wallet).toEqual({ availablePulls: 30, reservePulls: 1 });
+    expect(result.wallet).toEqual({ availablePulls: 60, reservePulls: 1 });
     expect(result.spent).toBe(1);
     expect(result.promotedFromReserve).toBe(1);
   });

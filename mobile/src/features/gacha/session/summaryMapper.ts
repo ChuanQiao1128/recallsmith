@@ -1,6 +1,6 @@
 import type { HomeCtaKind } from '../selectors/homeSelectors';
-import type { ResolvedSessionReward } from '../rewards/rewardResolver';
-import { resolveSessionReward } from '../rewards/rewardResolver';
+import { rewardLine as buildRewardLine, resolveSessionReward } from '../rewards/rewardResolver';
+import type { ResolvedSessionReward, RewardOutcome } from '../rewards/rewardResolver';
 import type { RewardWalletState } from '../rewards/rewardWallet';
 
 export const COPY = {
@@ -14,11 +14,10 @@ export const COPY = {
     partial: 'Progress logged for today.',
   },
   reward: {
-    sectionFullClear: 'Full clear reward',
+    sectionFullClear: 'Run reward',
     sectionProgress: "Today's reward",
     sectionNoReward: 'Session update',
     badge: (pulls: number) => (pulls > 0 ? `+${pulls} pull${pulls === 1 ? '' : 's'}` : 'Progress saved'),
-    gained: (pulls: number) => `+${pulls} free pull${pulls === 1 ? '' : 's'} added`,
     noPull: 'No free pulls this run',
     walletReady: (available: number) => `${available} ready to use`,
     walletReserve: (available: number, reserve: number) => `${available} ready · ${reserve} pending in reserve`,
@@ -163,6 +162,7 @@ export function buildSessionSummaryVM(params: {
     newToLearning: number;
     learningToMastered: number;
   };
+  reward?: RewardOutcome | null;
 }): { vm: SessionSummaryVM; resolvedReward: ResolvedSessionReward } {
   const {
     deckTitle,
@@ -174,6 +174,7 @@ export function buildSessionSummaryVM(params: {
     streakBefore = null,
     streakAfter = null,
     transitions,
+    reward,
   } = params;
 
   const resolvedReward = resolveSessionReward({
@@ -181,7 +182,9 @@ export function buildSessionSummaryVM(params: {
     sessionLimit,
     minimumGoal,
     wallet: wallet ?? { availablePulls: 0, reservePulls: 0 },
+    reward: reward ?? null,
   });
+  const outcome = resolvedReward.outcome;
 
   const completionLabel = resolvedReward.completedFullRun
     ? COPY.completion.fullClear
@@ -201,12 +204,12 @@ export function buildSessionSummaryVM(params: {
       ? COPY.reward.sectionProgress
       : COPY.reward.sectionNoReward;
 
-  const rewardLine = resolvedReward.rewardPulls > 0 ? COPY.reward.gained(resolvedReward.rewardPulls) : COPY.reward.noPull;
+  const rewardLine = buildRewardLine(outcome);
   const walletLine = resolveWalletLine(resolvedReward.walletAfter);
   const legacyRewardBody =
     wallet == null
       ? resolvedReward.rewardPulls > 0
-        ? `+${resolvedReward.rewardPulls} free pull${resolvedReward.rewardPulls === 1 ? '' : 's'} earned for this run.`
+        ? rewardLine
         : 'Progress saved for this run.'
       : resolvedReward.rewardMessage;
 
@@ -249,8 +252,8 @@ export function buildSessionSummaryVM(params: {
       badge: COPY.reward.badge(resolvedReward.rewardPulls),
       pulls: resolvedReward.rewardPulls,
       walletBefore: {
-        available: wallet?.availablePulls ?? 0,
-        reserve: wallet?.reservePulls ?? 0,
+        available: (outcome.walletBefore ?? wallet)?.availablePulls ?? 0,
+        reserve: (outcome.walletBefore ?? wallet)?.reservePulls ?? 0,
       },
       walletAfter: {
         available: resolvedReward.walletAfter.availablePulls,

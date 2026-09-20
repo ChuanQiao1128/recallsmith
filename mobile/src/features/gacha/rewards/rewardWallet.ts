@@ -403,3 +403,17 @@ export async function applySessionRewardToWallet(sessionId: string, rewardPulls:
     alreadyApplied: false,
   };
 }
+
+/** Read → applyRewardToWallet → save. The single wallet write R1/R2 make; the ledger/marker
+ *  write always precedes it (under-grant on a crash, same rationale as :375-394). */
+export async function grantPullsToStoredWallet(count: number): Promise<{
+  walletBefore: RewardWalletState;
+  walletAfter: RewardWalletState;
+  applied: AppliedRewardWalletState;
+}> {
+  const walletBefore = await loadRewardWalletState();
+  const applied = applyRewardToWallet(walletBefore, count);
+  const walletAfter = { availablePulls: applied.availablePulls, reservePulls: applied.reservePulls };
+  await saveRewardWalletState(walletAfter);
+  return { walletBefore, walletAfter, applied };
+}

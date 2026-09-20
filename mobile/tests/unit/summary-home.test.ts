@@ -4,8 +4,6 @@ import { buildHomeVM } from '../../src/features/gacha/selectors/homeSelectors';
 
 describe('buildSessionSummaryVM', () => {
   it('builds full-run summary copy with wallet-aware reward text', () => {
-    // v3 reward calibration: full clear → +1 pull (was +2). See
-    // computeSessionRewardPulls in rewardResolver.
     const summary = buildSessionSummaryVM({
       deckTitle: 'C# Interview',
       sessionDone: 5,
@@ -13,6 +11,16 @@ describe('buildSessionSummaryVM', () => {
       minimumGoal: 1,
       dueCount: 3,
       wallet: { availablePulls: 0, reservePulls: 0 },
+      reward: {
+        newCardPulls: 1,
+        newCardUids: ['u1'],
+        dueClearPulls: 0,
+        rewardPulls: 1,
+        applied: 1,
+        dropped: 0,
+        walletBefore: { availablePulls: 0, reservePulls: 0 },
+        walletAfter: { availablePulls: 1, reservePulls: 0 },
+      },
     });
 
     expect(summary.vm.completionLabel).toBe('Full run cleared');
@@ -21,9 +29,8 @@ describe('buildSessionSummaryVM', () => {
   });
 
   it('falls back to neutral reward copy when wallet is unavailable', () => {
-    // v3: hitting only minimumGoal (not full clear) earns 0 pulls now.
-    // The summary copy still distinguishes "no reward earned this run"
-    // from "no wallet info available".
+    // economy-v2: a run that earns no pull still distinguishes "no reward
+    // earned this run" from "no wallet info available".
     const summary = buildSessionSummaryVM({
       deckTitle: 'C# Interview',
       sessionDone: 1,
@@ -32,7 +39,7 @@ describe('buildSessionSummaryVM', () => {
       dueCount: 3,
     });
 
-    // Below full clear → progress saved, no pull badge
+    // No reward outcome → progress saved, no pull badge
     expect(summary.vm.nextActionLabel).toBe('Keep momentum');
   });
 
@@ -44,10 +51,11 @@ describe('buildSessionSummaryVM', () => {
       minimumGoal: 1,
       dueCount: 0,
       wallet: { availablePulls: 3, reservePulls: 0 },
+      reward: null,
     });
 
     expect(summary.vm.rewardBadge).toBe('Progress saved');
-    expect(summary.vm.rewardBody).toMatch(/progress saved/i);
+    expect(summary.vm.rewardBody).toMatch(/no free pulls this run/i);
   });
 });
 

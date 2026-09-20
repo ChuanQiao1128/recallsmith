@@ -2,6 +2,7 @@
 export type StudyMode = 'learn-new' | 'review-due' | 'mixed';
 
 import type { MockHomeState } from '../mock/types';
+import type { RewardOutcome } from '../features/gacha/rewards/rewardResolver';
 
 export type RootStackParamList = {
   Splash: undefined;
@@ -192,6 +193,7 @@ export type RootStackParamList = {
     minimumGoal: number;
     dueCount: number;
     streakEarned?: boolean;
+    reward?: RewardOutcome;
   };
 
   SignIn: { email?: string } | undefined;
