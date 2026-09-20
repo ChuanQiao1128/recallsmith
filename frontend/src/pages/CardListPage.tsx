@@ -310,6 +310,7 @@ export function CardListPage() {
                       <td className="px-3 py-2 text-slate-800">{card.question}</td>
                       <td className="px-3 py-2">
                         <RarityBadge difficulty={card.difficulty} />
+                        {card.mcq ? <span data-testid="card-mcq-badge" className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border bg-slate-100 text-slate-700 border-slate-200">MCQ</span> : null}
                       </td>
                       <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.createdAt).toLocaleString()}</td>
                       <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.updatedAt).toLocaleString()}</td>
