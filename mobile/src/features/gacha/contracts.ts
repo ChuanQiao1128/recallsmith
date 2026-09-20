@@ -25,6 +25,9 @@ export type DeckSummary = {
   newToday: number;
   masteredApprox: number;
   percent: number;
+  /** Owned cards at stage >= MASTERY_STAGE_THRESHOLD (isMasteredProgress). masteredApprox keeps
+   *  meaning "learned" and still feeds percent; only Home's Mastered ✓ / Deck mastered read this. */
+  masteredCount?: number;
 };
 
 export type TodayCounts = {

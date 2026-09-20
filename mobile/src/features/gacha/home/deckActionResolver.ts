@@ -14,7 +14,7 @@ import type { CalendarDay, DeckSummary } from '../contracts';
 import { resolveEffectiveOwned } from '../draw/effectiveOwned';
 import { countLearned, countNewAvailable } from '../planner/sessionPlanner';
 import type { HomeDeckActionHint } from '../selectors/homeSelectors';
-import { buildUpcoming, clamp01 } from '../selectors/progressSelectors';
+import { buildUpcoming, clamp01, isMasteredProgress } from '../selectors/progressSelectors';
 
 export type DeckAction =
   | { kind: 'open'; slug: string }
@@ -152,6 +152,7 @@ export async function loadHomeDeckSummaries(params: {
         plannedToday: 0,
         newToday: 0,
         masteredApprox: 0,
+        masteredCount: 0,
         percent: 0,
       });
       continue;
@@ -185,6 +186,7 @@ export async function loadHomeDeckSummaries(params: {
         plannedToday: 0,
         newToday: 0,
         masteredApprox: 0,
+        masteredCount: 0,
         percent: 0,
       });
       continue;
@@ -203,6 +205,12 @@ export async function loadHomeDeckSummaries(params: {
     // uids that mean nothing here.
     const ownedSet = await resolveEffectiveOwned(String((deck as any).Slug), progress);
     const learned = countLearned(progress, ownedSet);
+    // F11: "mastered" is stage >= 4, not "reviewed once". `isOwned` in sessionPlanner is
+    // private, so the gate is inlined; a studied card is always owned (grandfathered), so
+    // this can only ever be <= learned.
+    const mastered = progress.filter(
+      (item) => (ownedSet === null || ownedSet.has(item.stableUid)) && isMasteredProgress(item),
+    ).length;
     // "Fresh" stops meaning "a card in the deck file you have not studied" and
     // starts meaning "a card you hold and have not studied". This is the whole
     // point of the phase and the number that visibly moves: a new account with
@@ -244,6 +252,7 @@ export async function loadHomeDeckSummaries(params: {
       plannedToday: dueToday,
       newToday: fresh,
       masteredApprox: learned,
+      masteredCount: mastered,
       percent: clamp01(learned / denom),
     });
   }
