@@ -515,146 +515,12 @@ describe('DrawCeremonyScreen v9', () => {
     expect(ctaText?.props.numberOfLines).toBe(1);
   });
 
-  it('shows deterministic reveal semantics for reduced-motion when lottie path is available', async () => {
-    vi.resetModules();
-    vi.doMock('../../src/components/CeremonyLottie', async () => {
-      const actual = await vi.importActual<any>('../../src/components/CeremonyLottie');
-      const React = require('react');
-      return {
-        ...actual,
-        ceremonyLottieAvailable: true,
-        CeremonyLottie: ({ onAnimationFinish }: any) =>
-          React.createElement('View', { testID: 'mock-ceremony-lottie', onAnimationFinish }),
-      };
-    });
-
-    const { DrawCeremonyScreen: DrawCeremonyScreenWithLottie } = await import(
-      '../../src/screens/DrawCeremonyScreen'
-    );
-    (ReactNative as any).__setReduceMotionEnabled(true);
-
+  it('keeps normal-motion multi choreography and cadence parity', async () => {
     const replace = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <DrawCeremonyScreenWithLottie
-          navigation={{ replace } as any}
-          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT } } as any}
-        />,
-      );
-      await Promise.resolve();
-    });
-
-    expect(tree.root.findByProps({ testID: 'draw-ceremony-reveal-rarity' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'draw-ceremony-reveal-question' })).toBeTruthy();
-    expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
-
-    await act(async () => {
-      vi.advanceTimersByTime(REDUCED_TIMING.flashReveal - 1);
-      await Promise.resolve();
-    });
-    expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
-    expect(replace).not.toHaveBeenCalled();
-
-    await act(async () => {
-      vi.advanceTimersByTime(1);
-      await Promise.resolve();
-    });
-    expect(tree.root.findByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toBeTruthy();
-
-    await act(async () => {
-      vi.advanceTimersByTime(REDUCED_TIMING.settle - 1);
-      await Promise.resolve();
-    });
-    expect(replace).not.toHaveBeenCalled();
-
-    await act(async () => {
-      vi.advanceTimersByTime(1);
-      await Promise.resolve();
-    });
-    expect(replace).toHaveBeenCalledTimes(1);
-
-    vi.doUnmock('../../src/components/CeremonyLottie');
-    vi.resetModules();
-  });
-
-  it('ignores early lottie finish before settle', async () => {
-    vi.resetModules();
-    vi.doMock('../../src/components/CeremonyLottie', async () => {
-      const actual = await vi.importActual<any>('../../src/components/CeremonyLottie');
-      const React = require('react');
-      return {
-        ...actual,
-        ceremonyLottieAvailable: true,
-        CeremonyLottie: ({ onAnimationFinish }: any) =>
-          React.createElement('View', { testID: 'mock-ceremony-lottie', onAnimationFinish }),
-      };
-    });
-
-    const { DrawCeremonyScreen: DrawCeremonyScreenWithLottie } = await import(
-      '../../src/screens/DrawCeremonyScreen'
-    );
-
-    const replace = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <DrawCeremonyScreenWithLottie
-          navigation={{ replace } as any}
-          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT } } as any}
-        />,
-      );
-    });
-
-    armCeremonySwipe(tree);
-
-    await act(async () => {
-      vi.advanceTimersByTime(1000);
-    });
-
-    const lottie = tree.root.findByProps({ testID: 'mock-ceremony-lottie' });
-    act(() => {
-      lottie.props.onAnimationFinish();
-    });
-    expect(replace).not.toHaveBeenCalled();
-
-    await act(async () => {
-      vi.advanceTimersByTime(1140);
-    });
-    expect(tree.root.findByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toBeTruthy();
-
-    const settledLottie = tree.root.findByProps({ testID: 'mock-ceremony-lottie' });
-    act(() => {
-      settledLottie.props.onAnimationFinish();
-    });
-    expect(replace).toHaveBeenCalledTimes(1);
-
-    vi.doUnmock('../../src/components/CeremonyLottie');
-    vi.resetModules();
-  });
-
-  it('keeps normal-motion lottie multi choreography and cadence parity', async () => {
-    vi.resetModules();
-    vi.doMock('../../src/components/CeremonyLottie', async () => {
-      const actual = await vi.importActual<any>('../../src/components/CeremonyLottie');
-      const React = require('react');
-      return {
-        ...actual,
-        ceremonyLottieAvailable: true,
-        CeremonyLottie: ({ onAnimationFinish }: any) =>
-          React.createElement('View', { testID: 'mock-ceremony-lottie', onAnimationFinish }),
-      };
-    });
-
-    const { DrawCeremonyScreen: DrawCeremonyScreenWithLottie } = await import(
-      '../../src/screens/DrawCeremonyScreen'
-    );
-
-    const replace = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <DrawCeremonyScreenWithLottie
+        <DrawCeremonyScreen
           navigation={{ replace } as any}
           route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT } } as any}
         />,
@@ -677,7 +543,7 @@ describe('DrawCeremonyScreen v9', () => {
       await Promise.resolve();
     });
     expect(tree.root.findByProps({ testID: 'draw-ceremony-orbit-stage' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'draw-ceremony-orbit-mode' }).props.children).toBe('lottie');
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-orbit-mode' }).props.children).toBe('fallback');
     expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
 
     const orbitStart = parseFloat(
@@ -727,35 +593,17 @@ describe('DrawCeremonyScreen v9', () => {
     act(() => {
       tree.unmount();
     });
-
-    vi.doUnmock('../../src/components/CeremonyLottie');
-    vi.resetModules();
   });
 
-  it('keeps lottie single draw path free of multi-only orbit choreography', async () => {
-    vi.resetModules();
-    vi.doMock('../../src/components/CeremonyLottie', async () => {
-      const actual = await vi.importActual<any>('../../src/components/CeremonyLottie');
-      const React = require('react');
-      return {
-        ...actual,
-        ceremonyLottieAvailable: true,
-        CeremonyLottie: ({ onAnimationFinish }: any) =>
-          React.createElement('View', { testID: 'mock-ceremony-lottie', onAnimationFinish }),
-      };
-    });
-
-    const { DrawCeremonyScreen: DrawCeremonyScreenWithLottie } = await import(
-      '../../src/screens/DrawCeremonyScreen'
-    );
-
+  it('reaches the tap-to-flip table by timer when tapFlow is on and flips only on the table', async () => {
+    // Grammar: the table is entered from settle by timer (settleMs + tableTailMs), never a native callback.
     const replace = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <DrawCeremonyScreenWithLottie
+        <DrawCeremonyScreen
           navigation={{ replace } as any}
-          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: SINGLE_DRAW_RESULT } } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT, tapFlow: true } } as any}
         />,
       );
       await Promise.resolve();
@@ -764,24 +612,332 @@ describe('DrawCeremonyScreen v9', () => {
     armCeremonySwipe(tree);
 
     await act(async () => {
+      vi.advanceTimersByTime(620 + 300 + 940 + 1);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress();
+      await Promise.resolve();
+    });
+    expect(tree.root.findAllByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'tap-card-0' }).props.accessibilityLabel).toBe('Card 1 of 2, face down');
+
+    await act(async () => {
+      vi.advanceTimersByTime(280);
+      await Promise.resolve();
+    });
+    expect(
+      tree.root.findAll((n) => (n.type as any) === 'Text').find((n) => n.props.children === 'Show result'),
+    ).toBeTruthy();
+
+    await act(async () => {
+      vi.advanceTimersByTime(300 + 500);
+      await Promise.resolve();
+    });
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-cards-on-table' })).toBeTruthy();
+    expect(
+      tree.root.findAll((n) => (n.type as any) === 'Text').find((n) => n.props.children === 'Skip · 0/2'),
+    ).toBeTruthy();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress();
+      await Promise.resolve();
+    });
+    expect(
+      tree.root.findAll((n) => (n.type as any) === 'Text').find((n) => n.props.children === 'Skip · 1/2'),
+    ).toBeTruthy();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'tap-card-1' }).props.onPress();
+      await Promise.resolve();
+    });
+    expect(
+      tree.root.findAll((n) => (n.type as any) === 'Text').find((n) => n.props.children === 'Continue'),
+    ).toBeTruthy();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-ceremony-primary-cta' }).props.onPress();
+      await Promise.resolve();
+    });
+    expect(replace).toHaveBeenCalledWith(
+      'DrawResult',
+      expect.objectContaining({
+        revealedUids: ['1', '2'],
+        ceremonyEcho: expect.objectContaining({ tableReached: true }),
+      }),
+    );
+  });
+
+  it('keeps the rarity word out of every text before a card is face up', async () => {
+    // Grammar: the rarity word is withheld from the tree until a card is face up (B00 §3.6).
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: SINGLE_DRAW_RESULT, tapFlow: true } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(collectText(tree)).not.toContain('Rare');
+    expect(collectText(tree)).not.toContain('Legendary');
+
+    armCeremonySwipe(tree);
+    expect(collectText(tree)).not.toContain('Rare');
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+    expect(collectText(tree)).not.toContain('Rare');
+
+    await act(async () => {
+      vi.advanceTimersByTime(180);
+      await Promise.resolve();
+    });
+    expect(collectText(tree)).not.toContain('Rare');
+
+    await act(async () => {
+      vi.advanceTimersByTime(360);
+      await Promise.resolve();
+    });
+    expect(collectText(tree)).not.toContain('Rare');
+
+    await act(async () => {
       vi.advanceTimersByTime(220);
       await Promise.resolve();
     });
-    expect(tree.root.findByProps({ testID: 'draw-ceremony-single-pack-flyin' })).toBeTruthy();
-    expect(tree.root.findAllByProps({ testID: 'draw-ceremony-multi-flyin' })).toHaveLength(0);
+    expect(collectText(tree)).not.toContain('Rare');
+    expect(collectText(tree)).not.toContain('Legendary');
 
     await act(async () => {
-      vi.advanceTimersByTime(640);
+      vi.advanceTimersByTime(200 + 500);
       await Promise.resolve();
     });
-    expect(tree.root.findByProps({ testID: 'mock-ceremony-lottie' })).toBeTruthy();
-    expect(tree.root.findAllByProps({ testID: 'draw-ceremony-orbit-stage' })).toHaveLength(0);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress();
+      await Promise.resolve();
+    });
+    expect(collectText(tree)).toContain('Rare');
+  });
 
-    act(() => {
-      tree.unmount();
+  it('reduced motion with tapFlow keeps the reveal on the table with no flash', async () => {
+    // Grammar: Reduce Motion is a parallel path that still reaches the table; the flash never fires.
+    (ReactNative as any).__setReduceMotionEnabled(true);
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT, tapFlow: true } } as any}
+        />,
+      );
+      await Promise.resolve();
     });
 
-    vi.doUnmock('../../src/components/CeremonyLottie');
+    expect(phaseTitle(tree)).toContain('Pack open');
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-reveal-flash' }).props.style[1].opacity).toBe(0);
+
+    await act(async () => {
+      vi.advanceTimersByTime(180);
+      await Promise.resolve();
+    });
+    expect(
+      tree.root.findAll((n) => (n.type as any) === 'Text').find((n) => n.props.children === 'Show result'),
+    ).toBeTruthy();
+
+    await act(async () => {
+      vi.advanceTimersByTime(240);
+      await Promise.resolve();
+    });
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-cards-on-table' })).toBeTruthy();
+    expect(
+      tree.root.findAll((n) => (n.type as any) === 'Text').find((n) => n.props.children === 'Skip · 0/2'),
+    ).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-reveal-flash' }).props.style[1].opacity).toBe(0);
+    expect(replace).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress();
+      await Promise.resolve();
+    });
+    expect(
+      tree.root.findAll((n) => (n.type as any) === 'Text').find((n) => n.props.children === 'Skip · 1/2'),
+    ).toBeTruthy();
+  });
+
+  it('exposes the pack as an accessible button whose activate action starts the ceremony', async () => {
+    // Grammar: onTear is shared — the pack's activate action starts the same sequence as a swipe.
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const pack = tree.root.findByProps({ accessibilityLabel: 'Reward pack' });
+    expect(pack.props.accessibilityRole).toBe('button');
+    expect(pack.props.accessibilityActions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'activate' })]),
+    );
+
+    await act(async () => {
+      pack.props.onAccessibilityAction({ nativeEvent: { actionName: 'activate' } });
+      await Promise.resolve();
+    });
+    expect(phaseTitle(tree)).toContain('Pack inbound');
+  });
+
+  it('renders the fallback stage when motion is unavailable and still reaches settle', async () => {
+    // Grammar: under vitest the renderer is always 'fallback'; the Skia canvas never mounts.
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: SINGLE_DRAW_RESULT } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-fallback-stage' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'draw-ceremony-stage-canvas' })).toHaveLength(0);
+
+    armCeremonySwipe(tree);
+
+    await act(async () => {
+      vi.advanceTimersByTime(300 + 180 + 360 + 220);
+      await Promise.resolve();
+    });
+    expect(phaseTitle(tree)).toContain('Cards in place');
+  });
+
+  it('spills exactly as many cards as were drawn', async () => {
+    // Grammar: the deal renders exactly cards.length spill views, never padded.
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    armCeremonySwipe(tree);
+
+    await act(async () => {
+      vi.advanceTimersByTime(980);
+      await Promise.resolve();
+    });
+    expect(tree.root.findAllByProps({ testID: 'draw-ceremony-spill-card-0' }).length).toBeGreaterThanOrEqual(1);
+    expect(tree.root.findAllByProps({ testID: 'draw-ceremony-spill-card-1' }).length).toBeGreaterThanOrEqual(1);
+    expect(tree.root.findAllByProps({ testID: 'draw-ceremony-spill-card-2' })).toHaveLength(0);
+  });
+
+  it('lets a repeat user compress from hold without leaving the ceremony', async () => {
+    // Grammar: skipPolicy returns only 'none' | 'compress'; compress never calls goResult.
     vi.resetModules();
+    vi.doMock('../../src/features/gacha/draw/ceremonyPrefs', async () => ({
+      ...(await vi.importActual<any>('../../src/features/gacha/draw/ceremonyPrefs')),
+      readCeremoniesCompleted: async () => 1,
+    }));
+    const { DrawCeremonyScreen: Screen } = await import('../../src/screens/DrawCeremonyScreen');
+
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <Screen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    armCeremonySwipe(tree);
+
+    await act(async () => {
+      vi.advanceTimersByTime(620 + 179);
+      await Promise.resolve();
+    });
+    expect(tree.root.findAllByProps({ testID: 'draw-ceremony-fast-forward' })).toHaveLength(0);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-fast-forward' })).toBeTruthy();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'draw-ceremony-fast-forward' }).props.onPress();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(0 + 588 + 280);
+      await Promise.resolve();
+    });
+    expect(tree.root.findByProps({ testID: 'screen-draw-ceremony-primary-cta' })).toBeTruthy();
+    expect(replace).not.toHaveBeenCalled();
+
+    vi.doUnmock('../../src/features/gacha/draw/ceremonyPrefs');
+    vi.resetModules();
+  });
+
+  it('never shows a fast-forward control on a first-ever ceremony before settle', async () => {
+    // Grammar: skipPolicy fails closed — a first-ever ceremony shows nothing before settle.
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const assertControls = () => {
+      expect(tree.root.findAllByProps({ testID: 'draw-ceremony-fast-forward' })).toHaveLength(0);
+      expect(tree.root.findByProps({ accessibilityLabel: 'Leave ceremony' })).toBeTruthy();
+    };
+
+    assertControls();
+    armCeremonySwipe(tree);
+    assertControls();
+
+    await act(async () => {
+      vi.advanceTimersByTime(620);
+      await Promise.resolve();
+    });
+    assertControls();
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+    assertControls();
+
+    await act(async () => {
+      vi.advanceTimersByTime(940);
+      await Promise.resolve();
+    });
+    assertControls();
   });
 });
