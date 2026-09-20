@@ -38,6 +38,7 @@ export interface CreateCardParams {
   orderInDeck?: number;
   stableUid?: string;
   realWorldUsage?: string;
+  topic?: string;
 }
 
 export interface UpdateCardParams {
@@ -48,6 +49,7 @@ export interface UpdateCardParams {
   codeSnippet?: string;
   codeLanguage?: string;
   realWorldUsage?: string;
+  topic?: string;
   difficulty?: number;
   orderInDeck?: number;
   stableUid?: string;
@@ -110,6 +112,7 @@ function createParamsFor(deckId: number, card: ParsedCard): CreateCardParams {
     codeSnippet: optionalText(card.codeSnippet),
     codeLanguage: optionalText(card.codeLanguage),
     realWorldUsage: optionalText(card.realWorldUsage),
+    topic: optionalText(card.topic ?? null),
     difficulty: card.difficulty,
     orderInDeck: card.orderInDeck,
   };
@@ -125,6 +128,7 @@ function updateParamsFor(deckId: number, action: ImportUpdate): UpdateCardParams
     codeSnippet: optionalText(action.card.codeSnippet),
     codeLanguage: optionalText(action.card.codeLanguage),
     realWorldUsage: optionalText(action.card.realWorldUsage),
+    topic: optionalText(action.card.topic ?? null),
     difficulty: action.card.difficulty,
     orderInDeck: action.card.orderInDeck,
     expectedVersion: action.expectedVersion,

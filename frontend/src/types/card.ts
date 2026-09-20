@@ -11,6 +11,7 @@ export interface Card {
   realWorldUsage?: string | null;
   codeSnippet?: string | null;
   codeLanguage?: string | null;
+  topic?: string | null;
   revision?: number | null;
 
   version: number;
