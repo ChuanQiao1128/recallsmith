@@ -21,6 +21,7 @@ import {
   resolveDeckBySlug,
 } from '../content/deckRepository';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
+import { deckShortTitle } from '../content/deckShortTitle';
 import type { CardProgress, ReviewRating } from '../review/model';
 import {
   loadDeckProgress,
@@ -624,7 +625,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             </Pressable>
             <View style={styles.headerTextWrap}>
               <Text style={styles.title} numberOfLines={1}>
-                {deck.Title}
+                {deckShortTitle(deck.Slug, deck.Title)}
               </Text>
               <Text style={styles.subtitle} numberOfLines={1}>
                 {sessionVm.subtitle}

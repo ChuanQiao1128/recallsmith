@@ -12,6 +12,8 @@ import type {
   TodayCounts,
 } from '../contracts';
 import type { UpdateInfo } from '../../../content/deckRepository';
+import { deckShortTitle } from '../../../content/deckShortTitle';
+import { buildChallengeRoute } from '../planner/sessionBuilder';
 import type { RewardWalletState } from '../rewards/rewardWallet';
 
 export type HomeCtaKind =
@@ -37,13 +39,37 @@ export type HomeDeckActionHint =
   | 'paywall'
   | 'none';
 
+export type HomeDeckUpdateState = 'available' | 'updating';
+
+/**
+ * What the pack tile says about a newer build on the server. `null` when the
+ * installed build is current. 'updating' is the non-blocking progress state
+ * while the free-deck auto-installer runs; 'available' is the fallback chip
+ * (auto-apply not attempted, not applicable, or failed) that the tap installs.
+ */
+export type HomeDeckUpdateVM = {
+  state: HomeDeckUpdateState;
+  /** Cards the server build has beyond the installed one; 0 when unknown or none. */
+  addedCards: number;
+  chipLabel: string;
+};
+
 export type HomeDeckVM = {
   deck: DeckSummary;
+  /** Short display name for the 72pt tile (content/deckShortTitle); `deck.title` stays canonical. */
+  shortTitle: string;
   statusLabel: string;
   progressLabel: string;
   actionHint: HomeDeckActionHint;
   updateInfo: UpdateInfo | null;
+  update: HomeDeckUpdateVM | null;
   isSelected: boolean;
+};
+
+export type HomeUpdateNoticeVM = {
+  slug: string;
+  state: HomeDeckUpdateState;
+  text: string;
 };
 
 export type HomeCalendarCompact = {
@@ -81,13 +107,16 @@ export type HomeViewModel = LegacyHomeVM & {
     headline: string;
     subline: string;
   };
-  goal: HomeGoalVM;
+  /** `null` when the selected deck has nothing due and nothing new: the line has no number to give. */
+  goal: HomeGoalVM | null;
   cta: HomeCtaVM;
   draw: HomeDrawVM;
   decks: {
     rows: HomeDeckVM[];
     defaultOpen: boolean;
   };
+  /** One line for the selected deck while a newer build exists (or is being applied). */
+  updateNotice: HomeUpdateNoticeVM | null;
   calendar: {
     compact: HomeCalendarCompact;
     defaultOpen: false;
@@ -173,10 +202,23 @@ function buildCounts(deckSummaries: DeckSummary[], selectedDeck: DeckSummary | n
     selectedDue: selectedDeck?.dueToday ?? 0,
     selectedNew: selectedDeck?.newToday ?? 0,
     selectedMastered: selectedDeck?.masteredApprox ?? 0,
+    selectedOwned: ownedCardsOf(selectedDeck),
     normalCount,
     eliteCount,
     bossCount,
   };
+}
+
+// The resolver stores the owned slice as `ownedCards`; fixtures that predate
+// the field get the same sum it was built from (learned + fresh: every owned
+// card is either studied or not), so the tile never reads 0 for a deck that
+// plainly has cards in it.
+function ownedCardsOf(deck: DeckSummary | null): number {
+  if (!deck || !deck.canStudy) return 0;
+  if (typeof deck.ownedCards === 'number' && Number.isFinite(deck.ownedCards)) {
+    return Math.max(0, deck.ownedCards);
+  }
+  return Math.max(0, (deck.masteredApprox ?? 0) + (deck.newToday ?? 0));
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -412,11 +454,25 @@ function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCt
   }
 }
 
-function buildGoalVM(selectedDeck: DeckSummary | null): HomeGoalVM {
-  const total = Math.max(0, (selectedDeck?.dueToday ?? 0) + (selectedDeck?.newToday ?? 0));
+// "Full clear" is the run the session will actually build, so the number has
+// to be the planner's route length and not due + new: the summary already
+// says "5 / 5 · full clear" for a deck Home was calling "Full clear: 6 cards".
+// With nothing due and nothing new there is no run to describe, and a line
+// reading "Full clear: 0 cards" under an empty deck is noise, so it goes away.
+function buildGoalVM(selectedDeck: DeckSummary | null): HomeGoalVM | null {
+  if (!selectedDeck || !selectedDeck.canStudy) return null;
+  const dueCount = Math.max(0, selectedDeck.dueToday ?? 0);
+  const newCount = Math.max(0, selectedDeck.newToday ?? 0);
+  if (dueCount + newCount === 0) return null;
+  const { limit } = buildChallengeRoute({
+    slug: selectedDeck.slug,
+    deckTitle: selectedDeck.title,
+    dueCount,
+    newCount,
+  });
   return {
     minimum: `Keep streak: ${SESSION_MIN_GOAL} card`,
-    fullClear: total > 0 ? `Full clear: ${total} card${total === 1 ? '' : 's'}` : 'Full clear: 0 cards',
+    fullClear: `Full clear: ${limit} card${limit === 1 ? '' : 's'}`,
   };
 }
 
@@ -567,18 +623,59 @@ function actionHintForDeck(params: {
   return 'open';
 }
 
+function addedCardsOf(deck: DeckSummary): number {
+  const total = Number(deck.totalCards ?? 0);
+  const local = Number(deck.localCards ?? 0);
+  if (!Number.isFinite(total) || !Number.isFinite(local)) return 0;
+  return Math.max(0, Math.floor(total) - Math.floor(local));
+}
+
+function updateChipLabel(state: HomeDeckUpdateState, addedCards: number): string {
+  if (state === 'updating') return 'Updating…';
+  return addedCards > 0 ? `Update · +${addedCards} card${addedCards === 1 ? '' : 's'}` : 'Update';
+}
+
+function buildDeckUpdateVM(params: {
+  deck: DeckSummary;
+  actionHint: HomeDeckActionHint;
+  updating: boolean;
+}): HomeDeckUpdateVM | null {
+  const { deck, actionHint, updating } = params;
+  if (actionHint !== 'update') return null;
+  const state: HomeDeckUpdateState = updating ? 'updating' : 'available';
+  const addedCards = addedCardsOf(deck);
+  return { state, addedCards, chipLabel: updateChipLabel(state, addedCards) };
+}
+
+function buildUpdateNotice(row: HomeDeckVM | null): HomeUpdateNoticeVM | null {
+  if (!row || !row.update) return null;
+  const { state, addedCards } = row.update;
+  const cards = addedCards > 0 ? ` · +${addedCards} card${addedCards === 1 ? '' : 's'}` : '';
+  const text =
+    state === 'updating'
+      ? `Updating ${row.shortTitle}${cards}…`
+      : `${row.shortTitle} update ready${cards} — tap the pack to install.`;
+  return { slug: row.deck.slug, state, text };
+}
+
 function buildDeckRows(params: {
   deckSummaries: DeckSummary[];
   selectedSlug: string | null;
   updates: Record<string, UpdateInfo>;
   premium: boolean;
   signedIn: boolean;
+  updatingSlugs: ReadonlySet<string>;
 }): HomeDeckVM[] {
-  const { deckSummaries, selectedSlug, updates, premium, signedIn } = params;
+  const { deckSummaries, selectedSlug, updates, premium, signedIn, updatingSlugs } = params;
 
   return deckSummaries.map((deck) => {
     const updateInfo = updates[deck.slug] ?? null;
     const actionHint = actionHintForDeck({ deck, updateInfo, premium, signedIn });
+    const update = buildDeckUpdateVM({
+      deck,
+      actionHint,
+      updating: updatingSlugs.has(deck.slug),
+    });
 
     const statusLabel =
       actionHint === 'update'
@@ -599,10 +696,12 @@ function buildDeckRows(params: {
 
     return {
       deck,
+      shortTitle: deckShortTitle(deck.slug, deck.title),
       statusLabel,
       progressLabel,
       actionHint,
       updateInfo,
+      update,
       isSelected: deck.slug === selectedSlug,
     };
   });
@@ -629,6 +728,8 @@ export function buildHomeVM(params: {
   statusHint?: HomeCtaKind;
   errorMessage?: string | null;
   runtimeStatus?: Partial<HomeRuntimeStatus>;
+  /** Slugs whose free-deck auto-update is in flight right now (deckActionResolver.autoApplyFreeDeckUpdates). */
+  updatingSlugs?: readonly string[];
 }): HomeViewModel {
   const {
     deckSummaries,
@@ -642,6 +743,7 @@ export function buildHomeVM(params: {
     statusHint,
     errorMessage = null,
     runtimeStatus,
+    updatingSlugs = [],
   } = params;
 
   const selectedDeck =
@@ -705,7 +807,9 @@ export function buildHomeVM(params: {
     updates,
     premium,
     signedIn: hasSignedInUser,
+    updatingSlugs: new Set(updatingSlugs),
   });
+  const selectedRow = decks.find((row) => row.isSelected) ?? null;
 
   const vm: HomeViewModel = {
     hero: {
@@ -738,6 +842,7 @@ export function buildHomeVM(params: {
       rows: decks,
       defaultOpen: false,
     },
+    updateNotice: buildUpdateNotice(selectedRow),
     calendar: {
       compact: buildCalendarCompact(allUpcoming30),
       defaultOpen: false,

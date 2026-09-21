@@ -9,6 +9,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { checkManifestForUpdates, installDeckFromUrl, listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
+import { deckShortTitle } from '../content/deckShortTitle';
 import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
 import { loadDrawState } from '../features/gacha/draw/drawStateStore';
@@ -158,6 +159,8 @@ function NeighborHint({
   }
   const palette = packPaletteFromSlug(deck.slug);
   const thumb = packImageForSlug(deck.slug);
+  // 60pt rail: the manifest title truncates to "Claude…", the short alias fits.
+  const shortTitle = deckShortTitle(deck.slug, deck.title);
   return (
     <Pressable
       testID={`draw-neighbor-${side}`}
@@ -194,8 +197,8 @@ function NeighborHint({
           {side === 'left' ? '‹' : '›'}
         </Text>
       </View>
-      <Text style={styles.neighborTitle} numberOfLines={1}>
-        {deck.title}
+      <Text style={styles.neighborTitle} numberOfLines={2}>
+        {shortTitle}
       </Text>
     </Pressable>
   );

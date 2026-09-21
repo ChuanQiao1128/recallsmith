@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionSummaryVM, COPY } from '../../src/features/gacha/session/summaryMapper';
+import {
+  buildSessionSummaryVM,
+  COPY,
+  primaryActionGoesHome,
+  resolveSecondaryAction,
+} from '../../src/features/gacha/session/summaryMapper';
 
 // These scenarios were written against the pre-v3 reward formula (full clear
 // = +2 pulls, minimum goal = +1). rewardResolver.ts deliberately replaced it
@@ -160,5 +165,63 @@ describe('summaryMapper COPY terms', () => {
     for (const word of forbidden) {
       expect(all).not.toContain(word);
     }
+  });
+});
+
+describe('summaryMapper secondary action', () => {
+  it('offers the library under a primary that already goes Home', () => {
+    // 4/4 with pulls: primary "Continue" (today_full_clear → Home). The old
+    // secondary was "Back home" -- the same tap with a second label.
+    const fullClear = buildSessionSummaryVM({
+      deckTitle: 'C# Interview',
+      sessionDone: 4,
+      sessionLimit: 4,
+      minimumGoal: 1,
+      dueCount: 0,
+      wallet: { availablePulls: 0, reservePulls: 0 },
+    });
+    const minimum = buildSessionSummaryVM({
+      deckTitle: 'C# Interview',
+      sessionDone: 1,
+      sessionLimit: 4,
+      minimumGoal: 1,
+      dueCount: 2,
+    });
+
+    for (const summary of [fullClear, minimum]) {
+      expect(summary.vm.nextAction.primary.label).toBe('Continue');
+      expect(summary.vm.nextAction.secondary).toEqual({ label: 'Open library', kind: 'nothing_to_learn' });
+      expect(summary.vm.secondaryActionLabel).toBe('Open library');
+    }
+  });
+
+  it('offers Home under a primary that opens the library', () => {
+    const nothing = buildSessionSummaryVM({
+      deckTitle: 'C# Interview',
+      sessionDone: 0,
+      sessionLimit: 4,
+      minimumGoal: 1,
+      dueCount: 0,
+    });
+
+    expect(nothing.vm.nextAction.primary).toEqual({ label: 'Open library', kind: 'nothing_to_learn' });
+    expect(nothing.vm.nextAction.secondary).toEqual({ label: 'Back home', kind: 'today_done' });
+  });
+
+  it('never pairs a primary with a secondary that goes to the same screen', () => {
+    const scenarios = [
+      { sessionDone: 4, sessionLimit: 4, minimumGoal: 1, dueCount: 0 },
+      { sessionDone: 1, sessionLimit: 4, minimumGoal: 1, dueCount: 2 },
+      { sessionDone: 0, sessionLimit: 4, minimumGoal: 1, dueCount: 0 },
+      { sessionDone: 0, sessionLimit: 4, minimumGoal: 1, dueCount: 2 },
+    ];
+    for (const scenario of scenarios) {
+      const { vm } = buildSessionSummaryVM({ deckTitle: 'C# Interview', ...scenario });
+      expect(primaryActionGoesHome(vm.nextAction.primary.kind)).not.toBe(
+        primaryActionGoesHome(vm.nextAction.secondary!.kind),
+      );
+    }
+    expect(resolveSecondaryAction({ primaryGoesHome: true })).toEqual({ label: 'Open library', kind: 'nothing_to_learn' });
+    expect(resolveSecondaryAction({ primaryGoesHome: false })).toEqual({ label: 'Back home', kind: 'today_done' });
   });
 });

@@ -91,6 +91,7 @@ vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
     };
   }),
   loadDeckUpdates: vi.fn(async () => ({})),
+  autoApplyFreeDeckUpdates: vi.fn(() => []),
   resolveDeckAction: vi.fn(async () => ({ kind: 'open', slug: 'csharp' })),
   executeDeckAction: vi.fn(async () => ({ activeSlug: 'csharp' })),
 }));

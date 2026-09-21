@@ -114,6 +114,10 @@ vi.mock('../../src/premium/premiumStore', () => ({
 }));
 
 import { installDeckFromUrl } from '../../src/content/deckRepository';
+import { readStoredDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
+import { loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
+import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
+import type { CardProgress } from '../../src/review/model';
 
 const sha = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 
@@ -413,5 +417,98 @@ describe('installDeckFromUrl (content delivery v3)', () => {
     // Patch was rejected -> full deck fetched instead.
     expect(fetchCalls).toContain(DECK_URL);
     expect(files.get(FINAL_PATH)).toBe(deckText);
+  });
+
+  // The free-deck auto-update (deckActionResolver.autoApplyFreeDeckUpdates)
+  // runs this installer unasked on Home load. What makes that safe is that
+  // the owned set and the review progress live under their own slug-scoped
+  // keys the installer never writes; this pins that down for both update
+  // paths, so a future "clean up on install" cannot quietly take them.
+  describe('keeps the owned set and review progress across an update', () => {
+    const OLD_VERSION = 'old-build-1';
+    const DAY = 86_400_000;
+    const installedDeck = {
+      Slug: SLUG,
+      Title: 'C# Interview',
+      Locale: 'en-US',
+      Version: OLD_VERSION,
+      DeckType: 1,
+      TotalCards: 2,
+      Cards: [
+        { StableUid: 'u1', OrderInDeck: 1, Difficulty: 2, Question: 'Q u1' },
+        { StableUid: 'u2', OrderInDeck: 2, Difficulty: 2, Question: 'Q u2' },
+      ],
+    } as any;
+
+    async function seedInstalledWithProgress() {
+      invalidateDrawStateCache();
+      setActiveUserSubForStorage(null);
+      const now = Date.now();
+      const progress: CardProgress[] = [
+        { stableUid: 'u1', stage: 3, lastReviewedAt: now - DAY, nextReviewAt: now + 7 * DAY, lastSeenRevision: 1 },
+        { stableUid: 'u2', stage: 0, nextReviewAt: 0, lastSeenRevision: 0 },
+      ];
+      await saveDeckProgress(installedDeck, progress);
+      await saveDrawState(SLUG, { owned: ['u1', 'u2'], pity: { draws: 4, threshold: 10 } });
+      files.set(FINAL_PATH, flatDeckText(OLD_VERSION, ['u1', 'u2']));
+      store.set(
+        META_KEY,
+        JSON.stringify({ slug: SLUG, buildId: OLD_VERSION, installedAtMs: 1, fileUri: FINAL_PATH, cardCount: 2 }),
+      );
+      const before = new Map<string, string>();
+      for (const [key, value] of store) {
+        if (key !== META_KEY && key !== MANIFEST_CACHE_KEY) before.set(key, value);
+      }
+      return before;
+    }
+
+    async function expectUntouched(before: Map<string, string>) {
+      for (const [key, value] of before) {
+        expect(store.get(key)).toBe(value);
+      }
+      invalidateDrawStateCache();
+      const drawState = await loadDrawState(SLUG);
+      expect(drawState.owned).toEqual(['u1', 'u2']);
+      expect(drawState.pity).toEqual({ draws: 4, threshold: 10 });
+      const stored = await readStoredDeckProgress(SLUG);
+      expect(stored?.find((item) => item.stableUid === 'u1')?.stage).toBe(3);
+      expect(stored?.map((item) => item.stableUid)).toEqual(['u1', 'u2']);
+      expect(JSON.parse(store.get(META_KEY)!).buildId).toBe(VERSION);
+    }
+
+    it('through the patch path', async () => {
+      const patchRel = `decks/${SLUG}/patches/${OLD_VERSION}-${VERSION}.json`;
+      const deltaText = JSON.stringify({
+        schemaVersion: 2,
+        slug: SLUG,
+        fromVersion: OLD_VERSION,
+        toVersion: VERSION,
+        deck: { slug: SLUG, title: 'C# Interview', locale: 'en-US', deckType: 1, version: VERSION, totalCards: 3 },
+        added: [card('u3', 3)],
+        updated: [],
+        deleted: [],
+      });
+      seedManifest({
+        patches: [{ fromVersion: OLD_VERSION, toVersion: VERSION, path: patchRel, sha256: sha(deltaText) }],
+      });
+      fetchRegistry.set(`${BASE}/content/${patchRel}`, deltaText);
+      const before = await seedInstalledWithProgress();
+
+      expect(await installDeckFromUrl(SLUG, DECK_URL, VERSION, null)).toBe(true);
+      expect(fetchCalls).not.toContain(DECK_URL);
+      expect(JSON.parse(files.get(FINAL_PATH)!).cards).toHaveLength(3);
+      await expectUntouched(before);
+    });
+
+    it('through the full-download path', async () => {
+      const deckText = flatDeckText(VERSION, ['u1', 'u2', 'u3']);
+      seedManifest();
+      fetchRegistry.set(DECK_URL, deckText);
+      const before = await seedInstalledWithProgress();
+
+      expect(await installDeckFromUrl(SLUG, DECK_URL, VERSION, sha(deckText))).toBe(true);
+      expect(files.get(FINAL_PATH)).toBe(deckText);
+      await expectUntouched(before);
+    });
   });
 });
