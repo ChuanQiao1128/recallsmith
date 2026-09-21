@@ -1,7 +1,7 @@
 // mobile/src/features/gacha/mcq/mcqShuffle.ts
 // Deterministic seeded option order for MCQ cards (D02, plan §6.4). The hash is imported
-// (fnv1a32Hex, topics.ts:14); the PRNG is a module-private mulberry32 copy so this file and
-// poolSelection.ts never drift apart yet neither imports the other (D00 §0).
+// (fnv1a32Hex, topics.ts:14); the PRNG is a module-private mulberry32 copy of the draw-pool
+// arithmetic so behaviour never drifts, yet neither file imports the other (D00 §0).
 import type { McqExport, McqOption } from '../../../types/deckExport';
 import { fnv1a32Hex } from '../library/topics';
 
