@@ -43,23 +43,38 @@ function friendlyCodeLanguage(raw: string): string {
     'c++': 'C++',
     c: 'C',
     php: 'PHP',
+    md: 'Markdown',
+    markdown: 'Markdown',
+    xml: 'XML',
+    html: 'HTML',
+    css: 'CSS',
+    toml: 'TOML',
+    http: 'HTTP',
+    text: 'Text',
   };
   return map[lower] ?? raw;
 }
 
-// ReviewBody v3 — redesigned for multi-section answers (Explanation +
-// Coding sample + Real usage all rendered together). Key changes:
-//   • Removed the inner ScrollView with maxHeight 320pt (was the
-//     primary cause of "card back too small" — three sections crushed
-//     into a 320pt window). Outer SessionCardScreen ScrollView now
-//     handles all scrolling.
-//   • Removed the answerShell nested card-in-card chrome (was
-//     cream-on-cream visual mush).
-//   • Front face: question full-size + pokeBlue 56pt Reveal button.
-//   • Back face: question collapses to a small caption header (saves
-//     vertical room for the answer), each section uses gold uppercase
-//     eyebrow + hairline divider between sections.
-//   • Card chrome modernized: softCream + 18 radius + hairline +
+// ReviewBody v4 — full question, always.
+//   • v3 clamped the question to numberOfLines 4 before reveal and 2
+//     after ("questionCompact"). That was fine for one-line C# prompts
+//     and wrong for the scenario stems the AWS / CCDV-F decks carry
+//     (2–4 sentences, up to ~550 chars): the stem was cut with an
+//     ellipsis and after reveal only two lines survived, so the learner
+//     could not judge the answer against the question. v4 never clamps
+//     the question. Before reveal it is the full-size title; after
+//     reveal it stays above the answer in full, under a subtle
+//     "Question" caption, so the answer is always read in context.
+//   • No inner ScrollView (since v3): the outer SessionCardScreen
+//     ScrollView scrolls the whole card — question + explanation + code
+//     + usage — while the RatingBar dock stays pinned below it.
+//   • Code samples: monospace CodeBlock in a horizontal ScrollView (long
+//     JSON / bash lines never wrap) with a language caption.
+//   • Dynamic Type: every text here uses RN's default font scaling, and
+//     lineHeight scales with fontSize, so XL (fontScale 1.5) only makes
+//     the card taller — the scroll absorbs it. The badge row wraps
+//     instead of overflowing the card edge.
+//   • Card chrome unchanged from v3: softCream + 18 radius + hairline +
 //     subtle shadow (matches Home/CardDetail/Settings language).
 export function ReviewBody(props: {
   card: CardExport;
@@ -95,6 +110,7 @@ export function ReviewBody(props: {
           <CodeBlock
             code={card.CodeSnippet}
             language={normalizeCodeLanguage(card.CodeLanguage || 'javascript')}
+            label={codeLanguageLabel ?? undefined}
           />
         </View>
       ),
@@ -124,18 +140,23 @@ export function ReviewBody(props: {
         ) : null}
       </View>
 
-      {/* Question — full prominence on the front (max 4 lines so even
-          long questions wrap properly), demoted to a small caption when
-          the answer is showing (so the back gets full real estate for
-          its 3 sections). */}
+      {/* Question — rendered in full on both faces. Never clamp it: the
+          scenario stems in the AWS / CCDV-F decks run 2–4 sentences and
+          the learner has to see all of it to answer, and again to judge
+          the answer after reveal. The outer ScrollView handles overflow. */}
       {!faceUp ? (
-        <Text style={styles.question} numberOfLines={4}>
+        <Text style={styles.question} testID="review-question">
           {card.Question}
         </Text>
       ) : (
-        <Text style={styles.questionCompact} numberOfLines={2}>
-          {card.Question}
-        </Text>
+        <View style={styles.questionRecap} testID="review-question-recap">
+          <Text style={styles.questionCaption} numberOfLines={1}>
+            QUESTION
+          </Text>
+          <Text style={styles.questionRecapText} testID="review-question">
+            {card.Question}
+          </Text>
+        </View>
       )}
 
       {!faceUp ? (
@@ -213,6 +234,7 @@ const styles = StyleSheet.create({
   },
   headerRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     marginBottom: spacing.sm,
     gap: 6,
@@ -249,14 +271,29 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontWeight: '900',
   },
-  // Compact form for back-of-card — question shrinks to give the
-  // answer body more room when 3 sections are stacked.
-  questionCompact: {
-    fontSize: typography.bodySmall,
-    lineHeight: 18,
+  // Back-of-card recap — the full question stays above the answer so the
+  // learner judges the answer against the stem, not against memory. Body
+  // size (not title3) keeps a 500-char stem from eating the screen, and
+  // inkSoft (not inkMuted) keeps it readable at paragraph length.
+  questionRecap: {
+    marginBottom: spacing.sm,
+    paddingBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairline,
+  },
+  questionCaption: {
+    fontSize: typography.caption,
     color: colors.inkMuted,
-    fontWeight: '700',
-    marginBottom: spacing.xs,
+    fontWeight: '800',
+    letterSpacing: 1.0,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  questionRecapText: {
+    fontSize: typography.body,
+    lineHeight: 22,
+    color: colors.inkSoft,
+    fontWeight: '600',
   },
   // Reveal answer — pokeBlue 56pt pill matching the rest of the app
   // (was colors.ink black 44pt — clashed with the warm cream bg).
