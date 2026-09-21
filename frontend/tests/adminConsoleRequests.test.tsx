@@ -176,6 +176,19 @@ describe('the button the page calls safe for prod', () => {
   });
 });
 
+describe('the migrate secret field', () => {
+  it('is sent as x-migrate-secret only when filled in, and never in the body or URL', async () => {
+    httpMock.post.mockResolvedValue({ data: ok({ migrated: true, reset: false }) });
+
+    await mountConsole();
+    await userEvent.type(screen.getByLabelText('Migrate secret'), 's3cret-value');
+    await userEvent.click(screen.getByRole('button', { name: PLAIN_BUTTON }));
+
+    await waitFor(() => expect(httpMock.post).toHaveBeenCalledTimes(1));
+    expect(httpMock.post).toHaveBeenCalledWith(MIGRATE_PLAIN, {}, { headers: { 'x-migrate-secret': 's3cret-value' } });
+  });
+});
+
 describe('cancelling the reset dialog', () => {
   it('puts nothing on the wire at all', async () => {
     await mountConsole();

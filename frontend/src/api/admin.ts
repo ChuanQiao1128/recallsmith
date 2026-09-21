@@ -75,9 +75,22 @@ async function apiPost<T>(path: string, body: unknown): Promise<ApiResult<T>> {
 
 // ==================== Migrate ====================
 
-export async function runMigrate(reset: boolean): Promise<ApiResult<{ migrated: boolean; reset: boolean }>> {
+// `secret` is the API's MIGRATE_SECRET (src_C/Vpc/Db/Migrate.cs:138 — the extra
+// guard on top of super_admin). When the Lambda has one configured, the request
+// must carry it as `x-migrate-secret` or the API answers 403 "Bad migrate secret";
+// when it has none, the header must be absent, so the no-secret call is byte-for-
+// byte the old `http.post(path, {})` (adminConsoleRequests.test.tsx pins it).
+export async function runMigrate(reset: boolean, secret?: string): Promise<ApiResult<{ migrated: boolean; reset: boolean }>> {
   const qs = reset ? '?reset=1' : '';
-  return apiPost(`/api/v1/admin/db/migrate${qs}`, {});
+  const path = `/api/v1/admin/db/migrate${qs}`;
+  const trimmed = secret?.trim() ?? '';
+  if (trimmed === '') return apiPost(path, {});
+  try {
+    const resp = await http.post<ApiResult<{ migrated: boolean; reset: boolean }>>(path, {}, { headers: { 'x-migrate-secret': trimmed } });
+    return resp.data;
+  } catch (err) {
+    return fail<{ migrated: boolean; reset: boolean }>(toApiErrorMessage(err));
+  }
 }
 
 // ==================== Users ====================
