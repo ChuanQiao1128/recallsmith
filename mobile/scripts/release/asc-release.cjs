@@ -112,6 +112,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     let loc = locs.find((l) => l.attributes.locale === 'en-US') || locs[0];
     if (!loc) loc = await version.createLocalizationAsync({ locale: 'en-US' });
     const patch = {};
+    // A version created through the API starts with an EMPTY localization: supportUrl (required for
+    // submission) and marketingUrl are not inherited from the live version the way the web UI does
+    // it (2026-09-22: "This resource cannot be reviewed" until supportUrl was set). Copy them over.
+    if (!loc.attributes.supportUrl || !loc.attributes.marketingUrl) {
+      const live = await app.getLiveAppStoreVersionAsync({ platform: 'IOS' }).catch(() => null);
+      const liveLoc = live ? (await live.getLocalizationsAsync()).find((l) => l.attributes.locale === loc.attributes.locale) : null;
+      if (liveLoc) {
+        if (!loc.attributes.supportUrl && liveLoc.attributes.supportUrl) patch.supportUrl = liveLoc.attributes.supportUrl;
+        if (!loc.attributes.marketingUrl && liveLoc.attributes.marketingUrl) patch.marketingUrl = liveLoc.attributes.marketingUrl;
+      }
+    }
     if (whatsNew) patch.whatsNew = whatsNew;
     if (description) patch.description = description;
     if (keywords) patch.keywords = keywords;
@@ -126,7 +137,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const ilocs = await info.getLocalizationsAsync();
     let iloc = ilocs.find((l) => l.attributes.locale === 'en-US') || ilocs[0];
     if (!iloc) iloc = await info.createLocalizationAsync({ locale: 'en-US' });
-    await iloc.updateAsync({ subtitle });
+    // App Info localization PATCH insists on `name` alongside the subtitle (2026-09-22: "You must
+    // provide a value for the field 'name'"), so resend the current app name unchanged.
+    const ipatch = { name: iloc.attributes.name || 'DeveloperCards', subtitle };
+    // Same inheritance gap for the App Info localization: carry the privacy policy URL from the live record.
+    if (!iloc.attributes.privacyPolicyUrl) {
+      const liveInfo = await app.getLiveAppInfoAsync().catch(() => null);
+      const liveIl = liveInfo ? (await liveInfo.getLocalizationsAsync()).find((l) => l.attributes.locale === iloc.attributes.locale) : null;
+      if (liveIl && liveIl.attributes.privacyPolicyUrl) ipatch.privacyPolicyUrl = liveIl.attributes.privacyPolicyUrl;
+    }
+    await iloc.updateAsync(ipatch);
     console.log('SUBTITLE set on', iloc.attributes.locale);
   }
   await version.updateBuildAsync({ buildId: build.id });
@@ -136,9 +156,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   let rs = await app.getInProgressReviewSubmissionAsync({ platform: 'IOS' });
   if (!rs) rs = await app.createReviewSubmissionAsync({ platform: 'IOS' });
-  const items = await rs.getReviewSubmissionItemsAsync();
-  if (!items.some((it) => (it.attributes && it.attributes.appStoreVersion && it.attributes.appStoreVersion.id === version.id) || JSON.stringify(it).includes(version.id))) {
+  // Apple has no GET /reviewSubmissions/{id}/items (2026-09-22: "The relationship 'items' does not
+  // exist"), so add the version item directly and tolerate "already added".
+  try {
     await rs.addAppStoreVersionToReviewItems(version.id);
+    console.log('REVIEW_ITEM added version', version.id);
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (!/already|exists|duplicate/i.test(msg)) throw e;
+    console.log('REVIEW_ITEM already present:', msg.slice(0, 120));
   }
   const submitted = await rs.submitForReviewAsync();
   const state = (submitted && submitted.attributes && submitted.attributes.state) || 'submitted';
