@@ -50,7 +50,83 @@ const KEYWORDS = new Set([
   'undefined',
 ]);
 
-function tokenizeLine(code: string): Token[] {
+// Python keywords — the CCDV-F deck's samples are mostly Python, where the
+// JS set above mislabels `def`/`elif`/`None` as plain and `const`/`let` as
+// keywords. Applied only when the language says python.
+const PYTHON_KEYWORDS = new Set([
+  'def',
+  'class',
+  'return',
+  'if',
+  'elif',
+  'else',
+  'for',
+  'while',
+  'in',
+  'not',
+  'and',
+  'or',
+  'is',
+  'import',
+  'from',
+  'as',
+  'with',
+  'try',
+  'except',
+  'finally',
+  'raise',
+  'pass',
+  'break',
+  'continue',
+  'lambda',
+  'yield',
+  'async',
+  'await',
+  'None',
+  'True',
+  'False',
+  'del',
+  'global',
+  'nonlocal',
+  'assert',
+]);
+
+// Which comment syntax a language uses. 'slash' (// and /* */) is the
+// historical default and stays the fallback for unknown / empty languages
+// so C# / JS / TS samples render exactly as before. Hash languages get `#`
+// and lose `//` (Python floor division, bash paths like http://…). JSON and
+// Markdown have no comment syntax, so nothing is dimmed there.
+type CommentStyle = 'slash' | 'hash' | 'none';
+
+const HASH_COMMENT_LANGUAGES = new Set([
+  'python',
+  'bash',
+  'sh',
+  'shell',
+  'zsh',
+  'yaml',
+  'yml',
+  'ruby',
+  'toml',
+  'dockerfile',
+  'makefile',
+  'perl',
+  'r',
+]);
+const NO_COMMENT_LANGUAGES = new Set(['json', 'markdown', 'md']);
+
+function commentStyleFor(language: string | undefined): CommentStyle {
+  const l = (language ?? '').trim().toLowerCase();
+  if (HASH_COMMENT_LANGUAGES.has(l)) return 'hash';
+  if (NO_COMMENT_LANGUAGES.has(l)) return 'none';
+  return 'slash';
+}
+
+function keywordsFor(language: string | undefined): Set<string> {
+  return (language ?? '').trim().toLowerCase() === 'python' ? PYTHON_KEYWORDS : KEYWORDS;
+}
+
+function tokenizeLine(code: string, commentStyle: CommentStyle, keywords: Set<string>): Token[] {
   const tokens: Token[] = [];
   let i = 0;
 
@@ -59,7 +135,7 @@ function tokenizeLine(code: string): Token[] {
     const next = code[i + 1];
 
     // 行注释 //
-    if (ch === '/' && next === '/') {
+    if (commentStyle === 'slash' && ch === '/' && next === '/') {
       let start = i;
       i += 2;
       while (i < code.length && code[i] !== '\n') i++;
@@ -67,8 +143,17 @@ function tokenizeLine(code: string): Token[] {
       continue;
     }
 
+    // 行注释 #（python / bash / yaml …）
+    if (commentStyle === 'hash' && ch === '#') {
+      let start = i;
+      i += 1;
+      while (i < code.length && code[i] !== '\n') i++;
+      tokens.push({ type: 'comment', text: code.slice(start, i) });
+      continue;
+    }
+
     // 块注释 /* */ （这里只按单行处理，足够应付大多数情况）
-    if (ch === '/' && next === '*') {
+    if (commentStyle === 'slash' && ch === '/' && next === '*') {
       let start = i;
       i += 2;
       while (i < code.length && !(code[i] === '*' && code[i + 1] === '/')) i++;
@@ -118,7 +203,7 @@ function tokenizeLine(code: string): Token[] {
       let start = i;
       while (i < code.length && /[a-zA-Z0-9_$]/.test(code[i])) i++;
       const word = code.slice(start, i);
-      if (KEYWORDS.has(word)) {
+      if (keywords.has(word)) {
         tokens.push({ type: 'keyword', text: word });
       } else {
         tokens.push({ type: 'plain', text: word });
@@ -136,18 +221,35 @@ function tokenizeLine(code: string): Token[] {
 
 interface CodeBlockProps {
   code: string;
+  /** Normalized language id (tokenizer hint): 'python', 'json', 'csharp', … */
   language?: string;
+  /** Human-readable caption shown in the block's header ("Python", "C#").
+   *  Omitted → no caption row, so a snippet with no known language is not
+   *  labelled with a guess. */
+  label?: string;
 }
 
-export const CodeBlock: React.FC<CodeBlockProps> = ({ code }) => {
+export const CodeBlock: React.FC<CodeBlockProps> = ({ code, language, label }) => {
   const lines = useMemo(() => code.split('\n'), [code]);
+  const commentStyle = commentStyleFor(language);
+  const keywords = keywordsFor(language);
 
   return (
     <View style={styles.outer}>
-      <ScrollView horizontal bounces={false}>
+      {label ? (
+        <View style={styles.captionRow}>
+          <Text style={styles.caption} numberOfLines={1} testID="code-block-language">
+            {label}
+          </Text>
+        </View>
+      ) : null}
+      {/* Horizontal scroll: the content width is unbounded, so a 200-char
+          JSON or bash line stays on one line and the learner pans to it
+          instead of reading a wrapped, re-indented mess. */}
+      <ScrollView horizontal bounces={false} showsHorizontalScrollIndicator testID="code-block-scroll">
         <View style={styles.inner}>
           {lines.map((line, lineIndex) => {
-            const tokens = tokenizeLine(line);
+            const tokens = tokenizeLine(line, commentStyle, keywords);
             return (
               <View key={lineIndex} style={styles.line}>
                 {/* 行号区域，模拟 VS Code 左侧 gutter */}
@@ -186,6 +288,28 @@ const styles = StyleSheet.create({
     marginVertical: 8,
     borderLeftWidth: 3,
     borderLeftColor: '#007acc', // VS Code 蓝
+  },
+  // 语言标题：右上角小字，模拟编辑器 tab
+  captionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+    marginBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  caption: {
+    color: '#9cdcfe',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    fontFamily: Platform.select({
+      ios: 'Menlo',
+      android: 'monospace',
+      default: 'monospace',
+    }),
   },
   // 内部垂直堆叠所有行
   inner: {

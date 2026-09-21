@@ -525,6 +525,77 @@ describe('SessionCardScreen', () => {
     expect(primarySurface).toHaveLength(1);
   });
 
+  it('renders a long scenario stem in full inside the scroll surface, before and after reveal', async () => {
+    // ~420 chars: an SAA-C03-shaped stem. The pre-v4 ReviewBody clamped this to
+    // 4 lines on the front and 2 on the back, which is what the owner's device
+    // screenshots showed. The dock stays pinned outside the scroll either way.
+    const longQuestion =
+      'A company runs a three-tier web application on EC2 behind an Application Load Balancer, with ' +
+      'an RDS for PostgreSQL Multi-AZ database. Traffic is steady on weekdays but doubles for four ' +
+      'hours every Saturday. The operations team must keep p99 latency under 200 ms during the spike ' +
+      'without paying for the extra capacity all week, and must not change the application code or ' +
+      'the database engine. Which combination of changes meets these requirements MOST cost-effectively?';
+    vi.mocked(pickNextCard).mockReturnValue({
+      card: {
+        StableUid: '1',
+        OrderInDeck: 3220,
+        Difficulty: 2,
+        Question: longQuestion,
+        Explanation: 'Use a scheduled scaling action on the Auto Scaling group for the Saturday window.',
+      },
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+    } as any);
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{
+            key: 'session-card',
+            name: 'SessionCard',
+            params: { slug: 'csharp', mode: 'mixed', limit: 1 },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const primarySurface = tree.root.find(
+      (node) =>
+        (node.type as any) === 'ScrollView' && node.props?.testID === 'screen-session-card-primary-surface',
+    );
+    const questionNodes = () =>
+      primarySurface.findAll((node) => (node.type as any) === 'Text' && node.props?.testID === 'review-question');
+
+    // Front face: the full stem, no clamp, inside the scroll surface.
+    expect(questionNodes()).toHaveLength(1);
+    expect(questionNodes()[0].props.children).toBe(longQuestion);
+    expect(questionNodes()[0].props.numberOfLines).toBeUndefined();
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Reveal answer').props.onPress();
+      await Promise.resolve();
+    });
+
+    // Back face: still the full stem, still no clamp, and the answer follows it.
+    expect(questionNodes()).toHaveLength(1);
+    expect(questionNodes()[0].props.children).toBe(longQuestion);
+    expect(questionNodes()[0].props.numberOfLines).toBeUndefined();
+    expect(findTextByLabel(tree, 'QUESTION')).toHaveLength(1);
+    expect(
+      findTextByLabel(tree, 'Use a scheduled scaling action on the Auto Scaling group for the Saturday window.'),
+    ).toHaveLength(1);
+    // The dock is a sibling of the scroll surface, not inside it.
+    expect(
+      primarySurface.findAll((node) => (node.type as any) === 'View' && node.props?.testID === 'review-rating-dock'),
+    ).toHaveLength(0);
+    expect(
+      tree.root.findAll((node) => (node.type as any) === 'View' && node.props?.testID === 'review-rating-dock'),
+    ).toHaveLength(1);
+  });
+
   it('shows the tomorrow-load forecast line on the 20th new card and not on the 19th', async () => {
     const stepWith = (newCardsLearnedToday: number): RatingRewardStep => ({
       newCardPaid: false,
