@@ -113,7 +113,7 @@ describe('runImport', () => {
       deckId: DECK_ID,
       stableUid: 'cs-async-001',
       difficulty: 2,
-      orderInDeck: 0,
+      orderInDeck: 5,
       codeLanguage: 'csharp',
     });
     expect(rec.creates[1]).toMatchObject({ stableUid: 'cs-span-002', orderInDeck: 10 });
@@ -154,7 +154,7 @@ describe('runImport', () => {
         stableUid: 'cs-async-001',
         question: 'Does awaiting a completed Task switch threads?',
         difficulty: 2,
-        orderInDeck: 0,
+        orderInDeck: 5,
         explanation: 'Not necessarily; the fast path continues synchronously.',
         codeSnippet: 'var v = await Task.FromResult(42);',
         codeLanguage: 'csharp',

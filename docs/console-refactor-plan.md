@@ -746,7 +746,7 @@ css 逐字节不变(vite 报的是两位小数,所以这里不宣称更高精度
 | D3 | `stableUid` = 129 个字符 | `BAD_UID_FORMAT`(超 `MAX_UID_LENGTH`) | 接受,全长提交 ⚠️ |
 | D4 | `difficulty = 9` | `BAD_DIFFICULTY`,**卡在 header 阶段就没生成** | 接受,提交 `9` ⚠️ |
 | D5 | 同一 uid 两张卡 | `DUPLICATE_UID` | **没有这条代码路径**,两次都成功 |
-| D6 ↔ | `orderInDeck = 0` | 这正是导入**自己给每篇文档第一张卡分配的值** | **拒绝**:`orderInDeck must be a positive number` |
+| D6 ↔ | `orderInDeck = 0` | 2026-09-21 起导入给第一张卡分配 5（生产表有 `ck_cards_order_in_deck_positive`），不再是 0 | **拒绝**:`orderInDeck must be a positive number`（两扇门一致了） |
 | D7 ↔ | `difficulty = 0` 或 `4` | 合法 | `<select>` 只有 1/2/3,**人在界面上选不到** |
 | C1 | 空 / 纯空白 question | 拒绝 | 拒绝(`Question is required.`) |
 | C2 | 空 stableUid | `BAD_CARD_HEADER` | 拒绝(`StableUid is required.`) |

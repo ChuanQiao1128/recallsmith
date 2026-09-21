@@ -721,7 +721,7 @@ describe('round trip and reconciliation', () => {
         const parsed = parseDeckMarkdown(serializeDeckMarkdown(slug, cards));
         expect(parsed.errors).toEqual([]);
         expect(parsed.deckSlug).toBe(slug);
-        expect(contentOf(parsed)).toEqual(cards.map((c, i) => ({ ...c, orderInDeck: i * 10 })));
+        expect(contentOf(parsed)).toEqual(cards.map((c, i) => ({ ...c, orderInDeck: i === 0 ? 5 : i * 10 })));
       }),
     );
   });
