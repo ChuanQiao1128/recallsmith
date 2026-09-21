@@ -256,6 +256,11 @@ const CARD_BACK_IMAGES: Record<string, ImageSourcePropType> = {
 export const DEFAULT_CARD_BACK: ImageSourcePropType = defaultCardBack;
 export const CARD_FRAME_SIZE = { width: 400, height: 560 } as const;
 export const CARD_FRAME_ART_WINDOW = { x: 28, y: 64, width: 344, height: 296 } as const;
+// The frame's other cut-outs (scripts/gen_card_frames.py SLAB and the flat title strip above
+// the art window), in the same 400×560 space, so a card face can lay its text where the PNG
+// is transparent / flat instead of guessing percentages.
+export const CARD_FRAME_SLAB = { x: 28, y: 384, width: 344, height: 152 } as const;
+export const CARD_FRAME_TITLE_STRIP = { x: 28, y: 24, width: 344, height: 36 } as const;
 export const CARD_FRAME_NINE_SLICE_INSET = 40;
 export const CARD_FRAME_IMAGES: Record<Rarity, ImageSourcePropType> = { COM: frameCom, RAR: frameRar, LEG: frameLeg };
 export function cardFrameForRarity(rarity: Rarity): ImageSourcePropType {

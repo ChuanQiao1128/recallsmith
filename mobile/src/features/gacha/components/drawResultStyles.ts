@@ -139,10 +139,10 @@ export const drawResultStyles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 4,
   },
+  // Base layer under the rarity frame: fills the card (no padding — the face is laid out
+  // absolutely at the frame's cut-outs, see DrawResultScreen FEATURED_FRAME_LAYOUT).
   featuredGradient: {
-    flex: 1,
-    padding: 14,
-    justifyContent: 'flex-end',
+    ...StyleSheet.absoluteFillObject,
     borderRadius: 18,
     borderWidth: 2,
     borderColor: 'rgba(255,255,255,0.7)',
@@ -182,77 +182,32 @@ export const drawResultStyles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
-  // Featured card — proper card structure (top bar / art window / text panel /
-  // watermark) instead of just a gradient slab with text on it.
-  featuredTopBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  // Pack-themed art window — uses the actual pack palette as a gradient
-  // backdrop instead of generic concentric rings. The "code" inside is the
-  // pack identifier rendered larger so it reads as authentic, not stickered.
-  featuredArtWindow: {
-    flex: 1,
-    minHeight: 120,
-    borderRadius: 14,
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 6,
-  },
+  // Pack palette under the pack-art thumbnail in the frame's art window (the fallback
+  // when the cover PNG cannot render).
   featuredArtGradient: {
     ...StyleSheet.absoluteFillObject,
   },
-  featuredArtRing: {
-    position: 'absolute',
-    width: '60%',
-    aspectRatio: 1,
-    borderRadius: 999,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.30)',
-  },
-  featuredArtCode: {
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 38,
-    fontWeight: '900',
-    letterSpacing: 4,
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
-  },
-  // Subtle serial line at the bottom of the featured card — reads as
-  // registry mark, not a sticker. Replaces the rotated OFFICIAL stamp.
+  // Registry serial on the frame's title strip — reads as a registry mark, not a sticker.
   featuredSerial: {
-    marginTop: 8,
-    color: 'rgba(255,255,255,0.65)',
+    color: 'rgba(255,255,255,0.78)',
     fontSize: 9,
     fontWeight: '800',
     letterSpacing: 2.4,
     textAlign: 'right',
   },
+  // The white question panel inside the frame's transparent slab (position comes from
+  // FEATURED_FRAME_LAYOUT.slab). Six 14.5 px lines + padding fit the 27 % slab of a 364 px card.
   featuredQuestionSlab: {
     backgroundColor: 'rgba(255,255,255,0.94)',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minHeight: 64,
+    borderRadius: 8, // the frame cuts its slab with r=12 of 400 → ~8 px on the 260 px card
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
   featuredQuestion: {
     color: colors.inkSoft,
-    fontSize: typography.title3,
-    lineHeight: 24,
-    fontWeight: '900',
-  },
-  featuredShine: {
-    position: 'absolute',
-    top: -20,
-    left: -40,
-    width: 80,
-    height: 280,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    transform: [{ rotate: '18deg' }],
+    fontSize: 12,
+    lineHeight: 14.5,
+    fontWeight: '800',
   },
 
   // Bigger, hollow chips with colored rarity dot — reads like a stat row, not

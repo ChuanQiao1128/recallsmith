@@ -11,6 +11,10 @@ vi.mock('react-native', () => {
   const React = require('react');
   return {
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
+    // Image is what the rarity frame, the glow and the pack-art thumbnail render through
+    // (the screen reads it defensively via readRN); a plain element so the featured-card
+    // layout case can see where the frame sits.
+    Image: (props: any) => React.createElement('Image', props),
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
@@ -66,8 +70,10 @@ vi.mock('../../src/features/gacha/milestones/ratingPrompt', async (importOrigina
   maybeRequestRating: (...args: unknown[]) => maybeRequestRatingMock(...args),
 }));
 
-import { DrawResultScreen } from '../../src/screens/DrawResultScreen';
+import { DrawResultScreen, FEATURED_FRAME_LAYOUT, FEATURED_STEM_LINES } from '../../src/screens/DrawResultScreen';
 import { RATING_PROMPT_DELAY_MS } from '../../src/features/gacha/milestones/ratingPrompt';
+import { drawResultStyles } from '../../src/features/gacha/components/drawResultStyles';
+import { CARD_FRAME_ART_WINDOW, CARD_FRAME_SIZE, CARD_FRAME_SLAB, CARD_FRAME_TITLE_STRIP } from '../../src/theme/packArt';
 
 const DRAW_RESULT_FIXTURE = {
   poolId: 'csharp',
@@ -390,21 +396,31 @@ describe('DrawResultScreen v9', () => {
     },
   );
 
-  it('marks cards missing from revealedUids with a Not flipped chip', async () => {
+  // revealedUids (which cards were flipped on the ceremony table) no longer produces any
+  // copy: every card on this screen is face up with its stem, so a "Not flipped" stamp was
+  // table state leaking into the result. Whatever the ceremony reports, the tree is the same.
+  it.each([
+    ['some cards skipped', { revealedUids: ['1'] }],
+    ['nothing flipped', { revealedUids: [] }],
+    ['everything flipped', { revealedUids: ['1', '2'] }],
+    ['no reveal information', {}],
+  ])('shows no Not-flipped chip on any card when %s', async (_label, overrides) => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
         <DrawResultScreen
           navigation={{ navigate: vi.fn() } as any}
-          route={{ key: 'result', name: 'DrawResult', params: makeParams({ revealedUids: ['1'] }) } as any}
+          route={{ key: 'result', name: 'DrawResult', params: makeParams(overrides) } as any}
         />,
       );
     });
     await flush();
 
-    expect(tree.root.findByProps({ testID: 'draw-result-unrevealed-chip-1' })).toBeTruthy();
-    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-0' })).toHaveLength(0);
-    expect(collectText(tree)).toContain('Not flipped');
+    expect(tree.root.findAll((n) => typeof n.props.testID === 'string' && n.props.testID.includes('unrevealed'))).toHaveLength(0);
+    expect(collectText(tree)).not.toContain('Not flipped');
+    // Both cards are still listed face up.
+    expect(collectText(tree)).toContain('Q1');
+    expect(collectText(tree)).toContain('Q2');
 
     expect(tree.root.findByProps({ testID: 'draw-result-header' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'draw-result-collection-bar' })).toBeTruthy();
@@ -413,82 +429,95 @@ describe('DrawResultScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'draw-result-done-link' })).toBeTruthy();
   });
 
-  it('shows no unrevealed chips when revealedUids is absent', async () => {
+  it('shows no Not-flipped chip on a single unflipped pull either', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <DrawResultScreen
-          navigation={{ navigate: vi.fn() } as any}
-          route={{ key: 'result', name: 'DrawResult', params: makeParams() } as any}
-        />,
-      );
-    });
-    await flush();
-
-    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-0' })).toHaveLength(0);
-    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-1' })).toHaveLength(0);
-    expect(tree.root.findAllByProps({ testID: 'draw-result-featured-unrevealed-chip' })).toHaveLength(0);
-    expect(collectText(tree)).not.toContain('Not flipped');
-  });
-
-  it('shows no unrevealed chips when every card was flipped', async () => {
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <DrawResultScreen
-          navigation={{ navigate: vi.fn() } as any}
-          route={{ key: 'result', name: 'DrawResult', params: makeParams({ revealedUids: ['1', '2'] }) } as any}
-        />,
-      );
-    });
-    await flush();
-
-    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-0' })).toHaveLength(0);
-    expect(tree.root.findAllByProps({ testID: 'draw-result-unrevealed-chip-1' })).toHaveLength(0);
-    expect(tree.root.findAllByProps({ testID: 'draw-result-featured-unrevealed-chip' })).toHaveLength(0);
-    expect(collectText(tree)).not.toContain('Not flipped');
-  });
-
-  it('marks a single unflipped pull on the featured card', async () => {
-    const singleParams = makeParams({
-      drawResult: { ...DRAW_RESULT_FIXTURE, cards: [DRAW_RESULT_FIXTURE.cards[0]] },
-      revealedUids: [],
-    });
-
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <DrawResultScreen
-          navigation={{ navigate: vi.fn() } as any}
-          route={{ key: 'result', name: 'DrawResult', params: singleParams } as any}
-        />,
-      );
-    });
-    await flush();
-
-    expect(tree.root.findByProps({ testID: 'draw-result-featured-unrevealed-chip' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'screen-draw-result-featured-card' })).toBeTruthy();
-
-    let flipped!: renderer.ReactTestRenderer;
-    await act(async () => {
-      flipped = renderer.create(
         <DrawResultScreen
           navigation={{ navigate: vi.fn() } as any}
           route={{
             key: 'result',
             name: 'DrawResult',
-            params: makeParams({
-              drawResult: { ...DRAW_RESULT_FIXTURE, cards: [DRAW_RESULT_FIXTURE.cards[0]] },
-              revealedUids: ['1'],
-            }),
+            params: makeParams({ drawResult: { ...DRAW_RESULT_FIXTURE, cards: [DRAW_RESULT_FIXTURE.cards[0]] }, revealedUids: [] }),
           } as any}
         />,
       );
     });
     await flush();
 
-    expect(flipped.root.findAllByProps({ testID: 'draw-result-featured-unrevealed-chip' })).toHaveLength(0);
-    expect(flipped.root.findByProps({ testID: 'screen-draw-result-featured-card' })).toBeTruthy();
+    expect(tree.root.findAll((n) => typeof n.props.testID === 'string' && n.props.testID.includes('unrevealed'))).toHaveLength(0);
+    expect(collectText(tree)).not.toContain('Not flipped');
+    expect(tree.root.findByProps({ testID: 'screen-draw-result-featured-card' })).toBeTruthy();
+  });
+
+  it('stretches the rarity frame over the whole featured card and lays the face out at its cut-outs', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'result', name: 'DrawResult', params: makeParams() } as any} />,
+      );
+    });
+    await flush();
+
+    const pct = (part: number, whole: number) => `${Math.round((part / whole) * 100 * 100) / 100}%`;
+    const W = CARD_FRAME_SIZE.width;
+    const H = CARD_FRAME_SIZE.height;
+    // The layout constants are the frame's own geometry (400×560) as percentages of the card.
+    expect(FEATURED_FRAME_LAYOUT.artWindow).toEqual({
+      left: pct(CARD_FRAME_ART_WINDOW.x, W), top: pct(CARD_FRAME_ART_WINDOW.y, H),
+      width: pct(CARD_FRAME_ART_WINDOW.width, W), height: pct(CARD_FRAME_ART_WINDOW.height, H),
+    });
+    expect(FEATURED_FRAME_LAYOUT.artWindow).toEqual({ left: '7%', top: '11.43%', width: '86%', height: '52.86%' });
+    expect(FEATURED_FRAME_LAYOUT.slab).toEqual({
+      left: pct(CARD_FRAME_SLAB.x, W), top: pct(CARD_FRAME_SLAB.y, H),
+      width: pct(CARD_FRAME_SLAB.width, W), height: pct(CARD_FRAME_SLAB.height, H),
+    });
+    expect(FEATURED_FRAME_LAYOUT.titleStrip).toEqual({
+      left: pct(CARD_FRAME_TITLE_STRIP.x, W), top: pct(CARD_FRAME_TITLE_STRIP.y, H),
+      width: pct(CARD_FRAME_TITLE_STRIP.width, W), height: pct(CARD_FRAME_TITLE_STRIP.height, H),
+    });
+
+    // The host element (the mock's function component sits one level above it).
+    const card = tree.root.find((n) => (n.type as any) === 'Pressable' && n.props.testID === 'screen-draw-result-featured-card');
+    // The frame is a direct child of the (unpadded, 5:7) card, so its 100 % is the full card —
+    // not a child of a padded gradient whose content box was 88 % × 91 % of it.
+    const frame = tree.root.findByProps({ testID: 'draw-result-featured-frame' });
+    expect(frame.parent).toBe(card);
+    expect(frame.props.resizeMode).toBe('stretch');
+    expect(frame.props.style).toMatchObject({ width: '100%', height: '100%' });
+    const cardStyle = card.props.style({ pressed: false })[0];
+    expect(cardStyle).toBe(drawResultStyles.featured);
+    expect(cardStyle.aspectRatio).toBe(5 / 7);
+    expect((cardStyle as Record<string, unknown>).padding).toBeUndefined();
+    expect((drawResultStyles.featuredGradient as Record<string, unknown>).padding).toBeUndefined();
+    // The frame paints last (over the face).
+    expect(card.children[card.children.length - 1]).toBe(frame);
+
+    // Art window and slab sit at the frame's transparent windows, absolutely, not flex: 1.
+    const artWindow = tree.root.find((n) => (n.type as any) === 'View' && n.props.testID === 'draw-result-featured-art-window');
+    expect(artWindow.props.style).toMatchObject({ position: 'absolute', ...FEATURED_FRAME_LAYOUT.artWindow });
+    expect(artWindow.props.style.flex).toBeUndefined();
+    const question = tree.root.findByProps({ testID: 'draw-result-featured-question' });
+    expect(question.props.numberOfLines).toBe(FEATURED_STEM_LINES);
+    expect(FEATURED_STEM_LINES).toBe(6);
+    expect(question.props.ellipsizeMode).toBe('tail');
+    expect(question.props.children).toBe('Q1');
+    const slab = question.parent!;
+    expect(slab.props.style[0]).toMatchObject({ position: 'absolute', ...FEATURED_FRAME_LAYOUT.slab });
+
+    // The art window shows the deck's pack art (cover-cropped) with the rarity chip and the
+    // topic label over it — no slug monogram.
+    const art = tree.root.findByProps({ testID: 'draw-result-featured-art' });
+    expect(art.parent).toBe(artWindow);
+    expect(art.props.resizeMode).toBe('cover');
+    expect(art.props.source).toBeTruthy();
+    expect(collectText(tree)).not.toContain('CSH');
+    const topic = tree.root.findByProps({ testID: 'draw-result-featured-topic' });
+    expect(topic.parent).toBe(artWindow);
+    expect(topic.findAll((n) => (n.type as any) === 'Text').map((n) => n.props.children)).toEqual(['Core']);
+    expect(collectText(tree)).toContain('★ Legendary');
+    // The registry serial moved to the frame's title strip.
+    expect(collectText(tree)).toContain('REG. 004 / 20');
   });
 
   it('shares the pull image from the share button and reports unavailable inline', async () => {

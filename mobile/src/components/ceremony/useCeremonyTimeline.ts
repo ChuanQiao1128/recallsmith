@@ -39,6 +39,12 @@ export type CeremonyTimeline = {
 export type TimelineInput = {
   phase: CeremonyPhase; peakRarity: PeakRarity; isMulti: boolean; cardCount: number;
   timings: ResolvedCeremonyTimings; spill: SpillSchedule | null; reduceMotion: boolean; compressed: boolean;
+  /** true when the RN tap table owns the face-down cards (B09 `enableTapFlow`). The Skia
+   *  StageRims are drawn at the spill slots, which only coincide with the table's cards for a
+   *  one-row hand; from 6 cards the table fans two rows on its own geometry and the rims showed
+   *  as ghost outlines beside the cards. With the table in charge, `rim` stays 0 in every
+   *  phase — driven through the shared values, never by re-rendering the canvas. */
+  tapFlow?: boolean;
 };
 
 // ── Constants (B00 §2.10 verbatim) ───────────────────────────────────────────
@@ -150,14 +156,18 @@ export function haloColorForTell(tell: number, peakRarity: PeakRarity): string {
 /** The phase -> resting-target table (B00 §2.10, change 2). Records resting targets:
  *  the flash bloom and the camera punch are withSequence moves that return to rest. */
 export function timelineTargets(
-  input: Pick<TimelineInput, 'phase' | 'peakRarity' | 'isMulti' | 'reduceMotion'>,
+  input: Pick<TimelineInput, 'phase' | 'peakRarity' | 'isMulti' | 'reduceMotion' | 'tapFlow'>,
 ): TimelineTargets {
-  const { phase, peakRarity, isMulti: m, reduceMotion: rm } = input;
+  const { phase, peakRarity, isMulti: m, reduceMotion: rm, tapFlow = false } = input;
   const L = peakRarity === 'LEG';
   const C = peakRarity === 'COM';
   const packAnticipate = rm ? 1 : m ? 1.1 : 1.12;
   const raysAnticipate = m ? 0.26 : 0.22;
   const dimHold = L ? LEG_DIM : 0;
+  // The settle rim is the face-down rarity tell (0.55, COM none). It belongs to the Skia
+  // stage's own table; when the RN tap table owns the cards the rim has nothing to sit
+  // behind, so it is withheld in every phase.
+  const rimSettle = C || tapFlow ? 0 : 0.55;
   switch (phase) {
     case 'swipe':
       return { tell: 0, dim: 0, leak: 0, flash: 0, cameraScale: 1, packScale: 1, rays: 0.1, halo: 0.25, peel: 0, cardOut: 0, rim: 0 };
@@ -168,11 +178,11 @@ export function timelineTargets(
     case 'tear-flip':
       return { tell: 1, dim: dimHold, leak: 1, flash: 0, cameraScale: 1, packScale: packAnticipate, rays: raysAnticipate, halo: 0.6, peel: 1, cardOut: 1, rim: 0 };
     case 'flash-reveal':
-      return { tell: 1, dim: dimHold, leak: 0, flash: rm ? 0 : 0.85, cameraScale: 1, packScale: 1, rays: raysAnticipate, halo: 0.6, peel: 1, cardOut: 1, rim: rm ? (C ? 0 : 0.55) : 0 };
+      return { tell: 1, dim: dimHold, leak: 0, flash: rm ? 0 : 0.85, cameraScale: 1, packScale: 1, rays: raysAnticipate, halo: 0.6, peel: 1, cardOut: 1, rim: rm ? rimSettle : 0 };
     case 'settle':
     case 'cards-on-table':
     default:
-      return { tell: 1, dim: 0, leak: 0, flash: 0, cameraScale: 1, packScale: 1, rays: 0.1, halo: 0.35, peel: 1, cardOut: 1, rim: C ? 0 : 0.55 };
+      return { tell: 1, dim: 0, leak: 0, flash: 0, cameraScale: 1, packScale: 1, rays: 0.1, halo: 0.35, peel: 1, cardOut: 1, rim: rimSettle };
   }
 }
 
@@ -181,7 +191,7 @@ export function timelineTargets(
 type SpillValue = { x: SharedValue<number>; y: SharedValue<number>; rot: SharedValue<number> };
 
 export function useCeremonyTimeline(input: TimelineInput): CeremonyTimeline {
-  const { phase, peakRarity, isMulti, cardCount, timings, spill, reduceMotion, compressed } = input;
+  const { phase, peakRarity, isMulti, cardCount, timings, spill, reduceMotion, compressed, tapFlow = false } = input;
   const n = Math.max(0, Math.min(cardCount, MAX_TIMELINE_CARDS));
 
   // Every shared value at its `swipe` rest value.
@@ -242,7 +252,7 @@ export function useCeremonyTimeline(input: TimelineInput): CeremonyTimeline {
 
   // Phase effect: apply the phase's animations to every shared value.
   useEffect(() => {
-    const T = timelineTargets({ phase, peakRarity, isMulti, reduceMotion });
+    const T = timelineTargets({ phase, peakRarity, isMulti, reduceMotion, tapFlow });
     const E = resolveEasing;
 
     // Reduce Motion is a parallel ceremony (§3.4): opacity-only crossfades, no
@@ -432,7 +442,7 @@ export function useCeremonyTimeline(input: TimelineInput): CeremonyTimeline {
         break;
       }
     }
-  }, [phase, peakRarity, isMulti, reduceMotion, compressed, timings, spill, n]);
+  }, [phase, peakRarity, isMulti, reduceMotion, compressed, timings, spill, n, tapFlow]);
 
   return timeline;
 }
