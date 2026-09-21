@@ -8,12 +8,15 @@ import {
 } from './drawStateStore';
 import { normalizePityState } from './pity';
 import { selectDrawCards } from './poolSelection';
+import { rankCardsByOrder } from '../library/cardRank';
 
 export type DrawnCardVm = {
   stableUid: string;
   question: string;
   difficulty: number;
   rarity: 'COM' | 'RAR' | 'LEG';
+  /** 1-based position in the deck (cardRank.ts) — what DrawResult prints as "No. 011 / 441". */
+  rank: number;
 };
 
 export type DrawCommitResult = {
@@ -91,11 +94,13 @@ export async function commitDraw(slug: string, drawCount: 1 | 10): Promise<DrawC
     ts,
   });
 
+  const ranks = rankCardsByOrder(deck.Cards);
   const cards: DrawnCardVm[] = selection.cards.map((card) => ({
     stableUid: card.StableUid,
     question: card.Question,
     difficulty: card.Difficulty,
     rarity: rarityOfCard(card),
+    rank: ranks.get(card.StableUid) ?? 0,
   }));
 
   let highlightedRarity: 'RAR' | 'LEG' | null = null;

@@ -49,6 +49,7 @@ import { TapCard, type TapCardData } from '../components/ceremony/TapCard';
 import { FallbackStage } from '../components/ceremony/FallbackStage';
 import { FeaturedCard, type FeaturedCardProps } from '../components/ceremony/FeaturedCard';
 import { SpillSampler } from '../components/ceremony/SpillSampler';
+import { SwipeHint } from '../components/ceremony/SwipeHint';
 import { ceremonyStyles as styles } from '../components/ceremony/ceremonyStyles';
 import { prefetchCeremonyImages } from '../components/ceremony/imagePrefetch';
 import { DROPPED_FRAME_MS, startCeremonyPerf, type CeremonyPerfSession, type UiFrameStats } from '../features/gacha/draw/ceremonyPerf';
@@ -153,6 +154,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const [tellLanded, setTellLanded] = useState(false);
   const [compressed, setCompressed] = useState(false);
   const [activeTimings, setActiveTimings] = useState<ResolvedCeremonyTimings>(timings);
+  // The visible "Swipe to open" affordance: shown through the swipe phase until the first
+  // touch on the stage (any path: the GH pan on the pack, the stage responder, a plain tap).
+  const [swipeHintDismissed, setSwipeHintDismissed] = useState(false);
 
   const timers = useRef<number[]>([]);
   const swipeStartXRef = useRef<number | null>(null);
@@ -253,6 +257,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     spill,
     reduceMotion,
     compressed,
+    // With the RN tap table on, the Skia StageRims have no card to sit behind (the table
+    // fans two rows on its own geometry from 6 cards), so the timeline keeps `rim` at 0.
+    tapFlow: enableTapFlow,
   });
   const durations = useMemo(() => phaseDurations(activeTimings), [activeTimings]);
 
@@ -290,6 +297,16 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     route.params.totalCards,
   ]);
   goResultRef.current = goResult;
+
+  const dismissSwipeHint = useCallback(() => {
+    setSwipeHintDismissed((done) => (done ? done : true));
+  }, []);
+  const onSeamProgress = useCallback(
+    (p: number) => {
+      if (p > 0) dismissSwipeHint();
+    },
+    [dismissSwipeHint],
+  );
 
   const startSequence = useCallback(() => {
     setSwipeProgress(0);
@@ -640,9 +657,11 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
           <View
             style={styles.stage}
             testID="draw-ceremony-stage"
+            onTouchStart={dismissSwipeHint}
             onStartShouldSetResponder={() => stageOwnsSwipe || skipDecision === 'compress'}
             onMoveShouldSetResponder={() => stageOwnsSwipe || skipDecision === 'compress'}
             onResponderGrant={(event) => {
+              dismissSwipeHint();
               if (stageOwnsSwipe) {
                 swipeStartXRef.current = event?.nativeEvent?.pageX ?? event?.nativeEvent?.locationX ?? 0;
                 audio.bed('crinkle');
@@ -709,6 +728,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
                 timeline={timeline}
                 disabled={reduceMotion || phase !== 'swipe'}
                 onTear={startSequence}
+                onSeamProgress={onSeamProgress}
               />
             ) : null}
 
@@ -740,6 +760,10 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
             {phase === 'tear-flip' && isMulti ? (
               <SpillSampler durationMs={activeTimings.tearFlip} renderer={renderer} />
+            ) : null}
+
+            {phase === 'swipe' && !reduceMotion && !swipeHintDismissed ? (
+              <SwipeHint label={CEREMONY_COPY_V9.swipe.title} reduceMotion={reduceMotion} />
             ) : null}
 
             {enableTapFlow && (tablePhase || tableWarm) ? (

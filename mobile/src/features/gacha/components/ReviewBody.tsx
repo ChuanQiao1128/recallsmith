@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import CodeBlock from '../../../components/CodeBlock';
 import type { CardExport } from '../../../types/deckExport';
+import { formatRank } from '../library/libraryMapper';
 import { normalizeCodeLanguage, renderSimpleMarkdown } from '../session/reviewContentHelpers';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
@@ -78,10 +79,18 @@ function friendlyCodeLanguage(raw: string): string {
 //     subtle shadow (matches Home/CardDetail/Settings language).
 export function ReviewBody(props: {
   card: CardExport;
+  /**
+   * 1-based position in the deck (libraryMapper.rankCardsByOrder) — the same
+   * "#011" the Library tile and DrawResult print. Null when the caller has no
+   * deck to rank against; the badge then falls back to the raw OrderInDeck
+   * rather than inventing a number.
+   */
+  rank?: number | null;
   faceUp: boolean;
   onFlip: () => void;
 }) {
-  const { card, faceUp, onFlip } = props;
+  const { card, rank = null, faceUp, onFlip } = props;
+  const orderBadge = typeof rank === 'number' && rank > 0 ? `#${formatRank(rank)}` : `#${card.OrderInDeck}`;
 
   const difficultyLabel =
     card.Difficulty === 1 ? 'Easy' : card.Difficulty === 2 ? 'Medium' : 'Hard';
@@ -127,8 +136,8 @@ export function ReviewBody(props: {
   return (
     <View style={styles.card}>
       <View style={styles.headerRow}>
-        <Text style={styles.order} numberOfLines={1}>
-          #{card.OrderInDeck}
+        <Text style={styles.order} numberOfLines={1} testID="review-order-badge">
+          {orderBadge}
         </Text>
         <Text style={styles.badge} numberOfLines={1}>
           {difficultyLabel}

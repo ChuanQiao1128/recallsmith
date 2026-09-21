@@ -230,6 +230,56 @@ describe('useCeremonyTimeline', () => {
     expect(tl.rim.length).toBe(2);
   });
 
+  it('withholds the rim in every phase when the tap table owns the cards (tapFlow)', () => {
+    // The StageRims are drawn at the spill slots, which the RN tap table only matches for a
+    // one-row hand: with tapFlow on they must never rise. Everything else is untouched.
+    for (const phase of PHASES) {
+      for (const r of RARITIES) {
+        for (const rm of [false, true]) {
+          const off = timelineTargets({ phase, peakRarity: r, isMulti: true, reduceMotion: rm });
+          const on = timelineTargets({ phase, peakRarity: r, isMulti: true, reduceMotion: rm, tapFlow: true });
+          expect(on).toEqual({ ...off, rim: 0 });
+        }
+      }
+    }
+    // …and the featured-reveal path (tapFlow off / omitted) keeps the 0.55 settle tell.
+    expect(timelineTargets({ phase: 'settle', peakRarity: 'RAR', isMulti: true, reduceMotion: false, tapFlow: false }).rim).toBe(0.55);
+    expect(timelineTargets({ phase: 'flash-reveal', peakRarity: 'LEG', isMulti: true, reduceMotion: true }).rim).toBe(0.55);
+
+    // Driven through the shared values: settle and the table read 0 for every card.
+    const cards = Array.from({ length: 10 }, (_, i) => ({ rarity: i === 0 ? ('LEG' as const) : ('RAR' as const) }));
+    const timings = resolveCeremonyTimings({ isMulti: true, peakRarity: 'LEG', motionAvailable: false });
+    const schedule = buildSpillSchedule(cards, 940);
+    const mk = (phase: CeremonyPhase, tapFlow: boolean): TimelineInput => ({
+      phase, peakRarity: 'LEG', isMulti: true, cardCount: 10, timings, spill: schedule, reduceMotion: false, compressed: false, tapFlow,
+    });
+    let tl!: CeremonyTimeline;
+    const onTimeline = (x: CeremonyTimeline): void => {
+      tl = x;
+    };
+    let root!: renderer.ReactTestRenderer;
+    act(() => {
+      root = renderer.create(React.createElement(Probe, { input: mk('flash-reveal', true), onTimeline }));
+    });
+    act(() => {
+      root.update(React.createElement(Probe, { input: mk('settle', true), onTimeline }));
+    });
+    expect(tl.rim.map((r) => r.value)).toEqual(Array(10).fill(0));
+    act(() => {
+      root.update(React.createElement(Probe, { input: mk('cards-on-table', true), onTimeline }));
+    });
+    expect(tl.rim.map((r) => r.value)).toEqual(Array(10).fill(0));
+    // The spill geometry is still driven (the stage's deal flight is unaffected).
+    const slot0 = schedule.entries.find((e) => e.index === 0)!.slot;
+    expect(tl.spill[0].x.value).toBe(spillSlotOffset(slot0, 10).x);
+
+    // Same choreography with the stage's own table: rims rise at settle.
+    act(() => {
+      root = renderer.create(React.createElement(Probe, { input: mk('settle', false), onTimeline }));
+    });
+    expect(tl.rim.map((r) => r.value)).toEqual(Array(10).fill(0.55));
+  });
+
   it('reduce motion lays cards out statically with no scale or flash', () => {
     const cards = [{ rarity: 'RAR' as const }, { rarity: 'COM' as const }];
     const timings = resolveCeremonyTimings({ isMulti: true, peakRarity: 'RAR', motionAvailable: false });

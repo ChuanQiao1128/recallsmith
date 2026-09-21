@@ -9,6 +9,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { checkManifestForUpdates, installDeckFromUrl, listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
+import { deckShortTitle } from '../content/deckShortTitle';
 import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
 import { loadDrawState } from '../features/gacha/draw/drawStateStore';
@@ -158,6 +159,8 @@ function NeighborHint({
   }
   const palette = packPaletteFromSlug(deck.slug);
   const thumb = packImageForSlug(deck.slug);
+  // 60pt rail: the manifest title truncates to "Claude…", the short alias fits.
+  const shortTitle = deckShortTitle(deck.slug, deck.title);
   return (
     <Pressable
       testID={`draw-neighbor-${side}`}
@@ -194,8 +197,8 @@ function NeighborHint({
           {side === 'left' ? '‹' : '›'}
         </Text>
       </View>
-      <Text style={styles.neighborTitle} numberOfLines={1}>
-        {deck.title}
+      <Text style={styles.neighborTitle} numberOfLines={2}>
+        {shortTitle}
       </Text>
     </Pressable>
   );
@@ -769,7 +772,16 @@ export function DrawScreen({ navigation, route }: Props) {
             </View>
 
             <View style={styles.packStage} testID="draw-swipe-zone">
-              <PackArt palette={palette} bobbingValue={bobbingRef.current} shineValue={shineRef.current} title={ready.deckTitle} badgeText={badgeText} coverImage={coverImage} />
+              {/* The pack wobbles on a perspective rotateY, so its far half sits at z < 0. Fabric
+                  hoists the children of layout-only views to the nearest stacking context, which
+                  made the tilted pack a sibling layer of the halo above and let Core Animation
+                  depth-sort the halo through it (the halo covered whichever half was tilted
+                  away). `collapsable={false}` + zIndex make this wrapper a stacking context of
+                  its own: the 3D pack is flattened into the wrapper's plane, and the wrapper is
+                  composited above the halo as a whole. No layout of its own. */}
+              <View testID="draw-pack-3d-wrapper" collapsable={false} style={styles.pack3dWrapper}>
+                <PackArt palette={palette} bobbingValue={bobbingRef.current} shineValue={shineRef.current} title={ready.deckTitle} badgeText={badgeText} coverImage={coverImage} />
+              </View>
             </View>
 
             {/* Swipe-to-arm UI is hidden visually — auto-arm above primes
@@ -1023,6 +1035,8 @@ const styles = StyleSheet.create({
   neighborArrowChipText: { fontSize: 14, fontWeight: '900', color: colors.inkSoft, marginTop: -2 },
   neighborTitle: { marginTop: 6, color: colors.inkMuted, fontSize: 9, fontWeight: '800', textAlign: 'center', width: '100%' },
   packStage: { width: '100%', alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm },
+  // Stacking context for the 3D pack (see the JSX comment): above the hero halo, no layout.
+  pack3dWrapper: { zIndex: 2 },
   packShadow: {
     shadowColor: 'rgba(58,35,5,0.32)', shadowOpacity: 0.6, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 4, borderRadius: 22,
   },

@@ -30,16 +30,34 @@ function describeNode(role: RoutePreviewNode['role']) {
   };
 }
 
+/**
+ * A route with no nodes. `limit` 0 is the planner's one way of saying "there is
+ * nothing to deal here": the account holds no card of this deck (a fresh install
+ * before the first pull), so a run cannot start, let alone complete. Consumers
+ * must treat it as an empty state, never as "Run 0/1" — the header, the summary
+ * and Home's preview all did exactly that before this existed.
+ */
+export const EMPTY_ROUTE_LIMIT = 0;
+
 export function buildChallengeRoute(params: {
   slug: string;
   deckTitle: string;
   dueCount: number;
   newCount: number;
+  /** Cards of this deck the account holds (drawn or already studied). 0 → empty route. */
+  ownedCount: number;
 }): ChallengeRoute {
-  const { slug, deckTitle, dueCount, newCount } = params;
+  const { slug, deckTitle, dueCount, newCount, ownedCount } = params;
+  const hasPlayableCards = ownedCount > 0;
   const hasTodayWork = dueCount > 0 || newCount > 0;
   // R6/F10: one fresh card should plan a one-node route the user can full-clear.
-  const limit = hasTodayWork ? Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, dueCount + newCount)) : 1;
+  // With nothing owned there is no maintenance run to fall back to either: the
+  // old `: 1` branch planned a warm-up node over an empty collection.
+  const limit = !hasPlayableCards
+    ? EMPTY_ROUTE_LIMIT
+    : hasTodayWork
+      ? Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, dueCount + newCount))
+      : 1;
 
   const hasBoss = dueCount >= 3;
   const hasElite = dueCount >= 2 || newCount >= 1;
@@ -55,9 +73,11 @@ export function buildChallengeRoute(params: {
     };
   });
 
-  const summary = hasTodayWork
-    ? `${deckTitle} · ${dueCount} due · ${newCount} fresh · clear ${SESSION_MIN_GOAL} node to keep momentum`
-    : `${deckTitle} is light today — treat this as a short maintenance run, not a backlog day.`;
+  const summary = !hasPlayableCards
+    ? `${deckTitle} has no cards yet — open a pack to get your first cards.`
+    : hasTodayWork
+      ? `${deckTitle} · ${dueCount} due · ${newCount} fresh · clear ${SESSION_MIN_GOAL} node to keep momentum`
+      : `${deckTitle} is light today — treat this as a short maintenance run, not a backlog day.`;
 
   return {
     slug,
@@ -86,7 +106,10 @@ export function buildSweepRoute(params: {
 }): ChallengeRoute {
   const { slug, deckTitle, learnedCount, dueCount, newCount } = params;
   const dailyTarget = Math.ceil(learnedCount / SWEEP_SPREAD_DAYS);
-  const limit = Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, dailyTarget));
+  // A sweep plays learned cards only, so learnedCount is its owned count: with
+  // none learned there is nothing to sweep and the route is empty, not one node.
+  const limit =
+    learnedCount > 0 ? Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, dailyTarget)) : EMPTY_ROUTE_LIMIT;
 
   const nodes: RoutePreviewNode[] = Array.from({ length: limit }).map((_, index) => {
     const role = resolveRouteRole({ index, total: limit, hasElite: false, hasBoss: false });
@@ -99,7 +122,10 @@ export function buildSweepRoute(params: {
     };
   });
 
-  const summary = `${deckTitle} · ${learnedCount} learned card${learnedCount === 1 ? '' : 's'} · about ${dailyTarget} a day for ${SWEEP_SPREAD_DAYS} days`;
+  const summary =
+    learnedCount > 0
+      ? `${deckTitle} · ${learnedCount} learned card${learnedCount === 1 ? '' : 's'} · about ${dailyTarget} a day for ${SWEEP_SPREAD_DAYS} days`
+      : `${deckTitle} has no learned cards to sweep yet.`;
 
   return {
     slug,

@@ -90,6 +90,8 @@ export type RootStackParamList = {
         difficulty: number;
         rarity: 'COM' | 'RAR' | 'LEG';
         tag?: string;
+        /** 1-based deck position (cardRank.ts). Optional: older callers and fixtures omit it. */
+        rank?: number;
       }>;
       pityBefore: number;
       pityAfter: number;
@@ -117,6 +119,8 @@ export type RootStackParamList = {
         difficulty: number;
         rarity: 'COM' | 'RAR' | 'LEG';
         tag?: string;
+        /** 1-based deck position (cardRank.ts). Optional: older callers and fixtures omit it. */
+        rank?: number;
       }>;
       pityBefore: number;
       pityAfter: number;

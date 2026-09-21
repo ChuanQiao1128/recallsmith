@@ -39,6 +39,7 @@ const challenge = buildChallengeRoute({
   deckTitle: 'C# Interview',
   dueCount: 3,
   newCount: 2,
+  ownedCount: 4,
 });
 assert.equal(challenge.minimumGoal, 1);
 assert.equal(challenge.limit, 5);
@@ -50,10 +51,21 @@ const maintenanceChallenge = buildChallengeRoute({
   deckTitle: 'C# Interview',
   dueCount: 0,
   newCount: 0,
+  ownedCount: 4,
 });
 assert.equal(maintenanceChallenge.limit, 1);
 assert.equal(maintenanceChallenge.nodes[0]?.role, 'warmup');
 assert.match(maintenanceChallenge.summary, /maintenance run/i);
+
+const emptyChallenge = buildChallengeRoute({
+  slug: 'csharp',
+  deckTitle: 'C# Interview',
+  dueCount: 0,
+  newCount: 0,
+  ownedCount: 0,
+});
+assert.equal(emptyChallenge.limit, 0);
+assert.equal(emptyChallenge.nodes.length, 0);
 
 const plannedChallenge = planChallengeRoute({
   deck: sampleDeck,

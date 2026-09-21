@@ -108,6 +108,24 @@ describe('draw commit atomicity', () => {
     expect(persisted.pity.draws).toBe(result!.pityAfter);
   });
 
+  it('stamps every drawn card with its 1-based deck rank', async () => {
+    // OrderInDeck is index + 1 here, so rank and OrderInDeck coincide; the
+    // assertion is that the field exists and is consistent with the deck
+    // order. cardRank.test.ts pins the sparse-key case.
+    store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
+
+    const result = await commitDraw(SLUG, 10);
+
+    expect(result).not.toBeNull();
+    expect(result!.cards.length).toBeGreaterThan(0);
+    const orderOf = new Map(deckCards.map((card) => [card.StableUid, card.OrderInDeck]));
+    for (const card of result!.cards) {
+      expect(card.rank).toBe(orderOf.get(card.stableUid));
+      expect(card.rank).toBeGreaterThanOrEqual(1);
+      expect(card.rank).toBeLessThanOrEqual(deckCards.length);
+    }
+  });
+
   it('leaves owned and pity untouched when the commit write is killed', async () => {
     store.set(STATE_KEY, JSON.stringify({ owned: ['c1'], pity: { draws: 3, threshold: 10 } }));
     failSetItemFor = (key) => key === STATE_KEY;

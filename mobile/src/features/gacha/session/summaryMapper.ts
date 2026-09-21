@@ -7,11 +7,16 @@ export const COPY = {
   title: {
     fullClear: 'Run complete 🎉',
     progress: 'Good progress today',
+    // sessionDone 0: nothing was rated, so neither "progress" nor "complete"
+    // is true. Same words as nextAction.emptyTitle so the hero and the
+    // action card stop contradicting each other on a run that never dealt.
+    none: 'No run logged yet',
   },
   completion: {
     fullClear: "Cleared today's run.",
     minimum: 'You kept the streak.',
     partial: 'Progress logged for today.',
+    none: 'Nothing reviewed this time.',
   },
   reward: {
     sectionFullClear: 'Run reward',
@@ -27,6 +32,7 @@ export const COPY = {
     fullClearLabel: (done: number, total: number) => `${done} / ${total} cards · full clear`,
     minimumLabel: (done: number, total: number) => `${done} / ${total} cards · streak saved`,
     partialLabel: (done: number, total: number) => `${done} / ${total} cards · route started`,
+    noneLabel: (total: number) => (total > 0 ? `0 / ${total} cards · not started` : 'No cards to review yet'),
     queueLabel: (dueCount: number) => `${dueCount} due card${dueCount === 1 ? '' : 's'} in today's queue`,
     streakRise: (before: number, after: number) => `🔥 ${before} → ${after}`,
     streakHold: (value: number) => `🔥 ${value}`,
@@ -123,6 +129,23 @@ function resolvePrimaryAction(params: {
   return { label: COPY.nextAction.openLibrary, kind: 'nothing_to_learn' };
 }
 
+// The secondary link is always the destination the primary does not already
+// offer. "Back home" under a primary that goes Home (the "Continue" kinds, and
+// the demoted "Back to Home" the screen shows next to the reward callout) was
+// the same tap twice with two labels; under "Open library" it is the one
+// other place to go, and the library is that other place otherwise.
+export function resolveSecondaryAction(params: {
+  primaryGoesHome: boolean;
+}): { label: string; kind: HomeCtaKind } {
+  return params.primaryGoesHome
+    ? { label: COPY.nextAction.openLibrary, kind: 'nothing_to_learn' }
+    : { label: COPY.nextAction.backHome, kind: 'today_done' };
+}
+
+export function primaryActionGoesHome(kind: HomeCtaKind): boolean {
+  return kind !== 'nothing_to_learn' && kind !== 'wallet_full';
+}
+
 function resolveNextActionCopy(params: {
   resolvedReward: ResolvedSessionReward;
   hasActivity: boolean;
@@ -186,17 +209,27 @@ export function buildSessionSummaryVM(params: {
   });
   const outcome = resolvedReward.outcome;
 
-  const completionLabel = resolvedReward.completedFullRun
-    ? COPY.completion.fullClear
-    : resolvedReward.completedMinimumGoal
-      ? COPY.completion.minimum
-      : COPY.completion.partial;
+  // A run with nothing rated. Reachable from an empty deck (planner limit 0,
+  // see sessionBuilder.EMPTY_ROUTE_LIMIT) and from any route-complete Continue
+  // pressed before the first rating; both used to read "Good progress today ·
+  // 0/1 cleared" next to "No run logged yet".
+  const noRun = sessionDone <= 0;
 
-  const legacyCompletionLabel = resolvedReward.completedFullRun
-    ? 'Full run cleared'
-    : resolvedReward.completedMinimumGoal
-      ? 'Minimum goal cleared'
-      : 'Practice progress saved';
+  const completionLabel = noRun
+    ? COPY.completion.none
+    : resolvedReward.completedFullRun
+      ? COPY.completion.fullClear
+      : resolvedReward.completedMinimumGoal
+        ? COPY.completion.minimum
+        : COPY.completion.partial;
+
+  const legacyCompletionLabel = noRun
+    ? 'No cards reviewed'
+    : resolvedReward.completedFullRun
+      ? 'Full run cleared'
+      : resolvedReward.completedMinimumGoal
+        ? 'Minimum goal cleared'
+        : 'Practice progress saved';
 
   const rewardTitle = resolvedReward.completedFullRun
     ? COPY.reward.sectionFullClear
@@ -213,12 +246,17 @@ export function buildSessionSummaryVM(params: {
         : 'Progress saved for this run.'
       : resolvedReward.rewardMessage;
 
-  const total = sessionLimit > 0 ? sessionLimit : Math.max(1, sessionDone);
-  const progressBody = resolvedReward.completedFullRun
-    ? COPY.progress.fullClearLabel(sessionDone, total)
-    : resolvedReward.completedMinimumGoal
-      ? COPY.progress.minimumLabel(sessionDone, total)
-      : COPY.progress.partialLabel(sessionDone, total);
+  // No Math.max(1, …): a limit of 0 with nothing done is an empty deck, and
+  // "0 / 1" invented a card that does not exist. Unlimited runs (limit 0,
+  // done > 0) still read done / done as before.
+  const total = sessionLimit > 0 ? sessionLimit : Math.max(0, sessionDone);
+  const progressBody = noRun
+    ? COPY.progress.noneLabel(total)
+    : resolvedReward.completedFullRun
+      ? COPY.progress.fullClearLabel(sessionDone, total)
+      : resolvedReward.completedMinimumGoal
+        ? COPY.progress.minimumLabel(sessionDone, total)
+        : COPY.progress.partialLabel(sessionDone, total);
 
   const streakNote =
     streakBefore != null && streakAfter != null
@@ -238,7 +276,9 @@ export function buildSessionSummaryVM(params: {
       : null;
 
   const primaryAction = resolvePrimaryAction({ dueCount, resolvedReward });
-  const secondaryAction = { label: COPY.nextAction.backHome, kind: 'today_done' as HomeCtaKind };
+  const secondaryAction = resolveSecondaryAction({
+    primaryGoesHome: primaryActionGoesHome(primaryAction.kind),
+  });
   const nextActionCopy = resolveNextActionCopy({
     resolvedReward,
     hasActivity: sessionDone > 0 || dueCount > 0 || resolvedReward.rewardPulls > 0 || (streakAfter ?? 0) > 0,
@@ -282,8 +322,10 @@ export function buildSessionSummaryVM(params: {
       secondary: secondaryAction,
     },
 
-    title: resolvedReward.completedFullRun ? COPY.title.fullClear : COPY.title.progress,
-    subtitle: `${deckTitle} · ${sessionDone}/${sessionLimit || '∞'} cleared`,
+    title: noRun ? COPY.title.none : resolvedReward.completedFullRun ? COPY.title.fullClear : COPY.title.progress,
+    subtitle: noRun
+      ? `${deckTitle} · no cards reviewed`
+      : `${deckTitle} · ${sessionDone}/${sessionLimit || '∞'} cleared`,
     rewardTitle,
     rewardBody: legacyRewardBody,
     rewardBadge: COPY.reward.badge(resolvedReward.rewardPulls),

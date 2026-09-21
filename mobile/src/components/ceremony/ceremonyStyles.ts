@@ -203,4 +203,16 @@ export const ceremonyStyles = StyleSheet.create({
   // hold/tear-flip: the same centred geometry, out of flow (the pack still owns the flow) and invisible.
   tapTableWarm: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, opacity: 0 },
   spillSampler: { position: 'absolute', width: 1, height: 1, opacity: 0 }, // an invisible, non-interactive sampling leaf (VoiceOver still reads its live region)
+
+  // ─── Swipe-phase affordance (SwipeHint) — hung just under the stage's bottom edge (the
+  // fallback pack fills the stage to 12 px from it; the CTA row is empty during swipe), and
+  // absolute so mounting/unmounting it never moves the centred stage. Decoration only; the
+  // pack stays the accessible control.
+  swipeHint: {
+    position: 'absolute', bottom: -14, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    columnGap: 6,
+  },
+  swipeHintText: { color: colors.inkMuted, fontSize: typography.bodySmall, fontWeight: '800', letterSpacing: 0.3 },
+  swipeHintChevron: { width: 18, height: 18, alignItems: 'center', justifyContent: 'center' },
+  swipeHintChevronText: { color: colors.pokeBlueDeep, fontSize: 22, lineHeight: 22, fontWeight: '900', marginTop: -3 },
 });

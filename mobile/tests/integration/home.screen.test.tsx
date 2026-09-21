@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 let walletFixture = { availablePulls: 0, reservePulls: 0 };
 let activeSlugFixture: string | null = 'csharp';
 let deckSummariesFixture: any[] = [];
+let updatesFixture: Record<string, any> = {};
 
 const navigateMock = vi.fn();
 const setActiveDeckSlugMock = vi.fn(async (_slug: string) => {});
@@ -60,7 +61,7 @@ vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
     const totalDue = deckSummariesFixture.reduce((sum, deck) => sum + Number(deck.dueToday ?? 0), 0);
     return {
       deckSummaries: deckSummariesFixture,
-      updates: {},
+      updates: updatesFixture,
       allUpcoming30: Array.from({ length: 30 }, (_, i) => ({
         dateKey: new Date(now + i * 86_400_000).toISOString(),
         count: i === 0 ? totalDue : 0,
@@ -68,6 +69,7 @@ vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
       asOfISO: new Date(now).toISOString(),
     };
   }),
+  autoApplyFreeDeckUpdates: vi.fn(() => []),
   resolveDeckAction: vi.fn(async () => ({ kind: 'open', slug: 'csharp' })),
   executeDeckAction: vi.fn(async () => ({ activeSlug: 'csharp' })),
 }));
@@ -169,6 +171,7 @@ describe('HomeScreen v9', () => {
         percent: 0.62,
       },
     ];
+    updatesFixture = {};
     navigateMock.mockReset();
     setActiveDeckSlugMock.mockClear();
   });
@@ -588,5 +591,153 @@ describe('HomeScreen v9', () => {
     await flush();
     expect(textBlob(tree3)).not.toContain('Deck mastered 🎉');
     expect(masteredLabelCount(tree3)).toBe(0);
+  });
+
+  it('hides the goal line when the selected deck has nothing due and nothing new', async () => {
+    deckSummariesFixture = deckSummariesFixture.map((deck) => ({
+      ...deck,
+      dueToday: 0,
+      plannedToday: 0,
+      newToday: 0,
+    }));
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    expect(tree.root.findAllByProps({ testID: 'home-goal-line' })).toHaveLength(0);
+    expect(textBlob(tree)).not.toContain('Full clear: 0 cards');
+  });
+
+  it('caps the goal line at the route length the session will build', async () => {
+    // due 4 + new 3 = 7 cards, but the planner runs at most 5 a session, and
+    // the summary says "5 / 5 · full clear" -- Home has to name the same 5.
+    deckSummariesFixture = deckSummariesFixture.map((deck) =>
+      deck.slug === 'csharp' ? { ...deck, dueToday: 4, plannedToday: 4, newToday: 3 } : deck,
+    );
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const goal = tree.root.findByProps({ testID: 'home-goal-line' });
+    expect(String(goal.props.children)).toBe('Keep streak: 1 card · Full clear: 5 cards');
+  });
+
+  it('labels the tiles with the short deck title on two lines', async () => {
+    deckSummariesFixture = [
+      { ...deckSummariesFixture[0], slug: 'claude-ccdv-f', title: 'Claude Developer Foundations (CCDV-F)' },
+      { ...deckSummariesFixture[1], slug: 'aws-saa-c03', title: 'AWS Associate Architect' },
+    ];
+    activeSlugFixture = 'claude-ccdv-f';
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const tiles = tree.root.findByProps({ testID: 'home-pack-visual' }).findAll(
+      (node) =>
+        (node.type as any) === 'Pressable'
+        && typeof node.props.accessibilityLabel === 'string'
+        && node.props.accessibilityLabel.includes(' pack — '),
+    );
+    const labels = tiles.map((tile) => tile.props.accessibilityLabel);
+    expect(labels).toContain('Claude CCDV-F pack — 1 due');
+    expect(labels).toContain('AWS SAA-C03 pack — 2 due');
+
+    // The tile label under the thumbnail gets two lines (the thumbnail's own
+    // fallback monogram stays at one).
+    const titleNodes = tiles.flatMap((tile) =>
+      tile.findAll(
+        (node) =>
+          (node.type as any) === 'Text'
+          && node.props.numberOfLines === 2
+          && (node.props.children === 'Claude CCDV-F' || node.props.children === 'AWS SAA-C03'),
+      ),
+    );
+    expect(titleNodes.map((node) => node.props.children).sort()).toEqual(['AWS SAA-C03', 'Claude CCDV-F']);
+
+    // The Today card keeps the full title: that is where there is room for it.
+    expect(textBlob(tree)).toContain('Claude Developer Foundations (CCDV-F)');
+  });
+
+  it('shows the update chip and a one-line notice for a stale installed deck', async () => {
+    // Installed build has 81 of the 115 cards the manifest now lists.
+    deckSummariesFixture = deckSummariesFixture.map((deck) =>
+      deck.slug === 'csharp'
+        ? { ...deck, slug: 'csharp-basics', title: 'C# / .NET', totalCards: 115, localCards: 81, studyCards: 81 }
+        : deck,
+    );
+    activeSlugFixture = 'csharp-basics';
+    updatesFixture = {
+      'csharp-basics': {
+        slug: 'csharp-basics',
+        installedVersion: '20260816',
+        remoteVersion: '20260921',
+        hasUpdate: true,
+        remoteUrl: 'https://example.test/csharp-basics.json',
+        remoteSha256: null,
+      },
+    };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const chip = tree.root.find(
+      (node) => (node.type as any) === 'View' && node.props?.testID === 'home-pack-update-chip-csharp-basics',
+    );
+    const chipText = chip.find((node) => (node.type as any) === 'Text');
+    expect(chipText.props.children).toBe('Update · +34 cards');
+    expect(chipText.props.numberOfLines).toBe(2);
+    expect(tree.root.findAllByProps({ testID: 'home-pack-update-chip-aws' })).toHaveLength(0);
+
+    const notice = tree.root.find(
+      (node) => (node.type as any) === 'Text' && node.props?.testID === 'home-update-notice',
+    );
+    expect(notice.props.numberOfLines).toBe(1);
+    expect(String(notice.props.children)).toBe('C# / .NET update ready · +34 cards — tap the pack to install.');
+  });
+
+  it('drops the notice when the update belongs to a deck that is not selected', async () => {
+    updatesFixture = {
+      aws: {
+        slug: 'aws',
+        installedVersion: '1',
+        remoteVersion: '2',
+        hasUpdate: true,
+        remoteUrl: 'https://example.test/aws.json',
+        remoteSha256: null,
+      },
+    };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    expect(tree.root.findAllByProps({ testID: 'home-pack-update-chip-aws' }).length).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => (node.type as any) === 'Text' && node.props?.testID === 'home-update-notice'),
+    ).toHaveLength(0);
   });
 });

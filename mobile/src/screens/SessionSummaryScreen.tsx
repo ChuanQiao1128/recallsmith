@@ -10,7 +10,7 @@ import { SummaryProgressBlock } from '../features/gacha/components/SummaryProgre
 import { buildDrawState } from '../features/gacha/draw/drawState';
 import { resolveNewMilestones, type Milestone } from '../features/gacha/milestones/milestoneTracker';
 import { loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
-import { buildSessionSummaryVM } from '../features/gacha/session/summaryMapper';
+import { buildSessionSummaryVM, resolveSecondaryAction } from '../features/gacha/session/summaryMapper';
 import { applySessionStreak, loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import type { HomeCtaKind } from '../features/gacha/selectors/homeSelectors';
 import { a11y } from '../theme/a11y';
@@ -176,6 +176,12 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
           ? 'Back to Home'
           : summary.vm.nextAction.primary.label;
   const isPrimaryActionDisabled = isSummaryLoading;
+  // The demoted primary goes Home, so the link under it must not: the mapper
+  // picked the secondary against the un-demoted primary and would otherwise
+  // put "Back home" under "Back to Home".
+  const secondaryAction = showRewardCallout
+    ? resolveSecondaryAction({ primaryGoesHome: true })
+    : summary.vm.nextAction.secondary;
 
   return (
     <SafeAreaView testID="screen-session-summary-root" style={styles.safeArea}>
@@ -349,14 +355,14 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
               </Text>
             </Pressable>
 
-            {summaryResolveStatus === 'ready' && !isSummaryEmpty && summary.vm.nextAction.secondary ? (
+            {summaryResolveStatus === 'ready' && !isSummaryEmpty && secondaryAction ? (
               <Pressable
                 testID="screen-session-summary-secondary-cta"
                 accessibilityRole="link"
                 style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
                 onPress={() =>
                   navigateFromActionKind({
-                    kind: summary.vm.nextAction.secondary!.kind,
+                    kind: secondaryAction.kind,
                     slug,
                     rewardPending: false,
                     navigation,
@@ -364,7 +370,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
                 }
               >
                 <Text numberOfLines={1} style={styles.secondaryButtonText}>
-                  {summary.vm.nextAction.secondary.label}
+                  {secondaryAction.label}
                 </Text>
               </Pressable>
             ) : null}

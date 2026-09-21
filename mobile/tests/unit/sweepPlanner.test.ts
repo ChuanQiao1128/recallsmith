@@ -177,13 +177,19 @@ describe('sweep planner', () => {
       fc.property(fc.integer({ min: 0, max: 500 }), (learnedCount) => {
         const route = buildSweepRoute({ slug: 'csharp', deckTitle: 'C# Interview', learnedCount, dueCount: 0, newCount: 0 });
         const dailyTarget = Math.ceil(learnedCount / SWEEP_SPREAD_DAYS);
-        expect(route.limit).toBe(Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, dailyTarget)));
+        // Nothing learned → empty route (limit 0, no nodes), never a one-node run over nothing.
+        const expectedLimit = learnedCount > 0 ? Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, dailyTarget)) : 0;
+        expect(route.limit).toBe(expectedLimit);
         expect(route.mode).toBe('sweep');
         expect(route.minimumGoal).toBe(1);
         expect(route.nodes.length).toBe(route.limit);
-        expect(route.nodes[0].role).toBe('warmup');
+        if (learnedCount > 0) {
+          expect(route.nodes[0].role).toBe('warmup');
+          expect(route.summary).toContain(`about ${dailyTarget} a day for 7 days`);
+        } else {
+          expect(route.summary).toMatch(/no learned cards/i);
+        }
         expect(route.nodes.some((node) => node.role === 'elite' || node.role === 'boss')).toBe(false);
-        expect(route.summary).toContain(`about ${dailyTarget} a day for 7 days`);
       }),
     );
   });
@@ -192,7 +198,8 @@ describe('sweep planner', () => {
     fc.assert(
       fc.property(fixtureArb, ({ deck, progress, ownedSet }) => {
         const learnedCount = countLearned(progress, ownedSet);
-        const expectedLimit = Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, Math.ceil(learnedCount / SWEEP_SPREAD_DAYS)));
+        const expectedLimit =
+          learnedCount > 0 ? Math.max(1, Math.min(SESSION_MAIN_ROUTE_DEFAULT, Math.ceil(learnedCount / SWEEP_SPREAD_DAYS))) : 0;
 
         const sweep = planChallengeRoute({ deck, progress, now: NOW, mode: 'sweep', ownedSet });
         const plain = planChallengeRoute({ deck, progress, now: NOW, ownedSet });
