@@ -176,9 +176,28 @@ public sealed class Res
   public APIGatewayProxyResponse NotImplemented(string? message = null) =>
     Wrap(501, false, null, new ApiError { Code = "NOT_IMPLEMENTED", Message = message });
 
-  public APIGatewayProxyResponse Error500(Exception? _)
+  public APIGatewayProxyResponse Error500(Exception? ex)
   {
-    // Do not leak internal error details to clients.
+    // Do not leak internal error details to clients — but do keep them for us. Until 2026-09-21
+    // nothing logged the exception behind a 500, so a failed console import ("Internal server
+    // error" on one card) left no trace in CloudWatch. Type + message + SqlState/constraint for
+    // Postgres; the stack only at Debug (it is long and rarely needed).
+    if (ex is not null)
+    {
+      var pg = ex as Npgsql.PostgresException;
+      Console.WriteLine(JsonSerializer.Serialize(new
+      {
+        level = "error",
+        tag = "unhandled",
+        traceId = TraceId,
+        type = ex.GetType().FullName,
+        message = ex.Message,
+        sqlState = pg?.SqlState,
+        constraint = pg?.ConstraintName,
+        detail = pg?.Detail,
+        inner = ex.InnerException?.Message,
+      }));
+    }
     return Wrap(500, false, null, new ApiError { Code = "INTERNAL_ERROR", Message = "Internal server error" });
   }
 
