@@ -367,6 +367,37 @@ describe('DrawScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' }).props.disabled).toBe(true);
   });
 
+  it('labels the neighbour rail with the short deck title, two lines allowed', async () => {
+    manifestFixture = [
+      { slug: 'csharp-basics', availability: 'live', title: 'C# / .NET' },
+      { slug: 'claude-ccdv-f', availability: 'live', title: 'Claude Developer Foundations (CCDV-F)' },
+    ];
+    resolveDeckFixture = (slug: string) => ({
+      Slug: slug,
+      Title: slug === 'claude-ccdv-f' ? 'Claude Developer Foundations (CCDV-F)' : 'C# / .NET',
+      Cards: [{ StableUid: `${slug}-1`, OrderInDeck: 1, Difficulty: 1, Question: 'Q' }],
+    });
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen
+          navigation={{ goBack: vi.fn(), navigate: vi.fn() } as any}
+          route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp-basics' } } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const neighbour = tree.root.findByProps({ testID: 'draw-neighbor-left' });
+    const title = neighbour.find(
+      (node) => (node.type as any) === 'Text' && node.props.children === 'Claude CCDV-F',
+    );
+    expect(title.props.numberOfLines).toBe(2);
+    // The accessibility label keeps the full name: a screen reader has room.
+    expect(neighbour.props.accessibilityLabel).toBe('Select Claude Developer Foundations (CCDV-F)');
+  });
+
   it('requires a swipe arm before either open action can fire', async () => {
     const navigate = vi.fn();
 

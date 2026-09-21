@@ -202,6 +202,80 @@ describe('SessionSummaryScreen', () => {
     expect(navigation.navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
   });
 
+  it('names each destination once: the pulls chip, the Home button and the library link', async () => {
+    const navigation = { navigate: vi.fn() } as any;
+    const FIVE_NEW_CARDS_REWARD = {
+      newCardPulls: 5,
+      newCardUids: ['u1', 'u2', 'u3', 'u4', 'u5'],
+      dueClearPulls: 0 as const,
+      rewardPulls: 5,
+      applied: 5,
+      dropped: 0,
+      walletBefore: { availablePulls: 14, reservePulls: 0 },
+      walletAfter: { availablePulls: 19, reservePulls: 0 },
+    };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionSummaryScreen
+          navigation={navigation}
+          route={{
+            key: 'summary',
+            name: 'SessionSummary',
+            params: {
+              sessionId: 'sess-5',
+              slug: 'claude-ccdv-f',
+              deckTitle: 'Claude Developer Foundations (CCDV-F)',
+              sessionDone: 5,
+              sessionLimit: 5,
+              minimumGoal: 1,
+              dueCount: 0,
+              streakEarned: true,
+              reward: FIVE_NEW_CARDS_REWARD,
+            },
+          } as any}
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The "+5 pulls" chip used to render three times (hero, reward card top
+    // row, reward body); the hero chip is the one that stays, the reward card
+    // states the count through its anchor circle and its body sentence.
+    const chipNodes = tree.root.findAll(
+      (node) => (node.type as any) === 'Text' && getTextContent(node.props.children) === '+5 pulls',
+    );
+    expect(chipNodes).toHaveLength(1);
+
+    const primaryText = getTextContent(
+      findPressableByTestID(tree, 'screen-session-summary-primary-cta').find(
+        (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
+      ).props.children,
+    );
+    const secondaryText = getTextContent(
+      findPressableByTestID(tree, 'screen-session-summary-secondary-cta').find(
+        (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
+      ).props.children,
+    );
+    expect(primaryText).toBe('Back to Home');
+    expect(secondaryText).toBe('Open library');
+    expect(secondaryText).not.toMatch(/back home/i);
+
+    act(() => {
+      findPressableByTestID(tree, 'screen-session-summary-secondary-cta').props.onPress();
+    });
+    expect(navigation.navigate).toHaveBeenLastCalledWith('Library');
+
+    act(() => {
+      findPressableByTestID(tree, 'screen-session-summary-primary-cta').props.onPress();
+    });
+    expect(navigation.navigate).toHaveBeenLastCalledWith('Home');
+  });
+
   it('shows an error branch and retries reward resolution without navigating away', async () => {
     const loadWalletSpy = vi.spyOn(rewardWallet, 'loadRewardWalletState').mockRejectedValueOnce(new Error('network error'));
     const navigation = {

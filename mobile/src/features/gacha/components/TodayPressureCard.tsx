@@ -19,11 +19,15 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
   const { width } = useWindowDimensions();
   const useCompactMetrics = width < 390;
   const metricSizeStyle = useCompactMetrics ? styles.metricCompact : styles.metricWide;
+  // Every tile describes the selected deck, so the collapse does too. Owned
+  // is the superset (a due, new or learned card is an owned card), and the
+  // cross-deck due total that used to sit here belongs to reminders and the
+  // header line, not to whether this deck has cards in it.
   const nothingYet =
+    counts.selectedOwned === 0 &&
     counts.selectedDue === 0 &&
     counts.selectedNew === 0 &&
-    counts.selectedMastered === 0 &&
-    counts.totalDueAllDecks === 0;
+    counts.selectedMastered === 0;
 
   return (
     <View style={styles.card}>
@@ -64,12 +68,15 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
               Learned
             </Text>
           </View>
+          {/* testID kept from the "Total" era (docs/delivery/r16-issues pin it); the tile now
+              reads the selected deck's owned cards. The all-deck due sum it used to show was
+              taken for the deck size ("0 Total" on a 441-card deck). */}
           <View testID="home-today-count-total" style={[styles.metric, metricSizeStyle, styles.metricTotal]}>
             <Text style={styles.metricValue} numberOfLines={1}>
-              {counts.totalDueAllDecks}
+              {counts.selectedOwned}
             </Text>
             <Text style={styles.metricLabel} numberOfLines={1}>
-              Total
+              Owned
             </Text>
           </View>
         </View>

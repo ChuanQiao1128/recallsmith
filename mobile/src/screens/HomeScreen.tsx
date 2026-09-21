@@ -23,6 +23,7 @@ import {
 } from '../features/gacha/selectors/homeSelectors';
 import TodayPressureCard from '../features/gacha/components/TodayPressureCard';
 import {
+  autoApplyFreeDeckUpdates,
   executeDeckAction,
   loadHomeDeckSummaries,
   resolveDeckAction,
@@ -70,6 +71,8 @@ type HomeState = {
 type HomeVisualDeck = {
   slug: string;
   title: string;
+  /** Tile label (content/deckShortTitle); `title` stays the full manifest name for the hero. */
+  shortTitle: string;
   realRow: HomeDeckVM | null;
   cover: ReturnType<typeof packImageForSlug>;
   palette: ReturnType<typeof packPaletteFromSlug>;
@@ -103,6 +106,10 @@ export function HomeScreen({ navigation, route }: Props) {
   });
   const isMountedRef = useRef(true);
   const selectedSlugRef = useRef<string | null>(null);
+  // Free-deck auto-updates in flight. A ref, not state: the view model is the
+  // render state, and this only has to be readable at the next build of it.
+  const autoUpdatingRef = useRef<Set<string>>(new Set());
+  const refreshHomeRef = useRef<() => Promise<void>>(async () => {});
   const authStatus = useAuthStore((s) => s.status);
   const accessToken = useAuthStore((s) => s.accessToken);
   const authInit = useAuthStore((s) => s.init);
@@ -269,6 +276,27 @@ export function HomeScreen({ navigation, route }: Props) {
           session.route.length > 0 &&
           session.completedCount >= session.route.length,
       };
+      // Apply free-deck updates from the load path, unasked and without
+      // blocking the render: the tile shows "Updating…" from the slugs
+      // collected here, and each run refreshes Home when it settles so the
+      // new counts (and, on failure, the fallback chip) appear on their own.
+      // The resolver guards one attempt per slug per session; a throw here
+      // must never take Home down, so it degrades to "no runs started".
+      try {
+        const runs = autoApplyFreeDeckUpdates({
+          deckSummaries: summary.deckSummaries,
+          updates: summary.updates,
+        });
+        for (const run of runs) {
+          autoUpdatingRef.current.add(run.slug);
+          void run.done.then(() => {
+            autoUpdatingRef.current.delete(run.slug);
+            if (isMountedRef.current) void refreshHomeRef.current();
+          });
+        }
+      } catch {
+        // Auto-update is best effort; the chip remains the manual path.
+      }
       const vm = buildHomeScreenVM({
         state: 'ready',
         params: {
@@ -283,6 +311,7 @@ export function HomeScreen({ navigation, route }: Props) {
             ? null
             : 'Sign in to unlock cloud backup and month planning.',
           runtimeStatus,
+          updatingSlugs: [...autoUpdatingRef.current],
         },
       });
       setHomeState({ loading: false, error: null, vm });
@@ -305,6 +334,9 @@ export function HomeScreen({ navigation, route }: Props) {
       });
     }
   }, [isPremiumUser, isSignedIn]);
+  useEffect(() => {
+    refreshHomeRef.current = refreshHome;
+  }, [refreshHome]);
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -405,7 +437,10 @@ export function HomeScreen({ navigation, route }: Props) {
         }
         const { activeSlug } = await executeDeckAction(action);
         setSelectedSlug(activeSlug);
-        if (action.kind === 'open' || action.kind === 'install' || action.kind === 'update' || action.kind === 'trial-start') {
+        // An update refreshes a deck the user already has; they tapped it on
+        // Home and Home is where the new counts show. Fresh installs still go
+        // to the Library, where the cards they just got are.
+        if (action.kind === 'open' || action.kind === 'install' || action.kind === 'trial-start') {
           navigation.navigate('Library');
         }
         await refreshHome();
@@ -567,12 +602,14 @@ export function HomeScreen({ navigation, route }: Props) {
                 if (realRow.actionHint === 'none') status = 'Soon';
                 else if (realRow.actionHint === 'paywall') status = 'Locked';
                 else if (realRow.actionHint === 'install' || realRow.actionHint === 'trial-start') status = 'Install';
+                else if (realRow.update?.state === 'updating') status = 'Updating';
                 else if (realRow.actionHint === 'update') status = 'Update';
                 else if (isFullyMastered) status = 'Mastered ✓';
                 else if (dueCount > 0) status = `${dueCount} due`;
                 return {
                   slug,
                   title: realRow.deck.title ?? slug,
+                  shortTitle: realRow.shortTitle,
                   realRow,
                   cover,
                   palette,
@@ -587,6 +624,7 @@ export function HomeScreen({ navigation, route }: Props) {
               const EMPTY_FEATURED: HomeVisualDeck = {
                 slug: 'default',
                 title: 'Your first pack',
+                shortTitle: 'Your first pack',
                 realRow: null,
                 cover: packImageForSlug('default'),
                 palette: packPaletteFromSlug('default'),
@@ -618,7 +656,7 @@ export function HomeScreen({ navigation, route }: Props) {
               const statusDotColor = (deck: HomeVisualDeck) => {
                 if (!deck.realRow || deck.status === 'Soon') return colors.inkMuted;
                 if (deck.status === 'Locked') return colors.inkMuted;
-                if (deck.status === 'Install' || deck.status === 'Update') return colors.pokeBlue;
+                if (deck.status === 'Install' || deck.status === 'Update' || deck.status === 'Updating') return colors.pokeBlue;
                 if (deck.status.endsWith(' due')) return colors.gold;
                 return colors.mint; // ready / default
               };
@@ -628,9 +666,13 @@ export function HomeScreen({ navigation, route }: Props) {
               // except setup actions still use the existing deck resolver.
               const drawState = homeState.vm.draw.state;
               const featuredHint = featuredDeck.realRow?.actionHint ?? null;
+              // While the auto-installer is already applying the update, the
+              // pack behaves as an installed pack: a second tap must not
+              // re-enter the install flow it is waiting on.
+              const featuredUpdating = featuredDeck.realRow?.update?.state === 'updating';
               const resolvesFeaturedDeck =
                 featuredHint === 'paywall'
-                || featuredHint === 'update'
+                || (featuredHint === 'update' && !featuredUpdating)
                 || featuredHint === 'trial-start'
                 || (featuredHint === 'install' && drawState === 'locked');
               const featuredPackAccessibilityLabel = !featuredDeck.realRow
@@ -655,7 +697,7 @@ export function HomeScreen({ navigation, route }: Props) {
                 const hint = featuredDeck.realRow.actionHint;
                 if (
                   hint === 'paywall'
-                  || hint === 'update'
+                  || (hint === 'update' && !featuredUpdating)
                   || hint === 'trial-start'
                   || (hint === 'install' && drawState === 'locked')
                 ) {
@@ -730,9 +772,27 @@ export function HomeScreen({ navigation, route }: Props) {
                       counts={homeState.vm.counts}
                       selectedDeckTitle={homeState.vm.selectedDeckTitle}
                     />
-                    <Text testID="home-goal-line" style={styles.goalLine} numberOfLines={1}>
-                      {`${homeState.vm.goal.minimum} · ${homeState.vm.goal.fullClear}`}
-                    </Text>
+                    {/* One line for the selected deck while a newer build exists:
+                        "Updating …" while the free-deck auto-installer runs, and the
+                        manual fallback ("tap the pack to install") when it has not
+                        or could not. */}
+                    {homeState.vm.updateNotice ? (
+                      <Text
+                        testID="home-update-notice"
+                        style={[
+                          styles.updateNotice,
+                          homeState.vm.updateNotice.state === 'updating' && styles.updateNoticeUpdating,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {homeState.vm.updateNotice.text}
+                      </Text>
+                    ) : null}
+                    {homeState.vm.goal ? (
+                      <Text testID="home-goal-line" style={styles.goalLine} numberOfLines={1}>
+                        {`${homeState.vm.goal.minimum} · ${homeState.vm.goal.fullClear}`}
+                      </Text>
+                    ) : null}
                     <View testID="screen-home-primary-cta">
                       <Pressable
                         testID={homeState.vm.cta.testID}
@@ -793,7 +853,7 @@ export function HomeScreen({ navigation, route }: Props) {
                         <Pressable
                           key={d.slug}
                           accessibilityRole="button"
-                          accessibilityLabel={`${d.title} pack — ${d.status}`}
+                          accessibilityLabel={`${d.shortTitle} pack — ${d.status}`}
                           disabled={d.disabled}
                           style={({ pressed }) => [
                             styles.selectorTile,
@@ -803,7 +863,8 @@ export function HomeScreen({ navigation, route }: Props) {
                           onPress={() => {
                             if (!d.realRow) return;
                             const hint = d.realRow.actionHint;
-                            if (hint === 'open' || hint === 'none') {
+                            const updating = d.realRow.update?.state === 'updating';
+                            if (hint === 'open' || hint === 'none' || (hint === 'update' && updating)) {
                               void setActiveDeckSlug(d.slug);
                               setSelectedSlug(d.slug);
                               void refreshHome();
@@ -829,13 +890,30 @@ export function HomeScreen({ navigation, route }: Props) {
                                   style={styles.selectorThumbFallback}
                                 >
                                   <Text style={styles.selectorThumbFallbackText} numberOfLines={1}>
-                                    {d.title}
+                                    {d.shortTitle}
                                   </Text>
                                 </LinearGradient>
                               )}
                             </View>
+                            {/* Update chip over the pack art. The blue dot alone
+                                said nothing; a stale deck (81 of 115 cards) now
+                                says what it is missing, or that it is on its way. */}
+                            {d.realRow?.update ? (
+                              <View
+                                testID={`home-pack-update-chip-${d.slug}`}
+                                pointerEvents="none"
+                                style={[
+                                  styles.selectorUpdateChip,
+                                  d.realRow.update.state === 'updating' && styles.selectorUpdateChipUpdating,
+                                ]}
+                              >
+                                <Text style={styles.selectorUpdateChipText} numberOfLines={2}>
+                                  {d.realRow.update.chipLabel}
+                                </Text>
+                              </View>
+                            ) : null}
                           </View>
-                          {/* Tile meta: status color dot + title (no text badge) */}
+                          {/* Tile meta: status color dot + short title (two lines allowed) */}
                           <View style={styles.selectorMetaRow}>
                             <View
                               style={[
@@ -848,9 +926,9 @@ export function HomeScreen({ navigation, route }: Props) {
                                 styles.selectorTitle,
                                 d.selected && styles.selectorTitleSelected,
                               ]}
-                              numberOfLines={1}
+                              numberOfLines={2}
                             >
-                              {d.title}
+                              {d.shortTitle}
                             </Text>
                           </View>
                         </Pressable>
@@ -1087,6 +1165,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
   },
+  // One-line deck-update notice under the Today card. Quiet pill in the
+  // install blue; the "updating" variant drops the fill so it reads as a
+  // status, not a prompt.
+  updateNotice: {
+    marginBottom: spacing.xs,
+    alignSelf: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: colors.softLavender,
+    color: colors.pokeBlueDeep,
+    fontSize: typography.caption,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+    textAlign: 'center',
+  },
+  updateNoticeUpdating: {
+    backgroundColor: 'transparent',
+    color: colors.inkSecondary,
+  },
 
   // Hidden test probe — 0×0 view kept in tree so home-collapse-decks-toggle
   // / home-collapse-week-support-toggle / home-deck-row-{slug} /
@@ -1160,6 +1259,32 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 4,
   },
+  // "Update · +34 cards" pill pinned to the bottom of the thumbnail. Wider
+  // than the 64pt thumb on purpose (it may wrap to two short lines) and
+  // centred on it, so the count survives the tile width.
+  selectorUpdateChip: {
+    position: 'absolute',
+    bottom: 4,
+    left: -4,
+    right: -4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: colors.pokeBlue,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectorUpdateChipUpdating: {
+    backgroundColor: colors.inkSecondary,
+  },
+  selectorUpdateChipText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+    textAlign: 'center',
+  },
   selectorThumbFrame: {
     width: 64,
     height: 88,
@@ -1188,7 +1313,7 @@ const styles = StyleSheet.create({
   selectorMetaRow: {
     marginTop: 8,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 4,
     maxWidth: 72,
   },
@@ -1196,9 +1321,11 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 999,
+    marginTop: 4,
   },
   selectorTitle: {
     fontSize: typography.caption,
+    lineHeight: 14,
     fontWeight: '900',
     color: colors.inkSoft,
     letterSpacing: 0.3,

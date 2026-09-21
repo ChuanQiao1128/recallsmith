@@ -153,6 +153,7 @@ export async function loadHomeDeckSummaries(params: {
         newToday: 0,
         masteredApprox: 0,
         masteredCount: 0,
+        ownedCards: 0,
         percent: 0,
       });
       continue;
@@ -187,6 +188,7 @@ export async function loadHomeDeckSummaries(params: {
         newToday: 0,
         masteredApprox: 0,
         masteredCount: 0,
+        ownedCards: 0,
         percent: 0,
       });
       continue;
@@ -253,6 +255,7 @@ export async function loadHomeDeckSummaries(params: {
       newToday: fresh,
       masteredApprox: learned,
       masteredCount: mastered,
+      ownedCards: collectionSize,
       percent: clamp01(learned / denom),
     });
   }
@@ -396,4 +399,110 @@ export async function loadDeckUpdates(
   premium: boolean,
 ): Promise<Record<string, UpdateInfo>> {
   return checkManifestForUpdates(premium);
+}
+
+/** =========================
+ *  Free-deck auto-update
+ *  ========================= */
+
+export type AutoUpdateCandidate = {
+  slug: string;
+  remoteUrl: string;
+  remoteVersion: string;
+  remoteSha256: string | null;
+};
+
+export type AutoUpdateRun = {
+  slug: string;
+  /** Resolves true when the installer reports success; never rejects. */
+  done: Promise<boolean>;
+};
+
+// One attempt per slug per app session. The installer is idempotent (it joins
+// an in-flight install for the same key and short-circuits when the installed
+// buildId already matches), so this guard is not about correctness -- it is
+// what stops a deck that fails to download from being retried on every Home
+// focus, and what lets a failed attempt fall back to the visible chip instead
+// of a silent loop. Module state is the right scope: Home unmounts and
+// remounts across the tab bar, and "this session" must outlive it.
+const autoUpdateAttempted = new Set<string>();
+
+function isFreeDeck(deck: DeckSummary): boolean {
+  return !isPremiumDeck(deck);
+}
+
+// Pure so the selection rule has a unit test of its own: a free, installed,
+// live deck whose manifest buildId differs from the installed one and that the
+// manifest can actually serve (url + version). Premium decks are excluded on
+// purpose -- a non-premium account's "update" would be a preview swap, which
+// is a decision for the paywall flow, never something Home does unasked.
+export function selectAutoUpdateCandidates(params: {
+  deckSummaries: DeckSummary[];
+  updates: Record<string, UpdateInfo>;
+}): AutoUpdateCandidate[] {
+  const { deckSummaries, updates } = params;
+  const out: AutoUpdateCandidate[] = [];
+  for (const deck of deckSummaries) {
+    if (!deck.canStudy) continue;
+    if (!isFreeDeck(deck)) continue;
+    const availability = String(deck.availability ?? 'live').toLowerCase();
+    if (availability !== 'live') continue;
+    const info = updates[deck.slug];
+    if (!info?.hasUpdate) continue;
+    if (!canInstallFromUpdate(info)) continue;
+    const remoteVersion = String(info.remoteVersion ?? '').trim();
+    if (!remoteVersion) continue;
+    if (info.installedVersion != null && String(info.installedVersion) === remoteVersion) continue;
+    out.push({
+      slug: deck.slug,
+      remoteUrl: info.remoteUrl!,
+      remoteVersion,
+      remoteSha256: info.remoteSha256 ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Kicks off the installer for every candidate not yet attempted this session
+ * and returns the runs it started, without awaiting them: Home renders the
+ * "updating" chip from the returned slugs and refreshes when each settles.
+ *
+ * Deliberately calls installDeckFromUrl and not executeDeckAction: the latter
+ * also makes the deck active, and a background update must not move the
+ * user's selection. Owned cards and review progress live under their own
+ * slug-scoped keys that the installer never touches (only a retire purges
+ * them), which is what makes applying the update unasked safe.
+ */
+export function autoApplyFreeDeckUpdates(params: {
+  deckSummaries: DeckSummary[];
+  updates: Record<string, UpdateInfo>;
+}): AutoUpdateRun[] {
+  const runs: AutoUpdateRun[] = [];
+  for (const candidate of selectAutoUpdateCandidates(params)) {
+    if (autoUpdateAttempted.has(candidate.slug)) continue;
+    autoUpdateAttempted.add(candidate.slug);
+    const done = Promise.resolve()
+      .then(() =>
+        installDeckFromUrl(
+          candidate.slug,
+          candidate.remoteUrl,
+          candidate.remoteVersion,
+          candidate.remoteSha256,
+        ),
+      )
+      .then((ok) => ok === true)
+      .catch(() => false);
+    runs.push({ slug: candidate.slug, done });
+  }
+  return runs;
+}
+
+export function hasAutoUpdateBeenAttempted(slug: string): boolean {
+  return autoUpdateAttempted.has(slug);
+}
+
+/** Test seam: the per-session guard is module state and vitest shares modules within a file. */
+export function resetAutoUpdateAttemptsForTests(): void {
+  autoUpdateAttempted.clear();
 }

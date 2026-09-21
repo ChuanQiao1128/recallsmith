@@ -307,6 +307,53 @@ describe('SessionCardScreen', () => {
     });
   });
 
+  it('shows the short deck title in the header and hands the full title to the summary', async () => {
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(
+      buildDeck({ Slug: 'claude-ccdv-f', Title: 'Claude Developer Foundations (CCDV-F)' }) as any,
+    );
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{
+            key: 'session-card',
+            name: 'SessionCard',
+            params: { slug: 'claude-ccdv-f', mode: 'mixed', limit: 1 },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const header = tree.root.findAll(
+      (node) => (node.type as any) === 'Text' && node.props.children === 'Claude CCDV-F',
+    );
+    expect(header).toHaveLength(1);
+    expect(
+      tree.root.findAll(
+        (node) => (node.type as any) === 'Text' && node.props.children === 'Claude Developer Foundations (CCDV-F)',
+      ),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Reveal answer').props.onPress();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findPressableByLabel(tree, 'Good').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(navigation.replace).toHaveBeenCalledWith(
+      'SessionSummary',
+      expect.objectContaining({ slug: 'claude-ccdv-f', deckTitle: 'Claude Developer Foundations (CCDV-F)' }),
+    );
+  });
+
   it('passes the planner minimum goal to SessionSummary', async () => {
     vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ minimumGoal: 2 }) as any);
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;

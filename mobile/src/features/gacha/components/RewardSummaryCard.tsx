@@ -28,10 +28,10 @@ export function RewardSummaryCard(props: RewardSummaryCardProps) {
 
   return (
     <View testID={testID} style={styles.card}>
+      {/* Section label only. The "+N pulls" badge used to sit here too, a
+          third copy of the count the hero chip and the anchor circle below
+          already carry; the anchor is this card's statement of it. */}
       <View style={styles.topRow}>
-        <Text numberOfLines={1} style={styles.badge}>
-          {reward.badge}
-        </Text>
         <Text numberOfLines={1} style={styles.sectionLabel}>
           Reward
         </Text>
@@ -112,18 +112,8 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     gap: spacing.sm,
-  },
-  badge: {
-    borderRadius: 999,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(200, 136, 58, 0.2)',
-    color: colors.ink,
-    fontSize: typography.caption,
-    fontWeight: '800',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
   },
   sectionLabel: {
     color: colors.inkSecondary,

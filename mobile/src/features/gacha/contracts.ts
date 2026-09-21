@@ -28,13 +28,21 @@ export type DeckSummary = {
   /** Owned cards at stage >= MASTERY_STAGE_THRESHOLD (isMasteredProgress). masteredApprox keeps
    *  meaning "learned" and still feeds percent; only Home's Mastered ✓ / Deck mastered read this. */
   masteredCount?: number;
+  /** Cards of this deck the account holds (learned + fresh, the owned slice deckActionResolver
+   *  already sums for `percent`). Optional so hand-built fixtures keep compiling; readers fall
+   *  back to that same sum. */
+  ownedCards?: number;
 };
 
 export type TodayCounts = {
+  /** Due today summed across every studiable deck. Feeds reminders and the header line, never
+   *  a tile: on a 441-card deck with nothing due it read "0 Total" and was taken for the deck. */
   totalDueAllDecks: number;
   selectedDue: number;
   selectedNew: number;
   selectedMastered: number;
+  /** Owned cards in the selected deck — the fourth Today tile (Due · New · Learned · Owned). */
+  selectedOwned: number;
   normalCount: number;
   eliteCount: number;
   bossCount: number;

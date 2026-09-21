@@ -123,6 +123,23 @@ function resolvePrimaryAction(params: {
   return { label: COPY.nextAction.openLibrary, kind: 'nothing_to_learn' };
 }
 
+// The secondary link is always the destination the primary does not already
+// offer. "Back home" under a primary that goes Home (the "Continue" kinds, and
+// the demoted "Back to Home" the screen shows next to the reward callout) was
+// the same tap twice with two labels; under "Open library" it is the one
+// other place to go, and the library is that other place otherwise.
+export function resolveSecondaryAction(params: {
+  primaryGoesHome: boolean;
+}): { label: string; kind: HomeCtaKind } {
+  return params.primaryGoesHome
+    ? { label: COPY.nextAction.openLibrary, kind: 'nothing_to_learn' }
+    : { label: COPY.nextAction.backHome, kind: 'today_done' };
+}
+
+export function primaryActionGoesHome(kind: HomeCtaKind): boolean {
+  return kind !== 'nothing_to_learn' && kind !== 'wallet_full';
+}
+
 function resolveNextActionCopy(params: {
   resolvedReward: ResolvedSessionReward;
   hasActivity: boolean;
@@ -238,7 +255,9 @@ export function buildSessionSummaryVM(params: {
       : null;
 
   const primaryAction = resolvePrimaryAction({ dueCount, resolvedReward });
-  const secondaryAction = { label: COPY.nextAction.backHome, kind: 'today_done' as HomeCtaKind };
+  const secondaryAction = resolveSecondaryAction({
+    primaryGoesHome: primaryActionGoesHome(primaryAction.kind),
+  });
   const nextActionCopy = resolveNextActionCopy({
     resolvedReward,
     hasActivity: sessionDone > 0 || dueCount > 0 || resolvedReward.rewardPulls > 0 || (streakAfter ?? 0) > 0,
