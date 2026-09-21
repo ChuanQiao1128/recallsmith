@@ -7,6 +7,7 @@ import { rarityFromDifficulty, type Rarity } from '../draw/cardRarity';
 import { cardIconFor } from '../../../theme/cardIcon';
 import { compareTopicLabels, normalizeTopic, topicKey, UNTAGGED_TOPIC_KEY, UNTAGGED_TOPIC_LABEL } from './topics';
 import { formatRank, rankCardsByOrder } from './cardRank';
+import { normalizeMcq } from '../mcq/normalizeMcq';
 
 export { formatRank, rankCardsByOrder } from './cardRank';
 
@@ -54,6 +55,8 @@ export type LibraryCardRow = {
    * Identity stays stableUid; this is display only.
    */
   rank: number;
+  /** MCQ under the caller's flag (mcqEnabled): the tile prints a small "MC". Never the options. */
+  isMcq: boolean;
 };
 
 export type LibraryFilterChip = {
@@ -123,8 +126,9 @@ export function buildLibraryCardRows(params: {
   isTrial?: boolean;
   previewTotal?: number;
   ownedSet?: OwnedGate;
+  mcqEnabled?: boolean;
 }): LibraryCardRow[] {
-  const { deck, progress, now = new Date(), isTrial = false, previewTotal = 0, ownedSet = null } = params;
+  const { deck, progress, now = new Date(), isTrial = false, previewTotal = 0, ownedSet = null, mcqEnabled = true } = params;
   const cards = isTrial ? (deck.Cards ?? []).slice(0, previewTotal) : deck.Cards ?? [];
   const progressMap = new Map(progress.map((item) => [item.stableUid, item]));
   const ranks = rankCardsByOrder(deck.Cards ?? []);
@@ -182,6 +186,7 @@ export function buildLibraryCardRows(params: {
           isLearnedProgress(progressEntry as CardProgress),
         topic: normalizeTopic(card.Topic),
         rank: ranks.get(card.StableUid) ?? 0,
+        isMcq: mcqEnabled && normalizeMcq(card.Mcq) !== null,
       };
     });
 }
@@ -197,6 +202,7 @@ export function buildLibraryVM(params: {
   selectedDeckSlug?: string | null;
   ownedSet?: OwnedGate;
   topicFilter?: string | null;
+  mcqEnabled?: boolean;
 }): LibraryViewModel {
   const {
     deck,
@@ -209,8 +215,9 @@ export function buildLibraryVM(params: {
     selectedDeckSlug,
     ownedSet = null,
     topicFilter = null,
+    mcqEnabled = true,
   } = params;
-  const rows = buildLibraryCardRows({ deck, progress, now, isTrial, previewTotal, ownedSet });
+  const rows = buildLibraryCardRows({ deck, progress, now, isTrial, previewTotal, ownedSet, mcqEnabled });
   // Gated, these three read "of the cards you hold" -- an unowned card carries
   // status 'missing' and so falls out of all three on its own, no second gate
   // needed here.

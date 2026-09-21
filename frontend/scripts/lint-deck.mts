@@ -8,9 +8,11 @@
 //
 //   node frontend/scripts/lint-deck.mts <deck.md> [more.md ...]
 //
-// Output: one line per issue as `<line>: <CODE> <message>`, then a summary
-// line `N cards, M mcq, K issues`. Exit 1 when any file has an issue, 0 when
-// every file is clean.
+// Output: one line per issue as `<line>: <CODE> <message>`, then one line per
+// non-blocking suggestion as `<line>: WARN <CODE> <message>`, then a summary
+// line `N cards, M mcq, K issues, W warnings`. Exit 1 when any file has an
+// issue, 0 when every file is clean — warnings never fail the run unless
+// `--strict` is passed, which fails on any warning too.
 //
 // How src/lib is loaded: the console sources import each other without file
 // extensions (`./cardRules`), which Node's ESM loader refuses, and this repo
@@ -32,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 import type { ImportIssue, ParsedDeck } from '../src/lib/deckImport.ts';
+import type { ImportWarning } from '../src/lib/mcqWarnings.ts';
 
 /** Mirrors McqValidation.cs step 9 (`options[i].Text.Length > 600`). */
 const MCQ_OPTION_MAX_LENGTH = 600;
@@ -86,6 +89,7 @@ interface LintResult {
   cards: number;
   mcq: number;
   issues: ImportIssue[];
+  warnings: ImportWarning[];
 }
 
 function lintText(lib: DeckLib, text: string): LintResult {
@@ -95,11 +99,13 @@ function lintText(lib: DeckLib, text: string): LintResult {
     cards: deck.cards.length,
     mcq: deck.cards.filter((card) => card.mcq !== undefined).length,
     issues,
+    warnings: deck.warnings,
   };
 }
 
 export async function main(argv: readonly string[]): Promise<number> {
   const paths = argv.filter((arg) => !arg.startsWith('--'));
+  const strict = argv.includes('--strict');
   if (paths.length === 0) {
     process.stderr.write('usage: node frontend/scripts/lint-deck.mts <deck.md> [more.md ...]\n');
     return 2;
@@ -123,8 +129,11 @@ export async function main(argv: readonly string[]): Promise<number> {
     for (const issue of result.issues) {
       process.stdout.write(`${issue.line}: ${issue.code} ${issue.message}\n`);
     }
-    process.stdout.write(`${result.cards} cards, ${result.mcq} mcq, ${result.issues.length} issues\n`);
-    if (result.issues.length > 0) failed = true;
+    for (const warning of result.warnings) {
+      process.stdout.write(`${warning.line}: WARN ${warning.code} ${warning.message}\n`);
+    }
+    process.stdout.write(`${result.cards} cards, ${result.mcq} mcq, ${result.issues.length} issues, ${result.warnings.length} warnings\n`);
+    if (result.issues.length > 0 || (strict && result.warnings.length > 0)) failed = true;
   }
 
   return failed ? 1 : 0;

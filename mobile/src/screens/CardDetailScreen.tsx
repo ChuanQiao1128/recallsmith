@@ -12,6 +12,9 @@ import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 import { packPaletteFromSlug } from '../theme/packArt';
 import { formatRank, rankCardsByOrder } from '../features/gacha/library/cardRank';
+import { getFeatureFlags } from '../config/featureFlags';
+import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
+import { MCQ_COPY } from '../features/gacha/mcq/mcqConstants';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CardDetail'>;
 
@@ -184,6 +187,11 @@ export function CardDetailScreen({ navigation, route }: Props) {
   const rarity = rarityFromDifficulty(difficulty);
   const status = masteryStatus(cardProgress?.stage);
   const tag = (card as any)?.Tag ?? deck?.Title ?? '';
+  // Read once per render, never as live policy (featureFlags.ts:57-62). A locked
+  // card names no kind: the kind is one more thing the pull is supposed to reveal.
+  const mcq = card && !isLocked ? resolveMcq(card, getFeatureFlags()) : null;
+  const kindChip =
+    mcq === null ? null : mcqRequiredCount(mcq) >= 2 ? MCQ_COPY.detailChipPick(mcqRequiredCount(mcq)) : MCQ_COPY.detailChip;
   const slotLabel = `#${formatRank(slot)}`;
   const totalInDeck = deck?.Cards?.length ?? 0;
   const lastSeen = formatRelativeTime(cardProgress?.lastReviewedAt);
@@ -235,6 +243,13 @@ export function CardDetailScreen({ navigation, route }: Props) {
                           : 'Common'}
                   </Text>
                 </View>
+                {kindChip ? (
+                  <View testID="card-detail-kind-chip" style={styles.heroKindChip}>
+                    <Text style={styles.heroKindChipText} numberOfLines={1}>
+                      {kindChip}
+                    </Text>
+                  </View>
+                ) : null}
                 <View style={[styles.heroStatusChip, !isLocked && status === 'Mastered' && styles.heroStatusMastered]}>
                   <Text style={styles.heroStatusChipText} numberOfLines={1}>
                     {isLocked ? 'Missing' : status}
@@ -418,6 +433,8 @@ const styles = StyleSheet.create({
   },
   heroStatusMastered: { backgroundColor: colors.gold },
   heroStatusChipText: { color: colors.inkSoft, fontSize: typography.caption, fontWeight: '900', letterSpacing: 0.4 },
+  heroKindChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: 'rgba(20,23,55,0.72)' },
+  heroKindChipText: { color: colors.softCream, fontSize: typography.caption, fontWeight: '900', letterSpacing: 0.4 },
 
   // Pack-themed art window — matches DrawResult v2 design language.
   heroArtWindow: {

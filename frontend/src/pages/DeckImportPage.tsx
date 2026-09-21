@@ -27,6 +27,7 @@ import {
   type ImportAction,
   type ImportRunResult,
 } from '../lib/deckImportRunner';
+import { formatWarning, type ImportWarning, type McqWarningCode } from '../lib/mcqWarnings';
 import { markEnd, markStart } from '../perf/journey';
 import type { Deck } from '../types/deck';
 
@@ -50,6 +51,16 @@ const ACCEPTED_EXTENSIONS = ['.md', '.txt'];
 function truncate(text: string, max = 90): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
+}
+
+function groupWarnings(warnings: readonly ImportWarning[]): Array<[McqWarningCode, ImportWarning[]]> {
+  const groups = new Map<McqWarningCode, ImportWarning[]>();
+  for (const warning of warnings) {
+    const bucket = groups.get(warning.code);
+    if (bucket) bucket.push(warning);
+    else groups.set(warning.code, [warning]);
+  }
+  return [...groups.entries()];
 }
 
 const ACTION_CLASSES: Record<string, string> = {
@@ -420,6 +431,25 @@ export function DeckImportPage() {
                         <li key={`${issue.code}-${issue.line}-${i}`}>{formatIssue(issue)}</li>
                       ))}
                     </ul>
+                  </div>
+                ) : null}
+
+                {preview.parsed.warnings.length > 0 ? (
+                  <div data-testid="import-warnings" className="bg-amber-50 border border-amber-200 text-amber-900 px-3 py-2 rounded">
+                    <div className="font-semibold text-sm mb-1">
+                      {preview.parsed.warnings.length} suggestion
+                      {preview.parsed.warnings.length === 1 ? '' : 's'} — not blocking
+                    </div>
+                    {groupWarnings(preview.parsed.warnings).map(([code, items]) => (
+                      <div key={code} className="mt-1">
+                        <div className="text-xs font-semibold">{code} ({items.length})</div>
+                        <ul className="text-xs font-mono space-y-1 max-h-64 overflow-y-auto">
+                          {items.map((warning, i) => (
+                            <li key={`${warning.stableUid}-${warning.line}-${i}`}>{formatWarning(warning)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
                   </div>
                 ) : null}
               </div>

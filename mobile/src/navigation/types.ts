@@ -92,6 +92,9 @@ export type RootStackParamList = {
         tag?: string;
         /** 1-based deck position (cardRank.ts). Optional: older callers and fixtures omit it. */
         rank?: number;
+        /** D06 MCQ face mark. Absent on Q/A cards and under the kill switch; never any option text. */
+        kind?: 'mcq';
+        requiredCount?: number;
       }>;
       pityBefore: number;
       pityAfter: number;
@@ -121,6 +124,9 @@ export type RootStackParamList = {
         tag?: string;
         /** 1-based deck position (cardRank.ts). Optional: older callers and fixtures omit it. */
         rank?: number;
+        /** D06 MCQ face mark. Absent on Q/A cards and under the kill switch; never any option text. */
+        kind?: 'mcq';
+        requiredCount?: number;
       }>;
       pityBefore: number;
       pityAfter: number;

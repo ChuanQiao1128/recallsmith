@@ -37,6 +37,7 @@ import { drawResultStyles as styles } from '../features/gacha/components/drawRes
 import { SHARE_DRAW_TESTID, shareDrawImage, type ShareDrawResult } from '../features/gacha/share/shareDraw';
 import { RATING_PROMPT_DELAY_MS, maybeRequestRating, resolveRatingTrigger } from '../features/gacha/milestones/ratingPrompt';
 import { loadStreakSnapshot } from '../features/gacha/streaks/streakTracker';
+import { MCQ_COPY } from '../features/gacha/mcq/mcqConstants';
 
 // ─── react-native facade ────────────────────────────────────────────────────
 // Vitest mocks use a strict Proxy that throws on missing exports — wrap access.
@@ -86,6 +87,13 @@ function rarityStars(rarity: 'COM' | 'RAR' | 'LEG'): string {
 
 function cardTagText(card: DrawResultCard): string {
   return typeof card.tag === 'string' && card.tag.trim() ? card.tag.trim() : '';
+}
+
+function cardKindText(card: DrawResultCard): string {
+  if (card.kind !== 'mcq') return '';
+  return typeof card.requiredCount === 'number' && card.requiredCount >= 2
+    ? MCQ_COPY.faceMarkPick(card.requiredCount)
+    : MCQ_COPY.faceMark;
 }
 
 const FEATURED_GRADIENT_BY_RARITY: Record<
@@ -141,6 +149,10 @@ const localStyles = StyleSheet.create({
     backgroundColor: 'rgba(20,23,55,0.72)',
   },
   featuredTopicText: { color: colors.softCream, fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  featuredKindChip: {
+    position: 'absolute', right: 8, top: 8, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
+    backgroundColor: 'rgba(20,23,55,0.72)',
+  },
   featuredSlab: { position: 'absolute', ...FEATURED_FRAME_LAYOUT.slab, justifyContent: 'center' },
   featuredTitleStrip: {
     position: 'absolute', ...FEATURED_FRAME_LAYOUT.titleStrip, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end',
@@ -392,6 +404,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
   const packPalette = packPaletteFromSlug(params.slug);
   const packArt = packImageForSlug(params.slug);
   const featuredTopic = featured ? cardTagText(featured) : '';
+  const featuredKind = featured ? cardKindText(featured) : '';
   const featuredScale =
     hasAnimated && featuredEntryRef.current
       ? featuredEntryRef.current.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] })
@@ -467,7 +480,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
           {/* Featured card v3 — the B12 rarity frame stretched over the whole 5:7 card, and
               the face laid out at the frame's cut-outs: the deck's pack art in the art
-              window (rarity chip + topic label over it), the stem in the question slab
+              window (rarity chip + topic label + MCQ mark over it), the stem in the question slab
               (six lines, ellipsis — a summary, not the study surface), the registry
               serial in the frame's title strip. */}
           {featured ? (
@@ -537,6 +550,13 @@ export function DrawResultScreen({ navigation, route }: Props) {
                     <View testID="draw-result-featured-topic" style={localStyles.featuredTopicChip}>
                       <Text style={localStyles.featuredTopicText} numberOfLines={1}>
                         {featuredTopic}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {featuredKind ? (
+                    <View testID="draw-result-featured-kind" style={localStyles.featuredKindChip}>
+                      <Text style={localStyles.featuredTopicText} numberOfLines={1}>
+                        {featuredKind}
                       </Text>
                     </View>
                   ) : null}
