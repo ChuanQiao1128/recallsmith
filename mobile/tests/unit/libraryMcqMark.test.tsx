@@ -101,6 +101,14 @@ describe('Library MCQ tile mark', () => {
     );
     expect(markNodes).toHaveLength(1);
     expect(markNodes[0].props.children).toBe('MC');
+    // Legible and AA (review 2026-09-22 #7): >= 11 pt, inkSecondary on softCream = 7.76:1, and still
+    // one line in the same slot between the icon and the question.
+    const markStyle = Object.assign({}, ...[markNodes[0].props.style].flat(Infinity).filter(Boolean));
+    expect(markStyle.fontSize).toBeGreaterThanOrEqual(11);
+    expect(markStyle.color).toBe('#5A4B38');
+    expect(markNodes[0].props.numberOfLines).toBe(1);
+    const bodyTexts = markNodes[0].parent!.parent!.findAll((n) => (n.type as any) === 'Text').map((n) => n.props.children);
+    expect(bodyTexts).toEqual(['🧠', 'MC', 'What does the volatile keyword guarantee?']);
 
     const plain = renderTile({ ...baseRow, isMcq: false });
     expect(

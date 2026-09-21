@@ -8,7 +8,11 @@ import { colors } from '../../../theme/colors';
 import { packPaletteFromSlug } from '../../../theme/packArt';
 import { MCQ_COPY } from '../mcq/mcqConstants';
 
-const KIND_MARK_STYLE = { fontSize: 9, lineHeight: 12, fontWeight: '900' as const, letterSpacing: 0.6, color: colors.inkMuted, marginBottom: 2 };
+// The MC kind mark (review 2026-09-22 #7): 11 pt, never smaller — a 9 pt caption is below the
+// smallest legible size on a 2-column tile — in inkSecondary #5A4B38 on the tile's softCream
+// #FCF5EA body: 7.76:1 (AA needs 4.5:1; inkMuted #8A7B6A was 3.79:1). Same slot as before: one
+// line between the icon and the question, so the tile's layout does not move.
+const KIND_MARK_STYLE = { fontSize: 11, lineHeight: 14, fontWeight: '900' as const, letterSpacing: 0.6, color: colors.inkSecondary, marginBottom: 2 };
 
 type Props = {
   item: LibraryCardRow;

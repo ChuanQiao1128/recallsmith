@@ -61,6 +61,21 @@ export function mcqOptionA11yLabel(index: number, total: number, text: string): 
   return `Option ${mcqLetter(index)} of ${total}: ${text}`;
 }
 
+/** Accessibility label of a wrong-unpicked row's "Why not?" toggle (review 2026-09-22 #6): one label per
+ *  displayed position so VoiceOver does not read five identical buttons. Letter by DISPLAYED index. */
+export function mcqWhyNotA11yLabel(index: number): string {
+  return `Why not option ${mcqLetter(index)}`;
+}
+
+/** How long the inline over-limit hint stays on screen after an ignored tap (review 2026-09-22 #5). */
+export const MCQ_OVER_LIMIT_HINT_MS = 1_500;
+
+/** VoiceOver announcement for a tap beyond requiredCount on a choose-N card (review 2026-09-22 #5). The
+ *  visible hint stays MCQ_COPY.overLimit; the announcement adds the count so the rule is audible. */
+export function mcqOverLimitAnnouncement(requiredCount: number): string {
+  return `Pick ${requiredCount} answers — deselect one first`;
+}
+
 export function mcqPicksLine(picks: { landed: number; answered: number }): string {
   return picks.landed === 0
     ? `0 of ${picks.answered} picks landed — they're all back in 10 minutes`
