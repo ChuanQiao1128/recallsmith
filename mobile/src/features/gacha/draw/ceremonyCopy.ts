@@ -143,6 +143,7 @@ export const CEREMONY_COPY_V10 = {
   cardFaceDown: (n: number, total: number) => `Card ${n} of ${total}, face down`,
   cardRevealed: (n: number, total: number, rarity: string) => `Card ${n} of ${total}, ${rarity} revealed`,
   dealing: (percent: number) => `Dealing cards, ${percent} percent`,
-  unrevealedChip: 'Not flipped',
+  // No `unrevealedChip` any more: the result screen shows every card face up, so a
+  // "Not flipped" stamp per skipped card was table state leaking into copy.
   shareCta: 'Share this pull',
 } as const;

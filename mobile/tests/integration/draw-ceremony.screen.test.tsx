@@ -46,8 +46,25 @@ vi.mock('expo-linear-gradient', () => {
   return { LinearGradient: ({ children, ...props }: any) => React.createElement('LinearGradient', props, children) };
 });
 
+// Probe on the timeline the screen drives: the real hook, with its last return value kept so
+// a case can read the shared values (under the guard fallback every `with*` collapses to its
+// target, so `.value` IS the phase target). The canvas that draws the rims never mounts here.
+const timelineProbe = vi.hoisted(() => ({ current: null as null | { rim: ReadonlyArray<{ value: number }> } }));
+vi.mock('../../src/components/ceremony/useCeremonyTimeline', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/components/ceremony/useCeremonyTimeline')>();
+  return {
+    ...actual,
+    useCeremonyTimeline: (input: Parameters<typeof actual.useCeremonyTimeline>[0]) => {
+      const tl = actual.useCeremonyTimeline(input);
+      timelineProbe.current = tl;
+      return tl;
+    },
+  };
+});
+
 import * as ReactNative from 'react-native';
 import { DrawCeremonyScreen } from '../../src/screens/DrawCeremonyScreen';
+import { SWIPE_HINT_TESTID } from '../../src/components/ceremony/SwipeHint';
 import { getActiveCeremonyPerf, clearActiveCeremonyPerf } from '../../src/features/gacha/draw/ceremonyPerf';
 
 const MULTI_DRAW_RESULT = {
@@ -667,6 +684,146 @@ describe('DrawCeremonyScreen v9', () => {
         ceremonyEcho: expect.objectContaining({ tableReached: true }),
       }),
     );
+  });
+
+  it('keeps every StageRim at 0 through settle and the table when the tap table owns the cards', async () => {
+    // The Skia rims are drawn at the spill slots, which the RN tap table only matches for a
+    // one-row hand; with tapFlow on the rims must never rise (they showed as ghost outlines
+    // beside the two-row 10-pull). Driven through the timeline's shared values, so the
+    // memoised canvas is never re-rendered for it.
+    const tenCards = Array.from({ length: 10 }, (_, i) => ({
+      stableUid: String(i + 1), question: `Q${i + 1}`, difficulty: 2, rarity: i === 0 ? ('LEG' as const) : ('RAR' as const),
+    }));
+    const TEN = { ...MULTI_DRAW_RESULT, cards: tenCards };
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace: vi.fn() } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: TEN, tapFlow: true } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(timelineProbe.current?.rim).toHaveLength(10);
+
+    armCeremonySwipe(tree);
+    await act(async () => {
+      vi.advanceTimersByTime(620 + 300 + 940 + 280 + 1); // settle
+      await Promise.resolve();
+    });
+    expect(
+      tree.root.findAll((n) => (n.type as any) === 'Text').find((n) => n.props.children === 'Show result'),
+    ).toBeTruthy();
+    expect(timelineProbe.current!.rim.map((r) => r.value)).toEqual(Array(10).fill(0));
+
+    await act(async () => {
+      vi.advanceTimersByTime(300 + 500); // cards-on-table
+      await Promise.resolve();
+    });
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-cards-on-table' })).toBeTruthy();
+    expect(timelineProbe.current!.rim.map((r) => r.value)).toEqual(Array(10).fill(0));
+
+    // Flipping a card changes nothing on the stage side either.
+    await act(async () => {
+      tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress();
+      await Promise.resolve();
+    });
+    expect(timelineProbe.current!.rim.map((r) => r.value)).toEqual(Array(10).fill(0));
+
+    // Featured-reveal path (tapFlow off): the settle rim tell is unchanged at 0.55 for a
+    // non-COM peak — the stage's own table keeps its rims.
+    let featuredTree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      featuredTree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace: vi.fn() } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT, tapFlow: false } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+    armCeremonySwipe(featuredTree);
+    await act(async () => {
+      vi.advanceTimersByTime(620 + 300 + 940 + 280 + 1); // settle
+      await Promise.resolve();
+    });
+    expect(timelineProbe.current!.rim.map((r) => r.value)).toEqual([0.55, 0.55]);
+  });
+
+  it('shows the swipe affordance until the first touch and keeps the a11y phase copy', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace: vi.fn() } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: SINGLE_DRAW_RESULT, tapFlow: true } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    // Visible hint: the same words as the phase copy, plus the chevron; hidden from
+    // assistive tech because the pack (label + hint + activate action) and the live-region
+    // phase copy already say it.
+    const hint = tree.root.findByProps({ testID: SWIPE_HINT_TESTID });
+    expect(hint.props.accessibilityElementsHidden).toBe(true);
+    expect(hint.props.importantForAccessibility).toBe('no-hide-descendants');
+    expect(hint.props.pointerEvents).toBe('none');
+    const hintTexts = hint.findAll((n) => (n.type as any) === 'Text').map((n) => n.props.children);
+    expect(hintTexts).toEqual(['Swipe to open', '›']);
+    expect(phaseTitle(tree)).toBe('Swipe to open');
+    // Inside the stage, so it never moves the centred stage when it goes.
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-stage' }).findAllByProps({ testID: SWIPE_HINT_TESTID }).length).toBeGreaterThan(0);
+
+    // First touch anywhere on the stage → gone; still the swipe phase, a11y copy intact.
+    await act(async () => {
+      tree.root.findByProps({ testID: 'draw-ceremony-stage' }).props.onTouchStart();
+      await Promise.resolve();
+    });
+    expect(tree.root.findAllByProps({ testID: SWIPE_HINT_TESTID })).toHaveLength(0);
+    expect(phaseTitle(tree)).toBe('Swipe to open');
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-swipe-pack' })).toBeTruthy();
+
+    // A responder grant (the stage-owned swipe path) dismisses it too, and once the pack is
+    // torn the swipe phase is over so it never comes back.
+    let second!: renderer.ReactTestRenderer;
+    await act(async () => {
+      second = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace: vi.fn() } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: SINGLE_DRAW_RESULT, tapFlow: true } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(second.root.findAllByProps({ testID: SWIPE_HINT_TESTID }).length).toBeGreaterThan(0);
+    const stage = second.root.findByProps({ testID: 'draw-ceremony-stage' });
+    act(() => {
+      stage.props.onResponderGrant({ nativeEvent: { pageX: 16 } });
+    });
+    expect(second.root.findAllByProps({ testID: SWIPE_HINT_TESTID })).toHaveLength(0);
+    act(() => {
+      stage.props.onResponderMove({ nativeEvent: { pageX: 104 } });
+      stage.props.onResponderRelease({ nativeEvent: { pageX: 104 } });
+    });
+    expect(phaseTitle(second)).toBe('Pack inbound');
+    expect(second.root.findAllByProps({ testID: SWIPE_HINT_TESTID })).toHaveLength(0);
+
+    // Reduce Motion has no swipe phase, so no hint.
+    (ReactNative as any).__setReduceMotionEnabled(true);
+    let reduced!: renderer.ReactTestRenderer;
+    await act(async () => {
+      reduced = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace: vi.fn() } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: SINGLE_DRAW_RESULT, tapFlow: true } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(reduced.root.findAllByProps({ testID: SWIPE_HINT_TESTID })).toHaveLength(0);
   });
 
   it('keeps the rarity word out of every text before a card is face up', async () => {

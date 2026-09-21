@@ -18,10 +18,15 @@ import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { clearPermissionPromptPending, isPermissionPromptPending } from './PermissionPromptScreen';
 import { colors } from '../theme/colors';
 import {
+  CARD_FRAME_ART_WINDOW,
+  CARD_FRAME_SIZE,
+  CARD_FRAME_SLAB,
+  CARD_FRAME_TITLE_STRIP,
   PAGE_GRADIENT_LIGHT,
   cardFrameForRarity,
   GLOW_9SLICE,
   GLOW_9SLICE_INSET,
+  packImageForSlug,
   packPaletteFromSlug,
   rarityAccentColor,
   rarityHaloColor,
@@ -91,11 +96,55 @@ const FEATURED_GRADIENT_BY_RARITY: Record<
   COM: [colors.softPeach, colors.rarityCommon, colors.gold],
 } as const;
 
+// The B12 rarity frame (CARD_FRAME_SIZE 400×560) is stretched over the whole 260×364 card,
+// so the face is laid out at the frame's own cut-outs — art window, question slab, title
+// strip — as percentages of the card, the rule TapCard follows. Percentages of the CARD, not
+// of a padded content box: Yoga resolves `%` against the parent's content box, which is how
+// the frame used to shrink to 88 % × 91 % inside the padded gradient and sit top-left.
+function framePct(part: number, whole: number): `${number}%` {
+  return `${Math.round((part / whole) * 100 * 100) / 100}%`;
+}
+const FRAME_W = CARD_FRAME_SIZE.width;
+const FRAME_H = CARD_FRAME_SIZE.height;
+export const FEATURED_FRAME_LAYOUT = {
+  artWindow: {
+    left: framePct(CARD_FRAME_ART_WINDOW.x, FRAME_W),
+    top: framePct(CARD_FRAME_ART_WINDOW.y, FRAME_H),
+    width: framePct(CARD_FRAME_ART_WINDOW.width, FRAME_W),
+    height: framePct(CARD_FRAME_ART_WINDOW.height, FRAME_H),
+  },
+  slab: {
+    left: framePct(CARD_FRAME_SLAB.x, FRAME_W),
+    top: framePct(CARD_FRAME_SLAB.y, FRAME_H),
+    width: framePct(CARD_FRAME_SLAB.width, FRAME_W),
+    height: framePct(CARD_FRAME_SLAB.height, FRAME_H),
+  },
+  titleStrip: {
+    left: framePct(CARD_FRAME_TITLE_STRIP.x, FRAME_W),
+    top: framePct(CARD_FRAME_TITLE_STRIP.y, FRAME_H),
+    width: framePct(CARD_FRAME_TITLE_STRIP.width, FRAME_W),
+    height: framePct(CARD_FRAME_TITLE_STRIP.height, FRAME_H),
+  },
+} as const;
+/** The featured card is a summary, not the study surface: the stem gets six lines, then an ellipsis. */
+export const FEATURED_STEM_LINES = 6;
+
 const localStyles = StyleSheet.create({
-  featuredFrame: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
-  unrevealedChip: { alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, backgroundColor: 'rgba(58,35,5,0.10)' },
-  unrevealedChipText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.4, color: colors.inkMuted },
-  featuredUnrevealedChip: { marginLeft: 8, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.85)' },
+  // Fills the Pressable (no padding there), so 100 % is the full card.
+  featuredFrame: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  featuredArtWindow: { position: 'absolute', ...FEATURED_FRAME_LAYOUT.artWindow, overflow: 'hidden', borderRadius: 8 },
+  featuredArtImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  featuredChipInWindow: { position: 'absolute', left: 8, top: 8 },
+  featuredTopicChip: {
+    position: 'absolute', left: 8, bottom: 8, maxWidth: '80%', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
+    backgroundColor: 'rgba(20,23,55,0.72)',
+  },
+  featuredTopicText: { color: colors.softCream, fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  featuredSlab: { position: 'absolute', ...FEATURED_FRAME_LAYOUT.slab, justifyContent: 'center' },
+  featuredTitleStrip: {
+    position: 'absolute', ...FEATURED_FRAME_LAYOUT.titleStrip, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end',
+    paddingHorizontal: 8,
+  },
 });
 
 export function DrawResultScreen({ navigation, route }: Props) {
@@ -110,12 +159,9 @@ export function DrawResultScreen({ navigation, route }: Props) {
   const [shareStatus, setShareStatus] = useState<ShareDrawResult['status'] | 'idle' | 'sharing'>('idle');
 
   const cards = drawResult?.cards ?? [];
-  // Absent = the ceremony left before the table (or an old caller): no reveal
-  // information, so no chips. An empty array means "table reached, nothing flipped".
-  const revealedUids = params.revealedUids;
-  const hasRevealInfo = Array.isArray(revealedUids);
-  const revealedSet = useMemo(() => new Set(revealedUids ?? []), [revealedUids]);
-  const isUnrevealed = (uid: string) => hasRevealInfo && !revealedSet.has(uid);
+  // `params.revealedUids` (which cards were flipped on the ceremony table) is deliberately
+  // not surfaced: every card here is shown face up with its stem, so "Not flipped" ×10 after
+  // a Skip was internal state leaking as copy, not information the player could act on.
   const featured = useMemo(
     () =>
       cards.find((card) => card.rarity === 'LEG') ??
@@ -342,6 +388,9 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
   const featuredAccent = featured ? rarityAccentColor(featured.rarity) : colors.rarityCommon;
   const featuredHalo = featured ? rarityHaloColor(featured.rarity) : colors.softPeach;
+  const packPalette = packPaletteFromSlug(params.slug);
+  const packArt = packImageForSlug(params.slug);
+  const featuredTopic = featured ? cardTagText(featured) : '';
   const featuredScale =
     hasAnimated && featuredEntryRef.current
       ? featuredEntryRef.current.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] })
@@ -415,11 +464,11 @@ export function DrawResultScreen({ navigation, route }: Props) {
             </View>
           </View>
 
-          {/* Featured card v2 — pack-themed art window + prominent question
-              + subtle serial. The stack of OFFICIAL stamp + NEW ribbon +
-              concentric-ring emblem is gone; the card now leads with the
-              actual question (the thing the user is going to study) and
-              uses the pack's palette as authentic identity. */}
+          {/* Featured card v3 — the B12 rarity frame stretched over the whole 5:7 card, and
+              the face laid out at the frame's cut-outs: the deck's pack art in the art
+              window (rarity chip + topic label over it), the stem in the question slab
+              (six lines, ellipsis — a summary, not the study surface), the registry
+              serial in the frame's title strip. */}
           {featured ? (
             <AnimatedView
               style={[
@@ -451,72 +500,77 @@ export function DrawResultScreen({ navigation, route }: Props) {
                 accessibilityLabel={`Open featured card detail: ${featured.question}`}
                 onPress={() => setDetailUid(featured.stableUid)}
               >
+                {/* Base: the rarity gradient — the frame's own colour when the PNG is absent,
+                    and the corner fill behind it when it is. */}
                 <LinearGradient
                   colors={FEATURED_GRADIENT_BY_RARITY[featured.rarity]}
                   start={{ x: 0.1, y: 0 }}
                   end={{ x: 0.9, y: 1 }}
                   style={styles.featuredGradient}
-                >
-                  {/* Top: rarity chip only — no NEW ribbon, no OFFICIAL stamp */}
-                  <View style={styles.featuredTopBar}>
-                    <View style={[styles.featuredRarityChip, { backgroundColor: featuredAccent }]}>
-                      <Text style={styles.featuredRarity} numberOfLines={1}>
-                        ★ {rarityLabel(featured.rarity)}
+                />
+
+                {/* Art window (CARD_FRAME_ART_WINDOW): the deck's pack cover, cropped to the
+                    window, over the pack palette as the no-image fallback. */}
+                <View style={localStyles.featuredArtWindow} testID="draw-result-featured-art-window">
+                  <LinearGradient
+                    colors={packPalette.cover}
+                    start={{ x: 0.1, y: 0 }}
+                    end={{ x: 0.9, y: 1 }}
+                    style={styles.featuredArtGradient}
+                  />
+                  {RNImage && packArt ? (
+                    <RNImage
+                      testID="draw-result-featured-art"
+                      pointerEvents="none"
+                      source={packArt}
+                      resizeMode="cover"
+                      style={localStyles.featuredArtImage}
+                    />
+                  ) : null}
+                  <View style={[styles.featuredRarityChip, localStyles.featuredChipInWindow, { backgroundColor: featuredAccent }]}>
+                    <Text style={styles.featuredRarity} numberOfLines={1}>
+                      ★ {rarityLabel(featured.rarity)}
+                    </Text>
+                  </View>
+                  {featuredTopic ? (
+                    <View testID="draw-result-featured-topic" style={localStyles.featuredTopicChip}>
+                      <Text style={localStyles.featuredTopicText} numberOfLines={1}>
+                        {featuredTopic}
                       </Text>
                     </View>
-                    {cards.length === 1 && isUnrevealed(featured.stableUid) ? (
-                      <View testID="draw-result-featured-unrevealed-chip" style={localStyles.featuredUnrevealedChip}>
-                        <Text style={localStyles.unrevealedChipText} numberOfLines={1}>
-                          {CEREMONY_COPY_V10.unrevealedChip}
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
+                  ) : null}
+                </View>
 
-                  {/* Pack-themed art window — uses the pack's palette as a
-                      gradient backdrop (authentic identity, not generic
-                      rings). Inset slightly with a hairline ring. */}
-                  <View style={styles.featuredArtWindow}>
-                    <LinearGradient
-                      colors={packPaletteFromSlug(params.slug).cover}
-                      start={{ x: 0.1, y: 0 }}
-                      end={{ x: 0.9, y: 1 }}
-                      style={styles.featuredArtGradient}
-                    />
-                    <View pointerEvents="none" style={styles.featuredArtRing} />
-                    <Text style={styles.featuredArtCode} numberOfLines={1}>
-                      {(params.slug || 'A1').slice(0, 3).toUpperCase()}
-                    </Text>
-                  </View>
+                {/* Question slab (CARD_FRAME_SLAB) — leads the card, six lines then an ellipsis. */}
+                <View style={[localStyles.featuredSlab, styles.featuredQuestionSlab]}>
+                  <Text
+                    testID="draw-result-featured-question"
+                    style={styles.featuredQuestion}
+                    numberOfLines={FEATURED_STEM_LINES}
+                    ellipsizeMode="tail"
+                  >
+                    {featured.question}
+                  </Text>
+                </View>
 
-                  {/* Question area — leads the card now, full visibility */}
-                  <View style={styles.featuredQuestionSlab}>
-                    <Text style={styles.featuredQuestion} numberOfLines={4}>
-                      {featured.question}
-                    </Text>
-                  </View>
-
-                  {/* Subtle serial mark — reads as authentic registry, not
-                      a sticker. "REG. 042 / 300" style: ownedAfter / total. */}
+                {/* Registry serial on the frame's title strip: "REG. 042 / 300" (ownedAfter / total). */}
+                <View style={localStyles.featuredTitleStrip} pointerEvents="none">
                   <Text style={styles.featuredSerial} numberOfLines={1}>
                     {`REG. ${String(ownedAfter).padStart(3, '0')} / ${totalCards}`}
                   </Text>
+                </View>
 
-                  {/* Decorative diagonal shine */}
-                  <View pointerEvents="none" style={styles.featuredShine} />
-
-                  {/* B12 rarity frame PNG — transparent art window + lower slab,
-                      stretched over the 260×364 (5:7) card. */}
-                  {RNImage ? (
-                    <RNImage
-                      testID="draw-result-featured-frame"
-                      pointerEvents="none"
-                      source={cardFrameForRarity(featured.rarity)}
-                      resizeMode="stretch"
-                      style={localStyles.featuredFrame}
-                    />
-                  ) : null}
-                </LinearGradient>
+                {/* B12 rarity frame PNG — transparent art window + question slab — over the
+                    FULL card (a sibling of the face, not a child of a padded box). */}
+                {RNImage ? (
+                  <RNImage
+                    testID="draw-result-featured-frame"
+                    pointerEvents="none"
+                    source={cardFrameForRarity(featured.rarity)}
+                    resizeMode="stretch"
+                    style={localStyles.featuredFrame}
+                  />
+                ) : null}
               </Pressable>
             </AnimatedView>
           ) : null}
@@ -590,13 +644,6 @@ export function DrawResultScreen({ navigation, route }: Props) {
                           {card.rarity}
                         </Text>
                       </View>
-                      {isUnrevealed(card.stableUid) ? (
-                        <View testID={`draw-result-unrevealed-chip-${index}`} style={localStyles.unrevealedChip}>
-                          <Text style={localStyles.unrevealedChipText} numberOfLines={1}>
-                            {CEREMONY_COPY_V10.unrevealedChip}
-                          </Text>
-                        </View>
-                      ) : null}
                     </Pressable>
                   );
                 })}

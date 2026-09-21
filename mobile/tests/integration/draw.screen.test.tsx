@@ -218,6 +218,31 @@ describe('DrawScreen v9', () => {
     expect(collectText(tree)).not.toContain('Current pool');
   });
 
+  it('isolates the 3D pack in its own stacking context above the hero halo', async () => {
+    // The pack wobbles on perspective + rotateY; without a stacking context of its own Fabric
+    // hoists it next to the halo and Core Animation depth-sorts the halo through the tilted
+    // half. The wrapper is a real native view (collapsable=false), stacked above the halo, and
+    // adds no layout of its own.
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen navigation={{ goBack: vi.fn(), navigate: vi.fn() } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+      );
+    });
+    await flush();
+
+    const wrapper = tree.root.find((n) => (n.type as any) === 'View' && n.props.testID === 'draw-pack-3d-wrapper');
+    expect(wrapper.props.collapsable).toBe(false);
+    expect(wrapper.props.style.zIndex).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(wrapper.props.style)).toEqual(['zIndex']);
+    // Inside the swipe zone, wrapping the pack (the only LinearGradient cover in the stage).
+    const stage = tree.root.find((n) => (n.type as any) === 'View' && n.props.testID === 'draw-swipe-zone');
+    expect(stage.findAll((n) => (n.type as any) === 'View' && n.props.testID === 'draw-pack-3d-wrapper')).toHaveLength(1);
+    expect(wrapper.findAll((n) => (n.type as any) === 'LinearGradient').length).toBeGreaterThan(0);
+    // The halo is a sibling before the stage, never inside the wrapper.
+    expect(wrapper.findAll((n) => (n.type as any) === 'View' && n.props.style?.some?.((st: any) => st && st.borderRadius === 320))).toHaveLength(0);
+  });
+
   it('opens 10 cards and routes to ceremony', async () => {
     const navigate = vi.fn();
 
