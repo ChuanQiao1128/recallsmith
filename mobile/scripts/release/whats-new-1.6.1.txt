@@ -1,0 +1,6 @@
+• New free deck: Claude Developer Foundations (CCDV-F) — 441 cards across all eight exam domains, 142 of them exam-style multiple choice.
+• AWS Associate Architect grows to 371 cards, including 165 multiple-choice scenarios with a written reason for every wrong option.
+• Multiple-choice cards: pick your answer, say Sure or Not sure, see why each option is right or wrong. Your confidence shapes when the card comes back.
+• Learn a card, earn a pull: the first time you rate a new card Hard, Good or Easy, a pull lands in your wallet. Clearing the day's due cards adds one more.
+• Exam sweep mode, topic groups in the Library, a forecast of tomorrow's review load, and decks that update themselves.
+• Pack-opening polish: seamless sound, new AWS and Claude pack art, a swipe hint, and a smoother 10-pull table.
