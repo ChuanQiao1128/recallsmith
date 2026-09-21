@@ -61,7 +61,7 @@ import { getFeatureFlags } from '../config/featureFlags';
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
 import type { McqExport, McqOption } from '../types/deckExport';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
-import { MCQ_COPY, mcqBannerPartial } from '../features/gacha/mcq/mcqConstants';
+import { MCQ_COPY, mcqBannerPartial, mcqOverLimitAnnouncement } from '../features/gacha/mcq/mcqConstants';
 import {
   describeScheduledRating,
   mapMcqVerdictToRating,
@@ -186,6 +186,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [mcqState, setMcqState] = useState<McqCardState>(EMPTY_MCQ_CARD_STATE);
   const renderAsMcq = mcqState.mcq !== null;
   const [coachSeen, setCoachSeen] = useState<boolean | null>(null);
+  // The dock's measured height (onLayout). The scroll surface reserves exactly this much at the
+  // bottom so the last line of a card never hides under the opaque dock — the dock is taller in
+  // the options stage and taller again while the coach line is inside it (review 2026-09-22 #1).
+  const [dockLayoutHeight, setDockLayoutHeight] = useState<number | null>(null);
   const [plannedMinimumGoal, setPlannedMinimumGoal] = useState<number | null>(null);
   // Cached planner-derived limit. Loaded after planChallengeRoute runs.
   // null until first plan, then sticks. Falls back to routeLimit (when
@@ -726,6 +730,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       reviewStage,
       stage: current.progress.stage,
       hardStreak: current.progress.hardStreak ?? 0,
+      redeal: mcqState.attemptIndex >= 1,   // same-run redeal after a lapse never reaches easy (plan §5.4)
     });
     const scheduleLine = describeScheduledRating(current.progress, mappedRating, new Date()).line;
     setMcqState((prev) => ({ ...prev, stage: 'verdict', picks, confidence, changedPick, verdict, mappedRating, scheduleLine }));
@@ -760,6 +765,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
     coachSeenRef.current = true;
     setCoachSeen(true);
     void markMcqCoachSeen();
+  }
+  // A tap beyond requiredCount on a choose-N card: the body shows its inline hint; the parent owns
+  // the haptic and the VoiceOver announcement (D04 brief Constraints; review 2026-09-22 #5).
+  function handleOverLimit(): void {
+    mcqHaptic('warning');
+    const mcq = mcqState.mcq;
+    if (mcq) AI?.announceForAccessibility?.(mcqOverLimitAnnouncement(mcqRequiredCount(mcq)));
   }
   if (loadError) {
     return (
@@ -860,6 +872,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
     ]);
   }
   const ratingDockHeight = (renderAsMcq ? MCQ_DOCK_HEIGHT : 164) + Math.max(insets.bottom, 8);
+  // Reserved bottom padding: the measured dock once it has laid out, the stage default until then.
+  const scrollBottomPadding = dockLayoutHeight ?? ratingDockHeight;
   const doneMinimumGoal =
     plannedMinimumGoal ?? planChallengeRoute({ deck, progress, now, ownedSet, mode }).minimumGoal;
   const previewChecked = trialInfo.isTrial
@@ -904,7 +918,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             style={styles.scroll}
             contentContainerStyle={[
               styles.scrollContent,
-              current ? { paddingBottom: ratingDockHeight } : { paddingBottom: spacing.lg },
+              current ? { paddingBottom: scrollBottomPadding } : { paddingBottom: spacing.lg },
             ]}
             showsVerticalScrollIndicator={false}
           >
@@ -965,7 +979,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 scheduleLine={mcqState.scheduleLine}
                 attemptIndex={mcqState.attemptIndex}
                 onToggleOption={handleToggleOption}
-                onOverLimit={() => mcqHaptic('warning')}
+                onOverLimit={handleOverLimit}
               />
             ) : (
               <ReviewBody
@@ -976,7 +990,6 @@ export function SessionCardScreen({ navigation, route }: Props) {
               />
             )}
           </ScrollView>
-          <McqCoachLine visible={renderAsMcq && coachSeen === false} onDismiss={handleCoachDismiss} />
           {current ? (
             <View
               style={[
@@ -986,7 +999,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 },
               ]}
               testID="review-rating-dock"
+              onLayout={(event) => setDockLayoutHeight(event.nativeEvent.layout.height)}
             >
+              {/* Inside the dock, above the action rows: the dock is absolute and opaque, so an
+                  in-flow sibling before it would be painted over (review 2026-09-22 #1). */}
+              <McqCoachLine visible={renderAsMcq && coachSeen === false} onDismiss={handleCoachDismiss} />
               {mcqState.mcq ? (
                 <McqActionDock
                   testID="review-rating-bar"

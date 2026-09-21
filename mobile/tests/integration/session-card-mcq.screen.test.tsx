@@ -2,6 +2,8 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const announceMock = vi.hoisted(() => vi.fn());
+
 vi.mock('react-native', () => {
   const React = require('react');
   class MockAnimatedValue {
@@ -36,6 +38,8 @@ vi.mock('react-native', () => {
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     Alert: { alert: vi.fn() },
     StyleSheet: { create: (styles: any) => styles },
+    // Read through readRN('AccessibilityInfo', null) at module level, so it must exist at import time.
+    AccessibilityInfo: { announceForAccessibility: (text: string) => announceMock(text) },
   };
 });
 
@@ -287,6 +291,11 @@ function getTextContent(node: any): string {
 }
 
 const idText = (tree: renderer.ReactTestRenderer, id: string) => getTextContent(byTestID(tree, id)[0]);
+
+const flatStyle = (style: any): Record<string, any> => Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+
+const scrollPaddingBottom = (tree: renderer.ReactTestRenderer) =>
+  flatStyle(byTestID(tree, 'screen-session-card-primary-surface')[0].props.contentContainerStyle).paddingBottom;
 
 // Plan §4.3 card 1 — original AWS-flavoured MCQ, PG key order { v, options[{ key, why, text, correct }], shuffle, qualifier }.
 const CARD_1_OPT_B =
@@ -600,9 +609,13 @@ describe('SessionCardScreen MCQ branch', () => {
     expect(byTestID(tree, 'mcq-submit-sure')[0].props.disabled).toBe(false);
     expect(byTestID(tree, 'mcq-submit-unsure')[0].props.disabled).toBe(false);
 
+    announceMock.mockClear();
     await press(tree, 'mcq-option-d');
     expect(idText(tree, 'mcq-selected-count')).toBe('2 of 2 selected');
     expect(idText(tree, 'mcq-over-limit-hint')).toBe('Deselect one first');
+    // VoiceOver hears the rule with the count (review 2026-09-22 #5); the parent announces it.
+    expect(announceMock).toHaveBeenCalledTimes(1);
+    expect(announceMock).toHaveBeenCalledWith('Pick 2 answers — deselect one first');
 
     await press(tree, 'mcq-submit-sure');
     expect(idText(tree, 'mcq-verdict-banner')).toBe('You knew 1 of 2');
@@ -694,12 +707,14 @@ describe('SessionCardScreen MCQ branch', () => {
         ],
       }) as any,
     );
-    serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
+    // A stage-3 card (repeat review) lapses to stage 1 on `again` and comes straight back.
+    serve(CARD_1, { ...REPEAT_PROGRESS(CARD_1.StableUid), stage: 3 });
+    const lapsed = { ...NEW_PROGRESS(CARD_1.StableUid), stage: 1, lastReviewedAt: FIXED_NOW_MS, nextReviewAt: FIXED_NOW_MS + 600_000, hardStreak: 0, lapses: 1 };
     vi.mocked(buildRatedSessionState).mockReturnValueOnce({
-      updatedProgress: [{ ...NEW_PROGRESS(CARD_1.StableUid), stage: 0, lastReviewedAt: FIXED_NOW_MS, nextReviewAt: FIXED_NOW_MS + 600_000, lapses: 1 }],
-      updatedOne: { ...NEW_PROGRESS(CARD_1.StableUid), stage: 0, lastReviewedAt: FIXED_NOW_MS, nextReviewAt: FIXED_NOW_MS + 600_000, lastSeenRevision: 1 },
+      updatedProgress: [lapsed],
+      updatedOne: { ...lapsed, lastSeenRevision: 1 },
       nextDone: 1,
-      nextCurrent: { card: CARD_1, progress: { ...NEW_PROGRESS(CARD_1.StableUid), stage: 0, lastReviewedAt: FIXED_NOW_MS, nextReviewAt: FIXED_NOW_MS + 600_000, lapses: 1 } },
+      nextCurrent: { card: CARD_1, progress: lapsed },
       prevLearnedCount: 0,
       remainingDueCount: 0,
     } as any);
@@ -723,6 +738,41 @@ describe('SessionCardScreen MCQ branch', () => {
     const expected1 = shownOrderFor(normalizeMcq(CARD_1.Mcq)!, mcqSeed(sessionId, CARD_1.StableUid, 1)).map((o) => o.key);
     expect(order1).toEqual(expected1);
     expect(order1.join('')).not.toBe(order0.join(''));
+
+    // The redeal is stage 1, repeat_review, unchanged and fast — row 6 territory — yet it rates
+    // good, not easy: a lapse ten minutes ago is never undone by one quick re-answer (plan §5.4).
+    await press(tree, 'mcq-option-b');
+    vi.setSystemTime(FIXED_NOW_MS + 3_000);
+    await press(tree, 'mcq-submit-sure');
+    expect(idText(tree, 'mcq-verdict-banner')).toBe('Correct');
+    expect(idText(tree, 'mcq-schedule-line').startsWith('Scheduled as Good')).toBe(true);
+    await press(tree, 'mcq-next');
+    expect(recordReviewEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ rating: 'good', reviewStage: 'repeat_review' }),
+    );
+    expect(recordReviewEvent).not.toHaveBeenCalledWith(expect.objectContaining({ rating: 'easy' }));
+  });
+
+  it('reserves scroll padding for the measured dock height', async () => {
+    serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
+    const { tree } = await mount();
+
+    // Until the dock has laid out: the stage default (MCQ_DOCK_HEIGHT 216 + max(insets.bottom, 8)).
+    expect(scrollPaddingBottom(tree)).toBe(216 + 8);
+
+    const dock = byTestID(tree, 'review-rating-dock')[0];
+    expect(typeof dock.props.onLayout).toBe('function');
+    await act(async () => {
+      dock.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 354, height: 301 } } });
+    });
+    expect(scrollPaddingBottom(tree)).toBe(301);
+
+    // The coach line is dismissed, the dock shrinks, the padding follows.
+    await press(tree, 'mcq-coach-dismiss');
+    await act(async () => {
+      byTestID(tree, 'review-rating-dock')[0].props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 354, height: 120 } } });
+    });
+    expect(scrollPaddingBottom(tree)).toBe(120);
   });
 
   it('passes a kind hint to the planner on both call sites', async () => {
@@ -765,8 +815,24 @@ describe('SessionCardScreen MCQ branch', () => {
     const first = await mount();
 
     expect(byTestID(first.tree, 'mcq-coach-line')).toHaveLength(1);
+    // Mounted INSIDE the opaque, absolutely positioned dock (review 2026-09-22 #1): an in-flow sibling
+    // before the dock would be painted over and "Got it" could never be tapped.
+    const dock = byTestID(first.tree, 'review-rating-dock')[0];
+    expect(dock.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-line')).toHaveLength(1);
+    expect(dock.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-dismiss')).toHaveLength(1);
+    expect(
+      byTestID(first.tree, 'screen-session-card-primary-surface')[0].findAll(
+        (n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-line',
+      ),
+    ).toHaveLength(0);
+    // The coach band sits above the action rows.
+    const dockKids = dock.findAll(
+      (n) => typeof n.type === 'string' && (n.props?.testID === 'mcq-coach-line' || n.props?.testID === 'review-rating-bar'),
+    );
+    expect(dockKids.map((n) => n.props.testID)).toEqual(['mcq-coach-line', 'review-rating-bar']);
 
     await press(first.tree, 'mcq-show-options');
+    expect(dock.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-line')).toHaveLength(1);
     await press(first.tree, 'mcq-option-b');
     await press(first.tree, 'mcq-submit-sure');
     await press(first.tree, 'mcq-next');

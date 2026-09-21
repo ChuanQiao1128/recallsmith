@@ -143,14 +143,19 @@ const localStyles = StyleSheet.create({
   featuredFrame: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
   featuredArtWindow: { position: 'absolute', ...FEATURED_FRAME_LAYOUT.artWindow, overflow: 'hidden', borderRadius: 8 },
   featuredArtImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
-  featuredChipInWindow: { position: 'absolute', left: 8, top: 8 },
+  // The rarity chip and the MCQ kind mark share ONE column at the window's top-left (review
+  // 2026-09-22 #3): the kind mark used to be pinned top-right, and at Dynamic Type >= 1.2x the two
+  // grew into each other across the 224-pt window. Stacked, each mark can only push the next one
+  // down; both texts are capped at 1.3x so the column stays clear of the topic chip at the bottom.
+  featuredMarkStack: { position: 'absolute', left: 8, top: 8, alignItems: 'flex-start', gap: 4, maxWidth: '80%' },
+  featuredChipInWindow: { marginBottom: 0 },
   featuredTopicChip: {
     position: 'absolute', left: 8, bottom: 8, maxWidth: '80%', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
     backgroundColor: 'rgba(20,23,55,0.72)',
   },
   featuredTopicText: { color: colors.softCream, fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
   featuredKindChip: {
-    position: 'absolute', right: 8, top: 8, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
+    alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
     backgroundColor: 'rgba(20,23,55,0.72)',
   },
   featuredSlab: { position: 'absolute', ...FEATURED_FRAME_LAYOUT.slab, justifyContent: 'center' },
@@ -541,22 +546,24 @@ export function DrawResultScreen({ navigation, route }: Props) {
                       style={localStyles.featuredArtImage}
                     />
                   ) : null}
-                  <View style={[styles.featuredRarityChip, localStyles.featuredChipInWindow, { backgroundColor: featuredAccent }]}>
-                    <Text style={styles.featuredRarity} numberOfLines={1}>
-                      ★ {rarityLabel(featured.rarity)}
-                    </Text>
+                  <View testID="draw-result-featured-marks" style={localStyles.featuredMarkStack}>
+                    <View style={[styles.featuredRarityChip, localStyles.featuredChipInWindow, { backgroundColor: featuredAccent }]}>
+                      <Text style={styles.featuredRarity} numberOfLines={1} maxFontSizeMultiplier={1.3}>
+                        ★ {rarityLabel(featured.rarity)}
+                      </Text>
+                    </View>
+                    {featuredKind ? (
+                      <View testID="draw-result-featured-kind" style={localStyles.featuredKindChip}>
+                        <Text style={localStyles.featuredTopicText} numberOfLines={1} maxFontSizeMultiplier={1.3}>
+                          {featuredKind}
+                        </Text>
+                      </View>
+                    ) : null}
                   </View>
                   {featuredTopic ? (
                     <View testID="draw-result-featured-topic" style={localStyles.featuredTopicChip}>
                       <Text style={localStyles.featuredTopicText} numberOfLines={1}>
                         {featuredTopic}
-                      </Text>
-                    </View>
-                  ) : null}
-                  {featuredKind ? (
-                    <View testID="draw-result-featured-kind" style={localStyles.featuredKindChip}>
-                      <Text style={localStyles.featuredTopicText} numberOfLines={1}>
-                        {featuredKind}
                       </Text>
                     </View>
                   ) : null}

@@ -35,11 +35,14 @@ export function McqCoachLine(props: McqCoachLineProps) {
 export default McqCoachLine;
 
 const styles = StyleSheet.create({
+  // marginBottom: the band is mounted as the first child of the rating dock (D05, review 2026-09-22
+  // #1) and needs its own gap above the action rows; nothing else spaces it.
   band: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     padding: spacing.sm,
+    marginBottom: spacing.xs,
     borderRadius: 12,
     backgroundColor: colors.parchmentBgDeep,
     borderWidth: 1,

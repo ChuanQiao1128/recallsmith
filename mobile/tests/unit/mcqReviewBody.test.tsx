@@ -181,6 +181,17 @@ function hasTestId(tree: renderer.ReactTestRenderer, testID: string) {
   return tree.root.findAll((node) => node.props.testID === testID).length > 0;
 }
 
+// The innermost host View around a letter Text: the letter disc of that option row.
+function letterDisc(tree: renderer.ReactTestRenderer, key: string) {
+  const discs = tree.root.findAll(
+    (node) =>
+      (node.type as any) === 'View' &&
+      node.findAll((child) => (child.type as any) === 'Text' && child.props.testID === `mcq-option-letter-${key}`).length > 0,
+  );
+  expect(discs.length).toBeGreaterThan(0);
+  return discs[discs.length - 1];
+}
+
 function flatten(style: any): any {
   if (Array.isArray(style)) return style.filter(Boolean).reduce((acc, s) => ({ ...acc, ...flatten(s) }), {});
   return style ?? {};
@@ -324,6 +335,31 @@ describe('McqReviewBody', () => {
     });
     expect(hasTestId(tree, 'mcq-over-limit-hint')).toBe(false);
 
+    // …and on its own after 1.5 s when nothing else changes (review 2026-09-22 #5).
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        tree.update(
+          <McqReviewBody {...makeProps({ mcq: mcq2, shownOrder: SHOWN2, stage: 'options', picks: ['a', 'c'], onToggleOption, onOverLimit })} />,
+        );
+      });
+      act(() => {
+        pressableById(tree, 'mcq-option-e').props.onPress();
+      });
+      expect(onOverLimit).toHaveBeenCalledTimes(2);
+      expect(hasTestId(tree, 'mcq-over-limit-hint')).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(1_499);
+      });
+      expect(hasTestId(tree, 'mcq-over-limit-hint')).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(hasTestId(tree, 'mcq-over-limit-hint')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+
     // Single-select never reports over-limit.
     const singleToggle = vi.fn();
     const singleOver = vi.fn();
@@ -365,10 +401,12 @@ describe('McqReviewBody', () => {
     expect(textByTestId(tree, 'mcq-why-d').props.children).toBe(mcq2.options[3].why);
     expect(hasTestId(tree, 'mcq-why-toggle-d')).toBe(false);
 
-    // wrong-unpicked: WHY behind a toggle.
+    // wrong-unpicked: WHY behind a toggle, labelled by DISPLAYED letter (review 2026-09-22 #6).
     expect(hasTestId(tree, 'mcq-why-b')).toBe(false);
     const toggleB = pressableById(tree, 'mcq-why-toggle-b');
     expect(toggleB.props.accessibilityRole).toBe('button');
+    expect(toggleB.props.accessibilityLabel).toBe('Why not option B');
+    expect(pressableById(tree, 'mcq-why-toggle-e').props.accessibilityLabel).toBe('Why not option E');
     expect(toggleB.props.accessibilityState.expanded).toBe(false);
     expect(toggleB.findAll((n) => (n.type as any) === 'Text').some((n) => n.props.children === 'Why not?')).toBe(true);
     act(() => {
@@ -387,6 +425,21 @@ describe('McqReviewBody', () => {
       expect(row.props.onPress).toBeUndefined();
     }
     expect(pressableById(tree, 'mcq-option-a').props.accessibilityLabel.endsWith('. Correct')).toBe(true);
+
+    // wrong-unpicked rows keep full opacity; the muted reading is an AA ink on the text (inkSecondary
+    // #5A4B38 on softCream = 7.76:1) plus a dimmed letter disc — never a faded row (review 2026-09-22 #4).
+    for (const key of ['b', 'e']) {
+      const row = pressableById(tree, `mcq-option-${key}`);
+      expect(flatten(row.props.style).opacity).toBeUndefined();
+      expect(flatten(textByTestId(tree, `mcq-option-text-${key}`).props.style).color).toBe('#5A4B38');
+      expect(flatten(letterDisc(tree, key).props.style).opacity).toBe(0.55);
+    }
+    for (const key of ['a', 'c', 'd']) {
+      const row = pressableById(tree, `mcq-option-${key}`);
+      expect(flatten(row.props.style).opacity).toBeUndefined();
+      expect(flatten(textByTestId(tree, `mcq-option-text-${key}`).props.style).color).toBe('#3A2C1F');
+      expect(flatten(letterDisc(tree, key).props.style).opacity).toBeUndefined();
+    }
 
     expect(textByTestId(tree, 'mcq-verdict-banner').props.children).toBe('You knew 1 of 2');
     expect(textByTestId(tree, 'mcq-schedule-line').props.children).toBe(scheduleLine);
