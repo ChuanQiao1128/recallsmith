@@ -1619,6 +1619,7 @@ function mapRawDeckV1ToDeckExport(raw: RawDeckJsonV1): DeckExport {
       Difficulty: difficulty,
       OrderInDeck: order,
       Topic: typeof (c as any).topic === 'string' ? (c as any).topic : null,
+      Mcq: typeof (c as any).mcq === 'object' && (c as any).mcq !== null ? (c as any).mcq : null,
 
       Revision: revision,
       Version: version,
@@ -1679,6 +1680,7 @@ function mapRawDeckFlatToDeckExport(raw: RawDeckJsonFlat): DeckExport {
       Difficulty: difficulty,
       OrderInDeck: order,
       Topic: typeof (c as any).topic === 'string' ? (c as any).topic : null,
+      Mcq: typeof (c as any).mcq === 'object' && (c as any).mcq !== null ? (c as any).mcq : null,
 
       Revision: revision,
       Version: version,
