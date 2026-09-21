@@ -461,16 +461,21 @@ export function SessionCardScreen({ navigation, route }: Props) {
       });
       recordRewardStep(rewardStep, current.card.StableUid);
       const outcome = useSessionStore.getState().rewardOutcome;
-      setLoadForecast(
-        mode === 'sweep' ? null : forecastLine(
-          computeTomorrowLoad({
-            progress: nextState.updatedProgress,
-            now: nowAtRating,
-            ownedSet,
-            newCardsLearnedToday: rewardStep.newCardsLearnedToday,
-          }),
-        ),
-      );
+      // Held in a local as well as in state: when this rating ends the run the
+      // screen is replaced before the state ever renders, so the line travels
+      // to SessionSummary as a route param instead (review finding C).
+      const nextLoadForecast =
+        mode === 'sweep'
+          ? null
+          : forecastLine(
+              computeTomorrowLoad({
+                progress: nextState.updatedProgress,
+                now: nowAtRating,
+                ownedSet,
+                newCardsLearnedToday: rewardStep.newCardsLearnedToday,
+              }),
+            );
+      setLoadForecast(nextLoadForecast);
       const trial = trialRef.current;
       if (trial.isTrial && (mode === 'learn-new' || mode === 'mixed') && trial.previewCount > 0) {
         const nextLearnedCount = nextState.updatedProgress.filter(isLearned).length;
@@ -529,6 +534,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
           dueCount: nextState.remainingDueCount,
           streakEarned: useSessionStore.getState().streakEarned,
           reward: outcome,
+          // Only when there is a line: the route-complete Continue path and the
+          // no-milestone case keep the exact param shape the tests pin.
+          ...(nextLoadForecast ? { loadForecast: nextLoadForecast } : {}),
         });
       }
     } finally {

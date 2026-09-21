@@ -406,4 +406,67 @@ describe('SessionSummaryScreen', () => {
     expect(texts).toContain('Three clean runs');
     expect(texts).toContain('+1 more milestone unlocked');
   });
+
+  it('renders the tomorrow-load forecast line under the reward card only when the run ended on a milestone', async () => {
+    const LINE = 'At this pace, about 12 cards come due tomorrow.';
+    const baseParams = {
+      sessionId: 'sess-forecast',
+      slug: 'csharp',
+      deckTitle: 'C# Interview',
+      sessionDone: 20,
+      sessionLimit: 20,
+      minimumGoal: 1,
+      dueCount: 0,
+      streakEarned: true,
+      reward: ONE_NEW_CARD_REWARD,
+    };
+    const findLine = (tree: renderer.ReactTestRenderer) =>
+      tree.root.findAll((node) => (node.type as any) === 'Text' && node.props?.testID === 'session-summary-load-forecast');
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionSummaryScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'summary', name: 'SessionSummary', params: { ...baseParams, loadForecast: LINE } } as any}
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const line = findLine(tree);
+    expect(line).toHaveLength(1);
+    expect(getTextContent(line[0])).toBe(LINE);
+    expect(line[0].props.numberOfLines).toBe(2);
+
+    // Order on the page: reward card, then the forecast, then the progress block.
+    // Host nodes only: a testID prop also sits on the composite wrappers above each host View.
+    const order = tree.root
+      .findAll(
+        (node) =>
+          typeof node.type === 'string' &&
+          ['summary-reward-block', 'session-summary-load-forecast', 'summary-progress-block'].includes(node.props?.testID),
+      )
+      .map((node) => node.props.testID);
+    expect(order).toEqual(['summary-reward-block', 'session-summary-load-forecast', 'summary-progress-block']);
+
+    // No param (the run did not end on a milestone): nothing renders.
+    let plain!: renderer.ReactTestRenderer;
+    await act(async () => {
+      plain = renderer.create(
+        <SessionSummaryScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'summary-2', name: 'SessionSummary', params: baseParams } as any}
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(findLine(plain)).toHaveLength(0);
+  });
 });

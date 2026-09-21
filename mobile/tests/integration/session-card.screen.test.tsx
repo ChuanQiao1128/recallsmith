@@ -184,7 +184,8 @@ vi.mock('../../src/features/gacha/rewards/sessionRewards', () => {
 
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { resolveDeckBySlug } from '../../src/content/deckRepository';
-import { pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
+import { countDueToday, pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
+import { buildRatedSessionState } from '../../src/features/gacha/session/sessionReviewHelpers';
 import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
 import type { RatingRewardStep } from '../../src/features/gacha/rewards/sessionRewards';
 import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
@@ -586,5 +587,162 @@ describe('SessionCardScreen', () => {
     const line = findForecast(after);
     expect(line).toHaveLength(1);
     expect(String(line[0].props.children)).toMatch(/^At this pace, about \d+ cards? comes? due tomorrow\.$/);
+  });
+
+  describe('settleRatingReward call contract (review finding E)', () => {
+    const PRE_RATING_PROGRESS = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
+
+    afterEach(() => {
+      // mockReturnValue outlives vi.clearAllMocks(); put the planner mock back the way the file declares it.
+      vi.mocked(countDueToday).mockReturnValue(0);
+    });
+
+    async function rateOnceIn(mode: 'mixed' | 'sweep' | 'learn-new') {
+      const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+      let tree!: renderer.ReactTestRenderer;
+      await act(async () => {
+        tree = renderer.create(
+          <SessionCardScreen
+            navigation={navigation}
+            route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode, limit: 1 } } as any}
+          />,
+        );
+      });
+      await flush();
+      await act(async () => {
+        findPressableByLabel(tree, 'Reveal answer').props.onPress();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        findPressableByLabel(tree, 'Good').props.onPress();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return { tree, navigation };
+    }
+
+    it('passes newCardEligible=false in sweep mode and true otherwise', async () => {
+      await rateOnceIn('sweep');
+      expect(settleRatingReward).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(settleRatingReward).mock.calls[0][0]).toMatchObject({ slug: 'csharp', stableUid: '1', rating: 'good', newCardEligible: false });
+
+      vi.mocked(settleRatingReward).mockClear();
+      resetSessionStore();
+      await rateOnceIn('mixed');
+      expect(vi.mocked(settleRatingReward).mock.calls[0][0]).toMatchObject({ newCardEligible: true });
+
+      vi.mocked(settleRatingReward).mockClear();
+      resetSessionStore();
+      await rateOnceIn('learn-new');
+      expect(vi.mocked(settleRatingReward).mock.calls[0][0]).toMatchObject({ newCardEligible: true });
+    });
+
+    it('passes the pre-rating progress and the pre/post due counts, never the updated ones', async () => {
+      const updatedProgress = [{ stableUid: '1', stage: 1, lastReviewedAt: 1_700_000_000_000, nextReviewAt: 1_700_000_060_000 }];
+      vi.mocked(countDueToday).mockReturnValue(3);
+      vi.mocked(buildRatedSessionState).mockReturnValueOnce({
+        updatedProgress,
+        updatedOne: { ...updatedProgress[0], lastSeenRevision: 1 },
+        nextDone: 1,
+        nextCurrent: null,
+        prevLearnedCount: 0,
+        remainingDueCount: 2,
+      } as any);
+
+      await rateOnceIn('mixed');
+
+      const input = vi.mocked(settleRatingReward).mock.calls[0][0];
+      expect(input.progressBefore).toEqual(PRE_RATING_PROGRESS);
+      expect(input.progressBefore).not.toEqual(updatedProgress);
+      expect(input.dueBefore).toBe(3);
+      expect(input.remainingDueCount).toBe(2);
+      expect(input.now).toBeInstanceOf(Date);
+    });
+  });
+
+  describe('forecast line when the milestone rating ends the run (review finding C)', () => {
+    const milestoneStep = (): RatingRewardStep => ({
+      newCardPaid: true,
+      dueClearPaid: false,
+      pulls: 1,
+      walletBefore: { availablePulls: 0, reservePulls: 0 },
+      walletAfter: { availablePulls: 1, reservePulls: 0 },
+      applied: { availablePulls: 1, reservePulls: 0, appliedToAvailable: 1, appliedToReserve: 0, dropped: 0 },
+      newCardsLearnedToday: 20,
+    });
+    const findForecast = (tree: renderer.ReactTestRenderer) =>
+      tree.root.findAll((node) => (node.type as any) === 'Text' && node.props?.testID === 'session-card-load-forecast');
+
+    async function mountAndRate(params: Record<string, unknown>) {
+      const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+      let tree!: renderer.ReactTestRenderer;
+      await act(async () => {
+        tree = renderer.create(
+          <SessionCardScreen
+            navigation={navigation}
+            route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode: 'mixed', limit: 1, ...params } } as any}
+          />,
+        );
+      });
+      await flush();
+      await act(async () => {
+        findPressableByLabel(tree, 'Reveal answer').props.onPress();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        findPressableByLabel(tree, 'Good').props.onPress();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return { tree, navigation };
+    }
+
+    it('hands the line to SessionSummary as loadForecast when the run ends on the milestone', async () => {
+      vi.mocked(settleRatingReward).mockResolvedValueOnce(milestoneStep());
+      const { navigation } = await mountAndRate({});
+
+      expect(navigation.replace).toHaveBeenCalledTimes(1);
+      const [screen, params] = navigation.replace.mock.calls[0];
+      expect(screen).toBe('SessionSummary');
+      expect(params.loadForecast).toMatch(/^At this pace, about \d+ cards? comes? due tomorrow\.$/);
+      expect(params.reward).toEqual(expect.any(Object));
+    });
+
+    it('omits loadForecast from the SessionSummary params when the run ends off-milestone', async () => {
+      const { navigation } = await mountAndRate({});
+      const [, params] = navigation.replace.mock.calls[0];
+      expect('loadForecast' in params).toBe(false);
+    });
+
+    it('never forecasts in sweep mode, even on the milestone count', async () => {
+      vi.mocked(settleRatingReward).mockResolvedValueOnce(milestoneStep());
+      const { tree, navigation } = await mountAndRate({ mode: 'sweep' });
+      expect(findForecast(tree)).toHaveLength(0);
+      const [, params] = navigation.replace.mock.calls[0];
+      expect('loadForecast' in params).toBe(false);
+    });
+
+    it('keeps the in-session line and does not navigate when the run continues past the milestone', async () => {
+      vi.mocked(settleRatingReward).mockResolvedValueOnce(milestoneStep());
+      vi.mocked(buildRatedSessionState).mockReturnValueOnce({
+        updatedProgress: [{ stableUid: '1', stage: 1, lastReviewedAt: Date.now(), nextReviewAt: Date.now() + 60000 }],
+        updatedOne: { stableUid: '1', stage: 1, lastReviewedAt: Date.now(), nextReviewAt: Date.now() + 60000, lastSeenRevision: 1 },
+        nextDone: 1,
+        nextCurrent: {
+          card: { StableUid: '2', OrderInDeck: 2, Difficulty: 1, Question: 'Q2', Answer: 'A2' },
+          progress: { stableUid: '2', stage: 0, nextReviewAt: 0 },
+        },
+        prevLearnedCount: 0,
+        remainingDueCount: 0,
+      } as any);
+      vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 3, minimumGoal: 2 }) as any);
+
+      const { tree, navigation } = await mountAndRate({ limit: 3 });
+
+      expect(navigation.replace).not.toHaveBeenCalled();
+      const line = findForecast(tree);
+      expect(line).toHaveLength(1);
+      expect(String(line[0].props.children)).toMatch(/^At this pace, about \d+ cards? comes? due tomorrow\.$/);
+    });
   });
 });
