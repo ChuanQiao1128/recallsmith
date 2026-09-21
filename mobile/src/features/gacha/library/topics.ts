@@ -44,3 +44,29 @@ function hasNonAscii(value: string): boolean {
   }
   return false;
 }
+
+/**
+ * Chip order: numeric-aware, case-insensitive. "1.2 Secure" < "1.10 Design" < "2.1 Cost", "D1" < "D2" < "D10".
+ * Digit runs compare as numbers, everything between them through localeCompare at base sensitivity, so
+ * "iam" and "IAM" tie and accents do not jump the queue. Deterministic per engine: no Intl collator options
+ * are relied on beyond the default, so Hermes and Node agree on the examples above.
+ */
+export function compareTopicLabels(a: string, b: string): number {
+  const left = a.trim().split(/(\d+)/);
+  const right = b.trim().split(/(\d+)/);
+  const length = Math.min(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const l = left[i];
+    const r = right[i];
+    if (l === r) continue;
+    const bothNumeric = /^\d+$/.test(l) && /^\d+$/.test(r);
+    if (bothNumeric) {
+      const diff = Number(l) - Number(r);
+      if (diff !== 0) return diff;
+      continue;
+    }
+    const cmp = l.localeCompare(r, 'en', { sensitivity: 'base' });
+    if (cmp !== 0) return cmp;
+  }
+  return left.length - right.length || a.localeCompare(b, 'en');
+}

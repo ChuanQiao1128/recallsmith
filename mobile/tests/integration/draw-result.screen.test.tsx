@@ -141,6 +141,60 @@ describe('DrawResultScreen v9', () => {
     expect(collectText(tree)).toContain('4/20');
   });
 
+  it('prints the featured card\'s deck rank as "No. 011 / 441", not the owned count', async () => {
+    // Owner's device, 2026-09-21: the serial read "REG. 011 / 441" where 011
+    // was ownedAfter -- the collection bar's figure, not this card's number.
+    // The Library tile and the session header say "#011" for the card ranked
+    // 11th; the serial has to agree with them.
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{
+            key: 'result',
+            name: 'DrawResult',
+            params: makeParams({
+              ownedAfter: 4,
+              totalCards: 441,
+              drawResult: {
+                ...DRAW_RESULT_FIXTURE,
+                cards: [
+                  { stableUid: '1', question: 'Q1', difficulty: 3, rarity: 'LEG' as const, rank: 11 },
+                  { stableUid: '2', question: 'Q2', difficulty: 2, rarity: 'RAR' as const, rank: 300 },
+                ],
+              },
+            }),
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const serial = tree.root.findByProps({ testID: 'draw-result-featured-serial' });
+    const text = Array.isArray(serial.props.children) ? serial.props.children.join('') : String(serial.props.children);
+    expect(text).toBe('No. 011 / 441');
+    expect(collectText(tree)).not.toContain('REG.');
+    // The collection bar keeps owned / total; the two numbers are different questions.
+    expect(collectText(tree)).toContain('4/441');
+  });
+
+  it('falls back to the owned count in the serial when an older caller sends cards without a rank', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'result', name: 'DrawResult', params: makeParams() } as any}
+        />,
+      );
+    });
+    await flush();
+    const serial = tree.root.findByProps({ testID: 'draw-result-featured-serial' });
+    const text = Array.isArray(serial.props.children) ? serial.props.children.join('') : String(serial.props.children);
+    expect(text).toBe('No. 004 / 20');
+  });
+
   it('renders rarity strip in COM, RAR, LEG order', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {

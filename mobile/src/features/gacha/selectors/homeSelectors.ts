@@ -16,6 +16,7 @@ import type { RewardWalletState } from '../rewards/rewardWallet';
 
 export type HomeCtaKind =
   | 'first_run'
+  | 'empty_deck'
   | 'today_pending'
   | 'today_partial'
   | 'today_done'
@@ -99,6 +100,26 @@ export type HomeViewModel = LegacyHomeVM & {
   selectedDeckSlug: string | null;
 };
 
+/**
+ * Cards of the deck the account holds. The explicit field wins; the fallback is
+ * the same sum loadHomeDeckSummaries uses for it (learned + fresh), so a
+ * summary built without the field answers exactly what the resolver would.
+ */
+export function ownedCountOf(deck: DeckSummary): number {
+  const explicit = deck.ownedCount;
+  if (typeof explicit === 'number' && Number.isFinite(explicit)) return Math.max(0, explicit);
+  return Math.max(0, deck.masteredApprox + deck.newToday);
+}
+
+/** A studiable deck the account holds no card of: installed, never pulled from.
+ *  A plain boolean, not a type predicate: `deck is DeckSummary` would narrow the
+ *  false branch to `null` and hide every field from the code that follows. */
+function isEmptyDeck(deck: DeckSummary | null): boolean {
+  return !!deck && deck.canStudy && ownedCountOf(deck) === 0;
+}
+
+export const EMPTY_DECK_CTA_LABEL = 'Open a pack to get your first cards';
+
 function buildRoutePreview(selectedDeck: DeckSummary | null): RoutePreviewNode[] {
   if (!selectedDeck || !selectedDeck.canStudy) {
     return [
@@ -109,6 +130,13 @@ function buildRoutePreview(selectedDeck: DeckSummary | null): RoutePreviewNode[]
         subtitle: 'Install or unlock a deck first, then today’s route will appear here.',
       },
     ];
+  }
+
+  // Nothing owned → no route, mirroring buildChallengeRoute's EMPTY_ROUTE_LIMIT.
+  // No placeholder node either: the counts below are derived from this list,
+  // and a placeholder would surface as "1 normal node" on a deck with none.
+  if (isEmptyDeck(selectedDeck)) {
+    return [];
   }
 
   const due = selectedDeck.dueToday;
@@ -221,15 +249,18 @@ function buildDrawVM(wallet?: RewardWalletState | null, selectedDeck?: DeckSumma
   // changes. The first line is honest because the economy floor (economyFloor.ts, ECONOMY_FLOOR_GRANT)
   // pays exactly one pull on the next day a caught-up account with an empty wallet loads Home.
   const deck = selectedDeck?.canStudy ? selectedDeck : null;
+  const empty = isEmptyDeck(deck);
   const caughtUp = !!deck && deck.dueToday + deck.newToday === 0;
   const dueOnly = !!deck && deck.newToday === 0 && deck.dueToday > 0;
   return {
     state: 'locked',
-    label: caughtUp
-      ? 'No cards due · a free pull returns tomorrow'
-      : dueOnly
-        ? 'Clear today’s due cards to earn a pull'
-        : 'Learn a new card to earn a pull',
+    label: empty
+      ? 'No cards yet · a free pull returns tomorrow'
+      : caughtUp
+        ? 'No cards due · a free pull returns tomorrow'
+        : dueOnly
+          ? 'Clear today’s due cards to earn a pull'
+          : 'Learn a new card to earn a pull',
   };
 }
 
@@ -250,6 +281,12 @@ function inferStatusKind(input: {
 
   if (!selectedDeck || !selectedDeck.canStudy) {
     return 'first_run';
+  }
+
+  // Ahead of every day-state read: with no card owned there is no work, no
+  // partial run and no full clear to report, whatever runtimeStatus says.
+  if (isEmptyDeck(selectedDeck)) {
+    return 'empty_deck';
   }
 
   const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
@@ -313,6 +350,17 @@ function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCt
         kind,
         label: 'Open library',
         nav: 'library',
+        testID: 'home-primary-cta',
+        disabled: false,
+      };
+    case 'empty_deck':
+      // Always the draw, whatever the wallet holds: a deck with no cards has
+      // no other next step, and the economy floor (economyFloor.ts) pays the
+      // pull that makes it reachable on the day the wallet is empty.
+      return {
+        kind,
+        label: EMPTY_DECK_CTA_LABEL,
+        nav: 'draw',
         testID: 'home-primary-cta',
         disabled: false,
       };
@@ -413,6 +461,10 @@ function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCt
 }
 
 function buildGoalVM(selectedDeck: DeckSummary | null): HomeGoalVM {
+  if (isEmptyDeck(selectedDeck)) {
+    // "Keep streak: 1 card" promises a run that cannot start.
+    return { minimum: 'No cards yet', fullClear: 'Open a pack to start' };
+  }
   const total = Math.max(0, (selectedDeck?.dueToday ?? 0) + (selectedDeck?.newToday ?? 0));
   return {
     minimum: `Keep streak: ${SESSION_MIN_GOAL} card`,
@@ -458,6 +510,13 @@ function buildHeroCopy(params: {
   }
 
   switch (statusKind) {
+    case 'empty_deck':
+      return {
+        eyebrow: 'Today',
+        title: `No cards in ${selectedDeck.title} yet`,
+        subtitle: 'Open a pack to get your first cards — today’s route appears once you hold some.',
+        helper: 'Every card you pull joins today’s run; learning it earns the next pull.',
+      };
     case 'today_partial':
       return {
         eyebrow: 'Today',

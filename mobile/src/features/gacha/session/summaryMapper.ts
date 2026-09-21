@@ -7,11 +7,16 @@ export const COPY = {
   title: {
     fullClear: 'Run complete 🎉',
     progress: 'Good progress today',
+    // sessionDone 0: nothing was rated, so neither "progress" nor "complete"
+    // is true. Same words as nextAction.emptyTitle so the hero and the
+    // action card stop contradicting each other on a run that never dealt.
+    none: 'No run logged yet',
   },
   completion: {
     fullClear: "Cleared today's run.",
     minimum: 'You kept the streak.',
     partial: 'Progress logged for today.',
+    none: 'Nothing reviewed this time.',
   },
   reward: {
     sectionFullClear: 'Run reward',
@@ -27,6 +32,7 @@ export const COPY = {
     fullClearLabel: (done: number, total: number) => `${done} / ${total} cards · full clear`,
     minimumLabel: (done: number, total: number) => `${done} / ${total} cards · streak saved`,
     partialLabel: (done: number, total: number) => `${done} / ${total} cards · route started`,
+    noneLabel: (total: number) => (total > 0 ? `0 / ${total} cards · not started` : 'No cards to review yet'),
     queueLabel: (dueCount: number) => `${dueCount} due card${dueCount === 1 ? '' : 's'} in today's queue`,
     streakRise: (before: number, after: number) => `🔥 ${before} → ${after}`,
     streakHold: (value: number) => `🔥 ${value}`,
@@ -186,17 +192,27 @@ export function buildSessionSummaryVM(params: {
   });
   const outcome = resolvedReward.outcome;
 
-  const completionLabel = resolvedReward.completedFullRun
-    ? COPY.completion.fullClear
-    : resolvedReward.completedMinimumGoal
-      ? COPY.completion.minimum
-      : COPY.completion.partial;
+  // A run with nothing rated. Reachable from an empty deck (planner limit 0,
+  // see sessionBuilder.EMPTY_ROUTE_LIMIT) and from any route-complete Continue
+  // pressed before the first rating; both used to read "Good progress today ·
+  // 0/1 cleared" next to "No run logged yet".
+  const noRun = sessionDone <= 0;
 
-  const legacyCompletionLabel = resolvedReward.completedFullRun
-    ? 'Full run cleared'
-    : resolvedReward.completedMinimumGoal
-      ? 'Minimum goal cleared'
-      : 'Practice progress saved';
+  const completionLabel = noRun
+    ? COPY.completion.none
+    : resolvedReward.completedFullRun
+      ? COPY.completion.fullClear
+      : resolvedReward.completedMinimumGoal
+        ? COPY.completion.minimum
+        : COPY.completion.partial;
+
+  const legacyCompletionLabel = noRun
+    ? 'No cards reviewed'
+    : resolvedReward.completedFullRun
+      ? 'Full run cleared'
+      : resolvedReward.completedMinimumGoal
+        ? 'Minimum goal cleared'
+        : 'Practice progress saved';
 
   const rewardTitle = resolvedReward.completedFullRun
     ? COPY.reward.sectionFullClear
@@ -213,12 +229,17 @@ export function buildSessionSummaryVM(params: {
         : 'Progress saved for this run.'
       : resolvedReward.rewardMessage;
 
-  const total = sessionLimit > 0 ? sessionLimit : Math.max(1, sessionDone);
-  const progressBody = resolvedReward.completedFullRun
-    ? COPY.progress.fullClearLabel(sessionDone, total)
-    : resolvedReward.completedMinimumGoal
-      ? COPY.progress.minimumLabel(sessionDone, total)
-      : COPY.progress.partialLabel(sessionDone, total);
+  // No Math.max(1, …): a limit of 0 with nothing done is an empty deck, and
+  // "0 / 1" invented a card that does not exist. Unlimited runs (limit 0,
+  // done > 0) still read done / done as before.
+  const total = sessionLimit > 0 ? sessionLimit : Math.max(0, sessionDone);
+  const progressBody = noRun
+    ? COPY.progress.noneLabel(total)
+    : resolvedReward.completedFullRun
+      ? COPY.progress.fullClearLabel(sessionDone, total)
+      : resolvedReward.completedMinimumGoal
+        ? COPY.progress.minimumLabel(sessionDone, total)
+        : COPY.progress.partialLabel(sessionDone, total);
 
   const streakNote =
     streakBefore != null && streakAfter != null
@@ -282,8 +303,10 @@ export function buildSessionSummaryVM(params: {
       secondary: secondaryAction,
     },
 
-    title: resolvedReward.completedFullRun ? COPY.title.fullClear : COPY.title.progress,
-    subtitle: `${deckTitle} · ${sessionDone}/${sessionLimit || '∞'} cleared`,
+    title: noRun ? COPY.title.none : resolvedReward.completedFullRun ? COPY.title.fullClear : COPY.title.progress,
+    subtitle: noRun
+      ? `${deckTitle} · no cards reviewed`
+      : `${deckTitle} · ${sessionDone}/${sessionLimit || '∞'} cleared`,
     rewardTitle,
     rewardBody: legacyRewardBody,
     rewardBadge: COPY.reward.badge(resolvedReward.rewardPulls),

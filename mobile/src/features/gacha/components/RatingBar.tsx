@@ -3,24 +3,46 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ReviewRating } from '../../../review/model';
 import { colors } from '../../../theme/colors';
 
-const RATING_ITEMS: Array<{ key: ReviewRating; title: string; subtitle: string; styleKey: keyof typeof styles }> = [
-  { key: 'again', title: 'Again', subtitle: 'Show very soon', styleKey: 'ratingAgain' },
-  { key: 'hard', title: 'Hard', subtitle: 'Short interval', styleKey: 'ratingHard' },
-  { key: 'good', title: 'Good', subtitle: 'Normal interval', styleKey: 'ratingGood' },
+// Subtitles are sized to a 4-up grid at 320pt content width (~64pt per
+// button, minus padding) at the default font scale: two short words at 11pt.
+// "Show very soon" / "Normal interval" were cut to "Show very s…" /
+// "Normal inte…" on the owner's device (2026-09-21), which is worse than no
+// subtitle at all. Wording stays parallel across the four so the eye reads
+// them as one scale.
+export const RATING_ITEMS: ReadonlyArray<{
+  key: ReviewRating;
+  title: string;
+  subtitle: string;
+  styleKey: 'ratingAgain' | 'ratingHard' | 'ratingGood' | 'ratingEasy';
+}> = [
+  { key: 'again', title: 'Again', subtitle: 'Show soon', styleKey: 'ratingAgain' },
+  { key: 'hard', title: 'Hard', subtitle: 'Short gap', styleKey: 'ratingHard' },
+  { key: 'good', title: 'Good', subtitle: 'Normal gap', styleKey: 'ratingGood' },
   { key: 'easy', title: 'Easy', subtitle: 'Much later', styleKey: 'ratingEasy' },
 ];
 
+// The hint changes with the face. Before reveal it asks for the recall
+// attempt; after reveal the old sentence ("…before seeing the answer") kept
+// describing a moment that had already passed, so it now asks the question
+// the four buttons answer.
+export const RATING_HINT = {
+  beforeReveal: 'Think about how well you recalled this before seeing the answer.',
+  afterReveal: 'How well did you recall it?',
+} as const;
+
 export function RatingBar(props: {
   disabled?: boolean;
+  /** Whether the answer is showing. Drives the hint copy only; `disabled` still gates the buttons. */
+  revealed?: boolean;
   testID?: string;
   onRate: (rating: ReviewRating) => void;
 }) {
-  const { disabled = false, testID = 'review-rating-bar', onRate } = props;
+  const { disabled = false, revealed = false, testID = 'review-rating-bar', onRate } = props;
 
   return (
     <View style={styles.wrapper} testID={testID}>
-      <Text style={styles.hint} numberOfLines={2}>
-        Think about how well you recalled this before seeing the answer.
+      <Text style={styles.hint} numberOfLines={2} testID="review-rating-hint">
+        {revealed ? RATING_HINT.afterReveal : RATING_HINT.beforeReveal}
       </Text>
       <View style={styles.grid}>
         {RATING_ITEMS.map((item) => (

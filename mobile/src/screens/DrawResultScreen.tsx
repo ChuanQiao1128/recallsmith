@@ -27,6 +27,7 @@ import {
   rarityHaloColor,
 } from '../theme/packArt';
 import { CEREMONY_COPY_V10 } from '../features/gacha/draw/ceremonyCopy';
+import { formatRank } from '../features/gacha/library/cardRank';
 import { drawResultStyles as styles } from '../features/gacha/components/drawResultStyles';
 import { SHARE_DRAW_TESTID, shareDrawImage, type ShareDrawResult } from '../features/gacha/share/shareDraw';
 import { RATING_PROMPT_DELAY_MS, maybeRequestRating, resolveRatingTrigger } from '../features/gacha/milestones/ratingPrompt';
@@ -497,9 +498,14 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   </View>
 
                   {/* Subtle serial mark — reads as authentic registry, not
-                      a sticker. "REG. 042 / 300" style: ownedAfter / total. */}
-                  <Text style={styles.featuredSerial} numberOfLines={1}>
-                    {`REG. ${String(ownedAfter).padStart(3, '0')} / ${totalCards}`}
+                      a sticker. "No. 011 / 441": this card's rank in the
+                      deck over the deck size, the same number the Library
+                      tile and the session header print for it. It used to
+                      show ownedAfter here, which is the collection bar's
+                      figure, not the card's. Cards without a rank (older
+                      callers) fall back to the collection count. */}
+                  <Text style={styles.featuredSerial} numberOfLines={1} testID="draw-result-featured-serial">
+                    {`No. ${formatRank(typeof featured.rank === 'number' && featured.rank > 0 ? featured.rank : ownedAfter)} / ${totalCards}`}
                   </Text>
 
                   {/* Decorative diagonal shine */}

@@ -294,9 +294,13 @@ describe('economy floor', () => {
       // Before the floor this kind fell through to 'Open library' because the
       // wallet was locked -- a library of silhouettes. It now points at the
       // draw, which is the only action that can change the user's situation.
-      expect(vm.cta.kind).toBe('nothing_to_learn');
+      // The kind is empty_deck (nothing owned), not nothing_to_learn (owned,
+      // nothing scheduled): the floor grants either way, and the CTA names
+      // the first pull rather than a reward draw.
+      expect(vm.cta.kind).toBe('empty_deck');
       expect(vm.draw.state).toBe('available');
       expect(vm.cta.nav).toBe('draw');
+      expect(vm.cta.label).toBe('Open a pack to get your first cards');
     });
 
     it('grants to an account with no deck installed at all', async () => {

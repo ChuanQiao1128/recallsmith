@@ -328,6 +328,68 @@ describe('home primary CTA target', () => {
     expect(executeDeckAction).not.toHaveBeenCalled();
   });
 
+  // Owner's device, 2026-09-21: an installed deck the account had never pulled
+  // from. Home's button offered the library (silhouettes) or a "reward" draw;
+  // neither names the one thing that changes the situation. Both wallet
+  // states land on the same button because the economy floor pays the first
+  // pull on the day the wallet is empty.
+  it.each([
+    ['locked', { availablePulls: 0, reservePulls: 0 }],
+    ['ready', { availablePulls: 25, reservePulls: 0 }],
+  ])('sends an installed deck with no owned cards to Draw with the first-cards label (wallet %s)', async (_label, wallet) => {
+    progressFixture = [];
+    deckSummariesFixture = [
+      {
+        slug: 'csharp',
+        title: 'C# Interview',
+        locale: 'en-US',
+        version: '1',
+        deckType: 1,
+        totalCards: 441,
+        localCards: 441,
+        studyCards: 441,
+        canStudy: true,
+        dueToday: 0,
+        plannedToday: 0,
+        newToday: 0,
+        masteredApprox: 0,
+        masteredCount: 0,
+        ownedCount: 0,
+        percent: 0,
+      },
+    ];
+    walletFixture = wallet;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home' } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const cta = tree.root.find((node) => node.props?.testID === 'home-primary-cta');
+    const ctaLabel = cta
+      .find((node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number')
+      .props.children;
+    expect(ctaLabel).toBe('Open a pack to get your first cards');
+
+    const goalLine = tree.root.find((node) => node.props?.testID === 'home-goal-line');
+    expect(String(goalLine.props.children)).toBe('No cards yet · Open a pack to start');
+
+    await act(async () => {
+      cta.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
+    expect(navigateMock).not.toHaveBeenCalledWith('Library');
+    expect(navigateMock).not.toHaveBeenCalledWith('SessionCard', expect.anything());
+  });
+
   it('keeps the library CTA for an installable deck when the wallet is empty', async () => {
     progressFixture = [];
     deckSummariesFixture = [

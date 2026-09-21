@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildChallengeRoute } from '../../src/features/gacha/planner/sessionBuilder';
-import { countDueToday, pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
+import { buildChallengeRoute, buildSweepRoute, EMPTY_ROUTE_LIMIT } from '../../src/features/gacha/planner/sessionBuilder';
+import { countDueToday, countOwned, pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
 
 const NOW = new Date('2026-04-23T12:00:00.000Z');
 const TODAY_MS = NOW.getTime();
@@ -36,6 +36,7 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
       deckTitle: 'C# Interview',
       dueCount: 3,
       newCount: 2,
+      ownedCount: 40,
     });
 
     expect(challenge.minimumGoal).toBe(1);
@@ -44,17 +45,61 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
     expect(challenge.summary).toMatch(/keep momentum/i);
   });
 
-  it('creates a one-node maintenance route when today is clear', () => {
+  it('creates a one-node maintenance route when today is clear but cards are owned', () => {
     const challenge = buildChallengeRoute({
       slug: 'csharp',
       deckTitle: 'C# Interview',
       dueCount: 0,
       newCount: 0,
+      ownedCount: 12,
     });
 
     expect(challenge.limit).toBe(1);
     expect(challenge.nodes[0]?.role).toBe('warmup');
     expect(challenge.summary).toMatch(/maintenance run/i);
+  });
+
+  it('returns an empty route (limit 0, no nodes) when the account owns no card of the deck', () => {
+    // Owner's device, 2026-09-21: a freshly installed deck with 0 owned / 0 due
+    // / 0 new opened as "Warm-up node 0/1" and then "Route complete". The old
+    // `: 1` maintenance branch could not tell "nothing due" from "nothing owned".
+    const challenge = buildChallengeRoute({
+      slug: 'ccdv-f',
+      deckTitle: 'Claude Developer Foundations',
+      dueCount: 0,
+      newCount: 0,
+      ownedCount: 0,
+    });
+
+    expect(EMPTY_ROUTE_LIMIT).toBe(0);
+    expect(challenge.limit).toBe(EMPTY_ROUTE_LIMIT);
+    expect(challenge.nodes).toEqual([]);
+    expect(challenge.summary).toMatch(/open a pack/i);
+    expect(challenge.summary).not.toMatch(/maintenance run/i);
+  });
+
+  it('never returns limit 0 while at least one card is owned', () => {
+    for (const [due, fresh] of [
+      [0, 0],
+      [0, 1],
+      [1, 0],
+      [3, 2],
+    ]) {
+      const route = buildChallengeRoute({ slug: 'csharp', deckTitle: 'C# Interview', dueCount: due, newCount: fresh, ownedCount: 1 });
+      expect(route.limit).toBeGreaterThanOrEqual(1);
+      expect(route.nodes).toHaveLength(route.limit);
+    }
+  });
+
+  it('gives a sweep with no learned cards an empty route, not a one-node one', () => {
+    const empty = buildSweepRoute({ slug: 'csharp', deckTitle: 'C# Interview', learnedCount: 0, dueCount: 0, newCount: 0 });
+    expect(empty.limit).toBe(EMPTY_ROUTE_LIMIT);
+    expect(empty.nodes).toEqual([]);
+    expect(empty.mode).toBe('sweep');
+
+    const one = buildSweepRoute({ slug: 'csharp', deckTitle: 'C# Interview', learnedCount: 1, dueCount: 0, newCount: 0 });
+    expect(one.limit).toBe(1);
+    expect(one.nodes).toHaveLength(1);
   });
 
   it('derives counts from deck progress', () => {
@@ -65,6 +110,29 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
     expect(planned.limit).toBe(3);
   });
 
+  it('plans an empty route for a gated deck whose owned set admits none of its cards', () => {
+    const planned = planChallengeRoute({ deck: sampleDeck, progress: sampleProgress, now: NOW, ownedSet: new Set() });
+    expect(planned.dueCount).toBe(0);
+    expect(planned.newCount).toBe(0);
+    expect(planned.limit).toBe(EMPTY_ROUTE_LIMIT);
+    expect(planned.nodes).toEqual([]);
+
+    // The same deck with one owned, unscheduled card still plans a maintenance node.
+    const oneOwned = planChallengeRoute({ deck: sampleDeck, progress: sampleProgress, now: NOW, ownedSet: new Set(['3']) });
+    expect(oneOwned.limit).toBe(1);
+
+    const sweep = planChallengeRoute({ deck: sampleDeck, progress: sampleProgress, now: NOW, ownedSet: new Set(), mode: 'sweep' });
+    expect(sweep.limit).toBe(EMPTY_ROUTE_LIMIT);
+  });
+
+  it('countOwned reads the whole progress list ungated and only the admitted uids gated', () => {
+    expect(countOwned(sampleProgress)).toBe(4);
+    expect(countOwned(sampleProgress, null)).toBe(4);
+    expect(countOwned(sampleProgress, new Set())).toBe(0);
+    expect(countOwned(sampleProgress, new Set(['2', '4', 'stranger']))).toBe(2);
+    expect(countOwned([], null)).toBe(0);
+  });
+
   it('does not force a boss node when there is no high-pressure backlog', () => {
     const planned = planChallengeRoute({ deck: sampleDeck, progress: sampleProgress, now: NOW });
     expect(planned.nodes.some((node) => node.role === 'boss')).toBe(false);
@@ -72,7 +140,7 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
 
   it('gives a single new card a one-node route', () => {
     // R6 / F10: due 0 / new 1 must plan exactly one node the user can full-clear.
-    const single = buildChallengeRoute({ slug: 'csharp', deckTitle: 'C# Interview', dueCount: 0, newCount: 1 });
+    const single = buildChallengeRoute({ slug: 'csharp', deckTitle: 'C# Interview', dueCount: 0, newCount: 1, ownedCount: 1 });
     expect(single.limit).toBe(1);
     expect(single.nodes).toHaveLength(1);
     expect(single.nodes[0]?.role).toBe('warmup');
@@ -80,7 +148,7 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
 
   it('grows the route with every new card up to the cap', () => {
     const limitFor = (dueCount: number, newCount: number) =>
-      buildChallengeRoute({ slug: 'csharp', deckTitle: 'C# Interview', dueCount, newCount }).limit;
+      buildChallengeRoute({ slug: 'csharp', deckTitle: 'C# Interview', dueCount, newCount, ownedCount: dueCount + newCount }).limit;
     expect(limitFor(0, 2)).toBe(2);
     expect(limitFor(0, 3)).toBe(3);
     expect(limitFor(0, 7)).toBe(5);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { buildLibraryVM, buildLibraryCardRows } from '../../src/features/gacha/library/libraryMapper';
 import {
+  compareTopicLabels,
   fnv1a32Hex,
   normalizeTopic,
   topicKey,
@@ -149,16 +150,56 @@ describe('library topics', () => {
     expect(filtered.cards.map(uid)).toEqual(['1', '2', '3', '4', '5']);
   });
 
-  it('lists All, each topic in first-seen deck order, then Untagged', () => {
+  it('lists All, each topic sorted by label (not first-seen), then Untagged', () => {
+    // Deck order has IAM on card 1 and Compute / EC2 on card 2; the chips sort
+    // by label anyway. Owner's device, 2026-09-21: AWS chips read "4.1 Cost …,
+    // 1.2 Secure …" because the first card of each domain set the order.
     const vm = buildLibraryVM({ deck, progress: [], now: NOW });
-    expect(vm.topics.map(key)).toEqual(['all', 'iam', 'compute-ec2', 'untagged']);
-    expect(vm.topics.map((chip) => chip.label)).toEqual(['All', 'IAM', 'Compute / EC2', 'Untagged']);
-    expect(vm.topics.map((chip) => chip.count)).toEqual([5, 2, 1, 2]);
+    expect(vm.topics.map(key)).toEqual(['all', 'compute-ec2', 'iam', 'untagged']);
+    expect(vm.topics.map((chip) => chip.label)).toEqual(['All', 'Compute / EC2', 'IAM', 'Untagged']);
+    expect(vm.topics.map((chip) => chip.count)).toEqual([5, 1, 2, 2]);
+  });
+
+  it('sorts numbered topic labels numerically, All first and Untagged last', () => {
+    const numbered = deckFromTopics(['4.1 Cost-optimized storage', '1.2 Secure workloads', null, '1.10 Ten', '1.1 Design', 'D2 Apps', 'D10 Ops', 'D1 Agents', '2.1 Resilient']);
+    const vm = buildLibraryVM({ deck: numbered, progress: [], now: NOW });
+    expect(vm.topics.map((chip) => chip.label)).toEqual([
+      'All',
+      '1.1 Design',
+      '1.2 Secure workloads',
+      '1.10 Ten',
+      '2.1 Resilient',
+      '4.1 Cost-optimized storage',
+      'D1 Agents',
+      'D2 Apps',
+      'D10 Ops',
+      'Untagged',
+    ]);
+    // Grouping follows the chip order.
+    expect(vm.cards.map(uid)).toEqual(['u4', 'u1', 'u3', 'u8', 'u0', 'u7', 'u5', 'u6', 'u2']);
+  });
+
+  it('compareTopicLabels is numeric-aware, case-insensitive and total', () => {
+    const sorted = ['b', 'A', '10', '9', 'D10 x', 'd2 y', '1.10', '1.9', 'a'].sort(compareTopicLabels);
+    // Case ties at base sensitivity and is broken by the plain locale order (lowercase first) so the sort stays total.
+    expect(sorted).toEqual(['1.9', '1.10', '9', '10', 'a', 'A', 'b', 'd2 y', 'D10 x']);
+    // Case-insensitive at the primary level: 'b' does not jump ahead of 'A' the way a code-point sort would put it.
+    expect(['b', 'A', 'c', 'B'].sort(compareTopicLabels)).toEqual(['A', 'b', 'B', 'c']);
+    expect(compareTopicLabels('iam', 'JAM')).toBeLessThan(0);
+    expect(compareTopicLabels('1.2 Secure', '1.10 Design')).toBeLessThan(0);
+    expect(compareTopicLabels('D2', 'D10')).toBeLessThan(0);
+    fc.assert(
+      fc.property(fc.string(), fc.string(), (a, b) => {
+        // + 0 folds -0 into 0: toBe is Object.is, and -Math.sign(0) is -0.
+        expect(Math.sign(compareTopicLabels(a, b)) + 0).toBe(-Math.sign(compareTopicLabels(b, a)) + 0);
+        expect(compareTopicLabels(a, a)).toBe(0);
+      }),
+    );
   });
 
   it('orders cards by topic group then orderInDeck when any topic exists', () => {
     const vm = buildLibraryVM({ deck, progress: [], now: NOW });
-    expect(vm.cards.map(uid)).toEqual(['1', '4', '2', '3', '5']);
+    expect(vm.cards.map(uid)).toEqual(['2', '1', '4', '3', '5']);
     expect(vm.filters.map(key)).toEqual(['all', 'new', 'learning', 'mastered', 'rare', 'legendary']);
   });
 
@@ -171,11 +212,11 @@ describe('library topics', () => {
     expect(untagged.cards.map(uid)).toEqual(['3', '5']);
 
     const all = buildLibraryVM({ deck, progress: [], now: NOW, topicFilter: 'all' });
-    expect(all.cards.map(uid)).toEqual(['1', '4', '2', '3', '5']);
+    expect(all.cards.map(uid)).toEqual(['2', '1', '4', '3', '5']);
     expect(all.topicFilter).toBe(null);
 
     const nope = buildLibraryVM({ deck, progress: [], now: NOW, topicFilter: 'nope' });
-    expect(nope.cards.map(uid)).toEqual(['1', '4', '2', '3', '5']);
+    expect(nope.cards.map(uid)).toEqual(['2', '1', '4', '3', '5']);
     expect(nope.topicFilter).toBe(null);
   });
 
@@ -184,14 +225,14 @@ describe('library topics', () => {
     expect(rareIam.cards.map(uid)).toEqual(['4']);
 
     const rareAll = buildLibraryVM({ deck, progress: [], now: NOW, filter: 'rare' });
-    expect(rareAll.cards.map(uid)).toEqual(['4', '2']);
+    expect(rareAll.cards.map(uid)).toEqual(['2', '4']);
   });
 
-  it('appends topic last on every row and the two new keys last on the VM', () => {
+  it('appends topic then rank last on every row and the two new keys last on the VM', () => {
     const rows = buildLibraryCardRows({ deck, progress: [], now: NOW });
     const rowKeys = Object.keys(rows[0]);
-    expect(rowKeys.length).toBe(13);
-    expect(rowKeys.slice(-2)).toEqual(['isUpdated', 'topic']);
+    expect(rowKeys.length).toBe(14);
+    expect(rowKeys.slice(-3)).toEqual(['isUpdated', 'topic', 'rank']);
 
     const vm = buildLibraryVM({ deck, progress: [], now: NOW });
     expect(Object.keys(vm)).toEqual([

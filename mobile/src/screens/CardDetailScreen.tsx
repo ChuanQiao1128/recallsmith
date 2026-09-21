@@ -11,6 +11,7 @@ import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 import { packPaletteFromSlug } from '../theme/packArt';
+import { formatRank, rankCardsByOrder } from '../features/gacha/library/cardRank';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CardDetail'>;
 
@@ -176,12 +177,14 @@ export function CardDetailScreen({ navigation, route }: Props) {
   // The Library's silhouette tile makes the same trade: the registry admits
   // the card exists, the pull is still the moment you learn what it says.
   const title = isLocked ? 'Not in your collection yet' : (card?.Question ?? fallbackTitle);
-  const slot = card?.OrderInDeck ?? 0;
+  // Rank in the deck, not OrderInDeck: the tile the user just tapped says
+  // "#011" and this page has to say the same thing about the same card.
+  const slot = card && deck ? (rankCardsByOrder(deck.Cards ?? []).get(card.StableUid) ?? 0) : 0;
   const difficulty = card?.Difficulty ?? 1;
   const rarity = rarityFromDifficulty(difficulty);
   const status = masteryStatus(cardProgress?.stage);
   const tag = (card as any)?.Tag ?? deck?.Title ?? '';
-  const slotLabel = `#${String(slot).padStart(3, '0')}`;
+  const slotLabel = `#${formatRank(slot)}`;
   const totalInDeck = deck?.Cards?.length ?? 0;
   const lastSeen = formatRelativeTime(cardProgress?.lastReviewedAt);
   const nextReview = formatNextReview(cardProgress?.nextReviewAt);
@@ -268,7 +271,7 @@ export function CardDetailScreen({ navigation, route }: Props) {
               {/* Subtle serial mark — replaces the rotated OFFICIAL ★ stamp.
                   Reads as authentic registry, not a try-hard sticker. */}
               <Text style={styles.heroSerial} numberOfLines={1}>
-                {`REG. ${String(slot).padStart(3, '0')}${totalInDeck > 0 ? ` / ${totalInDeck}` : ''}`}
+                {`No. ${formatRank(slot)}${totalInDeck > 0 ? ` / ${totalInDeck}` : ''}`}
               </Text>
             </LinearGradient>
           </View>

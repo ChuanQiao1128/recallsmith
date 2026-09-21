@@ -21,6 +21,9 @@ const COPY = {
   loading: 'Preparing today’s challenge...',
   unavailableTitle: 'Challenge unavailable',
   unavailableFallback: 'Unable to build today’s route.',
+  emptyDeckTitle: 'No cards yet',
+  emptyDeckBody: 'Open a pack to get your first cards.',
+  emptyDeckCta: 'Open a pack to get your first cards',
   backHome: '← Home',
   routeEyebrow: 'Today’s challenge',
   minimumLabel: 'Stay on streak',
@@ -109,6 +112,38 @@ export function ChallengeScreen({ navigation, route }: Props) {
             <Text style={styles.loadingText} numberOfLines={1}>
               {COPY.loading}
             </Text>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+  if (challengeRoute && challengeRoute.limit === 0) {
+    // Planner said EMPTY_ROUTE_LIMIT: nothing owned, so "0 cards ahead" and a
+    // Begin button would advertise a run SessionCard refuses to start.
+    return (
+      <SafeAreaView testID="screen-challenge-root" style={styles.safeArea}>
+        <LinearGradient
+          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.center} testID="challenge-empty-deck">
+            <Text style={styles.title} numberOfLines={2}>
+              {COPY.emptyDeckTitle}
+            </Text>
+            <Text style={styles.subtitle} numberOfLines={2}>
+              {COPY.emptyDeckBody}
+            </Text>
+            <Pressable
+              testID="challenge-empty-deck-cta"
+              style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+              onPress={() => navigation.navigate('Draw', { slug: challengeRoute.slug, rewardPending: true })}
+            >
+              <Text style={styles.primaryButtonText} numberOfLines={1}>
+                {COPY.emptyDeckCta}
+              </Text>
+            </Pressable>
           </View>
         </LinearGradient>
       </SafeAreaView>

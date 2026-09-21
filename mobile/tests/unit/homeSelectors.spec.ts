@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildHomeScreenVM,
   buildHomeVM,
+  EMPTY_DECK_CTA_LABEL,
+  ownedCountOf,
   type HomeCtaKind,
 } from '../../src/features/gacha/selectors/homeSelectors';
 import type { DeckSummary } from '../../src/features/gacha/contracts';
@@ -29,6 +31,7 @@ function makeDeck(overrides: Partial<DeckSummary> = {}): DeckSummary {
 describe('buildHomeVM CTA kinds', () => {
   const allKinds: HomeCtaKind[] = [
     'first_run',
+    'empty_deck',
     'today_pending',
     'today_partial',
     'today_done',
@@ -241,6 +244,90 @@ describe('buildHomeVM CTA kinds', () => {
 
     expect(vm.draw.state).toBe('wallet-full');
     expect(vm.draw.label).toMatch(/Wallet full/i);
+  });
+
+  describe('empty deck (installed, nothing owned)', () => {
+    // Owner's device, 2026-09-21: a fresh CCDV-F install with 0 owned / 0 due
+    // / 0 new previewed "Warm-up node 0/1" and the primary button offered the
+    // library. There is exactly one next step for that deck: open a pack.
+    const emptyDeck = () => makeDeck({ dueToday: 0, newToday: 0, masteredApprox: 0, masteredCount: 0, ownedCount: 0, percent: 0 });
+
+    it('reads the owned count from the field, falling back to learned + fresh', () => {
+      expect(ownedCountOf(makeDeck({ ownedCount: 3 }))).toBe(3);
+      expect(ownedCountOf(makeDeck({ masteredApprox: 8, newToday: 2 }))).toBe(10);
+      expect(ownedCountOf(makeDeck({ masteredApprox: 0, newToday: 0 }))).toBe(0);
+      expect(ownedCountOf(makeDeck({ ownedCount: Number.NaN, masteredApprox: 1, newToday: 1 }))).toBe(2);
+    });
+
+    it('sends the primary CTA to the draw with the first-cards label, even with a locked wallet', () => {
+      for (const wallet of [
+        { availablePulls: 0, reservePulls: 0 },
+        { availablePulls: 1, reservePulls: 0 },
+        { availablePulls: 60, reservePulls: 5 },
+      ]) {
+        const vm = buildHomeVM({ selectedSlug: 'csharp', hasSignedInUser: true, deckSummaries: [emptyDeck()], wallet });
+        expect(vm.statusKind).toBe('empty_deck');
+        expect(vm.cta.kind).toBe('empty_deck');
+        expect(vm.cta.nav).toBe('draw');
+        expect(vm.cta.label).toBe(EMPTY_DECK_CTA_LABEL);
+        expect(vm.cta.label).toBe('Open a pack to get your first cards');
+        expect(vm.cta.disabled).toBe(false);
+      }
+    });
+
+    it('never builds a route preview and reports zero nodes', () => {
+      const vm = buildHomeVM({
+        selectedSlug: 'csharp',
+        hasSignedInUser: true,
+        deckSummaries: [emptyDeck()],
+        wallet: { availablePulls: 0, reservePulls: 0 },
+      });
+      expect(vm.routePreview).toEqual([]);
+      expect(vm.counts.normalCount + vm.counts.eliteCount + vm.counts.bossCount).toBe(0);
+      expect(vm.goal.minimum).toBe('No cards yet');
+      expect(vm.goal.fullClear).toBe('Open a pack to start');
+      expect(vm.hero.headline).toBe('No cards in C# Interview yet');
+      expect(vm.hero.subline).toMatch(/open a pack/i);
+      // Locked wallet: the badge says what the floor will do, without claiming cards are "due".
+      expect(vm.draw.state).toBe('locked');
+      expect(vm.draw.label).toBe('No cards yet · a free pull returns tomorrow');
+      expect(vm.drawStatusLabel).toBe('No cards yet · a free pull returns tomorrow');
+    });
+
+    it('outranks runtime status: nothing can have been completed in a deck with no cards', () => {
+      const vm = buildHomeVM({
+        selectedSlug: 'csharp',
+        hasSignedInUser: true,
+        deckSummaries: [emptyDeck()],
+        wallet: { availablePulls: 2, reservePulls: 0 },
+        runtimeStatus: { qualifiedToday: true, completedToday: 2, completedRouteToday: true },
+      });
+      expect(vm.cta.kind).toBe('empty_deck');
+      expect(vm.cta.nav).toBe('draw');
+    });
+
+    it('does not fire for a caught-up deck that owns cards (nothing_to_learn keeps its CTA)', () => {
+      const vm = buildHomeVM({
+        selectedSlug: 'csharp',
+        hasSignedInUser: true,
+        deckSummaries: [makeDeck({ dueToday: 0, newToday: 0, masteredApprox: 8 })],
+        wallet: { availablePulls: 0, reservePulls: 0 },
+      });
+      expect(vm.cta.kind).toBe('nothing_to_learn');
+      expect(vm.cta.label).toBe('Open library');
+      expect(vm.routePreview).toHaveLength(1);
+    });
+
+    it('does not fire for a deck that is not studiable (first_run keeps the library)', () => {
+      const vm = buildHomeVM({
+        selectedSlug: 'csharp',
+        hasSignedInUser: true,
+        deckSummaries: [makeDeck({ canStudy: false, dueToday: 0, newToday: 0, masteredApprox: 0, ownedCount: 0 })],
+        wallet: { availablePulls: 0, reservePulls: 0 },
+      });
+      expect(vm.cta.kind).toBe('first_run');
+      expect(vm.cta.nav).toBe('library');
+    });
   });
 
   it('keeps a usable primary CTA when no deck is available', () => {

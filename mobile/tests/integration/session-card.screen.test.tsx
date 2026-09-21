@@ -816,4 +816,112 @@ describe('SessionCardScreen', () => {
       expect(String(line[0].props.children)).toMatch(/^At this pace, about \d+ cards? comes? due tomorrow\.$/);
     });
   });
+
+  // Owner's device, 2026-09-21 (screenshots 06/07/15): a freshly installed
+  // deck opened as "Warm-up node 0/1" over nothing, the dock kept the
+  // pre-reveal hint after reveal, and the code sample bled through the
+  // 95 %-alpha dock.
+  describe('empty deck, hint copy, rank badge and dock surface (polish 2)', () => {
+    function mount(params: Record<string, unknown> = {}) {
+      const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+      let tree!: renderer.ReactTestRenderer;
+      return (async () => {
+        await act(async () => {
+          tree = renderer.create(
+            <SessionCardScreen
+              navigation={navigation}
+              route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode: 'mixed', ...params } } as any}
+            />,
+          );
+        });
+        await flush();
+        return { tree, navigation };
+      })();
+    }
+
+    const byTestID = (tree: renderer.ReactTestRenderer, testID: string) =>
+      tree.root.findAll((node) => node.props?.testID === testID && typeof node.type === 'string');
+
+    it('shows the draw empty state and never starts a session when the planner answers limit 0', async () => {
+      vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 0, nodes: [], dueCount: 0, newCount: 0 }) as any);
+      vi.mocked(pickNextCard).mockReturnValue(null);
+      const { tree, navigation } = await mount();
+
+      expect(byTestID(tree, 'session-card-empty-deck')).toHaveLength(1);
+      expect(findTextByLabel(tree, 'Open a pack to get your first cards')).toHaveLength(1);
+      // No route, no run header, no rating dock, no route-complete card.
+      expect(useSessionStore.getState().sessionId).toBeNull();
+      expect(useSessionStore.getState().route).toEqual([]);
+      expect(findTextByLabel(tree, 'Route complete')).toHaveLength(0);
+      expect(findTextByLabel(tree, 'Continue')).toHaveLength(0);
+      expect(byTestID(tree, 'review-rating-dock')).toHaveLength(0);
+      expect(JSON.stringify(tree.toJSON())).not.toContain('0/1');
+      expect(pickNextCard).not.toHaveBeenCalled();
+
+      act(() => {
+        findPressableByLabel(tree, 'Open a pack to get your first cards').props.onPress();
+      });
+      expect(navigation.navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
+      expect(navigation.replace).not.toHaveBeenCalled();
+    });
+
+    it('still starts a one-node maintenance run for limit 1 with no card to pick (route-complete path is untouched)', async () => {
+      vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 1, dueCount: 0, newCount: 0 }) as any);
+      vi.mocked(pickNextCard).mockReturnValue(null);
+      const { tree } = await mount();
+      expect(byTestID(tree, 'session-card-empty-deck')).toHaveLength(0);
+      expect(findTextByLabel(tree, 'Route complete')).toHaveLength(1);
+      expect(useSessionStore.getState().sessionId).toBeTruthy();
+    });
+
+    it('switches the dock hint from the recall prompt to the rating question on reveal', async () => {
+      const { tree } = await mount({ limit: 1 });
+      const hint = () => byTestID(tree, 'review-rating-hint')[0].props.children;
+
+      expect(hint()).toBe('Think about how well you recalled this before seeing the answer.');
+      await act(async () => {
+        findPressableByLabel(tree, 'Reveal answer').props.onPress();
+        await Promise.resolve();
+      });
+      expect(hint()).toBe('How well did you recall it?');
+      await act(async () => {
+        findPressableByLabel(tree, 'Hide').props.onPress();
+        await Promise.resolve();
+      });
+      expect(hint()).toBe('Think about how well you recalled this before seeing the answer.');
+    });
+
+    it('prints the deck rank in the header badge, not the raw OrderInDeck', async () => {
+      // Sparse authoring keys, shuffled: the 780 card is 2nd of 3 in deck order.
+      vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck({
+        TotalCards: 3,
+        Cards: [
+          { StableUid: 'c', OrderInDeck: 3700, Difficulty: 1, Question: 'Q3' },
+          { StableUid: 'a', OrderInDeck: 5, Difficulty: 1, Question: 'Q1' },
+          { StableUid: 'b', OrderInDeck: 780, Difficulty: 1, Question: 'Q2' },
+        ],
+      }) as any);
+      vi.mocked(pickNextCard).mockReturnValue({
+        card: { StableUid: 'b', OrderInDeck: 780, Difficulty: 1, Question: 'Q2' },
+        progress: { stableUid: 'b', stage: 0, nextReviewAt: 0 },
+      } as any);
+      const { tree } = await mount({ limit: 1 });
+      const badge = byTestID(tree, 'review-order-badge');
+      expect(badge).toHaveLength(1);
+      expect(badge[0].props.children).toBe('#002');
+      expect(JSON.stringify(tree.toJSON())).not.toContain('#780');
+    });
+
+    it('gives the rating dock an opaque surface with a top hairline and an upward shadow', async () => {
+      const { tree } = await mount({ limit: 1 });
+      const dock = byTestID(tree, 'review-rating-dock')[0];
+      const style = Object.assign({}, ...[dock.props.style].flat(Infinity).filter(Boolean));
+      expect(style.backgroundColor).toBe('#FAF3E0');
+      expect(String(style.backgroundColor)).not.toMatch(/rgba/);
+      expect(style.borderTopWidth).toBe(1);
+      expect(style.borderTopColor).toBeTruthy();
+      expect(style.shadowOffset).toEqual({ width: 0, height: -4 });
+      expect(style.shadowOpacity).toBeGreaterThan(0);
+    });
+  });
 });
