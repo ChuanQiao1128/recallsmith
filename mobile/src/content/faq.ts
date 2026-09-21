@@ -1,6 +1,7 @@
 // The user-facing FAQ shown on the Help tab. Every fact here is pulled
-// from the shipping economy, not the design deck: +1 pull per fully
-// cleared review (rewardResolver.ts), 3 starter pulls (rewardWallet.ts),
+// from the shipping economy, not the design deck: 1 pull per new card
+// learned (first Hard+ rating, R1) and 1 pull a day for clearing today's
+// due cards (R2), both settled in sessionRewards.ts, 3 starter pulls (rewardWallet.ts),
 // the 1-pull daily floor (economyFloor.ts), pity after 10 Commons
 // (pity.ts), uniform-no-duplicate draws, light-only UI (app.json), iOS
 // only. Wording follows home-review-and-launch-copy §2.9 version A and
@@ -11,11 +12,11 @@ export type FaqEntry = { q: string; a: string };
 export const FAQ_LIST: readonly FaqEntry[] = [
   {
     q: 'How do I earn pulls?',
-    a: "Fully clear today's review and you earn 1 pull. New accounts start with 3 starter pulls, and if you have no cards left to study and no pulls, a 1-pull daily floor keeps you going. Pulls are never sold.",
+    a: "Every new card you learn earns 1 pull the first time you rate it Hard or better, and clearing all of today's due cards earns 1 more, once a day. New accounts start with 3 starter pulls, and if you have no cards left to study and no pulls, a 1-pull daily floor keeps you going. Pulls are never sold.",
   },
   {
     q: 'Why is Draw locked?',
-    a: "Draw locks when you have no pulls to spend. Clear today's review to earn one, or wait for the daily floor pull if you have nothing left to study.",
+    a: "Draw locks when you have no pulls to spend. Learn a new card to earn one, or wait for the daily floor pull if you have nothing left to study.",
   },
   {
     q: 'What is pity?',

@@ -48,7 +48,7 @@ describe('buildHomeVM CTA kinds', () => {
       errorMessage: kind === 'error' ? 'boom' : null,
       wallet:
         kind === 'wallet_full'
-          ? { availablePulls: 30, reservePulls: 5 }
+          ? { availablePulls: 60, reservePulls: 5 }
           : { availablePulls: 0, reservePulls: 0 },
     });
 
@@ -132,7 +132,7 @@ describe('buildHomeVM CTA kinds', () => {
       selectedSlug: 'csharp',
       hasSignedInUser: true,
       deckSummaries: [makeDeck({ dueToday: 2, newToday: 1 })],
-      wallet: { availablePulls: 30, reservePulls: 5 },
+      wallet: { availablePulls: 60, reservePulls: 5 },
     });
 
     expect(vm.cta.kind).toBe('wallet_full');
@@ -236,7 +236,7 @@ describe('buildHomeVM CTA kinds', () => {
       selectedSlug: 'csharp',
       hasSignedInUser: true,
       deckSummaries: [makeDeck({ dueToday: 0, newToday: 0 })],
-      wallet: { availablePulls: 30, reservePulls: 5 },
+      wallet: { availablePulls: 60, reservePulls: 5 },
     });
 
     expect(vm.draw.state).toBe('wallet-full');
@@ -290,7 +290,7 @@ describe('Home copy glossary', () => {
     });
 
     expect(vm.hero.subline).toBe(
-      'Review today’s cards to earn pulls · at most 5 cards.',
+      'Each new card you learn earns a pull · up to 5 cards a run.',
     );
     expect(vm.hero.subline).not.toMatch(/normal|elite|boss|pressure|route|node/i);
   });
@@ -329,7 +329,7 @@ describe('Home copy glossary', () => {
 
     expect(onePull.draw.label).toBe('1 pull ready · 2 more waiting');
     expect(twoPulls.draw.label).toBe('2 pulls ready · 3 more waiting');
-    expect(locked.draw.label).toBe('Review today’s cards to earn a pull');
+    expect(locked.draw.label).toBe('Learn a new card to earn a pull');
   });
 
   it('deck rows say new, not fresh', () => {

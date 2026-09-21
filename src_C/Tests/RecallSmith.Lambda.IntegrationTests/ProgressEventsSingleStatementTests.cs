@@ -65,7 +65,9 @@ public class ProgressEventsSingleStatementTests
     IEnumerable<object> events,
     string? deviceId = "device-under-test",
     string? clientVersion = "1.2.3",
-    string? clientPlatform = "ios")
+    string? clientPlatform = "ios",
+    IReadOnlyList<string>? clientFeatures = null,
+    string? updateId = null)
   {
     var body = new Dictionary<string, object?>(StringComparer.Ordinal)
     {
@@ -75,6 +77,8 @@ public class ProgressEventsSingleStatementTests
     if (deviceId is not null) body["deviceId"] = deviceId;
     if (clientVersion is not null) body["clientVersion"] = clientVersion;
     if (clientPlatform is not null) body["clientPlatform"] = clientPlatform;
+    if (clientFeatures is not null) body["clientFeatures"] = clientFeatures;
+    if (updateId is not null) body["updateId"] = updateId;
 
     return body;
   }
@@ -441,6 +445,41 @@ public class ProgressEventsSingleStatementTests
 
     // Named separately from the count so that a returning shell reads as what
     // it is rather than as an off-by-one.
+    Assert.DoesNotContain(
+      onIngestBackend,
+      l => l.Sql.StartsWith("BEGIN", StringComparison.OrdinalIgnoreCase)
+        || l.Sql.StartsWith("COMMIT", StringComparison.OrdinalIgnoreCase)
+        || l.Sql.StartsWith("ROLLBACK", StringComparison.OrdinalIgnoreCase));
+  }
+
+  /// <summary>
+  /// The two envelope markers ride the same single statement as everything else.
+  /// clientFeatures and updateId add two payload keys and two bound parameters,
+  /// not a second write: a second billable statement here would be the
+  /// transaction shell F5 removed growing back under a new name.
+  /// </summary>
+  [Fact]
+  public async Task OneIngest_WithClientFeaturesAndUpdateId_IsStillOneStatement()
+  {
+    var user = NewUser("f5b");
+    await WarmAsync(user, 3);
+
+    var onIngestBackend = await ProbeIngestAsync(() =>
+      LambdaHost.PostProgressEventsAsync(user, Batch(
+        [Ev(NewEventId(), "card-caps", 4, Base + 6000)],
+        clientFeatures: ["mcq"],
+        updateId: "0b6c3f52-1c3f-4a3b-9c8e-7f0d2a1b4c5d")));
+
+    var billable = onIngestBackend.Where(l => !IsConnectionReset(l)).ToList();
+
+    Assert.True(
+      billable.Count == 1,
+      $"expected exactly one statement per ingest, saw {billable.Count}:\n{Render(onIngestBackend)}");
+
+    var sql = billable[0].Sql;
+    Assert.Contains("client_features", sql, StringComparison.Ordinal);
+    Assert.Contains("update_id", sql, StringComparison.Ordinal);
+
     Assert.DoesNotContain(
       onIngestBackend,
       l => l.Sql.StartsWith("BEGIN", StringComparison.OrdinalIgnoreCase)

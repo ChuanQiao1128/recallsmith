@@ -85,7 +85,18 @@ describe('SessionSummaryScreen', () => {
     warnSpy.mockRestore();
   });
 
-  it('applies the reward to the wallet once and shows wallet-aware copy', async () => {
+  const ONE_NEW_CARD_REWARD = {
+    newCardPulls: 1,
+    newCardUids: ['u1'],
+    dueClearPulls: 0 as const,
+    rewardPulls: 1,
+    applied: 1,
+    dropped: 0,
+    walletBefore: { availablePulls: 0, reservePulls: 0 },
+    walletAfter: { availablePulls: 1, reservePulls: 0 },
+  };
+
+  it('shows the outcome reward copy and never writes the wallet', async () => {
     const navigation = {
       navigate: vi.fn(),
     } as any;
@@ -107,6 +118,7 @@ describe('SessionSummaryScreen', () => {
               minimumGoal: 1,
               dueCount: 3,
               streakEarned: true,
+              reward: ONE_NEW_CARD_REWARD,
             },
           } as any}
         />,
@@ -148,8 +160,8 @@ describe('SessionSummaryScreen', () => {
     expect(secondaryTextStyle.fontSize).toBeLessThan(primaryTextStyle.fontSize as number);
 
     const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
-    // v3 reward calibration: full clear → +1 free pull (was +2).
-    expect(texts).toContain('+1 free pull');
+    // economy-v2: the pull is paid at rating; the summary only renders the outcome.
+    expect(texts).toContain('+1 pull · 1 new card learned');
     expect(texts).toContain('1 ready to use');
     expect(texts).toContain('Daily streak');
     expect(texts).toContain('First day complete');
@@ -170,6 +182,7 @@ describe('SessionSummaryScreen', () => {
               minimumGoal: 1,
               dueCount: 3,
               streakEarned: true,
+              reward: ONE_NEW_CARD_REWARD,
             },
           } as any}
         />,
@@ -178,12 +191,10 @@ describe('SessionSummaryScreen', () => {
       await Promise.resolve();
     });
 
-    // Wallet keys are user-scoped; no user is signed in under test, so
-    // the scope resolves to "anon".
-    const walletRaw = store.get('devcards:u:anon:recallsmith:reward-wallet:v1');
-    expect(walletRaw).toBeTruthy();
-    // v3: full clear → +1 pull persisted to wallet (was +2).
-    expect(JSON.parse(walletRaw!)).toEqual({ availablePulls: 1, reservePulls: 0 });
+    // The summary no longer writes the wallet; the pull was already banked at
+    // rating time. Wallet keys are user-scoped; no user is signed in under test,
+    // so the scope resolves to "anon".
+    expect(store.has('devcards:u:anon:recallsmith:reward-wallet:v1')).toBe(false);
 
     act(() => {
       findPressableByTestID(tree, 'summary-reward-use-pulls-cta').props.onPress();
@@ -192,7 +203,7 @@ describe('SessionSummaryScreen', () => {
   });
 
   it('shows an error branch and retries reward resolution without navigating away', async () => {
-    const applyRewardSpy = vi.spyOn(rewardWallet, 'applySessionRewardToWallet').mockRejectedValueOnce(new Error('network error'));
+    const loadWalletSpy = vi.spyOn(rewardWallet, 'loadRewardWalletState').mockRejectedValueOnce(new Error('network error'));
     const navigation = {
       navigate: vi.fn(),
     } as any;
@@ -241,16 +252,16 @@ describe('SessionSummaryScreen', () => {
 
     texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
     expect(texts).not.toContain('Unable to refresh reward and streak details right now.');
-    expect(applyRewardSpy).toHaveBeenCalledTimes(2);
-    applyRewardSpy.mockRestore();
+    expect(loadWalletSpy).toHaveBeenCalledTimes(2);
+    loadWalletSpy.mockRestore();
   });
 
   it('keeps the primary CTA disabled while reward resolution is loading', async () => {
-    let resolveReward!: (value: Awaited<ReturnType<typeof rewardWallet.applySessionRewardToWallet>>) => void;
-    const pendingReward = new Promise<Awaited<ReturnType<typeof rewardWallet.applySessionRewardToWallet>>>((resolve) => {
+    let resolveReward!: (value: Awaited<ReturnType<typeof rewardWallet.loadRewardWalletState>>) => void;
+    const pendingReward = new Promise<Awaited<ReturnType<typeof rewardWallet.loadRewardWalletState>>>((resolve) => {
       resolveReward = resolve;
     });
-    const applyRewardSpy = vi.spyOn(rewardWallet, 'applySessionRewardToWallet').mockReturnValueOnce(pendingReward);
+    const loadWalletSpy = vi.spyOn(rewardWallet, 'loadRewardWalletState').mockReturnValueOnce(pendingReward);
 
     const navigation = {
       navigate: vi.fn(),
@@ -292,19 +303,7 @@ describe('SessionSummaryScreen', () => {
     expect(navigation.navigate).not.toHaveBeenCalled();
 
     await act(async () => {
-      resolveReward({
-        walletBefore: { availablePulls: 0, reservePulls: 0 },
-        walletAfter: { availablePulls: 1, reservePulls: 0 },
-        applied: {
-          availablePulls: 1,
-          reservePulls: 0,
-          appliedToAvailable: 1,
-          appliedToReserve: 0,
-          dropped: 0,
-          rewardPulls: 1,
-        },
-        alreadyApplied: false,
-      });
+      resolveReward({ availablePulls: 1, reservePulls: 0 });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -314,8 +313,8 @@ describe('SessionSummaryScreen', () => {
 
     texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
     expect(texts).not.toContain('Updating...');
-    expect(applyRewardSpy).toHaveBeenCalledTimes(1);
-    applyRewardSpy.mockRestore();
+    expect(loadWalletSpy).toHaveBeenCalledTimes(1);
+    loadWalletSpy.mockRestore();
   });
 
   it('uses neutral empty-state library copy without session setup language', async () => {
@@ -406,5 +405,68 @@ describe('SessionSummaryScreen', () => {
     const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
     expect(texts).toContain('Three clean runs');
     expect(texts).toContain('+1 more milestone unlocked');
+  });
+
+  it('renders the tomorrow-load forecast line under the reward card only when the run ended on a milestone', async () => {
+    const LINE = 'At this pace, about 12 cards come due tomorrow.';
+    const baseParams = {
+      sessionId: 'sess-forecast',
+      slug: 'csharp',
+      deckTitle: 'C# Interview',
+      sessionDone: 20,
+      sessionLimit: 20,
+      minimumGoal: 1,
+      dueCount: 0,
+      streakEarned: true,
+      reward: ONE_NEW_CARD_REWARD,
+    };
+    const findLine = (tree: renderer.ReactTestRenderer) =>
+      tree.root.findAll((node) => (node.type as any) === 'Text' && node.props?.testID === 'session-summary-load-forecast');
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionSummaryScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'summary', name: 'SessionSummary', params: { ...baseParams, loadForecast: LINE } } as any}
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const line = findLine(tree);
+    expect(line).toHaveLength(1);
+    expect(getTextContent(line[0])).toBe(LINE);
+    expect(line[0].props.numberOfLines).toBe(2);
+
+    // Order on the page: reward card, then the forecast, then the progress block.
+    // Host nodes only: a testID prop also sits on the composite wrappers above each host View.
+    const order = tree.root
+      .findAll(
+        (node) =>
+          typeof node.type === 'string' &&
+          ['summary-reward-block', 'session-summary-load-forecast', 'summary-progress-block'].includes(node.props?.testID),
+      )
+      .map((node) => node.props.testID);
+    expect(order).toEqual(['summary-reward-block', 'session-summary-load-forecast', 'summary-progress-block']);
+
+    // No param (the run did not end on a milestone): nothing renders.
+    let plain!: renderer.ReactTestRenderer;
+    await act(async () => {
+      plain = renderer.create(
+        <SessionSummaryScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'summary-2', name: 'SessionSummary', params: baseParams } as any}
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(findLine(plain)).toHaveLength(0);
   });
 });

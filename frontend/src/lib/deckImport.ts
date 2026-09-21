@@ -8,8 +8,14 @@
 //   # deck: csharp-backend-fundamentals
 //
 //   ## cs-async-001 | d2
+//   TOPIC: <one line, optional, max 80 chars>
+//   QUALIFIER: <one line, optional; an MCQ card only>
 //   Q:
 //   <question lines>
+//   OPT: <a-f>            (an MCQ card only; "OPT: <a-f> *" marks a correct option)
+//   <option lines>
+//   WHY:                  (explains the OPT: above it; required for a wrong option)
+//   <why lines>
 //   A:
 //   <explanation lines>
 //   CODE: csharp
@@ -28,7 +34,9 @@
 //    keeps "insert a blank line to make it readable" a safe edit for authors.
 
 import type { Card } from '../types/card';
+import type { McqBlob } from '../types/mcq';
 import { hasContent, isValidDifficulty, isValidStableUid } from './cardRules';
+import { validateMcq, normalizeMcqForCompare, mcqOf, OPT_PAYLOAD, type McqIssueCode } from './mcqRules';
 
 // ---------------------- types ----------------------
 
@@ -41,6 +49,10 @@ export interface DeckCardContent {
   codeSnippet: string | null;
   codeLanguage: string | null;
   realWorldUsage: string | null;
+  /** Optional grouping label (server column cards.topic). ABSENT, never null, when the card has no TOPIC: line. */
+  topic?: string;
+  /** MCQ payload (server column cards.mcq). ABSENT, never null, on a Q/A card (a card with no OPT:/WHY:/QUALIFIER: line). */
+  mcq?: McqBlob;
 }
 
 export interface ParsedCard extends DeckCardContent {
@@ -63,7 +75,11 @@ export type ImportIssueCode =
   | 'MISSING_QUESTION'
   | 'MISSING_ANSWER'
   | 'TEXT_BEFORE_CARD'
-  | 'TEXT_BEFORE_SECTION';
+  | 'TEXT_BEFORE_SECTION'
+  | 'BAD_TOPIC'
+  | 'DUPLICATE_TOPIC'
+  | McqIssueCode
+  | 'MCQ_DUPLICATE_QUALIFIER';
 
 export interface ImportIssue {
   code: ImportIssueCode;
@@ -95,7 +111,9 @@ export type ComparableField =
   | 'explanation'
   | 'codeSnippet'
   | 'codeLanguage'
-  | 'realWorldUsage';
+  | 'realWorldUsage'
+  | 'topic'
+  | 'mcq';
 
 export interface ImportCreate {
   kind: 'create';
@@ -139,6 +157,19 @@ const QUESTION_MARKER = /^Q:[ \t]?(.*)$/;
 const ANSWER_MARKER = /^A:[ \t]?(.*)$/;
 const CODE_MARKER = /^CODE:[ \t]?(.*)$/;
 const USAGE_MARKER = /^USAGE:[ \t]?(.*)$/;
+// Loose on purpose (MCQ plan §4.4): a column-0 "TOPIC:" line is always this marker,
+// and the payload is validated afterwards, so a bad topic is reported instead of being
+// glued to the open section by the catch-all at the end of the loop.
+const TOPIC_MARKER = /^TOPIC:(.*)$/;
+/** Same limit as the server's Helpers.ParseOptionalTopic (C05): measured on the trimmed payload. */
+export const TOPIC_MAX_LENGTH = 80;
+// Loose on purpose (MCQ plan §4.4): a column-0 OPT:/WHY:/QUALIFIER: line is always
+// its marker, and the payload is validated afterwards, so a mistyped "OPT: g" is
+// reported at its own line instead of being glued to the open section by the
+// catch-all at the end of the loop.
+const OPT_MARKER = /^OPT:(.*)$/;
+const WHY_MARKER = /^WHY:(.*)$/;
+const QUALIFIER_MARKER = /^QUALIFIER:(.*)$/;
 
 /**
  * The card uid rule moved to cardRules.ts (UID_PATTERN + MAX_UID_LENGTH,
@@ -154,11 +185,19 @@ const USAGE_MARKER = /^USAGE:[ \t]?(.*)$/;
  */
 const SLUG_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 
-type SectionKind = 'question' | 'answer' | 'code' | 'usage';
+type SectionKind = 'question' | 'answer' | 'code' | 'usage' | `option:${string}` | `why:${string}`;
 
 interface Section {
   line: number;
   lines: string[];
+}
+
+/** MCQ state accumulated across a card's OPT:/WHY:/QUALIFIER: lines. */
+interface McqDraft {
+  qualifier: string | null;
+  qualifierSeen: boolean;
+  options: Array<{ key: string; correct: boolean }>;
+  lastOptionKey: string | null;
 }
 
 interface CardDraft {
@@ -167,6 +206,13 @@ interface CardDraft {
   difficulty: number;
   sections: Partial<Record<SectionKind, Section>>;
   codeLanguage: string | null;
+  topic: string | null;
+  topicSeen: boolean;
+  topicInvalid: boolean;
+  /** null until the first OPT:/WHY:/QUALIFIER: line. A card that never sees one is a Q/A card and gets no `mcq` key. */
+  mcq: McqDraft | null;
+  /** Set by MCQ_BAD_OPT_LINE: finishCard drops the card and reports nothing further for it. */
+  dropped: boolean;
 }
 
 function isBlank(line: string): boolean {
@@ -176,6 +222,14 @@ function isBlank(line: string): boolean {
 function sectionText(section: Section | undefined): string {
   if (!section) return '';
   return section.lines.join('\n');
+}
+
+/** Creates the MCQ draft on the first OPT:/WHY:/QUALIFIER: line and returns it. */
+function ensureMcq(draft: CardDraft): McqDraft {
+  if (draft.mcq === null) {
+    draft.mcq = { qualifier: null, qualifierSeen: false, options: [], lastOptionKey: null };
+  }
+  return draft.mcq;
 }
 
 // ---------------------- parse ----------------------
@@ -221,6 +275,10 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
     draft = null;
     currentSection = null;
 
+    // A card flagged by MCQ_BAD_OPT_LINE is dropped whole: the error is already
+    // reported at the offending line, and shipping half of it would hide it.
+    if (d.dropped) return;
+
     const question = sectionText(d.sections.question);
     const explanation = sectionText(d.sections.answer);
 
@@ -240,10 +298,26 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
         d.stableUid,
       );
     }
-    if (!question || !explanation) return;
+    if (!question || !explanation || d.topicInvalid) return;
 
     const codeSnippet = sectionText(d.sections.code) || null;
     const realWorldUsage = sectionText(d.sections.usage) || null;
+
+    // A card with at least one MCQ marker becomes an MCQ card. shuffle is always
+    // true (the format has no marker for it) and v is always 1.
+    const mcq: McqBlob | null = d.mcq
+      ? {
+          v: 1,
+          qualifier: d.mcq.qualifier,
+          shuffle: true,
+          options: d.mcq.options.map((o) => ({
+            key: o.key,
+            text: sectionText(d.sections[`option:${o.key}`]),
+            why: sectionText(d.sections[`why:${o.key}`]) || null,
+            correct: o.correct,
+          })),
+        }
+      : null;
 
     cards.push({
       stableUid: d.stableUid,
@@ -255,8 +329,10 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       // language is legal (the format allows a bare `CODE:`).
       codeLanguage: codeSnippet ? d.codeLanguage : null,
       realWorldUsage,
+      ...(d.topic !== null ? { topic: d.topic } : {}),
       orderInDeck: cards.length * 10,
       sourceLine: d.headerLine,
+      ...(mcq ? { mcq } : {}),
     });
   };
 
@@ -268,6 +344,16 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
   const openSection = (kind: SectionKind, line: number, firstLine: string): Section | null => {
     if (!draft) return null;
     if (draft.sections[kind]) {
+      if (kind.startsWith('option:')) {
+        pushIssue(
+          'MCQ_DUPLICATE_OPTION_KEY',
+          line,
+          `Card "${draft.stableUid}" repeats option "${kind.slice('option:'.length)}"; the first one wins.`,
+          draft.stableUid,
+        );
+        swallowing = true;
+        return null;
+      }
       pushIssue(
         'DUPLICATE_SECTION',
         line,
@@ -339,6 +425,11 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
         difficulty,
         sections: {},
         codeLanguage: null,
+        topic: null,
+        topicSeen: false,
+        topicInvalid: false,
+        mcq: null,
+        dropped: false,
       };
       currentSection = null;
       continue;
@@ -377,6 +468,102 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
           'Text outside any card. Cards start with "## <stable-uid> | d<0-4>".',
         );
       }
+      continue;
+    }
+
+    const topicMatch = TOPIC_MARKER.exec(raw);
+    if (topicMatch) {
+      const topic = topicMatch[1].trim();
+      if (draft.topicSeen) {
+        pushIssue(
+          'DUPLICATE_TOPIC',
+          lineNo,
+          `Card "${draft.stableUid}" repeats the TOPIC: line; the first one wins.`,
+          draft.stableUid,
+        );
+        continue;
+      }
+      draft.topicSeen = true;
+      if (!topic) {
+        pushIssue('BAD_TOPIC', lineNo, `Card "${draft.stableUid}" has an empty TOPIC: line.`, draft.stableUid);
+        draft.topicInvalid = true;
+        continue;
+      }
+      if (topic.length > TOPIC_MAX_LENGTH) {
+        pushIssue(
+          'BAD_TOPIC',
+          lineNo,
+          `Card "${draft.stableUid}" has a topic that is longer than ${TOPIC_MAX_LENGTH} characters.`,
+          draft.stableUid,
+        );
+        draft.topicInvalid = true;
+        continue;
+      }
+      draft.topic = topic;
+      continue;
+    }
+
+    const qualifierMatch = QUALIFIER_MARKER.exec(raw);
+    if (qualifierMatch) {
+      const mcq = ensureMcq(draft);
+      // Single line, like TOPIC:; it never touches currentSection.
+      if (mcq.qualifierSeen) {
+        pushIssue(
+          'MCQ_DUPLICATE_QUALIFIER',
+          lineNo,
+          `Card "${draft.stableUid}" repeats the QUALIFIER: line; the first one wins.`,
+          draft.stableUid,
+        );
+        continue;
+      }
+      // An empty payload is stored as '' so validateMcq reports MCQ_QUALIFIER_EMPTY.
+      mcq.qualifier = qualifierMatch[1].trim();
+      mcq.qualifierSeen = true;
+      continue;
+    }
+
+    const optMatch = OPT_MARKER.exec(raw);
+    if (optMatch) {
+      const mcq = ensureMcq(draft);
+      const payload = OPT_PAYLOAD.exec(optMatch[1]);
+      if (!payload) {
+        pushIssue(
+          'MCQ_BAD_OPT_LINE',
+          lineNo,
+          `Card "${draft.stableUid}": OPT: must be "OPT: <a-f>" or "OPT: <a-f> *" on its own line, got "${raw.trimEnd()}".`,
+          draft.stableUid,
+        );
+        // The line is never appended to the open section, and the body that
+        // follows it is swallowed silently: the whole card is dropped anyway.
+        draft.dropped = true;
+        currentSection = null;
+        swallowing = true;
+        continue;
+      }
+      const key = payload[1].toLowerCase();
+      const correct = payload[2] === '*';
+      currentSection = openSection(`option:${key}`, lineNo, '');
+      if (currentSection) mcq.options.push({ key, correct });
+      mcq.lastOptionKey = key;
+      continue;
+    }
+
+    const whyMatch = WHY_MARKER.exec(raw);
+    if (whyMatch) {
+      const mcq = ensureMcq(draft);
+      if (mcq.lastOptionKey === null) {
+        pushIssue(
+          'MCQ_WHY_WITHOUT_OPTION',
+          lineNo,
+          `Card "${draft.stableUid}" has a WHY: line before any OPT: line.`,
+          draft.stableUid,
+        );
+        // The orphan body must not also raise TEXT_BEFORE_SECTION.
+        currentSection = null;
+        swallowing = true;
+        continue;
+      }
+      currentSection = openSection(`why:${mcq.lastOptionKey}`, lineNo, whyMatch[1].replace(/^[ \t]/, ''));
       continue;
     }
 
@@ -508,6 +695,20 @@ export function validateCards(cards: readonly ParsedCard[]): ImportIssue[] {
         stableUid: card.stableUid,
       });
     }
+
+    // Every MCQ issue blocks: planImport re-runs validateCards and turns any
+    // issue with a stableUid into an INVALID_CARD conflict, and the page blocks
+    // on parsed.errors. There is no warning tier in Wave C.
+    if (card.mcq) {
+      for (const issue of validateMcq({
+        question: card.question,
+        explanation: card.explanation,
+        difficulty: card.difficulty,
+        mcq: card.mcq,
+      })) {
+        issues.push({ code: issue.code, line: card.sourceLine, message: issue.message, stableUid: card.stableUid });
+      }
+    }
   }
 
   return sortIssues(issues);
@@ -523,6 +724,8 @@ const COMPARABLE_FIELDS: readonly ComparableField[] = [
   'codeSnippet',
   'codeLanguage',
   'realWorldUsage',
+  'topic',
+  'mcq',
 ];
 
 /**
@@ -539,6 +742,12 @@ function fieldsThatDiffer(card: ParsedCard, existing: Card): ComparableField[] {
   for (const field of COMPARABLE_FIELDS) {
     if (field === 'difficulty' || field === 'orderInDeck') {
       if (card[field] !== existing[field]) changed.push(field);
+      continue;
+    }
+    if (field === 'mcq') {
+      // Server null, a missing key on an old server, and file absence all
+      // normalize to '' (mcqOf reads the wire key without a typed Card.mcq).
+      if (normalizeMcqForCompare(card.mcq) !== normalizeMcqForCompare(mcqOf(existing))) changed.push(field);
       continue;
     }
     if (normalizeText(card[field]) !== normalizeText(existing[field])) changed.push(field);
@@ -660,8 +869,20 @@ export function serializeDeckMarkdown(
 
   for (const card of cards) {
     out.push(`## ${card.stableUid} | d${card.difficulty}`);
+    if (card.topic) out.push(`TOPIC: ${card.topic}`);
+    if (card.mcq && card.mcq.qualifier !== null) out.push(`QUALIFIER: ${card.mcq.qualifier}`);
     out.push('Q:');
     out.push(card.question);
+    if (card.mcq) {
+      for (const option of card.mcq.options) {
+        out.push(option.correct ? `OPT: ${option.key} *` : `OPT: ${option.key}`);
+        out.push(option.text);
+        if (option.why !== null) {
+          out.push('WHY:');
+          out.push(option.why);
+        }
+      }
+    }
     out.push('A:');
     out.push(card.explanation);
     if (card.codeSnippet) {

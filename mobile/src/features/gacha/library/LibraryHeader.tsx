@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
-import type { LibraryDeckOption, LibraryFilter, LibraryFilterChip } from './libraryMapper';
+import type { LibraryDeckOption, LibraryFilter, LibraryFilterChip, LibraryTopicChip } from './libraryMapper';
 import { libraryStyles as styles } from './libraryScreenStyles';
 import { colors } from '../../../theme/colors';
 
@@ -114,6 +114,13 @@ type Props = {
   onSelectDeck: (slug: string) => void;
   onToggleFilterOpen: () => void;
   onSelectFilter: (filter: LibraryFilter) => void;
+  topics: LibraryTopicChip[];
+  topicFilter: string | null;
+  onSelectTopic: (key: string) => void;
+  /** "Review all · N" sweep entry (economy-v2 R8). Rendered only when both are
+   *  given and sweepCount > 0; the button starts a 'sweep' SessionCard run. */
+  onStartSweep?: () => void;
+  sweepCount?: number;
   /** Called when the brand-new-user banner CTA fires. Only invoked when
    *  ownedCount === 0 (i.e. user hasn't pulled any cards yet). When
    *  undefined, the banner is hidden regardless of state. */
@@ -136,6 +143,11 @@ export function LibraryHeader({
   onSelectDeck,
   onToggleFilterOpen,
   onSelectFilter,
+  topics,
+  topicFilter,
+  onSelectTopic,
+  onStartSweep,
+  sweepCount = 0,
   onOpenFirstPack,
   openFirstPackHasPulls = false,
 }: Props) {
@@ -203,6 +215,20 @@ export function LibraryHeader({
         </View>
       </View>
 
+      {onStartSweep && sweepCount > 0 ? (
+        <Pressable
+          testID="library-sweep-cta"
+          accessibilityRole="button"
+          accessibilityLabel="Review all learned cards"
+          style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+          onPress={onStartSweep}
+        >
+          <Text style={styles.retryText} numberOfLines={1}>
+            {`Review all · ${sweepCount}`}
+          </Text>
+        </Pressable>
+      ) : null}
+
       {/* Deck switcher — horizontal scroll instead of wrap-grid */}
       {deckOptions.length > 1 ? (
         <ScrollView
@@ -226,6 +252,37 @@ export function LibraryHeader({
               >
                 <Text style={[styles.deckChipText, active && styles.deckChipTextActive]} numberOfLines={1}>
                   {option.title}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : null}
+
+      {topics.length > 0 ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterChipsRow}
+          testID="library-topic-chips"
+        >
+          {topics.map((chip) => {
+            const active = chip.key === (topicFilter ?? 'all');
+            return (
+              <Pressable
+                key={`topic-${chip.key}`}
+                testID={`library-topic-chip-${chip.key}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                style={({ pressed }) => [
+                  styles.filterChip,
+                  active && styles.filterChipActive,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => onSelectTopic(chip.key)}
+              >
+                <Text style={[styles.filterChipText, active && styles.filterChipTextActive]} numberOfLines={1}>
+                  {active ? `${chip.label} · ${chip.count}` : chip.label}
                 </Text>
               </Pressable>
             );

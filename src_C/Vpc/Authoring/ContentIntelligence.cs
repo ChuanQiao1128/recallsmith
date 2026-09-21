@@ -1,5 +1,6 @@
 using System.Globalization;
 using Amazon.Lambda.APIGatewayEvents;
+using Npgsql;
 using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
 
@@ -92,8 +93,9 @@ public static class ContentIntelligence
 
       try
       {
+        var mcqCardCount = await CountMcqCardsAsync(conn, deckSlug, auth.UserSub, auth.IsSuperAdmin);
         var cards = await DbUtil.QueryAsync(conn, null, snapshotSql, [days, auth.UserSub, deckSlug, auth.IsSuperAdmin, limit]);
-        return res.Ok(BuildResponse(cards, days, deckSlug));
+        return res.Ok(BuildResponse(cards, days, deckSlug, mcqCardCount));
       }
       catch (Exception ex)
       {
@@ -102,7 +104,28 @@ public static class ContentIntelligence
       }
     }
 
-    const string sql = """
+    try
+    {
+      var mcqCardCount = await CountMcqCardsAsync(conn, deckSlug, auth.UserSub, auth.IsSuperAdmin);
+      var cards = await QueryLiveCardsAsync(conn, days, deckSlug, auth.UserSub, auth.IsSuperAdmin, limit);
+      return res.Ok(BuildResponse(cards, days, deckSlug, mcqCardCount));
+    }
+    catch (Exception ex)
+    {
+      Log.Error("Content intelligence error:", ex);
+      return res.Error500(ex);
+    }
+  }
+
+  /// <summary>
+  /// The live (non-snapshot) query. withMcqFilter=true appends `and c.mcq is null` to event_scored's WHERE so
+  /// MCQ answers never enter the Q/A user/difficulty baselines (MCQ plan §5.8: their dwell and verdict
+  /// distribution are structurally different); false is today's text, for a database without migration 019.
+  /// </summary>
+  private static string BuildLiveSql(bool withMcqFilter)
+  {
+    var mcqFilter = withMcqFilter ? "and c.mcq is null" : "";
+    return $"""
       with event_scored as (
         select
           e.event_id,
@@ -142,6 +165,7 @@ public static class ContentIntelligence
           and ($2::text is null or e.deck_slug = $2::text)
           and ($4::boolean or p.id is not null)
           and e.rating is not null
+          {mcqFilter}
       ),
       user_baseline as (
         select
@@ -318,16 +342,42 @@ public static class ContentIntelligence
       order by "fixPriorityScore" desc nulls last, review_count desc
       limit $5::int;
       """;
+  }
 
+  /// Runs BuildLiveSql(true); on PostgresException 42703 (cards.mcq absent: migration 019 not applied) re-runs
+  /// BuildLiveSql(false). Any other exception propagates to the handler's catch.
+  internal static async Task<List<Dictionary<string, object?>>> QueryLiveCardsAsync(
+    NpgsqlConnection conn, int days, string? deckSlug, string? userSub, bool isSuperAdmin, int limit)
+  {
+    object?[] parameters = [days, deckSlug, userSub, isSuperAdmin, limit];
     try
     {
-      var cards = await DbUtil.QueryAsync(conn, null, sql, [days, deckSlug, auth.UserSub, auth.IsSuperAdmin, limit]);
-      return res.Ok(BuildResponse(cards, days, deckSlug));
+      return await DbUtil.QueryAsync(conn, null, BuildLiveSql(true), parameters);
     }
-    catch (Exception ex)
+    catch (PostgresException pg) when (pg.SqlState == "42703")
     {
-      Log.Error("Content intelligence error:", ex);
-      return res.Error500(ex);
+      return await DbUtil.QueryAsync(conn, null, BuildLiveSql(false), parameters);
+    }
+  }
+
+  /// Readable, live MCQ cards in scope (C00 §2.12). Branch-independent: reads `cards`, not events or the snapshot,
+  /// so both the snapshot and the live branch report it. 42703 → 0 (no mcq column, so no MCQ cards).
+  internal static async Task<int> CountMcqCardsAsync(
+    NpgsqlConnection conn, string? deckSlug, string? userSub, bool isSuperAdmin)
+  {
+    const string countSql = """
+      select count(*) from cards c join decks d on d.id = c.deck_id and d.is_deleted = 0
+      left join admin_deck_permissions p on p.deck_id = d.id and p.admin_sub = $2 and p.can_read = 1
+      where c.is_deleted = 0 and c.mcq is not null and ($1::text is null or d.slug = $1::text) and ($3::boolean or p.id is not null)
+      """;
+    try
+    {
+      var scalar = await DbUtil.ExecuteScalarAsync(conn, null, countSql, [deckSlug, userSub, isSuperAdmin]);
+      return scalar is null ? 0 : Convert.ToInt32(scalar, CultureInfo.InvariantCulture);
+    }
+    catch (PostgresException pg) when (pg.SqlState == "42703")
+    {
+      return 0;
     }
   }
 
@@ -348,7 +398,7 @@ public static class ContentIntelligence
     return scalar is bool b && b;
   }
 
-  private static object BuildResponse(List<Dictionary<string, object?>> cards, int days, string? deckSlug)
+  private static object BuildResponse(List<Dictionary<string, object?>> cards, int days, string? deckSlug, int mcqCardCount)
   {
     return new
     {
@@ -365,6 +415,7 @@ public static class ContentIntelligence
         productiveChallenge = CountStatus(cards, "contentQualityStatus", "Productive Challenge"),
         difficultyUnderstated = CountStatus(cards, "difficultyCalibrationStatus", "Difficulty Understated"),
         difficultyOverstated = CountStatus(cards, "difficultyCalibrationStatus", "Difficulty Overstated"),
+        mcqCardCount,
       }
     };
   }

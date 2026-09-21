@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace RecallSmith.Lambda.Worker.S3;
 
 /// <summary>
@@ -58,4 +61,10 @@ public class CardExportData
   public string CodeSnippet { get; set; } = string.Empty;
   public string RealWorldUsage { get; set; } = string.Empty;
   public int Revision { get; set; } = 1;
+
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public string? Topic { get; set; }
+
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public JsonElement? Mcq { get; set; }
 }

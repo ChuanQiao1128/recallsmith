@@ -136,8 +136,8 @@ export function ContentIntelligencePage() {
   // body. Two ways to silence that were tried and rejected before this one:
   //
   //   * Wrapping the call — `async function run() { await load(); } void run()`
-  //     — makes the rule pass while changing nothing at all. That is an
-  //     eslint-disable with extra steps, and the next reader has no way to
+  //     — makes the rule pass while changing nothing at all. That is a lint
+  //     suppression with extra steps, and the next reader has no way to
   //     tell it was deliberate.
   //   * Duplicating the fetch body into the effect and keeping `load` for the
   //     Refresh button leaves two copies of one request to drift apart.
@@ -191,6 +191,7 @@ export function ContentIntelligencePage() {
   const cards = state.data?.cards ?? [];
   const topCards = cards.slice(0, 20);
   const summary = state.data?.summary;
+  const mcqCardCount = summary?.mcqCardCount ?? 0;
   const selectedCard = useMemo(() => {
     if (topCards.length === 0) return null;
     return topCards.find((card) => cardKey(card) === selectedCardKey) ?? topCards[0];
@@ -262,6 +263,15 @@ export function ContentIntelligencePage() {
 
         {state.error ? (
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{state.error}</div>
+        ) : null}
+
+        {mcqCardCount > 0 ? (
+          <div
+            data-testid="content-intelligence-mcq-banner"
+            className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800"
+          >
+            {`${mcqCardCount} MCQ card${mcqCardCount === 1 ? '' : 's'} in scope are not assessed by the Q/A model.`}
+          </div>
         ) : null}
 
         <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">

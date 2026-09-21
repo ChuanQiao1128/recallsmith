@@ -95,6 +95,8 @@ public static class ProgressEvents
       var deviceId = body.TryGetProperty("deviceId", out var d) ? d.ToString().Trim() : null;
       var clientVersion = body.TryGetProperty("clientVersion", out var cv) ? cv.ToString().Trim() : null;
       var clientPlatform = body.TryGetProperty("clientPlatform", out var cp) ? cp.ToString().Trim() : null;
+      var clientFeatures = ReadClientFeatures(body); // JSON array text such as ["mcq"], or null
+      var updateId = ReadUpdateId(body);             // trimmed, or null
 
       if (!body.TryGetProperty("events", out var eventsEl) || eventsEl.ValueKind != JsonValueKind.Array)
       {
@@ -363,8 +365,25 @@ public static class ProgressEvents
 
       var userHashParam = P(ref idx);
       parameters.Add(userIdHash);
+      var featuresParam = P(ref idx);
+      parameters.Add(clientFeatures);
+      var updateIdParam = P(ref idx);
+      parameters.Add(updateId);
 
-      var sql = $"""
+      // The outbox tag `card_format` reads cards.mcq (migration 019). Until that
+      // migration has run on a database, Postgres answers 42703 for this text;
+      // withCardFormat=false is then today's statement, re-run as is. One text
+      // per shape, so auto-prepare (Pg.cs) keeps one plan per shape.
+      string BuildIngestSql(bool withCardFormat)
+      {
+        var cardFormatKey = withCardFormat
+          ? ",\n              'card_format', case when c.mcq is not null then 'mcq' else 'qa' end"
+          : "";
+        var cardFormatJoin = withCardFormat
+          ? "\n          left join decks d on d.slug = ins.deck_slug and d.is_deleted = 0"
+            + "\n          left join cards c on c.deck_id = d.id and c.stable_uid = ins.stable_uid and c.is_deleted = 0"
+          : "";
+        return $"""
         with ensure_user as (
           insert into users (user_sub, email, last_seen_at, last_platform, last_version, last_device_id)
           values ({userSubParam}, {emailParam}, now(), {platformParam}, {versionParam}, {deviceIdParam})
@@ -404,14 +423,14 @@ public static class ProgressEvents
             event_id,
             event_type,
             'card',
-            deck_slug || ':' || stable_uid,
+            deck_slug || ':' || ins.stable_uid,
             jsonb_strip_nulls(jsonb_build_object(
               'event_id', event_id::text,
               'schema_version', schema_version,
               'event_type', event_type,
               'user_id_hash', {userHashParam},
               'deck_slug', deck_slug,
-              'card_stable_uid', stable_uid,
+              'card_stable_uid', ins.stable_uid,
               'card_revision', card_revision,
               'stated_difficulty', stated_difficulty,
               'rating', case rating
@@ -439,9 +458,11 @@ public static class ProgressEvents
               'platform', client_platform,
               'app_version', client_version,
               'offline_queue_delay_ms', offline_queue_delay_ms,
-              'deck_version', deck_version
+              'deck_version', deck_version{cardFormatKey},
+              'client_features', {featuresParam}::jsonb,
+              'update_id', {updateIdParam}::text
             ))
-          from ins
+          from ins{cardFormatJoin}
           on conflict (event_id) do nothing
           returning 1
         ),
@@ -582,17 +603,38 @@ public static class ProgressEvents
           count(*)::int as inserted_count
         from ins;
         """;
+      }
 
       // Timed on its own because this is the claim the design rests on: the
       // whole ingest (users upsert, event insert, outbox, aggregate,
       // last-writer-wins merge) is ONE statement, so it is one round trip.
+      // The 42703 fallback below is a second statement only on a database that
+      // has not run migration 019.
       //
       // sql_ms now brackets nothing but this statement and the string building
       // in front of it, so the two numbers should sit on top of each other in
       // production. A gap opening between them is the shell growing back, and
       // that is the whole reason both are still emitted.
       var swStatement = Stopwatch.StartNew();
-      var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
+      List<Dictionary<string, object?>> rows;
+      try
+      {
+        rows = await DbUtil.QueryAsync(conn, null, BuildIngestSql(withCardFormat: true), parameters);
+      }
+      catch (PostgresException pg) when (pg.SqlState == "42703")
+      {
+        // cards.mcq is not there yet: the failed statement wrote nothing (one
+        // statement, no shell), so today's text is run in its place. Logged so a
+        // production database that has not had migration 019 is visible.
+        Log.Warn(JsonSerializer.Serialize(new
+        {
+          traceId = req.TraceId,
+          impl = ProgressEventsImpl,
+          step = "ingest_card_format_fallback",
+          sqlState = pg.SqlState,
+        }));
+        rows = await DbUtil.QueryAsync(conn, null, BuildIngestSql(withCardFormat: false), parameters);
+      }
       var statementMs = swStatement.Elapsed.TotalMilliseconds;
 
       var sqlMs = swSql.Elapsed.TotalMilliseconds;
@@ -641,6 +683,38 @@ public static class ProgressEvents
     {
       return res.Error500(ex);
     }
+  }
+
+  private static readonly Regex FeatureTokenRegex = new("^[a-z][a-z0-9_-]{0,31}$", RegexOptions.Compiled);
+  private const int MaxClientFeatures = 16;
+  private const int MaxUpdateIdLength = 64;
+
+  /// <summary>
+  /// clientFeatures → the JSON text of a sorted, distinct array of feature tokens, or null.
+  /// Anything but an array → null. Items that are not strings, or that fail the token grammar
+  /// after trim + lower-case, are ignored; at most 16 survive. An empty result → null, so the
+  /// key is stripped from the payload exactly as when the client sent nothing.
+  /// </summary>
+  private static string? ReadClientFeatures(JsonElement body)
+  {
+    if (!body.TryGetProperty("clientFeatures", out var el) || el.ValueKind != JsonValueKind.Array) return null;
+    var tokens = new SortedSet<string>(StringComparer.Ordinal);
+    foreach (var item in el.EnumerateArray())
+    {
+      if (item.ValueKind != JsonValueKind.String) continue;
+      var token = (item.GetString() ?? "").Trim().ToLowerInvariant();
+      if (FeatureTokenRegex.IsMatch(token)) tokens.Add(token);
+    }
+    if (tokens.Count == 0) return null;
+    return JsonSerializer.Serialize(tokens.Take(MaxClientFeatures));
+  }
+
+  /// <summary>updateId → trimmed string when it is a non-blank JSON string of ≤ 64 chars; otherwise null.</summary>
+  private static string? ReadUpdateId(JsonElement body)
+  {
+    if (!body.TryGetProperty("updateId", out var el) || el.ValueKind != JsonValueKind.String) return null;
+    var id = (el.GetString() ?? "").Trim();
+    return id.Length > 0 && id.Length <= MaxUpdateIdLength ? id : null;
   }
 
   private static string RequireString(JsonElement obj, string prop, string fieldName)

@@ -92,6 +92,7 @@ v7 完成后，下面 6 件事必须同时为真：
 ### 2.2 主链路只能一种解释
 
 v6.1 §2 “唯一规则真表”继续有效，v7 不引入新规则、不修改阈值。具体含义：
+> 2026-09-21：经济规则以 `docs/economy-v2-learn-to-earn-2026-09-19.md` §2 为准（rules R1–R10, cap 60+5）；下面 "30 主钱包 + 5 reserve" 一条保留为历史，不再生效。
 
 - Streak：`hard / good / easy` 计入；`again` 不计；不做 mindful minute
 - Mastery 判定：`stage >= 4`，与稀有度解耦

@@ -5,6 +5,7 @@ import { isLearnedProgress, isMasteredProgress, isNewProgress, isScheduledProgre
 import { formatDateKey } from '../../../review/model';
 import { rarityFromDifficulty, type Rarity } from '../draw/cardRarity';
 import { cardIconFor } from '../../../theme/cardIcon';
+import { normalizeTopic, topicKey, UNTAGGED_TOPIC_KEY, UNTAGGED_TOPIC_LABEL } from './topics';
 
 // 'missing' is reachable only when a caller passes an ownedSet. Ungated there
 // is no way to know a card was never drawn, so the shipped three-value split
@@ -42,6 +43,7 @@ export type LibraryCardRow = {
   isMissing: boolean;
   isDueToday: boolean;
   isUpdated: boolean;
+  topic: string | null;
 };
 
 export type LibraryFilterChip = {
@@ -49,6 +51,8 @@ export type LibraryFilterChip = {
   label: 'All' | 'New' | 'Learning' | 'Mastered' | 'Rare' | 'Legendary';
   count: number;
 };
+
+export type LibraryTopicChip = { key: string; label: string; count: number };
 
 export type LibraryDeckOption = {
   slug: string;
@@ -61,6 +65,8 @@ export type LibraryViewModel = LibraryVM & {
   filter: LibraryFilter;
   filters: LibraryFilterChip[];
   cards: LibraryCardRow[];
+  topics: LibraryTopicChip[];
+  topicFilter: string | null;
 };
 
 function isDueToday(progress: CardProgress, now: Date): boolean {
@@ -163,6 +169,7 @@ export function buildLibraryCardRows(params: {
           !isMissing &&
           getCardRevision(card) > getSeenRevision(progressEntry as CardProgress) &&
           isLearnedProgress(progressEntry as CardProgress),
+        topic: normalizeTopic(card.Topic),
       };
     });
 }
@@ -177,6 +184,7 @@ export function buildLibraryVM(params: {
   decks?: LibraryDeckOption[];
   selectedDeckSlug?: string | null;
   ownedSet?: OwnedGate;
+  topicFilter?: string | null;
 }): LibraryViewModel {
   const {
     deck,
@@ -188,6 +196,7 @@ export function buildLibraryVM(params: {
     decks = [{ slug: deck.Slug, title: deck.Title }],
     selectedDeckSlug,
     ownedSet = null,
+    topicFilter = null,
   } = params;
   const rows = buildLibraryCardRows({ deck, progress, now, isTrial, previewTotal, ownedSet });
   // Gated, these three read "of the cards you hold" -- an unowned card carries
@@ -220,7 +229,7 @@ export function buildLibraryVM(params: {
 
   // Filter resolver — SRS dimensions and rarity dimensions are
   // independent. Only one filter active at a time (single-select chips).
-  const cards =
+  const statusFiltered =
     filter === 'all'
       ? rows
       : filter === 'new'
@@ -234,6 +243,44 @@ export function buildLibraryVM(params: {
               : filter === 'legendary'
                 ? rows.filter((item) => item.rarity === 'LEG')
                 : rows;
+
+  const groupKeyOf = (row: LibraryCardRow): string => (row.topic === null ? UNTAGGED_TOPIC_KEY : topicKey(row.topic));
+  const hasTopics = rows.some((row) => row.topic !== null);
+  // One chip per distinct key, first-seen in deck order (rows are already OrderInDeck ascending);
+  // the label is the first-seen normalized text, so "IAM/S3" and "IAM & S3" share one chip.
+  const topicOrder: string[] = [];
+  const topicLabel = new Map<string, string>();
+  const topicCount = new Map<string, number>();
+  if (hasTopics) {
+    for (const row of rows) {
+      if (row.topic === null) continue;
+      const key = topicKey(row.topic);
+      if (!topicLabel.has(key)) {
+        topicOrder.push(key);
+        topicLabel.set(key, row.topic);
+      }
+      topicCount.set(key, (topicCount.get(key) ?? 0) + 1);
+    }
+  }
+  const untaggedCount = rows.filter((row) => row.topic === null).length;
+  const topics: LibraryTopicChip[] = hasTopics
+    ? [
+        { key: 'all', label: 'All', count: rows.length },
+        ...topicOrder.map((key) => ({ key, label: topicLabel.get(key) ?? key, count: topicCount.get(key) ?? 0 })),
+        ...(untaggedCount > 0 ? [{ key: UNTAGGED_TOPIC_KEY, label: UNTAGGED_TOPIC_LABEL, count: untaggedCount }] : []),
+      ]
+    : [];
+  const effectiveTopicFilter =
+    topicFilter !== null && topicFilter !== 'all' && topics.some((chip) => chip.key === topicFilter) ? topicFilter : null;
+  const groupIndex = new Map(topics.map((chip, index) => [chip.key, index]));
+  const rank = (row: LibraryCardRow): number => groupIndex.get(groupKeyOf(row)) ?? Number.MAX_SAFE_INTEGER;
+  // Grouping IS the order: topic groups in chip order, OrderInDeck inside a group. Copy before sorting —
+  // for filter === 'all' the resolver hands back `rows` itself.
+  const cards = !hasTopics
+    ? statusFiltered
+    : [...statusFiltered]
+        .filter((row) => effectiveTopicFilter === null || groupKeyOf(row) === effectiveTopicFilter)
+        .sort((a, b) => rank(a) - rank(b) || a.orderInDeck - b.orderInDeck);
 
   const filters: LibraryFilterChip[] = [
     { key: 'all', label: 'All', count: rows.length },
@@ -262,5 +309,7 @@ export function buildLibraryVM(params: {
     filter,
     filters,
     cards,
+    topics,
+    topicFilter: effectiveTopicFilter,
   };
 }

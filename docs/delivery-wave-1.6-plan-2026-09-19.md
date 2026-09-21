@@ -118,7 +118,7 @@
 | C14 | 事件信封加客户端能力标记：`clientFeatures` + expo-updates `updateId`（`progressSync.ts` 冻结文件，按签字）+ `ProgressEvents.cs` 接收 + Snowflake `answer_mode` 改按它分区 | `mobile/src/sync/progressSync.ts`（限定行）, `src_C/Vpc/Runtime/ProgressEvents.cs`, `snowflake/*.sql`, tests | vitest：无标记时事件字节一致；`dotnet test` | C13 | 60 |
 | C15 | 文档：`content-delivery-v3.md`、`console-import-plan.md` 增补；MCQ 方案迁移号改 019/020；经济修正案落地检查 | `docs/*.md` | 非空 | C01, C09 | 20 |
 
-**Wave C 结束你要做的**：后端打包部署 + 生产库跑 018/019 → 两个卡组重新发布并**字节 diff**（除 buildId/sha 应一致）→ 控制台部署 → 审核通过后 `eas update` 推经济 / topic / 总复习 OTA（在通过**之前**不要推，审核中的 build 必须等于上架的 build）。
+**Wave C 结束你要做的**：后端打包部署 + 生产库跑 018/019 → owner 重跑 Snowflake `snowflake/001_content_intelligence_setup.sql`（C13 改了投影与 mart；views / dynamic tables 都是 create or replace，重跑即生效）→ 两个卡组重新发布并**字节 diff**（除 buildId/sha 应一致）→ 控制台部署 → 审核通过后 `eas update` 推经济 / topic / 总复习 OTA（在通过**之前**不要推，审核中的 build 必须等于上架的 build）。
 
 ### Wave D — MCQ 手机端 1.6.1 OTA（集成分支 `delivery/r16-d-mcq`，从 C 切）
 
@@ -226,5 +226,4 @@ FRONTEND_PATHS='mobile frontend'       # 适配 #2/#3 按根分派
 <!-- paths-not-on-disk
 计划中、尚未创建的文件（frontend/tests/docsPaths.test.ts 的守卫要求在此登记）：
      - docs/design/v10-ceremony-seam-of-light.md
-     - frontend/tests/deckImport.mcq.test.ts
 -->

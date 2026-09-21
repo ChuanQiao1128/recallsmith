@@ -1,3 +1,4 @@
+using System.Text.Json;
 using RecallSmith.Lambda.Worker.Content;
 using RecallSmith.Lambda.Worker.S3;
 
@@ -27,6 +28,16 @@ public class ContentSerializationContractTests
 
   private const string CardJson =
     """{"stableUid":"u1","orderInDeck":1,"difficulty":2,"question":"q","explanation":"e","codeLanguage":"csharp","codeSnippet":"c","realWorldUsage":"r","revision":1}""";
+
+  // What DbUtil hands back for a stored blob: PG jsonb text, PG key order, ": " / ", " spacing.
+  private const string McqPgText =
+    """{"v": 1, "options": [{"key": "a", "why": null, "text": "queue", "correct": true}, {"key": "b", "why": "no buffer", "text": "resize", "correct": false}, {"key": "c", "why": "one shard", "text": "stream", "correct": false}], "shuffle": true, "qualifier": null}""";
+
+  // What ContentJson emits for it: same key order, compact.
+  private const string McqJson =
+    """{"v":1,"options":[{"key":"a","why":null,"text":"queue","correct":true},{"key":"b","why":"no buffer","text":"resize","correct":false},{"key":"c","why":"one shard","text":"stream","correct":false}],"shuffle":true,"qualifier":null}""";
+
+  private static JsonElement Mcq(string json) => JsonSerializer.Deserialize<JsonElement>(json);
 
   [Fact]
   public void Card_SerializesExactCamelCaseFieldNames()
@@ -154,5 +165,66 @@ public class ContentSerializationContractTests
     Assert.Equal(
       """{"slug":"s","title":"T","locale":"en-US","deckType":1,"version":"20260428T075215Z-5ba0392a","totalCards":1,"cards":[""" + CardJson + "]}",
       json);
+  }
+
+  [Fact]
+  public void Card_WithTopic_AppendsTopicLast()
+  {
+    var card = MakeCard();
+    card.Topic = "t";
+
+    var json = ContentJson.Serialize(card);
+
+    Assert.Equal(
+      """{"stableUid":"u1","orderInDeck":1,"difficulty":2,"question":"q","explanation":"e","codeLanguage":"csharp","codeSnippet":"c","realWorldUsage":"r","revision":1,"topic":"t"}""",
+      json);
+    // The golden card plus one appended key — nothing in front of it moved.
+    Assert.Equal(CardJson[..^1] + ""","topic":"t"}""", json);
+  }
+
+  [Fact]
+  public void Card_NullTopic_KeepsGoldenBytes()
+  {
+    var card = MakeCard();
+    card.Topic = null;
+
+    Assert.Equal(CardJson, ContentJson.Serialize(card));
+
+    var chunk = new DeckChunkModel { SchemaVersion = 1, Slug = "s", Version = "to-2", Seq = 0, Cards = new List<CardExportData> { card } };
+    Assert.DoesNotContain("topic", ContentJson.Serialize(chunk), StringComparison.Ordinal);
+  }
+
+  [Fact]
+  public void Card_WithTopicAndMcq_AppendsMcqLast()
+  {
+    var card = MakeCard();
+    card.Topic = "t";
+    card.Mcq = Mcq(McqPgText);
+
+    Assert.Equal(CardJson[..^1] + ""","topic":"t","mcq":""" + McqJson + "}", ContentJson.Serialize(card));
+  }
+
+  [Fact]
+  public void Card_WithMcqOnly_OmitsTopic()
+  {
+    var card = MakeCard();
+    card.Mcq = Mcq(McqPgText);
+
+    Assert.Equal(CardJson[..^1] + ""","mcq":""" + McqJson + "}", ContentJson.Serialize(card));
+  }
+
+  [Fact]
+  public void Card_WithMcq_RoundTripsThroughContentJson()
+  {
+    var card = MakeCard();
+    card.Topic = "t";
+    card.Mcq = Mcq(McqPgText);
+    var expected = CardJson[..^1] + ""","topic":"t","mcq":""" + McqJson + "}";
+
+    // The previous-build read path: deck.json bytes -> JsonElement -> DeckDiff.
+    var roundTripped = JsonSerializer.Deserialize<CardExportData>(expected, ContentJson.Options)!;
+
+    Assert.Equal(expected, ContentJson.Serialize(roundTripped));
+    Assert.Equal(JsonValueKind.Object, roundTripped.Mcq!.Value.ValueKind);
   }
 }

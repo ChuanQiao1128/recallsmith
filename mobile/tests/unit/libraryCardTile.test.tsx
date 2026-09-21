@@ -50,6 +50,7 @@ const baseRow: LibraryCardRow = {
   isMissing: false,
   isDueToday: false,
   isUpdated: false,
+  topic: null,
 };
 
 function renderTile(row: LibraryCardRow) {

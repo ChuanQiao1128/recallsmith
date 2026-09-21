@@ -39,7 +39,7 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
     });
 
     expect(challenge.minimumGoal).toBe(1);
-    expect(challenge.limit).toBe(4);
+    expect(challenge.limit).toBe(5);
     expect(challenge.nodes.at(-1)?.role).toBe('boss');
     expect(challenge.summary).toMatch(/keep momentum/i);
   });
@@ -62,12 +62,31 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
 
     expect(planned.dueCount).toBe(1);
     expect(planned.newCount).toBe(2);
-    expect(planned.limit).toBe(2);
+    expect(planned.limit).toBe(3);
   });
 
   it('does not force a boss node when there is no high-pressure backlog', () => {
     const planned = planChallengeRoute({ deck: sampleDeck, progress: sampleProgress, now: NOW });
     expect(planned.nodes.some((node) => node.role === 'boss')).toBe(false);
+  });
+
+  it('gives a single new card a one-node route', () => {
+    // R6 / F10: due 0 / new 1 must plan exactly one node the user can full-clear.
+    const single = buildChallengeRoute({ slug: 'csharp', deckTitle: 'C# Interview', dueCount: 0, newCount: 1 });
+    expect(single.limit).toBe(1);
+    expect(single.nodes).toHaveLength(1);
+    expect(single.nodes[0]?.role).toBe('warmup');
+  });
+
+  it('grows the route with every new card up to the cap', () => {
+    const limitFor = (dueCount: number, newCount: number) =>
+      buildChallengeRoute({ slug: 'csharp', deckTitle: 'C# Interview', dueCount, newCount }).limit;
+    expect(limitFor(0, 2)).toBe(2);
+    expect(limitFor(0, 3)).toBe(3);
+    expect(limitFor(0, 7)).toBe(5);
+    expect(limitFor(1, 1)).toBe(2);
+    expect(limitFor(2, 2)).toBe(4);
+    expect(limitFor(1, 4)).toBe(5);
   });
 });
 
@@ -114,5 +133,20 @@ describe('countDueToday / pickNextCard', () => {
     });
 
     expect(next?.card.StableUid).toBe('2');
+  });
+
+  it('picks the longest-unseen learned card in sweep mode even when another card is due', () => {
+    const sweepProgress = [
+      { stableUid: '1', stage: 0, nextReviewAt: 0 },
+      { stableUid: '2', stage: 2, lastReviewedAt: TODAY_MS - 1000, nextReviewAt: YESTERDAY_MS, lastSeenRevision: 1 },
+      { stableUid: '3', stage: 4, lastReviewedAt: TODAY_MS - 5000, nextReviewAt: TOMORROW_MS, lastSeenRevision: 1 },
+      { stableUid: '4', stage: 0, nextReviewAt: 0 },
+    ] as any;
+
+    expect(pickNextCard({ deck: sampleDeck, progress: sweepProgress, now: NOW, mode: 'sweep' })?.card.StableUid).toBe('3');
+    expect(pickNextCard({ deck: sampleDeck, progress: sweepProgress, now: NOW, mode: 'review-due' })?.card.StableUid).toBe('2');
+    expect(
+      pickNextCard({ deck: sampleDeck, progress: sweepProgress, now: NOW, mode: 'sweep', avoidUid: '3' })?.card.StableUid,
+    ).toBe('2');
   });
 });

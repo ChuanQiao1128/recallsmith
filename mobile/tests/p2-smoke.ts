@@ -41,7 +41,7 @@ const challenge = buildChallengeRoute({
   newCount: 2,
 });
 assert.equal(challenge.minimumGoal, 1);
-assert.equal(challenge.limit, 4);
+assert.equal(challenge.limit, 5);
 assert.equal(challenge.nodes[challenge.nodes.length - 1]?.role, 'boss');
 assert.match(challenge.summary, /keep momentum/i);
 
@@ -62,7 +62,7 @@ const plannedChallenge = planChallengeRoute({
 });
 assert.equal(plannedChallenge.dueCount, 1);
 assert.equal(plannedChallenge.newCount, 2);
-assert.equal(plannedChallenge.limit, 2);
+assert.equal(plannedChallenge.limit, 3);
 
 assert.equal(countDueToday(sampleProgress, NOW), 1);
 
@@ -112,15 +112,15 @@ const mixedFallbackCard = pickNextCard({
 });
 assert.equal(mixedFallbackCard?.card.StableUid, '2');
 
-const wallet = applyRewardToWallet({ availablePulls: 29, reservePulls: 4 }, 3);
-assert.equal(wallet.availablePulls, 30);
+const wallet = applyRewardToWallet({ availablePulls: 59, reservePulls: 4 }, 3);
+assert.equal(wallet.availablePulls, 60);
 assert.equal(wallet.reservePulls, 5);
 assert.equal(wallet.appliedToAvailable, 1);
 assert.equal(wallet.appliedToReserve, 1);
 assert.equal(wallet.dropped, 1);
 
-const fullWallet = applyRewardToWallet({ availablePulls: 30, reservePulls: 5 }, 2);
-assert.equal(fullWallet.availablePulls, 30);
+const fullWallet = applyRewardToWallet({ availablePulls: 60, reservePulls: 5 }, 2);
+assert.equal(fullWallet.availablePulls, 60);
 assert.equal(fullWallet.reservePulls, 5);
 assert.equal(fullWallet.dropped, 2);
 
@@ -129,17 +129,37 @@ const reward = resolveSessionReward({
   sessionLimit: 4,
   minimumGoal: 1,
   wallet: { availablePulls: 0, reservePulls: 0 },
+  reward: {
+    newCardPulls: 1,
+    newCardUids: ['u1'],
+    dueClearPulls: 0,
+    rewardPulls: 1,
+    applied: 1,
+    dropped: 0,
+    walletBefore: { availablePulls: 0, reservePulls: 0 },
+    walletAfter: { availablePulls: 1, reservePulls: 0 },
+  },
 });
 assert.equal(reward.completedFullRun, true);
-// v3 reward calibration: full clear → +1 pull (was 2). See rewardResolver.
+// economy-v2: the pull is paid per rating; a full run only decides the title.
 assert.equal(reward.rewardPulls, 1);
-assert.match(reward.rewardMessage, /\+1 free pull/i);
+assert.match(reward.rewardMessage, /\+1 pull/i);
 
 const minimumReward = resolveSessionReward({
   sessionDone: 1,
   sessionLimit: 4,
   minimumGoal: 1,
-  wallet: { availablePulls: 30, reservePulls: 4 },
+  wallet: { availablePulls: 60, reservePulls: 4 },
+  reward: {
+    newCardPulls: 1,
+    newCardUids: ['u1'],
+    dueClearPulls: 0,
+    rewardPulls: 1,
+    applied: 1,
+    dropped: 0,
+    walletBefore: { availablePulls: 60, reservePulls: 4 },
+    walletAfter: { availablePulls: 60, reservePulls: 5 },
+  },
 });
 assert.equal(minimumReward.completedMinimumGoal, true);
 assert.equal(minimumReward.completedFullRun, false);

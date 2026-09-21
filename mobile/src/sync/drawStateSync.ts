@@ -17,6 +17,7 @@ import {
   type AnonWalletAdoption,
   type RewardWalletState,
 } from '../features/gacha/rewards/rewardWallet';
+import { adoptAnonNewCardLedger, type AnonLedgerAdoption } from '../features/gacha/rewards/newCardLedger';
 import type { PityState } from '../features/gacha/draw/pity';
 
 /**
@@ -230,7 +231,7 @@ const SKIPPED: DrawStateSyncResult = {
   appliedWallet: false,
 };
 
-export type AnonGachaAdoption = AnonDrawStateAdoption & AnonWalletAdoption;
+export type AnonGachaAdoption = AnonDrawStateAdoption & AnonWalletAdoption & AnonLedgerAdoption;
 
 // One adoption at a time. Two callers race in production: the sign-in path in
 // authStore calls adoptAnonGachaState directly, and the 'user_changed' progress
@@ -249,7 +250,8 @@ export function adoptAnonGachaState(): Promise<AnonGachaAdoption> {
   _adopting = (async () => {
     const draw = await adoptAnonDrawState();
     const wallet = await adoptAnonRewardWallet();
-    return { ...draw, ...wallet };
+    const ledger = await adoptAnonNewCardLedger();
+    return { ...draw, ...wallet, ...ledger };
   })().finally(() => {
     _adopting = null;
   });

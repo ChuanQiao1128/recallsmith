@@ -1,7 +1,8 @@
 // mobile/src/navigation/types.ts
-export type StudyMode = 'learn-new' | 'review-due' | 'mixed';
+export type StudyMode = 'learn-new' | 'review-due' | 'mixed' | 'sweep';
 
 import type { MockHomeState } from '../mock/types';
+import type { RewardOutcome } from '../features/gacha/rewards/rewardResolver';
 
 export type RootStackParamList = {
   Splash: undefined;
@@ -192,6 +193,10 @@ export type RootStackParamList = {
     minimumGoal: number;
     dueCount: number;
     streakEarned?: boolean;
+    reward?: RewardOutcome;
+    /** R7 forecast line when the run ended on a milestone rating (SessionCardScreen would otherwise
+     *  lose it to the replace). Rendered under the reward card, testID `session-summary-load-forecast`. */
+    loadForecast?: string;
   };
 
   SignIn: { email?: string } | undefined;

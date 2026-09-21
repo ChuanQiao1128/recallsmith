@@ -581,6 +581,24 @@ export async function loadDeckProgress(deck: DeckExport): Promise<CardProgress[]
   return filtered;
 }
 
+/**
+ * Read-only view of what is on disk for one slug in the current partition: the
+ * same key loadDeckProgress reads, each entry passed through the same schema
+ * normalizer (malformed entries dropped), and none of loadDeckProgress's
+ * writes -- no legacy migration, no reconcile, no meta upsert -- and no
+ * DeckExport needed. null when the key is absent or does not hold an array.
+ *
+ * For a reader that must not trust an in-memory snapshot (the R1 ledger seed,
+ * sessionRewards.ts): a remote pull merges into this key behind the session
+ * screen's back, and this is how such a reader sees the merge. Throws on a
+ * storage error so that reader can fail closed instead of seeding from nothing.
+ */
+export async function readStoredDeckProgress(slug: string): Promise<CardProgress[] | null> {
+  const raw = await readJson<unknown>(await progressKey(slug));
+  if (!Array.isArray(raw)) return null;
+  return raw.map(normalizeProgressEntry).filter((p): p is CardProgress => p != null);
+}
+
 export async function saveDeckProgress(deck: DeckExport, progress: CardProgress[]): Promise<void> {
   // do not reconcile here (avoid side-effects while writing)
   // This is a wholesale overwrite, not a merge: the only membership test it

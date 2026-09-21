@@ -2,6 +2,7 @@
 import type { ApiResult } from '../types/api';
 import type { Deck, DeckAvailability, DeckTier } from '../types/deck';
 import type { Card } from '../types/card';
+import type { McqBlob } from '../types/mcq';
 import axios from 'axios';
 import { http } from './http';
 import { dedupeRequest, DedupeKeys } from './dedupe';
@@ -392,6 +393,12 @@ export async function createCard(params: {
   revision?: number;
   stableUid?: string;
   realWorldUsage?: string;
+  topic?: string;
+  // The MCQ blob travels whole or not at all. An explicit `null` is a clear:
+  // the server drops absent body keys (Helpers.cs:58 skips a field the body has
+  // no own property for), so the only way to erase a stored blob is to send the
+  // key with value null. `undefined` means "leave alone".
+  mcq?: McqBlob | null;
 }): Promise<ApiResult<Card>> {
   try {
     const body: Record<string, unknown> = {
@@ -404,6 +411,8 @@ export async function createCard(params: {
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
     if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
+    if (params.topic !== undefined) body.topic = params.topic;
+    if (params.mcq !== undefined) body.mcq = params.mcq;
     if (params.revision !== undefined) body.revision = params.revision;
     body.stableUid = ensureStableUid(params.stableUid);
 
@@ -436,6 +445,7 @@ export async function updateCard(params: {
   // it when deciding update vs unchanged, so leaving it out here would make a
   // USAGE edit replan forever and break the "re-import is a no-op" promise.
   realWorldUsage?: string;
+  topic?: string;
   difficulty?: number;
   orderInDeck?: number;
   // Distinct from expectedVersion. That one is the optimistic-concurrency
@@ -445,6 +455,7 @@ export async function updateCard(params: {
   revision?: number;
   stableUid?: string;
   expectedVersion?: number;
+  mcq?: McqBlob | null;
 }): Promise<ApiResult<Card>> {
   try {
     // Backend expects id and expectedVersion in JSON body, not query string.
@@ -467,6 +478,8 @@ export async function updateCard(params: {
     if (params.codeSnippet !== undefined) body.codeSnippet = params.codeSnippet;
     if (params.codeLanguage !== undefined) body.codeLanguage = params.codeLanguage;
     if (params.realWorldUsage !== undefined) body.realWorldUsage = params.realWorldUsage;
+    if (params.topic !== undefined) body.topic = params.topic;
+    if (params.mcq !== undefined) body.mcq = params.mcq;
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
     if (params.revision !== undefined) body.revision = params.revision;
@@ -658,6 +671,7 @@ export interface ContentIntelligenceData {
     productiveChallenge: number;
     difficultyUnderstated: number;
     difficultyOverstated: number;
+    mcqCardCount?: number;
   };
 }
 

@@ -45,7 +45,7 @@ public static class Helpers
     return null;
   }
 
-  public sealed record UpdateField(string BodyKey, string ColumnName, Func<JsonElement, object?> Transform);
+  public sealed record UpdateField(string BodyKey, string ColumnName, Func<JsonElement, object?> Transform, string Cast = "");
 
   public static (List<string> Fields, List<object?> Parameters) BuildUpdateSet(JsonElement body, IReadOnlyList<UpdateField> spec)
   {
@@ -57,7 +57,7 @@ public static class Helpers
     {
       if (!body.TryGetProperty(f.BodyKey, out var el)) continue;
       var value = f.Transform(el);
-      fields.Add($"{f.ColumnName} = ${idx++}");
+      fields.Add($"{f.ColumnName} = ${idx++}{f.Cast}");
       parameters.Add(value);
     }
 
@@ -97,6 +97,37 @@ public static class Helpers
   {
     if (el.ValueKind == JsonValueKind.Null) throw new ValidationError($"{fieldName} must be an integer", fieldName);
     return Validation.EnsureInteger(el.ToString(), fieldName);
+  }
+
+  /// <summary>Upper bound on cards.topic in UTF-16 code units; the console's TOPIC_MAX_LENGTH (C06) is the same 80.</summary>
+  public const int TopicMaxLength = 80;
+
+  /// <summary>
+  /// POST body → cards.topic. absent / JSON null / blank → null; string → Trim();
+  /// > 80 chars → ValidationError("topic too long (max 80)");
+  /// any other ValueKind → ValidationError("topic must be a string").
+  /// </summary>
+  public static string? ParseOptionalTopic(JsonElement body)
+  {
+    return body.TryGetProperty("topic", out var el) ? NormalizeTopic(el) : null;
+  }
+
+  /// <summary>Same rules for one element (the PUT spec transform).</summary>
+  public static string? NormalizeTopic(JsonElement el)
+  {
+    switch (el.ValueKind)
+    {
+      case JsonValueKind.Undefined:
+      case JsonValueKind.Null:
+        return null;
+      case JsonValueKind.String:
+        var s = (el.GetString() ?? string.Empty).Trim();
+        if (s.Length == 0) return null;
+        if (s.Length > TopicMaxLength) throw new ValidationError("topic too long (max 80)", "topic");
+        return s;
+      default:
+        throw new ValidationError("topic must be a string", "topic");
+    }
   }
 
   private static async Task<bool> DeckPerm(NpgsqlConnection conn, string adminSub, long deckId, string column)
@@ -145,5 +176,28 @@ public static class Helpers
     var rows = await DbUtil.QueryAsync(conn, null, "select deck_id as \"deckId\" from cards where id = $1", [cardId]);
     if (rows.Count == 0) return null;
     return Convert.ToInt64(rows[0]["deckId"], CultureInfo.InvariantCulture);
+  }
+
+  /// <summary>
+  /// A jsonb column arrives from DbUtil.QueryAsync as a .NET string in PG text form (DbUtil.cs:24 GetValue;
+  /// parameters bind via AddWithValue, :63-68). Returns an OWN copy via JsonSerializer.Deserialize&lt;JsonElement&gt;(s),
+  /// not a RootElement off a disposed document. null / absent → null; an already-converted JsonElement is returned as is.
+  /// </summary>
+  public static JsonElement? JsonbElement(IReadOnlyDictionary<string, object?> row, string key)
+  {
+    if (!row.TryGetValue(key, out var v)) return null;
+    if (v is JsonElement je) return je;
+    if (v is string s) return JsonSerializer.Deserialize<JsonElement>(s);
+    return null;
+  }
+
+  /// <summary>
+  /// In place: row[key] = JsonbElement(row, key) when the key is present (a null cell stays null, so the wire
+  /// carries "mcq": null for a Q/A card). Absent key → no-op.
+  /// </summary>
+  public static void JsonbCell(Dictionary<string, object?> row, string key)
+  {
+    if (!row.ContainsKey(key)) return;
+    row[key] = JsonbElement(row, key);
   }
 }

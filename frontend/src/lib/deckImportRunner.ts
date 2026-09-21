@@ -19,12 +19,17 @@
 //    treats an absent key as "leave it alone", so omitting a cleared snippet
 //    would leave the old text in the row, and the next import of the same file
 //    would plan the same update forever. Idempotence is the whole point of
-//    reconciling, so it has to survive deletions too.
+//    reconciling, so it has to survive deletions too. For the same reason mcq is
+//    always sent as an explicit value (null on a Q/A card): an update that
+//    removed the options must clear the column, and an absent key would leave
+//    the old blob in place.
 
 import { VERSION_CONFLICT } from '../api/errors';
 import type { ApiResult } from '../types/api';
 import type { Card } from '../types/card';
+import type { McqBlob } from '../types/mcq';
 import type { ImportCreate, ImportUpdate, ParsedCard } from './deckImport';
+import { mcqOf } from './mcqRules';
 
 export type ImportAction = ImportCreate | ImportUpdate;
 
@@ -38,6 +43,8 @@ export interface CreateCardParams {
   orderInDeck?: number;
   stableUid?: string;
   realWorldUsage?: string;
+  topic?: string;
+  mcq?: McqBlob | null;
 }
 
 export interface UpdateCardParams {
@@ -48,6 +55,8 @@ export interface UpdateCardParams {
   codeSnippet?: string;
   codeLanguage?: string;
   realWorldUsage?: string;
+  topic?: string;
+  mcq?: McqBlob | null;
   difficulty?: number;
   orderInDeck?: number;
   stableUid?: string;
@@ -91,6 +100,10 @@ export interface ImportProgress {
 // moved.
 export { VERSION_CONFLICT };
 
+// Raised by the readiness guard below when the first MCQ write comes back
+// without its mcq blob: the API in front of us predates migration 019 / C08.
+export const SERVER_NOT_READY_MCQ = 'SERVER_NOT_READY_MCQ';
+
 /**
  * Optional text is stored trimmed by the server and read back as either null
  * or "", so the runner sends the same normalized string the planner compares.
@@ -110,6 +123,8 @@ function createParamsFor(deckId: number, card: ParsedCard): CreateCardParams {
     codeSnippet: optionalText(card.codeSnippet),
     codeLanguage: optionalText(card.codeLanguage),
     realWorldUsage: optionalText(card.realWorldUsage),
+    topic: optionalText(card.topic ?? null),
+    mcq: card.mcq ?? null,
     difficulty: card.difficulty,
     orderInDeck: card.orderInDeck,
   };
@@ -125,6 +140,8 @@ function updateParamsFor(deckId: number, action: ImportUpdate): UpdateCardParams
     codeSnippet: optionalText(action.card.codeSnippet),
     codeLanguage: optionalText(action.card.codeLanguage),
     realWorldUsage: optionalText(action.card.realWorldUsage),
+    topic: optionalText(action.card.topic ?? null),
+    mcq: action.card.mcq ?? null,
     difficulty: action.card.difficulty,
     orderInDeck: action.card.orderInDeck,
     expectedVersion: action.expectedVersion,
@@ -135,6 +152,9 @@ function updateParamsFor(deckId: number, action: ImportUpdate): UpdateCardParams
 export function describeFailure(failure: ImportFailure): string {
   if (failure.code === VERSION_CONFLICT) {
     return `${failure.message} Re-run the preview to refresh the reconciliation before retrying.`;
+  }
+  if (failure.code === SERVER_NOT_READY_MCQ) {
+    return 'The server is not ready for MCQ cards (migration 019 / Lambda not deployed); nothing after this card was written.';
   }
   return failure.message;
 }
@@ -155,8 +175,11 @@ export async function runImport(
   const result: ImportRunResult = { created: 0, updated: 0, failures: [] };
   const total = actions.length;
   let done = 0;
+  // The readiness check runs once per run, on the first action whose card
+  // carries an mcq blob. A run without MCQ cards never reads outcome.data.
+  let mcqProbed = false;
 
-  for (const action of actions) {
+  for (const [index, action] of actions.entries()) {
     let outcome: ApiResult<Card>;
 
     try {
@@ -180,6 +203,21 @@ export async function runImport(
     }
 
     if (outcome.success) {
+      if (!mcqProbed && action.card.mcq !== undefined) {
+        mcqProbed = true;
+        if (mcqOf(outcome.data) === null) {
+          // The write succeeded but the echo has no mcq: the API in front of us
+          // predates migration 019 / C08 and stored a Q/A card. Stop here so a
+          // wrong deployment order costs one card, not the rest of the file.
+          result.failures.push({ action, stableUid: action.card.stableUid, code: SERVER_NOT_READY_MCQ, message: `The server stored "${action.card.stableUid}" without its options.` });
+          for (const skipped of actions.slice(index + 1)) {
+            result.failures.push({ action: skipped, stableUid: skipped.card.stableUid, code: SERVER_NOT_READY_MCQ, message: `Not written: "${skipped.card.stableUid}" was skipped after the MCQ readiness check failed.` });
+          }
+          done += 1;
+          onProgress?.({ done, total, current: action });
+          return result;
+        }
+      }
       if (action.kind === 'create') result.created += 1;
       else result.updated += 1;
     } else {

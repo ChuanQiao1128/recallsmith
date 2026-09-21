@@ -520,7 +520,12 @@ export function HomeScreen({ navigation, route }: Props) {
                       ? 'A reward draw is ready'
                       : firstDrawCoach
                         ? 'Tap your pack to begin'
-                        : 'All caught up for now'}
+                        : selectedDeckRow?.deck.canStudy &&
+                            selectedDeckRow.deck.dueToday === 0 &&
+                            selectedDeckRow.deck.newToday === 0 &&
+                            homeState.vm.draw.state === 'locked'
+                          ? 'Caught up'
+                          : 'All caught up for now'}
                 </Text>
               </View>
               <Pressable
@@ -549,13 +554,15 @@ export function HomeScreen({ navigation, route }: Props) {
                 const palette = packPaletteFromSlug(slug);
                 const dueCount = (realRow.deck as any)?.dueCount ?? (realRow.deck as any)?.dueToday ?? 0;
                 const totalCards = (realRow.deck as any)?.totalCards ?? 0;
-                const masteredApprox = (realRow.deck as any)?.masteredApprox ?? 0;
-                // Fully mastered: every card in the deck has reached
-                // mastery stage. We also require dueCount=0 (no review
-                // is currently due) to avoid celebrating prematurely
-                // when a card just dropped back into review.
+                const masteredCount = (realRow.deck as any)?.masteredCount ?? 0;
+                // Fully mastered: every card in the deck has reached the
+                // mastery stage (stage >= 4, read from masteredCount — F11).
+                // The learned-count proxy ("reviewed once") must not decide
+                // this. We also require dueCount=0 (no review is currently
+                // due) to avoid celebrating prematurely when a card just
+                // dropped back into review.
                 const isFullyMastered =
-                  totalCards > 0 && masteredApprox >= totalCards && dueCount === 0;
+                  totalCards > 0 && masteredCount >= totalCards && dueCount === 0;
                 let status = 'Ready';
                 if (realRow.actionHint === 'none') status = 'Soon';
                 else if (realRow.actionHint === 'paywall') status = 'Locked';

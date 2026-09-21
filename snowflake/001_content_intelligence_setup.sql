@@ -77,6 +77,10 @@ select
   coalesce(src:payload:server_received_ts::timestamp_ltz, src:server_received_ts::timestamp_ltz) as server_received_ts,
   coalesce(src:payload:platform::string, src:platform::string) as platform,
   coalesce(src:payload:app_version::string, src:app_version::string) as app_version,
+  coalesce(src:payload:card_format::string, src:card_format::string, 'qa') as card_format,
+  coalesce(src:payload:client_features, src:client_features) as client_features,
+  coalesce(src:payload:update_id::string, src:update_id::string) as update_id,
+  iff(coalesce(src:payload:card_format::string, src:card_format::string, 'qa') = 'mcq' and coalesce(array_contains('mcq'::variant, coalesce(src:payload:client_features, src:client_features)), false), 'mcq', 'qa') as answer_mode,
   coalesce(src:payload:offline_queue_delay_ms::number, src:offline_queue_delay_ms::number) as offline_queue_delay_ms,
   src:outbox_id::number as outbox_id,
   src:aggregate_id::string as aggregate_id,
@@ -106,7 +110,11 @@ select
   review_count_for_card,
   dwell_time_ms,
   platform,
-  app_version
+  app_version,
+  card_format,
+  answer_mode,
+  client_features,
+  update_id
 from staging.stg_review_events
 where event_type = 'card_reviewed'
   and event_id is not null
@@ -131,23 +139,25 @@ with user_card_ordered as (
 user_baseline as (
   select
     user_id_hash,
+    answer_mode,
     count(*) as user_review_count,
     avg(response_score) as user_avg_response_score
   from user_card_ordered
-  group by user_id_hash
+  group by user_id_hash, answer_mode
 ),
 expected_by_difficulty as (
   select
     event_date,
     deck_slug,
     stated_difficulty,
+    answer_mode,
     avg(response_score) as expected_difficulty,
     nullif(stddev_samp(response_score), 0) as expected_stddev,
     median(dwell_time_ms) as expected_dwell_time_ms,
     nullif(stddev_samp(dwell_time_ms), 0) as expected_dwell_stddev
   from user_card_ordered
   where dwell_time_ms is null or dwell_time_ms > 0
-  group by event_date, deck_slug, stated_difficulty
+  group by event_date, deck_slug, stated_difficulty, answer_mode
 ),
 card_stats as (
   select
@@ -156,6 +166,7 @@ card_stats as (
     e.card_stable_uid,
     e.card_revision,
     e.stated_difficulty,
+    e.answer_mode,
     count(*) as review_count,
     count(distinct e.user_id_hash) as unique_user_count,
     count_if(e.user_card_review_number = 1) as first_review_count,
@@ -175,8 +186,8 @@ card_stats as (
       iff(ub.user_review_count >= 10 and ub.user_avg_response_score <= 1.4, 0, null))) as high_level_user_failure_rate,
     avg(iff(e.rating in ('good', 'easy'), e.user_card_review_number, null)) as review_count_to_mastery
   from user_card_ordered e
-  left join user_baseline ub on ub.user_id_hash = e.user_id_hash
-  group by e.event_date, e.deck_slug, e.card_stable_uid, e.card_revision, e.stated_difficulty
+  left join user_baseline ub on ub.user_id_hash = e.user_id_hash and ub.answer_mode = e.answer_mode
+  group by e.event_date, e.deck_slug, e.card_stable_uid, e.card_revision, e.stated_difficulty, e.answer_mode
 ),
 scored as (
   select
@@ -192,6 +203,7 @@ scored as (
     on b.event_date = cs.event_date
    and b.deck_slug = cs.deck_slug
    and b.stated_difficulty = cs.stated_difficulty
+   and b.answer_mode = cs.answer_mode
 )
 select
   *,
@@ -202,6 +214,7 @@ select
     else 'Correctly Calibrated'
   end as difficulty_calibration_status,
   case
+    when answer_mode = 'mcq' then 'MCQ · Not Assessed'
     when review_count < 30 then 'Needs More Data'
     when coalesce(difficulty_gap_z, 0) > 1.0
       and coalesce(dwell_time_gap_z, 0) > 1.0
@@ -255,6 +268,7 @@ with revision_rollup as (
     avg(again_rate) as failure_rate,
     avg(median_dwell_time_ms) as median_dwell_time_ms
   from marts.mart_card_quality_daily
+  where answer_mode = 'qa'
   group by deck_slug, card_stable_uid, card_revision, stated_difficulty
 ),
 paired as (
@@ -308,7 +322,8 @@ select
   count_if(difficulty_calibration_status = 'Difficulty Understated') as difficulty_understated_count,
   count_if(difficulty_calibration_status = 'Difficulty Overstated') as difficulty_overstated_count,
   avg(fix_priority_score) as avg_fix_priority_score,
-  max(fix_priority_score) as max_fix_priority_score
+  max(fix_priority_score) as max_fix_priority_score,
+  count_if(content_quality_status = 'MCQ · Not Assessed') as mcq_not_assessed_count
 from marts.mart_card_quality_daily
 group by event_date, deck_slug;
 

@@ -102,7 +102,7 @@ describe('owned gate — characterization (no ownedSet passed = ungated)', () =>
 
     expect(planned.dueCount).toBe(2);
     expect(planned.newCount).toBe(2);
-    expect(planned.limit).toBe(3);
+    expect(planned.limit).toBe(4);
   });
 
   it('fills the calendar from every scheduled card in the deck', () => {
@@ -215,7 +215,7 @@ describe('owned gate — flipped (ownedSet passed)', () => {
   it('plans a shorter route because the deck is no longer the pool', () => {
     const planned = planChallengeRoute({ deck: gateDeck, progress: gateProgress, now: NOW, ownedSet: OWNED });
 
-    // Was dueCount 2 / newCount 2 / limit 3. The route is built from the two
+    // Was dueCount 2 / newCount 2 / limit 4. The route is built from the two
     // counts above, so it shortens with them: a route node the gate will not
     // let you fill is a session that ends with an unexplained empty screen.
     expect(planned.dueCount).toBe(1);

@@ -49,7 +49,9 @@ public static class Cards
             c.version,
             c.is_deleted    as "isDeleted",
             c.created_at    as "createdAt",
-            c.updated_at    as "updatedAt"
+            c.updated_at    as "updatedAt",
+            c.topic,
+            c.mcq
           from cards c
           """;
 
@@ -80,6 +82,7 @@ public static class Cards
         sql += " order by c.order_in_deck asc, c.id asc";
 
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
+        foreach (var row in rows) Helpers.JsonbCell(row, "mcq");
         return res.Ok(rows);
       }
       catch (Exception ex) when (ex is ValidationError)
@@ -131,18 +134,30 @@ public static class Cards
         var difficultyInt = body.TryGetProperty("difficulty", out var difEl) ? Helpers.ParseOptionalInteger(difEl, "difficulty") : null;
         var revisionInt = body.TryGetProperty("revision", out var revEl) ? Helpers.ParseOptionalInteger(revEl, "revision") : null;
         var versionInt = body.TryGetProperty("version", out var verEl) ? Helpers.ParseOptionalInteger(verEl, "version") : null;
+        var topic = Helpers.ParseOptionalTopic(body);
+
+        var mcq = body.TryGetProperty("mcq", out var mcqEl) && mcqEl.ValueKind != JsonValueKind.Null
+          ? McqValidation.Canonicalize(mcqEl, question)
+          : null;
+        if (mcq is not null)
+        {
+          if (string.IsNullOrWhiteSpace(explanation)) return res.BadRequest("MCQ_EXPLANATION_REQUIRED", "explanation is required for an MCQ card");
+          if (!McqValidation.IsMcqDifficulty(difficultyInt ?? 2)) return res.BadRequest("MCQ_DIFFICULTY_RANGE", "difficulty must be 1..3 for an MCQ card");
+        }
 
         const string sql = """
           insert into cards (
             deck_id, stable_uid, question, explanation, code_snippet, code_language,
-            real_world_usage, difficulty, order_in_deck, revision, version
+            real_world_usage, difficulty, order_in_deck, revision, version, topic, mcq
           )
           values (
             $1,$2,$3,$4,$5,$6,$7,
             coalesce($8,2),
             $9,
             coalesce($10,1),
-            coalesce($11,1)
+            coalesce($11,1),
+            $12,
+            $13::jsonb
           )
           returning
             id,
@@ -159,7 +174,9 @@ public static class Cards
             version,
             is_deleted    as "isDeleted",
             created_at    as "createdAt",
-            updated_at    as "updatedAt";
+            updated_at    as "updatedAt",
+            topic,
+            mcq;
           """;
 
         var parameters = new object?[]
@@ -175,10 +192,16 @@ public static class Cards
           orderInDeckInt,
           revisionInt,
           versionInt,
+          topic, mcq,
         };
 
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
+        if (rows.Count > 0) Helpers.JsonbCell(rows[0], "mcq");
         return res.Ok(rows.Count > 0 ? rows[0] : null);
+      }
+      catch (McqValidationError ex)
+      {
+        return res.BadRequest(ex.Code, ex.Message);
       }
       catch (Exception ex) when (ex is ValidationError)
       {
@@ -233,6 +256,34 @@ public static class Cards
           return res.Forbidden("Moving cards between decks requires super_admin");
         }
 
+        var stored = await DbUtil.QueryAsync(conn, null, "select question, explanation, difficulty, mcq from cards where id = $1", [idInt]);
+        if (stored.Count == 0) return res.NotFound("Card not found");
+        var storedRow = stored[0];
+        var effectiveQuestion = body.TryGetProperty("question", out var qEl) && qEl.ValueKind != JsonValueKind.Null
+          ? qEl.ToString().Trim()
+          : storedRow["question"] as string ?? string.Empty;
+        var effectiveExplanation = body.TryGetProperty("explanation", out var exEl)
+          ? (exEl.ValueKind == JsonValueKind.Null ? null : exEl.ToString().Trim())
+          : storedRow["explanation"] as string;
+        long? effectiveDifficulty = body.TryGetProperty("difficulty", out var dEl)
+          ? (dEl.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(dEl, "difficulty"))
+          : Convert.ToInt64(storedRow["difficulty"], CultureInfo.InvariantCulture);
+        string? effectiveMcq;
+        if (body.TryGetProperty("mcq", out var mcqEl))
+        {
+          effectiveMcq = mcqEl.ValueKind == JsonValueKind.Null ? null : McqValidation.Canonicalize(mcqEl, effectiveQuestion);
+        }
+        else
+        {
+          var storedMcq = Helpers.JsonbElement(storedRow, "mcq");
+          effectiveMcq = storedMcq is null ? null : McqValidation.Canonicalize(storedMcq.Value, effectiveQuestion);
+        }
+        if (effectiveMcq is not null)
+        {
+          if (string.IsNullOrWhiteSpace(effectiveExplanation)) return res.BadRequest("MCQ_EXPLANATION_REQUIRED", "explanation is required for an MCQ card");
+          if (effectiveDifficulty is not long d || !McqValidation.IsMcqDifficulty(d)) return res.BadRequest("MCQ_DIFFICULTY_RANGE", "difficulty must be 1..3 for an MCQ card");
+        }
+
         var spec = new List<Helpers.UpdateField>
         {
           new("deckId", "deck_id", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "deckId")),
@@ -245,6 +296,8 @@ public static class Cards
           new("difficulty", "difficulty", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "difficulty")),
           new("orderInDeck", "order_in_deck", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "orderInDeck")),
           new("revision", "revision", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "revision")),
+          new("topic", "topic", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.NormalizeTopic(v)),
+          new("mcq", "mcq", v => v.ValueKind == JsonValueKind.Null ? null : McqValidation.Canonicalize(v, effectiveQuestion), "::jsonb"),
           new("isDeleted", "is_deleted", v => Helpers.ParseBoolean(v, false) ? 1 : 0),
         };
 
@@ -280,7 +333,9 @@ public static class Cards
             version,
             is_deleted    as "isDeleted",
             created_at    as "createdAt",
-            updated_at    as "updatedAt";
+            updated_at    as "updatedAt",
+            topic,
+            mcq;
           """;
 
         parameters.Add(idInt);
@@ -294,7 +349,12 @@ public static class Cards
           return res.BadRequest("VERSION_CONFLICT", "Card has been modified by another user. Please reload and try again.");
         }
 
+        Helpers.JsonbCell(rows[0], "mcq");
         return res.Ok(rows[0]);
+      }
+      catch (McqValidationError ex)
+      {
+        return res.BadRequest(ex.Code, ex.Message);
       }
       catch (Exception ex) when (ex is ValidationError)
       {

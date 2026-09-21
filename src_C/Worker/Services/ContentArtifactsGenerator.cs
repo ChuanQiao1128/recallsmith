@@ -277,6 +277,8 @@ public class ContentArtifactsGenerator : IContentArtifactsGenerator
         CodeSnippet = c.CodeSnippet ?? string.Empty,
         RealWorldUsage = c.RealWorldUsage ?? string.Empty,
         Revision = c.Revision ?? 1,
+        Topic = c.Topic,
+        Mcq = c.Mcq,
       });
     }
 
@@ -304,5 +306,7 @@ public class ContentArtifactsGenerator : IContentArtifactsGenerator
     public string? CodeSnippet { get; set; }
     public string? RealWorldUsage { get; set; }
     public int? Revision { get; set; }
+    public string? Topic { get; set; }
+    public JsonElement? Mcq { get; set; }
   }
 }

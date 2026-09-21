@@ -25,6 +25,9 @@ export type DeckSummary = {
   newToday: number;
   masteredApprox: number;
   percent: number;
+  /** Owned cards at stage >= MASTERY_STAGE_THRESHOLD (isMasteredProgress). masteredApprox keeps
+   *  meaning "learned" and still feeds percent; only Home's Mastered ✓ / Deck mastered read this. */
+  masteredCount?: number;
 };
 
 export type TodayCounts = {
@@ -65,7 +68,7 @@ export type HomeVM = {
 export type ChallengeRoute = {
   slug: string;
   deckTitle: string;
-  mode: 'mixed' | 'review-due' | 'learn-new';
+  mode: 'mixed' | 'review-due' | 'learn-new' | 'sweep';
   limit: number;
   minimumGoal: number;
   dueCount: number;

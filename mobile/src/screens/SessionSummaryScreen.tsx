@@ -9,8 +9,7 @@ import { RewardSummaryCard } from '../features/gacha/components/RewardSummaryCar
 import { SummaryProgressBlock } from '../features/gacha/components/SummaryProgressBlock';
 import { buildDrawState } from '../features/gacha/draw/drawState';
 import { resolveNewMilestones, type Milestone } from '../features/gacha/milestones/milestoneTracker';
-import { computeSessionRewardPulls } from '../features/gacha/rewards/rewardResolver';
-import { applySessionRewardToWallet, loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { buildSessionSummaryVM } from '../features/gacha/session/summaryMapper';
 import { applySessionStreak, loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import type { HomeCtaKind } from '../features/gacha/selectors/homeSelectors';
@@ -44,7 +43,7 @@ function navigateFromActionKind(args: {
 }
 
 export function SessionSummaryScreen({ navigation, route }: Props) {
-  const { sessionId, deckTitle, slug, sessionDone, sessionLimit, minimumGoal, dueCount, streakEarned = false } = route.params;
+  const { sessionId, deckTitle, slug, sessionDone, sessionLimit, minimumGoal, dueCount, streakEarned = false, reward, loadForecast } = route.params;
 
   const [walletBeforeReward, setWalletBeforeReward] = useState<RewardWalletState | null>(null);
   const [streakBeforeSnapshot, setStreakBeforeSnapshot] = useState<StreakSnapshot | null>(null);
@@ -62,14 +61,13 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
     (async () => {
       try {
         if (sessionId) {
-          const rewardPulls = computeSessionRewardPulls({ sessionDone, sessionLimit, minimumGoal });
-          const [rewardResult, streakResult] = await Promise.all([
-            applySessionRewardToWallet(sessionId, rewardPulls),
+          const [loadedWallet, streakResult] = await Promise.all([
+            loadRewardWalletState(),
             applySessionStreak({ sessionId, earned: streakEarned }),
           ]);
 
           if (!cancelled) {
-            setWalletBeforeReward(rewardResult.walletBefore);
+            setWalletBeforeReward(loadedWallet);
             setStreakBeforeSnapshot(streakResult.before);
             setStreakAfterSnapshot(streakResult.after);
             setNewMilestones(resolveNewMilestones({ before: streakResult.before, after: streakResult.after }));
@@ -98,6 +96,8 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
     };
   }, [sessionId, sessionDone, sessionLimit, minimumGoal, streakEarned, summaryRetryToken]);
 
+  const walletForSummary = reward?.walletBefore ?? walletBeforeReward;
+
   const summary = useMemo(
     () =>
       buildSessionSummaryVM({
@@ -106,7 +106,8 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
         sessionLimit,
         minimumGoal,
         dueCount,
-        wallet: walletBeforeReward,
+        wallet: walletForSummary,
+        reward: reward ?? null,
         streakBefore: streakBeforeSnapshot?.currentDailyStreak ?? null,
         streakAfter: streakAfterSnapshot?.currentDailyStreak ?? null,
       }),
@@ -116,7 +117,8 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
       sessionLimit,
       minimumGoal,
       dueCount,
-      walletBeforeReward,
+      walletForSummary,
+      reward,
       streakBeforeSnapshot,
       streakAfterSnapshot,
     ],
@@ -250,6 +252,12 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
                 : null
             }
           />
+
+          {loadForecast ? (
+            <Text testID="session-summary-load-forecast" numberOfLines={2} style={styles.forecastLine}>
+              {loadForecast}
+            </Text>
+          ) : null}
 
           <SummaryProgressBlock
             testID="summary-progress-block"
@@ -414,6 +422,15 @@ const styles = StyleSheet.create({
   heroCompletion: { color: colors.inkSecondary, fontSize: typography.caption, fontWeight: '700' },
   title: { marginTop: 8, color: colors.ink, fontSize: typography.title2, lineHeight: 28, fontWeight: '900' },
   subtitle: { marginTop: 6, color: colors.inkSecondary, fontSize: typography.bodySmall, lineHeight: 18, fontWeight: '600' },
+  // Same copy and weight as SessionCardScreen's in-session forecast line.
+  forecastLine: {
+    marginTop: 2,
+    marginBottom: spacing.sm,
+    fontSize: typography.caption,
+    color: colors.inkSecondary,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   milestoneCard: {
     borderRadius: spacing.lg,
     padding: spacing.md,
