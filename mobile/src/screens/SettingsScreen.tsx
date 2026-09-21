@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -39,6 +39,7 @@ import RemindersSection from '../features/gacha/settings/reminders/RemindersSect
 import AppearanceSection from '../features/gacha/settings/appearance/AppearanceSection';
 import AboutSection from '../features/gacha/settings/about/AboutSection';
 import DebugSection from '../features/gacha/settings/debug/DebugSection';
+import { createDebugTapCounter } from '../features/gacha/settings/debug/debugTapCounter';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
@@ -174,6 +175,13 @@ export function SettingsScreen({ navigation }: Props) {
 
   const onSignIn = useCallback(() => {
     navigation.navigate('SignIn');
+  }, [navigation]);
+
+  // Production door to the Debug menu: 7 taps on the version label within 3 s
+  // (the __DEV__ Debug section below stays as it is).
+  const debugTaps = useRef(createDebugTapCounter());
+  const onVersionPress = useCallback(() => {
+    if (debugTaps.current.tap()) navigation.navigate('DebugMenu');
   }, [navigation]);
 
   const onSignOut = useCallback(async () => {
@@ -349,6 +357,7 @@ export function SettingsScreen({ navigation }: Props) {
             appVersion={appVersion}
             onSupport={() => void openExternalLink(SUPPORT_URL)}
             onPrivacy={() => void openExternalLink(PRIVACY_URL)}
+            onVersionPress={onVersionPress}
           />
 
           {__DEV__ ? <DebugSection onOpenDebug={() => navigation.navigate('DebugMenu')} /> : null}

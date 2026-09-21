@@ -164,11 +164,17 @@ const fallbackEasing = {
   in: (e: (t: number) => number) => e,
 };
 
+/** Reanimated's per-frame UI-thread callback handle (`useFrameCallback`). */
+export type FrameCallbackHandle = { setActive: (active: boolean) => void; isActive: boolean; callbackId: number };
+export type FrameInfo = { timestamp: number; timeSincePreviousFrame: number | null; timeSinceFirstFrame: number };
+
 type ReanimatedSurface = {
   useSharedValue: <T>(init: T) => SharedValue<T>;
   useDerivedValue: <T>(fn: () => T) => SharedValue<T>;
   useAnimatedStyle: (fn: () => any) => any;
   useAnimatedReaction: (...args: any[]) => any;
+  /** UI-thread frame callback; the fallback never calls `fn` and returns an inert handle. */
+  useFrameCallback: (fn: (info: FrameInfo) => void, autostart?: boolean) => FrameCallbackHandle;
   withTiming: (to: any, cfg?: any, cb?: (finished?: boolean) => void) => any;
   withSpring: (to: any, cfg?: any, cb?: (finished?: boolean) => void) => any;
   withDelay: (ms: number, anim: any) => any;
@@ -183,12 +189,18 @@ type ReanimatedSurface = {
   createAnimatedComponent: (c: any) => any;
 };
 
+const INERT_FRAME_HANDLE: FrameCallbackHandle = Object.freeze({ setActive: () => undefined, isActive: false, callbackId: -1 });
+function inertFrameCallback(): FrameCallbackHandle {
+  return INERT_FRAME_HANDLE;
+}
+
 function realReanimated(RA: any): ReanimatedSurface {
   return {
     useSharedValue: RA.useSharedValue,
     useDerivedValue: RA.useDerivedValue,
     useAnimatedStyle: RA.useAnimatedStyle,
     useAnimatedReaction: RA.useAnimatedReaction,
+    useFrameCallback: typeof RA.useFrameCallback === 'function' ? RA.useFrameCallback : inertFrameCallback,
     withTiming: RA.withTiming,
     withSpring: RA.withSpring,
     withDelay: RA.withDelay,
@@ -214,6 +226,7 @@ function fallbackReanimated(): ReanimatedSurface {
     },
     useAnimatedStyle: (fn: () => any) => fn(),
     useAnimatedReaction: () => undefined,
+    useFrameCallback: inertFrameCallback,
     withTiming: (to: any, _cfg?: any, cb?: (finished?: boolean) => void) => {
       cb?.(true);
       return to;

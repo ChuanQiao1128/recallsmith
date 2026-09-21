@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -8,6 +8,11 @@ import { saveRewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { loadDrawState, saveDrawState } from '../features/gacha/draw/drawStateStore';
 import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { getCeremonyDevOverrides, setCeremonyDevOverride } from '../features/gacha/draw/ceremonyPrefs';
+import {
+  formatCeremonyPerfReport,
+  loadLastCeremonyPerfReport,
+  type CeremonyPerfReport,
+} from '../features/gacha/draw/ceremonyPerf';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DebugMenu'>;
 const scenarios = [
@@ -20,10 +25,51 @@ const scenarios = [
   { title: 'Churned reset', subtitle: 'Fresh-start-first home state' },
 ];
 
+/** Outside __DEV__ (the 7-tap door from Settings) every wallet / seed action asks once more. */
+export function confirmDevOnly(action: () => void, isDev: boolean = __DEV__): void {
+  if (isDev) {
+    action();
+    return;
+  }
+  Alert.alert(
+    'Dev only',
+    'This changes wallet or ownership data on this device. Continue?',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Continue', style: 'destructive', onPress: action },
+    ],
+  );
+}
+
 export function DebugMenuScreen({ navigation }: Props) {
   const [busy, setBusy] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [devOverrides, setDevOverrides] = useState(() => getCeremonyDevOverrides());
+  const [perfReport, setPerfReport] = useState<CeremonyPerfReport | null>(null);
+  const [perfLoaded, setPerfLoaded] = useState(false);
+  const [perfJsonVisible, setPerfJsonVisible] = useState(false);
+
+  const reloadPerf = useCallback(async () => {
+    let report: CeremonyPerfReport | null = null;
+    try {
+      report = await loadLastCeremonyPerfReport();
+    } catch {
+      report = null;
+    }
+    return report;
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void reloadPerf().then((report) => {
+      if (!mounted) return;
+      setPerfReport(report);
+      setPerfLoaded(true);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [reloadPerf]);
 
   async function handleSeedWallet() {
     if (busy) return;
@@ -138,6 +184,54 @@ export function DebugMenuScreen({ navigation }: Props) {
       onTertiary={() => navigation.navigate('More')}
       footer={
         <>
+        <View style={styles.perfCard} testID="debug-ceremony-perf">
+          <Text style={styles.ceremonyEyebrow} numberOfLines={1}>
+            LAST CEREMONY REPORT
+          </Text>
+          {perfReport ? (
+            formatCeremonyPerfReport(perfReport).map((line, i) => (
+              <Text key={i} style={styles.perfLine} testID={`debug-ceremony-perf-line-${i}`}>
+                {line}
+              </Text>
+            ))
+          ) : (
+            <Text style={styles.perfLine} testID="debug-ceremony-perf-empty">
+              {perfLoaded ? 'No ceremony recorded on this device yet. Open a pack, then come back.' : 'Loading…'}
+            </Text>
+          )}
+          <View style={styles.perfRow}>
+            <Pressable
+              testID="debug-ceremony-perf-reload"
+              accessibilityRole="button"
+              accessibilityLabel="Reload ceremony report"
+              style={({ pressed }) => [styles.ceremonyButton, styles.perfButton, pressed && styles.dangerButtonPressed]}
+              onPress={() => {
+                void reloadPerf().then((report) => {
+                  setPerfReport(report);
+                  setPerfLoaded(true);
+                });
+              }}
+            >
+              <Text style={styles.ceremonyButtonText}>Reload</Text>
+            </Pressable>
+            {perfReport ? (
+              <Pressable
+                testID="debug-ceremony-perf-json"
+                accessibilityRole="button"
+                accessibilityLabel={perfJsonVisible ? 'Hide report JSON' : 'Show report JSON'}
+                style={({ pressed }) => [styles.ceremonyButton, styles.perfButton, pressed && styles.dangerButtonPressed]}
+                onPress={() => setPerfJsonVisible((v) => !v)}
+              >
+                <Text style={styles.ceremonyButtonText}>{perfJsonVisible ? 'Hide JSON' : 'Show JSON'}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {perfReport && perfJsonVisible ? (
+            <Text style={styles.perfJson} selectable testID="debug-ceremony-perf-json-body">
+              {JSON.stringify(perfReport, null, 1)}
+            </Text>
+          ) : null}
+        </View>
         {__DEV__ ? (
           <View style={styles.ceremonyTools} testID="debug-ceremony-tools">
             <Text style={styles.ceremonyEyebrow} numberOfLines={1}>
@@ -149,7 +243,7 @@ export function DebugMenuScreen({ navigation }: Props) {
               accessibilityLabel="Seed wallet 60/5"
               disabled={busy}
               style={({ pressed }) => [styles.ceremonyButton, busy && styles.dangerButtonDisabled, pressed && styles.dangerButtonPressed]}
-              onPress={() => void handleSeedWallet()}
+              onPress={() => confirmDevOnly(() => void handleSeedWallet())}
             >
               <Text style={styles.ceremonyButtonText}>Seed wallet 60/5</Text>
             </Pressable>
@@ -159,7 +253,7 @@ export function DebugMenuScreen({ navigation }: Props) {
               accessibilityLabel="Only Legendary left"
               disabled={busy}
               style={({ pressed }) => [styles.ceremonyButton, busy && styles.dangerButtonDisabled, pressed && styles.dangerButtonPressed]}
-              onPress={() => void handleOnlyLegendary()}
+              onPress={() => confirmDevOnly(() => void handleOnlyLegendary())}
             >
               <Text style={styles.ceremonyButtonText}>Only Legendary left</Text>
             </Pressable>
@@ -232,6 +326,30 @@ export function DebugMenuScreen({ navigation }: Props) {
 export default DebugMenuScreen;
 
 const styles = StyleSheet.create({
+  perfCard: {
+    marginTop: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: 'rgba(120,180,245,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(120,180,245,0.28)',
+  },
+  perfLine: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 17,
+    color: 'rgba(245,236,196,0.9)',
+    fontWeight: '600',
+  },
+  perfRow: { flexDirection: 'row', columnGap: 10 },
+  perfButton: { flex: 1 },
+  perfJson: {
+    marginTop: 10,
+    fontSize: 10,
+    lineHeight: 13,
+    color: 'rgba(245,236,196,0.75)',
+  },
   ceremonyTools: {
     marginTop: 12,
     paddingVertical: 16,

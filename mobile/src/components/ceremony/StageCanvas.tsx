@@ -222,7 +222,10 @@ function StageRim({ x, y, rot, alpha, size, color, glowImage }: StageRimProps): 
   );
 }
 
-export function StageCanvas(props: StageCanvasProps): React.JSX.Element | null {
+// Memoised (2026-09-21 perf): the screen re-renders on every phase change and every card
+// flip, but none of this canvas's props change then (motion arrives through the timeline's
+// shared values), so the Skia element tree is reconciled once per ceremony.
+export const StageCanvas: React.NamedExoticComponent<StageCanvasProps> = React.memo(function StageCanvas(props: StageCanvasProps): React.JSX.Element | null {
   if (!skiaAvailable || !SkiaModule) return null;
 
   const {
@@ -251,15 +254,13 @@ export function StageCanvas(props: StageCanvasProps): React.JSX.Element | null {
   const spread = width * 0.35;
 
   // Derived colours/transforms — each callback a worklet reading only shared
-  // values, module constants and worklet helpers.
+  // values, module constants and worklet helpers. The halo and the leak share one
+  // derived stop list (identical inputs) so the tell colour is interpolated once per frame.
   const haloColors = useDerivedValue(() => {
     'worklet';
     return [stageHaloColor(tell.value, peakRarity), 'rgba(255,247,236,0)'];
   });
-  const leakColors = useDerivedValue(() => {
-    'worklet';
-    return [stageHaloColor(tell.value, peakRarity), 'rgba(255,247,236,0)'];
-  });
+  const leakColors = haloColors;
   // raysAngle is already RADIANS (B07 drives it 0 → 2π once per revolution,
   // B00 §2.10 "Units") — passed to Skia rotate unchanged.
   const rayTransform = useDerivedValue(() => {
@@ -410,4 +411,4 @@ export function StageCanvas(props: StageCanvasProps): React.JSX.Element | null {
       ) : null}
     </Canvas>
   );
-}
+});

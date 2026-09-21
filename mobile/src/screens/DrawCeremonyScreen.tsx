@@ -7,6 +7,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { CEREMONY_COPY_V10, CEREMONY_COPY_V9, getCeremonyPhaseCopy } from '../features/gacha/draw/ceremonyCopy';
 import {
+  CARD_FRAME_IMAGES,
   GLOW_9SLICE,
   PAGE_GRADIENT_CEREMONY,
   PARTICLE_SHEET,
@@ -49,6 +50,8 @@ import { FallbackStage } from '../components/ceremony/FallbackStage';
 import { FeaturedCard, type FeaturedCardProps } from '../components/ceremony/FeaturedCard';
 import { SpillSampler } from '../components/ceremony/SpillSampler';
 import { ceremonyStyles as styles } from '../components/ceremony/ceremonyStyles';
+import { prefetchCeremonyImages } from '../components/ceremony/imagePrefetch';
+import { DROPPED_FRAME_MS, startCeremonyPerf, type CeremonyPerfSession, type UiFrameStats } from '../features/gacha/draw/ceremonyPerf';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DrawCeremony'>;
 
@@ -157,9 +160,69 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const flippedRef = useRef<Set<string>>(flippedSet);
   const phaseStartedAtRef = useRef<number>(0);
   const goResultRef = useRef<() => void>(() => {});
+  const perfRef = useRef<CeremonyPerfSession | null>(null);
 
   const audio = useCeremonyAudio();
   const haptics = useCeremonyHaptics();
+
+  // UI-thread frame counters (Reanimated frame callback; inert under the guard fallback).
+  // Four scalar shared values written per frame on the UI thread, read once at unmount.
+  const uiFrames = Reanimated.useSharedValue(0);
+  const uiDropped = Reanimated.useSharedValue(0);
+  const uiMax = Reanimated.useSharedValue(0);
+  const uiSum = Reanimated.useSharedValue(0);
+  const uiFrameCallback = Reanimated.useFrameCallback((info) => {
+    'worklet';
+    const dt = info.timeSincePreviousFrame;
+    if (dt === null || dt === undefined) return;
+    uiFrames.value += 1;
+    uiSum.value += dt;
+    if (dt > uiMax.value) uiMax.value = dt;
+    if (dt > DROPPED_FRAME_MS) uiDropped.value += 1;
+  }, true);
+
+  // Perf recorder + warm-up: every audio player exists and the ceremony bitmaps are in
+  // the image cache before the tear is interactive (design §3.8); the report lands in
+  // AsyncStorage at unmount for DebugMenu's "Last ceremony report" card.
+  useEffect(() => {
+    const session = startCeremonyPerf({
+      renderer,
+      reduceMotion,
+      cardCount: cards.length,
+      peakRarity,
+      isMulti,
+      tapFlow: enableTapFlow,
+      slug: route.params.slug,
+    });
+    perfRef.current = session;
+    session.setUiSampler((): UiFrameStats | null => {
+      try {
+        const frames = uiFrames.value;
+        if (!(frames > 0)) return null;
+        return {
+          frames,
+          dropped: uiDropped.value,
+          max: Math.round(uiMax.value * 10) / 10,
+          meanMs: Math.round((uiSum.value / frames) * 10) / 10,
+        };
+      } catch {
+        return null;
+      }
+    });
+    try { audio.warmUp(); } catch { /* audio stays cold; the ceremony plays silent */ }
+    try {
+      prefetchCeremonyImages([
+        coverImage, cardBackImage, CARD_FRAME_IMAGES.COM, CARD_FRAME_IMAGES.RAR, CARD_FRAME_IMAGES.LEG,
+        GLOW_9SLICE, PARTICLE_SHEET,
+      ]);
+    } catch { /* the first draw decodes instead */ }
+    return () => {
+      try { uiFrameCallback.setActive(false); } catch {}
+      try { session.stop(); } catch {}
+      if (perfRef.current === session) perfRef.current = null;
+    };
+    // Mount-only: the meta snapshot is patched by updateMeta as facts resolve.
+  }, []);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -173,6 +236,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
   const setPhaseAt = useCallback((p: CeremonyPhase) => {
     phaseStartedAtRef.current = Date.now();
+    perfRef.current?.markPhase(p);
     setPhase(p);
   }, []);
 
@@ -388,6 +452,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
   // Reduce-motion cues on mount / RM change.
   useEffect(() => {
+    perfRef.current?.updateMeta({ reduceMotion });
     haptics.reset({ reduceMotion });
     if (reduceMotion) {
       audio.tail('soft-chime');
@@ -467,6 +532,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
   const packPhase = phase === 'swipe' || phase === 'approach' || phase === 'hold' || phase === 'tear-flip';
   const tablePhase = phase === 'flash-reveal' || phase === 'settle' || phase === 'cards-on-table';
+  // The tap table is committed (hidden, absolute, non-interactive) from 'hold' so its native
+  // views and bitmaps exist before the flash instead of being created on the flash frame.
+  const tableWarm = enableTapFlow && !reduceMotion && (phase === 'hold' || phase === 'tear-flip');
   const showFeatured = !enableTapFlow && (phase === 'flash-reveal' || phase === 'settle');
   const featuredProps: FeaturedCardProps = {
     accent,
@@ -641,7 +709,6 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
                 timeline={timeline}
                 disabled={reduceMotion || phase !== 'swipe'}
                 onTear={startSequence}
-                onSeamProgress={setSwipeProgress}
               />
             ) : null}
 
@@ -675,10 +742,13 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
               <SpillSampler durationMs={activeTimings.tearFlip} renderer={renderer} />
             ) : null}
 
-            {enableTapFlow && tablePhase ? (
+            {enableTapFlow && (tablePhase || tableWarm) ? (
               <View
                 testID={phase === 'cards-on-table' ? 'draw-ceremony-cards-on-table' : undefined}
-                style={phase === 'cards-on-table' ? styles.tapTable : styles.tapTableFrom}
+                style={phase === 'cards-on-table' ? styles.tapTable : tablePhase ? styles.tapTableFrom : styles.tapTableWarm}
+                pointerEvents={tablePhase ? undefined : 'none'}
+                accessibilityElementsHidden={!tablePhase}
+                importantForAccessibility={tablePhase ? undefined : 'no-hide-descendants'}
               >
                 {renderTable()}
               </View>

@@ -200,5 +200,7 @@ export const ceremonyStyles = StyleSheet.create({
   deckEdge: { position: 'absolute', width: 240, minHeight: 336, borderRadius: 22, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', backgroundColor: 'rgba(16,20,58,0.35)' },
   pitySeal: { position: 'absolute', top: 10, right: 10, width: 28, height: 28, borderRadius: 14, backgroundColor: '#F5C95E', borderWidth: 2, borderColor: '#FFF7EC' },
   tapTableFrom: { width: '100%', minHeight: 240, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 }, // the table container before 'cards-on-table' (no testID yet)
+  // hold/tear-flip: the same centred geometry, out of flow (the pack still owns the flow) and invisible.
+  tapTableWarm: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, opacity: 0 },
   spillSampler: { position: 'absolute', width: 1, height: 1, opacity: 0 }, // an invisible, non-interactive sampling leaf (VoiceOver still reads its live region)
 });

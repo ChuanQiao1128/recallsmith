@@ -64,18 +64,18 @@ grep -q "export function loadExpoAudio" "$a"                       || fail "miss
 grep -q "export function loadSfxSources" "$a"                      || fail "missing loadSfxSources"
 grep -q "playsInSilentMode: true" "$a"                             || fail "audio mode must set playsInSilentMode: true"
 grep -q "interruptionMode: 'mixWithOthers'" "$a"                   || fail "audio mode must set interruptionMode: 'mixWithOthers'"
-grep -q "'choir-swell': 'legendary'" "$a"                          || fail "alias choir-swell→legendary missing"
+grep -q "'choir-swell': 'ambience'" "$a"                           || fail "alias choir-swell→ambience missing (2026-09-21: every bed name loops the 8 s ambience)"
 grep -q "'seam-burst': 'rip'" "$a"                                 || fail "alias seam-burst→rip missing"
 grep -q "'sparkle-tail': 'shimmer'" "$a"                           || fail "alias sparkle-tail→shimmer missing"
 grep -q "bedTable: 0.25" "$a"                                      || fail "CEREMONY_GAIN.bedTable must be 0.25"
 grep -q "duck: 0.15" "$a"                                          || fail "CEREMONY_GAIN.duck must be 0.15"
 grep -q "stinger: 1.0" "$a"                                        || fail "CEREMONY_GAIN.hit.stinger must be 1.0"
-# the six committed WAVs are the only static asset requires
-for s in whoosh rip card-drop card-flip shimmer legendary; do
+# the seven committed WAVs are the only static asset requires (ambience.wav added 2026-09-21: the 8 s bed loop)
+for s in ambience whoosh rip card-drop card-flip shimmer legendary; do
   grep -Fq "require('../../assets/sfx/$s.wav')" "$a" || fail "missing require('../../assets/sfx/$s.wav')"
 done
 REQ_N=$(grep -cF "require('../../assets/sfx/" "$a" || true)
-[ "$REQ_N" = 6 ] || fail "expected exactly 6 require('../../assets/sfx/…') sites, found $REQ_N (no new sample files may be required)"
+[ "$REQ_N" = 7 ] || fail "expected exactly 7 require('../../assets/sfx/…') sites, found $REQ_N (no new sample files may be required)"
 
 # ── 4. ceremonyHaptics.ts guards (FAILS ON BASE) ───────────────────────────
 echo "[4/6] ceremonyHaptics.ts guards"
