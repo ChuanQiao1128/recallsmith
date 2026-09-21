@@ -43,6 +43,7 @@ export type McqVerdictInput = {
   reviewStage: McqReviewStage;    // same rule as SessionCardScreen.tsx:463 (isLearned(current.progress))
   stage: number;                  // current.progress.stage BEFORE the rating
   hardStreak: number;             // current.progress.hardStreak ?? 0 BEFORE the rating
+  redeal?: boolean;               // attemptIndex >= 1: a same-run redeal after a lapse (plan §5.4, review 2026-09-22)
 };
 
 /** Plan §5.3, top-down, first hit (rows :295-301). Total: any finite or non-finite numbers, any combination.
@@ -51,8 +52,11 @@ export type McqVerdictInput = {
  *  3 correct, unsure                                          → 'hard'
  *  4 correct, sure, first_review                              → 'good'
  *  5 correct, sure, repeat_review, (changedPick || !fast)     → 'good'
- *  6 correct, sure, repeat_review, !changedPick, fast, stage >= 1 && hardStreak === 0 → 'easy'
- *  7 correct, sure, repeat_review, !changedPick, fast, otherwise                     → 'good'
+ *  6 correct, sure, repeat_review, !changedPick, fast, !redeal, stage >= 1 && hardStreak === 0 → 'easy'
+ *  7 correct, sure, repeat_review, !changedPick, fast, otherwise (incl. redeal)             → 'good'
+ *  The redeal cap (plan §5.4 "重发永远到不了 easy"): `again` drops the stage by two, so a card that was at
+ *  stage >= 3 comes back ten minutes later at stage >= 1 and would otherwise satisfy row 6 — the lapse it
+ *  just recorded must not be undone by one fast re-answer. `redeal === true` therefore caps at 'good'.
  *  Cautious fallbacks (gap #1): an unrecognised verdict → 'again'; an unrecognised confidence → 'hard';
  *  an unrecognised reviewStage → 'good'; changedPick !== false counts as changed. Never throws; no clock. */
 export function mapMcqVerdictToRating(input: McqVerdictInput): ReviewRating {
@@ -64,6 +68,7 @@ export function mapMcqVerdictToRating(input: McqVerdictInput): ReviewRating {
   const changed = input.changedPick !== false;
   const fast = isFastResponse(input.responseMs, input.optionCount);
   if (changed || !fast) return 'good';                       // row 5
+  if (input.redeal === true) return 'good';                  // row 7 (redeal cap, plan §5.4)
   return input.stage >= 1 && input.hardStreak === 0 ? 'easy' : 'good';   // rows 6 / 7
 }
 

@@ -7,12 +7,14 @@ import { formatRank } from '../library/cardRank';
 import { normalizeCodeLanguage, renderSimpleMarkdown } from '../session/reviewContentHelpers';
 import {
   MCQ_COPY,
+  MCQ_OVER_LIMIT_HINT_MS,
   MCQ_TEST_IDS,
   mcqBannerPartial,
   mcqKindChip,
   mcqLetter,
   mcqOptionA11yLabel,
   mcqQualifierBody,
+  mcqWhyNotA11yLabel,
 } from '../mcq/mcqConstants';
 import { mcqRequiredCount } from '../mcq/normalizeMcq';
 import type { McqVerdict } from '../mcq/mcqVerdict';
@@ -199,11 +201,18 @@ export function McqReviewBody(props: McqReviewBodyProps) {
     setExpandedWhy([]);
   }, [card.StableUid, attemptIndex]);
 
-  // The over-limit hint has no timer: it appears on an ignored tap and clears on the next change
-  // of picks or stage.
+  // The over-limit hint appears on an ignored tap and clears on the next change of picks or stage,
+  // or on its own after MCQ_OVER_LIMIT_HINT_MS (review 2026-09-22 #5: a hint that only clears on
+  // the next tap outlives the mistake it answers). The VoiceOver announcement for the same tap is
+  // the parent's job (onOverLimit), the same split as the verdict announcement — D04 brief Constraints.
   useEffect(() => {
     setOverLimit(false);
   }, [picks.join('|'), stage]);
+  useEffect(() => {
+    if (!overLimit) return undefined;
+    const timer = setTimeout(() => setOverLimit(false), MCQ_OVER_LIMIT_HINT_MS);
+    return () => clearTimeout(timer);
+  }, [overLimit]);
 
   const requiredCount = mcqRequiredCount(mcq);
   const orderBadge = typeof rank === 'number' && rank > 0 ? `#${formatRank(rank)}` : `#${card.OrderInDeck}`;
@@ -351,7 +360,7 @@ export function McqReviewBody(props: McqReviewBodyProps) {
                   onPress={stage === 'verdict' ? undefined : () => handleTap(option.key, picked)}
                   style={[styles.optionRow, styles[rowStyleKey(state)]]}
                 >
-                  <View style={styles.letterDisc}>
+                  <View style={[styles.letterDisc, state === 'wrong-unpicked' && styles.letterDiscDimmed]}>
                     <Text testID={MCQ_TEST_IDS.optionLetter(option.key)} numberOfLines={1} style={styles.letter}>
                       {letter}
                     </Text>
@@ -371,7 +380,10 @@ export function McqReviewBody(props: McqReviewBodyProps) {
                         ) : null}
                       </View>
                     ) : null}
-                    <Text testID={MCQ_BODY_TEST_IDS.optionText(option.key)} style={styles.optionText}>
+                    <Text
+                      testID={MCQ_BODY_TEST_IDS.optionText(option.key)}
+                      style={[styles.optionText, state === 'wrong-unpicked' && styles.optionTextMuted]}
+                    >
                       {option.text}
                     </Text>
                   </View>
@@ -386,6 +398,7 @@ export function McqReviewBody(props: McqReviewBodyProps) {
                   <Pressable
                     testID={MCQ_TEST_IDS.whyToggle(option.key)}
                     accessibilityRole="button"
+                    accessibilityLabel={mcqWhyNotA11yLabel(index)}
                     accessibilityState={{ expanded }}
                     onPress={toggleWhy(option.key)}
                     style={({ pressed }) => [styles.whyToggle, pressed && styles.pressed]}
@@ -563,10 +576,14 @@ const styles = StyleSheet.create({
     borderColor: colors.danger,
     backgroundColor: 'rgba(170,54,54,0.10)',
   },
+  // Full opacity (review 2026-09-22 #4): the old `opacity: 0.55` blended inkSoft to #91867A on the
+  // softCream card, 3.29:1 — below AA for body text. The row keeps its hairline and the "faded"
+  // reading moves to two places that are not the text: a muted-but-AA ink on the option text
+  // (optionTextMuted) and a dimmed letter disc (letterDiscDimmed; the letter is also spoken in the
+  // row's accessibility label, so the disc is decorative).
   rowWrongUnpicked: {
     borderColor: colors.hairline,
     backgroundColor: 'transparent',
-    opacity: 0.55,
   },
   letterDisc: {
     width: 26,
@@ -576,6 +593,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.parchmentBgDeep,
+  },
+  letterDiscDimmed: {
+    opacity: 0.55,
   },
   letter: {
     fontSize: typography.bodySmall,
@@ -608,6 +628,11 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: colors.inkSoft,
     fontWeight: '500',
+  },
+  // inkSecondary #5A4B38 on the softCream card #FCF5EA (the wrong-unpicked row is transparent):
+  // 7.76:1, AA and AAA for body text; inkSoft is 12.43:1, so the step down still reads as muted.
+  optionTextMuted: {
+    color: colors.inkSecondary,
   },
   why: {
     marginTop: 6,

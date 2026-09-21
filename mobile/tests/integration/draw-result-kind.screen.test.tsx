@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 let walletFixture = { availablePulls: 2, reservePulls: 0 };
 let viewportWidth = 390;
+let fontScaleFixture = 1;
 let walletLoader: () => Promise<{ availablePulls: number; reservePulls: number }> = async () =>
   walletFixture;
 
@@ -22,7 +23,7 @@ vi.mock('react-native', () => {
         { ...props, onPress },
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
-    useWindowDimensions: () => ({ width: viewportWidth, height: 844, scale: 3, fontScale: 1 }),
+    useWindowDimensions: () => ({ width: viewportWidth, height: 844, scale: 3, fontScale: fontScaleFixture }),
     StyleSheet: { create: (styles: any) => styles, absoluteFillObject: {} },
   };
 });
@@ -126,6 +127,7 @@ describe('DrawResultScreen MCQ face mark', () => {
     walletFixture = { availablePulls: 2, reservePulls: 0 };
     walletLoader = async () => walletFixture;
     viewportWidth = 390;
+    fontScaleFixture = 1;
     permissionPromptPendingFixture = false;
     clearPermissionPromptPendingMock.mockClear();
     shareResultFixture = { status: 'shared' };
@@ -157,8 +159,12 @@ describe('DrawResultScreen MCQ face mark', () => {
     const artWindow = tree.root.find(
       (n) => (n.type as any) === 'View' && n.props.testID === 'draw-result-featured-art-window',
     );
+    // Inside the art window, in the marks column beside (below) the rarity chip. The mock renders
+    // each View as composite → host, so a host's grandparent is the enclosing host.
+    const marks = tree.root.find((n) => (n.type as any) === 'View' && n.props.testID === 'draw-result-featured-marks');
+    expect(marks.parent!.parent).toBe(artWindow);
     const kind = tree.root.findByProps({ testID: 'draw-result-featured-kind' });
-    expect(kind.parent).toBe(artWindow);
+    expect(kind.parent).toBe(marks);
     expect(kind.findAll((n) => (n.type as any) === 'Text').map((n) => n.props.children)).toEqual(['MC · pick 2']);
 
     const topic = tree.root.findByProps({ testID: 'draw-result-featured-topic' });
@@ -174,6 +180,63 @@ describe('DrawResultScreen MCQ face mark', () => {
     expect(card.children[card.children.length - 1]).toBe(frame);
 
     expect(collectText(tree).match(/MC · pick 2/g)).toHaveLength(1);
+  });
+
+  it('stacks the kind mark under the rarity chip so they never overlap at fontScale 1.5', async () => {
+    // Review 2026-09-22 #3: the mark used to sit top-right at the same y as the top-left rarity chip;
+    // at Dynamic Type >= 1.2x the two chips grew into each other. Layout props, not pixels: both
+    // marks are in-flow children of ONE column, in order, with their text scaling capped at 1.3x.
+    fontScaleFixture = 1.5;
+    const tree = await renderScreen(
+      makeParams({
+        drawResult: {
+          ...DRAW_RESULT_FIXTURE,
+          cards: [
+            { stableUid: '1', question: 'Q1', difficulty: 3, rarity: 'LEG' as const, tag: 'Core', kind: 'mcq' as const, requiredCount: 3 },
+            { stableUid: '2', question: 'Q2', difficulty: 2, rarity: 'RAR' as const },
+          ],
+        },
+      }),
+    );
+    const flat = (style: any) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+
+    const marks = tree.root.find((n) => (n.type as any) === 'View' && n.props.testID === 'draw-result-featured-marks');
+    const stack = flat(marks.props.style);
+    expect(stack.position).toBe('absolute');
+    expect(stack.flexDirection).toBeUndefined();   // column: the second mark can only go DOWN
+    expect(stack.gap).toBeGreaterThan(0);
+
+    const hostKids = marks.children.filter((c) => typeof c !== 'string') as renderer.ReactTestInstance[];
+    const kids = hostKids.map((c) => c.findAll((n) => (n.type as any) === 'View' && typeof n.props.style !== 'undefined')[0] ?? c);
+    expect(kids).toHaveLength(2);
+    const rarityText = kids[0].findAll((n) => (n.type as any) === 'Text')[0];
+    expect(String(rarityText.props.children.join ? rarityText.props.children.join('') : rarityText.props.children)).toContain('★');
+    const kindHost = tree.root.find((n) => (n.type as any) === 'View' && n.props.testID === 'draw-result-featured-kind');
+    expect(kids[1]).toBe(kindHost);
+
+    // Neither mark positions itself: no absolute offsets that could put them back on one row.
+    for (const kid of kids) {
+      const style = flat(kid.props.style);
+      expect(style.position).toBeUndefined();
+      expect(style.top).toBeUndefined();
+      expect(style.right).toBeUndefined();
+      expect(style.left).toBeUndefined();
+    }
+
+    const kindText = kindHost.findAll((n) => (n.type as any) === 'Text')[0];
+    expect(kindText.props.children).toBe('MC · pick 3');
+    expect(kindText.props.numberOfLines).toBe(1);
+    expect(kindText.props.maxFontSizeMultiplier).toBe(1.3);
+    expect(kindText.props.allowFontScaling).not.toBe(false);
+    expect(rarityText.props.maxFontSizeMultiplier).toBe(1.3);
+    expect(rarityText.props.allowFontScaling).not.toBe(false);
+
+    // The topic chip keeps its own corner (bottom-left) and is not part of the column.
+    const topic = tree.root.find((n) => (n.type as any) === 'View' && n.props.testID === 'draw-result-featured-topic');
+    const artWindow = tree.root.find((n) => (n.type as any) === 'View' && n.props.testID === 'draw-result-featured-art-window');
+    expect(topic.parent!.parent).toBe(artWindow);
+    expect(topic.parent!.parent).not.toBe(marks);
+    expect(flat(topic.props.style).bottom).toBe(8);
   });
 
   it('shows a plain MC mark for a single-answer card and nothing for Q/A', async () => {

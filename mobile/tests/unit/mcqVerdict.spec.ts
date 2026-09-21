@@ -54,6 +54,7 @@ const inputArb = fc.record({
   reviewStage: stageNameArb,
   stage: dirtyStageArb,
   hardStreak: hardStreakArb,
+  redeal: fc.oneof(fc.boolean(), fc.constant(undefined)),
 });
 
 const FOUR: ReviewRating[] = ['again', 'hard', 'good', 'easy'];
@@ -108,6 +109,40 @@ describe('mcqVerdict', () => {
     );
   });
 
+  it('a same-run redeal never reaches easy', () => {
+    // Review 2026-09-22 (row 6): `again` drops a stage-3 card to stage 1, so its ten-minute redeal
+    // would otherwise satisfy row 6 and climb straight back — the redeal flag caps the row at 'good'.
+    fc.assert(
+      fc.property(inputArb, (input) => {
+        expect(mapMcqVerdictToRating({ ...input, redeal: true })).not.toBe('easy');
+      }),
+    );
+    // The cap is the ONLY effect of the flag: everything that is not row 6 answers the same either way.
+    fc.assert(
+      fc.property(inputArb, (input) => {
+        const plain = mapMcqVerdictToRating({ ...input, redeal: false });
+        const capped = mapMcqVerdictToRating({ ...input, redeal: true });
+        expect(capped).toBe(plain === 'easy' ? 'good' : plain);
+      }),
+    );
+    const lapsedFromThree = {
+      verdict: 'correct' as McqVerdict,
+      confidence: 'sure' as McqConfidence,
+      changedPick: false,
+      responseMs: 3_000,
+      optionCount: 4,
+      reviewStage: 'repeat_review' as McqReviewStage,
+      stage: 1,
+      hardStreak: 0,
+    };
+    expect(mapMcqVerdictToRating(lapsedFromThree)).toBe('easy');
+    expect(mapMcqVerdictToRating({ ...lapsedFromThree, redeal: false })).toBe('easy');
+    expect(mapMcqVerdictToRating({ ...lapsedFromThree, redeal: true })).toBe('good');
+    expect(mapMcqVerdictToRating({ ...lapsedFromThree, redeal: true, stage: 0 })).toBe('good');
+    expect(mapMcqVerdictToRating({ ...lapsedFromThree, redeal: true, confidence: 'unsure' })).toBe('hard');
+    expect(mapMcqVerdictToRating({ ...lapsedFromThree, redeal: true, verdict: 'wrong' })).toBe('again');
+  });
+
   it('is total and only ever answers one of the four ratings', () => {
     fc.assert(
       fc.property(inputArb, (input) => {
@@ -128,6 +163,7 @@ describe('mcqVerdict', () => {
       reviewStage: fc.string(),
       stage: dirtyStageArb,
       hardStreak: hardStreakArb,
+      redeal: fc.anything(),
     });
     fc.assert(
       fc.property(dirtyArb, (raw) => {
@@ -137,6 +173,7 @@ describe('mcqVerdict', () => {
           confidence: raw.confidence as unknown as McqConfidence,
           changedPick: raw.changedPick as unknown as boolean,
           reviewStage: raw.reviewStage as unknown as McqReviewStage,
+          redeal: raw.redeal as unknown as boolean,
         };
         let out: ReviewRating;
         expect(() => {

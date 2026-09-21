@@ -13,6 +13,9 @@ import {
   mcqQualifierBody,
   mcqOptionA11yLabel,
   mcqPicksLine,
+  mcqWhyNotA11yLabel,
+  mcqOverLimitAnnouncement,
+  MCQ_OVER_LIMIT_HINT_MS,
 } from '../../src/features/gacha/mcq/mcqConstants';
 
 describe('mcqConstants', () => {
@@ -34,6 +37,10 @@ describe('mcqConstants', () => {
       'The stem asked for the MOST performant option. Several options would work; the one that best satisfies that phrase wins.',
     );
     expect(mcqOptionA11yLabel(1, 4, 'x')).toBe('Option B of 4: x');
+    expect([0, 1, 4].map(mcqWhyNotA11yLabel)).toEqual(['Why not option A', 'Why not option B', 'Why not option E']);
+    expect(mcqOverLimitAnnouncement(2)).toBe('Pick 2 answers — deselect one first');
+    expect(mcqOverLimitAnnouncement(3)).toBe('Pick 3 answers — deselect one first');
+    expect(MCQ_OVER_LIMIT_HINT_MS).toBe(1_500);
     expect(mcqPicksLine({ landed: 3, answered: 5 })).toBe('3 of 5 picks landed');
     expect(mcqPicksLine({ landed: 0, answered: 5 })).toBe(
       "0 of 5 picks landed — they're all back in 10 minutes",
