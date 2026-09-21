@@ -123,6 +123,10 @@ export function AdminUsersPage() {
     lastOk: null,
     lastError: null,
   });
+  // Held in component state only — never persisted, never logged. Production
+  // APIs configure MIGRATE_SECRET, so the button is unusable there without it
+  // (2026-09-21: "Bad migrate secret" on the first prod migration attempt).
+  const [migrateSecret, setMigrateSecret] = useState('');
 
   // permissions editor
   const [selected, setSelected] = useState<AdminUser | null>(null);
@@ -377,7 +381,8 @@ export function AdminUsersPage() {
 
     setDbState({ running: true, lastOk: null, lastError: null });
 
-    const resp = await runMigrate(reset);
+    const secret = migrateSecret.trim();
+    const resp = secret === '' ? await runMigrate(reset) : await runMigrate(reset, secret);
     if (!resp.success) {
       setDbState({ running: false, lastOk: null, lastError: resp.error?.message ?? 'Migration failed.' });
       return;
@@ -644,6 +649,23 @@ export function AdminUsersPage() {
               </summary>
 
               <div className="p-4">
+                <label className="block mb-3">
+                  <span className="block text-xs font-medium text-slate-700 mb-1">Migrate secret</span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={migrateSecret}
+                    onChange={(e) => setMigrateSecret(e.target.value)}
+                    disabled={dbState.running}
+                    placeholder="MIGRATE_SECRET of the API Lambda (leave empty if the API has none)"
+                    aria-label="Migrate secret"
+                    className="w-full max-w-xl px-3 py-1.5 rounded-md border border-slate-300 text-sm bg-white
+                               disabled:opacity-60"
+                  />
+                  <span className="block text-xs text-slate-500 mt-1">
+                    Sent once as <code>x-migrate-secret</code>; not stored. Production APIs require it.
+                  </span>
+                </label>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
