@@ -231,8 +231,8 @@ describe('library topics', () => {
   it('appends topic then rank last on every row and the two new keys last on the VM', () => {
     const rows = buildLibraryCardRows({ deck, progress: [], now: NOW });
     const rowKeys = Object.keys(rows[0]);
-    expect(rowKeys.length).toBe(14);
-    expect(rowKeys.slice(-3)).toEqual(['isUpdated', 'topic', 'rank']);
+    expect(rowKeys.length).toBe(15);
+    expect(rowKeys.slice(-4)).toEqual(['isUpdated', 'topic', 'rank', 'isMcq']);
 
     const vm = buildLibraryVM({ deck, progress: [], now: NOW });
     expect(Object.keys(vm)).toEqual([

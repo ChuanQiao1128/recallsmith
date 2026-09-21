@@ -9,6 +9,9 @@ import {
 import { normalizePityState } from './pity';
 import { selectDrawCards } from './poolSelection';
 import { rankCardsByOrder } from '../library/cardRank';
+import { getFeatureFlags } from '../../../config/featureFlags';
+import { mcqRequiredCount, resolveMcq } from '../mcq/normalizeMcq';
+import { normalizeTopic } from '../library/topics';
 
 export type DrawnCardVm = {
   stableUid: string;
@@ -17,6 +20,11 @@ export type DrawnCardVm = {
   rarity: 'COM' | 'RAR' | 'LEG';
   /** 1-based position in the deck (cardRank.ts) — what DrawResult prints as "No. 011 / 441". */
   rank: number;
+  /** C07 topic label (normalizeTopic(card.Topic)); the key is ABSENT when the card has no topic. DrawResult renders it as the featured topic chip. */
+  tag?: string;
+  /** Present only when the card is MCQ under the flags read at commit time (D00 §2.6.1); DrawResult renders the "MC · pick n" mark. No option ever travels here. */
+  kind?: 'mcq';
+  requiredCount?: number;
 };
 
 export type DrawCommitResult = {
@@ -94,14 +102,21 @@ export async function commitDraw(slug: string, drawCount: 1 | 10): Promise<DrawC
     ts,
   });
 
+  const flags = getFeatureFlags();
   const ranks = rankCardsByOrder(deck.Cards);
-  const cards: DrawnCardVm[] = selection.cards.map((card) => ({
-    stableUid: card.StableUid,
-    question: card.Question,
-    difficulty: card.Difficulty,
-    rarity: rarityOfCard(card),
-    rank: ranks.get(card.StableUid) ?? 0,
-  }));
+  const cards: DrawnCardVm[] = selection.cards.map((card) => {
+    const tag = normalizeTopic(card.Topic);
+    const mcq = resolveMcq(card, flags);
+    return {
+      stableUid: card.StableUid,
+      question: card.Question,
+      difficulty: card.Difficulty,
+      rarity: rarityOfCard(card),
+      rank: ranks.get(card.StableUid) ?? 0,
+      ...(tag !== null ? { tag } : {}),
+      ...(mcq !== null ? { kind: 'mcq' as const, requiredCount: mcqRequiredCount(mcq) } : {}),
+    };
+  });
 
   let highlightedRarity: 'RAR' | 'LEG' | null = null;
   for (const card of cards) {

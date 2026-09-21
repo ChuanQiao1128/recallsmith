@@ -14,6 +14,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
+import { getFeatureFlags } from '../config/featureFlags';
 import {
   checkManifestForUpdates,
   installDeckFromUrl,
@@ -173,6 +174,7 @@ export function LibraryScreen({ navigation, route }: Props) {
       selectedDeckSlug: selectedSlug,
       ownedSet,
       topicFilter,
+      mcqEnabled: getFeatureFlags().mcq.enabled,
     });
   }, [deck, progress, filter, deckOptions, selectedSlug, ownedSet, topicFilter]);
 
