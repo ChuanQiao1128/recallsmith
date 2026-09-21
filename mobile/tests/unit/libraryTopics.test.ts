@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { buildLibraryVM, buildLibraryCardRows } from '../../src/features/gacha/library/libraryMapper';
 import {
+  fnv1a32Hex,
   normalizeTopic,
   topicKey,
   UNTAGGED_TOPIC_KEY,
@@ -84,9 +85,58 @@ describe('library topics', () => {
     expect(topicKey('IAM')).toBe('iam');
     expect(topicKey('All')).toBe('t-all');
     expect(topicKey('Untagged')).toBe('t-untagged');
-    expect(topicKey('???')).toBe('t-');
+    expect(topicKey('???')).toBe(`t-${fnv1a32Hex('???')}`);
+    expect(topicKey('???')).toMatch(/^t-[0-9a-f]{8}$/);
     expect(UNTAGGED_TOPIC_KEY).toBe('untagged');
     expect(UNTAGGED_TOPIC_LABEL).toBe('Untagged');
+  });
+
+  it('gives CJK, Cyrillic and accented labels distinct, deterministic keys without moving ASCII ones', () => {
+    // FNV-1a 32-bit reference vectors (offset basis for '', 'a' → e40c292c).
+    expect(fnv1a32Hex('')).toBe('811c9dc5');
+    expect(fnv1a32Hex('a')).toBe('e40c292c');
+
+    // No ASCII letters/digits at all: every label used to collapse to 't-'.
+    const cjk = topicKey('网络');
+    const cjk2 = topicKey('存储');
+    const cyrillic = topicKey('Сеть');
+    expect(cjk).toMatch(/^t-[0-9a-f]{8}$/);
+    expect(cjk2).toMatch(/^t-[0-9a-f]{8}$/);
+    expect(cyrillic).toMatch(/^t-[0-9a-f]{8}$/);
+    expect(new Set([cjk, cjk2, cyrillic, topicKey('???')]).size).toBe(4);
+    expect(topicKey('网络')).toBe(cjk);
+    expect(topicKey(' 网络 ')).toBe(cjk);
+
+    // Accented Latin keeps its readable slug and gains the hash, so it never meets the bare ASCII form.
+    expect(topicKey('Réseau')).toMatch(/^r-seau-[0-9a-f]{8}$/);
+    expect(topicKey('Réseau')).not.toBe(topicKey('Reseau'));
+    expect(topicKey('Reseau')).toBe('reseau');
+    expect(topicKey('Résumé')).not.toBe(topicKey('Resume'));
+    expect(topicKey('Résumé')).not.toBe(topicKey('Résume'));
+    expect(topicKey('réseau')).toBe(topicKey('Réseau'));
+
+    // Mixed: the ASCII part still leads, the hash keeps it apart from the plain label.
+    expect(topicKey('网络 Networking')).toMatch(/^networking-[0-9a-f]{8}$/);
+    expect(topicKey('网络 Networking')).not.toBe(topicKey('Networking'));
+
+    // Pure-ASCII labels are untouched by the change (testIDs stay stable).
+    for (const label of ['IAM', 'Compute / EC2', 'IAM & S3', 'All', 'Untagged', ' iam ', 'S3']) {
+      expect(topicKey(label)).not.toMatch(/[0-9a-f]{8}$/);
+      expect(topicKey(label)).toBe(label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').replace(/^(all|untagged)$/, 't-$1'));
+    }
+  });
+
+  it('never returns an empty or reserved chip key for any label', () => {
+    fc.assert(
+      fc.property(fc.string({ minLength: 1 }), (label) => {
+        const key = topicKey(label);
+        expect(key.length).toBeGreaterThan(0);
+        expect(key).not.toBe('all');
+        expect(key).not.toBe(UNTAGGED_TOPIC_KEY);
+        expect(key).toMatch(/^[a-z0-9-]+$/);
+        expect(topicKey(label)).toBe(key);
+      }),
+    );
   });
 
   it('exposes no topic chips and keeps deck order for a deck without topics', () => {

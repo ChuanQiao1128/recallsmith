@@ -194,6 +194,9 @@ export type RootStackParamList = {
     dueCount: number;
     streakEarned?: boolean;
     reward?: RewardOutcome;
+    /** R7 forecast line when the run ended on a milestone rating (SessionCardScreen would otherwise
+     *  lose it to the replace). Rendered under the reward card, testID `session-summary-load-forecast`. */
+    loadForecast?: string;
   };
 
   SignIn: { email?: string } | undefined;

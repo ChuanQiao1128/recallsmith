@@ -43,7 +43,7 @@ function navigateFromActionKind(args: {
 }
 
 export function SessionSummaryScreen({ navigation, route }: Props) {
-  const { sessionId, deckTitle, slug, sessionDone, sessionLimit, minimumGoal, dueCount, streakEarned = false, reward } = route.params;
+  const { sessionId, deckTitle, slug, sessionDone, sessionLimit, minimumGoal, dueCount, streakEarned = false, reward, loadForecast } = route.params;
 
   const [walletBeforeReward, setWalletBeforeReward] = useState<RewardWalletState | null>(null);
   const [streakBeforeSnapshot, setStreakBeforeSnapshot] = useState<StreakSnapshot | null>(null);
@@ -253,6 +253,12 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
             }
           />
 
+          {loadForecast ? (
+            <Text testID="session-summary-load-forecast" numberOfLines={2} style={styles.forecastLine}>
+              {loadForecast}
+            </Text>
+          ) : null}
+
           <SummaryProgressBlock
             testID="summary-progress-block"
             done={summary.vm.progress.done}
@@ -416,6 +422,15 @@ const styles = StyleSheet.create({
   heroCompletion: { color: colors.inkSecondary, fontSize: typography.caption, fontWeight: '700' },
   title: { marginTop: 8, color: colors.ink, fontSize: typography.title2, lineHeight: 28, fontWeight: '900' },
   subtitle: { marginTop: 6, color: colors.inkSecondary, fontSize: typography.bodySmall, lineHeight: 18, fontWeight: '600' },
+  // Same copy and weight as SessionCardScreen's in-session forecast line.
+  forecastLine: {
+    marginTop: 2,
+    marginBottom: spacing.sm,
+    fontSize: typography.caption,
+    color: colors.inkSecondary,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   milestoneCard: {
     borderRadius: spacing.lg,
     padding: spacing.md,
