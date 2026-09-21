@@ -197,9 +197,11 @@ for sym in 'data-testid="import-warnings"' "formatWarning(" "function groupWarni
 done
 [ "$(grep -Fc "<Badge " "$DP" || true)" = "8" ] || fail "DeckImportPage.tsx: <Badge count must stay 8 (five in the preview strip, three in the result step) — no sixth badge"
 # 2k. lint-deck.mts — WARN lines, the four-field summary, --strict
+# `-e` marks the pattern explicitly so a `--`-prefixed literal (--strict) is not
+# mistaken for a grep option (BSD/GNU grep both reject a bare `grep -Fq "--strict"`).
 for sym in 'WARN ${' "--strict" 'issues, ${result.warnings.length} warnings' "warnings: ImportWarning[];" \
            "import type { ImportWarning } from '../src/lib/mcqWarnings.ts';"; do
-  grep -Fq "$sym" "$LD" || fail "lint-deck.mts lacks: $sym"
+  grep -Fq -e "$sym" "$LD" || fail "lint-deck.mts lacks: $sym"
 done
 # 2l. tests — titles, harness probes, counts
 for s in \
