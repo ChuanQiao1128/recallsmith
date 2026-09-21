@@ -11,6 +11,7 @@ import { buildDrawState } from '../features/gacha/draw/drawState';
 import { resolveNewMilestones, type Milestone } from '../features/gacha/milestones/milestoneTracker';
 import { loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { buildSessionSummaryVM, resolveSecondaryAction } from '../features/gacha/session/summaryMapper';
+import { mcqPicksLine } from '../features/gacha/mcq/mcqConstants';
 import { applySessionStreak, loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import type { HomeCtaKind } from '../features/gacha/selectors/homeSelectors';
 import { a11y } from '../theme/a11y';
@@ -43,7 +44,7 @@ function navigateFromActionKind(args: {
 }
 
 export function SessionSummaryScreen({ navigation, route }: Props) {
-  const { sessionId, deckTitle, slug, sessionDone, sessionLimit, minimumGoal, dueCount, streakEarned = false, reward, loadForecast } = route.params;
+  const { sessionId, deckTitle, slug, sessionDone, sessionLimit, minimumGoal, dueCount, streakEarned = false, reward, loadForecast, picks } = route.params;
 
   const [walletBeforeReward, setWalletBeforeReward] = useState<RewardWalletState | null>(null);
   const [streakBeforeSnapshot, setStreakBeforeSnapshot] = useState<StreakSnapshot | null>(null);
@@ -262,6 +263,12 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
           {loadForecast ? (
             <Text testID="session-summary-load-forecast" numberOfLines={2} style={styles.forecastLine}>
               {loadForecast}
+            </Text>
+          ) : null}
+
+          {picks ? (
+            <Text testID="session-summary-picks" numberOfLines={2} style={styles.forecastLine}>
+              {mcqPicksLine(picks)}
             </Text>
           ) : null}
 

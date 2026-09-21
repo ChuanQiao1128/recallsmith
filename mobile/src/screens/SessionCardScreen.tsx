@@ -8,6 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import * as RN from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -56,6 +57,24 @@ import { resetSessionStore, useSessionStore } from '../features/gacha/session/se
 import SessionProgressHeader from '../features/gacha/components/SessionProgressHeader';
 import RatingBar from '../features/gacha/components/RatingBar';
 import ReviewBody from '../features/gacha/components/ReviewBody';
+import { getFeatureFlags } from '../config/featureFlags';
+import { loadExpoHaptics } from '../components/ceremonyHaptics';
+import type { McqExport, McqOption } from '../types/deckExport';
+import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
+import { MCQ_COPY, mcqBannerPartial } from '../features/gacha/mcq/mcqConstants';
+import {
+  describeScheduledRating,
+  mapMcqVerdictToRating,
+  resolveMcqVerdict,
+  type McqConfidence,
+  type McqVerdict,
+} from '../features/gacha/mcq/mcqVerdict';
+import { mcqSeed, shownOrderFor } from '../features/gacha/mcq/mcqShuffle';
+import { buildKindHint, EMPTY_MCQ_RUN_STATE, noteServedCard, type McqRunState } from '../features/gacha/mcq/mcqRotation';
+import { markMcqCoachSeen, readMcqCoachSeen } from '../features/gacha/mcq/mcqCoachPrefs';
+import McqReviewBody, { type McqStage } from '../features/gacha/components/McqReviewBody';
+import McqActionDock from '../features/gacha/components/McqActionDock';
+import McqCoachLine from '../features/gacha/components/McqCoachLine';
 import { isPremiumActive, rcGetCustomerInfoSafe } from '../premium/revenuecat';
 import { setIsPremiumUser, usePremiumUser } from '../premium/premiumStore';
 import { colors } from '../theme/colors';
@@ -69,6 +88,51 @@ type TrialInfo = {
   totalCards: number;
 };
 const EMPTY_TRIAL_INFO: TrialInfo = { isTrial: false, previewCount: 0, totalCards: 0 };
+
+// Vitest supplies react-native without AccessibilityInfo — guarded lookup so tests don't crash (HomeScreen.tsx pattern).
+function readRN<T = any>(key: string, fallback: T): T {
+  try {
+    const value = (RN as any)[key];
+    return (value ?? fallback) as T;
+  } catch {
+    return fallback;
+  }
+}
+const AI: any = readRN('AccessibilityInfo', null);
+// Options-stage dock, stacked worst case: 8 + hint 20 + count 20 + 56 + 8 + 56 + link 44 = 212 (D05 gap 5).
+const MCQ_DOCK_HEIGHT = 216;
+type McqCardState = {
+  mcq: McqExport | null;               // resolveMcq(card, getFeatureFlags()) — null ⇒ renderAsMcq false
+  stage: McqStage;                     // 'stem' when flags.mcq.recallFirst !== false, else 'options'
+  shownOrder: McqOption[];             // shownOrderFor(mcq, mcqSeed(sessionId, StableUid, attemptIndex))
+  picks: string[];
+  firstPicks: string[] | null;         // the first COMPLETE set (length === requiredCount); set once
+  changedPick: boolean;                // submitted set ≠ firstPicks (as sets)
+  confidence: McqConfidence | null;
+  verdict: McqVerdict | null;
+  mappedRating: ReviewRating | null;
+  scheduleLine: string | null;
+  attemptIndex: number;
+};
+const EMPTY_MCQ_CARD_STATE: McqCardState = {
+  mcq: null, stage: 'stem', shownOrder: [], picks: [], firstPicks: null, changedPick: false,
+  confidence: null, verdict: null, mappedRating: null, scheduleLine: null, attemptIndex: 0,
+};
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((key) => set.has(key));
+}
+function mcqHaptic(kind: 'success' | 'warning' | 'error'): void {
+  try {
+    const haptics = loadExpoHaptics();
+    if (!haptics) return;
+    const name = kind === 'success' ? 'Success' : kind === 'warning' ? 'Warning' : 'Error';
+    Promise.resolve(haptics.notificationAsync(haptics.NotificationFeedbackType[name])).catch(() => {});
+  } catch {
+    // device mechanism only; never reaches a test or a user without the native module
+  }
+}
 
 function isLearned(progress: CardProgress): boolean {
   return typeof progress.lastReviewedAt === 'number' && progress.lastReviewedAt > 0;
@@ -119,6 +183,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [reviewing, setReviewing] = useState(false);
   const [sessionDone, setSessionDone] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
+  const [mcqState, setMcqState] = useState<McqCardState>(EMPTY_MCQ_CARD_STATE);
+  const renderAsMcq = mcqState.mcq !== null;
+  const [coachSeen, setCoachSeen] = useState<boolean | null>(null);
   const [plannedMinimumGoal, setPlannedMinimumGoal] = useState<number | null>(null);
   // Cached planner-derived limit. Loaded after planChallengeRoute runs.
   // null until first plan, then sticks. Falls back to routeLimit (when
@@ -139,6 +206,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
   // number the Library tile and DrawResult print, so "#011" means one card.
   const rankMapRef = useRef<Map<string, number>>(new Map());
   const cardShownAtRef = useRef(Date.now());
+  const optionsShownAtRef = useRef(0);
+  const submittedAtRef = useRef(0);
+  const attemptIndexRef = useRef<Map<string, number>>(new Map());   // StableUid → serves so far this run
+  const mcqRunRef = useRef<McqRunState>(EMPTY_MCQ_RUN_STATE);
+  const picksRef = useRef<{ landed: number; answered: number }>({ landed: 0, answered: 0 });
+  const coachSeenRef = useRef<boolean | null>(null);                 // null = not read yet; latch + last value (gap 3)
   const sessionId = useSessionStore((state) => state.sessionId);
   const sessionRoute = useSessionStore((state) => state.route);
   const sessionRouteIndex = useSessionStore((state) => state.currentIndex);
@@ -196,6 +269,39 @@ export function SessionCardScreen({ navigation, route }: Props) {
     setDailyStats(null);
     setCurrent(null);
   }
+  function applyCurrent(next: CurrentCardLike | null, sessionIdForSeed: string): void {
+    const flags = getFeatureFlags();
+    const mcq = next ? resolveMcq(next.card, flags) : null;
+    if (next) {
+      const uid = next.card.StableUid;
+      const attemptIndex = attemptIndexRef.current.get(uid) ?? 0;
+      attemptIndexRef.current.set(uid, attemptIndex + 1);
+      mcqRunRef.current = noteServedCard(mcqRunRef.current, next.progress, mcq !== null);
+      if (mcq !== null && coachSeenRef.current === null) {
+        coachSeenRef.current = true;               // latch: one read per session; "seen" until the read says otherwise
+        void readMcqCoachSeen().then((seen) => {
+          coachSeenRef.current = seen;
+          setCoachSeen(seen);
+        });
+      }
+      setCurrent(next);
+      if (mcq !== null) {
+        const stage: McqStage = flags.mcq.recallFirst !== false ? 'stem' : 'options';
+        if (stage === 'options') optionsShownAtRef.current = Date.now();
+        setMcqState({
+          ...EMPTY_MCQ_CARD_STATE,
+          mcq,
+          stage,
+          shownOrder: shownOrderFor(mcq, mcqSeed(sessionIdForSeed, uid, attemptIndex)),
+          attemptIndex,
+        });
+        return;
+      }
+    } else {
+      setCurrent(null);
+    }
+    setMcqState(EMPTY_MCQ_CARD_STATE);
+  }
   useFocusEffect(
     useCallback(() => {
       if (!slug) {
@@ -220,6 +326,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setLoadError(null);
         setSessionDone(0);
         setShowAnswer(false);
+        setMcqState(EMPTY_MCQ_CARD_STATE);
+        setCoachSeen(null);
+        attemptIndexRef.current = new Map();
+        mcqRunRef.current = EMPTY_MCQ_RUN_STATE;
+        picksRef.current = { landed: 0, answered: 0 };
+        coachSeenRef.current = null;
         setLoadForecast(null);
         setPlannedMinimumGoal(null);
         setPlannedLimit(null);
@@ -369,9 +481,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
             avoidUid: null,
             index: cardIndexRef.current,
             ownedSet: nextOwned,
+            kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()),
           });
+          const nextSessionId = `${deckForStudy.Slug}-${now.getTime()}`;
           startSession({
-            sessionId: `${deckForStudy.Slug}-${now.getTime()}`,
+            sessionId: nextSessionId,
             slug: deckForStudy.Slug,
             route: plannedChallenge.nodes,
             startedAt: now.getTime(),
@@ -379,7 +493,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           setProgress(nextProgress);
           setOwnedSet(nextOwned);
           setDailyStats(stats);
-          setCurrent(nextCurrent);
+          applyCurrent(nextCurrent, nextSessionId);
           setLoading(false);
           const remainingDueCount = countDueToday(nextProgress, now, nextOwned);
           void syncDailyReminders({ remainingDueCount, now });
@@ -445,6 +559,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         now: nowAtRating,
         cardIndex: cardIndexRef.current,
         ownedSet,
+        kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()),
       });
       // Events are facts, progress is a projection; facts must land first. A
       // queued event can rebuild the progress on the next sync, but a saved
@@ -531,7 +646,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         }).minimumGoal;
       setSessionDone(nextState.nextDone);
       setProgress(nextState.updatedProgress);
-      setCurrent(nextState.nextCurrent);
+      applyCurrent(nextState.nextCurrent, useSessionStore.getState().sessionId ?? '');
       setShowAnswer(false);
       void syncDailyReminders({
         remainingDueCount: nextState.remainingDueCount,
@@ -565,11 +680,86 @@ export function SessionCardScreen({ navigation, route }: Props) {
           // Only when there is a line: the route-complete Continue path and the
           // no-milestone case keep the exact param shape the tests pin.
           ...(nextLoadForecast ? { loadForecast: nextLoadForecast } : {}),
+          ...(picksRef.current.answered > 0 ? { picks: { ...picksRef.current } } : {}),
         });
       }
     } finally {
       setReviewing(false);
     }
+  }
+  function handleShowOptions(): void {
+    if (mcqState.stage !== 'stem') return;
+    optionsShownAtRef.current = Date.now();
+    setMcqState((prev) => ({ ...prev, stage: 'options' }));
+  }
+  function handleToggleOption(key: string): void {
+    const mcq = mcqState.mcq;
+    if (!mcq || mcqState.stage !== 'options' || reviewing) return;
+    const n = mcqRequiredCount(mcq);
+    setMcqState((prev) => {
+      let next: string[];
+      if (n === 1) {
+        next = [key];
+      } else if (prev.picks.includes(key)) {
+        next = prev.picks.filter((entry) => entry !== key);
+      } else if (prev.picks.length >= n) {
+        return prev;   // body already showed 'Deselect one first' and called onOverLimit
+      } else {
+        next = [...prev.picks, key];
+      }
+      const firstPicks = prev.firstPicks ?? (next.length === n ? next : null);
+      return { ...prev, picks: next, firstPicks };
+    });
+  }
+  function settleMcq(picks: string[], confidence: McqConfidence, changedPick: boolean): void {
+    const mcq = mcqState.mcq;
+    if (!current || !mcq || mcqState.stage !== 'options' || reviewing) return;
+    const verdict = resolveMcqVerdict(picks, mcq);
+    const responseMs = Date.now() - optionsShownAtRef.current;
+    const reviewStage = isLearned(current.progress) ? 'repeat_review' : 'first_review';
+    const mappedRating = mapMcqVerdictToRating({
+      verdict,
+      confidence,
+      changedPick,
+      responseMs,
+      optionCount: mcqState.shownOrder.length,
+      reviewStage,
+      stage: current.progress.stage,
+      hardStreak: current.progress.hardStreak ?? 0,
+    });
+    const scheduleLine = describeScheduledRating(current.progress, mappedRating, new Date()).line;
+    setMcqState((prev) => ({ ...prev, stage: 'verdict', picks, confidence, changedPick, verdict, mappedRating, scheduleLine }));
+    setShowAnswer(true);
+    submittedAtRef.current = Date.now();
+    mcqHaptic(verdict === 'correct' ? 'success' : verdict === 'partial' ? 'warning' : 'error');
+    const n = mcqRequiredCount(mcq);
+    const k = mcq.options.filter((o) => o.correct && picks.includes(o.key)).length;
+    const banner =
+      verdict === 'correct' ? MCQ_COPY.bannerCorrect : verdict === 'partial' ? mcqBannerPartial(k, n) : MCQ_COPY.bannerWrong;
+    AI?.announceForAccessibility?.(`${banner}. ${scheduleLine}.`);
+  }
+  function handleSubmit(confidence: McqConfidence): void {
+    const mcq = mcqState.mcq;
+    if (!mcq || mcqState.picks.length !== mcqRequiredCount(mcq)) return;
+    settleMcq(mcqState.picks, confidence, mcqState.firstPicks !== null && !sameSet(mcqState.picks, mcqState.firstPicks));
+  }
+  function handleDontKnow(): void {
+    settleMcq([], 'unsure', false);
+  }
+  function handleMcqNext(): void {
+    const mappedRating = mcqState.mappedRating;
+    if (mcqState.stage !== 'verdict' || !mappedRating) return;
+    picksRef.current = {
+      answered: picksRef.current.answered + 1,
+      landed: picksRef.current.landed + (mcqState.verdict !== 'wrong' ? 1 : 0),
+    };
+    if (coachSeen === false) handleCoachDismiss();
+    void handleRating(mappedRating);
+  }
+  function handleCoachDismiss(): void {
+    coachSeenRef.current = true;
+    setCoachSeen(true);
+    void markMcqCoachSeen();
   }
   if (loadError) {
     return (
@@ -669,7 +859,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       { text: 'Pause', onPress: () => navigation.goBack() },
     ]);
   }
-  const ratingDockHeight = 164 + Math.max(insets.bottom, 8);
+  const ratingDockHeight = (renderAsMcq ? MCQ_DOCK_HEIGHT : 164) + Math.max(insets.bottom, 8);
   const doneMinimumGoal =
     plannedMinimumGoal ?? planChallengeRoute({ deck, progress, now, ownedSet, mode }).minimumGoal;
   const previewChecked = trialInfo.isTrial
@@ -763,6 +953,20 @@ export function SessionCardScreen({ navigation, route }: Props) {
                   </Text>
                 </Pressable>
               </View>
+            ) : mcqState.mcq ? (
+              <McqReviewBody
+                card={current.card}
+                mcq={mcqState.mcq}
+                rank={rankMapRef.current.get(current.card.StableUid) ?? null}
+                stage={mcqState.stage}
+                shownOrder={mcqState.shownOrder}
+                picks={mcqState.picks}
+                verdict={mcqState.verdict}
+                scheduleLine={mcqState.scheduleLine}
+                attemptIndex={mcqState.attemptIndex}
+                onToggleOption={handleToggleOption}
+                onOverLimit={() => mcqHaptic('warning')}
+              />
             ) : (
               <ReviewBody
                 card={current.card}
@@ -772,6 +976,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
               />
             )}
           </ScrollView>
+          <McqCoachLine visible={renderAsMcq && coachSeen === false} onDismiss={handleCoachDismiss} />
           {current ? (
             <View
               style={[
@@ -782,12 +987,27 @@ export function SessionCardScreen({ navigation, route }: Props) {
               ]}
               testID="review-rating-dock"
             >
-              <RatingBar
-                testID="review-rating-bar"
-                disabled={reviewing || !showAnswer}
-                revealed={showAnswer}
-                onRate={(rating) => void handleRating(rating)}
-              />
+              {mcqState.mcq ? (
+                <McqActionDock
+                  testID="review-rating-bar"
+                  stage={mcqState.stage}
+                  requiredCount={mcqRequiredCount(mcqState.mcq)}
+                  selectedCount={mcqState.picks.length}
+                  disabled={reviewing}
+                  isLastNode={sessionLimit > 0 && sessionDone + 1 >= sessionLimit}
+                  onShowOptions={handleShowOptions}
+                  onSubmit={handleSubmit}
+                  onDontKnow={handleDontKnow}
+                  onNext={handleMcqNext}
+                />
+              ) : (
+                <RatingBar
+                  testID="review-rating-bar"
+                  disabled={reviewing || !showAnswer}
+                  revealed={showAnswer}
+                  onRate={(rating) => void handleRating(rating)}
+                />
+              )}
             </View>
           ) : null}
         </View>

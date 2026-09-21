@@ -201,6 +201,8 @@ export type RootStackParamList = {
     /** R7 forecast line when the run ended on a milestone rating (SessionCardScreen would otherwise
      *  lose it to the replace). Rendered under the reward card, testID `session-summary-load-forecast`. */
     loadForecast?: string;
+    /** D05: per-run MCQ pick tally, spread only when the run answered at least one MCQ card. */
+    picks?: { landed: number; answered: number };
   };
 
   SignIn: { email?: string } | undefined;
