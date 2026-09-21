@@ -1,0 +1,926 @@
+{
+  "aws-s3-storage-classes": {
+    "orderInDeck": 5,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "An application writes logs to S3 that are read often for 30 days and almost never afterwards, but must be kept for 7 years. Which storage classes and mechanism fit?"
+  },
+  "aws-s3-cloudfront-oac": {
+    "orderInDeck": 10,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "You serve a static site from S3 through CloudFront. Why keep the bucket private and use Origin Access Control instead of making the bucket public?"
+  },
+  "aws-iam-roles-vs-users": {
+    "orderInDeck": 20,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "An EC2 application needs to read from S3. Should it use an IAM user's access keys or an IAM role, and why?"
+  },
+  "aws-lambda-cold-start-init": {
+    "orderInDeck": 30,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "What happens during a Lambda cold start, and what work belongs in the INIT phase to shorten it?"
+  },
+  "aws-sqs-visibility-timeout-dlq": {
+    "orderInDeck": 40,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "A consumer reads a message from SQS, crashes halfway, and the same message is processed again by another worker. What controls this, and how do you stop a poison message looping forever?"
+  },
+  "aws-sqs-sns-eventbridge-choice": {
+    "orderInDeck": 50,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "When do you pick SQS, SNS, or EventBridge to connect services?"
+  },
+  "aws-rds-multi-az-vs-read-replica": {
+    "orderInDeck": 60,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "What is the difference between RDS Multi-AZ and a read replica, and which one improves availability?"
+  },
+  "aws-vpc-private-subnet-nat": {
+    "orderInDeck": 70,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An application in a private subnet must call a third-party HTTPS API. Why can it not reach the internet, and what do you add?"
+  },
+  "aws-vpc-security-group-vs-nacl": {
+    "orderInDeck": 80,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "What is the difference between a security group and a network ACL?"
+  },
+  "aws-ec2-purchase-options": {
+    "orderInDeck": 90,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A web tier runs steadily all year, and a nightly batch job can be interrupted and restarted. Which purchase options minimise cost?"
+  },
+  "aws-ebs-vs-efs-vs-instance-store": {
+    "orderInDeck": 100,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "When do you choose EBS, EFS, or instance store for EC2 storage?"
+  },
+  "aws-alb-vs-nlb": {
+    "orderInDeck": 110,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "When do you use an Application Load Balancer versus a Network Load Balancer?"
+  },
+  "aws-dynamodb-capacity-and-keys": {
+    "orderInDeck": 120,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A new table has unpredictable traffic. Which DynamoDB capacity mode do you start with, and what makes a good partition key?"
+  },
+  "aws-kms-envelope-encryption": {
+    "orderInDeck": 130,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "How does envelope encryption work with KMS, and why not encrypt the data directly with the KMS key?"
+  },
+  "aws-cloudwatch-alarm-vs-eventbridge-rule": {
+    "orderInDeck": 140,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "You want to be paged when a Lambda's error rate exceeds 5%, and separately to run a job when an EC2 instance changes state. Which service handles each?"
+  },
+  "aws-iam-policy-evaluation-explicit-deny": {
+    "orderInDeck": 150,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A developer's role has AdministratorAccess, but an SCP on the account denies s3:DeleteBucket. Can the developer delete a bucket, and what order does AWS follow to decide any request?"
+  },
+  "aws-iam-permissions-boundary": {
+    "orderInDeck": 160,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "You want developers to create IAM roles for their own workloads without ever creating a role more powerful than they are. Which feature enforces that, and why does a restrictive identity policy on the developers not solve it?"
+  },
+  "aws-sts-assume-role-cross-account": {
+    "orderInDeck": 170,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A SaaS vendor needs read access to CloudWatch metrics in your account. Why do you create a role instead of an IAM user with access keys, and what does the external ID add?"
+  },
+  "aws-organizations-scp": {
+    "orderInDeck": 180,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An SCP on a member account's OU allows only ec2:* and s3:*, and a user in that account has no IAM policies attached. What can the user do, and would the same SCP restrict the management account?"
+  },
+  "aws-iam-identity-center": {
+    "orderInDeck": 190,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A company with dozens of AWS accounts in one organisation wants staff to sign in once with their corporate Okta credentials and get role-based access in each account. Which service do you choose, and why not IAM users?"
+  },
+  "aws-s3-bucket-policy-vs-iam-policy": {
+    "orderInDeck": 200,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A Lambda role in account B must read objects from a bucket owned by account A. Which policy must account A write, and is an identity policy on the role still needed?"
+  },
+  "aws-s3-block-public-access": {
+    "orderInDeck": 210,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A team adds a bucket policy with Principal \"*\" to serve images publicly, but S3 rejects the PutBucketPolicy call. What is blocking it, and how do account-level and bucket-level settings interact?"
+  },
+  "aws-s3-object-lock-worm": {
+    "orderInDeck": 220,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Financial records must be impossible to delete for seven years, even by an administrator or the root user. Which Object Lock configuration do you choose, and what does governance mode permit instead?"
+  },
+  "aws-s3-encryption-options-sse": {
+    "orderInDeck": 230,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Auditors require proof of which principal decrypted each object and the ability to revoke a key for one dataset. Which S3 server-side encryption option satisfies this, and what cost issue follows?"
+  },
+  "aws-s3-presigned-urls": {
+    "orderInDeck": 240,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A mobile app must let users upload photos to a private S3 bucket without AWS credentials on the device. Why is a presigned URL the answer rather than opening the bucket?"
+  },
+  "aws-kms-key-rotation-and-multi-region": {
+    "orderInDeck": 250,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Your compliance team demands yearly rotation of KMS keys and your DR plan decrypts backups in a second Region. Which key types rotate automatically, and how do you decrypt across Regions without re-encrypting?"
+  },
+  "aws-acm-certificates-and-cloudfront-region": {
+    "orderInDeck": 260,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A team requests one ACM certificate in ap-southeast-2 and attaches it to an ALB, then cannot select it for their CloudFront distribution. What went wrong, and when can an ACM certificate be exported?"
+  },
+  "aws-cognito-user-pool-vs-identity-pool": {
+    "orderInDeck": 270,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A mobile app needs sign-in with MFA and social login, and afterwards must upload files straight to S3. Which Cognito component does each job?"
+  },
+  "aws-guardduty-inspector-macie-detective": {
+    "orderInDeck": 280,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Which service do you pick to find a leaked access key being used from an unusual country, an unpatched CVE in a container image, credit card numbers in a bucket, and the root cause after an alert?"
+  },
+  "aws-vpc-endpoints-gateway-vs-interface": {
+    "orderInDeck": 290,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Instances in a private subnet need S3 without a NAT gateway, and later an on-premises data centre must reach the same bucket privately. Gateway or interface endpoint, and why?"
+  },
+  "aws-vpc-peering-vs-transit-gateway": {
+    "orderInDeck": 300,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "You peer VPC A with B and B with C, then discover A cannot reach C. Why, and at what point should you replace peering with a Transit Gateway?"
+  },
+  "aws-vpc-flow-logs": {
+    "orderInDeck": 310,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "Connections to an EC2 instance are timing out and you suspect a security group is dropping them. What do VPC Flow Logs show you, and what do they not show?"
+  },
+  "aws-ssm-session-manager-vs-bastion": {
+    "orderInDeck": 320,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Auditors require that no EC2 instance accepts inbound SSH and that every administrative shell session is logged. Do you build a bastion host, or something else?"
+  },
+  "aws-site-to-site-vpn-vs-direct-connect": {
+    "orderInDeck": 330,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A company needs its data centre connected to a VPC within days, and later wants predictable throughput for large nightly transfers. When is Site-to-Site VPN the answer and when is Direct Connect?"
+  },
+  "aws-direct-connect-encryption": {
+    "orderInDeck": 340,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "A regulated workload must encrypt everything crossing its Direct Connect link and reach VPCs in two Regions. What does Direct Connect give you on its own, and what do you add?"
+  },
+  "aws-cloudhsm-vs-kms": {
+    "orderInDeck": 350,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A bank must keep its encryption keys in a single-tenant HSM that its own staff administer, yet still use those keys with RDS and EBS. KMS, CloudHSM, or both?"
+  },
+  "aws-ec2-imdsv2": {
+    "orderInDeck": 360,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "A web app on EC2 has a server-side request forgery bug. Why can an attacker use it to steal the instance role's credentials, and which setting closes the hole?"
+  },
+  "aws-rds-encryption-and-iam-auth": {
+    "orderInDeck": 370,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An unencrypted RDS MySQL instance must now be encrypted at rest and reachable from an EC2 application without a stored password. What are the steps, and what cannot be done in place?"
+  },
+  "aws-ebs-encryption-default": {
+    "orderInDeck": 380,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A compliance rule says every new EBS volume in the account must be encrypted, and some existing unencrypted volumes must be fixed. How do you handle each?"
+  },
+  "aws-security-group-referencing": {
+    "orderInDeck": 390,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Web servers behind an ALB scale in and out, and the database must accept connections only from those web servers. How do you write the rule without maintaining IP lists?"
+  },
+  "aws-alb-authentication-cognito-oidc": {
+    "orderInDeck": 400,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A web application behind an Application Load Balancer must require corporate single sign-on before any request reaches the EC2 targets, and the team does not want to write login code. What do you configure?"
+  },
+  "aws-api-gateway-auth-options": {
+    "orderInDeck": 410,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A REST API on API Gateway must accept calls from mobile app users, from internal AWS services, and from partners who send a custom bearer token. Which authoriser fits each caller, and where do API keys belong?"
+  },
+  "aws-lambda-vpc-access": {
+    "orderInDeck": 420,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A Lambda function must query an RDS instance in a private subnet, and after you attach the function to the VPC its calls to a public third-party API start timing out. Why, and what fixes both needs?"
+  },
+  "aws-privatelink-expose-service": {
+    "orderInDeck": 430,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A team runs an internal API in its VPC and must expose it to dozens of consumer VPCs in other accounts, several of which use the same 10.0.0.0/16 range. Peering is rejected; what do you build instead?"
+  },
+  "aws-iam-access-analyzer-credential-report": {
+    "orderInDeck": 440,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "An auditor asks two things: which S3 buckets, KMS keys or IAM roles are reachable from outside the organisation, and which IAM users lack MFA or hold access keys that have not been rotated in a year. Which tool answers each?"
+  },
+  "aws-route53-routing-policies": {
+    "orderInDeck": 450,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Three requirements land on one day: shift 5 percent of traffic to a new release, send European users to the Region that responds fastest, and serve a licensed video only inside one country. Which Route 53 routing policy fits each?"
+  },
+  "aws-route53-health-checks-failover": {
+    "orderInDeck": 460,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A failover record set points to a primary web tier in a private subnet with no public IPs, and the endpoint health check stays unhealthy even though the site works. What is wrong and how do you fix it?"
+  },
+  "aws-route53-alias-vs-cname": {
+    "orderInDeck": 470,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "You need example.com, the bare domain, to resolve to an Application Load Balancer. Why does a CNAME fail here and what do you use instead?"
+  },
+  "aws-asg-scaling-policies": {
+    "orderInDeck": 480,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An Auto Scaling group must hold average CPU near 50 percent, add a burst of capacity when CPU spikes past 90 percent, and be ready before the 9 am login rush every weekday. Which policy types cover this, and which one should you avoid?"
+  },
+  "aws-asg-lifecycle-hooks-and-warm-pools": {
+    "orderInDeck": 490,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "An Auto Scaling group must copy logs off each instance before it is terminated, and scale-out is slow because the AMI takes several minutes to bootstrap. Which two features solve these problems, and why do they need each other?"
+  },
+  "aws-asg-health-checks-elb-vs-ec2": {
+    "orderInDeck": 500,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An instance behind an Application Load Balancer returns HTTP 500 on every request and the target group marks it unhealthy, yet the Auto Scaling group never replaces it. Why, and what do you change?"
+  },
+  "aws-elb-cross-zone-and-sticky-sessions": {
+    "orderInDeck": 510,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A Network Load Balancer has two targets in one Availability Zone and eight in another, and the two are overloaded. What is happening, and why would adding sticky sessions make it worse?"
+  },
+  "aws-elb-deregistration-delay": {
+    "orderInDeck": 520,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "When an Auto Scaling group scales in, users with long downloads in progress receive 5xx errors. Which target group setting prevents that, and what is its default?"
+  },
+  "aws-aurora-vs-rds": {
+    "orderInDeck": 530,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "When do you pick Aurora over RDS for MySQL or PostgreSQL, and what does the higher price actually buy?"
+  },
+  "aws-aurora-global-database": {
+    "orderInDeck": 540,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A company needs its Aurora database readable on three continents and recoverable from a full Regional outage within minutes. Which feature fits, and what are the RPO and RTO trade-offs?"
+  },
+  "aws-rds-backups-snapshots-pitr": {
+    "orderInDeck": 550,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A developer ran an accidental DELETE on an RDS database 40 minutes ago and asks you to roll back to just before it. What do you use, and how do automated backups differ from manual snapshots?"
+  },
+  "aws-rds-cross-region-read-replica-dr": {
+    "orderInDeck": 560,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An RDS for PostgreSQL database in Sydney must survive a Regional outage and also serve reads to users in Ireland. Why is Multi-AZ alone insufficient, and what does the alternative cost you?"
+  },
+  "aws-dynamodb-global-tables": {
+    "orderInDeck": 570,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A mobile game must accept DynamoDB writes in both us-east-1 and eu-west-1 and keep working if one Region is impaired. Which feature fits, and what does its conflict rule mean for your data model?"
+  },
+  "aws-dynamodb-streams-and-ttl": {
+    "orderInDeck": 580,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A table stores session records that must be archived to S3 when they expire, without paying for the delete writes. How do you build this with DynamoDB features alone?"
+  },
+  "aws-s3-cross-region-replication": {
+    "orderInDeck": 590,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A compliance rule requires copies of a bucket's objects in a second Region, including objects uploaded last year. What must be true of both buckets, and why does enabling CRR alone not satisfy the rule?"
+  },
+  "aws-s3-versioning-and-mfa-delete": {
+    "orderInDeck": 600,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "An operator accidentally deleted objects from a bucket. What makes that recoverable, and what stops the same thing happening under stolen credentials?"
+  },
+  "aws-s3-durability-availability": {
+    "orderInDeck": 610,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "What is the difference between S3 durability and availability, and which storage class trades resilience to an Availability Zone loss for a lower price?"
+  },
+  "aws-sqs-fifo-vs-standard": {
+    "orderInDeck": 620,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An order system must apply price updates for each product in the order they were sent and must never process the same update twice. Standard or FIFO queue, and what does the choice cost you?"
+  },
+  "aws-sqs-long-polling": {
+    "orderInDeck": 630,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A worker fleet polls an SQS queue in a tight loop and the bill shows millions of empty ReceiveMessage responses. What setting fixes it, and why does it help?"
+  },
+  "aws-sqs-message-retention-and-size": {
+    "orderInDeck": 640,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A producer needs to enqueue 5 MB documents, and consumers may be offline for a week. Which SQS defaults get in the way, and what do you change?"
+  },
+  "aws-sns-fanout-filtering": {
+    "orderInDeck": 650,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An order event must trigger fulfilment, analytics, and a fraud check independently, and the fraud service only cares about orders above a threshold. What pattern serves this without the producer knowing about each consumer?"
+  },
+  "aws-lambda-retries-and-destinations": {
+    "orderInDeck": 660,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "A Lambda function fails intermittently. Why does the same code seem to retry twice when triggered by S3, never when called through API Gateway, and endlessly when reading a Kinesis stream?"
+  },
+  "aws-lambda-concurrency-reserved-provisioned": {
+    "orderInDeck": 670,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A payment Lambda function is being throttled because a noisy batch function in the same account is using all the available concurrency. Do you set reserved or provisioned concurrency, and what does each one actually change?"
+  },
+  "aws-dr-strategies-rpo-rto": {
+    "orderInDeck": 680,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A workload may lose no more than a few minutes of data, but the business accepts a recovery time measured in hours rather than seconds. Which disaster recovery strategy fits, and why not its cheaper or dearer neighbours?"
+  },
+  "aws-backup-service": {
+    "orderInDeck": 690,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A team scripts EBS snapshots, RDS snapshots and DynamoDB backups separately and cannot prove retention to auditors. Which service replaces the scripts, and which feature stops even an administrator deleting a backup early?"
+  },
+  "aws-multi-az-vs-multi-region": {
+    "orderInDeck": 700,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "When is deploying across multiple Availability Zones enough, and when does a workload genuinely need a second Region?"
+  },
+  "aws-cloudfront-origin-failover": {
+    "orderInDeck": 710,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A static site served by CloudFront from an S3 bucket must keep serving if that bucket's Region has problems. How do you make CloudFront fall back, and what exactly triggers the fallback?"
+  },
+  "aws-ecs-fargate-vs-ec2-launch": {
+    "orderInDeck": 720,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "One team needs GPU containers on reserved capacity, another has a spiky API and nobody to patch hosts. Which ECS launch type suits each, and how do the containers get AWS permissions in both cases?"
+  },
+  "aws-eks-vs-ecs": {
+    "orderInDeck": 730,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "When do you choose Amazon EKS over Amazon ECS for a containerised workload, given that both can run on Fargate?"
+  },
+  "aws-elastic-ip-and-eni-failover": {
+    "orderInDeck": 740,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A licensing server must keep the same IP address after failing over to a standby instance. When do you remap an Elastic IP, and when do you move a secondary network interface instead?"
+  },
+  "aws-eventbridge-archive-replay": {
+    "orderInDeck": 750,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A Lambda target silently mishandled a week of order events because of a bug. How can EventBridge let you reprocess those events after the fix, and what must already be in place?"
+  },
+  "aws-rds-multi-az-cluster-vs-instance": {
+    "orderInDeck": 760,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "A team on RDS for PostgreSQL wants automatic failover and also wants to send reporting queries to a standby. Do they choose a Multi-AZ DB instance or a Multi-AZ DB cluster, and why?"
+  },
+  "aws-elasticache-redis-cluster-mode-and-multi-az": {
+    "orderInDeck": 770,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A session store must survive the loss of a cache node without manual intervention, and a separate leaderboard needs a dataset larger than one node can hold. Which ElastiCache options do you pick for each?"
+  },
+  "aws-ebs-snapshot-cross-region-copy-and-dlm": {
+    "orderInDeck": 780,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A company must keep nightly EBS backups for 30 days and hold a copy in a second Region for disaster recovery, with no custom scripting. What do you set up, and why does the first cross-Region copy cost more than later ones?"
+  },
+  "aws-ec2-auto-recovery-and-status-checks": {
+    "orderInDeck": 790,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "An EC2 instance fails its system status check. What does that tell you compared with a failed instance status check, and what happens to the instance ID and IP addresses if automatic recovery runs?"
+  },
+  "aws-aurora-backtrack-and-cloning": {
+    "orderInDeck": 800,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A developer ran a DELETE without a WHERE clause on an Aurora MySQL cluster ten minutes ago, and separately the team wants a production-sized copy for load testing. Which Aurora feature fits each, and why not a snapshot restore?"
+  },
+  "aws-ebs-volume-types": {
+    "orderInDeck": 810,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "You must choose EBS volumes for three workloads: a boot volume hosting a mid-sized database, a log-processing job streaming large sequential files, and a latency-sensitive database needing sustained very high IOPS. Which types, and why?"
+  },
+  "aws-ebs-multi-attach-io2": {
+    "orderInDeck": 820,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "Two EC2 instances in the same Availability Zone must both read and write a single block volume for a clustered database. Can EBS do this, and why is it not simply shared storage like EFS?"
+  },
+  "aws-efs-performance-and-throughput-modes": {
+    "orderInDeck": 830,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A fleet of Linux web servers across three Availability Zones needs a shared POSIX file system whose load is spiky and hard to forecast. Which EFS performance mode and throughput mode do you choose?"
+  },
+  "aws-fsx-windows-vs-lustre-vs-ontap": {
+    "orderInDeck": 840,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Four requests arrive: Windows home directories joined to Active Directory, a machine-learning job that must read a large S3 dataset at high speed, an on-premises NetApp migration needing NFS and SMB together with snapshots, and a lift of a Linux ZFS file server. Which FSx flavour serves each?"
+  },
+  "aws-s3-performance-prefixes-multipart": {
+    "orderInDeck": 850,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A data pipeline writes millions of small objects to one S3 bucket under a single date prefix and starts receiving 503 Slow Down errors. What is the fix, and how do you speed up a single multi-gigabyte upload or download?"
+  },
+  "aws-s3-transfer-acceleration": {
+    "orderInDeck": 860,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "Users on several continents upload large video files to one S3 bucket in us-east-1 and complain about slow uploads. Which S3 feature helps, and what does it not fix?"
+  },
+  "aws-s3-select-and-athena": {
+    "orderInDeck": 870,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An application needs only a few columns from one large CSV object in S3, while an analyst wants to run ad hoc SQL across a whole bucket of logs. Which service fits each, and how do you keep the cost down?"
+  },
+  "aws-cloudfront-caching-ttl-and-invalidation": {
+    "orderInDeck": 880,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A team deploys a new app.js behind CloudFront but users keep getting the old file for a day. Why does that happen, and what is the cheaper long-term fix than invalidating?"
+  },
+  "aws-cloudfront-signed-urls-vs-cookies": {
+    "orderInDeck": 890,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A subscription video site serves hundreds of HLS segment files per stream through CloudFront, and a separate page offers a single paid installer download. Which private-content mechanism suits each, and what stops a user bypassing it?"
+  },
+  "aws-cloudfront-lambda-edge-vs-functions": {
+    "orderInDeck": 900,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "One requirement is to rewrite URLs and add a security header on every viewer request at millions of requests per second; another is to fetch a personalisation record from DynamoDB before a request reaches the origin. Which edge compute option fits each, and why can the first not do the second?"
+  },
+  "aws-global-accelerator-vs-cloudfront": {
+    "orderInDeck": 910,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A multiplayer game uses a custom UDP protocol, partner firewalls must allow-list fixed IP addresses, and players are on several continents. Why is CloudFront the wrong answer and Global Accelerator the right one?"
+  },
+  "aws-elasticache-redis-vs-memcached": {
+    "orderInDeck": 920,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A gaming backend needs a real-time top-10 leaderboard, a pub/sub channel for match events, and the cache must survive a node failure. Which ElastiCache engine, and when would Memcached have been the better pick?"
+  },
+  "aws-elasticache-lazy-loading-vs-write-through": {
+    "orderInDeck": 930,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A product catalogue cache returns prices that changed in the database an hour ago, while another team's write-through cache is full of items nobody reads. What is happening in each case, and what single addition helps both?"
+  },
+  "aws-dynamodb-dax": {
+    "orderInDeck": 940,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A read-heavy DynamoDB application repeatedly fetches the same hot items and needs microsecond reads. Why choose DAX over ElastiCache, and when does DAX not help?"
+  },
+  "aws-dynamodb-gsi-vs-lsi": {
+    "orderInDeck": 950,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "A DynamoDB table already exists and you need to query by an attribute that is not in the primary key. Which index type can you add now, and what would an LSI have given you that a GSI cannot?"
+  },
+  "aws-rds-proxy": {
+    "orderInDeck": 960,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Hundreds of Lambda functions open short-lived connections to an RDS MySQL instance and it starts returning too many connections errors. What do you put in front of the database, and why not just use a larger instance?"
+  },
+  "aws-aurora-reader-endpoint-and-autoscaling": {
+    "orderInDeck": 970,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Reporting queries are slowing an Aurora cluster's primary instance and read demand spikes unpredictably during the day. Which endpoint should the reports use, and how do you add read capacity automatically?"
+  },
+  "aws-ec2-instance-families": {
+    "orderInDeck": 980,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "Match the EC2 family letter to the workload: a web tier with idle periods, a video encoder, an in-memory database, a node with heavy local disk I/O, and a deep learning trainer."
+  },
+  "aws-ec2-placement-groups": {
+    "orderInDeck": 990,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "When do you choose a cluster, spread or partition placement group, and which one cannot hold fifty instances in a single Availability Zone?"
+  },
+  "aws-kinesis-data-streams-vs-firehose": {
+    "orderInDeck": 1000,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Clickstream events must land in S3 within about a minute with no consumer code to maintain, while a second team wants to run custom real-time anomaly detection on the same events. Which Kinesis service serves each need?"
+  },
+  "aws-kinesis-shards-and-partition-keys": {
+    "orderInDeck": 1010,
+    "difficulty": 3,
+    "revision": 1,
+    "question": "A provisioned Kinesis stream with ten shards throttles producers with ProvisionedThroughputExceededException while total traffic is well under capacity. What is the likely cause, and what are the fixes?"
+  },
+  "aws-api-gateway-caching-and-throttling": {
+    "orderInDeck": 1020,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A REST API backed by Lambda returns the same catalogue data to thousands of clients, and a few clients are hammering it. Where do you enable caching, and how do you limit each client?"
+  },
+  "aws-api-gateway-rest-vs-http-vs-websocket": {
+    "orderInDeck": 1030,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "When do you pick an HTTP API over a REST API in API Gateway, and when is neither of them the right answer?"
+  },
+  "aws-lambda-performance-memory-and-layers": {
+    "orderInDeck": 1040,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A CPU heavy Lambda function takes eight seconds at 128 MB. Why can raising its memory make it both faster and cheaper, and what do layers and container images change?"
+  },
+  "aws-lambda-event-source-mappings-sqs-batching": {
+    "orderInDeck": 1050,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A Lambda function reads an SQS queue, and one bad message in a batch of ten causes all ten to be reprocessed. What is happening, and how do you fix it without shrinking the batch?"
+  },
+  "aws-step-functions-standard-vs-express": {
+    "orderInDeck": 1060,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An order pipeline charges a card, waits up to two days for a warehouse callback, then emails the customer. Which Step Functions workflow type do you choose, and when would Express be right instead?"
+  },
+  "aws-opensearch-use-cases": {
+    "orderInDeck": 1070,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "Which AWS service handles full text search and log analytics with dashboards, and when are CloudWatch Logs Insights or Athena the better answer?"
+  },
+  "aws-redshift-vs-athena-vs-emr": {
+    "orderInDeck": 1080,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "One team wants occasional SQL over CSV and Parquet files already in S3 with no servers, another needs nightly BI reports joining dozens of very large tables. Which service fits each, and where does EMR belong?"
+  },
+  "aws-glue-etl-and-catalog": {
+    "orderInDeck": 1090,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "New JSON files land in S3 every hour and must be cleaned, converted to Parquet and made queryable by Athena with no servers to manage. Which service, and what does the Data Catalog add?"
+  },
+  "aws-aurora-vs-dynamodb-choice": {
+    "orderInDeck": 1100,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A new service needs a serverless database. When does that mean DynamoDB, and when is Aurora still the right answer even though the word serverless appears?"
+  },
+  "aws-lambda-limits-timeout-payload": {
+    "orderInDeck": 1110,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A video transcoding job takes about 40 minutes per file and the team wants to run it as a standard Lambda function. Which limit stops that, and where should the job run instead?"
+  },
+  "aws-appsync-graphql": {
+    "orderInDeck": 1120,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A mobile app needs one endpoint that reads from DynamoDB and a Lambda function, pushes live updates to clients, and keeps working offline. Why is AppSync a better fit than an API Gateway REST API?"
+  },
+  "aws-s3-glacier-retrieval-tiers": {
+    "orderInDeck": 1130,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Compliance archives are read perhaps once a year, but when auditors ask, a handful of files must be back within minutes. Which Glacier class and retrieval tier do you pick, and what does Deep Archive change?"
+  },
+  "aws-s3-requester-pays-and-data-transfer": {
+    "orderInDeck": 1140,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A research group publishes a multi-terabyte dataset in S3 and does not want to pay every time outsiders download it. What setting solves this, and what does the owner still pay for?"
+  },
+  "aws-savings-plans-vs-reserved-instances": {
+    "orderInDeck": 1150,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A company runs steady EC2 workloads plus some Fargate and Lambda, and may move between instance families and Regions next year. Which commitment gives the discount without locking them in, and when does a Reserved Instance still win?"
+  },
+  "aws-spot-fleet-and-interruption-handling": {
+    "orderInDeck": 1160,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A rendering farm on Spot keeps losing instances mid-job. How should the fleet be configured, and how does the application survive an interruption?"
+  },
+  "aws-ec2-dedicated-hosts-vs-instances": {
+    "orderInDeck": 1170,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "One team must bring its own per-core Windows Server and SQL Server licences to AWS; another team simply needs hardware not shared with other customers. Which tenancy option does each need?"
+  },
+  "aws-nat-gateway-cost-vs-vpc-endpoint": {
+    "orderInDeck": 1180,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Private-subnet instances push terabytes into S3 every night through a NAT Gateway and the VPC bill has ballooned. What is being charged, and what removes it?"
+  },
+  "aws-data-transfer-costs-az-region": {
+    "orderInDeck": 1190,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A web tier in one Availability Zone talks constantly to a cache tier in another, and static files are served straight from S3 to the internet. Where are the hidden transfer charges, and how do you cut them?"
+  },
+  "aws-cloudfront-cost-reduction": {
+    "orderInDeck": 1200,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A static site served straight from S3 is paying for data transfer and requests from viewers worldwide. How does CloudFront lower that bill, and which three distribution settings cut it further?"
+  },
+  "aws-aurora-serverless-v2": {
+    "orderInDeck": 1210,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A team runs a dev database and a production API whose traffic spikes unpredictably. When is Aurora Serverless v2 the cheaper choice over provisioned Aurora, and what changed from v1?"
+  },
+  "aws-dynamodb-standard-ia-table-class": {
+    "orderInDeck": 1220,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A DynamoDB table holds years of order history that is rarely read but must stay queryable. Which table class lowers the bill, and what is the trade-off?"
+  },
+  "aws-lambda-pricing-and-graviton": {
+    "orderInDeck": 1230,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "What does AWS bill a Lambda function for, and which two changes cut the bill without touching the code?"
+  },
+  "aws-fargate-spot-and-compute-savings-plans": {
+    "orderInDeck": 1240,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An ECS service on Fargate runs a steady web tier plus a fleet of retry-safe batch workers. How do you cut the bill without risking the web tier?"
+  },
+  "aws-cost-explorer-budgets-cur": {
+    "orderInDeck": 1250,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "Finance wants a monthly spend chart per team, an alert before a project overspends, and raw hourly line items for their own warehouse. Which tool answers each request?"
+  },
+  "aws-trusted-advisor": {
+    "orderInDeck": 1260,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A company on the Basic support plan wants Trusted Advisor to flag idle EC2 instances and underused EBS volumes. Why do those checks not appear, and what does Trusted Advisor cover?"
+  },
+  "aws-compute-optimizer-and-rightsizing": {
+    "orderInDeck": 1270,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "Before committing to a three-year Savings Plan, an architect wants evidence that the fleet is not over-provisioned. Which service gives instance-level rightsizing recommendations, and what does it need?"
+  },
+  "aws-ebs-gp3-vs-gp2-and-snapshot-archive": {
+    "orderInDeck": 1280,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An account has hundreds of 100 GiB gp2 volumes, some no longer attached, and thousands of monthly snapshots kept for seven years of compliance. What are the three cheapest fixes?"
+  },
+  "aws-efs-ia-and-lifecycle": {
+    "orderInDeck": 1290,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A shared EFS file system holds years of project files that nobody has opened in months, yet the storage bill keeps growing. Which feature do you enable, and when does it backfire?"
+  },
+  "aws-rds-reserved-and-stop-start": {
+    "orderInDeck": 1300,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A team runs a production PostgreSQL instance 24 hours a day and a dev instance used a few hours a week. What is the cheapest setup for each, and what surprises people who simply stop the dev instance?"
+  },
+  "aws-cloudwatch-logs-metric-filters-and-insights": {
+    "orderInDeck": 1310,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An application writes ERROR lines to CloudWatch Logs; the team wants to be paged when errors spike, to investigate them interactively, and to stream them to an external SIEM. Which CloudWatch Logs feature serves each need?"
+  },
+  "aws-cloudwatch-agent-custom-metrics": {
+    "orderInDeck": 1320,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "An operations team wants an alarm when an EC2 instance runs low on memory or disk space, but CloudWatch shows only CPU and network for the instance. Why, and what do they add?"
+  },
+  "aws-cloudtrail-vs-config-vs-cloudwatch": {
+    "orderInDeck": 1330,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A security group changed last week and the auditor asks three things: who changed it, what its rules were on each day since, and whether any group currently allows 0.0.0.0/0 on port 22. Which service answers each?"
+  },
+  "aws-systems-manager-run-command-patch-and-parameters": {
+    "orderInDeck": 1340,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A fleet of 200 EC2 instances and 50 on-premises servers needs a one-off script, monthly OS patching in a fixed window, and a shared database endpoint injected into apps, all without opening SSH. Which Systems Manager capabilities do you combine?"
+  },
+  "aws-snow-family-selection": {
+    "orderInDeck": 1350,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A research site with 400 TB on local disks and a 1 Gbps internet link must get the data into S3, and a second site with no reliable connectivity must run analytics locally. How do you decide between online transfer and a Snow device, and which device fits each?"
+  },
+  "aws-storage-gateway-modes": {
+    "orderInDeck": 1360,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An office wants its file server backed by S3 with fast local access, a database server needs an iSCSI volume kept entirely on site with cloud backups, and the backup team wants to retire physical tapes without changing backup software. Which Storage Gateway type and mode serves each?"
+  },
+  "aws-dms-and-sct": {
+    "orderInDeck": 1370,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A company must move an on-premises Oracle database to Aurora PostgreSQL while the application keeps running. Which services do you combine, and what does each one do?"
+  },
+  "aws-application-migration-service-mgn": {
+    "orderInDeck": 1380,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A company wants to move two hundred on-premises virtual machines to EC2 with no code changes and only minutes of downtime. Which service does the move, and which services help plan and track it?"
+  },
+  "aws-migration-strategies-7rs": {
+    "orderInDeck": 1390,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A migration assessment tags each application with one of the 7 Rs. How do you tell rehost, relocate, replatform, refactor, repurchase, retain and retire apart when the exam gives you a constraint?"
+  },
+  "aws-cloudformation-vs-cdk-vs-elastic-beanstalk": {
+    "orderInDeck": 1400,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "When do you choose CloudFormation, the CDK, or Elastic Beanstalk to stand up an application's infrastructure?"
+  },
+  "aws-elastic-beanstalk-deployment-policies": {
+    "orderInDeck": 1410,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An Elastic Beanstalk environment must deploy a new version with no loss of capacity and a fast, safe rollback if health checks fail. Which deployment policy do you choose, and why not rolling?"
+  },
+  "aws-codedeploy-blue-green-lambda-ecs": {
+    "orderInDeck": 1420,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A team wants CodeDeploy to send 10 percent of traffic to a new Lambda version, watch an error alarm, then shift the rest automatically. Which deployment type and configuration do they need, and how does this differ from EC2?"
+  },
+  "aws-config-rules-remediation": {
+    "orderInDeck": 1430,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Security wants every unencrypted EBS volume and every security group open to the internet on port 22 detected and fixed automatically across all accounts. Which service, and how do the pieces fit?"
+  },
+  "aws-resource-access-manager": {
+    "orderInDeck": 1440,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "Ten accounts in an organisation each need subnets in one central VPC and a route through one Transit Gateway. Do you build these in every account or share them, and with what?"
+  },
+  "aws-well-architected-pillars": {
+    "orderInDeck": 1450,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "What are the six pillars of the AWS Well-Architected Framework, and what does the Well-Architected Tool actually do with them?"
+  },
+  "aws-outposts-local-zones-wavelength": {
+    "orderInDeck": 1460,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A hospital must run EC2 and RDS inside its own data centre so patient records never leave the site, while a game studio wants lower latency for players in a city far from any Region. Which of Outposts, Local Zones and Wavelength fits each, and when is Wavelength the answer instead?"
+  },
+  "aws-secrets-manager-vs-parameter-store": {
+    "orderInDeck": 1470,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A team must store an Amazon RDS master password that is changed automatically on a schedule without writing custom code, and a colleague suggests an SSM Parameter Store SecureString because the standard tier is free. Which service fits the requirement, and why?"
+  },
+  "aws-waf-vs-shield": {
+    "orderInDeck": 1480,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "An Application Load Balancer fronting a public API is receiving SQL injection payloads in query strings while a separate SYN flood hammers the network layer. Which AWS service handles each, and why would swapping them fail?"
+  },
+  "aws-ec2-enhanced-networking-efa": {
+    "orderInDeck": 1490,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A CFD team runs a tightly coupled MPI simulation across dozens of EC2 instances, while a web team simply wants more throughput and lower latency for its API fleet. Which network adapter suits each, and why would swapping them be a mistake?"
+  },
+  "aws-datasync-vs-transfer-family": {
+    "orderInDeck": 1500,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A company must migrate a large on-premises NFS share into Amazon S3 and keep it synchronised nightly, while its trading partners must keep uploading files with their existing SFTP clients. Which AWS service fits each need, and why is one service not enough?"
+  },
+  "aws-purpose-built-databases-selection": {
+    "orderInDeck": 1510,
+    "difficulty": 1,
+    "revision": 1,
+    "question": "A fraud detection feature must traverse millions of relationships between accounts and devices, while a separate IoT feature stores sensor readings queried by time window. Which AWS database fits each workload, and why is Aurora the distractor?"
+  },
+  "aws-route53-resolver-hybrid-dns": {
+    "orderInDeck": 1520,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "Your on-premises servers, connected to AWS over Site-to-Site VPN, must resolve names in a Route 53 private hosted zone, and EC2 instances must resolve corp.internal names held on an on-premises DNS server. What do you deploy, and why does pointing the on-premises servers at the VPC's .2 address fail?"
+  },
+  "aws-s3-lifecycle-rules-minimums": {
+    "orderInDeck": 1530,
+    "difficulty": 2,
+    "revision": 1,
+    "question": "A single S3 lifecycle rule moves log objects to S3 Standard-IA at day 7 and then to S3 Glacier Deep Archive at day 20. Which step does S3 reject, and why?"
+  }
+}
