@@ -51,6 +51,16 @@ function learned(uid: string): CardProgress {
 function unlearned(uid: string): CardProgress {
   return { stableUid: uid, stage: 0, lastReviewedAt: 0, nextReviewAt: 0 };
 }
+function hasOwn(obj: Record<string, number>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+// fast-check 4.x biases fc.string() toward prototype names ('__proto__', 'valueOf',
+// 'constructor', ...). Inherited names are a fine probe -- the module answers them with
+// its own-key test and the oracle below must do the same -- but '__proto__' is not: a
+// plain `obj['__proto__'] = 0` sets the prototype instead of a key, JSON round-trips it
+// as an own key, and no stableUid is ever spelled that way. It is filtered out of the
+// key arbitrary rather than special-cased in the oracle.
+const uidArb = fc.string({ minLength: 1 }).filter((s) => s !== '__proto__');
 
 describe('newCardLedger', () => {
   beforeEach(() => {
@@ -90,7 +100,7 @@ describe('newCardLedger', () => {
   it('seeds exactly the learned uids with 0 and never overwrites a present ledger', async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.array(fc.record({ uid: fc.string({ minLength: 1 }), isLearned: fc.boolean() })),
+        fc.array(fc.record({ uid: uidArb, isLearned: fc.boolean() })),
         async (rows) => {
           store.clear();
           setActiveUserSubForStorage(null);
@@ -150,8 +160,8 @@ describe('newCardLedger', () => {
   it('never overwrites an existing paidAt when the seed unions the backfill in', async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.dictionary(fc.string({ minLength: 1 }), fc.integer({ min: 0, max: 2_000_000 })),
-        fc.array(fc.string({ minLength: 1 })),
+        fc.dictionary(uidArb, fc.integer({ min: 0, max: 2_000_000 })),
+        fc.array(uidArb),
         async (existing, learnedUids) => {
           store.clear();
           setActiveUserSubForStorage(null);
@@ -159,12 +169,41 @@ describe('newCardLedger', () => {
 
           const seeded = await seedNewCardLedgerIfAbsent('csharp', learnedUids.map(learned));
 
+          // Own keys only: `uid in existing` would also answer true for 'valueOf' / 'toString'
+          // inherited from Object.prototype, which the module (correctly) treats as absent.
           for (const [uid, paidAt] of Object.entries(existing)) expect(seeded[uid]).toBe(paidAt);
-          for (const uid of learnedUids) expect(seeded[uid]).toBe(uid in existing ? existing[uid] : 0);
+          for (const uid of learnedUids) expect(seeded[uid]).toBe(hasOwn(existing, uid) ? existing[uid] : 0);
           expect(Object.keys(seeded).length).toBe(new Set([...Object.keys(existing), ...learnedUids]).size);
         },
       ),
     );
+  });
+
+  it('unions a second learned-uid source into the backfill, only while the marker is absent', async () => {
+    // Anon adoption already stamped `a`; the snapshot knows `b`; storage knows `c` and `a`.
+    store.set(ANON_LEDGER_KEY, JSON.stringify({ a: 1_000 }));
+    const source = vi.fn(async () => new Set(['c', 'a', 'b']));
+
+    const seeded = await seedNewCardLedgerIfAbsent('csharp', [learned('b'), unlearned('d')], 9_000, source);
+    expect(source).toHaveBeenCalledTimes(1);
+    // `a` keeps its stamp whichever source names it; `b` and `c` are backfilled once each.
+    expect(seeded).toEqual({ a: 1_000, b: 0, c: 0 });
+    expect(JSON.parse(store.get(ANON_LEDGER_KEY)!)).toEqual({ a: 1_000, b: 0, c: 0 });
+    expect(JSON.parse(store.get(ANON_SEEDED_KEY)!)).toEqual({ seededAtMs: 9_000, backfilled: 2 });
+
+    // Marker present: the source is never consulted again, whatever it would say now.
+    const again = await seedNewCardLedgerIfAbsent('csharp', [learned('z')], 10_000, source);
+    expect(source).toHaveBeenCalledTimes(1);
+    expect(again).toEqual({ a: 1_000, b: 0, c: 0 });
+
+    // A source that throws is a seed-time storage error: the seed throws and writes nothing.
+    store.clear();
+    const dead = vi.fn(async () => {
+      throw new Error('storage read killed');
+    });
+    await expect(seedNewCardLedgerIfAbsent('csharp', [learned('b')], 11_000, dead)).rejects.toThrow('storage read killed');
+    expect(store.has(ANON_LEDGER_KEY)).toBe(false);
+    expect(store.has(ANON_SEEDED_KEY)).toBe(false);
   });
 
   it('reads a corrupt ledger as present and empty', async () => {

@@ -89,15 +89,23 @@ export async function readNewCardLedgerSeed(slug: string): Promise<NewCardLedger
   return parseSeed(raw);
 }
 
+/** A second source of already-learned uids for the seed, consulted ONLY when the marker is absent
+ *  (C00 §6, 2026-09-21 addendum, decision 4). sessionRewards.ts passes the storage-fresh view
+ *  (storageFreshLearned.ts) so the seed is not at the mercy of the caller's in-memory snapshot; a throw
+ *  propagates like any other seed-time storage error (the caller fails closed). */
+export type SeedLearnedUidsSource = () => Promise<Iterable<string>>;
+
 /** Marker present → the current ledger is returned unchanged. Marker absent → every entry of `progress`
- *  where isLearnedProgress (progressSelectors.ts:16-18) is unioned INTO the existing ledger as 0
- *  (an existing paidAt value is never overwritten -- anon adoption may already have stamped it), the
- *  ledger is written, THEN the marker is written (ledger first: a kill between the two writes replays
- *  the union on the next call, which is idempotent). Returns the ledger. Throws on storage error. */
+ *  where isLearnedProgress (progressSelectors.ts:16-18), unioned with every uid `extraLearnedUids`
+ *  yields (called only on this path), is unioned INTO the existing ledger as 0 (an existing paidAt
+ *  value is never overwritten -- anon adoption may already have stamped it), the ledger is written,
+ *  THEN the marker is written (ledger first: a kill between the two writes replays the union on the
+ *  next call, which is idempotent). Returns the ledger. Throws on storage error. */
 export async function seedNewCardLedgerIfAbsent(
   slug: string,
   progress: CardProgress[],
   nowMs: number = Date.now(),
+  extraLearnedUids?: SeedLearnedUidsSource,
 ): Promise<NewCardLedger> {
   const seed = await readNewCardLedgerSeed(slug);
   const { ledger } = await readNewCardLedger(slug);
@@ -109,6 +117,14 @@ export async function seedNewCardLedgerIfAbsent(
     if (isLearnedProgress(p) && !hasUid(seeded, p.stableUid)) {
       seeded[p.stableUid] = 0;
       backfilled += 1;
+    }
+  }
+  if (extraLearnedUids) {
+    for (const uid of await extraLearnedUids()) {
+      if (!hasUid(seeded, uid)) {
+        seeded[uid] = 0;
+        backfilled += 1;
+      }
     }
   }
   // Write even when the seed is {} -- an empty deck of learned cards still marks the
