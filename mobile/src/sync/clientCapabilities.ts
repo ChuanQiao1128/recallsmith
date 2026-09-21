@@ -9,9 +9,11 @@
  * a static import would drag react-native Image and requireNativeModule into
  * every suite that imports progressSync (B00 §9 #13). Any failure → {}.
  */
+import { getFeatureFlags } from '../config/featureFlags';
+
 export type ClientCapabilities = { clientFeatures?: string[]; updateId?: string };
 
-/** Wave C ships this empty; Wave D appends 'mcq' when flags.mcq.enabled at call time. */
+/** Base tokens are empty; Wave D appends 'mcq' when flags.mcq.enabled at call time. */
 export const CLIENT_FEATURES: readonly string[] = [];
 
 export const MAX_CLIENT_FEATURES = 16;
@@ -65,7 +67,9 @@ export async function getClientCapabilities(): Promise<ClientCapabilities> {
       cachedUpdateId = { value: await readUpdateId() };
     }
     const caps: ClientCapabilities = {};
-    const features = normalizeClientFeatures(CLIENT_FEATURES);
+    const features = normalizeClientFeatures(
+      getFeatureFlags().mcq.enabled ? [...CLIENT_FEATURES, 'mcq'] : CLIENT_FEATURES,
+    );
     if (features.length > 0) caps.clientFeatures = features;
     if (cachedUpdateId.value !== undefined) caps.updateId = cachedUpdateId.value;
     return caps;

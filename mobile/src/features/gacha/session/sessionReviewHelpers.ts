@@ -3,6 +3,7 @@ import type { CardProgress, ReviewRating } from '../../../review/model';
 import { scheduleNextReview } from '../../../review/model';
 import { countDueToday, pickNextCard } from '../planner/sessionPlanner';
 import type { OwnedGate } from '../contracts';
+import type { McqKindHint } from '../mcq/mcqRotation';
 
 export type CurrentCardLike = {
   card: CardExport;
@@ -55,6 +56,7 @@ export function buildRatedSessionState(params: {
   now: Date;
   cardIndex: { cards: CardExport[]; cardMap: Map<string, CardExport> } | null;
   ownedSet?: OwnedGate;
+  kindHint?: McqKindHint | null;
 }): {
   updatedProgress: CardProgress[];
   updatedOne: CardProgress;
@@ -63,7 +65,7 @@ export function buildRatedSessionState(params: {
   prevLearnedCount: number;
   remainingDueCount: number;
 } {
-  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null } = params;
+  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null } = params;
 
   const updatedOne: CardProgress = {
     ...scheduleNextReview(current.progress, rating, now),
@@ -86,6 +88,7 @@ export function buildRatedSessionState(params: {
           avoidUid: updatedOne.stableUid,
           index: cardIndex,
           ownedSet,
+          kindHint,
         })
       : null;
   const remainingDueCount = countDueToday(updatedProgress, new Date(now.getTime()), ownedSet);

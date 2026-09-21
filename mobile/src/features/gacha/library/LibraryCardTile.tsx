@@ -6,6 +6,9 @@ import { formatRank, type LibraryCardRow } from './libraryMapper';
 import { libraryStyles as styles } from './libraryScreenStyles';
 import { colors } from '../../../theme/colors';
 import { packPaletteFromSlug } from '../../../theme/packArt';
+import { MCQ_COPY } from '../mcq/mcqConstants';
+
+const KIND_MARK_STYLE = { fontSize: 9, lineHeight: 12, fontWeight: '900' as const, letterSpacing: 0.6, color: colors.inkMuted, marginBottom: 2 };
 
 type Props = {
   item: LibraryCardRow;
@@ -104,6 +107,11 @@ export function LibraryCardTile({ item, numColumns, highlighted, deckSlug, onPre
           <Text style={styles.cardBodyIcon} numberOfLines={1}>
             {item.icon}
           </Text>
+          {item.isMcq ? (
+            <Text style={KIND_MARK_STYLE} numberOfLines={1} testID={`library-card-kind-${item.stableUid}`}>
+              {MCQ_COPY.faceMark}
+            </Text>
+          ) : null}
           <Text style={styles.cardBodyText} numberOfLines={2}>
             {item.question}
           </Text>
