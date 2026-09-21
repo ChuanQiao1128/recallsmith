@@ -8,7 +8,10 @@
 // secret and prints none. Default is a plan (read-only); --apply mutates; --submit also submits.
 //
 //   node asc-release.cjs --version 1.6.0 --build 16 [--wait-build] [--whats-new FILE]
+//                        [--description FILE] [--keywords FILE] [--promo FILE] [--subtitle FILE]
 //                        [--release-type AFTER_APPROVAL|MANUAL] [--apply] [--submit]
+//   description/keywords/promo live on the version's en-US localization; subtitle lives on the
+//   App Info localization (Apple limits: subtitle 30, promo 170, keywords 100, description 4000).
 //                        [--bundle-id com.timeawake.recallsmith] [--username info@timeawake.co.nz]
 //
 // Exit codes: 0 ok · 1 error · 3 Apple session expired (re-run `eas credentials --platform ios`).
@@ -27,6 +30,10 @@ function argv() {
     else if (k === '--version') o.version = a[++i];
     else if (k === '--build') o.build = a[++i];
     else if (k === '--whats-new') o.whatsNew = a[++i];
+    else if (k === '--description') o.description = a[++i];
+    else if (k === '--keywords') o.keywords = a[++i];
+    else if (k === '--promo') o.promo = a[++i];
+    else if (k === '--subtitle') o.subtitle = a[++i];
     else if (k === '--release-type') o.releaseType = a[++i];
     else if (k === '--bundle-id') o.bundleId = a[++i];
     else if (k === '--username') o.username = a[++i];
@@ -79,10 +86,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let version = await app.getEditAppStoreVersionAsync({ platform: 'IOS' });
   console.log('VERSION(edit)', version ? version.attributes.versionString + ' ' + (version.attributes.appVersionState || version.attributes.appStoreState) : 'none');
   const whatsNew = o.whatsNew ? fs.readFileSync(o.whatsNew, 'utf8').trim() : null;
+  const readOpt = (f, max, name) => { if (!f) return null; const t = fs.readFileSync(f, 'utf8').trim(); if (t.length > max) throw new Error(name + ' is ' + t.length + ' chars (max ' + max + ')'); return t; };
+  const description = readOpt(o.description, 4000, 'description');
+  const keywords = readOpt(o.keywords, 100, 'keywords');
+  const promo = readOpt(o.promo, 170, 'promotionalText');
+  const subtitle = readOpt(o.subtitle, 30, 'subtitle');
   const plan = [];
   if (!version) plan.push('create version ' + o.version);
   else if (version.attributes.versionString !== o.version) plan.push('rename edit version ' + version.attributes.versionString + ' -> ' + o.version);
   if (whatsNew) plan.push('set en-US What\'s New (' + whatsNew.length + ' chars)');
+  if (description) plan.push('set en-US description (' + description.length + ' chars)');
+  if (keywords) plan.push('set en-US keywords (' + keywords.length + ' chars)');
+  if (promo) plan.push('set en-US promotional text (' + promo.length + ' chars)');
+  if (subtitle) plan.push('set en-US subtitle (' + subtitle.length + ' chars)');
   plan.push('attach build ' + build.id);
   plan.push('releaseType=' + o.releaseType);
   if (o.submit) plan.push('create review submission + submit for review');
@@ -91,12 +107,27 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   if (!version) version = await app.createVersionAsync({ versionString: o.version, platform: 'IOS' });
   else if (version.attributes.versionString !== o.version) version = await version.updateAsync({ versionString: o.version });
-  if (whatsNew) {
+  if (whatsNew || description || keywords || promo) {
     const locs = await version.getLocalizationsAsync();
     let loc = locs.find((l) => l.attributes.locale === 'en-US') || locs[0];
     if (!loc) loc = await version.createLocalizationAsync({ locale: 'en-US' });
-    await loc.updateAsync({ whatsNew });
-    console.log('WHATS_NEW set on', loc.attributes.locale);
+    const patch = {};
+    if (whatsNew) patch.whatsNew = whatsNew;
+    if (description) patch.description = description;
+    if (keywords) patch.keywords = keywords;
+    if (promo) patch.promotionalText = promo;
+    await loc.updateAsync(patch);
+    console.log('LOCALIZATION set on', loc.attributes.locale, Object.keys(patch).join(','));
+  }
+  if (subtitle) {
+    // apple-utils: app.getEditAppInfoAsync() = the App Info in an editable state (falls back to the first one).
+    const info = (await app.getEditAppInfoAsync()) || (await app.getAppInfoAsync())[0];
+    if (!info) throw new Error('no App Info record to put the subtitle on');
+    const ilocs = await info.getLocalizationsAsync();
+    let iloc = ilocs.find((l) => l.attributes.locale === 'en-US') || ilocs[0];
+    if (!iloc) iloc = await info.createLocalizationAsync({ locale: 'en-US' });
+    await iloc.updateAsync({ subtitle });
+    console.log('SUBTITLE set on', iloc.attributes.locale);
   }
   await version.updateBuildAsync({ buildId: build.id });
   version = await version.updateAsync({ releaseType: o.releaseType });
