@@ -76,3 +76,54 @@ describe('packArt — aws and stage assets', () => {
     expect(com).not.toBe(leg);
   });
 });
+
+describe('packArt — claude deck (claude-ccdv-f)', () => {
+  it('routes claude-ccdv-f to its own cover, not the default Wild Pack', () => {
+    const claude = packImageForSlug('claude');
+    expect(claude).toBeDefined();
+    expect(packImageForSlug('claude-ccdv-f')).toBe(claude);
+    expect(packImageForSlug('CLAUDE-CCDV-F')).toBe(claude);
+    expect(claude).not.toBe(packImageForSlug('default'));
+    expect(claude).not.toBe(packImageForSlug('aws'));
+    expect(claude).not.toBe(packImageForSlug('cloud'));
+    expect(claude).not.toBe(packImageForSlug('csharp'));
+  });
+
+  it('gives claude-ccdv-f the claude card back and the coral/plum palette', () => {
+    expect(cardBackImageForSlug('claude-ccdv-f')).toBeDefined();
+    expect(cardBackImageForSlug('claude-ccdv-f')).toBe(cardBackImageForSlug('claude'));
+    const palette = packPaletteFromSlug('claude-ccdv-f');
+    expect(palette).toEqual(packPaletteFromSlug('claude'));
+    // Coral glow stop sampled from claude.png — proves index 5 is wired, not a
+    // hash-fallback collision with one of the older palettes.
+    expect(palette.cover[2]).toBe('#F0864A');
+    for (const other of ['csharp', 'aws', 'cloud', 'ai', 'premium-deck', 'default']) {
+      expect(palette).not.toEqual(packPaletteFromSlug(other));
+    }
+  });
+
+  it('does not let the claude rule swallow cloud / cs- slugs', () => {
+    expect(packImageForSlug('cloud')).toBe(packImageForSlug('cloud-basics'));
+    expect(packImageForSlug('cloud')).not.toBe(packImageForSlug('claude'));
+    expect(packPaletteFromSlug('cloud-basics')).toEqual(packPaletteFromSlug('cloud'));
+    expect(packImageForSlug('cs-dotnet')).toBe(packImageForSlug('csharp'));
+  });
+
+  it('keeps the PNG and the palette in agreement for every fuzzy slug', () => {
+    // One canonicalizer feeds both lookups; this is the drift guard that was
+    // missing when aws-saa-c03 got the aws PNG but the cloud palette.
+    const pairs: Array<[string, string]> = [
+      ['claude-ccdv-f', 'claude'],
+      ['aws-saa-c03', 'aws'],
+      ['cs-dotnet', 'csharp'],
+      ['c#', 'csharp'],
+      ['ai-fundamentals', 'ai'],
+      ['gcp-ace', 'cloud'],
+    ];
+    for (const [fuzzy, canonical] of pairs) {
+      expect(packImageForSlug(fuzzy)).toBe(packImageForSlug(canonical));
+      expect(packPaletteFromSlug(fuzzy)).toEqual(packPaletteFromSlug(canonical));
+      expect(cardBackImageForSlug(fuzzy)).toBe(cardBackImageForSlug(canonical));
+    }
+  });
+});
