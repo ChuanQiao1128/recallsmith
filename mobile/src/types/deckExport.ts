@@ -23,4 +23,8 @@ export interface CardExport {
   Difficulty: number;           // 1 / 2 / 3
   OrderInDeck: number;
   Topic?: string | null;        // C05 cards.topic; absent in pre-018 files, null when untagged
+  Mcq?: McqExport | null;       // C08/C09 cards.mcq. Server-shaped, unvalidated on this type: read only through normalizeMcq / resolveMcq / isMcqCard (D00 §0)
 }
+
+export interface McqOption { key: string; text: string; why: string | null; correct: boolean }
+export interface McqExport { v: 1; qualifier: string | null; shuffle: boolean; options: McqOption[] }
