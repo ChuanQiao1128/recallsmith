@@ -22,6 +22,7 @@ import {
   normalizeClientFeatures,
   resetClientCapabilitiesForTests,
 } from '../../src/sync/clientCapabilities';
+import { applyRemoteFeatures } from '../../src/config/featureFlags';
 
 describe('clientCapabilities', () => {
   beforeEach(() => {
@@ -37,6 +38,7 @@ describe('clientCapabilities', () => {
       },
     }));
     resetClientCapabilitiesForTests();
+    applyRemoteFeatures({ features: { mcq: { enabled: false } } });
   });
 
   it('resolves {} when expo-updates cannot be loaded', async () => {
@@ -45,6 +47,7 @@ describe('clientCapabilities', () => {
       throw new Error('missing');
     });
     try {
+      (await import('../../src/config/featureFlags')).applyRemoteFeatures({ features: { mcq: { enabled: false } } });
       const mod = await import('../../src/sync/clientCapabilities');
       expect(await mod.getClientCapabilities()).toEqual({});
     } finally {
@@ -56,6 +59,7 @@ describe('clientCapabilities', () => {
   it('resolves {} against the real expo-updates module under node', async () => {
     vi.doUnmock('expo-updates');
     vi.resetModules();
+    (await import('../../src/config/featureFlags')).applyRemoteFeatures({ features: { mcq: { enabled: false } } });
     const mod = await import('../../src/sync/clientCapabilities');
     await expect(mod.getClientCapabilities()).resolves.toEqual({});
     vi.resetModules();
@@ -89,7 +93,8 @@ describe('clientCapabilities', () => {
     expect(mockState.reads).toBe(2);
   });
 
-  it('never sends undefined-valued keys', async () => {
+  it('never sends undefined-valued keys under the kill switch', async () => {
+    applyRemoteFeatures({ features: { mcq: { enabled: false } } });
     mockState.updateId = null;
     const caps = await getClientCapabilities();
     expect(Object.keys(caps)).toEqual([]);
@@ -97,7 +102,8 @@ describe('clientCapabilities', () => {
     expect('updateId' in caps).toBe(false);
   });
 
-  it('ships no feature tokens in Wave C', async () => {
+  it('ships no feature tokens beyond the flag-gated mcq token', async () => {
+    applyRemoteFeatures({ features: { mcq: { enabled: false } } });
     expect(CLIENT_FEATURES).toEqual([]);
     mockState.updateId = null;
     const caps = await getClientCapabilities();
