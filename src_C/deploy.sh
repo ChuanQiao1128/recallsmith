@@ -34,6 +34,24 @@ deploy_one() {
   [ "$st" = Successful ] || { echo "$fn LastUpdateStatus=$st" >&2; exit 1; }
   [ "$remote_sha" = "$local_sha" ] || { echo "$fn CodeSha256 mismatch: remote=$remote_sha local=$local_sha" >&2; exit 1; }
   echo "OK $fn CodeSha256=$remote_sha"
+
+  # update-function-code only moves $LATEST. API Gateway invokes core-vpc through the `prod`
+  # ALIAS (integration URI …:function:core-vpc:prod), so without publishing a version and moving
+  # the alias the API keeps running the old build — found 2026-09-21 when the first Wave C deploy
+  # left version 44 (2026-08-18) serving traffic, the console's migrate ran the OLD migration set
+  # and the MCQ import hit SERVER_NOT_READY_MCQ. The worker's SQS trigger targets $LATEST, but its
+  # alias is moved too so both functions read the same.
+  local alias="${PUBLISH_ALIAS:-prod}"
+  if aws lambda get-alias --region "$REGION" --function-name "$fn" --name "$alias" >/dev/null 2>&1; then
+    local ver alias_sha
+    ver="$(aws lambda publish-version --region "$REGION" --function-name "$fn" --description "deploy.sh $(date -u +%Y-%m-%dT%H:%M:%SZ) $(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo nogit)" --query 'Version' --output text)"
+    aws lambda update-alias --region "$REGION" --function-name "$fn" --name "$alias" --function-version "$ver" --query '[Name,FunctionVersion]' --output text
+    alias_sha="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn:$alias" --query 'CodeSha256' --output text)"
+    [ "$alias_sha" = "$local_sha" ] || { echo "$fn:$alias CodeSha256 mismatch after alias move: $alias_sha" >&2; exit 1; }
+    echo "OK $fn:$alias -> version $ver (CodeSha256 verified)"
+  else
+    echo "note: $fn has no alias '$alias'; only \$LATEST updated"
+  fi
 }
 
 [ "$ONLY" = worker ] || deploy_one "$VPC_FN" "$HERE/dist/vpc.zip"
