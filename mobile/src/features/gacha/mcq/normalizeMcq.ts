@@ -102,10 +102,7 @@ export function mcqRequiredCount(mcq: McqExport): number {
 }
 
 /** flags.mcq.enabled === false → null (kill switch, D00 §0); otherwise normalizeMcq(card.Mcq). Never throws. */
-export function resolveMcq(
-  card: Pick<CardExport, 'Mcq'>,
-  flags: Pick<FeatureFlags, 'mcq'>,
-): McqExport | null {
+export function resolveMcq(card: Pick<CardExport, 'Mcq'>, flags: Pick<FeatureFlags, 'mcq'>): McqExport | null {
   try {
     if (flags?.mcq?.enabled === false) return null;
     return normalizeMcq(card?.Mcq);
@@ -115,9 +112,6 @@ export function resolveMcq(
 }
 
 /** resolveMcq(card, flags) !== null — the plan's isMcqCard(card, flags). */
-export function isMcqCard(
-  card: Pick<CardExport, 'Mcq'>,
-  flags: Pick<FeatureFlags, 'mcq'>,
-): boolean {
+export function isMcqCard(card: Pick<CardExport, 'Mcq'>, flags: Pick<FeatureFlags, 'mcq'>): boolean {
   return resolveMcq(card, flags) !== null;
 }
