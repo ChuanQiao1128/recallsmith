@@ -4,12 +4,17 @@
     "name": "DeveloperCards",
     "slug": "recallsmith",
     "scheme": "recallsmith",
-    "version": "1.6.0",
+    "version": "1.6.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "plugins": [
-      ["expo-audio", { "microphonePermission": false }]
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false
+        }
+      ]
     ],
     "splash": {
       "image": "./assets/splash-icon.png",
@@ -23,7 +28,7 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
-      "buildNumber": "18"
+      "buildNumber": "19"
     },
     "android": {
       "adaptiveIcon": {
