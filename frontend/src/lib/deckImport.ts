@@ -37,6 +37,7 @@ import type { Card } from '../types/card';
 import type { McqBlob } from '../types/mcq';
 import { hasContent, isValidDifficulty, isValidStableUid } from './cardRules';
 import { validateMcq, normalizeMcqForCompare, mcqOf, OPT_PAYLOAD, type McqIssueCode } from './mcqRules';
+import { warnMcq, sortWarnings, type ImportWarning } from './mcqWarnings';
 
 // ---------------------- types ----------------------
 
@@ -95,6 +96,8 @@ export interface ParsedDeck {
   /** Only structurally complete cards. A broken card never silently ships. */
   cards: ParsedCard[];
   errors: ImportIssue[];
+  /** Non-blocking suggestions (mcqWarnings.ts). Never members of errors; the page and lint-deck print them, nothing gates on them. */
+  warnings: ImportWarning[];
 }
 
 export type ConflictReason =
@@ -624,7 +627,15 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
 
   errors.push(...validateCards(cards));
 
-  return { deckSlug, cards, errors: sortIssues(errors) };
+  const warnings: ImportWarning[] = [];
+  for (const card of cards) {
+    if (!card.mcq) continue;
+    for (const w of warnMcq({ question: card.question, realWorldUsage: card.realWorldUsage, mcq: card.mcq })) {
+      warnings.push({ code: w.code, severity: 'warning', line: card.sourceLine, message: w.message, stableUid: card.stableUid });
+    }
+  }
+
+  return { deckSlug, cards, errors: sortIssues(errors), warnings: sortWarnings(warnings) };
 }
 
 /** Stable ordering so two parses of the same text give byte identical issues. */
@@ -703,7 +714,8 @@ export function validateCards(cards: readonly ParsedCard[]): ImportIssue[] {
 
     // Every MCQ issue blocks: planImport re-runs validateCards and turns any
     // issue with a stableUid into an INVALID_CARD conflict, and the page blocks
-    // on parsed.errors. There is no warning tier in Wave C.
+    // on parsed.errors. The non-blocking tier lives in mcqWarnings.ts and is
+    // collected by parseDeckMarkdown into ParsedDeck.warnings, never here.
     if (card.mcq) {
       for (const issue of validateMcq({
         question: card.question,
@@ -905,6 +917,6 @@ export function serializeDeckMarkdown(
 }
 
 /** "line 12: Stable uid ... is already used" for compact UI lists. */
-export function formatIssue(issue: ImportIssue): string {
+export function formatIssue(issue: Pick<ImportIssue, 'line' | 'message'>): string {
   return `line ${issue.line}: ${issue.message}`;
 }
