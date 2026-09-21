@@ -5,6 +5,8 @@ import { buildChallengeRoute, buildSweepRoute } from './sessionBuilder';
 import { isLearnedProgress, isNewProgress, isScheduledProgress, startOfToday } from '../selectors/progressSelectors';
 import { formatDateKey } from '../../../review/model';
 import type { StudyMode } from '../../../navigation/types';
+import type { McqKindHint } from '../mcq/mcqRotation';
+import { normalizeMcq } from '../mcq/normalizeMcq';
 
 export type CurrentCardLike = {
   card: CardExport;
@@ -97,8 +99,9 @@ export function pickNextCard(params: {
   avoidUid?: string | null;
   index?: { cards: CardExport[]; cardMap: Map<string, CardExport> } | null;
   ownedSet?: OwnedGate;
+  kindHint?: McqKindHint | null;
 }): CurrentCardLike | null {
-  const { deck, progress, now, mode, avoidUid, index, ownedSet = null } = params;
+  const { deck, progress, now, mode, avoidUid, index, ownedSet = null, kindHint = null } = params;
   const cardMap = index?.cardMap ?? (deck ? buildCardMap(deck) : null);
   const cards = index?.cards ?? (deck ? sortCards(deck) : null);
   if (!cardMap || !cards) return null;
@@ -137,10 +140,18 @@ export function pickNextCard(params: {
   // what proves each entry path is guarded on its own instead of all three
   // riding on a single shared line. The cost is that a fourth pick added later
   // must remember `owns` -- if you are adding one, add it.
+  // kindHint (D03) is that fourth pick: it narrows or reorders pickNew and nothing else, and its predicates keep owns.
   const owns = (card: CardExport) => isOwned(card.StableUid, ownedSet);
   const pickDue = () => pickWith((card, progressEntry) => owns(card) && isDueTodayBucket(progressEntry, now));
   const pickUpdated = () => pickWith((card, progressEntry) => owns(card) && isUpdatedCard(card, progressEntry));
-  const pickNew = () => pickWith((card, progressEntry) => owns(card) && isNewProgress(progressEntry));
+  const isMcq = (card: CardExport) => normalizeMcq(card.Mcq) !== null;
+  const pickNew = () => {
+    const isNew = (card: CardExport, p: CardProgress) => owns(card) && isNewProgress(p);
+    if (!kindHint) return pickWith(isNew);
+    if (!kindHint.mcqAllowed) return pickWith((card, p) => isNew(card, p) && !isMcq(card));        // hard filter: the cap
+    const preferred = pickWith((card, p) => isNew(card, p) && (kindHint.preferMcq ? isMcq(card) : !isMcq(card)));
+    return preferred ?? pickWith(isNew);                                                              // soft ordering: the rotation
+  };
 
   // Sweep: every owned learned card, longest-unseen first, deck order as the
   // tie-break; the due bucket is deliberately ignored (economy-v2 R8). A card
