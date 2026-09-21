@@ -83,10 +83,10 @@ const pythonCard: CardExport = {
     'async def run(): ...',
 };
 
-function render(card: CardExport, faceUp: boolean, onFlip: () => void = () => {}) {
+function render(card: CardExport, faceUp: boolean, onFlip: () => void = () => {}, rank: number | null = null) {
   let tree!: renderer.ReactTestRenderer;
   act(() => {
-    tree = renderer.create(<ReviewBody card={card} faceUp={faceUp} onFlip={onFlip} />);
+    tree = renderer.create(<ReviewBody card={card} rank={rank} faceUp={faceUp} onFlip={onFlip} />);
   });
   return tree;
 }
@@ -149,14 +149,28 @@ describe('ReviewBody — the question is never clamped', () => {
     }
   });
 
-  it('keeps the order and difficulty badges', () => {
+  it('keeps the order and difficulty badges, falling back to OrderInDeck without a rank', () => {
     const tree = render(longCard, false);
-    // `#3220` is rendered as ['#', 3220] children; match on the joined form.
     const badgeTexts = texts(tree).map((node) =>
       Array.isArray(node.props.children) ? node.props.children.join('') : String(node.props.children),
     );
     expect(badgeTexts).toContain('#3220');
     expect(badgeTexts).toContain('Medium');
+  });
+
+  it('prints the deck rank as "#011", not the raw OrderInDeck, when the caller ranks the card', () => {
+    // Owner's device, 2026-09-21: the session header read "#290" for a card the
+    // Library tile numbers differently. One number per card, everywhere.
+    for (const faceUp of [false, true]) {
+      const tree = render(longCard, faceUp, () => {}, 11);
+      const badge = textByTestId(tree, 'review-order-badge');
+      expect(badge.props.children).toBe('#011');
+      expect(badge.props.numberOfLines).toBe(1);
+      expect(JSON.stringify(tree.toJSON())).not.toContain('#3220');
+    }
+    expect(textByTestId(render(longCard, false, () => {}, 441), 'review-order-badge').props.children).toBe('#441');
+    // 0 / negative are "unranked" and fall back rather than printing "#000".
+    expect(textByTestId(render(longCard, false, () => {}, 0), 'review-order-badge').props.children).toBe('#3220');
   });
 
   it('calls onFlip from the Reveal button', () => {

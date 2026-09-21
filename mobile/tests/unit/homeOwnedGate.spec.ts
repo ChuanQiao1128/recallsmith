@@ -150,10 +150,11 @@ describe('Home deck summaries under the ownership gate', () => {
   it('hands the primary button to the draw once the deck stops offering work', async () => {
     // The redistribution the PRD asks for, pinned end to end rather than from a
     // hand-written DeckSummary: the gate produces the summary, and the same
-    // summary drives the state machine. A new account lands in
-    // nothing_to_learn -- a state that used to be nearly unreachable, because
-    // an installed deck always had a hundred "new" cards -- and the CTA becomes
-    // the draw. This is the loop working, not an empty-state bug.
+    // summary drives the state machine. A new account lands in empty_deck --
+    // it holds no card, so ownedCount is 0 and there is no route to preview --
+    // and the CTA becomes the first pull. (nothing_to_learn is the neighbour
+    // state for an account that owns cards with nothing scheduled.) This is
+    // the loop working, not an empty-state bug.
     store.clear();
     invalidateDrawStateCache();
     await saveDeckProgress(DECK, [untouched('stranger'), untouched('drawn'), untouched('grand')]);
@@ -169,8 +170,21 @@ describe('Home deck summaries under the ownership gate', () => {
       allUpcoming30,
     });
 
-    expect(vm.statusKind).toBe('nothing_to_learn');
+    expect(deckSummaries[0].ownedCount).toBe(0);
+    expect(vm.statusKind).toBe('empty_deck');
     expect(vm.cta.nav).toBe('draw');
+    expect(vm.routePreview).toEqual([]);
+  });
+
+  it('reports the collection size as ownedCount on the summary', async () => {
+    store.clear();
+    invalidateDrawStateCache();
+    await saveDeckProgress(DECK, [untouched('stranger'), untouched('drawn'), untouched('grand')]);
+    await saveDrawState('csharp', { owned: ['drawn', 'grand'], pity: null });
+
+    const { deckSummaries } = await loadHomeDeckSummaries({ premium: false });
+    expect(deckSummaries[0].ownedCount).toBe(2);
+    expect(deckSummaries[0].newToday).toBe(2);
   });
 
   it('offers nothing fresh to an account that holds nothing', async () => {

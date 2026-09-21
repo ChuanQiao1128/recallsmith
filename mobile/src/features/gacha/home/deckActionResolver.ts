@@ -153,7 +153,7 @@ export async function loadHomeDeckSummaries(params: {
         newToday: 0,
         masteredApprox: 0,
         masteredCount: 0,
-        ownedCards: 0,
+        ownedCount: 0,
         percent: 0,
       });
       continue;
@@ -188,7 +188,7 @@ export async function loadHomeDeckSummaries(params: {
         newToday: 0,
         masteredApprox: 0,
         masteredCount: 0,
-        ownedCards: 0,
+        ownedCount: 0,
         percent: 0,
       });
       continue;
@@ -255,7 +255,7 @@ export async function loadHomeDeckSummaries(params: {
       newToday: fresh,
       masteredApprox: learned,
       masteredCount: mastered,
-      ownedCards: collectionSize,
+      ownedCount: collectionSize,
       percent: clamp01(learned / denom),
     });
   }

@@ -36,6 +36,8 @@ import {
   scheduleProgressSync,
 } from '../sync/progressSync';
 import { countDueToday, pickNextCard, planChallengeRoute } from '../features/gacha/planner/sessionPlanner';
+import { EMPTY_ROUTE_LIMIT } from '../features/gacha/planner/sessionBuilder';
+import { rankCardsByOrder } from '../features/gacha/library/cardRank';
 import { computeTomorrowLoad, forecastLine } from '../features/gacha/planner/loadForecast';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import { settleRatingReward } from '../features/gacha/rewards/sessionRewards';
@@ -122,6 +124,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
   // null until first plan, then sticks. Falls back to routeLimit (when
   // caller passes one explicitly), then to 5 (the new default cap).
   const [plannedLimit, setPlannedLimit] = useState<number | null>(null);
+  // True when the planner answered EMPTY_ROUTE_LIMIT: the account holds no
+  // card of this deck, so no session is started and the screen shows the
+  // draw instead of a run header over nothing.
+  const [emptyDeck, setEmptyDeck] = useState(false);
   const [trialInfo, setTrialInfo] = useState<TrialInfo>(EMPTY_TRIAL_INFO);
   const [loadForecast, setLoadForecast] = useState<string | null>(null);
   const sessionLimit = plannedLimit ?? routeLimit ?? 5;
@@ -129,6 +135,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const trialRef = useRef<TrialInfo>(EMPTY_TRIAL_INFO);
   const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport> } | null>(null);
+  // stableUid → 1-based position in the deck's OrderInDeck order; the same
+  // number the Library tile and DrawResult print, so "#011" means one card.
+  const rankMapRef = useRef<Map<string, number>>(new Map());
   const cardShownAtRef = useRef(Date.now());
   const sessionId = useSessionStore((state) => state.sessionId);
   const sessionRoute = useSessionStore((state) => state.route);
@@ -198,6 +207,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setCurrent(null);
         setPlannedMinimumGoal(null);
         setPlannedLimit(null);
+        setEmptyDeck(false);
         trialRef.current = EMPTY_TRIAL_INFO;
         setTrialInfo(EMPTY_TRIAL_INFO);
         return;
@@ -213,6 +223,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setLoadForecast(null);
         setPlannedMinimumGoal(null);
         setPlannedLimit(null);
+        setEmptyDeck(false);
         trialRef.current = EMPTY_TRIAL_INFO;
         setTrialInfo(EMPTY_TRIAL_INFO);
         const now = new Date();
@@ -287,6 +298,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
             cards: sortCards(deckForStudy),
             cardMap: buildCardMap(deckForStudy),
           };
+          // Ranked over the full deck, not the trial slice: a preview card's
+          // number has to match what the Library shows for it after purchase.
+          rankMapRef.current = rankCardsByOrder(fullCards);
           const nextTrialInfo = {
             isTrial,
             previewCount: isTrial ? (deckForStudy.Cards?.length ?? previewCount) : 0,
@@ -335,6 +349,18 @@ export function SessionCardScreen({ navigation, route }: Props) {
           // the header reads "Run 0/3" when the deck has 3 due cards
           // (was always "Run 0/20" because of the hard-coded default).
           setPlannedLimit(plannedChallenge.limit);
+          if (plannedChallenge.limit === EMPTY_ROUTE_LIMIT) {
+            // No card to deal: never start a session (no "Run 0/1", no
+            // route-complete card, no summary). The empty state below owns
+            // the screen until a pull puts a card in this deck.
+            setProgress(nextProgress);
+            setOwnedSet(nextOwned);
+            setDailyStats(stats);
+            setCurrent(null);
+            setEmptyDeck(true);
+            setLoading(false);
+            return;
+          }
           const nextCurrent = pickNextCard({
             deck: deckForStudy,
             progress: nextProgress,
@@ -365,6 +391,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           setCurrent(null);
           setOwnedSet(null);
           setPlannedMinimumGoal(null);
+          setEmptyDeck(false);
           trialRef.current = EMPTY_TRIAL_INFO;
           setTrialInfo(EMPTY_TRIAL_INFO);
           setLoadError(e?.message ?? 'Failed to load deck.');
@@ -592,6 +619,50 @@ export function SessionCardScreen({ navigation, route }: Props) {
       </SafeAreaView>
     );
   }
+  if (emptyDeck) {
+    return (
+      <SafeAreaView style={styles.safeArea} testID="screen-session-card-root">
+        <LinearGradient
+          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.container}>
+            <View style={styles.headerRow}>
+              <View style={styles.headerTextWrap}>
+                <Text style={styles.title} numberOfLines={1}>
+                  {deck.Title}
+                </Text>
+                <Text style={styles.subtitle} numberOfLines={1}>
+                  No cards yet
+                </Text>
+              </View>
+            </View>
+            <View style={styles.doneCard} testID="session-card-empty-deck">
+              <Text style={styles.doneTitle} numberOfLines={1}>
+                No cards yet
+              </Text>
+              <Text style={styles.doneBody} numberOfLines={3}>
+                You don’t hold any card of this deck yet. Open a pack to get your first cards — every
+                card you pull joins today’s run.
+              </Text>
+              <Pressable
+                testID="session-card-empty-deck-cta"
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
+                onPress={() => navigation.navigate('Draw', { slug: deck.Slug, rewardPending: true })}
+              >
+                <Text style={styles.doneButtonText} numberOfLines={1}>
+                  Open a pack to get your first cards
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
   function requestPause() {
     Alert.alert('Pause this run?', 'Your ratings are saved.', [
       { text: 'Keep reviewing', style: 'cancel' },
@@ -695,6 +766,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             ) : (
               <ReviewBody
                 card={current.card}
+                rank={rankMapRef.current.get(current.card.StableUid) ?? null}
                 faceUp={showAnswer}
                 onFlip={() => setShowAnswer((prev) => !prev)}
               />
@@ -713,6 +785,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
               <RatingBar
                 testID="review-rating-bar"
                 disabled={reviewing || !showAnswer}
+                revealed={showAnswer}
                 onRate={(rating) => void handleRating(rating)}
               />
             </View>
@@ -895,6 +968,10 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.4,
   },
+  // Opaque on purpose. At 95% alpha the code sample scrolled under the dock
+  // and bled through the rating buttons (owner's device, 2026-09-21); the
+  // hairline and the upward shadow now carry the "this floats above the
+  // card" reading instead of translucency.
   ratingDock: {
     position: 'absolute',
     left: spacing.screenPadding,
@@ -902,9 +979,14 @@ const styles = StyleSheet.create({
     bottom: 0,
     paddingTop: spacing.xs,
     paddingHorizontal: spacing.xs,
-    backgroundColor: 'rgba(250,243,224,0.95)',
+    backgroundColor: colors.parchmentBg,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(42,34,24,0.14)',
+    borderTopColor: colors.hairline,
+    shadowColor: colors.ink,
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 6,
   },
   pressed: {
     opacity: 0.9,

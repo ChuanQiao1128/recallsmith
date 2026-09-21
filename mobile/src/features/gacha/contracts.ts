@@ -28,10 +28,11 @@ export type DeckSummary = {
   /** Owned cards at stage >= MASTERY_STAGE_THRESHOLD (isMasteredProgress). masteredApprox keeps
    *  meaning "learned" and still feeds percent; only Home's Mastered ✓ / Deck mastered read this. */
   masteredCount?: number;
-  /** Cards of this deck the account holds (learned + fresh, the owned slice deckActionResolver
-   *  already sums for `percent`). Optional so hand-built fixtures keep compiling; readers fall
-   *  back to that same sum. */
-  ownedCards?: number;
+  /** Cards of this deck the account holds (drawn ∪ studied = learned + fresh, the owned slice
+   *  deckActionResolver already sums for `percent`). Optional because older fixtures predate
+   *  it; readers go through ownedCountOf, which falls back to masteredApprox + newToday — the
+   *  same sum loadHomeDeckSummaries computes (every owned card is either learned or fresh). */
+  ownedCount?: number;
 };
 
 export type TodayCounts = {

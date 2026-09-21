@@ -61,6 +61,18 @@ export function countLearned(progressList: CardProgress[], ownedSet: OwnedGate =
   return progressList.filter((progress) => isOwned(progress.stableUid, ownedSet) && isLearnedProgress(progress)).length;
 }
 
+/**
+ * How many cards of this deck the account can play at all. Ungated that is the
+ * whole deck (one progress row per card, see loadDeckProgress); gated it is the
+ * rows the set admits. It is the planner's "is there anything here" question,
+ * asked before due/new are even looked at: a fresh install that has not pulled
+ * yet has 0 due, 0 new and 0 owned, and only the last number tells that apart
+ * from a caught-up collector who owns cards with nothing scheduled today.
+ */
+export function countOwned(progressList: CardProgress[], ownedSet: OwnedGate = null): number {
+  return progressList.filter((progress) => isOwned(progress.stableUid, ownedSet)).length;
+}
+
 function getCardRevision(card: CardExport): number {
   const revision = (card as any)?.Revision;
   return typeof revision === 'number' && revision > 0 ? revision : 1;
@@ -181,5 +193,6 @@ export function planChallengeRoute(params: {
     deckTitle: deck.Title,
     dueCount,
     newCount,
+    ownedCount: countOwned(progress, ownedSet),
   });
 }

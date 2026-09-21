@@ -157,6 +157,73 @@ describe('summaryMapper wallet scenarios', () => {
   });
 });
 
+describe('summaryMapper — a run with nothing rated', () => {
+  // Owner's device, 2026-09-21: an empty deck reached the summary through the
+  // route-complete Continue and read "Good progress today · 0/1 cleared",
+  // "Progress logged for today." and "0 / 1 cards · route started" next to
+  // "No run logged yet". The planner now hands such a deck limit 0
+  // (EMPTY_ROUTE_LIMIT) and the summary must not invent a card for it.
+  it('reads as no run everywhere for limit 0 / done 0, with no phantom "0 / 1"', () => {
+    const summary = buildSessionSummaryVM({
+      deckTitle: 'Claude Developer Foundations (CCDV-F)',
+      sessionDone: 0,
+      sessionLimit: 0,
+      minimumGoal: 1,
+      dueCount: 0,
+      wallet: { availablePulls: 25, reservePulls: 0 },
+      reward: null,
+    });
+
+    expect(summary.vm.title).toBe('No run logged yet');
+    expect(summary.vm.subtitle).toBe('Claude Developer Foundations (CCDV-F) · no cards reviewed');
+    expect(summary.vm.progress.done).toBe(0);
+    expect(summary.vm.progress.total).toBe(0);
+    expect(summary.vm.progress.completionLabel).toBe('Nothing reviewed this time.');
+    expect(summary.vm.progress.body).toBe("No cards to review yet · 0 due cards in today's queue");
+    expect(summary.vm.completionLabel).toBe('No cards reviewed');
+    expect(summary.vm.nextAction.title).toBe('No run logged yet');
+    expect(summary.vm.reward.fullClear).toBe(false);
+    expect(summary.vm.reward.minimumGoalMet).toBe(false);
+
+    const all = JSON.stringify(summary.vm);
+    expect(all).not.toContain('0/1');
+    expect(all).not.toContain('0 / 1');
+    expect(all).not.toContain('Good progress today');
+    expect(all).not.toContain('Progress logged for today.');
+  });
+
+  it('keeps the planned total when the run had cards but none were rated', () => {
+    const summary = buildSessionSummaryVM({
+      deckTitle: 'C# Interview',
+      sessionDone: 0,
+      sessionLimit: 4,
+      minimumGoal: 1,
+      dueCount: 0,
+      wallet: { availablePulls: 0, reservePulls: 0 },
+    });
+    expect(summary.vm.title).toBe('No run logged yet');
+    expect(summary.vm.progress.total).toBe(4);
+    expect(summary.vm.progress.body).toBe("0 / 4 cards · not started · 0 due cards in today's queue");
+    expect(summary.vm.progress.completionLabel).toBe('Nothing reviewed this time.');
+    expect(summary.vm.subtitle).toBe('C# Interview · no cards reviewed');
+  });
+
+  it('leaves a rated run untouched: unlimited runs still read done / done', () => {
+    const summary = buildSessionSummaryVM({
+      deckTitle: 'C# Interview',
+      sessionDone: 3,
+      sessionLimit: 0,
+      minimumGoal: 1,
+      dueCount: 1,
+      wallet: { availablePulls: 0, reservePulls: 0 },
+    });
+    expect(summary.vm.title).toBe('Good progress today');
+    expect(summary.vm.progress.total).toBe(3);
+    expect(summary.vm.progress.body).toBe("3 / 3 cards · streak saved · 1 due card in today's queue");
+    expect(summary.vm.subtitle).toBe('C# Interview · 3/∞ cleared');
+  });
+});
+
 describe('summaryMapper COPY terms', () => {
   it('COPY contains no loss-aversion terms', () => {
     const forbidden = ['lost', 'missed', 'forfeit', 'wasted', 'expired', 'gone'];

@@ -39,7 +39,10 @@ import type { LibraryCardRow } from '../../src/features/gacha/library/libraryMap
  */
 const baseRow: LibraryCardRow = {
   stableUid: 'card-1',
-  orderInDeck: 7,
+  // orderInDeck is the authoring key; rank is the 1-based slot the tile prints.
+  // They differ on purpose so a test can tell which one the tile reads.
+  orderInDeck: 780,
+  rank: 7,
   question: 'What does the volatile keyword guarantee?',
   difficulty: 2,
   rarity: 'RAR',
@@ -74,6 +77,19 @@ describe('LibraryCardTile — silhouette vs revealed', () => {
     // Rarity stars are the reward for having pulled the card; an owned card
     // shows them even before it is studied.
     expect(json).toContain('★');
+  });
+
+  it('prints the 1-based rank as the slot number, never the raw orderInDeck', () => {
+    // Owner's device, 2026-09-21: AWS tiles read #005, #780, #1140, #3700 on a
+    // 371-card deck because the tile padded OrderInDeck (an authoring key with
+    // gaps). The slot is the card's position in the deck.
+    const json = renderTile(baseRow);
+    expect(json).toContain('#007');
+    expect(json).not.toContain('#780');
+
+    const missing = renderTile({ ...baseRow, rank: 371, orderInDeck: 3700, status: 'missing', statusLabel: 'Missing', badgeTone: 'missing', isMissing: true });
+    expect(missing).toContain('#371');
+    expect(missing).not.toContain('#3700');
   });
 
   it('keeps a card outside the collection behind the ? placeholder', () => {

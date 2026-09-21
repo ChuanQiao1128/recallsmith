@@ -253,7 +253,7 @@ describe('C03 Home F9 / F10 / F11', () => {
     expect(deckSummaries[0].dueToday).toBe(0);
     // Owned = the studied cards (grandfathered) + the drawn-and-unstudied one;
     // this is the number Home's fourth tile shows for the selected deck.
-    expect(deckSummaries[0].ownedCards).toBe(3);
+    expect(deckSummaries[0].ownedCount).toBe(3);
   });
 
   it('reports masteredCount 0 for a deck that is not studiable', async () => {
@@ -262,7 +262,7 @@ describe('C03 Home F9 / F10 / F11', () => {
     expect(deckSummaries[0].canStudy).toBe(false);
     expect(deckSummaries[0].masteredCount).toBe(0);
     expect(deckSummaries[0].masteredApprox).toBe(0);
-    expect(deckSummaries[0].ownedCards).toBe(0);
+    expect(deckSummaries[0].ownedCount).toBe(0);
   });
 
   it('previews exactly as many nodes as the planner would schedule', () => {
@@ -281,6 +281,7 @@ describe('C03 Home F9 / F10 / F11', () => {
         deckTitle: 'C# Interview',
         dueCount: due,
         newCount: fresh,
+        ownedCount: 8 + fresh,
       });
       expect(vm.routePreview).toHaveLength(expected);
       expect(vm.routePreview).toHaveLength(route.limit);
@@ -294,11 +295,14 @@ describe('C03 Home F9 / F10 / F11', () => {
           deckSummaries: [makeDeck({ dueToday: due, newToday: fresh })],
           wallet: EMPTY,
         });
+        // makeDeck carries masteredApprox 8, so the deck is never empty here;
+        // the owned count handed to the planner mirrors that (learned + fresh).
         const route = buildChallengeRoute({
           slug: 'csharp',
           deckTitle: 'C# Interview',
           dueCount: due,
           newCount: fresh,
+          ownedCount: 8 + fresh,
         });
         expect(vm.routePreview.length).toBe(route.limit);
         expect(vm.counts.normalCount + vm.counts.eliteCount + vm.counts.bossCount).toBe(route.limit);

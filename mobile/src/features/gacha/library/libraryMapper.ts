@@ -5,7 +5,10 @@ import { isLearnedProgress, isMasteredProgress, isNewProgress, isScheduledProgre
 import { formatDateKey } from '../../../review/model';
 import { rarityFromDifficulty, type Rarity } from '../draw/cardRarity';
 import { cardIconFor } from '../../../theme/cardIcon';
-import { normalizeTopic, topicKey, UNTAGGED_TOPIC_KEY, UNTAGGED_TOPIC_LABEL } from './topics';
+import { compareTopicLabels, normalizeTopic, topicKey, UNTAGGED_TOPIC_KEY, UNTAGGED_TOPIC_LABEL } from './topics';
+import { formatRank, rankCardsByOrder } from './cardRank';
+
+export { formatRank, rankCardsByOrder } from './cardRank';
 
 // 'missing' is reachable only when a caller passes an ownedSet. Ungated there
 // is no way to know a card was never drawn, so the shipped three-value split
@@ -44,6 +47,13 @@ export type LibraryCardRow = {
   isDueToday: boolean;
   isUpdated: boolean;
   topic: string | null;
+  /**
+   * 1-based position in the deck's OrderInDeck order — the number printed as
+   * "#011" on the tile, the session header and DrawResult. OrderInDeck itself
+   * is an authoring key with gaps (5, 780, 3700…) and was being shown raw.
+   * Identity stays stableUid; this is display only.
+   */
+  rank: number;
 };
 
 export type LibraryFilterChip = {
@@ -117,6 +127,7 @@ export function buildLibraryCardRows(params: {
   const { deck, progress, now = new Date(), isTrial = false, previewTotal = 0, ownedSet = null } = params;
   const cards = isTrial ? (deck.Cards ?? []).slice(0, previewTotal) : deck.Cards ?? [];
   const progressMap = new Map(progress.map((item) => [item.stableUid, item]));
+  const ranks = rankCardsByOrder(deck.Cards ?? []);
 
   return [...cards]
     .sort((a, b) => a.OrderInDeck - b.OrderInDeck)
@@ -170,6 +181,7 @@ export function buildLibraryCardRows(params: {
           getCardRevision(card) > getSeenRevision(progressEntry as CardProgress) &&
           isLearnedProgress(progressEntry as CardProgress),
         topic: normalizeTopic(card.Topic),
+        rank: ranks.get(card.StableUid) ?? 0,
       };
     });
 }
@@ -246,8 +258,10 @@ export function buildLibraryVM(params: {
 
   const groupKeyOf = (row: LibraryCardRow): string => (row.topic === null ? UNTAGGED_TOPIC_KEY : topicKey(row.topic));
   const hasTopics = rows.some((row) => row.topic !== null);
-  // One chip per distinct key, first-seen in deck order (rows are already OrderInDeck ascending);
-  // the label is the first-seen normalized text, so "IAM/S3" and "IAM & S3" share one chip.
+  // One chip per distinct key; the label is the first-seen normalized text, so "IAM/S3" and
+  // "IAM & S3" share one chip. Chips are then sorted by label (numeric-aware, see
+  // compareTopicLabels): deck order put "4.1 Cost" before "1.2 Secure" because that is where the
+  // authoring tool happened to put the first card of each domain.
   const topicOrder: string[] = [];
   const topicLabel = new Map<string, string>();
   const topicCount = new Map<string, number>();
@@ -261,6 +275,7 @@ export function buildLibraryVM(params: {
       }
       topicCount.set(key, (topicCount.get(key) ?? 0) + 1);
     }
+    topicOrder.sort((a, b) => compareTopicLabels(topicLabel.get(a) ?? a, topicLabel.get(b) ?? b));
   }
   const untaggedCount = rows.filter((row) => row.topic === null).length;
   const topics: LibraryTopicChip[] = hasTopics
@@ -274,7 +289,8 @@ export function buildLibraryVM(params: {
     topicFilter !== null && topicFilter !== 'all' && topics.some((chip) => chip.key === topicFilter) ? topicFilter : null;
   const groupIndex = new Map(topics.map((chip, index) => [chip.key, index]));
   const rank = (row: LibraryCardRow): number => groupIndex.get(groupKeyOf(row)) ?? Number.MAX_SAFE_INTEGER;
-  // Grouping IS the order: topic groups in chip order, OrderInDeck inside a group. Copy before sorting —
+  // Grouping IS the order: topic groups in chip order (All first, sorted topics, Untagged last),
+  // OrderInDeck inside a group. Copy before sorting —
   // for filter === 'all' the resolver hands back `rows` itself.
   const cards = !hasTopics
     ? statusFiltered

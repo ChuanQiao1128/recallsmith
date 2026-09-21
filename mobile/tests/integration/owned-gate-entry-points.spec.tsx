@@ -302,12 +302,17 @@ describe('ownership gate — every entry point', () => {
       );
 
       const blob = textBlob(tree);
-      expect(blob).toContain('Route complete');
       // The run header is planned separately from the pick, off its own
       // planChallengeRoute call, and it has to agree: ungated this deck plans a
-      // three-card route and then the screen has no card to put in it, so the
-      // header counts down against a route that does not exist.
-      expect(blob).toContain('Run 0/1');
+      // three-card route and then the screen has no card to put in it. Gated,
+      // the planner sees 0 owned and answers an empty route, and the screen
+      // shows the draw instead of "Route complete" over "Run 0/1" (which is
+      // what this test used to pin -- the phantom run itself).
+      expect(blob).toContain('No cards yet');
+      expect(blob).toContain('Open a pack to get your first cards');
+      expect(blob).not.toContain('Route complete');
+      expect(blob).not.toContain('Run 0/1');
+      expect(blob).not.toContain('Stranger question');
     });
 
     it('does not reach for an unowned card after a rating either', async () => {

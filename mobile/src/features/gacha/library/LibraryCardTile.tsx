@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
-import type { LibraryCardRow } from './libraryMapper';
+import { formatRank, type LibraryCardRow } from './libraryMapper';
 import { libraryStyles as styles } from './libraryScreenStyles';
 import { colors } from '../../../theme/colors';
 import { packPaletteFromSlug } from '../../../theme/packArt';
@@ -31,7 +31,9 @@ export function LibraryCardTile({ item, numColumns, highlighted, deckSlug, onPre
   // Reading the status string here would keep hiding the question text behind a
   // "?" on cards the user just pulled.
   const isMissing = item.isMissing;
-  const slotNumber = String(item.orderInDeck ?? 0).padStart(3, '0');
+  // item.rank, never item.orderInDeck: OrderInDeck is the authoring key (5,
+  // 780, 3700…) and printing it read as "#780 of 371". The rank is the slot.
+  const slotNumber = formatRank(item.rank);
   const palette = packPaletteFromSlug(deckSlug);
   const dotColor = statusDotColor(item.status);
   // Gacha rarity stars: COM = none, RAR = 1, LEG = 3. Owned cards
@@ -55,7 +57,7 @@ export function LibraryCardTile({ item, numColumns, highlighted, deckSlug, onPre
       {/* ART HEADER — pack-palette gradient. Slot # + rarity stars
           painted onto it (white/gold) and a status dot in the top-right.
           Two information dimensions visible at a glance:
-            • slot # = which card in the deck (Pokedex slot)
+            • slot # = 1-based rank in the deck (Pokedex slot)
             • star count = gacha rarity tier (COM/RAR/LEG)
             • status dot = SRS state (new/learning/mastered) */}
       <View style={styles.cardArtHeader}>
