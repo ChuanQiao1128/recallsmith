@@ -330,7 +330,12 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       codeLanguage: codeSnippet ? d.codeLanguage : null,
       realWorldUsage,
       ...(d.topic !== null ? { topic: d.topic } : {}),
-      orderInDeck: cards.length * 10,
+      // Position × 10 leaves room to insert later. Position 0 becomes 5, not 0:
+      // the production cards table carries ck_cards_order_in_deck_positive
+      // (order_in_deck > 0; migration 020 records it), so a 0 is a guaranteed
+      // 500 on the first card of every file — the live decks already sit at 5
+      // for that reason (2026-09-21, the 371-card AWS import).
+      orderInDeck: cards.length === 0 ? 5 : cards.length * 10,
       sourceLine: d.headerLine,
       ...(mcq ? { mcq } : {}),
     });

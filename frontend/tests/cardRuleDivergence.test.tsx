@@ -112,7 +112,7 @@ interface CardShape {
   explanation: string;
   /**
    * Form-side only. The import door computes orderInDeck itself
-   * (`cards.length * 10`), which is the whole point of D6.
+   * (position × 10, first card 5), which is the whole point of D6.
    */
   orderInDeck?: number;
 }
@@ -324,12 +324,14 @@ describe('D5: the same stableUid used twice', () => {
   });
 });
 
-describe('D6 (reversed): orderInDeck = 0', () => {
-  it('is what the import door assigns and what the form door refuses', async () => {
-    // Import side: every document's first card gets orderInDeck 0.
+describe('D6 (closed 2026-09-21): orderInDeck = 0', () => {
+  it('is no longer what the import door assigns, and is still what the form door refuses', async () => {
+    // Import side: the first card used to get orderInDeck 0 — the value the
+    // production table rejects (ck_cards_order_in_deck_positive, migration
+    // 020) and the form refuses. Both doors now agree: the first card is 5.
     const parsed = parseDeckMarkdown(docFor(BASE));
     expect(parsed.cards).toHaveLength(1);
-    expect(parsed.cards[0].orderInDeck).toBe(0);
+    expect(parsed.cards[0].orderInDeck).toBe(5);
     expect(parsed.errors.map(issue => issue.code)).not.toContain('BAD_CARD_HEADER');
 
     // Form side: the identical value is refused outright.

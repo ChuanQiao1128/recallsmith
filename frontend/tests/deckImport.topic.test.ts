@@ -103,7 +103,7 @@ describe('TOPIC: marker', () => {
       codeSnippet: null,
       codeLanguage: null,
       realWorldUsage: null,
-      orderInDeck: 0,
+      orderInDeck: 5,
       sourceLine: 2,
     });
   });

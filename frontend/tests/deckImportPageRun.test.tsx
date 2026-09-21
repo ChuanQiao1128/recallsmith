@@ -164,7 +164,7 @@ const A_STALE = serverCard({
   question: 'Alpha question',
   explanation: 'Alpha answer v1',
   difficulty: 2,
-  orderInDeck: 0,
+  orderInDeck: 5,
   version: 4,
 });
 
@@ -175,7 +175,7 @@ const A_MATCHING = serverCard({
   question: 'Alpha question',
   explanation: 'Alpha answer v2',
   difficulty: 2,
-  orderInDeck: 0,
+  orderInDeck: 5,
   version: 4,
 });
 

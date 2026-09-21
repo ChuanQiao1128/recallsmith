@@ -97,17 +97,17 @@ describe('parseDeckMarkdown: the documented example', () => {
       codeSnippet: 'var t = Task.FromResult(42);\nvar v = await t; // no context switch here',
       codeLanguage: 'csharp',
       realWorldUsage: '热路径上大量 await 已完成任务时,fast path 是性能不塌的原因。',
-      orderInDeck: 0,
+      orderInDeck: 5,
       sourceLine: 3,
     });
   });
 
-  it('numbers orderInDeck by ten so cards can be inserted later', () => {
+  it('numbers orderInDeck by ten so cards can be inserted later, starting at 5 (the table rejects 0)', () => {
     const twoCards = parseDeckMarkdown(
       ['# deck: d1', '## a-1 | d0', 'Q:', 'q', 'A:', 'a', '## a-2 | d1', 'Q:', 'q', 'A:', 'a'].join('\n'),
     );
     expect(twoCards.errors).toEqual([]);
-    expect(twoCards.cards.map((c) => c.orderInDeck)).toEqual([0, 10]);
+    expect(twoCards.cards.map((c) => c.orderInDeck)).toEqual([5, 10]);
   });
 
   it('leaves optional sections null when absent', () => {
@@ -137,7 +137,7 @@ describe('parseDeckMarkdown: errors carry line numbers', () => {
     expect(deck.errors[0].line).toBe(5);
     // One broken card does not discard the good ones.
     expect(deck.cards.map((c) => c.stableUid)).toEqual(['a-2']);
-    expect(deck.cards[0].orderInDeck).toBe(0);
+    expect(deck.cards[0].orderInDeck).toBe(5);
   });
 
   it('flags a missing Q: section', () => {
@@ -410,7 +410,7 @@ describe('planImport', () => {
 
     const plan = planImport(reordered, existing);
     expect(plan.updates.map((u) => [u.card.stableUid, u.card.orderInDeck, u.changedFields])).toEqual([
-      ['a-2', 0, ['orderInDeck']],
+      ['a-2', 5, ['orderInDeck']],
       ['a-1', 10, ['orderInDeck']],
     ]);
     expect(plan.unchanged).toEqual([]);
@@ -569,7 +569,7 @@ describe('deckImport properties', () => {
         expect(parsed.errors).toEqual([]);
         expect(parsed.deckSlug).toBe(slug);
         expect(contentOf(parsed)).toEqual(
-          cards.map((c, i) => ({ ...c, orderInDeck: i * 10 })),
+          cards.map((c, i) => ({ ...c, orderInDeck: i === 0 ? 5 : i * 10 })),
         );
       }),
     );
