@@ -48,6 +48,7 @@ vi.mock('expo-linear-gradient', () => {
 
 import * as ReactNative from 'react-native';
 import { DrawCeremonyScreen } from '../../src/screens/DrawCeremonyScreen';
+import { getActiveCeremonyPerf, clearActiveCeremonyPerf } from '../../src/features/gacha/draw/ceremonyPerf';
 
 const MULTI_DRAW_RESULT = {
   poolId: 'csharp',
@@ -939,5 +940,140 @@ describe('DrawCeremonyScreen v9', () => {
       await Promise.resolve();
     });
     assertControls();
+  });
+  it('commits the tap table hidden from hold (warm) and shows it at flash-reveal — same cards, no new mounts', async () => {
+    // Perf: the table's native views and bitmaps are created during the still hold phase,
+    // not on the flash frame. Hidden = out of flow, invisible, non-interactive, VoiceOver-hidden.
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT, tapFlow: true } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+    const tableContainers = () =>
+      tree.root.findAll((n) => (n.type as any) === 'View' && n.findAll((c) => c.props?.testID === 'tap-card-0').length > 0 && n.props.pointerEvents !== undefined);
+
+    const hostCards = () => tree.root.findAll((n) => (n.type as any) === 'Pressable' && n.props.testID === 'tap-card-0');
+    expect(hostCards()).toHaveLength(0);
+    armCeremonySwipe(tree);
+    // approach: still no table
+    expect(hostCards()).toHaveLength(0);
+
+    await act(async () => {
+      vi.advanceTimersByTime(620 + 1);
+      await Promise.resolve();
+    });
+    expect(phaseTitle(tree)).not.toBe('Pack inbound');
+    // hold: the cards exist but are warm-hidden
+    const warmCards = hostCards();
+    expect(warmCards).toHaveLength(1);
+    const warm = tableContainers()[0];
+    expect(warm.props.pointerEvents).toBe('none');
+    expect(warm.props.accessibilityElementsHidden).toBe(true);
+    expect(warm.props.importantForAccessibility).toBe('no-hide-descendants');
+    expect(warm.props.testID).toBeUndefined();
+    expect(warm.props.style.opacity).toBe(0);
+    expect(warmCards[0].props.disabled).toBe(true);
+    expect(warmCards[0].props.accessibilityLabel).toBe('Card 1 of 2, face down');
+    expect(tree.root.findAllByProps({ testID: 'draw-ceremony-cards-on-table' })).toHaveLength(0);
+    // the rarity word is still withheld while the table is warm
+    expect(collectText(tree)).not.toContain('Legendary');
+    expect(collectText(tree)).not.toContain('Rare');
+
+    await act(async () => {
+      vi.advanceTimersByTime(300 + 940);
+      await Promise.resolve();
+    });
+    // flash-reveal: the same container turns visible and interactive-ready (cards still disabled)
+    const shown = tree.root.find((n) => (n.type as any) === 'View' && n.findAll((c) => c.props?.testID === 'tap-card-0').length > 0 && n.props.accessibilityElementsHidden === false);
+    expect(shown.props.pointerEvents).toBeUndefined();
+    expect(shown.props.style.opacity).toBeUndefined();
+    expect(tree.root.findByProps({ testID: 'tap-card-0' }).props.disabled).toBe(true);
+
+    await act(async () => {
+      vi.advanceTimersByTime(280 + 300 + 500);
+      await Promise.resolve();
+    });
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-cards-on-table' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'tap-card-0' }).props.disabled).toBe(false);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('does not warm the table under Reduce Motion (flash-reveal mounts it, as before)', async () => {
+    (ReactNative as any).__setReduceMotionEnabled(true);
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT, tapFlow: true } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+    // RM: mount → flash-reveal at t = 0, table already committed in its visible container
+    const container = tree.root.find((n) => (n.type as any) === 'View' && n.findAll((c) => c.props?.testID === 'tap-card-0').length > 0 && n.props.accessibilityElementsHidden === false);
+    expect(container.props.pointerEvents).toBeUndefined();
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('records a ceremony perf report: phases in order, frames only from approach, stopped at unmount', async () => {
+    clearActiveCeremonyPerf();
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: MULTI_DRAW_RESULT, tapFlow: true } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+    const session = getActiveCeremonyPerf();
+    expect(session).not.toBeNull();
+    expect(session!.active).toBe(true);
+
+    armCeremonySwipe(tree);
+    await act(async () => {
+      vi.advanceTimersByTime(620 + 300 + 940 + 280 + 300 + 500);
+      await Promise.resolve();
+    });
+    expect(tree.root.findByProps({ testID: 'draw-ceremony-cards-on-table' })).toBeTruthy();
+    expect(session!.active).toBe(true);
+    expect(session!.report).toBeNull();
+
+    act(() => {
+      tree.unmount();
+    });
+    expect(session!.active).toBe(false);
+    const report = session!.report!;
+    expect(report.phases.map((p) => p.phase)).toEqual([
+      'swipe', 'approach', 'hold', 'tear-flip', 'flash-reveal', 'settle', 'cards-on-table',
+    ]);
+    // Under TEST_BASE the timers drive the durations: approach 620, hold 300, tear 940, flash 280, settle 300 (+500 tail).
+    const byPhase = Object.fromEntries(report.phases.map((p) => [p.phase, p.durationMs]));
+    expect(byPhase.approach).toBe(620);
+    expect(byPhase.hold).toBe(300);
+    expect(byPhase['tear-flip']).toBe(940);
+    expect(byPhase['flash-reveal']).toBe(280);
+    expect(byPhase.settle).toBe(800);
+    expect(report.meta).toEqual(expect.objectContaining({ renderer: 'fallback', cardCount: 2, peakRarity: 'LEG', isMulti: true, tapFlow: true, slug: 'csharp', reduceMotion: false }));
+    // Node has no requestAnimationFrame: no JS samples, and frame sampling was armed at approach.
+    expect(report.js).toBeNull();
+    expect(report.ui).toBeNull();
+    expect(report.framesFromMs).toBe(report.phases[1].atMs);
+    expect(getActiveCeremonyPerf()).toBeNull();
   });
 });

@@ -12,12 +12,16 @@ export const ABOUT_COPY = {
   version: (appVersion: string) => `App version ${appVersion}`,
 } as const;
 
+export const SETTINGS_VERSION_LABEL_TESTID = 'settings-version-label';
+
 export function AboutSection(props: {
   appVersion: string;
   onSupport: () => void;
   onPrivacy: () => void;
+  /** Tapped on the version label (SettingsScreen counts 7 taps in 3 s to open the Debug menu). */
+  onVersionPress?: () => void;
 }) {
-  const { appVersion, onSupport, onPrivacy } = props;
+  const { appVersion, onSupport, onPrivacy, onVersionPress } = props;
 
   return (
     <View style={styles.sectionCard}>
@@ -40,9 +44,11 @@ export function AboutSection(props: {
         </Text>
       </Pressable>
 
-      <Text style={styles.metaText} numberOfLines={1}>
-        {ABOUT_COPY.version(appVersion)}
-      </Text>
+      <Pressable testID={SETTINGS_VERSION_LABEL_TESTID} onPress={onVersionPress} hitSlop={8}>
+        <Text style={styles.metaText} numberOfLines={1}>
+          {ABOUT_COPY.version(appVersion)}
+        </Text>
+      </Pressable>
     </View>
   );
 }

@@ -360,4 +360,35 @@ describe('SettingsScreen', () => {
       .join('\n');
     expect(postRetryBlob).toContain('Momentum');
   });
+  it('opens the Debug menu after 7 taps on the version label within 3 s, even outside __DEV__', async () => {
+    vi.useFakeTimers();
+    try {
+      const { tree, navigate } = await renderSettings();
+      expect((globalThis as any).__DEV__).toBe(false);
+      // The __DEV__ Debug section is absent in production.
+      expect(tree.root.findAll((node) => (node.type as any) === 'Text' && nodeText(node) === 'Open debug menu')).toHaveLength(0);
+      const label = findPressableByTestID(tree, 'settings-version-label');
+      expect(nodeText(label.findByType('Text' as any))).toBe('App version 1.0.0');
+
+      // Six taps spread over 6 × 700 ms = 4.2 s never complete a 3 s window.
+      for (let i = 0; i < 6; i += 1) {
+        act(() => { label.props.onPress(); });
+        vi.advanceTimersByTime(700);
+      }
+      expect(navigate).not.toHaveBeenCalledWith('DebugMenu');
+
+      // Seven quick taps do.
+      vi.advanceTimersByTime(5000);
+      for (let i = 0; i < 6; i += 1) {
+        act(() => { label.props.onPress(); });
+        vi.advanceTimersByTime(200);
+      }
+      expect(navigate).not.toHaveBeenCalledWith('DebugMenu');
+      act(() => { label.props.onPress(); });
+      expect(navigate).toHaveBeenCalledWith('DebugMenu');
+      expect(navigate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -176,8 +176,12 @@ function makeSeamEdgePath(api: any, points: ReadonlyArray<{ x: number; y: number
 }
 
 // PackCanvas — module-private; holds every Skia hook. Rendered only when
-// skiaAvailable && SkiaModule, so SkiaModule is non-null here.
-function PackCanvas(props: PackTearProps): React.JSX.Element {
+// skiaAvailable && SkiaModule, so SkiaModule is non-null here. It takes only the props
+// it draws with and is memoised: the phase / disabled / handler churn that re-renders
+// the accessible root never re-reconciles the Skia pack (2026-09-21 perf).
+type PackCanvasProps = Pick<PackTearProps, 'width' | 'height' | 'coverImage' | 'palette' | 'isMulti' | 'pitySeal' | 'timeline'>;
+
+const PackCanvas: React.NamedExoticComponent<PackCanvasProps> = React.memo(function PackCanvas(props: PackCanvasProps): React.JSX.Element {
   const { width, height, coverImage, palette, isMulti, pitySeal, timeline } = props;
   const { Canvas, Group, Rect, RoundedRect, Image, Path, Circle, useImage, vec, rrect, rect } = SkiaModule;
   const { seam, peel, cardOut, packScale, packY, shiver } = timeline;
@@ -246,10 +250,10 @@ function PackCanvas(props: PackTearProps): React.JSX.Element {
       </Group>
     </Canvas>
   );
-}
+});
 
 export function PackTear(props: PackTearProps): React.JSX.Element {
-  const { width, height, palette, phase, isMulti, disabled, timeline, onTear, onSeamProgress } = props;
+  const { width, height, coverImage, palette, phase, isMulti, pitySeal, disabled, timeline, onTear, onSeamProgress } = props;
   const seam = timeline.seam;
 
   const committedRef = useRef(false);
@@ -319,7 +323,7 @@ export function PackTear(props: PackTearProps): React.JSX.Element {
         style={{ width, height }}
       >
         {skiaAvailable && SkiaModule ? (
-          <PackCanvas {...props} />
+          <PackCanvas width={width} height={height} coverImage={coverImage} palette={palette} isMulti={isMulti} pitySeal={pitySeal} timeline={timeline} />
         ) : (
           <View style={{ flex: 1, margin: '15%', borderRadius: PACK_CORNER_RADIUS, backgroundColor: palette.cover[1] }} />
         )}

@@ -86,7 +86,10 @@ export type TapCardProps = {
   timings: Pick<ResolvedCeremonyTimings, 'flipMs' | 'rimSettleMs' | 'liftMs' | 'landMs'>;
 };
 
-export function TapCard(props: TapCardProps): React.JSX.Element {
+// Memoised (2026-09-21 perf): every prop is a primitive or a stable reference from the
+// screen (memoised images, useCallback handlers, the drawResult card object), so a flip
+// or a phase change re-renders only the card whose props changed instead of all ten.
+export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(function TapCard(props: TapCardProps): React.JSX.Element {
   const {
     card, index, total, width, height, disabled, flipped,
     onTapStart, onFlipped, cardBackImage, frameImage, reduceMotion,
@@ -276,4 +279,4 @@ export function TapCard(props: TapCardProps): React.JSX.Element {
       </Reanimated.View>
     </AnimatedPressable>
   );
-}
+});

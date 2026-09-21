@@ -95,7 +95,8 @@ DEVICE / TEST_BASE（B00 §2.2 逐字复制）：
 ## 8. 音频与触觉
 - 三层：bed（垫底循环）/ hit（一次性打击）/ tail（收尾）。
 - 17 个名字：bed `crinkle` / `air` / `shimmer-pad` / `choir-swell`；hit `whoosh` / `rip` / `card-slide` / `stack-thud` / `seam-burst` / `card-flip` / `card-drop` / `chime` / `stinger` / `shimmer` / `legendary`；tail `sparkle-tail` / `soft-chime`。
-- `SFX_ALIASES`（`mobile/src/components/ceremonyAudio.ts`）把每个名字映射到今天已提交的六个 WAV：`crinkle`/`air`/`shimmer-pad`/`chime`/`sparkle-tail`/`soft-chime`→`shimmer`，`choir-swell`/`stinger`→`legendary`，`card-slide`/`stack-thud`→`card-drop`，`seam-burst`→`rip`，`whoosh`/`rip`/`card-flip`/`card-drop`/`shimmer`/`legendary` 映射到自身；逐格记录见 LICENSES.md。
+- `SFX_ALIASES`（`mobile/src/components/ceremonyAudio.ts`）把每个名字映射到已提交的七个 WAV（2026-09-21 起）：四个 bed 名 `crinkle`/`air`/`shimmer-pad`/`choir-swell` 全部→`ambience`（8 s 立体声无缝循环，一个共享的 loop 播放器，换 bed 只是音量 ramp、不重启）；`chime`/`sparkle-tail`/`soft-chime`→`shimmer`，`stinger`→`legendary`，`card-slide`/`stack-thud`→`card-drop`，`seam-burst`→`rip`，`whoosh`/`rip`/`card-flip`/`card-drop`/`shimmer`/`legendary` 映射到自身；逐格记录见 LICENSES.md。
+- 播放器模型（2026-09-21 卡顿修复）：`warmUp()` 在 DrawScreen 与 DrawCeremonyScreen mount 时把全部播放器建好（bed 1 个 + 每个一次性文件 2 个 pool），时间线里不再 `createAudioPlayer`；hit 走 pool 轮换，重触发用空闲播放器而不是对正在响的播放器 `seekTo(0)`；每个 hit 的 JS 触发延迟记入 `ceremonyPerf` 报告（Settings 版本号连点 7 次 → Debug menu）。
 - `CEREMONY_GAIN`：bed .30 / .35 / .40（COM/RAR/LEG）、table .25、duck .15。
 - prewarm：在 DrawScreen mount 时预热音频，避免首帧解码卡顿。
 - 触觉限流：`<= 3 / 1000 ms`；`success()` 每次仪式最多一次且仅 LEG；Reduce Motion 下只有一次 `light`。
@@ -111,7 +112,7 @@ DEVICE / TEST_BASE（B00 §2.2 逐字复制）：
 | `mobile/assets/ui/glow-9slice.png` | ~ | `mobile/scripts/gen_particles.py` | GLOW | StageCanvas |
 | `mobile/assets/packs/aws-back.png` | ~ | `mobile/scripts/gen_card_back.py` | BACK_AWS | TapCard |
 
-- 已提交的六个 WAV：`whoosh.wav`、`rip.wav`、`card-drop.wav`、`card-flip.wav`、`shimmer.wav`、`legendary.wav`（合成占位，来自 `mobile/scripts/gen_sfx.py`）。
+- 已提交的七个 WAV：`ambience.wav`（8 s 立体声 bed 循环）、`whoosh.wav`、`rip.wav`、`card-drop.wav`、`card-flip.wav`、`shimmer.wav`、`legendary.wav`（全部由 `mobile/scripts/gen_sfx.py` 程序合成，CC0；2026-09-21 起不再是 0.25 s 占位）。
 - 许可指针：根目录 LICENSE-ASSETS（art + audio 排除在 MIT 之外），逐文件音频许可 `mobile/assets/sfx/LICENSES.md`。
 
 ## 10. 原生依赖钉版（Skia / Reanimated / worklets）

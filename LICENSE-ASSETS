@@ -20,7 +20,7 @@ the sound effects — is excluded from the MIT grant.
 | `mobile/assets/packs/aws.png` (AWS pack cover) | AWS deck cover | TBD | TBD |
 | `mobile/assets/packs/*-back.png` | Card backs | project-made via `mobile/scripts/gen_card_back.py` | All rights reserved, Leo Qiao, 2026 |
 | `mobile/assets/ui/` | Rarity frames, foil LUT, particle sheet, glow sprite | project-made via `mobile/scripts/gen_card_frames.py` and `mobile/scripts/gen_particles.py` | All rights reserved, Leo Qiao, 2026 |
-| `mobile/assets/sfx/` | Sound effects | six synthetic placeholders from `mobile/scripts/gen_sfx.py`; replacements per `mobile/assets/sfx/LICENSES.md` | see `mobile/assets/sfx/LICENSES.md` |
+| `mobile/assets/sfx/` | Sound effects | seven project-synthesised files from `mobile/scripts/gen_sfx.py` (2026-09-21; the 8 s `ambience.wav` bed loop + six hits), CC0; any sourced replacement per `mobile/assets/sfx/LICENSES.md` | CC0 (project-synthesised); see `mobile/assets/sfx/LICENSES.md` |
 
 The AWS pack cover's origin is left `TBD` until the owner confirms whether it was
 project-generated or commissioned.
