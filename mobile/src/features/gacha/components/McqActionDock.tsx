@@ -6,7 +6,7 @@ import type { McqConfidence } from '../mcq/mcqVerdict';
 import type { McqStage } from './McqReviewBody';
 import { colors } from '../../../theme/colors';
 
-// The action dock sits where RatingBar sits today (same default testID) and drives the three
+// The action dock takes over the old rating dock's slot (same default testID) and drives the three
 // stages: Show options → Sure / Not sure / I don't know → Next / Finish run. Haptics and the
 // verdict itself belong to the parent (D05); this component only reports which button was tapped.
 export type McqActionDockProps = {
