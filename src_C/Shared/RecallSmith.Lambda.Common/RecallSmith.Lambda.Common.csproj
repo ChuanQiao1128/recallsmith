@@ -9,7 +9,25 @@
   <ItemGroup>
     <PackageReference Include="Amazon.Lambda.APIGatewayEvents" Version="2.7.1" />
     <PackageReference Include="Amazon.Lambda.Core" Version="2.5.0" />
+    <!-- Bearer JWT verification (JwtVerifier.cs): RS256 signature against the Cognito JWKS,
+         issuer, exp/nbf. Same major as each other on purpose: the two ship together and a
+         mixed pair is the classic "MethodMissing at runtime, green at compile time" package set. -->
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.23.0" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.23.0" />
     <PackageReference Include="Npgsql" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The public signing keys of the two Cognito pools, shipped in the zip (BundledJwks in
+         JwtVerifier.cs). core-vpc runs in a VPC with no NAT and no internet egress, so it
+         cannot GET the JWKS at runtime; without this seed every bearer request would fail
+         closed the moment the verifier shipped. Public keys only; refresh them with
+         `curl https://cognito-idp.ap-southeast-2.amazonaws.com/<poolId>/.well-known/jwks.json`.
+         None items with CopyToOutputDirectory flow to every referencing project's output, the
+         same mechanism Vpc uses for Db/Migrations/*.sql. -->
+    <None Include="Jwks\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

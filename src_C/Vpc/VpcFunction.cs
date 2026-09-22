@@ -18,6 +18,12 @@ public sealed class VpcFunction
     // warmup below hangs off the constructor rather than off a restore hook.
     SnapStartHooks.RegisterOnce();
 
+    // Read the bearer-verification policy here, in INIT, so that if the unverified dev mode
+    // is on the warning is the first thing in the log stream rather than a line buried after
+    // the first request. Never throws: a bad AUTH_ISSUERS value would, so it is caught and
+    // logged, and the first request then fails closed with a 401 instead of a crashed INIT.
+    try { Auth.EnsureConfigured(); } catch (Exception ex) { Log.Error("auth config:", ex.Message); }
+
     // The constructor is the real INIT phase mount point: it runs once per container,
     // before any request, with the init phase CPU burst. RunOnce never throws.
     Warmup.RunOnce();
@@ -58,7 +64,7 @@ public sealed class VpcFunction
     AuthContext auth;
     try
     {
-      auth = Auth.GetAuthContext(req);
+      auth = await Auth.GetAuthContextAsync(req);
     }
     catch
     {
@@ -274,21 +280,24 @@ public sealed class VpcFunction
         var p1 = RouteMatcher.Match("/api/v1/admin/users", p);
         if (p1 is not null && req.Method == "GET")
         {
-          if (!auth.IsSuperAdmin) return res.Forbidden("Requires super_admin");
+          var deny = Auth.RequireSuperAdmin(auth, res);
+          if (deny is not null) return deny;
           return res.NotImplemented("TODO: admin users list");
         }
 
         var p2 = RouteMatcher.Match("/api/v1/admin/users/:userSub", p);
         if (p2 is not null && req.Method == "GET")
         {
-          if (!auth.IsSuperAdmin) return res.Forbidden("Requires super_admin");
+          var deny = Auth.RequireSuperAdmin(auth, res);
+          if (deny is not null) return deny;
           return res.NotImplemented($"TODO: admin user detail for {p2["userSub"]}");
         }
 
         var p3 = RouteMatcher.Match("/api/v1/admin/users/:userSub/entitlements", p);
         if (p3 is not null && req.Method == "PUT")
         {
-          if (!auth.IsSuperAdmin) return res.Forbidden("Requires super_admin");
+          var deny = Auth.RequireSuperAdmin(auth, res);
+          if (deny is not null) return deny;
           return res.NotImplemented($"TODO: admin set entitlements for {p3["userSub"]}");
         }
       }

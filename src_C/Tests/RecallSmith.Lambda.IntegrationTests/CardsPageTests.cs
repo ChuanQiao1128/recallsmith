@@ -91,11 +91,11 @@ public class CardsPageTests
     });
   }
 
-  private static Task<APIGatewayProxyResponse> InvokePageAsync(string sub, string[] groups, IDictionary<string, string> query)
+  private static async Task<APIGatewayProxyResponse> InvokePageAsync(string sub, string[] groups, IDictionary<string, string> query)
   {
     var req = new LambdaRequest(Event(PagePath, sub, groups, query));
     var res = new Res(req.TraceId);
-    return CardsPage.HandleAuthoringCardsPage(req, res, Auth.GetAuthContext(req));
+    return await CardsPage.HandleAuthoringCardsPage(req, res, await Auth.GetAuthContextAsync(req));
   }
 
   private sealed record Page(List<long> Ids, List<JsonElement> Items, string? NextCursor, bool HasMore);

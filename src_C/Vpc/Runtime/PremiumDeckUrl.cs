@@ -140,7 +140,9 @@ public static class PremiumDeckUrl
     var apiEnv = (Environment.GetEnvironmentVariable("API_ENV") ?? string.Empty).Trim().ToLowerInvariant();
     var isProdEnv = apiEnv == "production";
 
-    // always require login
+    // always require login; a bearer that failed verification is a 401, not a missing login
+    var badToken = Auth.RejectIfBadToken(auth, res);
+    if (badToken is not null) return badToken;
     var userSub = (auth.UserSub ?? string.Empty).Trim();
     if (string.IsNullOrEmpty(userSub)) return res.Forbidden("Requires login");
 
