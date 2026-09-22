@@ -1,0 +1,9 @@
+.terraform/
+*.tfplan
+*.plan.json
+generated*.tf
+*.auto.tfvars
+!*.auto.tfvars.example
+crash.log
+backend_override.tf
+__pycache__/

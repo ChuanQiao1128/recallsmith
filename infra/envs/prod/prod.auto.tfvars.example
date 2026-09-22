@@ -1,0 +1,3 @@
+# Copy to prod.auto.tfvars (gitignored) or export TF_VAR_snowflake_external_id; value from: aws iam get-role --role-name snowflake-recallsmith-s3-role
+# JMESPath: Role.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals."sts:ExternalId"
+snowflake_external_id = "REPLACE_ME"

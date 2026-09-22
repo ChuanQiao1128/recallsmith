@@ -1,0 +1,8 @@
+{
+  "tags_only_updates": false,
+  "expect_imports": "docs/delivery/r16-issues/E01.imports.txt",
+  "outputs": ["api_id", "api_endpoint", "content_distribution_id", "content_domain_name", "console_distribution_id", "console_domain_name", "core_vpc_alias_arn", "worker_alias_arn", "queue_url", "db_address", "console_pool_endpoint", "mobile_pool_endpoint"],
+  "changes": {
+    "module.data.aws_db_instance.developercards": { "action": "update", "keys": ["apply_immediately", "final_snapshot_identifier", "skip_final_snapshot"] }
+  }
+}
