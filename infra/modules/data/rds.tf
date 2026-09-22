@@ -9,7 +9,7 @@ resource "aws_db_instance" "developercards" {
   apply_immediately                     = false
   auto_minor_version_upgrade            = true
   availability_zone                     = "ap-southeast-2b"
-  backup_retention_period               = 7
+  backup_retention_period               = 14
   backup_target                         = "region"
   backup_window                         = "12:55-13:25"
   ca_cert_identifier                    = "rds-ca-rsa2048-g1"
@@ -18,8 +18,7 @@ resource "aws_db_instance" "developercards" {
   database_insights_mode                = "standard"
   db_subnet_group_name                  = aws_db_subnet_group.default_vpc.name
   dedicated_log_volume                  = false
-  deletion_protection                   = false
-  enabled_cloudwatch_logs_exports       = []
+  deletion_protection                   = true
   engine                                = "postgres"
   engine_lifecycle_support              = "open-source-rds-extended-support-disabled"
   engine_version                        = "17.9"

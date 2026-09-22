@@ -1,6 +1,6 @@
 resource "aws_cloudwatch_log_group" "core_vpc" {
   name              = "/aws/lambda/${var.core_vpc_function_name}"
-  retention_in_days = 0
+  retention_in_days = 90
 }
 
 resource "aws_lambda_function" "core_vpc" {

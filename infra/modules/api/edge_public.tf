@@ -1,6 +1,6 @@
 resource "aws_cloudwatch_log_group" "edge_public" {
   name              = "/aws/lambda/${var.edge_public_function_name}"
-  retention_in_days = 0
+  retention_in_days = 30
 }
 
 resource "aws_lambda_function" "edge_public" {
