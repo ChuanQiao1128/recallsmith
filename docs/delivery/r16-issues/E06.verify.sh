@@ -378,6 +378,15 @@ frozen="$(git diff --numstat "$mb" HEAD -- \
   infra/modules/data infra/modules/edge infra/modules/api infra/modules/worker infra/modules/observability \
   src_C/Tests/RecallSmith.Lambda.IntegrationTests/IntegrationTestBase.cs \
   src_C/Tests/RecallSmith.Lambda.IntegrationTests/AuthBearerTests.cs)"
+# 2026-09-23 widening (same reason as E03): the new admin route must be registered in
+# RouteMetrics.KnownRoutes or RouteMetricsTests fails the src_C gate, and that file lives under the
+# frozen Common directory. Bounded to exactly one added line naming the route.
+rm_ns="$(git diff --numstat "$mb" HEAD -- src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs | awk '{print $1"\t"$2}')"
+if [ -n "$rm_ns" ]; then
+  [ "$rm_ns" = "$(printf '1\t0')" ] || fail "RouteMetrics.cs must be exactly one added line (numstat $rm_ns)"
+  git diff -U0 "$mb" HEAD -- src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs | grep -E '^\+[^+]' | grep -q 'bootstrap-roles' || fail "RouteMetrics.cs: the added line must register /api/v1/admin/db/bootstrap-roles"
+fi
+frozen="$(printf '%s\n' "$frozen" | grep -v 'src_C/Shared/RecallSmith\.Lambda\.Common/RouteMetrics\.cs' || true)"
 [ -z "$frozen" ] || { echo "$frozen" >&2; fail "frozen/out-of-scope file modified"; }
 if git diff --name-only "$mb" HEAD | grep -E '\.csproj$|src_C/Tests/.*Tests\.cs$' | grep -Ev 'AppRoleTests\.cs$|SecretsCompareTests\.cs$'; then
   fail "a .csproj or an existing test file changed"
@@ -407,7 +416,7 @@ bad="$(grep -En "$apply_re" "$DEPLOY" | grep -Ev '^[0-9]+:\s*(#|echo )|DRY:' | c
 [ -z "$bad" ] || fail "deploy.sh has a state-changing aws call before the DRY_RUN return (lines: $(echo $bad))"
 # 5b. Every changed or untracked path is one of the eighteen scope files. Untracked scan is
 # pathspec-scoped: the driver symlinks node_modules into the worktree.
-outside="$( { git diff --name-only "$mb" HEAD; git ls-files --others --exclude-standard -- infra src_C scripts docs mobile/src mobile/tests frontend/src; } | sort -u | grep -Ev '^(infra/modules/identity/ssm\.tf|infra/modules/identity/variables\.tf|infra/modules/identity/outputs\.tf|infra/envs/prod/main\.tf|infra/README\.md|src_C/Shared/RecallSmith\.Lambda\.Common/Secrets\.cs|src_C/Vpc/Db/Migrate\.cs|src_C/Vpc/Db/AppRole\.cs|src_C/Vpc/VpcFunction\.cs|src_C/deploy\.sh|src_C/env/prod\.env\.json|src_C/scripts/merge-env\.sh|src_C/scripts/merge-env\.test\.sh|scripts/invoke-as-admin\.sh|src_C/Tests/RecallSmith\.Lambda\.IntegrationTests/AppRoleTests\.cs|src_C/Tests/RecallSmith\.Lambda\.IntegrationTests/SecretsCompareTests\.cs|docs/runbooks/secrets-rotation\.md|docs/delivery/r16-issues/.*)$' || true )"
+outside="$( { git diff --name-only "$mb" HEAD; git ls-files --others --exclude-standard -- infra src_C scripts docs mobile/src mobile/tests frontend/src; } | sort -u | grep -Ev '^(infra/modules/identity/ssm\.tf|infra/modules/identity/variables\.tf|infra/modules/identity/outputs\.tf|infra/envs/prod/main\.tf|infra/README\.md|src_C/Shared/RecallSmith\.Lambda\.Common/Secrets\.cs|src_C/Vpc/Db/Migrate\.cs|src_C/Vpc/Db/AppRole\.cs|src_C/Vpc/VpcFunction\.cs|src_C/deploy\.sh|src_C/env/prod\.env\.json|src_C/scripts/merge-env\.sh|src_C/scripts/merge-env\.test\.sh|scripts/invoke-as-admin\.sh|src_C/Tests/RecallSmith\.Lambda\.IntegrationTests/AppRoleTests\.cs|src_C/Tests/RecallSmith\.Lambda\.IntegrationTests/SecretsCompareTests\.cs|docs/runbooks/secrets-rotation\.md|docs/delivery/r16-issues/.*|src_C/Shared/RecallSmith\.Lambda\.Common/RouteMetrics\.cs)$' || true )"
 [ -z "$outside" ] || { echo "$outside" >&2; fail "files changed outside E06 scope"; }
 
 echo "E06 VERIFY OK"

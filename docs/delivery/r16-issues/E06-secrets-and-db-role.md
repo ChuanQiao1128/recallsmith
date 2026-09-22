@@ -44,6 +44,7 @@ What E00 decided (and why):
 ## Constraints
 
 - **Scope (the ONLY files that may change):**
+  0. `src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs` — exactly ONE added line registering `/api/v1/admin/db/bootstrap-roles` in `KnownRoutes` (2026-09-23 widening).
   1. `infra/modules/identity/ssm.tf` (new)
   2. `infra/modules/identity/variables.tf` (append one `variable` block)
   3. `infra/modules/identity/outputs.tf` (append two `output` blocks)
