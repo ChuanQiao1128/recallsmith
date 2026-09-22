@@ -420,10 +420,20 @@ docker info >/dev/null 2>&1 || fail "Docker daemon is not running — the three 
 
 # ── 5. Scope + frozen + OTA + apply guard ──────────────────────────────────
 echo "[5/5] scope + frozen + OTA + apply guard"
-SCOPE_RE='^(infra/modules/worker/queue\.tf|infra/modules/worker/function\.tf|infra/modules/worker/outputs\.tf|infra/README\.md|docs/delivery/r16-issues/.*|src_C/Vpc/Db/Migrations/021_decks_live_build_id\.sql|src_C/Shared/RecallSmith\.Lambda\.Db/ManifestBuilder\.cs|src_C/Shared/RecallSmith\.Lambda\.Db/RecallSmith\.Lambda\.Db\.csproj|src_C/Vpc/Authoring/ManifestRebuild\.cs|src_C/Vpc/Authoring/Publish\.cs|src_C/Vpc/Authoring/Helpers\.cs|src_C/Vpc/Authoring/DeckRollback\.cs|src_C/Vpc/Authoring/PublishReaper\.cs|src_C/Vpc/VpcFunction\.cs|src_C/Vpc/SnapStartHooks\.cs|src_C/Worker/WorkerFunction\.cs|src_C/Worker/Services/IPublishJobProcessor\.cs|src_C/Worker/Services/PublishJobProcessor\.cs|src_C/Worker/Repositories/JobRepository\.cs|src_C/Worker/SnapStartHooks\.cs|src_C/Worker/Manifest/ManifestService\.cs|src_C/Worker/Manifest/IManifestService\.cs|src_C/Tests/RecallSmith\.Lambda\.IntegrationTests/(WorkerReceiveCountTests|ManifestBuilderTests|DeckRollbackTests|PublishReaperTests)\.cs)$'
+SCOPE_RE='^(infra/modules/worker/queue\.tf|infra/modules/worker/function\.tf|infra/modules/worker/outputs\.tf|infra/README\.md|docs/delivery/r16-issues/.*|src_C/Vpc/Db/Migrations/021_decks_live_build_id\.sql|src_C/Shared/RecallSmith\.Lambda\.Db/ManifestBuilder\.cs|src_C/Shared/RecallSmith\.Lambda\.Db/RecallSmith\.Lambda\.Db\.csproj|src_C/Vpc/Authoring/ManifestRebuild\.cs|src_C/Vpc/Authoring/Publish\.cs|src_C/Vpc/Authoring/Helpers\.cs|src_C/Vpc/Authoring/DeckRollback\.cs|src_C/Vpc/Authoring/PublishReaper\.cs|src_C/Vpc/VpcFunction\.cs|src_C/Vpc/SnapStartHooks\.cs|src_C/Worker/WorkerFunction\.cs|src_C/Worker/Services/IPublishJobProcessor\.cs|src_C/Worker/Services/PublishJobProcessor\.cs|src_C/Worker/Repositories/JobRepository\.cs|src_C/Worker/SnapStartHooks\.cs|src_C/Worker/Manifest/ManifestService\.cs|src_C/Worker/Manifest/IManifestService\.cs|src_C/Tests/RecallSmith\.Lambda\.IntegrationTests/(WorkerReceiveCountTests|ManifestBuilderTests|DeckRollbackTests|PublishReaperTests)\.cs|src_C/Shared/RecallSmith\.Lambda\.Common/RouteMetrics\.cs)$'
 # 5a. every changed or untracked path is in scope (pathspec-scoped untracked scan, never bare)
 outside="$( { git diff --name-only "$mb" HEAD; git ls-files --others --exclude-standard -- infra src_C scripts docs; } | sort -u | grep -Ev "$SCOPE_RE" || true )"
 [ -z "$outside" ] || { echo "$outside" >&2; fail "files changed outside E03 scope"; }
+# 2026-09-22 widening: E03's two new routes must be registered in RouteMetrics.KnownRoutes or the
+# RouteMetricsTests set-equality test fails the src_C gate; E04 (which owns the rest of the file)
+# depends on E03, so the only allowed change here is additive registration lines.
+rm_ns="$(git diff --numstat "$mb" HEAD -- src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs | awk '{print $1"\t"$2}')"
+if [ -n "$rm_ns" ]; then
+  del="${rm_ns#*	}"; add="${rm_ns%	*}"
+  [ "$del" = 0 ] || fail "RouteMetrics.cs: only additive route registration is allowed (numstat $rm_ns)"
+  [ "$add" -le 4 ] || fail "RouteMetrics.cs: at most 4 added lines (numstat $rm_ns)"
+  git diff -U0 "$mb" HEAD -- src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs | grep -E '^\+[^+]' | grep -vqE 'rollback|publish/reap' && fail "RouteMetrics.cs: added lines must be the two E03 route registrations"
+fi
 # 5b. the two ManifestService files appear only as deletions
 for f in src_C/Worker/Manifest/ManifestService.cs src_C/Worker/Manifest/IManifestService.cs; do
   git diff --diff-filter=D --name-only "$mb" HEAD -- "$f" | grep -q . || fail "$f must be deleted in this issue"

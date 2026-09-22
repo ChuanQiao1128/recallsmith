@@ -80,7 +80,7 @@ Sources: `docs/backend-architecture-review-2026-09-22.md` §1 table (`:60-76`), 
 | `src_C/Worker/WorkerFunction.cs`, `Services/IPublishJobProcessor.cs`, `Services/PublishJobProcessor.cs`, `Repositories/JobRepository.cs`, `SnapStartHooks.cs`; D `Manifest/ManifestService.cs`, `Manifest/IManifestService.cs` | E/D | | | | | E (`PublishJobProcessor.cs:187-225`) | | | |
 | `src_C/Vpc/SnapStartHooks.cs` | E (`ManifestBuilder.Reset()`) | | | | | | | E (drop `Vpc.Db.Pg.Reset()`) | |
 | `src_C/Shared/RecallSmith.Lambda.Common/Log.cs` | | E (§2.4.6) | | | | | | | |
-| `src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs` | | E (namespace, `EmitGauge`, `internal:` routes) | | | | | | | E14 does NOT touch it (§6 #4) |
+| `src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs` | E03: additive `KnownRoutes` registration of its two routes only (2026-09-22) | E (namespace, `EmitGauge`, `internal:` routes) | | | | | | | E14 does NOT touch it (§6 #4) |
 | `src_C/Vpc/Analytics/OutboxPublisher.cs` | | E (`PublishBatchAsync`, `OutboxPending`) | | | | | E (retention delete) | E (`using static`) | |
 | `src_C/Vpc/Analytics/ContentIntelligenceSnapshotImport.cs` | | | | | | E (etag skip) | | E (`using static`) | |
 | `src_C/Shared/RecallSmith.Lambda.Common/Secrets.cs` | | | C | | | | | | `FixedTimeEquals` helper |

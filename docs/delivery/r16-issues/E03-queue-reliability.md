@@ -57,6 +57,7 @@ What E00 decided, and the three places this brief tightens it (recorded here bec
 ## Constraints
 
 - **Scope (the ONLY files that may change):**
+  0. `src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs` — ONLY additive lines registering the two new routes (`/rollback`, `/api/v1/admin/publish/reap`) in `KnownRoutes`, ≤ 4 added / 0 removed (2026-09-22 widening: `RouteMetricsTests.RouteTable_AndTheDispatchers_NameTheSameRoutes` requires every dispatched route to be registered; E04 owns the rest of the file and merges after E03).
   1. `infra/modules/worker/queue.tf` (E)
   2. `infra/modules/worker/function.tf` (E — the ESM block only)
   3. `infra/modules/worker/outputs.tf` (E — append two outputs)
@@ -408,7 +409,7 @@ Steps 1–2 are file/literal checks (seconds); step 3 is `terraform init/validat
 
 - Do NOT run `terraform apply`, `terraform import`, `terraform init` with the S3 backend, `aws lambda update-*`, `aws sqs set-queue-attributes`, `aws sqs create-queue`, `./deploy.sh`, or anything under `scripts/` for real. Do NOT paste plan JSON or `terraform plan` text anywhere.
 - Do NOT rename the queue, the function, the alias or the ESM; do NOT add `tags`, `kms_master_key_id`, a `policy` on the DLQ, or an inline `redrive_allow_policy` attribute; do NOT touch `infra/envs/**` or any module other than `worker`.
-- Do NOT edit `Res.cs` (E07), `deploy.sh` (E06), `IJobRepository.cs`, `Migrate.cs`, `AdminManifest.cs`, `PremiumDeckUrl.cs`, `AdminDecks.cs`, `RouteMetrics.cs`, any `.csproj` other than the Db one, `src_C/Common/**`, the root `RecallSmith.Lambda.csproj`, `mobile/**`, `frontend/**`, `docs/*.md`.
+- Do NOT edit `Res.cs` (E07), `deploy.sh` (E06), `IJobRepository.cs`, `Migrate.cs`, `AdminManifest.cs`, `PremiumDeckUrl.cs`, `AdminDecks.cs`, any `.csproj` other than the Db one, `src_C/Common/**`, the root `RecallSmith.Lambda.csproj`, `mobile/**`, `frontend/**`, `docs/*.md`.
 - Do NOT change the manifest's key set, key order, `schemaVersion`, serializer options, `Content-Type` or `Cache-Control`; do NOT add `premiumPrefix` to the document.
 - Do NOT rethrow from `FunctionHandler`, derive `JobNotAcquiredException` from `BusinessException`, call `FailAsync` on a system error, or make the acquire branch `$2 > 1` alone.
 - Do NOT skip the rebuild without the metadata proof, and do NOT put without `IfMatch`/`IfNoneMatch`.
