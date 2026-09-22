@@ -208,6 +208,14 @@ public sealed class VpcFunction
       {
         return await Vpc.Authoring.ManifestRebuild.HandleManifestRebuild(req, res, auth);
       }
+      if (p.EndsWith("/rollback", StringComparison.OrdinalIgnoreCase) && p.Contains("/api/v1/admin/decks/", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.DeckRollback.HandleDeckRollback(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/publish/reap", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.PublishReaper.HandlePublishReap(req, res, auth);
+      }
       // Dashboard - 合并 decks 和 manifest，减少前端请求次数
       if (p.EndsWith("/api/v1/authoring/dashboard", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {

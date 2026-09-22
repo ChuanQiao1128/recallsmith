@@ -28,15 +28,22 @@ public class PublishJobProcessor : IPublishJobProcessor
       ?? new ContentArtifactsGenerator(s3Uploader, new ContentArtifactsRepository());
   }
 
-  public async Task ProcessAsync(string jobId)
+  public async Task ProcessAsync(string jobId, int receiveCount = 1)
   {
-    // Step 2: 乐观锁抢占任务
-    var acquired = await _jobRepository.TryAcquireJobAsync(jobId);
+    // Step 2: 乐观锁抢占任务（receiveCount = SQS ApproximateReceiveCount）
+    var acquired = await _jobRepository.TryAcquireJobAsync(jobId, receiveCount);
     if (!acquired)
     {
-      // 任务已被其他 Worker 抢走或已处理，优雅退出
-      Console.WriteLine($"[JobId={jobId}] Job already processed or acquired by another worker");
-      return;
+      // A redelivery lost the race. If the row is already SUCCESS or simply gone, this is a
+      // duplicate delivery of a finished job — acknowledge it. Otherwise the row is PROCESSING
+      // and not yet stale, so another container may still hold it: fail the item so SQS keeps it.
+      var row = await _jobRepository.GetJobAsync(jobId);
+      if (row is null || row.Status == "SUCCESS")
+      {
+        Console.WriteLine($"[JobId={jobId}] Job already completed or unknown; acknowledging replay");
+        return;
+      }
+      throw new JobNotAcquiredException(jobId);
     }
 
     // 获取任务信息
