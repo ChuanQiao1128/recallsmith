@@ -85,8 +85,11 @@ resource "aws_apigatewayv2_stage" "default" {
   default_route_settings {
     data_trace_enabled       = false
     detailed_metrics_enabled = true
-    throttling_burst_limit   = 0
-    throttling_rate_limit    = 0
+    # 2026-09-23 incident: E04 wrote 0/0 here. API Gateway treats 0 as "throttle everything" — every
+    # request answered 429 for ~14 minutes after the E05 apply (the same stage update carried it).
+    # Real limits now; E08 may raise them per route but must never write 0.
+    throttling_burst_limit = var.throttling_burst_limit
+    throttling_rate_limit  = var.throttling_rate_limit
   }
 }
 
@@ -101,7 +104,10 @@ resource "aws_apigatewayv2_stage" "dev" {
   default_route_settings {
     data_trace_enabled       = false
     detailed_metrics_enabled = true
-    throttling_burst_limit   = 0
-    throttling_rate_limit    = 0
+    # 2026-09-23 incident: E04 wrote 0/0 here. API Gateway treats 0 as "throttle everything" — every
+    # request answered 429 for ~14 minutes after the E05 apply (the same stage update carried it).
+    # Real limits now; E08 may raise them per route but must never write 0.
+    throttling_burst_limit = var.dev_throttling_burst_limit
+    throttling_rate_limit  = var.dev_throttling_rate_limit
   }
 }
