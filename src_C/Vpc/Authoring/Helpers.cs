@@ -45,6 +45,25 @@ public static class Helpers
     return null;
   }
 
+  /// <summary>
+  /// The wave's five-key envelope built directly through <see cref="Res.Raw"/> (Res.cs is E07's file):
+  /// { success, data, error{code,message}, traceId, version }. Used for the 404/409 codes Res does not
+  /// have a fixed helper for.
+  /// </summary>
+  public static APIGatewayProxyResponse ErrorEnvelope(Res res, int statusCode, string code, string message) =>
+    res.Raw(statusCode, new { success = false, data = (object?)null, error = new { code, message }, traceId = res.TraceId, version = "v1" });
+
+  /// <summary>
+  /// Maps a 23505 on the migration-021 partial unique index (uq_deck_publishes_active) to
+  /// 409 PUBLISH_IN_PROGRESS. Any other exception (or a 23505 on a different constraint) → null.
+  /// </summary>
+  public static APIGatewayProxyResponse? MapUniqueViolation409(Exception ex, Res res)
+  {
+    if (ex is not PostgresException { SqlState: "23505", ConstraintName: "uq_deck_publishes_active" }) return null;
+    return ErrorEnvelope(res, 409, "PUBLISH_IN_PROGRESS",
+      "A publish for this deck is still PENDING or PROCESSING. Wait for the worker, or run POST /api/v1/admin/publish/reap and retry.");
+  }
+
   public sealed record UpdateField(string BodyKey, string ColumnName, Func<JsonElement, object?> Transform, string Cast = "");
 
   public static (List<string> Fields, List<object?> Parameters) BuildUpdateSet(JsonElement body, IReadOnlyList<UpdateField> spec)

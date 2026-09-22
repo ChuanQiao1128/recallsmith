@@ -34,7 +34,7 @@ resource "aws_lambda_function" "worker" {
 
 resource "aws_lambda_alias" "worker_prod" {
   name             = var.alias_name
-  function_name    = aws_lambda_function.worker.function_name
+  function_name    = var.function_name
   function_version = "4"
   lifecycle {
     ignore_changes = [function_version, description]
@@ -45,9 +45,9 @@ resource "aws_lambda_event_source_mapping" "worker_sqs" {
   batch_size                         = 1
   enabled                            = true
   event_source_arn                   = aws_sqs_queue.publish_jobs.arn
-  function_name                      = aws_lambda_function.worker.arn
-  function_response_types            = []
-  maximum_batching_window_in_seconds = 60
+  function_name                      = aws_lambda_alias.worker_prod.arn
+  function_response_types            = ["ReportBatchItemFailures"]
+  maximum_batching_window_in_seconds = 0
   scaling_config {
     maximum_concurrency = 2
   }
