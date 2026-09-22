@@ -148,7 +148,7 @@ grep -Fq 'variable "analytics_bucket_name"' "$ID_VARS" || fail "identity/variabl
 # 2c. identity policies
 for sym in S3Analytics 'var.analytics_bucket_name' snowflake_read ListAnalyticsPrefix BucketLocation ReadAnalyticsObjects WriteMarts \
            's3:GetBucketLocation' 's3:GetObjectVersion' 'marts/content_intelligence/*' 'raw/review_events/*'; do
-  grep -Fq "$sym" "$ID_POLICIES" || fail "identity/policies.tf lacks: $sym"
+  grep -Fq -e "$sym" "$ID_POLICIES" || fail "identity/policies.tf lacks: $sym"
 done
 grep -Fq 'resource "aws_iam_policy" "snowflake_read"' "$ID_POLICIES" || fail "identity/policies.tf must hold the aws_iam_policy.snowflake_read block (moved from main.tf if E01 put it there)"
 ! grep -Fq 'resource "aws_iam_policy" "snowflake_read"' "$ID_MAIN" || fail "identity/main.tf still holds the snowflake_read block"
@@ -225,7 +225,7 @@ for sym in 'public class HashUserIdSaltTests' '[Collection(PostgresCollection.Na
            'NoSalt_MatchesLegacySha256Hex' 'EmptySalt_MatchesLegacySha256Hex' 'Salt_IsPrependedToSub' 'Salt_ChangesTheHash' \
            'Salted_IsDeterministicDistinctAndHex' 'DeleteSentOlderThan_RemovesOnlyOldSentRows' 'DeleteSentOlderThan_IsIdempotent' \
            'DeleteSentOlderThan_RejectsNonPositiveDays'; do
-  grep -Fq "$sym" "$SALTT" || fail "HashUserIdSaltTests.cs lacks: $sym"
+  grep -Fq -e "$sym" "$SALTT" || fail "HashUserIdSaltTests.cs lacks: $sym"
 done
 # 2k. snowflake 001 — line 1 only
 [ "$(sed -n 1p "$SQL1")" = "-- DeveloperCards Content Intelligence Snowflake setup." ] || fail "001:1 must be the DeveloperCards header"
@@ -238,7 +238,7 @@ for sym in 'create or replace view marts.card_snapshot_window' 'create or replac
            'alter task marts.snapshot_export_30d resume' 'alter task marts.snapshot_export_90d resume' \
            'where window_days = 30' 'where window_days = 90' "answer_mode = 'qa'" 'use database <DATABASE_NAME>' \
            "convert_timezone('UTC'" '-- snapshot-columns:begin' '-- snapshot-columns:end'; do
-  grep -Fq "$sym" "$SQL2" || fail "002_snapshot_export.sql lacks: $sym"
+  grep -Fq -e "$sym" "$SQL2" || fail "002_snapshot_export.sql lacks: $sym"
 done
 [ "$(fcount 'warehouse = <WAREHOUSE_NAME>' "$SQL2")" -ge 2 ]                       || fail "002: warehouse = <WAREHOUSE_NAME> on both tasks"
 [ "$(fcount 'USING CRON 0 1 * * * UTC' "$SQL2")" = "2" ]                           || fail "002: USING CRON 0 1 * * * UTC exactly twice"
@@ -264,7 +264,7 @@ diff "$TMP/view_cols.txt" "$TMP/row_cols.txt" >&2 || fail "002: the view's colum
 # 2m. snowflake README
 for sym in '002_snapshot_export.sql' 'snowpipe_sqs_arn' 'auto_suspend = 60' "$BUCKET" 'raw/review_events' 'analytics-salt' \
            'marts.card_snapshot_window' 'notification_channel'; do
-  grep -Fq "$sym" "$SFREADME" || fail "snowflake/README.md lacks: $sym"
+  grep -Fq -e "$sym" "$SFREADME" || fail "snowflake/README.md lacks: $sym"
 done
 [ "$(sed -n 1p "$SFREADME")" = "$(git show "$MB:$SFREADME" | sed -n 1p)" ] || fail "snowflake/README.md line 1 (title) must not change (E00 §2.14)"
 # 2n. allow file shape (the plan step compares it to the real plan)

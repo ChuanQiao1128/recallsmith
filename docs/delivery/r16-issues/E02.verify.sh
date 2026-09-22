@@ -131,7 +131,7 @@ for sym in 'data "aws_region" "current" {}' \
            's3:GetBucketAcl' 's3:PutObject' 'bucket-owner-full-control' 'aws:SourceArn' \
            '/AWSLogs/${var.account_id}/*' \
            'depends_on = [aws_s3_bucket_policy.cloudtrail]'; do
-  grep -Fq "$sym" "$RET" || fail "retention.tf lacks: $sym"
+  grep -Fq -e "$sym" "$RET" || fail "retention.tf lacks: $sym"
 done
 grep -Eq '^\s*name\s*=\s*"developercards-management"\s*$'      "$RET" || fail "retention.tf: trail name"
 grep -Eq '^\s*is_multi_region_trail\s*=\s*true\s*$'            "$RET" || fail "retention.tf: is_multi_region_trail = true"
@@ -177,7 +177,7 @@ head -1 "$SNAP" | grep -Fq '#!/usr/bin/env bash' || fail "rds-snapshot.sh: sheba
 for sym in 'set -euo pipefail' '^[a-z0-9-]{1,40}$' 'DRY_RUN' \
            'developercards-${label}-$(date -u +%Y%m%d-%H%M)' \
            'aws rds wait db-snapshot-available'; do
-  grep -Fq "$sym" "$SNAP" || fail "rds-snapshot.sh lacks: $sym"
+  grep -Fq -e "$sym" "$SNAP" || fail "rds-snapshot.sh lacks: $sym"
 done
 grep -Eq '^aws +rds +creat[e]-db-snapshot +--db-instance-identifier +"\$DB_ID" +--db-snapshot-identifier +"\$SNAP"' "$SNAP" || fail "rds-snapshot.sh: the real snapshot line must be exactly the pinned one"
 dry_line="$(grep -n 'DRY_RUN' "$SNAP" | grep -Ev '^[0-9]+:\s*#' | head -1 | cut -d: -f1)"

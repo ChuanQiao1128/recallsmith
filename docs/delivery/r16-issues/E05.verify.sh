@@ -82,7 +82,7 @@ for s in 'resource "aws_iam_role" "worker"' 'name = var.worker_role_name' '"sts:
          '"ec2:DeleteNetworkInterface"' '"ec2:AssignPrivateIpAddresses"' '"ec2:UnassignPrivateIpAddresses"' \
          '"sqs:ChangeMessageVisibility"' '"sqs:SendMessage"' '"sqs:ReceiveMessage"' '"s3:ListBucket"' \
          '/content/*' '/analytics/*' 'log-group:/aws/lambda/'; do
-  grep -Fq "$s" "$POL" || fail "policies.tf lacks: $s"
+  grep -Fq -e "$s" "$POL" || fail "policies.tf lacks: $s"
 done
 [ "$(fcount '"Eni"' "$POL")" = 2 ]     || fail "policies.tf: Sid Eni must appear exactly twice (one per document)"
 [ "$(fcount '"S3Head"' "$POL")" = 2 ]  || fail "policies.tf: Sid S3Head must appear exactly twice"

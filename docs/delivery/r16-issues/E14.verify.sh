@@ -166,7 +166,7 @@ for sym in 'namespace RecallSmith.Lambda.Common;' \
            'public static Scope Set(TimeSpan budget)' \
            'public sealed class Scope : IDisposable' \
            'cts.CancelAfter(budget)'; do
-  grep -Fq "$sym" "$DEADLINE" || fail "RequestDeadline.cs lacks: $sym"
+  grep -Fq -e "$sym" "$DEADLINE" || fail "RequestDeadline.cs lacks: $sym"
 done
 if grep -Eq 'GetEnvironmentVariable|Console\.' "$DEADLINE"; then fail "RequestDeadline.cs must not read env or write to the console"; fi
 # 2g. VpcFunction: ONE method named Handler, the optional-context signature, the deadline line

@@ -221,7 +221,7 @@ for sym in 'public static bool IsEnabled(string level)' \
            'public static void Error(params object?[] args)' \
            'public static void Event(string level, object fields)' \
            '"ts"' '"level"' '"msg"' 'Utf8JsonWriter' 'JsonValueKind.Object' 'LOG_LEVEL'; do
-  grep -Fq "$sym" "$LOG" || fail "Log.cs lacks: $sym"
+  grep -Fq -e "$sym" "$LOG" || fail "Log.cs lacks: $sym"
 done
 # 2h. RouteMetrics.cs
 for sym in 'public const string DefaultNamespace = "DeveloperCards";' \
@@ -232,7 +232,7 @@ for sym in 'public const string DefaultNamespace = "DeveloperCards";' \
            'public static void EmitGauge(string name, double value, string? unit = "Count")' \
            'public static string BuildGaugeLine(' \
            'public static IReadOnlyList<string> KnownRoutes { get; } = [.. StaticRoutes, .. TemplateRoutes];'; do
-  grep -Fq "$sym" "$RM" || fail "RouteMetrics.cs lacks: $sym"
+  grep -Fq -e "$sym" "$RM" || fail "RouteMetrics.cs lacks: $sym"
 done
 grep -Fq '"RecallSmith"' "$RM" && fail "RouteMetrics.cs still carries the RecallSmith namespace literal"
 grep -Eq '^\s*"/internal/|^\s*"internal:' "$RM" && fail "RouteMetrics.cs: internal actions must not sit in StaticRoutes/TemplateRoutes"
@@ -244,7 +244,7 @@ for sym in 'public sealed record OutboxPublishResult(int Claimed, int Published,
            'RouteMetrics.EmitGauge("OutboxPending", result.PendingAfter);' \
            'if (result.Retried > 0) return res.Error500(null);' \
            'pendingAfter = result.PendingAfter'; do
-  grep -Fq "$sym" "$OUTBOX" || fail "OutboxPublisher.cs lacks: $sym"
+  grep -Fq -e "$sym" "$OUTBOX" || fail "OutboxPublisher.cs lacks: $sym"
 done
 [ "$(grep -c 'RouteMetrics.EmitGauge("OutboxPending"' "$OUTBOX")" = "1" ] || fail "OutboxPublisher.cs: the gauge is emitted exactly once, in the HTTP handler"
 grep -Fq 'return res.Error500(ex);' "$OUTBOX" && fail "OutboxPublisher.cs: the old catch → Error500(ex) must be inside PublishBatchAsync's report, not the handler"

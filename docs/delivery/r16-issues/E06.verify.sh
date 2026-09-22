@@ -106,7 +106,7 @@ for sym in 'namespace RecallSmith.Lambda.Common;' \
            'CryptographicOperations.FixedTimeEquals(' \
            'Encoding.UTF8.GetBytes(' \
            'a.Length != b.Length'; do
-  grep -Fq "$sym" "$SECRETS_CS" || fail "Secrets.cs lacks: $sym"
+  grep -Fq -e "$sym" "$SECRETS_CS" || fail "Secrets.cs lacks: $sym"
 done
 # 2b. Migrate.cs — the three compares, nothing else
 [ "$(grep -Fc 'Secrets.FixedTimeEquals(got, required)' "$MIGRATE" || true)" = "3" ] || fail "Migrate.cs must contain Secrets.FixedTimeEquals(got, required) exactly three times"
@@ -135,7 +135,7 @@ for sym in 'namespace RecallSmith.Lambda.Vpc.Db;' \
            '"Bad migrate secret"' \
            'res.Raw(409' \
            'alter default privileges in schema public'; do
-  grep -Fq "$sym" "$APPROLE" || fail "AppRole.cs lacks: $sym"
+  grep -Fq -e "$sym" "$APPROLE" || fail "AppRole.cs lacks: $sym"
 done
 if grep -q 'Console.Write' "$APPROLE"; then fail "AppRole.cs must not Console.Write (body/password could leak)"; fi
 if grep -En 'Log\.(Debug|Info|Warn|Error)\(.*(assword|RawBody|Body)' "$APPROLE"; then fail "AppRole.cs logs a body or password"; fi
@@ -170,7 +170,7 @@ for sym in 'ENV="${ENV:-prod}"' \
            'pick_keys ' \
            'publish-version' \
            'update-function-code'; do
-  grep -Fq "$sym" "$DEPLOY" || fail "deploy.sh lacks: $sym"
+  grep -Fq -e "$sym" "$DEPLOY" || fail "deploy.sh lacks: $sym"
 done
 l_cfg="$(grep -nF 'update-function-configuration' "$DEPLOY" | grep -Ev '^[0-9]+:\s*#' | head -1 | cut -d: -f1)"
 l_pub="$(grep -nF 'publish-version' "$DEPLOY" | grep -Ev '^[0-9]+:\s*#' | head -1 | cut -d: -f1)"
@@ -183,11 +183,11 @@ for sym in "SSM_TO_ENV='{\"pg-password\":\"PGPASSWORD\",\"migrate-secret\":\"MIG
            "WORKER_FILE_KEYS='[\"PGUSER\",\"PGSSLMODE\",\"PG_MAX\",\"LOG_LEVEL\"]'" \
            "WORKER_SECRET_KEYS='[\"PGPASSWORD\"]'" \
            'merge_env()' 'ssm_to_env()' 'pick_keys()' 'unmapped SSM parameter'; do
-  grep -Fq "$sym" "$MERGE" || fail "merge-env.sh lacks: $sym"
+  grep -Fq -e "$sym" "$MERGE" || fail "merge-env.sh lacks: $sym"
 done
 if grep -q 'aws ' "$MERGE"; then fail "merge-env.sh must be pure jq (no aws call)"; fi
 for sym in 'FOO_KEEP' 'unmapped SSM parameter' 'stray-name' 'merge-env tests OK'; do
-  grep -Fq "$sym" "$MERGE_T" || fail "merge-env.test.sh lacks: $sym"
+  grep -Fq -e "$sym" "$MERGE_T" || fail "merge-env.test.sh lacks: $sym"
 done
 # 2g. prod.env.json == seed
 python3 - "$ENVJSON" "$TMP/env.canonical.json" <<'PY' || fail "prod.env.json is not JSON-equal to the E00 seed"
@@ -198,7 +198,7 @@ PY
 # 2h. invoke-as-admin.sh
 for sym in '"supervisor"' '"[super_admin]"' 'token_use' 'x-migrate-secret' '"${MIGRATE_SECRET:-}"' \
            '--cli-binary-format raw-in-base64-out' 'aws lambda invoke' 'DRY_RUN'; do
-  grep -Fq "$sym" "$INVOKE" || fail "invoke-as-admin.sh lacks: $sym"
+  grep -Fq -e "$sym" "$INVOKE" || fail "invoke-as-admin.sh lacks: $sym"
 done
 if grep -Eq 'MIGRATE_SECRET=\$[0-9]' "$INVOKE"; then fail "invoke-as-admin.sh takes the migrate secret from argv"; fi
 # 2i. Terraform
@@ -207,17 +207,17 @@ for sym in 'resource "aws_ssm_parameter" "secret"' \
            '"/developercards/${var.env}/${each.key}"' \
            '"SecureString"' '"Standard"' '"PLACEHOLDER-set-by-supervisor"' \
            'ignore_changes = [value]'; do
-  grep -Fq "$sym" "$SSM_TF" || fail "ssm.tf lacks: $sym"
+  grep -Fq -e "$sym" "$SSM_TF" || fail "ssm.tf lacks: $sym"
 done
 if grep -Eq 'key_id|insecure_value|overwrite|environment|provisioner|null_resource|local-exec|archive_file' "$SSM_TF"; then
   fail "ssm.tf carries a forbidden attribute/block (key_id/insecure_value/overwrite/environment/provisioner/null_resource/local-exec/archive_file)"
 fi
 grep -A3 -F 'variable "secret_parameter_names"' "$ID_VARS" | grep -Fq 'list(string)' || fail "identity/variables.tf lacks variable \"secret_parameter_names\" of type list(string)"
 for sym in 'output "secret_parameter_path"' 'output "secret_parameter_arns"' '"/developercards/${var.env}"'; do
-  grep -Fq "$sym" "$ID_OUTS" || fail "identity/outputs.tf lacks: $sym"
+  grep -Fq -e "$sym" "$ID_OUTS" || fail "identity/outputs.tf lacks: $sym"
 done
 for sym in 'secret_parameter_names' '"pg-password"' '"migrate-secret"' '"internal-shared-secret"' '"rc-webhook-auth-production"' '"rc-webhook-auth-development"'; do
-  grep -Fq "$sym" "$PROD_MAIN" || fail "envs/prod/main.tf lacks: $sym"
+  grep -Fq -e "$sym" "$PROD_MAIN" || fail "envs/prod/main.tf lacks: $sym"
 done
 if grep -q 'analytics-salt' "$PROD_MAIN"; then fail "analytics-salt is E13's, not E06's"; fi
 python3 - "$ALLOW" "$TMP/allow.canonical.json" <<'PY' || fail "E06.plan-allow.json is not JSON-equal to the brief's Changes 5"
@@ -232,25 +232,25 @@ git diff -U0 "$mb" HEAD -- "$README" | grep '^+[^+]' | grep -q 'E06' || fail "th
 for sym in '## Inventory' '## Rules' '## App-role password rotation' '## Master password rotation' '## Migrate secret' \
            '## Internal shared secret' '## RevenueCat webhook auth' '## First deploy (E06 cut-over)' '## Staging' \
            'modify-db-instance' '--master-user-password' 'put-parameter' 'bootstrap-roles' 'createDatabase' 'INJECT_ENV=0'; do
-  grep -Fq "$sym" "$RUNBOOK" || fail "secrets-rotation.md lacks: $sym"
+  grep -Fq -e "$sym" "$RUNBOOK" || fail "secrets-rotation.md lacks: $sym"
 done
 # 2k. Tests — titles, harnesses, generated-case count
 grep -Fq 'private const int GeneratedCases = 64;' "$SECRETS_T" || fail "SecretsCompareTests.cs lacks GeneratedCases = 64"
 grep -Fq '[MemberData(' "$SECRETS_T" || fail "SecretsCompareTests.cs lacks a [MemberData] property test"
 for s in FixedTimeEquals_NullOrEmpty_False FixedTimeEquals_Equal_True FixedTimeEquals_Different_False \
          FixedTimeEquals_GeneratedPairs_NeverTrueAndSymmetric FixedTimeEquals_GeneratedSelf_True; do
-  grep -Fq "$s" "$SECRETS_T" || fail "missing SecretsCompareTests method: $s"
+  grep -Fq -e "$s" "$SECRETS_T" || fail "missing SecretsCompareTests method: $s"
 done
 grep -Fq '[Collection(PostgresCollection.Name)]' "$APPROLE_T" || fail "AppRoleTests.cs must join the postgres collection"
 for sym in 'CreateScratchDatabaseAsync(' 'ApplyMigrationsAsync(' 'new VpcFunction().Handler('; do
-  grep -Fq "$sym" "$APPROLE_T" || fail "AppRoleTests.cs lacks: $sym"
+  grep -Fq -e "$sym" "$APPROLE_T" || fail "AppRoleTests.cs lacks: $sym"
 done
 for s in BootstrapRoles_Editor_Returns403 BootstrapRoles_BadMigrateSecret_Returns403 BootstrapRoles_BadRoleName_Returns400 \
          BootstrapRoles_BadDatabaseName_Returns400 BootstrapRoles_BadPassword_Returns400 \
          BootstrapRoles_MissingDatabaseWithoutCreate_Returns400 BootstrapRoles_NotMaster_Returns409 \
          BootstrapRoles_CreatesRoleAndDatabase_ThenIdempotent Bootstrap_ReassignsOwnershipOnConnectedDatabase \
          BootstrapRoles_RouteIsWired; do
-  grep -Fq "$s" "$APPROLE_T" || fail "missing AppRoleTests method: $s"
+  grep -Fq -e "$s" "$APPROLE_T" || fail "missing AppRoleTests method: $s"
 done
 # 2l. Suppression + secret-leak guards over the new files and the + lines of the edited files
 added="$TMP/added.txt"; : > "$added"

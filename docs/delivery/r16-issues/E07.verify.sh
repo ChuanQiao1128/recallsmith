@@ -72,7 +72,7 @@ for sym in 'private APIGatewayProxyResponse Wrap(int statusCode, bool success, o
            'Code = "PAYLOAD_TOO_LARGE"' \
            'public APIGatewayProxyResponse ServiceUnavailable(string code, string? message, int retryAfterSec)' \
            '["retry-after"] = retryAfterSec.ToString(CultureInfo.InvariantCulture)'; do
-  grep -Fq "$sym" "$RES" || fail "Res.cs lacks: $sym"
+  grep -Fq -e "$sym" "$RES" || fail "Res.cs lacks: $sym"
 done
 # 2b. Validation.cs — the one slug grammar
 for sym in 'public const string SlugPattern = "^[a-z0-9][a-z0-9-]{0,63}$";' \
@@ -80,7 +80,7 @@ for sym in 'public const string SlugPattern = "^[a-z0-9][a-z0-9-]{0,63}$";' \
            'public const string SlugRuleMessage = "slug must match ^[a-z0-9][a-z0-9-]{0,63}$";' \
            'public static bool IsValidSlug(string? slug)' \
            'public static string RequireSlug(string? slug, string field = "slug")'; do
-  grep -Fq "$sym" "$VAL" || fail "Validation.cs lacks: $sym"
+  grep -Fq -e "$sym" "$VAL" || fail "Validation.cs lacks: $sym"
 done
 # 2c. Decks.cs — POST + PUT go through RequireSlug
 [ "$(fcount 'Validation.RequireSlug(' "$DECKS")" = "2" ] || fail "Decks.cs: exactly two Validation.RequireSlug( call sites (POST + PUT)"
@@ -116,7 +116,7 @@ for sym in 'private const string ImplVersion = "2026-09-22T00:00Z-v14";' \
            'replayed' \
            'reason = "unauthorized"' 'reason = "db_unavailable"' 'reason = "db_insert_failed"' \
            'reason = "env_mismatch"' 'reason = "product_mismatch"' 'reason = "db_upsert_failed"' 'reason = "accepted"'; do
-  grep -Fq "$sym" "$HOOK" || fail "RevenuecatWebhook.cs lacks: $sym"
+  grep -Fq -e "$sym" "$HOOK" || fail "RevenuecatWebhook.cs lacks: $sym"
 done
 for bad in 'gotToken != expectedToken' 'host.Contains("dev"' 'Console.WriteLine(' 'Log.Warn(' 'conn is not null'; do
   grep -Fq "$bad" "$HOOK" && fail "RevenuecatWebhook.cs still contains: $bad"
@@ -130,7 +130,7 @@ for sym in 'private const string ProgressEventsImpl = "progressEvents-v2";' \
            '"NOT_OBJECT"' '"BAD_EVENT_ID"' '"MISSING_FIELD"' '"BAD_EVENT_TIME"' '"TOO_LONG"' \
            'if (rating is < 1 or > 4) rating = null;' \
            'step = "ingest_rejected"'; do
-  grep -Fq "$sym" "$PROG" || fail "ProgressEvents.cs lacks: $sym"
+  grep -Fq -e "$sym" "$PROG" || fail "ProgressEvents.cs lacks: $sym"
 done
 [ "$(fcount 'receivedCount = events.Count,' "$PROG")" -ge 2 ] || fail "ProgressEvents.cs: receivedCount = events.Count, expected in both responses"
 [ "$(count '^[[:space:]]+rejectedEventIds,$' "$PROG")" -ge 2 ] || fail "ProgressEvents.cs: rejectedEventIds, expected in both responses"
@@ -149,7 +149,7 @@ for s in Post_WrongTokenSameLength_Is401WithFourKeysOnly Post_MissingAuthorizati
   grep -Fq "$s(" "$RCT" || fail "RevenuecatWebhookTests.cs: missing test $s"
 done
 for s in 'test-secret-dev' 'retry-after' 'DB_UNAVAILABLE' 'e07_rc_partial' 'maxVersion: 2' 'Pg.Reset()'; do
-  grep -Fq "$s" "$RCT" || fail "RevenuecatWebhookTests.cs lacks: $s"
+  grep -Fq -e "$s" "$RCT" || fail "RevenuecatWebhookTests.cs lacks: $s"
 done
 for s in OneBadEventAmongTwentyFive_Is200_AndOthersAreStored AllRejected_Is200_WithZeroRows \
          RejectedIds_AreAlsoDuplicateIds_ForTheFrozenClient TooLongPerEventField_IsRejectedWithTooLong \
@@ -171,7 +171,7 @@ for s in OverCap_Is413_BeforeRouting AtCap_IsNot413 OverCap_Base64Decoded_Is413 
   grep -Fq "$s(" "$BCT" || fail "BodyCapTests.cs: missing test $s"
 done
 for s in '1_048_576' 'PAYLOAD_TOO_LARGE' 'new VpcFunction().Handler('; do
-  grep -Fq "$s" "$BCT" || fail "BodyCapTests.cs lacks: $s"
+  grep -Fq -e "$s" "$BCT" || fail "BodyCapTests.cs lacks: $s"
 done
 # 2j. suppression / gutting across every scope file (C07.verify.sh:151 + the C# spellings)
 if grep -Eq 'Skip[[:space:]]*=|#pragma warning disable|\.skip\(|\.only\(|@ts-ignore|@ts-expect-error|eslint-disable' "${SCOPE[@]}"; then
