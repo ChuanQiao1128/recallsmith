@@ -21,21 +21,21 @@ resource "aws_budgets_budget" "monthly" {
   notification {
     comparison_operator        = "GREATER_THAN"
     notification_type          = "ACTUAL"
-    subscriber_email_addresses = ["info@timeawake.co.nz"]
+    subscriber_email_addresses = [var.alert_email]
     threshold                  = 50
     threshold_type             = "PERCENTAGE"
   }
   notification {
     comparison_operator        = "GREATER_THAN"
     notification_type          = "FORECASTED"
-    subscriber_email_addresses = ["info@timeawake.co.nz"]
+    subscriber_email_addresses = [var.alert_email]
     threshold                  = 85
     threshold_type             = "PERCENTAGE"
   }
   notification {
     comparison_operator        = "GREATER_THAN"
     notification_type          = "ACTUAL"
-    subscriber_email_addresses = ["info@timeawake.co.nz"]
+    subscriber_email_addresses = [var.alert_email]
     threshold                  = 100
     threshold_type             = "PERCENTAGE"
   }

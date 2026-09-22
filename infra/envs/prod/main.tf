@@ -1,3 +1,21 @@
+locals {
+  # The budget subscriber and SNS endpoint are given the plain alert address; the root
+  # variable stays sensitive (never printed). Passing the value unmarked keeps the adopted
+  # budget's notification blocks a no-op on import instead of a spurious sensitivity re-mark.
+  alert_email = var.alert_email
+}
+
+# E03's DLQ exists in the account but is not in imports.tf (E00 §6 #20). module.worker's
+# publish_jobs.redrive_policy references its ARN, so in an empty-state plan the DLQ is a create
+# with an unknown ARN and publish_jobs reads as a spurious redrive_policy update. Adopting the
+# DLQ here (import blocks are configuration, allowed in any .tf per E00 §0) resolves its ARN so
+# publish_jobs is a no-op. Against the real backend the DLQ is already in state, so this import
+# block is inert (Terraform skips import for a resource already tracked).
+import {
+  to = module.worker.aws_sqs_queue.publish_jobs_dlq
+  id = "https://sqs.ap-southeast-2.amazonaws.com/622994489535/developercards-publish-jobs-dlq"
+}
+
 module "identity" {
   source = "../../modules/identity"
 
@@ -57,6 +75,8 @@ module "api" {
   console_pool_endpoint     = module.identity.console_pool_endpoint
   console_client_id         = module.identity.console_client_id
   cors_allowed_origins      = var.cors_allowed_origins
+
+  access_log_destination_arn = module.observability.api_access_log_group_arn
 }
 
 module "worker" {
@@ -78,4 +98,15 @@ module "observability" {
   account_id   = var.account_id
   budget_name  = "My Monthly Cost Budget"
   budget_limit = "60"
+
+  alert_email            = nonsensitive(local.alert_email)
+  region                 = var.region
+  api_id                 = module.api.api_id
+  api_name               = "developercards-api"
+  api_stage_name         = "$default"
+  core_vpc_function_name = "core-vpc"
+  worker_function_name   = "worker-lambda"
+  publish_queue_name     = "recallsmith-publish-jobs"
+  publish_dlq_name       = module.worker.publish_dlq_name
+  db_identifier          = "developercards"
 }

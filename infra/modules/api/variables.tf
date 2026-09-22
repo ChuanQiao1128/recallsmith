@@ -50,3 +50,5 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "access_log_destination_arn" { type = string }

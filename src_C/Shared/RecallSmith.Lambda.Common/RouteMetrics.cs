@@ -39,7 +39,7 @@ public static class RouteMetrics
   /// real value rather than null so that the code is useful the day it ships, before anyone
   /// has set anything.
   /// </remarks>
-  public const string DefaultNamespace = "RecallSmith";
+  public const string DefaultNamespace = "DeveloperCards";
   public const string NamespaceEnvVar = "METRICS_NAMESPACE";
 
   /// <summary>
@@ -66,6 +66,20 @@ public static class RouteMetrics
 
   /// <summary>The single bucket every unrecognised HTTP method collapses into.</summary>
   public const string OtherMethod = "OTHER";
+
+  /// <summary>Label prefix for E12's scheduler-driven internal events (synthetic path /internal/&lt;action&gt;).</summary>
+  public const string InternalRoutePrefix = "internal:";
+
+  /// <summary>The internal actions RouteFor labels; anything else under /internal/ is "unmatched" (same cost rule as the route table).</summary>
+  public static readonly IReadOnlyList<string> InternalActions =
+  [
+    "outbox/publish",
+    "content-intelligence/import",
+    "publish/reap-orphans",
+    "manifest/rebuild",
+    "db/migrate",
+    "health/deep",
+  ];
 
   // ------------------------------------------------------------------ the route table
 
@@ -201,6 +215,16 @@ public static class RouteMetrics
   {
     var p = (path ?? string.Empty).TrimEnd('/');
     if (p.Length == 0) return UnmatchedRoute;
+
+    if (p.StartsWith("/internal/", StringComparison.Ordinal))
+    {
+      var action = p["/internal/".Length..];
+      foreach (var known in InternalActions)
+      {
+        if (string.Equals(action, known, StringComparison.Ordinal)) return InternalRoutePrefix + known;
+      }
+      return UnmatchedRoute;
+    }
 
     foreach (var route in StaticRoutesLongestFirst)
     {
@@ -379,6 +403,68 @@ public static class RouteMetrics
   /// status code is still on the line, so a 4xx spike stays one Logs Insights query away.
   /// </remarks>
   public static bool IsServerError(int statusCode) => statusCode >= 500;
+
+  // ------------------------------------------------------------------ the gauge
+
+  /// <summary>
+  /// One EMF line carrying a single dimensionless gauge (e.g. OutboxPending) in the same
+  /// namespace as the route metrics. Same kill switch, same namespace override, same
+  /// never-throws rule as Emit; unit null → "None".
+  /// </summary>
+  public static void EmitGauge(string name, double value, string? unit = "Count")
+  {
+    if (IsDisabled(Environment.GetEnvironmentVariable(DisableEnvVar))) return;
+    if (string.IsNullOrWhiteSpace(name)) return;
+
+    try
+    {
+      var line = BuildGaugeLine(
+        metricNamespace: Environment.GetEnvironmentVariable(NamespaceEnvVar) is { Length: > 0 } ns
+          ? ns
+          : DefaultNamespace,
+        name: name,
+        value: value,
+        unit: unit ?? "None",
+        timestampMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+      Console.Out.WriteLine(line);
+    }
+    catch
+    {
+      // As with Emit: a gauge that cannot serialise is a missing data point, never a fault.
+    }
+  }
+
+  /// <summary>
+  /// Builds the dimensionless-gauge EMF line. Pure, so its shape can be asserted without a
+  /// clock or a Console. <c>Dimensions</c> is a one-element array holding an empty array,
+  /// which is how EMF spells "no dimensions"; the metric name is a top-level property.
+  /// </summary>
+  public static string BuildGaugeLine(string metricNamespace, string name, double value, string unit, long timestampMs)
+  {
+    var payload = new Dictionary<string, object?>
+    {
+      ["_aws"] = new
+      {
+        Timestamp = timestampMs,
+        CloudWatchMetrics = new[]
+        {
+          new
+          {
+            Namespace = metricNamespace,
+            Dimensions = new[] { Array.Empty<string>() },
+            Metrics = new[]
+            {
+              new { Name = name, Unit = unit },
+            },
+          },
+        },
+      },
+      [name] = value,
+    };
+
+    return JsonSerializer.Serialize(payload);
+  }
 
   private static void Emit(string service, LambdaRequest req, double latencyMs, int statusCode, bool isError)
   {

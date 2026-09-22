@@ -48,18 +48,17 @@ public sealed class VpcFunction
 
   private static async Task<APIGatewayProxyResponse> DispatchAsync(LambdaRequest req, Res res)
   {
-    Log.Info(
-      JsonSerializer.Serialize(new
-      {
-        tag = "boot",
-        lambda = ServiceName,
-        version = Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_VERSION"),
-        apiEnv = Environment.GetEnvironmentVariable("API_ENV"),
-        allowDevPremium = Environment.GetEnvironmentVariable("ALLOW_DEV_PREMIUM"),
-        disallowSandbox = Environment.GetEnvironmentVariable("DISALLOW_SANDBOX_PREMIUM"),
-        path = req.Path,
-        method = req.Method,
-      }));
+    Log.Event("info", new
+    {
+      tag = "boot",
+      lambda = ServiceName,
+      version = Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_VERSION"),
+      apiEnv = Environment.GetEnvironmentVariable("API_ENV"),
+      allowDevPremium = Environment.GetEnvironmentVariable("ALLOW_DEV_PREMIUM"),
+      disallowSandbox = Environment.GetEnvironmentVariable("DISALLOW_SANDBOX_PREMIUM"),
+      path = req.Path,
+      method = req.Method,
+    });
 
     AuthContext auth;
     try
@@ -83,19 +82,18 @@ public sealed class VpcFunction
       return res.Raw(200, new { ok = true });
     }
 
-    Log.Info(
-      JsonSerializer.Serialize(new
-      {
-        traceId = req.TraceId,
-        lambda = ServiceName,
-        method = req.Method,
-        path = req.Path,
-        userSub = auth.UserSub,
-        username = auth.Username,
-        groups = auth.Groups,
-        isAdmin = auth.IsAdmin,
-        isSuperAdmin = auth.IsSuperAdmin,
-      }));
+    Log.Event("info", new
+    {
+      traceId = req.TraceId,
+      lambda = ServiceName,
+      method = req.Method,
+      path = req.Path,
+      userSub = auth.UserSub,
+      username = auth.Username,
+      groups = auth.Groups,
+      isAdmin = auth.IsAdmin,
+      isSuperAdmin = auth.IsSuperAdmin,
+    });
 
     try
     {

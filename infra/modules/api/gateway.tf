@@ -1,3 +1,11 @@
+locals {
+  # E00 §2.4.4, one line, key order kept: $context.* are API Gateway variables, not Terraform interpolation.
+  api_access_log_format = chomp(<<-EOT
+    {"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","method":"$context.httpMethod","routeKey":"$context.routeKey","path":"$context.path","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency","responseLatency":"$context.responseLatency","integrationError":"$context.integrationErrorMessage","authorizerError":"$context.authorizer.error","userAgent":"$context.identity.userAgent"}
+  EOT
+  )
+}
+
 resource "aws_apigatewayv2_api" "http" {
   name                         = var.api_name
   protocol_type                = "HTTP"
@@ -70,9 +78,13 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   auto_deploy = true
   name        = "$default"
+  access_log_settings {
+    destination_arn = var.access_log_destination_arn
+    format          = local.api_access_log_format
+  }
   default_route_settings {
     data_trace_enabled       = false
-    detailed_metrics_enabled = false
+    detailed_metrics_enabled = true
     throttling_burst_limit   = 0
     throttling_rate_limit    = 0
   }
@@ -82,9 +94,13 @@ resource "aws_apigatewayv2_stage" "dev" {
   api_id      = aws_apigatewayv2_api.http.id
   auto_deploy = true
   name        = "dev"
+  access_log_settings {
+    destination_arn = var.access_log_destination_arn
+    format          = local.api_access_log_format
+  }
   default_route_settings {
     data_trace_enabled       = false
-    detailed_metrics_enabled = false
+    detailed_metrics_enabled = true
     throttling_burst_limit   = 0
     throttling_rate_limit    = 0
   }
