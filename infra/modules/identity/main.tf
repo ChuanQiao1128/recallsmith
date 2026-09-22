@@ -144,6 +144,10 @@ resource "aws_iam_role" "snowflake" {
   max_session_duration  = 3600
   name                  = "snowflake-recallsmith-s3-role"
   path                  = "/"
+
+  lifecycle {
+    ignore_changes = [assume_role_policy]
+  }
 }
 
 resource "aws_iam_policy" "snowflake_read" {

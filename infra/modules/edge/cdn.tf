@@ -132,6 +132,9 @@ resource "aws_cloudfront_distribution" "content" {
     cloudfront_default_certificate = true
     minimum_protocol_version       = "TLSv1"
   }
+  lifecycle {
+    ignore_changes = [tags, tags_all]
+  }
 }
 
 resource "aws_cloudfront_distribution" "console" {
