@@ -16,6 +16,17 @@ import {
   id = "https://sqs.ap-southeast-2.amazonaws.com/622994489535/developercards-publish-jobs-dlq"
 }
 
+# E04's API access-log group exists in the account but is not in imports.tf (E00 §6 #20).
+# module.api's two stages set access_log_settings.destination_arn to its ARN, so in an
+# empty-state plan the log group is a create with an unknown ARN and both stages read as a
+# spurious access_log_settings update. Adopting it here (same technique as the DLQ above,
+# E04 commit 5e5d524) resolves its ARN so the stages are a no-op. Against the real backend it
+# is already in state, so this import block is inert (Terraform skips import when tracked).
+import {
+  to = module.observability.aws_cloudwatch_log_group.api_access
+  id = "/aws/apigateway/developercards-api"
+}
+
 module "identity" {
   source = "../../modules/identity"
 
