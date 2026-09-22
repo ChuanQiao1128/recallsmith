@@ -114,8 +114,9 @@ public class LogShapeTests
       return Task.CompletedTask;
     });
 
-    // The DbWarmupTests selector text must survive verbatim.
-    Assert.Contains("\"step\":\"db-warmup\"", outText);
+    // The DbWarmupTests selector text must survive verbatim: "step":"db-warmup"
+    var selector = "\"step\":\"db-warmup\"";
+    Assert.Contains(selector, outText);
 
     var line = Assert.Single(Lines(outText));
     Assert.True(line.TryGetProperty("ts", out _));
