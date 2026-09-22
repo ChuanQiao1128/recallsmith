@@ -20,8 +20,10 @@ variable "tags" {
 }
 
 variable "alert_email" {
-  type      = string
-  sensitive = true
+  # Not marked sensitive at the module boundary on purpose: the budget subscriber is an
+  # adopted, non-sensitive attribute, and re-marking it sensitive would show a spurious
+  # notification diff on every import/plan. The root variable stays sensitive (never printed).
+  type = string
 }
 
 variable "region" { type = string }

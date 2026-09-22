@@ -1,3 +1,10 @@
+locals {
+  # The budget subscriber and SNS endpoint are given the plain alert address; the root
+  # variable stays sensitive (never printed). Passing the value unmarked keeps the adopted
+  # budget's notification blocks a no-op on import instead of a spurious sensitivity re-mark.
+  alert_email = var.alert_email
+}
+
 module "identity" {
   source = "../../modules/identity"
 
@@ -81,7 +88,7 @@ module "observability" {
   budget_name  = "My Monthly Cost Budget"
   budget_limit = "60"
 
-  alert_email            = var.alert_email
+  alert_email            = nonsensitive(local.alert_email)
   region                 = var.region
   api_id                 = module.api.api_id
   api_name               = "developercards-api"
