@@ -451,6 +451,10 @@ frozen="$(git diff --numstat "$mb" HEAD -- \
   src_C/Vpc/Db/Migrate.cs src_C/Vpc/Runtime src_C/Vpc/Analytics src_C/Vpc/Webhooks src_C/Vpc/Db/Migrations/0[0-2][0-9]_*.sql \
   src_C/Common frontend .github README.md)"
 frozen="$(printf '%s\n' "$frozen" | grep -v 'src_C/Vpc/Db/Migrations/021_decks_live_build_id.sql' || true)"
+# 2026-09-22 widening (same as 5b): RouteMetrics.cs sits under the frozen Common directory, but the
+# two new routes must be registered there or RouteMetricsTests fails the src_C gate. The numstat
+# guard below 5b bounds the change to <= 4 added / 0 removed lines naming those two routes.
+frozen="$(printf '%s\n' "$frozen" | grep -v 'src_C/Shared/RecallSmith\.Lambda\.Common/RouteMetrics\.cs' || true)"
 [ -z "$frozen" ] || { echo "$frozen" >&2; fail "frozen/out-of-scope file modified"; }
 git diff --quiet "$mb" HEAD -- src_C/Tests ":(exclude)$T_WORKER" ":(exclude)$T_BUILDER" ":(exclude)$T_ROLLBACK" ":(exclude)$T_REAPER" \
   || fail "an existing test file changed — E03 is add-only on tests (E00 §1.2)"
