@@ -209,28 +209,56 @@ Markdown 导入器：**词法宽松、载荷严格**——`OPT: a *`、`WHY:`、
 
 ---
 
-## §8 简历写法（2026-09-23 修订：第 1 条改为项目描述行；补入 Snowflake 数据链路）
+## §8 简历（按项目完成态写；发出前先对 §8.4 的解锁条件）
 
-### 中文
+写法纪律：第 1 行是项目描述（是什么 + 技术栈 + 上架），bullet 全部是可追问的技术成果；每条 = 做了什么 + 怎么做的 + 可验证的结果。
 
-> **DeveloperCards** — 独立开发的 iOS 备考应用（App Store 在架）· React Native/Expo (TypeScript)、React、C#/.NET 8、PostgreSQL、AWS（Lambda / API Gateway / SQS / RDS / S3+CloudFront / Cognito）、Snowflake、Terraform · 产品、三端代码、数据与基础设施均由本人完成
+### 8.1 中文
 
-1. **设计并实现离线优先的内容与进度链路**：卡组以不可变构建发布，支持**分块下载、delta 补丁与逐块 sha256 校验**；离线评分经**事务型 outbox** 以单条语句入库；新增字段保持**导出字节级向后兼容**（黄金测试钉住），老版本客户端无需升级即可接收新内容。线上内容从 235 张扩展到 **893 张（含 307 道带解析的选择题）**，新卡型复用既有调度模型、未引入第二套排期。
-2. **搭建行为数据链路并用于内容质量评估**：业务写与分析写在同一事务内落 outbox，异步排空为 S3 JSONL，经 Snowpipe 进入 Snowflake，staging/marts 按**作答形式分区**计算每张卡的失败率与停留时长基线，将卡片标记为"有挑战性"或"可能表述不清"并回写控制台；全链路已端到端验证，定时调度为下一步。
-3. **把 click-ops 的生产环境纳入 Terraform**（一次性导入 93 个线上资源、AWS 侧零变更），并补齐生产级基线：SQS 死信队列与重投、12 条 CloudWatch 告警 + SNS、CloudTrail、RDS 删除保护与 14 天备份、拆分执行角色并移除 4 个 `*FullAccess`；同期清理闲置资源使月度成本下降约 12%。
-4. **用自建的多 agent 交付流水线提高吞吐，并用门禁保证质量**：每个 issue 带契约与验收脚本，三层门禁（静态扫描、按模块测试、逐 issue 验收）+ 对抗式审查；该流程在合并前拦下一个会重复发放游戏内货币的并发缺陷，并促成一处未验签 JWT 鉴权漏洞的修复（生产验证伪造管理员令牌返回 401）。一个发布周期内交付 **85 个合并 PR、1 次二进制审核与 4 次 OTA 热更新**。
+> **DeveloperCards** — 独立开发的 iOS 备考应用（App Store 在架）· React Native/Expo (TypeScript)、React、C#/.NET 8、PostgreSQL、AWS（Lambda / API Gateway / SQS / RDS / S3+CloudFront / Cognito / EventBridge）、Snowflake、Terraform、GitHub Actions · 产品、三端代码、数据平台与基础设施均由本人完成
 
-### English
+1. **设计并实现离线优先的内容与进度链路**：卡组以不可变构建发布，支持分块下载、delta 补丁与逐块 sha256 校验；离线评分经事务型 outbox 以单条语句入库、跨设备 LWW 合并；新增字段保持**导出字节级向后兼容**（黄金测试钉住），老版本客户端无需升级即可接收新内容。线上内容从 235 张扩展到 **893 张（含 307 道带解析的选择题）**，新卡型通过一张判定映射表复用既有间隔重复模型，**未引入第二套排期算法或新的进度字段**。
 
-> **DeveloperCards** — Independent iOS exam-prep app, live on the App Store · React Native/Expo (TypeScript), React, C#/.NET 8, PostgreSQL, AWS (Lambda, API Gateway, SQS, RDS, S3+CloudFront, Cognito), Snowflake, Terraform · sole engineer across product, three clients, data and infrastructure
+2. **构建并加固 .NET 8 serverless 后端**：发布流水线（API → SQS → Worker → S3/CloudFront）具备死信队列与重投、幂等任务接管、孤儿任务定时清理，以及**按指针回滚**的卡组版本；安全侧在 Lambda 内完成 Cognito JWT 验签（JWKS / issuer / 过期 / 令牌类型）并叠加网关授权器，密钥托管于 SSM 并在部署时注入，执行角色按桶、前缀与队列最小化（移除 4 个 `*FullAccess` 托管策略）；**12 条 CloudWatch 告警 + SNS 通知**覆盖 5xx、限流、队列积压、死信与数据库水位。
 
-1. Designed and built the offline-first content and progress pipeline: immutable deck builds with chunked download, delta patches and per-chunk SHA-256 verification; offline reviews reconciled through a transactional outbox and single-statement ingest; new fields keep exports byte-identical for older clients (pinned by golden tests). Grew live content from 235 to 893 cards, including 307 explained multiple-choice items, reusing the existing scheduling model instead of adding a second one.
-2. Built the behavioural-analytics path used to score content quality: business and analytics writes share one transaction via an outbox, drained asynchronously to S3 JSONL, ingested by Snowpipe into Snowflake, where staging/mart models compute per-card failure-rate and dwell-time baselines partitioned by answer mode and flag cards as "productively challenging" or "possibly unclear" back in the console; validated end to end, scheduled ingestion is the next step.
-3. Brought a click-ops production environment under Terraform (93 live resources adopted with zero AWS-side change) and closed the production-readiness gaps: SQS dead-letter queue with redrive, 12 CloudWatch alarms with SNS, CloudTrail, RDS deletion protection and 14-day backups, split execution roles replacing four `*FullAccess` policies; retiring idle resources cut the monthly bill by ~12%.
-4. Ran delivery through a self-built multi-agent pipeline — per-issue contracts, acceptance scripts, three gate layers and adversarial review — which caught a concurrency defect that would have double-granted in-app currency and drove the fix for an unverified-JWT auth path (forged admin tokens now rejected in production); 85 merged PRs, one binary review and four OTA releases in a single cycle.
+3. **搭建行为数据平台并用于内容质量评估**：业务写与分析写在同一事务内落 outbox，**每 15 分钟**增量排空为 S3 JSONL，经 Snowpipe 进入 Snowflake，staging/marts 按作答形式分区计算每张卡的失败率与停留时长基线，将卡片标记为"有挑战性"或"可能表述不清"并回写作者控制台，形成内容迭代闭环。
 
-### 口径说明
-- 第 1 条的"235 → 893"和"307 道选择题"可由线上 manifest 验证；"字节级向后兼容"有黄金测试。
-- 第 2 条**不说"生产运行中"**：管道已实现并端到端验证，但目前没有定时触发器。补上 EventBridge 定时（约 1 小时工作量）后，把"定时调度为下一步"换成"每 15 分钟增量入库"。
-- 第 3 条的"约 12%"= 删除无流量的旧 Lambda 版本、预置并发、陈旧密钥后，月账单从 ≈$42 降到 ≈$37；被追问时给这个明细。
-- 第 4 条的两个缺陷都有提交记录和复现测试。
+4. **建立全自动交付链路**：用 Terraform 将原本手工创建的生产环境全量纳管（**一次性导入 93 个线上资源、AWS 侧零变更**），并搭建 GitHub Actions CI/CD——OIDC 免长期密钥、先部署 staging 跑冒烟、人工审批后发布生产（发布版本 + 切换别名，冒烟失败自动回滚），数据库迁移与 OTA 热更新纳入同一流水线；日常开发由自建的多 agent 流水线驱动（逐 issue 契约 + 验收脚本 + 三层门禁 + 对抗式审查），该机制在合并前拦下一个会重复发放游戏内货币的并发缺陷，并促成一处未验签 JWT 鉴权漏洞的修复。
+
+### 8.2 English
+
+> **DeveloperCards** — Independent iOS exam-prep app, live on the App Store · React Native/Expo (TypeScript), React, C#/.NET 8, PostgreSQL, AWS (Lambda, API Gateway, SQS, RDS, S3+CloudFront, Cognito, EventBridge), Snowflake, Terraform, GitHub Actions · sole engineer across product, three clients, data platform and infrastructure
+
+1. Designed and built the offline-first content and progress pipeline: decks ship as immutable builds with chunked download, delta patches and per-chunk SHA-256 verification; offline reviews reconcile through a transactional outbox with single-statement ingest and last-write-wins merge across devices; new fields keep exports byte-identical for older clients (pinned by golden tests). Grew live content from 235 to 893 cards, including 307 explained multiple-choice items, mapping the new card type onto the existing spaced-repetition model rather than adding a second scheduler or new progress state.
+
+2. Built and hardened the .NET 8 serverless backend: the publish pipeline (API → SQS → worker → S3/CloudFront) has a dead-letter queue with redrive, idempotent job take-over, a scheduled reaper for orphaned jobs and pointer-based deck rollback; Cognito JWTs are verified inside the Lambda (JWKS, issuer, expiry, token use) behind gateway authorizers, secrets live in SSM and are injected at deploy time, and execution roles are scoped per bucket, prefix and queue (four `*FullAccess` managed policies removed); 12 CloudWatch alarms with SNS notification cover 5xx, throttling, queue backlog, dead letters and database headroom.
+
+3. Built the behavioural-analytics platform that scores content quality: business and analytics writes share one transaction through an outbox, drained incrementally every 15 minutes to S3 JSONL, ingested by Snowpipe into Snowflake, where staging and mart models compute per-card failure-rate and dwell-time baselines partitioned by answer mode and flag cards as "productively challenging" or "possibly unclear" back in the authoring console, closing the content-iteration loop.
+
+4. Established fully automated delivery: adopted a hand-built production environment into Terraform (93 live resources imported in one pass with zero AWS-side change) and built a GitHub Actions CI/CD pipeline — keyless OIDC, deploy to staging, smoke test, manual approval, then production (publish version, move alias, automatic rollback on smoke failure), with database migrations and OTA updates in the same pipeline; day-to-day development runs through a self-built multi-agent pipeline (per-issue contracts, acceptance scripts, three gate layers, adversarial review) that caught a concurrency defect which would have double-granted in-app currency and drove the fix for an unverified-JWT auth path.
+
+### 8.3 每条的证据（被追问时给这些）
+
+| 条 | 可验证的证据 |
+|---|---|
+| 1 | 线上 manifest（3 个卡组 893 张）；`ContentSerializationContractTests` 黄金字节测试；`mcqVerdict` 的 fast-check 不变量；`chunkedInstall.ts` 的分块 + sha256 + 断点续传 |
+| 2 | SQS `RedrivePolicy` + DLQ；`decks.live_build_id` 回滚指针；`JwtVerifier.cs` + 66 个鉴权测试（生产实测伪造 super_admin → 401）；`aws cloudwatch describe-alarms` 12 条 |
+| 3 | `ProgressEvents.cs` 的单语句 outbox CTE；`snowflake/001_content_intelligence_setup.sql`；控制台 Content Intelligence 页 |
+| 4 | `infra/envs/prod/imports.tf`（93 个 import 块）+ apply 记录 `93 imported, 0 added, 0 destroyed`；`.github/workflows/`；`docs/delivery/r16-issues/`（每个 issue 的契约与验收脚本）；两个缺陷各有复现测试与提交 |
+
+### 8.4 发出前的解锁条件（2026-09-23 状态）
+
+| 条 | 已成立 | 仍需补 | 工作量 |
+|---|---|---|---|
+| 1 | 全部 | — | — |
+| 2 | DLQ / 回滚指针 / JWT 验签 / IAM 最小化 / 12 条告警 | 密钥进 SSM（E06，代码已完成待合）；网关授权器（E08） | ≈ 0.5 天 |
+| 3 | outbox / S3 / Snowflake SQL / 控制台回写 | "每 15 分钟" 依赖 EventBridge 定时（E12） | ≈ 1 小时 |
+| 4 | Terraform 93 资源 / agent 流水线 / 两个缺陷 | GitHub Actions CD 与 staging（E10、E11） | ≈ 1.5 天 |
+
+优先级：E12（解锁第 3 条的频率）→ E06（第 2 条的密钥）→ E10/E11（第 4 条的 CD）→ E08（第 2 条的授权器）。在这些合并并 apply 之前，若要提前投递，把对应措辞降级为"设计并实现，待接入定时/流水线"。
+
+### 8.5 数字口径
+- 893 = 81（C#）+ 371（AWS SAA-C03）+ 441（Claude CCDV-F）；307 道选择题 = 165 + 142。
+- 235 → 893 的起点是 1.5.0 时期的两个卡组（81 + 154）。
+- 93 个资源 = Lambda 与别名、IAM、API Gateway 路由/集成/授权器、SQS、RDS 与子网组、4 个 S3 桶及其子资源、2 个 CloudFront 分发与 OAC、2 个 Cognito 用户池、Route 53 托管区、日志组。
+- 12 条告警名称前缀 `developercards-prod-`，可在 CloudWatch 直接看到。
