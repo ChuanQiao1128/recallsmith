@@ -343,7 +343,14 @@ for rc in plan.get("resource_changes") or []:
         print("unexpected import in a real-backend plan:", rc["address"]); sys.exit(1)
 for a in sorted(eff):
     print("  %s  %s" % (a, eff[a]))
-outs = sorted((plan.get("output_changes") or {}).keys())
+# 2026-09-23 fix: Terraform emits an output_changes entry for EVERY root output, almost all of them
+# ["no-op"], so listing the keys made this check unsatisfiable (three worker runs failed on it while
+# the supervisor's plan of the same commit was clean). Count only outputs whose action is not no-op
+# AND whose value actually differs — a stale state read under -lock=false shows up as neither.
+outs = sorted(
+    name for name, oc in (plan.get("output_changes") or {}).items()
+    if (oc.get("actions") or []) != ["no-op"] and oc.get("before") != oc.get("after")
+)
 ok = eff == expected and not outs
 if not ok:
     print("expected exactly:", sorted(expected)); print("outputs changed:", outs)
