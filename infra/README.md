@@ -101,3 +101,4 @@ After merge, the supervisor (never a worker):
 - 2026-09-22 E01 — adopted 93 resources (imports only); plan = 93 imports + 1 provider-side RDS update; no AWS change.
 - 2026-09-22 E02 — safety switches: RDS deletion protection + 14-day backups, S3 versioning + noncurrent-90d lifecycle, log retention 90/30 d, multi-region CloudTrail into a locked bucket, budget $60, provider default_tags; devcards-content-dev: deletion pending owner OK (E00 §6 #15).
 - 2026-09-2x E03: DLQ developercards-publish-jobs-dlq (14 d) + redrive 3, publish queue visibility 3700 s, ESM → worker-lambda:prod with ReportBatchItemFailures and window 0; outputs publish_dlq_arn/publish_dlq_name.
+- 2026-09-22 E04: SNS developercards-alerts (+email, policy), 12 alarms, RDS event subscription, API access log /aws/apigateway/developercards-api (30 d) + detailed metrics on both stages, dashboard developercards-prod; code: JSON Log lines, Log.Event, EMF namespace DeveloperCards, EmitGauge OutboxPending.

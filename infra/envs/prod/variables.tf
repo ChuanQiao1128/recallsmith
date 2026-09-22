@@ -53,3 +53,8 @@ variable "snowflake_external_id" {
   sensitive = true
   default   = null
 }
+
+variable "alert_email" {
+  type      = string
+  sensitive = true
+}

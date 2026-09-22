@@ -45,3 +45,5 @@ output "console_pool_endpoint" {
 output "mobile_pool_endpoint" {
   value = module.identity.mobile_pool_endpoint
 }
+
+output "alerts_topic_arn" { value = module.observability.alerts_topic_arn }

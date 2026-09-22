@@ -57,6 +57,8 @@ module "api" {
   console_pool_endpoint     = module.identity.console_pool_endpoint
   console_client_id         = module.identity.console_client_id
   cors_allowed_origins      = var.cors_allowed_origins
+
+  access_log_destination_arn = module.observability.api_access_log_group_arn
 }
 
 module "worker" {
@@ -78,4 +80,15 @@ module "observability" {
   account_id   = var.account_id
   budget_name  = "My Monthly Cost Budget"
   budget_limit = "60"
+
+  alert_email            = var.alert_email
+  region                 = var.region
+  api_id                 = module.api.api_id
+  api_name               = "developercards-api"
+  api_stage_name         = "$default"
+  core_vpc_function_name = "core-vpc"
+  worker_function_name   = "worker-lambda"
+  publish_queue_name     = "recallsmith-publish-jobs"
+  publish_dlq_name       = module.worker.publish_dlq_name
+  db_identifier          = "developercards"
 }
