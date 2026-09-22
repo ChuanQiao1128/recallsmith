@@ -1,6 +1,6 @@
 resource "aws_cloudwatch_log_group" "worker" {
   name              = local.log_group_name
-  retention_in_days = 0
+  retention_in_days = 30
 }
 
 resource "aws_lambda_function" "worker" {

@@ -1,0 +1,22 @@
+{
+  "tags_only_updates": true,
+  "outputs": ["api_id", "api_endpoint", "content_distribution_id", "content_domain_name", "console_distribution_id", "console_domain_name", "core_vpc_alias_arn", "worker_alias_arn", "queue_url", "db_address", "console_pool_endpoint", "mobile_pool_endpoint"],
+  "changes": {
+    "module.data.aws_db_instance.developercards": { "action": "update", "keys": ["deletion_protection", "backup_retention_period", "tags", "tags_all", "apply_immediately", "skip_final_snapshot", "final_snapshot_identifier"] },
+    "module.data.aws_s3_bucket_versioning.content": { "action": "update", "keys": ["versioning_configuration"] },
+    "module.data.aws_s3_bucket_versioning.premium": { "action": "update", "keys": ["versioning_configuration"] },
+    "module.data.aws_s3_bucket_lifecycle_configuration.content": "create",
+    "module.data.aws_s3_bucket_lifecycle_configuration.premium": "create",
+    "module.api.aws_cloudwatch_log_group.core_vpc": { "action": "update", "keys": ["retention_in_days", "tags", "tags_all"] },
+    "module.api.aws_cloudwatch_log_group.edge_public": { "action": "update", "keys": ["retention_in_days", "tags", "tags_all"] },
+    "module.worker.aws_cloudwatch_log_group.worker": { "action": "update", "keys": ["retention_in_days", "tags", "tags_all"] },
+    "module.observability.aws_budgets_budget.monthly": { "action": "update", "keys": ["limit_amount", "tags", "tags_all"] },
+    "module.observability.aws_s3_bucket.cloudtrail": "create",
+    "module.observability.aws_s3_bucket_public_access_block.cloudtrail": "create",
+    "module.observability.aws_s3_bucket_ownership_controls.cloudtrail": "create",
+    "module.observability.aws_s3_bucket_server_side_encryption_configuration.cloudtrail": "create",
+    "module.observability.aws_s3_bucket_lifecycle_configuration.cloudtrail": "create",
+    "module.observability.aws_s3_bucket_policy.cloudtrail": "create",
+    "module.observability.aws_cloudtrail.management": "create"
+  }
+}

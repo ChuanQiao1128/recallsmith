@@ -77,5 +77,5 @@ module "observability" {
   env          = "prod"
   account_id   = var.account_id
   budget_name  = "My Monthly Cost Budget"
-  budget_limit = "20"
+  budget_limit = "60"
 }

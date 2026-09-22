@@ -99,3 +99,4 @@ After merge, the supervisor (never a worker):
 ## 6. Change log
 
 - 2026-09-22 E01 — adopted 93 resources (imports only); plan = 93 imports + 1 provider-side RDS update; no AWS change.
+- 2026-09-22 E02 — safety switches: RDS deletion protection + 14-day backups, S3 versioning + noncurrent-90d lifecycle, log retention 90/30 d, multi-region CloudTrail into a locked bucket, budget $60, provider default_tags; devcards-content-dev: deletion pending owner OK (E00 §6 #15).
