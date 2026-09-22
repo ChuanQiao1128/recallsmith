@@ -6,26 +6,6 @@ import {
   id = "core-vpc-role-joizyiwt"
 }
 import {
-  to = module.identity.aws_iam_role_policy_attachment.core_vpc["sqs_exec"]
-  id = "core-vpc-role-joizyiwt/arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole"
-}
-import {
-  to = module.identity.aws_iam_role_policy_attachment.core_vpc["ec2_full"]
-  id = "core-vpc-role-joizyiwt/arn:aws:iam::aws:policy/AmazonEC2FullAccess"
-}
-import {
-  to = module.identity.aws_iam_role_policy_attachment.core_vpc["rds_full"]
-  id = "core-vpc-role-joizyiwt/arn:aws:iam::aws:policy/AmazonRDSFullAccess"
-}
-import {
-  to = module.identity.aws_iam_role_policy_attachment.core_vpc["sqs_full"]
-  id = "core-vpc-role-joizyiwt/arn:aws:iam::aws:policy/AmazonSQSFullAccess"
-}
-import {
-  to = module.identity.aws_iam_role_policy_attachment.core_vpc["s3_full"]
-  id = "core-vpc-role-joizyiwt/arn:aws:iam::aws:policy/AmazonS3FullAccess"
-}
-import {
   to = module.identity.aws_iam_role_policy_attachment.core_vpc["logs"]
   id = "core-vpc-role-joizyiwt/arn:aws:iam::622994489535:policy/service-role/AWSLambdaBasicExecutionRole-033fad1a-ba7b-4152-ba28-7cf61f0c3423"
 }
@@ -68,10 +48,6 @@ import {
 import {
   to = module.identity.aws_iam_role_policy_attachment.snowflake["read"]
   id = "snowflake-recallsmith-s3-role/arn:aws:iam::622994489535:policy/snowflake-recallsmith-s3-read"
-}
-import {
-  to = module.identity.aws_iam_role_policy_attachment.snowflake["s3_full"]
-  id = "snowflake-recallsmith-s3-role/arn:aws:iam::aws:policy/AmazonS3FullAccess"
 }
 import {
   to = module.identity.aws_iam_role.rds_monitoring

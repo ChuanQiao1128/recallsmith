@@ -40,3 +40,27 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "worker_role_name" {
+  type = string
+} # prod "developercards-worker-lambda-role"
+
+variable "content_bucket_name" {
+  type = string
+} # prod "core-vpc"
+
+variable "premium_bucket_name" {
+  type = string
+} # prod "core-vpc-premium"
+
+variable "publish_queue_name" {
+  type = string
+} # prod "recallsmith-publish-jobs"
+
+variable "core_vpc_function_name" {
+  type = string
+} # prod "core-vpc"
+
+variable "worker_function_name" {
+  type = string
+} # prod "worker-lambda"
