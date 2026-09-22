@@ -66,11 +66,11 @@ public class CardsAuthoringMcqTests
     });
   }
 
-  private static Task<APIGatewayProxyResponse> InvokeAsync(string method, object? body, IDictionary<string, string>? query = null)
+  private static async Task<APIGatewayProxyResponse> InvokeAsync(string method, object? body, IDictionary<string, string>? query = null)
   {
     var req = new LambdaRequest(Event(method, NewSub(), ["super_admin"], body, query));
     var res = new Res(req.TraceId);
-    return Cards.HandleAuthoringCards(req, res, Auth.GetAuthContext(req));
+    return await Cards.HandleAuthoringCards(req, res, await Auth.GetAuthContextAsync(req));
   }
 
   private static JsonElement Data(APIGatewayProxyResponse response) =>

@@ -91,7 +91,7 @@ public class ContentIntelligenceMcqTests
   {
     var req = new LambdaRequest(Event("/api/v1/authoring/content-intelligence", sub, groups, query));
     var res = new Res(req.TraceId);
-    var response = await ContentIntelligence.HandleContentIntelligence(req, res, Auth.GetAuthContext(req));
+    var response = await ContentIntelligence.HandleContentIntelligence(req, res, await Auth.GetAuthContextAsync(req));
     Assert.True(response.StatusCode == 200, $"GET content-intelligence returned {response.StatusCode}: {response.Body}");
     using var doc = JsonDocument.Parse(response.Body!);
     return doc.RootElement.GetProperty("data").Clone();

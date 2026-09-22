@@ -160,7 +160,7 @@ public class PublishMcqGateTests
     var req = new LambdaRequest(Event("POST", "/api/v1/authoring/publish", "it-c09gate-super", ["super_admin"], query, body));
     var res = new Res(req.TraceId);
 
-    var response = await Publish.HandleAuthoringPublish(req, res, Auth.GetAuthContext(req));
+    var response = await Publish.HandleAuthoringPublish(req, res, await Auth.GetAuthContextAsync(req));
     var data = Data(response);
 
     var cards = data.GetProperty("export").GetProperty("cards").EnumerateArray().ToList();
@@ -193,7 +193,7 @@ public class PublishMcqGateTests
     var req = new LambdaRequest(Event("GET", "/api/v1/authoring/cards/page", "it-c09gate-super", ["super_admin"], query, null));
     var res = new Res(req.TraceId);
 
-    var response = await CardsPage.HandleAuthoringCardsPage(req, res, Auth.GetAuthContext(req));
+    var response = await CardsPage.HandleAuthoringCardsPage(req, res, await Auth.GetAuthContextAsync(req));
     var data = Data(response);
 
     var items = data.GetProperty("items").EnumerateArray().ToList();

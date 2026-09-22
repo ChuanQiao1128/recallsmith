@@ -14,6 +14,10 @@ public sealed class PublicFunction
   {
     // SnapStart runtime hooks must be registered during init (before snapshot).
     SnapStartHooks.RegisterOnce();
+
+    // Same as core-vpc: read the bearer-verification policy in INIT so its dev-mode warning,
+    // if any, leads the log stream. Never throws.
+    try { Auth.EnsureConfigured(); } catch (Exception ex) { Log.Error("auth config:", ex.Message); }
   }
 
   public async Task<APIGatewayProxyResponse> Handler(JsonElement evt)
@@ -39,7 +43,7 @@ public sealed class PublicFunction
     AuthContext auth;
     try
     {
-      auth = Auth.GetAuthContext(req);
+      auth = await Auth.GetAuthContextAsync(req);
     }
     catch
     {

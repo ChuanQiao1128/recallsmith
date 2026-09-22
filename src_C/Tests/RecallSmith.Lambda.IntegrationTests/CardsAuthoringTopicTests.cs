@@ -65,14 +65,14 @@ public class CardsAuthoringTopicTests
     });
   }
 
-  private static Task<APIGatewayProxyResponse> CardsAsync(string method, IDictionary<string, string>? query, string? body)
+  private static async Task<APIGatewayProxyResponse> CardsAsync(string method, IDictionary<string, string>? query, string? body)
   {
     var req = new LambdaRequest(Event(method, CardsPath, NewSub(), ["super_admin"], query, body));
     var res = new Res(req.TraceId);
-    return Cards.HandleAuthoringCards(req, res, Auth.GetAuthContext(req));
+    return await Cards.HandleAuthoringCards(req, res, await Auth.GetAuthContextAsync(req));
   }
 
-  private static Task<APIGatewayProxyResponse> PageAsync(long deckId)
+  private static async Task<APIGatewayProxyResponse> PageAsync(long deckId)
   {
     var query = new Dictionary<string, string>(StringComparer.Ordinal)
     {
@@ -81,16 +81,16 @@ public class CardsAuthoringTopicTests
     };
     var req = new LambdaRequest(Event("GET", PagePath, NewSub(), ["super_admin"], query, null));
     var res = new Res(req.TraceId);
-    return CardsPage.HandleAuthoringCardsPage(req, res, Auth.GetAuthContext(req));
+    return await CardsPage.HandleAuthoringCardsPage(req, res, await Auth.GetAuthContextAsync(req));
   }
 
-  private static Task<APIGatewayProxyResponse> PreviewAsync(long deckId)
+  private static async Task<APIGatewayProxyResponse> PreviewAsync(long deckId)
   {
     var query = new Dictionary<string, string>(StringComparer.Ordinal) { ["mode"] = "preview" };
     var body = JsonSerializer.Serialize(new { deckId });
     var req = new LambdaRequest(Event("POST", PublishPath, NewSub(), ["super_admin"], query, body));
     var res = new Res(req.TraceId);
-    return Publish.HandleAuthoringPublish(req, res, Auth.GetAuthContext(req));
+    return await Publish.HandleAuthoringPublish(req, res, await Auth.GetAuthContextAsync(req));
   }
 
   private static JsonElement Data(APIGatewayProxyResponse response) =>
