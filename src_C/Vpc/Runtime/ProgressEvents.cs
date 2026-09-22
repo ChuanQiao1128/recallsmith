@@ -44,6 +44,13 @@ public static class ProgressEvents
   // client from writing a rung that no scheduler can interpret.
   private const int MaxSrsStage = 6;
 
+  // Per-event caps (E07). Columns are unbounded text, so the bound lives here.
+  private const int MaxIdentifierLength = 128;   // deckSlug, stableUid
+  private const int MaxShortStringLength = 64;   // sessionId, reviewStage, schedulerVersion; batch-level deviceId/clientVersion/clientPlatform are clamped to it
+
+  /// <summary>One submitted event the ingest refused. EventId is null when the event carried no usable id (NOT_OBJECT, BAD_EVENT_ID).</summary>
+  private sealed record RejectedEvent(int Index, string? EventId, string Code);
+
   // Upper bound on how far ahead one review may schedule the next one.
   //
   // The ladder in mobile/src/review/model.ts (INTERVALS_DAYS) tops out at 60
@@ -67,7 +74,7 @@ public static class ProgressEvents
   // Stopwatch is a monotonic tick counter, so it cannot go backwards the way a
   // wall clock can, and reading it is a few nanoseconds against the milliseconds
   // being measured, which keeps the instrument off the scale it measures.
-  private const string ProgressEventsImpl = "progressEvents-v1";
+  private const string ProgressEventsImpl = "progressEvents-v2";
 
   public static async Task<APIGatewayProxyResponse> HandleProgressEvents(LambdaRequest req, Res res, AuthContext auth)
   {
@@ -95,6 +102,11 @@ public static class ProgressEvents
       var deviceId = body.TryGetProperty("deviceId", out var d) ? d.ToString().Trim() : null;
       var clientVersion = body.TryGetProperty("clientVersion", out var cv) ? cv.ToString().Trim() : null;
       var clientPlatform = body.TryGetProperty("clientPlatform", out var cp) ? cp.ToString().Trim() : null;
+      // Batch-level metadata the frozen client cannot shorten: clamp rather than reject, so one
+      // long value never wedges a whole batch.
+      if (deviceId?.Length > MaxShortStringLength) deviceId = deviceId[..MaxShortStringLength];
+      if (clientVersion?.Length > MaxShortStringLength) clientVersion = clientVersion[..MaxShortStringLength];
+      if (clientPlatform?.Length > MaxShortStringLength) clientPlatform = clientPlatform[..MaxShortStringLength];
       var clientFeatures = ReadClientFeatures(body); // JSON array text such as ["mcq"], or null
       var updateId = ReadUpdateId(body);             // trimmed, or null
 
@@ -114,24 +126,40 @@ public static class ProgressEvents
       var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
       var normalized = new List<NormalizedEvent>();
+      var rejected = new List<RejectedEvent>();
       for (var i = 0; i < events.Count; i++)
       {
         var e = events[i];
         if (e.ValueKind != JsonValueKind.Object)
         {
-          throw new ValidationError($"events[{i}] must be an object", $"events[{i}]");
+          rejected.Add(new RejectedEvent(i, null, "NOT_OBJECT"));
+          continue;
         }
 
-        var eventId = RequireString(e, "eventId", $"events[{i}].eventId");
-        if (!UuidRegex.IsMatch(eventId))
+        var eventId = OptionalString(e.TryGetProperty("eventId", out var eid) ? eid : (JsonElement?)null);
+        if (eventId is null || !UuidRegex.IsMatch(eventId))
         {
-          throw new ValidationError($"events[{i}].eventId must be a UUID", $"events[{i}].eventId");
+          // A non-UUID string is never echoed back, so the id stays null here.
+          rejected.Add(new RejectedEvent(i, null, "BAD_EVENT_ID"));
+          continue;
         }
 
-        var deckSlug = RequireString(e, "deckSlug", $"events[{i}].deckSlug");
-        var stableUid = RequireString(e, "stableUid", $"events[{i}].stableUid");
+        var deckSlug = OptionalString(e.TryGetProperty("deckSlug", out var dsl) ? dsl : (JsonElement?)null);
+        var stableUid = OptionalString(e.TryGetProperty("stableUid", out var suid) ? suid : (JsonElement?)null);
+        if (deckSlug is null || stableUid is null)
+        {
+          rejected.Add(new RejectedEvent(i, eventId, "MISSING_FIELD"));
+          continue;
+        }
+
+        if (deckSlug.Length > MaxIdentifierLength || stableUid.Length > MaxIdentifierLength)
+        {
+          rejected.Add(new RejectedEvent(i, eventId, "TOO_LONG"));
+          continue;
+        }
 
         var rating = OptionalInt(e.TryGetProperty("rating", out var r) ? r : (JsonElement?)null);
+        if (rating is < 1 or > 4) rating = null;
 
         // eventTimeMs / reviewedAtMs compatibility
         var eventTimeMs =
@@ -139,7 +167,13 @@ public static class ProgressEvents
           OptionalMs(e.TryGetProperty("reviewedAtMs", out var ram) ? ram : (JsonElement?)null) ??
           nowMs;
 
-        if (eventTimeMs <= 0) throw new ValidationError($"events[{i}].eventTimeMs invalid", $"events[{i}].eventTimeMs");
+        // Defensive: OptionalMs already maps non-positive numbers to the nowMs fallback, so no
+        // test can reach this — the guard stays anyway.
+        if (eventTimeMs <= 0)
+        {
+          rejected.Add(new RejectedEvent(i, eventId, "BAD_EVENT_TIME"));
+          continue;
+        }
 
         // Upper bound on a client-supplied clock. greatest() is monotonic and
         // has no undo path; a device with a 2030 clock would permanently poison
@@ -218,6 +252,12 @@ public static class ProgressEvents
         // so this is provenance for the day the ladder changes shape.
         var schedulerVersion = OptionalString(e.TryGetProperty("schedulerVersion", out var scv) ? scv : (JsonElement?)null);
 
+        if (sessionId?.Length > MaxShortStringLength || reviewStage?.Length > MaxShortStringLength || schedulerVersion?.Length > MaxShortStringLength)
+        {
+          rejected.Add(new RejectedEvent(i, eventId, "TOO_LONG"));
+          continue;
+        }
+
         normalized.Add(new NormalizedEvent(
           EventId: eventId,
           DeckSlug: deckSlug,
@@ -238,6 +278,28 @@ public static class ProgressEvents
           StatedDifficulty: statedDifficulty,
           SrsStage: srsStage,
           SchedulerVersion: schedulerVersion));
+      }
+
+      // The frozen client (progressSync.ts) only drops acceptedEventIds ∪ duplicateEventIds, so
+      // every valid-UUID id we refuse must still be acked through duplicateEventIds or its queue
+      // wedges. Ids that never parsed to a UUID (NOT_OBJECT, BAD_EVENT_ID) carry no id to ack.
+      var rejectedEventIds = rejected.Where(r => r.EventId is not null).Select(r => r.EventId!).Distinct(StringComparer.Ordinal).ToList();
+      if (rejected.Count > 0)
+      {
+        Log.Event("warn", new { tag = "progress-events", traceId = req.TraceId, impl = ProgressEventsImpl, step = "ingest_rejected", receivedCount = events.Count, rejectedCount = rejected.Count, codes = rejected.Select(r => r.Code).Distinct().ToList() });
+      }
+      if (normalized.Count == 0)
+      {
+        return res.Ok(new
+        {
+          serverTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+          receivedCount = events.Count,
+          acceptedCount = 0,
+          acceptedEventIds = new List<string>(),
+          duplicateEventIds = rejectedEventIds,
+          rejectedEventIds,
+          rejected,
+        });
       }
 
       // Parse phase ends here: JSON decode plus per-event validation and
@@ -644,7 +706,7 @@ public static class ProgressEvents
         : [];
 
       var acceptedSet = new HashSet<string>(insertedIds, StringComparer.Ordinal);
-      var duplicateEventIds = allEventIds.Where(id => !acceptedSet.Contains(id)).ToList();
+      var duplicateEventIds = allEventIds.Where(id => !acceptedSet.Contains(id)).Concat(rejectedEventIds).Distinct(StringComparer.Ordinal).ToList();
 
       // One line, emitted only on the success path, so the numbers all
       // describe the same complete ingest. total_ms stops before response
@@ -669,10 +731,12 @@ public static class ProgressEvents
       return res.Ok(new
       {
         serverTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        receivedCount = allEventIds.Count,
+        receivedCount = events.Count,
         acceptedCount = insertedIds.Count,
         acceptedEventIds = insertedIds,
         duplicateEventIds,
+        rejectedEventIds,
+        rejected,
       });
     }
     catch (Exception ex) when (ex is ValidationError)
@@ -715,18 +779,6 @@ public static class ProgressEvents
     if (!body.TryGetProperty("updateId", out var el) || el.ValueKind != JsonValueKind.String) return null;
     var id = (el.GetString() ?? "").Trim();
     return id.Length > 0 && id.Length <= MaxUpdateIdLength ? id : null;
-  }
-
-  private static string RequireString(JsonElement obj, string prop, string fieldName)
-  {
-    if (!obj.TryGetProperty(prop, out var el) || el.ValueKind == JsonValueKind.Null || el.ValueKind == JsonValueKind.Undefined)
-    {
-      throw new ValidationError($"{fieldName} is required", fieldName);
-    }
-
-    var s = el.ToString().Trim();
-    if (s.Length == 0) throw new ValidationError($"{fieldName} is required", fieldName);
-    return s;
   }
 
   private static int? OptionalInt(JsonElement? v)

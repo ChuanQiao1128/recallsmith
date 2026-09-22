@@ -201,11 +201,7 @@ public static class Publish
         return res.BadRequest("DECK_DELETED", "Deck is deleted (cannot publish)");
       }
 
-      var deckSlug = (Convert.ToString(deck["slug"], CultureInfo.InvariantCulture) ?? string.Empty).Trim();
-      if (string.IsNullOrEmpty(deckSlug) || deckSlug.Contains('/') || deckSlug.Contains("..", StringComparison.Ordinal))
-      {
-        throw new ValidationError("deck.slug contains invalid characters", "deckSlug");
-      }
+      var deckSlug = Validation.RequireSlug(Convert.ToString(deck["slug"], CultureInfo.InvariantCulture), "deckSlug");
 
       var cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckIdInt]);
 
