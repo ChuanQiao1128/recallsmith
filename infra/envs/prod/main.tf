@@ -28,6 +28,13 @@ module "identity" {
   console_pool_id       = var.console_pool_id
   mobile_pool_id        = var.mobile_pool_id
   snowflake_external_id = var.snowflake_external_id
+
+  worker_role_name       = "developercards-worker-lambda-role"
+  content_bucket_name    = "core-vpc"
+  premium_bucket_name    = "core-vpc-premium"
+  publish_queue_name     = "recallsmith-publish-jobs"
+  core_vpc_function_name = "core-vpc"
+  worker_function_name   = "worker-lambda"
 }
 
 module "data" {
@@ -86,7 +93,7 @@ module "worker" {
   queue_name         = "recallsmith-publish-jobs"
   function_name      = "worker-lambda"
   alias_name         = "prod"
-  role_arn           = module.identity.core_vpc_role_arn
+  role_arn           = module.identity.worker_role_arn
   subnet_ids         = module.data.subnet_ids
   security_group_ids = var.worker_security_group_ids
 }

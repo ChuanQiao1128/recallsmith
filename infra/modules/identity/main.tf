@@ -8,13 +8,8 @@ terraform {
 
 locals {
   core_vpc_attachments = {
-    sqs_exec = "arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole"
-    ec2_full = "arn:aws:iam::aws:policy/AmazonEC2FullAccess"
-    rds_full = "arn:aws:iam::aws:policy/AmazonRDSFullAccess"
-    sqs_full = "arn:aws:iam::aws:policy/AmazonSQSFullAccess"
-    s3_full  = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
-    logs     = aws_iam_policy.core_vpc_logs.arn
-    vpc      = aws_iam_policy.core_vpc_vpc.arn
+    logs = aws_iam_policy.core_vpc_logs.arn
+    vpc  = aws_iam_policy.core_vpc_vpc.arn
   }
 }
 
@@ -176,8 +171,7 @@ resource "aws_iam_policy" "snowflake_read" {
 
 resource "aws_iam_role_policy_attachment" "snowflake" {
   for_each = {
-    read    = aws_iam_policy.snowflake_read.arn
-    s3_full = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+    read = aws_iam_policy.snowflake_read.arn
   }
   role       = aws_iam_role.snowflake.name
   policy_arn = each.value
