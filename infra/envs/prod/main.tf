@@ -5,6 +5,17 @@ locals {
   alert_email = var.alert_email
 }
 
+# E03's DLQ exists in the account but is not in imports.tf (E00 §6 #20). module.worker's
+# publish_jobs.redrive_policy references its ARN, so in an empty-state plan the DLQ is a create
+# with an unknown ARN and publish_jobs reads as a spurious redrive_policy update. Adopting the
+# DLQ here (import blocks are configuration, allowed in any .tf per E00 §0) resolves its ARN so
+# publish_jobs is a no-op. Against the real backend the DLQ is already in state, so this import
+# block is inert (Terraform skips import for a resource already tracked).
+import {
+  to = module.worker.aws_sqs_queue.publish_jobs_dlq
+  id = "https://sqs.ap-southeast-2.amazonaws.com/622994489535/developercards-publish-jobs-dlq"
+}
+
 module "identity" {
   source = "../../modules/identity"
 

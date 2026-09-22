@@ -390,12 +390,6 @@ for tag in ("E02", "E03"):
 base = subprocess.run(["git", "show", f"{mb}:infra/envs/prod/outputs.tf"], capture_output=True, text=True).stdout
 base_outputs = set(re.findall(r'output\s+"([^"]+)"', base))
 RDS, RDS_KEYS = "module.data.aws_db_instance.developercards", {"apply_immediately", "skip_final_snapshot", "final_snapshot_identifier"}
-# Same class of worker-side import artifact as the RDS update above: publish_jobs is adopted
-# (in imports.tf), but its redrive_policy references E03's DLQ, which E00 §6 #20 keeps OUT of
-# imports.tf, so the empty-state plan treats the DLQ as a `create` (dropped just above) and its
-# ARN is unknown -> redrive_policy reads as an unknown-only diff. The supervisor's real backend
-# has the DLQ in state, so this is a no-op there. Dropped only when it is exactly that artifact.
-PJ, PJ_KEYS = "module.worker.aws_sqs_queue.publish_jobs", {"redrive_policy"}
 kept, dropped = [], []
 for rc in plan.get("resource_changes", []):
     ch, addr = rc.get("change", {}), rc.get("address", "")
@@ -406,12 +400,6 @@ for rc in plan.get("resource_changes", []):
         b, a = ch.get("before") or {}, ch.get("after") or {}
         if {k for k in set(b) | set(a) if b.get(k) != a.get(k)} <= RDS_KEYS:
             dropped.append((addr, "update (provider-side keys only)")); continue
-    if acts == ["update"] and addr == PJ and ch.get("importing"):
-        b, a = ch.get("before") or {}, ch.get("after") or {}
-        unknown = ch.get("after_unknown") or {}
-        diff = {k for k in set(b) | set(a) if b.get(k) != a.get(k)}
-        if diff and diff <= PJ_KEYS and all(unknown.get(k) for k in diff):
-            dropped.append((addr, "update (redrive to earlier-issue DLQ create; worker-side import artifact)")); continue
     kept.append(rc)
 plan["resource_changes"] = kept
 oc = plan.get("output_changes") or {}
