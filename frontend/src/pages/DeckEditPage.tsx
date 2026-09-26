@@ -7,6 +7,7 @@ import { useCards } from '../hooks/useCards';
 import { useDeck, useUpdateDeck } from '../hooks/useDecks';
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { buildDeckBody, parseDraftVersion, DRAFT_VERSION_ERROR } from '../lib/authoringBodies';
+import { CONSOLE_NAME } from '../lib/brand';
 
 import type { DeckAvailability, DeckTier } from '../types/deck';
 
@@ -313,7 +314,7 @@ export function DeckEditPage() {
 
   return (
     <ConsoleShell
-      title="RecallSmith Console"
+      title={CONSOLE_NAME}
       subtitle="Authoring · Edit Deck"
       userLabel={
         user

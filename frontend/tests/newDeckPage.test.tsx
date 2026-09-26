@@ -104,7 +104,7 @@ function mount() {
 
 const titleBox = () => screen.getByPlaceholderText('JavaScript Core Basics') as HTMLInputElement;
 const slugBox = () => screen.getByPlaceholderText('js-core-basics') as HTMLInputElement;
-const authorBox = () => screen.getByPlaceholderText('RecallSmith Team') as HTMLInputElement;
+const authorBox = () => screen.getByLabelText(/^Author/) as HTMLInputElement;
 const versionBox = () => screen.getByLabelText('Draft Version') as HTMLInputElement;
 const freeCardBox = () => screen.getByLabelText('Free Card Count') as HTMLInputElement;
 
@@ -158,7 +158,7 @@ describe('the form a user is handed', () => {
 
     expect(titleBox().value).toBe('');
     expect(slugBox().value).toBe('');
-    expect(authorBox().value).toBe('RecallSmith Team');
+    expect(authorBox().value).toBe('DeveloperCards');
     expect(versionBox().value).toBe('1');
     expect((screen.getByLabelText('Locale') as HTMLSelectElement).value).toBe('en-US');
   });

@@ -601,7 +601,14 @@ export function DeckImportPage() {
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className="flex-1 h-2 bg-slate-100 rounded overflow-hidden">
+                  <div
+                    className="flex-1 h-2 bg-slate-100 rounded overflow-hidden"
+                    role="progressbar"
+                    aria-label="Import progress"
+                    aria-valuemin={0}
+                    aria-valuemax={progress.total}
+                    aria-valuenow={progress.done}
+                  >
                     <div
                       className="h-full bg-indigo-600 transition-all"
                       style={{

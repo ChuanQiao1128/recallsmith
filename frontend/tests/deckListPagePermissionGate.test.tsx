@@ -112,6 +112,13 @@ function inventory(): string[] {
 // <Link>s: `button:Content Intelligence` and `button:Admin Management` are now
 // `a:...`. Nothing else in either list moved — `button:Decks` is the page's own
 // tab switcher, not a link, and it is unchanged.
+//
+// Re-measured again (F32, 2026-09-26): the deck search box gained
+// aria-label="Search decks" (CFE-19), so its inventory identity now joins that
+// accessible name to the unchanged placeholder — `input:Search decks|Search by
+// slug or title...`. The tab-switcher buttons gained role="tab"/aria-selected,
+// but inventory joins textContent+aria-label+placeholder, none of which moved,
+// so those two buttons keep their identity.
 const SUPER_ADMIN_CONTROLS = [
   'a:Admin Management',
   'a:Content Intelligence',
@@ -132,7 +139,7 @@ const SUPER_ADMIN_CONTROLS = [
   'button:Publish Jobs',
   'button:Refresh',
   'button:Sign out',
-  'input:Search by slug or title...',
+  'input:Search decks|Search by slug or title...',
   'select:All StatusPublishedNeeds PublishUnpublished|Filter by status',
   'select:All TypesStarterPaid|Filter by type',
 ];
@@ -152,7 +159,7 @@ const EDITOR_CONTROLS = [
   'button:Preview',
   'button:Refresh',
   'button:Sign out',
-  'input:Search by slug or title...',
+  'input:Search decks|Search by slug or title...',
   'select:All StatusPublishedNeeds PublishUnpublished|Filter by status',
   'select:All TypesStarterPaid|Filter by type',
 ];

@@ -71,9 +71,11 @@ export function DeckConsoleHeader({
           <div className="flex flex-wrap items-center gap-3">
             {/* Tab switcher, styled as a horizontal segmented control */}
             {superAdmin && (
-              <div className="flex items-center bg-white border border-slate-300 rounded-xl p-1 shadow-sm">
+              <div role="tablist" aria-label="Deck console views" className="flex items-center bg-white border border-slate-300 rounded-xl p-1 shadow-sm">
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'decks'}
                   className={`relative px-5 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
                     activeTab === 'decks'
                       ? 'bg-indigo-600 text-white shadow-md'
@@ -85,6 +87,8 @@ export function DeckConsoleHeader({
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'publishJobs'}
                   className={`relative px-5 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2 ${
                     activeTab === 'publishJobs'
                       ? 'bg-indigo-600 text-white shadow-md'

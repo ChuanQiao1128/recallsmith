@@ -62,6 +62,7 @@ export function DeckFilterBar({
                   value={q}
                   onChange={e => onSearchChange(e.target.value)}
                   placeholder="Search by slug or title..."
+                  aria-label="Search decks"
                 />
               </div>
               <div className="flex flex-wrap items-center gap-2">

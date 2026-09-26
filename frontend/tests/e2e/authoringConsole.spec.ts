@@ -213,7 +213,7 @@ test('an unauthenticated visit lands on login and the button starts a real PKCE 
   // MemoryRouter.
   await expect(page).toHaveURL('http://localhost:5173/login?next=%2F');
 
-  const signIn = page.getByRole('button', { name: 'Continue with Cognito' });
+  const signIn = page.getByRole('button', { name: 'Sign in' });
   // Enabled only when AUTH_CONFIGURED is true, which is true only if
   // frontend/.env.e2e actually reached the bundle. A build with no Cognito
   // configuration renders this disabled next to an "Auth is not configured"
