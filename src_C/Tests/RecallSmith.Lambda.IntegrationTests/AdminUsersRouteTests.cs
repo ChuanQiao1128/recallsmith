@@ -7,9 +7,10 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// <summary>
 /// The admin-users 501 placeholders are gone (CBE-01). GET /api/v1/admin/users,
 /// GET /api/v1/admin/users/:sub and PUT /api/v1/admin/users/:sub/entitlements used to
-/// answer 501 "TODO: admin users list" from core-vpc; they now fall through to the
-/// generic "Route not found" 404. The console instead calls edge-public at
-/// /api/v1/admin/cognito/users, which core-vpc never served and still does not.
+/// answer 501 "TODO: admin users list" from core-vpc; core-vpc now recognises those old
+/// paths only to reject them with a plain "Route not found" 404. The console instead
+/// calls edge-public at /api/v1/admin/cognito/users, which core-vpc never served and
+/// still does not.
 ///
 /// Every request below goes through <see cref="VpcFunction.Handler"/> with gateway
 /// authorizer claims for a super_admin — the same event shape as

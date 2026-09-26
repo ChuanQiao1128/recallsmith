@@ -296,6 +296,21 @@ public sealed class VpcFunction
         return await Vpc.Runtime.DrawStateSync.HandleDrawStateSync(req, res, auth);
       }
 
+      // Admin users routes are retired (CBE-01). The console lists and creates editors
+      // through edge-public's /api/v1/admin/cognito/users; core-vpc no longer answers a
+      // 501 "TODO" here. It still recognises the old paths only to reject them with 404,
+      // so legacy callers get a plain "route not found" and stay metered under their
+      // bounded RouteMetrics labels rather than minting a metric per user id.
+      {
+        var goneUsers = RouteMatcher.Match("/api/v1/admin/users", p);
+        var goneUser = RouteMatcher.Match("/api/v1/admin/users/:userSub", p);
+        var goneEntitlements = RouteMatcher.Match("/api/v1/admin/users/:userSub/entitlements", p);
+        if (goneUsers is not null || goneUser is not null || goneEntitlements is not null)
+        {
+          return res.NotFound("Route not found");
+        }
+      }
+
       // Internal routes
       if (p.EndsWith("/api/internal/entitlements/apply", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {
