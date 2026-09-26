@@ -36,7 +36,7 @@ public class RouteMetricsTests
   // Today's contract, spelled out rather than read from the code under test: a test that
   // asks RouteMetrics what RouteMetrics emits would follow it to any name at all, and these
   // names are what every dashboard and alarm built post-merge will be keyed on.
-  private const string Ns = "RecallSmith";
+  private const string Ns = "DeveloperCards";
   private const string Service = "core-vpc";
 
   // ---------------------------------------------------------------- the envelope
@@ -386,12 +386,12 @@ public class RouteMetricsTests
     var saved = Environment.GetEnvironmentVariable(RouteMetrics.NamespaceEnvVar);
     try
     {
-      Environment.SetEnvironmentVariable(RouteMetrics.NamespaceEnvVar, "RecallSmith/Staging");
+      Environment.SetEnvironmentVariable(RouteMetrics.NamespaceEnvVar, "DeveloperCards/Staging");
 
       var (line, _) = await MeasuredAsync("GET", "/health", () => Task.FromResult(new APIGatewayProxyResponse { StatusCode = 200 }));
 
       Assert.Equal(
-        "RecallSmith/Staging",
+        "DeveloperCards/Staging",
         line.GetProperty("_aws").GetProperty("CloudWatchMetrics")[0].GetProperty("Namespace").GetString());
     }
     finally

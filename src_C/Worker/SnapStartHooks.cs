@@ -1,6 +1,5 @@
 using System.Threading;
 using Amazon.Lambda.Core;
-using RecallSmith.Lambda.Worker.Manifest;
 using RecallSmith.Lambda.Worker.S3;
 
 namespace RecallSmith.Lambda.Worker;
@@ -36,6 +35,6 @@ internal static class SnapStartHooks
   {
     try { Lambda.Db.Pg.Reset(); } catch { /* best-effort */ }
     try { S3DeckUploader.Reset(); } catch { /* best-effort */ }
-    try { ManifestService.Reset(); } catch { /* best-effort */ }
+    try { Lambda.Db.ManifestBuilder.Reset(); } catch { /* best-effort */ }
   }
 }
