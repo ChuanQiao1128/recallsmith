@@ -1,6 +1,6 @@
 // src/components/CardForm.tsx
 
-import { useEffect, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Deck } from '../types/deck';
 import type { McqBlob } from '../types/mcq';
@@ -13,24 +13,11 @@ import {
   isValidStableUid,
 } from '../lib/cardRules';
 import { checkMcqForm } from '../lib/mcqFormCheck';
+import { highlightSnippet, mapToHlLanguage } from '../lib/highlightSnippet';
 
-// highlight.js core + languages
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import csharp from 'highlight.js/lib/languages/csharp';
-import sql from 'highlight.js/lib/languages/sql';
-import bash from 'highlight.js/lib/languages/bash';
+// The highlight.js theme stays here so it rides the lazy CardForm chunk; the
+// engine setup and mapToHlLanguage moved to lib/highlightSnippet.ts.
 import 'highlight.js/styles/atom-one-dark.css';
-
-hljs.registerLanguage('javascript', javascript);
-hljs.registerLanguage('js', javascript);
-hljs.registerLanguage('typescript', typescript);
-hljs.registerLanguage('ts', typescript);
-hljs.registerLanguage('csharp', csharp);
-hljs.registerLanguage('cs', csharp);
-hljs.registerLanguage('sql', sql);
-hljs.registerLanguage('bash', bash);
 
 export interface CardFormValues {
   question: string;
@@ -233,20 +220,6 @@ function slugifyWhileTyping(input: string): string {
     .replace(/^-+/, '');
 }
 
-function mapToHlLanguage(codeLang: string): string | null {
-  if (!codeLang) return null;
-  switch (codeLang) {
-    case 'js':
-      return 'javascript';
-    case 'ts':
-      return 'typescript';
-    case 'cs':
-      return 'csharp';
-    default:
-      return codeLang;
-  }
-}
-
 export function CardForm(props: CardFormProps) {
   const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, onDirtyChange } = props;
 
@@ -391,20 +364,18 @@ export function CardForm(props: CardFormProps) {
 
   const hlLanguage = mapToHlLanguage(values.codeLanguage);
 
-  const highlightedHtml = useMemo(() => {
-    const code = values.codeSnippet;
+  // The preview reads DEFERRED copies of the snippet and language, so typing
+  // stays on the urgent render path and highlighting happens at lower priority
+  // once React catches up. With no language picked the preview is escaped plain
+  // text, because the old behaviour ran every registered grammar (auto-detection)
+  // on each keystroke and lagged long snippets. Pick a language to get colours.
+  const deferredSnippet = useDeferredValue(values.codeSnippet);
+  const deferredLanguage = useDeferredValue(hlLanguage);
 
-    if (!code) {
-      return hljs.highlight('// No code snippet.', { language: 'javascript' }).value;
-    }
-
-    try {
-      if (hlLanguage) return hljs.highlight(code, { language: hlLanguage }).value;
-      return hljs.highlightAuto(code).value;
-    } catch {
-      return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-  }, [values.codeSnippet, hlLanguage]);
+  const highlightedHtml = useMemo(
+    () => highlightSnippet(deferredSnippet, deferredLanguage),
+    [deferredSnippet, deferredLanguage],
+  );
 
   return (
     <form
