@@ -351,3 +351,9 @@ import {
   to = module.observability.aws_budgets_budget.monthly
   id = "622994489535:My Monthly Cost Budget"
 }
+
+# 2026-09-26: alias-level invoke permission added by CLI during the E08 apply (see modules/api/core_vpc.tf).
+import {
+  to = module.api.aws_lambda_permission.core_vpc_alias_all_routes
+  id = "core-vpc:prod/apigw-ktbq1sie2c-all-routes-e08"
+}

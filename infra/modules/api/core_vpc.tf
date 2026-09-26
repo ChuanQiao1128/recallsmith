@@ -50,3 +50,17 @@ resource "aws_lambda_permission" "core_vpc" {
   principal     = "apigateway.amazonaws.com"
   source_arn    = each.value
 }
+
+# 2026-09-26 (E08 follow-up, supervisor): API Gateway invokes core-vpc through the `prod` ALIAS, and
+# the alias has its own resource policy (the statements above are on the unqualified function). The
+# alias policy only listed the pre-E08 route paths, so the routes E08 created (GET /health,
+# /api/v1/sync/*, /me, ...) answered 500 for ~1 min until this statement was added by CLI and
+# imported here. One statement covers every route and stage of this API.
+resource "aws_lambda_permission" "core_vpc_alias_all_routes" {
+  statement_id  = "apigw-ktbq1sie2c-all-routes-e08"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.core_vpc.function_name
+  qualifier     = "prod"
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "arn:aws:execute-api:ap-southeast-2:622994489535:ktbq1sie2c/*"
+}
