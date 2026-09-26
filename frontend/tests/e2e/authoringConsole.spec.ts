@@ -321,7 +321,9 @@ test('a signed-in console renders decks and navigates into a lazily-loaded route
 
   // The rows came from the stubbed network, not from a leftover cache.
   expect(api.seen).toContain('/api/v1/authoring/decks');
-  expect(api.seen).toContain('/api/v1/admin/manifest');
+  // An editor never asks for the super_admin-only manifest (F24 / CFE-04): it used to,
+  // and every editor session showed a red 'Manifest Sync Error' with every deck Unpublished.
+  expect(api.seen).not.toContain('/api/v1/admin/manifest');
 
   const cardsChunkLoadedBefore = scripts.some(s => /CardListPage-.*\.js$/.test(s.url));
   // Code splitting is real, not aspirational: the cards page is not in the
