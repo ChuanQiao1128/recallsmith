@@ -171,8 +171,10 @@ describe('a FAILED publish job explains itself', () => {
 
     await mountConsole();
 
-    // Switch to the Publish Jobs tab (super_admin-only).
-    fireEvent.click(screen.getByRole('button', { name: 'Publish Jobs' }));
+    // Switch to the Publish Jobs tab (super_admin-only). F32 (CFE-19) gave the
+    // switcher real tab semantics, so this control is now role="tab", not a
+    // plain button.
+    fireEvent.click(screen.getByRole('tab', { name: 'Publish Jobs' }));
 
     const errorCell = await screen.findByTestId('publish-job-error');
     expect(errorCell.textContent).toBe(reason);
