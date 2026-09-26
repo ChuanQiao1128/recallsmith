@@ -145,19 +145,20 @@ export function ContentIntelligencePage() {
   // Folding the body into the effect keeps a single implementation and makes
   // the dependency array the honest list of what causes a refetch.
   //
-  // NOT ADDED HERE, on purpose: a `cancelled` flag like the deck-loading effect
-  // below has. This effect has no cancellation today, so switching decks twice
-  // quickly can let the older response land last. That is a real bug, but it is
-  // a behaviour change, this page has no test covering it, and this edit was
-  // scoped to clearing a lint error. Fixing it needs its own change with a test
-  // that fails first.
+  // The cleanup below drops a response whose deck/window/refresh is no longer
+  // current: switching the deck or window (or pressing Refresh) tears down the
+  // in-flight effect, its cleanup flips `cancelled`, and the stale run bails
+  // before it can setState, so an older response can never land last over the
+  // newer selection's rows. `tests/contentIntelligenceRace.test.tsx` pins it.
   useEffect(() => {
+    let cancelled = false;
     async function run() {
       const res = await fetchContentIntelligence({
         deckSlug: deckSlug || null,
         days,
         limit: 100,
       });
+      if (cancelled) return;
       if (!res.success || !res.data) {
         setState({ loading: false, error: res.error?.message ?? 'Failed to load content intelligence', data: null });
         return;
@@ -165,6 +166,9 @@ export function ContentIntelligencePage() {
       setState({ loading: false, error: null, data: res.data });
     }
     void run();
+    return () => {
+      cancelled = true;
+    };
   }, [days, deckSlug, refreshNonce]);
 
   useEffect(() => {
