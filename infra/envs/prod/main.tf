@@ -46,6 +46,8 @@ module "identity" {
   publish_queue_name     = "recallsmith-publish-jobs"
   core_vpc_function_name = "core-vpc"
   worker_function_name   = "worker-lambda"
+
+  secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development"]
 }
 
 module "data" {
