@@ -27,9 +27,12 @@ public static class ContentIntelligence
     var days = (int)Math.Max(7, Math.Min(daysRaw ?? 90, 365));
     var limit = (int)Math.Max(1, Math.Min(limitRaw ?? 100, 500));
 
-    if ((days == 30 || days == 90) && await SnapshotAvailableAsync(conn, days))
+    if (days == 30 || days == 90)
     {
-      const string snapshotSql = """
+      var generatedAt = await SnapshotGeneratedAtAsync(conn, days, deckSlug);
+      if (IsSnapshotFresh(generatedAt, DateTimeOffset.UtcNow))
+      {
+        const string snapshotSql = """
         select
           s.deck_slug as "deckSlug",
           coalesce(d.title, s.deck_slug) as "deckTitle",
@@ -91,16 +94,17 @@ public static class ContentIntelligence
         limit $5::int;
         """;
 
-      try
-      {
-        var mcqCardCount = await CountMcqCardsAsync(conn, deckSlug, auth.UserSub, auth.IsSuperAdmin);
-        var cards = await DbUtil.QueryAsync(conn, null, snapshotSql, [days, auth.UserSub, deckSlug, auth.IsSuperAdmin, limit]);
-        return res.Ok(BuildResponse(cards, days, deckSlug, mcqCardCount));
-      }
-      catch (Exception ex)
-      {
-        Log.Error("Content intelligence snapshot error:", ex);
-        return res.Error500(ex);
+        try
+        {
+          var mcqCardCount = await CountMcqCardsAsync(conn, deckSlug, auth.UserSub, auth.IsSuperAdmin);
+          var cards = await DbUtil.QueryAsync(conn, null, snapshotSql, [days, auth.UserSub, deckSlug, auth.IsSuperAdmin, limit]);
+          return res.Ok(BuildResponse(cards, days, deckSlug, mcqCardCount, "snapshot", generatedAt.Value.ToUnixTimeMilliseconds()));
+        }
+        catch (Exception ex)
+        {
+          Log.Error("Content intelligence snapshot error:", ex);
+          return res.Error500(ex);
+        }
       }
     }
 
@@ -108,7 +112,7 @@ public static class ContentIntelligence
     {
       var mcqCardCount = await CountMcqCardsAsync(conn, deckSlug, auth.UserSub, auth.IsSuperAdmin);
       var cards = await QueryLiveCardsAsync(conn, days, deckSlug, auth.UserSub, auth.IsSuperAdmin, limit);
-      return res.Ok(BuildResponse(cards, days, deckSlug, mcqCardCount));
+      return res.Ok(BuildResponse(cards, days, deckSlug, mcqCardCount, "live", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
     }
     catch (Exception ex)
     {
@@ -387,22 +391,31 @@ public static class ContentIntelligence
     return string.IsNullOrEmpty(s) ? null : s;
   }
 
-  private static async Task<bool> SnapshotAvailableAsync(Npgsql.NpgsqlConnection conn, int windowDays)
+  internal static readonly TimeSpan SnapshotMaxAge = TimeSpan.FromHours(48);
+
+  internal static bool IsSnapshotFresh(DateTimeOffset? sourceGeneratedAt, DateTimeOffset now) =>
+    sourceGeneratedAt is not null && now - sourceGeneratedAt.Value <= SnapshotMaxAge;
+
+  /// The newest source_generated_at for the window (scoped to deckSlug when given), or null when the
+  /// window holds no snapshot rows. A timestamptz comes back as a DateTime, read as UTC.
+  internal static async Task<DateTimeOffset?> SnapshotGeneratedAtAsync(NpgsqlConnection conn, int windowDays, string? deckSlug)
   {
     var scalar = await DbUtil.ExecuteScalarAsync(
       conn,
       null,
-      "select exists(select 1 from content_intelligence_card_snapshot where window_days = $1 limit 1);",
-      [windowDays]);
+      "select max(source_generated_at) from content_intelligence_card_snapshot where window_days = $1 and ($2::text is null or deck_slug = $2::text);",
+      [windowDays, deckSlug]);
 
-    return scalar is bool b && b;
+    if (scalar is not DateTime dt) return null;
+    return new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Utc));
   }
 
-  private static object BuildResponse(List<Dictionary<string, object?>> cards, int days, string? deckSlug, int mcqCardCount)
+  private static object BuildResponse(List<Dictionary<string, object?>> cards, int days, string? deckSlug, int mcqCardCount, string source, long generatedAtMs)
   {
     return new
     {
-      generatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+      generatedAtMs,
+      source,
       windowDays = days,
       deckSlug,
       cards,
