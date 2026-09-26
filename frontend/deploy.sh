@@ -9,6 +9,7 @@ export AWS_PROFILE="${AWS_PROFILE:-dev}"
 BUCKET="${CONSOLE_BUCKET:-recallsmith-console-622994489535}"
 DIST_ID="${CONSOLE_DISTRIBUTION_ID:-E85FKUMZZWQWX}"     # d12pfy1rhi3ekm.cloudfront.net
 REGION="${AWS_REGION:-ap-southeast-2}"
+CONSOLE_URL="${CONSOLE_URL:-https://console.developercards.app}"
 
 npm run build
 [ -f dist/index.html ] || { echo "dist/index.html missing after build" >&2; exit 1; }
@@ -23,6 +24,6 @@ INV="$(aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths '
 echo "INVALIDATION=$INV"
 aws cloudfront wait invalidation-completed --distribution-id "$DIST_ID" --id "$INV"
 LOCAL="$(shasum -a 256 dist/index.html | cut -c1-16)"
-REMOTE="$(curl -fsSL "https://d12pfy1rhi3ekm.cloudfront.net/index.html" | shasum -a 256 | cut -c1-16)"
+REMOTE="$(curl -fsSL "$CONSOLE_URL/index.html" | shasum -a 256 | cut -c1-16)"
 [ "$LOCAL" = "$REMOTE" ] || { echo "live index.html ($REMOTE) != built ($LOCAL)" >&2; exit 1; }
 echo "OK console index.html sha256[0:16]=$REMOTE"
