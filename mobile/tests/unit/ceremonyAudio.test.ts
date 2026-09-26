@@ -106,7 +106,7 @@ describe('ceremonyAudio', () => {
     expect(players).toHaveLength(EXPECTED_PLAYERS);
     expect(audio.setAudioModeAsync).toHaveBeenCalledTimes(1);
     expect(audio.setAudioModeAsync).toHaveBeenCalledWith({
-      playsInSilentMode: true, interruptionMode: 'mixWithOthers',
+      playsInSilentMode: false, interruptionMode: 'mixWithOthers',
     });
     const calls = (audio.createAudioPlayer as ReturnType<typeof vi.fn>).mock.calls;
     const count = (f: string) => calls.filter((c) => c[0] === f).length;

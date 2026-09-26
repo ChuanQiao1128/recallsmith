@@ -38,7 +38,7 @@ vi.mock('react-native', () => {
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
     RefreshControl: (props: any) => React.createElement('RefreshControl', props),
     Platform: { OS: 'ios' },
-    Linking: { canOpenURL: vi.fn(async () => true), openURL: vi.fn(async () => {}) },
+    Linking: { canOpenURL: vi.fn(async () => true), openURL: vi.fn(async () => {}), openSettings: vi.fn(async () => {}) },
     Alert: { alert: (...args: any[]) => alertMock(...args) },
     StyleSheet: { create: (styles: any) => styles },
   };
@@ -114,9 +114,17 @@ vi.mock('../../src/config/remoteConfig', () => ({
 }));
 
 vi.mock('../../src/notifications/reminders', () => ({
+  DEFAULT_REMINDER_PREFS: {
+    morningEnabled: true,
+    morningTime: '09:00',
+    eveningEnabled: false,
+    eveningTime: '20:00',
+  },
   getReminderPrefs: () => getReminderPrefsMock(),
   setReminderPrefs: vi.fn(async (next: any) => next),
   refreshDailyRemindersFromCache: vi.fn(async () => {}),
+  getNotificationPermissionState: vi.fn(async () => 'granted'),
+  requestNotificationPermission: vi.fn(async () => 'granted'),
 }));
 
 vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
@@ -126,6 +134,7 @@ vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
 
 vi.mock('../../src/review/storage', () => ({
   resetAllReviewSchedules: (now: Date) => resetAllReviewSchedulesMock(now),
+  loadAllProgress: vi.fn(async () => ({ csharp: [{ lastReviewedAt: 1 }] })),
 }));
 
 vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
@@ -241,12 +250,15 @@ describe('SettingsScreen', () => {
     );
     expect(primaryText.props.numberOfLines).toBe(1);
 
+    // G34: the momentum meta line (reminder status) no longer clamps to one
+    // line, so its explanation wraps instead of ending in an ellipsis at large
+    // text sizes. The button label above it keeps its single-line clamp.
     const reminderMeta = tree.root.findAll(
       (node) => (node.type as any) === 'Text' && nodeText(node).includes('due cards remain'),
     );
     expect(reminderMeta.length).toBeGreaterThan(0);
     reminderMeta.forEach((node) => {
-      expect(node.props.numberOfLines).toBe(1);
+      expect(node.props.numberOfLines).toBeUndefined();
     });
   });
 
@@ -264,13 +276,13 @@ describe('SettingsScreen', () => {
   it('confirms and runs Fresh Start reset flow', async () => {
     const { tree } = await renderSettings();
 
-    act(() => {
-      findPressableByText(tree, 'Reset review schedule').props.onPress();
+    await act(async () => {
+      findPressableByText(tree, 'Make all learned cards due today').props.onPress();
     });
 
     expect(alertMock).toHaveBeenCalledWith(
-      'Reset review schedule',
-      'Keep your library. Bring learned cards back into today. Continue?',
+      'Make all learned cards due today?',
+      expect.stringContaining('1 learned card'),
       expect.any(Array),
     );
 
@@ -281,8 +293,8 @@ describe('SettingsScreen', () => {
 
     expect(resetAllReviewSchedulesMock).toHaveBeenCalledTimes(1);
     expect(alertMock).toHaveBeenCalledWith(
-      'Review schedule reset',
-      'Learned cards are due again today. Your library stays intact.',
+      'Cards are due now',
+      'Your library and owned cards are unchanged.',
     );
   });
 
@@ -304,7 +316,7 @@ describe('SettingsScreen', () => {
     expect(navigate).toHaveBeenCalledWith('Paywall');
   });
 
-  it('renders empty state with actionable reload CTA', async () => {
+  it('renders the ready screen with defaults when stored values are missing', async () => {
     getReminderPrefsMock.mockResolvedValueOnce(null as any);
     loadStreakSnapshotMock.mockResolvedValueOnce(null as any);
 
@@ -315,24 +327,13 @@ describe('SettingsScreen', () => {
       .map((node) => nodeText(node))
       .join('\n');
 
-    expect(textBlob).toContain('No settings ready yet');
+    expect(textBlob).toContain('Momentum');
+    expect(textBlob).toContain('0 days streak');
 
     const roots = findHostNodesByTestID(tree, 'SafeAreaView', 'screen-settings-root');
     const primaryCtas = findHostNodesByTestID(tree, 'Pressable', 'screen-settings-primary-cta');
     expect(roots).toHaveLength(1);
     expect(primaryCtas).toHaveLength(1);
-
-    await act(async () => {
-      findPressableByTestID(tree, 'screen-settings-primary-cta').props.onPress();
-      await Promise.resolve();
-    });
-    await flush();
-
-    const postReloadBlob = tree.root
-      .findAll((node) => (node.type as any) === 'Text')
-      .map((node) => nodeText(node))
-      .join('\n');
-    expect(postReloadBlob).toContain('Momentum');
   });
 
   it('renders error state and retries refresh', async () => {

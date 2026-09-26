@@ -17,6 +17,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import { useAuthStore } from '../auth/authStore';
+import { friendlyAuthError } from '../auth/authErrors';
+import { leaveAuthFlow, type LeaveAuthNavigation } from '../auth/leaveAuthFlow';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ConfirmSignUp'>;
 
@@ -47,12 +49,17 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
     if (!canSubmit) return;
 
     try {
-      await confirmSignUpCode(email, code);
+      const outcome = await confirmSignUpCode(email, code);
+      if (outcome === 'signed_in') {
+        // Auto sign-in completed within the window — leave the funnel.
+        leaveAuthFlow(navigation as unknown as LeaveAuthNavigation);
+        return;
+      }
       Alert.alert('Verified', 'Your email is verified. Please sign in.', [
-        { text: 'Continue', onPress: () => navigation.replace('SignIn', { email }) },
+        { text: 'Continue', onPress: () => navigation.popTo('SignIn', { email }) },
       ]);
     } catch (e: any) {
-      Alert.alert('Confirm failed', e?.message ?? 'Please try again.');
+      Alert.alert('Confirm failed', friendlyAuthError(e));
     }
   }
 
@@ -61,7 +68,7 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
       await resendConfirmCode(email);
       Alert.alert('Sent', 'A new code has been sent to your email.');
     } catch (e: any) {
-      Alert.alert('Resend failed', e?.message ?? 'Please try again.');
+      Alert.alert('Resend failed', friendlyAuthError(e));
     }
   }
 
@@ -110,6 +117,8 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
                 value={code}
                 onChangeText={(v) => setCode(v.replace(/\s/g, ''))}
                 keyboardType="number-pad"
+                textContentType="oneTimeCode"
+                autoComplete="one-time-code"
                 placeholder="123456"
                 placeholderTextColor="#9CA3AF"
                 style={styles.codeInput}

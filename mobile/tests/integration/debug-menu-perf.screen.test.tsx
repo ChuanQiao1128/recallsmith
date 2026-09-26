@@ -181,18 +181,34 @@ describe('DebugMenu — last ceremony report + production gating', () => {
     expect(after).toContain('JS frames: no samples');
   });
 
+  it('shows how many ceremony reports the device keeps', async () => {
+    (globalThis as any).__DEV__ = false;
+    const device = () => ({ platform: 'ios', osVersion: '18.6', model: 'iPhone', jsEngine: 'hermes', appVersion: '1.6.0 (16)', updateId: 'deadbeefcafe', runtimeVersion: '1.6.0', channel: 'production' });
+    for (let i = 0; i < 2; i += 1) {
+      const session = createCeremonyPerfSession(
+        { renderer: 'skia', reduceMotion: false, cardCount: 3, peakRarity: 'RAR', isMulti: true, tapFlow: true, slug: `s${i}` },
+        { now: () => 0, raf: null, caf: null, device },
+      );
+      session.markPhase('approach');
+      session.stop();
+      await flush();
+    }
+
+    const { tree } = await renderDebug();
+    const count = tree.root.findByProps({ testID: 'debug-ceremony-perf-history-count' });
+    const c = count.props.children;
+    expect(Array.isArray(c) ? c.join('') : String(c)).toBe('Keeping the last 2 of 5 reports');
+  });
+
   it('keeps the wallet/seed tools out of production and gates them behind a Dev only confirm', async () => {
     (globalThis as any).__DEV__ = false;
     const { tree } = await renderDebug();
     expect(tree.root.findAllByProps({ testID: 'debug-seed-wallet' })).toHaveLength(0);
     expect(tree.root.findAllByProps({ testID: 'debug-only-legendary' })).toHaveLength(0);
     expect(tree.root.findAllByProps({ testID: 'debug-ceremony-tuning' })).toHaveLength(0);
-    // The reset stays behind its existing confirmation.
-    act(() => {
-      tree.root.findByProps({ testID: 'debug-reset-progress' }).props.onPress();
-    });
-    expect(alertMock).toHaveBeenCalledTimes(1);
-    expect(alertMock.mock.calls[0][0]).toBe('Reset progress?');
+    // The whole DANGER ZONE (reset all progress) is not rendered in production —
+    // a curious user can no longer wipe their own collection from here.
+    expect(tree.root.findAllByProps({ testID: 'debug-reset-progress' })).toHaveLength(0);
 
     // confirmDevOnly: straight through in __DEV__, an Alert with Cancel/Continue otherwise.
     const action = vi.fn();

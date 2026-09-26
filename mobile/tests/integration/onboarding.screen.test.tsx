@@ -96,9 +96,10 @@ describe('phase A onboarding screens', () => {
     });
 
     await act(async () => {
-      // Audience option labels were rewritten outcome-driven:
-      // Junior → "Just starting", Both → "Mix it up", All → "Push me"
-      findPressableByText(surveyTree, 'Push me').props.onPress();
+      // Audience option labels now use the one shared vocabulary
+      // (getAudiencePreferenceLabel): junior → "Junior", both →
+      // "Balanced", all → "Stretch".
+      findPressableByText(surveyTree, 'Stretch').props.onPress();
       await Promise.resolve();
     });
 

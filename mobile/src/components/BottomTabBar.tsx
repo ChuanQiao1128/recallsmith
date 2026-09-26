@@ -1,20 +1,37 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { colors } from "../theme/colors";
+import { CHROME_MAX_FONT_SCALE } from "../theme/dynamicType";
 import { MAIN_TABS, type MainTabKey } from "../navigation/mainTabs";
 
 export function BottomTabBar(props: { active: MainTabKey; navigate: (route: string, params?: any) => void }) {
   return (
-    <View style={styles.shell}>
+    <View style={styles.shell} accessibilityRole="tablist">
       {MAIN_TABS.map((tab) => {
         const active = tab.key === props.active;
         return (
-          <Pressable key={tab.key} style={[styles.item, active && styles.itemActive]} onPress={() => props.navigate(tab.route)}>
-            <View style={[styles.indicator, active && styles.indicatorActive]} />
-            <View style={[styles.iconBadge, active && styles.iconBadgeActive]}>
-              <Text style={[styles.icon, active && styles.iconActive]}>{tab.icon}</Text>
+          <Pressable
+            key={tab.key}
+            style={[styles.item, active && styles.itemActive]}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={tab.label}
+            testID={`main-tab-${tab.key}`}
+            onPress={() => props.navigate(tab.route)}
+          >
+            <View
+              style={[styles.indicator, active && styles.indicatorActive]}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            />
+            <View
+              style={[styles.iconBadge, active && styles.iconBadgeActive]}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            >
+              <Text style={[styles.icon, active && styles.iconActive]} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{tab.icon}</Text>
             </View>
-            <Text style={[styles.label, active && styles.labelActive]}>{tab.label}</Text>
+            <Text style={[styles.label, active && styles.labelActive]} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{tab.label}</Text>
           </Pressable>
         );
       })}
@@ -86,7 +103,7 @@ const styles = StyleSheet.create({
     color: colors.gold,
   },
   label: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.3,
     color: '#8C7A5B',

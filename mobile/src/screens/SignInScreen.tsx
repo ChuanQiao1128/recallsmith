@@ -17,20 +17,11 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import { useAuthStore } from '../auth/authStore';
+import { friendlyAuthError, isAuthFlowError } from '../auth/authErrors';
+import { leaveAuthFlow, type LeaveAuthNavigation } from '../auth/leaveAuthFlow';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignIn'>;
-
-function goAway(navigation: Props['navigation']) {
-  if (navigation.canGoBack()) {
-    navigation.goBack();
-    return;
-  }
-  navigation.reset({
-    index: 0,
-    routes: [{ name: 'Home' as any }],
-  });
-}
 
 function normEmail(v: string) {
   return String(v || '').trim().toLowerCase();
@@ -41,14 +32,22 @@ export default function SignInScreen({ navigation, route }: Props) {
   const status = useAuthStore((s) => s.status);
   const isSignedIn = useAuthStore((s) => s.status === 'signed_in');
   const signInWithEmail = useAuthStore((s) => s.signInWithEmail);
+  const resendConfirmCode = useAuthStore((s) => s.resendConfirmCode);
 
   const [email, setEmail] = useState(route.params?.email ?? '');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
 
   useEffect(() => {
-    if (isSignedIn) goAway(navigation);
+    if (isSignedIn) leaveAuthFlow(navigation as unknown as LeaveAuthNavigation);
   }, [isSignedIn, navigation]);
+
+  // ForgotPassword returns via popTo('SignIn', { email }); pick up a new email
+  // so the field is prefilled when the user lands back here.
+  useEffect(() => {
+    const next = route.params?.email;
+    if (next) setEmail(next);
+  }, [route.params?.email]);
 
   const canSubmit = useMemo(() => {
     return normEmail(email).length >= 3 && password.length >= 1 && !loading && status !== 'signed_in';
@@ -59,14 +58,30 @@ export default function SignInScreen({ navigation, route }: Props) {
 
     try {
       await signInWithEmail(email, password);
-      goAway(navigation);
+      leaveAuthFlow(navigation as unknown as LeaveAuthNavigation);
     } catch (e: any) {
-      const msg = String(e?.message ?? '');
-      if (/already.*signed in/i.test(msg)) {
-        goAway(navigation);
+      // Unconfirmed account: resend a fresh code and route to ConfirmSignUp
+      // instead of dead-ending on an error alert.
+      if (isAuthFlowError(e, 'NEEDS_CONFIRMATION')) {
+        try {
+          await resendConfirmCode(email);
+        } catch {
+          // ignore — the confirm screen offers a manual resend
+        }
+        navigation.navigate('ConfirmSignUp', { email: normEmail(email) });
         return;
       }
-      Alert.alert('Sign in failed', msg || 'Please try again.');
+
+      const msg = String(e?.message ?? '');
+      if (/already.*signed in/i.test(msg)) {
+        // Amplify already holds a session but our store may be stale (e.g. an
+        // offline cold start). Re-read the session before leaving so the app
+        // reflects the signed-in user instead of bouncing silently.
+        await useAuthStore.getState().init();
+        leaveAuthFlow(navigation as unknown as LeaveAuthNavigation);
+        return;
+      }
+      Alert.alert('Sign in failed', friendlyAuthError(e));
     }
   }
 
@@ -120,6 +135,8 @@ export default function SignInScreen({ navigation, route }: Props) {
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="email-address"
+                textContentType="username"
+                autoComplete="email"
                 placeholder="you@example.com"
                 placeholderTextColor={colors.inkMuted}
                 style={styles.input}
@@ -136,6 +153,8 @@ export default function SignInScreen({ navigation, route }: Props) {
                 autoCapitalize="none"
                 autoCorrect={false}
                 secureTextEntry={!showPwd}
+                textContentType="password"
+                autoComplete="current-password"
                 placeholder="Your password"
                 placeholderTextColor={colors.inkMuted}
                 style={styles.input}
@@ -152,6 +171,18 @@ export default function SignInScreen({ navigation, route }: Props) {
                 <Text style={styles.pillText}>{showPwd ? 'Hide' : 'Show'}</Text>
               </Pressable>
             </View>
+
+            <Pressable
+              testID="signin-forgot-password"
+              onPress={() =>
+                navigation.navigate('ForgotPassword', { email: normEmail(email) || undefined })
+              }
+              disabled={loading}
+              hitSlop={8}
+              style={({ pressed }) => [styles.forgotLink, pressed && styles.pressed]}
+            >
+              <Text style={styles.forgotText}>Forgot password?</Text>
+            </Pressable>
 
             <Pressable
               style={({ pressed }) => [
@@ -279,6 +310,9 @@ const styles = StyleSheet.create({
   },
   primaryText: { fontSize: 15, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.4 },
   rowCenter: { flexDirection: 'row', alignItems: 'center' },
+
+  forgotLink: { alignSelf: 'flex-end', marginTop: 10, paddingVertical: 4, paddingHorizontal: 2 },
+  forgotText: { fontSize: 13, fontWeight: '800', color: colors.pokeBlueDeep },
 
   dividerRow: { flexDirection: 'row', alignItems: 'center', marginTop: 14, marginBottom: 10 },
   dividerLine: { flex: 1, height: 1, backgroundColor: colors.hairline },

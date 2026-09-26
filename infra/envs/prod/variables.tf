@@ -58,3 +58,9 @@ variable "alert_email" {
   type      = string
   sensitive = true
 }
+
+variable "domain" {
+  type        = string
+  default     = "developercards.app"
+  description = "Apex hostname. api./cdn./console. hang under it; the zone is adopted, not created (E09)."
+}

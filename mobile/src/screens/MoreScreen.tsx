@@ -27,9 +27,12 @@ export function MoreScreen({ navigation }: Props) {
   const [snapshot, setSnapshot] = useState<StreakSnapshot | null>(null);
   const [collected, setCollected] = useState<number | null>(null);
 
+  // Load stats once at mount and again on every focus. Once tab hops reuse the
+  // mounted More (pop-navigation, MSHELL-01), a mount-only effect would leave
+  // the streak/collection numbers stale after a review or a draw.
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
+    const load = async () => {
       const [loadedSnapshot, collectedCount] = await Promise.all([
         loadStreakSnapshot(),
         (async () => {
@@ -45,11 +48,16 @@ export function MoreScreen({ navigation }: Props) {
       if (cancelled) return;
       setSnapshot(loadedSnapshot);
       setCollected(collectedCount);
-    })();
+    };
+    void load();
+    const unsubscribe = navigation.addListener?.('focus', () => {
+      void load();
+    });
     return () => {
       cancelled = true;
+      if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, []);
+  }, [navigation]);
 
   // An em dash while the reads are in flight, never a fake number.
   const dayStreak = snapshot === null ? '—' : String(snapshot.currentDailyStreak);

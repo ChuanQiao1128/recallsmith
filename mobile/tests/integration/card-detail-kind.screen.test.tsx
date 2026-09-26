@@ -13,6 +13,9 @@ vi.mock('react-native', () => {
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     Pressable: ({ children, onPress, ...props }: any) => React.createElement('Pressable', { ...props, onPress }, typeof children === 'function' ? children({ pressed: false }) : children),
+    // CardDetail now pulls in CodeBlock (via the shared CardAnswerSections),
+    // which reads Platform at module load.
+    Platform: { OS: 'ios', select: (o: any) => o.ios ?? o.default },
     StyleSheet: { create: (styles: any) => styles },
   };
 });
@@ -71,19 +74,35 @@ const DECK = {
 let ownedFixture: Set<string> | null = null;
 
 vi.mock('../../src/content/activeDeck', () => ({ loadActiveDeckSlug: vi.fn(async () => 'aws') }));
+
 vi.mock('../../src/content/deckRepository', () => ({ resolveDeckBySlug: vi.fn(async () => DECK) }));
+// This screen loads the deck through deckCache's guarded loader. Mock deckCache
+// to delegate straight to the (mocked) resolveDeckBySlug so the read keeps the
+// same shape the test drives, without the real cache's dynamic scope import.
+vi.mock('../../src/content/deckCache', async () => {
+  const repo = (await import('../../src/content/deckRepository')) as {
+    resolveDeckBySlug: (slug: string) => Promise<unknown>;
+  };
+  return {
+    getCachedDeck: (slug: string) => repo.resolveDeckBySlug(slug),
+    invalidateDeckCache: () => {},
+  };
+});
 vi.mock('../../src/review/storage', () => ({ loadDeckProgress: vi.fn(async () => []) }));
 vi.mock('../../src/features/gacha/draw/effectiveOwned', () => ({ resolveEffectiveOwned: vi.fn(async () => ownedFixture) }));
 
 import { CardDetailScreen } from '../../src/screens/CardDetailScreen';
+import { resolveDeckBySlug } from '../../src/content/deckRepository';
 import { applyRemoteFeatures } from '../../src/config/featureFlags';
+
+// Exactly 550 characters — a representative AWS stem length (p50 270, max 550 per the brief).
+const LONG_QUESTION = (
+  'A company must design a resilient, cost-effective architecture on AWS that durably captures every incoming order during seasonal traffic spikes and processes each one asynchronously with the least operational overhead possible. '
+).repeat(4).slice(0, 550);
 
 async function flush() {
   await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
   });
 }
 
@@ -109,6 +128,23 @@ async function renderScreen(cardId: string): Promise<renderer.ReactTestRenderer>
   });
   await flush();
   return tree;
+}
+
+function questionBlockText(tree: renderer.ReactTestRenderer) {
+  const nodes = tree.root.findAll((n) => (n.type as any) === 'View' && n.props.testID === 'card-detail-question');
+  expect(nodes).toHaveLength(1);
+  const texts = nodes[0].findAll((n) => (n.type as any) === 'Text');
+  expect(texts).toHaveLength(1);
+  return texts[0];
+}
+
+function heroBlob(tree: renderer.ReactTestRenderer): string {
+  const hero = tree.root.findAll((n) => typeof n.type === 'string' && n.props.testID === 'card-detail-hero');
+  expect(hero).toHaveLength(1);
+  return hero[0]
+    .findAll((n) => (n.type as any) === 'Text')
+    .map((n) => String(n.props.children ?? ''))
+    .join('\n');
 }
 
 function kindChipText(tree: renderer.ReactTestRenderer): string | null {
@@ -158,5 +194,48 @@ describe('CardDetailScreen MCQ hero chip', () => {
     const killed = await renderScreen('one');
     expect(kindChipText(killed)).toBeNull();
     expect(textBlob(killed)).toContain('Q one');
+  });
+});
+
+describe('CardDetailScreen full question', () => {
+  afterEach(() => applyRemoteFeatures(null));
+
+  it('renders a 550-character question in full below the hero', async () => {
+    expect(LONG_QUESTION.length).toBe(550);
+    const longDeck = {
+      ...DECK,
+      Cards: [{ StableUid: 'long', OrderInDeck: 1, Difficulty: 2, Question: LONG_QUESTION }],
+    };
+    // Persistent (not Once): the read now flows through deckCache, so the exact
+    // number of resolveDeckBySlug reads is an implementation detail of the cache;
+    // the deck returned is what matters and it is the same on every read.
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(longDeck as any);
+    ownedFixture = new Set(['long']);
+
+    const tree = await renderScreen('long');
+
+    const block = questionBlockText(tree);
+    expect(block.props.children).toBe(LONG_QUESTION);
+    expect(block.props.numberOfLines).toBeUndefined();
+
+    // The stem no longer lives inside the fixed, clipping hero.
+    expect(heroBlob(tree)).not.toContain(LONG_QUESTION);
+  });
+
+  it('shows the locked title in the question block without leaking the question', async () => {
+    const longDeck = {
+      ...DECK,
+      Cards: [{ StableUid: 'long', OrderInDeck: 1, Difficulty: 2, Question: LONG_QUESTION }],
+    };
+    // Persistent (not Once): the read now flows through deckCache, so the exact
+    // number of resolveDeckBySlug reads is an implementation detail of the cache;
+    // the deck returned is what matters and it is the same on every read.
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(longDeck as any);
+    ownedFixture = new Set(); // non-null and does not hold 'long' → locked
+
+    const tree = await renderScreen('long');
+
+    expect(questionBlockText(tree).props.children).toBe('Not in your collection yet');
+    expect(textBlob(tree)).not.toContain(LONG_QUESTION);
   });
 });

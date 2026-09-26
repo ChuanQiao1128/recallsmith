@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Amazon.Lambda.APIGatewayEvents;
@@ -142,7 +143,7 @@ public sealed class Res
     return Base(statusCode, s, extraHeaders);
   }
 
-  private APIGatewayProxyResponse Wrap(int statusCode, bool success, object? data, ApiError? error)
+  private APIGatewayProxyResponse Wrap(int statusCode, bool success, object? data, ApiError? error, IDictionary<string, string>? extraHeaders = null)
   {
     var envelope = new ApiEnvelope
     {
@@ -153,7 +154,7 @@ public sealed class Res
       Version = _apiVersion,
     };
 
-    return Base(statusCode, JsonSerializer.Serialize(envelope, JsonOptions));
+    return Base(statusCode, JsonSerializer.Serialize(envelope, JsonOptions), extraHeaders);
   }
 
   public APIGatewayProxyResponse Ok(object? data) => Wrap(200, true, data, null);
@@ -175,6 +176,18 @@ public sealed class Res
 
   public APIGatewayProxyResponse NotImplemented(string? message = null) =>
     Wrap(501, false, null, new ApiError { Code = "NOT_IMPLEMENTED", Message = message });
+
+  /// <summary>413: the decoded request body is over VpcFunction's 1 MiB cap. Envelope-shaped like every other error.</summary>
+  public APIGatewayProxyResponse PayloadTooLarge() =>
+    Wrap(413, false, null, new ApiError { Code = "PAYLOAD_TOO_LARGE", Message = "Request body exceeds 1048576 characters" });
+
+  /// <summary>
+  /// 503 with a retry-after header, for a dependency that is down rather than a request that is wrong.
+  /// The RevenueCat webhook keeps its own Raw() shape; this one is for envelope routes (E12 uses it).
+  /// </summary>
+  public APIGatewayProxyResponse ServiceUnavailable(string code, string? message, int retryAfterSec) =>
+    Wrap(503, false, null, new ApiError { Code = code, Message = message },
+      new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["retry-after"] = retryAfterSec.ToString(CultureInfo.InvariantCulture) });
 
   public APIGatewayProxyResponse Error500(Exception? ex)
   {

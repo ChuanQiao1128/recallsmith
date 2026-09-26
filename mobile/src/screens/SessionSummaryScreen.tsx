@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+import { goHome } from '../navigation/tabNavigation';
 import { RewardSummaryCard } from '../features/gacha/components/RewardSummaryCard';
 import { SummaryProgressBlock } from '../features/gacha/components/SummaryProgressBlock';
 import { buildDrawState } from '../features/gacha/draw/drawState';
@@ -40,7 +41,7 @@ function navigateFromActionKind(args: {
     return;
   }
 
-  navigation.navigate('Home');
+  goHome(navigation);
 }
 
 export function SessionSummaryScreen({ navigation, route }: Props) {
@@ -339,7 +340,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
                 // When the gold reward CTA is showing, this button is
                 // demoted to "Back to Home" so the two CTAs don't compete.
                 if (showRewardCallout) {
-                  navigation.navigate('Home');
+                  goHome(navigation);
                   return;
                 }
 

@@ -17,7 +17,7 @@
 // clock hook, never a derived-value hook off SkiaModule (the crash designed out
 // of the old holographic renderer).
 
-import React, { useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import type { ImageSourcePropType } from 'react-native';
 import { Reanimated, SkiaModule, skiaAvailable, type SharedValue } from './reanimatedGuard';
 import type { PeakRarity } from '../../features/gacha/draw/ceremonyTimings';
@@ -29,8 +29,6 @@ const {
   useDerivedValue,
   useAnimatedReaction,
   withTiming,
-  withRepeat,
-  cancelAnimation,
   interpolateColor,
   Easing,
 } = Reanimated;
@@ -51,6 +49,12 @@ export type StageCanvasProps = {
   particleSheet?: ImageSourcePropType;
   glowNineSlice?: ImageSourcePropType;
   cardCount: number;
+  /** MGACHA-11: true once the cards are on the table. While idle the canvas must not
+   *  start or keep any repeating animation of its own. G09 already replaced the old
+   *  repeating particle clock with a one-shot `burstElapsed`, so honouring idle here
+   *  means the flash reaction must not re-arm a burst — nothing is (re)started while
+   *  idle (including when the component mounts already idle). */
+  idle?: boolean;
   testID?: string;
 };
 
@@ -132,6 +136,18 @@ export function packSlotInStage(width: number, height: number): StageRect {
     width: sw,
     height: sh,
   };
+}
+
+/**
+ * The burst's elapsed time to feed `particlePose`, as a one-shot timeline (MGACHA-01): `-1`
+ * before a burst has fired (`!(burstElapsedMs >= 0)`, so NaN also reads as "no burst"), otherwise
+ * `Math.min(burstElapsedMs, lifeMs)` — a finished burst clamps at `lifeMs`, where `particlePose`
+ * is already invisible, so it never restarts (the old repeating-clock modulo replayed it).
+ */
+export function burstParticleElapsed(burstElapsedMs: number, lifeMs: number): number {
+  'worklet';
+  if (!(burstElapsedMs >= 0)) return -1;
+  return Math.min(burstElapsedMs, lifeMs);
 }
 
 /** Deterministic per-sprite pose in an upward cone with gravity; zeroed outside its life window. */
@@ -237,6 +253,7 @@ export const StageCanvas: React.NamedExoticComponent<StageCanvasProps> = React.m
     particleSheet,
     glowNineSlice,
     cardCount,
+    idle = false,
     testID,
   } = props;
 
@@ -268,30 +285,26 @@ export const StageCanvas: React.NamedExoticComponent<StageCanvasProps> = React.m
     return [{ rotate: raysAngle.value }];
   });
 
-  // Particle clock: a linear ramp used as the burst timebase. The effect is
-  // always registered; only its body is conditional so the hook count is stable
-  // when reduceMotion flips mid-mount.
-  const clock = useSharedValue(0);
-  const burstAt = useSharedValue(-1);
-  useEffect(() => {
-    if (reduceMotion) {
-      clock.value = 0;
-      return undefined;
-    }
-    clock.value = withRepeat(
-      withTiming(RAY_REVOLUTION_MS, { duration: RAY_REVOLUTION_MS, easing: Easing.linear }),
-      -1,
-      false,
-    );
-    return () => cancelAnimation(clock);
-  }, [clock, reduceMotion]);
+  // Particle burst timebase: a one-shot elapsed ramp, -1 while no burst is live. It is driven
+  // straight from the flash crossing (below) rather than a repeating clock, so a finished burst
+  // clamps at its life and never replays every RAY_REVOLUTION_MS the way the old modulo did.
+  const burstElapsed = useSharedValue(-1);
 
-  // Fire a burst when the flash crosses its threshold on the way up.
+  // Fire a burst when the flash crosses its threshold on the way up (never under reduceMotion):
+  // seed the elapsed ramp at 0, then run it linearly to the peak rarity's particle life.
   useAnimatedReaction(
     () => flash.value,
     (v: number, prev: number | null) => {
       'worklet';
-      if (prev !== null && prev < 0.4 && v >= 0.4) burstAt.value = clock.value;
+      if (reduceMotion) return;
+      // MGACHA-11: never (re)arm a burst while the stage is idle on the table, so the
+      // canvas starts no animation of its own once the cards are down.
+      if (idle) return;
+      if (prev !== null && prev < 0.4 && v >= 0.4) {
+        const life = PARTICLE_LIFE_MS[peakRarity];
+        burstElapsed.value = 0;
+        burstElapsed.value = withTiming(life, { duration: life, easing: Easing.linear });
+      }
     },
   );
 
@@ -305,11 +318,11 @@ export const StageCanvas: React.NamedExoticComponent<StageCanvasProps> = React.m
       return;
     }
     const count = PARTICLE_COUNT[peakRarity];
-    if (i >= count || burstAt.value < 0) {
+    const elapsed = burstParticleElapsed(burstElapsed.value, PARTICLE_LIFE_MS[peakRarity]);
+    if (i >= count || elapsed < 0) {
       val.set(0, 0, 0, 0);
       return;
     }
-    const elapsed = (clock.value - burstAt.value + RAY_REVOLUTION_MS) % RAY_REVOLUTION_MS;
     const pose = particlePose(i, elapsed, PARTICLE_LIFE_MS[peakRarity], origin, spread);
     const r = poseToRSXform(pose, PARTICLE_SPRITE_SIZE);
     val.set(r.scos, r.ssin, r.tx, r.ty);

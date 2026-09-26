@@ -45,6 +45,11 @@ export type TimelineInput = {
    *  as ghost outlines beside the cards. With the table in charge, `rim` stays 0 in every
    *  phase — driven through the shared values, never by re-rendering the canvas. */
   tapFlow?: boolean;
+  /** true while `playCeremonyTimeline` owns the approach→settle choreography on the UI
+   *  thread (G43). When set, the per-phase effect skips every phase except
+   *  'cards-on-table' — running the per-phase reset would clobber the assigned plan. It
+   *  flips true while the phase is still 'swipe', so the 'swipe' reset is skipped too. */
+  planned?: boolean;
 };
 
 // ── Constants (B00 §2.10 verbatim) ───────────────────────────────────────────
@@ -191,7 +196,7 @@ export function timelineTargets(
 type SpillValue = { x: SharedValue<number>; y: SharedValue<number>; rot: SharedValue<number> };
 
 export function useCeremonyTimeline(input: TimelineInput): CeremonyTimeline {
-  const { phase, peakRarity, isMulti, cardCount, timings, spill, reduceMotion, compressed, tapFlow = false } = input;
+  const { phase, peakRarity, isMulti, cardCount, timings, spill, reduceMotion, compressed, tapFlow = false, planned = false } = input;
   const n = Math.max(0, Math.min(cardCount, MAX_TIMELINE_CARDS));
 
   // Every shared value at its `swipe` rest value.
@@ -252,6 +257,13 @@ export function useCeremonyTimeline(input: TimelineInput): CeremonyTimeline {
 
   // Phase effect: apply the phase's animations to every shared value.
   useEffect(() => {
+    // While a UI-thread plan owns the approach→settle choreography (G43), the per-phase
+    // path must not re-assign anything — that would clobber the withDelay/withSequence
+    // offsets `playCeremonyTimeline` set at the tear. Reduce Motion and fast-forward
+    // (compressed) keep the per-phase path; 'cards-on-table' always runs (it lands after
+    // the plan, cancels the ray loop and re-asserts the resting targets). 'swipe' is
+    // skipped too: `planned` flips true while the phase is still 'swipe'.
+    if (planned && !reduceMotion && !compressed && phase !== 'cards-on-table') return;
     const T = timelineTargets({ phase, peakRarity, isMulti, reduceMotion, tapFlow });
     const E = resolveEasing;
 
@@ -427,6 +439,11 @@ export function useCeremonyTimeline(input: TimelineInput): CeremonyTimeline {
       default: {
         // Nothing new starts (§2 "Settle is mandatory"); re-assert resting targets
         // with duration 0 so a late mount still reads the resting state.
+        // MGACHA-11: stop the ray revolution so the Skia stage stops redrawing every
+        // frame once the cards are on the table — the rays freeze at their current angle
+        // and rest at their 0.1 resting opacity. The mount-time loop, the reduce-motion
+        // branch and the cleanup stay as they are.
+        cancelAnimation(raysAngle);
         const z = { duration: 0 };
         tell.value = withTiming(T.tell, z);
         dim.value = withTiming(T.dim, z);
@@ -442,7 +459,242 @@ export function useCeremonyTimeline(input: TimelineInput): CeremonyTimeline {
         break;
       }
     }
-  }, [phase, peakRarity, isMulti, reduceMotion, compressed, timings, spill, n, tapFlow]);
+  }, [phase, peakRarity, isMulti, reduceMotion, compressed, timings, spill, n, tapFlow, planned]);
 
   return timeline;
+}
+
+// ── UI-thread plan (G43) ──────────────────────────────────────────────────────
+//
+// The per-phase switch above assigns each shared value when React commits a phase, so a
+// busy JS thread stretches the phases and drifts sound from picture. `playCeremonyTimeline`
+// assigns the WHOLE approach→settle choreography once, at the tear, with `withDelay` /
+// `withSequence` offsets so it runs on the UI thread regardless of JS load. React `phase`
+// state is then only for copy, a11y, skip gating and the table mount, and the per-phase
+// effect skips itself via `planned`. Reduce Motion and fast-forward keep the per-phase path.
+
+type SequenceStep = { at: number; durationMs: number; animation: unknown };
+
+/**
+ * Lay `steps` end-to-end on one shared value as a single `withSequence`. Steps are sorted by
+ * their absolute `at`; a cursor tracks where the previous step finished, and each step becomes
+ * `withDelay(gap, animation)` (or the bare animation when the gap is 0) with
+ * `gap = max(0, round(at - cursor))` — never negative — then `cursor += gap + durationMs`.
+ * Returns the single part when there is one, else `withSequence(...parts)`.
+ */
+export function sequenceAt(steps: ReadonlyArray<SequenceStep>): unknown {
+  const sorted = steps
+    .map((step, i) => ({ step, i }))
+    .sort((a, b) => a.step.at - b.step.at || a.i - b.i)
+    .map(({ step }) => step);
+  let cursor = 0;
+  const parts: unknown[] = [];
+  for (const step of sorted) {
+    const gap = Math.max(0, Math.round(step.at - cursor));
+    parts.push(gap === 0 ? step.animation : withDelay(gap, step.animation));
+    cursor += gap + step.durationMs;
+  }
+  if (parts.length === 1) return parts[0];
+  return withSequence(...parts);
+}
+
+/**
+ * Assign every shared value ONE `sequenceAt([...])` covering approach→settle, reproducing the
+ * per-phase switch exactly (same targets, durations and easings). Called once at the tear by
+ * DrawCeremonyScreen when motion is on; the per-phase effect then skips itself via `planned`.
+ */
+export function playCeremonyTimeline(
+  timeline: CeremonyTimeline,
+  input: {
+    peakRarity: PeakRarity;
+    isMulti: boolean;
+    timings: ResolvedCeremonyTimings;
+    spill: SpillSchedule | null;
+    tapFlow?: boolean;
+  },
+): void {
+  const { peakRarity, isMulti, timings, spill, tapFlow = false } = input;
+  const E = resolveEasing;
+
+  const A = timings.approach;
+  const H = timings.hold;
+  const TF = timings.tearFlip;
+  const FR = timings.flashReveal;
+  const S = timings.settleMs;
+  const tHold = A;
+  const tTear = A + H;
+  const tFlash = tTear + TF;
+  const tSettle = tFlash + FR;
+  const tellMs = Math.round(H * TELL_FRACTION_OF_HOLD);
+  const pause = peakRarity === 'LEG' ? LEG_HIT_PAUSE_MS : 0;
+  const B = isMulti ? TEAR_BEATS.multi : TEAR_BEATS.single;
+  const n = timeline.rim.length;
+
+  const approachT = timelineTargets({ phase: 'approach', peakRarity, isMulti, reduceMotion: false, tapFlow });
+  const holdT = timelineTargets({ phase: 'hold', peakRarity, isMulti, reduceMotion: false, tapFlow });
+  const settleT = timelineTargets({ phase: 'settle', peakRarity, isMulti, reduceMotion: false, tapFlow });
+
+  // `sequenceAt` returns the opaque animation record the guard produces; assign it to the
+  // shared value through one typed cast so each call site stays a plain `assign(...)`.
+  const assign = (sv: SharedValue<number>, steps: ReadonlyArray<SequenceStep>): void => {
+    sv.value = sequenceAt(steps) as number;
+  };
+
+  assign(timeline.packScale, [
+    { at: 0, durationMs: A, animation: withTiming(approachT.packScale, { duration: A, easing: E(EASING.EMPHASIZED_OUT) }) },
+    { at: tFlash, durationMs: 200, animation: withTiming(1, { duration: 200, easing: E(EASING.STANDARD) }) },
+  ]);
+  assign(timeline.packY, [
+    { at: 0, durationMs: A, animation: withTiming(-24, { duration: A, easing: E(EASING.EMPHASIZED_OUT) }) },
+  ]);
+  assign(timeline.rays, [
+    { at: 0, durationMs: A, animation: withTiming(approachT.rays, { duration: A, easing: E(EASING.STANDARD) }) },
+    { at: tSettle, durationMs: S, animation: withTiming(0.1, { duration: S, easing: E(EASING.STANDARD) }) },
+  ]);
+  assign(timeline.halo, [
+    { at: 0, durationMs: A, animation: withTiming(approachT.halo, { duration: A, easing: E(EASING.STANDARD) }) },
+    { at: tHold, durationMs: tellMs, animation: withTiming(0.6, { duration: tellMs, easing: E(EASING.STANDARD) }) },
+    { at: tSettle, durationMs: S, animation: withTiming(0.35, { duration: S, easing: E(EASING.STANDARD) }) },
+  ]);
+  assign(timeline.seam, [
+    { at: 0, durationMs: SEAM_PRECUT_MS, animation: withTiming(SEAM_PRECUT, { duration: SEAM_PRECUT_MS, easing: E(EASING.OUT_QUAD) }) },
+    {
+      at: tTear + pause,
+      durationMs: Math.round(TF * B.seamEnd),
+      animation: withTiming(1, { duration: Math.round(TF * B.seamEnd), easing: E(EASING.OUT_CUBIC) }),
+    },
+  ]);
+  assign(timeline.tell, [
+    { at: tHold, durationMs: tellMs, animation: withTiming(1, { duration: tellMs, easing: E(EASING.STANDARD) }) },
+  ]);
+  assign(timeline.dim, [
+    { at: tHold, durationMs: tellMs, animation: withTiming(holdT.dim, { duration: tellMs, easing: E(EASING.STANDARD) }) },
+    { at: tSettle, durationMs: S, animation: withTiming(0, { duration: S, easing: E(EASING.STANDARD) }) },
+  ]);
+  assign(timeline.leak, [
+    { at: tHold, durationMs: tellMs, animation: withTiming(1, { duration: tellMs, easing: E(EASING.STANDARD) }) },
+    {
+      at: tTear + pause,
+      durationMs: 60,
+      animation: withSequence(withTiming(0.6, { duration: 0 }), withTiming(1, { duration: 60, easing: E(EASING.LINEAR) })),
+    },
+    { at: tFlash, durationMs: 200, animation: withTiming(0, { duration: 200, easing: E(EASING.STANDARD) }) },
+  ]);
+  if (peakRarity === 'LEG' && timings.beatMs > 0) {
+    const half = Math.round(1000 / SHIVER_HZ / 2);
+    const reps = Math.max(1, Math.round(timings.beatMs / (2 * half)));
+    assign(timeline.shiver, [
+      {
+        at: tHold + Math.max(0, H - timings.beatMs),
+        durationMs: reps * 2 * half,
+        animation: withRepeat(
+          withSequence(
+            withTiming(SHIVER_PX, { duration: half, easing: E(EASING.LINEAR) }),
+            withTiming(-SHIVER_PX, { duration: half, easing: E(EASING.LINEAR) }),
+          ),
+          reps,
+          false,
+        ),
+      },
+      { at: tTear, durationMs: 40, animation: withTiming(0, { duration: 40, easing: E(EASING.LINEAR) }) },
+    ]);
+  }
+  assign(timeline.peel, [
+    {
+      at: tTear + pause + Math.round(TF * B.peelStart),
+      durationMs: Math.round(TF * (B.peelEnd - B.peelStart)),
+      animation: withTiming(1, { duration: Math.round(TF * (B.peelEnd - B.peelStart)), easing: E(EASING.EMPHASIZED_OUT) }),
+    },
+  ]);
+  assign(timeline.cardOut, [
+    {
+      at: tTear + pause + Math.round(TF * B.cardOutStart),
+      durationMs: Math.round(TF * (B.cardOutEnd - B.cardOutStart)),
+      animation: withTiming(1, { duration: Math.round(TF * (B.cardOutEnd - B.cardOutStart)), easing: E(EASING.EMPHASIZED_OUT) }),
+    },
+  ]);
+  if (peakRarity === 'LEG') {
+    assign(timeline.cameraRot, [
+      {
+        at: tTear + pause,
+        durationMs: 360,
+        animation: withSequence(
+          withTiming(-0.5, { duration: 90, easing: E(EASING.OUT_QUAD) }),
+          withTiming(0.4, { duration: 90, easing: E(EASING.OUT_QUAD) }),
+          withTiming(-0.25, { duration: 90, easing: E(EASING.OUT_QUAD) }),
+          withTiming(0, { duration: 90, easing: E(EASING.OUT_QUAD) }),
+        ),
+      },
+      { at: tSettle, durationMs: S, animation: withTiming(0, { duration: S, easing: E(EASING.STANDARD) }) },
+    ]);
+  }
+  if (spill) {
+    for (const entry of spill.entries) {
+      if (entry.index < n) {
+        const o = spillSlotOffset(entry.slot, n);
+        const at = tTear + pause + entry.leaveAt;
+        const dur = spill.travelMs;
+        assign(timeline.spill[entry.index].x, [
+          { at, durationMs: dur, animation: withTiming(o.x, { duration: dur, easing: E(EASING.EMPHASIZED_OUT) }) },
+        ]);
+        assign(timeline.spill[entry.index].y, [
+          { at, durationMs: dur, animation: withTiming(o.y, { duration: dur, easing: E(EASING.EMPHASIZED_OUT) }) },
+        ]);
+        assign(timeline.spill[entry.index].rot, [
+          { at, durationMs: dur, animation: withTiming((o.rot * Math.PI) / 180, { duration: dur, easing: E(EASING.EMPHASIZED_OUT) }) },
+        ]);
+      }
+    }
+  }
+  assign(timeline.flash, [
+    {
+      at: tFlash,
+      durationMs: 320,
+      animation: withSequence(
+        withTiming(0.85, { duration: 60, easing: E(EASING.LINEAR) }),
+        withTiming(0, { duration: 260, easing: E(EASING.OUT_QUAD) }),
+      ),
+    },
+  ]);
+  assign(timeline.cameraScale, [
+    {
+      at: tFlash,
+      durationMs: 320,
+      animation: withSequence(
+        withTiming(1.04, { duration: 60, easing: E(EASING.LINEAR) }),
+        withTiming(1, { duration: 260, easing: E(EASING.OUT_QUAD) }),
+      ),
+    },
+  ]);
+  for (let i = 0; i < n; i++) {
+    assign(timeline.rim[i], [
+      { at: tSettle + i * 40, durationMs: 200, animation: withTiming(settleT.rim, { duration: 200, easing: E(EASING.STANDARD) }) },
+    ]);
+  }
+}
+
+/** Cancel every in-flight animation the plan started, so the per-phase path can take back
+ *  ownership for a fast-forward. `raysAngle` is left alone (its revolution loop is owned by
+ *  the mount effect, not the plan). */
+export function cancelCeremonyTimeline(timeline: CeremonyTimeline): void {
+  cancelAnimation(timeline.tell);
+  cancelAnimation(timeline.dim);
+  cancelAnimation(timeline.seam);
+  cancelAnimation(timeline.leak);
+  cancelAnimation(timeline.flash);
+  cancelAnimation(timeline.cameraScale);
+  cancelAnimation(timeline.cameraRot);
+  cancelAnimation(timeline.shiver);
+  cancelAnimation(timeline.packScale);
+  cancelAnimation(timeline.packY);
+  cancelAnimation(timeline.peel);
+  cancelAnimation(timeline.cardOut);
+  cancelAnimation(timeline.rays);
+  cancelAnimation(timeline.halo);
+  for (const s of timeline.spill) {
+    cancelAnimation(s.x);
+    cancelAnimation(s.y);
+    cancelAnimation(s.rot);
+  }
+  for (const r of timeline.rim) cancelAnimation(r);
 }

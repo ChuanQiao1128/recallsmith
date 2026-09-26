@@ -160,16 +160,16 @@ describe('Me tab · real data', () => {
   it('shows the stored audience preference, not the mock default', async () => {
     audienceFixture = 'all';
     const tree = await renderProfile();
-    // Exact text nodes, not a substring of the blob: the word "always"
-    // appears in the copy and made a `toContain('all')` pass for free.
+    // Profile shows the one shared audience label, not the raw storage key:
+    // 'all' → "Stretch". The mock default 'both' would render "Balanced".
     const texts = tree.root
       .findAll((node) => (node.type as any) === 'Text')
       .map((node) => {
         const c = node.props.children;
         return Array.isArray(c) ? c.join('') : String(c ?? '');
       });
-    expect(texts).toContain('all');
-    expect(texts).not.toContain('both');
+    expect(texts).toContain('Stretch');
+    expect(texts).not.toContain('Balanced');
   });
 
   it('no longer advertises the hardcoded Achievements and Milestone hall screens', async () => {

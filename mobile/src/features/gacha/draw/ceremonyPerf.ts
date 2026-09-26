@@ -10,11 +10,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const CEREMONY_PERF_STORAGE_KEY = 'recallsmith:ceremonyPerf:last';
-export const CEREMONY_PERF_VERSION = 1;
+export const CEREMONY_PERF_HISTORY_KEY = 'recallsmith:ceremonyPerf:history';
+export const CEREMONY_PERF_VERSION = 2;
+/** How many reports the rolling history keeps (newest first). */
+export const CEREMONY_PERF_HISTORY_LIMIT = 5;
 /** A JS frame interval above this counts as a dropped frame (two 60 Hz frames). */
 export const DROPPED_FRAME_MS = 32;
 /** Sampling stops after this many intervals (~66 s at 60 Hz) so a long table sit stays bounded. */
 export const MAX_FRAME_SAMPLES = 4000;
+/** Timer-slip samples stop being added past this count so a long tap-flow sit stays bounded. */
+export const MAX_TIMER_SAMPLES = 200;
 
 export type FrameStats = {
   frames: number; p50: number; p95: number; max: number; meanMs: number; dropped: number;
@@ -22,9 +27,15 @@ export type FrameStats = {
 export type UiFrameStats = { frames: number; dropped: number; max: number; meanMs: number };
 export type PhaseMark = { phase: string; atMs: number; durationMs: number | null };
 export type AudioLatencySample = { name: string; atMs: number; latencyMs: number };
+/** A scheduled timer's planned-vs-actual fire time (v2): slip = fired − planned. */
+export type TimerSlipSample = { name: string; plannedMs: number; firedMs: number; slipMs: number };
+/** The moment React committed a phase's effect, relative to the ceremony start (v2). */
+export type PhaseCommitMark = { phase: string; atMs: number };
 export type CeremonyPerfMeta = {
   renderer: 'skia' | 'fallback'; reduceMotion: boolean; cardCount: number; peakRarity: string;
   isMulti: boolean; tapFlow: boolean; slug?: string;
+  // v2, optional so stored v1 reports and the existing test literals still type-check.
+  audioWarmAtTear?: boolean; syncInFlightAtTear?: boolean;
 };
 export type CeremonyPerfDeviceInfo = {
   platform: string; osVersion: string | null; model: string | null; jsEngine: string;
@@ -41,6 +52,9 @@ export type CeremonyPerfReport = {
   phases: PhaseMark[];
   audio: AudioLatencySample[];
   device: CeremonyPerfDeviceInfo;
+  // v2, optional so stored v1 reports and the existing test literals still type-check.
+  timers?: TimerSlipSample[];
+  commits?: PhaseCommitMark[];
 };
 
 export type CeremonyPerfSession = {
@@ -49,6 +63,10 @@ export type CeremonyPerfSession = {
   /** Starts JS frame sampling now if it has not started. Idempotent. */
   beginFrames(): void;
   recordAudioLatency(name: string, latencyMs: number): void;
+  /** Records a scheduled timer's planned-vs-fired slip (v2). No-op when inactive or any arg non-finite. */
+  recordTimerSlip(name: string, plannedMs: number, firedMs: number): void;
+  /** Records when React committed a phase's effect, relative to the ceremony start (v2). */
+  markPhaseCommit(phase: string): void;
   /** The screen hands in a reader for its UI-thread counters; read once at stop(). */
   setUiSampler(read: (() => UiFrameStats | null) | null): void;
   /** Late facts (Reduce Motion resolves asynchronously after mount). */
@@ -176,7 +194,8 @@ export function collectDeviceInfo(): CeremonyPerfDeviceInfo {
   return info;
 }
 
-function defaultNow(): number {
+/** High-resolution monotonic clock: `performance.now()` when available, else `Date.now()`. */
+export function perfNow(): number {
   const perf = (globalThis as { performance?: { now?: () => number } }).performance;
   if (perf && typeof perf.now === 'function') return perf.now();
   return Date.now();
@@ -193,13 +212,28 @@ function defaultCaf(): CafLike | null {
 }
 
 async function defaultPersist(report: CeremonyPerfReport): Promise<void> {
+  // Prepend to the rolling history (newest first, capped), then overwrite the "last" key.
+  // History is written FIRST and the last key SECOND: the persistence test captures the
+  // final setItem value, which must stay the single latest report under the contract key.
+  let history: CeremonyPerfReport[] = [];
+  try {
+    const raw = await AsyncStorage.getItem(CEREMONY_PERF_HISTORY_KEY);
+    if (typeof raw === 'string') {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) history = parsed as CeremonyPerfReport[];
+    }
+  } catch {
+    history = [];
+  }
+  const next = [report, ...history].slice(0, CEREMONY_PERF_HISTORY_LIMIT);
+  await AsyncStorage.setItem(CEREMONY_PERF_HISTORY_KEY, JSON.stringify(next));
   await AsyncStorage.setItem(CEREMONY_PERF_STORAGE_KEY, JSON.stringify(report));
 }
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
 export function createCeremonyPerfSession(meta: CeremonyPerfMeta, deps: CeremonyPerfDeps = {}): CeremonyPerfSession {
-  const now = deps.now ?? defaultNow;
+  const now = deps.now ?? perfNow;
   const raf = deps.raf === undefined ? defaultRaf() : deps.raf;
   const caf = deps.caf === undefined ? defaultCaf() : deps.caf;
   const persist = deps.persist ?? defaultPersist;
@@ -212,6 +246,9 @@ export function createCeremonyPerfSession(meta: CeremonyPerfMeta, deps: Ceremony
   const intervals: number[] = [];
   const marks: Array<{ phase: string; atMs: number }> = [];
   const audio: AudioLatencySample[] = [];
+  const timers: TimerSlipSample[] = [];
+  const commits: PhaseCommitMark[] = [];
+  const round1 = (v: number): number => Math.round(v * 10) / 10;
   let uiRead: (() => UiFrameStats | null) | null = null;
   let active = true;
   let framesStarted = false;
@@ -261,6 +298,18 @@ export function createCeremonyPerfSession(meta: CeremonyPerfMeta, deps: Ceremony
     audio.push({ name, atMs: Math.round(now() - t0), latencyMs: Math.round(latencyMs * 10) / 10 });
   }
 
+  function recordTimerSlip(name: string, plannedMs: number, firedMs: number): void {
+    if (!active) return;
+    if (!Number.isFinite(plannedMs) || !Number.isFinite(firedMs)) return;
+    if (timers.length >= MAX_TIMER_SAMPLES) return;
+    timers.push({ name, plannedMs: Math.round(plannedMs), firedMs: round1(firedMs), slipMs: round1(firedMs - plannedMs) });
+  }
+
+  function markPhaseCommit(phase: string): void {
+    if (!active) return;
+    commits.push({ phase, atMs: Math.round(now() - t0) });
+  }
+
   function setUiSampler(read: (() => UiFrameStats | null) | null): void {
     uiRead = read;
   }
@@ -299,6 +348,8 @@ export function createCeremonyPerfSession(meta: CeremonyPerfMeta, deps: Ceremony
       phases: finalizePhases(marks, endMs),
       audio: [...audio],
       device: dev,
+      timers: [...timers],
+      commits: [...commits],
     };
     try {
       Promise.resolve(persist(report)).catch(() => {});
@@ -310,6 +361,8 @@ export function createCeremonyPerfSession(meta: CeremonyPerfMeta, deps: Ceremony
     markPhase,
     beginFrames,
     recordAudioLatency,
+    recordTimerSlip,
+    markPhaseCommit,
     setUiSampler,
     updateMeta,
     stop,
@@ -374,6 +427,24 @@ export async function loadLastCeremonyPerfReport(): Promise<CeremonyPerfReport |
   }
 }
 
+/** The rolling report history (newest first). Drops entries parse rejects; [] on any error. */
+export async function loadCeremonyPerfHistory(): Promise<CeremonyPerfReport[]> {
+  try {
+    const raw = await AsyncStorage.getItem(CEREMONY_PERF_HISTORY_KEY);
+    if (typeof raw !== 'string') return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: CeremonyPerfReport[] = [];
+    for (const entry of parsed) {
+      const report = parseCeremonyPerfReport(JSON.stringify(entry));
+      if (report) out.push(report);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 /** Human lines for the DebugMenu card (pure). */
 export function formatCeremonyPerfReport(report: CeremonyPerfReport): string[] {
   const lines: string[] = [];
@@ -404,6 +475,33 @@ export function formatCeremonyPerfReport(report: CeremonyPerfReport): string[] {
     lines.push(`Audio hits: ${report.audio.length} · p50 ${percentile(sorted, 50)} ms · max ${worst.latencyMs} ms (${worst.name})`);
   } else {
     lines.push('Audio hits: none');
+  }
+  if (report.timers && report.timers.length > 0) {
+    const sorted = [...report.timers.map((t) => t.slipMs)].sort((a, b) => a - b);
+    const worst = report.timers.reduce((acc, t) => (t.slipMs > acc.slipMs ? t : acc), report.timers[0]);
+    lines.push(`Timer slip: ${report.timers.length} timers · p50 ${percentile(sorted, 50)} ms · max ${worst.slipMs} ms (${worst.name})`);
+  }
+  if (report.commits && report.commits.length > 0) {
+    let maxLag = -Infinity;
+    let maxPhase = '';
+    let matched = 0;
+    for (const c of report.commits) {
+      // Lag against the latest phase mark of the same name at or before this commit.
+      let markAt: number | null = null;
+      for (const p of report.phases) {
+        if (p.phase === c.phase && p.atMs <= c.atMs && (markAt === null || p.atMs > markAt)) markAt = p.atMs;
+      }
+      if (markAt === null) continue; // skip commits with no matching mark
+      matched += 1;
+      const lag = c.atMs - markAt;
+      if (lag > maxLag) { maxLag = lag; maxPhase = c.phase; }
+    }
+    if (matched > 0) lines.push(`Commit lag: max ${maxLag} ms (${maxPhase}) · ${matched} phases`);
+  }
+  if (report.meta.audioWarmAtTear !== undefined || report.meta.syncInFlightAtTear !== undefined) {
+    const warm = report.meta.audioWarmAtTear === undefined ? '?' : report.meta.audioWarmAtTear ? 'warm' : 'cold';
+    const sync = report.meta.syncInFlightAtTear === undefined ? '?' : report.meta.syncInFlightAtTear ? 'in flight' : 'idle';
+    lines.push(`At tear: audio ${warm} · sync ${sync}`);
   }
   const d = report.device;
   lines.push(

@@ -18,10 +18,12 @@ import {
   rarityAccentColor,
 } from '../theme/packArt';
 import { useFeatureFlags } from '../config/featureFlags';
-import { CEREMONY_GAIN, useCeremonyAudio } from '../components/ceremonyAudio';
+import { useCeremonyAudio } from '../components/ceremonyAudio';
 import { useCeremonyHaptics } from '../components/ceremonyHaptics';
 import { GestureHandler, Reanimated, motionAvailable, skiaAvailable } from '../components/ceremony/reanimatedGuard';
 import {
+  BED_TABLE_FADE_DELAY_MS,
+  BED_TABLE_FADE_OUT_MS,
   FAST_FORWARD_FROM_HOLD_FRACTION,
   FAST_FORWARD_TEAR_FACTOR,
   REDUCED_MOTION_FLASH_MS,
@@ -30,29 +32,32 @@ import {
   compressTimings,
   phaseDurations,
   resolveCeremonyTimings,
+  tapFlipCueOffsets,
   type CeremonyPhase,
   type PeakRarity,
   type ResolvedCeremonyTimings,
 } from '../features/gacha/draw/ceremonyTimings';
 import { buildSpillSchedule, featuredCardIndex } from '../features/gacha/draw/spillSchedule';
-import { skipPolicy } from '../features/gacha/draw/skipPolicy';
+import { skipPolicy, shouldMarkCeremonyComplete } from '../features/gacha/draw/skipPolicy';
 import {
   effectiveCeremoniesCompleted,
   getCeremonyDevOverrides,
   markCeremonyCompleted,
   readCeremoniesCompleted,
 } from '../features/gacha/draw/ceremonyPrefs';
-import { tableSlotLayout, useCeremonyTimeline } from '../components/ceremony/useCeremonyTimeline';
+import { cancelCeremonyTimeline, playCeremonyTimeline, tableSlotLayout, useCeremonyTimeline } from '../components/ceremony/useCeremonyTimeline';
+import { buildCeremonyCues, cueTimesFromSchedule, type CeremonyCueAction } from '../features/gacha/draw/ceremonyCues';
 import { STAGE_TESTID, StageCanvas } from '../components/ceremony/StageCanvas';
 import { PackTear, seamProgressFromDelta } from '../components/ceremony/PackTear';
 import { TapCard, type TapCardData } from '../components/ceremony/TapCard';
 import { FallbackStage } from '../components/ceremony/FallbackStage';
 import { FeaturedCard, type FeaturedCardProps } from '../components/ceremony/FeaturedCard';
-import { SpillSampler } from '../components/ceremony/SpillSampler';
+import { SpillSampler, shouldMountSpillSampler } from '../components/ceremony/SpillSampler';
 import { SwipeHint } from '../components/ceremony/SwipeHint';
 import { ceremonyStyles as styles } from '../components/ceremony/ceremonyStyles';
 import { prefetchCeremonyImages } from '../components/ceremony/imagePrefetch';
-import { DROPPED_FRAME_MS, startCeremonyPerf, type CeremonyPerfSession, type UiFrameStats } from '../features/gacha/draw/ceremonyPerf';
+import { DROPPED_FRAME_MS, perfNow, startCeremonyPerf, type CeremonyPerfSession, type UiFrameStats } from '../features/gacha/draw/ceremonyPerf';
+import { isDrawStateSyncInFlight } from '../sync/syncActivity';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DrawCeremony'>;
 
@@ -131,7 +136,6 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const cardBackImage = useMemo(() => cardBackImageForSlug(route.params.slug), [route.params.slug]);
   const accent = rarityAccentColor(peakRarity);
   const pitySeal = route.params.pityCardIndex != null;
-  const bedName = peakRarity === 'LEG' ? 'choir-swell' : peakRarity === 'RAR' ? 'shimmer-pad' : 'air';
 
   const flags = useFeatureFlags();
   const dev = getCeremonyDevOverrides();
@@ -153,6 +157,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const [ceremoniesCompleted, setCeremoniesCompleted] = useState(0);
   const [tellLanded, setTellLanded] = useState(false);
   const [compressed, setCompressed] = useState(false);
+  const [planned, setPlanned] = useState(false);
   const [activeTimings, setActiveTimings] = useState<ResolvedCeremonyTimings>(timings);
   // The visible "Swipe to open" affordance: shown through the swipe phase until the first
   // touch on the stage (any path: the GH pan on the pack, the stage responder, a plain tap).
@@ -163,8 +168,15 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const phaseRef = useRef<CeremonyPhase>('swipe');
   const flippedRef = useRef<Set<string>>(flippedSet);
   const phaseStartedAtRef = useRef<number>(0);
+  // The Date.now() at which the UI-thread plan started (G43). The sequence effect shifts the
+  // phase timers and cues by how long the plan has already been running, so a busy JS thread
+  // between the tear and the effect commit never doubles the head of the schedule.
+  const sequenceStartedAtRef = useRef<number>(0);
   const goResultRef = useRef<() => void>(() => {});
   const perfRef = useRef<CeremonyPerfSession | null>(null);
+  // Set once the ceremony reaches settle/table, so completion is recorded exactly once per
+  // ceremony regardless of how the player leaves (Skip, the leave button, or the Continue CTA).
+  const completionMarkedRef = useRef(false);
 
   const audio = useCeremonyAudio();
   const haptics = useCeremonyHaptics();
@@ -183,7 +195,12 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     uiSum.value += dt;
     if (dt > uiMax.value) uiMax.value = dt;
     if (dt > DROPPED_FRAME_MS) uiDropped.value += 1;
-  }, true);
+  }, false);
+  // UI-thread frame counting starts at the tear (first non-'swipe' phase), not at mount,
+  // so idle swipe-screen time never dilutes the mean. setActive(true) fires once.
+  const uiFrameCallbackRef = useRef(uiFrameCallback);
+  uiFrameCallbackRef.current = uiFrameCallback;
+  const uiFramesStartedRef = useRef(false);
 
   // Perf recorder + warm-up: every audio player exists and the ceremony bitmaps are in
   // the image cache before the tear is interactive (design §3.8); the report lands in
@@ -230,6 +247,16 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     phaseRef.current = phase;
+    perfRef.current?.markPhaseCommit(phase);
+  }, [phase]);
+  // Reaching settle or the table (any path — including the reduced-motion run) counts the
+  // ceremony as completed exactly once, so players who always press Skip still unlock the
+  // fast-forward on their next pull (MGACHA-09). The Continue CTA no longer marks it itself.
+  useEffect(() => {
+    if (shouldMarkCeremonyComplete(phase, completionMarkedRef.current)) {
+      completionMarkedRef.current = true;
+      markCeremonyCompleted().catch(() => {});
+    }
   }, [phase]);
   useEffect(() => {
     flippedRef.current = flippedSet;
@@ -241,6 +268,10 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const setPhaseAt = useCallback((p: CeremonyPhase) => {
     phaseStartedAtRef.current = Date.now();
     perfRef.current?.markPhase(p);
+    if (p !== 'swipe' && !uiFramesStartedRef.current) {
+      uiFramesStartedRef.current = true;
+      try { uiFrameCallbackRef.current?.setActive(true); } catch {}
+    }
     setPhase(p);
   }, []);
 
@@ -260,6 +291,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     // With the RN tap table on, the Skia StageRims have no card to sit behind (the table
     // fans two rows on its own geometry from 6 cards), so the timeline keeps `rim` at 0.
     tapFlow: enableTapFlow,
+    planned,
   });
   const durations = useMemo(() => phaseDurations(activeTimings), [activeTimings]);
 
@@ -313,8 +345,17 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     audio.hit('whoosh');
     audio.bed('air');
     haptics.tick();
+    // Assign the whole approach→settle choreography once, now, on the UI thread (G43). The
+    // per-phase path then skips itself via `planned`; Reduce Motion never plans (its per-phase
+    // crossfades stay). The cue schedule and phase timers still ride the JS thread, both
+    // anchored to this one start timestamp.
+    if (!reduceMotion) {
+      sequenceStartedAtRef.current = Date.now();
+      playCeremonyTimeline(timeline, { peakRarity, isMulti, timings, spill, tapFlow: enableTapFlow });
+      setPlanned(true);
+    }
     setSequenceToken((token) => token + 1);
-  }, [audio, haptics]);
+  }, [audio, haptics, reduceMotion, timeline, peakRarity, isMulti, timings, spill, enableTapFlow]);
 
   // Reduce-motion detection (kept verbatim from the pre-1.6 screen).
   useEffect(() => {
@@ -352,7 +393,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const runSchedule = useCallback(
     (entries: ScheduleEntry[]) => {
       for (const e of entries) {
+        const scheduledAt = perfNow();
         const id = setTimeout(() => {
+          perfRef.current?.recordTimerSlip(e.phase, e.at, perfNow() - scheduledAt);
           if (e.phase === 'settle') {
             setPhaseAt('settle');
             setCanSkip(true);
@@ -374,6 +417,55 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     [enableTapFlow, setPhaseAt],
   );
 
+  // Dispatch one cue to the B04 controllers. `bed` only receives `{ gain, fadeMs }` for the
+  // keys that are defined, so a plain `bed(name)` keeps its module defaults.
+  const fireCue = useCallback(
+    (action: CeremonyCueAction) => {
+      switch (action.kind) {
+        case 'bed': {
+          const opts: { gain?: number; fadeMs?: number } = {};
+          if (action.gain !== undefined) opts.gain = action.gain;
+          if (action.fadeMs !== undefined) opts.fadeMs = action.fadeMs;
+          audio.bed(action.name, Object.keys(opts).length > 0 ? opts : undefined);
+          break;
+        }
+        case 'hit':
+          audio.hit(action.name);
+          break;
+        case 'tail':
+          audio.tail(action.name);
+          break;
+        case 'duck':
+          audio.duck(action.gain, action.ms);
+          break;
+        case 'impact':
+          haptics.impact(action.style);
+          break;
+        case 'success':
+          haptics.success();
+          break;
+      }
+    },
+    [audio, haptics],
+  );
+
+  // Fire the phase-relative cue list from the same start as the phase timers: `at <= 0` cues
+  // fire synchronously in this tick; the rest ride setTimeout ids on timers.current, so every
+  // existing clear (re-run, compress, unmount) cancels them.
+  const scheduleCues = useCallback(
+    (list: Array<{ at: number; action: CeremonyCueAction }>) => {
+      for (const cue of list) {
+        if (cue.at <= 0) {
+          fireCue(cue.action);
+        } else {
+          const id = setTimeout(() => fireCue(cue.action), cue.at) as unknown as number;
+          timers.current.push(id);
+        }
+      }
+    },
+    [fireCue],
+  );
+
   // The single sequence effect: startSequence bumps the token, timers do the rest.
   useEffect(() => {
     timers.current.forEach((t) => clearTimeout(t));
@@ -386,6 +478,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
     if (reduceMotion) {
       setPhaseAt('flash-reveal');
+      perfRef.current?.updateMeta({ audioWarmAtTear: audio.isWarm(), syncInFlightAtTear: isDrawStateSyncInFlight() });
       const settleCue = setTimeout(() => {
         setPhaseAt('settle');
         setCanSkip(true);
@@ -400,6 +493,14 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
         }
       }, REDUCED_MOTION_FLASH_MS + REDUCED_MOTION_SETTLE_MS) as unknown as number;
       timers.current.push(settleCue, tail);
+      // The reduced-motion crossfade has no tear/hold phase, so only the flash-reveal and
+      // settle cues fire — the flash burst at once, the sparkle tail on the reduced schedule.
+      scheduleCues(
+        cueTimesFromSchedule(buildCeremonyCues({ peakRarity, isMulti, timings }), [
+          { at: 0, phase: 'flash-reveal' },
+          { at: REDUCED_MOTION_FLASH_MS, phase: 'settle' },
+        ]),
+      );
       return () => {
         timers.current.forEach((t) => clearTimeout(t));
       };
@@ -413,19 +514,19 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     }
 
     setPhaseAt('approach');
-    runSchedule(scheduleFrom('approach', timings, 0));
+    perfRef.current?.updateMeta({ audioWarmAtTear: audio.isWarm(), syncInFlightAtTear: isDrawStateSyncInFlight() });
+    // The UI-thread plan may already have been running since the tear; shift the JS phase
+    // timers and the cue schedule back by that elapsed time (clamped at 0) so a busy thread
+    // between the tear and this commit never replays the head of the schedule.
+    const elapsed = sequenceStartedAtRef.current > 0 ? Math.max(0, Date.now() - sequenceStartedAtRef.current) : 0;
+    const entries = scheduleFrom('approach', timings, 0).map((e) => ({ ...e, at: Math.max(0, e.at - elapsed) }));
+    runSchedule(entries);
+    scheduleCues(cueTimesFromSchedule(buildCeremonyCues({ peakRarity, isMulti, timings }), entries));
     const tellTimer = setTimeout(
       () => setTellLanded(true),
-      timings.approach + Math.round(timings.hold * FAST_FORWARD_FROM_HOLD_FRACTION),
+      Math.max(0, timings.approach + Math.round(timings.hold * FAST_FORWARD_FROM_HOLD_FRACTION) - elapsed),
     ) as unknown as number;
     timers.current.push(tellTimer);
-    if (timings.beatMs > 0) {
-      const beatTimer = setTimeout(
-        () => audio.duck(CEREMONY_GAIN.duck, 80),
-        timings.approach + timings.hold - timings.beatMs,
-      ) as unknown as number;
-      timers.current.push(beatTimer);
-    }
 
     return () => {
       timers.current.forEach((t) => clearTimeout(t));
@@ -445,27 +546,35 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     if (skipDecision !== 'compress') return;
     const elapsed = Date.now() - phaseStartedAtRef.current;
     const c = compressTimings(timings, phase === 'hold' ? elapsed : timings.hold);
+    // Hand animation back to the per-phase path: cancel the UI-thread plan's in-flight
+    // animations and clear `planned` so the phase effect assigns the compressed timings again.
+    cancelCeremonyTimeline(timeline);
+    setPlanned(false);
     timers.current.forEach((t) => clearTimeout(t));
     timers.current = [];
+    let entries: ScheduleEntry[] = [];
     if (phase === 'hold') {
-      runSchedule(scheduleFrom('hold', c, 0));
+      entries = scheduleFrom('hold', c, 0);
     } else if (phase === 'tear-flip') {
-      const entries = scheduleFrom('tear-flip', c, 0);
+      entries = scheduleFrom('tear-flip', c, 0);
       if (entries.length > 0) {
         entries[0] = {
           ...entries[0],
           at: Math.max(0, Math.round((timings.tearFlip - elapsed) / FAST_FORWARD_TEAR_FACTOR)),
         };
       }
-      runSchedule(entries);
     } else if (phase === 'flash-reveal') {
-      runSchedule(scheduleFrom('flash-reveal', c, elapsed));
+      entries = scheduleFrom('flash-reveal', c, elapsed);
     }
+    runSchedule(entries);
+    // Reschedule the remaining cues on the compressed timeline (the plan's cues were cleared
+    // with the timers above); phases already fired keep whatever cues had already played.
+    scheduleCues(cueTimesFromSchedule(buildCeremonyCues({ peakRarity, isMulti, timings: c }), entries));
     setCompressed(true);
     setActiveTimings(c);
     audio.duck(0, 60);
     haptics.tick();
-  }, [skipDecision, timings, phase, runSchedule, audio, haptics]);
+  }, [skipDecision, timings, phase, runSchedule, audio, haptics, timeline, scheduleCues, peakRarity, isMulti]);
 
   // Reduce-motion cues on mount / RM change.
   useEffect(() => {
@@ -477,36 +586,21 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     }
   }, [reduceMotion]);
 
-  // Per-phase audio/haptic cues (fire-and-forget through the B04 controllers).
+  // The approach→settle cues now come from `buildCeremonyCues` (scheduled from the same start
+  // as the phase timers), so the per-phase cue effect only keeps the table bed fade, which
+  // happens after the cards reach the table — outside the tear timeline (G09 / MGACHA-02).
   useEffect(() => {
-    if (phase === 'hold') {
-      // The bed starts now; the impact aligned with the tell is fired by the tell timer below.
-      audio.bed(bedName, { gain: CEREMONY_GAIN.bed[peakRarity] });
-    } else if (phase === 'tear-flip') {
-      audio.hit('rip');
-      haptics.impact('light');
-      if (isMulti) {
-        const id = setTimeout(() => audio.hit('stack-thud'), Math.round(activeTimings.tearFlip * 0.5)) as unknown as number;
-        timers.current.push(id);
-      }
-    } else if (phase === 'flash-reveal') {
-      audio.hit('seam-burst');
-      if (peakRarity === 'LEG') audio.hit('stinger');
-      else if (peakRarity === 'RAR') audio.hit('chime');
-      haptics.impact(peakRarity === 'LEG' ? 'heavy' : peakRarity === 'RAR' ? 'medium' : 'light');
-      if (peakRarity === 'LEG') haptics.success();
-    } else if (phase === 'settle') {
-      if (peakRarity !== 'COM') audio.tail('sparkle-tail');
-      audio.bed(bedName, { gain: CEREMONY_GAIN.bedTable });
+    if (phase === 'cards-on-table') {
+      // Fade the ambience bed out 1.5 s after the cards land, before expo-audio's non-gapless
+      // 8 s ambience loop can wrap (MGACHA-02). The id rides timers.current so unmount/restart
+      // clears it; tap-flip hits play afterwards on their own separate players.
+      const id = setTimeout(
+        () => audio.bed(null, { fadeMs: BED_TABLE_FADE_OUT_MS }),
+        BED_TABLE_FADE_DELAY_MS,
+      ) as unknown as number;
+      timers.current.push(id);
     }
   }, [phase]);
-
-  // The tell impact lands with the colour (RAR/LEG only) when tellLanded flips true.
-  useEffect(() => {
-    if (tellLanded && phase === 'hold' && peakRarity !== 'COM') {
-      haptics.impact(peakRarity === 'LEG' ? 'heavy' : 'medium');
-    }
-  }, [tellLanded]);
 
   // Stop all audio on unmount.
   useEffect(() => {
@@ -524,13 +618,30 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   }, [phaseTitleText]);
 
   const onTapStart = useCallback(
-    (card: TapCardData) => {
-      audio.hit('card-flip');
-      if (card.rarity === 'RAR') audio.hit('chime');
-      else if (card.rarity === 'LEG') audio.hit('legendary');
+    (card: TapCardData, flipDelayMs: number) => {
+      // Immediate touch feedback stays on the tap.
       haptics.impact('soft');
+      if (reduceMotion) {
+        // No visual flip animation to align to — play the flip sound and sting at once.
+        audio.hit('card-flip');
+        if (card.rarity === 'RAR') audio.hit('chime');
+        else if (card.rarity === 'LEG') audio.hit('legendary');
+        return;
+      }
+      // Otherwise schedule the flip sound to the visual flip (lift end) and the rarity sting to
+      // the flip midpoint (when the face appears), instead of firing both at tap time (MGACHA-07).
+      const { flipAtMs, stingAtMs } = tapFlipCueOffsets(card.rarity, flipDelayMs, activeTimings);
+      const flipId = setTimeout(() => audio.hit('card-flip'), flipAtMs) as unknown as number;
+      timers.current.push(flipId);
+      if (stingAtMs !== null) {
+        const stingId = setTimeout(
+          () => audio.hit(card.rarity === 'LEG' ? 'legendary' : 'chime'),
+          stingAtMs,
+        ) as unknown as number;
+        timers.current.push(stingId);
+      }
     },
-    [audio, haptics],
+    [audio, haptics, activeTimings, reduceMotion],
   );
   const onFlipped = useCallback((uid: string) => {
     setFlippedSet((s) => {
@@ -543,7 +654,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     setFocusedUid((cur) => (cur === uid ? null : uid));
   }, []);
   const onContinue = useCallback(() => {
-    markCeremonyCompleted().catch(() => {});
+    // Completion is already recorded by the phase effect on reaching settle/table; just leave.
     goResult();
   }, [goResult]);
 
@@ -713,6 +824,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
                 particleSheet={PARTICLE_SHEET}
                 glowNineSlice={GLOW_9SLICE}
                 cardCount={cards.length}
+                idle={phase === 'cards-on-table'}
               />
             ) : null}
 
@@ -758,7 +870,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
             {renderer === 'skia' && showFeatured ? <FeaturedCard {...featuredProps} /> : null}
 
-            {phase === 'tear-flip' && isMulti ? (
+            {shouldMountSpillSampler(phase, isMulti, renderer) ? (
               <SpillSampler durationMs={activeTimings.tearFlip} renderer={renderer} />
             ) : null}
 

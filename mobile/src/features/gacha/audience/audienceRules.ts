@@ -4,10 +4,16 @@ export type AudienceCandidateRow = {
   difficulty: number;
 };
 
+// One vocabulary for the audience preference, shared by the survey, the
+// Settings chips and Profile. These three words are the single label source.
+export const AUDIENCE_LABELS: Readonly<Record<AudiencePreference, string>> = {
+  junior: 'Junior',
+  both: 'Balanced',
+  all: 'Stretch',
+};
+
 export function getAudiencePreferenceLabel(pref: AudiencePreference): string {
-  if (pref === 'junior') return 'Junior';
-  if (pref === 'all') return 'Stretch';
-  return 'Balanced';
+  return AUDIENCE_LABELS[pref] ?? AUDIENCE_LABELS.both;
 }
 
 function matchesPreference(pref: AudiencePreference, difficulty: number): boolean {

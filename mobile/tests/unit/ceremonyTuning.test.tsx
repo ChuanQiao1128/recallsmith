@@ -297,7 +297,14 @@ describe('CeremonyTuning screen + DebugMenu ceremony seeds', () => {
       tree.root.findByProps({ testID: 'debug-ceremony-tuning' }).props.onPress();
     });
     expect(navigate).toHaveBeenCalledWith('CeremonyTuning');
-    expect(findPressableByText(tree, 'Open error shell')).toBeTruthy();
+    const errorShellPressables = tree.root.findAll(
+      (node) =>
+        (node.type as any) === 'Pressable' &&
+        node.findAll(
+          (child) => (child.type as any) === 'Text' && child.props.children === 'Open error shell',
+        ).length > 0,
+    );
+    expect(errorShellPressables).toHaveLength(0);
   });
 
   it('DebugMenu hides the ceremony tools when __DEV__ is false', async () => {
@@ -308,6 +315,7 @@ describe('CeremonyTuning screen + DebugMenu ceremony seeds', () => {
       tree = renderer.create(<DebugMenuScreen navigation={{ navigate } as any} route={{ key: 'debug', name: 'DebugMenu' } as any} />);
     });
     expect(tree.root.findAllByProps({ testID: 'debug-ceremony-tools' }).length).toBe(0);
-    expect(tree.root.findAllByProps({ testID: 'debug-reset-progress' }).length).toBeGreaterThan(0);
+    // The DANGER ZONE reset is now __DEV__-only too — production is read-only.
+    expect(tree.root.findAllByProps({ testID: 'debug-reset-progress' }).length).toBe(0);
   });
 });

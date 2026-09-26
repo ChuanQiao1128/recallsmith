@@ -16,6 +16,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { useAuthStore } from '../auth/authStore';
+import { friendlyAuthError, isAuthFlowError } from '../auth/authErrors';
+import { evaluatePassword, isPasswordValid } from '../auth/passwordPolicy';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUp'>;
@@ -27,24 +29,43 @@ function normEmail(v: string) {
 export default function SignUpScreen({ navigation }: Props) {
   const loading = useAuthStore((s) => s.loading);
   const signUpWithEmail = useAuthStore((s) => s.signUpWithEmail);
+  const resendConfirmCode = useAuthStore((s) => s.resendConfirmCode);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
 
+  const passwordRules = useMemo(() => evaluatePassword(password), [password]);
+
   const canSubmit = useMemo(() => {
-    return normEmail(email).length >= 3 && password.length >= 8 && !loading;
+    return normEmail(email).length >= 3 && isPasswordValid(password) && !loading;
   }, [email, password, loading]);
 
   async function onSubmit() {
     if (!canSubmit) return;
 
+    const e = normEmail(email);
     try {
-      const e = normEmail(email);
       await signUpWithEmail(e, password);
       navigation.replace('ConfirmSignUp', { email: e });
-    } catch (e: any) {
-      Alert.alert('Sign up failed', e?.message ?? 'Please try again.');
+    } catch (err: any) {
+      if (isAuthFlowError(err, 'USERNAME_EXISTS')) {
+        // The email is taken. If it's an unconfirmed account, resending the
+        // code succeeds and we route to ConfirmSignUp so the user can finish;
+        // if it throws, the account is confirmed — point them at sign in.
+        try {
+          await resendConfirmCode(e);
+          navigation.replace('ConfirmSignUp', { email: e });
+        } catch {
+          Alert.alert(
+            'Account already exists',
+            'This email already has an account. Sign in instead.',
+            [{ text: 'Sign in', onPress: () => navigation.replace('SignIn', { email: e }) }],
+          );
+        }
+        return;
+      }
+      Alert.alert('Sign up failed', friendlyAuthError(err));
     }
   }
 
@@ -95,6 +116,8 @@ export default function SignUpScreen({ navigation }: Props) {
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="email-address"
+                textContentType="username"
+                autoComplete="email"
                 placeholder="you@example.com"
                 placeholderTextColor="#9CA3AF"
                 style={styles.input}
@@ -103,7 +126,7 @@ export default function SignUpScreen({ navigation }: Props) {
               />
             </View>
 
-            <Text style={[styles.label, { marginTop: 12 }]}>Password (min 8 chars)</Text>
+            <Text style={[styles.label, { marginTop: 12 }]}>Password</Text>
             <View style={styles.inputWrap}>
               <TextInput
                 value={password}
@@ -111,6 +134,9 @@ export default function SignUpScreen({ navigation }: Props) {
                 autoCapitalize="none"
                 autoCorrect={false}
                 secureTextEntry={!showPwd}
+                textContentType="newPassword"
+                autoComplete="new-password"
+                passwordRules="minlength: 8; required: lower; required: upper; required: digit; required: special;"
                 placeholder="Create a password"
                 placeholderTextColor="#9CA3AF"
                 style={styles.input}
@@ -126,6 +152,18 @@ export default function SignUpScreen({ navigation }: Props) {
               >
                 <Text style={styles.pillText}>{showPwd ? 'Hide' : 'Show'}</Text>
               </Pressable>
+            </View>
+
+            <View style={styles.checklist}>
+              {passwordRules.map((rule) => (
+                <Text
+                  key={rule.id}
+                  testID={`signup-password-rule-${rule.id}`}
+                  style={[styles.checklistItem, rule.ok && styles.checklistItemOk]}
+                >
+                  {(rule.ok ? '✓' : '•') + ' ' + rule.label}
+                </Text>
+              ))}
             </View>
 
             <Pressable
@@ -235,6 +273,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(79,70,229,0.10)',
   },
   pillText: { color: '#4F46E5', fontWeight: '800', fontSize: 12 },
+
+  checklist: { marginTop: 10, gap: 2 },
+  checklistItem: { fontSize: 12, color: '#6B7280', fontWeight: '600' },
+  checklistItemOk: { color: '#047857' },
 
   primaryBtn: {
     marginTop: 16,

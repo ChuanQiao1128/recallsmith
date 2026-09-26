@@ -1030,4 +1030,6 @@ counts 变成 O(1) 读、筛选变成 O(结果集),progress 变更只增量更�
      - frontend/src/components/deckList/     :951 那条 2026-08-18 补注写的是当时的位置；
        2026-08-18 阶段 D 又把这 5 个组件整体搬进 frontend/src/features/deckList/components/。
        补注本身是历史记录，原样保留。
+     - mobile/src/mock/                       :1004 引用的 mock 数据目录已在 R1.7.0 G20 删除；
+       正文的句子与时态保持原样。
 -->

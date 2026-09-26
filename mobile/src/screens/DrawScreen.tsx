@@ -7,27 +7,33 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+import { errorToMessage } from '../api/errorKind';
+import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
-import { checkManifestForUpdates, installDeckFromUrl, listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
+import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
+import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
 import { deckShortTitle } from '../content/deckShortTitle';
 import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
 import { loadDrawState } from '../features/gacha/draw/drawStateStore';
 import { buildPityProgressLabelV9, DEFAULT_PITY_STATE, normalizePityState } from '../features/gacha/draw/pity';
+import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../features/gacha/draw/ceremonyTimings';
 import {
   consumePullsFromStoredWallet,
   loadRewardWalletState,
   refundPullsToStoredWallet,
-  type RewardWalletState,
 } from '../features/gacha/rewards/rewardWallet';
+import { spendablePullsNow } from '../features/gacha/rewards/spendablePulls';
 import { scheduleProgressSync } from '../sync/progressSync';
 import { a11y } from '../theme/a11y';
 import { colors } from '../theme/colors';
+import { CHROME_MAX_FONT_SCALE, packSizeForWindowHeight, useWindowHeight } from '../theme/dynamicType';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 import { PAGE_GRADIENT_LIGHT, packImageForSlug, packPaletteFromSlug, type PackPalette } from '../theme/packArt';
 import { prewarmCeremonyAudio } from '../components/ceremonyAudio';
 import { prewarmFoilShader } from '../components/ceremony/FoilLayer';
+import type { DeckExport } from '../types/deckExport';
 
 function readRN<T = any>(key: string, fallback: T): T {
   try {
@@ -62,10 +68,6 @@ const SWIPE_ARM_DISTANCE = 72;
 const SWIPE_TRACK_WIDTH = 200;
 const PACK_WIDTH = 240;
 const PACK_HEIGHT = 336;
-
-function spendablePulls(wallet: RewardWalletState): number {
-  return Math.max(0, Number(wallet.availablePulls ?? 0) || 0);
-}
 
 function normalizeTitle(raw: any, fallback: string): string {
   const fromManifest = String(raw?.title ?? raw?.Title ?? raw?.name ?? raw?.displayName ?? '').trim();
@@ -211,6 +213,7 @@ function PackArt({
   title,
   badgeText,
   coverImage,
+  packSize,
 }: {
   palette: PackPalette;
   bobbingValue: any;
@@ -218,11 +221,12 @@ function PackArt({
   title: string;
   badgeText: string;
   coverImage: any;
+  packSize: { width: number; height: number };
 }) {
   const translateY = hasAnimated && bobbingValue ? bobbingValue.interpolate({ inputRange: [0, 1], outputRange: [-14, 14] }) : 0;
   // Y-axis tilt so the pack's right side edge becomes visible — gives real 3D depth.
   const wobbleRotateY = hasAnimated && bobbingValue ? bobbingValue.interpolate({ inputRange: [0, 0.5, 1], outputRange: ['-7deg', '0deg', '7deg'] }) : '0deg';
-  const shineLeft = hasAnimated && shineValue ? shineValue.interpolate({ inputRange: [0, 1], outputRange: [-PACK_WIDTH * 0.6, PACK_WIDTH * 1.1] }) : -PACK_WIDTH * 0.6;
+  const shineLeft = hasAnimated && shineValue ? shineValue.interpolate({ inputRange: [0, 1], outputRange: [-packSize.width * 0.6, packSize.width * 1.1] }) : -packSize.width * 0.6;
 
   return (
     <AnimatedView
@@ -240,19 +244,20 @@ function PackArt({
         style={[
           styles.packSideEdge,
           {
+            height: packSize.height,
             backgroundColor: palette.cover[3] ?? palette.cover[0],
             transform: [{ translateX: 2.5 }, { rotateY: '-90deg' }],
           },
         ]}
       />
-      <LinearGradient colors={palette.cover} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={[styles.pack, { borderColor: palette.ring }]}>
+      <LinearGradient colors={palette.cover} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={[styles.pack, { width: packSize.width, height: packSize.height, borderColor: palette.ring }]}>
         {coverImage && RNImage ? (
           // PNG path: cover image is the complete artwork. We DO NOT layer on
           // packBadge / brand stripe / blob window / title slab — those would
           // obscure the PNG. Only the moving shine sweep stays.
           <>
             <RNImage source={coverImage} resizeMode="cover" style={StyleSheet.absoluteFillObject} pointerEvents="none" />
-            <AnimatedView pointerEvents="none" style={[styles.packShine, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
+            <AnimatedView pointerEvents="none" style={[styles.packShine, { height: packSize.height + 40 }, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
           </>
         ) : (
           // Fallback path: no PNG → render full procedural pack with brand
@@ -288,7 +293,7 @@ function PackArt({
               </Text>
             </View>
 
-            <AnimatedView pointerEvents="none" style={[styles.packShine, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
+            <AnimatedView pointerEvents="none" style={[styles.packShine, { height: packSize.height + 40 }, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
           </>
         )}
       </LinearGradient>
@@ -325,15 +330,32 @@ export function DrawScreen({ navigation, route }: Props) {
   const [swipeDelta, setSwipeDelta] = useState(0);
   const swipeStartXRef = useRef<number | null>(null);
   const swipeResetTimerRef = useRef<number | null>(null);
+  // Mirrors `ready` for reads inside load() (which closes over the value from
+  // the render that scheduled it): a switch keeps the ready chamber mounted,
+  // so the full-screen spinner is shown only on the first load, or after an
+  // error/empty branch cleared `ready`.
+  const readyRef = useRef<DrawReady | null>(null);
+  // The deck load() resolved and rendered, handed to commitDraw so the pull
+  // does not re-read and re-parse the same file.
+  const loadedDeckRef = useRef<{ slug: string; deck: DeckExport } | null>(null);
 
   const bobbingRef = useRef<any>(hasAnimated ? new A.Value(0) : null);
   const shineRef = useRef<any>(hasAnimated ? new A.Value(0) : null);
+
+  // Shrink the pack on short windows (e.g. iPhone SE) so the pack + swipe
+  // affordance + CTA all stay on screen. The swipe gesture must keep working,
+  // so the pack is resized — never wrapped in a ScrollView.
+  const packSize = packSizeForWindowHeight(useWindowHeight());
 
   useEffect(() => {
     if (route.params?.slug) {
       setSelectedSlug(route.params.slug);
     }
   }, [route.params?.slug]);
+
+  useEffect(() => {
+    readyRef.current = ready;
+  }, [ready]);
 
   const palette = useMemo(() => packPaletteFromSlug(ready?.slug ?? selectedSlug ?? route.params?.slug ?? ''), [ready?.slug, route.params?.slug, selectedSlug]);
   const coverImage = useMemo(() => packImageForSlug(ready?.slug ?? selectedSlug ?? route.params?.slug ?? ''), [ready?.slug, route.params?.slug, selectedSlug]);
@@ -364,7 +386,9 @@ export function DrawScreen({ navigation, route }: Props) {
     if (loadState !== 'ready') return;
     const t = setTimeout(() => setSwipePrimed(true), 250) as unknown as number;
     return () => clearTimeout(t);
-  }, [loadState]);
+    // Keyed on ready.slug too: a neighbour switch never passes through
+    // 'loading', so without it the pack would stay disarmed after a switch.
+  }, [loadState, ready?.slug]);
 
   useEffect(() => {
     if (!hasAnimated) return;
@@ -393,18 +417,21 @@ export function DrawScreen({ navigation, route }: Props) {
       let cancelled = false;
 
       const resolveOrInstall = async (slug: string) => {
-        let deck = await resolveDeckBySlug(slug);
+        let deck = await getCachedDeck(slug);
         if (deck) return deck;
         const updates = await checkManifestForUpdates(false);
         const update = updates[slug];
         if (!update?.remoteUrl) return null;
-        const installed = await installDeckFromUrl(slug, update.remoteUrl, update.remoteVersion, update.remoteSha256);
+        const installed = await installDeckAndInvalidate(slug, update.remoteUrl, update.remoteVersion, update.remoteSha256);
         if (!installed) return null;
-        return resolveDeckBySlug(slug);
+        return getCachedDeck(slug);
       };
 
       const load = async () => {
-        setLoadState('loading');
+        // First load (or a load after an error/empty branch cleared `ready`)
+        // shows the full-screen spinner; a neighbour switch keeps the ready
+        // chamber on screen and shows the inline pack loader instead.
+        if (readyRef.current === null) setLoadState('loading');
         setError(null);
         try {
           // Cache first. `{ preferRemote: true }` put a manifest fetch in
@@ -443,9 +470,15 @@ export function DrawScreen({ navigation, route }: Props) {
             return;
           }
 
-          const wallet = await loadRewardWalletState();
-          const pulls = spendablePulls(wallet);
-          const status = await loadDrawStatus(slug, (deck as any)?.Cards ?? []);
+          // Wallet and status are independent reads; awaiting them one after
+          // the other doubled the storage latency in front of the pack for no
+          // reason. loadDrawStatus owns its own failure (returns a blank
+          // status), so Promise.all cannot fail the load on its account.
+          const [wallet, status] = await Promise.all([
+            loadRewardWalletState(),
+            loadDrawStatus(slug, (deck as any)?.Cards ?? []),
+          ]);
+          const pulls = spendablePullsNow(wallet);
           const deckTitle = normalizeTitle(deck, slug);
           const mergedOptions = mergeSelectedDeck(deckOptions, slug, deckTitle);
 
@@ -473,6 +506,9 @@ export function DrawScreen({ navigation, route }: Props) {
           })();
 
           if (!cancelled) {
+            // Hand the resolved deck to the next commit so the pull reuses it
+            // instead of re-reading the file.
+            loadedDeckRef.current = { slug, deck };
             setReady({
               slug,
               deckTitle,
@@ -493,7 +529,7 @@ export function DrawScreen({ navigation, route }: Props) {
           if (!cancelled) {
             setReady(null);
             setLoadState('error');
-            setError(loadError?.message ?? 'Unable to load draw chamber right now.');
+            setError(errorToMessage(loadError));
           }
         }
       };
@@ -541,7 +577,9 @@ export function DrawScreen({ navigation, route }: Props) {
         // can hand out a free pull (cards, no charge). Same call the reward
         // wallet's dedupe ordering makes -- fail toward the user, because a
         // free pull is recoverable and "where did my pull go" is not.
-        const result = await commitDraw(ready.slug, drawCount);
+        const result = await commitDraw(ready.slug, drawCount, {
+          deck: loadedDeckRef.current?.slug === ready.slug ? loadedDeckRef.current.deck : null,
+        });
         // An exhausted pool is not an error return: selectDrawCards answers
         // `{ cards: [], poolExhausted: true }`, which is non-null, so the old
         // `!result` guard let it through -- wallet debited, ceremony played
@@ -574,9 +612,9 @@ export function DrawScreen({ navigation, route }: Props) {
         // device. 'draw_committed' is on the pull whitelist for the same
         // reason -- right after a draw is when a second device is most
         // worth reconciling.
-        scheduleProgressSync({ delayMs: 0, reason: 'draw_committed' });
+        scheduleProgressSync({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
 
-        const latestPulls = spendablePulls(spent.wallet);
+        const latestPulls = spendablePullsNow(spent.wallet);
         setReady((prev) =>
           prev
             ? { ...prev, walletPulls: latestPulls, canPullSingle: latestPulls >= 1, canPullMulti: latestPulls >= 10 }
@@ -640,13 +678,23 @@ export function DrawScreen({ navigation, route }: Props) {
               <Text style={styles.stateBody} numberOfLines={2}>
                 {error ?? 'Unable to load draw chamber right now.'}
               </Text>
-              <Pressable testID="screen-draw-primary-cta" style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]} onPress={() => setRetryToken((token) => token + 1)}>
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+              <Pressable
+                testID="screen-draw-primary-cta"
+                style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]}
+                onPress={() => {
+                  // An open() failure leaves `ready` set, so the next load
+                  // would keep the frozen error card up (readyRef is non-null).
+                  // Show the spinner immediately so Retry reads as progress.
+                  setLoadState('loading');
+                  setRetryToken((token) => token + 1);
+                }}
+              >
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Retry
                 </Text>
               </Pressable>
-              <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => navigation.navigate('Home')}>
-                <Text style={styles.secondaryCtaText} numberOfLines={1}>
+              <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => goHome(navigation)}>
+                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Back to Home
                 </Text>
               </Pressable>
@@ -670,12 +718,12 @@ export function DrawScreen({ navigation, route }: Props) {
                 Choose a pack from Library first, then come back.
               </Text>
               <Pressable testID="screen-draw-primary-cta" style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]} onPress={() => navigation.navigate('Library')}>
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   View library
                 </Text>
               </Pressable>
-              <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => navigation.navigate('Home')}>
-                <Text style={styles.secondaryCtaText} numberOfLines={1}>
+              <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => goHome(navigation)}>
+                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Back to Home
                 </Text>
               </Pressable>
@@ -689,7 +737,11 @@ export function DrawScreen({ navigation, route }: Props) {
   const armedFraction = swipePrimed ? 1 : Math.min(1, swipeDelta / SWIPE_ARM_DISTANCE);
   const swipeThumbX = armedFraction * (SWIPE_TRACK_WIDTH - 38);
   const badgeText = ready.slug.slice(0, 3).toUpperCase();
-  const openDisabled = opening || !swipePrimed;
+  // A neighbour switch is in flight: selectedSlug points at the new deck but
+  // the ready chamber still holds the old one. Only the pack area swaps to a
+  // spinner; the header, badge, rail and footer stay put.
+  const switchingDeck = selectedSlug !== null && selectedSlug !== ready.slug;
+  const openDisabled = opening || !swipePrimed || switchingDeck;
 
   return (
     <SafeAreaView style={styles.safeArea} testID="screen-draw-root">
@@ -700,10 +752,10 @@ export function DrawScreen({ navigation, route }: Props) {
               tiny text inside the pack art, which got lost. */}
           <View style={styles.header} testID="draw-header">
             <View style={styles.deckTitleWrap}>
-              <Text style={styles.deckEyebrow} numberOfLines={1}>
+              <Text style={styles.deckEyebrow} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 REWARD PACK
               </Text>
-              <Text style={styles.deckTitle} numberOfLines={1}>
+              <Text style={styles.deckTitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {ready.deckTitle}
               </Text>
             </View>
@@ -716,7 +768,7 @@ export function DrawScreen({ navigation, route }: Props) {
                 <View style={styles.pullsTokenGem} />
                 <View style={styles.pullsTokenFacet} />
               </View>
-              <Text style={styles.pullsBadgeText} numberOfLines={1}>
+              <Text style={styles.pullsBadgeText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 × {ready.walletPulls}
               </Text>
             </View>
@@ -725,7 +777,7 @@ export function DrawScreen({ navigation, route }: Props) {
           {/* Guarantee countdown. Rendered next to the pulls badge because it
               answers the question a player asks right before spending one. */}
           {ready.pityLabel ? (
-            <Text style={styles.pityProgress} testID="draw-pity-progress" numberOfLines={1}>
+            <Text style={styles.pityProgress} testID="draw-pity-progress" numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
               {ready.pityLabel}
             </Text>
           ) : null}
@@ -780,7 +832,13 @@ export function DrawScreen({ navigation, route }: Props) {
                   its own: the 3D pack is flattened into the wrapper's plane, and the wrapper is
                   composited above the halo as a whole. No layout of its own. */}
               <View testID="draw-pack-3d-wrapper" collapsable={false} style={styles.pack3dWrapper}>
-                <PackArt palette={palette} bobbingValue={bobbingRef.current} shineValue={shineRef.current} title={ready.deckTitle} badgeText={badgeText} coverImage={coverImage} />
+                {switchingDeck ? (
+                  <View testID="draw-pack-inline-loader" style={styles.packInlineLoader}>
+                    <ActivityIndicator size="large" color={colors.pokeBlueDeep} />
+                  </View>
+                ) : (
+                  <PackArt palette={palette} bobbingValue={bobbingRef.current} shineValue={shineRef.current} title={ready.deckTitle} badgeText={badgeText} coverImage={coverImage} packSize={packSize} />
+                )}
               </View>
             </View>
 
@@ -828,7 +886,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   void open(10);
                 }}
               >
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Collection complete
                 </Text>
               </Pressable>
@@ -842,7 +900,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   navigation.navigate('Library', { focusSlug: ready.slug });
                 }}
               >
-                <Text style={styles.secondaryCtaText} numberOfLines={1}>
+                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   See your collection
                 </Text>
               </Pressable>
@@ -858,7 +916,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   navigation.navigate('SessionCard', { slug: ready.slug });
                 }}
               >
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Earn pulls by studying  →
                 </Text>
               </Pressable>
@@ -901,7 +959,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   void open(10);
                 }}
               >
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Open 10
                 </Text>
               </Pressable>
@@ -915,7 +973,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   void open(1);
                 }}
               >
-                <Text style={styles.secondaryCtaText} numberOfLines={1}>
+                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Open 1
                 </Text>
               </Pressable>
@@ -1067,6 +1125,9 @@ const styles = StyleSheet.create({
   packTitleSlab: { marginTop: 6, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.30)', alignSelf: 'center', maxWidth: '92%' },
   packTitle: { fontSize: 18, fontWeight: '900', textAlign: 'center', letterSpacing: 0.4 },
   packShine: { position: 'absolute', top: -20, width: 60, height: PACK_HEIGHT + 40, backgroundColor: colors.shine },
+  // Pack-sized box so a neighbour switch spins in place instead of collapsing
+  // the stage and shifting the header/rail/footer around it.
+  packInlineLoader: { width: PACK_WIDTH, height: PACK_HEIGHT, alignItems: 'center', justifyContent: 'center' },
   // Slimmed swipe affordance — track is half the height, thumb smaller. Still
   // functional (test contract requires the gesture) but visually demoted so
   // the pack art reads as the hero instead.

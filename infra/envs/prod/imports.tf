@@ -200,14 +200,6 @@ import {
   id = "ktbq1sie2c/ftkbtwn"
 }
 import {
-  to = module.api.aws_apigatewayv2_integration.core_vpc_dup["a9dzpce"]
-  id = "ktbq1sie2c/a9dzpce"
-}
-import {
-  to = module.api.aws_apigatewayv2_integration.core_vpc_dup["q8lfdrr"]
-  id = "ktbq1sie2c/q8lfdrr"
-}
-import {
   to = module.api.aws_apigatewayv2_integration.edge_public
   id = "ktbq1sie2c/wf11obg"
 }
@@ -358,4 +350,36 @@ import {
 import {
   to = module.observability.aws_budgets_budget.monthly
   id = "622994489535:My Monthly Cost Budget"
+}
+
+# 2026-09-26: alias-level invoke permission added by CLI during the E08 apply (see modules/api/core_vpc.tf).
+import {
+  to = module.api.aws_lambda_permission.core_vpc_alias_all_routes
+  id = "core-vpc:prod/apigw-ktbq1sie2c-all-routes-e08"
+}
+
+# 2026-09-26: CORS preflight routes created by CLI during the E09 post-apply (see modules/api/gateway.tf).
+import {
+  to = module.api.aws_apigatewayv2_route.this["options_root"]
+  id = "ktbq1sie2c/8q9l0ml"
+}
+import {
+  to = module.api.aws_apigatewayv2_route.this["options_authoring"]
+  id = "ktbq1sie2c/02c7tw2"
+}
+import {
+  to = module.api.aws_apigatewayv2_route.this["options_admin"]
+  id = "ktbq1sie2c/4yr2yy4"
+}
+import {
+  to = module.api.aws_apigatewayv2_route.this["options_admin_cognito"]
+  id = "ktbq1sie2c/aa1i1xd"
+}
+import {
+  to = module.api.aws_apigatewayv2_route.this["options_ai"]
+  id = "ktbq1sie2c/rkgo83o"
+}
+import {
+  to = module.api.aws_apigatewayv2_route.this["options_billing"]
+  id = "ktbq1sie2c/kxx92m0"
 }

@@ -83,6 +83,32 @@ vi.mock('../../src/content/deckRepository', () => ({
   installDeckFromUrl: vi.fn(async () => true),
 }));
 
+// This screen reads/installs through deckCache. Mock it to delegate straight to
+// the (mocked) deckRepository so the test keeps driving resolveDeckBySlug /
+// installDeckFromUrl, without the real cache's dynamic scope import adding an
+// async hop the tight act() cycles here would race.
+vi.mock('../../src/content/deckCache', async () => {
+  const repo = (await import('../../src/content/deckRepository')) as {
+    resolveDeckBySlug: (slug: string) => Promise<unknown>;
+    installDeckFromUrl: (
+      slug: string,
+      url: string,
+      remoteVersion: string | null,
+      remoteSha256: string | null,
+    ) => Promise<boolean>;
+  };
+  return {
+    getCachedDeck: (slug: string) => repo.resolveDeckBySlug(slug),
+    installDeckAndInvalidate: (
+      slug: string,
+      url: string,
+      remoteVersion: string | null,
+      remoteSha256: string | null,
+    ) => repo.installDeckFromUrl(slug, url, remoteVersion, remoteSha256),
+    invalidateDeckCache: () => {},
+  };
+});
+
 vi.mock('../../src/content/activeDeck', () => ({
   loadActiveDeckSlug: vi.fn(async () => 'csharp'),
   setActiveDeckSlug: vi.fn(async () => {}),
@@ -389,7 +415,7 @@ describe('SessionCardScreen', () => {
     }));
   });
 
-  it('settles the rating reward and hands the outcome to Settlement', async () => {
+  it('settles the rating reward and hands the outcome to SessionSummary', async () => {
     vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 3, minimumGoal: 2 }) as any);
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
 
@@ -401,7 +427,7 @@ describe('SessionCardScreen', () => {
           route={{
             key: 'session-card',
             name: 'SessionCard',
-            params: { slug: 'csharp', mode: 'mixed', limit: 3, completionRoute: 'settlement' },
+            params: { slug: 'csharp', mode: 'mixed', limit: 3 },
           } as any}
         />,
       );
@@ -419,9 +445,9 @@ describe('SessionCardScreen', () => {
       await Promise.resolve();
     });
 
-    expect(navigation.replace).toHaveBeenCalledWith('Settlement', expect.objectContaining({
-      rewardPulls: 1,
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({
       sessionDone: 1,
+      reward: expect.objectContaining({ rewardPulls: 1 }),
     }));
   });
 
@@ -707,6 +733,43 @@ describe('SessionCardScreen', () => {
     expect(String(line[0].props.children)).toMatch(/^At this pace, about \d+ cards? comes? due tomorrow\.$/);
   });
 
+  it('offers Retry and Choose another deck when the deck cannot load', async () => {
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+    // First load can't resolve the deck → error state; the retry resolves it.
+    vi.mocked(resolveDeckBySlug).mockResolvedValueOnce(null as any);
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode: 'mixed', limit: 1 } } as any}
+        />,
+      );
+    });
+    await flush();
+
+    // Error state carries both recovery affordances.
+    expect(tree.root.findByProps({ testID: 'session-card-error-retry' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'session-card-error-choose-deck' })).toBeTruthy();
+
+    // Choose another deck routes to the Library.
+    act(() => {
+      tree.root.findByProps({ testID: 'session-card-error-choose-deck' }).props.onPress();
+    });
+    expect(navigation.navigate).toHaveBeenCalledWith('Library');
+
+    // Retry re-runs the load, which now succeeds → the card surface renders.
+    await act(async () => {
+      tree.root.findByProps({ testID: 'session-card-error-retry' }).props.onPress();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(tree.root.findAllByProps({ testID: 'session-card-error-retry' })).toHaveLength(0);
+    expect(findPressableByLabel(tree, 'Reveal answer')).toBeTruthy();
+  });
+
   describe('settleRatingReward call contract (review finding E)', () => {
     const PRE_RATING_PROGRESS = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
 
@@ -910,6 +973,22 @@ describe('SessionCardScreen', () => {
       });
       expect(navigation.navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
       expect(navigation.replace).not.toHaveBeenCalled();
+    });
+
+    it('offers a Back control on the empty-deck state', async () => {
+      // With the tab bar hidden during a review (MCORE-04), the empty-deck
+      // state needs its own way out — a Back button that pops the stack.
+      vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 0, nodes: [], dueCount: 0, newCount: 0 }) as any);
+      vi.mocked(pickNextCard).mockReturnValue(null);
+      const { tree, navigation } = await mount();
+
+      expect(byTestID(tree, 'session-card-empty-deck')).toHaveLength(1);
+      const back = byTestID(tree, 'session-card-empty-deck-back');
+      expect(back).toHaveLength(1);
+      act(() => {
+        back[0].props.onPress();
+      });
+      expect(navigation.goBack).toHaveBeenCalled();
     });
 
     it('still starts a one-node maintenance run for limit 1 with no card to pick (route-complete path is untouched)', async () => {

@@ -1,4 +1,4 @@
-import type { CardExport } from '../../../types/deckExport';
+import type { CardExport, DeckExport } from '../../../types/deckExport';
 import { rarityOfCard } from './cardRarity';
 import {
   appendDrawHistory,
@@ -42,7 +42,35 @@ function buildDrawId(slug: string, ts: number, seed: number): string {
   return `${slug}:${ts}:${seed >>> 0}`;
 }
 
-export async function commitDraw(slug: string, drawCount: 1 | 10): Promise<DrawCommitResult | null> {
+export type CommitDrawOptions = {
+  // The deck the caller already holds. When it is for this slug it is used as
+  // is; DrawScreen loads and renders it before the pull, so re-reading and
+  // re-parsing the file inside every commit (~13 KB+ for the large decks) only
+  // added latency in the window right before the ceremony mounts. A null,
+  // mismatched, or Cards-less value falls back to the dynamic-import resolve.
+  deck?: DeckExport | null;
+};
+
+// Draw history is diagnostics, never on the critical path. Appends are chained
+// onto this promise so they run in commit order, off the path a pull awaits,
+// and can never fail a draw. `commitDraw` never awaits it; a test (or shutdown)
+// that needs the writes to have landed awaits `flushDrawHistory()`.
+let historyQueue: Promise<void> = Promise.resolve();
+
+function enqueueDrawHistory(slug: string, entry: DrawHistoryEntry): void {
+  historyQueue = historyQueue.then(() => appendDrawHistory(slug, entry)).catch(() => {});
+}
+
+/** Resolves once every enqueued history append has settled. */
+export function flushDrawHistory(): Promise<void> {
+  return historyQueue;
+}
+
+export async function commitDraw(
+  slug: string,
+  drawCount: 1 | 10,
+  options?: CommitDrawOptions,
+): Promise<DrawCommitResult | null> {
   // review/storage is deliberately absent from this import. A draw used
   // to load the deck's review progress and hand it to selectDrawCards,
   // which stopped reading it when the review-history weighting was
@@ -51,8 +79,14 @@ export async function commitDraw(slug: string, drawCount: 1 | 10): Promise<DrawC
   // that nothing justified. The direction is now one-way by
   // construction -- review may read the owned set, gacha never reads
   // review -- which is what lets the two be reasoned about separately.
-  const { resolveDeckBySlug } = await import('../../../content/deckRepository');
-  const deck = await resolveDeckBySlug(slug);
+  const passed = options?.deck;
+  let deck: DeckExport | null;
+  if (passed && passed.Slug === slug && Array.isArray(passed.Cards)) {
+    deck = passed;
+  } else {
+    const { resolveDeckBySlug } = await import('../../../content/deckRepository');
+    deck = await resolveDeckBySlug(slug);
+  }
   if (!deck) return null;
 
   const drawState = await loadDrawState(slug);
@@ -90,8 +124,10 @@ export async function commitDraw(slug: string, drawCount: 1 | 10): Promise<DrawC
   });
 
   // After the commit, never before: a history entry that outlives a
-  // failed commit would describe a draw that did not happen.
-  await appendDrawHistory(slug, {
+  // failed commit would describe a draw that did not happen. Enqueued rather
+  // than awaited so the deck parse + AsyncStorage write no longer sit in the
+  // ~100 ms before the ceremony mounts; the queue preserves commit order.
+  enqueueDrawHistory(slug, {
     drawId: buildDrawId(slug, ts, seed),
     slug,
     seed,

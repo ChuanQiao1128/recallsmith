@@ -90,6 +90,18 @@ export type DrawHistoryEntry = {
   ts: number;
 };
 
+// On-disk shape. `ownedBefore` is stored in full only on the first retained
+// entry (and after a chain break); every later entry stores just the cards
+// that appeared since the previous entry's post-draw owned set, under
+// `ownedBeforeAdded`. Each of ~50 entries used to carry the whole owned list
+// (~13 KB apiece at 441 cards); the delta drops that to the handful of uids a
+// draw actually reveals. The public DrawHistoryEntry is unchanged: encode on
+// write, materialize back to full lists on read.
+export type StoredDrawHistoryEntry = Omit<DrawHistoryEntry, 'ownedBefore'> & {
+  ownedBefore?: string[];
+  ownedBeforeAdded?: string[];
+};
+
 function stateKey(slug: string): Promise<string> {
   return getUserScopedKey(`${DRAW_STATE_PREFIX}${slug}`);
 }
@@ -406,14 +418,84 @@ export async function adoptAnonDrawState(): Promise<AnonDrawStateAdoption> {
   return result;
 }
 
+/**
+ * Delta-encodes the ring buffer for storage. Entry 0 keeps its full
+ * `ownedBefore`; every later entry stores `ownedBeforeAdded` (and drops
+ * `ownedBefore`) as long as its owned set is a superset of the previous
+ * entry's post-draw owned set (`ownedBefore ∪ drawnUids`) -- the normal case,
+ * since a draw only ever adds cards. When that invariant breaks (a debug
+ * reset, or a sync that removed cards) the entry falls back to a full
+ * `ownedBefore`, which also re-anchors the chain for the entries after it.
+ */
+export function encodeDrawHistory(entries: DrawHistoryEntry[]): StoredDrawHistoryEntry[] {
+  const out: StoredDrawHistoryEntry[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (index === 0) {
+      out.push({ ...entry });
+      continue;
+    }
+    const previous = entries[index - 1];
+    const base = new Set(previous.ownedBefore);
+    for (const uid of previous.drawnUids) base.add(uid);
+
+    const current = new Set(entry.ownedBefore);
+    let isSuperset = current.size >= base.size;
+    if (isSuperset) {
+      for (const uid of base) {
+        if (!current.has(uid)) {
+          isSuperset = false;
+          break;
+        }
+      }
+    }
+
+    if (isSuperset) {
+      const added = entry.ownedBefore.filter((uid) => !base.has(uid));
+      const { ownedBefore: _dropped, ...rest } = entry;
+      out.push({ ...rest, ownedBeforeAdded: added });
+    } else {
+      out.push({ ...entry });
+    }
+  }
+  return out;
+}
+
 function parseDrawHistory(raw: string): DrawHistoryEntry[] {
   const parsed = JSON.parse(raw);
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter((entry): entry is DrawHistoryEntry => {
-    if (!entry || typeof entry !== 'object') return false;
-    const candidate = entry as Partial<DrawHistoryEntry>;
-    return typeof candidate.drawId === 'string' && typeof candidate.seed === 'number';
-  });
+  // Materialize the delta chain back to full owned lists in order. A full
+  // entry (legacy arrays are all full) resets the running base; a delta entry
+  // unions its `ownedBeforeAdded` onto the previous entry's post-draw owned
+  // set. A delta entry with no predecessor (a corrupt head) uses its added
+  // uids alone. The validity filter is unchanged: drawId string, seed number.
+  const out: DrawHistoryEntry[] = [];
+  let prevOwnedBefore: string[] = [];
+  let prevDrawnUids: string[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object') continue;
+    const candidate = item as Partial<StoredDrawHistoryEntry>;
+    if (typeof candidate.drawId !== 'string' || typeof candidate.seed !== 'number') continue;
+
+    let ownedBefore: string[];
+    if (Array.isArray(candidate.ownedBefore)) {
+      ownedBefore = toStringArray(candidate.ownedBefore);
+    } else if (Array.isArray(candidate.ownedBeforeAdded)) {
+      const base = new Set<string>(prevOwnedBefore);
+      for (const uid of prevDrawnUids) base.add(uid);
+      for (const uid of toStringArray(candidate.ownedBeforeAdded)) base.add(uid);
+      ownedBefore = [...base];
+    } else {
+      ownedBefore = [];
+    }
+
+    const entry = { ...candidate, ownedBefore } as DrawHistoryEntry;
+    delete (entry as Partial<StoredDrawHistoryEntry>).ownedBeforeAdded;
+    out.push(entry);
+    prevOwnedBefore = ownedBefore;
+    prevDrawnUids = Array.isArray(candidate.drawnUids) ? toStringArray(candidate.drawnUids) : [];
+  }
+  return out;
 }
 
 export async function loadDrawHistory(slug: string): Promise<DrawHistoryEntry[]> {
@@ -428,7 +510,7 @@ export async function loadDrawHistory(slug: string): Promise<DrawHistoryEntry[]>
 
     const entries = parseDrawHistory(globalRaw);
     try {
-      await AsyncStorage.setItem(await historyKey(slug), JSON.stringify(entries));
+      await AsyncStorage.setItem(await historyKey(slug), JSON.stringify(encodeDrawHistory(entries)));
       await AsyncStorage.removeItem(globalHistoryKey(slug));
     } catch {
       // Diagnostics are best-effort; the claim retries next load.
@@ -449,8 +531,10 @@ export async function loadDrawHistory(slug: string): Promise<DrawHistoryEntry[]>
 export async function appendDrawHistory(slug: string, entry: DrawHistoryEntry): Promise<void> {
   try {
     const existing = await loadDrawHistory(slug);
+    // Trimming happens on materialized (full) entries, so the oldest retained
+    // entry becomes index 0 and is re-encoded as a full `ownedBefore`.
     const next = [...existing, entry].slice(-DRAW_HISTORY_LIMIT);
-    await AsyncStorage.setItem(await historyKey(slug), JSON.stringify(next));
+    await AsyncStorage.setItem(await historyKey(slug), JSON.stringify(encodeDrawHistory(next)));
   } catch {
     // Diagnostics are best-effort by design.
   }

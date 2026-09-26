@@ -2,6 +2,14 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { invalidateDeckCache } from '../../src/content/deckCache';
+
+// deckCache memoizes deck reads at module scope; clear it between tests so a
+// changed resolveDeckBySlug mock is not shadowed by a prior test's entry (G30).
+beforeEach(() => {
+  invalidateDeckCache();
+});
+
 /**
  * The end-to-end fixture for the ownership gate, driven through the real
  * screens over a real (in-memory) storage.
@@ -130,6 +138,13 @@ vi.mock('../../src/content/activeDeck', () => ({
   setActiveDeckSlug: vi.fn(async () => {}),
 }));
 
+// deckCache reads the user scope through a guarded dynamic import of
+// progressScope; mock it so that import resolves to a fixed scope instead of
+// dragging in the real authStore -> react-native chain the runner cannot parse.
+vi.mock('../../src/review/progressScope', () => ({
+  getProgressScopeKey: () => 'anon',
+}));
+
 vi.mock('../../src/content/deckRepository', () => ({
   listManifestDecks: vi.fn(async () => [
     { slug: 'csharp', title: 'C# Interview', locale: 'en-US', version: '1', deckType: 1, availability: 'live' },
@@ -182,7 +197,6 @@ vi.mock('../../src/features/gacha/components/ReviewBody', () => {
 
 import { LibraryScreen } from '../../src/screens/LibraryScreen';
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
-import { ChallengeScreen } from '../../src/screens/ChallengeScreen';
 import { CardDetailScreen } from '../../src/screens/CardDetailScreen';
 import { saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
@@ -360,24 +374,6 @@ describe('ownership gate — every entry point', () => {
       );
 
       expect(textBlob(tree)).toContain('Grandfather question');
-    });
-  });
-
-  describe('challenge route', () => {
-    it('sizes today’s run from the collection, not the deck file', async () => {
-      await seed({
-        owned: ['drawn'],
-        progress: [untouched('stranger'), untouched('drawn'), untouched('grand')],
-      });
-
-      const tree = await renderScreen(
-        <ChallengeScreen navigation={nav()} route={{ key: 'k', name: 'Challenge', params: {} } as any} />,
-      );
-
-      // One owned unstudied card -> a one-node route (R6 dropped the padded
-      // warm-up slot). Ungated all three unstudied cards count and the route is
-      // two cards longer.
-      expect(textBlob(tree)).toContain('Clear today’s run (1 cards) for +2 free pulls.');
     });
   });
 

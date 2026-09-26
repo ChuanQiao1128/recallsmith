@@ -418,13 +418,41 @@ async function writeJson(key: string, value: any): Promise<void> {
   await AsyncStorage.setItem(key, JSON.stringify(value));
 }
 
+export const DECK_META_REFRESH_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether the deck-meta record on disk needs to be rewritten. Returns false
+ * only when the existing record already matches the deck's content version and
+ * was written less than DECK_META_REFRESH_MS ago; true otherwise (missing,
+ * stale, version changed, or an unparseable timestamp). This keeps the read
+ * path (loadDeckProgress) from writing to AsyncStorage on every load.
+ */
+export function shouldUpsertDeckMeta(
+  existing: { contentVersion?: unknown; lastSeenAtISO?: unknown } | null,
+  deck: DeckExport,
+  now: Date,
+): boolean {
+  if (!existing) return true;
+  if (existing.contentVersion !== deck.Version) return true;
+  if (typeof existing.lastSeenAtISO !== 'string') return true;
+  const parsed = Date.parse(existing.lastSeenAtISO);
+  if (Number.isNaN(parsed)) return true;
+  const age = now.getTime() - parsed;
+  if (age < 0 || age >= DECK_META_REFRESH_MS) return true;
+  return false;
+}
+
 async function upsertDeckMeta(deck: DeckExport, now: Date): Promise<void> {
+  const key = await deckMetaKey(deck.Slug);
+  const existing = await readJson<DeckMeta>(key);
+  if (!shouldUpsertDeckMeta(existing, deck, now)) return;
+
   const meta: DeckMeta = {
     slug: deck.Slug,
     contentVersion: deck.Version,
     lastSeenAtISO: now.toISOString(),
   };
-  await writeJson(await deckMetaKey(deck.Slug), meta);
+  await writeJson(key, meta);
 }
 
 /**

@@ -2,6 +2,14 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { invalidateDeckCache } from '../../src/content/deckCache';
+
+// deckCache memoizes deck reads at module scope; clear it between tests so a
+// changed resolveDeckBySlug mock is not shadowed by a prior test's entry (G30).
+beforeEach(() => {
+  invalidateDeckCache();
+});
+
 /**
  * Free-deck auto-update from the Home load path.
  *
@@ -181,7 +189,10 @@ vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
 }));
 
 import { HomeScreen } from '../../src/screens/HomeScreen';
-import { resetAutoUpdateAttemptsForTests } from '../../src/features/gacha/home/deckActionResolver';
+import {
+  resetAutoUpdateAttemptsForTests,
+  resetLastKnownDeckUpdatesForTests,
+} from '../../src/features/gacha/home/deckActionResolver';
 import { readStoredDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
 import { loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
@@ -216,8 +227,14 @@ async function seed() {
 
 async function flush(times = 6) {
   for (let i = 0; i < times; i++) {
+    // Yield a full macrotask (not just a microtask) each turn: Home's two-phase
+    // refresh coalesces the mount's focus + auth effects and settles the remote
+    // (auto-update) phase across a scheduler hop, so a bare `await Promise.resolve()`
+    // can return before the install fires. A microtask-only pump made this file
+    // pass only when other suites happened to add wall-clock time; the setTimeout
+    // yield drains the same queue but deterministically, standalone or in the suite.
     await act(async () => {
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
 }
@@ -263,6 +280,7 @@ describe('HomeScreen — free-deck auto-update', () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     resetSessionStore();
     resetAutoUpdateAttemptsForTests();
+    resetLastKnownDeckUpdatesForTests();
     installDeckFromUrlMock.mockClear();
     setActiveDeckSlugMock.mockClear();
     deckFixture = INSTALLED_DECK;

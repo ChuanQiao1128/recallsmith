@@ -1,0 +1,10 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.identity.aws_ssm_parameter.secret[\"pg-password\"]": "create",
+    "module.identity.aws_ssm_parameter.secret[\"migrate-secret\"]": "create",
+    "module.identity.aws_ssm_parameter.secret[\"internal-shared-secret\"]": "create",
+    "module.identity.aws_ssm_parameter.secret[\"rc-webhook-auth-production\"]": "create",
+    "module.identity.aws_ssm_parameter.secret[\"rc-webhook-auth-development\"]": "create"
+  }
+}

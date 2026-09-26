@@ -273,7 +273,7 @@ describe('SessionSummaryScreen', () => {
     act(() => {
       findPressableByTestID(tree, 'screen-session-summary-primary-cta').props.onPress();
     });
-    expect(navigation.navigate).toHaveBeenLastCalledWith('Home');
+    expect(navigation.navigate).toHaveBeenLastCalledWith('Home', undefined, { pop: true });
   });
 
   it('shows an error branch and retries reward resolution without navigating away', async () => {

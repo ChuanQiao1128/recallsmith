@@ -139,7 +139,7 @@ public static class Migrate
     if (!string.IsNullOrEmpty(required))
     {
       var got = Validation.GetHeader(req, "x-migrate-secret") ?? string.Empty;
-      if (!string.Equals(got, required, StringComparison.Ordinal)) return res.Forbidden("Bad migrate secret");
+      if (!Secrets.FixedTimeEquals(got, required)) return res.Forbidden("Bad migrate secret");
     }
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
@@ -261,7 +261,7 @@ public static class Migrate
     if (!string.IsNullOrEmpty(required))
     {
       var got = Validation.GetHeader(req, "x-migrate-secret") ?? string.Empty;
-      if (!string.Equals(got, required, StringComparison.Ordinal)) return res.Forbidden("Bad migrate secret");
+      if (!Secrets.FixedTimeEquals(got, required)) return res.Forbidden("Bad migrate secret");
     }
 
     if (!string.Equals(Environment.GetEnvironmentVariable("PGDATABASE") ?? string.Empty, "postgres", StringComparison.Ordinal))
@@ -298,7 +298,7 @@ public static class Migrate
     if (!string.IsNullOrEmpty(required))
     {
       var got = Validation.GetHeader(req, "x-migrate-secret") ?? string.Empty;
-      if (!string.Equals(got, required, StringComparison.Ordinal)) return res.Forbidden("Bad migrate secret");
+      if (!Secrets.FixedTimeEquals(got, required)) return res.Forbidden("Bad migrate secret");
     }
 
     if (!string.Equals(Environment.GetEnvironmentVariable("PGDATABASE") ?? string.Empty, "postgres", StringComparison.Ordinal))

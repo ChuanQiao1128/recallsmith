@@ -2,6 +2,14 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { invalidateDeckCache } from '../../src/content/deckCache';
+
+// deckCache memoizes deck reads at module scope; clear it between tests so a
+// changed resolveDeckBySlug mock is not shadowed by a prior test's entry (G30).
+beforeEach(() => {
+  invalidateDeckCache();
+});
+
 /**
  * Composite draw-screen tests: the REAL commitDraw, the REAL reward wallet
  * and a real (in-memory) AsyncStorage underneath the screen.
@@ -106,6 +114,13 @@ vi.mock('../../src/content/activeDeck', () => ({
   setActiveDeckSlug: vi.fn(async () => {}),
 }));
 
+// deckCache reads the user scope through a guarded dynamic import of
+// progressScope; mock it so that import resolves to a fixed scope instead of
+// dragging in the real authStore -> react-native chain the runner cannot parse.
+vi.mock('../../src/review/progressScope', () => ({
+  getProgressScopeKey: () => 'anon',
+}));
+
 vi.mock('../../src/content/deckRepository', () => ({
   listManifestDecks: vi.fn(async () => [{ slug: SLUG, availability: 'live', title: 'C# Interview' }]),
   resolveDeckBySlug: vi.fn(async (slug: string) => (slug === SLUG ? deck : null)),
@@ -130,6 +145,8 @@ import { DrawScreen } from '../../src/screens/DrawScreen';
 // next one's fixture.
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
+import { flushDrawHistory } from '../../src/features/gacha/draw/drawCommit';
+import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../../src/features/gacha/draw/ceremonyTimings';
 
 async function flush() {
   await act(async () => {
@@ -176,8 +193,12 @@ function readWallet(): { availablePulls: number; reservePulls: number } {
 }
 
 describe('draw screen · exhausted pool', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    // Drain any fire-and-forget history append the previous test enqueued
+    // through the real commitDraw before wiping the store, so a late write
+    // cannot land in the next test's fixture.
+    await flushDrawHistory();
     store.clear();
     invalidateDrawStateCache();
     setItemCalls.length = 0;
@@ -272,8 +293,12 @@ describe('draw screen · exhausted pool', () => {
 });
 
 describe('draw screen · sync trigger', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    // Drain any fire-and-forget history append the previous test enqueued
+    // through the real commitDraw before wiping the store, so a late write
+    // cannot land in the next test's fixture.
+    await flushDrawHistory();
     store.clear();
     invalidateDrawStateCache();
     setItemCalls.length = 0;
@@ -296,8 +321,9 @@ describe('draw screen · sync trigger', () => {
     });
 
     // The reason string is load-bearing: it is what puts this sync on the
-    // pull whitelist in syncProgressOnce.
-    expect(scheduleProgressSyncMock).toHaveBeenCalledWith({ delayMs: 0, reason: 'draw_committed' });
+    // pull whitelist in syncProgressOnce. The delay is deferred past the longest
+    // ceremony (MGACHA-03) so its work never lands on the JS thread mid-ceremony.
+    expect(scheduleProgressSyncMock).toHaveBeenCalledWith({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
   });
 
   it('does not ask for a sync when the pull bought nothing', async () => {
@@ -322,8 +348,12 @@ describe('draw screen · sync trigger', () => {
 });
 
 describe('draw screen · wallet/draw-state ordering', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    // Drain any fire-and-forget history append the previous test enqueued
+    // through the real commitDraw before wiping the store, so a late write
+    // cannot land in the next test's fixture.
+    await flushDrawHistory();
     store.clear();
     invalidateDrawStateCache();
     setItemCalls.length = 0;
