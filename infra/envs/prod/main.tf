@@ -27,6 +27,12 @@ import {
   id = "/aws/apigateway/developercards-api"
 }
 
+# E09: the registrar created this zone on 2026-09-22 (Route 53 Domains). Adopt it; never recreate it.
+import {
+  to = module.edge.aws_route53_zone.main[0]
+  id = "Z0284954BSN00C8BF94Q"
+}
+
 module "identity" {
   source = "../../modules/identity"
 
@@ -48,6 +54,8 @@ module "identity" {
   worker_function_name   = "worker-lambda"
 
   secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development"]
+
+  console_hostname = "console.${var.domain}"
 }
 
 module "data" {
@@ -78,6 +86,10 @@ module "edge" {
   content_bucket_regional_domain_name = module.data.content_bucket_regional_domain_name
   console_bucket_name                 = "recallsmith-console-622994489535"
   core_vpc_role_arn                   = module.identity.core_vpc_role_arn
+
+  domain           = var.domain
+  manage_domain    = true
+  site_bucket_name = "developercards-site-622994489535"
 }
 
 module "api" {
@@ -96,9 +108,13 @@ module "api" {
   console_client_id         = module.identity.console_client_id
   mobile_pool_endpoint      = module.identity.mobile_pool_endpoint
   mobile_client_id          = module.identity.mobile_client_id
-  cors_allowed_origins      = var.cors_allowed_origins
+  cors_allowed_origins      = concat(var.cors_allowed_origins, ["https://console.${var.domain}"])
 
   access_log_destination_arn = module.observability.api_access_log_group_arn
+
+  domain       = var.domain
+  api_cert_arn = module.edge.api_cert_arn
+  zone_id      = module.edge.zone_id
 }
 
 module "worker" {

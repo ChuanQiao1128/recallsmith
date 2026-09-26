@@ -1,7 +1,26 @@
 // mobile/src/api/apiClient.ts
+import { resolveApiBase, resolveApiFallback } from '../config/hosts';
+
 type ApiMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
-const API_BASE = (process.env.EXPO_PUBLIC_API_BASE || '').trim().replace(/\/+$/, '');
+type ApiOpts = {
+  method?: ApiMethod;
+  accessToken?: string | null; // ✅ now optional
+  body?: any;
+  timeoutMs?: number;
+  headers?: Record<string, string>;
+};
+
+// The base that last answered. Null until a request settles, so every process starts
+// on the primary hostname; a network failure there moves it to the fallback for the
+// rest of the process, and a failure on the fallback sends the next call back to the
+// primary (E09, E00 §2.9.4).
+let activeBase: string | null = null;
+
+/** Test seam: forget the remembered base. */
+export function resetApiBaseForTests(): void {
+  activeBase = null;
+}
 
 function joinUrl(base: string, path: string) {
   const p = path.startsWith('/') ? path : `/${path}`;
@@ -18,19 +37,14 @@ function safeJsonParse(text: string): any | null {
   }
 }
 
-export async function apiJson<T>(
-  path: string,
-  opts: {
-    method?: ApiMethod;
-    accessToken?: string | null; // ✅ now optional
-    body?: any;
-    timeoutMs?: number;
-    headers?: Record<string, string>;
-  },
-): Promise<T> {
-  if (!API_BASE) throw new Error('Missing EXPO_PUBLIC_API_BASE');
+/** A thrown TypeError is how fetch reports "could not reach the host" (DNS, TLS,
+ *  connection refused). Aborts (timeouts) and HTTP statuses are never TypeErrors. */
+function isNetworkError(e: unknown): boolean {
+  return e instanceof TypeError;
+}
 
-  const url = joinUrl(API_BASE, path);
+async function requestOnce<T>(base: string, path: string, opts: ApiOpts): Promise<T> {
+  const url = joinUrl(base, path);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 12000);
@@ -75,5 +89,31 @@ export async function apiJson<T>(
     return (json as T) ?? (null as any);
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+export async function apiJson<T>(path: string, opts: ApiOpts): Promise<T> {
+  const primary = resolveApiBase();
+  const fallback = resolveApiFallback();
+  const base = activeBase ?? primary;
+
+  try {
+    const out = await requestOnce<T>(base, path, opts);
+    activeBase = base;
+    return out;
+  } catch (e) {
+    const canRetry = base === primary && !!fallback && fallback !== primary && isNetworkError(e);
+    if (!canRetry) {
+      if (base !== primary) activeBase = null;
+      throw e;
+    }
+    try {
+      const out = await requestOnce<T>(fallback as string, path, opts);
+      activeBase = fallback;
+      return out;
+    } catch (e2) {
+      activeBase = null;
+      throw e2;
+    }
   }
 }

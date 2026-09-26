@@ -70,3 +70,9 @@ variable "secret_parameter_names" {
   type        = list(string)
   default     = []
 }
+
+variable "console_hostname" {
+  type        = string
+  default     = ""
+  description = "Console hostname added to the spa client's callback/logout URLs; \"\" adds nothing (staging)."
+}

@@ -1,11 +1,9 @@
 // mobile/src/content/premiumDeckApi.ts
 import { fetchAuthSession } from 'aws-amplify/auth';
 import * as Updates from 'expo-updates';
+import { resolveApiBase } from '../config/hosts';
 
-const API_BASE =
-  (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() ||
-  (process.env.EXPO_PUBLIC_API_BASE || '').trim() ||
-  '';
+const API_BASE = resolveApiBase();
 
 export type PremiumDeckUrlResp = {
   slug: string;
