@@ -26,6 +26,10 @@ output "console_client_id" {
   value = var.manage_cognito ? aws_cognito_user_pool_client.spa[0].id : null
 }
 
+output "console_dev_client_id" {
+  value = var.manage_cognito ? aws_cognito_user_pool_client.console_dev[0].id : null
+}
+
 output "mobile_pool_endpoint" {
   value = "cognito-idp.${var.region}.amazonaws.com/${var.mobile_pool_id}"
 }

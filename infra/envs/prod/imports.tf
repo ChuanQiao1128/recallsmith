@@ -200,14 +200,6 @@ import {
   id = "ktbq1sie2c/ftkbtwn"
 }
 import {
-  to = module.api.aws_apigatewayv2_integration.core_vpc_dup["a9dzpce"]
-  id = "ktbq1sie2c/a9dzpce"
-}
-import {
-  to = module.api.aws_apigatewayv2_integration.core_vpc_dup["q8lfdrr"]
-  id = "ktbq1sie2c/q8lfdrr"
-}
-import {
   to = module.api.aws_apigatewayv2_integration.edge_public
   id = "ktbq1sie2c/wf11obg"
 }

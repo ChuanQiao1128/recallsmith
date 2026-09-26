@@ -2,10 +2,13 @@ resource "aws_cognito_user_pool" "console" {
   count                    = var.manage_cognito ? 1 : 0
   auto_verified_attributes = ["email"]
   deletion_protection      = "ACTIVE"
-  mfa_configuration        = "OFF"
+  mfa_configuration        = "ON"
   name                     = "User pool - Console for DeveloperCards"
   user_pool_tier           = "ESSENTIALS"
   username_attributes      = ["email"]
+  software_token_mfa_configuration {
+    enabled = true
+  }
   account_recovery_setting {
     recovery_mechanism {
       name     = "verified_email"
@@ -49,18 +52,41 @@ resource "aws_cognito_user_pool_client" "spa" {
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_scopes                 = ["email", "openid", "profile"]
   auth_session_validity                = 3
-  callback_urls                        = ["http://localhost:5173/auth/callback", "https://d12pfy1rhi3ekm.cloudfront.net/auth/callback"]
+  callback_urls                        = ["https://d12pfy1rhi3ekm.cloudfront.net/auth/callback"]
   enable_token_revocation              = true
   id_token_validity                    = 1
-  logout_urls                          = ["http://localhost:5173/", "https://d12pfy1rhi3ekm.cloudfront.net/"]
+  logout_urls                          = ["https://d12pfy1rhi3ekm.cloudfront.net/"]
   name                                 = "My SPA app - mrj1i9"
   prevent_user_existence_errors        = "ENABLED"
-  refresh_token_validity               = 5
+  refresh_token_validity               = 30
   supported_identity_providers         = ["COGNITO"]
   user_pool_id                         = aws_cognito_user_pool.console[0].id
   token_validity_units {
-    access_token  = "days"
-    id_token      = "days"
+    access_token  = "hours"
+    id_token      = "hours"
+    refresh_token = "days"
+  }
+}
+
+resource "aws_cognito_user_pool_client" "console_dev" {
+  count                                = var.manage_cognito ? 1 : 0
+  access_token_validity                = 1
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_scopes                 = ["email", "openid", "profile"]
+  auth_session_validity                = 3
+  callback_urls                        = ["http://localhost:5173/auth/callback"]
+  enable_token_revocation              = true
+  id_token_validity                    = 1
+  logout_urls                          = ["http://localhost:5173/"]
+  name                                 = "console-dev"
+  prevent_user_existence_errors        = "ENABLED"
+  refresh_token_validity               = 30
+  supported_identity_providers         = ["COGNITO"]
+  user_pool_id                         = aws_cognito_user_pool.console[0].id
+  token_validity_units {
+    access_token  = "hours"
+    id_token      = "hours"
     refresh_token = "days"
   }
 }
