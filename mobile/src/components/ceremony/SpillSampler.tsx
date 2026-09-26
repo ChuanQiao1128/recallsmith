@@ -7,10 +7,23 @@ import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { ceremonyStyles } from './ceremonyStyles';
 import { CEREMONY_COPY_V10 } from '../../features/gacha/draw/ceremonyCopy';
+import type { CeremonyPhase } from '../../features/gacha/draw/ceremonyTimings';
 
 export const SPILL_SAMPLE_MS = 100;
 
 export type SpillSamplerProps = { durationMs: number; renderer: 'skia' | 'fallback' };
+
+// MGACHA-24: the sampler exists only for the fallback stage's test contract
+// (`draw-ceremony-orbit-*` testIDs). Its 100 ms setInterval must never tick on the Skia
+// path, where it re-rendered this leaf 18× during the busiest 1.8 s of a 10-pull for no
+// visible effect. Gate the mount on the fallback renderer so it stays off under Skia.
+export function shouldMountSpillSampler(
+  phase: CeremonyPhase,
+  isMulti: boolean,
+  renderer: 'skia' | 'fallback',
+): boolean {
+  return phase === 'tear-flip' && isMulti && renderer === 'fallback';
+}
 
 export const SpillSampler: React.NamedExoticComponent<SpillSamplerProps> = React.memo(
   function SpillSamplerImpl({ durationMs, renderer }: SpillSamplerProps) {

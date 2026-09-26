@@ -128,7 +128,11 @@ export const ceremonyStyles = StyleSheet.create({
   tapCardSlab: { position: 'absolute', left: '9%', top: '69%', width: '82%', height: '25%', justifyContent: 'center' },
   tapCardFocusLayer: { ...StyleSheet.absoluteFillObject, borderRadius: 10, overflow: 'hidden' },
   tapCardStreak: { position: 'absolute', top: -20, bottom: -20, width: 18, backgroundColor: 'rgba(255,255,255,0.85)', opacity: 0 },
-  tapCardShadow: { shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 6, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
+  // MGACHA-12: the shadow's static geometry only. `shadowOpacity` is driven per-frame from
+  // TapCard's animated slot style (tapCardShadowOpacity) so it drops to 0 while a card is
+  // lifted or mid-flip — an un-pathed iOS shadow on a transparent, 3D-rotating view is
+  // rasterised from the children's alpha every frame otherwise.
+  tapCardShadowBase: { shadowColor: '#000', shadowRadius: 6, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
 
   // ─── Screen-level entries (B09) — copied from the old ceremony tree, one-line
   // comments, shadowRadius clamped to 8 (B00 §7.4). Nothing above this changes.
