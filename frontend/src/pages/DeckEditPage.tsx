@@ -130,6 +130,11 @@ export function DeckEditPage() {
   // revalidation — hands useDeck new data for the same id, and without this guard
   // that data would be copied straight over whatever the user is typing.
   const initializedFor = useRef<number | null>(null);
+  // The id the form fields were last filled for, as STATE so the page re-renders:
+  // the form is only shown once its fields hold this deck's values. Without it the
+  // first render with data shows empty inputs for one tick, and typing into them
+  // (a fast user, or a test on a slow CI runner) is overwritten when the fill runs.
+  const [readyFor, setReadyFor] = useState<number | null>(null);
 
   useEffect(() => {
     const found = deckQuery.data;
@@ -163,6 +168,7 @@ export function DeckEditPage() {
     setSavedForm(loaded);
     setSaveError(null);
     setSaveOk(null);
+    setReadyFor(found.id);
   }, [deckQuery.data]);
 
   // Dirty once the deck has loaded and a field diverges from the last-saved
@@ -294,6 +300,14 @@ export function DeckEditPage() {
             Back
           </button>
         </div>
+      </div>
+    );
+  }
+
+  if (readyFor !== deckQuery.data.id) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-100">
+        <div className="text-slate-600 text-lg">Loading deck…</div>
       </div>
     );
   }
