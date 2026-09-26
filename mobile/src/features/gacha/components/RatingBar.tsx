@@ -30,6 +30,12 @@ export const RATING_HINT = {
   afterReveal: 'How well did you recall it?',
 } as const;
 
+// Spoken label for a rating button: "Again, show soon" — the title plus the
+// lowercased subtitle so VoiceOver reads a phrase, not two unrelated words.
+export function ratingA11yLabel(item: { title: string; subtitle: string }): string {
+  return `${item.title}, ${item.subtitle.toLowerCase()}`;
+}
+
 export function RatingBar(props: {
   disabled?: boolean;
   /** Whether the answer is showing. Drives the hint copy only; `disabled` still gates the buttons. */
@@ -55,6 +61,10 @@ export function RatingBar(props: {
               disabled && styles.ratingDisabled,
             ]}
             disabled={disabled}
+            accessibilityRole="button"
+            accessibilityLabel={ratingA11yLabel(item)}
+            accessibilityState={{ disabled }}
+            testID={`review-rating-${item.key}`}
             onPress={() => onRate(item.key)}
           >
             <Text style={styles.ratingTitle} numberOfLines={1}>

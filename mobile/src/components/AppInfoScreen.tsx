@@ -91,17 +91,17 @@ export function AppInfoScreen(props: {
           ))}
 
           {props.primaryLabel ? (
-            <Pressable style={[styles.primaryButton, cosmic && styles.primaryButtonCosmic]} onPress={props.onPrimary}>
+            <Pressable style={[styles.primaryButton, cosmic && styles.primaryButtonCosmic]} accessibilityRole="button" onPress={props.onPrimary}>
               <Text style={[styles.primaryButtonText, cosmic && styles.primaryButtonTextCosmic]}>{props.primaryLabel}</Text>
             </Pressable>
           ) : null}
           {props.secondaryLabel ? (
-            <Pressable style={[styles.secondaryButton, cosmic && styles.secondaryButtonCosmic]} onPress={props.onSecondary}>
+            <Pressable style={[styles.secondaryButton, cosmic && styles.secondaryButtonCosmic]} accessibilityRole="button" onPress={props.onSecondary}>
               <Text style={[styles.secondaryButtonText, cosmic && styles.secondaryButtonTextCosmic]}>{props.secondaryLabel}</Text>
             </Pressable>
           ) : null}
           {props.tertiaryLabel ? (
-            <Pressable style={[styles.tertiaryButton, cosmic && styles.tertiaryButtonCosmic]} onPress={props.onTertiary}>
+            <Pressable style={[styles.tertiaryButton, cosmic && styles.tertiaryButtonCosmic]} accessibilityRole="button" onPress={props.onTertiary}>
               <Text style={[styles.tertiaryButtonText, cosmic && styles.tertiaryButtonTextCosmic]}>{props.tertiaryLabel}</Text>
             </Pressable>
           ) : null}

@@ -28,7 +28,7 @@ export function AboutSection(props: {
       <Text style={styles.sectionTitle} numberOfLines={1}>
         {ABOUT_COPY.title}
       </Text>
-      <Text style={styles.sectionBody} numberOfLines={1}>
+      <Text style={styles.sectionBody}>
         {ABOUT_COPY.body}
       </Text>
 
@@ -45,7 +45,7 @@ export function AboutSection(props: {
       </Pressable>
 
       <Pressable testID={SETTINGS_VERSION_LABEL_TESTID} onPress={onVersionPress} hitSlop={8}>
-        <Text style={styles.metaText} numberOfLines={1}>
+        <Text style={styles.metaText}>
           {ABOUT_COPY.version(appVersion)}
         </Text>
       </Pressable>

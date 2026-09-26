@@ -140,6 +140,7 @@ export function RemindersSection(props: Props) {
       {showTurnOn ? (
         <Pressable
           testID="settings-reminders-turn-on"
+          accessibilityRole="button"
           disabled={busy}
           style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, busy && styles.disabled]}
           onPress={onTurnOn}
@@ -153,6 +154,7 @@ export function RemindersSection(props: Props) {
       {showOpenSettings ? (
         <Pressable
           testID="settings-reminders-open-settings"
+          accessibilityRole="button"
           style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
           onPress={onOpenSettings}
         >

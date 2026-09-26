@@ -25,6 +25,17 @@ type Props = {
   onPress: (stableUid: string) => void;
 };
 
+// Spoken label for a tile. Missing tiles stay a mystery ("not collected yet");
+// owned tiles read the slot, the SRS state as a plain word, then the question —
+// so VoiceOver never announces the bare "#012 ?" a locked tile shows visually.
+export function libraryTileA11yLabel(
+  item: Pick<LibraryCardRow, 'rank' | 'isMissing' | 'status' | 'question'>,
+): string {
+  if (item.isMissing) return `Card ${item.rank}, not collected yet`;
+  const word = item.status === 'mastered' ? 'mastered' : item.status === 'learning' ? 'learning' : 'new';
+  return `Card ${item.rank}, ${word}. ${item.question}`;
+}
+
 // Map card status → status dot color. We keep the dot as the single visual
 // indicator now that the bottom badge is gone.
 function statusDotColor(status: LibraryCardRow['status']): string {
@@ -66,6 +77,9 @@ export const LibraryCardTile = React.memo(function LibraryCardTile({
         highlighted && styles.cardHighlight,
       ]}
       testID={`library-card-${item.stableUid}`}
+      accessibilityRole="button"
+      accessibilityLabel={libraryTileA11yLabel(item)}
+      accessibilityHint="Opens the card"
       onPress={() => onPress(item.stableUid)}
     >
       {/* ART HEADER — pack-palette gradient. Slot # + rarity stars

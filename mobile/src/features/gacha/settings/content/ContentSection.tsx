@@ -29,11 +29,11 @@ export function ContentSection(props: {
       <Text style={styles.sectionTitle} numberOfLines={1}>
         {CONTENT_COPY.title}
       </Text>
-      <Text style={styles.sectionBody} numberOfLines={1}>
+      <Text style={styles.sectionBody}>
         {CONTENT_COPY.body}
       </Text>
 
-      <View style={styles.chipRow}>
+      <View style={styles.chipRow} accessibilityRole="radiogroup">
         {CONTENT_COPY.chips.map((chip) => {
           const active = chip.key === audience;
           return (
@@ -44,6 +44,8 @@ export function ContentSection(props: {
                 active && styles.chipActive,
                 (pressed || saving) && styles.pressed,
               ]}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: active, checked: active, disabled: saving }}
               onPress={() => onSelect(chip.key)}
               disabled={saving}
             >
@@ -55,7 +57,7 @@ export function ContentSection(props: {
         })}
       </View>
 
-      <Text style={styles.metaText} numberOfLines={1}>
+      <Text style={styles.metaText}>
         {CONTENT_COPY.current(audience)}
       </Text>
     </View>

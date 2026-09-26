@@ -54,11 +54,18 @@ export function AudienceSurveyScreen({ navigation }: Props) {
           <Text style={styles.title}>Which lane should new content favor?</Text>
           <Text style={styles.body}>This only shapes new supply and draw recommendations. Due review stays intact.</Text>
 
-          <View style={styles.optionList}>
+          <View style={styles.optionList} accessibilityRole="radiogroup">
             {OPTIONS.map((option) => {
               const active = selected === option.key;
               return (
-                <Pressable key={option.key} style={({ pressed }) => [styles.optionCard, active && styles.optionCardActive, pressed && styles.pressed]} onPress={() => setSelected(option.key)}>
+                <Pressable
+                  key={option.key}
+                  style={({ pressed }) => [styles.optionCard, active && styles.optionCardActive, pressed && styles.pressed]}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active, checked: active }}
+                  accessibilityLabel={`${option.label}. ${option.body}`}
+                  onPress={() => setSelected(option.key)}
+                >
                   <Text style={[styles.optionTitle, active && styles.optionTitleActive]}>{option.label}</Text>
                   <Text style={styles.optionBody}>{option.body}</Text>
                 </Pressable>
@@ -66,7 +73,7 @@ export function AudienceSurveyScreen({ navigation }: Props) {
             })}
           </View>
 
-          <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, saving && styles.buttonDisabled]} disabled={saving} onPress={() => void finish()}>
+          <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, saving && styles.buttonDisabled]} accessibilityRole="button" disabled={saving} onPress={() => void finish()}>
             <Text style={styles.primaryButtonText}>{saving ? 'Saving…' : 'Finish setup'}</Text>
           </Pressable>
 
