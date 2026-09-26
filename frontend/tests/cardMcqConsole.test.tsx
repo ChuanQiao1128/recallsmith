@@ -205,7 +205,12 @@ describe('the edit page shows the MCQ blob read-only', () => {
     // This is the page -> function half: EditCardPage.handleSubmit never mentions
     // mcq, so the server's blob is left alone. The function -> wire half — that an
     // explicit null is forwarded as an own key — is in authoringRequestBody.test.ts.
-    api.fetchCardById.mockResolvedValue(ok(card({ mcq: MCQ })));
+    // The stem MUST carry the qualifier: the form now runs the MCQ rules before
+    // submit, and the old fixture's OTHER_QUESTION lacked "LEAST operational
+    // overhead", so the real server would have refused that save too
+    // (MCQ_QUALIFIER_NOT_IN_STEM). MCQ_QUESTION makes the blob valid; the
+    // assertion (no mcq key on the wire) is unchanged.
+    api.fetchCardById.mockResolvedValue(ok(card({ question: MCQ_QUESTION, mcq: MCQ })));
     mountEdit();
     const saveButton = await screen.findByRole('button', { name: /save changes/i });
 

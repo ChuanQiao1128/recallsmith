@@ -125,6 +125,7 @@ describe('buildCardBody', () => {
       difficulty: 2,
       orderInDeck: 10,
       revision: 1,
+      topic: 'a-topic',
     };
     const body = buildCardBody(values);
 

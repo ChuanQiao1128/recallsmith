@@ -148,6 +148,7 @@ function valuesFor(shape: CardShape): CardFormValues {
     difficulty: shape.difficulty,
     orderInDeck: shape.orderInDeck ?? 10,
     revision: 1,
+    topic: '',
   };
 }
 

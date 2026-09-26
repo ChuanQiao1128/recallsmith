@@ -135,6 +135,7 @@ export function NewCardPage() {
     difficulty: 2,
     orderInDeck: nextOrder,
     revision: 1,
+    topic: '',
   };
 
   async function handleSubmit(
@@ -142,8 +143,13 @@ export function NewCardPage() {
   ): Promise<{ ok: boolean; error?: string }> {
     // buildCardBody trims and coerces every field the form collects, so a string
     // never reaches validation and a cleared optional text field is sent as ''.
+    // topic goes beside the builder (F20 pins that the builder never carries it)
+    // and only when non-empty: on create there is nothing to clear, so the key
+    // stays absent otherwise. mcq is never sent from the form.
+    const trimmedTopic = values.topic.trim();
     const { result } = await createCardMutation.mutateAsync({
       ...buildCardBody(values),
+      ...(trimmedTopic ? { topic: trimmedTopic } : {}),
       deckId: Number(deck.id),
       stableUid: values.stableUid,
     });
