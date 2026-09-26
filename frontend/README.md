@@ -50,3 +50,53 @@ callback.
 `src/api/contentManifest.ts` also reads `VITE_CONTENT_MANIFEST_URL` (falling back
 to `VITE_MANIFEST_URL`). Neither is set in `.env.development`; that feature
 reports a "not set" error until one is provided.
+
+## Deployment
+
+`./deploy.sh` is the whole deploy as one command: it runs `npm run build`, syncs
+the hashed assets under `dist/` to the console bucket as immutable
+(`public,max-age=31536000,immutable`), uploads `dist/index.html` last with
+`no-cache`, invalidates the CloudFront distribution, then reads `index.html` back
+from the live URL and compares its hash against the built one. Knobs, all read
+from the environment: `DRY_RUN=1` builds and prints the commands without touching
+AWS; `AWS_PROFILE` (default `dev`) picks the credentials; `CONSOLE_BUCKET` and
+`CONSOLE_DISTRIBUTION_ID` override the bucket and distribution defaults.
+
+The sync keeps old chunks on purpose — it no longer deletes what is not in the
+new build. A tab opened before a deploy still points at the previous
+`index.html`, and its next navigation asks for a hashed chunk from that older
+build; because CloudFront rewrites a missing object to `index.html` (200), a
+deleted chunk would come back as HTML and break the lazy import instead of
+loading. Leaving the old assets in place lets those open tabs finish loading
+until they reload.
+
+### Pruning old assets
+
+Because nothing is deleted on deploy, `assets/` grows over time and must be
+pruned by hand. Delete only keys under `assets/` whose `LastModified` is **older
+than 7 days** *and* that are **not** in the current build's `dist/assets/`.
+`aws s3 sync` only re-uploads files whose size or timestamp changed, so an
+unchanged chunk keeps its original `LastModified` while the live `index.html`
+still references it — age alone is not enough, or the prune would delete a live
+file.
+
+The read-first procedure (fill in the ISO date for 7 days ago):
+
+```sh
+# 1. List candidate keys: everything under assets/ older than 7 days.
+aws s3api list-objects-v2 --bucket "$CONSOLE_BUCKET" --prefix assets/ \
+  --query "Contents[?LastModified<='2026-09-20T00:00:00Z'].Key" --output text \
+  | tr '\t' '\n' > /tmp/prune-candidates.txt
+
+# 2. Remove from that list every name present in the build that is live now.
+for f in $(ls dist/assets); do
+  grep -v -- "$f" /tmp/prune-candidates.txt > /tmp/prune-keep.txt \
+    && mv /tmp/prune-keep.txt /tmp/prune-candidates.txt
+done
+
+# 3. Review the remaining list, then delete each key by hand.
+cat /tmp/prune-candidates.txt
+while read -r key; do aws s3 rm "s3://$CONSOLE_BUCKET/$key"; done < /tmp/prune-candidates.txt
+```
+
+Run this by hand at most monthly, after a deploy, never from `deploy.sh`.
