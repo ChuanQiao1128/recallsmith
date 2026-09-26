@@ -59,7 +59,7 @@ vi.mock('../../src/review/storage', () => ({
   getUserScopedKey: vi.fn(async (baseKey: string) => `${SCOPE}${baseKey}`),
 }));
 
-import { commitDraw, replayDraw } from '../../src/features/gacha/draw/drawCommit';
+import { commitDraw, flushDrawHistory, replayDraw } from '../../src/features/gacha/draw/drawCommit';
 import { loadDrawHistory, loadDrawState } from '../../src/features/gacha/draw/drawStateStore';
 // Clearing `store` below wipes the keys behind the store's back, the same way
 // the debug reset does in production -- and, like production, the in-memory
@@ -84,7 +84,11 @@ const LEGACY_OWNED_KEY = `devcards:draw-owned:${SLUG}`;
 const LEGACY_PITY_KEY = `devcards:draw-pity:${SLUG}`;
 
 describe('draw commit atomicity', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Drain any fire-and-forget history append the previous test enqueued
+    // before wiping the store, so a late write cannot land in the next test's
+    // fixture.
+    await flushDrawHistory();
     store.clear();
     invalidateDrawStateCache();
     setItemCalls.length = 0;
@@ -131,6 +135,7 @@ describe('draw commit atomicity', () => {
     failSetItemFor = (key) => key === STATE_KEY;
 
     await expect(commitDraw(SLUG, 10)).rejects.toThrow(/storage write killed/);
+    await flushDrawHistory();
 
     // The point of the merged key: a killed draw cannot half-apply. Owned
     // and pity are either both the pre-draw values or both the post-draw
@@ -147,6 +152,7 @@ describe('draw commit atomicity', () => {
     failSetItemFor = (key) => key === STATE_KEY;
 
     await expect(commitDraw(SLUG, 1)).rejects.toThrow();
+    await flushDrawHistory();
 
     expect(store.has(HISTORY_KEY)).toBe(false);
   });
@@ -178,7 +184,11 @@ describe('draw commit atomicity', () => {
 });
 
 describe('gacha does not depend on review', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Drain any fire-and-forget history append the previous test enqueued
+    // before wiping the store, so a late write cannot land in the next test's
+    // fixture.
+    await flushDrawHistory();
     store.clear();
     invalidateDrawStateCache();
     setItemCalls.length = 0;
@@ -204,7 +214,11 @@ describe('gacha does not depend on review', () => {
 });
 
 describe('draw replay', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Drain any fire-and-forget history append the previous test enqueued
+    // before wiping the store, so a late write cannot land in the next test's
+    // fixture.
+    await flushDrawHistory();
     store.clear();
     invalidateDrawStateCache();
     setItemCalls.length = 0;
@@ -213,6 +227,7 @@ describe('draw replay', () => {
 
   it('reproduces a recorded draw from its persisted seed and inputs', async () => {
     const result = await commitDraw(SLUG, 10);
+    await flushDrawHistory();
     const history = await loadDrawHistory(SLUG);
 
     expect(history).toHaveLength(1);
@@ -229,6 +244,7 @@ describe('draw replay', () => {
 
   it('detects a record whose seed no longer explains the outcome', async () => {
     await commitDraw(SLUG, 10);
+    await flushDrawHistory();
     const [record] = await loadDrawHistory(SLUG);
 
     const replay = replayDraw({ ...record, seed: record.seed + 1 }, deckCards);
@@ -250,6 +266,7 @@ describe('draw replay', () => {
     store.set(HISTORY_KEY, JSON.stringify(entries));
 
     await commitDraw(SLUG, 1);
+    await flushDrawHistory();
     const history = await loadDrawHistory(SLUG);
 
     expect(history).toHaveLength(50);

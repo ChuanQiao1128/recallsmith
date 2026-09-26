@@ -145,6 +145,7 @@ import { DrawScreen } from '../../src/screens/DrawScreen';
 // next one's fixture.
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
+import { flushDrawHistory } from '../../src/features/gacha/draw/drawCommit';
 import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../../src/features/gacha/draw/ceremonyTimings';
 
 async function flush() {
@@ -192,8 +193,12 @@ function readWallet(): { availablePulls: number; reservePulls: number } {
 }
 
 describe('draw screen · exhausted pool', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    // Drain any fire-and-forget history append the previous test enqueued
+    // through the real commitDraw before wiping the store, so a late write
+    // cannot land in the next test's fixture.
+    await flushDrawHistory();
     store.clear();
     invalidateDrawStateCache();
     setItemCalls.length = 0;
@@ -288,8 +293,12 @@ describe('draw screen · exhausted pool', () => {
 });
 
 describe('draw screen · sync trigger', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    // Drain any fire-and-forget history append the previous test enqueued
+    // through the real commitDraw before wiping the store, so a late write
+    // cannot land in the next test's fixture.
+    await flushDrawHistory();
     store.clear();
     invalidateDrawStateCache();
     setItemCalls.length = 0;
@@ -339,8 +348,12 @@ describe('draw screen · sync trigger', () => {
 });
 
 describe('draw screen · wallet/draw-state ordering', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    // Drain any fire-and-forget history append the previous test enqueued
+    // through the real commitDraw before wiping the store, so a late write
+    // cannot land in the next test's fixture.
+    await flushDrawHistory();
     store.clear();
     invalidateDrawStateCache();
     setItemCalls.length = 0;
