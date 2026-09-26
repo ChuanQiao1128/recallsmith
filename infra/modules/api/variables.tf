@@ -92,3 +92,13 @@ variable "dev_throttling_burst_limit" {
     error_message = "dev_throttling_burst_limit must be > 0; 0 throttles every request."
   }
 }
+
+variable "mobile_pool_endpoint" {
+  type        = string
+  description = "cognito-idp.<region>.amazonaws.com/<mobile pool id>, no scheme (module.identity.mobile_pool_endpoint)"
+}
+
+variable "mobile_client_id" {
+  type        = string
+  description = "Mobile app client id; the JWT authorizer audience (module.identity.mobile_client_id)"
+}

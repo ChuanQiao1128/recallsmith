@@ -7,26 +7,6 @@ terraform {
 }
 
 locals {
-  routes = {
-    default            = { route_key = "$default", integration = "core_vpc" }
-    proxy              = { route_key = "ANY /{proxy+}", integration = "core_vpc" }
-    publish_jobs       = { route_key = "GET /api/v1/authoring/publish/jobs", integration = "dup_q8lfdrr" }
-    premium_url        = { route_key = "GET /api/v1/content/premium-url", integration = "dup_a9dzpce" }
-    premium_url_dev    = { route_key = "GET /api/v1/content/premium-url-dev", integration = "dup_q8lfdrr" }
-    rc_production      = { route_key = "POST /webhooks/revenuecat/production", integration = "dup_a9dzpce" }
-    rc_development     = { route_key = "POST /webhooks/revenuecat/development", integration = "dup_q8lfdrr" }
-    edge_ai            = { route_key = "ANY /api/v1/ai/{proxy+}", integration = "edge_public" }
-    edge_billing       = { route_key = "ANY /api/v1/billing/{proxy+}", integration = "edge_public" }
-    edge_admin_cognito = { route_key = "ANY /api/v1/admin/cognito/{proxy+}", integration = "edge_public" }
-  }
-
-  integration_ids = {
-    core_vpc    = aws_apigatewayv2_integration.core_vpc.id
-    dup_a9dzpce = aws_apigatewayv2_integration.core_vpc_dup["a9dzpce"].id
-    dup_q8lfdrr = aws_apigatewayv2_integration.core_vpc_dup["q8lfdrr"].id
-    edge_public = aws_apigatewayv2_integration.edge_public.id
-  }
-
   core_vpc_permissions = {
     "ddf85795-8ac8-5e4f-b13e-1305b00a3ba7" = "arn:aws:execute-api:ap-southeast-2:622994489535:ktbq1sie2c/*/*/"
     "03c93ce4-7246-50e0-8573-a01d7e580e55" = "arn:aws:execute-api:ap-southeast-2:622994489535:ktbq1sie2c/*/*/{proxy+}"

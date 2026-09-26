@@ -4,14 +4,15 @@ resource "aws_cloudwatch_log_group" "core_vpc" {
 }
 
 resource "aws_lambda_function" "core_vpc" {
-  architectures = ["arm64"]
-  filename      = "${path.module}/../../bootstrap/placeholder.zip"
-  function_name = var.core_vpc_function_name
-  handler       = "RecallSmith.Lambda::RecallSmith.Lambda.VpcFunction::Handler"
-  memory_size   = 128
-  role          = var.core_vpc_role_arn
-  runtime       = "dotnet8"
-  timeout       = 90
+  architectures                  = ["arm64"]
+  filename                       = "${path.module}/../../bootstrap/placeholder.zip"
+  function_name                  = var.core_vpc_function_name
+  handler                        = "RecallSmith.Lambda::RecallSmith.Lambda.VpcFunction::Handler"
+  memory_size                    = 128
+  reserved_concurrent_executions = 40
+  role                           = var.core_vpc_role_arn
+  runtime                        = "dotnet8"
+  timeout                        = 90
   ephemeral_storage {
     size = 512
   }
