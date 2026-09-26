@@ -294,11 +294,11 @@ public static class CardsImport
       await DbUtil.ExecuteAsync(conn, tx, "set constraints uq_cards_deck_order immediate", []);
       await tx.CommitAsync();
     }
-    catch (PostgresException { SqlState: "42809" })
+    catch (PostgresException pg) when (pg is { SqlState: "42809" })
     {
       return Helpers.ErrorEnvelope(res, 503, "MIGRATION_REQUIRED", "cards.uq_cards_deck_order is not deferrable yet; run migration 022 first");
     }
-    catch (PostgresException { SqlState: "23505", ConstraintName: "uq_cards_deck_order" })
+    catch (PostgresException pg) when (pg is { SqlState: "23505", ConstraintName: "uq_cards_deck_order" })
     {
       return Helpers.ErrorEnvelope(res, 409, "ORDER_CONFLICT",
         "Another write changed card order in this deck during the import; nothing was written. Retry.");
