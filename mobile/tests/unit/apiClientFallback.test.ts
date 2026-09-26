@@ -77,7 +77,9 @@ describe('apiClient fallback', () => {
       err = e;
     }
     expect(calls).toHaveLength(1);
-    expect(err.name).toBe('AbortError');
+    // MSHELL-10 wraps transport failures: a timeout is kind 'timeout' with the AbortError as cause.
+    expect(err.kind).toBe('timeout');
+    expect(err.cause?.name).toBe('AbortError');
   });
 
   it('remembers the working host for later calls in the process', async () => {
@@ -100,7 +102,9 @@ describe('apiClient fallback', () => {
     }
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe('https://custom.test/api/v1/x');
-    expect(err).toBeInstanceOf(TypeError);
+    // MSHELL-10 wraps transport failures: kind 'offline' with the fetch TypeError as cause.
+    expect(err.kind).toBe('offline');
+    expect(err.cause).toBeInstanceOf(TypeError);
   });
 
   it('propagates the network error when the fallback also fails', async () => {
@@ -112,7 +116,9 @@ describe('apiClient fallback', () => {
       err = e;
     }
     expect(calls).toHaveLength(2);
-    expect(err).toBeInstanceOf(TypeError);
+    // MSHELL-10 wraps transport failures: kind 'offline' with the fetch TypeError as cause.
+    expect(err.kind).toBe('offline');
+    expect(err.cause).toBeInstanceOf(TypeError);
     await apiJson('/api/v1/x', {});
     expect(calls).toHaveLength(3);
     expect(calls[2].url).toBe(`${DEFAULT_API_BASE}/api/v1/x`);

@@ -16,14 +16,14 @@ export function getMainTabForRouteName(routeName?: string | null): MainTabKey | 
   if (!routeName) return null;
   const match = MAIN_TABS.find((tab) => tab.route === routeName);
   if (match) return match.key;
-  // Treat the legacy Challenge route preview as the Review tab too —
-  // any deep-link / direct entry into Challenge still highlights Review.
-  if (routeName === 'Challenge') return 'review';
   return null;
 }
 
 export function shouldShowMainTabBar(routeName?: string | null) {
-  // Tab bar is also visible on the legacy Challenge route preview.
-  if (routeName === 'Challenge') return true;
+  // Hide the bar while a review session is on screen. The Review tab routes to
+  // SessionCard, but with pop-navigation a stray tab tap would pop the running
+  // SessionCard (its unmount resets the session store), so no bar during a run
+  // — exits go through Pause (confirm) and the empty-deck Back control (MCORE-04).
+  if (routeName === 'SessionCard') return false;
   return getMainTabForRouteName(routeName) !== null;
 }

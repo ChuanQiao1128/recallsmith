@@ -114,12 +114,39 @@ vi.mock('../../src/sync/progressSync', () => ({
 
 import { Alert } from 'react-native';
 import { HomeScreen } from '../../src/screens/HomeScreen';
+import { loadHomeDeckSummaries } from '../../src/features/gacha/home/deckActionResolver';
+
+// Mirrors the mocked module's default snapshot so per-test overrides of
+// loadHomeDeckSummaries can be restored to the shared behaviour in beforeEach.
+function makeHomeSummary() {
+  const now = Date.now();
+  const totalDue = deckSummariesFixture.reduce((sum, deck) => sum + Number(deck.dueToday ?? 0), 0);
+  return {
+    deckSummaries: deckSummariesFixture,
+    updates: updatesFixture,
+    allUpcoming30: Array.from({ length: 30 }, (_, i) => ({
+      dateKey: new Date(now + i * 86_400_000).toISOString(),
+      count: i === 0 ? totalDue : 0,
+    })),
+    asOfISO: new Date(now).toISOString(),
+  };
+}
 
 async function flush() {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
   });
+}
+
+// The title of the featured hero pack (rendered as fallback text when the RN
+// facade has no Image), which follows the selected deck.
+function featuredTitle(tree: renderer.ReactTestRenderer): string {
+  const pack = tree.root.findByProps({ testID: 'home-featured-pack' });
+  return pack
+    .findAll((node) => (node.type as any) === 'Text')
+    .map((node) => String(node.props.children ?? ''))
+    .join('');
 }
 
 const textBlob = (tree: renderer.ReactTestRenderer) =>
@@ -174,6 +201,10 @@ describe('HomeScreen v9', () => {
     updatesFixture = {};
     navigateMock.mockReset();
     setActiveDeckSlugMock.mockClear();
+    // Restore the shared cache-first/revalidate stub so per-test overrides of
+    // loadHomeDeckSummaries never leak into the next test.
+    vi.mocked(loadHomeDeckSummaries).mockReset();
+    vi.mocked(loadHomeDeckSummaries).mockImplementation(async () => makeHomeSummary() as any);
   });
 
   it('renders root shell with one primary CTA surface', async () => {
@@ -396,6 +427,75 @@ describe('HomeScreen v9', () => {
 
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('aws');
     expect(navigateMock).not.toHaveBeenCalledWith('Library');
+  });
+
+  it('paints Home from local decks before the remote manifest check returns', async () => {
+    // Cache-first summaries resolve; the remote revalidation never does.
+    vi.mocked(loadHomeDeckSummaries).mockImplementation((params: any) =>
+      params?.remote === false
+        ? (Promise.resolve(makeHomeSummary()) as any)
+        : (new Promise(() => {}) as any),
+    );
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    // Home is up on the cache-first pass alone — no waiting on the network.
+    expect(tree.root.findByProps({ testID: 'screen-home-primary-cta' })).toBeTruthy();
+    expect(textBlob(tree)).not.toContain('Loading home...');
+  });
+
+  it('loads local summaries first and remote summaries second', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    const calls = vi.mocked(loadHomeDeckSummaries).mock.calls;
+    expect(calls[0]?.[0]).toEqual({ premium: false, remote: false });
+    expect(vi.mocked(loadHomeDeckSummaries)).toHaveBeenCalledWith({ premium: false, remote: true });
+  });
+
+  it('selecting a pack tile rebuilds the view without reloading deck summaries', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen navigation={{ navigate: navigateMock } as any} route={{ key: 'home', name: 'Home' } as any} />,
+      );
+    });
+    await flush();
+
+    expect(featuredTitle(tree)).toBe('C# Interview');
+    const loadCallsBefore = vi.mocked(loadHomeDeckSummaries).mock.calls.length;
+    setActiveDeckSlugMock.mockClear();
+
+    const tiles = tree.root.findByProps({ testID: 'home-pack-visual' }).findAll(
+      (node) =>
+        (node.type as any) === 'Pressable'
+        && typeof node.props.accessibilityLabel === 'string'
+        && node.props.accessibilityLabel.includes(' pack — '),
+    );
+    const awsTile = tiles.find((tile) => tile.props.accessibilityLabel.startsWith('AWS Core pack'));
+    expect(awsTile).toBeTruthy();
+
+    await act(async () => {
+      awsTile!.props.onPress();
+      await Promise.resolve();
+    });
+
+    // A local rebuild: no deck-summary reload, active slug moved, featured deck
+    // switched to AWS.
+    expect(vi.mocked(loadHomeDeckSummaries).mock.calls.length).toBe(loadCallsBefore);
+    expect(setActiveDeckSlugMock).toHaveBeenCalledWith('aws');
+    expect(featuredTitle(tree)).toBe('AWS Core');
   });
 
   it('renders the hero and pack shelf with zero decks', async () => {

@@ -92,6 +92,13 @@ vi.mock('../../src/content/activeDeck', () => ({
   setActiveDeckSlug: vi.fn(async () => {}),
 }));
 
+// deckCache reads the user scope through a guarded dynamic import of
+// progressScope; mock it so that import resolves to a fixed scope instead of
+// dragging in the real authStore -> react-native chain the runner cannot parse.
+vi.mock('../../src/review/progressScope', () => ({
+  getProgressScopeKey: () => 'anon',
+}));
+
 vi.mock('../../src/content/deckRepository', () => ({
   listManifestDecks: vi.fn(async () => [
     {

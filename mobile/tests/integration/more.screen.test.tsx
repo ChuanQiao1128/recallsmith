@@ -266,13 +266,13 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
     const editRow = tree.root.find(
       (node) =>
         (node.type as any) === 'Pressable' &&
-        node.findAll((child) => (child.type as any) === 'Text' && child.props.children === 'Edit profile')
+        node.findAll((child) => (child.type as any) === 'Text' && child.props.children === 'Study settings')
           .length > 0,
     );
     act(() => {
       editRow.props.onPress();
     });
-    expect(navigate).toHaveBeenCalledWith('EditProfile');
+    expect(navigate).toHaveBeenCalledWith('Settings');
   });
 
   it('Help renders the real user-language FAQ', async () => {

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  type LayoutChangeEvent,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,12 +16,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { CardExport, DeckExport } from '../types/deckExport';
-import {
-  checkManifestForUpdates,
-  installDeckFromUrl,
-  listManifestDecks,
-  resolveDeckBySlug,
-} from '../content/deckRepository';
+import { errorToMessage } from '../api/errorKind';
+import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
+import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { deckShortTitle } from '../content/deckShortTitle';
 import type { CardProgress, ReviewRating } from '../review/model';
@@ -54,11 +52,14 @@ import {
   sortCards,
 } from '../features/gacha/session/reviewContentHelpers';
 import { resetSessionStore, useSessionStore } from '../features/gacha/session/sessionStore';
+import { useScrollToTopOnChange } from '../features/gacha/session/useScrollToTopOnChange';
 import SessionProgressHeader from '../features/gacha/components/SessionProgressHeader';
 import RatingBar from '../features/gacha/components/RatingBar';
 import ReviewBody from '../features/gacha/components/ReviewBody';
 import { getFeatureFlags } from '../config/featureFlags';
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
+import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
+import { studyHaptic } from '../features/gacha/session/studyHaptics';
 import type { McqExport, McqOption } from '../types/deckExport';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
 import { MCQ_COPY, mcqBannerPartial, mcqOverLimitAnnouncement } from '../features/gacha/mcq/mcqConstants';
@@ -78,6 +79,7 @@ import McqCoachLine from '../features/gacha/components/McqCoachLine';
 import { isPremiumActive, rcGetCustomerInfoSafe } from '../premium/revenuecat';
 import { setIsPremiumUser, usePremiumUser } from '../premium/premiumStore';
 import { colors } from '../theme/colors';
+import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 type Props = NativeStackScreenProps<RootStackParamList, 'SessionCard'>;
@@ -99,8 +101,8 @@ function readRN<T = any>(key: string, fallback: T): T {
   }
 }
 const AI: any = readRN('AccessibilityInfo', null);
-// Options-stage dock, stacked worst case: 8 + hint 20 + count 20 + 56 + 8 + 56 + link 44 = 212 (D05 gap 5).
-const MCQ_DOCK_HEIGHT = 216;
+// Options-stage dock, one row: 8 + count 20 (choose-N only) + 48 + 8 = 84, rounded up.
+const MCQ_DOCK_HEIGHT = 96;
 type McqCardState = {
   mcq: McqExport | null;               // resolveMcq(card, getFeatureFlags()) — null ⇒ renderAsMcq false
   stage: McqStage;                     // 'stem' when flags.mcq.recallFirst !== false, else 'options'
@@ -124,6 +126,7 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   return b.every((key) => set.has(key));
 }
 function mcqHaptic(kind: 'success' | 'warning' | 'error'): void {
+  if (!getFeedbackPrefsSync().haptics) return;
   try {
     const haptics = loadExpoHaptics();
     if (!haptics) return;
@@ -157,9 +160,19 @@ function computePremiumActive(customerInfo: any): boolean {
   if (Array.isArray(subs) && subs.length > 0) return true;
   return false;
 }
+// A callback whose identity is stable for the component's lifetime but that
+// always calls the latest closure. Lets us hand McqReviewBody (React.memo)
+// callbacks that never change reference, so it does not re-render just because
+// a fresh handler was created this render, without capturing stale state.
+function useLatestCallback<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useCallback((...args: A): R => ref.current(...args), []);
+}
+
 export function SessionCardScreen({ navigation, route }: Props) {
   const slugFromRoute = route.params?.slug ?? null;
-  const { mode = 'mixed', completionRoute = 'summary' } = route.params ?? {};
+  const { mode = 'mixed' } = route.params ?? {};
   // Route-supplied limit is now optional. When the caller doesn't
   // explicitly pass one, sessionLimit derives from planChallengeRoute
   // (which respects SESSION_MAIN_ROUTE_DEFAULT = 5 + actual due/new
@@ -172,6 +185,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [deck, setDeck] = useState<DeckExport | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumped by the error state's Retry so the load effect re-runs without a
+  // slug change (offline / deck-not-found recovers once the deck is reachable).
+  const [reloadToken, setReloadToken] = useState(0);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   // The gate for this deck, resolved once per load and then held. It is state
   // rather than a ref because the render path counts due cards with it, and it
@@ -191,6 +207,19 @@ export function SessionCardScreen({ navigation, route }: Props) {
   // the options stage and taller again while the coach line is inside it (review 2026-09-22 #1).
   const [dockLayoutHeight, setDockLayoutHeight] = useState<number | null>(null);
   const [plannedMinimumGoal, setPlannedMinimumGoal] = useState<number | null>(null);
+
+  // Stable callbacks so the memoized ReviewBody / McqReviewBody do not re-render
+  // on every unrelated SessionCard state change (dock resize, picks, reviewing).
+  const handleFlip = useCallback(() => {
+    if (!showAnswer) studyHaptic('reveal');
+    setShowAnswer(!showAnswer);
+  }, [showAnswer]);
+  const handleDockLayout = useCallback((event: LayoutChangeEvent) => {
+    const h = event.nativeEvent.layout.height;
+    setDockLayoutHeight((prev) => (prev !== null && Math.abs(prev - h) < 1 ? prev : h));
+  }, []);
+  const stableToggleOption = useLatestCallback((key: string) => handleToggleOption(key));
+  const stableOverLimit = useLatestCallback(() => handleOverLimit());
   // Cached planner-derived limit. Loaded after planChallengeRoute runs.
   // null until first plan, then sticks. Falls back to routeLimit (when
   // caller passes one explicitly), then to 5 (the new default cap).
@@ -205,6 +234,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const isPremiumUser = usePremiumUser();
   const insets = useSafeAreaInsets();
   const trialRef = useRef<TrialInfo>(EMPTY_TRIAL_INFO);
+  const scrollRef = useRef<ScrollView>(null);
   const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport> } | null>(null);
   // stableUid → 1-based position in the deck's OrderInDeck order; the same
   // number the Library tile and DrawResult print, so "#011" means one card.
@@ -233,6 +263,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
       cardShownAtRef.current = Date.now();
     }
   }, [current?.card?.StableUid]);
+  // Reset the scroll surface to the top on every new card / attempt / completion,
+  // so a tall next card never opens with its first lines above the viewport
+  // (MCORE-03). Must sit above the screen's early returns to keep hook order stable.
+  useScrollToTopOnChange(
+    scrollRef,
+    current ? `${current.card.StableUid}:${mcqState.attemptIndex}:${sessionDone}` : null,
+  );
   useFocusEffect(
     useCallback(() => {
       if (slugFromRoute) {
@@ -374,19 +411,19 @@ export function SessionCardScreen({ navigation, route }: Props) {
           if (premiumByManifest && !premiumActive) {
             await ensurePremiumOnce();
           }
-          let resolved = await resolveDeckBySlug(slugValue);
+          let resolved = await getCachedDeck(slugValue);
           if (!resolved) {
             const updates = await checkManifestForUpdates();
             const info = (updates as any)[slugValue];
             if (info?.remoteUrl && info?.remoteVersion) {
-              const ok = await installDeckFromUrl(
+              const ok = await installDeckAndInvalidate(
                 slugValue,
                 info.remoteUrl,
                 info.remoteVersion,
                 info.remoteSha256 ?? null,
               );
               if (ok) {
-                resolved = await resolveDeckBySlug(slugValue);
+                resolved = await getCachedDeck(slugValue);
               }
             }
           }
@@ -512,7 +549,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           setEmptyDeck(false);
           trialRef.current = EMPTY_TRIAL_INFO;
           setTrialInfo(EMPTY_TRIAL_INFO);
-          setLoadError(e?.message ?? 'Failed to load deck.');
+          setLoadError(errorToMessage(e));
           setLoading(false);
         }
       }
@@ -529,7 +566,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       // that flashed continuously. sessionLimit is derived state we
       // SET inside this effect, so it must not gate the effect itself.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isPremiumUser, mode, navigation, previewLimit, slug]),
+    }, [isPremiumUser, mode, navigation, previewLimit, slug, reloadToken]),
   );
   const now = new Date();
   const dueTodayCount = countDueToday(progress, now, ownedSet);
@@ -549,6 +586,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
     if (reviewing) return;
     if (!showAnswer) return;
     if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
+    studyHaptic('rate');
     setReviewing(true);
     try {
       const nowAtRating = new Date();
@@ -657,20 +695,6 @@ export function SessionCardScreen({ navigation, route }: Props) {
         now: new Date(nowAtRating.getTime()),
       });
       if (!nextState.nextCurrent) {
-        if (completionRoute === 'settlement') {
-          navigation.replace('Settlement', {
-            slug: deck.Slug,
-            deckTitle: deck.Title,
-            sessionDone: nextState.nextDone,
-            rewardPulls: outcome.rewardPulls,
-            masteredCount: Math.max(
-              0,
-              nextState.updatedProgress.filter((item) => item.stage >= 4).length -
-                progress.filter((item) => item.stage >= 4).length,
-            ),
-          });
-          return;
-        }
         navigation.replace('SessionSummary', {
           sessionId: useSessionStore.getState().sessionId ?? undefined,
           slug: deck.Slug,
@@ -700,6 +724,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
     const mcq = mcqState.mcq;
     if (!mcq || mcqState.stage !== 'options' || reviewing) return;
     const n = mcqRequiredCount(mcq);
+    // A light tick whenever the tap actually adds or removes a pick — a single-select,
+    // a deselect, or a pick below the limit — but not on the over-limit path (that path
+    // gets a warning haptic via handleOverLimit instead).
+    const willChangePick = n === 1 || mcqState.picks.includes(key) || mcqState.picks.length < n;
+    if (willChangePick) studyHaptic('select');
     setMcqState((prev) => {
       let next: string[];
       if (n === 1) {
@@ -791,6 +820,28 @@ export function SessionCardScreen({ navigation, route }: Props) {
             </Text>
             <Pressable
               style={({ pressed }) => [styles.backButton, pressed && styles.pressed, { marginTop: 10 }]}
+              accessibilityRole="button"
+              onPress={() => setReloadToken((n) => n + 1)}
+              testID="session-card-error-retry"
+            >
+              <Text style={styles.backText} numberOfLines={1}>
+                Retry
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed, { marginTop: 10 }]}
+              accessibilityRole="button"
+              onPress={() => navigation.navigate('Library')}
+              testID="session-card-error-choose-deck"
+            >
+              <Text style={styles.backText} numberOfLines={1}>
+                Choose another deck
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed, { marginTop: 10 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
               onPress={() => navigation.goBack()}
             >
               <Text style={styles.backText} numberOfLines={1}>
@@ -832,11 +883,21 @@ export function SessionCardScreen({ navigation, route }: Props) {
         >
           <View style={styles.container}>
             <View style={styles.headerRow}>
+              <Pressable
+                style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                onPress={() => navigation.goBack()}
+                testID="session-card-empty-deck-back"
+              >
+                <Text style={styles.backText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                  ← Back
+                </Text>
+              </Pressable>
               <View style={styles.headerTextWrap}>
-                <Text style={styles.title} numberOfLines={1}>
+                <Text style={styles.title} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   {deck.Title}
                 </Text>
-                <Text style={styles.subtitle} numberOfLines={1}>
+                <Text style={styles.subtitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   No cards yet
                 </Text>
               </View>
@@ -892,17 +953,19 @@ export function SessionCardScreen({ navigation, route }: Props) {
           <View style={styles.headerRow}>
             <Pressable
               style={({ pressed }) => [styles.pauseButton, pressed && styles.pressed]}
+              accessibilityRole="button"
+              accessibilityLabel="Pause session"
               onPress={requestPause}
             >
-              <Text style={styles.pauseText} numberOfLines={1}>
+              <Text style={styles.pauseText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 Pause
               </Text>
             </Pressable>
             <View style={styles.headerTextWrap}>
-              <Text style={styles.title} numberOfLines={1}>
+              <Text style={styles.title} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {deckShortTitle(deck.Slug, deck.Title)}
               </Text>
-              <Text style={styles.subtitle} numberOfLines={1}>
+              <Text style={styles.subtitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {sessionVm.subtitle}
               </Text>
             </View>
@@ -914,6 +977,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             </Text>
           ) : null}
           <ScrollView
+            ref={scrollRef}
             testID="screen-session-card-primary-surface"
             style={styles.scroll}
             contentContainerStyle={[
@@ -924,10 +988,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
           >
             {trialInfo.isTrial && trialInfo.previewCount > 0 ? (
               <View style={styles.trialPreview} testID="session-card-trial-preview">
-                <Text style={styles.trialPreviewLabel} numberOfLines={1}>
+                <Text style={styles.trialPreviewLabel} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Preview run
                 </Text>
-                <Text style={styles.trialPreviewBody} numberOfLines={1}>
+                <Text style={styles.trialPreviewBody} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   {previewRemaining} of {trialInfo.previewCount} preview cards remaining
                 </Text>
               </View>
@@ -942,24 +1006,17 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 </Text>
                 <Pressable
                   style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
+                  accessibilityRole="button"
                   onPress={() =>
-                    completionRoute === 'settlement'
-                      ? navigation.replace('Settlement', {
-                          slug: deck.Slug,
-                          deckTitle: deck.Title,
-                          sessionDone,
-                          rewardPulls: useSessionStore.getState().rewardOutcome.rewardPulls,
-                          masteredCount: progress.filter((item) => item.stage >= 4).length,
-                        })
-                      : navigation.replace('SessionSummary', {
-                          slug: deck.Slug,
-                          deckTitle: deck.Title,
-                          sessionDone,
-                          sessionLimit,
-                          minimumGoal: doneMinimumGoal,
-                          dueCount: dueTodayCount,
-                          streakEarned: useSessionStore.getState().streakEarned,
-                        })
+                    navigation.replace('SessionSummary', {
+                      slug: deck.Slug,
+                      deckTitle: deck.Title,
+                      sessionDone,
+                      sessionLimit,
+                      minimumGoal: doneMinimumGoal,
+                      dueCount: dueTodayCount,
+                      streakEarned: useSessionStore.getState().streakEarned,
+                    })
                   }
                 >
                   <Text style={styles.doneButtonText} numberOfLines={1}>
@@ -968,7 +1025,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 </Pressable>
               </View>
             ) : mcqState.mcq ? (
-              <McqReviewBody
+              <>
+                {/* The one-time coach card renders at the top of the scroll content, above the question,
+                    so it scrolls with the card instead of stacking inside the pinned dock (G33). */}
+                <McqCoachLine visible={renderAsMcq && coachSeen === false} onDismiss={handleCoachDismiss} />
+                <McqReviewBody
                 card={current.card}
                 mcq={mcqState.mcq}
                 rank={rankMapRef.current.get(current.card.StableUid) ?? null}
@@ -978,15 +1039,16 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 verdict={mcqState.verdict}
                 scheduleLine={mcqState.scheduleLine}
                 attemptIndex={mcqState.attemptIndex}
-                onToggleOption={handleToggleOption}
-                onOverLimit={handleOverLimit}
+                onToggleOption={stableToggleOption}
+                onOverLimit={stableOverLimit}
               />
+              </>
             ) : (
               <ReviewBody
                 card={current.card}
                 rank={rankMapRef.current.get(current.card.StableUid) ?? null}
                 faceUp={showAnswer}
-                onFlip={() => setShowAnswer((prev) => !prev)}
+                onFlip={handleFlip}
               />
             )}
           </ScrollView>
@@ -999,11 +1061,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 },
               ]}
               testID="review-rating-dock"
-              onLayout={(event) => setDockLayoutHeight(event.nativeEvent.layout.height)}
+              onLayout={handleDockLayout}
             >
-              {/* Inside the dock, above the action rows: the dock is absolute and opaque, so an
-                  in-flow sibling before it would be painted over (review 2026-09-22 #1). */}
-              <McqCoachLine visible={renderAsMcq && coachSeen === false} onDismiss={handleCoachDismiss} />
               {mcqState.mcq ? (
                 <McqActionDock
                   testID="review-rating-bar"

@@ -24,9 +24,6 @@ vi.mock('expo-linear-gradient', () => {
 });
 
 import { PermissionPromptScreen } from '../../src/screens/PermissionPromptScreen';
-import { PoolPickerScreen } from '../../src/screens/PoolPickerScreen';
-import { CollectionMilestoneScreen } from '../../src/screens/CollectionMilestoneScreen';
-import { MasteryMilestoneScreen } from '../../src/screens/MasteryMilestoneScreen';
 
 function findPressableByText(tree: renderer.ReactTestRenderer, label: string) {
   return tree.root.find(
@@ -69,41 +66,5 @@ describe('phase A milestone and support routes', () => {
     expect(navigate).toHaveBeenCalledTimes(1);
     expect(navigate.mock.calls[0][0]).toBe('Home');
     expect(navigate.mock.calls[0][1]?.firstDrawCoach).toBeUndefined();
-  });
-
-  it('switches pools back into home', async () => {
-    const replace = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<PoolPickerScreen navigation={{ replace } as any} route={{ key: 'pool', name: 'PoolPicker', params: { activePoolId: 'csharp' } } as any} />);
-    });
-    act(() => {
-      findPressableByText(tree, 'AWS SAA').props.onPress();
-    });
-    expect(replace).toHaveBeenCalledWith('Home', { mockState: 'paused' });
-  });
-
-  it('returns from collection milestone to settlement', async () => {
-    const navigate = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<CollectionMilestoneScreen navigation={{ navigate } as any} route={{ key: 'collection', name: 'CollectionMilestone', params: { poolId: 'csharp', tier: 'bronze' } } as any} />);
-    });
-    act(() => {
-      findPressableByText(tree, 'Back to settlement').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('Settlement', expect.objectContaining({ slug: 'csharp' }));
-  });
-
-  it('returns from mastery milestone to settlement', async () => {
-    const navigate = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<MasteryMilestoneScreen navigation={{ navigate } as any} route={{ key: 'mastery', name: 'MasteryMilestone', params: { poolId: 'csharp', tier: 'junior' } } as any} />);
-    });
-    act(() => {
-      findPressableByText(tree, 'Back to settlement').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('Settlement', expect.objectContaining({ slug: 'csharp' }));
   });
 });

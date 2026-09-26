@@ -1,14 +1,17 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { reportClientError } from '../telemetry/clientErrorReporter';
+
 type Props = { children: React.ReactNode };
 type State = { error: Error | null };
 
 /**
  * Last line of defence above the navigator. Renders a retry screen instead of
- * letting a render error take the whole app down. Logs with console.error only:
- * 1.6.0 ships no crash reporter (no Sentry — see B00 §0), so the log line is what
- * a dev-client / TestFlight console shows.
+ * letting a render error take the whole app down. Logs with console.error and,
+ * since 1.7.0, also reports the caught error to the interim client error
+ * reporter (MSHELL-02) — the full Sentry crash reporter is still H02. The log
+ * line remains what a dev-client / TestFlight console shows.
  */
 export class RootErrorBoundary extends React.Component<Props, State> {
   state: State = { error: null };
@@ -19,6 +22,7 @@ export class RootErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
     console.error('[recallsmith] root error boundary', error, info.componentStack ?? '');
+    reportClientError(error, { screen: 'root', kind: 'boundary' });
   }
 
   private reset = () => {

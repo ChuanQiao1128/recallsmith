@@ -79,7 +79,11 @@ describe('McqActionDock', () => {
 
     // Options, single-select, nothing picked → submit disabled, no count row.
     const empty = renderDock({ stage: 'options', requiredCount: 1, selectedCount: 0 });
-    expect(textById(empty.tree, 'mcq-dock-hint').props.children).toBe('How confident are you?');
+    // The confidence hint is no longer a visible line; it moved to the buttons' accessibility hints.
+    expect(hasTestId(empty.tree, 'mcq-dock-hint')).toBe(false);
+    expect(pressable(empty.tree, 'mcq-submit-sure').props.accessibilityHint).toBe(MCQ_COPY.confidenceHint);
+    expect(pressable(empty.tree, 'mcq-submit-unsure').props.accessibilityHint).toBe(MCQ_COPY.confidenceHint);
+    expect(pressable(empty.tree, 'mcq-dont-know').props.accessibilityHint).toBe(MCQ_COPY.dontKnowHint);
     expect(hasTestId(empty.tree, 'mcq-selected-count')).toBe(false);
     expect(pressable(empty.tree, 'mcq-submit-sure').props.disabled).toBe(true);
     expect(pressable(empty.tree, 'mcq-submit-sure').props.accessibilityState.disabled).toBe(true);

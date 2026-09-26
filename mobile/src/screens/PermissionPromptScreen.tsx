@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RootStackParamList } from '../navigation/types';
+import { mapPermissionResponse } from '../notifications/permissionState';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PermissionPrompt'>;
@@ -17,12 +18,7 @@ function safeRequestNotificationPermission(): Promise<'granted' | 'denied' | 'un
     const Notifications = require('expo-notifications');
     if (!Notifications?.requestPermissionsAsync) return Promise.resolve('error');
     return Notifications.requestPermissionsAsync()
-      .then((res: any) => {
-        const status = res?.status ?? res?.granted ? 'granted' : (res?.status ?? 'undetermined');
-        if (status === 'granted' || res?.granted === true) return 'granted';
-        if (status === 'denied') return 'denied';
-        return 'undetermined';
-      })
+      .then((res: unknown) => mapPermissionResponse(res))
       .catch(() => 'error' as const);
   } catch {
     return Promise.resolve('error');
@@ -85,8 +81,8 @@ export function PermissionPromptScreen({ navigation }: Props) {
           <Text style={styles.eyebrow}>NOTIFICATIONS</Text>
           <Text style={styles.title}>Stay on streak with daily reminders</Text>
           <Text style={styles.body}>
-            We&apos;ll ping you once a day if cards are waiting. You can change this
-            anytime in settings — and we never send anything else.
+            One reminder each morning, plus an optional evening check-in only when
+            cards are still due. You can change both anytime in Settings &gt; Reminders.
           </Text>
           <Pressable
             style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, busy && styles.buttonDisabled]}

@@ -1,22 +1,24 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { setAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
+import { getAudiencePreferenceLabel } from '../features/gacha/audience/audienceRules';
 import { completeOnboarding } from '../features/gacha/onboarding/onboardingPrefs';
 import { colors } from '../theme/colors';
+import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
 import { markPermissionPromptPending } from './PermissionPromptScreen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AudienceSurvey'>;
 
-// Outcome-driven copy — was internal jargon ("balanced across easier
-// and harder content", "stretch cards"). Now uses the user's perspective.
-const OPTIONS: Array<{ key: AudiencePreference; label: string; body: string }> = [
-  { key: 'junior', label: 'Just starting', body: 'Easier cards first to build confidence.' },
-  { key: 'both', label: 'Mix it up', body: 'A balance of easy and hard cards.' },
-  { key: 'all', label: 'Push me', body: 'Lean toward harder cards when new content arrives.' },
+// The label is the one shared audience vocabulary (getAudiencePreferenceLabel);
+// the outcome-driven body sentence stays as the human-readable description.
+export const AUDIENCE_SURVEY_OPTIONS: Array<{ key: AudiencePreference; label: string; body: string }> = [
+  { key: 'junior', label: getAudiencePreferenceLabel('junior'), body: 'Easier cards first to build confidence.' },
+  { key: 'both', label: getAudiencePreferenceLabel('both'), body: 'A balance of easy and hard cards.' },
+  { key: 'all', label: getAudiencePreferenceLabel('all'), body: 'Lean toward harder cards when new content arrives.' },
 ];
 
 export function AudienceSurveyScreen({ navigation }: Props) {
@@ -49,16 +51,27 @@ export function AudienceSurveyScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient colors={[colors.parchmentBg, colors.parchmentBgDeep]} style={styles.gradient}>
-        <View style={styles.container}>
+        <ScrollView
+          testID="audience-survey-scroll"
+          contentContainerStyle={[styles.container, { flexGrow: 1 }]}
+          showsVerticalScrollIndicator={false}
+        >
           <Text style={styles.eyebrow}>CONTENT PREFERENCE</Text>
           <Text style={styles.title}>Which lane should new content favor?</Text>
           <Text style={styles.body}>This only shapes new supply and draw recommendations. Due review stays intact.</Text>
 
-          <View style={styles.optionList}>
-            {OPTIONS.map((option) => {
+          <View style={styles.optionList} accessibilityRole="radiogroup">
+            {AUDIENCE_SURVEY_OPTIONS.map((option) => {
               const active = selected === option.key;
               return (
-                <Pressable key={option.key} style={({ pressed }) => [styles.optionCard, active && styles.optionCardActive, pressed && styles.pressed]} onPress={() => setSelected(option.key)}>
+                <Pressable
+                  key={option.key}
+                  style={({ pressed }) => [styles.optionCard, active && styles.optionCardActive, pressed && styles.pressed]}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active, checked: active }}
+                  accessibilityLabel={`${option.label}. ${option.body}`}
+                  onPress={() => setSelected(option.key)}
+                >
                   <Text style={[styles.optionTitle, active && styles.optionTitleActive]}>{option.label}</Text>
                   <Text style={styles.optionBody}>{option.body}</Text>
                 </Pressable>
@@ -66,8 +79,8 @@ export function AudienceSurveyScreen({ navigation }: Props) {
             })}
           </View>
 
-          <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, saving && styles.buttonDisabled]} disabled={saving} onPress={() => void finish()}>
-            <Text style={styles.primaryButtonText}>{saving ? 'Saving…' : 'Finish setup'}</Text>
+          <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, saving && styles.buttonDisabled]} accessibilityRole="button" disabled={saving} onPress={() => void finish()}>
+            <Text style={styles.primaryButtonText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{saving ? 'Saving…' : 'Finish setup'}</Text>
           </Pressable>
 
           {/* Skip escape hatch — picks 'all' (most permissive) and
@@ -80,9 +93,9 @@ export function AudienceSurveyScreen({ navigation }: Props) {
             accessibilityRole="button"
             accessibilityLabel="Skip survey for now"
           >
-            <Text style={styles.skipLinkText}>Skip for now</Text>
+            <Text style={styles.skipLinkText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>Skip for now</Text>
           </Pressable>
-        </View>
+        </ScrollView>
       </LinearGradient>
     </SafeAreaView>
   );
@@ -93,7 +106,11 @@ export default AudienceSurveyScreen;
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
-  container: { flex: 1, paddingHorizontal: 20, paddingTop: 28, paddingBottom: 32 },
+  // No `flex: 1` here: as a ScrollView contentContainerStyle it takes
+  // `flexGrow: 1` (added at the call site) so the content fills a tall screen
+  // and `marginTop: 'auto'` still pins the CTA to the bottom, while on a short
+  // screen the content can exceed the viewport and scroll instead of clipping.
+  container: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: 32 },
   eyebrow: {
     fontSize: 11,
     fontWeight: '900',

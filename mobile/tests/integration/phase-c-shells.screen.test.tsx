@@ -29,7 +29,6 @@ vi.mock('@react-navigation/native', () => ({
 
 import { MoreScreen } from '../../src/screens/MoreScreen';
 import { ProfileScreen } from '../../src/screens/ProfileScreen';
-import { SettingsMainScreen } from '../../src/screens/SettingsMainScreen';
 import { HelpFAQScreen } from '../../src/screens/HelpFAQScreen';
 import { DebugMenuScreen } from '../../src/screens/DebugMenuScreen';
 
@@ -78,22 +77,16 @@ describe('phase C shells', () => {
         (node.type as any) === 'Pressable' &&
         node.findAll((child) => (child.type as any) === 'Text' && child.props.children === 'Achievements').length > 0,
     )).toHaveLength(0);
+    // The retired Edit profile CTA must not reappear either.
+    expect(tree.root.findAll(
+      (node) =>
+        (node.type as any) === 'Pressable' &&
+        node.findAll((child) => (child.type as any) === 'Text' && child.props.children === 'Edit profile').length > 0,
+    )).toHaveLength(0);
     act(() => {
-      findPressableByText(tree, 'Edit profile').props.onPress();
+      findPressableByText(tree, 'Study settings').props.onPress();
     });
-    expect(navigate).toHaveBeenCalledWith('EditProfile');
-  });
-
-  it('opens notifications from settings main shell', async () => {
-    const navigate = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<SettingsMainScreen navigation={{ navigate } as any} route={{ key: 'settings-main', name: 'SettingsMain' } as any} />);
-    });
-    act(() => {
-      findPressableByText(tree, 'Notifications & reminders').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('SettingsNotifications');
+    expect(navigate).toHaveBeenCalledWith('Settings');
   });
 
   it('renders faq content shell', async () => {
@@ -108,15 +101,18 @@ describe('phase C shells', () => {
     expect(textBlob).toContain('Why is Draw locked?');
   });
 
-  it('opens generic error shell from debug menu', async () => {
+  it('debug menu no longer links to the retired error and offline shells', async () => {
     const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(<DebugMenuScreen navigation={{ navigate } as any} route={{ key: 'debug', name: 'DebugMenu' } as any} />);
     });
-    act(() => {
-      findPressableByText(tree, 'Open error shell').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('ErrorGeneric');
+    for (const label of ['Open error shell', 'Offline banner']) {
+      expect(tree.root.findAll(
+        (node) =>
+          (node.type as any) === 'Pressable' &&
+          node.findAll((child) => (child.type as any) === 'Text' && child.props.children === label).length > 0,
+      )).toHaveLength(0);
+    }
   });
 });

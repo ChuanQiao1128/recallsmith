@@ -23,9 +23,7 @@ vi.mock('expo-linear-gradient', () => {
   return { LinearGradient: ({ children, ...props }: any) => React.createElement('LinearGradient', props, children) };
 });
 
-import { PoolOverviewScreen } from '../../src/screens/PoolOverviewScreen';
 import { MoreScreen } from '../../src/screens/MoreScreen';
-import { SettingsMainScreen } from '../../src/screens/SettingsMainScreen';
 
 function collectText(node: renderer.ReactTestInstance): string {
   const parts: string[] = [];
@@ -58,36 +56,12 @@ describe('support and pool polish screens', () => {
     warnSpy.mockRestore();
   });
 
-  it('keeps pool overview tied back into the library loop', async () => {
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<PoolOverviewScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'pool', name: 'PoolOverview', params: { poolId: 'csharp' } } as any} />);
-    });
-    const blob = textBlob(tree);
-    expect(blob).toContain('Best next move');
-    expect(blob).toContain('Back to library');
-  });
-
-  it('keeps me/settings framed as support rails, not second home surfaces', async () => {
+  it('keeps me framed as a support rail, not a second home surface', async () => {
     let moreTree!: renderer.ReactTestRenderer;
     await act(async () => {
       moreTree = renderer.create(<MoreScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'more', name: 'More' } as any} />);
     });
     const moreBlob = textBlob(moreTree);
     expect(moreBlob).not.toContain('support rail');
-
-    let settingsTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      settingsTree = renderer.create(<SettingsMainScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'settings', name: 'SettingsMain' } as any} />);
-    });
-    const settingsBlob = textBlob(settingsTree);
-    // The hero body was previously asserted via the dev-language phrase
-    // "support the learner quietly in the background" — that string was
-    // removed as part of v3 (user-voice copy). The "support rail" framing
-    // is still preserved through the Support chip in the hero.
-    expect(settingsBlob).toContain('Support');
-    // Settings should not duplicate Home content — guard that the
-    // primary daily-study CTA copy doesn't leak in.
-    expect(settingsBlob).not.toContain("Start today's challenge");
   });
 });

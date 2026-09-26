@@ -116,7 +116,7 @@ describe('TapCard', () => {
     act(() => {
       tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress();
     });
-    expect(onTapStart).toHaveBeenCalledWith(card);
+    expect(onTapStart).toHaveBeenCalledWith(card, expect.any(Number));
     expect(onFlipped).toHaveBeenCalledWith('u1');
 
     // Read styles on the very render that flips — pins the mirror-before-styles order.

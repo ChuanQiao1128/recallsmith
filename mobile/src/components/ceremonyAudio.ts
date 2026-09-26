@@ -17,11 +17,12 @@
 //   expo-audio's end-notification → seek → play loop was the audible stutter.
 // - Players are created with a 60 s status interval so expo-audio's periodic
 //   playbackStatusUpdate events stay off the JS thread during the ceremony.
-// - Each hit records its JS-side trigger latency (Date.now around play()) into
+// - Each hit records its JS-side trigger latency (performance.now around play()) into
 //   the ceremony perf recorder (features/gacha/draw/ceremonyPerf).
 import { useMemo } from 'react';
 import type { Rarity } from '../features/gacha/draw/cardRarity';
-import { recordCeremonyAudioLatency } from '../features/gacha/draw/ceremonyPerf';
+import { perfNow, recordCeremonyAudioLatency } from '../features/gacha/draw/ceremonyPerf';
+import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
 
 export type CeremonyBedName = 'crinkle' | 'air' | 'shimmer-pad' | 'choir-swell';
 export type CeremonyHitName =
@@ -140,10 +141,13 @@ export function createCeremonyAudioController(deps: {
   /** Receives every hit's JS-side trigger latency; defaults to the ceremony perf recorder. */
   onHitLatency?: (name: CeremonySfxName, latencyMs: number) => void;
   now?: () => number;
+  /** Device-global sound-effects gate; defaults to the feedback preference. */
+  isEnabled?: () => boolean;
 }): CeremonyAudioController {
   const { audio, sources } = deps;
   const onHitLatency = deps.onHitLatency ?? recordCeremonyAudioLatency;
-  const now = deps.now ?? Date.now;
+  const now = deps.now ?? perfNow;
+  const isEnabled = deps.isEnabled ?? (() => getFeedbackPrefsSync().soundEffects);
   const bedPlayers = new Map<CeremonySfxFile, AudioPlayerLike>();
   const bedStates = new Map<AudioPlayerLike, BedState>();
   const hitPools = new Map<CeremonySfxFile, HitPool>();
@@ -157,7 +161,7 @@ export function createCeremonyAudioController(deps: {
     audioModeSet = true;
     try {
       Promise.resolve(
-        audio.setAudioModeAsync({ playsInSilentMode: true, interruptionMode: 'mixWithOthers' }),
+        audio.setAudioModeAsync({ playsInSilentMode: false, interruptionMode: 'mixWithOthers' }),
       ).catch(() => {});
     } catch {}
   }
@@ -252,6 +256,7 @@ export function createCeremonyAudioController(deps: {
   }
 
   function fireOneShot(name: CeremonySfxName, gain: number): void {
+    if (!isEnabled()) return; // sound effects off: hit / tail / one-shot play do nothing
     const file = SFX_ALIASES[name];
     if (SFX_LOOP_FILES.has(file)) return; // a loop file never plays as a one-shot
     const pool = getHitPool(file);
@@ -289,7 +294,10 @@ export function createCeremonyAudioController(deps: {
   function bed(name: CeremonyBedName | null, opts?: { gain?: number; fadeMs?: number }): void {
     const gain = opts?.gain ?? CEREMONY_GAIN.bed.COM;
     const fadeMs = opts?.fadeMs ?? BED_FADE_MS;
-    const next = name === null ? undefined : getBedPlayer(name);
+    // Sound effects off: a non-null name stops the current bed instead of starting one
+    // (identical to bed(null)) so a bed already playing when the user toggles off fades out.
+    const effectiveName = isEnabled() ? name : null;
+    const next = effectiveName === null ? undefined : getBedPlayer(effectiveName);
     const outgoing = currentBed?.player;
     if (outgoing && outgoing !== next) {
       bedStates.set(outgoing, 'fading');

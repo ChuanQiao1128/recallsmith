@@ -2,6 +2,7 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ReviewRating } from '../../../review/model';
 import { colors } from '../../../theme/colors';
+import { CHROME_MAX_FONT_SCALE, isLargeFontScale, useFontScale } from '../../../theme/dynamicType';
 
 // Subtitles are sized to a 4-up grid at 320pt content width (~64pt per
 // button, minus padding) at the default font scale: two short words at 11pt.
@@ -30,6 +31,12 @@ export const RATING_HINT = {
   afterReveal: 'How well did you recall it?',
 } as const;
 
+// Spoken label for a rating button: "Again, show soon" — the title plus the
+// lowercased subtitle so VoiceOver reads a phrase, not two unrelated words.
+export function ratingA11yLabel(item: { title: string; subtitle: string }): string {
+  return `${item.title}, ${item.subtitle.toLowerCase()}`;
+}
+
 export function RatingBar(props: {
   disabled?: boolean;
   /** Whether the answer is showing. Drives the hint copy only; `disabled` still gates the buttons. */
@@ -39,28 +46,38 @@ export function RatingBar(props: {
 }) {
   const { disabled = false, revealed = false, testID = 'review-rating-bar', onRate } = props;
 
+  // At accessibility text sizes a fixed 4-up row clips the labels; reflow to a
+  // 2x2 grid instead so each button gets ~half the width and the full title +
+  // subtitle fit.
+  const large = isLargeFontScale(useFontScale());
+
   return (
     <View style={styles.wrapper} testID={testID}>
-      <Text style={styles.hint} numberOfLines={2} testID="review-rating-hint">
+      <Text style={styles.hint} numberOfLines={2} testID="review-rating-hint" maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
         {revealed ? RATING_HINT.afterReveal : RATING_HINT.beforeReveal}
       </Text>
-      <View style={styles.grid}>
+      <View style={[styles.grid, large && styles.gridTwoByTwo]} testID="review-rating-grid">
         {RATING_ITEMS.map((item) => (
           <Pressable
             key={item.key}
             style={({ pressed }) => [
               styles.ratingButton,
               styles[item.styleKey],
+              large && styles.ratingButtonHalf,
               pressed && styles.ratingPressed,
               disabled && styles.ratingDisabled,
             ]}
             disabled={disabled}
+            accessibilityRole="button"
+            accessibilityLabel={ratingA11yLabel(item)}
+            accessibilityState={{ disabled }}
+            testID={`review-rating-${item.key}`}
             onPress={() => onRate(item.key)}
           >
-            <Text style={styles.ratingTitle} numberOfLines={1}>
+            <Text style={styles.ratingTitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
               {item.title}
             </Text>
-            <Text style={styles.ratingSub} numberOfLines={1}>
+            <Text style={styles.ratingSub} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
               {item.subtitle}
             </Text>
           </Pressable>
@@ -74,6 +91,8 @@ const styles = StyleSheet.create({
   wrapper: {},
   hint: { fontSize: 12, color: colors.inkSecondary, marginBottom: 10 },
   grid: { flexDirection: 'row', gap: 8 },
+  gridTwoByTwo: { flexWrap: 'wrap' },
+  ratingButtonHalf: { flexBasis: '47%', flexGrow: 1 },
   ratingButton: {
     flex: 1,
     minWidth: 64,

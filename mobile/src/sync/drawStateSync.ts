@@ -19,6 +19,7 @@ import {
 } from '../features/gacha/rewards/rewardWallet';
 import { adoptAnonNewCardLedger, type AnonLedgerAdoption } from '../features/gacha/rewards/newCardLedger';
 import type { PityState } from '../features/gacha/draw/pity';
+import { setDrawStateSyncInFlight } from './syncActivity';
 
 /**
  * ============================
@@ -270,6 +271,7 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
   if (_inFlight) return SKIPPED;
 
   _inFlight = true;
+  setDrawStateSyncInFlight(true);
   try {
     // Adopt any anonymous-period state into this account BEFORE reading local
     // state, so an adopted deck is new to stamps.decks and is pushed with
@@ -462,5 +464,6 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
     return SKIPPED;
   } finally {
     _inFlight = false;
+    setDrawStateSyncInFlight(false);
   }
 }

@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
+  type LayoutChangeEvent,
+  type ListRenderItemInfo,
   Pressable,
   Text,
   useWindowDimensions,
@@ -13,17 +15,16 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+import { errorToMessage } from '../api/errorKind';
+import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { getFeatureFlags } from '../config/featureFlags';
-import {
-  checkManifestForUpdates,
-  installDeckFromUrl,
-  listManifestDecks,
-  resolveDeckBySlug,
-} from '../content/deckRepository';
+import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
+import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
 import { loadDeckProgress } from '../review/storage';
 import {
   buildLibraryVM,
+  type LibraryCardRow,
   type LibraryDeckOption,
   type LibraryFilter,
   type LibraryViewModel,
@@ -31,6 +32,11 @@ import {
 import { LibraryHeader } from '../features/gacha/library/LibraryHeader';
 import { LibraryCardTile } from '../features/gacha/library/LibraryCardTile';
 import { libraryStyles as styles } from '../features/gacha/library/libraryScreenStyles';
+import {
+  getLibraryItemLayout,
+  libraryRowIndexForItem,
+  LIBRARY_LIST_PADDING_TOP,
+} from '../features/gacha/library/libraryGridLayout';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
@@ -53,6 +59,10 @@ export function LibraryScreen({ navigation, route }: Props) {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [deckOptions, setDeckOptions] = useState<LibraryDeckOption[]>([]);
   const [deck, setDeck] = useState<DeckExport | null>(null);
+  // Mirrors the currently displayed deck for the refresh closure, which needs
+  // to know synchronously whether a deck is already on screen (stale state
+  // would lie on the second focus). Kept equal to `deck` at every setDeck.
+  const deckRef = useRef<DeckExport | null>(null);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   // Which cards this account holds, drawn plus grandfathered. Kept next to
   // `progress` and replaced with it in the same refresh, because the VM reads
@@ -68,8 +78,21 @@ export function LibraryScreen({ navigation, route }: Props) {
   // wallet=0 → banner sends user to SessionCard (earn pulls first);
   // wallet>0 → banner sends user to Draw (open the pack now).
   const [walletPulls, setWalletPulls] = useState<number>(0);
+  // Measured header height. Feeds getItemLayout's head offset so a row's offset
+  // includes the real header instead of a guess. Starts at 0 until onLayout.
+  const [headerHeight, setHeaderHeight] = useState(0);
 
   const numColumns = width < 390 ? 2 : 3;
+
+  const handleHeaderLayout = useCallback((event: LayoutChangeEvent) => {
+    const h = event.nativeEvent.layout.height;
+    setHeaderHeight((prev) => (Math.abs(prev - h) < 1 ? prev : h));
+  }, []);
+
+  const handleOpenCard = useCallback(
+    (stableUid: string) => navigation.navigate('CardDetail', { cardId: stableUid }),
+    [navigation],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -91,8 +114,19 @@ export function LibraryScreen({ navigation, route }: Props) {
 
   const refresh = useCallback(
     async (preferredSlug?: string | null) => {
-      setLoading(true);
+      // These load failures already carry curated, user-ready copy — mark them
+      // so the catch renders the message verbatim instead of running it through
+      // the transport classifier (which only helps for raw fetch/HTTP noise).
+      const friendlyError = (message: string): Error => {
+        const err: any = new Error(message);
+        err.isFriendlyMessage = true;
+        return err;
+      };
+      // Stale-while-revalidate: only the first load (nothing on screen yet)
+      // shows the full-screen spinner. Later refreshes keep the mounted grid.
+      if (deckRef.current === null) setLoading(true);
       setError(null);
+      let requestedSlug: string | null = null;
       try {
         const manifest = await listManifestDecks();
         const options = manifest
@@ -105,25 +139,26 @@ export function LibraryScreen({ navigation, route }: Props) {
           preferredSlug ?? selectedSlug ?? (await loadActiveDeckSlug()) ?? options[0]?.slug ?? null;
 
         if (!currentSlug) {
-          throw new Error('No deck available yet. Install one first.');
+          throw friendlyError('No deck available yet. Install one first.');
         }
+        requestedSlug = currentSlug;
 
-        let resolvedDeck = await resolveDeckBySlug(currentSlug);
+        let resolvedDeck = await getCachedDeck(currentSlug);
         if (!resolvedDeck) {
           const updates = await checkManifestForUpdates(false);
           const update = updates[currentSlug];
           if (!update?.remoteUrl) {
-            throw new Error('This deck is not available on this device yet.');
+            throw friendlyError('This deck is not available on this device yet.');
           }
-          const installed = await installDeckFromUrl(
+          const installed = await installDeckAndInvalidate(
             currentSlug,
             update.remoteUrl,
             update.remoteVersion,
             update.remoteSha256,
           ).catch(() => false);
-          resolvedDeck = installed ? await resolveDeckBySlug(currentSlug) : null;
+          resolvedDeck = installed ? await getCachedDeck(currentSlug) : null;
           if (!resolvedDeck) {
-            throw new Error('Install failed. Check your connection and retry.');
+            throw friendlyError('Install failed. Check your connection and retry.');
           }
         }
 
@@ -132,15 +167,27 @@ export function LibraryScreen({ navigation, route }: Props) {
         await setActiveDeckSlug(currentSlug);
 
         setSelectedSlug(currentSlug);
+        deckRef.current = resolvedDeck;
         setDeck(resolvedDeck);
         setProgress(resolvedProgress);
         setOwnedSet(resolvedOwned);
       } catch (loadErr: any) {
-        setDeckOptions([]);
-        setDeck(null);
-        setProgress([]);
-        setOwnedSet(null);
-        setError(loadErr?.message ?? 'Failed to load library.');
+        // Never wipe the deck switcher: keep whatever options loaded so an
+        // offline user can still reach their other installed decks.
+        if (
+          deckRef.current !== null &&
+          requestedSlug !== null &&
+          deckRef.current.Slug === requestedSlug
+        ) {
+          // A background refresh of the deck already on screen failed — keep
+          // the stale-but-usable grid and stay silent.
+        } else {
+          deckRef.current = null;
+          setDeck(null);
+          setProgress([]);
+          setOwnedSet(null);
+          setError(loadErr?.isFriendlyMessage ? loadErr.message : errorToMessage(loadErr));
+        }
       } finally {
         setLoading(false);
         lastRefreshAtRef.current = Date.now();
@@ -180,6 +227,20 @@ export function LibraryScreen({ navigation, route }: Props) {
 
   const visibleCards = vm?.cards ?? [];
 
+  const selectedDeckSlug = vm?.selectedDeckSlug;
+  const renderItem = useCallback(
+    ({ item }: ListRenderItemInfo<LibraryCardRow>) => (
+      <LibraryCardTile
+        item={item}
+        numColumns={numColumns}
+        highlighted={highlightedUids.includes(item.stableUid)}
+        deckSlug={selectedDeckSlug ?? ''}
+        onPress={handleOpenCard}
+      />
+    ),
+    [numColumns, highlightedUids, selectedDeckSlug, handleOpenCard],
+  );
+
   const requestedUids = route.params?.highlightUids;
 
   useEffect(() => {
@@ -218,7 +279,7 @@ export function LibraryScreen({ navigation, route }: Props) {
     const scrollTimer = setTimeout(() => {
       try {
         listRef.current?.scrollToIndex?.({
-          index: targetIndex,
+          index: libraryRowIndexForItem(targetIndex, numColumns),
           animated: true,
           viewPosition: 0.3,
         });
@@ -234,7 +295,14 @@ export function LibraryScreen({ navigation, route }: Props) {
       clearTimeout(scrollTimer);
       clearTimeout(highlightTimer);
     };
-  }, [requestedUids, route.params?.scrollToNew, visibleCards, vm]);
+  }, [requestedUids, route.params?.scrollToNew, visibleCards, vm, numColumns]);
+
+  // The grid no longer remounts on a filter/deck change (its key is column-count
+  // only), so nothing resets the scroll position for us. Snap back to the top
+  // whenever the filter, topic or selected deck changes.
+  useEffect(() => {
+    listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
+  }, [selectedSlug, filter, topicFilter]);
 
   // Both read straight off the VM now. The old arithmetic ("learned + mastered
   // over everything") was a proxy from before the app knew what a collection
@@ -253,7 +321,7 @@ export function LibraryScreen({ navigation, route }: Props) {
   const isCollectionComplete =
     filter === 'new' && vm?.counts.newCount === 0 && ownedCount === totalCount && totalCount > 0;
 
-  if (loading) {
+  if (loading && !deck) {
     return (
       <SafeAreaView style={styles.safeArea} testID="screen-library-root">
         <LinearGradient
@@ -289,6 +357,26 @@ export function LibraryScreen({ navigation, route }: Props) {
             <Text style={styles.errorBody} numberOfLines={2}>
               {error ?? 'Unable to read your deck right now.'}
             </Text>
+            {deckOptions.length > 1 ? (
+              <View style={styles.errorDeckSwitcher} testID="library-error-deck-switcher">
+                {deckOptions.map((option) => (
+                  <Pressable
+                    key={option.slug}
+                    style={({ pressed }) => [styles.errorDeckChip, pressed && styles.pressed]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: option.slug === selectedSlug }}
+                    onPress={() => {
+                      void refresh(option.slug);
+                    }}
+                    testID={`library-error-deck-${option.slug}`}
+                  >
+                    <Text style={styles.errorDeckChipText} numberOfLines={1}>
+                      {option.title}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
             <Pressable
               style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
               onPress={() => {
@@ -302,7 +390,7 @@ export function LibraryScreen({ navigation, route }: Props) {
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
-              onPress={() => navigation.navigate('Home')}
+              onPress={() => goHome(navigation)}
               testID="library-unavailable-home-cta"
             >
               <Text style={styles.retryText} numberOfLines={1}>
@@ -327,18 +415,23 @@ export function LibraryScreen({ navigation, route }: Props) {
           <FlatList
             ref={listRef}
             data={visibleCards}
-            key={`${numColumns}-${filter}-${topicFilter ?? 'all'}-${selectedSlug ?? 'none'}`}
+            key={`library-grid-${numColumns}`}
             numColumns={numColumns}
             testID="library-card-grid"
             contentContainerStyle={styles.container}
             showsVerticalScrollIndicator={false}
             columnWrapperStyle={numColumns > 1 ? styles.columnWrap : undefined}
+            getItemLayout={(_, index) =>
+              getLibraryItemLayout(LIBRARY_LIST_PADDING_TOP + headerHeight, index)
+            }
             // Per RN docs: scrollToIndex can fail when the target hasn't been
-            // measured yet (offscreen rows). Recover via offset estimation +
+            // measured yet (offscreen rows). Recover via the known row offset +
             // retry, instead of throwing an Invariant Violation.
             onScrollToIndexFailed={(info) => {
-              const ROW_HEIGHT_GUESS = 132;
-              const offset = (info.index / Math.max(numColumns, 1)) * ROW_HEIGHT_GUESS;
+              const offset = getLibraryItemLayout(
+                LIBRARY_LIST_PADDING_TOP + headerHeight,
+                info.index,
+              ).offset;
               listRef.current?.scrollToOffset?.({ offset, animated: true });
               setTimeout(() => {
                 if (info.index < visibleCards.length) {
@@ -351,6 +444,7 @@ export function LibraryScreen({ navigation, route }: Props) {
               }, 120);
             }}
             ListHeaderComponent={
+              <View onLayout={handleHeaderLayout}>
               <LibraryHeader
                 title={vm.title}
                 ownedCount={ownedCount}
@@ -388,6 +482,7 @@ export function LibraryScreen({ navigation, route }: Props) {
                 sweepCount={vm.counts.learningCount + vm.counts.masteredCount}
                 onStartSweep={() => navigation.navigate('SessionCard', { slug: vm.selectedDeckSlug, mode: 'sweep' })}
               />
+              </View>
             }
             ListEmptyComponent={
               <View style={styles.emptyState} testID="library-empty-state">
@@ -411,15 +506,7 @@ export function LibraryScreen({ navigation, route }: Props) {
               </View>
             }
             keyExtractor={(item) => item.stableUid}
-            renderItem={({ item }) => (
-              <LibraryCardTile
-                item={item}
-                numColumns={numColumns}
-                highlighted={highlightedUids.includes(item.stableUid)}
-                deckSlug={vm.selectedDeckSlug}
-                onPress={(stableUid) => navigation.navigate('CardDetail', { cardId: stableUid })}
-              />
-            )}
+            renderItem={renderItem}
           />
         </View>
       </LinearGradient>

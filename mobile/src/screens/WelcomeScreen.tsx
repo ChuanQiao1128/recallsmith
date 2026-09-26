@@ -90,6 +90,22 @@ export function WelcomeScreen({ navigation }: Props) {
                 that meant nothing to first-time users. Now: just "Continue". */}
             <Text style={styles.primaryButtonText}>Continue</Text>
           </Pressable>
+
+          {/* Returning users who reinstalled can restore their synced
+              progress from here. Opens SignIn with `navigate` (not
+              `replace`) so Back or a completed sign-in returns to Welcome;
+              they still tap Continue to finish onboarding. No authStore
+              import here — the onboarding test renders Welcome with only
+              react-native / AsyncStorage mocks. */}
+          <Pressable
+            testID="welcome-sign-in-link"
+            accessibilityRole="button"
+            style={({ pressed }) => [styles.signInLink, pressed && styles.pressed]}
+            onPress={() => navigation.navigate('SignIn')}
+            hitSlop={8}
+          >
+            <Text style={styles.signInLinkText}>I already have an account</Text>
+          </Pressable>
         </ScrollView>
       </LinearGradient>
     </SafeAreaView>
@@ -180,5 +196,21 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
+  // Quiet secondary link — parchment-toned, no fill, but a 44pt hit area so
+  // it stays tappable without competing with the primary Continue button.
+  signInLink: {
+    marginTop: 16,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  signInLinkText: {
+    color: colors.inkSecondary,
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textDecorationLine: 'underline',
+  },
   pressed: { opacity: 0.92 },
 });

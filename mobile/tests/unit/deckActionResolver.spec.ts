@@ -46,9 +46,12 @@ vi.mock('../../src/notifications/reminders', () => ({
 import {
   autoApplyFreeDeckUpdates,
   executeDeckAction,
+  getLastKnownDeckUpdates,
   hasAutoUpdateBeenAttempted,
   loadDeckUpdates,
+  loadHomeDeckSummaries,
   resetAutoUpdateAttemptsForTests,
+  resetLastKnownDeckUpdatesForTests,
   resolveDeckAction,
   selectAutoUpdateCandidates,
 } from '../../src/features/gacha/home/deckActionResolver';
@@ -77,10 +80,12 @@ describe('deckActionResolver', () => {
   beforeEach(() => {
     setActiveDeckSlugMock.mockClear();
     loadActiveDeckSlugMock.mockClear();
-    checkManifestForUpdatesMock.mockClear();
+    checkManifestForUpdatesMock.mockReset();
+    checkManifestForUpdatesMock.mockResolvedValue({});
     listManifestDecksMock.mockClear();
     resolveDeckBySlugMock.mockClear();
     installDeckFromUrlMock.mockClear();
+    resetLastKnownDeckUpdatesForTests();
   });
 
   it('resolves open action for study-ready deck', async () => {
@@ -197,6 +202,36 @@ describe('deckActionResolver', () => {
     const updates = await loadDeckUpdates(true);
     expect(checkManifestForUpdatesMock).toHaveBeenCalledWith(true);
     expect(updates).toEqual({ csharp: { slug: 'csharp' } });
+  });
+
+  it('skips the remote manifest check when remote is false', async () => {
+    await loadHomeDeckSummaries({ premium: false, remote: false });
+    expect(checkManifestForUpdatesMock).not.toHaveBeenCalled();
+  });
+
+  it('reuses the last remote updates on a cache-first load', async () => {
+    const remoteUpdates = {
+      csharp: {
+        slug: 'csharp',
+        installedVersion: '1',
+        remoteVersion: '2',
+        hasUpdate: true,
+        remoteUrl: 'https://example.com/csharp/deck.json',
+        remoteSha256: null,
+      },
+    };
+    checkManifestForUpdatesMock.mockResolvedValueOnce(remoteUpdates);
+
+    // A remote load records the manifest result as the last known updates.
+    const remote = await loadHomeDeckSummaries({ premium: false, remote: true });
+    expect(checkManifestForUpdatesMock).toHaveBeenCalledTimes(1);
+    expect(remote.updates).toEqual(remoteUpdates);
+    expect(getLastKnownDeckUpdates()).toEqual(remoteUpdates);
+
+    // The cache-first load reuses them without a second manifest check.
+    const cached = await loadHomeDeckSummaries({ premium: false, remote: false });
+    expect(checkManifestForUpdatesMock).toHaveBeenCalledTimes(1);
+    expect(cached.updates).toEqual(remoteUpdates);
   });
 });
 

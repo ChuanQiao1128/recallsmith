@@ -5,10 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const linkingMock = vi.hoisted(() => ({
   canOpenURL: vi.fn(async () => true),
   openURL: vi.fn(async (_url: string) => {}),
+  openSettings: vi.fn(async () => {}),
 }));
 
 const alertMock = vi.fn();
 const rcGetMonthlyPackageSafeMock = vi.fn();
+const rcPurchaseMonthlyMock = vi.fn(async () => ({ entitlements: { active: {} } }));
+const rcRestoreMock = vi.fn(async () => ({ entitlements: { active: {} } }));
+const rcGetCustomerInfoSafeMock = vi.fn(async () => ({ entitlements: { active: {} } }));
+const isPremiumActiveMock = vi.fn(() => false);
+const premiumStatusMock = vi.fn<() => 'unknown' | 'free' | 'premium'>(() => 'free');
 const featureFlagsMock = vi.fn();
 const setAudiencePreferenceMock = vi.fn(async (next: string) => next);
 const getAudiencePreferenceMock = vi.fn(async () => 'both');
@@ -122,16 +128,17 @@ vi.mock('../../src/auth/authStore', () => ({
 }));
 
 vi.mock('../../src/premium/premiumStore', () => ({
-  usePremiumUser: () => false,
+  usePremiumUser: () => premiumStatusMock() === 'premium',
+  usePremiumStatus: () => premiumStatusMock(),
   setIsPremiumUser: vi.fn(async () => {}),
 }));
 
 vi.mock('../../src/premium/revenuecat', () => ({
   rcGetMonthlyPackageSafe: () => rcGetMonthlyPackageSafeMock(),
-  rcPurchaseMonthly: vi.fn(async () => ({ entitlements: { active: {} } })),
-  rcRestore: vi.fn(async () => ({ entitlements: { active: {} } })),
-  rcGetCustomerInfoSafe: vi.fn(async () => ({ entitlements: { active: {} } })),
-  isPremiumActive: () => false,
+  rcPurchaseMonthly: () => rcPurchaseMonthlyMock(),
+  rcRestore: () => rcRestoreMock(),
+  rcGetCustomerInfoSafe: () => rcGetCustomerInfoSafeMock(),
+  isPremiumActive: (_info: any) => isPremiumActiveMock(),
 }));
 
 vi.mock('../../src/config/featureFlags', () => ({
@@ -151,9 +158,17 @@ vi.mock('../../src/config/remoteConfig', () => ({
 }));
 
 vi.mock('../../src/notifications/reminders', () => ({
+  DEFAULT_REMINDER_PREFS: {
+    morningEnabled: true,
+    morningTime: '09:00',
+    eveningEnabled: false,
+    eveningTime: '20:00',
+  },
   getReminderPrefs: () => getReminderPrefsMock(),
   setReminderPrefs: vi.fn(async (next: any) => next),
   refreshDailyRemindersFromCache: vi.fn(async () => {}),
+  getNotificationPermissionState: vi.fn(async () => 'granted'),
+  requestNotificationPermission: vi.fn(async () => 'granted'),
 }));
 
 vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
@@ -250,6 +265,16 @@ let warnSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   rcGetMonthlyPackageSafeMock.mockReset();
   rcGetMonthlyPackageSafeMock.mockResolvedValue(null);
+  rcPurchaseMonthlyMock.mockReset();
+  rcPurchaseMonthlyMock.mockResolvedValue({ entitlements: { active: {} } });
+  rcRestoreMock.mockReset();
+  rcRestoreMock.mockResolvedValue({ entitlements: { active: {} } });
+  rcGetCustomerInfoSafeMock.mockReset();
+  rcGetCustomerInfoSafeMock.mockResolvedValue({ entitlements: { active: {} } });
+  isPremiumActiveMock.mockReset();
+  isPremiumActiveMock.mockReturnValue(false);
+  premiumStatusMock.mockReset();
+  premiumStatusMock.mockReturnValue('free');
   featureFlagsMock.mockReset();
   featureFlagsMock.mockReturnValue(defaultFeatureFlags());
   linkingMock.canOpenURL.mockReset();
@@ -337,6 +362,66 @@ describe('PaywallScreen', () => {
       2,
       'https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Privacy-Policy-2bfa758eb54580db99a3ed89369f9a13?pvs=74',
     );
+  });
+
+  it('shows a Retry control when the price is unavailable and refetches on press', async () => {
+    rcGetMonthlyPackageSafeMock.mockResolvedValue(null);
+
+    const tree = await renderPaywall();
+
+    expect(findHostNodesByTestID(tree, 'Pressable', 'paywall-price-retry')).toHaveLength(1);
+    expect(findHostNodesByTestID(tree, 'Pressable', 'paywall-subscribe')).toHaveLength(0);
+
+    // Network is back: the next fetch returns a package.
+    rcGetMonthlyPackageSafeMock.mockResolvedValue({
+      product: { identifier: 'premium_monthly', priceString: 'NZ$4.99' },
+    });
+
+    const retry = findHostNodesByTestID(tree, 'Pressable', 'paywall-price-retry')[0];
+    await act(async () => {
+      retry.props.onPress();
+    });
+    await flush();
+
+    const billing = findHostNodesByTestID(tree, 'Text', 'paywall-billing-value');
+    expect(nodeText(billing[0])).toBe('NZ$4.99 / month');
+    expect(findHostNodesByTestID(tree, 'Pressable', 'paywall-subscribe')).toHaveLength(1);
+    expect(findHostNodesByTestID(tree, 'Pressable', 'paywall-price-retry')).toHaveLength(0);
+  });
+
+  it('reports a pending purchase as pending, not failed', async () => {
+    rcGetMonthlyPackageSafeMock.mockResolvedValue({
+      product: { identifier: 'premium_monthly', priceString: 'NZ$4.99' },
+    });
+    rcGetCustomerInfoSafeMock.mockResolvedValue({ entitlements: { active: {} } });
+    isPremiumActiveMock.mockReturnValue(false);
+    rcPurchaseMonthlyMock.mockRejectedValue({ code: '20' });
+
+    const tree = await renderPaywall();
+    const subscribe = findHostNodesByTestID(tree, 'Pressable', 'paywall-subscribe')[0];
+
+    await act(async () => {
+      subscribe.props.onPress();
+    });
+    await flush();
+
+    expect(alertMock).toHaveBeenCalledWith(
+      'Purchase pending',
+      expect.stringContaining('waiting for approval'),
+    );
+    const alertTitles = alertMock.mock.calls.map((call) => call[0]);
+    expect(alertTitles).not.toContain('Purchase failed');
+  });
+
+  it('shows a checking state instead of Not subscribed while premium status is unknown', async () => {
+    premiumStatusMock.mockReturnValue('unknown');
+
+    const tree = await renderPaywall();
+    const blob = textBlob(tree);
+
+    expect(blob).toContain('Checking your subscription…');
+    expect(blob).toContain('Checking…');
+    expect(blob).not.toContain('Not subscribed');
   });
 });
 

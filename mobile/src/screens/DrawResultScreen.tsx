@@ -14,7 +14,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+import { goHome } from '../navigation/tabNavigation';
 import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { spendablePullsNow } from '../features/gacha/rewards/spendablePulls';
 import { clearPermissionPromptPending, isPermissionPromptPending } from './PermissionPromptScreen';
 import { colors } from '../theme/colors';
 import {
@@ -32,6 +34,7 @@ import {
   rarityHaloColor,
 } from '../theme/packArt';
 import { CEREMONY_COPY_V10 } from '../features/gacha/draw/ceremonyCopy';
+import { COLLECTION_COPY } from '../features/gacha/copy/collectionCopy';
 import { formatRank } from '../features/gacha/library/cardRank';
 import { drawResultStyles as styles } from '../features/gacha/components/drawResultStyles';
 import { SHARE_DRAW_TESTID, shareDrawImage, type ShareDrawResult } from '../features/gacha/share/shareDraw';
@@ -158,6 +161,8 @@ const localStyles = StyleSheet.create({
     alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
     backgroundColor: 'rgba(20,23,55,0.72)',
   },
+  modalScroll: { maxHeight: 420 },
+  modalMeta: { marginTop: 8, color: colors.inkMuted, fontSize: 11, fontWeight: '800', letterSpacing: 0.4 },
   featuredSlab: { position: 'absolute', ...FEATURED_FRAME_LAYOUT.slab, justifyContent: 'center' },
   featuredTitleStrip: {
     position: 'absolute', ...FEATURED_FRAME_LAYOUT.titleStrip, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end',
@@ -235,10 +240,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
     loadRewardWalletState()
       .then((wallet) => {
         if (cancelled) return;
-        const pulls =
-          Math.max(0, Number(wallet.availablePulls ?? 0) || 0) +
-          Math.max(0, Number(wallet.reservePulls ?? 0) || 0);
-        setRemainingPulls(pulls);
+        setRemainingPulls(spendablePullsNow(wallet));
       })
       .catch(() => {
         if (!cancelled) setRemainingPulls(0);
@@ -315,7 +317,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
       navigation.navigate('PermissionPrompt');
       return;
     }
-    navigation.navigate('Home');
+    goHome(navigation);
   };
 
   const handleShare = async () => {
@@ -422,7 +424,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
   return (
     <SafeAreaView style={styles.safeArea} testID="screen-draw-result-root">
       <LinearGradient colors={PAGE_GRADIENT_LIGHT} style={styles.gradient}>
-        {/* Pokedex registration pill — fades in then out */}
+        {/* Collection registration pill — fades in then out */}
         {registerVisible ? (
           <AnimatedView
             pointerEvents="none"
@@ -434,9 +436,9 @@ export function DrawResultScreen({ navigation, route }: Props) {
             <View style={styles.registerIcon}>
               <Text style={styles.registerIconText}>📘</Text>
             </View>
-            {/* English-only app — registry pill is always Pokedex +N */}
+            {/* English-only app — registry pill is always Collection +N */}
             <Text style={styles.registerText} numberOfLines={1}>
-              {`Pokedex +${cards.length}`}
+              {COLLECTION_COPY.resultPill(cards.length)}
             </Text>
           </AnimatedView>
         ) : null}
@@ -456,7 +458,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
               {/* Gold uppercase eyebrow — reinforces the +N feeling
                   persistently after the toast fades. */}
               <Text style={styles.headerEyebrow} numberOfLines={1}>
-                {`+${cards.length} TO POKEDEX`}
+                {COLLECTION_COPY.resultEyebrow(cards.length)}
               </Text>
               <Text style={styles.headerTitle} numberOfLines={1}>
                 {deckLabel(params)}
@@ -859,9 +861,23 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   </Text>
                 </View>
               ) : null}
-              <Text style={styles.modalTitle} numberOfLines={3}>
-                {detailCard?.question ?? ''}
-              </Text>
+              {/* Full stem is readable here — the featured card is the summary
+                  (6 lines), the modal is the study surface (MGACHA-15). */}
+              <ScrollView testID="draw-result-detail-scroll" style={localStyles.modalScroll}>
+                {detailCard && cardTagText(detailCard) ? (
+                  <Text testID="draw-result-detail-topic" style={localStyles.modalMeta} numberOfLines={1}>
+                    {cardTagText(detailCard)}
+                  </Text>
+                ) : null}
+                {detailCard && cardKindText(detailCard) ? (
+                  <Text testID="draw-result-detail-kind" style={localStyles.modalMeta} numberOfLines={1}>
+                    {cardKindText(detailCard)}
+                  </Text>
+                ) : null}
+                <Text testID="draw-result-detail-question" style={styles.modalTitle}>
+                  {detailCard?.question ?? ''}
+                </Text>
+              </ScrollView>
               <Pressable
                 testID="screen-draw-result-detail-close"
                 style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]}
