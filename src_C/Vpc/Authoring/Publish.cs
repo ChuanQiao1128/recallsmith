@@ -18,6 +18,12 @@ public static class Publish
   private static readonly string? PremiumBucket = Environment.GetEnvironmentVariable("PREMIUM_BUCKET");
   private static readonly string? PublishJobQueueUrl = Environment.GetEnvironmentVariable("PUBLISH_JOB_QUEUE_URL");
 
+  /// <summary>Test seam (InternalsVisibleTo). When non-null the publish path uses these values instead of the
+  /// PUBLISH_JOB_QUEUE_URL / CONTENT_BUCKET captured at type init, and Send instead of the SQS client.
+  /// Always null in production.</summary>
+  internal sealed record EnqueueSeam(string QueueUrl, string ContentBucket, Func<SendMessageRequest, Task> Send);
+  internal static EnqueueSeam? TestEnqueueSeam;
+
   private static string NormalizePrefix(string? p, string defName)
   {
     var s = (p ?? defName).Trim();
@@ -151,7 +157,10 @@ public static class Publish
       ? "preview"
       : "publish";
 
-    if (mode == "publish" && string.IsNullOrEmpty(PublishJobQueueUrl)) return Helpers.ConfigError(res, "Missing env PUBLISH_JOB_QUEUE_URL");
+    var queueUrl = TestEnqueueSeam?.QueueUrl ?? PublishJobQueueUrl;
+    var contentBucket = TestEnqueueSeam?.ContentBucket ?? ContentBucket;
+
+    if (mode == "publish" && string.IsNullOrEmpty(queueUrl)) return Helpers.ConfigError(res, "Missing env PUBLISH_JOB_QUEUE_URL");
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
@@ -293,7 +302,7 @@ public static class Publish
       }
       else
       {
-        if (string.IsNullOrEmpty(ContentBucket)) throw new InvalidOperationException("Missing env CONTENT_BUCKET for free deck");
+        if (string.IsNullOrEmpty(contentBucket)) throw new InvalidOperationException("Missing env CONTENT_BUCKET for free deck");
         s3Key = $"{ContentPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
       }
 
@@ -317,13 +326,14 @@ public static class Publish
       // 4. Send the message to the SQS queue
       var sendMessageRequest = new SendMessageRequest
       {
-        QueueUrl = PublishJobQueueUrl,
+        QueueUrl = queueUrl,
         MessageBody = messageBody
       };
 
       try
       {
-        await SQS().SendMessageAsync(sendMessageRequest);
+        if (TestEnqueueSeam is not null) await TestEnqueueSeam.Send(sendMessageRequest);
+        else await SQS().SendMessageAsync(sendMessageRequest);
         Log.Event("info", new { tag = "publish", outcome = "enqueued", jobId, deckId = deckIdInt, deckSlug, buildId });
       }
       catch (Exception ex)
