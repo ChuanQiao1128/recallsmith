@@ -47,6 +47,7 @@ import { scheduleProgressSync } from './src/sync/progressSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { DEFAULT_APP_STORE_URL } from './src/config/remoteConfig';
 import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
+import { loadFeedbackPrefs } from './src/features/gacha/settings/feedbackPrefs';
 import { createOtaUpdateChecker, getExpoUpdatesModule } from './src/updates/otaUpdateCheck';
 import { collectDeviceInfo } from './src/features/gacha/draw/ceremonyPerf';
 import {
@@ -149,6 +150,9 @@ export default function App() {
     // launch — pre-existing users with non-empty wallets are skipped,
     // and we never re-grant after a user has spent their pulls.
     void seedStarterPullsIfNeeded();
+    // Load the device-global sound/haptics choice early so the ceremony audio,
+    // ceremony haptics and study haptics see the stored value on first use.
+    void loadFeedbackPrefs();
   }, []);
 
   useEffect(() => {

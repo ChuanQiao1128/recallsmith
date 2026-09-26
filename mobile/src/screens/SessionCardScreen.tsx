@@ -57,6 +57,8 @@ import RatingBar from '../features/gacha/components/RatingBar';
 import ReviewBody from '../features/gacha/components/ReviewBody';
 import { getFeatureFlags } from '../config/featureFlags';
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
+import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
+import { studyHaptic } from '../features/gacha/session/studyHaptics';
 import type { McqExport, McqOption } from '../types/deckExport';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
 import { MCQ_COPY, mcqBannerPartial, mcqOverLimitAnnouncement } from '../features/gacha/mcq/mcqConstants';
@@ -123,6 +125,7 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   return b.every((key) => set.has(key));
 }
 function mcqHaptic(kind: 'success' | 'warning' | 'error'): void {
+  if (!getFeedbackPrefsSync().haptics) return;
   try {
     const haptics = loadExpoHaptics();
     if (!haptics) return;
@@ -206,7 +209,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
 
   // Stable callbacks so the memoized ReviewBody / McqReviewBody do not re-render
   // on every unrelated SessionCard state change (dock resize, picks, reviewing).
-  const handleFlip = useCallback(() => setShowAnswer((prev) => !prev), []);
+  const handleFlip = useCallback(() => {
+    if (!showAnswer) studyHaptic('reveal');
+    setShowAnswer(!showAnswer);
+  }, [showAnswer]);
   const handleDockLayout = useCallback((event: LayoutChangeEvent) => {
     const h = event.nativeEvent.layout.height;
     setDockLayoutHeight((prev) => (prev !== null && Math.abs(prev - h) < 1 ? prev : h));
@@ -579,6 +585,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
     if (reviewing) return;
     if (!showAnswer) return;
     if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
+    studyHaptic('rate');
     setReviewing(true);
     try {
       const nowAtRating = new Date();
@@ -716,6 +723,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
     const mcq = mcqState.mcq;
     if (!mcq || mcqState.stage !== 'options' || reviewing) return;
     const n = mcqRequiredCount(mcq);
+    // A light tick whenever the tap actually adds or removes a pick — a single-select,
+    // a deselect, or a pick below the limit — but not on the over-limit path (that path
+    // gets a warning haptic via handleOverLimit instead).
+    const willChangePick = n === 1 || mcqState.picks.includes(key) || mcqState.picks.length < n;
+    if (willChangePick) studyHaptic('select');
     setMcqState((prev) => {
       let next: string[];
       if (n === 1) {
