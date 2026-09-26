@@ -7,3 +7,4 @@
 
 export { useDeck, useCreateDeck, useUpdateDeck, useDeleteDeck, usePublishDeck } from './useDecks';
 export { useCard, useCards, useCreateCard, useUpdateCard, useDeleteCard } from './useCards';
+export { useUnsavedChangesGuard } from './useUnsavedChangesGuard';

@@ -1,6 +1,6 @@
 // src/components/CardForm.tsx
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Deck } from '../types/deck';
 import type { McqBlob } from '../types/mcq';
@@ -74,6 +74,14 @@ interface CardFormProps {
    * the create page.
    */
   mcq?: McqBlob | null;
+
+  /**
+   * Reports whether any field now differs from the values the form mounted
+   * with, so a page can guard against a stray navigation discarding an edit
+   * (see useUnsavedChangesGuard). Optional: a form with no guard omits it. The
+   * form itself makes no navigation decision — it only reports.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface InternalState {
@@ -233,11 +241,27 @@ function mapToHlLanguage(codeLang: string): string | null {
 }
 
 export function CardForm(props: CardFormProps) {
-  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq } = props;
+  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, onDirtyChange } = props;
 
   const mcqRequiredCount = mcq ? mcq.options.filter(option => option.correct).length : 0;
 
   const [values, setValues] = useState<CardFormValues>(initialValues);
+
+  // The values the form mounted with. Frozen once, like `values` itself, so the
+  // two are compared against the same starting point across the form's life.
+  const [baseline] = useState(initialValues);
+
+  // Dirty is "some field now differs from where it started", field by field
+  // over CardFormValues' keys. Reported through onDirtyChange rather than acted
+  // on here — the navigation decision belongs to the page's guard.
+  const dirty = (Object.keys(baseline) as (keyof CardFormValues)[]).some(
+    key => values[key] !== baseline[key],
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
   const [state, setState] = useState<InternalState>({
     submitting: false,
     error: null,

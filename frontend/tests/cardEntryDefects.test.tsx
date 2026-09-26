@@ -28,6 +28,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
+import { renderAt } from './support/routerProbe';
 import type { Deck } from '../src/types/deck';
 import type { Card } from '../src/types/card';
 import type { ApiResult } from '../src/types/api';
@@ -165,11 +166,8 @@ describe('the difficulty control does not claim a value the card does not hold',
 
 describe('a new card is offered the next order in the deck', () => {
   function mountNew() {
-    return render(
-      <MemoryRouter initialEntries={[`/decks/cards/new?deckId=${DECK_ID}`]}>
-        <NewCardPage />
-      </MemoryRouter>,
-    );
+    // NewCardPage calls useBlocker, so it needs a data router (renderAt).
+    return renderAt(<NewCardPage />, [`/decks/cards/new?deckId=${DECK_ID}`]);
   }
 
   it('continues the deck instead of colliding with card one', async () => {
@@ -214,11 +212,8 @@ describe('a new card is offered the next order in the deck', () => {
 
 describe('editing a card keeps the edit to its usage note', () => {
   function mountEdit() {
-    return render(
-      <MemoryRouter initialEntries={[`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]}>
-        <EditCardPage />
-      </MemoryRouter>,
-    );
+    // EditCardPage calls useBlocker, so it needs a data router (renderAt).
+    return renderAt(<EditCardPage />, [`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]);
   }
 
   it('sends realWorldUsage along with everything else', async () => {
@@ -311,11 +306,7 @@ describe('the console does not hand out an export it has already rejected', () =
 describe('the revision the form insists on is the revision that gets stored', () => {
   it('sends it when creating a card', async () => {
     const user = userEvent.setup();
-    render(
-      <MemoryRouter initialEntries={[`/decks/cards/new?deckId=${DECK_ID}`]}>
-        <NewCardPage />
-      </MemoryRouter>,
-    );
+    renderAt(<NewCardPage />, [`/decks/cards/new?deckId=${DECK_ID}`]);
 
     const revision = await screen.findByLabelText('Revision');
     await user.clear(revision);
@@ -333,11 +324,7 @@ describe('the revision the form insists on is the revision that gets stored', ()
 
   it('sends it when editing a card', async () => {
     const user = userEvent.setup();
-    render(
-      <MemoryRouter initialEntries={[`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]}>
-        <EditCardPage />
-      </MemoryRouter>,
-    );
+    renderAt(<EditCardPage />, [`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]);
 
     const revision = await screen.findByLabelText('Revision');
     await user.clear(revision);

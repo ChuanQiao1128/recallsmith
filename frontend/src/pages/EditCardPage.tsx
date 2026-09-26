@@ -6,6 +6,7 @@ import { VERSION_CONFLICT } from '../api/errors';
 import { QueryKeys, useAppQueryClient } from '../api/queryClient';
 import { useCard, useUpdateCard } from '../hooks/useCards';
 import { useDeck } from '../hooks/useDecks';
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
 import type { Card } from '../types/card';
 import { CardForm, type CardFormValues } from '../components/CardForm';
@@ -102,6 +103,11 @@ export function EditCardPage() {
    * again, and it was the only one whose UI implied it could.
    */
   const [conflictRecoverable, setConflictRecoverable] = useState(false);
+
+  // The unsaved-changes guard. Declared above every early return, as the rules
+  // of hooks require; the save below bypasses it explicitly before navigating.
+  const [dirty, setDirty] = useState(false);
+  const guard = useUnsavedChangesGuard(dirty);
 
   if (invalidId) {
     return <EditCardErrorScreen message="Missing or invalid deckId/cardId." />;
@@ -225,6 +231,9 @@ export function EditCardPage() {
       return { ok: false, error: message };
     }
 
+    // A successful save is not a discard: allow the navigation that follows it
+    // before it fires, so the guard does not ask about the edit we just kept.
+    guard.allowNextNavigation();
     navigate(`/decks/cards?deckId=${deck.id}`, { replace: true });
     return { ok: true };
   }
@@ -255,6 +264,7 @@ export function EditCardPage() {
           initialValues={initialValues}
           onSubmit={handleSubmit}
           onCancel={() => navigate(-1)}
+          onDirtyChange={setDirty}
           recoveryLabel={conflictRecoverable ? RETRY_WITH_LATEST : null}
           mcq={card.mcq ?? null}
         />

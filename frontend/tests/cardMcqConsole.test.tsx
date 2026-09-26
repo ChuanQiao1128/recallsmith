@@ -13,10 +13,10 @@
 //     exactly as it stands (an absent key is "leave alone", C00 §2.11).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
 
+import { renderAt } from './support/routerProbe';
 import type { Card } from '../src/types/card';
 import type { Deck } from '../src/types/deck';
 import type { McqBlob } from '../src/types/mcq';
@@ -119,19 +119,13 @@ function mountList() {
 }
 
 function mountEdit() {
-  return render(
-    <MemoryRouter initialEntries={[`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]}>
-      <EditCardPage />
-    </MemoryRouter>,
-  );
+  // EditCardPage calls useBlocker, so it needs a data router (renderAt).
+  return renderAt(<EditCardPage />, [`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]);
 }
 
 function mountNew() {
-  return render(
-    <MemoryRouter initialEntries={[`/decks/cards/new?deckId=${DECK_ID}`]}>
-      <NewCardPage />
-    </MemoryRouter>,
-  );
+  // NewCardPage calls useBlocker, so it needs a data router (renderAt).
+  return renderAt(<NewCardPage />, [`/decks/cards/new?deckId=${DECK_ID}`]);
 }
 
 describe('the card list marks a card that carries an MCQ blob', () => {
