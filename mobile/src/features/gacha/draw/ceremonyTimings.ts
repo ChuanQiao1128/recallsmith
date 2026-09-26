@@ -44,6 +44,13 @@ export const DEVICE: CeremonyTimingTable = Object.freeze({
 });
 
 export const TO_TABLE_CAP_MS = Object.freeze({ single: 3300, multi: 5500 });
+// draw_committed's pull + draw-state sync (network / JSON / AsyncStorage) is deferred past the
+// longest possible ceremony so its work never lands on the JS thread mid-ceremony (MGACHA-03).
+export const DRAW_COMMITTED_SYNC_DELAY_MS = TO_TABLE_CAP_MS.multi + 1000;
+// The ambience bed fades out this long after the cards reach the table, before expo-audio's
+// non-gapless 8 s ambience loop can wrap on a normal pull (MGACHA-02).
+export const BED_TABLE_FADE_DELAY_MS = 1500;
+export const BED_TABLE_FADE_OUT_MS = 600;
 export const REDUCED_MOTION_FLASH_MS = 180;
 export const REDUCED_MOTION_SETTLE_MS = 240;
 export const SWIPE_TRIGGER_DISTANCE = 72;
@@ -63,6 +70,21 @@ export type ResolvedCeremonyTimings = {
   liftMs: number; landMs: number; tapQueueMs: number;
   toTableMs: number;
 };
+
+/**
+ * When a tap flip's sound cues should fire, relative to the tap (MGACHA-07). The visual flip
+ * starts after the queue delay plus the lift, and the face crosses at the flip midpoint, so the
+ * flip sound lands at lift end and the RAR/LEG sting lands with the face turning (COM has none).
+ */
+export function tapFlipCueOffsets(
+  rarity: PeakRarity,
+  queueDelayMs: number,
+  timings: Pick<ResolvedCeremonyTimings, 'liftMs' | 'flipMs'>,
+): { flipAtMs: number; stingAtMs: number | null } {
+  const flipAtMs = Math.max(0, Math.round(queueDelayMs)) + timings.liftMs;
+  const stingAtMs = rarity === 'COM' ? null : flipAtMs + Math.round(timings.flipMs[rarity] / 2);
+  return { flipAtMs, stingAtMs };
+}
 
 type TimingRow = CeremonyTimingTable['single'];
 

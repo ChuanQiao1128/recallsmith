@@ -78,7 +78,7 @@ export type TapCardProps = {
   /** true outside 'cards-on-table' — a disabled card never flips and reports accessibilityState.disabled. */
   disabled: boolean;
   flipped: boolean;
-  onTapStart?: (card: TapCardData) => void;
+  onTapStart?: (card: TapCardData, flipDelayMs: number) => void;
   onFlipped: (uid: string) => void;
   cardBackImage?: ImageSourcePropType; frameImage?: ImageSourcePropType;
   reduceMotion: boolean;
@@ -128,7 +128,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
       return;
     }
     flipDelay.current = tableTapQueue.enqueue(card.stableUid);
-    onTapStart?.(card);
+    onTapStart?.(card, flipDelay.current);
     onFlipped(card.stableUid);
   }, [disabled, flipped, card, onFocusToggle, onTapStart, onFlipped]);
 
