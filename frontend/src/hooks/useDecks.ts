@@ -25,41 +25,46 @@ import type { Deck } from '../types/deck';
 // load-bearing, and because it is the one setting whose absence produces a
 // spinner rather than a wrong number: see the comment on the default.
 export function useDeck(id: number) {
-  return useQuery({
-    queryKey: QueryKeys.deck(id),
-    queryFn: async (): Promise<Deck> => {
-      const res = await fetchDeckById(id);
+  return useQuery(
+    {
+      queryKey: QueryKeys.deck(id),
+      queryFn: async (): Promise<Deck> => {
+        const res = await fetchDeckById(id);
 
-      // The fallback wording follows the page. With !success and no server
-      // message the page already shows 'Deck not found.', so throwing any other
-      // string would give one kind of failure two different sentences.
-      if (!res.success) throw apiFailure(res, 'Deck not found.');
+        // The fallback wording follows the page. With !success and no server
+        // message the page already shows 'Deck not found.', so throwing any other
+        // string would give one kind of failure two different sentences.
+        if (!res.success) throw apiFailure(res, 'Deck not found.');
 
-      // A 200 carrying no deck is a deck that is not there, and it is thrown
-      // rather than returned as null.
-      //
-      // Returning null was the older shape, and it forced the page to work out
-      // "not found" by elimination: data === null after a query that did not
-      // error. That reads as a missing-value check, so it survives every
-      // refactor that tightens the type, and it cannot carry a code or a trace
-      // id because a null has nowhere to put them. Throwing puts both kinds of
-      // absence -- the server said no, and the server said yes but sent
-      // nothing -- into one channel the page can branch on.
-      if (!res.data) {
-        throw new ApiFailureError('Deck not found.', NOT_FOUND, res.traceId ?? '');
-      }
+        // A 200 carrying no deck is a deck that is not there, and it is thrown
+        // rather than returned as null.
+        //
+        // Returning null was the older shape, and it forced the page to work out
+        // "not found" by elimination: data === null after a query that did not
+        // error. That reads as a missing-value check, so it survives every
+        // refactor that tightens the type, and it cannot carry a code or a trace
+        // id because a null has nowhere to put them. Throwing puts both kinds of
+        // absence -- the server said no, and the server said yes but sent
+        // nothing -- into one channel the page can branch on.
+        if (!res.data) {
+          throw new ApiFailureError('Deck not found.', NOT_FOUND, res.traceId ?? '');
+        }
 
-      return res.data;
+        return res.data;
+      },
+      // The predicate is CardListPage's parseDeckId rule: only 0 and NaN skip the
+      // request. Negatives and fractions still go out, because they went out
+      // before the migration -- deckId=-5 gets the server's 404 wording today,
+      // and tightening this to id > 0 would turn that into a spinner that never
+      // stops. Kept here as well as in the caller: this is a public hook and the
+      // next caller may not have parsed anything.
+      enabled: !Number.isNaN(id) && id !== 0,
+      networkMode: 'always',
     },
-    // The predicate is CardListPage's parseDeckId rule: only 0 and NaN skip the
-    // request. Negatives and fractions still go out, because they went out
-    // before the migration -- deckId=-5 gets the server's 404 wording today,
-    // and tightening this to id > 0 would turn that into a spinner that never
-    // stops. Kept here as well as in the caller: this is a public hook and the
-    // next caller may not have parsed anything.
-    enabled: !Number.isNaN(id) && id !== 0,
-    networkMode: 'always',
-  });
+    // The app singleton, so a bare-mounted page reads the one cache the deck
+    // writes invalidate -- the same second argument the mutation hooks pass.
+    useAppQueryClient(),
+  );
 }
 
 // ---------------------------------------------------------------------------

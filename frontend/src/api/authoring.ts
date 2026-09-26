@@ -362,22 +362,89 @@ export async function fetchAdminDecksPage(
 
 // ---------------------- cards ----------------------
 
+// The server's MaxLimit on GET /api/v1/authoring/cards/page (CardsPage.cs). One
+// page never carries more than this, so fetchCardsByDeck asks for exactly it and
+// walks the cursor until the server says there is no more.
+export const CARDS_PAGE_LIMIT = 200;
+
+// A ceiling on the number of pages walked, so a server that keeps handing back a
+// cursor can never spin this loop forever. At CARDS_PAGE_LIMIT per page this is
+// 20 000 cards, well past any real deck; reaching it is a bug, not a big deck.
+const CARDS_PAGE_MAX_PAGES = 100;
+
+/** One page of the keyset-paginated cards route: `{ items, nextCursor, hasMore }`. */
+interface CardsPageEnvelope {
+  items?: Card[] | null;
+  nextCursor?: string | null;
+  hasMore?: boolean;
+}
+
 export async function fetchCardsByDeck(deckId: number): Promise<ApiResult<Card[]>> {
   return dedupeRequest(DedupeKeys.cards(deckId), async () => {
     try {
-      const resp = await http.get<ApiResult<Card[]>>('/api/v1/authoring/cards', {
-        params: { deckId },
-      });
-      const raw = resp.data;
+      const allCards: Card[] = [];
+      let cursor: string | null = null;
 
-      if (!raw.success) return raw;
+      for (let page = 0; page < CARDS_PAGE_MAX_PAGES; page++) {
+        // The first request carries no cursor; every request after it passes the
+        // one the previous page handed back.
+        const params: Record<string, unknown> =
+          cursor === null
+            ? { deckId, limit: CARDS_PAGE_LIMIT }
+            : { deckId, limit: CARDS_PAGE_LIMIT, cursor };
 
-      const list = raw.data ?? [];
-      return { ...raw, data: list.map(normalizeCard) };
+        const resp = await http.get<ApiResult<CardsPageEnvelope>>(
+          '/api/v1/authoring/cards/page',
+          { params },
+        );
+        const raw = resp.data;
+
+        // A refused page is the whole answer. Returning what came before it would
+        // be a partial list wearing a success envelope, which is worse than a
+        // clean failure the caller can retry.
+        if (!raw.success) return { ...raw, data: null };
+
+        for (const item of raw.data?.items ?? []) allCards.push(normalizeCard(item));
+
+        const nextCursor = raw.data?.nextCursor;
+        if (raw.data?.hasMore !== true || !nextCursor) {
+          return { ...raw, data: allCards };
+        }
+        cursor = nextCursor;
+      }
+
+      // The loop only falls through here if the server kept setting hasMore past
+      // CARDS_PAGE_MAX_PAGES, which no honest deck can.
+      return failResult<Card[]>('The card list did not finish paging.', 'PAGING_ERROR');
     } catch (err) {
       return apiResultFromError<Card[]>(err);
     }
   });
+}
+
+/**
+ * One card, read through `GET /api/v1/authoring/cards?id=`.
+ *
+ * The route answers with an array (the same handler the full list uses, filtered
+ * by id), so an empty array is a card that is not there rather than an error.
+ */
+export async function fetchCardById(id: number): Promise<ApiResult<Card>> {
+  try {
+    const resp = await http.get<ApiResult<Card[]>>('/api/v1/authoring/cards', {
+      params: { id },
+    });
+    const raw = resp.data;
+
+    if (!raw.success) return { ...raw, data: null };
+
+    const list = raw.data ?? [];
+    if (list.length === 0) {
+      return failResult<Card>('Card not found.', 'NOT_FOUND');
+    }
+    return { ...raw, data: normalizeCard(list[0]) };
+  } catch (err) {
+    return apiResultFromError<Card>(err);
+  }
 }
 
 export async function createCard(params: {
