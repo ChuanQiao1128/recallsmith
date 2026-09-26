@@ -257,21 +257,21 @@ function buildDrawVM(wallet?: RewardWalletState | null, selectedDeck?: DeckSumma
   ) {
     return {
       state: 'wallet-full',
-      label: `Wallet full (${FREE_PULL_CAP} + ${FREE_PULL_OVERFLOW_CAP})`,
+      label: `Pack wallet full (${FREE_PULL_CAP} + ${FREE_PULL_OVERFLOW_CAP})`,
     };
   }
 
   if (safeWallet.reservePulls > 0) {
     return {
       state: 'reserve',
-      label: `${safeWallet.availablePulls} pull${safeWallet.availablePulls === 1 ? '' : 's'} ready · ${safeWallet.reservePulls} more waiting`,
+      label: `${safeWallet.availablePulls} pull${safeWallet.availablePulls === 1 ? '' : 's'} ready for this pack · ${safeWallet.reservePulls} more waiting`,
     };
   }
 
   if (safeWallet.availablePulls > 0) {
     return {
       state: 'available',
-      label: `${safeWallet.availablePulls} pull${safeWallet.availablePulls === 1 ? '' : 's'} ready`,
+      label: `${safeWallet.availablePulls} pull${safeWallet.availablePulls === 1 ? '' : 's'} ready for this pack`,
     };
   }
 

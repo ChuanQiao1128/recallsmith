@@ -142,7 +142,10 @@ describe('buildReadyHomeVm', () => {
         totalDueAllDecks: 3,
         totalNewAllDecks: 1,
       },
-      wallet: { availablePulls: 0, reservePulls: 0 },
+      deckWallets: {
+        csharp: { availablePulls: 0, reservePulls: 0 },
+        aws: { availablePulls: 0, reservePulls: 0 },
+      },
       streak: STREAK,
     };
 

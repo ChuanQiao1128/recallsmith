@@ -34,6 +34,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
       for (const key of keys) store.delete(key);
     }),
     getAllKeys: vi.fn(async () => [...store.keys()]),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((k) => [k, store.get(k) ?? null] as [string, string | null])),
   },
 }));
 
@@ -179,12 +180,9 @@ vi.mock('../../src/features/gacha/components/ReviewBody', () => {
 import { loadHomeDeckSummaries } from '../../src/features/gacha/home/deckActionResolver';
 import { buildHomeScreenVM } from '../../src/features/gacha/selectors/homeSelectors';
 import { applyEconomyFloorIfStarved } from '../../src/features/gacha/rewards/economyFloor';
-import {
-  consumePullsFromStoredWallet,
-  loadRewardWalletState,
-  saveRewardWalletState,
-  type RewardWalletState,
-} from '../../src/features/gacha/rewards/rewardWallet';
+import type { RewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
+// 1.7: the floor is per-pack, so this drives the 'csharp' pack directly.
+import { consumeDeckPulls, loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { commitDraw } from '../../src/features/gacha/draw/drawCommit';
 import { listManifestDecks } from '../../src/content/deckRepository';
 import { saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
@@ -216,18 +214,25 @@ async function seed(params: {
   setActiveUserSubForStorage(null);
   await saveDeckProgress(DECK, params.progress ?? [untouched('c1'), untouched('c2'), untouched('c3')]);
   await saveDrawState('csharp', { owned: params.owned, pity: null });
-  await saveRewardWalletState(params.wallet ?? { availablePulls: 0, reservePulls: 0 });
+  // Per-pack wallet: the pack starts already migrated and already bootstrapped,
+  // so the daily floor is the only thing that can add a pull. A seeded balance
+  // goes into the pack itself.
+  store.set('devcards:u:anon:recallsmith:deck-wallets:v1', JSON.stringify({
+    migratedAtMs: 1,
+    decks: params.wallet ? { csharp: params.wallet } : {},
+    bootstrappedAtMs: { csharp: 1 },
+  }));
 }
 
 /**
- * The Home load chain, exactly as HomeScreen.refreshHome runs it: summaries
- * and wallet in one join, then the floor, then the view model off the wallet
- * the floor returned.
+ * The Home load chain: summaries, then the per-pack floor on the selected pack,
+ * then the view model off the wallet the floor returned.
  */
 async function runHomeLoadChain(opts: { now?: Date } = {}) {
   const summary = await loadHomeDeckSummaries({ premium: false });
-  const walletBeforeFloor = await loadRewardWalletState();
+  const walletBeforeFloor = await loadDeckWallet('csharp');
   const outcome = await applyEconomyFloorIfStarved({
+    slug: 'csharp',
     ownedNewCount: summary.totalNewAllDecks,
     dueCount: summary.totalDueAllDecks,
     wallet: walletBeforeFloor,
@@ -289,7 +294,7 @@ describe('economy floor', () => {
       expect(granted).toBe(1);
       expect(wallet).toEqual({ availablePulls: 1, reservePulls: 0 });
       // Persisted, not just returned: the next screen reads storage.
-      expect(await loadRewardWalletState()).toEqual({ availablePulls: 1, reservePulls: 0 });
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 1, reservePulls: 0 });
 
       // Before the floor this kind fell through to 'Open library' because the
       // wallet was locked -- a library of silhouettes. It now points at the
@@ -386,7 +391,7 @@ describe('economy floor', () => {
       const second = await runHomeLoadChain({ now: new Date(2026, 7, 19, 21, 30, 0) });
 
       expect(second.granted).toBe(0);
-      expect(await loadRewardWalletState()).toEqual({ availablePulls: 1, reservePulls: 0 });
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 1, reservePulls: 0 });
     });
 
     it('gives nothing more after the pull is spent and Home reloads the same day', async () => {
@@ -399,25 +404,25 @@ describe('economy floor', () => {
       const today = new Date(2026, 7, 19, 9, 0, 0);
 
       expect((await runHomeLoadChain({ now: today })).granted).toBe(1);
-      await consumePullsFromStoredWallet(1);
-      expect(await loadRewardWalletState()).toEqual({ availablePulls: 0, reservePulls: 0 });
+      await consumeDeckPulls('csharp', 1);
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
 
       const second = await runHomeLoadChain({ now: new Date(2026, 7, 19, 23, 59, 0) });
 
       expect(second.granted).toBe(0);
-      expect(await loadRewardWalletState()).toEqual({ availablePulls: 0, reservePulls: 0 });
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
     });
 
     it('grants again the next day', async () => {
       await seed({ owned: [] });
 
       expect((await runHomeLoadChain({ now: new Date(2026, 7, 19, 9, 0, 0) })).granted).toBe(1);
-      await consumePullsFromStoredWallet(1);
+      await consumeDeckPulls('csharp', 1);
 
       const tomorrow = await runHomeLoadChain({ now: new Date(2026, 7, 20, 9, 0, 0) });
 
       expect(tomorrow.granted).toBe(1);
-      expect(await loadRewardWalletState()).toEqual({ availablePulls: 1, reservePulls: 0 });
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 1, reservePulls: 0 });
     });
 
     it('grants once when two Home loads race', async () => {
@@ -438,7 +443,7 @@ describe('economy floor', () => {
       // zero it read, so the losing write re-states the winner's value instead
       // of stacking a second pull on top of it.
       expect(first.granted + second.granted).toBeGreaterThanOrEqual(1);
-      expect(await loadRewardWalletState()).toEqual({ availablePulls: 1, reservePulls: 0 });
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 1, reservePulls: 0 });
     });
 
     it('writes the day marker before it touches the wallet', async () => {
@@ -446,8 +451,8 @@ describe('economy floor', () => {
 
       await runHomeLoadChain({ now: new Date(2026, 7, 19, 9, 0, 0) });
 
-      const markerKey = 'devcards:u:anon:recallsmith:economy-floor:v1';
-      const walletKey = 'devcards:u:anon:recallsmith:reward-wallet:v1';
+      const markerKey = 'devcards:u:anon:recallsmith:economy-floor:v1:csharp';
+      const walletKey = 'devcards:u:anon:recallsmith:deck-wallets:v1';
       const markerAt = setItemCalls.lastIndexOf(markerKey);
       const walletAt = setItemCalls.lastIndexOf(walletKey);
 
@@ -471,7 +476,7 @@ describe('economy floor', () => {
       expect(home.vm.cta.nav).toBe('draw');
 
       // 2. Draw, paid for out of the wallet the floor just filled.
-      const spend = await consumePullsFromStoredWallet(1);
+      const spend = await consumeDeckPulls('csharp', 1);
       expect(spend.spent).toBe(1);
       // The draw seeds its RNG from the clock, so pin the clock. Any card
       // would satisfy "the drawn one is studiable", but only a card that is
@@ -520,7 +525,7 @@ describe('economy floor', () => {
       const after = await runHomeLoadChain();
       expect(after.summary.totalNewAllDecks).toBe(1);
       expect(after.granted).toBe(0);
-      expect(await loadRewardWalletState()).toEqual({ availablePulls: 0, reservePulls: 0 });
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
     });
   });
 });

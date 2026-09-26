@@ -61,7 +61,9 @@ export function createCoalescedRunner(task: () => Promise<void>): () => Promise<
 
 export type HomeVmInputs = {
   summary: HomeDeckSummarySnapshot;
-  wallet: RewardWalletState;
+  /** Per-pack wallets (1.7). buildReadyHomeVm picks the active pack's wallet, so a
+   *  pack-tile tap re-selects the right pack with no I/O. */
+  deckWallets: Record<string, RewardWalletState>;
   streak: StreakSnapshot;
 };
 
@@ -87,9 +89,13 @@ export function buildReadyHomeVm(params: {
   updatingSlugs: string[];
 }): HomeViewModel {
   const { inputs, selectedSlug, session, isSignedIn, premium, updatingSlugs } = params;
-  const { summary, wallet, streak } = inputs;
+  const { summary, deckWallets, streak } = inputs;
 
   const activeSlug = selectedSlug ?? summary.deckSummaries[0]?.slug ?? null;
+  // The active pack's wallet drives Home's draw line; a pack-tile tap re-picks it
+  // from the map already in hand, so no storage read is needed.
+  const wallet: RewardWalletState =
+    (activeSlug ? deckWallets[activeSlug] : undefined) ?? { availablePulls: 0, reservePulls: 0 };
   const now = new Date(summary.asOfISO);
   const todayKey = formatDateKey(now);
   const sessionStartDay =

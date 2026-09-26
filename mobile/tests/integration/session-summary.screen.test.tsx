@@ -44,7 +44,8 @@ vi.mock('expo-linear-gradient', () => {
 });
 
 import { SessionSummaryScreen } from '../../src/screens/SessionSummaryScreen';
-import * as rewardWallet from '../../src/features/gacha/rewards/rewardWallet';
+// 1.7: the summary reads the per-pack wallet.
+import * as deckWallet from '../../src/features/gacha/rewards/deckWallet';
 
 function getTextContent(node: any): string {
   if (typeof node === 'string') return node;
@@ -162,7 +163,7 @@ describe('SessionSummaryScreen', () => {
     const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
     // economy-v2: the pull is paid at rating; the summary only renders the outcome.
     expect(texts).toContain('+1 pull · 1 new card learned');
-    expect(texts).toContain('1 ready to use');
+    expect(texts).toContain('1 ready for this pack');
     expect(texts).toContain('Daily streak');
     expect(texts).toContain('First day complete');
 
@@ -277,7 +278,7 @@ describe('SessionSummaryScreen', () => {
   });
 
   it('shows an error branch and retries reward resolution without navigating away', async () => {
-    const loadWalletSpy = vi.spyOn(rewardWallet, 'loadRewardWalletState').mockRejectedValueOnce(new Error('network error'));
+    const loadWalletSpy = vi.spyOn(deckWallet, 'loadDeckWallet').mockRejectedValueOnce(new Error('network error'));
     const navigation = {
       navigate: vi.fn(),
     } as any;
@@ -331,11 +332,11 @@ describe('SessionSummaryScreen', () => {
   });
 
   it('keeps the primary CTA disabled while reward resolution is loading', async () => {
-    let resolveReward!: (value: Awaited<ReturnType<typeof rewardWallet.loadRewardWalletState>>) => void;
-    const pendingReward = new Promise<Awaited<ReturnType<typeof rewardWallet.loadRewardWalletState>>>((resolve) => {
+    let resolveReward!: (value: Awaited<ReturnType<typeof deckWallet.loadDeckWallet>>) => void;
+    const pendingReward = new Promise<Awaited<ReturnType<typeof deckWallet.loadDeckWallet>>>((resolve) => {
       resolveReward = resolve;
     });
-    const loadWalletSpy = vi.spyOn(rewardWallet, 'loadRewardWalletState').mockReturnValueOnce(pendingReward);
+    const loadWalletSpy = vi.spyOn(deckWallet, 'loadDeckWallet').mockReturnValueOnce(pendingReward);
 
     const navigation = {
       navigate: vi.fn(),

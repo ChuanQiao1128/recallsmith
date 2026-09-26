@@ -39,7 +39,8 @@ import {
 
 const ANON_LEDGER_KEY = 'devcards:u:anon:recallsmith:newCardPullPaidUids:csharp';
 const USER_LEDGER_KEY = 'devcards:u:user-a:recallsmith:newCardPullPaidUids:csharp';
-const ANON_MARKER_KEY = 'devcards:u:anon:recallsmith:due-clear:v1';
+// 1.7: the R2 marker is per-pack, so the resolved key carries the slug suffix.
+const ANON_MARKER_KEY = 'devcards:u:anon:recallsmith:due-clear:v1:csharp';
 // The per-partition "seeded" marker (review 2026-09-21, decision 1). Its presence -- not the
 // ledger key's -- is what makes a partition seeded.
 const ANON_SEEDED_KEY = 'devcards:u:anon:recallsmith:newCardPullSeeded:csharp';
@@ -237,13 +238,15 @@ describe('newCardLedger', () => {
     const day1Later = new Date(2026, 0, 15, 22, 0, 0);
     const day2 = new Date(2026, 0, 16, 9, 0, 0);
 
-    expect(await markDueClearedIfFirstToday(day1)).toBe(true);
-    expect(await markDueClearedIfFirstToday(day1Later)).toBe(false);
-    expect(await markDueClearedIfFirstToday(day2)).toBe(true);
+    expect(await markDueClearedIfFirstToday(day1, 'csharp')).toBe(true);
+    expect(await markDueClearedIfFirstToday(day1Later, 'csharp')).toBe(false);
+    expect(await markDueClearedIfFirstToday(day2, 'csharp')).toBe(true);
+    // A different pack has its own marker, so it still pays the same day.
+    expect(await markDueClearedIfFirstToday(day2, 'aws')).toBe(true);
 
     // A storage error means "do not pay" rather than a throw into the settle path.
     throwOnGet = (key) => key === ANON_MARKER_KEY;
-    expect(await markDueClearedIfFirstToday(day2)).toBe(false);
+    expect(await markDueClearedIfFirstToday(day2, 'csharp')).toBe(false);
   });
 
   it('adopts the anon ledger into the user partition, unions and clears the anon key', async () => {

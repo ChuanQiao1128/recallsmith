@@ -12,6 +12,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
       store.delete(key);
     }),
     getAllKeys: vi.fn(async () => [...store.keys()]),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((k) => [k, store.get(k) ?? null] as [string, string | null])),
   },
 }));
 
@@ -51,7 +52,18 @@ function okResponse(data: any) {
   return { success: true, data, error: null, traceId: 't', version: '1' };
 }
 
-const ZERO = { decks: 0, ownedAdded: 0, pityRaised: 0, addedPulls: 0, dropped: 0, ledgerDecks: 0, uidsAdded: 0 };
+const ZERO = {
+  decks: 0,
+  ownedAdded: 0,
+  pityRaised: 0,
+  addedPulls: 0,
+  dropped: 0,
+  ledgerDecks: 0,
+  uidsAdded: 0,
+  deckWalletDecks: 0,
+  deckPullsAdded: 0,
+  deckPullsDropped: 0,
+};
 
 describe('anon gacha state adoption', () => {
   beforeEach(() => {
@@ -176,7 +188,12 @@ describe('anon gacha state adoption', () => {
 
     expect(apiJson).toHaveBeenCalledTimes(1);
     const body = apiJson.mock.calls[0][1].body;
-    expect(body.decks[0]).toEqual({ deckSlug: SLUG, owned: ['c1'] });
+    // 1.7: the pushed deck also carries its (empty) per-pack pulls.
+    expect(body.decks[0]).toEqual({
+      deckSlug: SLUG,
+      owned: ['c1'],
+      pulls: { availablePulls: 0, reservePulls: 0, updatedAtMs: 0 },
+    });
   });
 
   it('pins ANON_USER_SCOPE_PREFIX to the anon scope getUserScopedKey builds', async () => {

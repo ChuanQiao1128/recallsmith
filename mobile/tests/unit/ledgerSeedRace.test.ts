@@ -22,7 +22,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 
 import { loadDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
 import type { CardProgress } from '../../src/review/model';
-import { loadRewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
+import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { adoptAnonNewCardLedger, readNewCardLedger, readNewCardLedgerSeed } from '../../src/features/gacha/rewards/newCardLedger';
 import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
 
@@ -88,7 +88,7 @@ describe('ledger seed vs. first pull ordering', () => {
     }
     expect(paid).toBe(0);
     expect(await readNewCardLedgerSeed(SLUG)).toEqual({ seededAtMs: new Date(2026, 8, 22, 10).getTime(), backfilled: 100 });
-    const wallet = await loadRewardWalletState();
+    const wallet = await loadDeckWallet(SLUG);
     // R2 fired once (dueBefore 100 → remaining 0 on the last card); R1 paid nothing.
     expect(wallet.availablePulls + wallet.reservePulls).toBe(1);
 

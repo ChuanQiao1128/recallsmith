@@ -15,7 +15,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import { goHome } from '../navigation/tabNavigation';
-import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { loadDeckWallet } from '../features/gacha/rewards/deckWallet';
 import { spendablePullsNow } from '../features/gacha/rewards/spendablePulls';
 import { clearPermissionPromptPending, isPermissionPromptPending } from './PermissionPromptScreen';
 import { colors } from '../theme/colors';
@@ -237,7 +237,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    loadRewardWalletState()
+    loadDeckWallet(params.slug)
       .then((wallet) => {
         if (cancelled) return;
         setRemainingPulls(spendablePullsNow(wallet));
@@ -248,7 +248,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [params.slug]);
 
   useEffect(() => {
     let cancelled = false;
