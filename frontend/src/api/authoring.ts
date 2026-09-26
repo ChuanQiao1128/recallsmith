@@ -578,6 +578,74 @@ export async function deleteCard(cardId: number): Promise<ApiResult<null>> {
   }
 }
 
+// ---------------------- cards import (batch upsert, F01) ----------------------
+
+// The whole file lands in one transaction, so a batch can take much longer than
+// a single-card write. The global client timeout (http.ts) is 15 s, which a
+// 500-card batch can outrun; API Gateway cuts the request off at 30 s, so this
+// asks for just under that. The per-request `timeout` overrides the global one.
+export const IMPORT_REQUEST_TIMEOUT_MS = 29_000;
+
+// One card as F01 reads it. There is deliberately no `expectedVersion`: the
+// import endpoint upserts by (deckId, stableUid) and ignores it, so sending one
+// would be dead weight the reader might mistake for a CAS token.
+export interface ImportCardInput {
+  stableUid: string;
+  question: string;
+  explanation: string;
+  codeSnippet: string;
+  codeLanguage: string;
+  realWorldUsage: string;
+  topic: string;
+  mcq: McqBlob | null;
+  difficulty: number;
+  orderInDeck: number;
+}
+
+export interface ImportCardsBatchResult {
+  created: number;
+  updated: number;
+  unchanged: number;
+}
+
+/**
+ * POST /api/v1/authoring/cards/import — atomic, idempotent bulk upsert of up to
+ * 500 cards by (deckId, stableUid) in a single transaction (F01 / CBE-02).
+ *
+ * The full card objects go in the body under F01's own field names. The `signal`
+ * lets the page cancel a slow batch through an AbortController, and the long
+ * timeout keeps a legitimately large batch from being reported as a failure it
+ * is not.
+ */
+export async function importCardsBatch(params: {
+  deckId: number;
+  cards: ImportCardInput[];
+  signal?: AbortSignal;
+}): Promise<ApiResult<ImportCardsBatchResult>> {
+  try {
+    const resp = await http.post<ApiResult<Partial<ImportCardsBatchResult>>>(
+      '/api/v1/authoring/cards/import',
+      { deckId: params.deckId, cards: params.cards },
+      { timeout: IMPORT_REQUEST_TIMEOUT_MS, signal: params.signal },
+    );
+    const raw = resp.data;
+
+    if (!raw.success) return { ...raw, data: null };
+
+    const data = raw.data ?? {};
+    return {
+      ...raw,
+      data: {
+        created: data.created ?? 0,
+        updated: data.updated ?? 0,
+        unchanged: data.unchanged ?? 0,
+      },
+    };
+  } catch (err) {
+    return apiResultFromError<ImportCardsBatchResult>(err);
+  }
+}
+
 // ---------------------- publish ----------------------
 
 export async function publishDeck(
