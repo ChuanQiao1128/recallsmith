@@ -85,6 +85,7 @@ import PaywallScreen from './src/screens/PaywallScreen';
 import SignUpScreen from './src/screens/SignUpScreen';
 import SignInScreen from './src/screens/SignInScreen';
 import ConfirmSignUpScreen from './src/screens/ConfirmSignUpScreen';
+import ForgotPasswordScreen from './src/screens/ForgotPasswordScreen';
 
 import { configureAmplifyOnce } from './src/auth/amplify';
 import { useAuthStore } from './src/auth/authStore';
@@ -283,6 +284,7 @@ export default function App() {
         <Stack.Screen name="SignIn" component={SignInScreen} />
         <Stack.Screen name="SignUp" component={SignUpScreen} />
         <Stack.Screen name="ConfirmSignUp" component={ConfirmSignUpScreen} />
+        <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           </Stack.Navigator>
         </NavigationContainer>
       </View>
