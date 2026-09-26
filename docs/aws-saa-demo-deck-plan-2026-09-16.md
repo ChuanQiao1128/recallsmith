@@ -143,3 +143,9 @@ DeveloperCards ingest Lambda: moving the PostgreSQL connect into INIT cut cold s
 **漏掉的 7 个风险**：钱包 pull 数（`DrawScreen.tsx:447-448` `pulls >= 10` 才能十连，没有后台加 pull 的接口）；上午十连废掉下午十连；`decks.total_cards` 留 0 → Home 显示 "0 cards"（`Decks.cs:139-141` 不写，`HomeDeckRow.tsx:53-57` 直接渲染；修法 `DeckEditPage.tsx:354-356` Apply to totalCards）；种子数据里的 `aws-solution-architect`（premium, coming）/ `aws-cloud-practitioner`（coming）幽灵行（`005_decks_manifest_v2.sql:175,184`）；d0 被 `deckRepository.ts:1658-1661` 改写成 2、d4 违反快照表 `check (stated_difficulty in (1,2,3))`（`010_content_intelligence_snapshot.sql:45-46`）；导入词法（标记只认列 0，CODE 内空行被吞，`deckImport.ts:20-28, 136-141, 268-287`）；iCloud checkout 里 197 个冲突副本，今天不许 build/deploy。
 
 **确认无误的**：Markdown 格式与 uid 规则；导入页对账幂等；发布 API 幂等拦截 + SQS 双写回退；手机端动态读 manifest、Draw 侧栏列出所有 live 卡组并可自动安装；slug 含 aws → cloud 封面、无卡背走程序化；稀有度映射 ≥3 传说 / 2 稀有；manifest.json 缓存 60 秒、构建目录不可变一年；8 月短包扣费修复真实存在（4a8c85d）；离线可开已安装卡组；C# 已安装本地包不受重建影响；钱包全局按用户、抽卡状态按卡组按用户隔离；新卡组不受 grandfather 逻辑影响；Content Intelligence 对零评分卡组不报错。
+
+<!-- paths-not-on-disk
+     本文档里出现、但磁盘上已经没有的仓库路径，逐条登记在这里（规则见 frontend/tests/docsPaths.test.ts）。
+     E03（2026-09-22）把 manifest 重建移进 src_C/Shared/RecallSmith.Lambda.Db/ManifestBuilder.cs，删除了下面这个文件；上文句子保持原样。
+- src_C/Worker/Manifest/ManifestService.cs
+-->
