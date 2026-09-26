@@ -237,3 +237,130 @@ describe('LibraryScreen install path (I2)', () => {
     expect(text).not.toContain('Deck is not installed yet');
   });
 });
+
+describe('LibraryScreen stale-while-revalidate (G02)', () => {
+  const deck1 = makeDeck('csharp', 'C# Interview', [
+    { uid: '1', order: 1, difficulty: 1, question: 'Q1' },
+    { uid: '2', order: 2, difficulty: 2, question: 'Q2' },
+    { uid: '3', order: 3, difficulty: 3, question: 'Q3' },
+  ]);
+  const deckPython = makeDeck('python', 'Python Basics', [
+    { uid: 'p1', order: 1, difficulty: 1, question: 'PQ1' },
+    { uid: 'p2', order: 2, difficulty: 2, question: 'PQ2' },
+  ]);
+
+  beforeEach(() => {
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    asyncStorageMap.clear();
+    invalidateDrawStateCache();
+    mockActiveDeckSlug = 'csharp';
+    mockManifestDecks = [{ slug: 'csharp', title: 'C# Interview', availability: 'live' }];
+    resolveDeckFixture = () => null;
+    updatesFixture = {};
+    installDeckOkFixture = true;
+    vi.clearAllMocks();
+  });
+
+  it('keeps the card grid mounted while a focus refresh is in flight', async () => {
+    resolveDeckFixture = () => deck1;
+    const navigation = { navigate: vi.fn() } as any;
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={navigation} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+    expect(tree.root.findByProps({ testID: 'library-card-grid' })).toBeTruthy();
+
+    // Second refresh: resolveDeckBySlug hangs on a deferred promise.
+    let release!: (value: any) => void;
+    const pending = new Promise((res) => {
+      release = res;
+    });
+    resolveDeckFixture = () => pending;
+
+    await act(async () => {
+      tree.update(
+        <LibraryScreen
+          navigation={navigation}
+          route={{ key: 'library', name: 'Library', params: { focusSlug: 'csharp' } } as any}
+        />,
+      );
+    });
+    await flush();
+
+    // Grid stays mounted, no full-screen spinner, during the in-flight refresh.
+    expect(tree.root.findByProps({ testID: 'library-card-grid' })).toBeTruthy();
+    expect(collectText(tree)).not.toContain('Loading your library...');
+
+    await act(async () => {
+      release(deck1);
+      await Promise.resolve();
+    });
+  });
+
+  it('keeps the grid when a background refresh of the same deck fails', async () => {
+    resolveDeckFixture = () => deck1;
+    const navigation = { navigate: vi.fn() } as any;
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={navigation} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+    expect(tree.root.findByProps({ testID: 'library-card-grid' })).toBeTruthy();
+
+    // Background refresh of the SAME deck fails to resolve — no install path.
+    resolveDeckFixture = () => null;
+    updatesFixture = {};
+
+    await act(async () => {
+      tree.update(
+        <LibraryScreen
+          navigation={navigation}
+          route={{ key: 'library', name: 'Library', params: { focusSlug: 'csharp' } } as any}
+        />,
+      );
+    });
+    await flush();
+
+    expect(tree.root.findByProps({ testID: 'library-card-grid' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'library-unavailable-state' })).toHaveLength(0);
+  });
+
+  it('keeps the deck switcher on the error state and retries with the chosen deck', async () => {
+    mockManifestDecks = [
+      { slug: 'csharp', title: 'C# Interview', availability: 'live' },
+      { slug: 'python', title: 'Python Basics', availability: 'live' },
+    ];
+    mockActiveDeckSlug = 'csharp';
+    // The active deck fails to load; the other deck resolves fine.
+    resolveDeckFixture = (slug: string) => (slug === 'python' ? deckPython : null);
+    updatesFixture = {};
+
+    const navigation = { navigate: vi.fn() } as any;
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={navigation} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+
+    // Active deck failed → error state still carries the deck switcher.
+    expect(tree.root.findByProps({ testID: 'library-unavailable-state' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-error-deck-switcher' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-error-deck-python' })).toBeTruthy();
+
+    // Choose the other deck → it loads and the grid appears.
+    await act(async () => {
+      tree.root.findByProps({ testID: 'library-error-deck-python' }).props.onPress();
+    });
+    await flush();
+
+    expect(tree.root.findByProps({ testID: 'library-card-grid' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'library-unavailable-state' })).toHaveLength(0);
+  });
+});
