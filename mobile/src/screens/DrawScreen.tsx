@@ -7,6 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { checkManifestForUpdates, installDeckFromUrl, listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
 import { deckShortTitle } from '../content/deckShortTitle';
@@ -645,7 +646,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   Retry
                 </Text>
               </Pressable>
-              <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => navigation.navigate('Home')}>
+              <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => goHome(navigation)}>
                 <Text style={styles.secondaryCtaText} numberOfLines={1}>
                   Back to Home
                 </Text>
@@ -674,7 +675,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   View library
                 </Text>
               </Pressable>
-              <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => navigation.navigate('Home')}>
+              <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => goHome(navigation)}>
                 <Text style={styles.secondaryCtaText} numberOfLines={1}>
                   Back to Home
                 </Text>

@@ -212,7 +212,7 @@ describe('LibraryScreen install path (I2)', () => {
     act(() => {
       tree.root.findByProps({ testID: 'library-unavailable-home-cta' }).props.onPress();
     });
-    expect(navigate).toHaveBeenCalledWith('Home');
+    expect(navigate).toHaveBeenCalledWith('Home', undefined, { pop: true });
   });
 
   it('shows the unavailable state when the install fails', async () => {

@@ -15,15 +15,22 @@ describe('main tab routing', () => {
     expect(getMainTabForRouteName('More')).toBe('me');
   });
 
-  it('shows the global tab bar on the five primary routes (and legacy Challenge)', () => {
+  it('shows the global tab bar on the primary routes (and legacy Challenge)', () => {
     expect(shouldShowMainTabBar('Home')).toBe(true);
     expect(shouldShowMainTabBar('Draw')).toBe(true);
-    expect(shouldShowMainTabBar('SessionCard')).toBe(true);
     expect(shouldShowMainTabBar('Challenge')).toBe(true);
     expect(shouldShowMainTabBar('Library')).toBe(true);
     expect(shouldShowMainTabBar('More')).toBe(true);
 
     expect(shouldShowMainTabBar('PlanOverview')).toBe(false);
     expect(shouldShowMainTabBar('SettingsMain')).toBe(false);
+  });
+
+  it('hides the tab bar during a review session', () => {
+    // The Review tab routes to SessionCard, but with pop-navigation a stray
+    // tab tap would pop the running session (unmount resets the store), so the
+    // bar must be hidden there — the route still highlights the Review tab.
+    expect(shouldShowMainTabBar('SessionCard')).toBe(false);
+    expect(getMainTabForRouteName('SessionCard')).toBe('review');
   });
 });

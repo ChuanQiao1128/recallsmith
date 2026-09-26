@@ -949,6 +949,22 @@ describe('SessionCardScreen', () => {
       expect(navigation.replace).not.toHaveBeenCalled();
     });
 
+    it('offers a Back control on the empty-deck state', async () => {
+      // With the tab bar hidden during a review (MCORE-04), the empty-deck
+      // state needs its own way out — a Back button that pops the stack.
+      vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 0, nodes: [], dueCount: 0, newCount: 0 }) as any);
+      vi.mocked(pickNextCard).mockReturnValue(null);
+      const { tree, navigation } = await mount();
+
+      expect(byTestID(tree, 'session-card-empty-deck')).toHaveLength(1);
+      const back = byTestID(tree, 'session-card-empty-deck-back');
+      expect(back).toHaveLength(1);
+      act(() => {
+        back[0].props.onPress();
+      });
+      expect(navigation.goBack).toHaveBeenCalled();
+    });
+
     it('still starts a one-node maintenance run for limit 1 with no card to pick (route-complete path is untouched)', async () => {
       vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 1, dueCount: 0, newCount: 0 }) as any);
       vi.mocked(pickNextCard).mockReturnValue(null);

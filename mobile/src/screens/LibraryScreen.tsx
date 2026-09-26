@@ -13,6 +13,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { getFeatureFlags } from '../config/featureFlags';
 import {
@@ -342,7 +343,7 @@ export function LibraryScreen({ navigation, route }: Props) {
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
-              onPress={() => navigation.navigate('Home')}
+              onPress={() => goHome(navigation)}
               testID="library-unavailable-home-cta"
             >
               <Text style={styles.retryText} numberOfLines={1}>

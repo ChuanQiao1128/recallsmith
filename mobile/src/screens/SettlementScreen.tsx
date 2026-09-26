@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
+import { goHome } from '../navigation/tabNavigation';
 import { MOCK_SETTLEMENT } from '../mock/settlement';
 import { buildMockSessionCards } from '../mock/session';
 import { buildSettlementVm } from '../features/gacha/settlement/settlementVm';
@@ -192,7 +193,7 @@ export function SettlementScreen({ navigation, route }: Props) {
               <Text style={styles.nextText}>{vm.nextRecommendation}</Text>
             </View>
 
-            <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]} onPress={() => navigation.navigate('Home')}>
+            <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]} onPress={() => goHome(navigation)}>
               <Text style={styles.primaryButtonText}>Return home</Text>
             </Pressable>
 

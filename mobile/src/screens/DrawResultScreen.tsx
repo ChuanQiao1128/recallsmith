@@ -14,6 +14,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+import { goHome } from '../navigation/tabNavigation';
 import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { clearPermissionPromptPending, isPermissionPromptPending } from './PermissionPromptScreen';
 import { colors } from '../theme/colors';
@@ -317,7 +318,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
       navigation.navigate('PermissionPrompt');
       return;
     }
-    navigation.navigate('Home');
+    goHome(navigation);
   };
 
   const handleShare = async () => {
