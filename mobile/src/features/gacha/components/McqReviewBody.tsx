@@ -20,6 +20,7 @@ import { mcqRequiredCount } from '../mcq/normalizeMcq';
 import { splitStemForOptions } from '../mcq/stemAsk';
 import type { McqVerdict } from '../mcq/mcqVerdict';
 import { colors } from '../../../theme/colors';
+import { CHROME_MAX_FONT_SCALE } from '../../../theme/dynamicType';
 import { spacing } from '../../../theme/spacing';
 import { typography } from '../../../theme/typography';
 
@@ -298,13 +299,13 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
       ) : null}
 
       <View style={styles.headerRow}>
-        <Text testID="mcq-order-badge" style={styles.order} numberOfLines={1}>
+        <Text testID="mcq-order-badge" style={styles.order} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
           {orderBadge}
         </Text>
-        <Text style={styles.badge} numberOfLines={1}>
+        <Text style={styles.badge} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
           {difficultyLabel}
         </Text>
-        <Text testID={MCQ_TEST_IDS.kindChip} style={styles.chip} numberOfLines={1}>
+        <Text testID={MCQ_TEST_IDS.kindChip} style={styles.chip} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
           {mcqKindChip(requiredCount)}
         </Text>
       </View>
@@ -372,7 +373,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
                   style={[styles.optionRow, styles[rowStyleKey(state)]]}
                 >
                   <View style={[styles.letterDisc, state === 'wrong-unpicked' && styles.letterDiscDimmed]}>
-                    <Text testID={MCQ_TEST_IDS.optionLetter(option.key)} numberOfLines={1} style={styles.letter}>
+                    <Text testID={MCQ_TEST_IDS.optionLetter(option.key)} numberOfLines={1} style={styles.letter} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                       {letter}
                     </Text>
                   </View>
@@ -601,8 +602,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   letterDisc: {
-    width: 26,
-    height: 26,
+    minWidth: 26,
+    minHeight: 26,
     borderRadius: 13,
     marginRight: spacing.sm,
     alignItems: 'center',
