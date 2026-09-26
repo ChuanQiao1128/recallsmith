@@ -59,13 +59,10 @@ public static class AppRole
     var deny = Auth.RequireSuperAdmin(auth, res);
     if (deny is not null) return deny;
 
-    // extra manual guard: x-migrate-secret (if configured), constant-time (Migrate.cs:138-142).
-    var required = Environment.GetEnvironmentVariable("MIGRATE_SECRET") ?? string.Empty;
-    if (!string.IsNullOrEmpty(required))
-    {
-      var got = Validation.GetHeader(req, "x-migrate-secret") ?? string.Empty;
-      if (!Secrets.FixedTimeEquals(got, required)) return res.Forbidden("Bad migrate secret");
-    }
+    // extra manual guard: x-migrate-secret (constant-time; 503 in prod when unset). Bootstrap-roles
+    // is not destructive, so it stays enabled in production — only the secret gate applies.
+    var secretDeny = DbSafety.CheckMigrateSecret(req, res);
+    if (secretDeny is not null) return secretDeny;
 
     using var doc = Validation.ParseJsonBody(req);
     if (doc is null) return res.BadRequest("BAD_REQUEST", "Invalid JSON body");

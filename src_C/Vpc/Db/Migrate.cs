@@ -139,13 +139,9 @@ public static class Migrate
     var deny = Auth.RequireSuperAdmin(auth, res);
     if (deny is not null) return deny;
 
-    // extra manual guard: x-migrate-secret (if configured)
-    var required = Environment.GetEnvironmentVariable("MIGRATE_SECRET") ?? string.Empty;
-    if (!string.IsNullOrEmpty(required))
-    {
-      var got = Validation.GetHeader(req, "x-migrate-secret") ?? string.Empty;
-      if (!Secrets.FixedTimeEquals(got, required)) return res.Forbidden("Bad migrate secret");
-    }
+    // extra manual guard: x-migrate-secret (constant-time; 503 in prod when unset)
+    var secretDeny = DbSafety.CheckMigrateSecret(req, res);
+    if (secretDeny is not null) return secretDeny;
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null)
@@ -262,15 +258,14 @@ public static class Migrate
     Res res,
     AuthContext auth)
   {
+    // First, before any role check: a production caller cannot tell this route from an unregistered path.
+    if (!DbSafety.DestructiveRoutesEnabled()) return res.NotFound("Route not found");
+
     var deny = Auth.RequireSuperAdmin(auth, res);
     if (deny is not null) return deny;
 
-    var required = Environment.GetEnvironmentVariable("MIGRATE_SECRET") ?? string.Empty;
-    if (!string.IsNullOrEmpty(required))
-    {
-      var got = Validation.GetHeader(req, "x-migrate-secret") ?? string.Empty;
-      if (!Secrets.FixedTimeEquals(got, required)) return res.Forbidden("Bad migrate secret");
-    }
+    var secretDeny = DbSafety.CheckMigrateSecret(req, res);
+    if (secretDeny is not null) return secretDeny;
 
     if (!string.Equals(Environment.GetEnvironmentVariable("PGDATABASE") ?? string.Empty, "postgres", StringComparison.Ordinal))
     {
@@ -299,15 +294,14 @@ public static class Migrate
     Res res,
     AuthContext auth)
   {
+    // First, before any role check: a production caller cannot tell this route from an unregistered path.
+    if (!DbSafety.DestructiveRoutesEnabled()) return res.NotFound("Route not found");
+
     var deny = Auth.RequireSuperAdmin(auth, res);
     if (deny is not null) return deny;
 
-    var required = Environment.GetEnvironmentVariable("MIGRATE_SECRET") ?? string.Empty;
-    if (!string.IsNullOrEmpty(required))
-    {
-      var got = Validation.GetHeader(req, "x-migrate-secret") ?? string.Empty;
-      if (!Secrets.FixedTimeEquals(got, required)) return res.Forbidden("Bad migrate secret");
-    }
+    var secretDeny = DbSafety.CheckMigrateSecret(req, res);
+    if (secretDeny is not null) return secretDeny;
 
     if (!string.Equals(Environment.GetEnvironmentVariable("PGDATABASE") ?? string.Empty, "postgres", StringComparison.Ordinal))
     {
