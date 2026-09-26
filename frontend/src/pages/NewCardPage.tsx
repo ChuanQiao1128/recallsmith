@@ -1,7 +1,9 @@
 // src/pages/NewCardPage.tsx
+import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useCards, useCreateCard } from '../hooks/useCards';
 import { useDeck } from '../hooks/useDecks';
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
 import { CardForm, type CardFormValues } from '../components/CardForm';
 import { buildCardBody } from '../lib/authoringBodies';
@@ -57,6 +59,11 @@ export function NewCardPage() {
   // application that anything had changed: CardListPage could only avoid
   // showing a stale list by refusing to cache at all.
   const createCardMutation = useCreateCard();
+
+  // The unsaved-changes guard. Declared above every early return, as the rules
+  // of hooks require; the save below clears it explicitly before navigating.
+  const [dirty, setDirty] = useState(false);
+  const guard = useUnsavedChangesGuard(dirty);
 
   if (invalidDeckId) {
     return (
@@ -148,6 +155,9 @@ export function NewCardPage() {
       };
     }
 
+    // A successful create is not a discard: allow the navigation that follows it
+    // before it fires, so the guard does not ask about the card we just saved.
+    guard.allowNextNavigation();
     navigate(`/decks/cards?deckId=${deck.id}`, { replace: true });
     return { ok: true };
   }
@@ -178,6 +188,7 @@ export function NewCardPage() {
           initialValues={initialValues}
           onSubmit={handleSubmit}
           onCancel={() => navigate(-1)}
+          onDirtyChange={setDirty}
         />
       </main>
     </div>

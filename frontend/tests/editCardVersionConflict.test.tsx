@@ -24,10 +24,10 @@
 // user touches a field, and quietly wrong afterwards.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
 
+import { renderAt } from './support/routerProbe';
 import type { Card } from '../src/types/card';
 import type { Deck } from '../src/types/deck';
 import { queryClient } from '../src/api/queryClient';
@@ -89,11 +89,8 @@ function saveButton(): HTMLButtonElement {
 }
 
 async function mountLoaded(): Promise<void> {
-  render(
-    <MemoryRouter initialEntries={[`/decks/cards/edit?deckId=${DECK_ID}&cardId=${CARD_ID}`]}>
-      <EditCardPage />
-    </MemoryRouter>,
-  );
+  // EditCardPage calls useBlocker, so it needs a data router (renderAt).
+  renderAt(<EditCardPage />, [`/decks/cards/edit?deckId=${DECK_ID}&cardId=${CARD_ID}`]);
   await screen.findByRole('button', { name: /save changes/i });
 }
 

@@ -38,10 +38,10 @@ const ALLOWLIST: Record<string, string> = {};
  * `../hooks/useCards`), not from the barrel, so this list is the barrel's
  * inventory and not a bundle fact.
  *
- * It was three — the read pair plus useDeleteCard — then nine, and is now ten.
- * The newest is useCard: the edit page reads its one row through ['card', id]
- * instead of downloading the whole deck, and the update invalidates that key.
- * Sorted, because scanHookWiring sorts.
+ * It was three — the read pair plus useDeleteCard — then nine, then ten, and is
+ * now eleven. The newest is useUnsavedChangesGuard: the card and deck editors
+ * warn before a stray navigation discards an unsaved edit, and it is called from
+ * all three of them. Sorted, because scanHookWiring sorts.
  *
  * Call sites, one each and all in src/ (the "orphans are empty" assertion above
  * is what actually enforces this; the list is here so a swap is visible):
@@ -51,6 +51,8 @@ const ALLOWLIST: Record<string, string> = {};
  *   useCreateDeck                       src/pages/NewDeckPage.tsx
  *   useUpdateDeck                       src/pages/DeckEditPage.tsx
  *   useDeleteDeck / usePublishDeck      src/pages/DeckListPage.tsx
+ *   useUnsavedChangesGuard              src/pages/EditCardPage.tsx,
+ *                                       NewCardPage.tsx, DeckEditPage.tsx
  */
 const EXPECTED_BARREL_HOOKS = [
   'useCard',
@@ -61,6 +63,7 @@ const EXPECTED_BARREL_HOOKS = [
   'useDeleteCard',
   'useDeleteDeck',
   'usePublishDeck',
+  'useUnsavedChangesGuard',
   'useUpdateCard',
   'useUpdateDeck',
 ];
@@ -129,7 +132,7 @@ describe('the scan itself is still looking at something', () => {
     expect(scan.scannedFileCount).toBeGreaterThanOrEqual(20);
   });
 
-  it('found the barrel it is judging, and it publishes exactly the wired ten', () => {
+  it('found the barrel it is judging, and it publishes exactly the wired eleven', () => {
     // Hardcoded on purpose, and re-deriving either line from ALLOWLIST breaks
     // it: `toBeGreaterThanOrEqual(ALLOWLIST.size)` is a real floor of 22 while
     // the allowlist is full and silently becomes `>= 0` — unfailable, passing

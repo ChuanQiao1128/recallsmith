@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { QueryKeys, useAppQueryClient } from '../api/queryClient';
 import { useCards } from '../hooks/useCards';
 import { useDeck, useUpdateDeck } from '../hooks/useDecks';
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { buildDeckBody, parseDraftVersion, DRAFT_VERSION_ERROR } from '../lib/authoringBodies';
 
 import type { DeckAvailability, DeckTier } from '../types/deck';
@@ -112,6 +113,10 @@ export function DeckEditPage() {
     retiredAtMs: '',
   });
 
+  // The form as last saved (or as first loaded), for the unsaved-changes guard.
+  // null until the deck loads, so an unloaded page is never "dirty".
+  const [savedForm, setSavedForm] = useState<FormState | null>(null);
+
   // The write goes through react-query so a saved deck invalidates both the
   // list and this deck's own cache entry.
   const updateDeckMutation = useUpdateDeck();
@@ -142,7 +147,7 @@ export function DeckEditPage() {
     if (initializedFor.current === found.id) return;
     initializedFor.current = found.id;
 
-    setForm({
+    const loaded: FormState = {
       slug: toStr(found.slug),
       title: toStr(found.title),
       author: toStr(found.author),
@@ -162,10 +167,18 @@ export function DeckEditPage() {
       totalCards: found.totalCards != null ? String(found.totalCards) : '',
       previewCards: found.previewCards != null ? String(found.previewCards) : '',
       retiredAtMs: found.retiredAtMs != null ? String(found.retiredAtMs) : '',
-    });
+    };
+    setForm(loaded);
+    // Same snapshot as the form starts on, so the page is clean until edited.
+    setSavedForm(loaded);
     setSaveError(null);
     setSaveOk(null);
   }, [deckQuery.data]);
+
+  // Dirty once the deck has loaded and a field diverges from the last-saved
+  // snapshot. Declared above every early return, as the rules of hooks require.
+  const dirty = savedForm !== null && JSON.stringify(form) !== JSON.stringify(savedForm);
+  const guard = useUnsavedChangesGuard(dirty);
 
   async function onSave(goBackAfter = false) {
     const loadedDeck = deckQuery.data;
@@ -230,13 +243,21 @@ export function DeckEditPage() {
       }
 
       setSaveOk('Saved.');
+      // The form just became the saved state, so the page is clean again and the
+      // guard has nothing to ask about.
+      setSavedForm(form);
       // The server's copy of the deck goes straight into its cache entry, so the
       // header shows what was saved without waiting for the refetch. The form is
       // NOT re-filled from it: initializedFor already holds this id, so what the
       // user typed survives. useUpdateDeck's own invalidations still run.
       queryClient.setQueryData(QueryKeys.deck(loadedDeck.id), res.data);
 
-      if (goBackAfter) navigate('/', { replace: true });
+      // A successful save is not a discard: allow the navigation that follows it
+      // before it fires, so the guard does not ask about what we just kept.
+      if (goBackAfter) {
+        guard.allowNextNavigation();
+        navigate('/', { replace: true });
+      }
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : 'Network error.');
     } finally {
