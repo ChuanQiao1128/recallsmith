@@ -60,6 +60,32 @@ export const libraryStyles = StyleSheet.create({
   },
   pressed: { opacity: 0.9 },
 
+  // Deck switcher shown on the error state so an offline user can still
+  // reach their other installed decks (MCORE-13).
+  errorDeckSwitcher: {
+    marginTop: spacing.md,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  errorDeckChip: {
+    minHeight: a11y.minTouch,
+    minWidth: 92,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.inkSecondary,
+    backgroundColor: colors.parchmentBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorDeckChipText: {
+    color: colors.ink,
+    fontSize: typography.caption,
+    fontWeight: '800',
+  },
+
   // ─── New compact header ──────────────────────────────────────────────────
   headerTopBar: {
     flexDirection: 'row',
