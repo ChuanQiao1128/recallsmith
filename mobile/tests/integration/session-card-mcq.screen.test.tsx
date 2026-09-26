@@ -775,8 +775,8 @@ describe('SessionCardScreen MCQ branch', () => {
     serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
     const { tree } = await mount();
 
-    // Until the dock has laid out: the stage default (MCQ_DOCK_HEIGHT 216 + max(insets.bottom, 8)).
-    expect(scrollPaddingBottom(tree)).toBe(216 + 8);
+    // Until the dock has laid out: the stage default (MCQ_DOCK_HEIGHT 96 + max(insets.bottom, 8)).
+    expect(scrollPaddingBottom(tree)).toBe(96 + 8);
 
     const dock = byTestID(tree, 'review-rating-dock')[0];
     expect(typeof dock.props.onLayout).toBe('function');
@@ -833,24 +833,9 @@ describe('SessionCardScreen MCQ branch', () => {
     const first = await mount();
 
     expect(byTestID(first.tree, 'mcq-coach-line')).toHaveLength(1);
-    // Mounted INSIDE the opaque, absolutely positioned dock (review 2026-09-22 #1): an in-flow sibling
-    // before the dock would be painted over and "Got it" could never be tapped.
-    const dock = byTestID(first.tree, 'review-rating-dock')[0];
-    expect(dock.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-line')).toHaveLength(1);
-    expect(dock.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-dismiss')).toHaveLength(1);
-    expect(
-      byTestID(first.tree, 'screen-session-card-primary-surface')[0].findAll(
-        (n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-line',
-      ),
-    ).toHaveLength(0);
-    // The coach band sits above the action rows.
-    const dockKids = dock.findAll(
-      (n) => typeof n.type === 'string' && (n.props?.testID === 'mcq-coach-line' || n.props?.testID === 'review-rating-bar'),
-    );
-    expect(dockKids.map((n) => n.props.testID)).toEqual(['mcq-coach-line', 'review-rating-bar']);
 
     await press(first.tree, 'mcq-show-options');
-    expect(dock.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-line')).toHaveLength(1);
+    expect(byTestID(first.tree, 'mcq-coach-line')).toHaveLength(1);
     await press(first.tree, 'mcq-option-b');
     await press(first.tree, 'mcq-submit-sure');
     await press(first.tree, 'mcq-next');
@@ -870,5 +855,36 @@ describe('SessionCardScreen MCQ branch', () => {
     await press(third.tree, 'mcq-coach-dismiss');
     expect(store.get('recallsmith:mcq:coach-seen:v1')).toBe('1');
     expect(byTestID(third.tree, 'mcq-coach-line')).toHaveLength(0);
+  });
+
+  it('mounts the MCQ coach card in the scroll content, not in the dock', async () => {
+    serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
+    const { tree } = await mount();
+
+    // The card renders inside the scroll surface (above the question), not inside the pinned dock.
+    const surface = byTestID(tree, 'screen-session-card-primary-surface')[0];
+    const dock = byTestID(tree, 'review-rating-dock')[0];
+    expect(
+      surface.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-line'),
+    ).toHaveLength(1);
+    expect(
+      surface.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-dismiss'),
+    ).toHaveLength(1);
+    expect(
+      dock.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-line'),
+    ).toHaveLength(0);
+    expect(
+      dock.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'mcq-coach-dismiss'),
+    ).toHaveLength(0);
+
+    // The coach card sits above the MCQ question body.
+    const surfaceKids = surface.findAll(
+      (n) => typeof n.type === 'string' && (n.props?.testID === 'mcq-coach-line' || n.props?.testID === 'mcq-review-body'),
+    );
+    expect(surfaceKids.map((n) => n.props.testID)).toEqual(['mcq-coach-line', 'mcq-review-body']);
+
+    // Dismissing it removes it from the scroll content.
+    await press(tree, 'mcq-coach-dismiss');
+    expect(byTestID(tree, 'mcq-coach-line')).toHaveLength(0);
   });
 });
