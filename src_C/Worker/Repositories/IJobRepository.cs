@@ -25,6 +25,9 @@ public interface IJobRepository
   /// 路线 A: 标记任务失败
   /// </summary>
   Task FailJobAsync(string jobId, string errorMessage);
+
+  /// <summary>Sets error_message on a PROCESSING row; status and updated_at (the take-over clock) are untouched.</summary>
+  Task RecordAttemptErrorAsync(string jobId, string errorMessage);
 }
 
 /// <summary>

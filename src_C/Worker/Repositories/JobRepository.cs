@@ -7,8 +7,9 @@ public class JobRepository : IJobRepository
 {
   /// <summary>
   /// Step 2: 乐观锁抢占任务
-  /// UPDATE deck_publishes SET status = 'PROCESSING' 
-  /// WHERE job_id = @jobId AND status IN ('PENDING', 'FAILED')
+  /// UPDATE deck_publishes SET status = 'PROCESSING'
+  /// WHERE job_id = @jobId AND (PENDING OR stale PROCESSING).
+  /// FAILED is terminal: a reaped or failed job is never re-acquired.
   /// </summary>
   public async Task<bool> TryAcquireJobAsync(string jobId, int receiveCount = 1)
   {
@@ -16,12 +17,12 @@ public class JobRepository : IJobRepository
     if (conn is null) throw new InvalidOperationException("Failed to open database connection");
 
     const string sql = """
-      UPDATE deck_publishes 
+      UPDATE deck_publishes
       SET status = 'PROCESSING',
           updated_at = now()
-      WHERE job_id = $1 
+      WHERE job_id = $1
         AND (
-          status IN ('PENDING', 'FAILED')
+          status = 'PENDING'
           OR (status = 'PROCESSING' AND (($2 > 1 AND updated_at < now() - interval '11 minutes') OR updated_at < now() - interval '15 minutes'))
         )
       """;
@@ -79,8 +80,8 @@ public class JobRepository : IJobRepository
     const string sql = """
       with done as (
         update deck_publishes
-        set status = 'SUCCESS', updated_at = now()
-        where job_id = $1
+        set status = 'SUCCESS', error_message = null, updated_at = now()
+        where job_id = $1 and status = 'PROCESSING'
         returning deck_id, build_id
       )
       update decks d
@@ -100,8 +101,9 @@ public class JobRepository : IJobRepository
       const string legacySql = """
         UPDATE deck_publishes
         SET status = 'SUCCESS',
+            error_message = NULL,
             updated_at = now()
-        WHERE job_id = $1
+        WHERE job_id = $1 AND status = 'PROCESSING'
         """;
       await DbUtil.ExecuteAsync(conn, null, legacySql, [jobId]);
     }
@@ -116,11 +118,28 @@ public class JobRepository : IJobRepository
     if (conn is null) throw new InvalidOperationException("Failed to open database connection");
 
     const string sql = """
-      UPDATE deck_publishes 
+      UPDATE deck_publishes
       SET status = 'FAILED',
           error_message = $2,
           updated_at = now()
-      WHERE job_id = $1
+      WHERE job_id = $1 AND status IN ('PENDING', 'PROCESSING')
+      """;
+
+    await DbUtil.ExecuteAsync(conn, null, sql, [jobId, errorMessage]);
+  }
+
+  /// <summary>
+  /// Sets error_message on a PROCESSING row; status and updated_at (the take-over clock) are untouched.
+  /// </summary>
+  public async Task RecordAttemptErrorAsync(string jobId, string errorMessage)
+  {
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) throw new InvalidOperationException("Failed to open database connection");
+
+    const string sql = """
+      UPDATE deck_publishes
+      SET error_message = $2
+      WHERE job_id = $1 AND status = 'PROCESSING'
       """;
 
     await DbUtil.ExecuteAsync(conn, null, sql, [jobId, errorMessage]);
