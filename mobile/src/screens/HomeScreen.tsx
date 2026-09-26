@@ -9,7 +9,7 @@ import {
   View,
 } from 'react-native';
 import * as RN from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -535,30 +535,27 @@ export function HomeScreen({ navigation, route }: Props) {
   const hasLoadedOnce = homeState.vm !== EMPTY_VM;
   if (homeState.loading && !hasLoadedOnce) {
     return (
-      <SafeAreaProvider>
-        <SafeAreaView style={styles.safeArea} testID="screen-home-root">
-          <LinearGradient
-            colors={[colors.parchmentBg, colors.parchmentBgDeep]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.gradient}
-          >
-            <View style={styles.loadingWrap}>
-              <ActivityIndicator size="large" color={colors.gold} />
-              <Text style={styles.loadingText} numberOfLines={1}>
-                Loading home...
-              </Text>
-            </View>
-          </LinearGradient>
-        </SafeAreaView>
-      </SafeAreaProvider>
-    );
-  }
-  return (
-    <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea} testID="screen-home-root">
         <LinearGradient
           colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator size="large" color={colors.gold} />
+            <Text style={styles.loadingText} numberOfLines={1}>
+              Loading home...
+            </Text>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+  return (
+    <SafeAreaView style={styles.safeArea} testID="screen-home-root">
+      <LinearGradient
+        colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
@@ -1089,8 +1086,7 @@ export function HomeScreen({ navigation, route }: Props) {
             ) : null}
           </ScrollView>
         </LinearGradient>
-      </SafeAreaView>
-    </SafeAreaProvider>
+    </SafeAreaView>
   );
 }
 export default HomeScreen;
