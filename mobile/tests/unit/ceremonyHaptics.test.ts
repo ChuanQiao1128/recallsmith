@@ -61,18 +61,35 @@ describe('ceremonyHaptics', () => {
     const h = makeFakeHaptics();
     let t = 0;
     const c = createCeremonyHapticsController({ haptics: h, now: () => t });
+    // tick and impact share the one 3/1000 ms window; success is exempt and neither checks
+    // nor consumes a slot, so it does not fill the window that tick/impact draw from.
     c.tick();
     c.impact('light');
+    c.impact('medium');
     c.success();
     expect(h.selectionAsync).toHaveBeenCalledTimes(1);
-    expect(h.impactAsync).toHaveBeenCalledTimes(1);
+    expect(h.impactAsync).toHaveBeenCalledTimes(2);
     expect(h.notificationAsync).toHaveBeenCalledTimes(1);
     t = 10;
     c.impact('soft');
-    expect(h.impactAsync).toHaveBeenCalledTimes(1);
+    expect(h.impactAsync).toHaveBeenCalledTimes(2);
     t = 1000;
     c.impact('soft');
-    expect(h.impactAsync).toHaveBeenCalledTimes(2);
+    expect(h.impactAsync).toHaveBeenCalledTimes(3);
+  });
+
+  it('success is exempt from the rate limiter so the LEG climax always fires', () => {
+    const h = makeFakeHaptics();
+    let t = 0;
+    const c = createCeremonyHapticsController({ haptics: h, now: () => t });
+    // Fill the whole 3/1000 ms window with impacts (as the tell/tear/flash climax does)...
+    c.impact('light');
+    c.impact('medium');
+    c.impact('heavy');
+    expect(h.impactAsync).toHaveBeenCalledTimes(3);
+    // ...the success cue still fires: it does not consult the limiter.
+    c.success();
+    expect(h.notificationAsync).toHaveBeenCalledTimes(1);
   });
 
   it('success fires at most once per reset', () => {

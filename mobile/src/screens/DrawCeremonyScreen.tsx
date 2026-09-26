@@ -22,6 +22,8 @@ import { CEREMONY_GAIN, useCeremonyAudio } from '../components/ceremonyAudio';
 import { useCeremonyHaptics } from '../components/ceremonyHaptics';
 import { GestureHandler, Reanimated, motionAvailable, skiaAvailable } from '../components/ceremony/reanimatedGuard';
 import {
+  BED_TABLE_FADE_DELAY_MS,
+  BED_TABLE_FADE_OUT_MS,
   FAST_FORWARD_FROM_HOLD_FRACTION,
   FAST_FORWARD_TEAR_FACTOR,
   REDUCED_MOTION_FLASH_MS,
@@ -30,12 +32,13 @@ import {
   compressTimings,
   phaseDurations,
   resolveCeremonyTimings,
+  tapFlipCueOffsets,
   type CeremonyPhase,
   type PeakRarity,
   type ResolvedCeremonyTimings,
 } from '../features/gacha/draw/ceremonyTimings';
 import { buildSpillSchedule, featuredCardIndex } from '../features/gacha/draw/spillSchedule';
-import { skipPolicy } from '../features/gacha/draw/skipPolicy';
+import { skipPolicy, shouldMarkCeremonyComplete } from '../features/gacha/draw/skipPolicy';
 import {
   effectiveCeremoniesCompleted,
   getCeremonyDevOverrides,
@@ -166,6 +169,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const phaseStartedAtRef = useRef<number>(0);
   const goResultRef = useRef<() => void>(() => {});
   const perfRef = useRef<CeremonyPerfSession | null>(null);
+  // Set once the ceremony reaches settle/table, so completion is recorded exactly once per
+  // ceremony regardless of how the player leaves (Skip, the leave button, or the Continue CTA).
+  const completionMarkedRef = useRef(false);
 
   const audio = useCeremonyAudio();
   const haptics = useCeremonyHaptics();
@@ -237,6 +243,15 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   useEffect(() => {
     phaseRef.current = phase;
     perfRef.current?.markPhaseCommit(phase);
+  }, [phase]);
+  // Reaching settle or the table (any path — including the reduced-motion run) counts the
+  // ceremony as completed exactly once, so players who always press Skip still unlock the
+  // fast-forward on their next pull (MGACHA-09). The Continue CTA no longer marks it itself.
+  useEffect(() => {
+    if (shouldMarkCeremonyComplete(phase, completionMarkedRef.current)) {
+      completionMarkedRef.current = true;
+      markCeremonyCompleted().catch(() => {});
+    }
   }, [phase]);
   useEffect(() => {
     flippedRef.current = flippedSet;
@@ -508,11 +523,22 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
       audio.hit('seam-burst');
       if (peakRarity === 'LEG') audio.hit('stinger');
       else if (peakRarity === 'RAR') audio.hit('chime');
-      haptics.impact(peakRarity === 'LEG' ? 'heavy' : peakRarity === 'RAR' ? 'medium' : 'light');
+      // The LEG "Success" climax is exempt from the limiter (MGACHA-08); fire it FIRST so the
+      // heavy impact that follows can never crowd it out of the 3/1000 ms window.
       if (peakRarity === 'LEG') haptics.success();
+      haptics.impact(peakRarity === 'LEG' ? 'heavy' : peakRarity === 'RAR' ? 'medium' : 'light');
     } else if (phase === 'settle') {
       if (peakRarity !== 'COM') audio.tail('sparkle-tail');
       audio.bed(bedName, { gain: CEREMONY_GAIN.bedTable });
+    } else if (phase === 'cards-on-table') {
+      // Fade the ambience bed out 1.5 s after the cards land, before expo-audio's non-gapless
+      // 8 s ambience loop can wrap (MGACHA-02). The id rides timers.current so unmount/restart
+      // clears it; tap-flip hits play afterwards on their own separate players.
+      const id = setTimeout(
+        () => audio.bed(null, { fadeMs: BED_TABLE_FADE_OUT_MS }),
+        BED_TABLE_FADE_DELAY_MS,
+      ) as unknown as number;
+      timers.current.push(id);
     }
   }, [phase]);
 
@@ -539,13 +565,30 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   }, [phaseTitleText]);
 
   const onTapStart = useCallback(
-    (card: TapCardData) => {
-      audio.hit('card-flip');
-      if (card.rarity === 'RAR') audio.hit('chime');
-      else if (card.rarity === 'LEG') audio.hit('legendary');
+    (card: TapCardData, flipDelayMs: number) => {
+      // Immediate touch feedback stays on the tap.
       haptics.impact('soft');
+      if (reduceMotion) {
+        // No visual flip animation to align to — play the flip sound and sting at once.
+        audio.hit('card-flip');
+        if (card.rarity === 'RAR') audio.hit('chime');
+        else if (card.rarity === 'LEG') audio.hit('legendary');
+        return;
+      }
+      // Otherwise schedule the flip sound to the visual flip (lift end) and the rarity sting to
+      // the flip midpoint (when the face appears), instead of firing both at tap time (MGACHA-07).
+      const { flipAtMs, stingAtMs } = tapFlipCueOffsets(card.rarity, flipDelayMs, activeTimings);
+      const flipId = setTimeout(() => audio.hit('card-flip'), flipAtMs) as unknown as number;
+      timers.current.push(flipId);
+      if (stingAtMs !== null) {
+        const stingId = setTimeout(
+          () => audio.hit(card.rarity === 'LEG' ? 'legendary' : 'chime'),
+          stingAtMs,
+        ) as unknown as number;
+        timers.current.push(stingId);
+      }
     },
-    [audio, haptics],
+    [audio, haptics, activeTimings, reduceMotion],
   );
   const onFlipped = useCallback((uid: string) => {
     setFlippedSet((s) => {
@@ -558,7 +601,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     setFocusedUid((cur) => (cur === uid ? null : uid));
   }, []);
   const onContinue = useCallback(() => {
-    markCeremonyCompleted().catch(() => {});
+    // Completion is already recorded by the phase effect on reaching settle/table; just leave.
     goResult();
   }, [goResult]);
 

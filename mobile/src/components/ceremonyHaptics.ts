@@ -1,6 +1,7 @@
 // ceremonyHaptics — one haptic vocabulary with a rolling rate limit (≤ 3 events per
-// 1000 ms across every kind), Success at most once per ceremony and a Reduce-Motion
-// mode. Guarded require of expo-haptics; every call is a silent no-op without it.
+// 1000 ms across tick/impact), the LEG Success climax exempt from the limiter and fired
+// at most once per ceremony, and a Reduce-Motion mode. Guarded require of expo-haptics;
+// every call is a silent no-op without it.
 import { useMemo } from 'react';
 
 export type HapticImpact = 'light' | 'medium' | 'heavy' | 'soft' | 'rigid';
@@ -91,9 +92,11 @@ export function createCeremonyHapticsController(deps: {
   }
 
   function success(): void {
+    // The LEG "Success" climax is exempt from the rolling limiter (MGACHA-08): the tell, tear
+    // and flash impacts fill the 3/1000 ms window, so consulting it here always dropped the
+    // success cue. It still fires at most once per reset() and is a no-op without the module.
     if (!haptics) return;
     if (successUsed) return;
-    if (!limiter.allow()) return;
     successUsed = true;
     try {
       Promise.resolve(haptics.notificationAsync(haptics.NotificationFeedbackType.Success)).catch(() => {});

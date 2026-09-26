@@ -130,6 +130,7 @@ import { DrawScreen } from '../../src/screens/DrawScreen';
 // next one's fixture.
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
+import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../../src/features/gacha/draw/ceremonyTimings';
 
 async function flush() {
   await act(async () => {
@@ -296,8 +297,9 @@ describe('draw screen · sync trigger', () => {
     });
 
     // The reason string is load-bearing: it is what puts this sync on the
-    // pull whitelist in syncProgressOnce.
-    expect(scheduleProgressSyncMock).toHaveBeenCalledWith({ delayMs: 0, reason: 'draw_committed' });
+    // pull whitelist in syncProgressOnce. The delay is deferred past the longest
+    // ceremony (MGACHA-03) so its work never lands on the JS thread mid-ceremony.
+    expect(scheduleProgressSyncMock).toHaveBeenCalledWith({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
   });
 
   it('does not ask for a sync when the pull bought nothing', async () => {

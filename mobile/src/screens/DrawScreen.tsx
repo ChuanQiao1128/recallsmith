@@ -15,6 +15,7 @@ import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
 import { loadDrawState } from '../features/gacha/draw/drawStateStore';
 import { buildPityProgressLabelV9, DEFAULT_PITY_STATE, normalizePityState } from '../features/gacha/draw/pity';
+import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../features/gacha/draw/ceremonyTimings';
 import {
   consumePullsFromStoredWallet,
   loadRewardWalletState,
@@ -575,7 +576,7 @@ export function DrawScreen({ navigation, route }: Props) {
         // device. 'draw_committed' is on the pull whitelist for the same
         // reason -- right after a draw is when a second device is most
         // worth reconciling.
-        scheduleProgressSync({ delayMs: 0, reason: 'draw_committed' });
+        scheduleProgressSync({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
 
         const latestPulls = spendablePulls(spent.wallet);
         setReady((prev) =>

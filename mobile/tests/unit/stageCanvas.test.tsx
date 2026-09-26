@@ -57,6 +57,7 @@ import {
   tableCardSize,
   particlePose,
   poseToRSXform,
+  burstParticleElapsed,
   packRectInStage,
   packSlotInStage,
   type StageTimeline,
@@ -263,6 +264,17 @@ describe('StageCanvas', () => {
     expect(particlePose(3, 450, 900, o, 100)).toEqual(mid);
 
     expect(poseToRSXform({ x: 10, y: 20, scale: 1, rotation: 0 }, 64)).toEqual({ scos: 1, ssin: 0, tx: -22, ty: -12 });
+  });
+
+  it('a finished particle burst never replays (no clock modulo)', () => {
+    // No burst live yet → -1 (the buffer worklet zeroes the quad).
+    expect(burstParticleElapsed(-1, 1500)).toBe(-1);
+    // Mid-burst → the elapsed passes straight through and the sprite is visible.
+    expect(burstParticleElapsed(700, 1500)).toBe(700);
+    expect(particlePose(0, burstParticleElapsed(700, 1500), 1500, { x: 0, y: 0 }, 100).scale).toBeGreaterThan(0);
+    // Well past the life (what a 14 s repeating clock would have wrapped back to 0) → clamps at
+    // lifeMs, where particlePose is already invisible, so the burst stays finished.
+    expect(particlePose(0, burstParticleElapsed(20000, 1500), 1500, { x: 0, y: 0 }, 100).scale).toBe(0);
   });
 
   it('exposes the frozen ceremony constants', () => {

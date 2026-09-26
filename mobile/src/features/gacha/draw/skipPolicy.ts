@@ -19,6 +19,12 @@ export type SkipPolicyInput = {
   alreadyCompressed: boolean;
 };
 
+/** Reaching settle or the table counts the ceremony as completed exactly once, so players who
+ *  always press Skip (never the Continue CTA) still unlock the fast-forward next time (MGACHA-09). */
+export function shouldMarkCeremonyComplete(phase: CeremonyPhase, alreadyMarked: boolean): boolean {
+  return !alreadyMarked && (phase === 'settle' || phase === 'cards-on-table');
+}
+
 export function skipPolicy(input: SkipPolicyInput): SkipDecision {
   // 1. Reduce motion is a parallel ceremony with its own 180/420 ms path (B00 §3.3);
   //    there is nothing to compress.
