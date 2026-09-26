@@ -4,7 +4,7 @@
 // table itself; this leaf never renders one. Every user string comes from the copy
 // module or is a shared pack constant.
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import * as RN from 'react-native';
 import type { ImageSourcePropType } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -93,13 +93,15 @@ export function FallbackStage(props: FallbackStageProps): React.JSX.Element {
             ]}
           >
             <LinearGradient
-              colors={palette.cover}
+              colors={coverImage && RNImage ? (['#000000', '#000000'] as const) : palette.cover}
               start={{ x: 0.1, y: 0 }}
               end={{ x: 0.9, y: 1 }}
-              style={[ceremonyStyles.swipePackInner, { borderColor: palette.ring }]}
+              style={coverImage && RNImage
+                ? [ceremonyStyles.swipePackInner, { borderColor: palette.ring }, ceremonyStyles.packOnCover]
+                : [ceremonyStyles.swipePackInner, { borderColor: palette.ring }]}
             >
               {coverImage && RNImage ? (
-                <RNImage source={coverImage} resizeMode="cover" style={StyleSheet.absoluteFillObject} pointerEvents="none" />
+                <RNImage source={coverImage} resizeMode="contain" style={ceremonyStyles.packCoverImage} pointerEvents="none" />
               ) : null}
               {pitySeal ? <View style={ceremonyStyles.pitySeal} /> : null}
             </LinearGradient>

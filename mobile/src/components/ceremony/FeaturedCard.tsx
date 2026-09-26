@@ -2,7 +2,7 @@
 // tree's static reveal branch rebuilt with no motion library at all. Both faces
 // are always in the tree so both testIDs survive; the hidden face is rotated away.
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import * as RN from 'react-native';
 import type { ImageSourcePropType } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -35,18 +35,21 @@ const hiddenFace = { opacity: 0, transform: [{ rotateY: '180deg' }] } as const;
 
 export function FeaturedCard(props: FeaturedCardProps): React.JSX.Element {
   const { accent, rarityText, questionText, packPaletteCover, coverImage, faceUp } = props;
+  // PNG path: the cover is the whole card back, drawn with `contain` on a black
+  // matte. Without a cover the procedural gradient and its padding are kept.
+  const showCover = coverImage && RNImage;
   return (
     <View style={[ceremonyStyles.flipCard, faceUp && [ceremonyStyles.flipCardRevealed, { borderColor: accent }]]}>
       {/* Back face */}
       <View style={faceUp ? hiddenFace : undefined} pointerEvents={faceUp ? 'none' : undefined}>
         <LinearGradient
-          colors={packPaletteCover}
+          colors={showCover ? (['#000000', '#000000'] as const) : packPaletteCover}
           start={{ x: 0.1, y: 0 }}
           end={{ x: 0.9, y: 1 }}
-          style={ceremonyStyles.flipBackGradient}
+          style={showCover ? [ceremonyStyles.flipBackGradient, ceremonyStyles.packOnCover] : ceremonyStyles.flipBackGradient}
         >
-          {coverImage && RNImage ? (
-            <RNImage source={coverImage} resizeMode="cover" style={StyleSheet.absoluteFillObject} pointerEvents="none" />
+          {showCover ? (
+            <RNImage source={coverImage} resizeMode="contain" style={ceremonyStyles.packCoverImage} pointerEvents="none" />
           ) : null}
           {/* 'Reward card' is hard-coded in the old tree and is not in the copy module — kept byte-identical. */}
           <Text style={ceremonyStyles.cardBackText} numberOfLines={1}>

@@ -882,6 +882,41 @@ describe('DrawCeremonyScreen v9', () => {
     expect(collectText(tree)).toContain('Rare');
   });
 
+  it('labels the featured reveal with the rarity word, not the raw code', async () => {
+    // The featured card (tapFlow off) is face up whenever mounted, so it shows
+    // the rarity word. It must read 'Rare', never the raw 'RAR' code.
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: SINGLE_DRAW_RESULT, tapFlow: false } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+    armCeremonySwipe(tree);
+
+    const recorded: string[] = [];
+    for (let i = 0; i < 60; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(100);
+        await Promise.resolve();
+      });
+      const found = tree.root.findAllByProps({ testID: 'draw-ceremony-reveal-rarity' });
+      if (found.length > 0) {
+        const c = found[0].props.children;
+        recorded.push(Array.isArray(c) ? c.join('') : String(c ?? ''));
+      }
+    }
+
+    expect(recorded.length).toBeGreaterThan(0);
+    for (const text of recorded) {
+      expect(text).toBe('Rare');
+    }
+  });
+
   it('reduced motion with tapFlow keeps the reveal on the table with no flash', async () => {
     // Grammar: Reduce Motion is a parallel path that still reaches the table; the flash never fires.
     (ReactNative as any).__setReduceMotionEnabled(true);
