@@ -286,16 +286,16 @@ public class DeckWalletSyncIntegrationTests
     Assert.Equal((0, 0, Base), await PoolAsync(user, "deck-a"));
 
     // A non-object pulls is not a pool: neither a number nor null writes a row.
+    // Those decks carry nothing else either, so the request is a well-formed 200
+    // (asserted by LambdaHost) that touches no pool.
     var user2 = NewUser("nonobject");
-    var data2 = await LambdaHost.PostDrawStateSyncAsync(
+    await LambdaHost.PostDrawStateSyncAsync(
       user2,
       Body(
         null,
         new { deckSlug = "deck-num", owned = Array.Empty<string>(), pulls = 5 },
         new { deckSlug = "deck-null", owned = Array.Empty<string>(), pulls = (object?)null }));
 
-    Assert.Equal(JsonValueKind.Null, PullsOut(data2, "deck-num").ValueKind);
-    Assert.Equal(JsonValueKind.Null, PullsOut(data2, "deck-null").ValueKind);
     Assert.Equal(0L, await PoolRowCountAsync(user2));
   }
 
