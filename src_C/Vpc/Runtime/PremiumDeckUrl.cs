@@ -34,12 +34,8 @@ public static class PremiumDeckUrl
 
   private static string? SafeSlug(string? s)
   {
-    var v = (s ?? string.Empty).Trim();
-    if (!System.Text.RegularExpressions.Regex.IsMatch(v, "^[a-z0-9-]+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-    {
-      return null;
-    }
-    return v.ToLowerInvariant();
+    var v = (s ?? string.Empty).Trim().ToLowerInvariant();
+    return Validation.IsValidSlug(v) ? v : null;
   }
 
   private static int ToInt(string? v, int def)
@@ -135,7 +131,7 @@ public static class PremiumDeckUrl
 
     var traceId = res.TraceId;
     var slug = SafeSlug(query.TryGetValue("slug", out var s) ? s : null);
-    if (string.IsNullOrEmpty(slug)) return res.BadRequest("Missing/invalid slug");
+    if (string.IsNullOrEmpty(slug)) return res.BadRequest("VALIDATION_ERROR", Validation.SlugRuleMessage);
 
     var apiEnv = (Environment.GetEnvironmentVariable("API_ENV") ?? string.Empty).Trim().ToLowerInvariant();
     var isProdEnv = apiEnv == "production";

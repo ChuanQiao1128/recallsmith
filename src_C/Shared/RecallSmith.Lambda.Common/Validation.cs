@@ -19,6 +19,22 @@ public static class Validation
 {
   private static readonly Regex DbNameRegex = new("^[a-zA-Z_][a-zA-Z0-9_]{0,62}$", RegexOptions.Compiled);
 
+  /// <summary>The one deck-slug grammar (E00 §2.7): lower-case ASCII letter or digit first, then up to 63 of [a-z0-9-]. Shared by Decks, Publish and PremiumDeckUrl.</summary>
+  public const string SlugPattern = "^[a-z0-9][a-z0-9-]{0,63}$";
+  public static readonly Regex SlugRegex = new(SlugPattern, RegexOptions.Compiled);
+  public const string SlugRuleMessage = "slug must match ^[a-z0-9][a-z0-9-]{0,63}$";
+
+  /// <summary>True when <paramref name="slug"/> is non-null and matches SlugPattern exactly. `$` would also match before a trailing newline, hence the explicit check.</summary>
+  public static bool IsValidSlug(string? slug) => slug is not null && !slug.EndsWith('\n') && SlugRegex.IsMatch(slug);
+
+  /// <summary>Trim, then IsValidSlug or throw ValidationError(SlugRuleMessage, field). Returns the trimmed slug.</summary>
+  public static string RequireSlug(string? slug, string field = "slug")
+  {
+    var s = (slug ?? string.Empty).Trim();
+    if (!IsValidSlug(s)) throw new ValidationError(SlugRuleMessage, field);
+    return s;
+  }
+
   public static string? GetHeader(LambdaRequest req, string name)
   {
     if (req.Headers.TryGetValue(name, out var v)) return v;

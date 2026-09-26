@@ -132,6 +132,8 @@ public static class Decks
           return res.BadRequest("VALIDATION_ERROR", "slug, title, author are required");
         }
 
+        slug = Validation.RequireSlug(slug);
+
         var deckTypeInt = body.TryGetProperty("deckType", out var dt) ? Helpers.ParseOptionalInteger(dt, "deckType") : null;
         var versionInt = body.TryGetProperty("version", out var ve) ? Helpers.ParseOptionalInteger(ve, "version") : null;
 
@@ -195,7 +197,7 @@ public static class Decks
 
         var spec = new List<Helpers.UpdateField>
         {
-          new("slug", "slug", v => v.ValueKind == JsonValueKind.Null ? null : v.ToString().Trim()),
+          new("slug", "slug", v => v.ValueKind == JsonValueKind.Null ? null : Validation.RequireSlug(v.ToString())),
           new("title", "title", v => v.ValueKind == JsonValueKind.Null ? null : v.ToString().Trim()),
           new("author", "author", v => v.ValueKind == JsonValueKind.Null ? null : v.ToString().Trim()),
           new("description", "description", v => v.ValueKind == JsonValueKind.Null ? null : v.ToString().Trim()),

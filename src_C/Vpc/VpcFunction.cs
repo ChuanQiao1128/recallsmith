@@ -97,6 +97,7 @@ public sealed class VpcFunction
 
     try
     {
+      if ((req.RawBody?.Length ?? 0) > 1_048_576) return res.PayloadTooLarge();
       // 💡 彻底清除路径匹配的干扰因素：去掉尾部斜杠
       var p = req.Path.TrimEnd('/');
 
