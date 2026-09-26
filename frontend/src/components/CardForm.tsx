@@ -1,6 +1,6 @@
 // src/components/CardForm.tsx
 
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Deck } from '../types/deck';
 import type { McqBlob } from '../types/mcq';
@@ -12,24 +12,12 @@ import {
   isValidDifficulty,
   isValidStableUid,
 } from '../lib/cardRules';
+import { checkMcqForm } from '../lib/mcqFormCheck';
+import { highlightSnippet, mapToHlLanguage } from '../lib/highlightSnippet';
 
-// highlight.js core + languages
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import csharp from 'highlight.js/lib/languages/csharp';
-import sql from 'highlight.js/lib/languages/sql';
-import bash from 'highlight.js/lib/languages/bash';
+// The highlight.js theme stays here so it rides the lazy CardForm chunk; the
+// engine setup and mapToHlLanguage moved to lib/highlightSnippet.ts.
 import 'highlight.js/styles/atom-one-dark.css';
-
-hljs.registerLanguage('javascript', javascript);
-hljs.registerLanguage('js', javascript);
-hljs.registerLanguage('typescript', typescript);
-hljs.registerLanguage('ts', typescript);
-hljs.registerLanguage('csharp', csharp);
-hljs.registerLanguage('cs', csharp);
-hljs.registerLanguage('sql', sql);
-hljs.registerLanguage('bash', bash);
 
 export interface CardFormValues {
   question: string;
@@ -41,6 +29,7 @@ export interface CardFormValues {
   difficulty: number;
   orderInDeck: number;
   revision: number;
+  topic: string;
 }
 
 interface CardFormProps {
@@ -72,8 +61,21 @@ interface CardFormProps {
    * notes are authored through the deck Markdown import (OPT:/WHY:/QUALIFIER:)
    * and validated there and at the API. Absent or null on a Q/A card and on
    * the create page.
+   *
+   * It is still never sent, but it is now VALIDATED against the form's own
+   * values: the server re-canonicalises the stored blob against the edited
+   * question, explanation and difficulty on every PUT, so checkMcqForm runs the
+   * same rules here and surfaces the verdict before submit (see below).
    */
   mcq?: McqBlob | null;
+
+  /**
+   * Reports whether any field now differs from the values the form mounted
+   * with, so a page can guard against a stray navigation discarding an edit
+   * (see useUnsavedChangesGuard). Optional: a form with no guard omits it. The
+   * form itself makes no navigation decision — it only reports.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface InternalState {
@@ -218,26 +220,38 @@ function slugifyWhileTyping(input: string): string {
     .replace(/^-+/, '');
 }
 
-function mapToHlLanguage(codeLang: string): string | null {
-  if (!codeLang) return null;
-  switch (codeLang) {
-    case 'js':
-      return 'javascript';
-    case 'ts':
-      return 'typescript';
-    case 'cs':
-      return 'csharp';
-    default:
-      return codeLang;
-  }
-}
-
 export function CardForm(props: CardFormProps) {
-  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq } = props;
+  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, onDirtyChange } = props;
 
   const mcqRequiredCount = mcq ? mcq.options.filter(option => option.correct).length : 0;
 
   const [values, setValues] = useState<CardFormValues>(initialValues);
+
+  // The MCQ rules re-run over the live values on every render — cheap, and it is
+  // what keeps the inline issues and the submit gate reading the same verdict.
+  // Null on a Q/A card, where there is nothing to check.
+  const mcqCheck = mcq
+    ? checkMcqForm(
+        { question: values.question, explanation: values.explanation, difficulty: values.difficulty },
+        mcq,
+      )
+    : null;
+
+  // The values the form mounted with. Frozen once, like `values` itself, so the
+  // two are compared against the same starting point across the form's life.
+  const [baseline] = useState(initialValues);
+
+  // Dirty is "some field now differs from where it started", field by field
+  // over CardFormValues' keys. Reported through onDirtyChange rather than acted
+  // on here — the navigation decision belongs to the page's guard.
+  const dirty = (Object.keys(baseline) as (keyof CardFormValues)[]).some(
+    key => values[key] !== baseline[key],
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
   const [state, setState] = useState<InternalState>({
     submitting: false,
     error: null,
@@ -319,6 +333,14 @@ export function CardForm(props: CardFormProps) {
       return;
     }
 
+    // The MCQ blocking gate. A blocking issue is one the server's PUT would
+    // refuse against the edited stem/explanation/difficulty, so submitting would
+    // fail with a server code; refuse here instead. Advisory issues never block.
+    if (mcqCheck && mcqCheck.blocking.length > 0) {
+      setState(prev => ({ ...prev, error: 'Fix the multiple-choice issues listed below before saving.' }));
+      return;
+    }
+
     setState({ submitting: true, error: null });
 
     try {
@@ -342,20 +364,18 @@ export function CardForm(props: CardFormProps) {
 
   const hlLanguage = mapToHlLanguage(values.codeLanguage);
 
-  const highlightedHtml = useMemo(() => {
-    const code = values.codeSnippet;
+  // The preview reads DEFERRED copies of the snippet and language, so typing
+  // stays on the urgent render path and highlighting happens at lower priority
+  // once React catches up. With no language picked the preview is escaped plain
+  // text, because the old behaviour ran every registered grammar (auto-detection)
+  // on each keystroke and lagged long snippets. Pick a language to get colours.
+  const deferredSnippet = useDeferredValue(values.codeSnippet);
+  const deferredLanguage = useDeferredValue(hlLanguage);
 
-    if (!code) {
-      return hljs.highlight('// No code snippet.', { language: 'javascript' }).value;
-    }
-
-    try {
-      if (hlLanguage) return hljs.highlight(code, { language: hlLanguage }).value;
-      return hljs.highlightAuto(code).value;
-    } catch {
-      return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-  }, [values.codeSnippet, hlLanguage]);
+  const highlightedHtml = useMemo(
+    () => highlightSnippet(deferredSnippet, deferredLanguage),
+    [deferredSnippet, deferredLanguage],
+  );
 
   return (
     <form
@@ -467,7 +487,22 @@ export function CardForm(props: CardFormProps) {
         )}
       </div>
 
-    
+      {/* Topic */}
+      <div>
+        <label htmlFor="topic" className="block text-sm font-medium text-slate-700 mb-1">Topic</label>
+        <input
+          type="text"
+          className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+          id="topic"
+          maxLength={80}
+          value={values.topic}
+          onChange={e => handleChange('topic', e.target.value)}
+        />
+        <p className="mt-1 text-xs text-slate-500">
+          Optional. Groups cards in the app; up to 80 characters. Clear it to remove the topic.
+        </p>
+      </div>
 
       {/* Language + Difficulty + Order + Revision */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -600,7 +635,8 @@ export function CardForm(props: CardFormProps) {
         >
           <legend className="px-1 text-sm font-medium text-slate-700">Multiple choice</legend>
           <p className="text-xs text-slate-500">
-            Read-only here. Options, answers and WHY notes change through the deck Markdown import.
+            Options, answers and WHY notes change through the deck Markdown import. The checks below
+            re-run as you edit the question, explanation and difficulty.
           </p>
           <p data-testid="card-form-mcq-required" className="mt-1 text-xs text-slate-600">
             {mcqRequiredCount === 1 ? 'Single answer' : `Choose ${mcqRequiredCount}`}
@@ -626,6 +662,20 @@ export function CardForm(props: CardFormProps) {
               </li>
             ))}
           </ol>
+          {mcqCheck && mcqCheck.blocking.length > 0 ? (
+            <ul data-testid="card-form-mcq-issues" className="mt-2 space-y-1 text-xs text-red-700">
+              {mcqCheck.blocking.map(issue => (
+                <li key={issue.code + issue.message}>{issue.message}</li>
+              ))}
+            </ul>
+          ) : null}
+          {mcqCheck && mcqCheck.advisory.length > 0 ? (
+            <ul data-testid="card-form-mcq-advice" className="mt-2 space-y-1 text-xs text-amber-700">
+              {mcqCheck.advisory.map(issue => (
+                <li key={issue.code + issue.message}>{issue.message}</li>
+              ))}
+            </ul>
+          ) : null}
         </fieldset>
       ) : null}
 

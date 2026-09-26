@@ -1,27 +1,18 @@
 // @vitest-environment jsdom
 //
-// What actually leaves the browser when the console's two most destructive
-// buttons are pressed.
+// What actually leaves the browser when the console's migrate controls are used.
 //
 // Every other AdminUsersPage file mocks src/api/admin, which is the right seam
 // for "what does the operator see" but stops one call short of the thing that
-// matters here. `runMigrate(true)` and `runMigrate(false)` differ by a boolean
-// at that seam; they differ by `?reset=1` on the wire, and the translation
-// happens in src/api/admin.ts, below every one of those mocks. A page test can
-// prove the console handed `true` down. It cannot prove `true` still means
-// "drop the tables" by the time the request is built, or that `false` does not.
+// matters here: the exact URL, body and headers src/api/admin.ts builds, below
+// every one of those mocks. A page test can prove the console called
+// `runMigrate`. It cannot prove the request that leaves is
+// `POST /api/v1/admin/db/migrate` with nothing appended, and that the migrate
+// secret rides as a header rather than in the URL or body.
 //
-// The two mutations that justify this file, both measured rather than imagined:
-//
-//   const qs = reset ? '?reset=1' : ''   ->   const qs = ''
-//     the reset case here goes red; adminUsersConfirm's seven cases and all of
-//     adminUsersMigrate stay green. The typed-confirmation gate, the dialog, the
-//     phrase — all still working, all now guarding a request that resets
-//     nothing.
-//
-//   const qs = reset ? '?reset=1' : ''   ->   const qs = '?reset=1'
-//     the plain case here goes red; the same twelve cases stay green. The button
-//     the page's own hint calls "safe for prod" starts DROPping production.
+// (The old "Reset & migrate (DEV only)" button and its `?reset=1` are gone as of
+// F22/CBE-23: the server ignored the flag and ran an ordinary migrate, so the
+// scary confirmation guarded nothing.)
 //
 // Mock depth, and why it is a safety property rather than a preference:
 // .env.local and the committed .env.development both set VITE_API_BASE to a real
@@ -68,12 +59,9 @@ const { AdminUsersPage } = await import('../src/pages/AdminUsersPage');
 const ADMIN_API_SOURCE = resolve(dirname(fileURLToPath(import.meta.url)), '../src/api/admin.ts');
 
 const MIGRATE_PLAIN = '/api/v1/admin/db/migrate';
-const MIGRATE_RESET = '/api/v1/admin/db/migrate?reset=1';
 const PERMISSIONS_BULK = '/api/v1/admin/permissions/bulk';
 
-const RESET_BUTTON = 'Reset & migrate (DEV only)';
-const PLAIN_BUTTON = 'Run migrate (no reset)';
-const RESET_CONFIRM = 'Reset & migrate';
+const PLAIN_BUTTON = 'Run migrations';
 
 async function mountConsole(): Promise<void> {
   render(
@@ -86,17 +74,12 @@ async function mountConsole(): Promise<void> {
   await screen.findByText('1 user(s)');
 }
 
-async function openResetDialog(): Promise<ReturnType<typeof within>> {
-  await userEvent.click(screen.getByRole('button', { name: RESET_BUTTON }));
-  return within(screen.getByRole('alertdialog'));
-}
-
 beforeEach(() => {
   signOut();
   signInAsSuperAdmin();
 
   httpMock.get.mockImplementation((url: string) => {
-    if (url === '/api/v1/admin/users') return Promise.resolve({ data: ok([alice()]) });
+    if (url === '/api/v1/admin/cognito/users') return Promise.resolve({ data: ok([alice()]) });
     if (url === '/api/v1/admin/permissions') {
       return Promise.resolve({
         data: ok([
@@ -148,23 +131,9 @@ describe('the seam this file relies on', () => {
   });
 });
 
-describe('the reset button', () => {
-  it('sends exactly one request, and it is the one that carries reset=1', async () => {
-    httpMock.post.mockResolvedValue({ data: ok({ migrated: true, reset: true }) });
-
-    await mountConsole();
-    const dialog = await openResetDialog();
-    await userEvent.type(dialog.getByRole('textbox'), 'RESET');
-    await userEvent.click(dialog.getByRole('button', { name: RESET_CONFIRM }));
-
-    await waitFor(() => expect(httpMock.post).toHaveBeenCalledTimes(1));
-    expect(httpMock.post).toHaveBeenCalledWith(MIGRATE_RESET, {});
-  });
-});
-
-describe('the button the page calls safe for prod', () => {
+describe('the migrate button', () => {
   it('sends the migrate URL with nothing appended to it', async () => {
-    httpMock.post.mockResolvedValue({ data: ok({ migrated: true, reset: false }) });
+    httpMock.post.mockResolvedValue({ data: ok({ appliedCount: 0 }) });
 
     await mountConsole();
     await userEvent.click(screen.getByRole('button', { name: PLAIN_BUTTON }));
@@ -178,7 +147,7 @@ describe('the button the page calls safe for prod', () => {
 
 describe('the migrate secret field', () => {
   it('is sent as x-migrate-secret only when filled in, and never in the body or URL', async () => {
-    httpMock.post.mockResolvedValue({ data: ok({ migrated: true, reset: false }) });
+    httpMock.post.mockResolvedValue({ data: ok({ appliedCount: 0 }) });
 
     await mountConsole();
     await userEvent.type(screen.getByLabelText('Migrate secret'), 's3cret-value');
@@ -186,20 +155,6 @@ describe('the migrate secret field', () => {
 
     await waitFor(() => expect(httpMock.post).toHaveBeenCalledTimes(1));
     expect(httpMock.post).toHaveBeenCalledWith(MIGRATE_PLAIN, {}, { headers: { 'x-migrate-secret': 's3cret-value' } });
-  });
-});
-
-describe('cancelling the reset dialog', () => {
-  it('puts nothing on the wire at all', async () => {
-    await mountConsole();
-    const dialog = await openResetDialog();
-    await userEvent.type(dialog.getByRole('textbox'), 'RESET');
-    await userEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
-
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
-    // Stronger than "runMigrate was not called": nothing was built, nothing was
-    // sent, and no server had to decide whether to honour it.
-    expect(httpMock.post).not.toHaveBeenCalled();
   });
 });
 

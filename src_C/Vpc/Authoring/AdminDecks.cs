@@ -36,7 +36,7 @@ public static class AdminDecks
     if (req.Method != "GET") return res.MethodNotAllowed("Method not allowed");
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
     try
     {
@@ -72,12 +72,13 @@ public static class AdminDecks
           d.version,
           (extract(epoch from d.updated_at) * 1000)::bigint as "updatedAtMs",
           floor(extract(epoch from d.updated_at) * 1000000)::bigint as "__cursorUs",
+          d.live_build_id as "liveBuildId",
           lp.build_id as "latestBuildId"
         from decks d
         left join lateral (
           select p.build_id
           from deck_publishes p
-          where p.deck_slug = d.slug and p.status = 'SUCCESS'
+          where p.deck_id = d.id and p.status = 'SUCCESS'
           order by p.created_at desc, p.id desc
           limit 1
         ) lp on true

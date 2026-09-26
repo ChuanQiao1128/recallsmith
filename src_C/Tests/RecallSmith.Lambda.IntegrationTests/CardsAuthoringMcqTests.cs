@@ -438,7 +438,7 @@ public class CardsAuthoringMcqTests
       ["question"] = McqFixtures.SqsQuestion,
       ["mcq"] = McqFixtures.SqsBlob(),
     });
-    Assert.Equal(400, stale.StatusCode);
+    Assert.Equal(409, stale.StatusCode);
     Assert.Equal("VERSION_CONFLICT", ErrorCode(stale));
   }
 }

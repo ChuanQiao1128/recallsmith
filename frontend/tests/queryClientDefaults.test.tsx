@@ -2,25 +2,25 @@
 //
 // The shared QueryClient's defaults, and the rule they now follow.
 //
-// They used to be staleTime 5min / gcTime 10min / retry 1 /
-// refetchOnWindowFocus true — a sensible profile for an application whose
-// writes invalidate their caches, applied to one that had none. Both hooks that
-// existed overrode all four, line by line, so the settings governed zero lines
-// of behaviour. That is not harmless: a default nothing exercises is a default
-// nobody has tested, and the next hook written would have inherited a
-// five-minute window in a console where creating a card told the deck list
-// nothing.
+// They were pinned to staleTime 0 / gcTime 0 while the console had no
+// invalidations: a card created on one page could not tell the list on another
+// it was stale, so the only safe cache was no cache. Every write now invalidates
+// exactly what it changes, which is what makes a short window safe rather than a
+// trap. So the read defaults are staleTime 30s / gcTime 300s: List -> Edit ->
+// back reuses the deck instead of downloading it three times, and a write
+// invalidates its keys the moment it lands.
 //
-// The rule the new set follows is: a global default describes behaviour that is
-// SAFE for the system as it stands; a page that can prove an optimisation is
-// safe there opts into it.
+// The rule the set follows is: a global default may cache for as long as every
+// write that could invalidate it says so — and the console now reached that
+// point.
 //
-// WHERE THE WITNESSES ARE. The behaviour of the four query settings is asserted
-// in tests/cardListPageQueryWiring.test.tsx, whose "fetching still behaves the
-// way it did before react-query" block mounts a real page against a client
-// carrying these defaults. Those three cases used to prove the HOOKS overrode a
-// dangerous default; now they prove the default is not dangerous. That swap only
-// holds while the hooks stay out of it, which is the last block in this file.
+// WHERE THE WITNESSES ARE. The behaviour of the query settings is asserted in
+// tests/cardListPageQueryWiring.test.tsx, whose "fetching still behaves the way
+// it did before react-query" block mounts a real page against a client carrying
+// these defaults — the window still ignores focus and does not retry a refusal,
+// and a return visit inside 30s serves the cache while one past it reloads. Those
+// cases only stay sharp while the hooks stay out of it, which is the last block
+// in this file.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -74,12 +74,12 @@ describe('the conservative defaults', () => {
     // A configuration ratchet, and stated as one. It cannot show that any of
     // these values does anything — the behavioural cases live in
     // cardListPageQueryWiring — but it is the only thing that fails when the
-    // aggressive profile is put back, which is a specific and likely edit:
-    // every one of these five is a plausible "optimisation" on its own.
+    // window is put back to zero, or pushed past what the invalidations cover:
+    // every one of these six is a plausible edit on its own.
     const queries = queryClient.getDefaultOptions().queries;
 
-    expect(queries?.staleTime).toBe(0);
-    expect(queries?.gcTime).toBe(0);
+    expect(queries?.staleTime).toBe(30_000);
+    expect(queries?.gcTime).toBe(300_000);
     expect(queries?.retry).toBe(false);
     expect(queries?.refetchOnWindowFocus).toBe(false);
     expect(queries?.refetchOnReconnect).toBe(false);

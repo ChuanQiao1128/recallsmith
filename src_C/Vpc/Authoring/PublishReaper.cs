@@ -10,8 +10,10 @@ public sealed record ReapResult(int Pending, int Processing, string[] JobIds);
 
 /// <summary>
 /// POST /api/v1/admin/publish/reap (super-admin): fails orphaned PENDING (&gt; 10 min since insert)
-/// and PROCESSING (&gt; 30 min since last touch) rows so the queue can re-acquire them (the worker
-/// takes PENDING/FAILED). The core is Res-free so E12's scheduled reap can reuse it.
+/// and PROCESSING (&gt; 30 min since last touch) rows. FAILED is terminal: the worker never re-acquires
+/// a FAILED row, and if a reaped job's in-flight SQS message is later redelivered the worker
+/// acknowledges and drops it, so recovering the deck needs a fresh publish. The core is Res-free so
+/// E12's scheduled reap can reuse it.
 /// </summary>
 public static class PublishReaper
 {
@@ -34,9 +36,11 @@ public static class PublishReaper
     select 'PROCESSING' as was, job_id from q
     """;
 
-  public static async Task<ReapResult> ReapOrphansAsync(NpgsqlConnection conn)
+  public static Task<ReapResult> ReapOrphansAsync(NpgsqlConnection conn) => ReapOrphansAsync(conn, null);
+
+  public static async Task<ReapResult> ReapOrphansAsync(NpgsqlConnection conn, NpgsqlTransaction? tx)
   {
-    var rows = await DbUtil.QueryAsync(conn, null, ReapSql, []);
+    var rows = await DbUtil.QueryAsync(conn, tx, ReapSql, []);
 
     var pending = 0;
     var processing = 0;
@@ -61,9 +65,31 @@ public static class PublishReaper
     if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
-    var r = await ReapOrphansAsync(conn);
+    ReapResult r;
+    AdminAuditEntry auditEntry;
+    bool persisted;
+
+    await using (var tx = await conn.BeginTransactionAsync())
+    {
+      try
+      {
+        r = await ReapOrphansAsync(conn, tx);
+        // Record even when nothing was reaped: the click itself is the admin action.
+        auditEntry = AdminAudit.Entry(auth, res, "publish.reap", "deck_publishes", null,
+          new { pending = r.Pending, processing = r.Processing, jobIds = r.JobIds });
+        persisted = await AdminAudit.RecordAsync(conn, tx, auditEntry);
+        await tx.CommitAsync();
+      }
+      catch
+      {
+        try { await tx.RollbackAsync(); } catch { /* ignore */ }
+        throw;
+      }
+    }
+
+    AdminAudit.Emit(auditEntry, persisted);
     return res.Ok(new { pending = r.Pending, processing = r.Processing, jobIds = r.JobIds });
   }
 }

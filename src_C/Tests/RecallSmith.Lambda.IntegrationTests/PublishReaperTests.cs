@@ -133,7 +133,7 @@ public class PublishReaperTests
   }
 
   [Fact]
-  public async Task Reap_ReapedRowIsReacquirable()
+  public async Task Reap_ReapedRowIsTerminalForTheWorker()
   {
     await using var conn = await _db.OpenAsync();
     var jobId = await SeedRowAsync(conn, "PROCESSING", updatedMinutesAgo: 31);
@@ -141,9 +141,10 @@ public class PublishReaperTests
     await PublishReaper.ReapOrphansAsync(conn);
     Assert.Equal("FAILED", await StatusOfAsync(conn, jobId));
 
+    // FAILED is terminal: a reaped row's in-flight message can no longer re-acquire it.
     var acquired = await new JobRepository().TryAcquireJobAsync(jobId, 2);
-    Assert.True(acquired);
-    Assert.Equal("PROCESSING", await StatusOfAsync(conn, jobId));
+    Assert.False(acquired);
+    Assert.Equal("FAILED", await StatusOfAsync(conn, jobId));
   }
 
   // ---- route ----------------------------------------------------------------------------------

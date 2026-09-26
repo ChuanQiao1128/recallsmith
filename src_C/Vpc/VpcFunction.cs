@@ -24,6 +24,20 @@ public sealed class VpcFunction
     // logged, and the first request then fails closed with a 401 instead of a crashed INIT.
     try { Auth.EnsureConfigured(); } catch (Exception ex) { Log.Error("auth config:", ex.Message); }
 
+    // Boot line once per container, not once per request: the constructor is the INIT-phase
+    // mount point, so this fires on cold start and the CloudWatch count tracks cold starts.
+    // No path/method here — a container serves many requests, so per-request fields belong on
+    // the per-request line in DispatchAsync.
+    Log.Event("info", new
+    {
+      tag = "boot",
+      lambda = ServiceName,
+      version = Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_VERSION"),
+      apiEnv = Environment.GetEnvironmentVariable("API_ENV"),
+      allowDevPremium = Environment.GetEnvironmentVariable("ALLOW_DEV_PREMIUM"),
+      disallowSandbox = Environment.GetEnvironmentVariable("DISALLOW_SANDBOX_PREMIUM"),
+    });
+
     // The constructor is the real INIT phase mount point: it runs once per container,
     // before any request, with the init phase CPU burst. RunOnce never throws.
     Warmup.RunOnce();
@@ -48,18 +62,6 @@ public sealed class VpcFunction
 
   private static async Task<APIGatewayProxyResponse> DispatchAsync(LambdaRequest req, Res res)
   {
-    Log.Event("info", new
-    {
-      tag = "boot",
-      lambda = ServiceName,
-      version = Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_VERSION"),
-      apiEnv = Environment.GetEnvironmentVariable("API_ENV"),
-      allowDevPremium = Environment.GetEnvironmentVariable("ALLOW_DEV_PREMIUM"),
-      disallowSandbox = Environment.GetEnvironmentVariable("DISALLOW_SANDBOX_PREMIUM"),
-      path = req.Path,
-      method = req.Method,
-    });
-
     AuthContext auth;
     try
     {
@@ -179,6 +181,10 @@ public sealed class VpcFunction
       // "/api/v1/authoring/cards", so the two never shadow each other — but the
       // more specific path stays first anyway, so a future prefix match cannot
       // quietly swallow it.
+      if (p.EndsWith("/api/v1/authoring/cards/import", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.CardsImport.HandleCardsImport(req, res, auth);
+      }
       if (p.EndsWith("/api/v1/authoring/cards/page", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Authoring.CardsPage.HandleAuthoringCardsPage(req, res, auth);
@@ -215,20 +221,28 @@ public sealed class VpcFunction
       {
         return await Vpc.Authoring.DeckRollback.HandleDeckRollback(req, res, auth);
       }
+      if (p.EndsWith("/builds", StringComparison.OrdinalIgnoreCase) && p.Contains("/api/v1/admin/decks/", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.DeckBuilds.HandleDeckBuilds(req, res, auth);
+      }
       if (p.EndsWith("/api/v1/admin/publish/reap", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Authoring.PublishReaper.HandlePublishReap(req, res, auth);
       }
-      // Dashboard - 合并 decks 和 manifest，减少前端请求次数
-      if (p.EndsWith("/api/v1/authoring/dashboard", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
-      {
-        return await Vpc.Authoring.Dashboard.HandleDashboard(req, res, auth);
-      }
-
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Runtime.Me.HandleMe(req, res, auth);
+      }
+      if ((p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) ||
+           p.EndsWith("/api/v1/user/me", StringComparison.OrdinalIgnoreCase)) &&
+          req.Method.Equals("DELETE", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Runtime.AccountDeletion.HandleDeleteMe(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/user/client-errors", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Runtime.ClientErrors.HandleClientErrors(req, res, auth);
       }
       if (p.EndsWith("/api/v1/user/bootstrap", StringComparison.OrdinalIgnoreCase))
       {
@@ -286,30 +300,18 @@ public sealed class VpcFunction
         return await Vpc.Runtime.DrawStateSync.HandleDrawStateSync(req, res, auth);
       }
 
-      // Admin users placeholders
+      // Admin users routes are retired (CBE-01). The console lists and creates editors
+      // through edge-public's /api/v1/admin/cognito/users; core-vpc no longer answers a
+      // 501 "TODO" here. It still recognises the old paths only to reject them with 404,
+      // so legacy callers get a plain "route not found" and stay metered under their
+      // bounded RouteMetrics labels rather than minting a metric per user id.
       {
-        var p1 = RouteMatcher.Match("/api/v1/admin/users", p);
-        if (p1 is not null && req.Method == "GET")
+        var goneUsers = RouteMatcher.Match("/api/v1/admin/users", p);
+        var goneUser = RouteMatcher.Match("/api/v1/admin/users/:userSub", p);
+        var goneEntitlements = RouteMatcher.Match("/api/v1/admin/users/:userSub/entitlements", p);
+        if (goneUsers is not null || goneUser is not null || goneEntitlements is not null)
         {
-          var deny = Auth.RequireSuperAdmin(auth, res);
-          if (deny is not null) return deny;
-          return res.NotImplemented("TODO: admin users list");
-        }
-
-        var p2 = RouteMatcher.Match("/api/v1/admin/users/:userSub", p);
-        if (p2 is not null && req.Method == "GET")
-        {
-          var deny = Auth.RequireSuperAdmin(auth, res);
-          if (deny is not null) return deny;
-          return res.NotImplemented($"TODO: admin user detail for {p2["userSub"]}");
-        }
-
-        var p3 = RouteMatcher.Match("/api/v1/admin/users/:userSub/entitlements", p);
-        if (p3 is not null && req.Method == "PUT")
-        {
-          var deny = Auth.RequireSuperAdmin(auth, res);
-          if (deny is not null) return deny;
-          return res.NotImplemented($"TODO: admin set entitlements for {p3["userSub"]}");
+          return res.NotFound("Route not found");
         }
       }
 

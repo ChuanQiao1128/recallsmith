@@ -12,6 +12,15 @@ namespace RecallSmith.Lambda.Common;
 /// being told it lacks a role. Null for a request with no token, a token the API Gateway
 /// authorizer already verified, or a token this code verified.
 /// </param>
+/// <param name="AdminDenyReason">
+/// Non-null when the claims carried an admin group (<c>super_admin</c>/<c>editor</c>) but failed
+/// the console binding: <c>"admin_issuer"</c> when the token was not minted by the console pool,
+/// or <c>"admin_client"</c> when it was not minted by a configured console app client. The three
+/// role flags are then false while the identity (sub, username, groups) is preserved, so
+/// <see cref="Auth.RequireUser"/> still passes and <see cref="Auth.RequireAdmin"/>/
+/// <see cref="Auth.RequireSuperAdmin"/> answer 403 "Requires a console token". Null when the
+/// binding passed or the claims never carried an admin group.
+/// </param>
 public sealed record AuthContext(
   IReadOnlyDictionary<string, JsonElement> Claims,
   string? UserSub,
@@ -20,7 +29,8 @@ public sealed record AuthContext(
   bool IsSuperAdmin,
   bool IsEditor,
   bool IsAdmin,
-  string? RejectReason = null);
+  string? RejectReason = null,
+  string? AdminDenyReason = null);
 
 /// <summary>
 /// The two environment-driven knobs of bearer verification, parsed once per container.
@@ -31,25 +41,56 @@ public sealed record AuthContext(
 /// "decode the payload and believe it" path, kept for local development against a gateway that
 /// has no authorizer, and it cannot be switched on in production by any environment variable.
 /// </param>
-public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnverified)
+/// <param name="ConsoleIssuer">
+/// The canonical issuer URL of the console pool. The admin role flags are granted only to claims
+/// that came from this issuer (see <see cref="Auth.ConsoleBindingFailure"/>). Always set by
+/// <see cref="Parse"/>; null only for a hand-built <see cref="AuthOptions"/>, which turns the
+/// binding off.
+/// </param>
+/// <param name="ConsoleClientIds">
+/// The console app client ids (AUTH_CONSOLE_CLIENT_IDS). When non-empty, an admin token must also
+/// carry a matching <c>client_id</c> (access tokens) or <c>aud</c> (id tokens). Empty means the
+/// client check is off and only the issuer is enforced.
+/// </param>
+public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnverified, string? ConsoleIssuer = null, IReadOnlyList<string>? ConsoleClientIds = null)
 {
   public const string IssuersEnv = "AUTH_ISSUERS";
   public const string AllowUnverifiedEnv = "AUTH_ALLOW_UNVERIFIED";
   public const string ApiEnvEnv = "API_ENV";
+  public const string ConsoleIssuerEnv = "AUTH_CONSOLE_ISSUER";
+  public const string ConsoleClientIdsEnv = "AUTH_CONSOLE_CLIENT_IDS";
+  public const string DefaultConsolePool = "ap-southeast-2_4Vf8uCXKt";
 
-  /// <summary>Pure: the whole policy as a function of three strings, so it can be tested without touching the process environment.</summary>
-  public static AuthOptions Parse(string? issuersEnv, string? allowUnverifiedEnv, string? apiEnv)
+  /// <summary>Pure: the whole policy as a function of its strings, so it can be tested without touching the process environment.</summary>
+  public static AuthOptions Parse(string? issuersEnv, string? allowUnverifiedEnv, string? apiEnv, string? consoleIssuerEnv = null, string? consoleClientIdsEnv = null)
   {
     var issuers = CognitoJwtVerifier.ParseIssuers(issuersEnv);
     var flagOn = string.Equals(allowUnverifiedEnv?.Trim(), "1", StringComparison.Ordinal);
     var isProduction = string.Equals(apiEnv?.Trim(), "production", StringComparison.OrdinalIgnoreCase);
-    return new AuthOptions(issuers, AllowUnverified: flagOn && !isProduction);
+
+    // Always set, fail closed: a malformed AUTH_CONSOLE_ISSUER throws in NormalizeIssuer just as
+    // a malformed AUTH_ISSUERS does, rather than silently disabling the console binding.
+    var consoleIssuer = CognitoJwtVerifier.NormalizeIssuer(
+      string.IsNullOrWhiteSpace(consoleIssuerEnv) ? DefaultConsolePool : consoleIssuerEnv);
+
+    var consoleClientIds = (consoleClientIdsEnv ?? string.Empty)
+      .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+      .Distinct(StringComparer.Ordinal)
+      .ToList();
+
+    return new AuthOptions(
+      issuers,
+      AllowUnverified: flagOn && !isProduction,
+      ConsoleIssuer: consoleIssuer,
+      ConsoleClientIds: consoleClientIds);
   }
 
   public static AuthOptions FromEnvironment() => Parse(
     Environment.GetEnvironmentVariable(IssuersEnv),
     Environment.GetEnvironmentVariable(AllowUnverifiedEnv),
-    Environment.GetEnvironmentVariable(ApiEnvEnv));
+    Environment.GetEnvironmentVariable(ApiEnvEnv),
+    Environment.GetEnvironmentVariable(ConsoleIssuerEnv),
+    Environment.GetEnvironmentVariable(ConsoleClientIdsEnv));
 }
 
 public readonly record struct InternalSignatureVerifyResult(bool Ok, string? Reason);
@@ -210,12 +251,12 @@ public static class Auth
   public static async Task<AuthContext> GetAuthContextAsync(LambdaRequest req, CancellationToken ct = default)
   {
     var authorizerClaims = TryGetAuthorizerClaims(req);
-    if (authorizerClaims is not null) return Build(authorizerClaims, rejectReason: null);
+    if (authorizerClaims is not null) return LogAdminDeny(Build(authorizerClaims, rejectReason: null, gatewayVerified: true), req);
 
     var token = ExtractBearer(req);
-    if (token is null) return Build(new Dictionary<string, JsonElement>(StringComparer.Ordinal), rejectReason: null);
+    if (token is null) return Build(new Dictionary<string, JsonElement>(StringComparer.Ordinal), rejectReason: null, gatewayVerified: false);
 
-    if (Options.AllowUnverified) return Build(DecodeJwtWithoutVerify(token), rejectReason: null);
+    if (Options.AllowUnverified) return LogAdminDeny(Build(DecodeJwtWithoutVerify(token), rejectReason: null, gatewayVerified: false), req);
 
     var result = await Verifier.VerifyAsync(token, ct);
     if (!result.Ok)
@@ -232,13 +273,103 @@ public static class Auth
       // the signature check; it goes to the info log so the warn stream stays about tokens
       // that tried and failed.
       if (result.Reason == "malformed") Log.Info(line); else Log.Warn(line);
-      return Build(new Dictionary<string, JsonElement>(StringComparer.Ordinal), rejectReason: result.Reason);
+      return Build(new Dictionary<string, JsonElement>(StringComparer.Ordinal), rejectReason: result.Reason, gatewayVerified: false);
     }
 
-    return Build(result.Claims!, rejectReason: null);
+    return LogAdminDeny(Build(result.Claims!, rejectReason: null, gatewayVerified: false), req);
   }
 
-  private static AuthContext Build(IReadOnlyDictionary<string, JsonElement> claims, string? rejectReason)
+  /// <summary>
+  /// One structured warn line when a verified identity carried an admin group but failed the
+  /// console binding. Never logs a claim value -- only the reason code and the request's own
+  /// coordinates -- and returns the context unchanged so it composes into the return path.
+  /// </summary>
+  private static AuthContext LogAdminDeny(AuthContext ctx, LambdaRequest req)
+  {
+    if (ctx.AdminDenyReason is not null)
+    {
+      Log.Warn(JsonSerializer.Serialize(new
+      {
+        tag = "auth",
+        reason = ctx.AdminDenyReason,
+        traceId = req.TraceId,
+        method = req.Method,
+        path = req.Path,
+      }));
+    }
+    return ctx;
+  }
+
+  /// <summary>
+  /// The console binding: returns null when <paramref name="claims"/> may carry console admin
+  /// roles, otherwise the reason a token minted outside the console pool or client is denied them.
+  /// Pure so it can be tested without a request. <paramref name="gatewayVerified"/> is true only
+  /// for claims the API Gateway authorizer produced (or an IAM-level invoke), where an absent
+  /// <c>iss</c>/client claim is trusted by design; false for anything this code decoded itself.
+  /// </summary>
+  public static string? ConsoleBindingFailure(IReadOnlyDictionary<string, JsonElement> claims, AuthOptions options, bool gatewayVerified)
+  {
+    // Binding off: only a hand-constructed AuthOptions can leave ConsoleIssuer null; Parse always sets it.
+    if (options.ConsoleIssuer is null) return null;
+
+    var iss = GetStringClaim(claims, "iss")?.TrimEnd('/');
+    if (iss is null)
+    {
+      if (!gatewayVerified) return "admin_issuer";
+    }
+    else if (!string.Equals(iss, options.ConsoleIssuer, StringComparison.Ordinal))
+    {
+      return "admin_issuer";
+    }
+
+    if (options.ConsoleClientIds is { Count: > 0 } clientIds)
+    {
+      var clients = GetClientClaims(claims);
+      if (clients.Count == 0)
+      {
+        if (!gatewayVerified) return "admin_client";
+      }
+      else if (!clients.Any(c => clientIds.Contains(c, StringComparer.Ordinal)))
+      {
+        return "admin_client";
+      }
+    }
+
+    return null;
+  }
+
+  /// <summary>
+  /// The client-identifying values on the token: <c>client_id</c> (access tokens) when present,
+  /// else <c>aud</c> (id tokens; a string, or an array of strings). Empty when neither is present.
+  /// </summary>
+  private static List<string> GetClientClaims(IReadOnlyDictionary<string, JsonElement> claims)
+  {
+    var clientId = GetStringClaim(claims, "client_id");
+    if (clientId is not null) return [clientId];
+
+    if (!claims.TryGetValue("aud", out var aud)) return [];
+    if (aud.ValueKind == JsonValueKind.String)
+    {
+      var s = aud.GetString();
+      return s is null ? [] : [s];
+    }
+    if (aud.ValueKind == JsonValueKind.Array)
+    {
+      var list = new List<string>();
+      foreach (var el in aud.EnumerateArray())
+      {
+        if (el.ValueKind == JsonValueKind.String)
+        {
+          var s = el.GetString();
+          if (s is not null) list.Add(s);
+        }
+      }
+      return list;
+    }
+    return [];
+  }
+
+  private static AuthContext Build(IReadOnlyDictionary<string, JsonElement> claims, string? rejectReason, bool gatewayVerified)
   {
     claims.TryGetValue("cognito:groups", out var g1);
     claims.TryGetValue("cognito_groups", out var g2);
@@ -257,6 +388,21 @@ public static class Auth
     var isEditor = set.Contains("editor") || groupsLower.Any(g => g.StartsWith("editor_", StringComparison.Ordinal));
     var isAdmin = isSuperAdmin || isEditor;
 
+    // The console binding: an admin group only counts when the claims came from the console pool
+    // and, when configured, a console app client. A token that fails the binding keeps its
+    // identity (sub/username/groups) but loses its roles; the gates then answer 403.
+    string? adminDenyReason = null;
+    if (isSuperAdmin || isEditor)
+    {
+      adminDenyReason = ConsoleBindingFailure(claims, Options, gatewayVerified);
+      if (adminDenyReason is not null)
+      {
+        isSuperAdmin = false;
+        isEditor = false;
+        isAdmin = false;
+      }
+    }
+
     var userSub = GetStringClaim(claims, "sub");
     var username =
       GetStringClaim(claims, "cognito:username") ??
@@ -270,7 +416,8 @@ public static class Auth
       IsSuperAdmin: isSuperAdmin,
       IsEditor: isEditor,
       IsAdmin: isAdmin,
-      RejectReason: rejectReason);
+      RejectReason: rejectReason,
+      AdminDenyReason: adminDenyReason);
   }
 
   /// <summary>
@@ -297,6 +444,7 @@ public static class Auth
   {
     var bad = RejectIfBadToken(auth, res);
     if (bad is not null) return bad;
+    if (auth.AdminDenyReason is not null) return res.Forbidden("Requires a console token");
     if (!auth.IsAdmin) return res.Forbidden("Requires editor or super_admin");
     return null;
   }
@@ -305,6 +453,7 @@ public static class Auth
   {
     var bad = RejectIfBadToken(auth, res);
     if (bad is not null) return bad;
+    if (auth.AdminDenyReason is not null) return res.Forbidden("Requires a console token");
     if (!auth.IsSuperAdmin) return res.Forbidden("Requires super_admin");
     return null;
   }

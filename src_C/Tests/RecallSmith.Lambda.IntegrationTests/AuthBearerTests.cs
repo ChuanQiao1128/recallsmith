@@ -144,9 +144,9 @@ public sealed class AuthBearerTests : IDisposable
     var token = TestJwt.ResignedWith(_attacker, Kid, TestJwt.Payload(groups: ["super_admin"]));
 
     AssertUnauthorized(await CallAsync(token, "/api/v1/admin/permissions"));
-    AssertUnauthorized(await CallAsync(token, "/api/v1/authoring/dashboard"));
+    AssertUnauthorized(await CallAsync(token, "/api/v1/authoring/decks"));
     AssertUnauthorized(await CallAsync(token, "/api/v1/me"));
-    AssertUnauthorized(await CallAsync(token, "/api/v1/admin/users"));
+    AssertUnauthorized(await CallAsync(token, "/api/v1/admin/manifest"));
   }
 
   // ------------------------------------------------------------- the genuine

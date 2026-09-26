@@ -5,34 +5,33 @@ import { QueryClient, QueryClientContext } from '@tanstack/react-query';
 /**
  * The application's one QueryClient.
  *
- * THE PRINCIPLE THESE DEFAULTS FOLLOW, because the previous set followed the
- * opposite one and it cost nothing only by luck:
+ * THE PRINCIPLE THESE DEFAULTS FOLLOW: a global default may cache for as long as
+ * every write that could invalidate it says so. The console reached that point.
+ * Each write now invalidates exactly what it changed:
  *
- *   A global default must describe behaviour that is SAFE for the system as it
- *   stands today. An aggressive optimisation is opted into by the page that can
- *   prove it is safe there.
+ *   card create / update / delete   invalidate ['cards', deckId] (delete removes
+ *                                   the row in place instead; update also
+ *                                   invalidates ['card', id]).
+ *   deck create / update / delete   invalidate ['decks'] and the affected
+ *                                   ['decks', id].
+ *   deck publish                    invalidates ['decks'].
+ *   import run                      invalidates ['cards', deckId] and
+ *                                   ['decks', id] in DeckImportPage's finally.
  *
- * What was here before was staleTime 5min / gcTime 10min / retry 1 /
- * refetchOnWindowFocus true — a reasonable-looking profile for an app whose
- * write paths invalidate their caches. This one's did not. Both hooks that
- * existed overrode every one of those four, line by line, so the defaults were
- * dead configuration: zero lines of behaviour, and a loaded trap for the next
- * hook, which would inherit a five-minute window in a console where a card
- * created on one page never invalidated the list on another. "Never executed"
- * and "harmless" are not the same property.
+ * With that in place a short cache is safe rather than a trap, so the defaults
+ * are no longer pinned to zero:
  *
- * So the defaults are now the conservative answer, and a page that wants
- * caching asks for it. Concretely:
- *
- *   staleTime 0            Every mount asks the server. This is the setting the
- *                          console's write paths used to make mandatory; C3
- *                          gives the mutations their invalidations, so a page
- *                          may now raise it deliberately -- one page at a time,
- *                          with the invalidation to match.
- *   gcTime 0               An unobserved query is forgotten rather than served
- *                          to the next mount ahead of the request. Re-entering
- *                          a page shows its loading state, which is what it
- *                          showed before react-query was introduced.
+ *   staleTime 30_000       A read served in the last 30 s is reused without a
+ *                          request, so List -> Edit -> back no longer downloads
+ *                          the whole deck three times. A write invalidates its
+ *                          keys the moment it lands, so what this window can
+ *                          serve stale is only a change made outside this
+ *                          console (the importer, another tab), and only until
+ *                          the next mount past the window.
+ *   gcTime 300_000         An unobserved query is kept for five minutes before
+ *                          it is dropped, so re-entering a page inside that
+ *                          window paints from cache while it revalidates rather
+ *                          than showing a spinner.
  *   retry false            A refusal is an answer. Retrying it sends a request
  *                          the server already declined and delays the message
  *                          by a backoff.
@@ -59,8 +58,8 @@ import { QueryClient, QueryClientContext } from '@tanstack/react-query';
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 0,
-      gcTime: 0,
+      staleTime: 30_000,
+      gcTime: 300_000,
       retry: false,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
@@ -114,4 +113,8 @@ export const QueryKeys = {
   decks: () => ['decks'] as const,
   deck: (id: number) => ['decks', id] as const,
   cards: (deckId: number) => ['cards', deckId] as const,
+  // A single card read by id, distinct from the ['cards', deckId] list: the edit
+  // page reads one row through ?id= and the update writes it back here, so a save
+  // invalidates both this key and the list the card belongs to.
+  card: (id: number) => ['card', id] as const,
 } as const;

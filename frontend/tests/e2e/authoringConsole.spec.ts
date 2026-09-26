@@ -168,6 +168,8 @@ async function stubApi(page: Page): Promise<{ seen: string[]; unexpected: string
 
     if (path === '/api/v1/authoring/decks') return body(ok([DECK]));
     if (path === '/api/v1/admin/manifest') return body(ok(MANIFEST));
+    if (path === '/api/v1/authoring/cards/page')
+      return body(ok({ items: [CARD], nextCursor: null, hasMore: false }));
     if (path === '/api/v1/authoring/cards') return body(ok([CARD]));
     if (path === '/api/v1/authoring/publish/jobs') return body(ok([]));
 
@@ -211,7 +213,7 @@ test('an unauthenticated visit lands on login and the button starts a real PKCE 
   // MemoryRouter.
   await expect(page).toHaveURL('http://localhost:5173/login?next=%2F');
 
-  const signIn = page.getByRole('button', { name: 'Continue with Cognito' });
+  const signIn = page.getByRole('button', { name: 'Sign in' });
   // Enabled only when AUTH_CONFIGURED is true, which is true only if
   // frontend/.env.e2e actually reached the bundle. A build with no Cognito
   // configuration renders this disabled next to an "Auth is not configured"
@@ -319,7 +321,9 @@ test('a signed-in console renders decks and navigates into a lazily-loaded route
 
   // The rows came from the stubbed network, not from a leftover cache.
   expect(api.seen).toContain('/api/v1/authoring/decks');
-  expect(api.seen).toContain('/api/v1/admin/manifest');
+  // An editor never asks for the super_admin-only manifest (F24 / CFE-04): it used to,
+  // and every editor session showed a red 'Manifest Sync Error' with every deck Unpublished.
+  expect(api.seen).not.toContain('/api/v1/admin/manifest');
 
   const cardsChunkLoadedBefore = scripts.some(s => /CardListPage-.*\.js$/.test(s.url));
   // Code splitting is real, not aspirational: the cards page is not in the
@@ -343,7 +347,7 @@ test('a signed-in console renders decks and navigates into a lazily-loaded route
   // is what makes this status meaningful.
   expect(cardsChunk.every(s => s.status === 200)).toBe(true);
 
-  expect(api.seen).toContain(`/api/v1/authoring/cards?deckId=${DECK.id}`);
+  expect(api.seen).toContain(`/api/v1/authoring/cards/page?deckId=${DECK.id}&limit=200`);
   expect(api.unexpected).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });

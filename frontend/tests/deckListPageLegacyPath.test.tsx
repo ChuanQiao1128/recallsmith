@@ -155,8 +155,10 @@ beforeEach(() => {
   api.fetchAdminDecksPage.mockResolvedValue(emptyDecksPage());
   api.fetchDecks.mockResolvedValue(
     ok([
-      deck({ id: 1, slug: PUBLISHED_SLUG, title: 'C# Async' }),
-      deck({ id: 2, slug: DRAFT_SLUG, title: 'C# LINQ', totalCards: 4 }),
+      // liveBuildId is what an editor's Published badge now comes from: editors
+      // skip the manifest, so decks.live_build_id is their only publish signal.
+      deck({ id: 1, slug: PUBLISHED_SLUG, title: 'C# Async', liveBuildId: 'build-777' }),
+      deck({ id: 2, slug: DRAFT_SLUG, title: 'C# LINQ', totalCards: 4, liveBuildId: null }),
     ]),
   );
   api.fetchAdminManifest.mockResolvedValue(ok(manifestPayload()));
@@ -181,7 +183,7 @@ afterEach(() => {
 });
 
 describe('the legacy deck list path', () => {
-  it('L1: an editor session loads decks and manifest without touching the paged endpoint', async () => {
+  it('L1: an editor session loads decks without the paged endpoint or the manifest', async () => {
     signInAsEditor();
 
     await mountConsole();
@@ -190,16 +192,18 @@ describe('the legacy deck list path', () => {
     // probing it at all would be a guaranteed 403 on every console load.
     expect(api.fetchAdminDecksPage).not.toHaveBeenCalled();
     expect(api.fetchDecks).toHaveBeenCalledTimes(1);
-    expect(api.fetchAdminManifest).toHaveBeenCalledTimes(1);
+    // The manifest is super_admin-only too. Asking for it always 403s for an
+    // editor and used to light a red banner on every load, so an editor session
+    // must never touch it — publish status comes from liveBuildId instead.
+    expect(api.fetchAdminManifest).not.toHaveBeenCalled();
 
-    // One assertion, four functions: the { manifest } wrapper is unwrapped,
-    // Decks is found under a PascalCase key, each entry is normalised, and the
-    // buildId decides the badge. Any of the four failing loses this text.
+    // The first deck carries a liveBuildId, so it reads Published even though no
+    // manifest was ever fetched.
     expect(await screen.findByText('C# Async')).not.toBeNull();
     expect(within(rowFor('C# Async')).getByText('Published')).not.toBeNull();
 
-    // The second deck has no buildId and no path, so it must NOT be published —
-    // otherwise "Published" above would prove nothing about the join, only that
+    // The second deck has a null liveBuildId, so it must NOT be published —
+    // otherwise "Published" above would prove nothing about the field, only that
     // the page can print the word.
     expect(within(rowFor('C# LINQ')).getByText('Needs Publish')).not.toBeNull();
     expect(within(rowFor('C# LINQ')).queryByText('Published')).toBeNull();

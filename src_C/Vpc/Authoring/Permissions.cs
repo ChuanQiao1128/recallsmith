@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
+using Npgsql;
 using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
 
@@ -14,7 +15,7 @@ public static class Permissions
     if (deny is not null) return deny;
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
     // BULK
     if (req.Path.EndsWith("/bulk", StringComparison.Ordinal))
@@ -50,9 +51,17 @@ public static class Permissions
           if (canRead || canWrite) rows.Add((deckId, canRead, canWrite));
         }
 
+        var action = replace ? "permissions.replace" : "permissions.merge";
+        var target = $"admin:{adminSub.Trim()}";
+        AdminAuditEntry? auditEntry = null;
+        var persisted = false;
+
         await using var tx = await conn.BeginTransactionAsync();
         try
         {
+          // Audit the state before the mutation so a mis-click leaves a record of what was revoked.
+          var before = await ReadAdminPermsAsync(conn, tx, adminSub.Trim());
+
           if (replace)
           {
             await DbUtil.ExecuteAsync(conn, tx, "delete from admin_deck_permissions where admin_sub = $1", [adminSub.Trim()]);
@@ -87,6 +96,10 @@ public static class Permissions
             await DbUtil.ExecuteAsync(conn, tx, sql, parameters);
           }
 
+          var after = await ReadAdminPermsAsync(conn, tx, adminSub.Trim());
+          auditEntry = AdminAudit.Entry(auth, res, action, target, before, after);
+          persisted = await AdminAudit.RecordAsync(conn, tx, auditEntry);
+
           await tx.CommitAsync();
         }
         catch
@@ -95,6 +108,8 @@ public static class Permissions
           throw;
         }
 
+        // A failing statement (e.g. 23503 on an unknown deck) rolls back the audit row with everything else.
+        AdminAudit.Emit(auditEntry, persisted);
         return res.Ok(new { saved = rows.Count, replace });
       }
       catch (Exception ex) when (ex is ValidationError)
@@ -196,22 +211,40 @@ public static class Permissions
           returning admin_sub as "adminSub", deck_id as "deckId", can_read as "canRead", can_write as "canWrite"
           """;
 
-        var rows = await DbUtil.QueryAsync(conn, null, sql,
-        [
-          adminSub.Trim(),
-          deckIdInt,
-          canRead ? 1 : 0,
-          canWrite ? 1 : 0,
-        ]);
+        AdminAuditEntry auditEntry;
+        bool persisted;
+        object after;
 
-        var r = rows[0];
-        return res.Ok(new
+        await using var tx = await conn.BeginTransactionAsync();
+        try
         {
-          adminSub = Convert.ToString(r["adminSub"], CultureInfo.InvariantCulture),
-          deckId = Convert.ToInt64(r["deckId"], CultureInfo.InvariantCulture),
-          canRead = Convert.ToInt32(r["canRead"], CultureInfo.InvariantCulture) == 1,
-          canWrite = Convert.ToInt32(r["canWrite"], CultureInfo.InvariantCulture) == 1,
-        });
+          var beforeRows = await DbUtil.QueryAsync(conn, tx,
+            "select admin_sub as \"adminSub\", deck_id as \"deckId\", can_read as \"canRead\", can_write as \"canWrite\" from admin_deck_permissions where admin_sub = $1 and deck_id = $2",
+            [adminSub.Trim(), deckIdInt]);
+          object? before = beforeRows.Count > 0 ? MapPermRow(beforeRows[0]) : null;
+
+          var rows = await DbUtil.QueryAsync(conn, tx, sql,
+          [
+            adminSub.Trim(),
+            deckIdInt,
+            canRead ? 1 : 0,
+            canWrite ? 1 : 0,
+          ]);
+
+          after = MapPermRow(rows[0]);
+          auditEntry = AdminAudit.Entry(auth, res, "permissions.upsert", $"admin:{adminSub.Trim()}", before, after);
+          persisted = await AdminAudit.RecordAsync(conn, tx, auditEntry);
+
+          await tx.CommitAsync();
+        }
+        catch
+        {
+          try { await tx.RollbackAsync(); } catch { /* ignore */ }
+          throw;
+        }
+
+        AdminAudit.Emit(auditEntry, persisted);
+        return res.Ok(after);
       }
       catch (Exception ex) when (ex is ValidationError)
       {
@@ -234,7 +267,31 @@ public static class Permissions
 
         var deckIdInt = Validation.RequireInteger(req.Query.TryGetValue("deckId", out var d) ? d : null, "deckId");
 
-        await DbUtil.ExecuteAsync(conn, null, "delete from admin_deck_permissions where admin_sub = $1 and deck_id = $2", [adminSub, deckIdInt]);
+        AdminAuditEntry auditEntry;
+        bool persisted;
+
+        await using var tx = await conn.BeginTransactionAsync();
+        try
+        {
+          var beforeRows = await DbUtil.QueryAsync(conn, tx,
+            "select admin_sub as \"adminSub\", deck_id as \"deckId\", can_read as \"canRead\", can_write as \"canWrite\" from admin_deck_permissions where admin_sub = $1 and deck_id = $2",
+            [adminSub, deckIdInt]);
+          object? before = beforeRows.Count > 0 ? MapPermRow(beforeRows[0]) : null;
+
+          await DbUtil.ExecuteAsync(conn, tx, "delete from admin_deck_permissions where admin_sub = $1 and deck_id = $2", [adminSub, deckIdInt]);
+
+          auditEntry = AdminAudit.Entry(auth, res, "permissions.delete", $"admin:{adminSub}", before, null);
+          persisted = await AdminAudit.RecordAsync(conn, tx, auditEntry);
+
+          await tx.CommitAsync();
+        }
+        catch
+        {
+          try { await tx.RollbackAsync(); } catch { /* ignore */ }
+          throw;
+        }
+
+        AdminAudit.Emit(auditEntry, persisted);
         return res.Ok(new { deleted = true });
       }
       catch (Exception ex) when (ex is ValidationError)
@@ -251,6 +308,28 @@ public static class Permissions
 
     return res.MethodNotAllowed("Method not allowed");
   }
+
+  /// <summary>All of one admin's permission rows, ordered by deck, as an audit-friendly shape.</summary>
+  private static async Task<List<object>> ReadAdminPermsAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, string adminSub)
+  {
+    var rows = await DbUtil.QueryAsync(conn, tx,
+      "select deck_id as \"deckId\", can_read as \"canRead\", can_write as \"canWrite\" from admin_deck_permissions where admin_sub = $1 order by deck_id",
+      [adminSub]);
+    return rows.Select(r => (object)new
+    {
+      deckId = Convert.ToInt64(r["deckId"], CultureInfo.InvariantCulture),
+      canRead = Convert.ToInt32(r["canRead"], CultureInfo.InvariantCulture) == 1,
+      canWrite = Convert.ToInt32(r["canWrite"], CultureInfo.InvariantCulture) == 1,
+    }).ToList();
+  }
+
+  private static object MapPermRow(Dictionary<string, object?> r) => new
+  {
+    adminSub = Convert.ToString(r["adminSub"], CultureInfo.InvariantCulture),
+    deckId = Convert.ToInt64(r["deckId"], CultureInfo.InvariantCulture),
+    canRead = Convert.ToInt32(r["canRead"], CultureInfo.InvariantCulture) == 1,
+    canWrite = Convert.ToInt32(r["canWrite"], CultureInfo.InvariantCulture) == 1,
+  };
 
   private static long? ToMs(object? v)
   {

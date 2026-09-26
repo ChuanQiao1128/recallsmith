@@ -2,7 +2,11 @@
 
 import { useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useCreateDeck } from '../hooks/useDecks';
+import { useCreateDeck, useUpdateDeck } from '../hooks/useDecks';
+import { buildDeckBody, parseDraftVersion, DRAFT_VERSION_ERROR } from '../lib/authoringBodies';
+import { CONSOLE_NAME, DEFAULT_DECK_AUTHOR } from '../lib/brand';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 
 interface NewDeckForm {
   title: string;
@@ -13,7 +17,7 @@ interface NewDeckForm {
   deckType: number; // 1 Starter, 2 Paid
 
   // mobile / publish fields: captured here, used later by publish and preview
-  contentVersion: string; // e.g. 1.0.0
+  draftVersion: string; // whole number held in decks.version; publish stamps its own build id
   freeCardCount: number; // cards a Paid deck opens for preview, e.g. 50
 }
 
@@ -42,23 +46,18 @@ function slugify(input: string): string {
     .replace(/^-+|-+$/g, ''); // and leading/trailing separators go
 }
 
-function isValidSemver(v: string): boolean {
-  // Accepts 1.0.0 / 1.0.0-alpha / 1.0.0+build
-  return /^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(v.trim());
-}
-
 export function NewDeckPage() {
   const navigate = useNavigate();
 
   const [form, setForm] = useState<NewDeckForm>({
     title: '',
     slug: '',
-    author: 'RecallSmith Team',
+    author: DEFAULT_DECK_AUTHOR,
     description: '',
     locale: 'en-US',
     deckType: 1,
 
-    contentVersion: '1.0.0',
+    draftVersion: '1',
     freeCardCount: 50,
   });
 
@@ -70,6 +69,9 @@ export function NewDeckPage() {
   // The write goes through react-query so that a created deck invalidates the
   // deck list rather than relying on the list refusing to cache.
   const createDeckMutation = useCreateDeck();
+  // Decks.cs POST ignores previewCards, so a Paid deck's free card count reaches
+  // the row only through a follow-up PUT after the create succeeds.
+  const updateDeckMutation = useUpdateDeck();
 
   const isStarter = form.deckType === 1;
   const isFreeStarter = isStarter; // the rule: a Starter deck is always a free starter
@@ -112,20 +114,18 @@ export function NewDeckPage() {
     const trimmedTitle = form.title.trim();
     const trimmedSlug = form.slug.trim();
     const trimmedAuthor = form.author.trim();
-    const trimmedVersion = form.contentVersion.trim();
+    const trimmedVersion = form.draftVersion.trim();
+    const draftVersion = parseDraftVersion(trimmedVersion);
 
     const problems: string[] = [];
 
     if (!trimmedTitle) problems.push('Title is required.');
     if (!trimmedSlug) problems.push('Slug is required.');
     if (!trimmedAuthor) problems.push('Author is required.');
-    // One message per field, still. An empty version fails both checks, and
-    // "Content version is required." followed by "must be semver like 1.0.0"
-    // would be two complaints about one blank box — which is the noise that
-    // makes people stop reading a list.
-    if (!trimmedVersion) problems.push('Content version is required.');
-    else if (!isValidSemver(trimmedVersion))
-      problems.push('Content version must be semver like 1.0.0');
+    // One message per field, still. A blank box is its own complaint; anything
+    // else that will not parse to a whole number of 1 or more is the other.
+    if (!trimmedVersion) problems.push('Draft version is required.');
+    else if (draftVersion === null) problems.push(DRAFT_VERSION_ERROR);
 
     // Only a Paid deck has a preview count to get wrong: a Starter deck opens
     // every card, so a stale negative left over from switching type is not a
@@ -142,12 +142,19 @@ export function NewDeckPage() {
     setState({ submitting: true, errors: [] });
 
     try {
-      const result = await createDeckMutation.mutateAsync({
-        slug: trimmedSlug,
-        title: trimmedTitle,
-        author: trimmedAuthor,
-        description: form.description,
-      });
+      const result = await createDeckMutation.mutateAsync(
+        buildDeckBody({
+          slug: trimmedSlug,
+          title: trimmedTitle,
+          author: trimmedAuthor,
+          description: form.description,
+          locale: form.locale,
+          deckType: form.deckType,
+          // Non-null here: a null draftVersion was collected into `problems`
+          // above and returned before this point.
+          version: draftVersion ?? 1,
+        }),
+      );
 
       if (!result.success) {
         setState({
@@ -155,6 +162,26 @@ export function NewDeckPage() {
           errors: [result.error?.message ?? 'Create deck failed.'],
         });
         return;
+      }
+
+      // A Paid deck carries a free card count the POST could not store, so save
+      // it with a follow-up PUT before leaving. A Starter deck makes one request.
+      if (form.deckType === 2 && result.data) {
+        const { result: previewResult } = await updateDeckMutation.mutateAsync({
+          id: result.data.id,
+          params: { previewCards: form.freeCardCount },
+        });
+
+        if (!previewResult.success) {
+          const message = previewResult.error?.message ?? 'unknown error';
+          setState({
+            submitting: false,
+            errors: [
+              `Deck created, but the free card count was not saved: ${message}. Set Preview Cards on the deck's Edit page.`,
+            ],
+          });
+          return;
+        }
       }
 
       navigate('/', { replace: true });
@@ -167,22 +194,26 @@ export function NewDeckPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">New Deck</h1>
-            <p className="text-xs text-slate-500 mt-1">
-              Start a new deck &mdash; something like <span className="font-mono">js-core-basics</span>.
-            </p>
-          </div>
-          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-            ← Back to list
-          </Link>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · New deck"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">New Deck</h1>
+          <p className="text-xs text-slate-500 mt-1">
+            Start a new deck &mdash; something like <span className="font-mono">js-core-basics</span>.
+          </p>
         </div>
-      </header>
+        <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+          ← Back to list
+        </Link>
+      </div>
 
-      <main className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl mx-auto px-4 py-6">
         <form
           onSubmit={handleSubmit}
           className="bg-white border border-slate-200 rounded-lg shadow-sm px-6 py-6 space-y-4"
@@ -209,10 +240,11 @@ export function NewDeckPage() {
 
           {/* Title */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="new-deck-title" className="block text-sm font-medium text-slate-700 mb-1">
               Title <span className="text-red-500">*</span>
             </label>
             <input
+              id="new-deck-title"
               type="text"
               className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -226,10 +258,11 @@ export function NewDeckPage() {
 
           {/* Slug */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="new-deck-slug" className="block text-sm font-medium text-slate-700 mb-1">
               Slug <span className="text-red-500">*</span>
             </label>
             <input
+              id="new-deck-slug"
               type="text"
               className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
                          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -244,16 +277,17 @@ export function NewDeckPage() {
 
           {/* Author */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="new-deck-author" className="block text-sm font-medium text-slate-700 mb-1">
               Author <span className="text-red-500">*</span>
             </label>
             <input
+              id="new-deck-author"
               type="text"
               className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               value={form.author}
               onChange={e => handleChange('author', e.target.value)}
-              placeholder="RecallSmith Team"
+              placeholder={DEFAULT_DECK_AUTHOR}
             />
           </div>
 
@@ -261,8 +295,9 @@ export function NewDeckPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Locale */}
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Locale</label>
+              <label htmlFor="new-deck-locale" className="block text-sm font-medium text-slate-700 mb-1">Locale</label>
               <select
+                id="new-deck-locale"
                 className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm bg-white
                            focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 value={form.locale}
@@ -277,8 +312,8 @@ export function NewDeckPage() {
 
             {/* DeckType */}
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Deck Type</label>
-              <div className="flex items-center gap-4 mt-1">
+              <span id="new-deck-type-label" className="block text-sm font-medium text-slate-700 mb-1">Deck Type</span>
+              <div role="radiogroup" aria-labelledby="new-deck-type-label" className="flex items-center gap-4 mt-1">
                 <label className="inline-flex items-center gap-1 text-sm text-slate-700">
                   <input
                     type="radio"
@@ -315,20 +350,22 @@ export function NewDeckPage() {
             <div className="text-sm font-semibold text-slate-800 mb-2">Mobile / Publish settings</div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* contentVersion */}
+              {/* draftVersion */}
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Content Version <span className="text-red-500">*</span>
+                <label htmlFor="new-deck-version" className="block text-sm font-medium text-slate-700 mb-1">
+                  Draft Version <span className="text-red-500">*</span>
                 </label>
                 <input
+                  id="new-deck-version"
                   type="text"
                   className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
                              focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  value={form.contentVersion}
-                  onChange={e => handleChange('contentVersion', e.target.value.trim())}
-                  placeholder="1.0.0"
+                  value={form.draftVersion}
+                  onChange={e => handleChange('draftVersion', e.target.value.trim())}
+                  placeholder="1"
+                  aria-label="Draft Version"
                 />
-                <p className="mt-1 text-xs text-slate-500">The Version written into deck.json. Keep it strict semver.</p>
+                <p className="mt-1 text-xs text-slate-500">The draft version held in the database (a whole number). Publishing stamps its own build id into deck.json.</p>
               </div>
 
               {/* isFreeStarter (derived) */}
@@ -371,8 +408,9 @@ export function NewDeckPage() {
 
           {/* Description */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
+            <label htmlFor="new-deck-description" className="block text-sm font-medium text-slate-700 mb-1">Description</label>
             <textarea
+              id="new-deck-description"
               className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                          min-h-[80px]"
@@ -404,7 +442,7 @@ export function NewDeckPage() {
             </button>
           </div>
         </form>
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

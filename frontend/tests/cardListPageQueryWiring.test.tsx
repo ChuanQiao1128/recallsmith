@@ -176,15 +176,12 @@ describe('the rows come from the shared query cache', () => {
 // each one is about a setting that used to be dangerous there. Under the
 // permissive test client they would all pass either way.
 //
-// WHAT THEY WITNESS CHANGED, and it is worth stating rather than letting the
-// wording rot. The defaults used to be staleTime 5min / gcTime 10min / retry 1
-// / refetchOnWindowFocus true, and these cases proved the HOOKS overrode them
-// one by one. The defaults are now the conservative set and the hooks state
-// none of the four, so the same three cases prove the DEFAULT is safe. Neither
-// the assertions nor the numbers below moved; the thing standing behind them
-// did. tests/queryClientDefaults.test.tsx holds the hooks out of it, because a
-// hook that restated `staleTime: 0` would make all three green again while the
-// shared client went back to five minutes.
+// WHAT THEY WITNESS. Focus does not refetch, a refusal is not retried, and the
+// 30s window is real: a return visit inside it serves the cache, one past it
+// reloads. The hooks state none of these settings, so the cases prove the shared
+// DEFAULT carries them; tests/queryClientDefaults.test.tsx holds the hooks out of
+// it, because a hook that restated `staleTime` would make the window cases green
+// against whatever the shared client happened to be set to.
 describe('fetching still behaves the way it did before react-query', () => {
   it('ignores the window regaining focus', async () => {
     renderWithClient(makeAppDefaultsQueryClient(), <CardListPage />, [
@@ -205,7 +202,7 @@ describe('fetching still behaves the way it did before react-query', () => {
     expect(api.fetchDeckById).toHaveBeenCalledTimes(1);
   });
 
-  it('reloads on the next visit instead of serving a remembered list', async () => {
+  it('serves the cached list on a return visit inside 30 seconds', async () => {
     const client = makeAppDefaultsQueryClient();
 
     renderWithClient(client, <CardListPage />, [`/decks/cards?deckId=${DECK_ID}`]);
@@ -217,15 +214,35 @@ describe('fetching still behaves the way it did before react-query', () => {
     renderWithClient(client, <CardListPage />, [`/decks/cards?deckId=${DECK_ID}`]);
     await screen.findByText(CARD_QUESTION);
 
-    // This is the regression a five-minute staleTime would introduce today.
-    // The reason has narrowed and has not gone away: NewCardPage and
-    // EditCardPage do now invalidate ['cards', deckId] when they write, so the
-    // list would eventually be told — but only for the writes that go through
-    // this console. A deck edited by the importer, by another tab, or by
-    // anybody else is still invisible to it, and re-entering this page is the
-    // only moment the console has to find out. Raising it is a decision, not a
-    // default.
-    expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(2);
+    // The list read less than 30s ago is reused without a second request. This is
+    // the whole point of raising staleTime: List -> Edit -> back no longer
+    // re-downloads the deck each hop. The writes that could stale it invalidate
+    // ['cards', deckId] themselves, so what the window can serve stale is only a
+    // change made outside this console, and only until the next mount past 30s.
+    expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads on a return visit once the list is older than 30 seconds', async () => {
+    // Date.now drives react-query's staleness, so moving it past the window is
+    // what turns a cache hit into a refetch. testing-library's waits run on the
+    // real timer, so nudging Date.now alone does not stall the async assertions.
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+
+    const client = makeAppDefaultsQueryClient();
+
+    renderWithClient(client, <CardListPage />, [`/decks/cards?deckId=${DECK_ID}`]);
+    await screen.findByText(CARD_QUESTION);
+    expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(1);
+
+    cleanup();
+
+    // 31s later the cached list is stale, so the next visit reads it again.
+    nowSpy.mockReturnValue(1_000_000 + 31_000);
+
+    renderWithClient(client, <CardListPage />, [`/decks/cards?deckId=${DECK_ID}`]);
+    await screen.findByText(CARD_QUESTION);
+
+    await waitFor(() => expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(2));
   });
 
   it('shows a refusal at once instead of quietly retrying first', async () => {

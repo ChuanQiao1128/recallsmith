@@ -10,6 +10,7 @@ import {
 } from '../api/authoring';
 import { useDeleteDeck, usePublishDeck } from '../hooks/useDecks';
 import { readSessionCache, writeSessionCache } from '../lib/sessionCache';
+import { CONSOLE_NAME } from '../lib/brand';
 import { getContentManifestUrl } from '../api/contentManifest';
 import { markEnd, markStart } from '../perf/journey';
 import type { Deck } from '../types/deck';
@@ -38,8 +39,6 @@ import { buildViewRows } from '../features/deckList/deckListRows';
 import type { ConsoleDeckRow } from '../features/deckList/deckListRows';
 import { useDeckPagination } from '../features/deckList/useDeckPagination';
 
-import { clearStoredTokens } from '../auth/tokenStore';
-import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin, type SessionUser } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
@@ -154,6 +153,17 @@ export function DeckListPage() {
   // Refs owned by the polling loop.
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activePollsRef = useRef(0);
+  // Consecutive quiet idle polls, carried into nextPollDelay so a long-idle tab
+  // relaxes to the slow cadence; reset to 0 on any manual refresh or resume.
+  const idlePollsRef = useRef(0);
+  // True while the tab is hidden: a poll that resolves during a pause must not
+  // arm a new timer, and the "auto-refresh stopped" banner must not light for a
+  // deliberate pause.
+  const pollPausedRef = useRef(false);
+  // Latest loadPublishJobs, read through a ref so the visibilitychange effect can
+  // call it without listing it as a dependency (which would re-register the
+  // listener every render) and without suppressing the exhaustive-deps rule.
+  const loadPublishJobsRef = useRef<() => void>(() => {});
 
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | DeckStatus>('all');
@@ -187,6 +197,44 @@ export function DeckListPage() {
   async function loadAll(forceRefresh = false) {
     // Cache first.
     const cachedDecks = readSessionCache<Deck[]>('decks', ownerSub);
+
+    // Editors skip the admin manifest entirely. It is super_admin-only, so
+    // fetching it always 403s and lights a red "Manifest Sync Error" banner
+    // while marking every deck Unpublished. Instead their manifest state stays
+    // at its empty default (so the banner can never appear) and publish status
+    // is derived from each deck's liveBuildId. A cached deck list alone is
+    // enough to paint cached rows.
+    if (!superAdmin) {
+      setManifestState({ loading: false, error: null, url: manifestUrl, meta: {}, bySlug: {}, raw: null });
+
+      if (cachedDecks && !forceRefresh) {
+        setDeckState({ loading: false, error: null, decks: cachedDecks });
+      } else {
+        setDeckState(prev => ({ ...prev, loading: true, error: null }));
+      }
+
+      try {
+        const decksRes = await fetchDecks();
+        if (!mountedRef.current) return;
+        if (!decksRes.success) {
+          if (!cachedDecks) {
+            setDeckState({ loading: false, error: decksRes.error?.message ?? 'Failed to load decks.', decks: [] });
+          }
+        } else {
+          const decks = decksRes.data ?? [];
+          writeSessionCache('decks', ownerSub, decks);
+          setDeckState({ loading: false, error: null, decks });
+        }
+      } catch (err: unknown) {
+        if (!mountedRef.current) return;
+        const message = err instanceof Error ? err.message : 'Network error.';
+        if (!cachedDecks) {
+          setDeckState({ loading: false, error: message, decks: [] });
+        }
+      }
+      return;
+    }
+
     const cachedManifest = readSessionCache<{ meta: ManifestMeta; bySlug: Record<string, ManifestDeckLite>; raw: unknown }>('manifest', ownerSub);
     
     // With a cache and no forced refresh, show it at once (no loading state) and refresh behind it.
@@ -465,8 +513,9 @@ export function DeckListPage() {
     // the timer, and there is no longer a user to tell.
     if (!mountedRef.current) return;
 
-    const decision = nextPollDelay(outcome, activePollsRef.current);
+    const decision = nextPollDelay(outcome, activePollsRef.current, idlePollsRef.current);
     activePollsRef.current = decision.nextActivePolls;
+    idlePollsRef.current = decision.nextIdlePolls;
 
     if (decision.jobs) setPublishJobs(decision.jobs);
     // The outcome is the only place that still knows whether the server
@@ -479,32 +528,52 @@ export function DeckListPage() {
     );
     if (decision.showError) console.error('Failed to load publish jobs:', decision.showError);
 
-    if (!decision.stopped) {
+    // A poll that resolves while the tab is hidden must not arm a new timer: the
+    // pause owns the schedule and the visibilitychange handler resumes it.
+    if (!decision.stopped && !pollPausedRef.current) {
       pollTimerRef.current = setTimeout(() => void loadPublishJobs(), decision.delayMs);
     }
 
     // Backstop for the invariant: the flag is read back off the timer instead
     // of being set by whichever branch ran, so a branch added later that
     // forgets to reschedule still turns the banner on rather than going quiet.
-    setPollingStopped(pollTimerRef.current === null);
+    // A deliberate pause is neither polling nor stopped, so it is excluded here.
+    setPollingStopped(pollTimerRef.current === null && !pollPausedRef.current);
   }
 
-  // Start polling on mount, clear the timer on unmount.
+  // Keep the ref pointing at the latest closure so the visibilitychange effect
+  // can call the current loadPublishJobs without depending on it.
+  loadPublishJobsRef.current = loadPublishJobs;
+
+  // Start polling on mount, clear the timer on unmount. Editors never poll: the
+  // Publish Jobs tab is super_admin-only, so there is nothing for them to watch.
   useEffect(() => {
-    void loadPublishJobs();
+    if (superAdmin) void loadPublishJobs();
     return () => {
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
   }, []);
 
-  function handleSignOut() {
-    clearStoredTokens();
-    try {
-      window.location.assign(buildLogoutUrl());
-    } catch {
-      navigate('/login', { replace: true });
-    }
-  }
+  // Pause the poll while the tab is hidden and resume the moment it is visible
+  // again. Registered only for super_admin, since only they poll at all.
+  useEffect(() => {
+    if (!superAdmin) return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        pollPausedRef.current = true;
+        if (pollTimerRef.current) {
+          clearTimeout(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+      } else {
+        pollPausedRef.current = false;
+        idlePollsRef.current = 0;
+        loadPublishJobsRef.current();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [superAdmin]);
 
   const decks = useMemo<Deck[]>(() => deckState.decks ?? [], [deckState.decks]);
 
@@ -561,7 +630,7 @@ export function DeckListPage() {
 
   return (
     <ConsoleShell
-      title="DeveloperCards Console"
+      title={CONSOLE_NAME}
       subtitle="Authoring · Decks"
       userLabel={
         user
@@ -569,7 +638,6 @@ export function DeckListPage() {
           : '—'
       }
       superAdmin={superAdmin}
-      onSignOut={handleSignOut}
       contentIntelligenceHref="/content-intelligence"
       adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
@@ -584,7 +652,10 @@ export function DeckListPage() {
             if (listModeRef.current === 'paginated') void loadPagedFirst(debouncedQ);
             else void loadAll(false);
           }}
-          onRefreshJobs={() => void loadPublishJobs()}
+          onRefreshJobs={() => {
+            idlePollsRef.current = 0;
+            void loadPublishJobs();
+          }}
           onNewDeck={() => navigate('/decks/new')}
         />
 
@@ -616,58 +687,21 @@ export function DeckListPage() {
         {superAdmin && pollNotice && (
           <ErrorBanner
             notice={pollNotice}
-            onRetry={pollingStopped ? () => void loadPublishJobs() : undefined}
+            onRetry={pollingStopped ? () => {
+              idlePollsRef.current = 0;
+              void loadPublishJobs();
+            } : undefined}
             retryLabel="Auto-refresh stopped. Click to retry."
           />
         )}
 
-        {/* <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-500">Total Decks</div>
-              <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center border border-slate-100">
-                <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-              </div>
-            </div>
-            <div className="mt-3 text-3xl font-bold text-slate-900">{0}</div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-500">Published</div>
-              <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center border border-emerald-100">
-                <svg className="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-              </div>
-            </div>
-            <div className="mt-3 text-3xl font-bold text-slate-900">{0}</div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between relative overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-br from-amber-50/50 to-transparent pointer-events-none"></div>
-            <div className="flex items-center justify-between relative">
-              <div className="text-sm font-medium text-amber-700">Needs Publish</div>
-              <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center border border-amber-200">
-                <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-              </div>
-            </div>
-            <div className="mt-3 text-3xl font-bold text-amber-700 relative">{0}</div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-500">Unpublished</div>
-              <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center border border-slate-200">
-                <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" /></svg>
-              </div>
-            </div>
-            <div className="mt-3 text-3xl font-bold text-slate-900">{0}</div>
-          </div>
-        </div> -->
-
         {/* Main List Container - Tab Content */}
         {activeTab === 'publishJobs' && superAdmin ? (
           /* Publish Jobs List */
-          <PublishJobsPanel jobs={publishJobs} onRefresh={() => void loadPublishJobs()} />
+          <PublishJobsPanel jobs={publishJobs} onRefresh={() => {
+            idlePollsRef.current = 0;
+            void loadPublishJobs();
+          }} />
         ) : (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
           {/* Filters Bar */}

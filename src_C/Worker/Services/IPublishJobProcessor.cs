@@ -15,6 +15,9 @@ public interface IPublishJobProcessor
   /// 标记任务为失败
   /// </summary>
   Task FailAsync(string jobId, string errorMessage);
+
+  /// <summary>Writes a system-error reason onto a PROCESSING row without changing its status or updated_at.</summary>
+  Task RecordAttemptErrorAsync(string jobId, string errorMessage);
 }
 
 /// A redelivery found the row PROCESSING and not yet stale: another container may still be

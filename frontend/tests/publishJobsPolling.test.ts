@@ -4,6 +4,8 @@ import fc from 'fast-check';
 import {
   POLL_ACTIVE_MAX_MS,
   POLL_IDLE_MS,
+  POLL_IDLE_SLOWDOWN_AFTER,
+  POLL_IDLE_SLOW_MS,
   POLL_NETWORK_FAILURE_MESSAGE,
   POLL_SOFT_FAILURE_MESSAGE,
   nextPollDelay,
@@ -67,6 +69,42 @@ describe('nextPollDelay: success with no active jobs', () => {
     expect(d.delayMs).toBe(POLL_IDLE_MS);
     expect(d.jobs).toEqual([]);
     expect(d.showError).toBeNull();
+  });
+});
+
+describe('nextPollDelay: the idle slowdown', () => {
+  // A tab left open with nothing to publish does not need a 30 s heartbeat for
+  // ever. After POLL_IDLE_SLOWDOWN_AFTER quiet polls the idle cadence relaxes,
+  // but the first ten stay fast so the common visible-tab case is unaffected.
+  it('slows the idle cadence after ten quiet polls', () => {
+    // The tenth quiet poll (idlePolls 9 -> 10) is still fast: 10 is not past 10.
+    const tenth = nextPollDelay(ok([]), 0, POLL_IDLE_SLOWDOWN_AFTER - 1);
+    expect(tenth.nextIdlePolls).toBe(POLL_IDLE_SLOWDOWN_AFTER);
+    expect(tenth.delayMs).toBe(POLL_IDLE_MS);
+
+    // The eleventh (idlePolls 10 -> 11) crosses the threshold and slows down.
+    const eleventh = nextPollDelay(ok([]), 0, POLL_IDLE_SLOWDOWN_AFTER);
+    expect(eleventh.nextIdlePolls).toBe(POLL_IDLE_SLOWDOWN_AFTER + 1);
+    expect(eleventh.delayMs).toBe(POLL_IDLE_SLOW_MS);
+  });
+
+  it('returns to the fast idle cadence as soon as a job is active', () => {
+    // Deep into the slow cadence, one active job resets the idle count outright.
+    const active = nextPollDelay(ok([job('PENDING')]), 0, 50);
+    expect(active.nextIdlePolls).toBe(0);
+    expect(active.delayMs).toBe(2_000);
+
+    // And the very next idle poll is fast again, because the count restarts at 0.
+    const backToIdle = nextPollDelay(ok([]), 0, active.nextIdlePolls);
+    expect(backToIdle.nextIdlePolls).toBe(1);
+    expect(backToIdle.delayMs).toBe(POLL_IDLE_MS);
+  });
+
+  it('carries the idle count through a failure', () => {
+    // A blip must not restart the idle countdown, exactly as it must not restart
+    // the active backoff: both soft and thrown failures carry idlePolls through.
+    expect(nextPollDelay(soft(), 0, 7).nextIdlePolls).toBe(7);
+    expect(nextPollDelay({ kind: 'exception', error: new Error('down') }, 0, 7).nextIdlePolls).toBe(7);
   });
 });
 

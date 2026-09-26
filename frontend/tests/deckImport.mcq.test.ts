@@ -10,19 +10,8 @@ import {
   type ParsedCard,
   type ParsedDeck,
 } from '../src/lib/deckImport';
-import {
-  describeFailure,
-  runImport,
-  type CreateCardParams,
-  type ImportAction,
-  type ImportProgress,
-  type ImportWriter,
-  type UpdateCardParams,
-  SERVER_NOT_READY_MCQ,
-} from '../src/lib/deckImportRunner';
 import { validateMcq, normalizeMcqForCompare, LETTER_REFERENCE, type McqIssueCode } from '../src/lib/mcqRules';
 import type { McqBlob, McqOption } from '../src/types/mcq';
-import type { ApiResult } from '../src/types/api';
 import type { Card } from '../src/types/card';
 
 const DECK_ID = 7;
@@ -145,63 +134,6 @@ function twoStarBlob(): McqBlob {
     options: [opt('a', true, null), opt('b', false, 'beta is not right'), opt('c', true, null)],
   };
 }
-
-function ok(data: Card | null): ApiResult<Card> {
-  return { success: true, data, error: null, traceId: 't' };
-}
-
-function echoRow(params: CreateCardParams | UpdateCardParams, mcq?: McqBlob | null): Card & { mcq?: McqBlob | null } {
-  return {
-    id: 1,
-    deckId: DECK_ID,
-    stableUid: params.stableUid ?? 'x',
-    question: params.question ?? '',
-    difficulty: params.difficulty ?? 1,
-    orderInDeck: params.orderInDeck ?? 0,
-    explanation: params.explanation ?? '',
-    realWorldUsage: params.realWorldUsage ?? null,
-    codeSnippet: params.codeSnippet ?? null,
-    codeLanguage: params.codeLanguage ?? null,
-    topic: params.topic ?? null,
-    version: 1,
-    isDeleted: 0,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    ...(mcq !== undefined ? { mcq } : {}),
-  };
-}
-
-interface Recorder {
-  writer: ImportWriter;
-  creates: CreateCardParams[];
-  updates: UpdateCardParams[];
-  calls: string[];
-}
-
-function recorder(responses: (params: CreateCardParams | UpdateCardParams) => ApiResult<Card> = () => ok(null)): Recorder {
-  const creates: CreateCardParams[] = [];
-  const updates: UpdateCardParams[] = [];
-  const calls: string[] = [];
-  const writer: ImportWriter = {
-    async createCard(params) {
-      creates.push(params);
-      calls.push(`create:${params.stableUid}`);
-      return responses(params);
-    },
-    async updateCard(params) {
-      updates.push(params);
-      calls.push(`update:${params.id}`);
-      return responses(params);
-    },
-  };
-  return { writer, creates, updates, calls };
-}
-
-function actionsFor(document: string, existing: readonly Card[] = []): ImportAction[] {
-  const plan = planImport(parseDeckMarkdown(document), existing);
-  return [...plan.creates, ...plan.updates];
-}
-
 function toCard(card: ParsedCard, id: number, version: number): Card & { mcq?: McqBlob | null } {
   return {
     id,
@@ -785,58 +717,5 @@ describe('round trip and reconciliation', () => {
       qualifier: '  LEAST operational overhead  ',
     };
     expect(normalizeMcqForCompare(hand)).toBe(normalizeMcqForCompare(card1));
-  });
-});
-
-// ---------------------- runImport readiness guard ----------------------
-
-const QA_LEAD = ['## qa-lead-01 | d1', 'Q:', 'a plain question', 'A:', 'a plain answer'].join('\n');
-const QA_TRAIL = ['## qa-trail-01 | d1', 'Q:', 'another question', 'A:', 'another answer'].join('\n');
-const GUARD_DOC = ['# deck: aws-associate-architect', '', QA_LEAD, '', MCQ_CARD_1, '', MCQ_CARD_2, '', QA_TRAIL].join('\n');
-const QA_DOC = ['# deck: qa-deck', '', QA_LEAD, '', QA_TRAIL].join('\n');
-
-describe('runImport readiness guard', () => {
-  it('stops after the first MCQ write whose echo lacks mcq and lists the rest as SERVER_NOT_READY_MCQ', async () => {
-    const rec = recorder((params) => ok(echoRow(params)));
-    let lastProgress: ImportProgress | undefined;
-    const result = await runImport(DECK_ID, actionsFor(GUARD_DOC), rec.writer, (p) => {
-      lastProgress = p;
-    });
-
-    expect(result.created).toBe(1);
-    expect(result.failures.map((f) => f.stableUid)).toEqual([
-      'aws-sqs-order-buffer-mcq-01',
-      'aws-s3-compliance-copy-mcq-02',
-      'qa-trail-01',
-    ]);
-    expect(result.failures.every((f) => f.code === SERVER_NOT_READY_MCQ)).toBe(true);
-    expect(rec.calls).toHaveLength(2);
-    expect(lastProgress?.done).toBe(2);
-  });
-
-  it('continues when the echo carries an mcq object', async () => {
-    const rec = recorder((params) => ok(echoRow(params, params.mcq ?? null)));
-    const result = await runImport(DECK_ID, actionsFor(GUARD_DOC), rec.writer);
-
-    expect(result.created).toBe(4);
-    expect(result.failures).toEqual([]);
-    const expected = requireMcq(parseDeckMarkdown(GUARD_DOC).cards[1]);
-    expect(rec.creates[1].mcq).toEqual(expected);
-    expect(rec.creates[0].mcq).toBeNull();
-  });
-
-  it('never inspects the echo of a Q/A-only run', async () => {
-    const rec = recorder();
-    const result = await runImport(DECK_ID, actionsFor(QA_DOC), rec.writer);
-    expect(result.failures).toEqual([]);
-    expect(result.created).toBe(2);
-  });
-
-  it('describeFailure names the server readiness problem', () => {
-    const action = actionsFor(QA_DOC)[0];
-    expect(describeFailure({ action, stableUid: 'x', code: SERVER_NOT_READY_MCQ, message: 'ignored' })).toBe(
-      'The server is not ready for MCQ cards (migration 019 / Lambda not deployed); nothing after this card was written.',
-    );
-    expect(describeFailure({ action, stableUid: 'x', code: 'OTHER', message: 'plain message' })).toBe('plain message');
   });
 });

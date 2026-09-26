@@ -11,12 +11,16 @@
 // panel exists at all stays on the page. Pushing it in here would mean mounting
 // a component so that it can return null.
 //
-// PROVENANCE. The JSX below was moved out of src/pages/DeckListPage.tsx and is
+// PROVENANCE. The JSX below was moved out of src/pages/DeckListPage.tsx and was
 // byte-identical to the original apart from the renames listed above. Its
 // ORIGINAL INDENTATION IS PRESERVED ON PURPOSE, even though it looks over-deep
 // for a file this small: re-indenting would destroy the only cheap proof that
 // nothing else changed in the move. eslint has no indent rule here, so this
 // costs nothing but the look of it.
+//
+// 1.7.0 (F24, CFE-09): an Error column was added after Status so a FAILED job
+// shows its errorMessage instead of sending the owner to CloudWatch, and the
+// Job ID cell gained a title so the full id is available on hover.
 //
 // NO HOOKS, NO memo, NO useCallback. tests/deckListHookOrder.test.ts C2
 // enforces this over the whole directory. The reason is C1: the page's recorded
@@ -55,6 +59,7 @@ export function PublishJobsPanel({ jobs, onRefresh }: PublishJobsPanelProps) {
                       <th className="px-4 py-3 text-left">Job ID</th>
                       <th className="px-4 py-3 text-left">Deck</th>
                       <th className="px-4 py-3 text-left">Status</th>
+                      <th className="px-4 py-3 text-left">Error</th>
                       <th className="px-4 py-3 text-left">Note</th>
                       <th className="px-4 py-3 text-left">Time</th>
                     </tr>
@@ -62,7 +67,7 @@ export function PublishJobsPanel({ jobs, onRefresh }: PublishJobsPanelProps) {
                   <tbody className="divide-y divide-slate-100">
                     {jobs.map(job => (
                       <tr key={job.jobId} className="hover:bg-slate-50/60">
-                        <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{job.jobId.slice(0, 8)}...</td>
+                        <td className="px-4 py-3 font-mono text-[11px] text-slate-500" title={job.jobId}>{job.jobId.slice(0, 8)}...</td>
                         <td className="px-4 py-3 font-medium text-slate-700">{job.deckSlug}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium ${
@@ -73,6 +78,13 @@ export function PublishJobsPanel({ jobs, onRefresh }: PublishJobsPanelProps) {
                           }`}>
                             {job.status}
                           </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs">
+                          {job.status === 'FAILED' && job.errorMessage ? (
+                            <span data-testid="publish-job-error" title={job.errorMessage} className="text-red-700 max-w-xs break-words">{job.errorMessage}</span>
+                          ) : (
+                            '-'
+                          )}
                         </td>
                         <td className="px-4 py-3 text-xs text-slate-600 max-w-xs truncate">{job.note || '-'}</td>
                         <td className="px-4 py-3 text-xs text-slate-500">{safeDateTime(job.createdAt)}</td>

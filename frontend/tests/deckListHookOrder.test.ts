@@ -47,15 +47,21 @@ const SPLIT_DIR = path.join(FRONTEND, 'src/features/deckList/components');
 /**
  * The hook calls DeckListPage makes directly, in source order.
  *
- * Recorded against the unmodified page and updated once since, deliberately:
+ * Recorded against the unmodified page and updated twice since, deliberately:
  * `useDeleteDeck` and `usePublishDeck` were added immediately after
  * `useConfirm` when the two row actions moved onto react-query mutations. That
  * placement is not arbitrary — they sit with the other thing the row actions
  * need, and above the paginated block, which is the block the comment at the
  * useDeckPagination call warns must be liftable as a unit.
  *
- * `useDeckPagination` now sits at index 26; the two useMemos at the end are
- * still `decks` and `viewRows`.
+ * The second update was F24 (2026-09-26). Three `useRef`s joined the two the
+ * polling loop already owned — `idlePollsRef`, `pollPausedRef` and
+ * `loadPublishJobsRef`, which carry the idle-slowdown count, the hidden-tab
+ * pause flag, and the latest loadPublishJobs for the visibilitychange effect to
+ * call. A fifth `useEffect` was added for that visibilitychange listener, right
+ * after the mount poll effect.
+ *
+ * The two useMemos at the end are still `decks` and `viewRows`.
  */
 const EXPECTED_HOOK_SEQUENCE = [
   'useNavigate',
@@ -79,12 +85,16 @@ const EXPECTED_HOOK_SEQUENCE = [
   'useState',
   'useRef',
   'useRef',
+  'useRef',
+  'useRef',
+  'useRef',
   'useState',
   'useState',
   'useState',
   'useRef',
   'useEffect',
   'useDeckPagination',
+  'useEffect',
   'useEffect',
   'useEffect',
   'useEffect',
@@ -178,7 +188,7 @@ describe('C1: the page calls its hooks in a fixed order', () => {
     // A scanner that silently found nothing would agree with an empty literal
     // forever. Three independent floors: the length, the presence of the one
     // non-React hook, and the fact that more than one distinct hook appears.
-    expect(EXPECTED_HOOK_SEQUENCE.length).toBe(33);
+    expect(EXPECTED_HOOK_SEQUENCE.length).toBe(37);
     expect(EXPECTED_HOOK_SEQUENCE).toContain('useDeckPagination');
     expect(new Set(EXPECTED_HOOK_SEQUENCE).size).toBeGreaterThan(4);
   });
