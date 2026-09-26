@@ -18,7 +18,8 @@ public interface IJobRepository
   /// <summary>
   /// Step 5: 标记任务成功
   /// </summary>
-  Task CompleteJobAsync(string jobId);
+  /// <param name="exportedCardCount">The number of cards written to deck.json; null leaves decks.total_cards untouched.</param>
+  Task CompleteJobAsync(string jobId, int? exportedCardCount = null);
 
   /// <summary>
   /// 路线 A: 标记任务失败
