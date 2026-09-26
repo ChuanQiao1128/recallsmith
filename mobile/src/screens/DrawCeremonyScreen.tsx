@@ -49,7 +49,7 @@ import { cancelCeremonyTimeline, playCeremonyTimeline, tableSlotLayout, useCerem
 import { buildCeremonyCues, cueTimesFromSchedule, type CeremonyCueAction } from '../features/gacha/draw/ceremonyCues';
 import { STAGE_TESTID, StageCanvas } from '../components/ceremony/StageCanvas';
 import { PackTear, seamProgressFromDelta } from '../components/ceremony/PackTear';
-import { TapCard, type TapCardData } from '../components/ceremony/TapCard';
+import { TapCard, rarityLabel, type TapCardData } from '../components/ceremony/TapCard';
 import { FallbackStage } from '../components/ceremony/FallbackStage';
 import { FeaturedCard, type FeaturedCardProps } from '../components/ceremony/FeaturedCard';
 import { SpillSampler, shouldMountSpillSampler } from '../components/ceremony/SpillSampler';
@@ -666,7 +666,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const showFeatured = !enableTapFlow && (phase === 'flash-reveal' || phase === 'settle');
   const featuredProps: FeaturedCardProps = {
     accent,
-    rarityText: featured?.rarity ?? peakRarity,
+    rarityText: rarityLabel(featured?.rarity ?? peakRarity),
     questionText: featured?.question ?? 'Cards revealed',
     packPaletteCover: palette.cover,
     coverImage,

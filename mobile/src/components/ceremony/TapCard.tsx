@@ -263,7 +263,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
                   style={ceremonyStyles.tapCardArtGradient}
                 />
                 <View style={[ceremonyStyles.tapCardChip, ceremonyStyles.tapCardChipInWindow, { backgroundColor: accent }]}>
-                  <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>★ {card.rarity}</Text>
+                  <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>{flipped ? `★ ${rarityLabel(card.rarity)}` : '★'}</Text>
                 </View>
               </View>
               <View style={ceremonyStyles.tapCardSlab}>
@@ -274,7 +274,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
           ) : (
             <>
               <View style={[ceremonyStyles.tapCardChip, { backgroundColor: accent }]}>
-                <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>★ {card.rarity}</Text>
+                <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>{flipped ? `★ ${rarityLabel(card.rarity)}` : '★'}</Text>
               </View>
               <Text style={ceremonyStyles.tapCardQuestion} numberOfLines={3}>{card.question}</Text>
             </>

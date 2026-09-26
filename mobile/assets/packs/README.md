@@ -10,11 +10,13 @@ key by `canonicalPackSlug`):
 | `<slug>.png` | pack cover (sealed foil booster look, brand at top, deck name at bottom) | 1024×1536, 2:3, opaque, ≤ 1.2 MB |
 | `<slug>-back.png` | card back shown during the tap-to-flip ceremony | 400×560, 5:7, opaque, ≤ 200 KB |
 
-Covers render with `resizeMode="contain"` on Home / Welcome and `"cover"` in
-the 240×336 DrawScreen pack, so keep the pack filling the frame with a black
-surround like `csharp.png` (no transparency — the black foil edge hides the
-crop either way). Card backs render with `"cover"` inside a 10-px-radius
-gold-edged slot, so a full-bleed border pattern is expected.
+Covers render with `resizeMode="contain"` everywhere: on Home / Welcome, in
+the 240×336 DrawScreen pack, and in the ceremony (the fallback pack and the
+featured card back), each on a black matte so the thin letterbox bars blend
+into the art. Keep the pack filling the frame with a black surround like
+`csharp.png` (no transparency — the black foil edge hides the bars either
+way). Card backs render with `"cover"` inside a 10-px-radius gold-edged slot,
+so a full-bleed border pattern is expected.
 
 ## Provenance
 
