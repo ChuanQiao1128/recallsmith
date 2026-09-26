@@ -88,7 +88,7 @@ resource "aws_wafv2_web_acl" "content" {
 }
 
 resource "aws_cloudfront_distribution" "content" {
-  aliases             = []
+  aliases             = [local.cdn_hostname]
   enabled             = true
   http_version        = "http2"
   is_ipv6_enabled     = true
@@ -129,8 +129,9 @@ resource "aws_cloudfront_distribution" "content" {
     }
   }
   viewer_certificate {
-    cloudfront_default_certificate = true
-    minimum_protocol_version       = "TLSv1"
+    acm_certificate_arn      = local.cloudfront_cert_arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
   }
   lifecycle {
     ignore_changes = [tags, tags_all]
@@ -138,7 +139,7 @@ resource "aws_cloudfront_distribution" "content" {
 }
 
 resource "aws_cloudfront_distribution" "console" {
-  aliases             = []
+  aliases             = [local.console_hostname]
   comment             = "RecallSmith authoring console (dev)"
   default_root_object = "index.html"
   enabled             = true
@@ -193,8 +194,9 @@ resource "aws_cloudfront_distribution" "console" {
     }
   }
   viewer_certificate {
-    cloudfront_default_certificate = true
-    minimum_protocol_version       = "TLSv1"
+    acm_certificate_arn      = local.cloudfront_cert_arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
   }
 }
 

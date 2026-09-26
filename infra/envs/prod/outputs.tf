@@ -47,3 +47,28 @@ output "mobile_pool_endpoint" {
 }
 
 output "alerts_topic_arn" { value = module.observability.alerts_topic_arn }
+
+output "zone_name_servers" {
+  value = module.edge.zone_name_servers
+}
+output "api_hostname" {
+  value = module.api.api_hostname
+}
+output "cdn_hostname" {
+  value = module.edge.cdn_hostname
+}
+output "console_hostname" {
+  value = module.edge.console_hostname
+}
+output "site_hostname" {
+  value = var.domain
+}
+output "site_distribution_id" {
+  value = module.edge.site_distribution_id
+}
+output "cloudfront_cert_arn" {
+  value = module.edge.cloudfront_cert_arn
+}
+output "api_cert_arn" {
+  value = module.edge.api_cert_arn
+}

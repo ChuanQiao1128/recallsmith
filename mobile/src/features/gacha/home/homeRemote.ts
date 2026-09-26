@@ -1,12 +1,11 @@
+import { resolveApiBase } from '../../../config/hosts';
+
 function isTruthyEnv(v: any): boolean {
   const s = String(v ?? '').trim().toLowerCase();
   return s === '1' || s === 'true' || s === 'yes' || s === 'on';
 }
 
-const API_BASE_URL =
-  (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() ||
-  (process.env.EXPO_PUBLIC_API_BASE || '').trim() ||
-  'https://ktbq1sie2c.execute-api.ap-southeast-2.amazonaws.com';
+const API_BASE_URL = resolveApiBase();
 
 export async function fetchPremiumDeckUrl(slug: string, accessToken: string | null): Promise<{ url: string; buildId: string } | null> {
   const s = String(slug || '').trim();

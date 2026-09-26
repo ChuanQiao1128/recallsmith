@@ -2,16 +2,14 @@
 import Purchases, { type CustomerInfo, type PurchasesPackage } from 'react-native-purchases';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import { APP_ENV, IS_PROD, premiumUrlPath } from '../config/appEnv';
+import { resolveApiBase } from '../config/hosts';
 
 // ---------- Env ----------
 const RC_IOS_API_KEY = (process.env.EXPO_PUBLIC_RC_IOS_API_KEY || '').trim();
 const ENTITLEMENT_ID = (process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || '').trim(); // MUST be Identifier
 const MONTHLY_PRODUCT_ID = (process.env.EXPO_PUBLIC_RC_MONTHLY_PRODUCT_ID || '').trim();
 
-const API_BASE_URL =
-  (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim() ||
-  (process.env.EXPO_PUBLIC_API_BASE || '').trim() ||
-  '';
+const API_BASE_URL = resolveApiBase();
 
 /**
  * ✅ Hard safety:
@@ -260,9 +258,7 @@ async function ensureConfigured(): Promise<void> {
     Purchases.configure({ apiKey: RC_IOS_API_KEY });
 
     try {
-      // @ts-ignore
       if (typeof Purchases.invalidateCustomerInfoCache === 'function') {
-        // @ts-ignore
         await Purchases.invalidateCustomerInfoCache();
       }
     } catch {}
@@ -372,9 +368,7 @@ export async function rcGetCustomerInfoSafe(): Promise<CustomerInfo> {
   } catch {}
 
   try {
-    // @ts-ignore
     if (typeof Purchases.invalidateCustomerInfoCache === 'function') {
-      // @ts-ignore
       await Purchases.invalidateCustomerInfoCache();
     }
   } catch {}

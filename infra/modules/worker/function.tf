@@ -4,14 +4,15 @@ resource "aws_cloudwatch_log_group" "worker" {
 }
 
 resource "aws_lambda_function" "worker" {
-  architectures = ["arm64"]
-  filename      = "${path.module}/../../bootstrap/placeholder.zip"
-  function_name = var.function_name
-  handler       = "RecallSmith.Lambda.Worker::RecallSmith.Lambda.Worker.WorkerFunction::FunctionHandler"
-  memory_size   = 512
-  role          = var.role_arn
-  runtime       = "dotnet8"
-  timeout       = 615
+  architectures                  = ["arm64"]
+  filename                       = "${path.module}/../../bootstrap/placeholder.zip"
+  function_name                  = var.function_name
+  handler                        = "RecallSmith.Lambda.Worker::RecallSmith.Lambda.Worker.WorkerFunction::FunctionHandler"
+  memory_size                    = 512
+  reserved_concurrent_executions = 2
+  role                           = var.role_arn
+  runtime                        = "dotnet8"
+  timeout                        = 615
   ephemeral_storage {
     size = 512
   }

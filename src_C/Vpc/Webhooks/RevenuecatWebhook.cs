@@ -11,7 +11,7 @@ namespace RecallSmith.Lambda.Vpc.Webhooks;
 
 public static class RevenuecatWebhook
 {
-  private const string ImplVersion = "2025-12-27T00:30Z-v13";
+  private const string ImplVersion = "2026-09-22T00:00Z-v14";
 
   private static string PickHeader(LambdaRequest req, string name)
   {
@@ -60,6 +60,9 @@ public static class RevenuecatWebhook
     }
   }
 
+  private static APIGatewayProxyResponse DbUnavailable(Res res, string mode) =>
+    res.Raw(503, new { ok = false, error = "DB_UNAVAILABLE", mode, impl = ImplVersion }, new Dictionary<string, string> { ["retry-after"] = "60" });
+
   private static string ModeFromPath(LambdaRequest req)
   {
     var path = req.Path;
@@ -67,9 +70,9 @@ public static class RevenuecatWebhook
     if (path == "/webhooks/revenuecat/production") return "production";
     if (path == "/rc/webhook") return "development";
 
-    var host = PickHeader(req, "host").ToLowerInvariant();
-    var isDevHost = host.Contains("dev", StringComparison.Ordinal) || host.Contains("development", StringComparison.Ordinal);
-    return isDevHost ? "development" : "production";
+    // An unmatched path (the bare /webhooks/revenuecat that VpcFunction still routes)
+    // fails safe onto the production token rather than a host heuristic.
+    return "production";
   }
 
   private static string GetExpectedAuthRaw(string mode)
@@ -141,7 +144,7 @@ public static class RevenuecatWebhook
     return el.ToString();
   }
 
-  private static async Task InsertRcEventOnce(
+  private static async Task<bool> InsertRcEventOnce(
     NpgsqlConnection conn,
     string eventId,
     string mode,
@@ -165,11 +168,11 @@ public static class RevenuecatWebhook
         expiration_at_ms,
         raw
       )
-      values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-      on conflict (event_id) do nothing;
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+      on conflict (event_id) do nothing returning 1;
       """;
 
-    await DbUtil.ExecuteAsync(conn, null, sql,
+    var inserted = await DbUtil.ExecuteScalarAsync(conn, null, sql,
     [
       eventId,
       mode,
@@ -181,6 +184,7 @@ public static class RevenuecatWebhook
       expirationAtMs,
       rawJson,
     ]);
+    return inserted is not null;
   }
 
   private static async Task UpsertPremiumState(
@@ -262,22 +266,17 @@ public static class RevenuecatWebhook
     var gotAuth = PickHeader(req, "authorization");
     var gotToken = StripBearer(gotAuth);
 
-    if (string.IsNullOrEmpty(gotToken) || gotToken != expectedToken)
+    if (!Secrets.FixedTimeEquals(gotToken, expectedToken))
     {
       var expectedRaw = GetExpectedAuthRaw(mode).Trim();
-      return res.Raw(401, new
-      {
-        ok = false,
-        error = "Unauthorized",
-        mode,
-        impl = ImplVersion,
-        gotBearer = gotAuth.TrimStart().StartsWith("bearer ", StringComparison.OrdinalIgnoreCase),
-        gotLen = gotToken.Length,
-        expectedLen = expectedToken.Length,
-        expectedHasBearer = expectedRaw.TrimStart().StartsWith("bearer ", StringComparison.OrdinalIgnoreCase),
-        gotHash8 = gotToken.Length > 0 ? Hash8(gotToken) : null,
-        expectedHash8 = expectedToken.Length > 0 ? Hash8(expectedToken) : null,
-      });
+      var gotBearer = gotAuth.TrimStart().StartsWith("bearer ", StringComparison.OrdinalIgnoreCase);
+      var gotLen = gotToken.Length;
+      var expectedLen = expectedToken.Length;
+      var expectedHasBearer = expectedRaw.TrimStart().StartsWith("bearer ", StringComparison.OrdinalIgnoreCase);
+      var gotHash8 = gotToken.Length > 0 ? Hash8(gotToken) : null;
+      var expectedHash8 = expectedToken.Length > 0 ? Hash8(expectedToken) : null;
+      Log.Event("warn", new { tag = "rc-webhook", reason = "unauthorized", mode, gotBearer, gotLen, expectedLen, expectedHasBearer, gotHash8, expectedHash8 });
+      return res.Raw(401, new { ok = false, error = "Unauthorized", mode, impl = ImplVersion });
     }
 
     // parse payload
@@ -315,13 +314,30 @@ public static class RevenuecatWebhook
 
     var promo = IsPromoProduct(productId);
 
-    // DB log (best-effort)
-    await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is not null)
+    // The DB steps are required, not best-effort: with the ::jsonb cast the insert is real,
+    // and an event that cannot be recorded (so cannot be de-duplicated on retry) is a 503 with
+    // retry-after so RevenueCat retries the paid event instead of marking it delivered.
+    NpgsqlConnection? conn;
+    try
     {
+      conn = await Pg.OpenConnectionOrNullAsync();
+    }
+    catch (Exception ex)
+    {
+      Log.Event("error", new { tag = "rc-webhook", reason = "db_unavailable", mode, eventId, error = ex.Message });
+      return DbUnavailable(res, mode);
+    }
+    if (conn is null)
+    {
+      Log.Event("error", new { tag = "rc-webhook", reason = "db_unavailable", mode, eventId, error = (string?)null });
+      return DbUnavailable(res, mode);
+    }
+    await using (conn)
+    {
+      bool replayed;
       try
       {
-        await InsertRcEventOnce(
+        replayed = !await InsertRcEventOnce(
           conn,
           eventId: eventId,
           mode: mode,
@@ -335,93 +351,97 @@ public static class RevenuecatWebhook
       }
       catch (Exception ex)
       {
-        Log.Warn("[rc-webhook] db insert rc_webhook_events failed:", ex.Message);
+        Log.Event("error", new { tag = "rc-webhook", reason = "db_insert_failed", mode, eventId, error = ex.Message });
+        return DbUnavailable(res, mode);
       }
-    }
 
-    if (!isTest)
-    {
-      var expectedEnv = GetExpectedEnv(mode);
-      if (!string.IsNullOrEmpty(envUpper) && !string.IsNullOrEmpty(expectedEnv) && envUpper != expectedEnv)
+      if (!isTest)
       {
-        Log.Warn("[rc-webhook] env mismatch", new { mode, path = req.Path, eventId, got = envUpper, expected = expectedEnv });
-        return res.Raw(200, new
+        var expectedEnv = GetExpectedEnv(mode);
+        if (!string.IsNullOrEmpty(envUpper) && !string.IsNullOrEmpty(expectedEnv) && envUpper != expectedEnv)
         {
-          ok = true,
-          accepted = false,
-          reason = "env_mismatch",
-          mode,
+          Log.Event("warn", new { tag = "rc-webhook", reason = "env_mismatch", mode, path = req.Path, eventId, got = envUpper, expected = expectedEnv });
+          return res.Raw(200, new
+          {
+            ok = true,
+            accepted = false,
+            reason = "env_mismatch",
+            mode,
+            impl = ImplVersion,
+            gotEnv = string.IsNullOrEmpty(envUpper) ? null : envUpper,
+            expectedEnv,
+            eventId,
+            type = typeUpper,
+          });
+        }
+
+        var monthly = GetMonthlyProductId();
+        if (!string.IsNullOrEmpty(productId) && !string.IsNullOrEmpty(monthly) && productId != monthly && !promo)
+        {
+          Log.Event("warn", new { tag = "rc-webhook", reason = "product_mismatch", mode, path = req.Path, eventId, got = productId, expected = monthly, type = typeUpper });
+          return res.Raw(200, new
+          {
+            ok = true,
+            accepted = false,
+            reason = "product_mismatch",
+            mode,
+            impl = ImplVersion,
+            gotProductId = productId,
+            expectedMonthlyProductId = monthly,
+            eventId,
+            type = typeUpper,
+          });
+        }
+      }
+
+      // premium state (real events only)
+      if (!isTest && appUserId is not null)
+      {
+        var premiumActive = ComputePremiumActive(typeUpper, expMs, nowMs);
+        var premiumEnv = MapPremiumEnv(envUpper);
+
+        try
+        {
+          var entitlementId = ReadString(ev, "entitlement_id");
+          await UpsertPremiumState(
+            conn,
+            appUserId: appUserId,
+            premiumActive: premiumActive,
+            premiumEnv: premiumEnv,
+            productId: productId,
+            entitlementId: entitlementId,
+            expiresAtMs: expMs,
+            lastEventId: eventId,
+            lastEventType: typeUpper,
+            lastEventTsMs: eventTsMs);
+        }
+        catch (Exception ex)
+        {
+          Log.Event("error", new { tag = "rc-webhook", reason = "db_upsert_failed", mode, eventId, appUserId, error = ex.Message });
+          return DbUnavailable(res, mode);
+        }
+
+        Log.Event("info", new
+        {
+          tag = "rc-webhook",
+          reason = "accepted",
           impl = ImplVersion,
-          gotEnv = string.IsNullOrEmpty(envUpper) ? null : envUpper,
-          expectedEnv,
+          mode,
+          isTest,
+          route = req.Path,
           eventId,
           type = typeUpper,
+          environment = string.IsNullOrEmpty(envUpper) ? null : envUpper,
+          appUserId,
+          productId,
+          promo,
+          promoAllowed = promo,
+          replayed,
         });
       }
 
-      var monthly = GetMonthlyProductId();
-      if (!string.IsNullOrEmpty(productId) && !string.IsNullOrEmpty(monthly) && productId != monthly && !promo)
-      {
-        Log.Warn("[rc-webhook] product mismatch", new { path = req.Path, got = productId, expected = monthly, eventId, type = typeUpper });
-        return res.Raw(200, new
-        {
-          ok = true,
-          accepted = false,
-          reason = "product_mismatch",
-          mode,
-          impl = ImplVersion,
-          gotProductId = productId,
-          expectedMonthlyProductId = monthly,
-          eventId,
-          type = typeUpper,
-        });
-      }
+      return res.Raw(200, new { ok = true, accepted = true, mode, impl = ImplVersion, eventId, type = typeUpper, promo });
     }
-
-    // premium state (real events only)
-    if (!isTest && appUserId is not null && conn is not null)
-    {
-      var premiumActive = ComputePremiumActive(typeUpper, expMs, nowMs);
-      var premiumEnv = MapPremiumEnv(envUpper);
-
-      try
-      {
-        var entitlementId = ReadString(ev, "entitlement_id");
-        await UpsertPremiumState(
-          conn,
-          appUserId: appUserId,
-          premiumActive: premiumActive,
-          premiumEnv: premiumEnv,
-          productId: productId,
-          entitlementId: entitlementId,
-          expiresAtMs: expMs,
-          lastEventId: eventId,
-          lastEventType: typeUpper,
-          lastEventTsMs: eventTsMs);
-      }
-      catch (Exception ex)
-      {
-        Log.Warn("[rc-webhook] db upsert user_premium_state failed:", ex.Message);
-      }
-
-      Log.Event("info", new
-      {
-        tag = "rc-webhook",
-        impl = ImplVersion,
-        mode,
-        isTest,
-        route = req.Path,
-        eventId,
-        type = typeUpper,
-        environment = string.IsNullOrEmpty(envUpper) ? null : envUpper,
-        appUserId,
-        productId,
-        promo,
-        promoAllowed = promo,
-      });
-    }
-
-    return res.Raw(200, new { ok = true, accepted = true, mode, impl = ImplVersion, eventId, type = typeUpper, promo });
   }
 }
 
