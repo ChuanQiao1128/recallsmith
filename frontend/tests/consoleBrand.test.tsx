@@ -16,7 +16,6 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const COGNITO_ENV: Record<string, string> = {
   VITE_COGNITO_DOMAIN: 'https://auth.login-tests.invalid',
@@ -46,8 +45,9 @@ import { makeTestQueryClient } from './support/queryTestClient';
 import { signOut } from './support/consoleSession';
 import { renderAt } from './support/routerProbe';
 
-const SRC = fileURLToPath(new URL('../src/', import.meta.url));
-const INDEX_HTML = fileURLToPath(new URL('../index.html', import.meta.url));
+// vitest runs with cwd = frontend/, so the source tree and index.html sit here.
+const SRC = join(process.cwd(), 'src');
+const INDEX_HTML = join(process.cwd(), 'index.html');
 
 /** Every .ts/.tsx/.css file under src/, as absolute paths. */
 function walkSource(dir: string): string[] {
