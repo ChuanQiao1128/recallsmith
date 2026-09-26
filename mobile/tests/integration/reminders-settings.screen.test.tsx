@@ -166,7 +166,12 @@ function nodeText(node: renderer.ReactTestInstance): string {
 }
 
 function findByTestID(tree: renderer.ReactTestRenderer, testID: string) {
-  return tree.root.findAll((node) => node.props?.testID === testID);
+  // Match only host elements (string type) so a component that receives testID
+  // as a prop (e.g. the ToggleRow wrapper) isn't double-counted alongside the
+  // real host Pressable it renders.
+  return tree.root.findAll(
+    (node) => typeof node.type === 'string' && node.props?.testID === testID,
+  );
 }
 
 async function renderSettings() {

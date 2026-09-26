@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const linkingMock = vi.hoisted(() => ({
   canOpenURL: vi.fn(async () => true),
   openURL: vi.fn(async (_url: string) => {}),
+  openSettings: vi.fn(async () => {}),
 }));
 
 const alertMock = vi.fn();
@@ -151,9 +152,17 @@ vi.mock('../../src/config/remoteConfig', () => ({
 }));
 
 vi.mock('../../src/notifications/reminders', () => ({
+  DEFAULT_REMINDER_PREFS: {
+    morningEnabled: true,
+    morningTime: '09:00',
+    eveningEnabled: false,
+    eveningTime: '20:00',
+  },
   getReminderPrefs: () => getReminderPrefsMock(),
   setReminderPrefs: vi.fn(async (next: any) => next),
   refreshDailyRemindersFromCache: vi.fn(async () => {}),
+  getNotificationPermissionState: vi.fn(async () => 'granted'),
+  requestNotificationPermission: vi.fn(async () => 'granted'),
 }));
 
 vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
