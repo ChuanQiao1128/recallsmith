@@ -21,8 +21,8 @@ import {
   consumePullsFromStoredWallet,
   loadRewardWalletState,
   refundPullsToStoredWallet,
-  type RewardWalletState,
 } from '../features/gacha/rewards/rewardWallet';
+import { spendablePullsNow } from '../features/gacha/rewards/spendablePulls';
 import { scheduleProgressSync } from '../sync/progressSync';
 import { a11y } from '../theme/a11y';
 import { colors } from '../theme/colors';
@@ -67,10 +67,6 @@ const SWIPE_ARM_DISTANCE = 72;
 const SWIPE_TRACK_WIDTH = 200;
 const PACK_WIDTH = 240;
 const PACK_HEIGHT = 336;
-
-function spendablePulls(wallet: RewardWalletState): number {
-  return Math.max(0, Number(wallet.availablePulls ?? 0) || 0);
-}
 
 function normalizeTitle(raw: any, fallback: string): string {
   const fromManifest = String(raw?.title ?? raw?.Title ?? raw?.name ?? raw?.displayName ?? '').trim();
@@ -481,7 +477,7 @@ export function DrawScreen({ navigation, route }: Props) {
             loadRewardWalletState(),
             loadDrawStatus(slug, (deck as any)?.Cards ?? []),
           ]);
-          const pulls = spendablePulls(wallet);
+          const pulls = spendablePullsNow(wallet);
           const deckTitle = normalizeTitle(deck, slug);
           const mergedOptions = mergeSelectedDeck(deckOptions, slug, deckTitle);
 
@@ -617,7 +613,7 @@ export function DrawScreen({ navigation, route }: Props) {
         // worth reconciling.
         scheduleProgressSync({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
 
-        const latestPulls = spendablePulls(spent.wallet);
+        const latestPulls = spendablePullsNow(spent.wallet);
         setReady((prev) =>
           prev
             ? { ...prev, walletPulls: latestPulls, canPullSingle: latestPulls >= 1, canPullMulti: latestPulls >= 10 }
