@@ -63,6 +63,10 @@ export default function SignInScreen({ navigation, route }: Props) {
     } catch (e: any) {
       const msg = String(e?.message ?? '');
       if (/already.*signed in/i.test(msg)) {
+        // Amplify already holds a session but our store may be stale (e.g. an
+        // offline cold start). Re-read the session before leaving so the app
+        // reflects the signed-in user instead of bouncing silently.
+        await useAuthStore.getState().init();
         goAway(navigation);
         return;
       }

@@ -21,6 +21,24 @@ import { invalidateDrawStateCache } from '../features/gacha/draw/drawStateCache'
 
 type AuthStatus = 'unknown' | 'anonymous' | 'signed_in';
 
+// Persisted the first time we ever see a signed-in session. Lets a later
+// tokenless init distinguish "this user's refresh token expired" (show the
+// session-expired banner) from "never signed in" (stay quietly anonymous).
+export const AUTH_WAS_SIGNED_IN_KEY = 'recallsmith:auth:wasSignedIn';
+
+/**
+ * True for transient/offline auth failures (network, timeout, abort), where
+ * Amplify throws but keeps the cached tokens. False for a real expiry —
+ * NotAuthorizedException means the refresh token is gone and tokens are wiped.
+ */
+export function isTransientAuthError(err: unknown): boolean {
+  const name = String((err as any)?.name ?? '');
+  if (name.startsWith('NotAuthorizedException')) return false;
+  if (name === 'NetworkError' || name === 'TimeoutError' || name === 'AbortError') return true;
+  const msg = String((err as any)?.message ?? '');
+  return /network|timed? ?out|fetch failed|internet/i.test(msg);
+}
+
 type AuthState = {
   status: AuthStatus;
   userId: string | null; // ✅ 稳定用户标识（sub / userId）
@@ -34,7 +52,17 @@ type AuthState = {
   loading: boolean;
   lastError: string | null;
 
+  // A previously signed-in session whose refresh token expired. Drives the
+  // Home "Session expired, sign in to keep syncing" banner.
+  sessionExpired: boolean;
+  // A transient (offline) init failure. The session was kept; retry on the
+  // next foreground.
+  initRetryPending: boolean;
+
   init: () => Promise<void>;
+
+  markSessionExpired: () => Promise<void>;
+  dismissSessionExpired: () => void;
 
   signUpWithEmail: (email: string, password: string) => Promise<void>;
   confirmSignUpCode: (email: string, code: string) => Promise<void>;
@@ -123,6 +151,22 @@ async function applySessionToState(set: any) {
   // including the init() path.
   if (userSub) await adoptAnonGachaState();
 
+  // Remember that this device has held a real session (best-effort), and derive
+  // the session-expired flag: a token means the session is valid; no token means
+  // it expired only if we had previously been signed in on this device.
+  let sessionExpired = false;
+  if (at) {
+    try {
+      await AsyncStorage.setItem(AUTH_WAS_SIGNED_IN_KEY, '1');
+    } catch {}
+  } else {
+    try {
+      sessionExpired = (await AsyncStorage.getItem(AUTH_WAS_SIGNED_IN_KEY)) === '1';
+    } catch {
+      sessionExpired = false;
+    }
+  }
+
   set({
     status: at ? 'signed_in' : 'anonymous',
     userId: userSub,
@@ -131,6 +175,8 @@ async function applySessionToState(set: any) {
     accessToken: at,
     idToken: it,
     lastError: null,
+    sessionExpired,
+    initRetryPending: false,
   });
 
   // ✅ Inject token into progress sync layer
@@ -153,26 +199,72 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   loading: false,
   lastError: null,
 
+  sessionExpired: false,
+  initRetryPending: false,
+
   init: async () => {
     set({ loading: true, lastError: null });
     try {
       await applySessionToState(set);
-    } catch {
-      // ✅ critical: ensure unsigned-in => no sync token (also clears activeUserSub)
-      await setSyncAccessToken(null);
+    } catch (err) {
+      if (isTransientAuthError(err)) {
+        // Transient/offline failure: Amplify still holds the session. Keep the
+        // sync token and the user's storage scope (do NOT clear them) so the
+        // app reads the account's own data offline, and retry on next foreground.
+        set({
+          status: 'anonymous',
+          userId: null,
+          email: null,
+          userSub: null,
+          accessToken: null,
+          idToken: null,
+          lastError: null,
+          initRetryPending: true,
+        });
+      } else {
+        // ✅ critical: ensure unsigned-in => no sync token (also clears activeUserSub)
+        await setSyncAccessToken(null);
 
-      set({
-        status: 'anonymous',
-        userId: null,
-        email: null,
-        userSub: null,
-        accessToken: null,
-        idToken: null,
-        lastError: null,
-      });
+        let sessionExpired = false;
+        try {
+          sessionExpired = (await AsyncStorage.getItem(AUTH_WAS_SIGNED_IN_KEY)) === '1';
+        } catch {
+          sessionExpired = false;
+        }
+
+        set({
+          status: 'anonymous',
+          userId: null,
+          email: null,
+          userSub: null,
+          accessToken: null,
+          idToken: null,
+          lastError: null,
+          sessionExpired,
+          initRetryPending: false,
+        });
+      }
     } finally {
       set({ loading: false });
     }
+  },
+
+  markSessionExpired: async () => {
+    await setSyncAccessToken(null);
+    set({
+      status: 'anonymous',
+      userId: null,
+      email: null,
+      userSub: null,
+      accessToken: null,
+      idToken: null,
+      sessionExpired: true,
+      initRetryPending: false,
+    });
+  },
+
+  dismissSessionExpired: () => {
+    set({ sessionExpired: false });
   },
 
   signUpWithEmail: async (email: string, password: string) => {
@@ -295,6 +387,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // ✅ 关键：先清 sync token / activeUserSub，再更新 UI（避免 Home reload 还读旧 scope）
       await setSyncAccessToken(null);
 
+      // Explicit sign-out clears the was-signed-in flag so the session-expired
+      // banner never shows after a deliberate sign-out.
+      try {
+        await AsyncStorage.removeItem(AUTH_WAS_SIGNED_IN_KEY);
+      } catch {}
+
       set({
         status: 'anonymous',
         userId: null,
@@ -304,6 +402,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         idToken: null,
         loading: false,
         lastError: null,
+        sessionExpired: false,
+        initRetryPending: false,
       });
     }
   },
@@ -324,7 +424,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {}
     await setSyncAccessToken(null); // clears activeUserSub + cancels pending sync (frozen helper, unchanged)
     await purgeUserScopedStorage(sub);
-    set({ status: 'anonymous', userId: null, email: null, userSub: null, accessToken: null, idToken: null, lastError: null });
+    // Deleting the account is an explicit sign-out too: never show the banner.
+    try {
+      await AsyncStorage.removeItem(AUTH_WAS_SIGNED_IN_KEY);
+    } catch {}
+    set({ status: 'anonymous', userId: null, email: null, userSub: null, accessToken: null, idToken: null, lastError: null, sessionExpired: false, initRetryPending: false });
   },
 }));
 
