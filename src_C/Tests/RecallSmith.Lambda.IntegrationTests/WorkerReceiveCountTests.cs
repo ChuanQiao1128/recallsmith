@@ -47,7 +47,7 @@ public class WorkerReceiveCountTests
 
     public Task<bool> TryAcquireJobAsync(string jobId, int receiveCount = 1) => Task.FromResult(AcquireResult);
     public Task<JobInfo?> GetJobAsync(string jobId) => Task.FromResult(Job);
-    public Task CompleteJobAsync(string jobId) => Task.CompletedTask;
+    public Task CompleteJobAsync(string jobId, int? exportedCardCount = null) => Task.CompletedTask;
     public Task FailJobAsync(string jobId, string errorMessage) => Task.CompletedTask;
   }
 

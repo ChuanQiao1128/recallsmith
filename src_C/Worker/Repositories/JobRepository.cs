@@ -69,12 +69,13 @@ public class JobRepository : IJobRepository
   /// <summary>
   /// Step 5: 标记任务成功
   /// </summary>
-  public async Task CompleteJobAsync(string jobId)
+  public async Task CompleteJobAsync(string jobId, int? exportedCardCount = null)
   {
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null) throw new InvalidOperationException("Failed to open database connection");
 
-    // 021+: mark SUCCESS and move the deck's live pointer to this build in one atomic statement.
+    // 021+: mark SUCCESS, move the deck's live pointer to this build, and set total_cards to the
+    // exported card count (null leaves it untouched) in one atomic statement.
     const string sql = """
       with done as (
         update deck_publishes
@@ -83,14 +84,15 @@ public class JobRepository : IJobRepository
         returning deck_id, build_id
       )
       update decks d
-      set live_build_id = done.build_id
+      set live_build_id = done.build_id,
+          total_cards = coalesce($2::int, d.total_cards)
       from done
       where d.id = done.deck_id
       """;
 
     try
     {
-      await DbUtil.ExecuteAsync(conn, null, sql, [jobId]);
+      await DbUtil.ExecuteAsync(conn, null, sql, [jobId, exportedCardCount]);
     }
     catch (PostgresException pg) when (pg.SqlState == "42703")
     {

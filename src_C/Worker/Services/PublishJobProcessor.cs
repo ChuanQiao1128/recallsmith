@@ -82,7 +82,7 @@ public class PublishJobProcessor : IPublishJobProcessor
     await _contentArtifacts.GenerateAsync(job, deckData, uploadResult);
 
     // Step 5: 最终一致性提交
-    await _jobRepository.CompleteJobAsync(jobId);
+    await _jobRepository.CompleteJobAsync(jobId, deckData.Cards.Count);
 
     Console.WriteLine($"[JobId={jobId}] Job completed successfully");
   }
@@ -133,7 +133,7 @@ public class PublishJobProcessor : IPublishJobProcessor
       Locale = Convert.ToString(deck.TryGetValue("locale", out var lo) ? lo : null, CultureInfo.InvariantCulture) ?? "en-US",
       DeckType = deckType,
       Version = Convert.ToString(deck.TryGetValue("version", out var ver) ? ver : null, CultureInfo.InvariantCulture) ?? "1",
-      TotalCards = Convert.ToInt32(deck.TryGetValue("totalCards", out var tc) ? tc : cards.Count, CultureInfo.InvariantCulture),
+      TotalCards = cards.Count,
       Cards = cards
     };
   }
