@@ -168,6 +168,8 @@ async function stubApi(page: Page): Promise<{ seen: string[]; unexpected: string
 
     if (path === '/api/v1/authoring/decks') return body(ok([DECK]));
     if (path === '/api/v1/admin/manifest') return body(ok(MANIFEST));
+    if (path === '/api/v1/authoring/cards/page')
+      return body(ok({ items: [CARD], nextCursor: null, hasMore: false }));
     if (path === '/api/v1/authoring/cards') return body(ok([CARD]));
     if (path === '/api/v1/authoring/publish/jobs') return body(ok([]));
 
@@ -343,7 +345,7 @@ test('a signed-in console renders decks and navigates into a lazily-loaded route
   // is what makes this status meaningful.
   expect(cardsChunk.every(s => s.status === 200)).toBe(true);
 
-  expect(api.seen).toContain(`/api/v1/authoring/cards?deckId=${DECK.id}`);
+  expect(api.seen).toContain(`/api/v1/authoring/cards/page?deckId=${DECK.id}&limit=200`);
   expect(api.unexpected).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });

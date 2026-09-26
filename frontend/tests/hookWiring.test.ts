@@ -38,22 +38,22 @@ const ALLOWLIST: Record<string, string> = {};
  * `../hooks/useCards`), not from the barrel, so this list is the barrel's
  * inventory and not a bundle fact.
  *
- * It was three — the read pair plus useDeleteCard — and is now nine. The six
- * added are the write path: every submit and every row action in the console
- * now goes through a mutation that invalidates what it changed, instead of
- * issuing a bare request and leaving the rest of the app to find out on its
- * own. Sorted, because scanHookWiring sorts.
+ * It was three — the read pair plus useDeleteCard — then nine, and is now ten.
+ * The newest is useCard: the edit page reads its one row through ['card', id]
+ * instead of downloading the whole deck, and the update invalidates that key.
+ * Sorted, because scanHookWiring sorts.
  *
  * Call sites, one each and all in src/ (the "orphans are empty" assertion above
  * is what actually enforces this; the list is here so a swap is visible):
  *   useCards / useDeck / useDeleteCard  src/pages/CardListPage.tsx
+ *   useCard / useUpdateCard             src/pages/EditCardPage.tsx
  *   useCreateCard                       src/pages/NewCardPage.tsx
- *   useUpdateCard                       src/pages/EditCardPage.tsx
  *   useCreateDeck                       src/pages/NewDeckPage.tsx
  *   useUpdateDeck                       src/pages/DeckEditPage.tsx
  *   useDeleteDeck / usePublishDeck      src/pages/DeckListPage.tsx
  */
 const EXPECTED_BARREL_HOOKS = [
+  'useCard',
   'useCards',
   'useCreateCard',
   'useCreateDeck',
@@ -129,7 +129,7 @@ describe('the scan itself is still looking at something', () => {
     expect(scan.scannedFileCount).toBeGreaterThanOrEqual(20);
   });
 
-  it('found the barrel it is judging, and it publishes exactly the wired nine', () => {
+  it('found the barrel it is judging, and it publishes exactly the wired ten', () => {
     // Hardcoded on purpose, and re-deriving either line from ALLOWLIST breaks
     // it: `toBeGreaterThanOrEqual(ALLOWLIST.size)` is a real floor of 22 while
     // the allowlist is full and silently becomes `>= 0` — unfailable, passing

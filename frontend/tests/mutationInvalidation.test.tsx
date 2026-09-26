@@ -57,6 +57,7 @@ const CARD_ID = 101;
 const DECK_LIST_KEY = ['decks'];
 const DECK_ROW_KEY = ['decks', DECK_ID];
 const CARDS_KEY = ['cards', DECK_ID];
+const CARD_KEY = ['card', CARD_ID];
 
 const card = { id: CARD_ID, deckId: DECK_ID, question: 'q' } as Card;
 const deck = { id: DECK_ID, slug: 'csharp-fundamentals', title: 'C#' } as Deck;
@@ -104,7 +105,10 @@ describe('a card that was written', () => {
     const { result } = renderHook(() => hooks.useUpdateCard(), { wrapper });
     await result.current.mutateAsync({ id: CARD_ID, deckId: DECK_ID, question: 'q2' });
 
-    await waitFor(() => expect(invalidatedKeys()).toEqual([CARDS_KEY]));
+    // Both the list the card sits in and its own single-card cache: the edit page
+    // reads the row through ['card', id], so a save that skipped it would serve
+    // the pre-save version on the next ?id= read inside the staleTime window.
+    await waitFor(() => expect(invalidatedKeys()).toEqual([CARDS_KEY, CARD_KEY]));
   });
 
   it('is removed from the cached list by name when it is deleted, without a refetch', async () => {

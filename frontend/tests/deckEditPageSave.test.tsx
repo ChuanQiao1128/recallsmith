@@ -60,6 +60,7 @@ import type { Deck } from '../src/types/deck';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { deferred, networkFailure, ok, refused } from './support/apiResult';
 import { locationText, renderAt } from './support/routerProbe';
+import { queryClient } from '../src/api/queryClient';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
@@ -162,6 +163,9 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  // DeckEditPage mounts bare on the app singleton; clear it between cases so a
+  // saved deck cannot be served to the next test from cache.
+  queryClient.clear();
   signOut();
 });
 

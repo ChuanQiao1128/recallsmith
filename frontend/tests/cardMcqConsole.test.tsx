@@ -24,10 +24,12 @@ import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { renderWithQuery } from './support/queryTestClient';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 import { ok } from './support/apiResult';
+import { queryClient } from '../src/api/queryClient';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
   fetchCardsByDeck: vi.fn(),
+  fetchCardById: vi.fn(),
   createCard: vi.fn(),
   updateCard: vi.fn(),
 }));
@@ -92,6 +94,7 @@ beforeEach(() => {
   signInAsSuperAdmin();
   api.fetchDeckById.mockResolvedValue(ok(deck));
   api.fetchCardsByDeck.mockResolvedValue(ok([card()]));
+  api.fetchCardById.mockResolvedValue(ok(card()));
   api.updateCard.mockResolvedValue(ok(card()));
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -100,6 +103,9 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  // The edit and new pages mount bare on the app singleton; clear it between
+  // cases so a cached deck or card cannot cross over.
+  queryClient.clear();
   signOut();
 });
 
@@ -157,7 +163,7 @@ describe('the card list marks a card that carries an MCQ blob', () => {
 
 describe('the edit page shows the MCQ blob read-only', () => {
   it('renders the read-only MCQ panel on the edit page when the card carries mcq', async () => {
-    api.fetchCardsByDeck.mockResolvedValue(ok([card({ mcq: MCQ })]));
+    api.fetchCardById.mockResolvedValue(ok(card({ mcq: MCQ })));
     mountEdit();
     await screen.findByRole('button', { name: /save changes/i });
 
@@ -187,7 +193,7 @@ describe('the edit page shows the MCQ blob read-only', () => {
   });
 
   it('renders no MCQ panel on the edit page for a Q/A card', async () => {
-    api.fetchCardsByDeck.mockResolvedValue(ok([card({ mcq: null })]));
+    api.fetchCardById.mockResolvedValue(ok(card({ mcq: null })));
     mountEdit();
     await screen.findByRole('button', { name: /save changes/i });
 
@@ -205,7 +211,7 @@ describe('the edit page shows the MCQ blob read-only', () => {
     // This is the page -> function half: EditCardPage.handleSubmit never mentions
     // mcq, so the server's blob is left alone. The function -> wire half — that an
     // explicit null is forwarded as an own key — is in authoringRequestBody.test.ts.
-    api.fetchCardsByDeck.mockResolvedValue(ok([card({ mcq: MCQ })]));
+    api.fetchCardById.mockResolvedValue(ok(card({ mcq: MCQ })));
     mountEdit();
     const saveButton = await screen.findByRole('button', { name: /save changes/i });
 
