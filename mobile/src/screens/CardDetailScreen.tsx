@@ -351,19 +351,6 @@ export function CardDetailScreen({ navigation, route }: Props) {
           >
             <Text style={styles.secondaryActionText}>Back to library</Text>
           </Pressable>
-
-          {/* HIDDEN test-contract strings: keep "Why this card matters" and
-              "Back to tag coverage" in the tree for plan-library-deep-polish.
-              Rendered with 0 fontSize — invisible to user, scrapeable to test. */}
-          <Text style={styles.testProbeHidden}>Why this card matters</Text>
-          <Pressable
-            style={styles.testProbeHidden}
-            onPress={() => navigation.navigate('TagExplorer', { poolId: 'csharp' })}
-          >
-            <Text style={styles.testProbeHidden}>Back to tag coverage</Text>
-          </Pressable>
-
-          {loading ? null : null}
         </ScrollView>
       </LinearGradient>
     </SafeAreaView>
@@ -545,6 +532,4 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   secondaryActionText: { color: colors.pokeBlueDeep, fontSize: typography.button, fontWeight: '900' },
-
-  testProbeHidden: { width: 0, height: 0, opacity: 0, fontSize: 0, lineHeight: 0, overflow: 'hidden' },
 });

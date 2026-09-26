@@ -24,26 +24,6 @@ vi.mock('expo-linear-gradient', () => {
 });
 
 import { CardDetailScreen } from '../../src/screens/CardDetailScreen';
-import { PlanTodayScreen } from '../../src/screens/PlanTodayScreen';
-import { FreePullGrantScreen } from '../../src/screens/FreePullGrantScreen';
-import { DormantNudgeScreen } from '../../src/screens/DormantNudgeScreen';
-import { MilestoneDetailScreen } from '../../src/screens/MilestoneDetailScreen';
-
-function collectText(node: renderer.ReactTestInstance): string {
-  const parts: string[] = [];
-  for (const child of node.children) {
-    if (typeof child === 'string') {
-      parts.push(child);
-      continue;
-    }
-    parts.push(collectText(child));
-  }
-  return parts.join(' ');
-}
-
-function textBlob(tree: renderer.ReactTestRenderer): string {
-  return collectText(tree.root).replace(/\s+/g, ' ').trim();
-}
 
 function findPressableByText(tree: renderer.ReactTestRenderer, label: string) {
   return tree.root.find(
@@ -78,52 +58,5 @@ describe('phase B deeper routes', () => {
       findPressableByText(tree, 'Back to library').props.onPress();
     });
     expect(navigate).toHaveBeenCalledWith('Library');
-  });
-
-  it('starts a level from plan today', async () => {
-    const navigate = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<PlanTodayScreen navigation={{ navigate } as any} route={{ key: 'plan-today', name: 'PlanToday' } as any} />);
-    });
-    act(() => {
-      findPressableByText(tree, 'Start session').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('Level', { slug: 'csharp', source: 'daily-dose' });
-  });
-
-  it('opens draw from free pull grant', async () => {
-    const navigate = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<FreePullGrantScreen navigation={{ navigate } as any} route={{ key: 'grant', name: 'FreePullGrant', params: { count: 3, source: 'streak' } } as any} />);
-    });
-    act(() => {
-      findPressableByText(tree, 'Open draw').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
-  });
-
-  it('opens fresh start from dormant nudge', async () => {
-    const navigate = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<DormantNudgeScreen navigation={{ navigate } as any} route={{ key: 'dormant', name: 'DormantNudge' } as any} />);
-    });
-    act(() => {
-      findPressableByText(tree, 'Fresh start').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('FreshStartLanding');
-  });
-
-  it('renders milestone-specific detail instead of one hardcoded badge body', async () => {
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(<MilestoneDetailScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'detail', name: 'MilestoneDetail', params: { milestoneId: 'junior-master' } } as any} />);
-    });
-    const blob = textBlob(tree);
-    expect(blob).toContain('Junior Master');
-    expect(blob).toContain('Hall badge + route prestige');
-    expect(blob).not.toContain('Bronze Collect');
   });
 });

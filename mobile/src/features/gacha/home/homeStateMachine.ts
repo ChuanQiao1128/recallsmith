@@ -1,5 +1,14 @@
-import type { MockHomeState } from '../../../mock/types';
 import type { RewardWalletState } from '../rewards/rewardWallet';
+
+export type HomeState =
+  | 'new-user'
+  | 'active'
+  | 'clear-day'
+  | 'reward-ready'
+  | 'backlog'
+  | 'dormant'
+  | 'churned'
+  | 'paused';
 
 export type HomeLifecycleState = 'new-user' | 'active' | 'dormant' | 'churned' | 'paused';
 
@@ -9,7 +18,7 @@ export function resolveHomeState(params: {
   wallet: RewardWalletState;
   streakCount?: number;
   lifecycle?: HomeLifecycleState;
-}): MockHomeState {
+}): HomeState {
   const { dueCount, newCount, wallet, streakCount = 0, lifecycle = 'active' } = params;
 
   if (lifecycle === 'paused') return 'paused';

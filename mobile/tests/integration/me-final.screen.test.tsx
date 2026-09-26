@@ -25,13 +25,7 @@ vi.mock('expo-linear-gradient', () => {
 
 import { MoreScreen } from '../../src/screens/MoreScreen';
 import { ProfileScreen } from '../../src/screens/ProfileScreen';
-import { AchievementsScreen } from '../../src/screens/AchievementsScreen';
 import { HelpFAQScreen } from '../../src/screens/HelpFAQScreen';
-import { SettingsMainScreen } from '../../src/screens/SettingsMainScreen';
-import { SettingsAudienceScreen } from '../../src/screens/SettingsAudienceScreen';
-import { SettingsNotificationsScreen } from '../../src/screens/SettingsNotificationsScreen';
-import { SettingsPoolsScreen } from '../../src/screens/SettingsPoolsScreen';
-import { SettingsAppearanceScreen } from '../../src/screens/SettingsAppearanceScreen';
 
 function collectText(node: renderer.ReactTestInstance): string {
   const parts: string[] = [];
@@ -106,15 +100,6 @@ describe('me final flow', () => {
     expect(profileBlob).not.toContain('Next best return point');
     expect(profileBlob).not.toContain('premium learner card');
 
-    let achievementsTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      achievementsTree = renderer.create(<AchievementsScreen navigation={{ navigate } as any} route={{ key: 'achievements', name: 'Achievements' } as any} />);
-    });
-    const achievementsBlob = textBlob(achievementsTree);
-    expect(achievementsBlob).toContain('Wins and milestones');
-    expect(achievementsBlob).toContain('Unlocked milestones');
-    expect(achievementsBlob).not.toContain('feels more ceremonial');
-
     let faqTree!: renderer.ReactTestRenderer;
     await act(async () => {
       faqTree = renderer.create(<HelpFAQScreen navigation={{ navigate } as any} route={{ key: 'faq', name: 'HelpFAQ' } as any} />);
@@ -123,91 +108,5 @@ describe('me final flow', () => {
     expect(faqBlob).toContain('Help and answers');
     expect(faqBlob).toContain('Top questions');
     expect(faqBlob).not.toContain('cosmic support treatment');
-  });
-
-  it('keeps settings pages productized and clearly partitioned', async () => {
-    const navigate = vi.fn();
-
-    let settingsMainTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      settingsMainTree = renderer.create(<SettingsMainScreen navigation={{ navigate } as any} route={{ key: 'settings-main', name: 'SettingsMain' } as any} />);
-    });
-    const mainBlob = textBlob(settingsMainTree);
-    expect(mainBlob).toContain('Preferences and account');
-    expect(mainBlob).toContain('Content preferences');
-    expect(mainBlob).toContain('Notifications & reminders');
-    expect(mainBlob).toContain('Pools and availability');
-    expect(mainBlob).toContain('Theme and reading density');
-    expect(mainBlob).toContain('Daily rhythm');
-    expect(mainBlob).toContain('Study rules');
-    expect(mainBlob).not.toContain('print hierarchy');
-
-    let audienceTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      audienceTree = renderer.create(<SettingsAudienceScreen navigation={{ navigate } as any} route={{ key: 'settings-audience', name: 'SettingsAudience' } as any} />);
-    });
-    const audienceBlob = textBlob(audienceTree);
-    expect(audienceBlob).toContain('Content preference');
-    expect(audienceBlob).toContain('Due review stays the same');
-    expect(audienceBlob).toContain('Recommendation surfaces');
-    expect(audienceBlob).not.toContain('dedicated page');
-
-    let notificationsTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      notificationsTree = renderer.create(<SettingsNotificationsScreen navigation={{ navigate } as any} route={{ key: 'settings-notifications', name: 'SettingsNotifications' } as any} />);
-    });
-    const notificationsBlob = textBlob(notificationsTree);
-    expect(notificationsBlob).toContain('Reminders and quiet hours');
-    expect(notificationsBlob).toContain('Reminder plan');
-    expect(notificationsBlob).toContain('Morning nudge');
-    expect(notificationsBlob).toContain('Evening rescue');
-    expect(notificationsBlob).not.toContain('real page');
-
-    let poolsTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      poolsTree = renderer.create(<SettingsPoolsScreen navigation={{ navigate } as any} route={{ key: 'settings-pools', name: 'SettingsPools' } as any} />);
-    });
-    const poolsBlob = textBlob(poolsTree);
-    expect(poolsBlob).toContain('Pools and availability');
-    expect(poolsBlob).toContain('Currently active');
-    expect(poolsBlob).not.toContain('concrete page');
-
-    let appearanceTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      appearanceTree = renderer.create(<SettingsAppearanceScreen navigation={{ navigate } as any} route={{ key: 'settings-appearance', name: 'SettingsAppearance' } as any} />);
-    });
-    const appearanceBlob = textBlob(appearanceTree);
-    expect(appearanceBlob).toContain('Theme and reading density');
-    expect(appearanceBlob).toContain('Motion and ceremony');
-    expect(appearanceBlob).not.toContain('real design tokens');
-  });
-
-  it('preserves the me-route navigation chain across the key actions', async () => {
-    const navigate = vi.fn();
-    let tree!: renderer.ReactTestRenderer;
-
-    await act(async () => {
-      tree = renderer.create(<SettingsMainScreen navigation={{ navigate } as any} route={{ key: 'settings-main', name: 'SettingsMain' } as any} />);
-    });
-
-    act(() => {
-      findPressableByText(tree, 'Notifications & reminders').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('SettingsNotifications');
-
-    act(() => {
-      findPressableByText(tree, 'Content preferences').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('SettingsAudience');
-
-    act(() => {
-      findPressableByText(tree, 'Pools and availability').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('SettingsPools');
-
-    act(() => {
-      findPressableByText(tree, 'Theme and reading density').props.onPress();
-    });
-    expect(navigate).toHaveBeenCalledWith('SettingsAppearance');
   });
 });

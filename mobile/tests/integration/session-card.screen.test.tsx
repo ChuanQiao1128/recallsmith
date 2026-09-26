@@ -389,7 +389,7 @@ describe('SessionCardScreen', () => {
     }));
   });
 
-  it('settles the rating reward and hands the outcome to Settlement', async () => {
+  it('settles the rating reward and hands the outcome to SessionSummary', async () => {
     vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute({ limit: 3, minimumGoal: 2 }) as any);
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
 
@@ -401,7 +401,7 @@ describe('SessionCardScreen', () => {
           route={{
             key: 'session-card',
             name: 'SessionCard',
-            params: { slug: 'csharp', mode: 'mixed', limit: 3, completionRoute: 'settlement' },
+            params: { slug: 'csharp', mode: 'mixed', limit: 3 },
           } as any}
         />,
       );
@@ -419,9 +419,9 @@ describe('SessionCardScreen', () => {
       await Promise.resolve();
     });
 
-    expect(navigation.replace).toHaveBeenCalledWith('Settlement', expect.objectContaining({
-      rewardPulls: 1,
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({
       sessionDone: 1,
+      reward: expect.objectContaining({ rewardPulls: 1 }),
     }));
   });
 
