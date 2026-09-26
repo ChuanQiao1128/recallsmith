@@ -29,6 +29,16 @@ locals {
     health             = { route_key = "GET /health", integration = "core_vpc", auth = "none" }
     rc_production      = { route_key = "POST /webhooks/revenuecat/production", integration = "core_vpc", auth = "none" }
     rc_development     = { route_key = "POST /webhooks/revenuecat/development", integration = "core_vpc", auth = "none" }
+    # 2026-09-26 (E09 follow-up): browser CORS preflights carry no token. A JWT route such as
+    # ANY /api/v1/authoring/{proxy+} matched them (longest greedy path wins over the method) and
+    # answered 401, so the console could not call the API. One unauthenticated OPTIONS route per
+    # console prefix; core-vpc answers OPTIONS with 200 and API Gateway adds the CORS headers.
+    options_root          = { route_key = "OPTIONS /{proxy+}", integration = "core_vpc", auth = "none" }
+    options_authoring     = { route_key = "OPTIONS /api/v1/authoring/{proxy+}", integration = "core_vpc", auth = "none" }
+    options_admin         = { route_key = "OPTIONS /api/v1/admin/{proxy+}", integration = "core_vpc", auth = "none" }
+    options_admin_cognito = { route_key = "OPTIONS /api/v1/admin/cognito/{proxy+}", integration = "core_vpc", auth = "none" }
+    options_ai            = { route_key = "OPTIONS /api/v1/ai/{proxy+}", integration = "core_vpc", auth = "none" }
+    options_billing       = { route_key = "OPTIONS /api/v1/billing/{proxy+}", integration = "core_vpc", auth = "none" }
   }
 
   integration_ids = {
