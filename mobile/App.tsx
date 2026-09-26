@@ -90,8 +90,10 @@ import { useAuthStore } from './src/auth/authStore';
 import { scheduleProgressSync } from './src/sync/progressSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
+import { createOtaUpdateChecker, getExpoUpdatesModule } from './src/updates/otaUpdateCheck';
 
 configureAmplifyOnce();
+const otaUpdateChecker = createOtaUpdateChecker({ updates: getExpoUpdatesModule() });
 
 if (__DEV__) {
   // Reanimated 4 needs react-native-worklets/plugin (applied by babel-preset-expo when the package is
@@ -171,7 +173,10 @@ export default function App() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'background' || state === 'inactive') scheduleProgressSync({ delayMs: 0, reason: 'app_background' });
-      else if (state === 'active') scheduleProgressSync({ delayMs: 0, reason: 'app_foreground' });
+      else if (state === 'active') {
+        scheduleProgressSync({ delayMs: 0, reason: 'app_foreground' });
+        void otaUpdateChecker.onForeground(() => (navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : undefined));
+      }
     });
     return () => sub.remove();
   }, []);
