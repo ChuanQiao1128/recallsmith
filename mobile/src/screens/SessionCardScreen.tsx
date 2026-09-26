@@ -173,6 +173,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [deck, setDeck] = useState<DeckExport | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumped by the error state's Retry so the load effect re-runs without a
+  // slug change (offline / deck-not-found recovers once the deck is reachable).
+  const [reloadToken, setReloadToken] = useState(0);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   // The gate for this deck, resolved once per load and then held. It is state
   // rather than a ref because the render path counts due cards with it, and it
@@ -538,7 +541,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       // that flashed continuously. sessionLimit is derived state we
       // SET inside this effect, so it must not gate the effect itself.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isPremiumUser, mode, navigation, previewLimit, slug]),
+    }, [isPremiumUser, mode, navigation, previewLimit, slug, reloadToken]),
   );
   const now = new Date();
   const dueTodayCount = countDueToday(progress, now, ownedSet);
@@ -798,6 +801,26 @@ export function SessionCardScreen({ navigation, route }: Props) {
             <Text style={styles.errorBody} numberOfLines={2}>
               {loadError}
             </Text>
+            <Pressable
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed, { marginTop: 10 }]}
+              accessibilityRole="button"
+              onPress={() => setReloadToken((n) => n + 1)}
+              testID="session-card-error-retry"
+            >
+              <Text style={styles.backText} numberOfLines={1}>
+                Retry
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed, { marginTop: 10 }]}
+              accessibilityRole="button"
+              onPress={() => navigation.navigate('Library')}
+              testID="session-card-error-choose-deck"
+            >
+              <Text style={styles.backText} numberOfLines={1}>
+                Choose another deck
+              </Text>
+            </Pressable>
             <Pressable
               style={({ pressed }) => [styles.backButton, pressed && styles.pressed, { marginTop: 10 }]}
               onPress={() => navigation.goBack()}

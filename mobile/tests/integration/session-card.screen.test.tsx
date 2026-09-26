@@ -707,6 +707,43 @@ describe('SessionCardScreen', () => {
     expect(String(line[0].props.children)).toMatch(/^At this pace, about \d+ cards? comes? due tomorrow\.$/);
   });
 
+  it('offers Retry and Choose another deck when the deck cannot load', async () => {
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+    // First load can't resolve the deck → error state; the retry resolves it.
+    vi.mocked(resolveDeckBySlug).mockResolvedValueOnce(null as any);
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode: 'mixed', limit: 1 } } as any}
+        />,
+      );
+    });
+    await flush();
+
+    // Error state carries both recovery affordances.
+    expect(tree.root.findByProps({ testID: 'session-card-error-retry' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'session-card-error-choose-deck' })).toBeTruthy();
+
+    // Choose another deck routes to the Library.
+    act(() => {
+      tree.root.findByProps({ testID: 'session-card-error-choose-deck' }).props.onPress();
+    });
+    expect(navigation.navigate).toHaveBeenCalledWith('Library');
+
+    // Retry re-runs the load, which now succeeds → the card surface renders.
+    await act(async () => {
+      tree.root.findByProps({ testID: 'session-card-error-retry' }).props.onPress();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(tree.root.findAllByProps({ testID: 'session-card-error-retry' })).toHaveLength(0);
+    expect(findPressableByLabel(tree, 'Reveal answer')).toBeTruthy();
+  });
+
   describe('settleRatingReward call contract (review finding E)', () => {
     const PRE_RATING_PROGRESS = [{ stableUid: '1', stage: 0, nextReviewAt: 0 }];
 

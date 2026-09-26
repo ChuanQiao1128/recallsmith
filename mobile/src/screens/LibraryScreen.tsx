@@ -53,6 +53,10 @@ export function LibraryScreen({ navigation, route }: Props) {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [deckOptions, setDeckOptions] = useState<LibraryDeckOption[]>([]);
   const [deck, setDeck] = useState<DeckExport | null>(null);
+  // Mirrors the currently displayed deck for the refresh closure, which needs
+  // to know synchronously whether a deck is already on screen (stale state
+  // would lie on the second focus). Kept equal to `deck` at every setDeck.
+  const deckRef = useRef<DeckExport | null>(null);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   // Which cards this account holds, drawn plus grandfathered. Kept next to
   // `progress` and replaced with it in the same refresh, because the VM reads
@@ -91,8 +95,11 @@ export function LibraryScreen({ navigation, route }: Props) {
 
   const refresh = useCallback(
     async (preferredSlug?: string | null) => {
-      setLoading(true);
+      // Stale-while-revalidate: only the first load (nothing on screen yet)
+      // shows the full-screen spinner. Later refreshes keep the mounted grid.
+      if (deckRef.current === null) setLoading(true);
       setError(null);
+      let requestedSlug: string | null = null;
       try {
         const manifest = await listManifestDecks();
         const options = manifest
@@ -107,6 +114,7 @@ export function LibraryScreen({ navigation, route }: Props) {
         if (!currentSlug) {
           throw new Error('No deck available yet. Install one first.');
         }
+        requestedSlug = currentSlug;
 
         let resolvedDeck = await resolveDeckBySlug(currentSlug);
         if (!resolvedDeck) {
@@ -132,15 +140,27 @@ export function LibraryScreen({ navigation, route }: Props) {
         await setActiveDeckSlug(currentSlug);
 
         setSelectedSlug(currentSlug);
+        deckRef.current = resolvedDeck;
         setDeck(resolvedDeck);
         setProgress(resolvedProgress);
         setOwnedSet(resolvedOwned);
       } catch (loadErr: any) {
-        setDeckOptions([]);
-        setDeck(null);
-        setProgress([]);
-        setOwnedSet(null);
-        setError(loadErr?.message ?? 'Failed to load library.');
+        // Never wipe the deck switcher: keep whatever options loaded so an
+        // offline user can still reach their other installed decks.
+        if (
+          deckRef.current !== null &&
+          requestedSlug !== null &&
+          deckRef.current.Slug === requestedSlug
+        ) {
+          // A background refresh of the deck already on screen failed — keep
+          // the stale-but-usable grid and stay silent.
+        } else {
+          deckRef.current = null;
+          setDeck(null);
+          setProgress([]);
+          setOwnedSet(null);
+          setError(loadErr?.message ?? 'Failed to load library.');
+        }
       } finally {
         setLoading(false);
         lastRefreshAtRef.current = Date.now();
@@ -253,7 +273,7 @@ export function LibraryScreen({ navigation, route }: Props) {
   const isCollectionComplete =
     filter === 'new' && vm?.counts.newCount === 0 && ownedCount === totalCount && totalCount > 0;
 
-  if (loading) {
+  if (loading && !deck) {
     return (
       <SafeAreaView style={styles.safeArea} testID="screen-library-root">
         <LinearGradient
@@ -289,6 +309,26 @@ export function LibraryScreen({ navigation, route }: Props) {
             <Text style={styles.errorBody} numberOfLines={2}>
               {error ?? 'Unable to read your deck right now.'}
             </Text>
+            {deckOptions.length > 1 ? (
+              <View style={styles.errorDeckSwitcher} testID="library-error-deck-switcher">
+                {deckOptions.map((option) => (
+                  <Pressable
+                    key={option.slug}
+                    style={({ pressed }) => [styles.errorDeckChip, pressed && styles.pressed]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: option.slug === selectedSlug }}
+                    onPress={() => {
+                      void refresh(option.slug);
+                    }}
+                    testID={`library-error-deck-${option.slug}`}
+                  >
+                    <Text style={styles.errorDeckChipText} numberOfLines={1}>
+                      {option.title}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
             <Pressable
               style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
               onPress={() => {
