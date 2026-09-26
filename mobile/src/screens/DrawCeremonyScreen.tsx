@@ -52,7 +52,8 @@ import { SpillSampler } from '../components/ceremony/SpillSampler';
 import { SwipeHint } from '../components/ceremony/SwipeHint';
 import { ceremonyStyles as styles } from '../components/ceremony/ceremonyStyles';
 import { prefetchCeremonyImages } from '../components/ceremony/imagePrefetch';
-import { DROPPED_FRAME_MS, startCeremonyPerf, type CeremonyPerfSession, type UiFrameStats } from '../features/gacha/draw/ceremonyPerf';
+import { DROPPED_FRAME_MS, perfNow, startCeremonyPerf, type CeremonyPerfSession, type UiFrameStats } from '../features/gacha/draw/ceremonyPerf';
+import { isDrawStateSyncInFlight } from '../sync/syncActivity';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DrawCeremony'>;
 
@@ -183,7 +184,12 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     uiSum.value += dt;
     if (dt > uiMax.value) uiMax.value = dt;
     if (dt > DROPPED_FRAME_MS) uiDropped.value += 1;
-  }, true);
+  }, false);
+  // UI-thread frame counting starts at the tear (first non-'swipe' phase), not at mount,
+  // so idle swipe-screen time never dilutes the mean. setActive(true) fires once.
+  const uiFrameCallbackRef = useRef(uiFrameCallback);
+  uiFrameCallbackRef.current = uiFrameCallback;
+  const uiFramesStartedRef = useRef(false);
 
   // Perf recorder + warm-up: every audio player exists and the ceremony bitmaps are in
   // the image cache before the tear is interactive (design §3.8); the report lands in
@@ -230,6 +236,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     phaseRef.current = phase;
+    perfRef.current?.markPhaseCommit(phase);
   }, [phase]);
   useEffect(() => {
     flippedRef.current = flippedSet;
@@ -241,6 +248,10 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const setPhaseAt = useCallback((p: CeremonyPhase) => {
     phaseStartedAtRef.current = Date.now();
     perfRef.current?.markPhase(p);
+    if (p !== 'swipe' && !uiFramesStartedRef.current) {
+      uiFramesStartedRef.current = true;
+      try { uiFrameCallbackRef.current?.setActive(true); } catch {}
+    }
     setPhase(p);
   }, []);
 
@@ -352,7 +363,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const runSchedule = useCallback(
     (entries: ScheduleEntry[]) => {
       for (const e of entries) {
+        const scheduledAt = perfNow();
         const id = setTimeout(() => {
+          perfRef.current?.recordTimerSlip(e.phase, e.at, perfNow() - scheduledAt);
           if (e.phase === 'settle') {
             setPhaseAt('settle');
             setCanSkip(true);
@@ -386,6 +399,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
     if (reduceMotion) {
       setPhaseAt('flash-reveal');
+      perfRef.current?.updateMeta({ audioWarmAtTear: audio.isWarm(), syncInFlightAtTear: isDrawStateSyncInFlight() });
       const settleCue = setTimeout(() => {
         setPhaseAt('settle');
         setCanSkip(true);
@@ -413,6 +427,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     }
 
     setPhaseAt('approach');
+    perfRef.current?.updateMeta({ audioWarmAtTear: audio.isWarm(), syncInFlightAtTear: isDrawStateSyncInFlight() });
     runSchedule(scheduleFrom('approach', timings, 0));
     const tellTimer = setTimeout(
       () => setTellLanded(true),

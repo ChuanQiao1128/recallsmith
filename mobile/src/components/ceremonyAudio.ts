@@ -17,11 +17,11 @@
 //   expo-audio's end-notification → seek → play loop was the audible stutter.
 // - Players are created with a 60 s status interval so expo-audio's periodic
 //   playbackStatusUpdate events stay off the JS thread during the ceremony.
-// - Each hit records its JS-side trigger latency (Date.now around play()) into
+// - Each hit records its JS-side trigger latency (performance.now around play()) into
 //   the ceremony perf recorder (features/gacha/draw/ceremonyPerf).
 import { useMemo } from 'react';
 import type { Rarity } from '../features/gacha/draw/cardRarity';
-import { recordCeremonyAudioLatency } from '../features/gacha/draw/ceremonyPerf';
+import { perfNow, recordCeremonyAudioLatency } from '../features/gacha/draw/ceremonyPerf';
 
 export type CeremonyBedName = 'crinkle' | 'air' | 'shimmer-pad' | 'choir-swell';
 export type CeremonyHitName =
@@ -143,7 +143,7 @@ export function createCeremonyAudioController(deps: {
 }): CeremonyAudioController {
   const { audio, sources } = deps;
   const onHitLatency = deps.onHitLatency ?? recordCeremonyAudioLatency;
-  const now = deps.now ?? Date.now;
+  const now = deps.now ?? perfNow;
   const bedPlayers = new Map<CeremonySfxFile, AudioPlayerLike>();
   const bedStates = new Map<AudioPlayerLike, BedState>();
   const hitPools = new Map<CeremonySfxFile, HitPool>();

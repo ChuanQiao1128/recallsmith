@@ -9,7 +9,9 @@ import { loadDrawState, saveDrawState } from '../features/gacha/draw/drawStateSt
 import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { getCeremonyDevOverrides, setCeremonyDevOverride } from '../features/gacha/draw/ceremonyPrefs';
 import {
+  CEREMONY_PERF_HISTORY_LIMIT,
   formatCeremonyPerfReport,
+  loadCeremonyPerfHistory,
   loadLastCeremonyPerfReport,
   type CeremonyPerfReport,
 } from '../features/gacha/draw/ceremonyPerf';
@@ -46,24 +48,32 @@ export function DebugMenuScreen({ navigation }: Props) {
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [devOverrides, setDevOverrides] = useState(() => getCeremonyDevOverrides());
   const [perfReport, setPerfReport] = useState<CeremonyPerfReport | null>(null);
+  const [perfHistory, setPerfHistory] = useState<CeremonyPerfReport[]>([]);
   const [perfLoaded, setPerfLoaded] = useState(false);
   const [perfJsonVisible, setPerfJsonVisible] = useState(false);
 
   const reloadPerf = useCallback(async () => {
     let report: CeremonyPerfReport | null = null;
+    let history: CeremonyPerfReport[] = [];
     try {
       report = await loadLastCeremonyPerfReport();
     } catch {
       report = null;
     }
-    return report;
+    try {
+      history = await loadCeremonyPerfHistory();
+    } catch {
+      history = [];
+    }
+    return { report, history };
   }, []);
 
   useEffect(() => {
     let mounted = true;
-    void reloadPerf().then((report) => {
+    void reloadPerf().then(({ report, history }) => {
       if (!mounted) return;
       setPerfReport(report);
+      setPerfHistory(history);
       setPerfLoaded(true);
     });
     return () => {
@@ -199,6 +209,11 @@ export function DebugMenuScreen({ navigation }: Props) {
               {perfLoaded ? 'No ceremony recorded on this device yet. Open a pack, then come back.' : 'Loading…'}
             </Text>
           )}
+          {perfHistory.length > 0 ? (
+            <Text style={styles.perfLine} testID="debug-ceremony-perf-history-count">
+              {`Keeping the last ${perfHistory.length} of ${CEREMONY_PERF_HISTORY_LIMIT} reports`}
+            </Text>
+          ) : null}
           <View style={styles.perfRow}>
             <Pressable
               testID="debug-ceremony-perf-reload"
@@ -206,8 +221,9 @@ export function DebugMenuScreen({ navigation }: Props) {
               accessibilityLabel="Reload ceremony report"
               style={({ pressed }) => [styles.ceremonyButton, styles.perfButton, pressed && styles.dangerButtonPressed]}
               onPress={() => {
-                void reloadPerf().then((report) => {
+                void reloadPerf().then(({ report, history }) => {
                   setPerfReport(report);
+                  setPerfHistory(history);
                   setPerfLoaded(true);
                 });
               }}
@@ -229,6 +245,11 @@ export function DebugMenuScreen({ navigation }: Props) {
           {perfReport && perfJsonVisible ? (
             <Text style={styles.perfJson} selectable testID="debug-ceremony-perf-json-body">
               {JSON.stringify(perfReport, null, 1)}
+            </Text>
+          ) : null}
+          {perfJsonVisible && perfHistory.length > 1 ? (
+            <Text style={styles.perfJson} selectable testID="debug-ceremony-perf-history-json">
+              {JSON.stringify(perfHistory, null, 1)}
             </Text>
           ) : null}
         </View>
