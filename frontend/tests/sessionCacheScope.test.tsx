@@ -227,10 +227,10 @@ describe('the page and the account it is signed in as', () => {
 
     await screen.findByText('My Own Deck');
     // Not "a cache exists" — the OWNER is the whole repair, so the owner is
-    // what is asserted.
+    // what is asserted. Since F24 an editor skips the admin manifest entirely,
+    // so only the decks cache is filed, and it is still scoped to the account.
     expect(cacheKeys()).toEqual([
       `recallsmith/v1/${TEST_EDITOR_SUB}/decks`,
-      `recallsmith/v1/${TEST_EDITOR_SUB}/manifest`,
     ]);
   });
 
