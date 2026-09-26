@@ -230,6 +230,12 @@ public sealed class VpcFunction
       {
         return await Vpc.Runtime.Me.HandleMe(req, res, auth);
       }
+      if ((p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) ||
+           p.EndsWith("/api/v1/user/me", StringComparison.OrdinalIgnoreCase)) &&
+          req.Method.Equals("DELETE", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Runtime.AccountDeletion.HandleDeleteMe(req, res, auth);
+      }
       if (p.EndsWith("/api/v1/user/client-errors", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Runtime.ClientErrors.HandleClientErrors(req, res, auth);
