@@ -5,7 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
-import type { DeckExport } from '../types/deckExport';
+import type { CardExport, DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
@@ -16,6 +16,9 @@ import { formatRank, rankCardsByOrder } from '../features/gacha/library/cardRank
 import { getFeatureFlags } from '../config/featureFlags';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
 import { MCQ_COPY } from '../features/gacha/mcq/mcqConstants';
+import { CardAnswerSections } from '../features/gacha/components/CardAnswerSections';
+import { cardDetailStatus } from '../features/gacha/library/cardDetailStatus';
+import { findCardAcrossDecks } from '../features/gacha/library/findCardAcrossDecks';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CardDetail'>;
 
@@ -47,6 +50,18 @@ async function getCachedDeckSafe(slug: string): Promise<DeckExport | null> {
     return null;
   }
 }
+// The installed decks' slugs, for the cross-deck lookup: a deep link can point
+// at a card that lives in a deck other than the active one. Same lazy, guarded
+// shape as the loaders above so the content stack stays out of import time.
+async function listManifestSlugsSafe(): Promise<string[]> {
+  try {
+    const mod = await import('../content/deckRepository');
+    const decks = (await mod?.listManifestDecks?.()) ?? [];
+    return decks.map((d) => d.slug);
+  } catch {
+    return [];
+  }
+}
 async function loadDeckProgressSafe(deck: DeckExport): Promise<CardProgress[]> {
   try {
     const mod = await import('../review/storage');
@@ -71,36 +86,57 @@ async function resolveEffectiveOwnedSafe(
   }
 }
 
-// Pull a real card from the active deck (no more LIBRARY_SNAPSHOT mock).
+// Pull a real card from any installed deck (active first, then the rest — no
+// more LIBRARY_SNAPSHOT mock, and no more active-deck-only blind spot).
+type CardLoadStatus = 'loading' | 'ready' | 'not-found';
+
 function useDeckCard(cardId: string) {
   const [deck, setDeck] = useState<DeckExport | null>(null);
+  const [card, setCard] = useState<CardExport | null>(null);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   const [ownedSet, setOwnedSet] = useState<Set<string> | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<CardLoadStatus>('loading');
 
   useEffect(() => {
     let cancelled = false;
+    setStatus('loading');
+    setDeck(null);
+    setCard(null);
+    setProgress([]);
+    setOwnedSet(null);
     (async () => {
       try {
-        const slug = await loadActiveDeckSlugSafe();
-        if (!slug) return;
-        const d = await getCachedDeckSafe(slug);
-        if (!d || cancelled) return;
-        const p = await loadDeckProgressSafe(d);
+        // Active deck first (usually already cached), then every other
+        // installed deck in manifest order — a deep link can land on a card
+        // that isn't in the active deck at all.
+        const found = await findCardAcrossDecks(cardId, {
+          activeSlug: await loadActiveDeckSlugSafe(),
+          listSlugs: listManifestSlugsSafe,
+          loadDeck: getCachedDeckSafe,
+        });
+        if (cancelled) return;
+        if (!found) {
+          setStatus('not-found');
+          return;
+        }
+        // Progress and ownership belong to the deck the card was actually found
+        // in, so a locked card in a non-active deck stays locked.
+        const p = await loadDeckProgressSafe(found.deck);
         if (cancelled) return;
         // Resolved before the card is published to the tree, not alongside it.
         // Two setStates a tick apart would render one frame of the unlocked
         // card -- the question text of a card the user does not hold, which is
-        // exactly the thing the lock exists to withhold.
-        const owned = await resolveEffectiveOwnedSafe(slug, p);
+        // exactly the thing the lock exists to withhold. card and ownedSet are
+        // set together so isLocked is never evaluated against a stale set.
+        const owned = await resolveEffectiveOwnedSafe(found.deck.Slug, p);
         if (cancelled) return;
-        setDeck(d);
+        setDeck(found.deck);
+        setCard(found.card);
         setProgress(p);
         setOwnedSet(owned);
+        setStatus('ready');
       } catch {
-        /* fall through to fallback below */
-      } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setStatus('not-found');
       }
     })();
     return () => {
@@ -108,12 +144,11 @@ function useDeckCard(cardId: string) {
     };
   }, [cardId]);
 
-  const card = deck?.Cards?.find((c) => c.StableUid === cardId) ?? null;
   const cardProgress = progress.find((p) => p.stableUid === cardId) ?? null;
   // Three-valued, like the Library mapper: a null set means the question was
   // never answered, and an unanswered question is not a "no".
   const isLocked = !!card && ownedSet !== null && !ownedSet.has(card.StableUid);
-  return { card, cardProgress, deck, loading, isLocked };
+  return { card, cardProgress, deck, status, isLocked };
 }
 
 // Rarity labels aligned with the rest of the app (Library tile stars,
@@ -146,12 +181,6 @@ function rarityFromDifficulty(difficulty: number): {
   };
 }
 
-function masteryStatus(stage: number | undefined): 'New' | 'Learning' | 'Mastered' {
-  if (!stage || stage === 0) return 'New';
-  if (stage < 3) return 'Learning';
-  return 'Mastered';
-}
-
 function formatRelativeTime(timestamp: number | undefined): string {
   if (!timestamp || timestamp <= 0) return '—';
   const ms = Date.now() - timestamp;
@@ -174,20 +203,91 @@ function formatNextReview(nextReviewAt: number | undefined): string {
 }
 
 export function CardDetailScreen({ navigation, route }: Props) {
-  const { card, cardProgress, deck, loading, isLocked } = useDeckCard(route.params.cardId);
+  const { card, cardProgress, deck, status, isLocked } = useDeckCard(route.params.cardId);
 
-  const fallbackTitle = 'Card details';
+  // The "Show answer" toggle is per-card: reset to closed whenever the route's
+  // cardId changes so a new card never opens already-revealed.
+  const [answerOpen, setAnswerOpen] = useState(false);
+  useEffect(() => {
+    setAnswerOpen(false);
+  }, [route.params.cardId]);
+
+  // While loading we cannot honestly draw the hero (#000 Common New) or claim
+  // the card is missing — a neutral skeleton stands in until the lookup lands.
+  if (status === 'loading') {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient colors={[colors.softCream, colors.softPeach, colors.softLavender]} style={styles.gradient}>
+          <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+            <View style={styles.topBar}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Back"
+                style={({ pressed }) => [styles.backChip, pressed && styles.pressed]}
+                onPress={() => navigation.goBack()}
+              >
+                <Text style={styles.backChipText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>← Back</Text>
+              </Pressable>
+            </View>
+            <View testID="card-detail-skeleton">
+              <View style={styles.heroCardWrap}>
+                <View style={styles.skeletonHero} />
+              </View>
+              <View style={styles.skeletonQuestion} />
+              <View style={styles.skeletonMeta} />
+            </View>
+          </ScrollView>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
+  // No installed deck holds this card (unknown uid, or its deck isn't on this
+  // phone). Say so plainly instead of an empty page with a session button.
+  if (status === 'not-found') {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LinearGradient colors={[colors.softCream, colors.softPeach, colors.softLavender]} style={styles.gradient}>
+          <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+            <View style={styles.topBar}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Back"
+                style={({ pressed }) => [styles.backChip, pressed && styles.pressed]}
+                onPress={() => navigation.goBack()}
+              >
+                <Text style={styles.backChipText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>← Back</Text>
+              </Pressable>
+            </View>
+            <View testID="card-detail-not-found" style={styles.notFoundCard}>
+              <Text style={styles.notFoundTitle}>Card not found</Text>
+              <Text style={styles.notFoundBody}>
+                This card isn&apos;t on this phone. It may belong to a deck that isn&apos;t installed.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}
+                onPress={() => navigation.navigate('Library')}
+              >
+                <Text style={styles.primaryActionText}>Back to library</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  }
+
   // A locked card shows its slot and nothing else it could be recognised by.
   // The Library's silhouette tile makes the same trade: the registry admits
   // the card exists, the pull is still the moment you learn what it says.
-  const title = isLocked ? 'Not in your collection yet' : (card?.Question ?? fallbackTitle);
+  const title = isLocked ? 'Not in your collection yet' : (card?.Question ?? '');
   // Rank in the deck, not OrderInDeck: the tile the user just tapped says
   // "#011" and this page has to say the same thing about the same card.
   const slot = card && deck ? (rankCardsByOrder(deck.Cards ?? []).get(card.StableUid) ?? 0) : 0;
   const difficulty = card?.Difficulty ?? 1;
   const rarity = rarityFromDifficulty(difficulty);
-  const status = masteryStatus(cardProgress?.stage);
-  const tag = (card as any)?.Tag ?? deck?.Title ?? '';
+  const cardStatus = cardDetailStatus(cardProgress);
   // Read once per render, never as live policy (featureFlags.ts:57-62). A locked
   // card names no kind: the kind is one more thing the pull is supposed to reveal.
   const mcq = card && !isLocked ? resolveMcq(card, getFeatureFlags()) : null;
@@ -252,9 +352,9 @@ export function CardDetailScreen({ navigation, route }: Props) {
                     </Text>
                   </View>
                 ) : null}
-                <View style={[styles.heroStatusChip, !isLocked && status === 'Mastered' && styles.heroStatusMastered]}>
+                <View style={[styles.heroStatusChip, !isLocked && cardStatus === 'Mastered' && styles.heroStatusMastered]}>
                   <Text style={styles.heroStatusChipText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-                    {isLocked ? 'Missing' : status}
+                    {isLocked ? 'Missing' : cardStatus}
                   </Text>
                 </View>
               </View>
@@ -312,6 +412,46 @@ export function CardDetailScreen({ navigation, route }: Props) {
               <Text style={styles.metaValue} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{cardProgress?.stage ?? 0}</Text>
             </View>
           </View>
+
+          {/* SHOW ANSWER — owned cards only. Library's reason to exist is to
+              re-read a card you already hold; a locked card reveals nothing new
+              (no toggle, no options), exactly as its silhouette tile does. The
+              body is the shared CardAnswerSections, so the explanation / code /
+              usage read identically to the session reveal. For MCQ cards the
+              correct option text is listed first, in stored order. */}
+          {card && !isLocked ? (
+            <View style={styles.answerSection}>
+              <Pressable
+                accessibilityRole="button"
+                testID="card-detail-show-answer"
+                style={({ pressed }) => [styles.showAnswerButton, pressed && styles.pressed]}
+                onPress={() => setAnswerOpen((open) => !open)}
+              >
+                <Text style={styles.showAnswerText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                  {answerOpen ? 'Hide answer' : 'Show answer'}
+                </Text>
+              </Pressable>
+              {answerOpen ? (
+                <View testID="card-detail-answer" style={styles.answerBody}>
+                  {mcq ? (
+                    <View testID="card-detail-mcq-correct" style={styles.mcqCorrectBlock}>
+                      <Text style={styles.mcqCorrectHeader} numberOfLines={1}>
+                        CORRECT ANSWER
+                      </Text>
+                      {mcq.options
+                        .filter((option) => option.correct)
+                        .map((option) => (
+                          <Text key={option.key} style={styles.mcqCorrectText}>
+                            {option.text}
+                          </Text>
+                        ))}
+                    </View>
+                  ) : null}
+                  <CardAnswerSections card={card} />
+                </View>
+              ) : null}
+            </View>
+          ) : null}
 
           {/* ACTION ROW — primary opens the deck-wide session (planner-
               driven mixed route); secondary is back-to-library. The
@@ -533,4 +673,97 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   secondaryActionText: { color: colors.pokeBlueDeep, fontSize: typography.button, fontWeight: '900' },
+
+  // ─── Loading skeleton ────────────────────────────────────────────────────
+  // Neutral placeholder blocks — no rank, rarity, status or "Card details"
+  // text — while the cross-deck lookup lands.
+  skeletonHero: {
+    width: 260,
+    aspectRatio: 5 / 7,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+  },
+  skeletonQuestion: {
+    height: 64,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    marginBottom: spacing.md,
+  },
+  skeletonMeta: {
+    height: 56,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+  },
+
+  // ─── Not found ───────────────────────────────────────────────────────────
+  notFoundCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: spacing.lg,
+    marginTop: spacing.md,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  notFoundTitle: {
+    color: colors.inkSoft,
+    fontSize: typography.title3,
+    fontWeight: '900',
+    marginBottom: spacing.sm,
+  },
+  notFoundBody: {
+    color: colors.inkMuted,
+    fontSize: typography.body,
+    lineHeight: 22,
+    fontWeight: '600',
+    marginBottom: spacing.md,
+  },
+
+  // ─── Show answer ─────────────────────────────────────────────────────────
+  answerSection: { marginBottom: spacing.md },
+  showAnswerButton: {
+    minHeight: 48,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: colors.pokeBlueFaint,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  showAnswerText: { color: colors.pokeBlueDeep, fontSize: typography.button, fontWeight: '900' },
+  answerBody: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    marginTop: spacing.sm,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  mcqCorrectBlock: { paddingVertical: spacing.sm },
+  mcqCorrectHeader: {
+    fontSize: typography.caption,
+    color: colors.gold,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 1.0,
+    marginBottom: 8,
+  },
+  mcqCorrectText: {
+    fontSize: typography.body,
+    lineHeight: 22,
+    color: colors.inkSoft,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
 });
