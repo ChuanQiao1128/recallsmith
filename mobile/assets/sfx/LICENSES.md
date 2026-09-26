@@ -74,3 +74,16 @@ name: drop it under this directory with the intended name (for example
 
 Sourced replacements must keep to the accepted list above (`CC0`, `CC-BY` 4.0 with
 attribution, `Sonniss royalty-free`); `CC-BY-NC` and `CC-BY-SA` stay rejected.
+
+## v2/ (release 1.7.0, 2026-09-27)
+Source: Kenney (www.kenney.nl), all packs licensed Creative Commons Zero (CC0 1.0), downloaded 2026-09-27:
+casino-audio, music-jingles, impact-sounds, interface-sounds. Converted OGG -> 44.1 kHz 16-bit mono WAV
+with ffmpeg and loudness-matched per role (loudnorm, true peak -1.5 dBTP).
+- charge.wav: casino-audio card-shove-1/2/3, trimmed 0.28 s, +0/+2/+4 semitones, at 0/350/700 ms
+- tear.wav: casino-audio cards-pack-open-1
+- burst.wav: music-jingles jingles_HIT03
+- flyout.wav: casino-audio card-slide-1
+- flip.wav: casino-audio card-place-2
+- stinger-com.wav: music-jingles jingles_PIZZI00
+- stinger-rar.wav: music-jingles jingles_STEEL00
+- stinger-leg.wav: music-jingles jingles_STEEL07
