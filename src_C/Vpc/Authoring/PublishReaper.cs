@@ -63,7 +63,7 @@ public static class PublishReaper
     if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
     var r = await ReapOrphansAsync(conn);
     return res.Ok(new { pending = r.Pending, processing = r.Processing, jobIds = r.JobIds });

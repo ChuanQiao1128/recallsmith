@@ -47,7 +47,7 @@ public static class CardsImport
     if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
     long deckId;
     List<ImportCard> cards;

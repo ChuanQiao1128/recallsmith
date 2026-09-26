@@ -16,10 +16,10 @@ public static class ManifestRebuild
     if (deny is not null) return deny;
 
     if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
-    if (string.IsNullOrEmpty(ContentBucket)) return res.BadRequest("CONFIG_ERROR", "Missing env CONTENT_BUCKET");
+    if (string.IsNullOrEmpty(ContentBucket)) return Helpers.ConfigError(res, "Missing env CONTENT_BUCKET");
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
     var r = await ManifestBuilder.RebuildAsync(conn, ManifestBuilder.S3(), ContentBucket, ContentPrefix, PremiumPrefix);
 

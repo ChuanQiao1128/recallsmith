@@ -151,10 +151,10 @@ public static class Publish
       ? "preview"
       : "publish";
 
-    if (mode == "publish" && string.IsNullOrEmpty(PublishJobQueueUrl)) return res.BadRequest("CONFIG_ERROR", "Missing env PUBLISH_JOB_QUEUE_URL");
+    if (mode == "publish" && string.IsNullOrEmpty(PublishJobQueueUrl)) return Helpers.ConfigError(res, "Missing env PUBLISH_JOB_QUEUE_URL");
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
     try
     {
@@ -210,7 +210,7 @@ public static class Publish
 
       if (tier == "premium" && string.IsNullOrEmpty(PremiumBucket))
       {
-        return res.BadRequest("CONFIG_ERROR", "Missing env PREMIUM_BUCKET");
+        return Helpers.ConfigError(res, "Missing env PREMIUM_BUCKET");
       }
 
       var baseCards = cardRows.Select(c => new
