@@ -71,21 +71,6 @@ export type ResolvedCeremonyTimings = {
   toTableMs: number;
 };
 
-/**
- * When a tap flip's sound cues should fire, relative to the tap (MGACHA-07). The visual flip
- * starts after the queue delay plus the lift, and the face crosses at the flip midpoint, so the
- * flip sound lands at lift end and the RAR/LEG sting lands with the face turning (COM has none).
- */
-export function tapFlipCueOffsets(
-  rarity: PeakRarity,
-  queueDelayMs: number,
-  timings: Pick<ResolvedCeremonyTimings, 'liftMs' | 'flipMs'>,
-): { flipAtMs: number; stingAtMs: number | null } {
-  const flipAtMs = Math.max(0, Math.round(queueDelayMs)) + timings.liftMs;
-  const stingAtMs = rarity === 'COM' ? null : flipAtMs + Math.round(timings.flipMs[rarity] / 2);
-  return { flipAtMs, stingAtMs };
-}
-
 type TimingRow = CeremonyTimingTable['single'];
 
 function mergeRow(base: TimingRow, over: Partial<TimingRow> | undefined): TimingRow {

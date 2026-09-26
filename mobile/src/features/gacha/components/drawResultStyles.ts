@@ -272,77 +272,10 @@ export const drawResultStyles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  // ─── Always-on mini-strip (Pokemon-style row of card thumbnails) ────────
-  miniStrip: {
+  // ─── Full-width 2×5 summary grid (framed mini cards) ────────────────────
+  summaryGridWrap: {
     marginTop: spacing.md,
-  },
-  miniStripContent: {
-    paddingHorizontal: 4,
-    columnGap: 8,
-  },
-  miniCard: {
-    width: 88,
-    height: 124,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    overflow: 'hidden',
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    paddingTop: 14, // leaves room for the rarity bar
-    marginRight: 8,
-    shadowColor: 'rgba(58,35,5,0.18)',
-    shadowOpacity: 1,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
-  },
-  miniCardRarityBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 6,
-  },
-  miniCardSlot: {
-    color: colors.inkMuted,
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  miniCardQuestion: {
-    marginTop: 4,
-    color: colors.inkSoft,
-    fontSize: 10,
-    lineHeight: 12,
-    fontWeight: '700',
-    flex: 1,
-  },
-  // Gold rarity stars — top-right corner of mini card. Aligns visually
-  // with the Library tile's rarity star convention. textShadow for depth.
-  miniCardStars: {
-    position: 'absolute',
-    top: 6,
-    right: 8,
-    color: colors.gold,
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 0.6,
-    textShadowColor: 'rgba(58,35,5,0.35)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 1.5,
-  },
-  miniCardChip: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginTop: 4,
-  },
-  miniCardChipText: {
-    color: '#FFFFFF',
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 0.4,
+    alignItems: 'center',
   },
 
   sheetWrap: {

@@ -95,6 +95,8 @@ export type TapCardProps = {
   reduceMotion: boolean;
   focused?: boolean; onFocusToggle?: (uid: string) => void;   // RAR/LEG focus fly-in
   timings: Pick<ResolvedCeremonyTimings, 'flipMs' | 'rimSettleMs' | 'liftMs' | 'landMs'>;
+  /** When true, the LEG landing haptic is suppressed (the spotlight owns the reveal cues, I05). */
+  silent?: boolean;
 };
 
 // Memoised (2026-09-21 perf): every prop is a primitive or a stable reference from the
@@ -104,7 +106,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
   const {
     card, index, total, width, height, disabled, flipped,
     onTapStart, onFlipped, cardBackImage, frameImage, reduceMotion,
-    focused, onFocusToggle, timings,
+    focused, onFocusToggle, timings, silent = false,
   } = props;
 
   const flip = useSharedValue(flipped ? 1 : 0);
@@ -129,8 +131,10 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
   const onLanded = React.useCallback(() => {
     // S6: LEG adds a Heavy impact at landing (B04 owns the rolling rate limit).
     // The literals below are the canonical copy in CEREMONY_COPY_V10 (B10).
+    // Silent cards (I05 multi-pull: the spotlight owns the reveal cues) fire nothing.
+    if (silent) return;
     if (card.rarity === 'LEG') getCeremonyHaptics().impact('heavy');
-  }, [card.rarity]);
+  }, [card.rarity, silent]);
 
   const handlePress = React.useCallback(() => {
     if (disabled) return;

@@ -96,10 +96,19 @@ function cardKindText(card: RevealCardFaceCard): string {
     : MCQ_COPY.faceMark;
 }
 
+/** Gold ★ count for a rarity — RAR = 1, LEG = 3, COM = none. */
+function rarityStars(rarity: RevealCardFaceCard['rarity']): string {
+  if (rarity === 'LEG') return '★★★';
+  if (rarity === 'RAR') return '★';
+  return '';
+}
+
 export type RevealCardFaceProps = {
   card: RevealCardFaceCard;
   width: number;
   testIDPrefix: string;
+  /** 'full' (default) is the study-surface face; 'mini' is the framed summary-grid thumbnail. */
+  variant?: 'full' | 'mini';
   packArt?: ImageSourcePropType;
   packPaletteCover: PackPalette['cover'];
   serialText?: string;
@@ -110,7 +119,7 @@ export type RevealCardFaceProps = {
 };
 
 export function RevealCardFace(props: RevealCardFaceProps): React.JSX.Element {
-  const { card, width, testIDPrefix: prefix, packArt, packPaletteCover, serialText, testID, style, onPress, accessibilityLabel } = props;
+  const { card, width, testIDPrefix: prefix, variant = 'full', packArt, packPaletteCover, serialText, testID, style, onPress, accessibilityLabel } = props;
 
   const accent = rarityAccentColor(card.rarity);
   const metrics = revealFaceMetrics(width);
@@ -123,7 +132,59 @@ export function RevealCardFace(props: RevealCardFaceProps): React.JSX.Element {
   // card at the given width. No iOS shadow* here — the spotlight rotates the face in 3D.
   const rootStyle = style !== undefined ? style : { width, aspectRatio: 5 / 7, borderRadius: 18, overflow: 'hidden' as const };
 
-  const children = (
+  // The mini face (summary grid): rarity gradient base, the art window with the pack art, a
+  // stars mark, and the rarity frame last. No chip, kind, topic, question or serial.
+  const miniStars = rarityStars(card.rarity);
+  const miniChildren = (
+    <>
+      {/* 1 — rarity gradient base. */}
+      <LinearGradient
+        colors={FEATURED_GRADIENT_BY_RARITY[card.rarity]}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
+        style={drawResultStyles.featuredGradient}
+      />
+
+      {/* 2 — art window: the pack art cover-cropped over the pack palette. */}
+      <View style={localStyles.artWindow} testID={`${prefix}-art-window`}>
+        <LinearGradient
+          colors={packPaletteCover}
+          start={{ x: 0.1, y: 0 }}
+          end={{ x: 0.9, y: 1 }}
+          style={drawResultStyles.featuredArtGradient}
+        />
+        {RNImage && packArt ? (
+          <RNImage
+            testID={`${prefix}-art`}
+            pointerEvents="none"
+            source={packArt}
+            resizeMode="cover"
+            style={localStyles.artImage}
+          />
+        ) : null}
+      </View>
+
+      {/* 3 — stars mark. */}
+      <View style={localStyles.miniStarsWrap} pointerEvents="none">
+        <Text testID={`${prefix}-stars`} style={[localStyles.miniStars, { color: accent }]} numberOfLines={1}>
+          {miniStars}
+        </Text>
+      </View>
+
+      {/* 4 — rarity frame PNG, painted LAST over the face. */}
+      {RNImage ? (
+        <RNImage
+          testID={`${prefix}-frame`}
+          pointerEvents="none"
+          source={cardFrameForRarity(card.rarity)}
+          resizeMode="stretch"
+          style={localStyles.frame}
+        />
+      ) : null}
+    </>
+  );
+
+  const children = variant === 'mini' ? miniChildren : (
     <>
       {/* 1 — rarity gradient base (the frame's own colour when the PNG is absent). */}
       <LinearGradient
@@ -237,6 +298,8 @@ const localStyles = StyleSheet.create({
     backgroundColor: 'rgba(20,23,55,0.72)',
   },
   slab: { position: 'absolute', ...REVEAL_FRAME_LAYOUT.slab, justifyContent: 'center' },
+  miniStarsWrap: { position: 'absolute', left: 0, right: 0, bottom: '10%', alignItems: 'center' },
+  miniStars: { fontSize: 12, fontWeight: '900', letterSpacing: 1, textShadowColor: 'rgba(0,0,0,0.35)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   titleStrip: {
     position: 'absolute', ...REVEAL_FRAME_LAYOUT.titleStrip, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end',
     paddingHorizontal: 8,

@@ -88,6 +88,9 @@ export type RevealSpotlightProps = {
   packPaletteCover: PackPalette['cover'];
   serialText?: string;
   footer?: React.ReactNode;
+  /** Multi-pull (I05) additive props — absent for the single-pull spotlight (I04 unchanged). */
+  progressText?: string;
+  onSkipAll?: () => void;
   onFlipStart?: (plan: SpotlightFlipPlan) => void;
   onLanded?: () => void;
   onPressFaceUp?: () => void;
@@ -97,7 +100,7 @@ export type RevealSpotlightProps = {
 function RevealSpotlightImpl(props: RevealSpotlightProps): React.JSX.Element {
   const {
     card, index, total, visible, interactive, initialFaceUp = false, autoFlip = false, reduceMotion,
-    cardBackImage, packArt, packPaletteCover, serialText, footer,
+    cardBackImage, packArt, packPaletteCover, serialText, footer, progressText, onSkipAll,
     onFlipStart, onLanded, onPressFaceUp, testID,
   } = props;
 
@@ -266,6 +269,18 @@ function RevealSpotlightImpl(props: RevealSpotlightProps): React.JSX.Element {
     >
       <View testID="reveal-spotlight-scrim" pointerEvents="none" style={[styles.scrim, { backgroundColor: SPOTLIGHT_SCRIM, opacity: SPOTLIGHT_SCRIM_OPACITY }]} />
 
+      {progressText ? (
+        <Text testID="reveal-spotlight-progress" style={styles.progress} numberOfLines={1}>
+          {progressText}
+        </Text>
+      ) : null}
+
+      {onSkipAll ? (
+        <Pressable testID="reveal-spotlight-skip-all" accessibilityRole="button" style={styles.skipAll} onPress={onSkipAll}>
+          <Text style={styles.skipAllText} numberOfLines={1}>Skip all</Text>
+        </Pressable>
+      ) : null}
+
       {skiaAvailable && SkiaModule && !reduceMotion ? (
         <SpotlightCanvas
           width={win.width}
@@ -329,6 +344,12 @@ function RevealSpotlightImpl(props: RevealSpotlightProps): React.JSX.Element {
             ) : null}
           </Reanimated.View>
         </AnimatedPressable>
+
+        {face === 'up' && onPressFaceUp ? (
+          <Text testID="reveal-spotlight-continue-hint" style={styles.continueHint} numberOfLines={1}>
+            Tap to continue
+          </Text>
+        ) : null}
 
         {revealed ? (
           <Pressable testID="reveal-spotlight-read-full" accessibilityRole="button" style={styles.readFull} onPress={() => setSheetOpen(true)}>
@@ -440,6 +461,10 @@ const styles = StyleSheet.create({
   backImage: { width: '100%', height: '100%' },
   backInnerRing: { position: 'absolute', width: '70%', height: '70%', borderRadius: 999, borderWidth: 1, borderColor: 'rgba(218,180,90,0.30)' },
   backMonogram: { color: 'rgba(218,180,90,0.85)', fontSize: 64, fontWeight: '900', letterSpacing: 1, fontStyle: 'italic' },
+  progress: { position: 'absolute', top: 24, left: 20, zIndex: 55, color: '#F5ECC4', fontSize: 16, fontWeight: '900', letterSpacing: 1, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+  skipAll: { position: 'absolute', top: 20, right: 20, zIndex: 55, minHeight: 40, paddingHorizontal: 16, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.14)' },
+  skipAllText: { color: '#F5ECC4', fontSize: 14, fontWeight: '800', letterSpacing: 0.3 },
+  continueHint: { marginTop: 14, color: 'rgba(245,236,196,0.85)', fontSize: 13, fontWeight: '700', letterSpacing: 0.3, textAlign: 'center' },
   banner: { fontSize: 34, fontWeight: '900', letterSpacing: 1, marginBottom: 18, textAlign: 'center', textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
   bannerSpacer: { height: 52, marginBottom: 18 },
   readFull: { marginTop: 20, minHeight: 44, paddingHorizontal: 18, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.12)' },
