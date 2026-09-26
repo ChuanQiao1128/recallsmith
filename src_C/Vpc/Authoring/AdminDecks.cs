@@ -77,7 +77,7 @@ public static class AdminDecks
         left join lateral (
           select p.build_id
           from deck_publishes p
-          where p.deck_slug = d.slug and p.status = 'SUCCESS'
+          where p.deck_id = d.id and p.status = 'SUCCESS'
           order by p.created_at desc, p.id desc
           limit 1
         ) lp on true
