@@ -144,6 +144,7 @@ public static class RouteMetrics
     "/api/v1/admin/manifest",
     "/api/v1/admin/decks",
     "/rollback",
+    "/builds",
     "/api/v1/admin/publish/reap",
     "/api/v1/content/premium-url",
     "/api/v1/runtime/premium-url",

@@ -221,6 +221,10 @@ public sealed class VpcFunction
       {
         return await Vpc.Authoring.DeckRollback.HandleDeckRollback(req, res, auth);
       }
+      if (p.EndsWith("/builds", StringComparison.OrdinalIgnoreCase) && p.Contains("/api/v1/admin/decks/", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.DeckBuilds.HandleDeckBuilds(req, res, auth);
+      }
       if (p.EndsWith("/api/v1/admin/publish/reap", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Authoring.PublishReaper.HandlePublishReap(req, res, auth);
