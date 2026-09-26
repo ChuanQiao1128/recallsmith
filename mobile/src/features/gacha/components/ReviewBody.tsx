@@ -77,7 +77,7 @@ function friendlyCodeLanguage(raw: string): string {
 //     instead of overflowing the card edge.
 //   • Card chrome unchanged from v3: softCream + 18 radius + hairline +
 //     subtle shadow (matches Home/CardDetail/Settings language).
-export function ReviewBody(props: {
+export type ReviewBodyProps = {
   card: CardExport;
   /**
    * 1-based position in the deck (libraryMapper.rankCardsByOrder) — the same
@@ -88,7 +88,9 @@ export function ReviewBody(props: {
   rank?: number | null;
   faceUp: boolean;
   onFlip: () => void;
-}) {
+};
+
+export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps) {
   const { card, rank = null, faceUp, onFlip } = props;
   const orderBadge = typeof rank === 'number' && rank > 0 ? `#${formatRank(rank)}` : `#${card.OrderInDeck}`;
 
@@ -220,7 +222,7 @@ export function ReviewBody(props: {
       )}
     </View>
   );
-}
+});
 
 export default ReviewBody;
 

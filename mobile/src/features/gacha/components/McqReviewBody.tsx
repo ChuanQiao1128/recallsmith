@@ -175,7 +175,7 @@ function rowStyleKey(state: McqOptionRowState): RowStyleKey {
   }
 }
 
-export function McqReviewBody(props: McqReviewBodyProps) {
+export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewBodyProps) {
   const {
     card,
     mcq,
@@ -467,7 +467,7 @@ export function McqReviewBody(props: McqReviewBodyProps) {
         : null}
     </View>
   );
-}
+});
 
 export default McqReviewBody;
 
