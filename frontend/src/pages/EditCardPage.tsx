@@ -11,6 +11,9 @@ import { parseDeckId } from '../lib/parseDeckId';
 import type { Card } from '../types/card';
 import { CardForm, type CardFormValues } from '../components/CardForm';
 import { buildCardBody } from '../lib/authoringBodies';
+import { CONSOLE_NAME } from '../lib/brand';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 
 /**
  * The label on the recovery button, and the sentence that explains it.
@@ -38,22 +41,26 @@ const CONFLICT_UNRECOVERABLE =
 /** The header-plus-red-box shell every failure on this page renders through. */
 function EditCardErrorScreen({ message }: { message: string }) {
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
-          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-            ← Back to Decks
-          </Link>
-        </div>
-      </header>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Edit card"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
+        <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+          ← Back to Decks
+        </Link>
+      </div>
 
-      <main className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl mx-auto px-4 py-6">
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
           {message}
         </div>
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }
 
@@ -244,25 +251,29 @@ export function EditCardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · <span className="font-mono">{deck.slug}</span>
-            </p>
-          </div>
-          <Link
-            to={`/decks/cards?deckId=${deck.id}`}
-            className="text-sm text-indigo-600 hover:text-indigo-800"
-          >
-            ← Back to Cards
-          </Link>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Edit card"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {deck.title} · <span className="font-mono">{deck.slug}</span>
+          </p>
         </div>
-      </header>
+        <Link
+          to={`/decks/cards?deckId=${deck.id}`}
+          className="text-sm text-indigo-600 hover:text-indigo-800"
+        >
+          ← Back to Cards
+        </Link>
+      </div>
 
-      <main className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl mx-auto px-4 py-6">
         <CardForm
           mode="edit"
           deck={deck}
@@ -273,7 +284,7 @@ export function EditCardPage() {
           recoveryLabel={conflictRecoverable ? RETRY_WITH_LATEST : null}
           mcq={card.mcq ?? null}
         />
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

@@ -1,13 +1,20 @@
 // src/components/console/ConsoleShell.tsx
 
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
+
+import { useSignOut } from '../../auth/AuthContext';
+import { isSuperAdmin, readSessionUser } from '../../auth/sessionUser';
 
 type Props = {
   title: string;
   subtitle?: string;
-  userLabel: string;
-  superAdmin: boolean;
-  onSignOut: () => void;
+  // Optional: a page that knows its own identity passes these and keeps full
+  // control of the header; a page that does not lets the shell derive them from
+  // the stored session (see below), so every authoring page can render the same
+  // top bar without threading the session through itself.
+  userLabel?: string;
+  superAdmin?: boolean;
 
   // ---------------------------------------------------------------------
   // DESTINATIONS, NOT HANDLERS. THE DIFFERENCE IS THE WHOLE POINT.
@@ -42,13 +49,30 @@ export function ConsoleShell({
   subtitle,
   userLabel,
   superAdmin,
-  onSignOut,
   decksHref,
   contentIntelligenceHref,
   adminUsersHref,
   children,
 }: Props) {
+  // Sign-out is the shell's own affair now, through AuthContext, so no page has
+  // to carry (or duplicate) a handler. In the real app this resets the context's
+  // tokens state; in a bare page test it degrades to dropping the session.
+  const signOut = useSignOut();
 
+  // When a page passes neither field, derive both from the stored session. The
+  // session cannot change under a mounted shell — signing out navigates away —
+  // so it is read once, the same `useMemo(…, [])` the pages use for it. A page
+  // that passes a value keeps full control of it.
+  const derivedUser = useMemo(() => readSessionUser(), []);
+
+  const resolvedUserLabel =
+    userLabel ??
+    (derivedUser
+      ? `${derivedUser.email ?? derivedUser.username ?? 'Signed in'} · ${
+          isSuperAdmin(derivedUser) ? 'super_admin' : 'editor'
+        }`
+      : '—');
+  const resolvedSuperAdmin = superAdmin ?? isSuperAdmin(derivedUser);
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -80,7 +104,7 @@ export function ConsoleShell({
                 </Link>
               ) : null}
 
-              {superAdmin && adminUsersHref ? (
+              {resolvedSuperAdmin && adminUsersHref ? (
                 <Link
                   to={adminUsersHref}
                   className={NAV_LINK_CLASS}
@@ -92,7 +116,7 @@ export function ConsoleShell({
             </nav>
 
             <span className="text-xs px-2 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-700">
-              {userLabel}
+              {resolvedUserLabel}
             </span>
 
             {/* Stays a button, and must: signing out is an action with a side
@@ -100,7 +124,7 @@ export function ConsoleShell({
             <button
               type="button"
               className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
-              onClick={onSignOut}
+              onClick={signOut}
             >
               Sign out
             </button>

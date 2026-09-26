@@ -31,6 +31,9 @@ import {
 } from '../lib/deckImportRunner';
 import { formatWarning, type ImportWarning, type McqWarningCode } from '../lib/mcqWarnings';
 import { markEnd, markStart } from '../perf/journey';
+import { CONSOLE_NAME } from '../lib/brand';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 import type { Deck } from '../types/deck';
 
 type Step = 'input' | 'preview' | 'result';
@@ -319,50 +322,58 @@ export function DeckImportPage() {
 
   if (deckState.error || !deck) {
     return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">Import Markdown</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
-        <main className="max-w-4xl mx-auto px-4 py-6">
+      <ConsoleShell
+        title={CONSOLE_NAME}
+        subtitle="Authoring · Import"
+        decksHref="/"
+        contentIntelligenceHref="/content-intelligence"
+        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      >
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold text-slate-800">Import Markdown</h1>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← Back to Decks
+          </Link>
+        </div>
+        <div className="max-w-4xl mx-auto px-4 py-6">
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
             <div className="font-semibold mb-1">Failed to load deck</div>
             <div className="text-sm">{deckState.error ?? 'Unknown error'}</div>
           </div>
-        </main>
-      </div>
+        </div>
+      </ConsoleShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">
-              Import Markdown · <span className="font-mono text-base">{deck.slug}</span>
-            </h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · step {step === 'input' ? '1 of 3 · source' : step === 'preview' ? '2 of 3 · preview' : '3 of 3 · execute'}
-            </p>
-          </div>
-          {running ? (
-            <span aria-disabled="true" className="text-sm text-slate-400">
-              ← Back to Cards
-            </span>
-          ) : (
-            <Link to={backLink} className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Cards
-            </Link>
-          )}
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Import"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">
+            Import Markdown · <span className="font-mono text-base">{deck.slug}</span>
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {deck.title} · step {step === 'input' ? '1 of 3 · source' : step === 'preview' ? '2 of 3 · preview' : '3 of 3 · execute'}
+          </p>
         </div>
-      </header>
+        {running ? (
+          <span aria-disabled="true" className="text-sm text-slate-400">
+            ← Back to Cards
+          </span>
+        ) : (
+          <Link to={backLink} className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← Back to Cards
+          </Link>
+        )}
+      </div>
 
-      <main className="max-w-4xl mx-auto px-4 py-6 space-y-4">
+      <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
         {step === 'input' ? (
           <section className="bg-white rounded-lg shadow-sm border border-slate-200">
             <div className="px-4 py-3 border-b border-slate-100">
@@ -716,7 +727,7 @@ export function DeckImportPage() {
             </div>
           </section>
         ) : null}
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

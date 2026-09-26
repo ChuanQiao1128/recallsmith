@@ -13,8 +13,6 @@ import {
 } from '../api/admin';
 
 import { AUTH_CONFIGURED } from '../auth/authConfig';
-import { clearStoredTokens } from '../auth/tokenStore';
-import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 
 import { CONSOLE_NAME } from '../lib/brand';
@@ -133,15 +131,6 @@ export function AdminUsersPage() {
   const [permOk, setPermOk] = useState<string | null>(null);
   const [permError, setPermError] = useState<string | null>(null);
   const [deckSearch, setDeckSearch] = useState('');
-
-  function handleSignOut() {
-    clearStoredTokens();
-    try {
-      window.location.assign(buildLogoutUrl());
-    } catch {
-      navigate('/login', { replace: true });
-    }
-  }
 
   async function loadAll(showSpinner = true) {
     try {
@@ -368,7 +357,6 @@ export function AdminUsersPage() {
         subtitle="Admin · Users & Permissions"
         userLabel={sessionUser ? `${sessionUser.email ?? sessionUser.username ?? 'Signed in'} · editor` : '—'}
         superAdmin={false}
-        onSignOut={handleSignOut}
       >
         <Callout tone="danger" title="Access denied">
           This page requires <span className="font-semibold">super_admin</span>.
@@ -391,7 +379,6 @@ export function AdminUsersPage() {
       subtitle="Admin · Users & Permissions"
       userLabel={sessionUser ? `${sessionUser.email ?? sessionUser.username ?? 'Signed in'} · super_admin` : '—'}
       superAdmin={true}
-      onSignOut={handleSignOut}
       adminUsersHref="/admin/users"
     >
       {!AUTH_CONFIGURED ? (

@@ -39,8 +39,6 @@ import { buildViewRows } from '../features/deckList/deckListRows';
 import type { ConsoleDeckRow } from '../features/deckList/deckListRows';
 import { useDeckPagination } from '../features/deckList/useDeckPagination';
 
-import { clearStoredTokens } from '../auth/tokenStore';
-import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin, type SessionUser } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
@@ -577,15 +575,6 @@ export function DeckListPage() {
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, [superAdmin]);
 
-  function handleSignOut() {
-    clearStoredTokens();
-    try {
-      window.location.assign(buildLogoutUrl());
-    } catch {
-      navigate('/login', { replace: true });
-    }
-  }
-
   const decks = useMemo<Deck[]>(() => deckState.decks ?? [], [deckState.decks]);
 
   const viewRows = useMemo<ConsoleDeckRow[]>(() => {
@@ -649,7 +638,6 @@ export function DeckListPage() {
           : '—'
       }
       superAdmin={superAdmin}
-      onSignOut={handleSignOut}
       contentIntelligenceHref="/content-intelligence"
       adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >

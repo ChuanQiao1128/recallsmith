@@ -7,6 +7,9 @@ import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
 import { CardForm, type CardFormValues } from '../components/CardForm';
 import { buildCardBody } from '../lib/authoringBodies';
+import { CONSOLE_NAME } from '../lib/brand';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 
 /**
  * Where the next card goes in the deck's running order.
@@ -67,21 +70,25 @@ export function NewCardPage() {
 
   if (invalidDeckId) {
     return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
-        <main className="max-w-3xl mx-auto px-4 py-6">
+      <ConsoleShell
+        title={CONSOLE_NAME}
+        subtitle="Authoring · New card"
+        decksHref="/"
+        contentIntelligenceHref="/content-intelligence"
+        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      >
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← Back to Decks
+          </Link>
+        </div>
+        <div className="max-w-3xl mx-auto px-4 py-6">
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
             Missing or invalid deckId.
           </div>
-        </main>
-      </div>
+        </div>
+      </ConsoleShell>
     );
   }
 
@@ -99,21 +106,25 @@ export function NewCardPage() {
   if (deckQuery.isError || !deckQuery.data) {
     const message = deckQuery.error instanceof Error ? deckQuery.error.message : 'Deck not found.';
     return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
-        <main className="max-w-3xl mx-auto px-4 py-6">
+      <ConsoleShell
+        title={CONSOLE_NAME}
+        subtitle="Authoring · New card"
+        decksHref="/"
+        contentIntelligenceHref="/content-intelligence"
+        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      >
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← Back to Decks
+          </Link>
+        </div>
+        <div className="max-w-3xl mx-auto px-4 py-6">
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
             {message}
           </div>
-        </main>
-      </div>
+        </div>
+      </ConsoleShell>
     );
   }
 
@@ -169,25 +180,29 @@ export function NewCardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · <span className="font-mono">{deck.slug}</span>
-            </p>
-          </div>
-          <Link
-            to={`/decks/cards?deckId=${deck.id}`}
-            className="text-sm text-indigo-600 hover:text-indigo-800"
-          >
-            ← Back to Cards
-          </Link>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · New card"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {deck.title} · <span className="font-mono">{deck.slug}</span>
+          </p>
         </div>
-      </header>
+        <Link
+          to={`/decks/cards?deckId=${deck.id}`}
+          className="text-sm text-indigo-600 hover:text-indigo-800"
+        >
+          ← Back to Cards
+        </Link>
+      </div>
 
-      <main className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl mx-auto px-4 py-6">
         <CardForm
           mode="create"
           deck={deck}
@@ -196,7 +211,7 @@ export function NewCardPage() {
           onCancel={() => navigate(-1)}
           onDirtyChange={setDirty}
         />
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

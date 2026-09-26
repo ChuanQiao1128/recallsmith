@@ -9,6 +9,9 @@ import {
   validateDeckExportLikeMobile,
   type DeckExportPreview,
 } from '../lib/deckExportPreview';
+import { CONSOLE_NAME } from '../lib/brand';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 
 async function copyToClipboard(text: string) {
   if (navigator.clipboard && (window.isSecureContext || location.hostname === 'localhost')) {
@@ -95,22 +98,26 @@ export function DeckPreviewPage() {
 
   if (error || !deck) {
     return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">Deck Preview</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
+      <ConsoleShell
+        title={CONSOLE_NAME}
+        subtitle="Authoring · Preview"
+        decksHref="/"
+        contentIntelligenceHref="/content-intelligence"
+        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      >
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold text-slate-800">Deck Preview</h1>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← Back to Decks
+          </Link>
+        </div>
 
-        <main className="max-w-4xl mx-auto px-4 py-6">
+        <div className="max-w-4xl mx-auto px-4 py-6">
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
             {error ?? 'Failed to load.'}
           </div>
-        </main>
-      </div>
+        </div>
+      </ConsoleShell>
     );
   }
 
@@ -118,32 +125,36 @@ export function DeckPreviewPage() {
   const deletedCount = Math.max(0, cards.length - liveCount);
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">Deck Preview</h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · <span className="font-mono">{deck.slug}</span> · {deck.locale}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              className="text-sm text-slate-600 hover:text-slate-800"
-              onClick={() => navigate(-1)}
-            >
-              ← Back
-            </button>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              Decks
-            </Link>
-          </div>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Preview"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">Deck Preview</h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {deck.title} · <span className="font-mono">{deck.slug}</span> · {deck.locale}
+          </p>
         </div>
-      </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-6 space-y-4">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            className="text-sm text-slate-600 hover:text-slate-800"
+            onClick={() => navigate(-1)}
+          >
+            ← Back
+          </button>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            Decks
+          </Link>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
         <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900">
           <div className="font-semibold">Approximate preview</div>
           <p className="mt-1">
@@ -254,7 +265,7 @@ export function DeckPreviewPage() {
             {exportJson}
           </pre>
         </div>
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

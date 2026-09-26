@@ -4,7 +4,9 @@ import { useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useCreateDeck, useUpdateDeck } from '../hooks/useDecks';
 import { buildDeckBody, parseDraftVersion, DRAFT_VERSION_ERROR } from '../lib/authoringBodies';
-import { DEFAULT_DECK_AUTHOR } from '../lib/brand';
+import { CONSOLE_NAME, DEFAULT_DECK_AUTHOR } from '../lib/brand';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 
 interface NewDeckForm {
   title: string;
@@ -192,22 +194,26 @@ export function NewDeckPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">New Deck</h1>
-            <p className="text-xs text-slate-500 mt-1">
-              Start a new deck &mdash; something like <span className="font-mono">js-core-basics</span>.
-            </p>
-          </div>
-          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-            ← Back to list
-          </Link>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · New deck"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">New Deck</h1>
+          <p className="text-xs text-slate-500 mt-1">
+            Start a new deck &mdash; something like <span className="font-mono">js-core-basics</span>.
+          </p>
         </div>
-      </header>
+        <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+          ← Back to list
+        </Link>
+      </div>
 
-      <main className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl mx-auto px-4 py-6">
         <form
           onSubmit={handleSubmit}
           className="bg-white border border-slate-200 rounded-lg shadow-sm px-6 py-6 space-y-4"
@@ -436,7 +442,7 @@ export function NewDeckPage() {
             </button>
           </div>
         </form>
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

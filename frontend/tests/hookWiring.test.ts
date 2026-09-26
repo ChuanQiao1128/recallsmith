@@ -214,12 +214,28 @@ describe('the scan itself is still looking at something', () => {
     // hook into a permanent failure. It also does not belong there on merits:
     // that barrel publishes the data-fetching hooks pages render through, and
     // this one answers "which client", which no page asks.
+    //
+    // useSignOut is the fifth entry, and the prompt was answered rather than
+    // silenced. It is declared in src/auth/AuthContext.tsx beside the context it
+    // reads, and it has exactly ONE call site, hand-verified the same way:
+    //   src/components/console/ConsoleShell.tsx — `const signOut = useSignOut();`
+    //   at the top of the shell, wired to the Sign out button's onClick, so every
+    //   authoring page that renders through the shell signs out through it.
+    // Deliberately NOT added to src/hooks/index.ts, for the same reason as
+    // useConfirm above: it reads a React context (AuthContext) whose wiring
+    // question is not "does anything call it" — the shell does — but "is the
+    // provider an ancestor". main.tsx mounts <AuthProvider> at the root; the hook
+    // degrades to signOutWithoutProvider when it is not, and
+    // tests/consoleShellEverywhere.test.tsx asserts both halves. A barrel cannot
+    // answer that, so publishing it there would advertise a plumbing hook as a
+    // reusable data-fetching one.
     const outside = findHookShapedExportsOutsideHooksDir(sources).map(entry => entry.name);
     expect(outside).toEqual([
       'useAppQueryClient',
       'useAuth',
       'useConfirm',
       'useDeckPagination',
+      'useSignOut',
     ]);
   });
 });

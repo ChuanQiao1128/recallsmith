@@ -11,8 +11,6 @@ import { CONSOLE_NAME } from '../lib/brand';
 
 import type { DeckAvailability, DeckTier } from '../types/deck';
 
-import { clearStoredTokens } from '../auth/tokenStore';
-import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
@@ -125,15 +123,6 @@ export function DeckEditPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState<string | null>(null);
-
-  function handleSignOut() {
-    clearStoredTokens();
-    try {
-      window.location.assign(buildLogoutUrl());
-    } catch {
-      navigate('/login', { replace: true });
-    }
-  }
 
   // The form is filled from the deck exactly ONCE per deck id, tracked by a ref
   // that holds the id it was filled for. A background refetch — the one the save
@@ -322,7 +311,6 @@ export function DeckEditPage() {
           : '—'
       }
       superAdmin={superAdmin}
-      onSignOut={handleSignOut}
       adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
