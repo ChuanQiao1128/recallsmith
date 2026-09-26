@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { setAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
+import { getAudiencePreferenceLabel } from '../features/gacha/audience/audienceRules';
 import { completeOnboarding } from '../features/gacha/onboarding/onboardingPrefs';
 import { colors } from '../theme/colors';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
@@ -12,12 +13,12 @@ import { markPermissionPromptPending } from './PermissionPromptScreen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AudienceSurvey'>;
 
-// Outcome-driven copy — was internal jargon ("balanced across easier
-// and harder content", "stretch cards"). Now uses the user's perspective.
-const OPTIONS: Array<{ key: AudiencePreference; label: string; body: string }> = [
-  { key: 'junior', label: 'Just starting', body: 'Easier cards first to build confidence.' },
-  { key: 'both', label: 'Mix it up', body: 'A balance of easy and hard cards.' },
-  { key: 'all', label: 'Push me', body: 'Lean toward harder cards when new content arrives.' },
+// The label is the one shared audience vocabulary (getAudiencePreferenceLabel);
+// the outcome-driven body sentence stays as the human-readable description.
+export const AUDIENCE_SURVEY_OPTIONS: Array<{ key: AudiencePreference; label: string; body: string }> = [
+  { key: 'junior', label: getAudiencePreferenceLabel('junior'), body: 'Easier cards first to build confidence.' },
+  { key: 'both', label: getAudiencePreferenceLabel('both'), body: 'A balance of easy and hard cards.' },
+  { key: 'all', label: getAudiencePreferenceLabel('all'), body: 'Lean toward harder cards when new content arrives.' },
 ];
 
 export function AudienceSurveyScreen({ navigation }: Props) {
@@ -60,7 +61,7 @@ export function AudienceSurveyScreen({ navigation }: Props) {
           <Text style={styles.body}>This only shapes new supply and draw recommendations. Due review stays intact.</Text>
 
           <View style={styles.optionList} accessibilityRole="radiogroup">
-            {OPTIONS.map((option) => {
+            {AUDIENCE_SURVEY_OPTIONS.map((option) => {
               const active = selected === option.key;
               return (
                 <Pressable

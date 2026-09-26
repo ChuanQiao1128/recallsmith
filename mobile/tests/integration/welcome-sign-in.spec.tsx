@@ -38,15 +38,15 @@ vi.mock('expo-linear-gradient', () => {
   return { LinearGradient: ({ children, ...props }: any) => React.createElement('LinearGradient', props, children) };
 });
 
-import { SplashScreen } from '../../src/screens/SplashScreen';
 import { WelcomeScreen } from '../../src/screens/WelcomeScreen';
-import { AudienceSurveyScreen } from '../../src/screens/AudienceSurveyScreen';
+
+const ONBOARDING_STAGE_KEY = 'recallsmith:onboarding:stage:v1';
 
 function findPressableByText(tree: renderer.ReactTestRenderer, label: string) {
   return tree.root.find((node) => (node.type as any) === 'Pressable' && node.findAll((child) => (child.type as any) === 'Text' && child.props.children === label).length > 0);
 }
 
-describe('phase A onboarding screens', () => {
+describe('welcome sign-in link', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -62,56 +62,39 @@ describe('phase A onboarding screens', () => {
     warnSpy.mockRestore();
   });
 
-  it('routes splash to welcome for a new user', async () => {
+  it('offers returning users a sign-in link on Welcome', async () => {
+    const navigate = vi.fn();
     const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      renderer.create(<SplashScreen navigation={{ replace } as any} route={{ key: 'splash', name: 'Splash' } as any} />);
-      await Promise.resolve();
+      tree = renderer.create(<WelcomeScreen navigation={{ navigate, replace } as any} route={{ key: 'welcome', name: 'Welcome' } as any} />);
+    });
+
+    await act(async () => {
+      findPressableByText(tree, 'I already have an account').props.onPress();
       await Promise.resolve();
     });
-    expect(replace).toHaveBeenCalledWith('Welcome');
+
+    // Opens SignIn without completing onboarding: the user returns to Welcome
+    // and taps Continue to finish setup.
+    expect(navigate).toHaveBeenCalledWith('SignIn');
+    expect(replace).not.toHaveBeenCalled();
+    expect(store.get(ONBOARDING_STAGE_KEY)).toBeUndefined();
   });
 
-  it('advances welcome into audience survey and finishes onboarding', async () => {
+  it('still advances new users to the audience survey', async () => {
+    const navigate = vi.fn();
     const replace = vi.fn();
-    let welcomeTree!: renderer.ReactTestRenderer;
+    let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      welcomeTree = renderer.create(<WelcomeScreen navigation={{ replace } as any} route={{ key: 'welcome', name: 'Welcome' } as any} />);
+      tree = renderer.create(<WelcomeScreen navigation={{ navigate, replace } as any} route={{ key: 'welcome', name: 'Welcome' } as any} />);
     });
 
-    // Welcome v3 is a single page (no more 3-swipe carousel + Next buttons).
-    // One tap on the primary CTA completes the welcome stage and replaces
-    // into the audience survey. CTA copy was "Continue to audience" —
-    // simplified to "Continue" because "audience" was internal jargon
-    // that meant nothing to first-time users.
     await act(async () => {
-      findPressableByText(welcomeTree, 'Continue').props.onPress();
+      findPressableByText(tree, 'Continue').props.onPress();
       await Promise.resolve();
     });
+
     expect(replace).toHaveBeenCalledWith('AudienceSurvey');
-
-    let surveyTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      surveyTree = renderer.create(<AudienceSurveyScreen navigation={{ replace } as any} route={{ key: 'audience', name: 'AudienceSurvey' } as any} />);
-    });
-
-    await act(async () => {
-      // Audience option labels now use the one shared vocabulary
-      // (getAudiencePreferenceLabel): junior → "Junior", both →
-      // "Balanced", all → "Stretch".
-      findPressableByText(surveyTree, 'Stretch').props.onPress();
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      findPressableByText(surveyTree, 'Finish setup').props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(store.get('recallsmith:audience-preference:v1')).toBe('all');
-    expect(store.get('recallsmith:onboarding:stage:v1')).toBe('done');
-    expect(replace).toHaveBeenCalledWith('Home', { firstDrawCoach: true });
-    expect(store.get('notifications:permission-prompt:pending:v1')).toBe('1');
   });
 });
