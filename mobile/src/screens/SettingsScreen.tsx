@@ -43,6 +43,13 @@ import AccountSection from '../features/gacha/settings/account/AccountSection';
 import ContentSection from '../features/gacha/settings/content/ContentSection';
 import RemindersSection from '../features/gacha/settings/reminders/RemindersSection';
 import AppearanceSection from '../features/gacha/settings/appearance/AppearanceSection';
+import { FeedbackSection } from '../features/gacha/settings/feedback/FeedbackSection';
+import {
+  getFeedbackPrefsSync,
+  loadFeedbackPrefs,
+  setFeedbackPref,
+  type FeedbackPrefs,
+} from '../features/gacha/settings/feedbackPrefs';
 import AboutSection from '../features/gacha/settings/about/AboutSection';
 import DebugSection from '../features/gacha/settings/debug/DebugSection';
 import { createDebugTapCounter } from '../features/gacha/settings/debug/debugTapCounter';
@@ -111,6 +118,9 @@ export function SettingsScreen({ navigation }: Props) {
   const [reminderBusy, setReminderBusy] = useState(false);
   const [streak, setStreak] = useState<StreakSnapshot | null>(null);
   const [resetting, setResetting] = useState(false);
+  // Device-global feedback prefs. Seeded from the synchronous in-memory value (defaults
+  // until App.tsx's mount load runs) and refreshed from storage in the focus load below.
+  const [feedbackPrefs, setFeedbackPrefs] = useState<FeedbackPrefs>(() => getFeedbackPrefsSync());
 
   const reminderPlan = useMemo(() => buildReminderPlanVM(reminderPrefs), [reminderPrefs]);
 
@@ -118,11 +128,14 @@ export function SettingsScreen({ navigation }: Props) {
     setLoadState('loading');
     setLoadError(null);
     try {
-      const [nextAudience, nextPrefs, nextStreak] = await Promise.all([
+      const [nextAudience, nextPrefs, nextStreak, nextFeedback] = await Promise.all([
         loadAudiencePreference(),
         getReminderPrefs(),
         loadStreakSnapshot(),
+        loadFeedbackPrefs(),
       ]);
+
+      setFeedbackPrefs(nextFeedback);
 
       if (!hasSettingsPayload(nextPrefs, nextStreak)) {
         setStreak(null);
@@ -241,6 +254,12 @@ export function SettingsScreen({ navigation }: Props) {
       },
     });
   }, [refresh]);
+
+  const onToggleFeedback = useCallback((key: keyof FeedbackPrefs, value: boolean) => {
+    // Optimistic: reflect the choice immediately, then persist and store the result.
+    setFeedbackPrefs((prev) => ({ ...prev, [key]: value }));
+    void setFeedbackPref(key, value).then((saved) => setFeedbackPrefs(saved));
+  }, []);
 
   const onSignIn = useCallback(() => {
     navigation.navigate('SignIn');
@@ -408,6 +427,8 @@ export function SettingsScreen({ navigation }: Props) {
           />
 
           <AppearanceSection />
+
+          <FeedbackSection prefs={feedbackPrefs} onToggle={onToggleFeedback} />
 
           {paywallHidden ? null : (
             <View style={styles.sectionCard}>

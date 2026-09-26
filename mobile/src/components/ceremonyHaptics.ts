@@ -3,6 +3,7 @@
 // at most once per ceremony, and a Reduce-Motion mode. Guarded require of expo-haptics;
 // every call is a silent no-op without it.
 import { useMemo } from 'react';
+import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
 
 export type HapticImpact = 'light' | 'medium' | 'heavy' | 'soft' | 'rigid';
 export const HAPTIC_RATE_LIMIT = Object.freeze({ maxEvents: 3, windowMs: 1000 });
@@ -55,14 +56,18 @@ export function loadExpoHaptics(): ExpoHapticsLike | null {
 export function createCeremonyHapticsController(deps: {
   haptics: ExpoHapticsLike | null;
   now?: () => number;
+  /** Device-global haptics gate; defaults to the feedback preference. */
+  isEnabled?: () => boolean;
 }): CeremonyHapticsController {
   const { haptics } = deps;
+  const isEnabled = deps.isEnabled ?? (() => getFeedbackPrefsSync().haptics);
   const limiter = createHapticLimiter(deps.now);
   let successUsed = false;
   let rmLightUsed = false;
   let reduceMotion = false;
 
   function tick(): void {
+    if (!isEnabled()) return;
     if (!haptics) return;
     if (reduceMotion) return;
     if (!limiter.allow()) return;
@@ -72,6 +77,7 @@ export function createCeremonyHapticsController(deps: {
   }
 
   function impact(style: HapticImpact = 'medium'): void {
+    if (!isEnabled()) return;
     if (!haptics) return;
     let markRmLight = false;
     if (reduceMotion) {
@@ -95,6 +101,7 @@ export function createCeremonyHapticsController(deps: {
     // The LEG "Success" climax is exempt from the rolling limiter (MGACHA-08): the tell, tear
     // and flash impacts fill the 3/1000 ms window, so consulting it here always dropped the
     // success cue. It still fires at most once per reset() and is a no-op without the module.
+    if (!isEnabled()) return;
     if (!haptics) return;
     if (successUsed) return;
     successUsed = true;
