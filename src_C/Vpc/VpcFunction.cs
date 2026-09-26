@@ -296,33 +296,6 @@ public sealed class VpcFunction
         return await Vpc.Runtime.DrawStateSync.HandleDrawStateSync(req, res, auth);
       }
 
-      // Admin users placeholders
-      {
-        var p1 = RouteMatcher.Match("/api/v1/admin/users", p);
-        if (p1 is not null && req.Method == "GET")
-        {
-          var deny = Auth.RequireSuperAdmin(auth, res);
-          if (deny is not null) return deny;
-          return res.NotImplemented("TODO: admin users list");
-        }
-
-        var p2 = RouteMatcher.Match("/api/v1/admin/users/:userSub", p);
-        if (p2 is not null && req.Method == "GET")
-        {
-          var deny = Auth.RequireSuperAdmin(auth, res);
-          if (deny is not null) return deny;
-          return res.NotImplemented($"TODO: admin user detail for {p2["userSub"]}");
-        }
-
-        var p3 = RouteMatcher.Match("/api/v1/admin/users/:userSub/entitlements", p);
-        if (p3 is not null && req.Method == "PUT")
-        {
-          var deny = Auth.RequireSuperAdmin(auth, res);
-          if (deny is not null) return deny;
-          return res.NotImplemented($"TODO: admin set entitlements for {p3["userSub"]}");
-        }
-      }
-
       // Internal routes
       if (p.EndsWith("/api/internal/entitlements/apply", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {

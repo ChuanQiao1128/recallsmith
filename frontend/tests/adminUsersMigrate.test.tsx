@@ -2,21 +2,16 @@
 //
 // What the screen is allowed to claim about a database migration.
 //
-// tests/adminUsersConfirm.test.tsx already covers the gate in front of the
-// destructive button: the dialog, the typed phrase, and cancelling. It stops
-// the moment `runMigrate` is called. This file starts there — the flight, the
-// two landings, and the one sentence the page prints afterwards.
+// tests/adminUsersConfirm.test.tsx covers that the migrate button runs straight
+// away with no dialog. This file starts once `runMigrate` is called — the
+// in-flight lock, the two landings, and the one sentence the page prints after.
 //
-// The sentence is the case worth reading twice. `runMigrateClick(true)` asks
-// for a reset; the response says whether one happened. Those are different
-// facts, and the success line is built from the response (`resp.data?.reset`)
-// rather than from the request. An operator who is told "reset + migrate" has
-// been told their data is gone; being told that because the console *asked*,
-// while the server declined, sends them to restore a backup they did not need
-// — or worse, teaches them that the phrase means nothing.
+// (The "Reset & migrate" button and the `reset` flag it carried are gone as of
+// F22/CBE-23: the server ignored the flag, so the success line no longer varies
+// on it. The page now prints a single, unconditional "Migration completed.")
 //
 // Deliberately NOT tested: the `if (dbState.running) return` on the first line
-// of runMigrateClick. Both buttons carry `disabled={dbState.running}`, and a
+// of runMigrateClick. The button carries `disabled={dbState.running}`, and a
 // disabled <button> does not dispatch click at all, so no user gesture can
 // reach that line. A case for it would pass no matter what the line said, which
 // is the definition of a test with no teeth. What protects the user there is
@@ -48,11 +43,9 @@ vi.mock('../src/api/admin', async importOriginal => {
 
 const { AdminUsersPage } = await import('../src/pages/AdminUsersPage');
 
-type MigrateResult = ApiResult<{ migrated: boolean; reset: boolean }>;
+type MigrateResult = ApiResult<{ dryRun?: boolean; appliedCount?: number; latestAvailable?: number }>;
 
-const RESET_BUTTON = 'Reset & migrate (DEV only)';
-const PLAIN_BUTTON = 'Run migrate (no reset)';
-const RESET_CONFIRM = 'Reset & migrate';
+const PLAIN_BUTTON = 'Run migrations';
 
 async function mountConsole(): Promise<void> {
   render(
@@ -66,28 +59,16 @@ async function mountConsole(): Promise<void> {
 }
 
 /**
- * Every button in the danger zone.
+ * The migrate button in the danger zone.
  *
- * Found through the <details> element rather than by name, because the names
- * change while a migration is in flight — and one of them changes wrongly. Both
- * labels are driven by the same `dbState.running` flag, so a plain migrate
- * makes the *reset* button announce "Running (reset)..." while nothing is being
- * reset. That is recorded, not asserted: pinning the current strings here would
- * make the test go red when someone fixes it, and the claim this case is making
- * is about reachability, not wording.
+ * Found through the <details> element rather than by name so the query does not
+ * have to track the label flipping to "Running migrations..." while a migration
+ * is in flight.
  */
 function dangerZoneButtons(): HTMLElement[] {
   const zone = document.querySelector('details');
   if (!zone) throw new Error('danger zone not on the page');
   return within(zone).getAllByRole('button');
-}
-
-/** Walk the whole reset gate: press, type the phrase, confirm. */
-async function confirmReset(): Promise<void> {
-  await userEvent.click(screen.getByRole('button', { name: RESET_BUTTON }));
-  const dialog = within(screen.getByRole('alertdialog'));
-  await userEvent.type(dialog.getByRole('textbox'), 'RESET');
-  await userEvent.click(dialog.getByRole('button', { name: RESET_CONFIRM }));
 }
 
 beforeEach(() => {
@@ -108,7 +89,7 @@ afterEach(() => {
 });
 
 describe('while a migration is in flight', () => {
-  it('locks both migrate buttons, and unlocks them when it lands', async () => {
+  it('locks the migrate button, and unlocks it when it lands', async () => {
     const pending = deferred<MigrateResult>();
     api.runMigrate.mockReturnValue(pending.promise);
 
@@ -116,10 +97,10 @@ describe('while a migration is in flight', () => {
     await userEvent.click(screen.getByRole('button', { name: PLAIN_BUTTON }));
 
     const inFlight = dangerZoneButtons();
-    expect(inFlight).toHaveLength(2);
+    expect(inFlight).toHaveLength(1);
     for (const button of inFlight) expect(button.hasAttribute('disabled')).toBe(true);
 
-    pending.resolve(ok({ migrated: true, reset: false }));
+    pending.resolve(ok({ appliedCount: 0 }));
 
     await waitFor(() => {
       for (const button of dangerZoneButtons()) {
@@ -127,14 +108,13 @@ describe('while a migration is in flight', () => {
       }
     });
     expect(screen.queryByRole('button', { name: PLAIN_BUTTON })).not.toBeNull();
-    expect(screen.queryByRole('button', { name: RESET_BUTTON })).not.toBeNull();
   });
 });
 
 describe('when the migration fails', () => {
   it('shows the server reason, claims no success, and does not re-read anything', async () => {
     api.runMigrate.mockResolvedValue(
-      refused<{ migrated: boolean; reset: boolean }>('DB_LOCKED', 'advisory lock is held'),
+      refused<{ dryRun?: boolean; appliedCount?: number; latestAvailable?: number }>('DB_LOCKED', 'advisory lock is held'),
     );
 
     await mountConsole();
@@ -154,7 +134,7 @@ describe('when the migration fails', () => {
 
 describe('when the migration succeeds', () => {
   it('re-reads users and decks, because they may be different rows now', async () => {
-    api.runMigrate.mockResolvedValue(ok({ migrated: true, reset: false }));
+    api.runMigrate.mockResolvedValue(ok({ appliedCount: 3 }));
 
     await mountConsole();
     expect(api.listAdminUsers).toHaveBeenCalledTimes(1);
@@ -164,33 +144,21 @@ describe('when the migration succeeds', () => {
 
     expect(await screen.findByText('Migration completed.')).not.toBeNull();
     // The screen must not keep showing rows from before the schema changed
-    // under it. After a reset there may be none.
+    // under it.
     await waitFor(() => {
       expect(api.listAdminUsers).toHaveBeenCalledTimes(2);
       expect(api.listAdminDecks).toHaveBeenCalledTimes(2);
     });
   });
-});
 
-describe('the sentence printed after a reset was requested', () => {
-  it('does not say a reset happened when the server says it did not', async () => {
-    api.runMigrate.mockResolvedValue(ok({ migrated: true, reset: false }));
+  it('says only that the migration completed, with no reset suffix', async () => {
+    api.runMigrate.mockResolvedValue(ok({ appliedCount: 0 }));
 
     await mountConsole();
-    await confirmReset();
+    await userEvent.click(screen.getByRole('button', { name: PLAIN_BUTTON }));
 
     expect(await screen.findByText('Migration completed.')).not.toBeNull();
     expect(screen.queryByText('Migration completed (reset + migrate).')).toBeNull();
-    expect(api.runMigrate).toHaveBeenCalledWith(true);
-  });
-
-  it('says a reset happened when the server says it did', async () => {
-    api.runMigrate.mockResolvedValue(ok({ migrated: true, reset: true }));
-
-    await mountConsole();
-    await confirmReset();
-
-    expect(await screen.findByText('Migration completed (reset + migrate).')).not.toBeNull();
-    expect(screen.queryByText('Migration completed.')).toBeNull();
+    expect(api.runMigrate).toHaveBeenCalledWith();
   });
 });

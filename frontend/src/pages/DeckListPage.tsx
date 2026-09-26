@@ -621,49 +621,6 @@ export function DeckListPage() {
           />
         )}
 
-        {/* <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-500">Total Decks</div>
-              <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center border border-slate-100">
-                <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-              </div>
-            </div>
-            <div className="mt-3 text-3xl font-bold text-slate-900">{0}</div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-500">Published</div>
-              <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center border border-emerald-100">
-                <svg className="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-              </div>
-            </div>
-            <div className="mt-3 text-3xl font-bold text-slate-900">{0}</div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between relative overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-br from-amber-50/50 to-transparent pointer-events-none"></div>
-            <div className="flex items-center justify-between relative">
-              <div className="text-sm font-medium text-amber-700">Needs Publish</div>
-              <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center border border-amber-200">
-                <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-              </div>
-            </div>
-            <div className="mt-3 text-3xl font-bold text-amber-700 relative">{0}</div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-500">Unpublished</div>
-              <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center border border-slate-200">
-                <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" /></svg>
-              </div>
-            </div>
-            <div className="mt-3 text-3xl font-bold text-slate-900">{0}</div>
-          </div>
-        </div> -->
-
         {/* Main List Container - Tab Content */}
         {activeTab === 'publishJobs' && superAdmin ? (
           /* Publish Jobs List */
