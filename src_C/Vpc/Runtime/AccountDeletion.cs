@@ -35,8 +35,8 @@ public static class AccountDeletion
   /// the outbox rows (through the caller's events) first, then user_premium_state and
   /// rc_webhook_events by app_user_id, then the users row -- whose <c>on delete cascade</c> removes
   /// user_entitlements, user_subscriptions, user_progress_events, user_progress, user_draw_owned,
-  /// user_draw_meta and user_wallet. A failure rolls the whole thing back, so the phone keeps the
-  /// account and can retry.
+  /// user_draw_meta, user_wallet and user_deck_wallet. A failure rolls the whole thing back, so the
+  /// phone keeps the account and can retry.
   /// </summary>
   public static async Task<AccountDeletionResult> DeleteUserDataAsync(NpgsqlConnection conn, string userSub)
   {
