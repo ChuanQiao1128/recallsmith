@@ -67,6 +67,24 @@ export type HomeDeckSummarySnapshot = {
   totalNewAllDecks: number;
 };
 
+// Last remote update map that resolved successfully this session. A cache-first
+// Home load (remote: false) reads this instead of hitting the remote-first
+// manifest check, so cold start paints from what the last online load already
+// learned rather than waiting on the network. Module state is the right scope:
+// Home unmounts and remounts across the tab bar, and "last known" must outlive
+// it, exactly like the auto-update attempt guard below.
+let lastKnownUpdates: Record<string, UpdateInfo> = {};
+
+/** A shallow copy of the last remote update map that resolved this session. */
+export function getLastKnownDeckUpdates(): Record<string, UpdateInfo> {
+  return { ...lastKnownUpdates };
+}
+
+/** Test seam: `lastKnownUpdates` is module state and vitest shares modules within a file. */
+export function resetLastKnownDeckUpdatesForTests(): void {
+  lastKnownUpdates = {};
+}
+
 function toDeckEntriesFromUpdates(rawUpdates: Record<string, unknown>): ManifestDeckEntry[] {
   return Object.entries(rawUpdates ?? {})
     .map(([slug, info]) => ({
@@ -100,16 +118,25 @@ function toDeckEntriesFromUpdates(rawUpdates: Record<string, unknown>): Manifest
 
 export async function loadHomeDeckSummaries(params: {
   premium: boolean;
+  remote?: boolean;
 }): Promise<HomeDeckSummarySnapshot> {
-  const { premium } = params;
+  const { premium, remote } = params;
   const now = new Date();
   let updates: Record<string, UpdateInfo> = {};
   let manifestDecks: ManifestDeckEntry[] = [];
 
-  try {
-    updates = await loadDeckUpdates(premium);
-  } catch {
-    updates = {};
+  if (remote === false) {
+    // Cache-first: reuse the last remote updates and make no manifest check, so
+    // Home can paint before any network round-trip. Everything after (the
+    // manifest deck list -- already cache-first -- and the per-deck loop) is
+    // unchanged.
+    updates = getLastKnownDeckUpdates();
+  } else {
+    try {
+      updates = await loadDeckUpdates(premium);
+    } catch {
+      updates = {};
+    }
   }
 
   try {
@@ -398,7 +425,11 @@ export async function executeDeckAction(action: DeckAction): Promise<{ activeSlu
 export async function loadDeckUpdates(
   premium: boolean,
 ): Promise<Record<string, UpdateInfo>> {
-  return checkManifestForUpdates(premium);
+  const updates = await checkManifestForUpdates(premium);
+  // Remember the last successful remote map so a later cache-first load
+  // (remote: false) can reuse it without a network round-trip.
+  lastKnownUpdates = updates;
+  return updates;
 }
 
 /** =========================
