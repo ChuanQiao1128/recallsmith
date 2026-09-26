@@ -15,6 +15,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+import { errorToMessage } from '../api/errorKind';
 import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { getFeatureFlags } from '../config/featureFlags';
@@ -177,7 +178,7 @@ export function LibraryScreen({ navigation, route }: Props) {
           setDeck(null);
           setProgress([]);
           setOwnedSet(null);
-          setError(loadErr?.message ?? 'Failed to load library.');
+          setError(errorToMessage(loadErr));
         }
       } finally {
         setLoading(false);

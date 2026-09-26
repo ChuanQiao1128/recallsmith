@@ -16,6 +16,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { CardExport, DeckExport } from '../types/deckExport';
+import { errorToMessage } from '../api/errorKind';
 import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
@@ -548,7 +549,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           setEmptyDeck(false);
           trialRef.current = EMPTY_TRIAL_INFO;
           setTrialInfo(EMPTY_TRIAL_INFO);
-          setLoadError(e?.message ?? 'Failed to load deck.');
+          setLoadError(errorToMessage(e));
           setLoading(false);
         }
       }
