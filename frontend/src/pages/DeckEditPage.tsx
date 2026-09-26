@@ -54,6 +54,19 @@ function effectiveTier(deckType: number, tier: '' | DeckTier): DeckTier {
   return Number(deckType) === 1 ? 'free' : 'premium';
 }
 
+/**
+ * The sentence shown when the deck will not load.
+ *
+ * useDeck bakes in 'Deck not found.' as its own fallback when the server sends no
+ * message; this page has always shown 'Failed to load deck.' in that spot, so the
+ * hook's fallback is mapped back to the page's. A real server message — a
+ * refusal's wording, a thrown request's message — passes through untouched.
+ */
+function deckLoadMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : 'Failed to load deck.';
+  return message === 'Deck not found.' ? 'Failed to load deck.' : message;
+}
+
 export function DeckEditPage() {
   const navigate = useNavigate();
   const [sp] = useSearchParams();
@@ -243,9 +256,7 @@ export function DeckEditPage() {
   const loadError = invalidDeckId
     ? 'Missing or invalid deckId.'
     : deckQuery.isError
-      ? deckQuery.error instanceof Error
-        ? deckQuery.error.message
-        : 'Failed to load deck.'
+      ? deckLoadMessage(deckQuery.error)
       : null;
 
   if (!invalidDeckId && deckQuery.isPending) {
