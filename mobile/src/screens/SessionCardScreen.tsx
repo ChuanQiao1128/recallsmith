@@ -160,7 +160,7 @@ function computePremiumActive(customerInfo: any): boolean {
 }
 export function SessionCardScreen({ navigation, route }: Props) {
   const slugFromRoute = route.params?.slug ?? null;
-  const { mode = 'mixed', completionRoute = 'summary' } = route.params ?? {};
+  const { mode = 'mixed' } = route.params ?? {};
   // Route-supplied limit is now optional. When the caller doesn't
   // explicitly pass one, sessionLimit derives from planChallengeRoute
   // (which respects SESSION_MAIN_ROUTE_DEFAULT = 5 + actual due/new
@@ -669,20 +669,6 @@ export function SessionCardScreen({ navigation, route }: Props) {
         now: new Date(nowAtRating.getTime()),
       });
       if (!nextState.nextCurrent) {
-        if (completionRoute === 'settlement') {
-          navigation.replace('Settlement', {
-            slug: deck.Slug,
-            deckTitle: deck.Title,
-            sessionDone: nextState.nextDone,
-            rewardPulls: outcome.rewardPulls,
-            masteredCount: Math.max(
-              0,
-              nextState.updatedProgress.filter((item) => item.stage >= 4).length -
-                progress.filter((item) => item.stage >= 4).length,
-            ),
-          });
-          return;
-        }
         navigation.replace('SessionSummary', {
           sessionId: useSessionStore.getState().sessionId ?? undefined,
           slug: deck.Slug,
@@ -986,23 +972,15 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 <Pressable
                   style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
                   onPress={() =>
-                    completionRoute === 'settlement'
-                      ? navigation.replace('Settlement', {
-                          slug: deck.Slug,
-                          deckTitle: deck.Title,
-                          sessionDone,
-                          rewardPulls: useSessionStore.getState().rewardOutcome.rewardPulls,
-                          masteredCount: progress.filter((item) => item.stage >= 4).length,
-                        })
-                      : navigation.replace('SessionSummary', {
-                          slug: deck.Slug,
-                          deckTitle: deck.Title,
-                          sessionDone,
-                          sessionLimit,
-                          minimumGoal: doneMinimumGoal,
-                          dueCount: dueTodayCount,
-                          streakEarned: useSessionStore.getState().streakEarned,
-                        })
+                    navigation.replace('SessionSummary', {
+                      slug: deck.Slug,
+                      deckTitle: deck.Title,
+                      sessionDone,
+                      sessionLimit,
+                      minimumGoal: doneMinimumGoal,
+                      dueCount: dueTodayCount,
+                      streakEarned: useSessionStore.getState().streakEarned,
+                    })
                   }
                 >
                   <Text style={styles.doneButtonText} numberOfLines={1}>

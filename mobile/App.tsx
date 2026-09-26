@@ -21,63 +21,15 @@ import WelcomeScreen from './src/screens/WelcomeScreen';
 import AudienceSurveyScreen from './src/screens/AudienceSurveyScreen';
 import PermissionPromptScreen from './src/screens/PermissionPromptScreen';
 import HomeScreen from './src/screens/HomeScreen';
-import DailyDoseScreen from './src/screens/DailyDoseScreen';
-import WeekSummaryScreen from './src/screens/WeekSummaryScreen';
-import MonthSummaryScreen from './src/screens/MonthSummaryScreen';
-import PoolLaunchScreen from './src/screens/PoolLaunchScreen';
-import FreshStartLandingScreen from './src/screens/FreshStartLandingScreen';
-import PausedPoolScreen from './src/screens/PausedPoolScreen';
-import PoolPickerScreen from './src/screens/PoolPickerScreen';
 import LibraryScreen from './src/screens/LibraryScreen';
-import SortFilterScreen from './src/screens/SortFilterScreen';
 import CardDetailScreen from './src/screens/CardDetailScreen';
-import PoolOverviewScreen from './src/screens/PoolOverviewScreen';
-import TagExplorerScreen from './src/screens/TagExplorerScreen';
-import AudienceFilterScreen from './src/screens/AudienceFilterScreen';
-import PlanOverviewScreen from './src/screens/PlanOverviewScreen';
-import PlanTodayScreen from './src/screens/PlanTodayScreen';
-import PlanWeekScreen from './src/screens/PlanWeekScreen';
-import PlanMonthScreen from './src/screens/PlanMonthScreen';
-import MilestoneHallScreen from './src/screens/MilestoneHallScreen';
-import MilestoneDetailScreen from './src/screens/MilestoneDetailScreen';
-import StreakMilestoneScreen from './src/screens/StreakMilestoneScreen';
-import WeekStreakMilestoneScreen from './src/screens/WeekStreakMilestoneScreen';
-import FreePullGrantScreen from './src/screens/FreePullGrantScreen';
-import FreePullInventoryScreen from './src/screens/FreePullInventoryScreen';
-import DailyDigestScreen from './src/screens/DailyDigestScreen';
-import WeekPlannerPromptScreen from './src/screens/WeekPlannerPromptScreen';
-import MonthRewindScreen from './src/screens/MonthRewindScreen';
-import BacklogWarningScreen from './src/screens/BacklogWarningScreen';
-import BacklogBurstScreen from './src/screens/BacklogBurstScreen';
-import FreshStartConfirmScreen from './src/screens/FreshStartConfirmScreen';
-import DormantNudgeScreen from './src/screens/DormantNudgeScreen';
 import MoreScreen from './src/screens/MoreScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
-import EditProfileScreen from './src/screens/EditProfileScreen';
-import AchievementsScreen from './src/screens/AchievementsScreen';
-import SettingsMainScreen from './src/screens/SettingsMainScreen';
-import SettingsAudienceScreen from './src/screens/SettingsAudienceScreen';
-import SettingsNotificationsScreen from './src/screens/SettingsNotificationsScreen';
-import SettingsPoolsScreen from './src/screens/SettingsPoolsScreen';
-import SettingsAppearanceScreen from './src/screens/SettingsAppearanceScreen';
-import AboutScreen from './src/screens/AboutScreen';
 import HelpFAQScreen from './src/screens/HelpFAQScreen';
-import ErrorNetworkScreen from './src/screens/ErrorNetworkScreen';
-import ErrorGenericScreen from './src/screens/ErrorGenericScreen';
-import ToastHostScreen from './src/screens/ToastHostScreen';
-import CoachOverlayScreen from './src/screens/CoachOverlayScreen';
-import OfflineBannerScreen from './src/screens/OfflineBannerScreen';
 import DebugMenuScreen from './src/screens/DebugMenuScreen';
 import CeremonyTuningScreen from './src/screens/dev/CeremonyTuning';
-import LevelScreen from './src/screens/LevelScreen';
 import DrawCeremonyScreen from './src/screens/DrawCeremonyScreen';
 import DrawResultScreen from './src/screens/DrawResultScreen';
-import SettlementScreen from './src/screens/SettlementScreen';
-import MasteredCelebrationScreen from './src/screens/MasteredCelebrationScreen';
-import CollectionMilestoneScreen from './src/screens/CollectionMilestoneScreen';
-import MasteryMilestoneScreen from './src/screens/MasteryMilestoneScreen';
-import ChallengeScreen from './src/screens/ChallengeScreen';
-import DeckScreen from './src/screens/DeckScreen';
 import SessionCardScreen from './src/screens/SessionCardScreen';
 import DrawScreen from './src/screens/DrawScreen';
 import SessionSummaryScreen from './src/screens/SessionSummaryScreen';
@@ -239,55 +191,13 @@ export default function App() {
         <Stack.Screen name="PermissionPrompt" component={PermissionPromptScreen} />
         <Stack.Screen name="Paywall" component={PaywallScreen} />
         <Stack.Screen name="Home" component={HomeScreen} />
-        <Stack.Screen name="DailyDose" component={DailyDoseScreen} />
-        <Stack.Screen name="WeekSummary" component={WeekSummaryScreen} />
-        <Stack.Screen name="MonthSummary" component={MonthSummaryScreen} />
-        <Stack.Screen name="PoolLaunch" component={PoolLaunchScreen} />
-        <Stack.Screen name="PoolPicker" component={PoolPickerScreen} />
-        <Stack.Screen name="FreshStartLanding" component={FreshStartLandingScreen} />
-        <Stack.Screen name="PausedPool" component={PausedPoolScreen} />
         <Stack.Screen name="Library" component={LibraryScreen} />
-        <Stack.Screen name="SortFilter" component={SortFilterScreen} />
         <Stack.Screen name="CardDetail" component={CardDetailScreen} />
-        <Stack.Screen name="PoolOverview" component={PoolOverviewScreen} />
-        <Stack.Screen name="TagExplorer" component={TagExplorerScreen} />
-        <Stack.Screen name="AudienceFilter" component={AudienceFilterScreen} />
-        <Stack.Screen name="PlanOverview" component={PlanOverviewScreen} />
-        <Stack.Screen name="PlanToday" component={PlanTodayScreen} />
-        <Stack.Screen name="PlanWeek" component={PlanWeekScreen} />
-        <Stack.Screen name="PlanMonth" component={PlanMonthScreen} />
-        <Stack.Screen name="MilestoneHall" component={MilestoneHallScreen} />
-        <Stack.Screen name="MilestoneDetail" component={MilestoneDetailScreen} />
-        <Stack.Screen name="StreakMilestone" component={StreakMilestoneScreen} />
-        <Stack.Screen name="WeekStreakMilestone" component={WeekStreakMilestoneScreen} />
-        <Stack.Screen name="FreePullGrant" component={FreePullGrantScreen} />
-        <Stack.Screen name="FreePullInventory" component={FreePullInventoryScreen} />
-        <Stack.Screen name="DailyDigest" component={DailyDigestScreen} />
-        <Stack.Screen name="WeekPlannerPrompt" component={WeekPlannerPromptScreen} />
-        <Stack.Screen name="MonthRewind" component={MonthRewindScreen} />
-        <Stack.Screen name="BacklogWarning" component={BacklogWarningScreen} />
-        <Stack.Screen name="BacklogBurst" component={BacklogBurstScreen} />
-        <Stack.Screen name="FreshStartConfirm" component={FreshStartConfirmScreen} />
-        <Stack.Screen name="DormantNudge" component={DormantNudgeScreen} />
         <Stack.Screen name="More" component={MoreScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
-        <Stack.Screen name="EditProfile" component={EditProfileScreen} />
-        <Stack.Screen name="Achievements" component={AchievementsScreen} />
-        <Stack.Screen name="SettingsMain" component={SettingsMainScreen} />
-        <Stack.Screen name="SettingsAudience" component={SettingsAudienceScreen} />
-        <Stack.Screen name="SettingsNotifications" component={SettingsNotificationsScreen} />
-        <Stack.Screen name="SettingsPools" component={SettingsPoolsScreen} />
-        <Stack.Screen name="SettingsAppearance" component={SettingsAppearanceScreen} />
-        <Stack.Screen name="About" component={AboutScreen} />
         <Stack.Screen name="HelpFAQ" component={HelpFAQScreen} />
-        <Stack.Screen name="ErrorNetwork" component={ErrorNetworkScreen} />
-        <Stack.Screen name="ErrorGeneric" component={ErrorGenericScreen} />
-        <Stack.Screen name="ToastHost" component={ToastHostScreen} />
-        <Stack.Screen name="CoachOverlay" component={CoachOverlayScreen} />
-        <Stack.Screen name="OfflineBanner" component={OfflineBannerScreen} />
         <Stack.Screen name="DebugMenu" component={DebugMenuScreen} />
         {__DEV__ ? <Stack.Screen name="CeremonyTuning" component={CeremonyTuningScreen} /> : null}
-        <Stack.Screen name="Level" component={LevelScreen} />
         {/* Draw flow uses cross-fade transitions so the pack art continuity
             from Draw → Ceremony → Result feels like a single moment. */}
         <Stack.Screen
@@ -300,12 +210,6 @@ export default function App() {
           component={DrawResultScreen}
           options={{ animation: 'fade', animationDuration: 280, gestureEnabled: false }}
         />
-        <Stack.Screen name="Settlement" component={SettlementScreen} />
-        <Stack.Screen name="MasteredCelebration" component={MasteredCelebrationScreen} />
-        <Stack.Screen name="CollectionMilestone" component={CollectionMilestoneScreen} />
-        <Stack.Screen name="MasteryMilestone" component={MasteryMilestoneScreen} />
-        <Stack.Screen name="Challenge" component={ChallengeScreen} />
-        <Stack.Screen name="Deck" component={DeckScreen} />
         <Stack.Screen name="SessionCard" component={SessionCardScreen} />
         <Stack.Screen
           name="Draw"

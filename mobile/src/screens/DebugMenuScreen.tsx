@@ -195,10 +195,6 @@ export function DebugMenuScreen({ navigation }: Props) {
       chips={isDev ? ['QA', 'Scenarios'] : undefined}
       stats={isDev ? [{ label: 'Scenarios', value: String(scenarios.length) }] : undefined}
       sections={isDev ? [{ title: 'Scenarios', items: scenarios }] : undefined}
-      primaryLabel={isDev ? 'Open error shell' : undefined}
-      onPrimary={isDev ? () => navigation.navigate('ErrorGeneric') : undefined}
-      secondaryLabel={isDev ? 'Offline banner' : undefined}
-      onSecondary={isDev ? () => navigation.navigate('OfflineBanner') : undefined}
       tertiaryLabel="Back to more"
       onTertiary={() => navigation.navigate('More')}
       footer={
