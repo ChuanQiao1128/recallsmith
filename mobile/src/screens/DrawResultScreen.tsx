@@ -30,7 +30,9 @@ import {
   rarityHaloColor,
 } from '../theme/packArt';
 import { RevealCardFace } from '../components/ceremony/RevealCardFace';
+import { DrawSummaryGrid } from '../components/ceremony/DrawSummaryGrid';
 import { resultFeaturedCardWidth } from '../features/gacha/draw/spotlightPlan';
+import { spacing } from '../theme/spacing';
 // The featured face and its frame layout now live in RevealCardFace so DrawResult and the
 // single-pull RevealSpotlight render the same card; the old names stay exported here.
 export { REVEAL_FRAME_LAYOUT as FEATURED_FRAME_LAYOUT, REVEAL_STEM_LINES as FEATURED_STEM_LINES } from '../components/ceremony/RevealCardFace';
@@ -498,49 +500,18 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
           {cards.length > 1 ? (
             <>
-              {/* Always-visible compact horizontal strip — fills the bottom of
-                  the page so the user immediately sees what they pulled. The
-                  detailed grid remains behind the existing toggle below. */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.miniStripContent}
-                style={styles.miniStrip}
-              >
-                {cards.map((card, index) => {
-                  const accent = rarityAccentColor(card.rarity);
-                  const stars = rarityStars(card.rarity);
-                  return (
-                    <Pressable
-                      key={`mini-${card.stableUid}-${index}`}
-                      style={({ pressed }) => [styles.miniCard, pressed && styles.pressed]}
-                      onPress={() => setDetailUid(card.stableUid)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Open card ${index + 1}: ${card.question}`}
-                    >
-                      <View style={[styles.miniCardRarityBar, { backgroundColor: accent }]} />
-                      <Text style={styles.miniCardSlot} numberOfLines={1}>
-                        {String(index + 1).padStart(2, '0')}
-                      </Text>
-                      {/* Gold rarity stars — top-right, only visible for
-                          RAR/LEG (matches Library tile language) */}
-                      {stars ? (
-                        <Text style={styles.miniCardStars} numberOfLines={1}>
-                          {stars}
-                        </Text>
-                      ) : null}
-                      <Text style={styles.miniCardQuestion} numberOfLines={3}>
-                        {card.question}
-                      </Text>
-                      <View style={[styles.miniCardChip, { backgroundColor: accent }]}>
-                        <Text style={styles.miniCardChipText} numberOfLines={1}>
-                          {card.rarity}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+              {/* Full-width 2×5 summary grid of framed mini cards (Legendary first, rares glowing)
+                  — the same grid the ceremony ends on. Tapping a cell opens the detail modal. */}
+              <View style={styles.summaryGridWrap}>
+                <DrawSummaryGrid
+                  testIDPrefix="draw-result-summary"
+                  cards={cards}
+                  width={windowWidth - 2 * spacing.screenPadding}
+                  packArt={packArt}
+                  packPaletteCover={packPalette.cover}
+                  onPressCard={(uid) => setDetailUid(uid)}
+                />
+              </View>
 
               <Pressable
                 testID="draw-result-open-all-cards"

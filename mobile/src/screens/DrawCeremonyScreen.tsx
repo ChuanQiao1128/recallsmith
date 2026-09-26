@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, Pressable, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { AccessibilityInfo, Pressable, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -32,7 +32,6 @@ import {
   compressTimings,
   phaseDurations,
   resolveCeremonyTimings,
-  tapFlipCueOffsets,
   type CeremonyPhase,
   type PeakRarity,
   type ResolvedCeremonyTimings,
@@ -51,7 +50,14 @@ import { STAGE_TESTID, StageCanvas } from '../components/ceremony/StageCanvas';
 import { PackTear, seamProgressFromDelta } from '../components/ceremony/PackTear';
 import { TapCard, rarityLabel, type TapCardData } from '../components/ceremony/TapCard';
 import { RevealSpotlight } from '../components/ceremony/RevealSpotlight';
+import { DrawSummaryGrid } from '../components/ceremony/DrawSummaryGrid';
 import { spotlightFlipCues, type SpotlightFlipPlan } from '../features/gacha/draw/spotlightPlan';
+import {
+  INITIAL_SPOTLIGHT_QUEUE,
+  SPOTLIGHT_AUTO_ADVANCE_MS,
+  revealAllOrder,
+  spotlightQueueReducer,
+} from '../features/gacha/draw/spotlightQueue';
 import { formatRank } from '../features/gacha/library/cardRank';
 import { FallbackStage } from '../components/ceremony/FallbackStage';
 import { FeaturedCard, type FeaturedCardProps } from '../components/ceremony/FeaturedCard';
@@ -148,7 +154,16 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
       : 'fallback';
   const timings = useMemo(() => resolveCeremonyTimings({ isMulti, peakRarity, motionAvailable }), [isMulti, peakRarity]);
   const enableTapFlow = route.params.tapFlow ?? (motionAvailable && drawResult.cards.length > 0);
+  // The multi-pull reveal auto-runs on device (motionAvailable) but stays manual in tests unless
+  // the route asks for it, so the existing table-tap tests keep driving the sequence by hand.
+  const autoReveal = route.params.autoReveal ?? motionAvailable;
   const slot = tableSlotLayout(cards.length);
+  const { width: windowWidth } = useWindowDimensions();
+
+  // The multi-pull spotlight queue (I05): table taps / "Reveal all" enqueue uids, the spotlight
+  // walks through them one at a time carrying the current uid, and a revealed card can be opened
+  // again for inspection once the walk is done.
+  const [spot, dispatchSpot] = useReducer(spotlightQueueReducer, INITIAL_SPOTLIGHT_QUEUE);
 
   const [phase, setPhase] = useState<CeremonyPhase>('swipe');
   const [canSkip, setCanSkip] = useState(false);
@@ -167,6 +182,12 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   const [swipeHintDismissed, setSwipeHintDismissed] = useState(false);
 
   const timers = useRef<number[]>([]);
+  // The single in-flight spotlight auto-advance timer (COM/RAR hold), cleared on a tap or Skip all
+  // so a stale timer can never fire against the wrong card (the uid guard in the reducer is a
+  // second line of defence).
+  const spotAdvanceRef = useRef<number | null>(null);
+  // Once-per-ceremony guard: the auto reveal runs the first time the table is reached.
+  const autoRevealedRef = useRef(false);
   const swipeStartXRef = useRef<number | null>(null);
   const phaseRef = useRef<CeremonyPhase>('swipe');
   const flippedRef = useRef<Set<string>>(flippedSet);
@@ -620,39 +641,25 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     AccessibilityInfo.announceForAccessibility?.(phaseTitleText);
   }, [phaseTitleText]);
 
-  const onTapStart = useCallback(
-    (card: TapCardData, flipDelayMs: number) => {
-      // Immediate touch feedback stays on the tap.
-      haptics.impact('soft');
-      if (reduceMotion) {
-        // No visual flip animation to align to — play the flip sound and sting at once.
-        audio.hit('card-flip');
-        if (card.rarity === 'RAR') audio.hit('chime');
-        else if (card.rarity === 'LEG') audio.hit('legendary');
-        return;
-      }
-      // Otherwise schedule the flip sound to the visual flip (lift end) and the rarity sting to
-      // the flip midpoint (when the face appears), instead of firing both at tap time (MGACHA-07).
-      const { flipAtMs, stingAtMs } = tapFlipCueOffsets(card.rarity, flipDelayMs, activeTimings);
-      const flipId = setTimeout(() => audio.hit('card-flip'), flipAtMs) as unknown as number;
-      timers.current.push(flipId);
-      if (stingAtMs !== null) {
-        const stingId = setTimeout(
-          () => audio.hit(card.rarity === 'LEG' ? 'legendary' : 'chime'),
-          stingAtMs,
-        ) as unknown as number;
-        timers.current.push(stingId);
+  // Every table tap is now haptics-only, Reduce Motion included: the spotlight the tapped card
+  // flies into owns the flip sound and the rarity sting (I05), so the table itself stays silent.
+  const onTapStart = useCallback(() => {
+    haptics.impact('soft');
+  }, [haptics]);
+  const onFlipped = useCallback(
+    (uid: string) => {
+      setFlippedSet((s) => {
+        const next = new Set(s);
+        next.add(uid);
+        return next;
+      });
+      // On the multi-pull table, a flipped card is sent through the spotlight in tap order.
+      if (isMulti && phaseRef.current === 'cards-on-table') {
+        dispatchSpot({ type: 'enqueue', uid });
       }
     },
-    [audio, haptics, activeTimings, reduceMotion],
+    [isMulti],
   );
-  const onFlipped = useCallback((uid: string) => {
-    setFlippedSet((s) => {
-      const next = new Set(s);
-      next.add(uid);
-      return next;
-    });
-  }, []);
   const onFocusToggle = useCallback((uid: string) => {
     setFocusedUid((cur) => (cur === uid ? null : uid));
   }, []);
@@ -669,6 +676,71 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     },
     [onFlipped, scheduleCues],
   );
+
+  // ── Multi-pull spotlight sequence (I05) ──
+  const clearSpotAdvance = useCallback(() => {
+    if (spotAdvanceRef.current !== null) {
+      clearTimeout(spotAdvanceRef.current);
+      spotAdvanceRef.current = null;
+    }
+  }, []);
+
+  // "Reveal all" (and the on-device auto path): flip every face-down card up front — lowest
+  // rarity first so the pull builds to its best card — and hand the whole ordered list to the
+  // spotlight queue to walk one at a time.
+  const revealAll = useCallback(() => {
+    const uids = revealAllOrder(cards, flippedRef.current);
+    if (uids.length === 0) return;
+    setFlippedSet((s) => {
+      const next = new Set(s);
+      uids.forEach((u) => next.add(u));
+      return next;
+    });
+    dispatchSpot({ type: 'enqueueAll', uids });
+  }, [cards]);
+
+  // A landed COM/RAR spotlight card auto-advances after its hold; LEG waits for a tap. The timer
+  // carries the uid so a stale fire (after a manual tap already advanced) is ignored by the reducer.
+  const onSpotlightLanded = useCallback(
+    (uid: string, rarity: PeakRarity) => {
+      const holdMs = SPOTLIGHT_AUTO_ADVANCE_MS[rarity];
+      if (typeof holdMs !== 'number') return;
+      clearSpotAdvance();
+      const id = setTimeout(() => {
+        spotAdvanceRef.current = null;
+        dispatchSpot({ type: 'advance', uid });
+      }, holdMs) as unknown as number;
+      spotAdvanceRef.current = id;
+      timers.current.push(id);
+    },
+    [clearSpotAdvance],
+  );
+
+  const onSpotlightPressFaceUp = useCallback(
+    (uid: string) => {
+      clearSpotAdvance();
+      dispatchSpot({ type: 'advance', uid });
+    },
+    [clearSpotAdvance],
+  );
+
+  const onSpotlightSkipAll = useCallback(() => {
+    clearSpotAdvance();
+    setFlippedSet((s) => {
+      const next = new Set(s);
+      cards.forEach((c) => next.add(c.stableUid));
+      return next;
+    });
+    dispatchSpot({ type: 'skipAll' });
+  }, [cards, clearSpotAdvance]);
+
+  // Auto reveal: on device, the sequence starts by itself the first time the table is reached.
+  useEffect(() => {
+    if (!autoReveal || !enableTapFlow || !isMulti) return;
+    if (phase !== 'cards-on-table' || autoRevealedRef.current) return;
+    autoRevealedRef.current = true;
+    revealAll();
+  }, [autoReveal, enableTapFlow, isMulti, phase, revealAll]);
 
   const packPhase = phase === 'swipe' || phase === 'approach' || phase === 'hold' || phase === 'tear-flip';
   const tablePhase = phase === 'flash-reveal' || phase === 'settle' || phase === 'cards-on-table';
@@ -693,6 +765,16 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   };
 
   const allFlipped = cards.length > 0 && flippedSet.size >= cards.length;
+
+  // Multi-pull spotlight: the card the queue currently points at, and where the CTA + table sit.
+  const multiTapFlow = enableTapFlow && cards.length > 1;
+  const spotCard = multiTapFlow && spot.current !== null ? cards.find((c) => c.stableUid === spot.current) ?? null : null;
+  const spotIndex = spotCard ? cards.findIndex((c) => c.stableUid === spotCard.stableUid) : 0;
+  const multiSpotlightMounted = multiTapFlow && spot.current !== null && spotCard !== null;
+  // Once every card is face up and the walk is over, the table becomes the summary grid.
+  const showSummaryGrid = multiTapFlow && phase === 'cards-on-table' && allFlipped && spot.current === null;
+  // The "Reveal all" button shows while cards are still face down and nothing is being revealed.
+  const showRevealAll = multiTapFlow && phase === 'cards-on-table' && spot.current === null && !allFlipped;
   // On the table the word appears once a card is face up; on the featured-reveal path
   // (tapFlow off) the settle phase shows it. With tapFlow on the reveal is the table,
   // so settle keeps the word withheld until the first flip.
@@ -742,6 +824,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
       focused={focusedUid === card.stableUid}
       onFocusToggle={onFocusToggle}
       timings={activeTimings}
+      silent
     />
   );
 
@@ -921,10 +1004,34 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
                 accessibilityElementsHidden={!tablePhase}
                 importantForAccessibility={tablePhase ? undefined : 'no-hide-descendants'}
               >
-                {renderTable()}
+                {showSummaryGrid ? (
+                  <DrawSummaryGrid
+                    testIDPrefix="draw-ceremony-summary"
+                    cards={cards}
+                    width={windowWidth - 32}
+                    packArt={coverImage}
+                    packPaletteCover={palette.cover}
+                    onPressCard={(uid) => dispatchSpot({ type: 'open', uid })}
+                  />
+                ) : (
+                  renderTable()
+                )}
               </View>
             ) : null}
           </View>
+
+          {showRevealAll ? (
+            <Pressable
+              testID="draw-ceremony-reveal-all"
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.skipButton, pressed && styles.pressed]}
+              onPress={revealAll}
+            >
+              <Text style={styles.skipText} numberOfLines={1}>
+                Reveal all
+              </Text>
+            </Pressable>
+          ) : null}
 
           <Text
             style={[styles.footerRarity, !rarityVisible && styles.footerRarityHidden]}
@@ -934,7 +1041,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
             {rarityVisible ? rarityWord : ''}
           </Text>
 
-          {!singleSpotlight ? primaryCta : null}
+          {!singleSpotlight && !multiSpotlightMounted ? primaryCta : null}
         </Reanimated.View>
 
         {singleSpotlight && spotlightCard && (tablePhase || tableWarm) ? (
@@ -952,6 +1059,29 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
             serialText={spotlightSerial}
             footer={primaryCta}
             onFlipStart={(plan) => onSpotlightFlipStart(spotlightCard.stableUid, spotlightCard.rarity, plan)}
+          />
+        ) : null}
+
+        {multiSpotlightMounted && spotCard ? (
+          <RevealSpotlight
+            key={`${spot.current}-${spot.mode}`}
+            card={spotCard}
+            index={spotIndex}
+            total={cards.length}
+            visible
+            interactive
+            autoFlip={spot.mode === 'reveal'}
+            initialFaceUp={spot.mode === 'inspect'}
+            reduceMotion={reduceMotion}
+            cardBackImage={cardBackImage}
+            packArt={coverImage}
+            packPaletteCover={palette.cover}
+            progressText={spot.mode === 'reveal' ? `${spot.shown.length} / ${cards.length}` : undefined}
+            footer={primaryCta}
+            onFlipStart={(plan) => scheduleCues(spotlightFlipCues(spotCard.rarity, plan))}
+            onLanded={() => onSpotlightLanded(spotCard.stableUid, spotCard.rarity)}
+            onPressFaceUp={() => onSpotlightPressFaceUp(spotCard.stableUid)}
+            onSkipAll={spot.mode === 'reveal' ? onSpotlightSkipAll : undefined}
           />
         ) : null}
 
