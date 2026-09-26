@@ -876,7 +876,7 @@ describe('DrawCeremonyScreen v9', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress();
+      tree.root.findByProps({ testID: 'reveal-spotlight-card' }).props.onPress();
       await Promise.resolve();
     });
     expect(collectText(tree)).toContain('Rare');
