@@ -230,7 +230,85 @@ public static class ContentIntelligenceSnapshotImport
     return value.UtcDateTime;
   }
 
-  private static async Task<int> ImportSnapshotAsync(
+  internal sealed record SnapshotImportResult(int RowCount, int DeletedCount);
+
+  /// <summary>
+  /// Streams JSON lines from <paramref name="reader"/> into the snapshot table inside one transaction,
+  /// then deletes the rows of the imported windows that this run did not write (a card that dropped out
+  /// of a newer snapshot must leave the table). An empty file writes and deletes nothing.
+  /// Any exception rolls the transaction back and rethrows.
+  /// </summary>
+  internal static async Task<SnapshotImportResult> ImportRowsAsync(Npgsql.NpgsqlConnection conn, TextReader reader)
+  {
+    var options = new JsonSerializerOptions
+    {
+      PropertyNameCaseInsensitive = true,
+      Converters = { new FlexibleDateTimeOffsetConverter() },
+    };
+
+    await using var tx = await conn.BeginTransactionAsync();
+    try
+    {
+      var rowCount = 0;
+      var windows = new HashSet<int>();
+      var keyWindows = new List<int>();
+      var keyDecks = new List<string>();
+      var keyUids = new List<string>();
+      var keyRevisions = new List<int>();
+
+      string? line;
+      while ((line = await reader.ReadLineAsync()) is not null)
+      {
+        if (string.IsNullOrWhiteSpace(line)) continue;
+
+        var row = JsonSerializer.Deserialize<CardSnapshotRow>(line, options);
+        if (row is null) continue;
+
+        await UpsertSnapshotRowAsync(conn, tx, row);
+        rowCount++;
+        windows.Add(row.WindowDays);
+        keyWindows.Add(row.WindowDays);
+        keyDecks.Add(row.DeckSlug);
+        keyUids.Add(row.CardStableUid);
+        keyRevisions.Add(row.CardRevision);
+      }
+
+      var deletedCount = 0;
+      if (rowCount > 0)
+      {
+        const string deleteSql = """
+          delete from content_intelligence_card_snapshot s
+          where s.window_days = any($1::int[])
+            and not exists (
+              select 1 from unnest($2::int[], $3::text[], $4::text[], $5::int[]) as k(window_days, deck_slug, card_stable_uid, card_revision)
+              where k.window_days = s.window_days and k.deck_slug = s.deck_slug
+                and k.card_stable_uid = s.card_stable_uid and k.card_revision = s.card_revision)
+          """;
+
+        deletedCount = await ExecuteAsync(
+          conn,
+          tx,
+          deleteSql,
+          [
+            windows.ToArray(),
+            keyWindows.ToArray(),
+            keyDecks.ToArray(),
+            keyUids.ToArray(),
+            keyRevisions.ToArray(),
+          ]);
+      }
+
+      await tx.CommitAsync();
+      return new SnapshotImportResult(rowCount, deletedCount);
+    }
+    catch
+    {
+      try { await tx.RollbackAsync(); } catch { /* ignore */ }
+      throw;
+    }
+  }
+
+  private static async Task<SnapshotImportResult> ImportSnapshotAsync(
     Npgsql.NpgsqlConnection conn,
     string bucket,
     string key)
@@ -241,46 +319,15 @@ public static class ContentIntelligenceSnapshotImport
       Key = key,
     });
 
-    await using var tx = await conn.BeginTransactionAsync();
-    try
+    Stream contentStream = response.ResponseStream;
+    if (key.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
     {
-      Stream contentStream = response.ResponseStream;
-      if (key.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
-      {
-        contentStream = new GZipStream(response.ResponseStream, CompressionMode.Decompress);
-      }
-
-      using var stream = contentStream;
-      using var reader = new StreamReader(stream);
-
-      var rowCount = 0;
-      string? line;
-      while ((line = await reader.ReadLineAsync()) is not null)
-      {
-        if (string.IsNullOrWhiteSpace(line)) continue;
-
-        var row = JsonSerializer.Deserialize<CardSnapshotRow>(
-          line,
-          new JsonSerializerOptions
-          {
-            PropertyNameCaseInsensitive = true,
-            Converters = { new FlexibleDateTimeOffsetConverter() },
-          });
-
-        if (row is null) continue;
-
-        await UpsertSnapshotRowAsync(conn, tx, row);
-        rowCount++;
-      }
-
-      await tx.CommitAsync();
-      return rowCount;
+      contentStream = new GZipStream(response.ResponseStream, CompressionMode.Decompress);
     }
-    catch
-    {
-      try { await tx.RollbackAsync(); } catch { /* ignore */ }
-      throw;
-    }
+
+    using var stream = contentStream;
+    using var reader = new StreamReader(stream);
+    return await ImportRowsAsync(conn, reader);
   }
 
   public static async Task<APIGatewayProxyResponse> HandleImportSnapshot(
@@ -320,15 +367,16 @@ public static class ContentIntelligenceSnapshotImport
       }
 
       runId = await CreateImportRunAsync(conn, bucket, key, etag);
-      var rowCount = await ImportSnapshotAsync(conn, bucket, key);
-      await CompleteImportRunAsync(conn, runId, "SUCCEEDED", rowCount, null);
+      var result = await ImportSnapshotAsync(conn, bucket, key);
+      await CompleteImportRunAsync(conn, runId, "SUCCEEDED", result.RowCount, null);
 
       return res.Ok(new
       {
         ok = true,
         bucket,
         key,
-        rowCount,
+        rowCount = result.RowCount,
+        deletedCount = result.DeletedCount,
         runId,
       });
     }
