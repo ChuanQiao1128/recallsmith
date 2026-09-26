@@ -97,8 +97,8 @@ function readRN<T = any>(key: string, fallback: T): T {
   }
 }
 const AI: any = readRN('AccessibilityInfo', null);
-// Options-stage dock, stacked worst case: 8 + hint 20 + count 20 + 56 + 8 + 56 + link 44 = 212 (D05 gap 5).
-const MCQ_DOCK_HEIGHT = 216;
+// Options-stage dock, one row: 8 + count 20 (choose-N only) + 48 + 8 = 84, rounded up.
+const MCQ_DOCK_HEIGHT = 96;
 type McqCardState = {
   mcq: McqExport | null;               // resolveMcq(card, getFeatureFlags()) — null ⇒ renderAsMcq false
   stage: McqStage;                     // 'stem' when flags.mcq.recallFirst !== false, else 'options'
@@ -1006,7 +1006,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 </Pressable>
               </View>
             ) : mcqState.mcq ? (
-              <McqReviewBody
+              <>
+                {/* The one-time coach card renders at the top of the scroll content, above the question,
+                    so it scrolls with the card instead of stacking inside the pinned dock (G33). */}
+                <McqCoachLine visible={renderAsMcq && coachSeen === false} onDismiss={handleCoachDismiss} />
+                <McqReviewBody
                 card={current.card}
                 mcq={mcqState.mcq}
                 rank={rankMapRef.current.get(current.card.StableUid) ?? null}
@@ -1019,6 +1023,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 onToggleOption={stableToggleOption}
                 onOverLimit={stableOverLimit}
               />
+              </>
             ) : (
               <ReviewBody
                 card={current.card}
@@ -1039,9 +1044,6 @@ export function SessionCardScreen({ navigation, route }: Props) {
               testID="review-rating-dock"
               onLayout={handleDockLayout}
             >
-              {/* Inside the dock, above the action rows: the dock is absolute and opaque, so an
-                  in-flow sibling before it would be painted over (review 2026-09-22 #1). */}
-              <McqCoachLine visible={renderAsMcq && coachSeen === false} onDismiss={handleCoachDismiss} />
               {mcqState.mcq ? (
                 <McqActionDock
                   testID="review-rating-bar"
