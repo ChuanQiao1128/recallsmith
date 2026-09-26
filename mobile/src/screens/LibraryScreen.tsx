@@ -114,6 +114,14 @@ export function LibraryScreen({ navigation, route }: Props) {
 
   const refresh = useCallback(
     async (preferredSlug?: string | null) => {
+      // These load failures already carry curated, user-ready copy — mark them
+      // so the catch renders the message verbatim instead of running it through
+      // the transport classifier (which only helps for raw fetch/HTTP noise).
+      const friendlyError = (message: string): Error => {
+        const err: any = new Error(message);
+        err.isFriendlyMessage = true;
+        return err;
+      };
       // Stale-while-revalidate: only the first load (nothing on screen yet)
       // shows the full-screen spinner. Later refreshes keep the mounted grid.
       if (deckRef.current === null) setLoading(true);
@@ -131,7 +139,7 @@ export function LibraryScreen({ navigation, route }: Props) {
           preferredSlug ?? selectedSlug ?? (await loadActiveDeckSlug()) ?? options[0]?.slug ?? null;
 
         if (!currentSlug) {
-          throw new Error('No deck available yet. Install one first.');
+          throw friendlyError('No deck available yet. Install one first.');
         }
         requestedSlug = currentSlug;
 
@@ -140,7 +148,7 @@ export function LibraryScreen({ navigation, route }: Props) {
           const updates = await checkManifestForUpdates(false);
           const update = updates[currentSlug];
           if (!update?.remoteUrl) {
-            throw new Error('This deck is not available on this device yet.');
+            throw friendlyError('This deck is not available on this device yet.');
           }
           const installed = await installDeckAndInvalidate(
             currentSlug,
@@ -150,7 +158,7 @@ export function LibraryScreen({ navigation, route }: Props) {
           ).catch(() => false);
           resolvedDeck = installed ? await getCachedDeck(currentSlug) : null;
           if (!resolvedDeck) {
-            throw new Error('Install failed. Check your connection and retry.');
+            throw friendlyError('Install failed. Check your connection and retry.');
           }
         }
 
@@ -178,7 +186,7 @@ export function LibraryScreen({ navigation, route }: Props) {
           setDeck(null);
           setProgress([]);
           setOwnedSet(null);
-          setError(errorToMessage(loadErr));
+          setError(loadErr?.isFriendlyMessage ? loadErr.message : errorToMessage(loadErr));
         }
       } finally {
         setLoading(false);
