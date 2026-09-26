@@ -1,7 +1,8 @@
 // src/pages/DeckImportPage.tsx
 //
 // Markdown batch import for one deck: paste or pick a file, preview the
-// reconciliation, then apply it card by card.
+// reconciliation, then apply it in transactional batches, with a cancel button
+// and a leave guard while a run is in progress.
 //
 // The page is deliberately thin. Parsing, validation and the create/update/
 // unchanged decision live in lib/deckImport.ts, and the write loop lives in
@@ -11,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
-import { createCard, fetchCardsByDeck, fetchDeckById, updateCard } from '../api/authoring';
+import { fetchCardsByDeck, fetchDeckById, importCardsBatch } from '../api/authoring';
 import { QueryKeys, useAppQueryClient } from '../api/queryClient';
 import { RarityDistribution } from '../components/RarityDistribution';
 import {
@@ -136,10 +137,29 @@ export function DeckImportPage() {
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   const [running, setRunning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [runResult, setRunResult] = useState<ImportRunResult | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // The controller for the batch run in flight, so the Cancel button can abort
+  // it. Held in a ref rather than state because pressing Cancel must not depend
+  // on a re-render having landed first.
+  const abortRef = useRef<AbortController | null>(null);
+
+  // A run writes real cards, and leaving the page mid-run abandons a partially
+  // written deck, so warn before the tab is closed or navigated away. Keyed on
+  // `running` so the guard is registered only while a batch is in flight.
+  useEffect(() => {
+    if (!running) return;
+
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [running]);
 
   useEffect(() => {
     if (invalidDeckId) return;
@@ -248,7 +268,11 @@ export function DeckImportPage() {
   async function execute(toRun: readonly ImportAction[]) {
     if (!deck || toRun.length === 0) return;
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setRunning(true);
+    setCancelling(false);
     setProgress({ done: 0, total: toRun.length });
     setStep('result');
 
@@ -256,12 +280,17 @@ export function DeckImportPage() {
       const result = await runImport(
         deck.id,
         toRun,
-        { createCard, updateCard },
-        (p) => setProgress({ done: p.done, total: p.total }),
+        { importCards: importCardsBatch },
+        {
+          signal: controller.signal,
+          onProgress: (p) => setProgress({ done: p.done, total: p.total }),
+        },
       );
       setRunResult(result);
     } finally {
+      abortRef.current = null;
       setRunning(false);
+      setCancelling(false);
       // The run wrote cards and moved the deck's totals, so both cached views are
       // now behind the server. Without this the card list would keep showing the
       // pre-import rows for up to the staleTime window.
@@ -321,9 +350,15 @@ export function DeckImportPage() {
               {deck.title} · step {step === 'input' ? '1 of 3 · source' : step === 'preview' ? '2 of 3 · preview' : '3 of 3 · execute'}
             </p>
           </div>
-          <Link to={backLink} className="text-sm text-indigo-600 hover:text-indigo-800">
-            ← Back to Cards
-          </Link>
+          {running ? (
+            <span aria-disabled="true" className="text-sm text-slate-400">
+              ← Back to Cards
+            </span>
+          ) : (
+            <Link to={backLink} className="text-sm text-indigo-600 hover:text-indigo-800">
+              ← Back to Cards
+            </Link>
+          )}
         </div>
       </header>
 
@@ -565,13 +600,30 @@ export function DeckImportPage() {
                     {progress.done} / {progress.total}
                   </span>
                 </div>
-                <div className="w-full h-2 bg-slate-100 rounded overflow-hidden">
-                  <div
-                    className="h-full bg-indigo-600 transition-all"
-                    style={{
-                      width: `${progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100)}%`,
-                    }}
-                  />
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-2 bg-slate-100 rounded overflow-hidden">
+                    <div
+                      className="h-full bg-indigo-600 transition-all"
+                      style={{
+                        width: `${progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  {running ? (
+                    <button
+                      type="button"
+                      disabled={cancelling}
+                      className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium
+                                 border border-slate-300 text-slate-700 hover:bg-slate-50
+                                 disabled:cursor-not-allowed disabled:text-slate-400"
+                      onClick={() => {
+                        abortRef.current?.abort();
+                        setCancelling(true);
+                      }}
+                    >
+                      {cancelling ? 'Cancelling...' : 'Cancel import'}
+                    </button>
+                  ) : null}
                 </div>
               </div>
 
@@ -585,6 +637,14 @@ export function DeckImportPage() {
                       counts describe the most recent run
                     </span>
                   </div>
+
+                  {runResult.cancelled ? (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-900 px-3 py-2 rounded text-sm">
+                      Import cancelled. {runResult.created} created and {runResult.updated} updated
+                      before it stopped; {runResult.notRun} not written. Re-run the preview before
+                      importing again.
+                    </div>
+                  ) : null}
 
                   {runResult.failures.length > 0 ? (
                     <div className="bg-red-50 border border-red-200 rounded px-3 py-2">
@@ -608,29 +668,26 @@ export function DeckImportPage() {
                   )}
 
                   <div className="flex items-center gap-3">
-                    {runResult.failures.length > 0 ? (
+                    {runResult.failures.length > 0 || runResult.cancelled ? (
                       <button
                         type="button"
                         disabled={running}
                         className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium
                                    bg-indigo-600 text-white hover:bg-indigo-700
                                    disabled:bg-slate-300 disabled:cursor-not-allowed"
-                        onClick={() => {
-                          const retry = runResult.failures.map((f) => f.action);
-                          void execute(retry);
-                        }}
+                        onClick={() => void buildPreview()}
                       >
-                        Retry {runResult.failures.length} failed
+                        Re-run the preview
                       </button>
-                    ) : null}
-
-                    <button
-                      type="button"
-                      className="text-sm px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
-                      onClick={() => void buildPreview()}
-                    >
-                      Re-preview
-                    </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-sm px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+                        onClick={() => void buildPreview()}
+                      >
+                        Re-run the preview
+                      </button>
+                    )}
 
                     <button
                       type="button"

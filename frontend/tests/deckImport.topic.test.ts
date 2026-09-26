@@ -8,12 +8,8 @@ import {
   TOPIC_MAX_LENGTH,
   type ParsedCard,
 } from '../src/lib/deckImport';
-import {
-  runImport,
-  type CreateCardParams,
-  type ImportWriter,
-  type UpdateCardParams,
-} from '../src/lib/deckImportRunner';
+import { runImport, type ImportBatchWriter } from '../src/lib/deckImportRunner';
+import type { ImportCardInput, ImportCardsBatchResult } from '../src/api/authoring';
 import type { ApiResult } from '../src/types/api';
 import type { Card } from '../src/types/card';
 
@@ -43,32 +39,31 @@ function serverCard(card: ParsedCard, overrides: Partial<Card> & Pick<Card, 'id'
   };
 }
 
-function ok(): ApiResult<Card> {
-  return { success: true, data: null, error: null, traceId: 't' };
+function ok(counts: Partial<ImportCardsBatchResult> = {}): ApiResult<ImportCardsBatchResult> {
+  return {
+    success: true,
+    data: { created: counts.created ?? 0, updated: counts.updated ?? 0, unchanged: counts.unchanged ?? 0 },
+    error: null,
+    traceId: 't',
+  };
 }
 
 interface Recorder {
-  writer: ImportWriter;
-  creates: CreateCardParams[];
-  updates: UpdateCardParams[];
+  writer: ImportBatchWriter;
+  batches: ImportCardInput[][];
 }
 
 function recorder(): Recorder {
-  const creates: CreateCardParams[] = [];
-  const updates: UpdateCardParams[] = [];
+  const batches: ImportCardInput[][] = [];
 
-  const writer: ImportWriter = {
-    async createCard(params) {
-      creates.push(params);
-      return ok();
-    },
-    async updateCard(params) {
-      updates.push(params);
-      return ok();
+  const writer: ImportBatchWriter = {
+    async importCards(params) {
+      batches.push(params.cards);
+      return ok({ created: 1, updated: params.cards.length - 1 });
     },
   };
 
-  return { writer, creates, updates };
+  return { writer, batches };
 }
 
 function firstCard(text: string): ParsedCard {
@@ -291,9 +286,16 @@ describe('runImport with topic', () => {
     expect(plan.creates).toHaveLength(1);
 
     const rec = recorder();
-    const result = await runImport(7, [...plan.creates, ...plan.updates], rec.writer);
-    expect(rec.creates[0]).toMatchObject({ stableUid: 'a-2', topic: '' });
-    expect(rec.updates[0]).toMatchObject({ id: 41, expectedVersion: 3, topic: 'Networking' });
-    expect(result).toEqual({ created: 1, updated: 1, failures: [] });
+    const result = await runImport(7, [...plan.creates, ...plan.updates], rec.writer, {
+      sleep: async () => {},
+    });
+
+    const sent = rec.batches[0];
+    const created = sent.find((c) => c.stableUid === 'a-2');
+    const updated = sent.find((c) => c.stableUid === 'a-1');
+    if (!created || !updated) throw new Error('expected both cards in the batch');
+    expect(created).toMatchObject({ stableUid: 'a-2', topic: '' });
+    expect(updated).toMatchObject({ stableUid: 'a-1', topic: 'Networking' });
+    expect(result).toEqual({ created: 1, updated: 1, failures: [], cancelled: false, notRun: 0 });
   });
 });

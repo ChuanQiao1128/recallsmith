@@ -1,44 +1,24 @@
 // @vitest-environment jsdom
 //
 // DeckImportPage, steps 2 and 3: what the plan looks like on screen, what the
-// gate refuses, and what the page actually hands to the runner.
-//
-// Written and run green against a COMPLETELY UNMODIFIED DeckImportPage.tsx
-// (sha256 769221c451b1d442b4c1d60f13833d8a3aad6d6074c0c889da7c70895c1720cc).
-// Sibling file: deckImportPageSource.test.tsx (step 1). Read its header first —
-// the userEvent applyAccept trap and the "unreachable catch" ruling are there.
+// gate refuses, and what the page actually hands to the batch runner.
 //
 // WHAT BELONGS IN THIS FILE. Only behaviour a single-line edit to
 // DeckImportPage.tsx can break. lib/deckImport.ts decides what a create, an
-// update, a conflict and a parse error ARE, and deckImport.test.ts pins all of
-// that; lib/deckImportRunner.ts decides the write order, the partial-failure
-// semantics and the exact create/update bodies, and deckImportRunner.test.ts
-// pins those (including expectedVersion and the ""-clearing rule at :122/:144).
-// So this file never asserts issue wording, never asserts an issue line number,
-// and never asserts a createCard/updateCard argument beyond deckId + stableUid.
-// What is left is genuinely the page's own:
-//
-//   * toRows (:69-89) — a private function no library test can see. It
-//     interleaves creates and updates back into DOCUMENT order, and the fixture
-//     below is built so that order DISAGREES with plan order.
-//   * the gate — three independent clauses in `blocked` (:224-230). The page
-//     never re-decides what a conflict is; it decides whether the button is dead.
-//   * the call site (:232-250) — whether {createCard, updateCard} is handed
-//     over at all, whether onProgress is passed, whether a retry re-sends only
-//     the failures, and whether each failure goes through describeFailure.
-//     describeFailure is thoroughly unit-tested and, until this file, NOTHING
-//     proved the page called it. That is the defect shape this repo keeps
-//     producing, so it gets an assertion of its own (B11).
+// update, a conflict and a parse error ARE, and deckImport.test.ts pins that;
+// lib/deckImportRunner.ts decides batching, backoff and the exact card bodies,
+// and deckImportRunner.test.ts / deckImportBatchRunner.test.ts pin those. So this
+// file never asserts issue wording or line numbers, and only asserts the batch
+// writer's arguments as far as deckId + stableUid. What is left is the page's
+// own: toRows' document-order sort, the three-clause gate, and the call site —
+// whether importCardsBatch is handed over, whether onProgress drives the bar,
+// whether a failure offers a re-preview rather than replaying stale actions, and
+// whether each failure goes through describeFailure.
 //
 // THE FIXTURE IS THE POINT. In DOC the card that will be UPDATED has its header
 // on line 3 and the card that will be CREATED has its header on line 9, while
-// the plan is creates-then-updates. Measured with the sort removed, the rows
-// come out [line 9 create, line 3 update] — i.e. the file reads backwards.
-// Only an assertion on ROW ORDER can see that; counts and badges cannot.
-//
-// ASSERTION MECHANICS: no jest-dom (toBeNull / not.toBeNull / toHaveLength /
-// toBe), no `as`, DOM handles narrowed with instanceof or thrown. Server-chosen
-// strings go in through refused() and come back out as the same value.
+// the plan is creates-then-updates, so only an assertion on ROW ORDER can see
+// toRows' sort.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
@@ -52,8 +32,7 @@ import { locationText, renderAt } from './support/routerProbe';
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
   fetchCardsByDeck: vi.fn(),
-  createCard: vi.fn(),
-  updateCard: vi.fn(),
+  importCardsBatch: vi.fn(),
 }));
 
 vi.mock('../src/api/authoring', async importOriginal => {
@@ -234,7 +213,13 @@ function rowSummaries(): string[][] {
 }
 
 function writes(): number {
-  return api.createCard.mock.calls.length + api.updateCard.mock.calls.length;
+  return api.importCardsBatch.mock.calls.length;
+}
+
+/** The stableUids of the cards sent in batch `n`, sorted so order is not asserted here. */
+function batchUids(n = 0): string[] {
+  const arg = api.importCardsBatch.mock.calls[n][0] as { cards: Array<{ stableUid: string }> };
+  return arg.cards.map(c => c.stableUid).sort();
 }
 
 async function toPreview(
@@ -254,8 +239,7 @@ async function toPreview(
 beforeEach(() => {
   api.fetchDeckById.mockResolvedValue(ok(deck));
   api.fetchCardsByDeck.mockResolvedValue(ok([A_STALE]));
-  api.createCard.mockResolvedValue(ok(B_MATCHING));
-  api.updateCard.mockResolvedValue(ok(A_MATCHING));
+  api.importCardsBatch.mockResolvedValue(ok({ created: 1, updated: 1, unchanged: 0 }));
 });
 
 afterEach(() => {
@@ -270,9 +254,6 @@ afterEach(() => {
 
 describe('the preview table', () => {
   it('reads in document order, not in the order the writes will happen', async () => {
-    // The only assertion in the repository that can see toRows' sort. The plan
-    // is [create cs-b-002, update cs-a-001]; the document is the other way
-    // round. See the fixture note at the top.
     const user = userEvent.setup();
     await toPreview(user, DOC, [A_STALE]);
 
@@ -297,32 +278,18 @@ describe('the preview table', () => {
   });
 
   it('shows the rarity mix of the whole document, including cards nothing will happen to', async () => {
-    // Everything here is already on the server, so the write set is empty. The
-    // distribution must still describe the two cards in the document — it
-    // answers "what did I paste", not "what is about to change".
     const user = userEvent.setup();
     await toPreview(user, DOC, [A_MATCHING, B_MATCHING]);
 
     expect(screen.queryByText('Rarity Distribution')).not.toBeNull();
     expect(screen.queryByText('Total: 2 cards')).not.toBeNull();
 
-    // The per-tier lines, which are the mix this case is named after; the two
-    // assertions above only prove the panel mounted. They are also the only
-    // rendered assertion on the rarity labels themselves, which were '普通' /
-    // '稀有' / '史诗' sitting inside an otherwise English panel. The label is
-    // read straight from RARITY_MAP, so this fails if that map goes back to
-    // carrying two spellings of one label and the wrong one is rendered.
     expect(screen.queryByText('Common: 0 (0%)')).not.toBeNull();
     expect(screen.queryByText('Rare: 1 (50%)')).not.toBeNull();
     expect(screen.queryByText('Epic: 1 (50%)')).not.toBeNull();
   });
 
   it('re-reads the deck when asked to refresh the reconciliation', async () => {
-    // Deliberately worded as "the page asks again", not "a second request goes
-    // out". In production fetchCardsByDeck is wrapped in dedupeRequest
-    // (src/api/authoring.ts:365) and the module mock here replaces the whole
-    // function, dedupe included — so this file cannot and does not claim
-    // anything about what reaches the network.
     const user = userEvent.setup();
     await toPreview(user, DOC, [A_STALE]);
     expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(1);
@@ -338,22 +305,6 @@ describe('the preview table', () => {
 // ------------------------------------------------------------------
 
 describe('the gate on the import button', () => {
-  // Three independent clauses in `blocked`. Each fixture trips exactly one of
-  // them and leaves the other two clean, so removing one clause must turn
-  // exactly one of these cases red. Verified: deleting the slug clause reddened
-  // only the wrong-deck case, the parse clause only the problems case, the
-  // conflict clause only the deleted-card case. Each fixture also carries at
-  // least one real action, or the button would stay disabled on the
-  // `actions.length === 0` clause and the mutation would be invisible.
-  //
-  // HONEST ABOUT `expect(writes()).toBe(0)`: under every gate mutation run, the
-  // `.disabled` assertion is the one that fails first, so the write count is
-  // never the unique killer — a disabled button does not dispatch a click, so
-  // no mutation can leave the attribute set and still write. It is kept because
-  // it states the CONSEQUENCE the operator cares about rather than the
-  // mechanism, and it would survive a rewrite of the gate to aria-disabled or
-  // to a guard inside the handler. It is a second sentence, not a second tooth.
-
   it('refuses a document written for a different deck, and names both decks', async () => {
     const user = userEvent.setup();
     await toPreview(user, DOC_WRONG_DECK, [A_STALE]);
@@ -389,9 +340,6 @@ describe('the gate on the import button', () => {
   });
 
   it('refuses a document that collides with a deleted card', async () => {
-    // cs-b-002 exists on the server in a soft-deleted state, so creating it
-    // would mint a second row for a uid that already exists. The page does not
-    // re-decide that (planImport does); it decides the button is dead.
     const user = userEvent.setup();
     await toPreview(user, DOC, [A_STALE, B_SOFT_DELETED]);
 
@@ -423,59 +371,54 @@ describe('the gate on the import button', () => {
 // ------------------------------------------------------------------
 
 describe('executing the plan', () => {
-  it('creates the new card, updates the changed one, and says it finished', async () => {
+  it('sends the whole plan as one batch and says it finished', async () => {
     const user = userEvent.setup();
     await toPreview(user, DOC, [A_STALE]);
 
     await user.click(importButton());
 
     expect(await screen.findByText('All planned writes succeeded.')).not.toBeNull();
-    expect(api.createCard).toHaveBeenCalledTimes(1);
-    expect(api.createCard).toHaveBeenCalledWith(
-      expect.objectContaining({ deckId: DECK_ID, stableUid: 'cs-b-002' }),
-    );
-    expect(api.updateCard).toHaveBeenCalledTimes(1);
-    expect(api.updateCard).toHaveBeenCalledWith(
-      expect.objectContaining({ deckId: DECK_ID, stableUid: 'cs-a-001' }),
-    );
+    expect(api.importCardsBatch).toHaveBeenCalledTimes(1);
+    const arg = api.importCardsBatch.mock.calls[0][0] as { deckId: number };
+    expect(arg.deckId).toBe(DECK_ID);
+    expect(batchUids()).toEqual(['cs-a-001', 'cs-b-002']);
+    expect(badgeStrip('created').slice(0, 3)).toEqual(['1created', '1updated', '0failed']);
 
     expect(screen.queryByText(/step 3 of 3 · execute/)).not.toBeNull();
     expect(screen.queryByText('Finished')).not.toBeNull();
     expect(screen.queryByRole('button', { name: /^Retry/ })).toBeNull();
   });
 
-  it('counts the writes off one by one while they are in flight', async () => {
-    // The middle reading is the whole case. Measured with the onProgress
-    // argument removed, the bar sits at "0 / 2" for the entire run and then
-    // jumps straight to Finished, so only an assertion taken WHILE the second
-    // write is outstanding can see it.
+  it('shows the bar moving while the batch is in flight, then the final count', async () => {
+    // With onProgress removed the bar would sit at "0 / 2" and jump to Finished,
+    // so the observation that matters is taken WHILE the batch is outstanding.
     const user = userEvent.setup();
     const pending = deferred<unknown>();
-    api.updateCard.mockReturnValue(pending.promise);
+    api.importCardsBatch.mockReturnValue(pending.promise);
 
     await toPreview(user, DOC, [A_STALE]);
     await user.click(importButton());
 
-    await waitFor(() => expect(screen.queryByText('1 / 2')).not.toBeNull());
-    expect(screen.queryByText('Writing cards...')).not.toBeNull();
+    await waitFor(() => expect(screen.queryByText('Writing cards...')).not.toBeNull());
+    expect(screen.queryByText('0 / 2')).not.toBeNull();
 
-    pending.resolve(ok(A_MATCHING));
+    pending.resolve(ok({ created: 1, updated: 1, unchanged: 0 }));
 
     expect(await screen.findByText('2 / 2')).not.toBeNull();
     expect(screen.queryByText('Finished')).not.toBeNull();
   });
 
-  it('explains a refused write in full, hint included', async () => {
-    // Three facts in one line: which card, what the server said, and the tail
-    // that only describeFailure adds. Until this case nothing anywhere proved
-    // the page routed its failures through describeFailure at all.
+  it('explains a refused batch in full, hint included', async () => {
+    // Three facts in one line: which card, what the server said, and the tail that
+    // only describeFailure adds. A refused batch rolls back, so every card in it
+    // is reported.
     const user = userEvent.setup();
-    api.updateCard.mockResolvedValue(refused('VERSION_CONFLICT', STALE_VERSION_MESSAGE));
+    api.importCardsBatch.mockResolvedValue(refused('VERSION_CONFLICT', STALE_VERSION_MESSAGE));
 
     await toPreview(user, DOC, [A_STALE]);
     await user.click(importButton());
 
-    expect(await screen.findByText('1 card failed')).not.toBeNull();
+    expect(await screen.findByText('2 cards failed')).not.toBeNull();
     const uid = screen.getByText('cs-a-001');
     const line = uid.parentElement;
     if (!(line instanceof HTMLElement)) throw new Error('failure line has no container');
@@ -484,26 +427,23 @@ describe('executing the plan', () => {
     );
   });
 
-  it('retries only what failed, and reports the retry rather than the whole run', async () => {
+  it('offers a re-preview after a failure rather than replaying stale actions', async () => {
+    // Replaces the old "retry only what failed": the batch endpoint is planned
+    // against fresh server state, never replayed with the plan-time versions.
     const user = userEvent.setup();
-    api.updateCard.mockResolvedValue(refused('VERSION_CONFLICT', STALE_VERSION_MESSAGE));
+    api.importCardsBatch.mockResolvedValue(refused('VERSION_CONFLICT', STALE_VERSION_MESSAGE));
 
     await toPreview(user, DOC, [A_STALE]);
     await user.click(importButton());
-    await screen.findByText('1 card failed');
-    expect(api.createCard).toHaveBeenCalledTimes(1);
+    await screen.findByText('2 cards failed');
+    expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /^Retry/ })).toBeNull();
 
-    api.updateCard.mockResolvedValue(ok(A_MATCHING));
-    await user.click(screen.getByRole('button', { name: 'Retry 1 failed' }));
+    await user.click(screen.getByRole('button', { name: 'Re-run the preview' }));
 
-    expect(await screen.findByText('All planned writes succeeded.')).not.toBeNull();
-    // The card that already succeeded must NOT be written a second time.
-    expect(api.createCard).toHaveBeenCalledTimes(1);
-    expect(api.updateCard).toHaveBeenCalledTimes(2);
-    expect(api.updateCard).toHaveBeenLastCalledWith(
-      expect.objectContaining({ deckId: DECK_ID, stableUid: 'cs-a-001' }),
-    );
-    expect(badgeStrip('created').slice(0, 3)).toEqual(['0created', '1updated', '0failed']);
+    // Re-preview re-reads the deck instead of re-sending the failed batch.
+    await waitFor(() => expect(api.fetchCardsByDeck).toHaveBeenCalledTimes(2));
+    expect(api.importCardsBatch).toHaveBeenCalledTimes(1);
   });
 });
 
