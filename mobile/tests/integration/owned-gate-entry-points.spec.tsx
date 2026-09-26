@@ -182,7 +182,6 @@ vi.mock('../../src/features/gacha/components/ReviewBody', () => {
 
 import { LibraryScreen } from '../../src/screens/LibraryScreen';
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
-import { ChallengeScreen } from '../../src/screens/ChallengeScreen';
 import { CardDetailScreen } from '../../src/screens/CardDetailScreen';
 import { saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
@@ -360,24 +359,6 @@ describe('ownership gate — every entry point', () => {
       );
 
       expect(textBlob(tree)).toContain('Grandfather question');
-    });
-  });
-
-  describe('challenge route', () => {
-    it('sizes today’s run from the collection, not the deck file', async () => {
-      await seed({
-        owned: ['drawn'],
-        progress: [untouched('stranger'), untouched('drawn'), untouched('grand')],
-      });
-
-      const tree = await renderScreen(
-        <ChallengeScreen navigation={nav()} route={{ key: 'k', name: 'Challenge', params: {} } as any} />,
-      );
-
-      // One owned unstudied card -> a one-node route (R6 dropped the padded
-      // warm-up slot). Ungated all three unstudied cards count and the route is
-      // two cards longer.
-      expect(textBlob(tree)).toContain('Clear today’s run (1 cards) for +2 free pulls.');
     });
   });
 

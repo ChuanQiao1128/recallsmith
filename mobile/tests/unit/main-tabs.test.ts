@@ -7,18 +7,14 @@ describe('main tab routing', () => {
     expect(getMainTabForRouteName('Home')).toBe('home');
     expect(getMainTabForRouteName('Draw')).toBe('draw');
     // Review tab now routes to SessionCard for one-tap study entry.
-    // The legacy Challenge route still highlights the review tab when
-    // entered via deep-link / bottom-nav-redirect.
     expect(getMainTabForRouteName('SessionCard')).toBe('review');
-    expect(getMainTabForRouteName('Challenge')).toBe('review');
     expect(getMainTabForRouteName('Library')).toBe('library');
     expect(getMainTabForRouteName('More')).toBe('me');
   });
 
-  it('shows the global tab bar on the primary routes (and legacy Challenge)', () => {
+  it('shows the global tab bar on the primary routes', () => {
     expect(shouldShowMainTabBar('Home')).toBe(true);
     expect(shouldShowMainTabBar('Draw')).toBe(true);
-    expect(shouldShowMainTabBar('Challenge')).toBe(true);
     expect(shouldShowMainTabBar('Library')).toBe(true);
     expect(shouldShowMainTabBar('More')).toBe(true);
 

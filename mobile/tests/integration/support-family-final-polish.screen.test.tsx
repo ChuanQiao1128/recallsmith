@@ -24,11 +24,6 @@ vi.mock('expo-linear-gradient', () => {
 });
 
 import { HelpFAQScreen } from '../../src/screens/HelpFAQScreen';
-import { AboutScreen } from '../../src/screens/AboutScreen';
-import { ErrorGenericScreen } from '../../src/screens/ErrorGenericScreen';
-import { ErrorNetworkScreen } from '../../src/screens/ErrorNetworkScreen';
-import { OfflineBannerScreen } from '../../src/screens/OfflineBannerScreen';
-import { ToastHostScreen } from '../../src/screens/ToastHostScreen';
 
 function collectText(node: renderer.ReactTestInstance): string {
   const parts: string[] = [];
@@ -61,50 +56,12 @@ describe('support family final polish', () => {
     warnSpy.mockRestore();
   });
 
-  it('keeps help/about framed as calm support and product identity surfaces', async () => {
+  it('keeps help framed as a calm support surface', async () => {
     let faqTree!: renderer.ReactTestRenderer;
     await act(async () => {
       faqTree = renderer.create(<HelpFAQScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'faq', name: 'HelpFAQ' } as any} />);
     });
     const faqBlob = textBlob(faqTree);
     expect(faqBlob).not.toContain('support companion');
-
-    let aboutTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      aboutTree = renderer.create(<AboutScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'about', name: 'About' } as any} />);
-    });
-    const aboutBlob = textBlob(aboutTree);
-    expect(aboutBlob).toContain('lightweight product identity page');
-    expect(aboutBlob).toContain('DeveloperCards mobile v6 candidate build');
-  });
-
-  it('keeps error/offline/toast surfaces aligned around short recovery loops', async () => {
-    let genericTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      genericTree = renderer.create(<ErrorGenericScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'generic', name: 'ErrorGeneric' } as any} />);
-    });
-    const genericBlob = textBlob(genericTree);
-    expect(genericBlob).toContain('If this keeps happening');
-
-    let networkTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      networkTree = renderer.create(<ErrorNetworkScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'network', name: 'ErrorNetwork' } as any} />);
-    });
-    const networkBlob = textBlob(networkTree);
-    expect(networkBlob).toContain('Connection lost, but your route is still safe');
-
-    let offlineTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      offlineTree = renderer.create(<OfflineBannerScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'offline', name: 'OfflineBanner' } as any} />);
-    });
-    const offlineBlob = textBlob(offlineTree);
-    expect(offlineBlob).toContain('When to escalate');
-
-    let toastTree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      toastTree = renderer.create(<ToastHostScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'toast', name: 'ToastHost' } as any} />);
-    });
-    const toastBlob = textBlob(toastTree);
-    expect(toastBlob).toContain('Debug menu');
   });
 });
