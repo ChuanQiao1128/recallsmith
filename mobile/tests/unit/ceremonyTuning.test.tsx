@@ -225,6 +225,33 @@ describe('CeremonyTuning screen + DebugMenu ceremony seeds', () => {
     expect((globalThis as any).cancelAnimationFrame).toHaveBeenCalled();
   });
 
+  it('opens a forced-rarity ceremony preview from the tuning screen', () => {
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<CeremonyTuningScreen navigation={{ navigate } as any} route={{ key: 't', name: 'CeremonyTuning' } as any} />);
+    });
+
+    act(() => {
+      tree.root.findByProps({ testID: 'ceremony-tuning-preview-LEG' }).props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    const [screen, params] = navigate.mock.calls[0];
+    expect(screen).toBe('DrawCeremony');
+    expect(params.drawResult.cards).toHaveLength(1);
+    expect(params.drawResult.cards[0].rarity).toBe('LEG');
+    expect(params.drawResult.cards[0].question.length).toBeGreaterThanOrEqual(160);
+
+    act(() => {
+      tree.root.findByProps({ testID: 'ceremony-tuning-preview-multi' }).props.onPress();
+    });
+    const multiParams = navigate.mock.calls[1][1];
+    expect(multiParams.drawResult.cards).toHaveLength(10);
+    expect(multiParams.drawResult.cards.filter((c: { rarity: string }) => c.rarity === 'LEG')).toHaveLength(1);
+    expect(multiParams.drawResult.cards.filter((c: { rarity: string }) => c.rarity === 'RAR')).toHaveLength(3);
+    expect(multiParams.drawResult.cards.filter((c: { rarity: string }) => c.rarity === 'COM')).toHaveLength(6);
+  });
+
   it('DebugMenu seeds the wallet at 60/5 and reports it', async () => {
     const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;

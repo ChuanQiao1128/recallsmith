@@ -50,6 +50,9 @@ import { buildCeremonyCues, cueTimesFromSchedule, type CeremonyCueAction } from 
 import { STAGE_TESTID, StageCanvas } from '../components/ceremony/StageCanvas';
 import { PackTear, seamProgressFromDelta } from '../components/ceremony/PackTear';
 import { TapCard, rarityLabel, type TapCardData } from '../components/ceremony/TapCard';
+import { RevealSpotlight } from '../components/ceremony/RevealSpotlight';
+import { spotlightFlipCues, type SpotlightFlipPlan } from '../features/gacha/draw/spotlightPlan';
+import { formatRank } from '../features/gacha/library/cardRank';
 import { FallbackStage } from '../components/ceremony/FallbackStage';
 import { FeaturedCard, type FeaturedCardProps } from '../components/ceremony/FeaturedCard';
 import { SpillSampler, shouldMountSpillSampler } from '../components/ceremony/SpillSampler';
@@ -657,12 +660,28 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     // Completion is already recorded by the phase effect on reaching settle/table; just leave.
     goResult();
   }, [goResult]);
+  // The single-pull spotlight requests its flip: mark the card flipped (so the CTA becomes
+  // Continue) and ride the flip cue schedule on timers.current, exactly like a tap-table flip.
+  const onSpotlightFlipStart = useCallback(
+    (uid: string, rarity: PeakRarity, plan: SpotlightFlipPlan) => {
+      onFlipped(uid);
+      scheduleCues(spotlightFlipCues(rarity, plan));
+    },
+    [onFlipped, scheduleCues],
+  );
 
   const packPhase = phase === 'swipe' || phase === 'approach' || phase === 'hold' || phase === 'tear-flip';
   const tablePhase = phase === 'flash-reveal' || phase === 'settle' || phase === 'cards-on-table';
   // The tap table is committed (hidden, absolute, non-interactive) from 'hold' so its native
   // views and bitmaps exist before the flash instead of being created on the flash frame.
   const tableWarm = enableTapFlow && !reduceMotion && (phase === 'hold' || phase === 'tear-flip');
+  // A single pull reveals in the full-screen RevealSpotlight instead of a tiny table card.
+  const singleSpotlight = enableTapFlow && cards.length === 1;
+  const spotlightCard = singleSpotlight ? cards[0] : null;
+  const spotlightSerial =
+    spotlightCard && typeof spotlightCard.rank === 'number' && spotlightCard.rank > 0 && typeof route.params.totalCards === 'number'
+      ? `No. ${formatRank(spotlightCard.rank)} / ${route.params.totalCards}`
+      : undefined;
   const showFeatured = !enableTapFlow && (phase === 'flash-reveal' || phase === 'settle');
   const featuredProps: FeaturedCardProps = {
     accent,
@@ -686,6 +705,22 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
         : CEREMONY_COPY_V10.skipProgress(flippedSet.size, cards.length)
       : CEREMONY_COPY_V10.showResult;
   const ctaPress = phase === 'cards-on-table' && allFlipped ? onContinue : goResult;
+
+  // Built once. For a single pull it rides inside the spotlight's footer; otherwise it sits in
+  // the content column — exactly one instance in the tree at any time.
+  const primaryCta = canSkip ? (
+    <Pressable
+      testID="screen-draw-ceremony-primary-cta"
+      nativeID="draw-ceremony-skip-hint"
+      accessibilityRole="button"
+      style={({ pressed }) => [styles.skipButton, pressed && styles.pressed]}
+      onPress={ctaPress}
+    >
+      <Text style={styles.skipText} numberOfLines={1}>
+        {ctaText}
+      </Text>
+    </Pressable>
+  ) : null;
 
   const stageOwnsSwipe = phase === 'swipe' && !reduceMotion && !(renderer === 'skia' && GestureHandler.available);
 
@@ -878,7 +913,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
               <SwipeHint label={CEREMONY_COPY_V9.swipe.title} reduceMotion={reduceMotion} />
             ) : null}
 
-            {enableTapFlow && (tablePhase || tableWarm) ? (
+            {enableTapFlow && cards.length > 1 && (tablePhase || tableWarm) ? (
               <View
                 testID={phase === 'cards-on-table' ? 'draw-ceremony-cards-on-table' : undefined}
                 style={phase === 'cards-on-table' ? styles.tapTable : tablePhase ? styles.tapTableFrom : styles.tapTableWarm}
@@ -899,20 +934,26 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
             {rarityVisible ? rarityWord : ''}
           </Text>
 
-          {canSkip ? (
-            <Pressable
-              testID="screen-draw-ceremony-primary-cta"
-              nativeID="draw-ceremony-skip-hint"
-              accessibilityRole="button"
-              style={({ pressed }) => [styles.skipButton, pressed && styles.pressed]}
-              onPress={ctaPress}
-            >
-              <Text style={styles.skipText} numberOfLines={1}>
-                {ctaText}
-              </Text>
-            </Pressable>
-          ) : null}
+          {!singleSpotlight ? primaryCta : null}
         </Reanimated.View>
+
+        {singleSpotlight && spotlightCard && (tablePhase || tableWarm) ? (
+          <RevealSpotlight
+            key={spotlightCard.stableUid}
+            card={spotlightCard}
+            index={0}
+            total={1}
+            visible={tablePhase}
+            interactive={phase === 'cards-on-table'}
+            reduceMotion={reduceMotion}
+            cardBackImage={cardBackImage}
+            packArt={coverImage}
+            packPaletteCover={palette.cover}
+            serialText={spotlightSerial}
+            footer={primaryCta}
+            onFlipStart={(plan) => onSpotlightFlipStart(spotlightCard.stableUid, spotlightCard.rarity, plan)}
+          />
+        ) : null}
 
         <View
           testID="draw-ceremony-reveal-flash"

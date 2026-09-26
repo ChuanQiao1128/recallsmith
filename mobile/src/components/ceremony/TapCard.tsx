@@ -247,9 +247,12 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
         )}
       </Reanimated.View>
 
-      {/* CARD FRONT */}
+      {/* CARD FRONT — the side stays mounted (so the flip has something to rotate), but its
+          children mount only once flipped so the rarity word is never in the tree face down. */}
       <Reanimated.View style={[ceremonyStyles.tapCardSide, frontStyle]}>
         <View style={[ceremonyStyles.tapCardFace, { borderColor: accent, shadowColor: accent }]}>
+          {flipped ? (
+          <>
           {frameImage && RNImage ? (
             // With a rarity frame the face is laid out to the frame's windows (B12 geometry:
             // art window y 11–64 %, text slab y 68–95 %, both x 7–93 %) so nothing sits under
@@ -286,6 +289,8 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
                 <FoilLayer width={width} height={height} accentColor={accent} rarity={card.rarity} active tilt={tilt} lut={FOIL_LUT} />
               </View>
             </PanHost>
+          ) : null}
+          </>
           ) : null}
         </View>
       </Reanimated.View>
