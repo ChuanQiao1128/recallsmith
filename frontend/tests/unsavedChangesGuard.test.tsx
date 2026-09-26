@@ -238,6 +238,7 @@ describe('the unsaved-changes guard', () => {
       difficulty: 2,
       orderInDeck: 10,
       revision: 1,
+      topic: '',
     };
 
     render(

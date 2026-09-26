@@ -166,6 +166,7 @@ export function EditCardPage() {
         : Number(card.orderInDeck) || 1,
     revision:
       (card as unknown as { revision?: number | null }).revision ?? 1,
+    topic: card.topic ?? '',
   };
 
   /**
@@ -193,9 +194,13 @@ export function EditCardPage() {
     // buildCardBody trims every optional text field, so a cleared explanation,
     // usage note or snippet is sent as '' rather than dropped — the api layer
     // omits undefined keys, and an absent key leaves the old value in the row.
-    // mcq and topic are deliberately absent, so a stored MCQ blob is left alone.
+    // topic is sent beside the builder (F20 pins that the builder never carries
+    // it): '' is sent on purpose, because the server stores null for a blank
+    // topic, which is how a topic is cleared. mcq stays absent, so a stored MCQ
+    // blob is left alone.
     const { result } = await updateCardMutation.mutateAsync({
       ...buildCardBody(values),
+      topic: values.topic.trim(),
       id: Number(card.id),
       deckId: Number(card.deckId),
       stableUid: card.stableUid,

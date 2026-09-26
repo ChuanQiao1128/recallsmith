@@ -126,6 +126,7 @@ describe('the difficulty control does not claim a value the card does not hold',
       difficulty,
       orderInDeck: 10,
       revision: 1,
+      topic: '',
     };
     render(
       <CardForm
@@ -352,7 +353,7 @@ describe('every field on the card form is reachable by its label', () => {
         deck={deck}
         initialValues={{
           question: '', stableUid: '', explanation: '', realWorldUsage: '',
-          codeSnippet: '', codeLanguage: '', difficulty: 2, orderInDeck: 10, revision: 1,
+          codeSnippet: '', codeLanguage: '', difficulty: 2, orderInDeck: 10, revision: 1, topic: '',
         }}
         onSubmit={async () => ({ ok: true })}
         onCancel={() => {}}

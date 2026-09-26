@@ -61,6 +61,7 @@ function values(over: Partial<CardFormValues> = {}): CardFormValues {
     difficulty: 2,
     orderInDeck: 10,
     revision: 1,
+    topic: '',
     ...over,
   };
 }
