@@ -864,6 +864,16 @@ export function SessionCardScreen({ navigation, route }: Props) {
         >
           <View style={styles.container}>
             <View style={styles.headerRow}>
+              <Pressable
+                style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                onPress={() => navigation.goBack()}
+                testID="session-card-empty-deck-back"
+              >
+                <Text style={styles.backText} numberOfLines={1}>
+                  ← Back
+                </Text>
+              </Pressable>
               <View style={styles.headerTextWrap}>
                 <Text style={styles.title} numberOfLines={1}>
                   {deck.Title}

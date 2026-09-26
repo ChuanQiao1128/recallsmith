@@ -13,7 +13,8 @@ import type { RootStackParamList } from './src/navigation/types';
 import { linking } from './src/navigation/linking';
 import BottomTabBar from './src/components/BottomTabBar';
 import { RootErrorBoundary } from './src/components/RootErrorBoundary';
-import { getMainTabForRouteName } from './src/navigation/mainTabs';
+import { getMainTabForRouteName, shouldShowMainTabBar } from './src/navigation/mainTabs';
+import { navigateToTab } from './src/navigation/tabNavigation';
 import SplashScreen from './src/screens/SplashScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
 import AudienceSurveyScreen from './src/screens/AudienceSurveyScreen';
@@ -283,14 +284,14 @@ export default function App() {
         </NavigationContainer>
       </View>
 
-      {activeMainTab ? (
+      {activeMainTab && shouldShowMainTabBar(currentRouteName) ? (
         <SafeAreaView style={styles.mainTabSafeArea} edges={['bottom']}>
           <View style={styles.mainTabBarShell}>
           <BottomTabBar
             active={activeMainTab}
             navigate={(name, params) => {
               if (!navigationRef.isReady()) return;
-              (navigationRef as any).navigate(name, params);
+              navigateToTab(navigationRef, name, params);
             }}
           />
           </View>

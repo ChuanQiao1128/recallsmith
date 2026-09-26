@@ -23,6 +23,11 @@ export function getMainTabForRouteName(routeName?: string | null): MainTabKey | 
 }
 
 export function shouldShowMainTabBar(routeName?: string | null) {
+  // Hide the bar while a review session is on screen. The Review tab routes to
+  // SessionCard, but with pop-navigation a stray tab tap would pop the running
+  // SessionCard (its unmount resets the session store), so no bar during a run
+  // — exits go through Pause (confirm) and the empty-deck Back control (MCORE-04).
+  if (routeName === 'SessionCard') return false;
   // Tab bar is also visible on the legacy Challenge route preview.
   if (routeName === 'Challenge') return true;
   return getMainTabForRouteName(routeName) !== null;

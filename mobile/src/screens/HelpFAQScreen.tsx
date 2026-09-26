@@ -1,6 +1,7 @@
 import React from 'react';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
+import { navigateToTab } from '../navigation/tabNavigation';
 import AppInfoScreen from '../components/AppInfoScreen';
 import { FAQ_LIST } from '../content/faq';
 
@@ -24,7 +25,7 @@ export function HelpFAQScreen({ navigation }: Props) {
         },
       ]}
       primaryLabel="Back to me"
-      onPrimary={() => navigation.navigate('More')}
+      onPrimary={() => navigateToTab(navigation, 'More')}
     />
   );
 }

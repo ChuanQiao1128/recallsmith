@@ -328,7 +328,7 @@ describe('DrawResultScreen v9', () => {
       tree.root.findByProps({ testID: 'draw-result-done-link' }).props.onPress();
     });
 
-    expect(navigate).toHaveBeenCalledWith('Home');
+    expect(navigate).toHaveBeenCalledWith('Home', undefined, { pop: true });
   });
 
   it('routes the first Done into PermissionPrompt once when the onboarding flag is pending', async () => {
