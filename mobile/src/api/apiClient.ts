@@ -1,4 +1,6 @@
 // mobile/src/api/apiClient.ts
+import { classifyError } from './errorKind';
+
 type ApiMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 const API_BASE = (process.env.EXPO_PUBLIC_API_BASE || '').trim().replace(/\/+$/, '');
@@ -55,15 +57,29 @@ export async function apiJson<T>(
       headers.Authorization = `Bearer ${token}`;
     }
 
-    const send = (authToken: string) =>
-      fetch(url, {
-        method: opts.method ?? 'GET',
-        headers: authToken
-          ? { ...headers, Authorization: `Bearer ${authToken}` }
-          : headers,
-        body: opts.body ? JSON.stringify(opts.body) : undefined,
-        signal: controller.signal,
-      });
+    // Wrap fetch so a transport rejection (offline) or an AbortController abort
+    // (our 12 s timeout) escapes as a classified Error instead of a raw
+    // `TypeError('Network request failed')` or an unlabelled abort. The re-sent
+    // 401 request below goes through the same wrapper, so it is classified too.
+    const send = async (authToken: string): Promise<Response> => {
+      try {
+        return await fetch(url, {
+          method: opts.method ?? 'GET',
+          headers: authToken
+            ? { ...headers, Authorization: `Bearer ${authToken}` }
+            : headers,
+          body: opts.body ? JSON.stringify(opts.body) : undefined,
+          signal: controller.signal,
+        });
+      } catch (cause: any) {
+        const aborted = cause?.name === 'AbortError';
+        const err: any = new Error(aborted ? 'Request timed out' : cause?.message ?? 'Network request failed', {
+          cause,
+        });
+        err.kind = aborted ? 'timeout' : 'offline';
+        throw err;
+      }
+    };
 
     let resp = await send(token);
 
@@ -83,17 +99,24 @@ export async function apiJson<T>(
     const json = safeJsonParse(text);
 
     if (!resp.ok) {
+      // Build the message from string candidates only, so an object payload
+      // like `{ error: { code: 'X' } }` never stringifies to '[object Object]'
+      // (MSHELL-10). Fall back to a truncated body, then a synthetic HTTP line.
+      const pickString = (value: unknown): string | null =>
+        typeof value === 'string' && value.trim() ? value.trim() : null;
+      const bodyText = typeof text === 'string' && text.trim() ? text.trim().slice(0, 200) : null;
       const msg =
-        json?.error?.message ||
-        json?.error ||
-        json?.message ||
-        (typeof text === 'string' && text.trim() ? text.trim() : null) ||
+        pickString(json?.error?.message) ||
+        pickString(json?.error) ||
+        pickString(json?.message) ||
+        bodyText ||
         `HTTP ${resp.status} ${resp.statusText}`;
       // Attach status/code so callers can react to specific rejections
-      // (e.g. a 400 on a stale sync cursor) — additive, message unchanged.
+      // (e.g. a 400 on a stale sync cursor) — additive, status/code unchanged.
       const err: any = new Error(msg);
       err.status = resp.status;
       err.apiErrorCode = typeof json?.error?.code === 'string' ? json.error.code : null;
+      err.kind = classifyError({ status: resp.status });
       throw err;
     }
 

@@ -7,6 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
+import { errorToMessage } from '../api/errorKind';
 import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
@@ -528,7 +529,7 @@ export function DrawScreen({ navigation, route }: Props) {
           if (!cancelled) {
             setReady(null);
             setLoadState('error');
-            setError(loadError?.message ?? 'Unable to load draw chamber right now.');
+            setError(errorToMessage(loadError));
           }
         }
       };
