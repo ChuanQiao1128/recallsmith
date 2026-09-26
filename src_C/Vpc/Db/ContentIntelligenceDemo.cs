@@ -28,16 +28,15 @@ public static class ContentIntelligenceDemo
     Res res,
     AuthContext auth)
   {
+    // First, before any role check: a production caller cannot tell this route from an unregistered path.
+    if (!DbSafety.DestructiveRoutesEnabled()) return res.NotFound("Route not found");
+
     var deny = Auth.RequireSuperAdmin(auth, res);
     if (deny is not null) return deny;
     if (req.Method != "POST") return res.MethodNotAllowed();
 
-    var required = Environment.GetEnvironmentVariable("MIGRATE_SECRET") ?? string.Empty;
-    if (!string.IsNullOrEmpty(required))
-    {
-      var got = Validation.GetHeader(req, "x-migrate-secret") ?? string.Empty;
-      if (!string.Equals(got, required, StringComparison.Ordinal)) return res.Forbidden("Bad migrate secret");
-    }
+    var secretDeny = DbSafety.CheckMigrateSecret(req, res);
+    if (secretDeny is not null) return secretDeny;
 
     var action = (req.Query.TryGetValue("action", out var rawAction) ? rawAction : "seed")
       .Trim()
