@@ -549,8 +549,9 @@ checks = [
   (first(a("module.api.aws_apigatewayv2_domain_name.api").get("domain_name_configuration")).get("endpoint_type") == "REGIONAL", "api endpoint_type"),
   (first(a("module.api.aws_apigatewayv2_domain_name.api").get("domain_name_configuration")).get("security_policy") == "TLS_1_2", "api security_policy"),
   (a("module.api.aws_apigatewayv2_api_mapping.api").get("stage") == "$default", "mapping stage"),
-  (a("module.edge.aws_acm_certificate.cloudfront[0]").get("domain_name") == "developercards.app" and a("module.edge.aws_acm_certificate.cloudfront[0]").get("subject_alternative_names") == ["*.developercards.app"], "cloudfront cert names"),
-  (a("module.edge.aws_acm_certificate.api[0]").get("domain_name") == "developercards.app" and a("module.edge.aws_acm_certificate.api[0]").get("subject_alternative_names") == ["*.developercards.app"], "api cert names"),
+  # 2026-09-26: provider 6.x folds the apex into the planned SAN set -> set check, not list equality
+  (a("module.edge.aws_acm_certificate.cloudfront[0]").get("domain_name") == "developercards.app" and {"*.developercards.app"} <= set(a("module.edge.aws_acm_certificate.cloudfront[0]").get("subject_alternative_names") or []) <= {"*.developercards.app", "developercards.app"}, "cloudfront cert names"),
+  (a("module.edge.aws_acm_certificate.api[0]").get("domain_name") == "developercards.app" and {"*.developercards.app"} <= set(a("module.edge.aws_acm_certificate.api[0]").get("subject_alternative_names") or []) <= {"*.developercards.app", "developercards.app"}, "api cert names"),
   ({"https://console.developercards.app", "https://d12pfy1rhi3ekm.cloudfront.net"} <= set(first(a("module.api.aws_apigatewayv2_api.http").get("cors_configuration")).get("allow_origins") or []), "cors origins"),
   ({"https://console.developercards.app/auth/callback", "https://d12pfy1rhi3ekm.cloudfront.net/auth/callback"} <= set(a("module.identity.aws_cognito_user_pool_client.spa[0]").get("callback_urls") or []), "spa callback_urls"),
   ({"https://console.developercards.app/", "https://d12pfy1rhi3ekm.cloudfront.net/"} <= set(a("module.identity.aws_cognito_user_pool_client.spa[0]").get("logout_urls") or []), "spa logout_urls"),
@@ -632,6 +633,10 @@ grep -Fq "https://d1ditdi9jqpy6n.cloudfront.net" mobile/src/content/deckReposito
 for f in "$HOME_REMOTE" "$PREMIUM_API" "$RC"; do
   ns="$(git diff --numstat "$mb" -- "$f" | cut -f1,2)"
   add="${ns%%${TAB}*}"; del="${ns##*${TAB}}"
+  # 2026-09-26: check 2o forbids @ts-ignore anywhere in these files, so pre-existing dead
+  # `// @ts-ignore` comment lines may also be removed; they do not count toward the four.
+  ign="$(git diff -U0 "$mb" -- "$f" | grep -E '^-[^-]' | grep -cE '^-[[:space:]]*// @ts-ignore[[:space:]]*$' || true)"
+  del=$(( ${del:-0} - ${ign:-0} ))
   [ "${del:-0}" = "4" ] || fail "$f: expected exactly 4 removed lines (the env literal), got '${ns:-<no diff>}'"
   [ "${add:-0}" -le 3 ] || fail "$f: expected <= 3 added lines (import + resolveApiBase()), got $add"
 done
