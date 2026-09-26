@@ -279,6 +279,7 @@ export function consumePullsFromWallet(current: RewardWalletState, count: number
   };
 }
 
+/** @deprecated 1.7: per-pack wallets live in deckWallet.ts */
 export async function consumePullsFromStoredWallet(count: number): Promise<{
   wallet: RewardWalletState;
   spent: number;
@@ -304,6 +305,8 @@ export async function consumePullsFromStoredWallet(count: number): Promise<{
  * applyRewardToWallet so a refund obeys the same caps as a grant; the
  * overflow that implies is the honest one, because a refund arriving at a
  * full wallet is indistinguishable from a reward arriving at a full wallet.
+ *
+ * @deprecated 1.7: per-pack wallets live in deckWallet.ts
  */
 export async function refundPullsToStoredWallet(count: number): Promise<RewardWalletState> {
   const safeCount = Math.max(0, Math.floor(count));
@@ -405,7 +408,8 @@ export async function applySessionRewardToWallet(sessionId: string, rewardPulls:
 }
 
 /** Read → applyRewardToWallet → save. The single wallet write R1/R2 make; the ledger/marker
- *  write always precedes it (under-grant on a crash, same rationale as :375-394). */
+ *  write always precedes it (under-grant on a crash, same rationale as :375-394).
+ *  @deprecated 1.7: per-pack wallets live in deckWallet.ts */
 export async function grantPullsToStoredWallet(count: number): Promise<{
   walletBefore: RewardWalletState;
   walletAfter: RewardWalletState;

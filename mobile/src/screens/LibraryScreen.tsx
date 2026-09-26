@@ -41,7 +41,7 @@ import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
-import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { ensureDeckBootstrap, loadDeckWallet } from '../features/gacha/rewards/deckWallet';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Library'>;
 
@@ -94,23 +94,32 @@ export function LibraryScreen({ navigation, route }: Props) {
     [navigation],
   );
 
+  // Per-pack wallet (1.7): the banner CTA follows the selected pack, so the read
+  // is keyed on the slug and reset to 0 while the new pack loads. The first visit
+  // to a never-drawn pack is bootstrapped here too, so its banner already knows
+  // it has pulls.
   useEffect(() => {
+    if (!selectedSlug) return;
     let cancelled = false;
-    loadRewardWalletState()
-      .then((wallet) => {
+    setWalletPulls(0);
+    const slug = selectedSlug;
+    (async () => {
+      try {
+        await ensureDeckBootstrap(slug);
+        const wallet = await loadDeckWallet(slug);
         if (cancelled) return;
         const total =
           Math.max(0, Number(wallet.availablePulls ?? 0) || 0) +
           Math.max(0, Number(wallet.reservePulls ?? 0) || 0);
         setWalletPulls(total);
-      })
-      .catch(() => {
+      } catch {
         /* default 0 is fine for the banner CTA decision */
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [selectedSlug]);
 
   const refresh = useCallback(
     async (preferredSlug?: string | null) => {

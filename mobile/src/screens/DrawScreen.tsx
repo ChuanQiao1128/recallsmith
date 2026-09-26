@@ -19,10 +19,12 @@ import { loadDrawState } from '../features/gacha/draw/drawStateStore';
 import { buildPityProgressLabelV9, DEFAULT_PITY_STATE, normalizePityState } from '../features/gacha/draw/pity';
 import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../features/gacha/draw/ceremonyTimings';
 import {
-  consumePullsFromStoredWallet,
-  loadRewardWalletState,
-  refundPullsToStoredWallet,
-} from '../features/gacha/rewards/rewardWallet';
+  consumeDeckPulls,
+  ensureDeckBootstrap,
+  loadDeckWallet,
+  migrateLegacyWalletIfNeeded,
+  refundDeckPulls,
+} from '../features/gacha/rewards/deckWallet';
 import { spendablePullsNow } from '../features/gacha/rewards/spendablePulls';
 import { scheduleProgressSync } from '../sync/progressSync';
 import { a11y } from '../theme/a11y';
@@ -495,15 +497,22 @@ export function DrawScreen({ navigation, route }: Props) {
             return;
           }
 
+          // 1.7 per-pack wallet: drain any legacy global balance into packs
+          // once, then run the pack's first-visit bootstrap, before the pack
+          // wallet is read. Both are no-ops after their first effect, but they
+          // must precede the read so the badge shows the armed pack's balance.
+          await migrateLegacyWalletIfNeeded();
+          await ensureDeckBootstrap(slug);
+
           // Wallet and status are independent reads; awaiting them one after
           // the other doubled the storage latency in front of the pack for no
           // reason. loadDrawStatus owns its own failure (returns a blank
           // status), so Promise.all cannot fail the load on its account.
-          const [wallet, status] = await Promise.all([
-            loadRewardWalletState(),
+          const [deckWallet, status] = await Promise.all([
+            loadDeckWallet(slug),
             loadDrawStatus(slug, (deck as any)?.Cards ?? []),
           ]);
-          const pulls = spendablePullsNow(wallet);
+          const pulls = spendablePullsNow(deckWallet);
           const deckTitle = normalizeTitle(deck, slug);
           const mergedOptions = mergeSelectedDeck(deckOptions, slug, deckTitle);
 
@@ -631,7 +640,7 @@ export function DrawScreen({ navigation, route }: Props) {
         // here spent all ten. The near-complete collector, who is exactly who
         // this pack is for by then, paid six pulls for nothing and was told
         // nothing about it.
-        const spent = await consumePullsFromStoredWallet(Math.min(drawCount, result.cards.length));
+        const spent = await consumeDeckPulls(ready.slug, Math.min(drawCount, result.cards.length));
         chargedPulls = spent.spent;
 
         // The gacha half of the sync had no trigger of its own: draw state
@@ -668,7 +677,7 @@ export function DrawScreen({ navigation, route }: Props) {
         });
       } catch {
         if (chargedPulls > 0) {
-          await refundPullsToStoredWallet(chargedPulls).catch(() => {});
+          await refundDeckPulls(ready.slug, chargedPulls).catch(() => {});
         }
         setLoadState('error');
         setError('Unable to open this pack right now.');
@@ -805,7 +814,12 @@ export function DrawScreen({ navigation, route }: Props) {
                 {ready.deckTitle}
               </Text>
             </View>
-            <View style={styles.pullsBadge} testID="draw-pack-pulls-badge" nativeID="draw-wallet-badge">
+            <View
+              style={styles.pullsBadge}
+              testID="draw-pack-pulls-badge"
+              nativeID="draw-wallet-badge"
+              accessibilityLabel={`${ready.walletPulls} pull${ready.walletPulls === 1 ? '' : 's'} for ${ready.deckTitle}`}
+            >
               {/* Currency token — solid gold gem with subtle inner facet.
                   Replaced the Pokeball-style 2-tone token (top blue / bottom
                   white / divider / center dot) which was an obvious Pokemon
@@ -902,7 +916,7 @@ export function DrawScreen({ navigation, route }: Props) {
                 via a hidden probe when the empty-pulls CTA takes over. */}
             {!ready.canPullSingle ? (
               <Text style={styles.swipeHintHidden} numberOfLines={1}>
-                No pulls left. Study sessions grant more pulls.
+                No pulls for this pack yet. Learn its cards to earn more.
               </Text>
             ) : null}
           </View>

@@ -2,12 +2,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { formatDateKey } from '../../../review/model';
 import { getUserScopedKey } from '../../../review/storage';
+import type { DeckSummary } from '../contracts';
+import { ownedCountOf } from '../selectors/homeSelectors';
+import { applyRewardToWallet, type RewardWalletState } from './rewardWallet';
 import {
-  applyRewardToWallet,
-  loadRewardWalletState,
-  saveRewardWalletState,
-  type RewardWalletState,
-} from './rewardWallet';
+  ensureDeckBootstrap,
+  loadDeckWallets,
+  migrateLegacyWalletIfNeeded,
+  updateDeckWallet,
+} from './deckWallet';
 
 /**
  * Exactly one. The floor is a throttle, not a faucet: it exists so the
@@ -25,10 +28,11 @@ export const ECONOMY_FLOOR_GRANT = 1;
 const ECONOMY_FLOOR_KEY = 'recallsmith:economy-floor:v1';
 
 export type EconomyFloorInputs = {
-  /** Cards this account holds and has not studied, summed over all decks. */
+  /** Cards this pack holds and has not studied. */
   ownedNewCount: number | null | undefined;
-  /** Cards due today, summed over all decks. */
+  /** Cards of this pack due today. */
   dueCount: number | null | undefined;
+  /** This pack's wallet. */
   wallet: RewardWalletState | null | undefined;
 };
 
@@ -104,7 +108,7 @@ export function isEconomyStarved(input: EconomyFloorInputs): boolean {
  * server round-trip to close.
  */
 export async function applyEconomyFloorIfStarved(
-  input: EconomyFloorInputs & { now?: Date },
+  input: EconomyFloorInputs & { slug: string; now?: Date },
 ): Promise<EconomyFloorOutcome> {
   const wallet = toWallet(input.wallet);
   if (!isEconomyStarved(input)) {
@@ -114,36 +118,95 @@ export async function applyEconomyFloorIfStarved(
   const dayKey = formatDateKey(input.now ?? new Date());
 
   try {
-    const key = await getUserScopedKey(ECONOMY_FLOOR_KEY);
+    // Per pack (option A): the marker is scoped to the slug, so a starved pack
+    // gets its own daily floor pull independent of the others.
+    const key = await getUserScopedKey(`${ECONOMY_FLOOR_KEY}:${input.slug}`);
     const marker = await AsyncStorage.getItem(key);
     if (marker === dayKey) {
       return { wallet, granted: 0, reason: 'already-granted-today' };
     }
 
-    // Re-read rather than write on top of the caller's snapshot. Home reads
-    // the wallet in parallel with the deck summaries, so by the time we get
-    // here a settlement could have landed pulls that the snapshot predates;
-    // computing the new balance from a stale copy would erase them. Confirming
-    // starvation against the fresh read as well keeps the grant honest in the
-    // same window.
-    const current = await loadRewardWalletState();
-    if (current.availablePulls + current.reservePulls !== 0) {
-      return { wallet: current, granted: 0, reason: 'not-starved' };
+    // Grant through updateDeckWallet so the write is serialized against every
+    // other pack-wallet mutation and re-reads the fresh pack wallet. Home reads
+    // the wallets in parallel with the deck summaries, so by the time we get
+    // here a settlement could have landed pulls the snapshot predates; a stale
+    // copy would erase them. The day marker is written INSIDE the updater,
+    // before the new wallet is returned (and so before updateDeckWallet's own
+    // write), so a crash under-grants (loses one floor pull) rather than arming
+    // a second grant on the next Home load.
+    let granted = 0;
+    const { after } = await updateDeckWallet(input.slug, async (current) => {
+      if (current.availablePulls + current.reservePulls !== 0) {
+        // No longer empty on the fresh read: nothing to write.
+        return null;
+      }
+      const applied = applyRewardToWallet(current, ECONOMY_FLOOR_GRANT);
+      await AsyncStorage.setItem(key, dayKey);
+      granted = ECONOMY_FLOOR_GRANT;
+      return { availablePulls: applied.availablePulls, reservePulls: applied.reservePulls };
+    });
+
+    if (granted === 0) {
+      // The fresh pack wallet was not empty; report it unchanged.
+      return { wallet: after, granted: 0, reason: 'not-starved' };
     }
 
-    const applied = applyRewardToWallet(current, ECONOMY_FLOOR_GRANT);
-    const next: RewardWalletState = {
-      availablePulls: applied.availablePulls,
-      reservePulls: applied.reservePulls,
-    };
-
-    await AsyncStorage.setItem(key, dayKey);
-    await saveRewardWalletState(next);
-
-    return { wallet: next, granted: ECONOMY_FLOOR_GRANT, reason: 'granted' };
+    return { wallet: after, granted: ECONOMY_FLOOR_GRANT, reason: 'granted' };
   } catch {
     // Storage trouble must not take Home down with it. Returning the caller's
     // wallet unchanged leaves the user where they were; the next load retries.
     return { wallet, granted: 0, reason: 'unavailable' };
+  }
+}
+
+/**
+ * Home's per-pack wallet preparation. In order: (1) migrate/sweep the legacy
+ * global wallet into packs; (2) first-visit bootstrap for every studiable pack;
+ * (3) read every pack wallet; (4) apply the daily floor to each studiable pack
+ * whose collection is not complete; (5) return the wallets.
+ *
+ * Bootstrap runs BEFORE the floor so a never-drawn pack gets its 3 pulls, not a
+ * single floor pull. Never throws: on any error it returns whatever
+ * loadDeckWallets() gives.
+ */
+export async function prepareHomeDeckWallets(params: {
+  deckSummaries: DeckSummary[];
+  now: Date;
+}): Promise<Record<string, RewardWalletState>> {
+  const { deckSummaries, now } = params;
+  try {
+    // (1) One-time split of the legacy balance, plus a sweep of any that reappears.
+    await migrateLegacyWalletIfNeeded();
+
+    // (2) Bootstrap every studiable pack (each is a no-op unless the pack has
+    //     never been drawn from and holds nothing).
+    for (const summary of deckSummaries) {
+      if (summary.canStudy === true) {
+        await ensureDeckBootstrap(summary.slug);
+      }
+    }
+
+    // (3) Read the wallets after bootstrap.
+    const wallets = await loadDeckWallets();
+
+    // (4) Floor each studiable pack whose collection is not complete.
+    for (const summary of deckSummaries) {
+      if (summary.canStudy !== true) continue;
+      // Skip a complete collection: nothing left to draw, so no floor is owed.
+      if (summary.totalCards > 0 && ownedCountOf(summary) >= summary.totalCards) continue;
+      const outcome = await applyEconomyFloorIfStarved({
+        slug: summary.slug,
+        ownedNewCount: summary.newToday,
+        dueCount: summary.dueToday,
+        wallet: wallets[summary.slug],
+        now,
+      });
+      wallets[summary.slug] = outcome.wallet;
+    }
+
+    // (5) Return the prepared wallets.
+    return wallets;
+  } catch {
+    return loadDeckWallets();
   }
 }
