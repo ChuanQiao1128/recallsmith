@@ -227,8 +227,14 @@ async function seed() {
 
 async function flush(times = 6) {
   for (let i = 0; i < times; i++) {
+    // Yield a full macrotask (not just a microtask) each turn: Home's two-phase
+    // refresh coalesces the mount's focus + auth effects and settles the remote
+    // (auto-update) phase across a scheduler hop, so a bare `await Promise.resolve()`
+    // can return before the install fires. A microtask-only pump made this file
+    // pass only when other suites happened to add wall-clock time; the setTimeout
+    // yield drains the same queue but deterministically, standalone or in the suite.
     await act(async () => {
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
 }
