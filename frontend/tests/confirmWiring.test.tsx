@@ -33,6 +33,7 @@ import type { ApiResult } from '../src/types/api';
 import { AuthProvider } from '../src/auth/AuthContext';
 import { makeTestQueryClient } from './support/queryTestClient';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
+import { queryClient } from '../src/api/queryClient';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
@@ -139,6 +140,9 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  // This file mounts under its own test client, but the app singleton is cleared
+  // too so nothing leaks into the bare-mount files that share it.
+  queryClient.clear();
   signOut();
   localStorage.clear();
 });

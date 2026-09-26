@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Link, Navigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { AUTH_CONFIGURED, AUTH_CONFIG } from '../auth/authConfig';
 import { useAuth } from '../auth/AuthContext';
+import { CONSOLE_NAME } from '../lib/brand';
 // Was a four-line local copy that let `//evil.com` through. It now lives in
 // src/auth/safeRedirect.ts so this page and the OAuth callback share one
 // answer; see that file for what the leading-slash test missed.
@@ -22,12 +23,21 @@ export function LoginPage() {
     access_denied: 'Sign-in was cancelled before it finished.',
     missing_code: 'The sign-in response was incomplete. Please try again.',
     exchange_failed: 'Sign-in could not be completed. Please try again.',
+    session_expired: 'Your session expired. Sign in again to pick up where you left off.',
+    unauthorized: 'Your session is no longer valid. Sign in again to continue.',
   };
   const errCode = searchParams.get('error');
   const err = errCode ? (ERROR_COPY[errCode] ?? 'Something went wrong during sign-in. Please try again.') : '';
+  // An idle-timeout redirect is not a failed sign-in — the last one worked and
+  // then aged out — so those two codes get an honest heading. Every other code
+  // keeps "Sign-in failed".
+  const errHeading = errCode === 'session_expired' || errCode === 'unauthorized' ? 'Session ended' : 'Sign-in failed';
 
   const [loading, setLoading] = useState(false);
-  const config = AUTH_CONFIGURED ? AUTH_CONFIG : null;
+  // Read import.meta.env.DEV in the component body, not at module scope, so a
+  // test can stub it: the Cognito configuration is a developer aid and must not
+  // show on the production login page.
+  const config = import.meta.env.DEV && AUTH_CONFIGURED ? AUTH_CONFIG : null;
 
   if (auth.isAuthenticated) return <Navigate to={nextUrl} replace />;
 
@@ -35,11 +45,11 @@ export function LoginPage() {
     <div className="min-h-screen bg-slate-100 flex items-center justify-center px-4">
       <div className="w-full max-w-md bg-white border border-slate-200 rounded-lg shadow-sm p-6">
         <h1 className="text-xl font-semibold text-slate-800">Sign in</h1>
-        <p className="text-xs text-slate-500 mt-1">RecallSmith Authoring Console</p>
+        <p className="text-xs text-slate-500 mt-1">{CONSOLE_NAME}</p>
 
         {err ? (
           <div className="mt-4 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
-            <div className="font-semibold">Sign-in failed</div>
+            <div className="font-semibold">{errHeading}</div>
             <div className="text-xs mt-1">{err}</div>
           </div>
         ) : null}
@@ -70,7 +80,7 @@ export function LoginPage() {
             }
           }}
         >
-          {loading ? 'Redirecting...' : 'Continue with Cognito'}
+          {loading ? 'Redirecting...' : 'Sign in'}
         </button>
 
         {config ? (
@@ -81,10 +91,6 @@ export function LoginPage() {
             <div>Scopes: <span className="font-mono">{config.scopes.join(' ')}</span></div>
           </div>
         ) : null}
-
-        <div className="mt-4">
-          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">← Back to Home</Link>
-        </div>
       </div>
     </div>
   );

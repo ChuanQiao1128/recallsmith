@@ -38,22 +38,24 @@ const ALLOWLIST: Record<string, string> = {};
  * `../hooks/useCards`), not from the barrel, so this list is the barrel's
  * inventory and not a bundle fact.
  *
- * It was three — the read pair plus useDeleteCard — and is now nine. The six
- * added are the write path: every submit and every row action in the console
- * now goes through a mutation that invalidates what it changed, instead of
- * issuing a bare request and leaving the rest of the app to find out on its
- * own. Sorted, because scanHookWiring sorts.
+ * It was three — the read pair plus useDeleteCard — then nine, then ten, and is
+ * now eleven. The newest is useUnsavedChangesGuard: the card and deck editors
+ * warn before a stray navigation discards an unsaved edit, and it is called from
+ * all three of them. Sorted, because scanHookWiring sorts.
  *
  * Call sites, one each and all in src/ (the "orphans are empty" assertion above
  * is what actually enforces this; the list is here so a swap is visible):
  *   useCards / useDeck / useDeleteCard  src/pages/CardListPage.tsx
+ *   useCard / useUpdateCard             src/pages/EditCardPage.tsx
  *   useCreateCard                       src/pages/NewCardPage.tsx
- *   useUpdateCard                       src/pages/EditCardPage.tsx
  *   useCreateDeck                       src/pages/NewDeckPage.tsx
  *   useUpdateDeck                       src/pages/DeckEditPage.tsx
  *   useDeleteDeck / usePublishDeck      src/pages/DeckListPage.tsx
+ *   useUnsavedChangesGuard              src/pages/EditCardPage.tsx,
+ *                                       NewCardPage.tsx, DeckEditPage.tsx
  */
 const EXPECTED_BARREL_HOOKS = [
+  'useCard',
   'useCards',
   'useCreateCard',
   'useCreateDeck',
@@ -61,6 +63,7 @@ const EXPECTED_BARREL_HOOKS = [
   'useDeleteCard',
   'useDeleteDeck',
   'usePublishDeck',
+  'useUnsavedChangesGuard',
   'useUpdateCard',
   'useUpdateDeck',
 ];
@@ -129,7 +132,7 @@ describe('the scan itself is still looking at something', () => {
     expect(scan.scannedFileCount).toBeGreaterThanOrEqual(20);
   });
 
-  it('found the barrel it is judging, and it publishes exactly the wired nine', () => {
+  it('found the barrel it is judging, and it publishes exactly the wired eleven', () => {
     // Hardcoded on purpose, and re-deriving either line from ALLOWLIST breaks
     // it: `toBeGreaterThanOrEqual(ALLOWLIST.size)` is a real floor of 22 while
     // the allowlist is full and silently becomes `>= 0` — unfailable, passing
@@ -211,12 +214,28 @@ describe('the scan itself is still looking at something', () => {
     // hook into a permanent failure. It also does not belong there on merits:
     // that barrel publishes the data-fetching hooks pages render through, and
     // this one answers "which client", which no page asks.
+    //
+    // useSignOut is the fifth entry, and the prompt was answered rather than
+    // silenced. It is declared in src/auth/AuthContext.tsx beside the context it
+    // reads, and it has exactly ONE call site, hand-verified the same way:
+    //   src/components/console/ConsoleShell.tsx — `const signOut = useSignOut();`
+    //   at the top of the shell, wired to the Sign out button's onClick, so every
+    //   authoring page that renders through the shell signs out through it.
+    // Deliberately NOT added to src/hooks/index.ts, for the same reason as
+    // useConfirm above: it reads a React context (AuthContext) whose wiring
+    // question is not "does anything call it" — the shell does — but "is the
+    // provider an ancestor". main.tsx mounts <AuthProvider> at the root; the hook
+    // degrades to signOutWithoutProvider when it is not, and
+    // tests/consoleShellEverywhere.test.tsx asserts both halves. A barrel cannot
+    // answer that, so publishing it there would advertise a plumbing hook as a
+    // reusable data-fetching one.
     const outside = findHookShapedExportsOutsideHooksDir(sources).map(entry => entry.name);
     expect(outside).toEqual([
       'useAppQueryClient',
       'useAuth',
       'useConfirm',
       'useDeckPagination',
+      'useSignOut',
     ]);
   });
 });

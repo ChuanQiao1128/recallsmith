@@ -28,6 +28,9 @@ export interface Deck {
   totalCards?: number | null;
   previewCards?: number | null;
   retiredAtMs?: number | null;
+  // The build the manifest serves, from decks.live_build_id. Lets editors, who
+  // never fetch the admin manifest, still tell a published deck from a draft.
+  liveBuildId?: string | null;
 
   // legacy/optional (keep if you already use)
   contentVersion?: string | null;

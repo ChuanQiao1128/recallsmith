@@ -64,6 +64,9 @@ import { locationText, renderAt } from './support/routerProbe';
 
 const api = vi.hoisted(() => ({
   createDeck: vi.fn(),
+  // Present so a Paid create's follow-up PUT never reaches the real api layer.
+  // No case here creates a Paid deck, but the page now holds the mutation.
+  updateDeck: vi.fn(),
 }));
 
 vi.mock('../src/api/authoring', async importOriginal => {
@@ -101,8 +104,8 @@ function mount() {
 
 const titleBox = () => screen.getByPlaceholderText('JavaScript Core Basics') as HTMLInputElement;
 const slugBox = () => screen.getByPlaceholderText('js-core-basics') as HTMLInputElement;
-const authorBox = () => screen.getByPlaceholderText('RecallSmith Team') as HTMLInputElement;
-const versionBox = () => screen.getByPlaceholderText('1.0.0') as HTMLInputElement;
+const authorBox = () => screen.getByLabelText(/^Author/) as HTMLInputElement;
+const versionBox = () => screen.getByLabelText('Draft Version') as HTMLInputElement;
 const freeCardBox = () => screen.getByLabelText('Free Card Count') as HTMLInputElement;
 
 /** See the header note: a paste, because typing eats the hyphens. */
@@ -127,7 +130,7 @@ function fillValid(): void {
   fireEvent.change(titleBox(), { target: { value: 'JavaScript Core Basics' } });
   setSlug('js-core-basics');
   fireEvent.change(authorBox(), { target: { value: 'RecallSmith Team' } });
-  fireEvent.change(versionBox(), { target: { value: '1.0.0' } });
+  fireEvent.change(versionBox(), { target: { value: '1' } });
 }
 
 /** The browser's own submit, bypassing constraint validation. See header. */
@@ -150,13 +153,13 @@ afterEach(() => {
 });
 
 describe('the form a user is handed', () => {
-  it('starts with an author, a locale and a content version already filled in', async () => {
+  it('starts with an author, a locale and a draft version already filled in', async () => {
     mount();
 
     expect(titleBox().value).toBe('');
     expect(slugBox().value).toBe('');
-    expect(authorBox().value).toBe('RecallSmith Team');
-    expect(versionBox().value).toBe('1.0.0');
+    expect(authorBox().value).toBe('DeveloperCards');
+    expect(versionBox().value).toBe('1');
     expect((screen.getByLabelText('Locale') as HTMLSelectElement).value).toBe('en-US');
   });
 
@@ -253,7 +256,7 @@ describe('the guards, all of which now report together', () => {
   // one-problem-at-a-time cases below still hold, because a form with exactly
   // one thing wrong still produces exactly one message.
   it('reports every empty required field at once, not just the first', async () => {
-    // Title and Slug are both empty; Author and Content Version are prefilled,
+    // Title and Slug are both empty; Author and Draft Version are prefilled,
     // so exactly two of the six checks fail here.
     mount();
     await userEvent.click(submitButton());
@@ -283,7 +286,7 @@ describe('the guards, all of which now report together', () => {
     // the only one.
     mount();
     fireEvent.change(authorBox(), { target: { value: '' } });
-    fireEvent.change(versionBox(), { target: { value: '1.0' } });
+    fireEvent.change(versionBox(), { target: { value: '1.5' } });
     await userEvent.click(paidRadio());
     fireEvent.change(freeCardBox(), { target: { value: '-1' } });
 
@@ -296,7 +299,7 @@ describe('the guards, all of which now report together', () => {
       'Title is required.',
       'Slug is required.',
       'Author is required.',
-      'Content version must be semver like 1.0.0',
+      'Draft version must be a whole number of 1 or more.',
       'Free card count must be a non-negative number.',
     ]);
     expect(api.createDeck).toHaveBeenCalledTimes(0);
@@ -336,40 +339,41 @@ describe('the guards, all of which now report together', () => {
     expect(api.createDeck).toHaveBeenCalledTimes(0);
   });
 
-  it('asks for a content version once the author is there', async () => {
+  it('asks for a draft version once the author is there', async () => {
     mount();
     fillValid();
     fireEvent.change(versionBox(), { target: { value: '' } });
     await userEvent.click(submitButton());
 
-    expect(await screen.findByText('Content version is required.')).not.toBeNull();
-    // A blank version fails "is required" AND "is not semver", and now that
+    expect(await screen.findByText('Draft version is required.')).not.toBeNull();
+    // A blank box fails "is required" AND "is not a whole number", and now that
     // the checks no longer return early, both would be pushed. Two complaints
     // about one blank box is the noise that makes a list stop being read, so
-    // the semver check is an else-if — asserted here rather than left to the
+    // the parse check is an else-if — asserted here rather than left to the
     // reader of the source.
-    expect(screen.queryByText('Content version must be semver like 1.0.0')).toBeNull();
+    expect(screen.queryByText('Draft version must be a whole number of 1 or more.')).toBeNull();
     expect(api.createDeck).toHaveBeenCalledTimes(0);
   });
 
-  it('rejects a content version that is not semver', async () => {
+  it('rejects a draft version that is not a whole number of 1 or more', async () => {
     mount();
     fillValid();
-    fireEvent.change(versionBox(), { target: { value: '1.0' } });
+    fireEvent.change(versionBox(), { target: { value: '1.5' } });
     await userEvent.click(submitButton());
 
-    expect(await screen.findByText('Content version must be semver like 1.0.0')).not.toBeNull();
+    expect(await screen.findByText('Draft version must be a whole number of 1 or more.')).not.toBeNull();
     expect(api.createDeck).toHaveBeenCalledTimes(0);
   });
 
-  it('accepts the semver forms the regex allows', async () => {
+  it('accepts a padded whole number and sends it as an integer', async () => {
     mount();
     fillValid();
-    fireEvent.change(versionBox(), { target: { value: '2.10.3-alpha.1' } });
+    fireEvent.change(versionBox(), { target: { value: ' 7 ' } });
     await userEvent.click(submitButton());
 
     await waitFor(() => expect(api.createDeck).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText('Content version must be semver like 1.0.0')).toBeNull();
+    expect(screen.queryByText('Draft version must be a whole number of 1 or more.')).toBeNull();
+    expect(api.createDeck.mock.calls[0][0].version).toBe(7);
   });
 
   it('rejects a negative preview count on a Paid deck', async () => {
@@ -415,7 +419,7 @@ describe('a deck the server created', () => {
     fireEvent.change(titleBox(), { target: { value: '  JavaScript Core Basics  ' } });
     setSlug('js-core-basics');
     fireEvent.change(authorBox(), { target: { value: '  RecallSmith Team  ' } });
-    fireEvent.change(versionBox(), { target: { value: '1.0.0' } });
+    fireEvent.change(versionBox(), { target: { value: '1' } });
     await userEvent.click(submitButton());
 
     await waitFor(() => expect(api.createDeck).toHaveBeenCalledTimes(1));

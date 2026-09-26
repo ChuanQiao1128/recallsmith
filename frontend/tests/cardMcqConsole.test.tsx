@@ -13,10 +13,10 @@
 //     exactly as it stands (an absent key is "leave alone", C00 §2.11).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
 
+import { renderAt } from './support/routerProbe';
 import type { Card } from '../src/types/card';
 import type { Deck } from '../src/types/deck';
 import type { McqBlob } from '../src/types/mcq';
@@ -24,10 +24,12 @@ import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { renderWithQuery } from './support/queryTestClient';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 import { ok } from './support/apiResult';
+import { queryClient } from '../src/api/queryClient';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
   fetchCardsByDeck: vi.fn(),
+  fetchCardById: vi.fn(),
   createCard: vi.fn(),
   updateCard: vi.fn(),
 }));
@@ -92,6 +94,7 @@ beforeEach(() => {
   signInAsSuperAdmin();
   api.fetchDeckById.mockResolvedValue(ok(deck));
   api.fetchCardsByDeck.mockResolvedValue(ok([card()]));
+  api.fetchCardById.mockResolvedValue(ok(card()));
   api.updateCard.mockResolvedValue(ok(card()));
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -100,6 +103,9 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  // The edit and new pages mount bare on the app singleton; clear it between
+  // cases so a cached deck or card cannot cross over.
+  queryClient.clear();
   signOut();
 });
 
@@ -113,19 +119,13 @@ function mountList() {
 }
 
 function mountEdit() {
-  return render(
-    <MemoryRouter initialEntries={[`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]}>
-      <EditCardPage />
-    </MemoryRouter>,
-  );
+  // EditCardPage calls useBlocker, so it needs a data router (renderAt).
+  return renderAt(<EditCardPage />, [`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]);
 }
 
 function mountNew() {
-  return render(
-    <MemoryRouter initialEntries={[`/decks/cards/new?deckId=${DECK_ID}`]}>
-      <NewCardPage />
-    </MemoryRouter>,
-  );
+  // NewCardPage calls useBlocker, so it needs a data router (renderAt).
+  return renderAt(<NewCardPage />, [`/decks/cards/new?deckId=${DECK_ID}`]);
 }
 
 describe('the card list marks a card that carries an MCQ blob', () => {
@@ -157,7 +157,7 @@ describe('the card list marks a card that carries an MCQ blob', () => {
 
 describe('the edit page shows the MCQ blob read-only', () => {
   it('renders the read-only MCQ panel on the edit page when the card carries mcq', async () => {
-    api.fetchCardsByDeck.mockResolvedValue(ok([card({ mcq: MCQ })]));
+    api.fetchCardById.mockResolvedValue(ok(card({ mcq: MCQ })));
     mountEdit();
     await screen.findByRole('button', { name: /save changes/i });
 
@@ -187,7 +187,7 @@ describe('the edit page shows the MCQ blob read-only', () => {
   });
 
   it('renders no MCQ panel on the edit page for a Q/A card', async () => {
-    api.fetchCardsByDeck.mockResolvedValue(ok([card({ mcq: null })]));
+    api.fetchCardById.mockResolvedValue(ok(card({ mcq: null })));
     mountEdit();
     await screen.findByRole('button', { name: /save changes/i });
 
@@ -205,7 +205,12 @@ describe('the edit page shows the MCQ blob read-only', () => {
     // This is the page -> function half: EditCardPage.handleSubmit never mentions
     // mcq, so the server's blob is left alone. The function -> wire half — that an
     // explicit null is forwarded as an own key — is in authoringRequestBody.test.ts.
-    api.fetchCardsByDeck.mockResolvedValue(ok([card({ mcq: MCQ })]));
+    // The stem MUST carry the qualifier: the form now runs the MCQ rules before
+    // submit, and the old fixture's OTHER_QUESTION lacked "LEAST operational
+    // overhead", so the real server would have refused that save too
+    // (MCQ_QUALIFIER_NOT_IN_STEM). MCQ_QUESTION makes the blob valid; the
+    // assertion (no mcq key on the wire) is unchanged.
+    api.fetchCardById.mockResolvedValue(ok(card({ question: MCQ_QUESTION, mcq: MCQ })));
     mountEdit();
     const saveButton = await screen.findByRole('button', { name: /save changes/i });
 

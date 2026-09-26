@@ -1,6 +1,7 @@
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 
+import { documentTitleFor } from './lib/brand';
 import { RequireAuth } from './auth/RequireAuth';
 import { PerfOverlay } from './perf/PerfOverlay';
 import { ChunkErrorBoundary } from './components/ChunkErrorBoundary';
@@ -60,6 +61,11 @@ function App() {
   // boundary so the boundary stays a plain component with no router dependency,
   // which is what lets its tests mount it without one.
   const location = useLocation();
+
+  // Give each route its own tab title, set once here rather than in a per-page hook.
+  useEffect(() => {
+    document.title = documentTitleFor(location.pathname);
+  }, [location.pathname]);
 
   return (
     <>

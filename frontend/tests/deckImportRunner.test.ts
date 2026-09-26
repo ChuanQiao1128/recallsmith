@@ -5,56 +5,47 @@ import {
   describeFailure,
   runImport,
   VERSION_CONFLICT,
-  type CreateCardParams,
   type ImportAction,
+  type ImportBatchWriter,
   type ImportProgress,
-  type ImportWriter,
-  type UpdateCardParams,
 } from '../src/lib/deckImportRunner';
+import type { ImportCardInput, ImportCardsBatchResult } from '../src/api/authoring';
 import type { ApiResult } from '../src/types/api';
 import type { Card } from '../src/types/card';
 
 const DECK_ID = 7;
 
-function ok(): ApiResult<Card> {
-  // The runner only reads `success` and `error`, so a null payload is enough
-  // and keeps the fixtures from pretending to know the server's row shape.
-  return { success: true, data: null, error: null, traceId: 't' };
+function ok(counts: Partial<ImportCardsBatchResult> = {}): ApiResult<ImportCardsBatchResult> {
+  return {
+    success: true,
+    data: { created: counts.created ?? 0, updated: counts.updated ?? 0, unchanged: counts.unchanged ?? 0 },
+    error: null,
+    traceId: 't',
+  };
 }
 
-function err(code: string, message: string): ApiResult<Card> {
+function err(code: string, message: string): ApiResult<ImportCardsBatchResult> {
   return { success: false, data: null, error: { code, message }, traceId: 't' };
 }
 
 interface Recorder {
-  writer: ImportWriter;
-  creates: CreateCardParams[];
-  updates: UpdateCardParams[];
-  /** Call order across both methods, as "create:uid" / "update:id". */
-  calls: string[];
+  writer: ImportBatchWriter;
+  batches: ImportCardInput[][];
 }
 
+/** A fake batch writer whose response is chosen per call. */
 function recorder(
-  responses: (params: CreateCardParams | UpdateCardParams) => ApiResult<Card> = () => ok(),
+  responses: (call: number, cards: ImportCardInput[]) => ApiResult<ImportCardsBatchResult> = () => ok(),
 ): Recorder {
-  const creates: CreateCardParams[] = [];
-  const updates: UpdateCardParams[] = [];
-  const calls: string[] = [];
-
-  const writer: ImportWriter = {
-    async createCard(params) {
-      creates.push(params);
-      calls.push(`create:${params.stableUid}`);
-      return responses(params);
-    },
-    async updateCard(params) {
-      updates.push(params);
-      calls.push(`update:${params.id}`);
-      return responses(params);
+  const batches: ImportCardInput[][] = [];
+  let call = 0;
+  const writer: ImportBatchWriter = {
+    async importCards(params) {
+      batches.push(params.cards);
+      return responses(call++, params.cards);
     },
   };
-
-  return { writer, creates, updates, calls };
+  return { writer, batches };
 }
 
 const DOC = [
@@ -101,25 +92,23 @@ function existingCard(overrides: Partial<Card> & Pick<Card, 'id' | 'stableUid'>)
 }
 
 describe('runImport', () => {
-  it('creates every planned card serially, in plan order', async () => {
-    const rec = recorder();
+  it('sends every planned card in one batch, in plan order', async () => {
+    const rec = recorder((_call, cards) => ok({ created: cards.length }));
 
-    const result = await runImport(DECK_ID, actionsFor(DOC), rec.writer);
+    const result = await runImport(DECK_ID, actionsFor(DOC), rec.writer, { sleep: async () => {} });
 
-    expect(result).toEqual({ created: 2, updated: 0, failures: [] });
-    expect(rec.calls).toEqual(['create:cs-async-001', 'create:cs-span-002']);
-    expect(rec.updates).toHaveLength(0);
-    expect(rec.creates[0]).toMatchObject({
-      deckId: DECK_ID,
+    expect(result).toEqual({ created: 2, updated: 0, failures: [], cancelled: false, notRun: 0 });
+    expect(rec.batches).toHaveLength(1);
+    expect(rec.batches[0].map((c) => c.stableUid)).toEqual(['cs-async-001', 'cs-span-002']);
+    expect(rec.batches[0][0]).toMatchObject({
       stableUid: 'cs-async-001',
       difficulty: 2,
       orderInDeck: 5,
       codeLanguage: 'csharp',
     });
-    expect(rec.creates[1]).toMatchObject({ stableUid: 'cs-span-002', orderInDeck: 10 });
   });
 
-  it('sends the version captured at plan time so a stale edit cannot be clobbered', async () => {
+  it('builds an update body from the plan action, without an expectedVersion field', async () => {
     const existing = [
       existingCard({
         id: 41,
@@ -131,134 +120,62 @@ describe('runImport', () => {
         version: 9,
       }),
     ];
-    const rec = recorder();
+    const rec = recorder((_call, cards) => ok({ created: 1, updated: cards.length - 1 }));
 
-    const result = await runImport(DECK_ID, actionsFor(DOC, existing), rec.writer);
+    const result = await runImport(DECK_ID, actionsFor(DOC, existing), rec.writer, { sleep: async () => {} });
 
     expect(result.created).toBe(1);
     expect(result.updated).toBe(1);
-    expect(rec.updates).toHaveLength(1);
-    expect(rec.updates[0]).toMatchObject({ id: 41, expectedVersion: 9, deckId: DECK_ID });
+    const updated = rec.batches[0].find((c) => c.stableUid === 'cs-span-002');
+    if (!updated) throw new Error('cs-span-002 was not sent');
+    // F01 ignores expectedVersion, so the runner does not send it.
+    expect(Object.hasOwn(updated, 'expectedVersion')).toBe(false);
   });
 
-  it('clears a removed optional section with "" instead of omitting the field', async () => {
-    // Omitting the key would mean "leave it alone" to the API, so the snippet
-    // would survive its own deletion and the import would never converge.
-    const stripped = DOC.split('\n')
-      .filter((line) => line !== 'CODE: csharp' && !line.startsWith('var v ='))
-      .join('\n');
+  it('reports every card in a refused batch and keeps the run going', async () => {
+    const rec = recorder(() => err('VALIDATION_ERROR', 'cards[0] (cs-async-001): Question too long'));
 
-    const existing = [
-      existingCard({
-        id: 41,
-        stableUid: 'cs-async-001',
-        question: 'Does awaiting a completed Task switch threads?',
-        difficulty: 2,
-        orderInDeck: 5,
-        explanation: 'Not necessarily; the fast path continues synchronously.',
-        codeSnippet: 'var v = await Task.FromResult(42);',
-        codeLanguage: 'csharp',
-        realWorldUsage: 'Hot paths stay cheap because of the fast path.',
-        version: 3,
-      }),
-    ];
-    const rec = recorder();
+    const result = await runImport(DECK_ID, actionsFor(DOC), rec.writer, { sleep: async () => {} });
 
-    await runImport(DECK_ID, actionsFor(stripped, existing), rec.writer);
-
-    expect(rec.updates).toHaveLength(1);
-    expect(rec.updates[0].codeSnippet).toBe('');
-    expect(rec.updates[0].codeLanguage).toBe('');
+    expect(result.created).toBe(0);
+    expect(result.failures.map((f) => f.stableUid)).toEqual(['cs-async-001', 'cs-span-002']);
+    expect(result.failures.every((f) => f.code === 'VALIDATION_ERROR')).toBe(true);
   });
 
-  it('records a failed card and keeps writing the rest', async () => {
-    const rec = recorder((params) =>
-      'stableUid' in params && params.stableUid === 'cs-async-001'
-        ? err('VALIDATION_ERROR', 'Question too long')
-        : ok(),
-    );
-
-    const result = await runImport(DECK_ID, actionsFor(DOC), rec.writer);
-
-    expect(result.created).toBe(1);
-    expect(result.failures).toHaveLength(1);
-    expect(result.failures[0]).toMatchObject({
-      stableUid: 'cs-async-001',
-      code: 'VALIDATION_ERROR',
-    });
-    // The second card must still have been attempted.
-    expect(rec.calls).toEqual(['create:cs-async-001', 'create:cs-span-002']);
-  });
-
-  it('turns a thrown error into a failure rather than losing the remaining cards', async () => {
-    const calls: string[] = [];
-    const writer: ImportWriter = {
-      async createCard(params) {
-        calls.push(String(params.stableUid));
-        if (params.stableUid === 'cs-async-001') throw new Error('socket hang up');
-        return ok();
-      },
-      async updateCard() {
-        return ok();
+  it('turns a thrown writer error into a batch failure rather than losing the run', async () => {
+    const writer: ImportBatchWriter = {
+      async importCards() {
+        throw new Error('socket hang up');
       },
     };
 
-    const result = await runImport(DECK_ID, actionsFor(DOC), writer);
+    const result = await runImport(DECK_ID, actionsFor(DOC), writer, { sleep: async () => {} });
 
-    expect(calls).toEqual(['cs-async-001', 'cs-span-002']);
-    expect(result.created).toBe(1);
-    expect(result.failures[0]).toMatchObject({
-      code: 'UNEXPECTED_ERROR',
-      message: 'socket hang up',
-    });
+    expect(result.failures[0]).toMatchObject({ code: 'UNEXPECTED_ERROR', message: 'socket hang up' });
+    expect(result.failures).toHaveLength(2);
   });
 
-  it('reports progress once per action, including failed ones', async () => {
+  it('reports progress once per batch, naming the batch last action', async () => {
     const seen: ImportProgress[] = [];
-    const rec = recorder(() => err('SERVER_ERROR', 'boom'));
+    const rec = recorder((_call, cards) => ok({ created: cards.length }));
 
-    await runImport(DECK_ID, actionsFor(DOC), rec.writer, (p) => seen.push(p));
-
-    expect(seen.map((p) => p.done)).toEqual([1, 2]);
-    expect(seen.every((p) => p.total === 2)).toBe(true);
-    expect(seen[1].current.card.stableUid).toBe('cs-span-002');
-  });
-
-  it('retries only the failed actions when the failure list is fed back in', async () => {
-    let firstAttempt = true;
-    const rec = recorder((params) => {
-      if ('stableUid' in params && params.stableUid === 'cs-span-002' && firstAttempt) {
-        return err('SERVER_ERROR', 'boom');
-      }
-      return ok();
+    await runImport(DECK_ID, actionsFor(DOC), rec.writer, {
+      sleep: async () => {},
+      onProgress: (p) => seen.push(p),
     });
 
-    const actions = actionsFor(DOC);
-    const first = await runImport(DECK_ID, actions, rec.writer);
-    expect(first.failures).toHaveLength(1);
-
-    firstAttempt = false;
-    const retry = await runImport(
-      DECK_ID,
-      first.failures.map((f) => f.action),
-      rec.writer,
-    );
-
-    expect(retry).toEqual({ created: 1, updated: 0, failures: [] });
-    expect(rec.calls).toEqual([
-      'create:cs-async-001',
-      'create:cs-span-002',
-      'create:cs-span-002',
-    ]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ done: 2, total: 2 });
+    expect(seen[0].current.card.stableUid).toBe('cs-span-002');
   });
 
   it('does nothing at all for an empty action list', async () => {
     const rec = recorder();
 
-    const result = await runImport(DECK_ID, [], rec.writer);
+    const result = await runImport(DECK_ID, [], rec.writer, { sleep: async () => {} });
 
-    expect(result).toEqual({ created: 0, updated: 0, failures: [] });
-    expect(rec.calls).toEqual([]);
+    expect(result).toEqual({ created: 0, updated: 0, failures: [], cancelled: false, notRun: 0 });
+    expect(rec.batches).toEqual([]);
   });
 });
 

@@ -65,7 +65,7 @@ public static class DeckRollback
     try
     {
       await using var conn = await Pg.OpenConnectionOrNullAsync();
-      if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars");
+      if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
       var deckRows = await DbUtil.QueryAsync(conn, null,
         "select id, slug, live_build_id from decks where id = $1 and is_deleted = 0", [deckId.Value]);
@@ -80,8 +80,28 @@ public static class DeckRollback
         [deckId.Value, buildId]);
       if (buildRows.Count == 0) return res.BadRequest("VALIDATION_ERROR", $"No SUCCESS build {buildId} for deck {deckId.Value}");
 
-      await DbUtil.ExecuteAsync(conn, null, "update decks set live_build_id = $2 where id = $1", [deckId.Value, buildId]);
+      var auditEntry = AdminAudit.Entry(auth, res, "deck.rollback", $"deck:{deckId.Value}",
+        new { liveBuildId = previousBuildId }, new { liveBuildId = buildId });
+      bool persisted;
 
+      await using (var tx = await conn.BeginTransactionAsync())
+      {
+        try
+        {
+          await DbUtil.ExecuteAsync(conn, tx, "update decks set live_build_id = $2 where id = $1", [deckId.Value, buildId]);
+          persisted = await AdminAudit.RecordAsync(conn, tx, auditEntry);
+          await tx.CommitAsync();
+        }
+        catch
+        {
+          try { await tx.RollbackAsync(); } catch { /* ignore */ }
+          throw;
+        }
+      }
+
+      AdminAudit.Emit(auditEntry, persisted);
+
+      // The rebuild stays after commit and is unchanged.
       await rebuild(conn);
 
       return res.Ok(new

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { createCard, deleteCard, fetchCardsByDeck, updateCard } from '../api/authoring';
+import { createCard, deleteCard, fetchCardById, fetchCardsByDeck, updateCard } from '../api/authoring';
 import { apiFailure } from '../api/errors';
 import { QueryKeys, useAppQueryClient } from '../api/queryClient';
 import type { Card } from '../types/card';
@@ -7,23 +7,54 @@ import type { Card } from '../types/card';
 // The options match useDeck one for one; the reasoning is in the block above
 // useDeck in useDecks.ts, and the reasoning for the ones that are no longer
 // written out is in src/api/queryClient.ts.
+//
+// The second argument to useQuery is the app singleton, resolved the same way
+// the mutation hooks resolve it: a page mounted bare (no provider) still reads
+// and writes the one cache the writes invalidate, instead of a private one no
+// mutation can reach.
 export function useCards(deckId: number) {
-  return useQuery({
-    queryKey: QueryKeys.cards(deckId),
-    queryFn: async () => {
-      const res = await fetchCardsByDeck(deckId);
-      // 'Failed to load cards.' is the page's own wording today. This hook used
-      // to throw 'Failed to fetch cards', which would have quietly changed the
-      // sentence the user reads the moment it was wired in.
-      if (!res.success) throw apiFailure(res, 'Failed to load cards.');
-      return res.data ?? [];
+  return useQuery(
+    {
+      queryKey: QueryKeys.cards(deckId),
+      queryFn: async () => {
+        const res = await fetchCardsByDeck(deckId);
+        // 'Failed to load cards.' is the page's own wording today. This hook used
+        // to throw 'Failed to fetch cards', which would have quietly changed the
+        // sentence the user reads the moment it was wired in.
+        if (!res.success) throw apiFailure(res, 'Failed to load cards.');
+        return res.data ?? [];
+      },
+      enabled: !Number.isNaN(deckId) && deckId !== 0,
+      // See useDeck: the default networkMode 'online' does not run the queryFn
+      // while the browser reports itself offline, status parks at 'pending', and
+      // the page spins forever.
+      networkMode: 'always',
     },
-    enabled: !Number.isNaN(deckId) && deckId !== 0,
-    // See useDeck: the default networkMode 'online' does not run the queryFn
-    // while the browser reports itself offline, status parks at 'pending', and
-    // the page spins forever.
-    networkMode: 'always',
-  });
+    useAppQueryClient(),
+  );
+}
+
+/**
+ * One card, read by id through `?id=`.
+ *
+ * Keyed by QueryKeys.card so a save can invalidate it, and enabled only for a
+ * usable id: 0, NaN and negatives never go out, because the id comes from a URL
+ * and a missing one must not fire a request that the server would 404 anyway.
+ */
+export function useCard(cardId: number) {
+  return useQuery(
+    {
+      queryKey: QueryKeys.card(cardId),
+      queryFn: async () => {
+        const res = await fetchCardById(cardId);
+        if (!res.success) throw apiFailure(res, 'Card not found.');
+        return res.data as Card;
+      },
+      enabled: Number.isFinite(cardId) && cardId > 0,
+      networkMode: 'always',
+    },
+    useAppQueryClient(),
+  );
 }
 
 type CreateCardParams = Parameters<typeof createCard>[0];
@@ -60,11 +91,15 @@ export function useUpdateCard() {
     {
       mutationFn: async (params: UpdateCardParams) => {
         const result = await updateCard(params);
-        return { result, deckId: params.deckId };
+        return { result, deckId: params.deckId, id: params.id };
       },
-      onSuccess: ({ result, deckId }) => {
+      onSuccess: ({ result, deckId, id }) => {
         if (!result.success) return;
         void queryClient.invalidateQueries({ queryKey: QueryKeys.cards(deckId) });
+        // The single-card cache the edit page reads is now stale too: its version
+        // and content just changed. Invalidating it keeps a later ?id= read from
+        // serving the pre-save row inside the staleTime window.
+        void queryClient.invalidateQueries({ queryKey: QueryKeys.card(id) });
       },
     },
     queryClient,
@@ -108,6 +143,12 @@ export function useDeleteCard() {
         queryClient.setQueryData<Card[]>(QueryKeys.cards(deckId), prev =>
           prev === undefined ? prev : prev.filter(c => c.id !== cardId),
         );
+
+        // The single-card cache is a copy of a row that no longer exists, so it
+        // is dropped rather than invalidated: there is nothing to refetch, and a
+        // ?id= read of a deleted card is the server's 404 to give, not a stale
+        // hit to serve.
+        queryClient.removeQueries({ queryKey: QueryKeys.card(cardId) });
       },
     },
     queryClient,

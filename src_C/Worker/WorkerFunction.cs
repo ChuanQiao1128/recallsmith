@@ -49,6 +49,23 @@ public class WorkerFunction
   }
 
   /// <summary>
+  /// The publish queue's redrive maxReceiveCount (infra/modules/worker/queue.tf). A system error on this
+  /// receive (or later, e.g. a DLQ redrive) is the job's last chance: the row is marked FAILED so the deck
+  /// is not left 409-blocked, and the item is still reported so SQS moves the message to the DLQ.
+  /// </summary>
+  public const int MaxReceiveCount = 3;
+
+  /// <summary>Upper bound on the exception text copied into deck_publishes.error_message.</summary>
+  public const int MaxErrorDetailChars = 400;
+
+  /// <summary>"system error on attempt {n}/{MaxReceiveCount}: {ExceptionType}: {message ≤ MaxErrorDetailChars}".</summary>
+  public static string SystemErrorMessage(int receiveCount, Exception ex)
+  {
+    var detail = ex.Message.Length > MaxErrorDetailChars ? ex.Message[..MaxErrorDetailChars] : ex.Message;
+    return $"system error on attempt {receiveCount}/{MaxReceiveCount}: {ex.GetType().Name}: {detail}";
+  }
+
+  /// <summary>
   /// Lambda 入口方法
   /// </summary>
   public async Task<SQSBatchResponse> FunctionHandler(SQSEvent sqsEvent, ILambdaContext context)
@@ -114,8 +131,33 @@ public class WorkerFunction
       }
       catch (Exception ex)
       {
-        // 路线 B: 系统级崩溃 —— 报告 item failure，SQS 在可见性超时后重投递。
-        LogWithJobId(jobId, $"System error: {ex.Message}");
+        // Route B: system error. Record why, and on the last receive fail the row so the deck is not
+        // 409-blocked behind a message that is about to go to the DLQ. Always report the item.
+        var reason = SystemErrorMessage(receiveCount, ex);
+        LogWithJobId(jobId, reason);
+        if (receiveCount >= MaxReceiveCount)
+        {
+          try
+          {
+            await _processor.FailAsync(jobId, reason);
+            LogWithJobId(jobId, "Last receive: job marked as FAILED");
+          }
+          catch (Exception failEx)
+          {
+            LogWithJobId(jobId, $"System error while failing job: {failEx.Message}");
+          }
+        }
+        else
+        {
+          try
+          {
+            await _processor.RecordAttemptErrorAsync(jobId, reason);
+          }
+          catch (Exception recordEx)
+          {
+            LogWithJobId(jobId, $"Could not record attempt error: {recordEx.Message}");
+          }
+        }
         failures.Add(new SQSBatchResponse.BatchItemFailure { ItemIdentifier = record.MessageId });
       }
     }

@@ -165,9 +165,13 @@ function legacyDeck(overrides: Partial<Deck> & Pick<Deck, 'id' | 'slug' | 'title
  * Three legacy decks with three distinct statuses and three distinct type
  * classifications, sorted by manifestOrder into a fixed order.
  *
- *   ctrl-starter-one  order 0  deckType 1     manifest buildId  -> published
- *   amb-null-type     order 1  deckType null  no manifest entry -> needs_publish
+ *   ctrl-starter-one  order 0  deckType 1     liveBuildId set   -> published
+ *   amb-null-type     order 1  deckType null  no live build     -> needs_publish
  *   ctrl-paid-two     order 2  deckType 2     0 cards           -> unpublished
+ *
+ * Since F24 the legacy path is an editor session, which skips the admin manifest
+ * entirely, so the published signal is decks.live_build_id (surfaced as
+ * liveBuildId) rather than a manifest entry.
  */
 function legacyDecks(): Deck[] {
   return [
@@ -181,6 +185,7 @@ function legacyDecks(): Deck[] {
       tier: 'free',
       totalCards: 12,
       manifestOrder: 0,
+      liveBuildId: 'build-777',
     }),
     legacyDeck({
       id: 103,

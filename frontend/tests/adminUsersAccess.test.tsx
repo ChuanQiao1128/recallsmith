@@ -54,8 +54,7 @@ vi.mock('../src/api/admin', async importOriginal => {
 
 const { AdminUsersPage } = await import('../src/pages/AdminUsersPage');
 
-const RESET_BUTTON = 'Reset & migrate (DEV only)';
-const PLAIN_BUTTON = 'Run migrate (no reset)';
+const PLAIN_BUTTON = 'Run migrations';
 const CREATE_BUTTON = 'Create editor';
 
 /**
@@ -104,9 +103,8 @@ describe('an editor who reaches the admin console', () => {
 
     expect(screen.queryByText('Access denied')).not.toBeNull();
 
-    // The two migrate buttons first, because they are the ones that cannot be
-    // undone. Then the account factory, then the door to the permission editor.
-    expect(screen.queryByRole('button', { name: RESET_BUTTON })).toBeNull();
+    // The migrate button first, because it is the one that touches the database.
+    // Then the account factory, then the door to the permission editor.
     expect(screen.queryByRole('button', { name: PLAIN_BUTTON })).toBeNull();
     expect(screen.queryByRole('button', { name: CREATE_BUTTON })).toBeNull();
     expect(screen.queryAllByRole('button', { name: 'Manage' })).toHaveLength(0);
@@ -132,7 +130,6 @@ describe('a super_admin on the same page', () => {
 
     expect(screen.queryByText('Access denied')).toBeNull();
 
-    expect(screen.queryByRole('button', { name: RESET_BUTTON })).not.toBeNull();
     expect(screen.queryByRole('button', { name: PLAIN_BUTTON })).not.toBeNull();
     expect(screen.queryByRole('button', { name: CREATE_BUTTON })).not.toBeNull();
 

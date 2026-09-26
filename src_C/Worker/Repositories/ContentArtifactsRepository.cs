@@ -5,9 +5,9 @@ namespace RecallSmith.Lambda.Worker.Repositories;
 public class ContentArtifactsRepository : IContentArtifactsRepository
 {
   /// <summary>
-  /// 查找同 slug 最近一次 SUCCESS 的构建
+  /// 查找同 deck_id 最近一次 SUCCESS 的构建
   /// </summary>
-  public async Task<PreviousBuildInfo?> GetLatestSuccessBuildAsync(string deckSlug)
+  public async Task<PreviousBuildInfo?> GetLatestSuccessBuildAsync(long deckId)
   {
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null) throw new InvalidOperationException("Failed to open database connection");
@@ -17,12 +17,12 @@ public class ContentArtifactsRepository : IContentArtifactsRepository
         build_id as "buildId",
         s3_key as "s3Key"
       FROM deck_publishes
-      WHERE deck_slug = $1 AND status = 'SUCCESS'
-      ORDER BY created_at DESC
+      WHERE deck_id = $1 AND status = 'SUCCESS'
+      ORDER BY created_at DESC, id DESC
       LIMIT 1
       """;
 
-    var rows = await DbUtil.QueryAsync(conn, null, sql, [deckSlug]);
+    var rows = await DbUtil.QueryAsync(conn, null, sql, [deckId]);
     if (rows.Count == 0) return null;
 
     var row = rows[0];

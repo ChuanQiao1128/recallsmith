@@ -29,7 +29,7 @@ import type { ReactElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render } from '@testing-library/react';
 import type { RenderResult } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { queryClient as appQueryClient } from '../../src/api/queryClient';
 
 /** A QueryClient with every ambient behaviour a test cannot control turned off. */
@@ -69,15 +69,21 @@ export function makeAppDefaultsQueryClient(): QueryClient {
 
 export type RenderWithQueryResult = RenderResult & { client: QueryClient };
 
-/** Mount `ui` under a caller-supplied client, so one client can serve two mounts. */
+/** Mount `ui` under a caller-supplied client, so one client can serve two mounts.
+ *
+ * A DATA router (createMemoryRouter + RouterProvider), not a plain
+ * <MemoryRouter>: pages that call useBlocker — the unsaved-changes guard on the
+ * card and deck editors — only work under a data router. A single splat route
+ * renders `ui`, so pages with no router hooks of their own are unaffected. */
 export function renderWithClient(
   client: QueryClient,
   ui: ReactElement,
   initialEntries: string[],
 ): RenderWithQueryResult {
+  const router = createMemoryRouter([{ path: '*', element: ui }], { initialEntries });
   const rendered = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   );
 

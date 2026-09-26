@@ -6,4 +6,5 @@
 // every hook in this folder appears here, and every hook here has a caller.
 
 export { useDeck, useCreateDeck, useUpdateDeck, useDeleteDeck, usePublishDeck } from './useDecks';
-export { useCards, useCreateCard, useUpdateCard, useDeleteCard } from './useCards';
+export { useCard, useCards, useCreateCard, useUpdateCard, useDeleteCard } from './useCards';
+export { useUnsavedChangesGuard } from './useUnsavedChangesGuard';

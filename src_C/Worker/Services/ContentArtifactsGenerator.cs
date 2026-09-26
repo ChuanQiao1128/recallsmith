@@ -193,7 +193,7 @@ public class ContentArtifactsGenerator : IContentArtifactsGenerator
   {
     var jobId = job.JobId;
 
-    var prev = await _repository.GetLatestSuccessBuildAsync(job.DeckSlug);
+    var prev = await _repository.GetLatestSuccessBuildAsync(job.DeckId);
     if (prev is null || string.IsNullOrEmpty(prev.BuildId) || string.IsNullOrEmpty(prev.S3Key))
     {
       Console.WriteLine($"[JobId={jobId}] No previous SUCCESS build, skipping patch");

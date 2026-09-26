@@ -2,6 +2,13 @@
 //
 // Mount a page under a router and be able to read where it navigated to.
 //
+// The router is a DATA router (createMemoryRouter + RouterProvider), not a plain
+// <MemoryRouter>. Pages that call useBlocker — the unsaved-changes guard on the
+// card and deck editors — only work under a data router, and a plain
+// MemoryRouter throws "useBlocker must be used within a data router". A single
+// splat route renders `ui` beside the probe, so navigate() still updates history
+// without unmounting either, exactly as before.
+//
 // The probe component itself is in tests/support/locationProbe.tsx rather than
 // here: react-refresh/only-export-components is an error in this repo's eslint
 // config, and it fires on any module that defines a component next to ordinary
@@ -20,18 +27,17 @@
 
 import type { ReactElement } from 'react';
 import { render } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
 import { LocationProbe } from './locationProbe';
 
-/** Mount `ui` under a MemoryRouter starting at `entries`, with the probe beside it. */
+/** Mount `ui` under a data router starting at `entries`, with the probe beside it. */
 export function renderAt(ui: ReactElement, entries: string[]) {
-  return render(
-    <MemoryRouter initialEntries={entries}>
-      {ui}
-      <LocationProbe />
-    </MemoryRouter>,
+  const router = createMemoryRouter(
+    [{ path: '*', element: <>{ui}<LocationProbe /></> }],
+    { initialEntries: entries },
   );
+  return render(<RouterProvider router={router} />);
 }
 
 /** The probe's current text, e.g. "/decks/cards?deckId=7". */

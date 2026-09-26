@@ -13,36 +13,56 @@ public static class Helpers
   {
     if (ex is not PostgresException pg) return null;
 
-    // 23505: unique_violation
-    if (pg.SqlState == "23505")
+    switch (pg.SqlState)
     {
-      var constraint = pg.ConstraintName ?? string.Empty;
-      var detail = pg.Detail ?? string.Empty;
-      var message = "Duplicate value violates unique constraint.";
-
-      switch (constraint)
+      case "23505": // unique_violation
       {
-        case "uq_cards_deck_uid":
-          message = "Another card in this deck already uses this Stable UID.";
-          break;
-        case "uq_cards_deck_order":
-          message = "Order in deck must be unique within this deck.";
-          break;
-        case "decks_slug_key":
-          message = "Slug is already used by another deck.";
-          break;
-        case "uq_admin_deck_permissions":
-          message = "Duplicate permission entry for this admin and deck.";
-          break;
-        default:
-          if (detail.Contains("(slug)", StringComparison.Ordinal)) message = "Slug is already used by another deck.";
-          break;
+        var constraint = pg.ConstraintName ?? string.Empty;
+        var detail = pg.Detail ?? string.Empty;
+        var message = "Duplicate value violates unique constraint.";
+
+        switch (constraint)
+        {
+          case "uq_cards_deck_uid":
+            message = "Another card in this deck already uses this Stable UID.";
+            break;
+          case "uq_cards_deck_order":
+            message = "Order in deck must be unique within this deck.";
+            break;
+          case "decks_slug_key":
+            message = "Slug is already used by another deck.";
+            break;
+          case "uq_admin_deck_permissions":
+            message = "Duplicate permission entry for this admin and deck.";
+            break;
+          default:
+            if (detail.Contains("(slug)", StringComparison.Ordinal)) message = "Slug is already used by another deck.";
+            break;
+        }
+
+        return MapUniqueViolation409(ex, res) ?? ErrorEnvelope(res, 409, "UNIQUE_VIOLATION", message);
       }
 
-      return res.BadRequest("UNIQUE_VIOLATION", message);
-    }
+      case "23514": // check_violation
+      {
+        var message = pg.ConstraintName == "ck_cards_order_in_deck_positive"
+          ? "orderInDeck must be a positive integer."
+          : $"Value violates check constraint {pg.ConstraintName}.";
+        return res.BadRequest("VALIDATION_ERROR", message);
+      }
 
-    return null;
+      case "23503": // foreign_key_violation
+        return res.BadRequest("VALIDATION_ERROR", $"Referenced row does not exist ({pg.ConstraintName}).");
+
+      case "23502": // not_null_violation
+        return res.BadRequest("VALIDATION_ERROR", $"{pg.ColumnName ?? "A required field"} must not be null.");
+
+      case "22P02": // invalid_text_representation
+        return res.BadRequest("VALIDATION_ERROR", "Invalid value format.");
+
+      default:
+        return null;
+    }
   }
 
   /// <summary>
@@ -52,6 +72,23 @@ public static class Helpers
   /// </summary>
   public static APIGatewayProxyResponse ErrorEnvelope(Res res, int statusCode, string code, string message) =>
     res.Raw(statusCode, new { success = false, data = (object?)null, error = new { code, message }, traceId = res.TraceId, version = "v1" });
+
+  /// <summary>503 CONFIG_ERROR: the server is missing configuration (PG env, bucket, queue). Not the caller's fault.</summary>
+  public static APIGatewayProxyResponse ConfigError(Res res, string message) => ErrorEnvelope(res, 503, "CONFIG_ERROR", message);
+
+  /// <summary>Body keys present in <paramref name="body"/> that <paramref name="fullSpec"/> knows but
+  /// <paramref name="allowedSpec"/> dropped for the caller's role, in fullSpec order.</summary>
+  public static List<string> IgnoredFields(JsonElement body, IReadOnlyList<UpdateField> fullSpec, IReadOnlyList<UpdateField> allowedSpec)
+  {
+    var allowed = new HashSet<string>(allowedSpec.Select(f => f.BodyKey), StringComparer.Ordinal);
+    var ignored = new List<string>();
+    foreach (var f in fullSpec)
+    {
+      if (allowed.Contains(f.BodyKey)) continue;
+      if (body.ValueKind == JsonValueKind.Object && body.TryGetProperty(f.BodyKey, out _)) ignored.Add(f.BodyKey);
+    }
+    return ignored;
+  }
 
   /// <summary>
   /// Maps a 23505 on the migration-021 partial unique index (uq_deck_publishes_active) to

@@ -18,12 +18,16 @@ public interface IJobRepository
   /// <summary>
   /// Step 5: 标记任务成功
   /// </summary>
-  Task CompleteJobAsync(string jobId);
+  /// <param name="exportedCardCount">The number of cards written to deck.json; null leaves decks.total_cards untouched.</param>
+  Task CompleteJobAsync(string jobId, int? exportedCardCount = null);
 
   /// <summary>
   /// 路线 A: 标记任务失败
   /// </summary>
   Task FailJobAsync(string jobId, string errorMessage);
+
+  /// <summary>Sets error_message on a PROCESSING row; status and updated_at (the take-over clock) are untouched.</summary>
+  Task RecordAttemptErrorAsync(string jobId, string errorMessage);
 }
 
 /// <summary>

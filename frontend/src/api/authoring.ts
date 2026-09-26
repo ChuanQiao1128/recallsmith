@@ -5,30 +5,8 @@ import type { Card } from '../types/card';
 import type { McqBlob } from '../types/mcq';
 import axios from 'axios';
 import { http } from './http';
+import { apiResultFromError, failResult } from './httpFailure';
 import { dedupeRequest, DedupeKeys } from './dedupe';
-
-function toApiErrorMessage(err: unknown): string {
-  if (axios.isAxiosError(err)) {
-    const status = err.response?.status;
-    const data = err.response?.data;
-
-    if (data && typeof data === 'object' && 'error' in data) {
-      const errorData = data as { error?: { message?: string } };
-      return errorData?.error?.message ?? `Request failed (HTTP ${status})`;
-    }
-    return `Request failed${status ? ` (HTTP ${status})` : ''}`;
-  }
-  return err instanceof Error ? err.message : 'Network error.';
-}
-
-function fail<T>(message: string, code = 'NETWORK_ERROR'): ApiResult<T> {
-  return {
-    success: false,
-    data: null,
-    error: { code, message },
-    traceId: '',
-  };
-}
 
 // ---------------------- normalization helpers ----------------------
 
@@ -121,7 +99,7 @@ export async function fetchDecks(): Promise<ApiResult<Deck[]>> {
 
       return { ...raw, data: normalized };
     } catch (err) {
-      return fail<Deck[]>(toApiErrorMessage(err));
+      return apiResultFromError<Deck[]>(err);
     }
   });
 }
@@ -137,15 +115,15 @@ export async function fetchDeckById(id: number): Promise<ApiResult<Deck>> {
 
     const list = raw.data ?? [];
     if (list.length === 0) {
-      return fail<Deck>('Deck not found', 'NOT_FOUND');
+      return failResult<Deck>('Deck not found', 'NOT_FOUND');
     }
     const normalized = normalizeDeck(list[0]);
     if (!normalized) {
-      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Invalid deck data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalized };
   } catch (err) {
-    return fail<Deck>(toApiErrorMessage(err));
+    return apiResultFromError<Deck>(err);
   }
 }
 
@@ -160,15 +138,15 @@ export async function fetchDeckBySlug(slug: string): Promise<ApiResult<Deck>> {
 
     const list = raw.data ?? [];
     if (list.length === 0) {
-      return fail<Deck>('Deck not found', 'NOT_FOUND');
+      return failResult<Deck>('Deck not found', 'NOT_FOUND');
     }
     const normalized = normalizeDeck(list[0]);
     if (!normalized) {
-      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Invalid deck data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalized };
   } catch (err) {
-    return fail<Deck>(toApiErrorMessage(err));
+    return apiResultFromError<Deck>(err);
   }
 }
 
@@ -177,13 +155,23 @@ export async function createDeck(params: {
   slug?: string;
   description?: string;
   author?: string;
+  locale?: string;
+  deckType?: number;
+  version?: number;
 }): Promise<ApiResult<Deck>> {
   try {
     // A JSON body throughout, matching updateDeck.
+    //
+    // Forwarded on `!== undefined` rather than on truthiness: a cleared
+    // description is '' and must be sent, and deckType/version of a Starter deck
+    // are the meaningful values 1, which truthiness would keep but 0 would not.
     const body: Record<string, unknown> = { title: params.title };
-    if (params.slug) body.slug = params.slug;
-    if (params.description) body.description = params.description;
-    if (params.author) body.author = params.author;
+    if (params.slug !== undefined) body.slug = params.slug;
+    if (params.description !== undefined) body.description = params.description;
+    if (params.author !== undefined) body.author = params.author;
+    if (params.locale !== undefined) body.locale = params.locale;
+    if (params.deckType !== undefined) body.deckType = params.deckType;
+    if (params.version !== undefined) body.version = params.version;
 
     const resp = await http.post<ApiResult<Deck>>('/api/v1/authoring/decks', body);
     const raw = resp.data;
@@ -192,15 +180,15 @@ export async function createDeck(params: {
 
     const deck = raw.data;
     if (!deck) {
-      return fail<Deck>('Create deck failed: no data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Create deck failed: no data returned', 'SERVER_ERROR');
     }
     const normalized = normalizeDeck(deck);
     if (!normalized) {
-      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Invalid deck data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalized };
   } catch (err) {
-    return fail<Deck>(toApiErrorMessage(err));
+    return apiResultFromError<Deck>(err);
   }
 }
 
@@ -210,6 +198,10 @@ export async function updateDeck(
     title?: string;
     slug?: string;
     description?: string;
+    author?: string;
+    locale?: string;
+    deckType?: number;
+    version?: number;
     manifestOrder?: number | null;
     availability?: DeckAvailability | null;
     tier?: DeckTier | null;
@@ -225,6 +217,10 @@ export async function updateDeck(
     if (params.title !== undefined) body.title = params.title;
     if (params.slug !== undefined) body.slug = params.slug;
     if (params.description !== undefined) body.description = params.description;
+    if (params.author !== undefined) body.author = params.author;
+    if (params.locale !== undefined) body.locale = params.locale;
+    if (params.deckType !== undefined) body.deckType = params.deckType;
+    if (params.version !== undefined) body.version = params.version;
     if (params.manifestOrder !== undefined) body.manifestOrder = params.manifestOrder;
     if (params.availability !== undefined) body.availability = params.availability;
     if (params.tier !== undefined) body.tier = params.tier;
@@ -241,15 +237,15 @@ export async function updateDeck(
 
     const deck = raw.data;
     if (!deck) {
-      return fail<Deck>('Update deck failed: no data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Update deck failed: no data returned', 'SERVER_ERROR');
     }
     const normalized = normalizeDeck(deck);
     if (!normalized) {
-      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Invalid deck data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalized };
   } catch (err) {
-    return fail<Deck>(toApiErrorMessage(err));
+    return apiResultFromError<Deck>(err);
   }
 }
 
@@ -262,7 +258,7 @@ export async function deleteDeck(id: number): Promise<ApiResult<null>> {
     );
     return resp.data;
   } catch (err) {
-    return fail<null>(toApiErrorMessage(err));
+    return apiResultFromError<null>(err);
   }
 }
 
@@ -348,36 +344,107 @@ export async function fetchAdminDecksPage(
     return { ...raw, data: normalizeAdminDecksPage(raw.data) };
   } catch (err) {
     if (axios.isAxiosError(err) && err.response?.status === 404) {
-      return fail<AdminDecksPage>(
+      return failResult<AdminDecksPage>(
         'Paginated decks endpoint is not available (HTTP 404).',
         ADMIN_DECKS_ENDPOINT_MISSING,
       );
     }
     if (axios.isAxiosError(err) && err.response?.status === 403) {
-      return fail<AdminDecksPage>(toApiErrorMessage(err), 'FORBIDDEN');
+      // Keep the converted message/traceId/httpStatus, but force FORBIDDEN so a
+      // gateway 403 without an envelope still trips the legacy fallback.
+      const result = apiResultFromError<AdminDecksPage>(err);
+      if (result.error) result.error.code = 'FORBIDDEN';
+      return result;
     }
-    return fail<AdminDecksPage>(toApiErrorMessage(err));
+    return apiResultFromError<AdminDecksPage>(err);
   }
 }
 
 // ---------------------- cards ----------------------
 
+// The server's MaxLimit on GET /api/v1/authoring/cards/page (CardsPage.cs). One
+// page never carries more than this, so fetchCardsByDeck asks for exactly it and
+// walks the cursor until the server says there is no more.
+export const CARDS_PAGE_LIMIT = 200;
+
+// A ceiling on the number of pages walked, so a server that keeps handing back a
+// cursor can never spin this loop forever. At CARDS_PAGE_LIMIT per page this is
+// 20 000 cards, well past any real deck; reaching it is a bug, not a big deck.
+const CARDS_PAGE_MAX_PAGES = 100;
+
+/** One page of the keyset-paginated cards route: `{ items, nextCursor, hasMore }`. */
+interface CardsPageEnvelope {
+  items?: Card[] | null;
+  nextCursor?: string | null;
+  hasMore?: boolean;
+}
+
 export async function fetchCardsByDeck(deckId: number): Promise<ApiResult<Card[]>> {
   return dedupeRequest(DedupeKeys.cards(deckId), async () => {
     try {
-      const resp = await http.get<ApiResult<Card[]>>('/api/v1/authoring/cards', {
-        params: { deckId },
-      });
-      const raw = resp.data;
+      const allCards: Card[] = [];
+      let cursor: string | null = null;
 
-      if (!raw.success) return raw;
+      for (let page = 0; page < CARDS_PAGE_MAX_PAGES; page++) {
+        // The first request carries no cursor; every request after it passes the
+        // one the previous page handed back.
+        const params: Record<string, unknown> =
+          cursor === null
+            ? { deckId, limit: CARDS_PAGE_LIMIT }
+            : { deckId, limit: CARDS_PAGE_LIMIT, cursor };
 
-      const list = raw.data ?? [];
-      return { ...raw, data: list.map(normalizeCard) };
+        const resp = await http.get<ApiResult<CardsPageEnvelope>>(
+          '/api/v1/authoring/cards/page',
+          { params },
+        );
+        const raw = resp.data;
+
+        // A refused page is the whole answer. Returning what came before it would
+        // be a partial list wearing a success envelope, which is worse than a
+        // clean failure the caller can retry.
+        if (!raw.success) return { ...raw, data: null };
+
+        for (const item of raw.data?.items ?? []) allCards.push(normalizeCard(item));
+
+        const nextCursor = raw.data?.nextCursor;
+        if (raw.data?.hasMore !== true || !nextCursor) {
+          return { ...raw, data: allCards };
+        }
+        cursor = nextCursor;
+      }
+
+      // The loop only falls through here if the server kept setting hasMore past
+      // CARDS_PAGE_MAX_PAGES, which no honest deck can.
+      return failResult<Card[]>('The card list did not finish paging.', 'PAGING_ERROR');
     } catch (err) {
-      return fail<Card[]>(toApiErrorMessage(err));
+      return apiResultFromError<Card[]>(err);
     }
   });
+}
+
+/**
+ * One card, read through `GET /api/v1/authoring/cards?id=`.
+ *
+ * The route answers with an array (the same handler the full list uses, filtered
+ * by id), so an empty array is a card that is not there rather than an error.
+ */
+export async function fetchCardById(id: number): Promise<ApiResult<Card>> {
+  try {
+    const resp = await http.get<ApiResult<Card[]>>('/api/v1/authoring/cards', {
+      params: { id },
+    });
+    const raw = resp.data;
+
+    if (!raw.success) return { ...raw, data: null };
+
+    const list = raw.data ?? [];
+    if (list.length === 0) {
+      return failResult<Card>('Card not found.', 'NOT_FOUND');
+    }
+    return { ...raw, data: normalizeCard(list[0]) };
+  } catch (err) {
+    return apiResultFromError<Card>(err);
+  }
 }
 
 export async function createCard(params: {
@@ -424,11 +491,11 @@ export async function createCard(params: {
 
     const card = raw.data;
     if (!card) {
-      return fail<Card>('Create card failed: no data returned', 'SERVER_ERROR');
+      return failResult<Card>('Create card failed: no data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalizeCard(card) };
   } catch (err) {
-    return fail<Card>(toApiErrorMessage(err));
+    return apiResultFromError<Card>(err);
   }
 }
 
@@ -493,11 +560,11 @@ export async function updateCard(params: {
 
     const card = raw.data;
     if (!card) {
-      return fail<Card>('Update card failed: no data returned', 'SERVER_ERROR');
+      return failResult<Card>('Update card failed: no data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalizeCard(card) };
   } catch (err) {
-    return fail<Card>(toApiErrorMessage(err));
+    return apiResultFromError<Card>(err);
   }
 }
 
@@ -507,51 +574,75 @@ export async function deleteCard(cardId: number): Promise<ApiResult<null>> {
     const resp = await http.delete<ApiResult<null>>(`/api/v1/authoring/cards?id=${encodeURIComponent(cardId)}`);
     return resp.data;
   } catch (err) {
-    return fail<null>(toApiErrorMessage(err));
+    return apiResultFromError<null>(err);
   }
 }
 
-// ---------------------- permissions ----------------------
+// ---------------------- cards import (batch upsert, F01) ----------------------
 
-export async function fetchPermissions(): Promise<ApiResult<{ adminSub: string; deckId: number; canRead: boolean; canWrite: boolean }[]>> {
-  try {
-    const resp = await http.get<ApiResult<{ adminSub: string; deckId: number; canRead: boolean; canWrite: boolean }[]>>('/api/v1/admin/permissions');
-    return resp.data;
-  } catch (err) {
-    return fail(toApiErrorMessage(err));
-  }
+// The whole file lands in one transaction, so a batch can take much longer than
+// a single-card write. The global client timeout (http.ts) is 15 s, which a
+// 500-card batch can outrun; API Gateway cuts the request off at 30 s, so this
+// asks for just under that. The per-request `timeout` overrides the global one.
+export const IMPORT_REQUEST_TIMEOUT_MS = 29_000;
+
+// One card as F01 reads it. There is deliberately no `expectedVersion`: the
+// import endpoint upserts by (deckId, stableUid) and ignores it, so sending one
+// would be dead weight the reader might mistake for a CAS token.
+export interface ImportCardInput {
+  stableUid: string;
+  question: string;
+  explanation: string;
+  codeSnippet: string;
+  codeLanguage: string;
+  realWorldUsage: string;
+  topic: string;
+  mcq: McqBlob | null;
+  difficulty: number;
+  orderInDeck: number;
 }
 
-export async function updatePermission(params: { adminSub: string; deckId: number; canRead?: boolean; canWrite?: boolean }): Promise<ApiResult<null>> {
+export interface ImportCardsBatchResult {
+  created: number;
+  updated: number;
+  unchanged: number;
+}
+
+/**
+ * POST /api/v1/authoring/cards/import — atomic, idempotent bulk upsert of up to
+ * 500 cards by (deckId, stableUid) in a single transaction (F01 / CBE-02).
+ *
+ * The full card objects go in the body under F01's own field names. The `signal`
+ * lets the page cancel a slow batch through an AbortController, and the long
+ * timeout keeps a legitimately large batch from being reported as a failure it
+ * is not.
+ */
+export async function importCardsBatch(params: {
+  deckId: number;
+  cards: ImportCardInput[];
+  signal?: AbortSignal;
+}): Promise<ApiResult<ImportCardsBatchResult>> {
   try {
-    // Parameters go in a JSON body, as everywhere else here.
-    const body: Record<string, unknown> = {
-      adminSub: params.adminSub,
-      deckId: params.deckId,
+    const resp = await http.post<ApiResult<Partial<ImportCardsBatchResult>>>(
+      '/api/v1/authoring/cards/import',
+      { deckId: params.deckId, cards: params.cards },
+      { timeout: IMPORT_REQUEST_TIMEOUT_MS, signal: params.signal },
+    );
+    const raw = resp.data;
+
+    if (!raw.success) return { ...raw, data: null };
+
+    const data = raw.data ?? {};
+    return {
+      ...raw,
+      data: {
+        created: data.created ?? 0,
+        updated: data.updated ?? 0,
+        unchanged: data.unchanged ?? 0,
+      },
     };
-    if (params.canRead !== undefined) body.canRead = params.canRead;
-    if (params.canWrite !== undefined) body.canWrite = params.canWrite;
-
-    const resp = await http.put<ApiResult<null>>('/api/v1/admin/permissions', body);
-    return resp.data;
   } catch (err) {
-    return fail(toApiErrorMessage(err));
-  }
-}
-
-export async function bulkUpdatePermissions(params: { adminSub: string; deckIds: number[]; canRead?: boolean; canWrite?: boolean }): Promise<ApiResult<null>> {
-  try {
-    const body: Record<string, unknown> = {
-      adminSub: params.adminSub,
-      deckIds: params.deckIds,
-    };
-    if (params.canRead !== undefined) body.canRead = params.canRead;
-    if (params.canWrite !== undefined) body.canWrite = params.canWrite;
-
-    const resp = await http.put<ApiResult<null>>('/api/v1/admin/permissions/bulk', body);
-    return resp.data;
-  } catch (err) {
-    return fail(toApiErrorMessage(err));
+    return apiResultFromError<ImportCardsBatchResult>(err);
   }
 }
 
@@ -568,16 +659,7 @@ export async function publishDeck(
     });
     return resp.data;
   } catch (err) {
-    return fail(toApiErrorMessage(err));
-  }
-}
-
-export async function checkPublishJobStatus(jobId: string): Promise<ApiResult<{ jobId: string; status: string; buildId?: string; s3Key?: string; errorMessage?: string }>> {
-  try {
-    const resp = await http.get<ApiResult<{ jobId: string; status: string; buildId?: string; s3Key?: string; errorMessage?: string }>>(`/api/v1/authoring/publish/status?jobId=${encodeURIComponent(jobId)}`);
-    return resp.data;
-  } catch (err) {
-    return fail(toApiErrorMessage(err));
+    return apiResultFromError<{ mode: string; jobId?: string }>(err);
   }
 }
 
@@ -595,7 +677,7 @@ export async function fetchPublishJobs(): Promise<ApiResult<PublishJob[]>> {
     const resp = await http.get<ApiResult<PublishJob[]>>('/api/v1/authoring/publish/jobs');
     return resp.data;
   } catch (err) {
-    return fail(toApiErrorMessage(err));
+    return apiResultFromError<PublishJob[]>(err);
   }
 }
 
@@ -607,9 +689,90 @@ export async function fetchAdminManifest(): Promise<ApiResult<Record<string, unk
       const resp = await http.get<ApiResult<Record<string, unknown>>>('/api/v1/admin/manifest');
       return resp.data;
     } catch (err) {
-      return fail<Record<string, unknown>>(toApiErrorMessage(err));
+      return apiResultFromError<Record<string, unknown>>(err);
     }
   });
+}
+
+// ---------------------- deck builds, rollback & maintenance (F29) ----------------------
+
+/** One SUCCESS build of a deck, as GET /api/v1/admin/decks/{id}/builds returns it. */
+export interface DeckBuild {
+  buildId: string;
+  jobId: string | null;
+  note: string | null;
+  createdAt: string;
+  isLive: boolean;
+}
+
+export interface DeckBuildsData {
+  deckId: number;
+  slug: string;
+  liveBuildId: string | null;
+  builds: DeckBuild[];
+}
+
+export interface DeckRollbackResult {
+  deckId: number;
+  slug: string;
+  liveBuildId: string;
+  previousBuildId: string | null;
+  manifestRebuilt: boolean;
+}
+
+export interface ManifestRebuildResult {
+  ok: boolean;
+  manifestKey: string;
+  generatedAtMs: number;
+  deckCount: number;
+}
+
+export interface PublishReapResult {
+  pending: number;
+  processing: number;
+  jobIds: string[];
+}
+
+/** GET /api/v1/admin/decks/{id}/builds (super_admin): a deck's SUCCESS builds, newest first. */
+export async function fetchDeckBuilds(deckId: number): Promise<ApiResult<DeckBuildsData>> {
+  try {
+    const resp = await http.get<ApiResult<DeckBuildsData>>(`/api/v1/admin/decks/${deckId}/builds`);
+    return resp.data;
+  } catch (err) {
+    return apiResultFromError<DeckBuildsData>(err);
+  }
+}
+
+/** POST /api/v1/admin/decks/{id}/rollback (super_admin): point the deck at an older SUCCESS build. */
+export async function rollbackDeck(deckId: number, buildId: string): Promise<ApiResult<DeckRollbackResult>> {
+  try {
+    const resp = await http.post<ApiResult<DeckRollbackResult>>(`/api/v1/admin/decks/${deckId}/rollback`, {
+      buildId,
+    });
+    return resp.data;
+  } catch (err) {
+    return apiResultFromError<DeckRollbackResult>(err);
+  }
+}
+
+/** POST /api/v1/admin/manifest/rebuild (super_admin): regenerate manifest.json from the database. */
+export async function rebuildManifest(): Promise<ApiResult<ManifestRebuildResult>> {
+  try {
+    const resp = await http.post<ApiResult<ManifestRebuildResult>>('/api/v1/admin/manifest/rebuild', {});
+    return resp.data;
+  } catch (err) {
+    return apiResultFromError<ManifestRebuildResult>(err);
+  }
+}
+
+/** POST /api/v1/admin/publish/reap (super_admin): fail stuck PENDING/PROCESSING jobs. */
+export async function reapStuckPublishJobs(): Promise<ApiResult<PublishReapResult>> {
+  try {
+    const resp = await http.post<ApiResult<PublishReapResult>>('/api/v1/admin/publish/reap', {});
+    return resp.data;
+  } catch (err) {
+    return apiResultFromError<PublishReapResult>(err);
+  }
 }
 
 // ---------------------- Content Intelligence ----------------------
@@ -690,7 +853,6 @@ export async function fetchContentIntelligence(params?: {
     const resp = await http.get<ApiResult<ContentIntelligenceData>>(`/api/v1/authoring/content-intelligence${suffix}`);
     return resp.data;
   } catch (err) {
-    return fail<ContentIntelligenceData>(toApiErrorMessage(err));
+    return apiResultFromError<ContentIntelligenceData>(err);
   }
 }
-// experiment: tweak

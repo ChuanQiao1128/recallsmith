@@ -1,13 +1,19 @@
 // src/pages/EditCardPage.tsx
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { fetchDeckById, fetchCardsByDeck } from '../api/authoring';
+import { fetchCardById } from '../api/authoring';
 import { VERSION_CONFLICT } from '../api/errors';
-import { useUpdateCard } from '../hooks/useCards';
+import { QueryKeys, useAppQueryClient } from '../api/queryClient';
+import { useCard, useUpdateCard } from '../hooks/useCards';
+import { useDeck } from '../hooks/useDecks';
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
-import type { Deck } from '../types/deck';
 import type { Card } from '../types/card';
 import { CardForm, type CardFormValues } from '../components/CardForm';
+import { buildCardBody } from '../lib/authoringBodies';
+import { CONSOLE_NAME } from '../lib/brand';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 
 /**
  * The label on the recovery button, and the sentence that explains it.
@@ -32,11 +38,30 @@ const CONFLICT_UNRECOVERABLE =
   'Reload the page before trying again — this console could not read the ' +
   'current version of the card.';
 
-interface PageState {
-  loading: boolean;
-  deck: Deck | null;
-  card: Card | null;
-  error: string | null;
+/** The header-plus-red-box shell every failure on this page renders through. */
+function EditCardErrorScreen({ message }: { message: string }) {
+  return (
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Edit card"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
+        <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+          ← Back to Decks
+        </Link>
+      </div>
+
+      <div className="max-w-3xl mx-auto px-4 py-6">
+        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
+          {message}
+        </div>
+      </div>
+    </ConsoleShell>
+  );
 }
 
 export function EditCardPage() {
@@ -59,16 +84,20 @@ export function EditCardPage() {
   const invalidId = deckId === null || Number.isNaN(numericCardId) || numericCardId <= 0;
   const numericDeckId = deckId ?? Number.NaN;
 
-  const [state, setState] = useState<PageState>({
-    loading: !invalidId,
-    deck: null,
-    card: null,
-    error: invalidId ? 'Missing or invalid deckId/cardId.' : null,
-  });
+  // Hooks first and above every early return, as in CardListPage. The deck and
+  // the one card come through the shared cache: List -> Edit no longer downloads
+  // the whole deck to show a single row, and the single-card read is exactly the
+  // ?id= endpoint the old comment here claimed did not exist. Both are disabled
+  // for an invalid id (useDeck skips 0/NaN, useCard requires a finite id > 0), so
+  // an invalidId page never issues a request.
+  const deckQuery = useDeck(numericDeckId);
+  const cardQuery = useCard(numericCardId);
 
   // The write goes through react-query, so a saved card invalidates the list it
-  // belongs to instead of leaving every other reader to guess.
+  // belongs to and its own ['card', id] entry instead of leaving every other
+  // reader to guess.
   const updateCardMutation = useUpdateCard();
+  const queryClient = useAppQueryClient();
 
   /**
    * Whether the last save lost a version race AND a newer version was read back.
@@ -82,102 +111,19 @@ export function EditCardPage() {
    */
   const [conflictRecoverable, setConflictRecoverable] = useState(false);
 
-  useEffect(() => {
-    if (invalidId) return;
-
-    let cancelled = false;
-
-    async function load() {
-      try {
-        setState(prev => ({ ...prev, loading: true, error: null }));
-
-        const [deckResult, cardsResult] = await Promise.all([
-          fetchDeckById(numericDeckId),
-          fetchCardsByDeck(numericDeckId),
-        ]);
-
-        if (cancelled) return;
-
-        if (!deckResult.success || !deckResult.data) {
-          setState({
-            loading: false,
-            deck: null,
-            card: null,
-            error: deckResult.error?.message ?? 'Deck not found.',
-          });
-          return;
-        }
-
-        if (!cardsResult.success || !cardsResult.data) {
-          setState({
-            loading: false,
-            deck: deckResult.data,
-            card: null,
-            error: cardsResult.error?.message ?? 'Failed to load cards.',
-          });
-          return;
-        }
-
-        const cards = cardsResult.data as Card[];
-        // The backend id may arrive as a string, so compare as numbers.
-        const target = cards.find(c => Number(c.id) === numericCardId);
-
-        if (!target) {
-          setState({
-            loading: false,
-            deck: deckResult.data,
-            card: null,
-            error: `Card with id ${numericCardId} not found in this deck.`,
-          });
-          return;
-        }
-
-        setState({
-          loading: false,
-          deck: deckResult.data,
-          card: target,
-          error: null,
-        });
-      } catch (err: unknown) {
-        if (cancelled) return;
-        setState({
-          loading: false,
-          deck: null,
-          card: null,
-          error: err instanceof Error ? err.message : 'Network error.',
-        });
-      }
-    }
-
-    void load();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [invalidId, numericDeckId, numericCardId]);
+  // The unsaved-changes guard. Declared above every early return, as the rules
+  // of hooks require; the save below clears it explicitly before navigating.
+  const [dirty, setDirty] = useState(false);
+  const guard = useUnsavedChangesGuard(dirty);
 
   if (invalidId) {
-    return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
-
-        <main className="max-w-3xl mx-auto px-4 py-6">
-          <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
-            {state.error ?? 'Missing or invalid deckId/cardId.'}
-          </div>
-        </main>
-      </div>
-    );
+    return <EditCardErrorScreen message="Missing or invalid deckId/cardId." />;
   }
 
-  if (state.loading) {
+  // Ahead of the pending check, for the reason CardListPage spells out: a
+  // disabled query stays status 'pending' forever, so an invalid id has to be
+  // answered before isPending is read. It is, above.
+  if (deckQuery.isPending || cardQuery.isPending) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-slate-600 text-lg">Loading card...</div>
@@ -185,29 +131,29 @@ export function EditCardPage() {
     );
   }
 
-  if (!state.deck || !state.card) {
-    return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
-
-        <main className="max-w-3xl mx-auto px-4 py-6">
-          <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
-            {state.error ?? 'Card not found.'}
-          </div>
-        </main>
-      </div>
-    );
+  if (deckQuery.isError || !deckQuery.data) {
+    const message = deckQuery.error instanceof Error ? deckQuery.error.message : 'Deck not found.';
+    return <EditCardErrorScreen message={message} />;
   }
 
-  const deck = state.deck;
-  const card = state.card;
+  if (cardQuery.isError || !cardQuery.data) {
+    const message = cardQuery.error instanceof Error ? cardQuery.error.message : 'Card not found.';
+    return <EditCardErrorScreen message={message} />;
+  }
+
+  // Bound after the guards so their non-null types survive into the closures
+  // below (a const captured before the guard keeps its `T | undefined` type).
+  const deck = deckQuery.data;
+  const card = cardQuery.data;
+
+  // The card was read by its own id, so it is the right card or none — what is
+  // left to check is that it belongs to the deck in the URL. The backend id may
+  // arrive as a string, so compare as numbers.
+  if (Number(card.deckId) !== numericDeckId) {
+    return (
+      <EditCardErrorScreen message={`Card with id ${numericCardId} not found in this deck.`} />
+    );
+  }
 
   const initialValues: CardFormValues = {
     question: card.question,
@@ -227,20 +173,23 @@ export function EditCardPage() {
         : Number(card.orderInDeck) || 1,
     revision:
       (card as unknown as { revision?: number | null }).revision ?? 1,
+    topic: card.topic ?? '',
   };
 
   /**
    * The card as the server holds it right now, or null if it could not be read.
    *
-   * Same request the initial load makes -- there is no single-card endpoint --
-   * so this is one extra list read on the one path that needs it, rather than a
-   * new API surface for a recovery that happens rarely.
+   * A fresh ?id= read that deliberately skips the cache: on success it writes
+   * the row into ['card', id] with setQueryData, so the next render — and the
+   * next save — carries the version the server is actually holding.
    */
   async function readCurrentCard(): Promise<Card | null> {
     try {
-      const cardsResult = await fetchCardsByDeck(numericDeckId);
-      if (!cardsResult.success || !cardsResult.data) return null;
-      return cardsResult.data.find(c => Number(c.id) === numericCardId) ?? null;
+      const cardResult = await fetchCardById(numericCardId);
+      if (!cardResult.success || !cardResult.data) return null;
+      const latest = cardResult.data;
+      queryClient.setQueryData(QueryKeys.card(numericCardId), latest);
+      return latest;
     } catch {
       return null;
     }
@@ -249,36 +198,18 @@ export function EditCardPage() {
   async function handleSubmit(
     values: CardFormValues,
   ): Promise<{ ok: boolean; error?: string }> {
-    const difficulty =
-      typeof values.difficulty === 'number'
-        ? values.difficulty
-        : Number(values.difficulty) || 2;
-    const orderInDeck =
-      typeof values.orderInDeck === 'number'
-        ? values.orderInDeck
-        : Number(values.orderInDeck) || 1;
+    // buildCardBody trims every optional text field, so a cleared explanation,
+    // usage note or snippet is sent as '' rather than dropped — the api layer
+    // omits undefined keys, and an absent key leaves the old value in the row.
+    // topic is sent beside the builder (F20 pins that the builder never carries
+    // it): '' is sent on purpose, because the server stores null for a blank
+    // topic, which is how a topic is cleared. mcq stays absent, so a stored MCQ
+    // blob is left alone.
     const { result } = await updateCardMutation.mutateAsync({
+      ...buildCardBody(values),
+      topic: values.topic.trim(),
       id: Number(card.id),
       deckId: Number(card.deckId),
-      question: values.question.trim(),
-      explanation: values.explanation?.trim() || undefined,
-      // Forwarded rather than omitted. updateCard has accepted this field all
-      // along and drops undefined keys from the body, so leaving it out was not
-      // data loss — it was an edit that silently did not happen. The markdown
-      // importer compares realWorldUsage when deciding update vs unchanged, so
-      // an edit that never lands also means the deck never stops re-planning.
-      realWorldUsage: values.realWorldUsage ?? '',
-      codeSnippet: values.codeSnippet || undefined,
-      codeLanguage: values.codeLanguage || undefined,
-      difficulty,
-      orderInDeck,
-      // Forwarded now that the client type carries it. The form has validated
-      // this field all along; a rule that guards a value nobody sends is not a
-      // safety net, it is a claim that something is being protected.
-      revision:
-        typeof values.revision === 'number' && Number.isFinite(values.revision)
-          ? values.revision
-          : 1,
       stableUid: card.stableUid,
       expectedVersion: card.version,
     });
@@ -304,7 +235,6 @@ export function EditCardPage() {
           return { ok: false, error: `${message} ${CONFLICT_UNRECOVERABLE}` };
         }
 
-        setState(prev => ({ ...prev, card: latest }));
         setConflictRecoverable(true);
         return { ok: false, error: `${message} ${CONFLICT_HINT}` };
       }
@@ -313,40 +243,48 @@ export function EditCardPage() {
       return { ok: false, error: message };
     }
 
+    // A successful save is not a discard: allow the navigation that follows it
+    // before it fires, so the guard does not ask about the edit we just kept.
+    guard.allowNextNavigation();
     navigate(`/decks/cards?deckId=${deck.id}`, { replace: true });
     return { ok: true };
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · <span className="font-mono">{deck.slug}</span>
-            </p>
-          </div>
-          <Link
-            to={`/decks/cards?deckId=${deck.id}`}
-            className="text-sm text-indigo-600 hover:text-indigo-800"
-          >
-            ← Back to Cards
-          </Link>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Edit card"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {deck.title} · <span className="font-mono">{deck.slug}</span>
+          </p>
         </div>
-      </header>
+        <Link
+          to={`/decks/cards?deckId=${deck.id}`}
+          className="text-sm text-indigo-600 hover:text-indigo-800"
+        >
+          ← Back to Cards
+        </Link>
+      </div>
 
-      <main className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl mx-auto px-4 py-6">
         <CardForm
           mode="edit"
           deck={deck}
           initialValues={initialValues}
           onSubmit={handleSubmit}
           onCancel={() => navigate(-1)}
+          onDirtyChange={setDirty}
           recoveryLabel={conflictRecoverable ? RETRY_WITH_LATEST : null}
           mcq={card.mcq ?? null}
         />
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

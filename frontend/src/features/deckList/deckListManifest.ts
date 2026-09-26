@@ -199,7 +199,11 @@ export function parseManifestMeta(raw: unknown): ManifestMeta {
 }
 
 export function getDeckStatusFromManifest(deck: Deck, m?: ManifestDeckLite, cardCount?: number): DeckStatus {
-  const isPublished = !!(m && (m.buildId || m.path));
+  // Editors skip the admin manifest, so their only published signal is the
+  // deck's own live_build_id, surfaced as liveBuildId on GET /authoring/decks.
+  const isPublished =
+    !!(m && (m.buildId || m.path))
+    || (typeof deck.liveBuildId === 'string' && deck.liveBuildId.trim() !== '');
   const count = cardCount ?? deck.totalCards ?? 0;
 
   if (isPublished) return 'published';

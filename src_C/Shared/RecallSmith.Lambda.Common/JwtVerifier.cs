@@ -235,7 +235,9 @@ public sealed class CognitoJwtVerifier
       ValidIssuer = issuer,
       // Cognito access tokens carry client_id, not aud; the authorizer that will eventually
       // sit in front of this checks the audience per pool. Here the issuer set is the trust
-      // boundary, and an id token from a pool we trust is as good as its access token.
+      // boundary for verification, and an id token from a pool we trust is as good as its
+      // access token. The console binding (issuer + client) that grants the admin role flags is
+      // enforced separately in Auth.ConsoleBindingFailure, not here.
       ValidateAudience = false,
       ValidateLifetime = true,
       RequireExpirationTime = true,

@@ -1,17 +1,15 @@
 // src/pages/NewCardPage.tsx
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { fetchCardsByDeck, fetchDeckById } from '../api/authoring';
-import { useCreateCard } from '../hooks/useCards';
+import { useCards, useCreateCard } from '../hooks/useCards';
+import { useDeck } from '../hooks/useDecks';
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
-import type { Deck } from '../types/deck';
 import { CardForm, type CardFormValues } from '../components/CardForm';
-
-interface PageState {
-  loadingDeck: boolean;
-  deck: Deck | null;
-  error: string | null;
-}
+import { buildCardBody } from '../lib/authoringBodies';
+import { CONSOLE_NAME } from '../lib/brand';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 
 /**
  * Where the next card goes in the deck's running order.
@@ -53,18 +51,11 @@ export function NewCardPage() {
   const invalidDeckId = deckId === null;
   const numericDeckId = deckId ?? Number.NaN;
 
-  const [state, setState] = useState<PageState>({
-    loadingDeck: !invalidDeckId,
-    deck: null,
-    error: invalidDeckId ? 'Missing or invalid deckId.' : null,
-  });
-
-  // Kept out of PageState on purpose: knowing the next number is a convenience,
-  // not a precondition for writing a card. A failed or slow card list must not
-  // hold the form shut, so this settles on its own and the form opens either
-  // way. ORDER_STEP is the fallback, which is also the right answer for a deck
-  // whose cards could not be read but which is in fact empty.
-  const [nextOrder, setNextOrder] = useState<number>(ORDER_STEP);
+  // Hooks first, above the early returns. The deck and its cards come through
+  // the shared cache; the card list is read only to suggest the next order, and
+  // a failed one must not hold the form shut.
+  const deckQuery = useDeck(numericDeckId);
+  const cardsQuery = useCards(numericDeckId);
 
   // The write goes through react-query so the list this card belongs to is
   // invalidated when it lands. Before this, creating a card told nothing in the
@@ -72,81 +63,39 @@ export function NewCardPage() {
   // showing a stale list by refusing to cache at all.
   const createCardMutation = useCreateCard();
 
-  useEffect(() => {
-    if (invalidDeckId) return;
-
-    let cancelled = false;
-
-    async function loadDeck() {
-      try {
-        setState(prev => ({ ...prev, loadingDeck: true, error: null }));
-
-        // Both at once, and both awaited before the form is allowed to mount.
-        // CardForm copies initialValues into its own state on first render, so
-        // a card list that lands after that would be a number nobody sees.
-        const [result, cards] = await Promise.all([
-          fetchDeckById(numericDeckId),
-          fetchCardsByDeck(numericDeckId),
-        ]);
-        if (cancelled) return;
-
-        if (!result.success || !result.data) {
-          setState({
-            loadingDeck: false,
-            deck: null,
-            error: result.error?.message ?? 'Deck not found.',
-          });
-          return;
-        }
-
-        // A card list that failed leaves nextOrder at its default. The deck
-        // itself loaded, so the person can still write a card; the only thing
-        // lost is the suggestion, and they can type over it.
-        if (cards.success && cards.data) setNextOrder(nextOrderInDeck(cards.data));
-
-        setState({
-          loadingDeck: false,
-          deck: result.data,
-          error: null,
-        });
-      } catch (err: unknown) {
-        if (cancelled) return;
-        setState({
-          loadingDeck: false,
-          deck: null,
-          error: err instanceof Error ? err.message : 'Network error.',
-        });
-      }
-    }
-
-    void loadDeck();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [invalidDeckId, numericDeckId]);
+  // The unsaved-changes guard. Declared above every early return, as the rules
+  // of hooks require; the save below clears it explicitly before navigating.
+  const [dirty, setDirty] = useState(false);
+  const guard = useUnsavedChangesGuard(dirty);
 
   if (invalidDeckId) {
     return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
-        <main className="max-w-3xl mx-auto px-4 py-6">
+      <ConsoleShell
+        title={CONSOLE_NAME}
+        subtitle="Authoring · New card"
+        decksHref="/"
+        contentIntelligenceHref="/content-intelligence"
+        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      >
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← Back to Decks
+          </Link>
+        </div>
+        <div className="max-w-3xl mx-auto px-4 py-6">
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
-            {state.error ?? 'Missing or invalid deckId.'}
+            Missing or invalid deckId.
           </div>
-        </main>
-      </div>
+        </div>
+      </ConsoleShell>
     );
   }
 
-  if (state.loadingDeck) {
+  // Both must settle before the form mounts, whether the cards read succeeded or
+  // failed: CardForm copies initialValues into its own state on first render, so
+  // a card list that lands after that would compute a next order nobody sees.
+  if (deckQuery.isPending || cardsQuery.isPending) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-slate-600 text-lg">Loading deck...</div>
@@ -154,27 +103,38 @@ export function NewCardPage() {
     );
   }
 
-  if (!state.deck) {
+  if (deckQuery.isError || !deckQuery.data) {
+    const message = deckQuery.error instanceof Error ? deckQuery.error.message : 'Deck not found.';
     return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
-        <main className="max-w-3xl mx-auto px-4 py-6">
+      <ConsoleShell
+        title={CONSOLE_NAME}
+        subtitle="Authoring · New card"
+        decksHref="/"
+        contentIntelligenceHref="/content-intelligence"
+        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      >
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← Back to Decks
+          </Link>
+        </div>
+        <div className="max-w-3xl mx-auto px-4 py-6">
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
-            {state.error ?? 'Deck not found.'}
+            {message}
           </div>
-        </main>
-      </div>
+        </div>
+      </ConsoleShell>
     );
   }
 
-  const deck = state.deck;
+  const deck = deckQuery.data;
+
+  // A card list that failed leaves nextOrder at its default. The deck itself
+  // loaded, so the person can still write a card; the only thing lost is the
+  // suggestion, and they can type over it. ORDER_STEP is also the right answer
+  // for a deck whose cards could not be read but which is in fact empty.
+  const nextOrder = cardsQuery.isSuccess ? nextOrderInDeck(cardsQuery.data) : ORDER_STEP;
 
   const initialValues: CardFormValues = {
     question: '',
@@ -186,37 +146,23 @@ export function NewCardPage() {
     difficulty: 2,
     orderInDeck: nextOrder,
     revision: 1,
+    topic: '',
   };
 
   async function handleSubmit(
     values: CardFormValues,
   ): Promise<{ ok: boolean; error?: string }> {
-    // Coerced to numbers here, so a string never reaches validation.
-    const difficulty =
-      typeof values.difficulty === 'number'
-        ? values.difficulty
-        : Number(values.difficulty) || 2;
-    const orderInDeck =
-      typeof values.orderInDeck === 'number'
-        ? values.orderInDeck
-        : Number(values.orderInDeck) || 1;
+    // buildCardBody trims and coerces every field the form collects, so a string
+    // never reaches validation and a cleared optional text field is sent as ''.
+    // topic goes beside the builder (F20 pins that the builder never carries it)
+    // and only when non-empty: on create there is nothing to clear, so the key
+    // stays absent otherwise. mcq is never sent from the form.
+    const trimmedTopic = values.topic.trim();
     const { result } = await createCardMutation.mutateAsync({
+      ...buildCardBody(values),
+      ...(trimmedTopic ? { topic: trimmedTopic } : {}),
       deckId: Number(deck.id),
       stableUid: values.stableUid,
-      question: values.question.trim(),
-      explanation: values.explanation?.trim() || undefined,
-      realWorldUsage: values.realWorldUsage?.trim() || undefined,
-      codeSnippet: values.codeSnippet || undefined,
-      codeLanguage: values.codeLanguage || undefined,
-      difficulty,
-      orderInDeck,
-      // Forwarded now that the client type carries it. The form has validated
-      // this field all along; a rule that guards a value nobody sends is not a
-      // safety net, it is a claim that something is being protected.
-      revision:
-        typeof values.revision === 'number' && Number.isFinite(values.revision)
-          ? values.revision
-          : 1,
     });
 
     if (!result.success) {
@@ -226,38 +172,46 @@ export function NewCardPage() {
       };
     }
 
+    // A successful create is not a discard: allow the navigation that follows it
+    // before it fires, so the guard does not ask about the card we just saved.
+    guard.allowNextNavigation();
     navigate(`/decks/cards?deckId=${deck.id}`, { replace: true });
     return { ok: true };
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · <span className="font-mono">{deck.slug}</span>
-            </p>
-          </div>
-          <Link
-            to={`/decks/cards?deckId=${deck.id}`}
-            className="text-sm text-indigo-600 hover:text-indigo-800"
-          >
-            ← Back to Cards
-          </Link>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · New card"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {deck.title} · <span className="font-mono">{deck.slug}</span>
+          </p>
         </div>
-      </header>
+        <Link
+          to={`/decks/cards?deckId=${deck.id}`}
+          className="text-sm text-indigo-600 hover:text-indigo-800"
+        >
+          ← Back to Cards
+        </Link>
+      </div>
 
-      <main className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl mx-auto px-4 py-6">
         <CardForm
           mode="create"
           deck={deck}
           initialValues={initialValues}
           onSubmit={handleSubmit}
           onCancel={() => navigate(-1)}
+          onDirtyChange={setDirty}
         />
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

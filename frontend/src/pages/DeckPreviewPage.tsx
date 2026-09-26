@@ -1,46 +1,17 @@
 // src/pages/DeckPreviewPage.tsx
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { fetchDeckById, fetchCardsByDeck } from '../api/authoring';
-import type { Deck } from '../types/deck';
-import type { Card } from '../types/card';
-
-type DeckExportCard = {
-  StableUid: string;
-  OrderInDeck: number;
-  Difficulty: number;
-  Question: string;
-  Explanation: string | null;
-  CodeSnippet: string | null;
-  RealWorldUsage?: string | null;
-  CodeLanguage: string | null;
-  Revision?: number;
-};
-
-type DeckExport = {
-  Slug: string;
-  Version: string;
-  Title: string;
-  Locale: string;
-  DeckType: number;
-  IsFreeStarter: boolean;
-  TotalCards: number;
-  FreeCardCount: number;
-  Cards: DeckExportCard[];
-};
-
-function isNonEmptyString(v: unknown): v is string {
-  return typeof v === 'string' && v.trim().length > 0;
-}
-
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v);
-}
-
-function isValidSemver(v: string): boolean {
-  return /^(?:\d+\.){2}\d+(?:[+-][0-9A-Za-z.-]+)?$/.test(v.trim());
-}
+import { useCards } from '../hooks/useCards';
+import { useDeck } from '../hooks/useDecks';
+import {
+  buildDeckExportPreview,
+  validateDeckExportLikeMobile,
+  type DeckExportPreview,
+} from '../lib/deckExportPreview';
+import { CONSOLE_NAME } from '../lib/brand';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 
 async function copyToClipboard(text: string) {
   if (navigator.clipboard && (window.isSecureContext || location.hostname === 'localhost')) {
@@ -71,60 +42,6 @@ function downloadText(filename: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
-function validateDeckExportLikeMobile(model: DeckExport | null) {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-
-  if (!model) {
-    errors.push('No model generated.');
-    return { errors, warnings };
-  }
-
-  if (!isNonEmptyString(model.Slug)) errors.push('Deck.Slug is required.');
-  if (!isNonEmptyString(model.Version)) errors.push('Deck.Version is required.');
-  if (isNonEmptyString(model.Version) && !isValidSemver(model.Version)) {
-    warnings.push(`Deck.Version "${model.Version}" is not strict semver (recommended).`);
-  }
-
-  if (!Array.isArray(model.Cards)) errors.push('Deck.Cards must be an array.');
-
-  const seenUid = new Set<string>();
-  const seenOrder = new Set<number>();
-
-  for (let i = 0; i < model.Cards.length; i++) {
-    const c = model.Cards[i];
-    const idx = i + 1;
-
-    if (!isNonEmptyString(c.StableUid)) errors.push(`Card #${idx}: StableUid is required.`);
-    if (!isFiniteNumber(c.OrderInDeck)) errors.push(`Card #${idx}: OrderInDeck must be a number.`);
-
-    if (isNonEmptyString(c.StableUid)) {
-      if (seenUid.has(c.StableUid)) errors.push(`Duplicate StableUid: "${c.StableUid}"`);
-      seenUid.add(c.StableUid);
-    }
-
-    if (isFiniteNumber(c.OrderInDeck)) {
-      if (seenOrder.has(c.OrderInDeck)) errors.push(`Duplicate OrderInDeck: ${c.OrderInDeck}`);
-      seenOrder.add(c.OrderInDeck);
-      if (c.OrderInDeck <= 0) warnings.push(`Card "${c.StableUid}": OrderInDeck should be > 0.`);
-    }
-
-    if (!isNonEmptyString(c.Question)) warnings.push(`Card "${c.StableUid}": Question is empty.`);
-    if (!isFiniteNumber(c.Difficulty) || c.Difficulty < 1 || c.Difficulty > 3) {
-      warnings.push(`Card "${c.StableUid}": Difficulty should be 1..3.`);
-    }
-  }
-
-  if (model.TotalCards !== model.Cards.length) {
-    warnings.push(`TotalCards(${model.TotalCards}) != Cards.length(${model.Cards.length}).`);
-  }
-  if (model.FreeCardCount > model.TotalCards) {
-    warnings.push(`FreeCardCount(${model.FreeCardCount}) > TotalCards(${model.TotalCards}).`);
-  }
-
-  return { errors, warnings };
-}
-
 export function DeckPreviewPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -132,128 +49,31 @@ export function DeckPreviewPage() {
   const deckIdRaw = searchParams.get('deckId') ?? '';
   const deckId = Number(deckIdRaw);
   const invalidDeckId = !deckId || Number.isNaN(deckId);
+  const queryDeckId = invalidDeckId ? Number.NaN : deckId;
 
-  const [loading, setLoading] = useState(!invalidDeckId);
-  const [deck, setDeck] = useState<Deck | null>(null);
-  const [cards, setCards] = useState<Card[]>([]);
-  const [error, setError] = useState<string | null>(invalidDeckId ? 'Missing or invalid deckId.' : null);
+  // The deck and its cards come through the shared cache; both are read here
+  // rather than fetched by hand, so opening the preview after the card list does
+  // not download the whole deck again inside the staleTime window.
+  const deckQuery = useDeck(queryDeckId);
+  const cardsQuery = useCards(queryDeckId);
 
   const [copied, setCopied] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (invalidDeckId) return;
+  const deck = deckQuery.data ?? null;
+  // Memoised so the empty-list fallback is a stable reference: exportModel's
+  // useMemo lists it, and a fresh [] each render would recompute the export on
+  // every render for a deck that has no cards.
+  const cards = useMemo(() => cardsQuery.data ?? [], [cardsQuery.data]);
 
-    let cancelled = false;
-
-    async function load() {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const [deckRes, cardsRes] = await Promise.all([fetchDeckById(deckId), fetchCardsByDeck(deckId)]);
-        if (cancelled) return;
-
-        if (!deckRes.success || !deckRes.data) {
-          setDeck(null);
-          setCards([]);
-          setError(deckRes.error?.message ?? 'Deck not found.');
-          setLoading(false);
-          return;
-        }
-
-        if (!cardsRes.success) {
-          setDeck(deckRes.data);
-          setCards([]);
-          setError(cardsRes.error?.message ?? 'Failed to load cards.');
-          setLoading(false);
-          return;
-        }
-
-        setDeck(deckRes.data);
-        setCards(cardsRes.data ?? []);
-        setLoading(false);
-      } catch (e: unknown) {
-        if (cancelled) return;
-        setDeck(null);
-        setCards([]);
-        setError(e instanceof Error ? e.message : 'Network error.');
-        setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [deckId, invalidDeckId]);
-
-  const exportModel: DeckExport | null = useMemo(() => {
-    if (!deck) return null;
-
-    const liveCards = cards
-      .filter(c => (c.isDeleted ?? 0) === 0)
-      .slice()
-      .sort((a, b) => a.orderInDeck - b.orderInDeck);
-
-    const totalCards = liveCards.length;
-
-    // Preview is pinned to 0.0.0 by decision: it is not a published build.
-    const version = '0.0.0';
-
-    const isFreeStarter =
-      typeof deck.isFreeStarter === 'boolean' ? deck.isFreeStarter : deck.deckType === 1;
-
-    const freeCardCountRaw = deck.freeCardCount;
-    const freeCardCountCandidate =
-      deck.deckType === 1
-        ? totalCards
-        : Number.isFinite(freeCardCountRaw)
-          ? Number(freeCardCountRaw)
-          : 50;
-
-    const freeCardCount = Math.max(0, Math.min(freeCardCountCandidate, totalCards));
-
-    const Cards: DeckExportCard[] = liveCards.map(c => {
-      const explanation = c.explanation?.trim() ? c.explanation : null;
-      const codeSnippet = c.codeSnippet?.trim() ? c.codeSnippet : null;
-      const codeLanguage = c.codeLanguage?.trim() ? c.codeLanguage : null;
-
-      const realWorld = c.realWorldUsage ?? null;
-      const realWorldUsage =
-        typeof realWorld === 'string' && realWorld.trim().length > 0 ? realWorld : null;
-
-      const revision = c.revision ?? null;
-
-      return {
-        StableUid: c.stableUid,
-        OrderInDeck: c.orderInDeck,
-        Difficulty: isFiniteNumber(c.difficulty) ? c.difficulty : 2,
-        Question: c.question ?? '',
-        Explanation: explanation,
-        CodeSnippet: codeSnippet,
-        RealWorldUsage: realWorldUsage,
-        CodeLanguage: codeLanguage,
-        ...(Number.isFinite(revision) ? { Revision: Number(revision) } : {}),
-      };
-    });
-
-    return {
-      Slug: deck.slug,
-      Version: version,
-      Title: deck.title,
-      Locale: deck.locale,
-      DeckType: deck.deckType,
-      IsFreeStarter: !!isFreeStarter,
-      TotalCards: totalCards,
-      FreeCardCount: freeCardCount,
-      Cards,
-    };
-  }, [deck, cards]);
+  const exportModel: DeckExportPreview | null = useMemo(
+    () => (deck ? buildDeckExportPreview(deck, cards) : null),
+    [deck, cards],
+  );
 
   const { errors, warnings } = useMemo(() => validateDeckExportLikeMobile(exportModel), [exportModel]);
   const exportJson = useMemo(() => (exportModel ? JSON.stringify(exportModel, null, 2) : ''), [exportModel]);
 
-  if (loading) {
+  if (!invalidDeckId && (deckQuery.isPending || cardsQuery.isPending)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-slate-600 text-lg">Loading preview...</div>
@@ -261,24 +81,43 @@ export function DeckPreviewPage() {
     );
   }
 
+  // Any failure — the deck, the cards, or an unusable deckId — collapses to one
+  // error string and the same red box the hand-rolled version showed. A cards
+  // failure still takes the whole screen rather than a half-built preview.
+  const error = invalidDeckId
+    ? 'Missing or invalid deckId.'
+    : deckQuery.isError || !deck
+      ? deckQuery.error instanceof Error
+        ? deckQuery.error.message
+        : 'Deck not found.'
+      : cardsQuery.isError
+        ? cardsQuery.error instanceof Error
+          ? cardsQuery.error.message
+          : 'Failed to load cards.'
+        : null;
+
   if (error || !deck) {
     return (
-      <div className="min-h-screen bg-slate-100">
-        <header className="bg-white border-b border-slate-200">
-          <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-slate-800">Deck Preview</h1>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← Back to Decks
-            </Link>
-          </div>
-        </header>
+      <ConsoleShell
+        title={CONSOLE_NAME}
+        subtitle="Authoring · Preview"
+        decksHref="/"
+        contentIntelligenceHref="/content-intelligence"
+        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      >
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold text-slate-800">Deck Preview</h1>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← Back to Decks
+          </Link>
+        </div>
 
-        <main className="max-w-4xl mx-auto px-4 py-6">
+        <div className="max-w-4xl mx-auto px-4 py-6">
           <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
             {error ?? 'Failed to load.'}
           </div>
-        </main>
-      </div>
+        </div>
+      </ConsoleShell>
     );
   }
 
@@ -286,32 +125,43 @@ export function DeckPreviewPage() {
   const deletedCount = Math.max(0, cards.length - liveCount);
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">Deck Preview</h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · <span className="font-mono">{deck.slug}</span> · {deck.locale}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              className="text-sm text-slate-600 hover:text-slate-800"
-              onClick={() => navigate(-1)}
-            >
-              ← Back
-            </button>
-            <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-              Decks
-            </Link>
-          </div>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Preview"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">Deck Preview</h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {deck.title} · <span className="font-mono">{deck.slug}</span> · {deck.locale}
+          </p>
         </div>
-      </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-6 space-y-4">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            className="text-sm text-slate-600 hover:text-slate-800"
+            onClick={() => navigate(-1)}
+          >
+            ← Back
+          </button>
+          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+            Decks
+          </Link>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900">
+          <div className="font-semibold">Approximate preview</div>
+          <p className="mt-1">
+            Built in this browser from the deck and its cards. The published deck.json is produced by the publish worker: its Version is the build id (shown here as 0.0.0), and other details can differ.
+          </p>
+        </div>
+
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono">
@@ -410,12 +260,12 @@ export function DeckPreviewPage() {
         </div>
 
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
-          <h2 className="text-sm font-semibold text-slate-800">DeckExport JSON</h2>
+          <h2 className="text-sm font-semibold text-slate-800">Approximate deck.json</h2>
           <pre className="mt-2 text-xs bg-slate-950 text-slate-100 rounded p-3 overflow-auto">
             {exportJson}
           </pre>
         </div>
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

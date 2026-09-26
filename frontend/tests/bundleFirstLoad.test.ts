@@ -47,8 +47,13 @@ const FRONTEND = fileURLToPath(new URL('..', import.meta.url));
  * this cap sits a few percent above it, tight enough that the three regressions
  * reproduced during this step (an eager page import, a naive vendor
  * manualChunks, and keeping DeckListPage synchronous) all exceed it.
+ *
+ * F31 (2026-09-27): +55.6 kB raw for react-router's data router
+ * (createBrowserRouter/RouterProvider), required by useBlocker for the
+ * unsaved-changes guard; measured 310,441 -> 366,033. Raised to measured+10k,
+ * rounded up to the next 1,000.
  */
-const FIRST_LOAD_BUDGET_BYTES = 320_000;
+const FIRST_LOAD_BUDGET_BYTES = 377_000;
 
 /**
  * The login page's real download, static closure plus the module-scope prefetch.
@@ -81,8 +86,13 @@ const FIRST_LOAD_BUDGET_BYTES = 320_000;
  *
  * The first-load budget below was NOT moved: that closure went 308,582 ->
  * 310,280 against a 320,000 cap and still fits.
+ *
+ * F31 (2026-09-27): +55.6 kB raw for react-router's data router
+ * (createBrowserRouter/RouterProvider), required by useBlocker for the
+ * unsaved-changes guard; measured 418,085 -> 473,677. Raised to measured+10k,
+ * rounded up to the next 1,000.
  */
-const EAGER_BUDGET_BYTES = 418_000;
+const EAGER_BUDGET_BYTES = 484_000;
 
 /**
  * Floor, so a parser that degenerates to an empty or near-empty set cannot make

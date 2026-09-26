@@ -14,7 +14,7 @@ public static class Cards
     if (deny is not null) return deny;
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
     var isSuperAdmin = auth.IsSuperAdmin;
     var adminSub = auth.UserSub;
@@ -301,14 +301,21 @@ public static class Cards
           new("isDeleted", "is_deleted", v => Helpers.ParseBoolean(v, false) ? 1 : 0),
         };
 
+        var fullSpec = spec;
         if (!isSuperAdmin)
         {
           // editors: restrict moving deck, deleting, and changing stableUid (progress key)
           spec = spec.Where(f => f.BodyKey is not ("deckId" or "isDeleted" or "stableUid")).ToList();
         }
+        var ignoredFields = Helpers.IgnoredFields(body, fullSpec, spec);
 
         var (fields, parameters) = Helpers.BuildUpdateSet(body, spec);
-        if (fields.Count == 1) return res.BadRequest("VALIDATION_ERROR", "No fields to update");
+        if (fields.Count == 1)
+        {
+          return ignoredFields.Count > 0
+            ? res.BadRequest("VALIDATION_ERROR", $"No fields to update (ignored for your role: {string.Join(", ", ignoredFields)})")
+            : res.BadRequest("VALIDATION_ERROR", "No fields to update");
+        }
 
         // version++ (insert before updated_at)
         var updatedAtIndex = fields.Count - 1;
@@ -346,10 +353,11 @@ public static class Cards
         {
           var check = await DbUtil.QueryAsync(conn, null, "select version from cards where id = $1", [idInt]);
           if (check.Count == 0) return res.NotFound("Card not found");
-          return res.BadRequest("VERSION_CONFLICT", "Card has been modified by another user. Please reload and try again.");
+          return Helpers.ErrorEnvelope(res, 409, "VERSION_CONFLICT", "Card has been modified by another user. Please reload and try again.");
         }
 
         Helpers.JsonbCell(rows[0], "mcq");
+        if (ignoredFields.Count > 0) rows[0]["ignoredFields"] = ignoredFields;
         return res.Ok(rows[0]);
       }
       catch (McqValidationError ex)

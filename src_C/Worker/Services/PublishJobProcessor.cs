@@ -38,9 +38,9 @@ public class PublishJobProcessor : IPublishJobProcessor
       // duplicate delivery of a finished job — acknowledge it. Otherwise the row is PROCESSING
       // and not yet stale, so another container may still hold it: fail the item so SQS keeps it.
       var row = await _jobRepository.GetJobAsync(jobId);
-      if (row is null || row.Status == "SUCCESS")
+      if (row is null || row.Status is "SUCCESS" or "FAILED")
       {
-        Console.WriteLine($"[JobId={jobId}] Job already completed or unknown; acknowledging replay");
+        Console.WriteLine($"[JobId={jobId}] Job already finished ({row?.Status ?? "absent"}); acknowledging replay");
         return;
       }
       throw new JobNotAcquiredException(jobId);
@@ -82,7 +82,7 @@ public class PublishJobProcessor : IPublishJobProcessor
     await _contentArtifacts.GenerateAsync(job, deckData, uploadResult);
 
     // Step 5: 最终一致性提交
-    await _jobRepository.CompleteJobAsync(jobId);
+    await _jobRepository.CompleteJobAsync(jobId, deckData.Cards.Count);
 
     Console.WriteLine($"[JobId={jobId}] Job completed successfully");
   }
@@ -91,6 +91,8 @@ public class PublishJobProcessor : IPublishJobProcessor
   {
     await _jobRepository.FailJobAsync(jobId, errorMessage);
   }
+
+  public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
 
   /// <summary>
   /// 从数据库加载卡组数据
@@ -133,7 +135,7 @@ public class PublishJobProcessor : IPublishJobProcessor
       Locale = Convert.ToString(deck.TryGetValue("locale", out var lo) ? lo : null, CultureInfo.InvariantCulture) ?? "en-US",
       DeckType = deckType,
       Version = Convert.ToString(deck.TryGetValue("version", out var ver) ? ver : null, CultureInfo.InvariantCulture) ?? "1",
-      TotalCards = Convert.ToInt32(deck.TryGetValue("totalCards", out var tc) ? tc : cards.Count, CultureInfo.InvariantCulture),
+      TotalCards = cards.Count,
       Cards = cards
     };
   }

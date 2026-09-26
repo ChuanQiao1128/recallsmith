@@ -1,14 +1,23 @@
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useDeck } from '../hooks/useDecks';
 import { useCards, useDeleteCard } from '../hooks/useCards';
 import { ApiFailureError, NOT_FOUND } from '../api/errors';
 import { parseDeckId } from '../lib/parseDeckId';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
+import { CONSOLE_NAME } from '../lib/brand';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 import { RarityBadge } from '../components/RarityBadge';
 import { RarityDistribution } from '../components/RarityDistribution';
 import { ErrorBannerList } from '../components/ui/ErrorBanner';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
+import {
+  DEFAULT_CARD_LIST_CRITERIA,
+  filterAndSortCards,
+  formatCardDate,
+  isCriteriaActive,
+} from '../lib/cardListFilter';
+import type { CardListCriteria } from '../lib/cardListFilter';
 import {
   emptyErrorFeed,
   clearNotice,
@@ -49,17 +58,21 @@ function LoadFailureScreen({
   onRetry?: () => void;
 }) {
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-slate-800">Deck Cards</h1>
-          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-            ← Back to Decks
-          </Link>
-        </div>
-      </header>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Cards"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold text-slate-800">Deck Cards</h1>
+        <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+          ← Back to Decks
+        </Link>
+      </div>
 
-      <main className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-4xl mx-auto px-4 py-6">
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
           <div className="font-semibold mb-1">Failed to load cards</div>
           <div className="text-sm">{message}</div>
@@ -78,8 +91,8 @@ function LoadFailureScreen({
             </button>
           ) : null}
         </div>
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }
 
@@ -110,6 +123,25 @@ export function CardListPage() {
 
   const [errors, setErrors] = useState<ErrorNotice[]>(emptyErrorFeed);
   const confirm = useConfirm();
+
+  // Filter/sort state lives in the component only — no URL, no persistence. The
+  // search term is deferred so a fast typist never waits on a 441-row re-filter,
+  // and the visible list is memoised on exactly what filterAndSortCards reads,
+  // so a keystroke that does not change the result does not rebuild the table.
+  // These sit above every early return with the other hooks: the rules of hooks
+  // do not survive a filter bar that only exists once the cards have loaded.
+  const [criteria, setCriteria] = useState<CardListCriteria>(DEFAULT_CARD_LIST_CRITERIA);
+  const deferredQuery = useDeferredValue(criteria.query);
+  const visibleCards = useMemo(
+    () =>
+      filterAndSortCards(cardsQuery.data ?? [], {
+        query: deferredQuery,
+        kind: criteria.kind,
+        difficulty: criteria.difficulty,
+        sort: criteria.sort,
+      }),
+    [cardsQuery.data, deferredQuery, criteria.kind, criteria.difficulty, criteria.sort],
+  );
 
   async function handleDelete(cardId: number) {
     if (!superAdmin) return;
@@ -210,23 +242,36 @@ export function CardListPage() {
   const deck = deckQuery.data;
   const cards = cardsQuery.data;
 
-  return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">
-              Cards · <span className="font-mono text-base">{deck.slug}</span>
-            </h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · {deck.locale} · {deck.deckType === 1 ? 'Starter Deck' : 'Paid Deck'}
-            </p>
-          </div>
+  // One option per difficulty actually present in the deck, ascending. Building
+  // it from the full `cards` (not the filtered set) keeps every choice reachable
+  // no matter what the current filter has narrowed the table down to.
+  const difficulties = Array.from(new Set(cards.map(card => card.difficulty))).sort(
+    (a, b) => a - b,
+  );
+  const filtersActive = isCriteriaActive(criteria);
 
-          <div className="flex items-center gap-3">
-            <Link to="/" className="text-sm text-slate-600 hover:text-slate-800">
-              ← Back to Decks
-            </Link>
+  return (
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Cards"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">
+            Cards · <span className="font-mono text-base">{deck.slug}</span>
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {deck.title} · {deck.locale} · {deck.deckType === 1 ? 'Starter Deck' : 'Paid Deck'}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Link to="/" className="text-sm text-slate-600 hover:text-slate-800">
+            ← Back to Decks
+          </Link>
 
             <button
               type="button"
@@ -256,10 +301,9 @@ export function CardListPage() {
               + New Card
             </button>
           </div>
-        </div>
-      </header>
+      </div>
 
-      <main className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-4xl mx-auto px-4 py-6">
         {/* Failed deletes land here rather than in a modal dialog, so the row
             the user was working on stays visible and clickable. */}
         {errors.length > 0 && (
@@ -274,7 +318,81 @@ export function CardListPage() {
         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-800">Card List</h2>
-            <span className="text-xs text-slate-500">{cards.length} cards</span>
+            <div className="flex items-center gap-3">
+              {filtersActive ? (
+                <span data-testid="card-list-visible-count" className="text-xs text-slate-500">
+                  Showing {visibleCards.length} of {cards.length} cards
+                </span>
+              ) : null}
+              <span className="text-xs text-slate-500">{cards.length} cards</span>
+            </div>
+          </div>
+
+          <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
+            <input
+              type="search"
+              aria-label="Search cards"
+              placeholder="Search uid, question or topic"
+              value={criteria.query}
+              onChange={e => setCriteria(prev => ({ ...prev, query: e.target.value }))}
+              className="flex-1 min-w-[12rem] text-sm px-3 py-1.5 rounded-md border border-slate-300
+                         focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+
+            <select
+              aria-label="Card type"
+              value={criteria.kind}
+              onChange={e =>
+                setCriteria(prev => ({ ...prev, kind: e.target.value as CardListCriteria['kind'] }))
+              }
+              className="text-sm px-2 py-1.5 rounded-md border border-slate-300 text-slate-700"
+            >
+              <option value="all">All types</option>
+              <option value="mcq">MCQ</option>
+              <option value="qa">Q&amp;A</option>
+            </select>
+
+            <select
+              aria-label="Difficulty"
+              value={criteria.difficulty === 'all' ? 'all' : String(criteria.difficulty)}
+              onChange={e =>
+                setCriteria(prev => ({
+                  ...prev,
+                  difficulty: e.target.value === 'all' ? 'all' : Number(e.target.value),
+                }))
+              }
+              className="text-sm px-2 py-1.5 rounded-md border border-slate-300 text-slate-700"
+            >
+              <option value="all">All difficulties</option>
+              {difficulties.map(difficulty => (
+                <option key={difficulty} value={String(difficulty)}>
+                  {difficulty}
+                </option>
+              ))}
+            </select>
+
+            <select
+              aria-label="Sort cards"
+              value={criteria.sort}
+              onChange={e =>
+                setCriteria(prev => ({ ...prev, sort: e.target.value as CardListCriteria['sort'] }))
+              }
+              className="text-sm px-2 py-1.5 rounded-md border border-slate-300 text-slate-700"
+            >
+              <option value="order">Deck order</option>
+              <option value="updated">Recently updated</option>
+              <option value="difficulty">Difficulty</option>
+            </select>
+
+            {filtersActive ? (
+              <button
+                type="button"
+                className="text-sm px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+                onClick={() => setCriteria(DEFAULT_CARD_LIST_CRITERIA)}
+              >
+                Clear filters
+              </button>
+            ) : null}
           </div>
 
           <div className="overflow-x-auto">
@@ -299,8 +417,14 @@ export function CardListPage() {
                       No cards yet. Click &quot;New Card&quot; to add the first one.
                     </td>
                   </tr>
+                ) : visibleCards.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-6 text-center text-slate-500 text-sm">
+                      No cards match these filters.
+                    </td>
+                  </tr>
                 ) : (
-                  cards.map(card => (
+                  visibleCards.map(card => (
                     <tr
                       key={card.id}
                       className="border-b border-slate-100 hover:bg-slate-50 transition-colors"
@@ -312,8 +436,8 @@ export function CardListPage() {
                         <RarityBadge difficulty={card.difficulty} />
                         {card.mcq ? <span data-testid="card-mcq-badge" className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border bg-slate-100 text-slate-700 border-slate-200">MCQ</span> : null}
                       </td>
-                      <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.createdAt).toLocaleString()}</td>
-                      <td className="px-3 py-2 text-slate-500 text-xs">{new Date(card.updatedAt).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-slate-500 text-xs">{formatCardDate(card.createdAt)}</td>
+                      <td className="px-3 py-2 text-slate-500 text-xs">{formatCardDate(card.updatedAt)}</td>
                       <td className="px-3 py-2 text-slate-700">{card.orderInDeck}</td>
 
                       <td className="px-3 py-2 text-slate-700 text-xs">
@@ -355,7 +479,7 @@ export function CardListPage() {
             </div>
           ) : null}
         </div>
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }

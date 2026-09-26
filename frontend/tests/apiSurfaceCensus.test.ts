@@ -36,13 +36,15 @@
 //   * a name VANISHES from the list -> someone paid debt down. Remove it here,
 //     in the same change.
 //
-// WHY THE LIST IS NOT EMPTY
+// WHY THE LIST IS EMPTY
 //
-// The four entries are older than this file and unrelated to the hook deletion.
-// They were left alone on purpose: this change was scoped to the cascade, and
-// deleting four more exports on the way past would have made the diff harder to
-// review than the thing it was reviewing. They are recorded rather than fixed,
-// which is the difference between a known balance and an unknown one.
+// It used to carry four entries — fetchPermissions, updatePermission,
+// bulkUpdatePermissions and checkPublishJobStatus — real endpoints with no page
+// behind them, recorded rather than fixed while the cascade cleanup stayed
+// scoped. F22 (CFE-21) deleted all four from src/api/authoring.ts, so the
+// outstanding balance is now zero. A name reappearing here means a deletion
+// elsewhere just orphaned an export again; wire it up or delete it, do not
+// re-add it here.
 
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -59,22 +61,11 @@ const AUTHORING = join(SRC_ROOT, 'api', 'authoring.ts');
 /**
  * Exports of src/api/authoring.ts that nothing imports, sorted.
  *
- * Every entry predates the 2026-08 hook deletion and is unrelated to it. Each
- * one is a real endpoint with no page behind it:
- *
- *   fetchPermissions / updatePermission / bulkUpdatePermissions
- *       The per-deck permission endpoints. AdminUsersPage manages group
- *       membership, not per-deck grants, so nothing reaches these.
- *   checkPublishJobStatus
- *       Single-job status polling. DeckListPage polls fetchPublishJobs (the
- *       whole list) on an interval instead, so the per-job call has no caller.
+ * Empty since F22 (CFE-21) deleted the four dead endpoints —
+ * fetchPermissions, updatePermission, bulkUpdatePermissions and
+ * checkPublishJobStatus — that used to sit here with no page behind them.
  */
-const EXPECTED_DANGLING = [
-  'bulkUpdatePermissions',
-  'checkPublishJobStatus',
-  'fetchPermissions',
-  'updatePermission',
-];
+const EXPECTED_DANGLING: string[] = [];
 
 /**
  * SCOPE: this module only, not all of src/.
@@ -120,7 +111,7 @@ const imported = namesImportedFrom(consumers, 'authoring', 'src/api/authoring.ts
 const dangling = exported.filter(name => !imported.has(name)).sort();
 
 describe('exports of src/api/authoring.ts that nothing imports', () => {
-  it('are exactly the four that predate the hook deletion', () => {
+  it('are none: the four old dead exports were deleted', () => {
     // A new name here means a deletion elsewhere just orphaned an export.
     expect(dangling).toEqual(EXPECTED_DANGLING);
   });

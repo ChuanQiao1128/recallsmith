@@ -6,9 +6,9 @@ namespace RecallSmith.Lambda.Worker.Repositories;
 public interface IContentArtifactsRepository
 {
   /// <summary>
-  /// 查找同 slug 最近一次 SUCCESS 的构建（当前任务处于 PROCESSING，天然被排除）
+  /// 查找同 deck_id 最近一次 SUCCESS 的构建（当前任务处于 PROCESSING，天然被排除）
   /// </summary>
-  Task<PreviousBuildInfo?> GetLatestSuccessBuildAsync(string deckSlug);
+  Task<PreviousBuildInfo?> GetLatestSuccessBuildAsync(long deckId);
 
   /// <summary>
   /// 记录本次构建 deck.json 的 sha256 / 字节数 / package.json 相对路径（migration 011 之后可用）
