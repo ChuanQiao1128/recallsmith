@@ -136,7 +136,7 @@ export function packSlotInStage(width: number, height: number): StageRect {
  * The burst's elapsed time to feed `particlePose`, as a one-shot timeline (MGACHA-01): `-1`
  * before a burst has fired (`!(burstElapsedMs >= 0)`, so NaN also reads as "no burst"), otherwise
  * `Math.min(burstElapsedMs, lifeMs)` — a finished burst clamps at `lifeMs`, where `particlePose`
- * is already invisible, so it never restarts (the old `% RAY_REVOLUTION_MS` clock replayed it).
+ * is already invisible, so it never restarts (the old repeating-clock modulo replayed it).
  */
 export function burstParticleElapsed(burstElapsedMs: number, lifeMs: number): number {
   'worklet';

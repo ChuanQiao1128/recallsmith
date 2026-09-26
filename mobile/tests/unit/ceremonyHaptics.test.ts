@@ -121,14 +121,17 @@ describe('ceremonyHaptics', () => {
     expect(h.selectionAsync).not.toHaveBeenCalled();
     c.impact('soft');
     expect(h.impactAsync).toHaveBeenCalledTimes(2);
+    c.impact('soft');
+    expect(h.impactAsync).toHaveBeenCalledTimes(3);
+    // success is exempt: it fires even with the impact window already full.
     c.success();
     expect(h.notificationAsync).toHaveBeenCalledTimes(1);
     t = 10;
     c.impact('soft');
-    expect(h.impactAsync).toHaveBeenCalledTimes(2);
+    expect(h.impactAsync).toHaveBeenCalledTimes(3);
     t = 1000;
     c.impact('soft');
-    expect(h.impactAsync).toHaveBeenCalledTimes(3);
+    expect(h.impactAsync).toHaveBeenCalledTimes(4);
   });
 
   it('dropped calls do not consume limiter slots under reduce motion', () => {
