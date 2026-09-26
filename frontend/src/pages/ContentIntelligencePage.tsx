@@ -1,5 +1,4 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 
 import {
   fetchContentIntelligence,
@@ -7,9 +6,7 @@ import {
   type ContentIntelligenceCard,
   type ContentIntelligenceData,
 } from '../api/authoring';
-import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
-import { clearStoredTokens } from '../auth/tokenStore';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import type { Deck } from '../types/deck';
 
@@ -88,7 +85,6 @@ function suggestedAction(card: ContentIntelligenceCard) {
 }
 
 export function ContentIntelligencePage() {
-  const navigate = useNavigate();
   const user = useMemo(() => readSessionUser(), []);
   const superAdmin = useMemo(() => isSuperAdmin(user), [user]);
 
@@ -183,15 +179,6 @@ export function ContentIntelligencePage() {
     };
   }, []);
 
-  function handleSignOut() {
-    clearStoredTokens();
-    try {
-      window.location.assign(buildLogoutUrl());
-    } catch {
-      navigate('/login', { replace: true });
-    }
-  }
-
   const cards = state.data?.cards ?? [];
   const topCards = cards.slice(0, 20);
   const summary = state.data?.summary;
@@ -207,7 +194,6 @@ export function ContentIntelligencePage() {
       subtitle="Difficulty Calibration · Content Quality"
       userLabel={user ? `${user.email ?? user.username ?? 'Signed in'}${superAdmin ? ' · super_admin' : ' · editor'}` : '—'}
       superAdmin={superAdmin}
-      onSignOut={handleSignOut}
       decksHref="/"
       adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >

@@ -5,6 +5,8 @@ import { useCards, useDeleteCard } from '../hooks/useCards';
 import { ApiFailureError, NOT_FOUND } from '../api/errors';
 import { parseDeckId } from '../lib/parseDeckId';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
+import { CONSOLE_NAME } from '../lib/brand';
+import { ConsoleShell } from '../components/console/ConsoleShell';
 import { RarityBadge } from '../components/RarityBadge';
 import { RarityDistribution } from '../components/RarityDistribution';
 import { ErrorBannerList } from '../components/ui/ErrorBanner';
@@ -56,17 +58,21 @@ function LoadFailureScreen({
   onRetry?: () => void;
 }) {
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-slate-800">Deck Cards</h1>
-          <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-            ← Back to Decks
-          </Link>
-        </div>
-      </header>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Cards"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold text-slate-800">Deck Cards</h1>
+        <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-800">
+          ← Back to Decks
+        </Link>
+      </div>
 
-      <main className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-4xl mx-auto px-4 py-6">
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
           <div className="font-semibold mb-1">Failed to load cards</div>
           <div className="text-sm">{message}</div>
@@ -85,8 +91,8 @@ function LoadFailureScreen({
             </button>
           ) : null}
         </div>
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }
 
@@ -245,22 +251,27 @@ export function CardListPage() {
   const filtersActive = isCriteriaActive(criteria);
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">
-              Cards · <span className="font-mono text-base">{deck.slug}</span>
-            </h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {deck.title} · {deck.locale} · {deck.deckType === 1 ? 'Starter Deck' : 'Paid Deck'}
-            </p>
-          </div>
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Authoring · Cards"
+      decksHref="/"
+      contentIntelligenceHref="/content-intelligence"
+      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">
+            Cards · <span className="font-mono text-base">{deck.slug}</span>
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            {deck.title} · {deck.locale} · {deck.deckType === 1 ? 'Starter Deck' : 'Paid Deck'}
+          </p>
+        </div>
 
-          <div className="flex items-center gap-3">
-            <Link to="/" className="text-sm text-slate-600 hover:text-slate-800">
-              ← Back to Decks
-            </Link>
+        <div className="flex items-center gap-3">
+          <Link to="/" className="text-sm text-slate-600 hover:text-slate-800">
+            ← Back to Decks
+          </Link>
 
             <button
               type="button"
@@ -290,10 +301,9 @@ export function CardListPage() {
               + New Card
             </button>
           </div>
-        </div>
-      </header>
+      </div>
 
-      <main className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-4xl mx-auto px-4 py-6">
         {/* Failed deletes land here rather than in a modal dialog, so the row
             the user was working on stays visible and clickable. */}
         {errors.length > 0 && (
@@ -469,7 +479,7 @@ export function CardListPage() {
             </div>
           ) : null}
         </div>
-      </main>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }
