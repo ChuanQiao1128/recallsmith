@@ -258,7 +258,9 @@ async function ensureConfigured(): Promise<void> {
     Purchases.configure({ apiKey: RC_IOS_API_KEY });
 
     try {
+      // @ts-ignore
       if (typeof Purchases.invalidateCustomerInfoCache === 'function') {
+        // @ts-ignore
         await Purchases.invalidateCustomerInfoCache();
       }
     } catch {}
@@ -368,7 +370,9 @@ export async function rcGetCustomerInfoSafe(): Promise<CustomerInfo> {
   } catch {}
 
   try {
+    // @ts-ignore
     if (typeof Purchases.invalidateCustomerInfoCache === 'function') {
+      // @ts-ignore
       await Purchases.invalidateCustomerInfoCache();
     }
   } catch {}
