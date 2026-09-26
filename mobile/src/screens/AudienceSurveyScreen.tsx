@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -7,6 +7,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { setAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
 import { completeOnboarding } from '../features/gacha/onboarding/onboardingPrefs';
 import { colors } from '../theme/colors';
+import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
 import { markPermissionPromptPending } from './PermissionPromptScreen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AudienceSurvey'>;
@@ -49,7 +50,11 @@ export function AudienceSurveyScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient colors={[colors.parchmentBg, colors.parchmentBgDeep]} style={styles.gradient}>
-        <View style={styles.container}>
+        <ScrollView
+          testID="audience-survey-scroll"
+          contentContainerStyle={[styles.container, { flexGrow: 1 }]}
+          showsVerticalScrollIndicator={false}
+        >
           <Text style={styles.eyebrow}>CONTENT PREFERENCE</Text>
           <Text style={styles.title}>Which lane should new content favor?</Text>
           <Text style={styles.body}>This only shapes new supply and draw recommendations. Due review stays intact.</Text>
@@ -74,7 +79,7 @@ export function AudienceSurveyScreen({ navigation }: Props) {
           </View>
 
           <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, saving && styles.buttonDisabled]} accessibilityRole="button" disabled={saving} onPress={() => void finish()}>
-            <Text style={styles.primaryButtonText}>{saving ? 'Saving…' : 'Finish setup'}</Text>
+            <Text style={styles.primaryButtonText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{saving ? 'Saving…' : 'Finish setup'}</Text>
           </Pressable>
 
           {/* Skip escape hatch — picks 'all' (most permissive) and
@@ -87,9 +92,9 @@ export function AudienceSurveyScreen({ navigation }: Props) {
             accessibilityRole="button"
             accessibilityLabel="Skip survey for now"
           >
-            <Text style={styles.skipLinkText}>Skip for now</Text>
+            <Text style={styles.skipLinkText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>Skip for now</Text>
           </Pressable>
-        </View>
+        </ScrollView>
       </LinearGradient>
     </SafeAreaView>
   );
@@ -100,7 +105,11 @@ export default AudienceSurveyScreen;
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
-  container: { flex: 1, paddingHorizontal: 20, paddingTop: 28, paddingBottom: 32 },
+  // No `flex: 1` here: as a ScrollView contentContainerStyle it takes
+  // `flexGrow: 1` (added at the call site) so the content fills a tall screen
+  // and `marginTop: 'auto'` still pins the CTA to the bottom, while on a short
+  // screen the content can exceed the viewport and scroll instead of clipping.
+  container: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: 32 },
   eyebrow: {
     fontSize: 11,
     fontWeight: '900',

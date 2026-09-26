@@ -5,6 +5,7 @@ import { MCQ_COPY, MCQ_TEST_IDS, mcqSelectedCount } from '../mcq/mcqConstants';
 import type { McqConfidence } from '../mcq/mcqVerdict';
 import type { McqStage } from './McqReviewBody';
 import { colors } from '../../../theme/colors';
+import { CHROME_MAX_FONT_SCALE } from '../../../theme/dynamicType';
 
 // The action dock takes over the old rating dock's slot (same default testID) and drives the three
 // stages: Show options → Sure / Not sure / I don't know → Next / Finish run. Haptics and the
@@ -49,7 +50,7 @@ export function McqActionDock(props: McqActionDockProps) {
           onPress={onShowOptions}
           style={({ pressed }) => [styles.primary, pressed && styles.pressed, disabled && styles.disabledOpacity]}
         >
-          <Text style={styles.primaryLabel} numberOfLines={1}>
+          <Text style={styles.primaryLabel} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
             {MCQ_COPY.showOptions}
           </Text>
         </Pressable>
@@ -58,7 +59,7 @@ export function McqActionDock(props: McqActionDockProps) {
       {stage === 'options' ? (
         <View>
           {requiredCount > 1 ? (
-            <Text testID={MCQ_TEST_IDS.selectedCount} numberOfLines={1} style={styles.count}>
+            <Text testID={MCQ_TEST_IDS.selectedCount} numberOfLines={1} style={styles.count} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
               {mcqSelectedCount(selectedCount, requiredCount)}
             </Text>
           ) : null}
@@ -72,7 +73,7 @@ export function McqActionDock(props: McqActionDockProps) {
               onPress={() => onSubmit('sure')}
               style={({ pressed }) => [styles.primary, styles.rowItem, styles.rowButton, pressed && styles.pressed, submitDisabled && styles.disabledOpacity]}
             >
-              <Text style={[styles.primaryLabel, styles.rowLabel]} numberOfLines={1}>
+              <Text style={[styles.primaryLabel, styles.rowLabel]} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {MCQ_COPY.sure}
               </Text>
             </Pressable>
@@ -85,7 +86,7 @@ export function McqActionDock(props: McqActionDockProps) {
               onPress={() => onSubmit('unsure')}
               style={({ pressed }) => [styles.secondary, styles.rowItem, styles.rowButton, pressed && styles.pressed, submitDisabled && styles.disabledOpacity]}
             >
-              <Text style={[styles.secondaryLabel, styles.rowLabel]} numberOfLines={1}>
+              <Text style={[styles.secondaryLabel, styles.rowLabel]} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {MCQ_COPY.unsure}
               </Text>
             </Pressable>
@@ -98,7 +99,7 @@ export function McqActionDock(props: McqActionDockProps) {
               onPress={onDontKnow}
               style={({ pressed }) => [styles.tertiary, styles.rowItem, styles.rowButton, pressed && styles.pressed, disabled && styles.disabledOpacity]}
             >
-              <Text style={[styles.tertiaryLabel, styles.rowLabel]} numberOfLines={1}>
+              <Text style={[styles.tertiaryLabel, styles.rowLabel]} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {MCQ_COPY.dontKnow}
               </Text>
             </Pressable>
@@ -115,7 +116,7 @@ export function McqActionDock(props: McqActionDockProps) {
           onPress={onNext}
           style={({ pressed }) => [styles.primary, pressed && styles.pressed, disabled && styles.disabledOpacity]}
         >
-          <Text style={styles.primaryLabel} numberOfLines={1}>
+          <Text style={styles.primaryLabel} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
             {isLastNode ? MCQ_COPY.finishRun : MCQ_COPY.next}
           </Text>
         </Pressable>

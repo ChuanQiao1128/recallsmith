@@ -523,16 +523,26 @@ describe('McqReviewBody', () => {
     for (const stage of ['stem', 'options', 'verdict'] as const) {
       const { tree } = renderBody({ mcq: mcqLong, shownOrder: mcqLong.options, stage, verdict: stage === 'verdict' ? 'wrong' : null });
 
+      // Font scaling is never disabled anywhere. Card *body* text (stem,
+      // options, explanations, why) is never capped; only chrome (letter
+      // disc, difficulty badge, kind chip, order badge) may carry a
+      // maxFontSizeMultiplier, and only at the policy multiplier (1.4).
       for (const node of texts(tree)) {
         expect(node.props.allowFontScaling).not.toBe(false);
-        expect(node.props.maxFontSizeMultiplier).toBeUndefined();
+        if (node.props.maxFontSizeMultiplier !== undefined) {
+          expect(node.props.maxFontSizeMultiplier).toBe(1.4);
+        }
       }
+
+      // Body text stays explicitly uncapped: the stem and every option text.
+      expect(textByTestId(tree, 'mcq-stem').props.maxFontSizeMultiplier).toBeUndefined();
 
       if (stage !== 'stem') {
         const optionA = textByTestId(tree, 'mcq-option-text-a');
         expect(optionA.props.children).toBe(LONG_OPTION);
         expect(optionA.props.children.length).toBe(481);
         expect(optionA.props.numberOfLines).toBeUndefined();
+        expect(optionA.props.maxFontSizeMultiplier).toBeUndefined();
       }
 
       // The only clamp above one line is the clamped lead-in (mcq-stem-lead, 2 lines),

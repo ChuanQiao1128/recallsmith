@@ -26,6 +26,7 @@ import {
 import { scheduleProgressSync } from '../sync/progressSync';
 import { a11y } from '../theme/a11y';
 import { colors } from '../theme/colors';
+import { CHROME_MAX_FONT_SCALE, packSizeForWindowHeight, useWindowHeight } from '../theme/dynamicType';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 import { PAGE_GRADIENT_LIGHT, packImageForSlug, packPaletteFromSlug, type PackPalette } from '../theme/packArt';
@@ -214,6 +215,7 @@ function PackArt({
   title,
   badgeText,
   coverImage,
+  packSize,
 }: {
   palette: PackPalette;
   bobbingValue: any;
@@ -221,11 +223,12 @@ function PackArt({
   title: string;
   badgeText: string;
   coverImage: any;
+  packSize: { width: number; height: number };
 }) {
   const translateY = hasAnimated && bobbingValue ? bobbingValue.interpolate({ inputRange: [0, 1], outputRange: [-14, 14] }) : 0;
   // Y-axis tilt so the pack's right side edge becomes visible — gives real 3D depth.
   const wobbleRotateY = hasAnimated && bobbingValue ? bobbingValue.interpolate({ inputRange: [0, 0.5, 1], outputRange: ['-7deg', '0deg', '7deg'] }) : '0deg';
-  const shineLeft = hasAnimated && shineValue ? shineValue.interpolate({ inputRange: [0, 1], outputRange: [-PACK_WIDTH * 0.6, PACK_WIDTH * 1.1] }) : -PACK_WIDTH * 0.6;
+  const shineLeft = hasAnimated && shineValue ? shineValue.interpolate({ inputRange: [0, 1], outputRange: [-packSize.width * 0.6, packSize.width * 1.1] }) : -packSize.width * 0.6;
 
   return (
     <AnimatedView
@@ -243,19 +246,20 @@ function PackArt({
         style={[
           styles.packSideEdge,
           {
+            height: packSize.height,
             backgroundColor: palette.cover[3] ?? palette.cover[0],
             transform: [{ translateX: 2.5 }, { rotateY: '-90deg' }],
           },
         ]}
       />
-      <LinearGradient colors={palette.cover} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={[styles.pack, { borderColor: palette.ring }]}>
+      <LinearGradient colors={palette.cover} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={[styles.pack, { width: packSize.width, height: packSize.height, borderColor: palette.ring }]}>
         {coverImage && RNImage ? (
           // PNG path: cover image is the complete artwork. We DO NOT layer on
           // packBadge / brand stripe / blob window / title slab — those would
           // obscure the PNG. Only the moving shine sweep stays.
           <>
             <RNImage source={coverImage} resizeMode="cover" style={StyleSheet.absoluteFillObject} pointerEvents="none" />
-            <AnimatedView pointerEvents="none" style={[styles.packShine, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
+            <AnimatedView pointerEvents="none" style={[styles.packShine, { height: packSize.height + 40 }, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
           </>
         ) : (
           // Fallback path: no PNG → render full procedural pack with brand
@@ -291,7 +295,7 @@ function PackArt({
               </Text>
             </View>
 
-            <AnimatedView pointerEvents="none" style={[styles.packShine, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
+            <AnimatedView pointerEvents="none" style={[styles.packShine, { height: packSize.height + 40 }, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
           </>
         )}
       </LinearGradient>
@@ -331,6 +335,11 @@ export function DrawScreen({ navigation, route }: Props) {
 
   const bobbingRef = useRef<any>(hasAnimated ? new A.Value(0) : null);
   const shineRef = useRef<any>(hasAnimated ? new A.Value(0) : null);
+
+  // Shrink the pack on short windows (e.g. iPhone SE) so the pack + swipe
+  // affordance + CTA all stay on screen. The swipe gesture must keep working,
+  // so the pack is resized — never wrapped in a ScrollView.
+  const packSize = packSizeForWindowHeight(useWindowHeight());
 
   useEffect(() => {
     if (route.params?.slug) {
@@ -644,12 +653,12 @@ export function DrawScreen({ navigation, route }: Props) {
                 {error ?? 'Unable to load draw chamber right now.'}
               </Text>
               <Pressable testID="screen-draw-primary-cta" style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]} onPress={() => setRetryToken((token) => token + 1)}>
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Retry
                 </Text>
               </Pressable>
               <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => goHome(navigation)}>
-                <Text style={styles.secondaryCtaText} numberOfLines={1}>
+                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Back to Home
                 </Text>
               </Pressable>
@@ -673,12 +682,12 @@ export function DrawScreen({ navigation, route }: Props) {
                 Choose a pack from Library first, then come back.
               </Text>
               <Pressable testID="screen-draw-primary-cta" style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]} onPress={() => navigation.navigate('Library')}>
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   View library
                 </Text>
               </Pressable>
               <Pressable testID="screen-draw-secondary-cta" style={({ pressed }) => [styles.secondaryCta, pressed && styles.pressed]} onPress={() => goHome(navigation)}>
-                <Text style={styles.secondaryCtaText} numberOfLines={1}>
+                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Back to Home
                 </Text>
               </Pressable>
@@ -703,10 +712,10 @@ export function DrawScreen({ navigation, route }: Props) {
               tiny text inside the pack art, which got lost. */}
           <View style={styles.header} testID="draw-header">
             <View style={styles.deckTitleWrap}>
-              <Text style={styles.deckEyebrow} numberOfLines={1}>
+              <Text style={styles.deckEyebrow} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 REWARD PACK
               </Text>
-              <Text style={styles.deckTitle} numberOfLines={1}>
+              <Text style={styles.deckTitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {ready.deckTitle}
               </Text>
             </View>
@@ -719,7 +728,7 @@ export function DrawScreen({ navigation, route }: Props) {
                 <View style={styles.pullsTokenGem} />
                 <View style={styles.pullsTokenFacet} />
               </View>
-              <Text style={styles.pullsBadgeText} numberOfLines={1}>
+              <Text style={styles.pullsBadgeText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 × {ready.walletPulls}
               </Text>
             </View>
@@ -728,7 +737,7 @@ export function DrawScreen({ navigation, route }: Props) {
           {/* Guarantee countdown. Rendered next to the pulls badge because it
               answers the question a player asks right before spending one. */}
           {ready.pityLabel ? (
-            <Text style={styles.pityProgress} testID="draw-pity-progress" numberOfLines={1}>
+            <Text style={styles.pityProgress} testID="draw-pity-progress" numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
               {ready.pityLabel}
             </Text>
           ) : null}
@@ -783,7 +792,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   its own: the 3D pack is flattened into the wrapper's plane, and the wrapper is
                   composited above the halo as a whole. No layout of its own. */}
               <View testID="draw-pack-3d-wrapper" collapsable={false} style={styles.pack3dWrapper}>
-                <PackArt palette={palette} bobbingValue={bobbingRef.current} shineValue={shineRef.current} title={ready.deckTitle} badgeText={badgeText} coverImage={coverImage} />
+                <PackArt palette={palette} bobbingValue={bobbingRef.current} shineValue={shineRef.current} title={ready.deckTitle} badgeText={badgeText} coverImage={coverImage} packSize={packSize} />
               </View>
             </View>
 
@@ -831,7 +840,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   void open(10);
                 }}
               >
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Collection complete
                 </Text>
               </Pressable>
@@ -845,7 +854,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   navigation.navigate('Library', { focusSlug: ready.slug });
                 }}
               >
-                <Text style={styles.secondaryCtaText} numberOfLines={1}>
+                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   See your collection
                 </Text>
               </Pressable>
@@ -861,7 +870,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   navigation.navigate('SessionCard', { slug: ready.slug });
                 }}
               >
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Earn pulls by studying  →
                 </Text>
               </Pressable>
@@ -904,7 +913,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   void open(10);
                 }}
               >
-                <Text style={styles.primaryCtaText} numberOfLines={1}>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Open 10
                 </Text>
               </Pressable>
@@ -918,7 +927,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   void open(1);
                 }}
               >
-                <Text style={styles.secondaryCtaText} numberOfLines={1}>
+                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Open 1
                 </Text>
               </Pressable>

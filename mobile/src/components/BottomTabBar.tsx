@@ -1,6 +1,7 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { colors } from "../theme/colors";
+import { CHROME_MAX_FONT_SCALE } from "../theme/dynamicType";
 import { MAIN_TABS, type MainTabKey } from "../navigation/mainTabs";
 
 export function BottomTabBar(props: { active: MainTabKey; navigate: (route: string, params?: any) => void }) {
@@ -28,9 +29,9 @@ export function BottomTabBar(props: { active: MainTabKey; navigate: (route: stri
               accessibilityElementsHidden
               importantForAccessibility="no-hide-descendants"
             >
-              <Text style={[styles.icon, active && styles.iconActive]}>{tab.icon}</Text>
+              <Text style={[styles.icon, active && styles.iconActive]} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{tab.icon}</Text>
             </View>
-            <Text style={[styles.label, active && styles.labelActive]}>{tab.label}</Text>
+            <Text style={[styles.label, active && styles.labelActive]} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{tab.label}</Text>
           </Pressable>
         );
       })}
@@ -102,7 +103,7 @@ const styles = StyleSheet.create({
     color: colors.gold,
   },
   label: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.3,
     color: '#8C7A5B',

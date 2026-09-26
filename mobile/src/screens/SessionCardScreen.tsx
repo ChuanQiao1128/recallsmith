@@ -76,6 +76,7 @@ import McqCoachLine from '../features/gacha/components/McqCoachLine';
 import { isPremiumActive, rcGetCustomerInfoSafe } from '../premium/revenuecat';
 import { setIsPremiumUser, usePremiumUser } from '../premium/premiumStore';
 import { colors } from '../theme/colors';
+import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 type Props = NativeStackScreenProps<RootStackParamList, 'SessionCard'>;
@@ -875,15 +876,15 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 onPress={() => navigation.goBack()}
                 testID="session-card-empty-deck-back"
               >
-                <Text style={styles.backText} numberOfLines={1}>
+                <Text style={styles.backText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   ← Back
                 </Text>
               </Pressable>
               <View style={styles.headerTextWrap}>
-                <Text style={styles.title} numberOfLines={1}>
+                <Text style={styles.title} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   {deck.Title}
                 </Text>
-                <Text style={styles.subtitle} numberOfLines={1}>
+                <Text style={styles.subtitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   No cards yet
                 </Text>
               </View>
@@ -943,15 +944,15 @@ export function SessionCardScreen({ navigation, route }: Props) {
               accessibilityLabel="Pause session"
               onPress={requestPause}
             >
-              <Text style={styles.pauseText} numberOfLines={1}>
+              <Text style={styles.pauseText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 Pause
               </Text>
             </Pressable>
             <View style={styles.headerTextWrap}>
-              <Text style={styles.title} numberOfLines={1}>
+              <Text style={styles.title} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {deckShortTitle(deck.Slug, deck.Title)}
               </Text>
-              <Text style={styles.subtitle} numberOfLines={1}>
+              <Text style={styles.subtitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {sessionVm.subtitle}
               </Text>
             </View>
@@ -974,10 +975,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
           >
             {trialInfo.isTrial && trialInfo.previewCount > 0 ? (
               <View style={styles.trialPreview} testID="session-card-trial-preview">
-                <Text style={styles.trialPreviewLabel} numberOfLines={1}>
+                <Text style={styles.trialPreviewLabel} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Preview run
                 </Text>
-                <Text style={styles.trialPreviewBody} numberOfLines={1}>
+                <Text style={styles.trialPreviewBody} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   {previewRemaining} of {trialInfo.previewCount} preview cards remaining
                 </Text>
               </View>

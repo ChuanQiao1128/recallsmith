@@ -8,6 +8,7 @@ import type { RootStackParamList } from '../navigation/types';
 import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
+import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 import { packPaletteFromSlug } from '../theme/packArt';
@@ -209,9 +210,9 @@ export function CardDetailScreen({ navigation, route }: Props) {
               style={({ pressed }) => [styles.backChip, pressed && styles.pressed]}
               onPress={() => navigation.goBack()}
             >
-              <Text style={styles.backChipText}>← Back</Text>
+              <Text style={styles.backChipText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>← Back</Text>
             </Pressable>
-            <Text style={styles.topSlot} numberOfLines={1}>
+            <Text style={styles.topSlot} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
               {slotLabel}{totalInDeck > 0 ? ` / ${String(totalInDeck).padStart(3, '0')}` : ''}
             </Text>
           </View>
@@ -227,7 +228,7 @@ export function CardDetailScreen({ navigation, route }: Props) {
             >
               <View style={styles.heroTopBar}>
                 <View style={[styles.heroRarityChip, { backgroundColor: rarity.accent }]}>
-                  <Text style={styles.heroRarityChipText} numberOfLines={1}>
+                  <Text style={styles.heroRarityChipText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                     {/* Stars proportional to rarity tier — same language
                         as Library tile (RAR=1, LEG=3, COM=none). Common
                         cards get just the label, no decorative star.
@@ -246,13 +247,13 @@ export function CardDetailScreen({ navigation, route }: Props) {
                 </View>
                 {kindChip ? (
                   <View testID="card-detail-kind-chip" style={styles.heroKindChip}>
-                    <Text style={styles.heroKindChipText} numberOfLines={1}>
+                    <Text style={styles.heroKindChipText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                       {kindChip}
                     </Text>
                   </View>
                 ) : null}
                 <View style={[styles.heroStatusChip, !isLocked && status === 'Mastered' && styles.heroStatusMastered]}>
-                  <Text style={styles.heroStatusChipText} numberOfLines={1}>
+                  <Text style={styles.heroStatusChipText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                     {isLocked ? 'Missing' : status}
                   </Text>
                 </View>
@@ -276,7 +277,7 @@ export function CardDetailScreen({ navigation, route }: Props) {
 
               {/* Subtle serial mark — replaces the rotated OFFICIAL ★ stamp.
                   Reads as authentic registry, not a try-hard sticker. */}
-              <Text style={styles.heroSerial} numberOfLines={1}>
+              <Text style={styles.heroSerial} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {`No. ${formatRank(slot)}${totalInDeck > 0 ? ` / ${totalInDeck}` : ''}`}
               </Text>
             </LinearGradient>
@@ -292,23 +293,23 @@ export function CardDetailScreen({ navigation, route }: Props) {
           {/* META STRIP — slot, last seen, next review, mastery */}
           <View style={styles.metaStrip}>
             <View style={styles.metaCell}>
-              <Text style={styles.metaLabel}>SLOT</Text>
-              <Text style={styles.metaValue}>{slotLabel}</Text>
+              <Text style={styles.metaLabel} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>SLOT</Text>
+              <Text style={styles.metaValue} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{slotLabel}</Text>
             </View>
             <View style={styles.metaDivider} />
             <View style={styles.metaCell}>
-              <Text style={styles.metaLabel}>LAST</Text>
-              <Text style={styles.metaValue}>{lastSeen}</Text>
+              <Text style={styles.metaLabel} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>LAST</Text>
+              <Text style={styles.metaValue} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{lastSeen}</Text>
             </View>
             <View style={styles.metaDivider} />
             <View style={styles.metaCell}>
-              <Text style={styles.metaLabel}>NEXT</Text>
-              <Text style={styles.metaValue}>{nextReview}</Text>
+              <Text style={styles.metaLabel} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>NEXT</Text>
+              <Text style={styles.metaValue} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{nextReview}</Text>
             </View>
             <View style={styles.metaDivider} />
             <View style={styles.metaCell}>
-              <Text style={styles.metaLabel}>STAGE</Text>
-              <Text style={styles.metaValue}>{cardProgress?.stage ?? 0}</Text>
+              <Text style={styles.metaLabel} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>STAGE</Text>
+              <Text style={styles.metaValue} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{cardProgress?.stage ?? 0}</Text>
             </View>
           </View>
 
@@ -475,9 +476,9 @@ const styles = StyleSheet.create({
   heroSerial: {
     marginTop: 8,
     color: 'rgba(255,255,255,0.65)',
-    fontSize: 9,
+    fontSize: 11,
     fontWeight: '800',
-    letterSpacing: 2.4,
+    letterSpacing: 1.8,
     textAlign: 'right',
   },
 
@@ -499,7 +500,7 @@ const styles = StyleSheet.create({
   },
   metaCell: { flex: 1, alignItems: 'center' },
   metaDivider: { width: 1, height: 28, backgroundColor: colors.hairline },
-  metaLabel: { fontSize: 9, fontWeight: '900', letterSpacing: 1, color: colors.inkMuted },
+  metaLabel: { fontSize: 11, fontWeight: '900', letterSpacing: 0.6, color: colors.inkMuted },
   metaValue: { marginTop: 4, fontSize: 13, fontWeight: '900', color: colors.inkSoft },
 
   // ─── Actions ────────────────────────────────────────────────────────────
