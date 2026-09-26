@@ -107,10 +107,10 @@ for rk in '"ANY /api/v1/authoring/{proxy+}"' '"ANY /api/v1/admin/{proxy+}"' '"AN
   grep -Fq -- "$rk" "$GATEWAY" || fail "gateway.tf lacks route key $rk"
 done
 # 2c. gateway.tf — throttles (whitespace-tolerant), route_settings, depends_on on both stages
-grep -Eq 'throttling_burst_limit[[:space:]]*=[[:space:]]*200([^0-9]|$)' "$GATEWAY" || fail "gateway.tf lacks throttling_burst_limit = 200"
-grep -Eq 'throttling_rate_limit[[:space:]]*=[[:space:]]*100([^0-9]|$)'  "$GATEWAY" || fail "gateway.tf lacks throttling_rate_limit = 100"
-[ "$(grep -cE 'throttling_burst_limit[[:space:]]*=[[:space:]]*200([^0-9]|$)' "$GATEWAY")" -ge 2 ] || fail "the 200 burst default must appear on both stages"
-[ "$(grep -cE 'throttling_rate_limit[[:space:]]*=[[:space:]]*100([^0-9]|$)'  "$GATEWAY")" -ge 2 ] || fail "the 100 rps default must appear on both stages"
+[ "$(grep -cE 'throttling_burst_limit[[:space:]]*=[[:space:]]*var\.(dev_)?throttling_burst_limit' "$GATEWAY")" -ge 2 ] || fail "both stages must keep throttling_burst_limit = var.* (no literal; 2026-09-23 incident)"
+[ "$(grep -cE 'throttling_rate_limit[[:space:]]*=[[:space:]]*var\.(dev_)?throttling_rate_limit' "$GATEWAY")" -ge 2 ] || fail "both stages must keep throttling_rate_limit = var.* (no literal; 2026-09-23 incident)"
+grep -Eq 'throttling_(burst|rate)_limit[[:space:]]*=[[:space:]]*[0-9]' "$GATEWAY" && fail "gateway.tf: numeric literal stage throttle (use the validated variables)"
+[ "$(grep -c 'condition' "${GATEWAY%/*}/variables.tf")" -ge 4 ] || fail "api/variables.tf lost a throttle validation block"
 throttle_pair() {  # $1 route key (fixed string), $2 burst, $3 rate — one entry per line (Changes 4)
   grep -F -- "\"$1\"" "$GATEWAY" | grep -Eq "burst[[:space:]]*=[[:space:]]*$2,[[:space:]]*rate[[:space:]]*=[[:space:]]*$3([^0-9]|$)" \
     || fail "gateway.tf lacks throttle entry: \"$1\" = { burst = $2, rate = $3 }"
@@ -377,7 +377,8 @@ want_rs = {("ANY /api/v1/sync/{proxy+}", 40, 20), ("ANY /api/v1/draw-state/{prox
 for st in ("default", "dev"):
     a, _ = after(f"module.api.aws_apigatewayv2_stage.{st}")
     d = (a.get("default_route_settings") or [{}])[0]
-    check(d.get("throttling_burst_limit") == 200 and d.get("throttling_rate_limit") == 100, f"stage {st}: default throttle 200/100")
+    want_d = {"default": (400, 200), "dev": (100, 50)}[st]
+    check((d.get("throttling_burst_limit"), d.get("throttling_rate_limit")) == want_d, f"stage {st}: default throttle unchanged {want_d} (burst, rate) — validated variables, never 0")
     check(d.get("detailed_metrics_enabled") is True, f"stage {st}: detailed_metrics_enabled stays true (E04)")
     got_rs = {(r.get("route_key"), r.get("throttling_burst_limit"), int(r.get("throttling_rate_limit") or 0)) for r in (a.get("route_settings") or [])}
     check(got_rs == want_rs, f"stage {st}: route_settings must be exactly the four throttle entries")
