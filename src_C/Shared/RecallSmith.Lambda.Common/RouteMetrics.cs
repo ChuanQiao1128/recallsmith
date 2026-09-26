@@ -126,6 +126,7 @@ public static class RouteMetrics
     "/api/v1/admin/analytics/outbox/publish",
     "/api/v1/admin/analytics/content-intelligence/import",
     "/api/v1/authoring/decks",
+    "/api/v1/authoring/cards/import",
     "/api/v1/authoring/cards/page",
     "/api/v1/authoring/cards",
     "/api/v1/admin/permissions",
