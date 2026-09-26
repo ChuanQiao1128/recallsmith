@@ -136,7 +136,6 @@ public static class RouteMetrics
     "/api/v1/authoring/publish/jobs",
     "/api/v1/authoring/content-intelligence",
     "/api/v1/admin/manifest/rebuild",
-    "/api/v1/authoring/dashboard",
     "/api/v1/me",
     "/api/v1/user/client-errors",
     "/api/v1/user/bootstrap",

@@ -24,6 +24,20 @@ public sealed class VpcFunction
     // logged, and the first request then fails closed with a 401 instead of a crashed INIT.
     try { Auth.EnsureConfigured(); } catch (Exception ex) { Log.Error("auth config:", ex.Message); }
 
+    // Boot line once per container, not once per request: the constructor is the INIT-phase
+    // mount point, so this fires on cold start and the CloudWatch count tracks cold starts.
+    // No path/method here — a container serves many requests, so per-request fields belong on
+    // the per-request line in DispatchAsync.
+    Log.Event("info", new
+    {
+      tag = "boot",
+      lambda = ServiceName,
+      version = Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_VERSION"),
+      apiEnv = Environment.GetEnvironmentVariable("API_ENV"),
+      allowDevPremium = Environment.GetEnvironmentVariable("ALLOW_DEV_PREMIUM"),
+      disallowSandbox = Environment.GetEnvironmentVariable("DISALLOW_SANDBOX_PREMIUM"),
+    });
+
     // The constructor is the real INIT phase mount point: it runs once per container,
     // before any request, with the init phase CPU burst. RunOnce never throws.
     Warmup.RunOnce();
@@ -48,18 +62,6 @@ public sealed class VpcFunction
 
   private static async Task<APIGatewayProxyResponse> DispatchAsync(LambdaRequest req, Res res)
   {
-    Log.Event("info", new
-    {
-      tag = "boot",
-      lambda = ServiceName,
-      version = Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_VERSION"),
-      apiEnv = Environment.GetEnvironmentVariable("API_ENV"),
-      allowDevPremium = Environment.GetEnvironmentVariable("ALLOW_DEV_PREMIUM"),
-      disallowSandbox = Environment.GetEnvironmentVariable("DISALLOW_SANDBOX_PREMIUM"),
-      path = req.Path,
-      method = req.Method,
-    });
-
     AuthContext auth;
     try
     {
@@ -223,12 +225,6 @@ public sealed class VpcFunction
       {
         return await Vpc.Authoring.PublishReaper.HandlePublishReap(req, res, auth);
       }
-      // Dashboard - 合并 decks 和 manifest，减少前端请求次数
-      if (p.EndsWith("/api/v1/authoring/dashboard", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
-      {
-        return await Vpc.Authoring.Dashboard.HandleDashboard(req, res, auth);
-      }
-
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
