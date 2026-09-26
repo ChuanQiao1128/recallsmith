@@ -1,5 +1,5 @@
 // ============================================
-// RecallSmith rarity configuration
+// DeveloperCards rarity configuration
 // ============================================
 //
 // `label` used to be Chinese with a parallel `labelEn` beside it, and `label`

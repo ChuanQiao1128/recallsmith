@@ -10,6 +10,7 @@ import {
 } from '../api/authoring';
 import { useDeleteDeck, usePublishDeck } from '../hooks/useDecks';
 import { readSessionCache, writeSessionCache } from '../lib/sessionCache';
+import { CONSOLE_NAME } from '../lib/brand';
 import { getContentManifestUrl } from '../api/contentManifest';
 import { markEnd, markStart } from '../perf/journey';
 import type { Deck } from '../types/deck';
@@ -640,7 +641,7 @@ export function DeckListPage() {
 
   return (
     <ConsoleShell
-      title="DeveloperCards Console"
+      title={CONSOLE_NAME}
       subtitle="Authoring · Decks"
       userLabel={
         user

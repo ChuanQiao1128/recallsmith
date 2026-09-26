@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useCreateDeck, useUpdateDeck } from '../hooks/useDecks';
 import { buildDeckBody, parseDraftVersion, DRAFT_VERSION_ERROR } from '../lib/authoringBodies';
+import { DEFAULT_DECK_AUTHOR } from '../lib/brand';
 
 interface NewDeckForm {
   title: string;
@@ -49,7 +50,7 @@ export function NewDeckPage() {
   const [form, setForm] = useState<NewDeckForm>({
     title: '',
     slug: '',
-    author: 'RecallSmith Team',
+    author: DEFAULT_DECK_AUTHOR,
     description: '',
     locale: 'en-US',
     deckType: 1,
@@ -233,10 +234,11 @@ export function NewDeckPage() {
 
           {/* Title */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="new-deck-title" className="block text-sm font-medium text-slate-700 mb-1">
               Title <span className="text-red-500">*</span>
             </label>
             <input
+              id="new-deck-title"
               type="text"
               className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -250,10 +252,11 @@ export function NewDeckPage() {
 
           {/* Slug */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="new-deck-slug" className="block text-sm font-medium text-slate-700 mb-1">
               Slug <span className="text-red-500">*</span>
             </label>
             <input
+              id="new-deck-slug"
               type="text"
               className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
                          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -268,16 +271,17 @@ export function NewDeckPage() {
 
           {/* Author */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="new-deck-author" className="block text-sm font-medium text-slate-700 mb-1">
               Author <span className="text-red-500">*</span>
             </label>
             <input
+              id="new-deck-author"
               type="text"
               className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               value={form.author}
               onChange={e => handleChange('author', e.target.value)}
-              placeholder="RecallSmith Team"
+              placeholder={DEFAULT_DECK_AUTHOR}
             />
           </div>
 
@@ -285,8 +289,9 @@ export function NewDeckPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Locale */}
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Locale</label>
+              <label htmlFor="new-deck-locale" className="block text-sm font-medium text-slate-700 mb-1">Locale</label>
               <select
+                id="new-deck-locale"
                 className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm bg-white
                            focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 value={form.locale}
@@ -301,8 +306,8 @@ export function NewDeckPage() {
 
             {/* DeckType */}
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Deck Type</label>
-              <div className="flex items-center gap-4 mt-1">
+              <span id="new-deck-type-label" className="block text-sm font-medium text-slate-700 mb-1">Deck Type</span>
+              <div role="radiogroup" aria-labelledby="new-deck-type-label" className="flex items-center gap-4 mt-1">
                 <label className="inline-flex items-center gap-1 text-sm text-slate-700">
                   <input
                     type="radio"
@@ -341,10 +346,11 @@ export function NewDeckPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* draftVersion */}
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
+                <label htmlFor="new-deck-version" className="block text-sm font-medium text-slate-700 mb-1">
                   Draft Version <span className="text-red-500">*</span>
                 </label>
                 <input
+                  id="new-deck-version"
                   type="text"
                   className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
                              focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -396,8 +402,9 @@ export function NewDeckPage() {
 
           {/* Description */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
+            <label htmlFor="new-deck-description" className="block text-sm font-medium text-slate-700 mb-1">Description</label>
             <textarea
+              id="new-deck-description"
               className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                          min-h-[80px]"

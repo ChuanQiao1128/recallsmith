@@ -17,6 +17,7 @@ import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 
+import { CONSOLE_NAME } from '../lib/brand';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
@@ -363,7 +364,7 @@ export function AdminUsersPage() {
   if (!superAdmin) {
     return (
       <ConsoleShell
-        title="RecallSmith Console"
+        title={CONSOLE_NAME}
         subtitle="Admin · Users & Permissions"
         userLabel={sessionUser ? `${sessionUser.email ?? sessionUser.username ?? 'Signed in'} · editor` : '—'}
         superAdmin={false}
@@ -386,7 +387,7 @@ export function AdminUsersPage() {
 
   return (
     <ConsoleShell
-      title="RecallSmith Console"
+      title={CONSOLE_NAME}
       subtitle="Admin · Users & Permissions"
       userLabel={sessionUser ? `${sessionUser.email ?? sessionUser.username ?? 'Signed in'} · super_admin` : '—'}
       superAdmin={true}
@@ -450,8 +451,9 @@ export function AdminUsersPage() {
 
             <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Username</label>
+                <label htmlFor="new-user-username" className="block text-xs font-medium text-slate-700 mb-1">Username</label>
                 <input
+                  id="new-user-username"
                   className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                   value={form.username}
                   onChange={e => setForm(prev => ({ ...prev, username: e.target.value }))}
@@ -460,8 +462,9 @@ export function AdminUsersPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Email</label>
+                <label htmlFor="new-user-email" className="block text-xs font-medium text-slate-700 mb-1">Email</label>
                 <input
+                  id="new-user-email"
                   className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                   value={form.email}
                   onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))}
@@ -470,8 +473,9 @@ export function AdminUsersPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Temp password</label>
+                <label htmlFor="new-user-temp-password" className="block text-xs font-medium text-slate-700 mb-1">Temp password</label>
                 <input
+                  id="new-user-temp-password"
                   type="password"
                   className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                   value={form.tempPassword}

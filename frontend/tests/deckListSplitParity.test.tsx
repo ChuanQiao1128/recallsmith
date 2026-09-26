@@ -166,28 +166,41 @@ interface Baseline {
 // which never render the shell at all, and their hashes are unchanged to the
 // character. editorLegacy moved by +109 B against +126 B for every super-admin
 // scenario, which is exactly the Admin Management link an editor does not see.
+//
+// RE-MEASURED AGAIN, 2026-09-26, F32. Nine of the eleven moved when CFE-19 gave
+// the deck search box aria-label="Search decks" (+26 B) and turned the Decks /
+// Publish Jobs switcher into a real tablist: role="tablist"
+// aria-label="Deck console views" on the container and role="tab"
+// aria-selected="…" on each button (+112 B together). Verified BEFORE the
+// numbers were touched, by word-diffing the recorded superAdminPaginated
+// snapshot: the ONLY added tokens are those four attribute groups, with nothing
+// removed. Every super-admin scenario that renders both controls moved by +138 B
+// (26 + 112). editorLegacy has no switcher, so it moves by the search label
+// alone (+26 B). publishJobsTab renders the switcher but not the filter bar, so
+// it moves by the tab attributes alone (+112 B). initialLoading and
+// fatalErrorRetry are still the early returns and are unchanged to the character.
 const B1: Record<string, Baseline> = {
   // The three reachable role/mode cells.
-  superAdminPaginated: { hash: 'ac1ec307f87cf5f0e187c42694f4cb85f1e24cc339f753250ae2d4738d5baf33', bytes: 11346 },
-  superAdminLegacyFallback: { hash: '747ec255c12a1a4bf5b1be7ad3069f6f31a7189ea6d714801d28d7783df0e5fd', bytes: 11592 },
-  editorLegacy: { hash: '81a3e47b71ee16b24a799d3c43ba6179446bd0aa37ed43c2fdb853a0cb5a4115', bytes: 8767 },
+  superAdminPaginated: { hash: 'bd7ce896ee264dcfb074b317e80b0a8d550d9eefdce66f33e336a9fd9505a5a6', bytes: 11484 },
+  superAdminLegacyFallback: { hash: '5bca1832341285ca3c14852e361205fdcfcc5632ab43ba4f8d2d670132130f12', bytes: 11730 },
+  editorLegacy: { hash: '514ac7fa6ea01bad8a28b878805e8dd15c95fbf1087f1f8895da38e9812a54b8', bytes: 8793 },
   // The two early returns, which never reach the main tree at all.
   initialLoading: { hash: 'da5e91db42c7895c31e1fba36b34c6aaeb456d4ef2efde3a425f5b5066a52974', bytes: 147 },
   fatalErrorRetry: { hash: '22809bb57f98a29737e080c405194d891a62ee389911aae33891f12b55c1c396', bytes: 421 },
   // Both halves of the empty-state ternary. These two differ by ONE WORD, and
   // the split turns that ternary into an `emptyMessage` prop — which is exactly
   // the kind of change that keeps one branch and loses the other.
-  emptySearchResult: { hash: 'df44fb4505dabfe79eb4493d5fe6a8ebb2ffa7f0a0d300e5740b165e35fb767d', bytes: 5330 },
-  emptyWithNoQuery: { hash: '39bc473d68c93b6058ae204e70f1c32438d9ee4982f54cf64de18d983e72b6f4', bytes: 5320 },
+  emptySearchResult: { hash: '1ae49976cc7e097fe1afbc9a7a2c90989d1c62d24650e60e3dc842d16963651d', bytes: 5468 },
+  emptyWithNoQuery: { hash: '62951107210f2a2af1a16626b78da86a5869ce3e331d9df207ee8aba3120c079', bytes: 5458 },
   // The three banners/panels that only appear in one state each.
-  manifestErrorBanner: { hash: '12a1459c8b341ecfd2c3e4e8b801078739ef998494bd1c06fd28e9b325f7493b', bytes: 11844 },
+  manifestErrorBanner: { hash: '855acf09e2d102a19cba1ed6651f7be02776a8ab5efb484037b0b4c0063f7a77', bytes: 11982 },
   // F24 (2026-09-26): the Publish Jobs table gained an Error column after Status
   // (CFE-09) and a title on the Job ID cell, so this scenario's markup grew by
   // 99 B. No other scenario renders that table, so only this hash moved.
-  publishJobsTab: { hash: '52c2716fde2800eafb317a2e0d95fc606f8eb99c5057ee90e6c0e2b2b9a1143f', bytes: 4328 },
-  pollFailureBanner: { hash: '0de61b70fff301afc550ded6f0d569b49ab62e1c55e6ca1f77b97acfe561c9e8', bytes: 12231 },
+  publishJobsTab: { hash: '676605fecd38f6fcb82d2a1713b5134de9ef5f9c93217c85a4718af86afaa7a1', bytes: 4440 },
+  pollFailureBanner: { hash: '3839db8b82b18e1ebcef70fd2af9d517b9f9d9b899a517c06c7c8204c1366ab0', bytes: 12369 },
   // A row mid-publish, so the pending markup is inside a hash too.
-  publishingRow: { hash: '3ae183dc00937a0fecca0e472f66c7671ecdba95f23b1f6860db61acab55ea68', bytes: 11362 },
+  publishingRow: { hash: '6af41038e9b8dabde2e27ece9ea025b27a7064dc1e8876a3b35fd8dcc326297d', bytes: 11500 },
 };
 
 // B2: one Profiler onRender entry per commit of the profiled subtree.

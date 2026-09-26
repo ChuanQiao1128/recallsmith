@@ -154,7 +154,7 @@ describe('the page the browser loads', () => {
   it('names the product in its title', () => {
     // It said "frontend" — the scaffold's own placeholder — which is what every
     // open tab and every bookmark was called.
-    expect(html()).toMatch(/<title>RecallSmith Console<\/title>/);
+    expect(html()).toMatch(/<title>DeveloperCards Console<\/title>/);
     expect(html()).not.toMatch(/<title>\s*frontend\s*<\/title>/);
   });
 

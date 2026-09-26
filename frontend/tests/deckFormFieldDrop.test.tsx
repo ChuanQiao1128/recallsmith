@@ -99,7 +99,7 @@ afterEach(() => {
 describe('D1 NewDeckPage sends every field it collects', () => {
   const titleBox = () => screen.getByPlaceholderText('JavaScript Core Basics') as HTMLInputElement;
   const slugBox = () => screen.getByPlaceholderText('js-core-basics') as HTMLInputElement;
-  const authorBox = () => screen.getByPlaceholderText('RecallSmith Team') as HTMLInputElement;
+  const authorBox = () => screen.getByLabelText(/^Author/) as HTMLInputElement;
   const versionBox = () => screen.getByLabelText('Draft Version') as HTMLInputElement;
   const localeBox = () => screen.getByLabelText('Locale') as HTMLSelectElement;
 
