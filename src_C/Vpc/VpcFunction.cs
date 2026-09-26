@@ -230,6 +230,10 @@ public sealed class VpcFunction
       {
         return await Vpc.Runtime.Me.HandleMe(req, res, auth);
       }
+      if (p.EndsWith("/api/v1/user/client-errors", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Runtime.ClientErrors.HandleClientErrors(req, res, auth);
+      }
       if (p.EndsWith("/api/v1/user/bootstrap", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Runtime.Bootstrap.HandleBootstrap(req, res, auth);
