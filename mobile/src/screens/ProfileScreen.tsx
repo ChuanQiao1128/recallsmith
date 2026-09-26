@@ -3,6 +3,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import AppInfoScreen from '../components/AppInfoScreen';
 import { getAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
+import { getAudiencePreferenceLabel } from '../features/gacha/audience/audienceRules';
 import { loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Profile'>;
@@ -57,7 +58,7 @@ export function ProfileScreen({ navigation }: Props) {
         {
           title: 'Current setup',
           items: [
-            { title: 'Audience', subtitle: audience ?? '—' },
+            { title: 'Audience', subtitle: audience ? getAudiencePreferenceLabel(audience) : '—' },
           ],
         },
         {

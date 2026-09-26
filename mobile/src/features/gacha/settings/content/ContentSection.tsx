@@ -10,9 +10,9 @@ export const CONTENT_COPY = {
   title: 'Content preferences',
   body: "Choose who today's new cards are aimed at.",
   chips: [
-    { key: 'junior', label: 'Junior' },
-    { key: 'both', label: 'Balanced' },
-    { key: 'all', label: 'All levels' },
+    { key: 'junior', label: getAudiencePreferenceLabel('junior') },
+    { key: 'both', label: getAudiencePreferenceLabel('both') },
+    { key: 'all', label: getAudiencePreferenceLabel('all') },
   ] as Array<{ key: AudiencePreference; label: string }>,
   current: (pref: AudiencePreference) => `Current lane: ${getAudiencePreferenceLabel(pref)}`,
 } as const;
