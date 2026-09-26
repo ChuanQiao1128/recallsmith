@@ -2,7 +2,7 @@
 
 > 范围：web console 前端、console 后端（core-vpc / worker）、手机端 React Native 逐页、AWS 加强（Wave E）。
 > 数据：7 个审计区逐页审计 + 复核，共 170 条发现；复核结果（CONFIRMED / DOWNGRADE）在表中注明；证伪 0 条；失败的审计区：无。
-> 路径约定：`frontend/`、`src_C/`、`infra/`、`mobile/` 相对仓库根。抽卡区证据里的 `src/...` 指 `mobile/src/...`；壳区证据里不带前缀的 `App.tsx`、`app.json`、`package.json`、`BottomTabBar.tsx` 等指 `mobile/` 下对应文件。Wave E 文档在 `/Users/qc/src/recallsmith-merge/docs/delivery/r16-issues/`，控制目录 `~/.rimv-delivery/r16-e-prod`。
+> 路径约定：`frontend/`、`src_C/`、`infra/`、`mobile/` 相对仓库根。抽卡区证据里以 `src/` 开头的路径都在 `mobile/` 下；壳区证据里不带前缀的 `App.tsx`、`app.json`、`package.json`、`BottomTabBar.tsx` 等指 `mobile/` 下对应文件。Wave E 文档在 `/Users/qc/src/recallsmith-merge/docs/delivery/r16-issues/`，控制目录 `~/.rimv-delivery/r16-e-prod`。
 
 ---
 
@@ -1009,3 +1009,8 @@ CBE-10/AWS-20（超时链）和 CBE-20（删重复数据层）由 E14 承接，�
 ### C. 审计失败的区域
 
 无（[]）。会话记录里 playwright MCP 连接超时，github/linear/slack 等连接器需要授权，但本次审计都用不到。
+
+<!-- paths-not-on-disk
+     本文档里出现、但磁盘上还没有的仓库路径（计划要新建的文件），规则见 frontend/tests/docsPaths.test.ts。
+- mobile/scripts/release/whats-new-1.7.0.txt
+-->
