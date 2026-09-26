@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  type LayoutChangeEvent,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -154,6 +155,16 @@ function computePremiumActive(customerInfo: any): boolean {
   if (Array.isArray(subs) && subs.length > 0) return true;
   return false;
 }
+// A callback whose identity is stable for the component's lifetime but that
+// always calls the latest closure. Lets us hand McqReviewBody (React.memo)
+// callbacks that never change reference, so it does not re-render just because
+// a fresh handler was created this render, without capturing stale state.
+function useLatestCallback<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useCallback((...args: A): R => ref.current(...args), []);
+}
+
 export function SessionCardScreen({ navigation, route }: Props) {
   const slugFromRoute = route.params?.slug ?? null;
   const { mode = 'mixed' } = route.params ?? {};
@@ -191,6 +202,16 @@ export function SessionCardScreen({ navigation, route }: Props) {
   // the options stage and taller again while the coach line is inside it (review 2026-09-22 #1).
   const [dockLayoutHeight, setDockLayoutHeight] = useState<number | null>(null);
   const [plannedMinimumGoal, setPlannedMinimumGoal] = useState<number | null>(null);
+
+  // Stable callbacks so the memoized ReviewBody / McqReviewBody do not re-render
+  // on every unrelated SessionCard state change (dock resize, picks, reviewing).
+  const handleFlip = useCallback(() => setShowAnswer((prev) => !prev), []);
+  const handleDockLayout = useCallback((event: LayoutChangeEvent) => {
+    const h = event.nativeEvent.layout.height;
+    setDockLayoutHeight((prev) => (prev !== null && Math.abs(prev - h) < 1 ? prev : h));
+  }, []);
+  const stableToggleOption = useLatestCallback((key: string) => handleToggleOption(key));
+  const stableOverLimit = useLatestCallback(() => handleOverLimit());
   // Cached planner-derived limit. Loaded after planChallengeRoute runs.
   // null until first plan, then sticks. Falls back to routeLimit (when
   // caller passes one explicitly), then to 5 (the new default cap).
@@ -995,15 +1016,15 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 verdict={mcqState.verdict}
                 scheduleLine={mcqState.scheduleLine}
                 attemptIndex={mcqState.attemptIndex}
-                onToggleOption={handleToggleOption}
-                onOverLimit={handleOverLimit}
+                onToggleOption={stableToggleOption}
+                onOverLimit={stableOverLimit}
               />
             ) : (
               <ReviewBody
                 card={current.card}
                 rank={rankMapRef.current.get(current.card.StableUid) ?? null}
                 faceUp={showAnswer}
-                onFlip={() => setShowAnswer((prev) => !prev)}
+                onFlip={handleFlip}
               />
             )}
           </ScrollView>
@@ -1016,7 +1037,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 },
               ]}
               testID="review-rating-dock"
-              onLayout={(event) => setDockLayoutHeight(event.nativeEvent.layout.height)}
+              onLayout={handleDockLayout}
             >
               {/* Inside the dock, above the action rows: the dock is absolute and opaque, so an
                   in-flow sibling before it would be painted over (review 2026-09-22 #1). */}

@@ -4,6 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { formatRank, type LibraryCardRow } from './libraryMapper';
 import { libraryStyles as styles } from './libraryScreenStyles';
+import { LIBRARY_TILE_MAX_FONT_SCALE } from './libraryGridLayout';
 import { colors } from '../../../theme/colors';
 import { packPaletteFromSlug } from '../../../theme/packArt';
 import { MCQ_COPY } from '../mcq/mcqConstants';
@@ -32,7 +33,13 @@ function statusDotColor(status: LibraryCardRow['status']): string {
   return colors.inkMuted;
 }
 
-export function LibraryCardTile({ item, numColumns, highlighted, deckSlug, onPress }: Props) {
+export const LibraryCardTile = React.memo(function LibraryCardTile({
+  item,
+  numColumns,
+  highlighted,
+  deckSlug,
+  onPress,
+}: Props) {
   // item.isMissing, not `status === 'new'`: once the gate is on, 'new' means
   // "drawn, not studied yet" -- a card the user owns and is entitled to read.
   // Reading the status string here would keep hiding the question text behind a
@@ -75,13 +82,18 @@ export function LibraryCardTile({ item, numColumns, highlighted, deckSlug, onPre
           style={[styles.cardArtHeaderGradient, isMissing && styles.cardArtHeaderMissing]}
         />
         <View style={styles.cardArtTopLeft}>
-          <Text style={styles.cardArtSlotNumber} numberOfLines={1}>
+          <Text
+            style={styles.cardArtSlotNumber}
+            numberOfLines={1}
+            maxFontSizeMultiplier={LIBRARY_TILE_MAX_FONT_SCALE}
+          >
             {`#${slotNumber}`}
           </Text>
           {rarityStarCount > 0 ? (
             <Text
               style={styles.cardArtRarityStars}
               numberOfLines={1}
+              maxFontSizeMultiplier={LIBRARY_TILE_MAX_FONT_SCALE}
               testID={`library-card-rarity-${item.stableUid}`}
             >
               {rarityStars}
@@ -102,21 +114,38 @@ export function LibraryCardTile({ item, numColumns, highlighted, deckSlug, onPre
           keep the ? mystery to preserve the discovery moment. */}
       {isMissing ? (
         <View style={styles.cardBody}>
-          <Text style={styles.cardBodyMissingMark} numberOfLines={1}>
+          <Text
+            style={styles.cardBodyMissingMark}
+            numberOfLines={1}
+            maxFontSizeMultiplier={LIBRARY_TILE_MAX_FONT_SCALE}
+          >
             ?
           </Text>
         </View>
       ) : (
         <View style={styles.cardBody}>
-          <Text style={styles.cardBodyIcon} numberOfLines={1}>
+          <Text
+            style={styles.cardBodyIcon}
+            numberOfLines={1}
+            maxFontSizeMultiplier={LIBRARY_TILE_MAX_FONT_SCALE}
+          >
             {item.icon}
           </Text>
           {item.isMcq ? (
-            <Text style={KIND_MARK_STYLE} numberOfLines={1} testID={`library-card-kind-${item.stableUid}`}>
+            <Text
+              style={KIND_MARK_STYLE}
+              numberOfLines={1}
+              maxFontSizeMultiplier={LIBRARY_TILE_MAX_FONT_SCALE}
+              testID={`library-card-kind-${item.stableUid}`}
+            >
               {MCQ_COPY.faceMark}
             </Text>
           ) : null}
-          <Text style={styles.cardBodyText} numberOfLines={2}>
+          <Text
+            style={styles.cardBodyText}
+            numberOfLines={2}
+            maxFontSizeMultiplier={LIBRARY_TILE_MAX_FONT_SCALE}
+          >
             {item.question}
           </Text>
         </View>
@@ -131,8 +160,13 @@ export function LibraryCardTile({ item, numColumns, highlighted, deckSlug, onPre
         accessibilityElementsHidden
         importantForAccessibility="no-hide-descendants"
       >
-        <Text style={styles.cardTestProbeHidden}>{item.statusLabel}</Text>
+        <Text
+          style={styles.cardTestProbeHidden}
+          maxFontSizeMultiplier={LIBRARY_TILE_MAX_FONT_SCALE}
+        >
+          {item.statusLabel}
+        </Text>
       </View>
     </Pressable>
   );
-}
+});

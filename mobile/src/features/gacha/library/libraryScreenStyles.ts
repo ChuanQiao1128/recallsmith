@@ -4,6 +4,11 @@ import { a11y } from '../../../theme/a11y';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
 import { typography } from '../../../theme/typography';
+import {
+  LIBRARY_LIST_PADDING_TOP,
+  LIBRARY_ROW_GAP,
+  LIBRARY_TILE_HEIGHT,
+} from './libraryGridLayout';
 
 export const libraryStyles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
@@ -11,7 +16,7 @@ export const libraryStyles = StyleSheet.create({
   primarySurface: { flex: 1 },
   container: {
     paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.screenPadding,
+    paddingTop: LIBRARY_LIST_PADDING_TOP,
     paddingBottom: spacing.xl,
   },
   centerState: {
@@ -286,7 +291,7 @@ export const libraryStyles = StyleSheet.create({
   },
   columnWrap: {
     justifyContent: 'space-between',
-    marginBottom: spacing.xs,
+    marginBottom: LIBRARY_ROW_GAP,
   },
   // ─── Brand-new user banner ─────────────────────────────────────────
   // Renders above the Pokedex header when the user has 0 owned cards.
@@ -336,7 +341,7 @@ export const libraryStyles = StyleSheet.create({
   // ─── Pokedex slot tile v2 — pack-art header + question body ──────────────
   card: {
     flex: 1,
-    minHeight: 154,
+    height: LIBRARY_TILE_HEIGHT,
     borderRadius: 14,
     backgroundColor: colors.softCream,
     borderWidth: 1,
