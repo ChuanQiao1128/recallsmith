@@ -181,7 +181,10 @@ vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
 }));
 
 import { HomeScreen } from '../../src/screens/HomeScreen';
-import { resetAutoUpdateAttemptsForTests } from '../../src/features/gacha/home/deckActionResolver';
+import {
+  resetAutoUpdateAttemptsForTests,
+  resetLastKnownDeckUpdatesForTests,
+} from '../../src/features/gacha/home/deckActionResolver';
 import { readStoredDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
 import { loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
@@ -263,6 +266,7 @@ describe('HomeScreen — free-deck auto-update', () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     resetSessionStore();
     resetAutoUpdateAttemptsForTests();
+    resetLastKnownDeckUpdatesForTests();
     installDeckFromUrlMock.mockClear();
     setActiveDeckSlugMock.mockClear();
     deckFixture = INSTALLED_DECK;

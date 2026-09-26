@@ -18,7 +18,6 @@ import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import {
   buildHomeScreenVM,
   type HomeDeckVM,
-  type HomeRuntimeStatus,
   type HomeViewModel,
 } from '../features/gacha/selectors/homeSelectors';
 import TodayPressureCard from '../features/gacha/components/TodayPressureCard';
@@ -29,11 +28,16 @@ import {
   resolveDeckAction,
 } from '../features/gacha/home/deckActionResolver';
 import HomeDeckRow from '../features/gacha/home/HomeDeckRow';
+import {
+  buildReadyHomeVm,
+  createCoalescedRunner,
+  type HomeVmInputs,
+} from '../features/gacha/home/homeRefresh';
+import type { HomeDeckSummarySnapshot } from '../features/gacha/home/deckActionResolver';
 import { fetchServerPremium } from '../features/gacha/home/homeRemote';
 import { applyEconomyFloorIfStarved } from '../features/gacha/rewards/economyFloor';
 import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
 import { loadStreakSnapshot } from '../features/gacha/streaks/streakTracker';
-import { formatDateKey } from '../review/model';
 import { forceProgressSync } from '../sync/progressSync';
 import { useAuthStore } from '../auth/authStore';
 import { SessionExpiredBanner } from '../auth/SessionExpiredBanner';
@@ -110,7 +114,11 @@ export function HomeScreen({ navigation, route }: Props) {
   // Free-deck auto-updates in flight. A ref, not state: the view model is the
   // render state, and this only has to be readable at the next build of it.
   const autoUpdatingRef = useRef<Set<string>>(new Set());
+  // Last inputs a successful refresh built its VM from. A pack-tile tap rebuilds
+  // the VM from these with no I/O; phase 2 replaces `summary` in place.
+  const homeInputsRef = useRef<HomeVmInputs | null>(null);
   const refreshHomeRef = useRef<() => Promise<void>>(async () => {});
+  const runRefreshRef = useRef<() => Promise<void>>(async () => {});
   const authStatus = useAuthStore((s) => s.status);
   const accessToken = useAuthStore((s) => s.accessToken);
   const authInit = useAuthStore((s) => s.init);
@@ -227,11 +235,52 @@ export function HomeScreen({ navigation, route }: Props) {
       isMountedRef.current = false;
     };
   }, []);
-  const refreshHome = useCallback(async () => {
-    setHomeState((prev) => ({ ...prev, loading: true, error: null }));
+  // Apply free-deck updates from a just-loaded summary, unasked and without
+  // blocking the render: the tile shows "Updating…" from the slugs collected
+  // here, and each run refreshes Home when it settles so the new counts (and,
+  // on failure, the fallback chip) appear on their own. The resolver guards one
+  // attempt per slug per session; a throw here must never take Home down, so it
+  // degrades to "no runs started".
+  const startAutoUpdates = useCallback((summary: HomeDeckSummarySnapshot) => {
+    try {
+      const runs = autoApplyFreeDeckUpdates({
+        deckSummaries: summary.deckSummaries,
+        updates: summary.updates,
+      });
+      for (const run of runs) {
+        autoUpdatingRef.current.add(run.slug);
+        void run.done.then(() => {
+          autoUpdatingRef.current.delete(run.slug);
+          if (isMountedRef.current) void refreshHomeRef.current();
+        });
+      }
+    } catch {
+      // Auto-update is best effort; the chip remains the manual path.
+    }
+  }, []);
+  const publishReadyVm = useCallback(
+    (inputs: HomeVmInputs) => {
+      setHomeState({
+        loading: false,
+        error: null,
+        vm: buildReadyHomeVm({
+          inputs,
+          selectedSlug: selectedSlugRef.current,
+          session: useSessionStore.getState(),
+          isSignedIn,
+          premium: isPremiumUser,
+          updatingSlugs: [...autoUpdatingRef.current],
+        }),
+      });
+    },
+    [isPremiumUser, isSignedIn],
+  );
+  const runRefresh = useCallback(async () => {
+    // Phase 1 (cache-first): build the VM from the cached manifest and the
+    // decks already on the phone -- no network -- so Home paints immediately.
     try {
       const [summary, walletBeforeFloor, streak] = await Promise.all([
-        loadHomeDeckSummaries({ premium: isPremiumUser }),
+        loadHomeDeckSummaries({ premium: isPremiumUser, remote: false }),
         loadRewardWalletState(),
         loadStreakSnapshot(),
       ]);
@@ -241,7 +290,6 @@ export function HomeScreen({ navigation, route }: Props) {
       if (!currentSelectedSlug && activeSlug) {
         setSelectedSlug(activeSlug);
       }
-      const session = useSessionStore.getState();
       const now = new Date(summary.asOfISO);
       // The economy floor lives here, and only here, because this is the one
       // point in the app where its three inputs are in hand at the same
@@ -262,60 +310,9 @@ export function HomeScreen({ navigation, route }: Props) {
         now,
       });
       if (!isMountedRef.current) return;
-      const todayKey = formatDateKey(now);
-      const sessionStartDay =
-        typeof session.startedAt === 'number' && session.startedAt > 0
-          ? formatDateKey(new Date(session.startedAt))
-          : null;
-      const sameDeckSession =
-        !!activeSlug && session.slug === activeSlug && sessionStartDay === todayKey;
-      const runtimeStatus: HomeRuntimeStatus = {
-        qualifiedToday: streak.lastQualifiedDateKey === todayKey,
-        completedToday: sameDeckSession ? session.completedCount : 0,
-        completedRouteToday:
-          sameDeckSession &&
-          session.route.length > 0 &&
-          session.completedCount >= session.route.length,
-      };
-      // Apply free-deck updates from the load path, unasked and without
-      // blocking the render: the tile shows "Updating…" from the slugs
-      // collected here, and each run refreshes Home when it settles so the
-      // new counts (and, on failure, the fallback chip) appear on their own.
-      // The resolver guards one attempt per slug per session; a throw here
-      // must never take Home down, so it degrades to "no runs started".
-      try {
-        const runs = autoApplyFreeDeckUpdates({
-          deckSummaries: summary.deckSummaries,
-          updates: summary.updates,
-        });
-        for (const run of runs) {
-          autoUpdatingRef.current.add(run.slug);
-          void run.done.then(() => {
-            autoUpdatingRef.current.delete(run.slug);
-            if (isMountedRef.current) void refreshHomeRef.current();
-          });
-        }
-      } catch {
-        // Auto-update is best effort; the chip remains the manual path.
-      }
-      const vm = buildHomeScreenVM({
-        state: 'ready',
-        params: {
-          deckSummaries: summary.deckSummaries,
-          selectedSlug: activeSlug,
-          hasSignedInUser: isSignedIn,
-          wallet,
-          updates: summary.updates,
-          allUpcoming30: summary.allUpcoming30,
-          premium: isPremiumUser,
-          accountLockup: isSignedIn
-            ? null
-            : 'Sign in to unlock cloud backup and month planning.',
-          runtimeStatus,
-          updatingSlugs: [...autoUpdatingRef.current],
-        },
-      });
-      setHomeState({ loading: false, error: null, vm });
+      homeInputsRef.current = { summary, wallet, streak };
+      startAutoUpdates(summary);
+      publishReadyVm(homeInputsRef.current);
     } catch {
       if (!isMountedRef.current) return;
       const fallbackWallet = await loadRewardWalletState().catch(() => ({
@@ -333,11 +330,52 @@ export function HomeScreen({ navigation, route }: Props) {
         error: 'Could not refresh Home right now.',
         vm,
       });
+      return;
     }
-  }, [isPremiumUser, isSignedIn]);
+    // Phase 2 (revalidate, background): re-check the remote manifest and
+    // republish. A failure keeps the phase-1 VM with no error state, and there
+    // is no second wallet read and no second economy-floor pass -- the wallet
+    // Home already rendered is the wallet it keeps.
+    try {
+      const summary = await loadHomeDeckSummaries({ premium: isPremiumUser, remote: true });
+      if (!isMountedRef.current || !homeInputsRef.current) return;
+      homeInputsRef.current = { ...homeInputsRef.current, summary };
+      startAutoUpdates(summary);
+      publishReadyVm(homeInputsRef.current);
+    } catch {
+      // Revalidation is best effort; the cache-first VM stands.
+    }
+  }, [isPremiumUser, isSignedIn, publishReadyVm, startAutoUpdates]);
+  useEffect(() => {
+    runRefreshRef.current = runRefresh;
+  }, [runRefresh]);
+  // Stable across renders: overlapping calls (focus effect, auth effect, tile
+  // taps, auto-update completions) fold into one in-flight run plus at most one
+  // trailing run instead of stacking full refreshes.
+  const refreshHome = useMemo(
+    () => createCoalescedRunner(() => runRefreshRef.current()),
+    [],
+  );
   useEffect(() => {
     refreshHomeRef.current = refreshHome;
   }, [refreshHome]);
+  // Rebuilds the VM for a newly selected pack from the inputs already in hand --
+  // no loadHomeDeckSummaries, no storage read, no network -- so a tile tap
+  // highlights instantly. Falls back to a full refresh only before the first
+  // successful load has produced any inputs.
+  const selectPackLocally = useCallback(
+    (slug: string) => {
+      selectedSlugRef.current = slug;
+      setSelectedSlug(slug);
+      void setActiveDeckSlug(slug);
+      if (homeInputsRef.current) {
+        publishReadyVm(homeInputsRef.current);
+      } else {
+        void refreshHome();
+      }
+    },
+    [publishReadyVm, refreshHome],
+  );
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -353,7 +391,6 @@ export function HomeScreen({ navigation, route }: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setHomeState((prev) => ({ ...prev, loading: true }));
       if (isSignedIn) {
         try {
           await forceProgressSync('home_auth_changed');
@@ -867,9 +904,7 @@ export function HomeScreen({ navigation, route }: Props) {
                             const hint = d.realRow.actionHint;
                             const updating = d.realRow.update?.state === 'updating';
                             if (hint === 'open' || hint === 'none' || (hint === 'update' && updating)) {
-                              void setActiveDeckSlug(d.slug);
-                              setSelectedSlug(d.slug);
-                              void refreshHome();
+                              selectPackLocally(d.slug);
                               return;
                             }
                             void handleDeckPress(d.realRow);
