@@ -15,6 +15,10 @@ resource "aws_route53_zone" "main" {
 
   lifecycle {
     prevent_destroy = true
+    # The registrar-created zone has no force_destroy in its imported state (null); the
+    # schema default (false) would otherwise register as a spurious null -> false change on
+    # the adoption plan. Ignoring it keeps adoption a tags-only no-op (E00 §2.9.1 intent).
+    ignore_changes = [force_destroy]
   }
 }
 
