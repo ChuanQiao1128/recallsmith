@@ -182,7 +182,7 @@ resource "aws_cognito_user_pool_client" "mobile" {
   id_token_validity                    = 60
   name                                 = "MobileDeveloperCards"
   prevent_user_existence_errors        = "ENABLED"
-  refresh_token_validity               = 5
+  refresh_token_validity               = 90 # 2026-09-26 AWS-08: was 5 days (signed-in learners silently dropped to anonymous)
   supported_identity_providers         = ["COGNITO"]
   user_pool_id                         = aws_cognito_user_pool.mobile[0].id
   token_validity_units {
