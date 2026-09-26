@@ -163,7 +163,7 @@ export function DeckListPage() {
   const pollPausedRef = useRef(false);
   // Latest loadPublishJobs, read through a ref so the visibilitychange effect can
   // call it without listing it as a dependency (which would re-register the
-  // listener every render) and without an eslint-disable.
+  // listener every render) and without suppressing the exhaustive-deps rule.
   const loadPublishJobsRef = useRef<() => void>(() => {});
 
   const [q, setQ] = useState('');
