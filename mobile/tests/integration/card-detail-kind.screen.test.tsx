@@ -71,7 +71,20 @@ const DECK = {
 let ownedFixture: Set<string> | null = null;
 
 vi.mock('../../src/content/activeDeck', () => ({ loadActiveDeckSlug: vi.fn(async () => 'aws') }));
+
 vi.mock('../../src/content/deckRepository', () => ({ resolveDeckBySlug: vi.fn(async () => DECK) }));
+// This screen loads the deck through deckCache's guarded loader. Mock deckCache
+// to delegate straight to the (mocked) resolveDeckBySlug so the read keeps the
+// same shape the test drives, without the real cache's dynamic scope import.
+vi.mock('../../src/content/deckCache', async () => {
+  const repo = (await import('../../src/content/deckRepository')) as {
+    resolveDeckBySlug: (slug: string) => Promise<unknown>;
+  };
+  return {
+    getCachedDeck: (slug: string) => repo.resolveDeckBySlug(slug),
+    invalidateDeckCache: () => {},
+  };
+});
 vi.mock('../../src/review/storage', () => ({ loadDeckProgress: vi.fn(async () => []) }));
 vi.mock('../../src/features/gacha/draw/effectiveOwned', () => ({ resolveEffectiveOwned: vi.fn(async () => ownedFixture) }));
 
@@ -86,10 +99,7 @@ const LONG_QUESTION = (
 
 async function flush() {
   await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
   });
 }
 
@@ -193,7 +203,10 @@ describe('CardDetailScreen full question', () => {
       ...DECK,
       Cards: [{ StableUid: 'long', OrderInDeck: 1, Difficulty: 2, Question: LONG_QUESTION }],
     };
-    vi.mocked(resolveDeckBySlug).mockResolvedValueOnce(longDeck as any);
+    // Persistent (not Once): the read now flows through deckCache, so the exact
+    // number of resolveDeckBySlug reads is an implementation detail of the cache;
+    // the deck returned is what matters and it is the same on every read.
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(longDeck as any);
     ownedFixture = new Set(['long']);
 
     const tree = await renderScreen('long');
@@ -211,7 +224,10 @@ describe('CardDetailScreen full question', () => {
       ...DECK,
       Cards: [{ StableUid: 'long', OrderInDeck: 1, Difficulty: 2, Question: LONG_QUESTION }],
     };
-    vi.mocked(resolveDeckBySlug).mockResolvedValueOnce(longDeck as any);
+    // Persistent (not Once): the read now flows through deckCache, so the exact
+    // number of resolveDeckBySlug reads is an implementation detail of the cache;
+    // the deck returned is what matters and it is the same on every read.
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(longDeck as any);
     ownedFixture = new Set(); // non-null and does not hold 'long' → locked
 
     const tree = await renderScreen('long');

@@ -2,6 +2,14 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { invalidateDeckCache } from '../../src/content/deckCache';
+
+// deckCache memoizes deck reads at module scope; clear it between tests so a
+// changed resolveDeckBySlug mock is not shadowed by a prior test's entry (G30).
+beforeEach(() => {
+  invalidateDeckCache();
+});
+
 const announceMock = vi.hoisted(() => vi.fn());
 
 vi.mock('react-native', () => {
@@ -93,6 +101,13 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
       keys.forEach((key) => store.delete(key));
     }),
   },
+}));
+
+// deckCache reads the user scope through a guarded dynamic import of
+// progressScope; mock it so that import resolves to a fixed scope instead of
+// dragging in the real authStore -> react-native chain the runner cannot parse.
+vi.mock('../../src/review/progressScope', () => ({
+  getProgressScopeKey: () => 'anon',
 }));
 
 vi.mock('../../src/content/deckRepository', () => ({

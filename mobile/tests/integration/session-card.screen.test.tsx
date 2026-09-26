@@ -83,6 +83,32 @@ vi.mock('../../src/content/deckRepository', () => ({
   installDeckFromUrl: vi.fn(async () => true),
 }));
 
+// This screen reads/installs through deckCache. Mock it to delegate straight to
+// the (mocked) deckRepository so the test keeps driving resolveDeckBySlug /
+// installDeckFromUrl, without the real cache's dynamic scope import adding an
+// async hop the tight act() cycles here would race.
+vi.mock('../../src/content/deckCache', async () => {
+  const repo = (await import('../../src/content/deckRepository')) as {
+    resolveDeckBySlug: (slug: string) => Promise<unknown>;
+    installDeckFromUrl: (
+      slug: string,
+      url: string,
+      remoteVersion: string | null,
+      remoteSha256: string | null,
+    ) => Promise<boolean>;
+  };
+  return {
+    getCachedDeck: (slug: string) => repo.resolveDeckBySlug(slug),
+    installDeckAndInvalidate: (
+      slug: string,
+      url: string,
+      remoteVersion: string | null,
+      remoteSha256: string | null,
+    ) => repo.installDeckFromUrl(slug, url, remoteVersion, remoteSha256),
+    invalidateDeckCache: () => {},
+  };
+});
+
 vi.mock('../../src/content/activeDeck', () => ({
   loadActiveDeckSlug: vi.fn(async () => 'csharp'),
   setActiveDeckSlug: vi.fn(async () => {}),

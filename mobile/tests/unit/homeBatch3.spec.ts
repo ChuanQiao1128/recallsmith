@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fc from 'fast-check';
 
+import { invalidateDeckCache } from '../../src/content/deckCache';
+
+// deckCache memoizes deck reads at module scope; clear it between tests so a
+// changed resolveDeckBySlug mock is not shadowed by a prior test's entry (G30).
+beforeEach(() => {
+  invalidateDeckCache();
+});
+
 /**
  * C03 (H3 Home batch 3): the F9 sublines keyed on draw.state, the F10 locked
  * labels and Caught-up copy, the F11 masteredCount read, and the route-preview

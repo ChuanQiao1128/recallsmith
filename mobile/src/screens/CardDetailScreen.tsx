@@ -38,10 +38,10 @@ async function loadActiveDeckSlugSafe(): Promise<string | null> {
     return null;
   }
 }
-async function resolveDeckBySlugSafe(slug: string): Promise<DeckExport | null> {
+async function getCachedDeckSafe(slug: string): Promise<DeckExport | null> {
   try {
-    const mod = await import('../content/deckRepository');
-    return (await mod?.resolveDeckBySlug?.(slug)) ?? null;
+    const mod = await import('../content/deckCache');
+    return (await mod?.getCachedDeck?.(slug)) ?? null;
   } catch {
     return null;
   }
@@ -83,7 +83,7 @@ function useDeckCard(cardId: string) {
       try {
         const slug = await loadActiveDeckSlugSafe();
         if (!slug) return;
-        const d = await resolveDeckBySlugSafe(slug);
+        const d = await getCachedDeckSafe(slug);
         if (!d || cancelled) return;
         const p = await loadDeckProgressSafe(d);
         if (cancelled) return;

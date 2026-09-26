@@ -2,6 +2,14 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { invalidateDeckCache } from '../../src/content/deckCache';
+
+// deckCache memoizes deck reads at module scope; clear it between tests so a
+// changed resolveDeckBySlug mock is not shadowed by a prior test's entry (G30).
+beforeEach(() => {
+  invalidateDeckCache();
+});
+
 /**
  * Free-deck auto-update from the Home load path.
  *
