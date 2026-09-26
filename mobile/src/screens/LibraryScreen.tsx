@@ -16,12 +16,8 @@ import type { RootStackParamList } from '../navigation/types';
 import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { getFeatureFlags } from '../config/featureFlags';
-import {
-  checkManifestForUpdates,
-  installDeckFromUrl,
-  listManifestDecks,
-  resolveDeckBySlug,
-} from '../content/deckRepository';
+import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
+import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
 import { loadDeckProgress } from '../review/storage';
 import {
   buildLibraryVM,
@@ -117,20 +113,20 @@ export function LibraryScreen({ navigation, route }: Props) {
         }
         requestedSlug = currentSlug;
 
-        let resolvedDeck = await resolveDeckBySlug(currentSlug);
+        let resolvedDeck = await getCachedDeck(currentSlug);
         if (!resolvedDeck) {
           const updates = await checkManifestForUpdates(false);
           const update = updates[currentSlug];
           if (!update?.remoteUrl) {
             throw new Error('This deck is not available on this device yet.');
           }
-          const installed = await installDeckFromUrl(
+          const installed = await installDeckAndInvalidate(
             currentSlug,
             update.remoteUrl,
             update.remoteVersion,
             update.remoteSha256,
           ).catch(() => false);
-          resolvedDeck = installed ? await resolveDeckBySlug(currentSlug) : null;
+          resolvedDeck = installed ? await getCachedDeck(currentSlug) : null;
           if (!resolvedDeck) {
             throw new Error('Install failed. Check your connection and retry.');
           }

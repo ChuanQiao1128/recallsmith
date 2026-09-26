@@ -15,12 +15,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { CardExport, DeckExport } from '../types/deckExport';
-import {
-  checkManifestForUpdates,
-  installDeckFromUrl,
-  listManifestDecks,
-  resolveDeckBySlug,
-} from '../content/deckRepository';
+import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
+import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { deckShortTitle } from '../content/deckShortTitle';
 import type { CardProgress, ReviewRating } from '../review/model';
@@ -386,19 +382,19 @@ export function SessionCardScreen({ navigation, route }: Props) {
           if (premiumByManifest && !premiumActive) {
             await ensurePremiumOnce();
           }
-          let resolved = await resolveDeckBySlug(slugValue);
+          let resolved = await getCachedDeck(slugValue);
           if (!resolved) {
             const updates = await checkManifestForUpdates();
             const info = (updates as any)[slugValue];
             if (info?.remoteUrl && info?.remoteVersion) {
-              const ok = await installDeckFromUrl(
+              const ok = await installDeckAndInvalidate(
                 slugValue,
                 info.remoteUrl,
                 info.remoteVersion,
                 info.remoteSha256 ?? null,
               );
               if (ok) {
-                resolved = await resolveDeckBySlug(slugValue);
+                resolved = await getCachedDeck(slugValue);
               }
             }
           }

@@ -1,12 +1,11 @@
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../../../content/activeDeck';
 import {
   checkManifestForUpdates,
-  installDeckFromUrl,
   listManifestDecks,
-  resolveDeckBySlug,
   type ManifestDeckEntry,
   type UpdateInfo,
 } from '../../../content/deckRepository';
+import { getCachedDeck, installDeckAndInvalidate } from '../../../content/deckCache';
 import { syncDailyReminders } from '../../../notifications/reminders';
 import { loadDeckProgress } from '../../../review/storage';
 import { applyCachedRemoteProgress } from '../../../sync/progressSync';
@@ -186,7 +185,7 @@ export async function loadHomeDeckSummaries(params: {
       continue;
     }
 
-    const deck = await resolveDeckBySlug(entry.slug);
+    const deck = await getCachedDeck(entry.slug);
     const localCards = deck?.Cards?.length ?? (deck as any)?.TotalCards ?? 0;
     const canStudy = !!deck && localCards > 0;
     const declaredTotal =
@@ -399,7 +398,7 @@ export async function executeDeckAction(action: DeckAction): Promise<{ activeSlu
     case 'install':
     case 'update':
     case 'trial-start': {
-      const ok = await installDeckFromUrl(
+      const ok = await installDeckAndInvalidate(
         action.slug,
         action.remoteUrl,
         action.remoteVersion,
@@ -499,7 +498,7 @@ export function selectAutoUpdateCandidates(params: {
  * and returns the runs it started, without awaiting them: Home renders the
  * "updating" chip from the returned slugs and refreshes when each settles.
  *
- * Deliberately calls installDeckFromUrl and not executeDeckAction: the latter
+ * Deliberately calls installDeckAndInvalidate and not executeDeckAction: the latter
  * also makes the deck active, and a background update must not move the
  * user's selection. Owned cards and review progress live under their own
  * slug-scoped keys that the installer never touches (only a retire purges
@@ -515,7 +514,7 @@ export function autoApplyFreeDeckUpdates(params: {
     autoUpdateAttempted.add(candidate.slug);
     const done = Promise.resolve()
       .then(() =>
-        installDeckFromUrl(
+        installDeckAndInvalidate(
           candidate.slug,
           candidate.remoteUrl,
           candidate.remoteVersion,

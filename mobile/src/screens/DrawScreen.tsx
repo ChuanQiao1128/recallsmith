@@ -9,7 +9,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
-import { checkManifestForUpdates, installDeckFromUrl, listManifestDecks, resolveDeckBySlug } from '../content/deckRepository';
+import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
+import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
 import { deckShortTitle } from '../content/deckShortTitle';
 import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
@@ -395,14 +396,14 @@ export function DrawScreen({ navigation, route }: Props) {
       let cancelled = false;
 
       const resolveOrInstall = async (slug: string) => {
-        let deck = await resolveDeckBySlug(slug);
+        let deck = await getCachedDeck(slug);
         if (deck) return deck;
         const updates = await checkManifestForUpdates(false);
         const update = updates[slug];
         if (!update?.remoteUrl) return null;
-        const installed = await installDeckFromUrl(slug, update.remoteUrl, update.remoteVersion, update.remoteSha256);
+        const installed = await installDeckAndInvalidate(slug, update.remoteUrl, update.remoteVersion, update.remoteSha256);
         if (!installed) return null;
-        return resolveDeckBySlug(slug);
+        return getCachedDeck(slug);
       };
 
       const load = async () => {
