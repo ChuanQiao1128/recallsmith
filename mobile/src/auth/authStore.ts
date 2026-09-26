@@ -19,6 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { AuthFlowError, AUTH_ERROR_COPY, friendlyAuthError } from './authErrors';
 import { isPasswordValid } from './passwordPolicy';
+import { deleteServerAccountData } from './deleteServerAccount';
 
 import { setSyncAccessToken, forceProgressSync, setActiveUserSub } from '../sync/progressSync';
 import { adoptAnonGachaState } from '../sync/drawStateSync';
@@ -119,6 +120,19 @@ function safeStr(v: any): string | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
   return s ? s : null;
+}
+
+// Log RevenueCat out on sign-out and after account deletion so the previous
+// user's entitlement cannot leak into the anonymous state on a shared device.
+// Loaded lazily so importing the store never pulls react-native-purchases /
+// expo-updates into the test bundle. Never throws.
+async function logoutRevenueCat(): Promise<void> {
+  try {
+    const { rcLogout } = await import('../premium/revenuecat');
+    await rcLogout();
+  } catch {
+    // Best-effort: a RevenueCat logout failure must not block sign-out/delete.
+  }
 }
 
 async function applySessionToState(set: any) {
@@ -499,12 +513,40 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         sessionExpired: false,
         initRetryPending: false,
       });
+
+      // Drop the previous user's RevenueCat identity so the anonymous state
+      // does not inherit their entitlement.
+      await logoutRevenueCat();
     }
   },
 
   deleteAccountNow: async () => {
     const sub = get().userSub;
     set({ lastError: null });
+
+    // (a) Get a fresh access token for the authenticated server delete. Prefer
+    // getFreshAccessToken (G05) — loaded lazily to avoid a static import cycle —
+    // and fall back to the token already in the store when it returns null.
+    let token: string | null = null;
+    try {
+      const { getFreshAccessToken } = await import('./freshToken');
+      token = await getFreshAccessToken({ forceRefresh: true });
+    } catch {
+      token = null;
+    }
+    if (!token) token = get().accessToken;
+
+    // (b) Delete the user's server-side data BEFORE Cognito deleteUser. A 404/405/501
+    // ("F15 not deployed") resolves and deletion continues; a 5xx/401/403/network
+    // throws — keep the session, surface the error, do NOT call deleteUser or purge.
+    try {
+      await deleteServerAccountData(token);
+    } catch (err: any) {
+      set({ lastError: err?.message ?? 'Delete account failed' });
+      throw err;
+    }
+
+    // (c) Delete the Cognito user.
     try {
       await deleteUser();
     } catch (err: any) {
@@ -513,6 +555,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ lastError: msg });
       throw new Error(msg);
     }
+    // (d) Sign out, clear the sync token, purge this account's device storage.
     try {
       await signOut();
     } catch {}
@@ -523,6 +566,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await AsyncStorage.removeItem(AUTH_WAS_SIGNED_IN_KEY);
     } catch {}
     set({ status: 'anonymous', userId: null, email: null, userSub: null, accessToken: null, idToken: null, lastError: null, sessionExpired: false, initRetryPending: false });
+
+    // (e) Drop the deleted user's RevenueCat identity.
+    await logoutRevenueCat();
   },
 }));
 

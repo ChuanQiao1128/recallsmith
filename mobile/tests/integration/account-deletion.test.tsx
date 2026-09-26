@@ -27,9 +27,32 @@ vi.mock('aws-amplify/auth', () => ({
   resendSignUpCode: vi.fn(),
   signIn: vi.fn(),
   signOut: vi.fn(async () => {}),
-  fetchAuthSession: vi.fn(),
+  // getFreshAccessToken (via freshToken.ts) re-reads the session before the
+  // server delete; return a token so it resolves to a fresh access token
+  // instead of tripping the session-expired path.
+  fetchAuthSession: vi.fn(async () => ({
+    tokens: { accessToken: 'fresh-access', idToken: 'fresh-id' },
+  })),
   getCurrentUser: vi.fn(),
   deleteUser: vi.fn(async () => {}),
+  resetPassword: vi.fn(),
+  confirmResetPassword: vi.fn(),
+  autoSignIn: vi.fn(),
+}));
+
+// The real server-delete is exercised in tests/unit/deleteServerAccount.test.ts.
+// Here we mock the call but keep the real AccountDeletionError class so
+// `err instanceof AccountDeletionError` and the friendly copy stay authentic.
+vi.mock('../../src/auth/deleteServerAccount', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/auth/deleteServerAccount')>();
+  return {
+    ...actual,
+    deleteServerAccountData: vi.fn(async () => 'deleted' as const),
+  };
+});
+
+vi.mock('../../src/premium/revenuecat', () => ({
+  rcLogout: vi.fn(async () => {}),
 }));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
@@ -59,6 +82,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { deleteUser, signOut } from 'aws-amplify/auth';
 import { setSyncAccessToken } from '../../src/sync/progressSync';
 import { useAuthStore } from '../../src/auth/authStore';
+import {
+  AccountDeletionError,
+  deleteServerAccountData,
+} from '../../src/auth/deleteServerAccount';
+import { rcLogout } from '../../src/premium/revenuecat';
 import { AccountSection, ACCOUNT_COPY } from '../../src/features/gacha/settings/account/AccountSection';
 
 function collectText(node: renderer.ReactTestInstance): string {
@@ -96,8 +124,22 @@ describe('account deletion', () => {
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.clearAllMocks();
+    // clearAllMocks resets call history but not implementations; restore clean
+    // defaults for the mocks individual tests override with persistent impls.
+    (deleteServerAccountData as any).mockReset();
+    (deleteServerAccountData as any).mockResolvedValue('deleted');
+    (deleteUser as any).mockReset();
+    (deleteUser as any).mockResolvedValue(undefined);
     asyncStore.clear();
-    useAuthStore.setState({ status: 'signed_in', userId: 'sub-1', userSub: 'sub-1', email: 'a@b.c' });
+    useAuthStore.setState({
+      status: 'signed_in',
+      userId: 'sub-1',
+      userSub: 'sub-1',
+      email: 'a@b.c',
+      accessToken: null,
+      idToken: null,
+      lastError: null,
+    });
   });
 
   afterEach(() => {
@@ -141,6 +183,93 @@ describe('account deletion', () => {
     expect(signOut).not.toHaveBeenCalled();
     expect(useAuthStore.getState().status).toBe('signed_in');
     expect(useAuthStore.getState().lastError).not.toBeNull();
+  });
+
+  it('calls the server delete before Cognito deleteUser', async () => {
+    const order: string[] = [];
+    (deleteServerAccountData as any).mockImplementation(async () => {
+      order.push('server');
+      return 'deleted';
+    });
+    (deleteUser as any).mockImplementation(async () => {
+      order.push('cognito');
+    });
+
+    await useAuthStore.getState().deleteAccountNow();
+
+    expect(order).toEqual(['server', 'cognito']);
+    // A fresh access token (from getFreshAccessToken) reaches the server delete.
+    expect(deleteServerAccountData).toHaveBeenCalledWith('fresh-access');
+  });
+
+  it('keeps the session and does not call deleteUser when the server delete fails', async () => {
+    (deleteServerAccountData as any).mockRejectedValueOnce(new AccountDeletionError('network'));
+
+    await expect(useAuthStore.getState().deleteAccountNow()).rejects.toBeInstanceOf(
+      AccountDeletionError,
+    );
+
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(setSyncAccessToken).not.toHaveBeenCalledWith(null);
+    expect(AsyncStorage.multiRemove).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().status).toBe('signed_in');
+    expect(useAuthStore.getState().lastError).toBe(new AccountDeletionError('network').message);
+  });
+
+  it('logs RevenueCat out after deleting the account', async () => {
+    await useAuthStore.getState().deleteAccountNow();
+
+    expect(deleteUser).toHaveBeenCalledTimes(1);
+    expect(rcLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it('signOutNow logs RevenueCat out', async () => {
+    await useAuthStore.getState().signOutNow();
+
+    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(rcLogout).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState().status).toBe('anonymous');
+  });
+
+  it('shows the App Store subscription notice and a retry after a failed delete', async () => {
+    (deleteServerAccountData as any).mockRejectedValue(new AccountDeletionError('network'));
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <AccountSection
+          signedIn
+          email="a@b.c"
+          resetting={false}
+          onSignIn={vi.fn()}
+          onSignOut={vi.fn()}
+          onResetReviewSchedule={vi.fn()}
+          primaryCtaTestID="screen-settings-primary-cta"
+        />,
+      );
+    });
+
+    act(() => {
+      findByTestID(tree, 'settings-delete-account-open')[0].props.onPress();
+    });
+    act(() => {
+      findByTestID(tree, 'settings-delete-account-input')[0].props.onChangeText('DELETE');
+    });
+    await act(async () => {
+      findByTestID(tree, 'settings-delete-account-confirm')[0].props.onPress();
+      await flushMicrotasks();
+    });
+
+    // The account is still signed in; deletion was not carried out.
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(findByTestID(tree, 'settings-delete-account-subscription-notice').length).toBe(1);
+    expect(textBlob(tree)).toContain(ACCOUNT_COPY.subscriptionNotice);
+    expect(textBlob(tree)).toContain(new AccountDeletionError('network').message);
+
+    const retry = findByTestID(tree, 'settings-delete-account-retry');
+    expect(retry.length).toBe(1);
+    expect(collectText(retry[0])).toContain(ACCOUNT_COPY.retry);
   });
 
   it('runs the typed-confirmation flow to a deleted notice', async () => {

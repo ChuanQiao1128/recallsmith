@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../../../../theme/colors';
 import { spacing } from '../../../../theme/spacing';
 import { typography } from '../../../../theme/typography';
+import { AccountDeletionError } from '../../../../auth/deleteServerAccount';
 
 export const ACCOUNT_COPY = {
   title: 'Account',
@@ -16,13 +17,16 @@ export const ACCOUNT_COPY = {
   resetSchedule: 'Reset review schedule',
   deleteTitle: 'Delete account',
   deleteBody:
-    'Permanently deletes your sign-in and removes the progress, cards and streak stored on this device for it. This cannot be undone.',
+    'Permanently deletes your account and the progress, cards and wallet saved for it on our servers and on this device. This cannot be undone.',
+  subscriptionNotice:
+    'Deleting your account does not cancel an App Store subscription. Cancel it first in iOS Settings > Apple Account > Subscriptions.',
   deleteOpen: 'Delete account',
   deleteConfirmPrompt: 'Type DELETE to confirm',
   deleteConfirmCta: 'Delete my account',
   deleteCancel: 'Keep my account',
   deleting: 'Deleting...',
   deleteError: 'Could not delete your account. Check your connection and try again.',
+  retry: 'Try again',
   deletedNotice: 'Your account was deleted and you are signed out.',
 } as const;
 
@@ -65,8 +69,10 @@ export function AccountSection(props: {
       setDeleted(true);
       setConfirmOpen(false);
       setConfirmText('');
-    } catch {
-      setDeleteError(ACCOUNT_COPY.deleteError);
+    } catch (e) {
+      // Keep confirmText so a retry does not require retyping DELETE. A typed
+      // deletion error carries friendly copy; anything else uses the generic one.
+      setDeleteError(e instanceof AccountDeletionError ? e.message : ACCOUNT_COPY.deleteError);
     } finally {
       setDeleting(false);
     }
@@ -124,6 +130,7 @@ export function AccountSection(props: {
             {ACCOUNT_COPY.deleteTitle}
           </Text>
           <Text style={styles.sectionBody}>{ACCOUNT_COPY.deleteBody}</Text>
+          <Text style={styles.sectionBody}>{ACCOUNT_COPY.subscriptionNotice}</Text>
           <Pressable
             style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
             onPress={() => setConfirmOpen(true)}
@@ -137,6 +144,12 @@ export function AccountSection(props: {
       ) : signedIn && confirmOpen ? (
         <>
           <Text style={styles.sectionBody}>{ACCOUNT_COPY.deleteConfirmPrompt}</Text>
+          <Text
+            style={styles.sectionBody}
+            testID="settings-delete-account-subscription-notice"
+          >
+            {ACCOUNT_COPY.subscriptionNotice}
+          </Text>
           <TextInput
             testID="settings-delete-account-input"
             style={styles.confirmInput}
@@ -175,7 +188,25 @@ export function AccountSection(props: {
               {ACCOUNT_COPY.deleteCancel}
             </Text>
           </Pressable>
-          {deleteError !== null ? <Text style={styles.errorText}>{deleteError}</Text> : null}
+          {deleteError !== null ? (
+            <>
+              <Text style={styles.errorText}>{deleteError}</Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  deleting && styles.disabledButton,
+                  pressed && styles.pressed,
+                ]}
+                onPress={onConfirmDelete}
+                disabled={deleting}
+                testID="settings-delete-account-retry"
+              >
+                <Text style={styles.secondaryButtonText} numberOfLines={1}>
+                  {ACCOUNT_COPY.retry}
+                </Text>
+              </Pressable>
+            </>
+          ) : null}
         </>
       ) : null}
     </View>
