@@ -26,12 +26,14 @@ describe('tabNavigation helpers', () => {
       routeParamList: {},
       routeGetIdList: {},
     } as any;
-    let state = router.getInitialState(options);
+    // getStateForAction returns a widened (possibly partial) state; keep this
+    // loose so the router drives freely without fighting the reducer's types.
+    let state: any = router.getInitialState(options);
 
     const hop = (name: string) => {
       const action = CommonActions.navigate(name, undefined, { pop: true });
       state = router.getStateForAction(state, action, options) ?? state;
-      const names = state.routes.map((route) => route.name);
+      const names = state.routes.map((route: any) => route.name);
       const unique = new Set(names);
       expect(unique.size).toBe(names.length);
     };
@@ -40,7 +42,7 @@ describe('tabNavigation helpers', () => {
       hop(name);
     }
 
-    const finalNames = state.routes.map((route) => route.name);
+    const finalNames = state.routes.map((route: any) => route.name);
     expect(new Set(finalNames).size).toBe(finalNames.length);
   });
 });
