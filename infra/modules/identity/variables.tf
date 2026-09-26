@@ -64,3 +64,9 @@ variable "core_vpc_function_name" {
 variable "worker_function_name" {
   type = string
 } # prod "worker-lambda"
+
+variable "secret_parameter_names" {
+  description = "Kebab-case leaf names under /developercards/<env>/; values are written by the supervisor with put-parameter, never by Terraform."
+  type        = list(string)
+  default     = []
+}

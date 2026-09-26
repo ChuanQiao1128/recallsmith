@@ -114,6 +114,7 @@ public static class RouteMetrics
     "/rc/webhook",
     "/api/v1/db/ping",
     "/api/v1/admin/db/migrate",
+    "/api/v1/admin/db/bootstrap-roles",
     "/api/v1/admin/db/content-intelligence-demo",
     "/api/v1/admin/db/migrations",
     "/api/v1/admin/db/create",

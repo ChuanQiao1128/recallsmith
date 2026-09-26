@@ -122,6 +122,10 @@ public sealed class VpcFunction
       {
         return await Vpc.Db.Migrate.HandleDbMigrate(req, res, auth);
       }
+      if (p.EndsWith("/api/v1/admin/db/bootstrap-roles", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Db.AppRole.HandleBootstrapRoles(req, res, auth);
+      }
       if (p.EndsWith("/api/v1/admin/db/content-intelligence-demo", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Db.ContentIntelligenceDemo.HandleContentIntelligenceDemo(req, res, auth);
