@@ -177,13 +177,23 @@ export async function createDeck(params: {
   slug?: string;
   description?: string;
   author?: string;
+  locale?: string;
+  deckType?: number;
+  version?: number;
 }): Promise<ApiResult<Deck>> {
   try {
     // A JSON body throughout, matching updateDeck.
+    //
+    // Forwarded on `!== undefined` rather than on truthiness: a cleared
+    // description is '' and must be sent, and deckType/version of a Starter deck
+    // are the meaningful values 1, which truthiness would keep but 0 would not.
     const body: Record<string, unknown> = { title: params.title };
-    if (params.slug) body.slug = params.slug;
-    if (params.description) body.description = params.description;
-    if (params.author) body.author = params.author;
+    if (params.slug !== undefined) body.slug = params.slug;
+    if (params.description !== undefined) body.description = params.description;
+    if (params.author !== undefined) body.author = params.author;
+    if (params.locale !== undefined) body.locale = params.locale;
+    if (params.deckType !== undefined) body.deckType = params.deckType;
+    if (params.version !== undefined) body.version = params.version;
 
     const resp = await http.post<ApiResult<Deck>>('/api/v1/authoring/decks', body);
     const raw = resp.data;
@@ -210,6 +220,10 @@ export async function updateDeck(
     title?: string;
     slug?: string;
     description?: string;
+    author?: string;
+    locale?: string;
+    deckType?: number;
+    version?: number;
     manifestOrder?: number | null;
     availability?: DeckAvailability | null;
     tier?: DeckTier | null;
@@ -225,6 +239,10 @@ export async function updateDeck(
     if (params.title !== undefined) body.title = params.title;
     if (params.slug !== undefined) body.slug = params.slug;
     if (params.description !== undefined) body.description = params.description;
+    if (params.author !== undefined) body.author = params.author;
+    if (params.locale !== undefined) body.locale = params.locale;
+    if (params.deckType !== undefined) body.deckType = params.deckType;
+    if (params.version !== undefined) body.version = params.version;
     if (params.manifestOrder !== undefined) body.manifestOrder = params.manifestOrder;
     if (params.availability !== undefined) body.availability = params.availability;
     if (params.tier !== undefined) body.tier = params.tier;

@@ -2,7 +2,8 @@
 
 import { useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useCreateDeck } from '../hooks/useDecks';
+import { useCreateDeck, useUpdateDeck } from '../hooks/useDecks';
+import { buildDeckBody, parseDraftVersion, DRAFT_VERSION_ERROR } from '../lib/authoringBodies';
 
 interface NewDeckForm {
   title: string;
@@ -13,7 +14,7 @@ interface NewDeckForm {
   deckType: number; // 1 Starter, 2 Paid
 
   // mobile / publish fields: captured here, used later by publish and preview
-  contentVersion: string; // e.g. 1.0.0
+  draftVersion: string; // whole number held in decks.version; publish stamps its own build id
   freeCardCount: number; // cards a Paid deck opens for preview, e.g. 50
 }
 
@@ -42,11 +43,6 @@ function slugify(input: string): string {
     .replace(/^-+|-+$/g, ''); // and leading/trailing separators go
 }
 
-function isValidSemver(v: string): boolean {
-  // Accepts 1.0.0 / 1.0.0-alpha / 1.0.0+build
-  return /^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(v.trim());
-}
-
 export function NewDeckPage() {
   const navigate = useNavigate();
 
@@ -58,7 +54,7 @@ export function NewDeckPage() {
     locale: 'en-US',
     deckType: 1,
 
-    contentVersion: '1.0.0',
+    draftVersion: '1',
     freeCardCount: 50,
   });
 
@@ -70,6 +66,9 @@ export function NewDeckPage() {
   // The write goes through react-query so that a created deck invalidates the
   // deck list rather than relying on the list refusing to cache.
   const createDeckMutation = useCreateDeck();
+  // Decks.cs POST ignores previewCards, so a Paid deck's free card count reaches
+  // the row only through a follow-up PUT after the create succeeds.
+  const updateDeckMutation = useUpdateDeck();
 
   const isStarter = form.deckType === 1;
   const isFreeStarter = isStarter; // the rule: a Starter deck is always a free starter
@@ -112,20 +111,18 @@ export function NewDeckPage() {
     const trimmedTitle = form.title.trim();
     const trimmedSlug = form.slug.trim();
     const trimmedAuthor = form.author.trim();
-    const trimmedVersion = form.contentVersion.trim();
+    const trimmedVersion = form.draftVersion.trim();
+    const draftVersion = parseDraftVersion(trimmedVersion);
 
     const problems: string[] = [];
 
     if (!trimmedTitle) problems.push('Title is required.');
     if (!trimmedSlug) problems.push('Slug is required.');
     if (!trimmedAuthor) problems.push('Author is required.');
-    // One message per field, still. An empty version fails both checks, and
-    // "Content version is required." followed by "must be semver like 1.0.0"
-    // would be two complaints about one blank box — which is the noise that
-    // makes people stop reading a list.
-    if (!trimmedVersion) problems.push('Content version is required.');
-    else if (!isValidSemver(trimmedVersion))
-      problems.push('Content version must be semver like 1.0.0');
+    // One message per field, still. A blank box is its own complaint; anything
+    // else that will not parse to a whole number of 1 or more is the other.
+    if (!trimmedVersion) problems.push('Draft version is required.');
+    else if (draftVersion === null) problems.push(DRAFT_VERSION_ERROR);
 
     // Only a Paid deck has a preview count to get wrong: a Starter deck opens
     // every card, so a stale negative left over from switching type is not a
@@ -142,12 +139,19 @@ export function NewDeckPage() {
     setState({ submitting: true, errors: [] });
 
     try {
-      const result = await createDeckMutation.mutateAsync({
-        slug: trimmedSlug,
-        title: trimmedTitle,
-        author: trimmedAuthor,
-        description: form.description,
-      });
+      const result = await createDeckMutation.mutateAsync(
+        buildDeckBody({
+          slug: trimmedSlug,
+          title: trimmedTitle,
+          author: trimmedAuthor,
+          description: form.description,
+          locale: form.locale,
+          deckType: form.deckType,
+          // Non-null here: a null draftVersion was collected into `problems`
+          // above and returned before this point.
+          version: draftVersion ?? 1,
+        }),
+      );
 
       if (!result.success) {
         setState({
@@ -155,6 +159,26 @@ export function NewDeckPage() {
           errors: [result.error?.message ?? 'Create deck failed.'],
         });
         return;
+      }
+
+      // A Paid deck carries a free card count the POST could not store, so save
+      // it with a follow-up PUT before leaving. A Starter deck makes one request.
+      if (form.deckType === 2 && result.data) {
+        const { result: previewResult } = await updateDeckMutation.mutateAsync({
+          id: result.data.id,
+          params: { previewCards: form.freeCardCount },
+        });
+
+        if (!previewResult.success) {
+          const message = previewResult.error?.message ?? 'unknown error';
+          setState({
+            submitting: false,
+            errors: [
+              `Deck created, but the free card count was not saved: ${message}. Set Preview Cards on the deck's Edit page.`,
+            ],
+          });
+          return;
+        }
       }
 
       navigate('/', { replace: true });
@@ -315,20 +339,21 @@ export function NewDeckPage() {
             <div className="text-sm font-semibold text-slate-800 mb-2">Mobile / Publish settings</div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* contentVersion */}
+              {/* draftVersion */}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Content Version <span className="text-red-500">*</span>
+                  Draft Version <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
                   className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono
                              focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  value={form.contentVersion}
-                  onChange={e => handleChange('contentVersion', e.target.value.trim())}
-                  placeholder="1.0.0"
+                  value={form.draftVersion}
+                  onChange={e => handleChange('draftVersion', e.target.value.trim())}
+                  placeholder="1"
+                  aria-label="Draft Version"
                 />
-                <p className="mt-1 text-xs text-slate-500">The Version written into deck.json. Keep it strict semver.</p>
+                <p className="mt-1 text-xs text-slate-500">The draft version held in the database (a whole number). Publishing stamps its own build id into deck.json.</p>
               </div>
 
               {/* isFreeStarter (derived) */}
