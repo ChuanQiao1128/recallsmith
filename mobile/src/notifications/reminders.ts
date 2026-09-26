@@ -2,6 +2,9 @@
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
+import { mapPermissionResponse, type NotificationPermissionState } from './permissionState';
+
+export type { NotificationPermissionState };
 
 const ANDROID_CHANNEL_ID = 'reminders';
 
@@ -21,7 +24,7 @@ export type ReminderPrefs = {
   eveningTime: string; // "20:00"
 };
 
-const DEFAULT_PREFS: ReminderPrefs = {
+export const DEFAULT_REMINDER_PREFS: ReminderPrefs = {
   morningEnabled: true,
   morningTime: '09:00',
   eveningEnabled: false,
@@ -72,19 +75,19 @@ function normalizeTime(v: string, fallback: string) {
 
 async function readPrefs(): Promise<ReminderPrefs> {
   const raw = await AsyncStorage.getItem(KEY_PREFS);
-  if (!raw) return DEFAULT_PREFS;
+  if (!raw) return DEFAULT_REMINDER_PREFS;
 
   try {
     const obj = JSON.parse(raw);
-    const morningEnabled = typeof obj?.morningEnabled === 'boolean' ? obj.morningEnabled : DEFAULT_PREFS.morningEnabled;
-    const eveningEnabled = typeof obj?.eveningEnabled === 'boolean' ? obj.eveningEnabled : DEFAULT_PREFS.eveningEnabled;
+    const morningEnabled = typeof obj?.morningEnabled === 'boolean' ? obj.morningEnabled : DEFAULT_REMINDER_PREFS.morningEnabled;
+    const eveningEnabled = typeof obj?.eveningEnabled === 'boolean' ? obj.eveningEnabled : DEFAULT_REMINDER_PREFS.eveningEnabled;
 
-    const morningTime = normalizeTime(String(obj?.morningTime ?? DEFAULT_PREFS.morningTime), DEFAULT_PREFS.morningTime);
-    const eveningTime = normalizeTime(String(obj?.eveningTime ?? DEFAULT_PREFS.eveningTime), DEFAULT_PREFS.eveningTime);
+    const morningTime = normalizeTime(String(obj?.morningTime ?? DEFAULT_REMINDER_PREFS.morningTime), DEFAULT_REMINDER_PREFS.morningTime);
+    const eveningTime = normalizeTime(String(obj?.eveningTime ?? DEFAULT_REMINDER_PREFS.eveningTime), DEFAULT_REMINDER_PREFS.eveningTime);
 
     return { morningEnabled, morningTime, eveningEnabled, eveningTime };
   } catch {
-    return DEFAULT_PREFS;
+    return DEFAULT_REMINDER_PREFS;
   }
 }
 
@@ -105,12 +108,41 @@ export async function setReminderPrefs(patch: Partial<ReminderPrefs>): Promise<R
   return next;
 }
 
-// Read-only: the OS permission request lives solely in PermissionPromptScreen.
-// syncDailyReminders runs on every Home refresh (deckActionResolver.ts:251),
-// so requesting here re-prompted users who had just tapped "Not now".
+// Read-only: syncDailyReminders never asks the OS. The permission request is
+// only triggered by explicit user actions (PermissionPromptScreen and
+// Settings > Reminders via requestNotificationPermission). syncDailyReminders
+// runs on every Home refresh (deckActionResolver.ts:251), so requesting here
+// would re-prompt users who had just tapped "Not now".
 async function hasPermission(): Promise<boolean> {
   const { status } = await Notifications.getPermissionsAsync();
   return status === 'granted';
+}
+
+/**
+ * Read the current notification permission without prompting. Any throw
+ * (native module unavailable, jsdom, etc.) is treated as `'undetermined'`.
+ */
+export async function getNotificationPermissionState(): Promise<NotificationPermissionState> {
+  try {
+    const res = await Notifications.getPermissionsAsync();
+    return mapPermissionResponse(res);
+  } catch {
+    return 'undetermined';
+  }
+}
+
+/**
+ * Ask the OS for notification permission and map the answer. Only called from
+ * explicit user actions (PermissionPrompt, Settings > Reminders);
+ * syncDailyReminders stays read-only. Any throw → `'undetermined'`.
+ */
+export async function requestNotificationPermission(): Promise<NotificationPermissionState> {
+  try {
+    const res = await Notifications.requestPermissionsAsync();
+    return mapPermissionResponse(res);
+  } catch {
+    return 'undetermined';
+  }
 }
 
 async function ensureAndroidChannel(): Promise<void> {

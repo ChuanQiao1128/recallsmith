@@ -38,7 +38,7 @@ vi.mock('react-native', () => {
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
     RefreshControl: (props: any) => React.createElement('RefreshControl', props),
     Platform: { OS: 'ios' },
-    Linking: { canOpenURL: vi.fn(async () => true), openURL: vi.fn(async () => {}) },
+    Linking: { canOpenURL: vi.fn(async () => true), openURL: vi.fn(async () => {}), openSettings: vi.fn(async () => {}) },
     Alert: { alert: (...args: any[]) => alertMock(...args) },
     StyleSheet: { create: (styles: any) => styles },
   };
@@ -114,9 +114,17 @@ vi.mock('../../src/config/remoteConfig', () => ({
 }));
 
 vi.mock('../../src/notifications/reminders', () => ({
+  DEFAULT_REMINDER_PREFS: {
+    morningEnabled: true,
+    morningTime: '09:00',
+    eveningEnabled: false,
+    eveningTime: '20:00',
+  },
   getReminderPrefs: () => getReminderPrefsMock(),
   setReminderPrefs: vi.fn(async (next: any) => next),
   refreshDailyRemindersFromCache: vi.fn(async () => {}),
+  getNotificationPermissionState: vi.fn(async () => 'granted'),
+  requestNotificationPermission: vi.fn(async () => 'granted'),
 }));
 
 vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({

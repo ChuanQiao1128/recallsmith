@@ -19,8 +19,14 @@ import { getCurrentAppVersion } from '../config/remoteConfig';
 import { useFeatureFlags } from '../config/featureFlags';
 import { useAuthStore } from '../auth/authStore';
 import {
+  DEFAULT_REMINDER_PREFS,
   getReminderPrefs,
+  setReminderPrefs,
+  refreshDailyRemindersFromCache,
+  getNotificationPermissionState,
+  requestNotificationPermission,
   type ReminderPrefs,
+  type NotificationPermissionState,
 } from '../notifications/reminders';
 import { buildReminderPlanVM } from '../features/gacha/reminders/reminderPlanner';
 import { loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
@@ -56,13 +62,6 @@ const PREMIUM_COPY = {
   body: 'Unlock premium tracks and keep upgrades in one place.',
   action: 'Open premium',
 } as const;
-
-const DEFAULT_REMINDER_PREFS: ReminderPrefs = {
-  morningEnabled: true,
-  morningTime: '09:00',
-  eveningEnabled: true,
-  eveningTime: '20:00',
-};
 
 function hasSettingsPayload(
   prefs: ReminderPrefs | null | undefined,
@@ -108,6 +107,8 @@ export function SettingsScreen({ navigation }: Props) {
   const [audience, setAudience] = useState<AudiencePreference>('both');
   const [audienceSaving, setAudienceSaving] = useState(false);
   const [reminderPrefs, setReminderPrefsState] = useState<ReminderPrefs>(DEFAULT_REMINDER_PREFS);
+  const [reminderPermission, setReminderPermission] = useState<NotificationPermissionState | 'unknown'>('unknown');
+  const [reminderBusy, setReminderBusy] = useState(false);
   const [streak, setStreak] = useState<StreakSnapshot | null>(null);
   const [resetting, setResetting] = useState(false);
 
@@ -133,6 +134,14 @@ export function SettingsScreen({ navigation }: Props) {
       setReminderPrefsState(nextPrefs);
       setStreak(nextStreak);
       setLoadState('ready');
+
+      // A permission read must never flip the screen to the error state, so it
+      // runs in its own try/catch after the payload check has succeeded.
+      try {
+        setReminderPermission(await getNotificationPermissionState());
+      } catch {
+        setReminderPermission('undetermined');
+      }
     } catch {
       setLoadError('Unable to load settings right now.');
       setLoadState('error');
@@ -158,6 +167,66 @@ export function SettingsScreen({ navigation }: Props) {
       setAudienceSaving(false);
     }
   }, [audience, audienceSaving]);
+
+  const onTurnOnReminders = useCallback(async () => {
+    if (reminderBusy) return;
+    setReminderBusy(true);
+    try {
+      const next = await requestNotificationPermission();
+      setReminderPermission(next);
+      if (next === 'granted') {
+        await refreshDailyRemindersFromCache();
+      }
+    } finally {
+      setReminderBusy(false);
+    }
+  }, [reminderBusy]);
+
+  const onOpenReminderSettings = useCallback(async () => {
+    try {
+      await Linking.openSettings();
+    } catch {
+      Alert.alert('Cannot open settings', 'Please open iOS Settings > DeveloperCards > Notifications.');
+    }
+  }, []);
+
+  const applyReminderPatch = useCallback(async (patch: Partial<ReminderPrefs>) => {
+    try {
+      const saved = await setReminderPrefs(patch);
+      setReminderPrefsState(saved);
+      await refreshDailyRemindersFromCache();
+    } catch {
+      Alert.alert('Update failed', 'Unable to update reminders right now.');
+    }
+  }, []);
+
+  const onToggleMorning = useCallback(
+    (enabled: boolean) => {
+      void applyReminderPatch({ morningEnabled: enabled });
+    },
+    [applyReminderPatch],
+  );
+
+  const onToggleEvening = useCallback(
+    (enabled: boolean) => {
+      void applyReminderPatch({ eveningEnabled: enabled });
+    },
+    [applyReminderPatch],
+  );
+
+  const onSelectMorningTime = useCallback(
+    (time: string) => {
+      void applyReminderPatch({ morningTime: time });
+    },
+    [applyReminderPatch],
+  );
+
+  const onSelectEveningTime = useCallback(
+    (time: string) => {
+      void applyReminderPatch({ eveningTime: time });
+    },
+    [applyReminderPatch],
+  );
 
   const onResetReviewSchedule = useCallback(() => {
     confirmResetReviewSchedule({
@@ -306,7 +375,7 @@ export function SettingsScreen({ navigation }: Props) {
               {momentumDays} days streak · {totalSessions} qualified sessions
             </Text>
             <Text style={styles.metaText} numberOfLines={1}>
-              {reminderPlan.eveningLine}
+              {reminderPlan.statusLine}
             </Text>
           </View>
 
@@ -327,9 +396,15 @@ export function SettingsScreen({ navigation }: Props) {
           />
 
           <RemindersSection
-            signedIn={signedIn}
-            plan={reminderPlan}
-            onSignIn={onSignIn}
+            permission={reminderPermission}
+            prefs={reminderPrefs}
+            busy={reminderBusy}
+            onTurnOn={() => void onTurnOnReminders()}
+            onOpenSettings={() => void onOpenReminderSettings()}
+            onToggleMorning={onToggleMorning}
+            onToggleEvening={onToggleEvening}
+            onSelectMorningTime={onSelectMorningTime}
+            onSelectEveningTime={onSelectEveningTime}
           />
 
           <AppearanceSection />
