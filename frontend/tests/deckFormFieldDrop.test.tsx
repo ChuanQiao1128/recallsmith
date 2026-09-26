@@ -28,6 +28,7 @@ import userEvent from '@testing-library/user-event';
 import type { Card } from '../src/types/card';
 import type { Deck } from '../src/types/deck';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
+import { queryClient } from '../src/api/queryClient';
 import { ok, refused } from './support/apiResult';
 import { locationText, renderAt } from './support/routerProbe';
 
@@ -90,6 +91,8 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  // DeckEditPage mounts bare on the app singleton; clear it between cases.
+  queryClient.clear();
   signOut();
 });
 

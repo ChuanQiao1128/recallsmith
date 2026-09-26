@@ -16,10 +16,12 @@ import type { Card } from '../src/types/card';
 import type { ApiResult } from '../src/types/api';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { renderAt } from './support/routerProbe';
+import { queryClient } from '../src/api/queryClient';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
   fetchCardsByDeck: vi.fn(),
+  fetchCardById: vi.fn(),
   updateCard: vi.fn(),
   updateDeck: vi.fn(),
 }));
@@ -81,6 +83,7 @@ beforeEach(() => {
   signInAsSuperAdmin();
   api.fetchDeckById.mockResolvedValue(ok(deck));
   api.fetchCardsByDeck.mockResolvedValue(ok([card()]));
+  api.fetchCardById.mockResolvedValue(ok(card()));
   api.updateCard.mockResolvedValue(ok(card()));
   api.updateDeck.mockResolvedValue(ok(deck));
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -90,6 +93,8 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  // Both pages mount bare on the app singleton; clear it between cases.
+  queryClient.clear();
   signOut();
 });
 

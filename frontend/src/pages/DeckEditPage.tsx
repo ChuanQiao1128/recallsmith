@@ -2,35 +2,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
-import {
-  fetchDeckById,
-  fetchCardsByDeck,
-} from '../api/authoring';
-
-import { useUpdateDeck } from '../hooks/useDecks';
+import { QueryKeys, useAppQueryClient } from '../api/queryClient';
+import { useCards } from '../hooks/useCards';
+import { useDeck, useUpdateDeck } from '../hooks/useDecks';
 import { buildDeckBody, parseDraftVersion, DRAFT_VERSION_ERROR } from '../lib/authoringBodies';
 
-import type { Deck, DeckAvailability, DeckTier } from '../types/deck';
+import type { DeckAvailability, DeckTier } from '../types/deck';
 
 import { clearStoredTokens } from '../auth/tokenStore';
 import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
-
-type LoadState = {
-  loading: boolean;
-  error: string | null;
-  deck: Deck | null;
-};
-
-type CardsInfo = {
-  loading: boolean;
-  error: string | null;
-  count: number | null;
-};
-
-
 
 type FormState = {
   // base fields
@@ -71,6 +54,19 @@ function effectiveTier(deckType: number, tier: '' | DeckTier): DeckTier {
   return Number(deckType) === 1 ? 'free' : 'premium';
 }
 
+/**
+ * The sentence shown when the deck will not load.
+ *
+ * useDeck bakes in 'Deck not found.' as its own fallback when the server sends no
+ * message; this page has always shown 'Failed to load deck.' in that spot, so the
+ * hook's fallback is mapped back to the page's. A real server message — a
+ * refusal's wording, a thrown request's message — passes through untouched.
+ */
+function deckLoadMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : 'Failed to load deck.';
+  return message === 'Deck not found.' ? 'Failed to load deck.' : message;
+}
+
 export function DeckEditPage() {
   const navigate = useNavigate();
   const [sp] = useSearchParams();
@@ -81,16 +77,20 @@ export function DeckEditPage() {
   const deckIdRaw = sp.get('deckId');
   const deckId = deckIdRaw ? Number(deckIdRaw) : NaN;
 
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  // The page's own guard is stricter than useDeck's: a negative deckId is
+  // refused here before any request, the way this page has always behaved. When
+  // it fails, NaN is handed to the hooks so their enabled predicate skips the
+  // fetch entirely.
+  const invalidDeckId = !Number.isFinite(deckId) || deckId <= 0;
+  const queryDeckId = invalidDeckId ? Number.NaN : deckId;
 
-  const [load, setLoad] = useState<LoadState>({ loading: true, error: null, deck: null });
-  const [cardsInfo, setCardsInfo] = useState<CardsInfo>({ loading: false, error: null, count: null });
+  // The deck and its card count both come through the shared cache. The cards
+  // read is gated on a loaded deck, so it stays downstream of the deck fetch the
+  // way the hand-rolled effect ordered them — a failed deck never fires it.
+  const deckQuery = useDeck(queryDeckId);
+  const cardsQuery = useCards(deckQuery.isSuccess ? queryDeckId : Number.NaN);
+
+  const queryClient = useAppQueryClient();
 
   const [form, setForm] = useState<FormState>({
     slug: '',
@@ -128,80 +128,47 @@ export function DeckEditPage() {
     }
   }
 
+  // The form is filled from the deck exactly ONCE per deck id, tracked by a ref
+  // that holds the id it was filled for. A background refetch — the one the save
+  // itself triggers through useUpdateDeck's invalidation, or any staleness
+  // revalidation — hands useDeck new data for the same id, and without this guard
+  // that data would be copied straight over whatever the user is typing.
+  const initializedFor = useRef<number | null>(null);
+
   useEffect(() => {
-    let cancelled = false;
+    const found = deckQuery.data;
+    if (!found) return;
+    if (initializedFor.current === found.id) return;
+    initializedFor.current = found.id;
 
-    (async () => {
-      if (!Number.isFinite(deckId) || deckId <= 0) {
-        setLoad({ loading: false, error: 'Missing or invalid deckId.', deck: null });
-        return;
-      }
+    setForm({
+      slug: toStr(found.slug),
+      title: toStr(found.title),
+      author: toStr(found.author),
+      description: toStr(found.description ?? ''),
+      locale: toStr(found.locale ?? 'en-US'),
+      deckType: Number(found.deckType ?? 1) || 1,
+      version: toStr(found.version ?? '1'),
 
-      setLoad({ loading: true, error: null, deck: null });
-      setSaveError(null);
-      setSaveOk(null);
+      tier: found.tier === 'free' || found.tier === 'premium' ? found.tier : '',
+      availability:
+        found.availability === 'coming' || found.availability === 'retired' || found.availability === 'live'
+          ? found.availability
+          : 'live',
+      eta: toStr(found.eta ?? ''),
 
-      try {
-        // 1) load deck
-        const deckRes = await fetchDeckById(deckId);
-        if (cancelled || !mountedRef.current) return;
-
-        if (!deckRes.success || !deckRes.data) {
-          setLoad({ loading: false, error: deckRes.error?.message ?? 'Failed to load deck.', deck: null });
-          return;
-        }
-
-        const found = deckRes.data;
-        setLoad({ loading: false, error: null, deck: found });
-
-        // init form once
-        setForm({
-          slug: toStr(found.slug),
-          title: toStr(found.title),
-          author: toStr(found.author),
-          description: toStr(found.description ?? ''),
-          locale: toStr(found.locale ?? 'en-US'),
-          deckType: Number(found.deckType ?? 1) || 1,
-          version: toStr(found.version ?? '1'),
-
-          tier: found.tier === 'free' || found.tier === 'premium' ? found.tier : '',
-          availability:
-            found.availability === 'coming' || found.availability === 'retired' || found.availability === 'live'
-              ? found.availability
-              : 'live',
-          eta: toStr(found.eta ?? ''),
-
-          manifestOrder: found.manifestOrder != null ? String(found.manifestOrder) : '',
-          totalCards: found.totalCards != null ? String(found.totalCards) : '',
-          previewCards: found.previewCards != null ? String(found.previewCards) : '',
-          retiredAtMs: found.retiredAtMs != null ? String(found.retiredAtMs) : '',
-        });
-
-        // 2) load cards count
-        setCardsInfo({ loading: true, error: null, count: null });
-        const cardsRes = await fetchCardsByDeck(found.id);
-        if (cancelled || !mountedRef.current) return;
-
-        if (!cardsRes.success) {
-          setCardsInfo({ loading: false, error: cardsRes.error?.message ?? 'Failed to load cards.', count: null });
-        } else {
-          setCardsInfo({ loading: false, error: null, count: (cardsRes.data ?? []).length });
-        }
-
-
-      } catch (err: unknown) {
-        if (cancelled || !mountedRef.current) return;
-        setLoad({ loading: false, error: err instanceof Error ? err.message : 'Network error.', deck: null });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [deckId]);
+      manifestOrder: found.manifestOrder != null ? String(found.manifestOrder) : '',
+      totalCards: found.totalCards != null ? String(found.totalCards) : '',
+      previewCards: found.previewCards != null ? String(found.previewCards) : '',
+      retiredAtMs: found.retiredAtMs != null ? String(found.retiredAtMs) : '',
+    });
+    setSaveError(null);
+    setSaveOk(null);
+  }, [deckQuery.data]);
 
   async function onSave(goBackAfter = false) {
-    if (!load.deck) return;
+    const loadedDeck = deckQuery.data;
+    if (!loadedDeck) return;
 
     setSaving(true);
     setSaveError(null);
@@ -252,7 +219,7 @@ export function DeckEditPage() {
       };
 
       const { result: res } = await updateDeckMutation.mutateAsync({
-        id: load.deck.id,
+        id: loadedDeck.id,
         params: payload,
       });
 
@@ -262,7 +229,11 @@ export function DeckEditPage() {
       }
 
       setSaveOk('Saved.');
-      setLoad(prev => ({ ...prev, deck: res.data ?? prev.deck }));
+      // The server's copy of the deck goes straight into its cache entry, so the
+      // header shows what was saved without waiting for the refetch. The form is
+      // NOT re-filled from it: initializedFor already holds this id, so what the
+      // user typed survives. useUpdateDeck's own invalidations still run.
+      queryClient.setQueryData(QueryKeys.deck(loadedDeck.id), res.data);
 
       if (goBackAfter) navigate('/', { replace: true });
     } catch (err: unknown) {
@@ -274,7 +245,7 @@ export function DeckEditPage() {
 
   function applySuggestedCounts() {
     if (!superAdmin) return;
-    const count = cardsInfo.count ?? 0;
+    const count = cardsQuery.data?.length ?? 0;
     setForm(prev => ({
       ...prev,
       totalCards: String(count),
@@ -282,7 +253,13 @@ export function DeckEditPage() {
     }));
   }
 
-  if (load.loading) {
+  const loadError = invalidDeckId
+    ? 'Missing or invalid deckId.'
+    : deckQuery.isError
+      ? deckLoadMessage(deckQuery.error)
+      : null;
+
+  if (!invalidDeckId && deckQuery.isPending) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
         <div className="text-slate-600 text-lg">Loading deck…</div>
@@ -290,12 +267,12 @@ export function DeckEditPage() {
     );
   }
 
-  if (load.error) {
+  if (loadError || !deckQuery.data) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
         <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded shadow-sm max-w-md">
           <div className="font-semibold mb-1">Failed to load deck</div>
-          <div className="text-sm">{load.error}</div>
+          <div className="text-sm">{loadError ?? 'Failed to load deck.'}</div>
 
           <button
             type="button"
@@ -309,7 +286,7 @@ export function DeckEditPage() {
     );
   }
 
-  const deck = load.deck!;
+  const deck = deckQuery.data;
   const effTier = effectiveTier(form.deckType, form.tier);
 
   return (
@@ -355,13 +332,15 @@ export function DeckEditPage() {
         {/* Cards count */}
         <div className="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-3">
           <div className="text-xs text-slate-600 font-semibold">Cards in DB</div>
-          {cardsInfo.loading ? (
+          {cardsQuery.isPending ? (
             <div className="text-sm text-slate-600 mt-1">Loading cards…</div>
-          ) : cardsInfo.error ? (
-            <div className="text-sm text-amber-700 mt-1">{cardsInfo.error}</div>
+          ) : cardsQuery.isError ? (
+            <div className="text-sm text-amber-700 mt-1">
+              {cardsQuery.error instanceof Error ? cardsQuery.error.message : 'Failed to load cards.'}
+            </div>
           ) : (
             <div className="text-sm text-slate-800 mt-1">
-              count = <span className="font-mono">{cardsInfo.count ?? 0}</span>
+              count = <span className="font-mono">{cardsQuery.data?.length ?? 0}</span>
               {superAdmin ? (
                 <button
                   type="button"

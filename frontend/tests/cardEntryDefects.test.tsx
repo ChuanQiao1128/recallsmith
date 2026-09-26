@@ -31,11 +31,13 @@ import { MemoryRouter } from 'react-router-dom';
 import type { Deck } from '../src/types/deck';
 import type { Card } from '../src/types/card';
 import type { ApiResult } from '../src/types/api';
+import { queryClient } from '../src/api/queryClient';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
   fetchCardsByDeck: vi.fn(),
+  fetchCardById: vi.fn(),
   createCard: vi.fn(),
   updateCard: vi.fn(),
 }));
@@ -93,6 +95,7 @@ beforeEach(() => {
   signInAsSuperAdmin();
   api.fetchDeckById.mockResolvedValue(ok(deck));
   api.fetchCardsByDeck.mockResolvedValue(ok([card()]));
+  api.fetchCardById.mockResolvedValue(ok(card()));
   api.createCard.mockResolvedValue(ok(card()));
   api.updateCard.mockResolvedValue(ok(card()));
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -102,6 +105,9 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  // These pages mount bare and read through the app singleton; clear it so one
+  // case's cached deck/card does not survive into the next.
+  queryClient.clear();
   signOut();
 });
 
@@ -217,7 +223,7 @@ describe('editing a card keeps the edit to its usage note', () => {
 
   it('sends realWorldUsage along with everything else', async () => {
     const user = userEvent.setup();
-    api.fetchCardsByDeck.mockResolvedValue(ok([card()]));
+    api.fetchCardById.mockResolvedValue(ok(card()));
     mountEdit();
 
     const usage = await screen.findByDisplayValue('A flag polled from another thread.');

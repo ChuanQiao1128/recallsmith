@@ -30,12 +30,13 @@ import { MemoryRouter } from 'react-router-dom';
 
 import type { Card } from '../src/types/card';
 import type { Deck } from '../src/types/deck';
+import { queryClient } from '../src/api/queryClient';
 import { ok, refused, networkFailure } from './support/apiResult';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 
 const api = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
-  fetchCardsByDeck: vi.fn(),
+  fetchCardById: vi.fn(),
   updateCard: vi.fn(),
 }));
 
@@ -111,12 +112,15 @@ beforeEach(() => {
   signOut();
   signInAsSuperAdmin();
   api.fetchDeckById.mockResolvedValue(ok(deck));
-  api.fetchCardsByDeck.mockResolvedValue(ok([card(4)]));
+  api.fetchCardById.mockResolvedValue(ok(card(4)));
 });
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  // The page mounts bare, so useCard/useDeck run on the app singleton. Clearing
+  // it keeps one case's cached card from being served to the next.
+  queryClient.clear();
   signOut();
 });
 
@@ -127,7 +131,7 @@ describe('a save that lost a version race', () => {
     // Ordering matters and it is the mechanism under test: the re-read happens
     // DURING the failed save, not after it, so the newer version has to be what
     // the server is already answering by the time Save is pressed.
-    api.fetchCardsByDeck.mockResolvedValue(ok([card(9)]));
+    api.fetchCardById.mockResolvedValue(ok(card(9)));
     api.updateCard.mockResolvedValueOnce(refused<Card>('VERSION_CONFLICT', STALE_MESSAGE));
 
     await userEvent.click(saveButton());
@@ -150,7 +154,7 @@ describe('a save that lost a version race', () => {
     // The re-read answers with a card whose question is different, and the form
     // must NOT adopt it: the point of the recovery is that the edit survives.
     // Reloading was always available and always cost exactly this.
-    api.fetchCardsByDeck.mockResolvedValue(ok([card(9, { question: 'Somebody else rewrote it' })]));
+    api.fetchCardById.mockResolvedValue(ok(card(9, { question: 'Somebody else rewrote it' })));
     api.updateCard.mockResolvedValue(refused<Card>('VERSION_CONFLICT', STALE_MESSAGE));
 
     await retypeQuestion('My unsaved rewrite');
@@ -164,7 +168,7 @@ describe('a save that lost a version race', () => {
   it('offers the retry button, and it sends what is on screen when it is pressed', async () => {
     await mountLoaded();
 
-    api.fetchCardsByDeck.mockResolvedValue(ok([card(9)]));
+    api.fetchCardById.mockResolvedValue(ok(card(9)));
     api.updateCard.mockResolvedValueOnce(refused<Card>('VERSION_CONFLICT', STALE_MESSAGE));
 
     await retypeQuestion('First rewrite');
@@ -188,7 +192,7 @@ describe('a save that lost a version race', () => {
   it('leaves the page for the card list once the retry is accepted', async () => {
     await mountLoaded();
 
-    api.fetchCardsByDeck.mockResolvedValue(ok([card(9)]));
+    api.fetchCardById.mockResolvedValue(ok(card(9)));
     api.updateCard.mockResolvedValueOnce(refused<Card>('VERSION_CONFLICT', STALE_MESSAGE));
 
     await userEvent.click(saveButton());
@@ -205,9 +209,9 @@ describe('a conflict this console cannot recover from', () => {
   it('says to reload and offers no button, when the re-read fails too', async () => {
     await mountLoaded();
 
-    // The reread is the next fetchCardsByDeck, and it does not come back.
+    // The reread is the next fetchCardById, and it does not come back.
     api.updateCard.mockResolvedValue(refused<Card>('VERSION_CONFLICT', STALE_MESSAGE));
-    api.fetchCardsByDeck.mockResolvedValue(networkFailure<Card[]>('Network error.'));
+    api.fetchCardById.mockResolvedValue(networkFailure<Card>('Network error.'));
     await userEvent.click(saveButton());
 
     expect(await screen.findByText(/could not read the current version/i)).not.toBeNull();
@@ -222,13 +226,13 @@ describe('every other refusal', () => {
     api.updateCard.mockResolvedValue(refused<Card>('VALIDATION_FAILED', 'Question is too long.'));
     await mountLoaded();
 
-    const readsBefore = api.fetchCardsByDeck.mock.calls.length;
+    const readsBefore = api.fetchCardById.mock.calls.length;
     await userEvent.click(saveButton());
 
     expect(await screen.findByText('Question is too long.')).not.toBeNull();
     expect(screen.queryByRole('button', { name: RETRY_LABEL })).toBeNull();
     // The re-read belongs to the conflict path alone. Firing it for every
     // refusal would double the request count on the page's busiest failure.
-    expect(api.fetchCardsByDeck.mock.calls.length).toBe(readsBefore);
+    expect(api.fetchCardById.mock.calls.length).toBe(readsBefore);
   });
 });

@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import { createCard, fetchCardsByDeck, fetchDeckById, updateCard } from '../api/authoring';
+import { QueryKeys, useAppQueryClient } from '../api/queryClient';
 import { RarityDistribution } from '../components/RarityDistribution';
 import {
   formatIssue,
@@ -110,6 +111,10 @@ function Badge({ label, count, tone }: { label: string; count: number; tone: str
 
 export function DeckImportPage() {
   const [searchParams] = useSearchParams();
+
+  // The one place this page touches the shared cache: after a run, the card list
+  // and the deck row it just changed are invalidated (see execute's finally).
+  const queryClient = useAppQueryClient();
 
   const deckIdRaw = searchParams.get('deckId') ?? '';
   const deckId = Number(deckIdRaw);
@@ -257,6 +262,11 @@ export function DeckImportPage() {
       setRunResult(result);
     } finally {
       setRunning(false);
+      // The run wrote cards and moved the deck's totals, so both cached views are
+      // now behind the server. Without this the card list would keep showing the
+      // pre-import rows for up to the staleTime window.
+      void queryClient.invalidateQueries({ queryKey: QueryKeys.cards(deck.id) });
+      void queryClient.invalidateQueries({ queryKey: QueryKeys.deck(deck.id) });
     }
   }
 

@@ -1,10 +1,9 @@
 // src/pages/DeckPreviewPage.tsx
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { fetchDeckById, fetchCardsByDeck } from '../api/authoring';
-import type { Deck } from '../types/deck';
-import type { Card } from '../types/card';
+import { useCards } from '../hooks/useCards';
+import { useDeck } from '../hooks/useDecks';
 
 type DeckExportCard = {
   StableUid: string;
@@ -132,60 +131,21 @@ export function DeckPreviewPage() {
   const deckIdRaw = searchParams.get('deckId') ?? '';
   const deckId = Number(deckIdRaw);
   const invalidDeckId = !deckId || Number.isNaN(deckId);
+  const queryDeckId = invalidDeckId ? Number.NaN : deckId;
 
-  const [loading, setLoading] = useState(!invalidDeckId);
-  const [deck, setDeck] = useState<Deck | null>(null);
-  const [cards, setCards] = useState<Card[]>([]);
-  const [error, setError] = useState<string | null>(invalidDeckId ? 'Missing or invalid deckId.' : null);
+  // The deck and its cards come through the shared cache; both are read here
+  // rather than fetched by hand, so opening the preview after the card list does
+  // not download the whole deck again inside the staleTime window.
+  const deckQuery = useDeck(queryDeckId);
+  const cardsQuery = useCards(queryDeckId);
 
   const [copied, setCopied] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (invalidDeckId) return;
-
-    let cancelled = false;
-
-    async function load() {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const [deckRes, cardsRes] = await Promise.all([fetchDeckById(deckId), fetchCardsByDeck(deckId)]);
-        if (cancelled) return;
-
-        if (!deckRes.success || !deckRes.data) {
-          setDeck(null);
-          setCards([]);
-          setError(deckRes.error?.message ?? 'Deck not found.');
-          setLoading(false);
-          return;
-        }
-
-        if (!cardsRes.success) {
-          setDeck(deckRes.data);
-          setCards([]);
-          setError(cardsRes.error?.message ?? 'Failed to load cards.');
-          setLoading(false);
-          return;
-        }
-
-        setDeck(deckRes.data);
-        setCards(cardsRes.data ?? []);
-        setLoading(false);
-      } catch (e: unknown) {
-        if (cancelled) return;
-        setDeck(null);
-        setCards([]);
-        setError(e instanceof Error ? e.message : 'Network error.');
-        setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [deckId, invalidDeckId]);
+  const deck = deckQuery.data ?? null;
+  // Memoised so the empty-list fallback is a stable reference: exportModel's
+  // useMemo lists it, and a fresh [] each render would recompute the export on
+  // every render for a deck that has no cards.
+  const cards = useMemo(() => cardsQuery.data ?? [], [cardsQuery.data]);
 
   const exportModel: DeckExport | null = useMemo(() => {
     if (!deck) return null;
@@ -253,13 +213,28 @@ export function DeckPreviewPage() {
   const { errors, warnings } = useMemo(() => validateDeckExportLikeMobile(exportModel), [exportModel]);
   const exportJson = useMemo(() => (exportModel ? JSON.stringify(exportModel, null, 2) : ''), [exportModel]);
 
-  if (loading) {
+  if (!invalidDeckId && (deckQuery.isPending || cardsQuery.isPending)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-slate-600 text-lg">Loading preview...</div>
       </div>
     );
   }
+
+  // Any failure — the deck, the cards, or an unusable deckId — collapses to one
+  // error string and the same red box the hand-rolled version showed. A cards
+  // failure still takes the whole screen rather than a half-built preview.
+  const error = invalidDeckId
+    ? 'Missing or invalid deckId.'
+    : deckQuery.isError || !deck
+      ? deckQuery.error instanceof Error
+        ? deckQuery.error.message
+        : 'Deck not found.'
+      : cardsQuery.isError
+        ? cardsQuery.error instanceof Error
+          ? cardsQuery.error.message
+          : 'Failed to load cards.'
+        : null;
 
   if (error || !deck) {
     return (
