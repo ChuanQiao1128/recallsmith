@@ -427,6 +427,11 @@ export function useCeremonyTimeline(input: TimelineInput): CeremonyTimeline {
       default: {
         // Nothing new starts (§2 "Settle is mandatory"); re-assert resting targets
         // with duration 0 so a late mount still reads the resting state.
+        // MGACHA-11: stop the ray revolution so the Skia stage stops redrawing every
+        // frame once the cards are on the table — the rays freeze at their current angle
+        // and rest at their 0.1 resting opacity. The mount-time loop, the reduce-motion
+        // branch and the cleanup stay as they are.
+        cancelAnimation(raysAngle);
         const z = { duration: 0 };
         tell.value = withTiming(T.tell, z);
         dim.value = withTiming(T.dim, z);

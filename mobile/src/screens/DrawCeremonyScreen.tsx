@@ -51,7 +51,7 @@ import { PackTear, seamProgressFromDelta } from '../components/ceremony/PackTear
 import { TapCard, type TapCardData } from '../components/ceremony/TapCard';
 import { FallbackStage } from '../components/ceremony/FallbackStage';
 import { FeaturedCard, type FeaturedCardProps } from '../components/ceremony/FeaturedCard';
-import { SpillSampler } from '../components/ceremony/SpillSampler';
+import { SpillSampler, shouldMountSpillSampler } from '../components/ceremony/SpillSampler';
 import { SwipeHint } from '../components/ceremony/SwipeHint';
 import { ceremonyStyles as styles } from '../components/ceremony/ceremonyStyles';
 import { prefetchCeremonyImages } from '../components/ceremony/imagePrefetch';
@@ -771,6 +771,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
                 particleSheet={PARTICLE_SHEET}
                 glowNineSlice={GLOW_9SLICE}
                 cardCount={cards.length}
+                idle={phase === 'cards-on-table'}
               />
             ) : null}
 
@@ -816,7 +817,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
             {renderer === 'skia' && showFeatured ? <FeaturedCard {...featuredProps} /> : null}
 
-            {phase === 'tear-flip' && isMulti ? (
+            {shouldMountSpillSampler(phase, isMulti, renderer) ? (
               <SpillSampler durationMs={activeTimings.tearFlip} renderer={renderer} />
             ) : null}
 

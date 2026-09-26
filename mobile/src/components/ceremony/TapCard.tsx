@@ -11,7 +11,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { GestureHandler, Reanimated, motionAvailable, type SharedValue } from './reanimatedGuard';
 import { FoilLayer } from './FoilLayer';
 import { ceremonyStyles } from './ceremonyStyles';
-import { rarityAccentColor } from '../../theme/packArt';
+import { rarityAccentColor, FOIL_LUT } from '../../theme/packArt';
 import { getCeremonyHaptics } from '../ceremonyHaptics';
 import type { PeakRarity, ResolvedCeremonyTimings } from '../../features/gacha/draw/ceremonyTimings';
 
@@ -39,6 +39,17 @@ export const FLIP_EASING = [0.05, 0.7, 0.1, 1] as const;
 export const FOCUS_MS = 320;
 export const LIFT_TRANSLATE_Y = -10;
 export const LIFT_SCALE = 1.08;
+
+// MGACHA-12: the slot's resting shadow opacity. The iOS shadow is un-pathed and the slot is a
+// transparent view whose children rotate in 3D, so the OS re-rasterises the shadow from the
+// children's alpha every frame while the card moves. Drop it to 0 while the card is lifted or
+// mid-flip (the shadow adds nothing there) and restore it at rest.
+export const TAP_CARD_SHADOW_OPACITY = 0.28;
+export function tapCardShadowOpacity(flip: number, lift: number): number {
+  'worklet';
+  if (lift > 0.001 || (flip > 0.001 && flip < 0.999)) return 0;
+  return TAP_CARD_SHADOW_OPACITY;
+}
 
 /** Pure FIFO used by the table: enqueue(uid) returns the ms delay at which that flip may start. */
 export function createTapQueue(gapMs: number = TAP_QUEUE_GAP_MS, now: () => number = Date.now): { enqueue(uid: string): number; clear(): void } {
@@ -168,6 +179,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
       { scale: 1 + (LIFT_SCALE - 1) * lift.value + 0.6 * focus.value },
     ],
     zIndex: focus.value > 0 ? 20 : 1,
+    shadowOpacity: tapCardShadowOpacity(flip.value, lift.value),
   }));
   const backStyle = useAnimatedStyle(() => ({
     opacity: interpolate(flip.value, [0, 0.49, 0.5, 1], [1, 1, 0, 0]),
@@ -205,7 +217,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={handlePress}
-      style={[ceremonyStyles.tapCardSlot, ceremonyStyles.tapCardShadow, { width, height }, slotStyle]}
+      style={[ceremonyStyles.tapCardSlot, ceremonyStyles.tapCardShadowBase, { width, height }, slotStyle]}
     >
       {/* Persistent radial glow for RAR/LEG cards — stays visible after the flip. */}
       {isRare && flipped ? (
@@ -271,7 +283,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
           {focused && card.rarity !== 'COM' ? (
             <PanHost gesture={tiltGesture}>
               <View style={ceremonyStyles.tapCardFocusLayer}>
-                <FoilLayer width={width} height={height} accentColor={accent} rarity={card.rarity} active tilt={tilt} />
+                <FoilLayer width={width} height={height} accentColor={accent} rarity={card.rarity} active tilt={tilt} lut={FOIL_LUT} />
               </View>
             </PanHost>
           ) : null}

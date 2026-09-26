@@ -49,6 +49,12 @@ export type StageCanvasProps = {
   particleSheet?: ImageSourcePropType;
   glowNineSlice?: ImageSourcePropType;
   cardCount: number;
+  /** MGACHA-11: true once the cards are on the table. While idle the canvas must not
+   *  start or keep any repeating animation of its own. G09 already replaced the old
+   *  repeating particle clock with a one-shot `burstElapsed`, so honouring idle here
+   *  means the flash reaction must not re-arm a burst — nothing is (re)started while
+   *  idle (including when the component mounts already idle). */
+  idle?: boolean;
   testID?: string;
 };
 
@@ -247,6 +253,7 @@ export const StageCanvas: React.NamedExoticComponent<StageCanvasProps> = React.m
     particleSheet,
     glowNineSlice,
     cardCount,
+    idle = false,
     testID,
   } = props;
 
@@ -290,6 +297,9 @@ export const StageCanvas: React.NamedExoticComponent<StageCanvasProps> = React.m
     (v: number, prev: number | null) => {
       'worklet';
       if (reduceMotion) return;
+      // MGACHA-11: never (re)arm a burst while the stage is idle on the table, so the
+      // canvas starts no animation of its own once the cards are down.
+      if (idle) return;
       if (prev !== null && prev < 0.4 && v >= 0.4) {
         const life = PARTICLE_LIFE_MS[peakRarity];
         burstElapsed.value = 0;
