@@ -111,15 +111,28 @@ export function subscribePremiumUser(fn: Listener): () => void {
 }
 
 /**
+ * ✅ Tri-state premium status.
+ * 'unknown' while the async key + storage read is still resolving, then 'premium'
+ * or 'free'. This avoids the false "Not subscribed" flash a subscriber saw while
+ * the cache loaded (MGACHA-25).
+ */
+export type PremiumStatusState = 'unknown' | 'free' | 'premium';
+
+/**
  * ✅ Hook: 支持传入 userSub / userKey hint（强烈建议传）
  * 这样切账号时会重新读取对应 key 的缓存，避免串号。
+ * Starts 'unknown', resolves to 'premium'/'free', follows subscribePremiumUser
+ * updates for the same key, and resets to 'unknown' when userKeyHint changes.
  */
-export function usePremiumUser(userKeyHint?: string | null): boolean {
-  const [isPremium, setIsPremiumState] = React.useState(false);
+export function usePremiumStatus(userKeyHint?: string | null): PremiumStatusState {
+  const [status, setStatus] = React.useState<PremiumStatusState>('unknown');
   const currentKeyRef = React.useRef<string>('anon');
 
   React.useEffect(() => {
     let mounted = true;
+
+    // reset to unknown for the new key until its cache resolves
+    setStatus('unknown');
 
     // 1) load value for this userKey
     void (async () => {
@@ -127,7 +140,7 @@ export function usePremiumUser(userKeyHint?: string | null): boolean {
       currentKeyRef.current = key;
 
       const v = await getIsPremiumUser(key);
-      if (mounted) setIsPremiumState(v);
+      if (mounted) setStatus(v ? 'premium' : 'free');
     })();
 
     // 2) subscribe updates, but only apply if same userKey
@@ -135,7 +148,7 @@ export function usePremiumUser(userKeyHint?: string | null): boolean {
       const cur = currentKeyRef.current;
       const k = sanitizeUserKey(changedKey || 'anon');
       if (k !== cur) return;
-      setIsPremiumState(!!v);
+      setStatus(v ? 'premium' : 'free');
     });
 
     return () => {
@@ -145,5 +158,13 @@ export function usePremiumUser(userKeyHint?: string | null): boolean {
     // ✅ dependency on userKeyHint: account switch triggers reload
   }, [userKeyHint]);
 
-  return isPremium;
+  return status;
+}
+
+/**
+ * ✅ Boolean hook kept for its other callers (SessionCardScreen, DeckScreen,
+ * HomeScreen and ~11 mocks). Now derived from the tri-state hook.
+ */
+export function usePremiumUser(userKeyHint?: string | null): boolean {
+  return usePremiumStatus(userKeyHint) === 'premium';
 }

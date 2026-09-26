@@ -14,16 +14,13 @@ const API_BASE_URL =
   '';
 
 /**
- * ✅ Hard safety:
- * - production build: NEVER allow sandbox as Premium
- * - dev build: allow sandbox by default
+ * Sandbox entitlements count as premium in every build.
+ * This is RevenueCat's recommendation: App Review and TestFlight testers purchase
+ * in the StoreKit sandbox, so a production binary that dropped sandbox entitlements
+ * would never unlock premium for them (IAP-functionality rejection risk). Any
+ * sandbox policing is done server-side via DISALLOW_SANDBOX_PREMIUM
+ * (src_C/Vpc/Runtime/PremiumDeckUrl.cs), which gates the actual premium deck URLs.
  */
-const _allowSandboxRaw = String(process.env.EXPO_PUBLIC_RC_ALLOW_SANDBOX || '1') === '1';
-export const ALLOW_SANDBOX: boolean = IS_PROD ? false : _allowSandboxRaw;
-
-if (IS_PROD && _allowSandboxRaw) {
-  console.warn('[rc] EXPO_PUBLIC_RC_ALLOW_SANDBOX=1 ignored because build is production.');
-}
 
 // Dangerous fallback (dev-only): if entitlement id mismatch but there are active entitlements, treat as premium.
 // ✅ hard-disabled on production build
@@ -165,10 +162,10 @@ export function getPremiumStatus(info: CustomerInfo | null | undefined): Premium
       const activeProduction = isSb === false || isSb == null; // treat unknown as prod (defensive)
       const activeSandbox = isSb === true;
 
-      // ✅ production build: sandbox never counts
-      const effectiveActive = activeProduction || (!IS_PROD && ALLOW_SANDBOX && activeSandbox);
+      // Sandbox entitlements count as premium in every build (server enforces DISALLOW_SANDBOX_PREMIUM).
+      const effectiveActive = activeProduction || activeSandbox;
 
-      const env: PremiumEnv = activeProduction ? 'production' : effectiveActive ? 'sandbox' : 'none';
+      const env: PremiumEnv = activeProduction ? 'production' : activeSandbox ? 'sandbox' : 'none';
 
       return {
         active: effectiveActive,
@@ -193,8 +190,8 @@ export function getPremiumStatus(info: CustomerInfo | null | undefined): Premium
       const activeProduction = isSb === false || isSb == null;
       const activeSandbox = isSb === true;
 
-      const effectiveActive = activeProduction || (!IS_PROD && ALLOW_SANDBOX && activeSandbox);
-      const env: PremiumEnv = activeProduction ? 'production' : effectiveActive ? 'sandbox' : 'none';
+      const effectiveActive = activeProduction || activeSandbox;
+      const env: PremiumEnv = activeProduction ? 'production' : activeSandbox ? 'sandbox' : 'none';
 
       return {
         active: effectiveActive,
@@ -268,7 +265,7 @@ async function ensureConfigured(): Promise<void> {
     } catch {}
 
     if (__DEV__) {
-      console.log('[rc] configured', { APP_ENV, IS_PROD, ALLOW_SANDBOX, PREMIUM_URL_PATH });
+      console.log('[rc] configured', { APP_ENV, IS_PROD, ALLOW_SANDBOX: true, PREMIUM_URL_PATH });
     }
   })();
 

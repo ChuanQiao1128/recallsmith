@@ -16,7 +16,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 
 import type { RootStackParamList } from '../navigation/types';
-import { usePremiumUser, setIsPremiumUser } from '../premium/premiumStore';
+import { usePremiumStatus, setIsPremiumUser } from '../premium/premiumStore';
 import {
   rcPurchaseMonthly,
   rcRestore,
@@ -24,6 +24,7 @@ import {
   rcGetMonthlyPackageSafe,
   isPremiumActive,
 } from '../premium/revenuecat';
+import { classifyPurchaseError, PURCHASE_ERROR_COPY } from '../premium/purchaseErrors';
 import { useAuthStore } from '../auth/authStore';
 import { colors } from '../theme/colors';
 
@@ -38,27 +39,39 @@ type PricingState =
   | { kind: 'unavailable' };
 
 export function PaywallScreen({ navigation }: Props) {
-  const isPremium = usePremiumUser();
+  const premiumStatus = usePremiumStatus();
+  const isPremium = premiumStatus === 'premium';
   const isSignedIn = useAuthStore((s) => s.status === 'signed_in');
+  // While signed in and the cached premium status is still resolving we show a
+  // "checking" state instead of a false "Not subscribed" (MGACHA-25).
+  const isCheckingPremium = isSignedIn && premiumStatus === 'unknown';
   const [busy, setBusy] = React.useState(false);
   const [pricing, setPricing] = React.useState<PricingState>({ kind: 'loading' });
 
+  const mountedRef = React.useRef(true);
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadPrice() {
-      const pkg = await rcGetMonthlyPackageSafe();
-      if (cancelled) return;
-
-      const price = String(pkg?.product?.priceString ?? '').trim();
-      setPricing(price ? { kind: 'ready', label: `${price} / month` } : { kind: 'unavailable' });
-    }
-
-    void loadPrice();
+    mountedRef.current = true;
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
     };
   }, []);
+
+  // Refetch the price on every focus so a brief offline moment at open no longer
+  // hides the Subscribe button forever (MGACHA-17). A refetch keeps an already
+  // `ready` price on screen; only loading/unavailable show the loading label.
+  const loadPrice = useCallback(async () => {
+    const pkg = await rcGetMonthlyPackageSafe();
+    if (!mountedRef.current) return;
+
+    const price = String(pkg?.product?.priceString ?? '').trim();
+    setPricing(price ? { kind: 'ready', label: `${price} / month` } : { kind: 'unavailable' });
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadPrice();
+    }, [loadPrice]),
+  );
 
   // ✅ 更鲁棒：Paywall 打开时自动刷新一次订阅状态，避免“其实已经 Premium 但 UI 还显示未订阅”
   useFocusEffect(
@@ -150,8 +163,10 @@ export function PaywallScreen({ navigation }: Props) {
         );
       }
     } catch (e: any) {
-      if (e?.userCancelled) return;
-      Alert.alert('Purchase failed', e?.message ?? String(e));
+      const kind = classifyPurchaseError(e);
+      if (kind === 'cancelled') return;
+      const copy = PURCHASE_ERROR_COPY[kind];
+      Alert.alert(copy.title, copy.body);
     } finally {
       setBusy(false);
     }
@@ -177,7 +192,11 @@ export function PaywallScreen({ navigation }: Props) {
       Alert.alert('Restore complete', active ? 'Premium is active.' : 'No active subscription found.');
       if (active) navigation.goBack();
     } catch (e: any) {
-      Alert.alert('Restore failed', e?.message ?? String(e));
+      if (classifyPurchaseError(e) === 'network') {
+        Alert.alert(PURCHASE_ERROR_COPY.network.title, PURCHASE_ERROR_COPY.network.body);
+      } else {
+        Alert.alert('Restore failed', 'We could not restore purchases right now. Please try again.');
+      }
     } finally {
       setBusy(false);
     }
@@ -215,6 +234,8 @@ export function PaywallScreen({ navigation }: Props) {
               <Text style={styles.sectionSubtitle}>
                 {!isSignedIn
                   ? '🔒 Sign in required to purchase / restore'
+                  : isCheckingPremium
+                  ? 'Checking your subscription…'
                   : isPremium
                   ? '✅ Premium active on this account'
                   : '🔒 Not subscribed'}
@@ -230,7 +251,13 @@ export function PaywallScreen({ navigation }: Props) {
               <View style={styles.kvRow}>
                 <Text style={styles.kLabel}>Access</Text>
                 <Text style={styles.kValue}>
-                  {isSignedIn ? (isPremium ? 'All premium decks' : 'Free decks only') : 'Free decks only'}
+                  {!isSignedIn
+                    ? 'Free decks only'
+                    : isCheckingPremium
+                    ? 'Checking…'
+                    : isPremium
+                    ? 'All premium decks'
+                    : 'Free decks only'}
                 </Text>
               </View>
 
@@ -244,6 +271,17 @@ export function PaywallScreen({ navigation }: Props) {
                       : 'Not available right now'}
                 </Text>
               </View>
+
+              {pricing.kind === 'unavailable' ? (
+                <Pressable
+                  testID="paywall-price-retry"
+                  style={({ pressed }) => [styles.retryBtn, pressed && styles.pressed, busy && styles.buttonDisabled]}
+                  disabled={busy}
+                  onPress={() => void loadPrice()}
+                >
+                  <Text style={styles.retryBtnText}>Retry</Text>
+                </Pressable>
+              ) : null}
             </View>
 
             {/* What you get */}
@@ -271,9 +309,9 @@ export function PaywallScreen({ navigation }: Props) {
                   style={({ pressed }) => [
                     styles.primaryButton,
                     pressed && styles.buttonPressed,
-                    (busy || isPremium) && styles.buttonDisabled,
+                    (busy || isPremium || isCheckingPremium) && styles.buttonDisabled,
                   ]}
-                  disabled={busy || isPremium}
+                  disabled={busy || isPremium || isCheckingPremium}
                   onPress={() => {
                     if (!isSignedIn) {
                       goSignIn();
@@ -289,7 +327,13 @@ export function PaywallScreen({ navigation }: Props) {
                     </View>
                   ) : (
                     <Text style={styles.primaryButtonText}>
-                      {isPremium ? 'Premium active' : isSignedIn ? 'Unlock Premium' : 'Sign in to continue'}
+                      {isCheckingPremium
+                        ? 'Checking…'
+                        : isPremium
+                        ? 'Premium active'
+                        : isSignedIn
+                        ? 'Unlock Premium'
+                        : 'Sign in to continue'}
                     </Text>
                   )}
                 </Pressable>
@@ -405,6 +449,9 @@ const styles = StyleSheet.create({
   kvRow: { marginTop: 8, flexDirection: 'row', justifyContent: 'space-between' },
   kLabel: { fontSize: 12, color: colors.inkMuted, fontWeight: '600' },
   kValue: { fontSize: 13, color: colors.inkSoft, fontWeight: '800' },
+
+  retryBtn: { marginTop: 10, alignSelf: 'flex-start', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999, backgroundColor: colors.softCream, borderWidth: 1, borderColor: colors.hairline },
+  retryBtnText: { fontSize: 13, color: colors.pokeBlueDeep, fontWeight: '900' },
 
   // Premium bullets — gold dots reinforce the premium accent
   bulletRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
