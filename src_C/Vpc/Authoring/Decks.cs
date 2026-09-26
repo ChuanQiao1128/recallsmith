@@ -145,6 +145,7 @@ public static class Decks
             d.total_cards as "totalCards",
             d.preview_cards as "previewCards",
             d.retired_at_ms as "retiredAtMs",
+            d.live_build_id as "liveBuildId",
 
             d.is_deleted as "isDeleted",
             d.created_at as "createdAt",

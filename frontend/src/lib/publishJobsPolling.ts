@@ -29,6 +29,16 @@ import type { ApiResult } from '../types/api';
 export const POLL_IDLE_MS = 30_000;
 
 /**
+ * After this many consecutive quiet idle polls the cadence relaxes further: a
+ * tab that has sat with nothing to publish for five minutes does not need to be
+ * asked every 30 s. A visible tab is the common case, so the first ten polls
+ * keep today's 30 s cadence and only a genuinely idle session slows down.
+ */
+export const POLL_IDLE_SLOWDOWN_AFTER = 10;
+/** The slow idle cadence, applied once past POLL_IDLE_SLOWDOWN_AFTER. */
+export const POLL_IDLE_SLOW_MS = 120_000;
+
+/**
  * Active-job backoff ladder. Two quick looks catch the common fast publish,
  * then the cadence relaxes so a slow build does not hammer the API.
  */
@@ -57,6 +67,12 @@ export interface PollDecision {
   /** Backoff counter to carry into the next call. */
   nextActivePolls: number;
   /**
+   * Consecutive quiet idle polls to carry into the next call. Reset to 0 the
+   * moment a job is active; carried unchanged through a failure so a transport
+   * blip does not restart the idle countdown.
+   */
+  nextIdlePolls: number;
+  /**
    * Whether polling is deliberately ending. Always false here; a caller that
    * ever sees true owes the user a visible "auto refresh stopped" state.
    */
@@ -84,8 +100,15 @@ function messageOf(error: unknown): string {
  *
  * @param outcome     what the attempt resolved or threw with
  * @param activePolls consecutive polls that have seen active jobs so far
+ * @param idlePolls   consecutive quiet idle polls so far; defaults to 0 so the
+ *                    two-argument callers keep today's fast idle cadence for the
+ *                    first POLL_IDLE_SLOWDOWN_AFTER polls
  */
-export function nextPollDelay(outcome: PollOutcome, activePolls: number): PollDecision {
+export function nextPollDelay(
+  outcome: PollOutcome,
+  activePolls: number,
+  idlePolls = 0,
+): PollDecision {
   if (outcome.kind === 'exception') {
     return {
       delayMs: POLL_IDLE_MS,
@@ -94,6 +117,7 @@ export function nextPollDelay(outcome: PollOutcome, activePolls: number): PollDe
       // The counter is carried, not reset: a transport blip should not make a
       // publish that was mid-flight restart its backoff from the top.
       nextActivePolls: activePolls,
+      nextIdlePolls: idlePolls,
       stopped: false,
     };
   }
@@ -108,17 +132,20 @@ export function nextPollDelay(outcome: PollOutcome, activePolls: number): PollDe
       jobs: null,
       showError: result.error?.message ?? POLL_SOFT_FAILURE_MESSAGE,
       nextActivePolls: activePolls,
+      nextIdlePolls: idlePolls,
       stopped: false,
     };
   }
 
   const jobs = result.data;
   if (!jobs.some(isActive)) {
+    const nextIdlePolls = idlePolls + 1;
     return {
-      delayMs: POLL_IDLE_MS,
+      delayMs: nextIdlePolls > POLL_IDLE_SLOWDOWN_AFTER ? POLL_IDLE_SLOW_MS : POLL_IDLE_MS,
       jobs,
       showError: null,
       nextActivePolls: 0,
+      nextIdlePolls,
       stopped: false,
     };
   }
@@ -129,6 +156,7 @@ export function nextPollDelay(outcome: PollOutcome, activePolls: number): PollDe
     jobs,
     showError: null,
     nextActivePolls: attempts,
+    nextIdlePolls: 0,
     stopped: false,
   };
 }

@@ -265,13 +265,14 @@ describe('G2: the raw-manifest developer panel', () => {
     expect(consoleWarn).toHaveBeenCalled();
   });
 
-  it('is hidden from an editor whose manifest loaded just as successfully', async () => {
+  it('is hidden from an editor, who never loads the manifest at all', async () => {
     signInAsEditor();
     await mountConsole();
 
-    // The manifest really did load, so `raw !== null` holds here too and the
-    // ONLY thing hiding the panel is the role.
-    expect(api.fetchAdminManifest).toHaveBeenCalled();
+    // Since F24 an editor skips the super_admin-only manifest entirely, so `raw`
+    // never leaves null. The role gate would hide the panel on its own, but the
+    // panel must stay hidden either way.
+    expect(api.fetchAdminManifest).not.toHaveBeenCalled();
     expect(document.querySelectorAll('summary')).toHaveLength(0);
   });
 });
@@ -287,14 +288,15 @@ describe('G3: the publish-jobs polling banner', () => {
     expect(alerts.some(t => t.includes('jobs upstream is down'))).toBe(true);
   });
 
-  it('is hidden from an editor even though the same poll fails for them too', async () => {
+  it('is hidden from an editor, who does not poll publish jobs at all', async () => {
     signInAsEditor();
     api.fetchPublishJobs.mockResolvedValue(refused<PublishJob[]>('UPSTREAM', 'jobs upstream is down'));
     await mountConsole();
 
-    // The poll runs for everyone — it is started by an unconditional mount
-    // effect — so this is a rendering gate, not a "we never asked" accident.
-    expect(api.fetchPublishJobs).toHaveBeenCalled();
+    // Since F24 the mount poll is super_admin-only, so an editor never issues the
+    // request and the banner has nothing to render. The JSX still gates the
+    // banner on superAdmin too, so both guards agree.
+    expect(api.fetchPublishJobs).not.toHaveBeenCalled();
     const alerts = Array.from(document.querySelectorAll('[role="alert"]')).map(a => a.textContent ?? '');
     expect(alerts.some(t => t.includes('Publish jobs are not refreshing'))).toBe(false);
   });

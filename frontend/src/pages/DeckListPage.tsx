@@ -154,6 +154,17 @@ export function DeckListPage() {
   // Refs owned by the polling loop.
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activePollsRef = useRef(0);
+  // Consecutive quiet idle polls, carried into nextPollDelay so a long-idle tab
+  // relaxes to the slow cadence; reset to 0 on any manual refresh or resume.
+  const idlePollsRef = useRef(0);
+  // True while the tab is hidden: a poll that resolves during a pause must not
+  // arm a new timer, and the "auto-refresh stopped" banner must not light for a
+  // deliberate pause.
+  const pollPausedRef = useRef(false);
+  // Latest loadPublishJobs, read through a ref so the visibilitychange effect can
+  // call it without listing it as a dependency (which would re-register the
+  // listener every render) and without suppressing the exhaustive-deps rule.
+  const loadPublishJobsRef = useRef<() => void>(() => {});
 
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | DeckStatus>('all');
@@ -187,6 +198,44 @@ export function DeckListPage() {
   async function loadAll(forceRefresh = false) {
     // Cache first.
     const cachedDecks = readSessionCache<Deck[]>('decks', ownerSub);
+
+    // Editors skip the admin manifest entirely. It is super_admin-only, so
+    // fetching it always 403s and lights a red "Manifest Sync Error" banner
+    // while marking every deck Unpublished. Instead their manifest state stays
+    // at its empty default (so the banner can never appear) and publish status
+    // is derived from each deck's liveBuildId. A cached deck list alone is
+    // enough to paint cached rows.
+    if (!superAdmin) {
+      setManifestState({ loading: false, error: null, url: manifestUrl, meta: {}, bySlug: {}, raw: null });
+
+      if (cachedDecks && !forceRefresh) {
+        setDeckState({ loading: false, error: null, decks: cachedDecks });
+      } else {
+        setDeckState(prev => ({ ...prev, loading: true, error: null }));
+      }
+
+      try {
+        const decksRes = await fetchDecks();
+        if (!mountedRef.current) return;
+        if (!decksRes.success) {
+          if (!cachedDecks) {
+            setDeckState({ loading: false, error: decksRes.error?.message ?? 'Failed to load decks.', decks: [] });
+          }
+        } else {
+          const decks = decksRes.data ?? [];
+          writeSessionCache('decks', ownerSub, decks);
+          setDeckState({ loading: false, error: null, decks });
+        }
+      } catch (err: unknown) {
+        if (!mountedRef.current) return;
+        const message = err instanceof Error ? err.message : 'Network error.';
+        if (!cachedDecks) {
+          setDeckState({ loading: false, error: message, decks: [] });
+        }
+      }
+      return;
+    }
+
     const cachedManifest = readSessionCache<{ meta: ManifestMeta; bySlug: Record<string, ManifestDeckLite>; raw: unknown }>('manifest', ownerSub);
     
     // With a cache and no forced refresh, show it at once (no loading state) and refresh behind it.
@@ -465,8 +514,9 @@ export function DeckListPage() {
     // the timer, and there is no longer a user to tell.
     if (!mountedRef.current) return;
 
-    const decision = nextPollDelay(outcome, activePollsRef.current);
+    const decision = nextPollDelay(outcome, activePollsRef.current, idlePollsRef.current);
     activePollsRef.current = decision.nextActivePolls;
+    idlePollsRef.current = decision.nextIdlePolls;
 
     if (decision.jobs) setPublishJobs(decision.jobs);
     // The outcome is the only place that still knows whether the server
@@ -479,23 +529,52 @@ export function DeckListPage() {
     );
     if (decision.showError) console.error('Failed to load publish jobs:', decision.showError);
 
-    if (!decision.stopped) {
+    // A poll that resolves while the tab is hidden must not arm a new timer: the
+    // pause owns the schedule and the visibilitychange handler resumes it.
+    if (!decision.stopped && !pollPausedRef.current) {
       pollTimerRef.current = setTimeout(() => void loadPublishJobs(), decision.delayMs);
     }
 
     // Backstop for the invariant: the flag is read back off the timer instead
     // of being set by whichever branch ran, so a branch added later that
     // forgets to reschedule still turns the banner on rather than going quiet.
-    setPollingStopped(pollTimerRef.current === null);
+    // A deliberate pause is neither polling nor stopped, so it is excluded here.
+    setPollingStopped(pollTimerRef.current === null && !pollPausedRef.current);
   }
 
-  // Start polling on mount, clear the timer on unmount.
+  // Keep the ref pointing at the latest closure so the visibilitychange effect
+  // can call the current loadPublishJobs without depending on it.
+  loadPublishJobsRef.current = loadPublishJobs;
+
+  // Start polling on mount, clear the timer on unmount. Editors never poll: the
+  // Publish Jobs tab is super_admin-only, so there is nothing for them to watch.
   useEffect(() => {
-    void loadPublishJobs();
+    if (superAdmin) void loadPublishJobs();
     return () => {
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
   }, []);
+
+  // Pause the poll while the tab is hidden and resume the moment it is visible
+  // again. Registered only for super_admin, since only they poll at all.
+  useEffect(() => {
+    if (!superAdmin) return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        pollPausedRef.current = true;
+        if (pollTimerRef.current) {
+          clearTimeout(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+      } else {
+        pollPausedRef.current = false;
+        idlePollsRef.current = 0;
+        loadPublishJobsRef.current();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [superAdmin]);
 
   function handleSignOut() {
     clearStoredTokens();
@@ -584,7 +663,10 @@ export function DeckListPage() {
             if (listModeRef.current === 'paginated') void loadPagedFirst(debouncedQ);
             else void loadAll(false);
           }}
-          onRefreshJobs={() => void loadPublishJobs()}
+          onRefreshJobs={() => {
+            idlePollsRef.current = 0;
+            void loadPublishJobs();
+          }}
           onNewDeck={() => navigate('/decks/new')}
         />
 
@@ -616,7 +698,10 @@ export function DeckListPage() {
         {superAdmin && pollNotice && (
           <ErrorBanner
             notice={pollNotice}
-            onRetry={pollingStopped ? () => void loadPublishJobs() : undefined}
+            onRetry={pollingStopped ? () => {
+              idlePollsRef.current = 0;
+              void loadPublishJobs();
+            } : undefined}
             retryLabel="Auto-refresh stopped. Click to retry."
           />
         )}
@@ -624,7 +709,10 @@ export function DeckListPage() {
         {/* Main List Container - Tab Content */}
         {activeTab === 'publishJobs' && superAdmin ? (
           /* Publish Jobs List */
-          <PublishJobsPanel jobs={publishJobs} onRefresh={() => void loadPublishJobs()} />
+          <PublishJobsPanel jobs={publishJobs} onRefresh={() => {
+            idlePollsRef.current = 0;
+            void loadPublishJobs();
+          }} />
         ) : (
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
           {/* Filters Bar */}
