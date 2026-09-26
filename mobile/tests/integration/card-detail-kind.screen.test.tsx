@@ -13,6 +13,9 @@ vi.mock('react-native', () => {
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     Pressable: ({ children, onPress, ...props }: any) => React.createElement('Pressable', { ...props, onPress }, typeof children === 'function' ? children({ pressed: false }) : children),
+    // CardDetail now pulls in CodeBlock (via the shared CardAnswerSections),
+    // which reads Platform at module load.
+    Platform: { OS: 'ios', select: (o: any) => o.ios ?? o.default },
     StyleSheet: { create: (styles: any) => styles },
   };
 });
