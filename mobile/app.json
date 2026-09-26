@@ -14,7 +14,8 @@
         {
           "microphonePermission": false
         }
-      ]
+      ],
+      "./plugins/withPodsDeploymentTarget"
     ],
     "splash": {
       "image": "./assets/splash-icon.png",
