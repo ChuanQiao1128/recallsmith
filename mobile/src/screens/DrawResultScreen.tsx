@@ -33,6 +33,7 @@ import {
   rarityHaloColor,
 } from '../theme/packArt';
 import { CEREMONY_COPY_V10 } from '../features/gacha/draw/ceremonyCopy';
+import { COLLECTION_COPY } from '../features/gacha/copy/collectionCopy';
 import { formatRank } from '../features/gacha/library/cardRank';
 import { drawResultStyles as styles } from '../features/gacha/components/drawResultStyles';
 import { SHARE_DRAW_TESTID, shareDrawImage, type ShareDrawResult } from '../features/gacha/share/shareDraw';
@@ -425,7 +426,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
   return (
     <SafeAreaView style={styles.safeArea} testID="screen-draw-result-root">
       <LinearGradient colors={PAGE_GRADIENT_LIGHT} style={styles.gradient}>
-        {/* Pokedex registration pill — fades in then out */}
+        {/* Collection registration pill — fades in then out */}
         {registerVisible ? (
           <AnimatedView
             pointerEvents="none"
@@ -437,9 +438,9 @@ export function DrawResultScreen({ navigation, route }: Props) {
             <View style={styles.registerIcon}>
               <Text style={styles.registerIconText}>📘</Text>
             </View>
-            {/* English-only app — registry pill is always Pokedex +N */}
+            {/* English-only app — registry pill is always Collection +N */}
             <Text style={styles.registerText} numberOfLines={1}>
-              {`Pokedex +${cards.length}`}
+              {COLLECTION_COPY.resultPill(cards.length)}
             </Text>
           </AnimatedView>
         ) : null}
@@ -459,7 +460,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
               {/* Gold uppercase eyebrow — reinforces the +N feeling
                   persistently after the toast fades. */}
               <Text style={styles.headerEyebrow} numberOfLines={1}>
-                {`+${cards.length} TO POKEDEX`}
+                {COLLECTION_COPY.resultEyebrow(cards.length)}
               </Text>
               <Text style={styles.headerTitle} numberOfLines={1}>
                 {deckLabel(params)}

@@ -175,21 +175,30 @@ export function DebugMenuScreen({ navigation }: Props) {
     );
   }
 
+  // Read __DEV__ at render (tests flip the global between cases). In
+  // production the 7-tap door still opens this screen, but it is read-only:
+  // only the ceremony performance report remains. The mock scenario list, the
+  // dev error/offline shells and the progress-wiping DANGER ZONE are __DEV__
+  // only so an App Reviewer or curious user cannot reach them.
+  const isDev = __DEV__;
+
   return (
     <AppInfoScreen
       eyebrow="Debug menu"
-      title="Scenario switching and QA shortcuts"
-      body="DebugMenu keeps its QA function but now carries more of the premium cosmic control-room feeling used by support and system surfaces."
+      title={isDev ? 'Scenario switching and QA shortcuts' : 'Diagnostics'}
+      body={
+        isDev
+          ? 'DebugMenu keeps its QA function but now carries more of the premium cosmic control-room feeling used by support and system surfaces.'
+          : 'Performance details you can share with support. Nothing here changes your progress.'
+      }
       cosmic
-      chips={['QA', 'Scenarios']}
-      stats={[
-        { label: 'Scenarios', value: String(scenarios.length) },
-      ]}
-      sections={[{ title: 'Scenarios', items: scenarios }]}
-      primaryLabel="Open error shell"
-      onPrimary={() => navigation.navigate('ErrorGeneric')}
-      secondaryLabel="Offline banner"
-      onSecondary={() => navigation.navigate('OfflineBanner')}
+      chips={isDev ? ['QA', 'Scenarios'] : undefined}
+      stats={isDev ? [{ label: 'Scenarios', value: String(scenarios.length) }] : undefined}
+      sections={isDev ? [{ title: 'Scenarios', items: scenarios }] : undefined}
+      primaryLabel={isDev ? 'Open error shell' : undefined}
+      onPrimary={isDev ? () => navigation.navigate('ErrorGeneric') : undefined}
+      secondaryLabel={isDev ? 'Offline banner' : undefined}
+      onSecondary={isDev ? () => navigation.navigate('OfflineBanner') : undefined}
       tertiaryLabel="Back to more"
       onTertiary={() => navigation.navigate('More')}
       footer={
@@ -307,37 +316,39 @@ export function DebugMenuScreen({ navigation }: Props) {
             </Pressable>
           </View>
         ) : null}
-        <View style={styles.dangerZone}>
-          <Text style={styles.dangerEyebrow} numberOfLines={1}>
-            DANGER ZONE
-          </Text>
-          <Text style={styles.dangerBody} numberOfLines={3}>
-            Wipes owned cards, deck progress, daily stats, reward wallet, pity
-            counters, and streak history. Useful for retesting a fresh install
-            without resetting auth or premium.
-          </Text>
-          <Pressable
-            testID="debug-reset-progress"
-            accessibilityRole="button"
-            accessibilityLabel="Reset all progress"
-            disabled={busy}
-            style={({ pressed }) => [
-              styles.dangerButton,
-              busy && styles.dangerButtonDisabled,
-              pressed && styles.dangerButtonPressed,
-            ]}
-            onPress={() => void handleReset()}
-          >
-            <Text style={styles.dangerButtonText}>
-              {busy ? 'Resetting…' : 'Reset all progress'}
+        {isDev ? (
+          <View style={styles.dangerZone}>
+            <Text style={styles.dangerEyebrow} numberOfLines={1}>
+              DANGER ZONE
             </Text>
-          </Pressable>
-          {lastResult ? (
-            <Text style={styles.dangerResult} numberOfLines={2}>
-              {lastResult}
+            <Text style={styles.dangerBody} numberOfLines={3}>
+              Wipes owned cards, deck progress, daily stats, reward wallet, pity
+              counters, and streak history. Useful for retesting a fresh install
+              without resetting auth or premium.
             </Text>
-          ) : null}
-        </View>
+            <Pressable
+              testID="debug-reset-progress"
+              accessibilityRole="button"
+              accessibilityLabel="Reset all progress"
+              disabled={busy}
+              style={({ pressed }) => [
+                styles.dangerButton,
+                busy && styles.dangerButtonDisabled,
+                pressed && styles.dangerButtonPressed,
+              ]}
+              onPress={() => void handleReset()}
+            >
+              <Text style={styles.dangerButtonText}>
+                {busy ? 'Resetting…' : 'Reset all progress'}
+              </Text>
+            </Pressable>
+            {lastResult ? (
+              <Text style={styles.dangerResult} numberOfLines={2}>
+                {lastResult}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
         </>
       }
     />

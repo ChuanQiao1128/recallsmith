@@ -78,8 +78,8 @@ export function ProfileScreen({ navigation }: Props) {
           ],
         },
       ]}
-      primaryLabel="Edit profile"
-      onPrimary={() => navigation.navigate('EditProfile')}
+      primaryLabel="Study settings"
+      onPrimary={() => navigation.navigate('Settings')}
       // Achievements and Milestone hall render hardcoded badge lists. They
       // stay in the repo (and in the navigator) but stop being advertised
       // from a tab a real user reaches in two taps.

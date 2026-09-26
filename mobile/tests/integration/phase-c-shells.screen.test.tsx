@@ -79,9 +79,9 @@ describe('phase C shells', () => {
         node.findAll((child) => (child.type as any) === 'Text' && child.props.children === 'Achievements').length > 0,
     )).toHaveLength(0);
     act(() => {
-      findPressableByText(tree, 'Edit profile').props.onPress();
+      findPressableByText(tree, 'Study settings').props.onPress();
     });
-    expect(navigate).toHaveBeenCalledWith('EditProfile');
+    expect(navigate).toHaveBeenCalledWith('Settings');
   });
 
   it('opens notifications from settings main shell', async () => {
