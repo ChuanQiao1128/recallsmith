@@ -93,6 +93,7 @@ import { useAuthStore } from './src/auth/authStore';
 import { installAccessTokenRefresher, refreshAuthOnForeground } from './src/auth/freshToken';
 import { scheduleProgressSync } from './src/sync/progressSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
+import { DEFAULT_APP_STORE_URL } from './src/config/remoteConfig';
 import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
 import { createOtaUpdateChecker, getExpoUpdatesModule } from './src/updates/otaUpdateCheck';
 import { collectDeviceInfo } from './src/features/gacha/draw/ceremonyPerf';
@@ -162,8 +163,7 @@ function goHomeAfterScreenError() {
  */
 function ForceUpdateOverlay(props: ForceUpdateGate) {
   async function openUpdate() {
-    if (!props.updateUrl) return;
-    await Linking.openURL(props.updateUrl);
+    await Linking.openURL(props.updateUrl ?? DEFAULT_APP_STORE_URL);
   }
 
   return (
@@ -177,10 +177,9 @@ function ForceUpdateOverlay(props: ForceUpdateGate) {
             Current: {props.currentVersion}
             {props.minSupportedVersion ? ` · Required: ${props.minSupportedVersion}+` : ''}
           </Text>
-          <Pressable style={({ pressed }) => [styles.updateButton, pressed && { opacity: 0.9 }, !props.updateUrl && { opacity: 0.6 }]} disabled={!props.updateUrl} onPress={openUpdate}>
-            <Text style={styles.updateButtonText}>{props.updateUrl ? 'Open App Store' : 'Update link not set'}</Text>
+          <Pressable style={({ pressed }) => [styles.updateButton, pressed && { opacity: 0.9 }]} onPress={openUpdate}>
+            <Text style={styles.updateButtonText}>Open App Store</Text>
           </Pressable>
-          {!props.updateUrl ? <Text style={styles.updateHint}>(Set updateUrl or appStoreId in remote config JSON)</Text> : null}
         </View>
       </LinearGradient>
     </View>
@@ -386,5 +385,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   updateButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
-  updateHint: { marginTop: 10, fontSize: 12, color: '#6B7280' },
 });

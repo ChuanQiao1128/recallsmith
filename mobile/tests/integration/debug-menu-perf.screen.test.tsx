@@ -206,12 +206,9 @@ describe('DebugMenu — last ceremony report + production gating', () => {
     expect(tree.root.findAllByProps({ testID: 'debug-seed-wallet' })).toHaveLength(0);
     expect(tree.root.findAllByProps({ testID: 'debug-only-legendary' })).toHaveLength(0);
     expect(tree.root.findAllByProps({ testID: 'debug-ceremony-tuning' })).toHaveLength(0);
-    // The reset stays behind its existing confirmation.
-    act(() => {
-      tree.root.findByProps({ testID: 'debug-reset-progress' }).props.onPress();
-    });
-    expect(alertMock).toHaveBeenCalledTimes(1);
-    expect(alertMock.mock.calls[0][0]).toBe('Reset progress?');
+    // The whole DANGER ZONE (reset all progress) is not rendered in production —
+    // a curious user can no longer wipe their own collection from here.
+    expect(tree.root.findAllByProps({ testID: 'debug-reset-progress' })).toHaveLength(0);
 
     // confirmDevOnly: straight through in __DEV__, an Alert with Cancel/Continue otherwise.
     const action = vi.fn();

@@ -308,6 +308,7 @@ describe('CeremonyTuning screen + DebugMenu ceremony seeds', () => {
       tree = renderer.create(<DebugMenuScreen navigation={{ navigate } as any} route={{ key: 'debug', name: 'DebugMenu' } as any} />);
     });
     expect(tree.root.findAllByProps({ testID: 'debug-ceremony-tools' }).length).toBe(0);
-    expect(tree.root.findAllByProps({ testID: 'debug-reset-progress' }).length).toBeGreaterThan(0);
+    // The DANGER ZONE reset is now __DEV__-only too — production is read-only.
+    expect(tree.root.findAllByProps({ testID: 'debug-reset-progress' }).length).toBe(0);
   });
 });

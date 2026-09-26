@@ -145,6 +145,11 @@ export async function loadRemoteConfig(
   return loadCachedRemoteConfig();
 }
 
+// Real App Store listing for RecallSmith (ascAppId 6756044885). Used as the
+// force-update fallback so a gated user always has a working "Open App Store"
+// button, even when the remote config carries neither updateUrl nor appStoreId.
+export const DEFAULT_APP_STORE_URL = 'https://apps.apple.com/app/id6756044885';
+
 export function resolveIosUpdate(config: RemoteConfig, currentVersion: string): {
   forceUpdate: boolean;
   updateUrl: string | null;
@@ -162,7 +167,7 @@ export function resolveIosUpdate(config: RemoteConfig, currentVersion: string): 
       ? ios.updateUrl.trim()
       : ios.appStoreId?.trim()
       ? `https://apps.apple.com/app/id${ios.appStoreId.trim()}`
-      : null;
+      : DEFAULT_APP_STORE_URL;
 
   const message =
     ios.message?.trim() ||

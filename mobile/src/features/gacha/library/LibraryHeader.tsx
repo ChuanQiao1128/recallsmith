@@ -4,6 +4,7 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import type { LibraryDeckOption, LibraryFilter, LibraryFilterChip, LibraryTopicChip } from './libraryMapper';
 import { libraryStyles as styles } from './libraryScreenStyles';
 import { colors } from '../../../theme/colors';
+import { COLLECTION_COPY } from '../copy/collectionCopy';
 
 // Progress ring using the classic two-half rotation trick (no SVG dep).
 // Renders the unfilled portion as a hairline track and the filled
@@ -175,7 +176,7 @@ export function LibraryHeader({
         >
           <View style={styles.emptyCollectionBannerTextWrap}>
             <Text style={styles.emptyCollectionBannerEyebrow} numberOfLines={1}>
-              YOUR POKEDEX IS EMPTY
+              {COLLECTION_COPY.libraryEmptyEyebrow}
             </Text>
             <Text style={styles.emptyCollectionBannerTitle} numberOfLines={2}>
               {bannerTitle}
@@ -191,7 +192,7 @@ export function LibraryHeader({
       <View style={styles.headerTopBar}>
         <View style={styles.headerTitleColumn}>
           <Text style={styles.headerEyebrow} numberOfLines={1}>
-            POKEDEX
+            {COLLECTION_COPY.libraryEyebrow}
           </Text>
           <Text style={styles.title} numberOfLines={1}>
             {title}
