@@ -214,4 +214,5 @@ export type RootStackParamList = {
   SignIn: { email?: string } | undefined;
   SignUp: undefined;
   ConfirmSignUp: { email: string };
+  ForgotPassword: { email?: string } | undefined;
 };
