@@ -13,6 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Link, Outlet, RouterProvider, createMemoryRouter, useNavigate } from 'react-router-dom';
 
@@ -284,7 +285,11 @@ describe('the unsaved-changes guard', () => {
   });
 
   it('main.tsx mounts the app through a data router', () => {
-    const source = readFileSync(fileURLToPath(new URL('../src/main.tsx', import.meta.url)), 'utf8');
+    // Resolved with node:path rather than `new URL(..., import.meta.url)`: under
+    // jsdom the latter is rewritten to resolve against the document's http base,
+    // which fileURLToPath then rejects. See tests/errorReporting.test.tsx.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(resolve(here, '../src/main.tsx'), 'utf8');
     expect(source).toContain('createBrowserRouter(');
     expect(source).toContain('<RouterProvider');
     expect(source).not.toContain('<BrowserRouter');

@@ -105,7 +105,7 @@ export function EditCardPage() {
   const [conflictRecoverable, setConflictRecoverable] = useState(false);
 
   // The unsaved-changes guard. Declared above every early return, as the rules
-  // of hooks require; the save below bypasses it explicitly before navigating.
+  // of hooks require; the save below clears it explicitly before navigating.
   const [dirty, setDirty] = useState(false);
   const guard = useUnsavedChangesGuard(dirty);
 
