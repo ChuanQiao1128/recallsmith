@@ -6,6 +6,7 @@ import { useCreateCard } from '../hooks/useCards';
 import { parseDeckId } from '../lib/parseDeckId';
 import type { Deck } from '../types/deck';
 import { CardForm, type CardFormValues } from '../components/CardForm';
+import { buildCardBody } from '../lib/authoringBodies';
 
 interface PageState {
   loadingDeck: boolean;
@@ -191,32 +192,12 @@ export function NewCardPage() {
   async function handleSubmit(
     values: CardFormValues,
   ): Promise<{ ok: boolean; error?: string }> {
-    // Coerced to numbers here, so a string never reaches validation.
-    const difficulty =
-      typeof values.difficulty === 'number'
-        ? values.difficulty
-        : Number(values.difficulty) || 2;
-    const orderInDeck =
-      typeof values.orderInDeck === 'number'
-        ? values.orderInDeck
-        : Number(values.orderInDeck) || 1;
+    // buildCardBody trims and coerces every field the form collects, so a string
+    // never reaches validation and a cleared optional text field is sent as ''.
     const { result } = await createCardMutation.mutateAsync({
+      ...buildCardBody(values),
       deckId: Number(deck.id),
       stableUid: values.stableUid,
-      question: values.question.trim(),
-      explanation: values.explanation?.trim() || undefined,
-      realWorldUsage: values.realWorldUsage?.trim() || undefined,
-      codeSnippet: values.codeSnippet || undefined,
-      codeLanguage: values.codeLanguage || undefined,
-      difficulty,
-      orderInDeck,
-      // Forwarded now that the client type carries it. The form has validated
-      // this field all along; a rule that guards a value nobody sends is not a
-      // safety net, it is a claim that something is being protected.
-      revision:
-        typeof values.revision === 'number' && Number.isFinite(values.revision)
-          ? values.revision
-          : 1,
     });
 
     if (!result.success) {

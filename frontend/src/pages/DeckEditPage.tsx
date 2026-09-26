@@ -8,6 +8,7 @@ import {
 } from '../api/authoring';
 
 import { useUpdateDeck } from '../hooks/useDecks';
+import { buildDeckBody, parseDraftVersion, DRAFT_VERSION_ERROR } from '../lib/authoringBodies';
 
 import type { Deck, DeckAvailability, DeckTier } from '../types/deck';
 
@@ -222,10 +223,25 @@ export function DeckEditPage() {
         return;
       }
 
+      const version = parseDraftVersion(form.version);
+      if (version === null) {
+        setSaveError(DRAFT_VERSION_ERROR);
+        return;
+      }
+
       const payload = {
-        slug,
-        title,
-        description: form.description.trim() || undefined,
+        // buildDeckBody carries the base fields — including author, locale and
+        // version, which this page collected and used to drop — and sends an
+        // emptied description as '' rather than leaving the old text in the row.
+        ...buildDeckBody({
+          slug,
+          title,
+          author,
+          description: form.description,
+          locale: form.locale,
+          deckType,
+          version,
+        }),
         manifestOrder: parseNullableInt(form.manifestOrder),
         availability: form.availability as DeckAvailability | null,
         tier: form.tier ? form.tier : null,

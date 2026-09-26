@@ -166,7 +166,7 @@ afterEach(() => {
 });
 
 describe('the body of the PUT, in full', () => {
-  it('sends exactly these ten fields and no others', async () => {
+  it('sends exactly these fourteen fields and no others', async () => {
     await mountLoaded();
     await clickSave();
 
@@ -175,7 +175,13 @@ describe('the body of the PUT, in full', () => {
     expect(payload()).toStrictEqual({
       slug: 'csharp-fundamentals',
       title: 'C# Fundamentals',
+      // author, locale and version travel now: the base fields buildDeckBody
+      // carries that this page used to collect and drop.
+      author: 'console-tests',
       description: 'Interview prep',
+      locale: 'en-US',
+      deckType: 1,
+      version: 3,
       manifestOrder: 4,
       availability: 'live',
       tier: null,
@@ -189,15 +195,16 @@ describe('the body of the PUT, in full', () => {
     });
   });
 
-  it('drops an empty description to undefined rather than sending an empty string', async () => {
+  it('sends an emptied description as an empty string', async () => {
     await mountLoaded();
     await userEvent.clear(screen.getByLabelText('Description'));
     await clickSave();
 
     await waitFor(() => expect(api.updateDeck).toHaveBeenCalledTimes(1));
-    // undefined is a key updateDeck's `!== undefined` filter skips, so the
-    // column is left alone; '' would overwrite it.
-    expect(payload().description).toBeUndefined();
+    // '' is a present key, so the column is actually cleared. Dropping it (the
+    // old `|| undefined`) left the old text in the row — a clear that did
+    // nothing. This is the same rule deckImportRunner already follows.
+    expect(payload().description).toBe('');
     expect('description' in payload()).toBe(true);
   });
 
