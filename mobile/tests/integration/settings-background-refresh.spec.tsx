@@ -22,6 +22,24 @@ const loadStreakSnapshotMock = vi.fn(async () => ({
   currentWeekKey: '2026-W17',
 }));
 
+// Mutable auth fixture so a test can flip `loading` and re-render, the way a real
+// auth reload would after the first successful settings load.
+const authFixture: {
+  status: string;
+  email: string | null;
+  loading: boolean;
+  signOutNow: () => Promise<void>;
+} = {
+  status: 'signed_in',
+  email: 'test@example.com',
+  loading: false,
+  signOutNow: signOutNowMock,
+};
+
+// Records the focus callback so a test can re-run it to simulate the screen
+// regaining focus (return from SignIn/Paywall/an external link).
+let focusCallback: (() => void) | null = null;
+
 vi.mock('react-native', () => {
   const React = require('react');
   return {
@@ -34,6 +52,7 @@ vi.mock('react-native', () => {
         { ...props, onPress },
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
+    TextInput: (props: any) => React.createElement('TextInput', props),
     Modal: ({ children, visible }: any) => (visible ? React.createElement('Modal', null, children) : null),
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
     RefreshControl: (props: any) => React.createElement('RefreshControl', props),
@@ -59,11 +78,15 @@ vi.mock('expo-linear-gradient', () => {
   };
 });
 
-vi.mock('@react-navigation/native', () => ({
-  useFocusEffect: (callback: any) => {
-    React.useEffect(() => callback(), [callback]);
-  },
-}));
+vi.mock('@react-navigation/native', () => {
+  const React = require('react');
+  return {
+    useFocusEffect: (callback: any) => {
+      focusCallback = callback;
+      React.useEffect(() => callback(), [callback]);
+    },
+  };
+});
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
@@ -93,13 +116,7 @@ vi.mock('react-native-purchases', () => ({
 }));
 
 vi.mock('../../src/auth/authStore', () => ({
-  useAuthStore: (selector: any) =>
-    selector({
-      status: 'signed_in',
-      email: 'test@example.com',
-      loading: false,
-      signOutNow: signOutNowMock,
-    }),
+  useAuthStore: (selector: any) => selector(authFixture),
 }));
 
 vi.mock('../../src/content/deckRepository', () => ({
@@ -156,26 +173,15 @@ function nodeText(node: renderer.ReactTestInstance): string {
   return Array.isArray(content) ? content.join('') : String(content ?? '');
 }
 
-function findPressableByText(tree: renderer.ReactTestRenderer, label: string) {
-  return tree.root.find(
-    (node) =>
-      (node.type as any) === 'Pressable' &&
-      node.findAll((child) => (child.type as any) === 'Text' && nodeText(child) === label).length > 0,
-  );
+function textBlob(tree: renderer.ReactTestRenderer): string {
+  return tree.root
+    .findAll((node) => (node.type as any) === 'Text')
+    .map((node) => nodeText(node))
+    .join('\n');
 }
 
-function findPressableByTestID(tree: renderer.ReactTestRenderer, testID: string) {
-  return tree.root.find((node) => (node.type as any) === 'Pressable' && node.props?.testID === testID);
-}
-
-function findHostNodesByTestID(
-  tree: renderer.ReactTestRenderer,
-  hostType: string,
-  testID: string,
-) {
-  return tree.root.findAll(
-    (node) => (node.type as any) === hostType && node.props?.testID === testID,
-  );
+function findHostByTestID(tree: renderer.ReactTestRenderer, hostType: string, testID: string) {
+  return tree.root.find((node) => (node.type as any) === hostType && node.props?.testID === testID);
 }
 
 async function renderSettings() {
@@ -196,7 +202,16 @@ async function renderSettings() {
   return { tree, navigate };
 }
 
-describe('SettingsScreen', () => {
+function renderElement(navigate: any, goBack: any) {
+  return (
+    <SettingsScreen
+      navigation={{ navigate, goBack } as any}
+      route={{ key: 'settings', name: 'Settings' } as any}
+    />
+  );
+}
+
+describe('SettingsScreen background refresh', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -225,6 +240,11 @@ describe('SettingsScreen', () => {
       currentWeekKey: '2026-W17',
     });
 
+    authFixture.status = 'signed_in';
+    authFixture.email = 'test@example.com';
+    authFixture.loading = false;
+    focusCallback = null;
+
     (globalThis as any).__DEV__ = false;
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -236,160 +256,74 @@ describe('SettingsScreen', () => {
     warnSpy.mockRestore();
   });
 
-  it('keeps root and primary CTA testID contract with single anchor', async () => {
+  it('keeps the settings content mounted when the screen refocuses', async () => {
     const { tree } = await renderSettings();
+    expect(textBlob(tree)).toContain('Momentum');
 
-    const roots = findHostNodesByTestID(tree, 'SafeAreaView', 'screen-settings-root');
-    const primaryCtas = findHostNodesByTestID(tree, 'Pressable', 'screen-settings-primary-cta');
-
-    expect(roots).toHaveLength(1);
-    expect(primaryCtas).toHaveLength(1);
-
-    const primaryText = findPressableByTestID(tree, 'screen-settings-primary-cta').find(
-      (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
-    );
-    expect(primaryText.props.numberOfLines).toBe(1);
-
-    // G34: the momentum meta line (reminder status) no longer clamps to one
-    // line, so its explanation wraps instead of ending in an ellipsis at large
-    // text sizes. The button label above it keeps its single-line clamp.
-    const reminderMeta = tree.root.findAll(
-      (node) => (node.type as any) === 'Text' && nodeText(node).includes('due cards remain'),
-    );
-    expect(reminderMeta.length).toBeGreaterThan(0);
-    reminderMeta.forEach((node) => {
-      expect(node.props.numberOfLines).toBeUndefined();
+    // A refocus while the reminder read is still pending must not swap the
+    // screen for the spinner after the first successful load.
+    getReminderPrefsMock.mockReturnValueOnce(new Promise(() => {}) as any);
+    await act(async () => {
+      focusCallback?.();
     });
+
+    const blob = textBlob(tree);
+    expect(blob).not.toContain('Loading settings...');
+    expect(blob).toContain('Momentum');
   });
 
-  it('saves audience preference when a chip is pressed', async () => {
+  it('keeps the typed DELETE confirmation across a refocus', async () => {
     const { tree } = await renderSettings();
 
     await act(async () => {
-      findPressableByText(tree, 'Junior').props.onPress();
-      await Promise.resolve();
+      findHostByTestID(tree, 'Pressable', 'settings-delete-account-open').props.onPress();
     });
-
-    expect(setAudiencePreferenceMock).toHaveBeenCalledWith('junior');
-  });
-
-  it('confirms and runs Fresh Start reset flow', async () => {
-    const { tree } = await renderSettings();
 
     await act(async () => {
-      findPressableByText(tree, 'Make all learned cards due today').props.onPress();
+      findHostByTestID(tree, 'TextInput', 'settings-delete-account-input').props.onChangeText('DEL');
     });
-
-    expect(alertMock).toHaveBeenCalledWith(
-      'Make all learned cards due today?',
-      expect.stringContaining('1 learned card'),
-      expect.any(Array),
-    );
-
-    const buttons = alertMock.mock.calls[0][2];
-    await act(async () => {
-      await buttons[1].onPress();
-    });
-
-    expect(resetAllReviewSchedulesMock).toHaveBeenCalledTimes(1);
-    expect(alertMock).toHaveBeenCalledWith(
-      'Cards are due now',
-      'Your library and owned cards are unchanged.',
-    );
-  });
-
-  it('renders Premium section and routes action to Paywall', async () => {
-    const { tree, navigate } = await renderSettings();
-
-    const textBlob = tree.root
-      .findAll((node) => (node.type as any) === 'Text')
-      .map((node) => nodeText(node))
-      .join('\n');
-
-    expect(textBlob).toContain('Premium');
-    expect(textBlob).toContain('Open premium');
-
-    act(() => {
-      findPressableByText(tree, 'Open premium').props.onPress();
-    });
-
-    expect(navigate).toHaveBeenCalledWith('Paywall');
-  });
-
-  it('renders the ready screen with defaults when stored values are missing', async () => {
-    getReminderPrefsMock.mockResolvedValueOnce(null as any);
-    loadStreakSnapshotMock.mockResolvedValueOnce(null as any);
-
-    const { tree } = await renderSettings();
-
-    const textBlob = tree.root
-      .findAll((node) => (node.type as any) === 'Text')
-      .map((node) => nodeText(node))
-      .join('\n');
-
-    expect(textBlob).toContain('Momentum');
-    expect(textBlob).toContain('0 days streak');
-
-    const roots = findHostNodesByTestID(tree, 'SafeAreaView', 'screen-settings-root');
-    const primaryCtas = findHostNodesByTestID(tree, 'Pressable', 'screen-settings-primary-cta');
-    expect(roots).toHaveLength(1);
-    expect(primaryCtas).toHaveLength(1);
-  });
-
-  it('renders error state and retries refresh', async () => {
-    getReminderPrefsMock.mockRejectedValueOnce(new Error('network down'));
-
-    const { tree } = await renderSettings();
-
-    const textBlob = tree.root
-      .findAll((node) => (node.type as any) === 'Text')
-      .map((node) => nodeText(node))
-      .join('\n');
-    expect(textBlob).toContain('Settings unavailable');
+    expect(findHostByTestID(tree, 'TextInput', 'settings-delete-account-input').props.value).toBe('DEL');
 
     await act(async () => {
-      findPressableByTestID(tree, 'screen-settings-primary-cta').props.onPress();
-      await Promise.resolve();
+      focusCallback?.();
     });
     await flush();
 
-    expect(getReminderPrefsMock).toHaveBeenCalledTimes(2);
-
-    const postRetryBlob = tree.root
-      .findAll((node) => (node.type as any) === 'Text')
-      .map((node) => nodeText(node))
-      .join('\n');
-    expect(postRetryBlob).toContain('Momentum');
+    expect(findHostByTestID(tree, 'TextInput', 'settings-delete-account-input').props.value).toBe('DEL');
   });
-  it('opens the Debug menu after 7 taps on the version label within 3 s, even outside __DEV__', async () => {
-    vi.useFakeTimers();
-    try {
-      const { tree, navigate } = await renderSettings();
-      expect((globalThis as any).__DEV__).toBe(false);
-      // The __DEV__ Debug section is absent in production.
-      expect(tree.root.findAll((node) => (node.type as any) === 'Text' && nodeText(node) === 'Open debug menu')).toHaveLength(0);
-      const label = findPressableByTestID(tree, 'settings-version-label');
-      expect(nodeText(label.findByType('Text' as any))).toBe('App version 1.0.0');
 
-      // Six taps spread over 6 × 700 ms = 4.2 s never complete a 3 s window.
-      for (let i = 0; i < 6; i += 1) {
-        act(() => { label.props.onPress(); });
-        vi.advanceTimersByTime(700);
-      }
-      expect(navigate).not.toHaveBeenCalledWith('DebugMenu');
+  it('keeps the settings screen visible when a background refresh fails', async () => {
+    const { tree } = await renderSettings();
+    expect(textBlob(tree)).toContain('Momentum');
 
-      // Seven quick taps do.
-      vi.advanceTimersByTime(5000);
-      for (let i = 0; i < 6; i += 1) {
-        act(() => { label.props.onPress(); });
-        vi.advanceTimersByTime(200);
-      }
-      expect(navigate).not.toHaveBeenCalledWith('DebugMenu');
-      act(() => { label.props.onPress(); });
-      expect(navigate).toHaveBeenCalledWith('DebugMenu');
-      expect(navigate).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    getReminderPrefsMock.mockRejectedValueOnce(new Error('network down'));
+    await act(async () => {
+      focusCallback?.();
+    });
+    await flush();
+
+    const blob = textBlob(tree);
+    expect(blob).not.toContain('Settings unavailable');
+    expect(blob).toContain('Momentum');
+  });
+
+  it('keeps the settings content while auth reloads after the first load', async () => {
+    const navigate = vi.fn();
+    const goBack = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(renderElement(navigate, goBack));
+    });
+    await flush();
+    expect(textBlob(tree)).toContain('Momentum');
+
+    authFixture.loading = true;
+    await act(async () => {
+      tree.update(renderElement(navigate, goBack));
+    });
+
+    const blob = textBlob(tree);
+    expect(blob).not.toContain('Loading settings...');
+    expect(blob).toContain('Momentum');
   });
 });

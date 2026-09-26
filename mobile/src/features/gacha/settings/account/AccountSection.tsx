@@ -12,9 +12,9 @@ export const ACCOUNT_COPY = {
   signedInState: (email: string) => `Signed in as ${email}`,
   signIn: 'Sign in',
   signOut: 'Sign out',
-  freshStartTitle: 'Fresh Start',
-  freshStartBody: 'Clear today’s schedule. Keeps your owned cards.',
-  resetSchedule: 'Reset review schedule',
+  freshStartTitle: 'Review everything again',
+  freshStartBody: 'Makes every card you have studied, in every deck, due now. Your owned cards stay.',
+  resetSchedule: 'Make all learned cards due today',
   deleteTitle: 'Delete account',
   deleteBody:
     'Permanently deletes your account and the progress, cards and wallet saved for it on our servers and on this device. This cannot be undone.',
