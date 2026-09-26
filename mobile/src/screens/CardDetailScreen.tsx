@@ -219,6 +219,7 @@ export function CardDetailScreen({ navigation, route }: Props) {
           {/* HERO CARD — same featured style as DrawResult */}
           <View style={styles.heroCardWrap}>
             <LinearGradient
+              testID="card-detail-hero"
               colors={rarity.gradient}
               start={{ x: 0.1, y: 0 }}
               end={{ x: 0.9, y: 1 }}
@@ -273,22 +274,19 @@ export function CardDetailScreen({ navigation, route }: Props) {
                 </Text>
               </View>
 
-              <View style={styles.heroQuestionSlab}>
-                {/* No numberOfLines — CardDetail is the canonical
-                    "view this card's full content" surface. Long
-                    questions should fully render. The page already
-                    scrolls (parent ScrollView). */}
-                <Text style={styles.heroQuestion}>
-                  {title}
-                </Text>
-              </View>
-
               {/* Subtle serial mark — replaces the rotated OFFICIAL ★ stamp.
                   Reads as authentic registry, not a try-hard sticker. */}
               <Text style={styles.heroSerial} numberOfLines={1}>
                 {`No. ${formatRank(slot)}${totalInDeck > 0 ? ` / ${totalInDeck}` : ''}`}
               </Text>
             </LinearGradient>
+          </View>
+
+          {/* QUESTION — the canonical "view this card's full content" surface.
+              Moved out of the fixed overflow-hidden hero (MCORE-01): normal-flow
+              text, no numberOfLines, no fixed height. The page already scrolls. */}
+          <View testID="card-detail-question" style={styles.questionCard}>
+            <Text style={styles.questionText}>{title}</Text>
           </View>
 
           {/* META STRIP — slot, last seen, next review, mastery */}
@@ -471,14 +469,20 @@ const styles = StyleSheet.create({
     textShadowRadius: 4,
   },
 
-  heroQuestionSlab: {
-    backgroundColor: 'rgba(255,255,255,0.94)',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minHeight: 64,
+  // ─── Question card (full stem, normal flow, below the hero) ──────────────
+  questionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    marginBottom: spacing.md,
+    shadowColor: colors.shadowSoft,
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
-  heroQuestion: { color: colors.inkSoft, fontSize: typography.title3, lineHeight: 22, fontWeight: '900' },
+  questionText: { color: colors.inkSoft, fontSize: typography.title3, lineHeight: 24, fontWeight: '800' },
 
   // Serial mark — replaces OFFICIAL stamp
   heroSerial: {

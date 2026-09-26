@@ -638,9 +638,12 @@ describe('SessionCardScreen MCQ branch', () => {
     expect(byTestID(tree, 'mcq-stem')[0].props.numberOfLines).toBeUndefined();
 
     await press(tree, 'mcq-show-options');
-    expect(byTestID(tree, 'mcq-stem')[0].props.numberOfLines).toBe(3);
+    // The ask stem is never clamped; only the scenario lead-in is (2 lines).
+    expect(byTestID(tree, 'mcq-stem')[0].props.numberOfLines).toBeUndefined();
+    expect(byTestID(tree, 'mcq-stem-lead')[0].props.numberOfLines).toBe(2);
     await press(tree, 'mcq-show-full-stem');
     expect(byTestID(tree, 'mcq-stem')[0].props.numberOfLines).toBeUndefined();
+    expect(byTestID(tree, 'mcq-stem-lead')).toHaveLength(0);
 
     expect(getTextContent(byTestID(tree, 'mcq-option-text-b')[0])).toBe(LONG_OPTION_TEXT);
     const optionTexts = tree.root.findAll(

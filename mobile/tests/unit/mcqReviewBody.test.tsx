@@ -248,23 +248,45 @@ describe('McqReviewBody', () => {
     expect(segs.filter((s) => s.emphasis === 'caps').map((s) => s.text)).toEqual(['BEST', 'FEWEST']);
   });
 
-  it('collapses the stem to three lines on the options stage until Show full question', () => {
+  it('keeps the ask and the qualifier visible on the options stage and clamps only the lead-in', () => {
     const { tree } = renderBody({ stage: 'options' });
-    expect(textByTestId(tree, 'mcq-stem').props.numberOfLines).toBe(3);
+
+    // Only the scenario lead-in is clamped, and only to two lines.
+    const lead = textByTestId(tree, 'mcq-stem-lead');
+    expect(lead.props.numberOfLines).toBe(2);
+    expect(lead.props.children).toBe(
+      'An order API runs on Amazon EC2 instances behind an Application Load Balancer. During flash sales the downstream fulfilment service is overwhelmed and orders are lost.',
+    );
+
+    // The ask sentence (with its LEAST qualifier) is rendered in full, never clamped.
+    const stem = textByTestId(tree, 'mcq-stem');
+    expect(stem.props.numberOfLines).toBeUndefined();
+    expect(joinStemChildren(stem)).toBe(
+      'The company wants the API to keep accepting orders while fulfilment catches up, with the LEAST operational overhead. Which solution meets these requirements?',
+    );
+
+    // The qualifier is bolded inside the visible ask, not hidden in the clamped lead-in.
+    const qualifiers = texts(tree).filter((node) => node.props.testID === 'mcq-qualifier');
+    expect(qualifiers).toHaveLength(1);
+    expect(qualifiers[0].props.children).toBe('LEAST operational overhead');
+
+    // Show full question reveals the whole stem in mcq-stem and drops the lead-in block.
     const toggle = pressableById(tree, 'mcq-show-full-stem');
     expect(
       toggle.findAll((n) => (n.type as any) === 'Text').some((n) => n.props.children === MCQ_COPY.showFullStem),
     ).toBe(true);
-
     act(() => {
       toggle.props.onPress();
     });
+    expect(joinStemChildren(textByTestId(tree, 'mcq-stem'))).toBe(card1.Question);
     expect(textByTestId(tree, 'mcq-stem').props.numberOfLines).toBeUndefined();
+    expect(hasTestId(tree, 'mcq-stem-lead')).toBe(false);
     expect(hasTestId(tree, 'mcq-show-full-stem')).toBe(false);
 
-    // The verdict stage never clamps the stem.
+    // The verdict stage never clamps the stem and never shows a lead-in block.
     const verdict = renderBody({ stage: 'verdict', verdict: 'wrong' });
     expect(textByTestId(verdict.tree, 'mcq-stem').props.numberOfLines).toBeUndefined();
+    expect(hasTestId(verdict.tree, 'mcq-stem-lead')).toBe(false);
   });
 
   it('assigns letters by displayed position, never by key', () => {
@@ -513,9 +535,12 @@ describe('McqReviewBody', () => {
         expect(optionA.props.numberOfLines).toBeUndefined();
       }
 
+      // The only clamp above one line is the clamped lead-in (mcq-stem-lead, 2 lines),
+      // and only on the options stage; everything else is either unclamped or a 1-line label.
       for (const node of texts(tree).filter((n) => typeof n.props.numberOfLines === 'number')) {
-        if (node.props.numberOfLines === 3) {
-          expect(node.props.testID).toBe('mcq-stem');
+        if (node.props.numberOfLines > 1) {
+          expect(node.props.numberOfLines).toBe(2);
+          expect(node.props.testID).toBe('mcq-stem-lead');
           expect(stage).toBe('options');
         } else {
           expect(node.props.numberOfLines).toBe(1);

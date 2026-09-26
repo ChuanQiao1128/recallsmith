@@ -158,6 +158,8 @@ const localStyles = StyleSheet.create({
     alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
     backgroundColor: 'rgba(20,23,55,0.72)',
   },
+  modalScroll: { maxHeight: 420 },
+  modalMeta: { marginTop: 8, color: colors.inkMuted, fontSize: 11, fontWeight: '800', letterSpacing: 0.4 },
   featuredSlab: { position: 'absolute', ...FEATURED_FRAME_LAYOUT.slab, justifyContent: 'center' },
   featuredTitleStrip: {
     position: 'absolute', ...FEATURED_FRAME_LAYOUT.titleStrip, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end',
@@ -859,9 +861,23 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   </Text>
                 </View>
               ) : null}
-              <Text style={styles.modalTitle} numberOfLines={3}>
-                {detailCard?.question ?? ''}
-              </Text>
+              {/* Full stem is readable here — the featured card is the summary
+                  (6 lines), the modal is the study surface (MGACHA-15). */}
+              <ScrollView testID="draw-result-detail-scroll" style={localStyles.modalScroll}>
+                {detailCard && cardTagText(detailCard) ? (
+                  <Text testID="draw-result-detail-topic" style={localStyles.modalMeta} numberOfLines={1}>
+                    {cardTagText(detailCard)}
+                  </Text>
+                ) : null}
+                {detailCard && cardKindText(detailCard) ? (
+                  <Text testID="draw-result-detail-kind" style={localStyles.modalMeta} numberOfLines={1}>
+                    {cardKindText(detailCard)}
+                  </Text>
+                ) : null}
+                <Text testID="draw-result-detail-question" style={styles.modalTitle}>
+                  {detailCard?.question ?? ''}
+                </Text>
+              </ScrollView>
               <Pressable
                 testID="screen-draw-result-detail-close"
                 style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]}

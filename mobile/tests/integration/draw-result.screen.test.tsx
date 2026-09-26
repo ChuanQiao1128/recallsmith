@@ -377,6 +377,55 @@ describe('DrawResultScreen v9', () => {
     expect(tree.root.findAllByProps({ testID: 'screen-draw-result-detail-close' })).toHaveLength(0);
   });
 
+  it('shows the full question, topic and MCQ mark in a scrollable detail modal', async () => {
+    const longQuestion = (
+      'A company must design a resilient, cost-effective architecture on AWS that durably captures every incoming order during seasonal traffic spikes and processes each one asynchronously with the least operational overhead possible. '
+    ).repeat(4).slice(0, 550);
+    expect(longQuestion).toHaveLength(550);
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{
+            key: 'result',
+            name: 'DrawResult',
+            params: makeParams({
+              drawResult: {
+                ...DRAW_RESULT_FIXTURE,
+                cards: [
+                  { stableUid: '1', question: longQuestion, difficulty: 3, rarity: 'LEG', tag: 'Networking', kind: 'mcq' },
+                  { stableUid: '2', question: 'Q2', difficulty: 2, rarity: 'RAR' },
+                ],
+              },
+            }),
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    // Host instances only — the mocked RN components render both a composite and a host node
+    // carrying the same testID, so filter to the host (string type) to count once.
+    const hostByTestID = (id: string) =>
+      tree.root.findAll((n) => typeof n.type === 'string' && n.props.testID === id);
+
+    // Open the modal from the featured (LEG) card.
+    act(() => {
+      hostByTestID('screen-draw-result-featured-card')[0].props.onPress();
+    });
+
+    expect(hostByTestID('draw-result-detail-scroll')).toHaveLength(1);
+
+    const question = hostByTestID('draw-result-detail-question')[0];
+    expect(question.props.children).toBe(longQuestion);
+    expect(question.props.numberOfLines).toBeUndefined();
+
+    expect(hostByTestID('draw-result-detail-topic')[0].props.children).toBe('Networking');
+    expect(hostByTestID('draw-result-detail-kind')[0].props.children).toBe('MC');
+  });
+
   it('keeps sheet testID with single snap point and handles empty draw state', async () => {
     const navigate = vi.fn();
 
