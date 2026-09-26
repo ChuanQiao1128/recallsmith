@@ -1,9 +1,9 @@
 import 'react-native-gesture-handler';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-url-polyfill/auto';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -11,10 +11,10 @@ import * as Notifications from 'expo-notifications';
 
 import type { RootStackParamList } from './src/navigation/types';
 import { linking } from './src/navigation/linking';
-import BottomTabBar from './src/components/BottomTabBar';
 import { RootErrorBoundary } from './src/components/RootErrorBoundary';
 import { ScreenErrorBoundary } from './src/components/ScreenErrorBoundary';
-import { getMainTabForRouteName, shouldShowMainTabBar } from './src/navigation/mainTabs';
+import { TabBarHost } from './src/navigation/TabBarHost';
+import { createRouteNameStore } from './src/navigation/routeNameStore';
 import { navigateToTab } from './src/navigation/tabNavigation';
 import SplashScreen from './src/screens/SplashScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
@@ -44,6 +44,7 @@ import { configureAmplifyOnce } from './src/auth/amplify';
 import { useAuthStore } from './src/auth/authStore';
 import { installAccessTokenRefresher, refreshAuthOnForeground } from './src/auth/freshToken';
 import { scheduleProgressSync } from './src/sync/progressSync';
+import { createAppStateSyncHandler } from './src/sync/appStateSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { DEFAULT_APP_STORE_URL } from './src/config/remoteConfig';
 import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
@@ -141,7 +142,9 @@ function ForceUpdateOverlay(props: ForceUpdateGate) {
 
 export default function App() {
   const forceUpdate = useForceUpdateGate(REMOTE_CONFIG_URL);
-  const [currentRouteName, setCurrentRouteName] = useState<keyof RootStackParamList | undefined>(undefined);
+  // The current route lives in an external store, not App state, so navigation
+  // re-renders only TabBarHost (MSHELL-21) instead of the whole navigator tree.
+  const routeStore = useMemo(createRouteNameStore, []);
 
   useEffect(() => {
     void useAuthStore.getState().init();
@@ -156,29 +159,28 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const syncOnAppState = createAppStateSyncHandler({ schedule: scheduleProgressSync });
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'background' || state === 'inactive') scheduleProgressSync({ delayMs: 0, reason: 'app_background' });
-      else if (state === 'active') {
+      syncOnAppState(state);
+      if (state === 'active') {
         void refreshAuthOnForeground();
-        scheduleProgressSync({ delayMs: 0, reason: 'app_foreground' });
         void otaUpdateChecker.onForeground(() => (navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : undefined));
       }
     });
     return () => sub.remove();
   }, []);
 
-  const activeMainTab = getMainTabForRouteName(currentRouteName);
-
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <RootErrorBoundary>
         <View style={styles.appShell}>
       <View style={styles.navigatorShell}>
         <NavigationContainer
           ref={navigationRef}
           linking={linking}
-          onReady={() => setCurrentRouteName(navigationRef.getCurrentRoute()?.name as keyof RootStackParamList | undefined)}
-          onStateChange={() => setCurrentRouteName(navigationRef.getCurrentRoute()?.name as keyof RootStackParamList | undefined)}
+          onReady={() => routeStore.set(navigationRef.getCurrentRoute()?.name)}
+          onStateChange={() => routeStore.set(navigationRef.getCurrentRoute()?.name)}
         >
           <Stack.Navigator
             initialRouteName="Splash"
@@ -230,23 +232,18 @@ export default function App() {
         </NavigationContainer>
       </View>
 
-      {activeMainTab && shouldShowMainTabBar(currentRouteName) ? (
-        <SafeAreaView style={styles.mainTabSafeArea} edges={['bottom']}>
-          <View style={styles.mainTabBarShell}>
-          <BottomTabBar
-            active={activeMainTab}
-            navigate={(name, params) => {
-              if (!navigationRef.isReady()) return;
-              navigateToTab(navigationRef, name, params);
-            }}
-          />
-          </View>
-        </SafeAreaView>
-      ) : null}
+      <TabBarHost
+        routeStore={routeStore}
+        navigate={(name, params) => {
+          if (!navigationRef.isReady()) return;
+          navigateToTab(navigationRef, name, params);
+        }}
+      />
 
       {forceUpdate ? <ForceUpdateOverlay {...forceUpdate} /> : null}
         </View>
       </RootErrorBoundary>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
@@ -254,15 +251,6 @@ export default function App() {
 const styles = StyleSheet.create({
   appShell: { flex: 1, backgroundColor: '#F5F3FF' },
   navigatorShell: { flex: 1 },
-  mainTabSafeArea: {
-    backgroundColor: '#F5F3FF',
-  },
-  mainTabBarShell: {
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    paddingBottom: 8,
-    backgroundColor: '#F5F3FF',
-  },
   gradient: { flex: 1 },
   updateOverlay: {
     ...StyleSheet.absoluteFillObject,

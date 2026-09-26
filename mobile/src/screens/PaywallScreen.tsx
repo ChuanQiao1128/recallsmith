@@ -10,7 +10,7 @@ import {
   ScrollView,
   Linking,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
@@ -203,10 +203,9 @@ export function PaywallScreen({ navigation }: Props) {
   }
 
   return (
-    <SafeAreaProvider>
-      <SafeAreaView style={styles.safeArea}>
-        <LinearGradient
-          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
+    <SafeAreaView style={styles.safeArea}>
+      <LinearGradient
+        colors={[colors.parchmentBg, colors.parchmentBgDeep]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
@@ -379,8 +378,7 @@ export function PaywallScreen({ navigation }: Props) {
             <View style={{ height: 10 }} />
           </ScrollView>
         </LinearGradient>
-      </SafeAreaView>
-    </SafeAreaProvider>
+    </SafeAreaView>
   );
 }
 
