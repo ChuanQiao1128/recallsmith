@@ -22,7 +22,7 @@ public class JobRepository : IJobRepository
       WHERE job_id = $1 
         AND (
           status IN ('PENDING', 'FAILED')
-          OR (status = 'PROCESSING' AND ($2 > 1 OR updated_at < now() - interval '15 minutes'))
+          OR (status = 'PROCESSING' AND (($2 > 1 AND updated_at < now() - interval '11 minutes') OR updated_at < now() - interval '15 minutes'))
         )
       """;
 
@@ -74,14 +74,35 @@ public class JobRepository : IJobRepository
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null) throw new InvalidOperationException("Failed to open database connection");
 
+    // 021+: mark SUCCESS and move the deck's live pointer to this build in one atomic statement.
     const string sql = """
-      UPDATE deck_publishes 
-      SET status = 'SUCCESS',
-          updated_at = now()
-      WHERE job_id = $1
+      with done as (
+        update deck_publishes
+        set status = 'SUCCESS', updated_at = now()
+        where job_id = $1
+        returning deck_id, build_id
+      )
+      update decks d
+      set live_build_id = done.build_id
+      from done
+      where d.id = done.deck_id
       """;
 
-    await DbUtil.ExecuteAsync(conn, null, sql, [jobId]);
+    try
+    {
+      await DbUtil.ExecuteAsync(conn, null, sql, [jobId]);
+    }
+    catch (PostgresException pg) when (pg.SqlState == "42703")
+    {
+      // Pre-021 window (code shipped, console Migrate not yet clicked): no live_build_id column.
+      const string legacySql = """
+        UPDATE deck_publishes
+        SET status = 'SUCCESS',
+            updated_at = now()
+        WHERE job_id = $1
+        """;
+      await DbUtil.ExecuteAsync(conn, null, legacySql, [jobId]);
+    }
   }
 
   /// <summary>

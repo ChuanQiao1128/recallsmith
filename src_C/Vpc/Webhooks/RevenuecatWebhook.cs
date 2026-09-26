@@ -404,7 +404,7 @@ public static class RevenuecatWebhook
         Log.Warn("[rc-webhook] db upsert user_premium_state failed:", ex.Message);
       }
 
-      Console.WriteLine(JsonSerializer.Serialize(new
+      Log.Event("info", new
       {
         tag = "rc-webhook",
         impl = ImplVersion,
@@ -418,7 +418,7 @@ public static class RevenuecatWebhook
         productId,
         promo,
         promoAllowed = promo,
-      }));
+      });
     }
 
     return res.Raw(200, new { ok = true, accepted = true, mode, impl = ImplVersion, eventId, type = typeUpper, promo });

@@ -12,6 +12,8 @@ using static RecallSmith.Lambda.Vpc.Db.DbUtil;
 
 namespace RecallSmith.Lambda.Vpc.Analytics;
 
+public sealed record OutboxPublishResult(int Claimed, int Published, int Retried, int PendingAfter);
+
 public static class OutboxPublisher
 {
   private static AmazonS3Client? _s3;
@@ -177,6 +179,53 @@ public static class OutboxPublisher
     await ExecuteAsync(conn, null, sql, [ids, error]);
   }
 
+  /// <summary>
+  /// Claims a batch of pending outbox rows, writes them to S3 and marks them sent. An S3 or
+  /// mark-sent failure is reported in the result (rows returned to 'pending' for retry), not
+  /// thrown -- E12's loop decides what to do with a failing publisher; DB failures propagate.
+  /// </summary>
+  public static async Task<OutboxPublishResult> PublishBatchAsync(NpgsqlConnection conn, IAmazonS3 s3, string bucket, string prefix, int limit)
+  {
+    var rows = await ClaimPending(conn, limit);
+    if (rows.Count == 0)
+    {
+      return new OutboxPublishResult(0, 0, 0, await CountPendingAsync(conn));
+    }
+
+    var ids = rows.Select(row => ToLong(row["id"])).Where(id => id > 0).ToArray();
+    var now = DateTimeOffset.UtcNow;
+    var key = $"{prefix}/event_type=card_reviewed/dt={now:yyyy-MM-dd}/batch-{now:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}.jsonl";
+    var body = BuildJsonl(rows, now);
+
+    try
+    {
+      await s3.PutObjectAsync(new PutObjectRequest
+      {
+        BucketName = bucket,
+        Key = key,
+        ContentBody = body,
+        ContentType = "application/x-ndjson; charset=utf-8",
+      });
+
+      await MarkSent(conn, ids);
+
+      return new OutboxPublishResult(rows.Count, rows.Count, 0, await CountPendingAsync(conn));
+    }
+    catch (Exception ex)
+    {
+      await MarkRetry(conn, ids, ex.Message);
+      Log.Error("Analytics outbox publish failed:", ex);
+      return new OutboxPublishResult(rows.Count, 0, rows.Count, await CountPendingAsync(conn));
+    }
+  }
+
+  private static async Task<int> CountPendingAsync(NpgsqlConnection conn)
+  {
+    const string sql = "select count(*) from analytics_event_outbox where status = 'pending';";
+    var rows = await QueryAsync(conn, null, sql, []);
+    return rows.Count == 0 ? 0 : (int)ToLong(rows[0].Values.First());
+  }
+
   public static async Task<APIGatewayProxyResponse> HandlePublishOutbox(
     LambdaRequest req,
     Res res,
@@ -201,43 +250,18 @@ public static class OutboxPublisher
       return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
     }
 
-    var rows = await ClaimPending(conn, limit);
-    if (rows.Count == 0)
+    var result = await PublishBatchAsync(conn, S3(), bucket, prefix, limit);
+    RouteMetrics.EmitGauge("OutboxPending", result.PendingAfter);
+    if (result.Retried > 0) return res.Error500(null);
+    return res.Ok(new
     {
-      return res.Ok(new { ok = true, published = 0, bucket, prefix });
-    }
-
-    var ids = rows.Select(row => ToLong(row["id"])).Where(id => id > 0).ToArray();
-    var now = DateTimeOffset.UtcNow;
-    var key = $"{prefix}/event_type=card_reviewed/dt={now:yyyy-MM-dd}/batch-{now:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}.jsonl";
-    var body = BuildJsonl(rows, now);
-
-    try
-    {
-      await S3().PutObjectAsync(new PutObjectRequest
-      {
-        BucketName = bucket,
-        Key = key,
-        ContentBody = body,
-        ContentType = "application/x-ndjson; charset=utf-8",
-      });
-
-      await MarkSent(conn, ids);
-
-      return res.Ok(new
-      {
-        ok = true,
-        published = rows.Count,
-        bucket,
-        key,
-        bytes = Encoding.UTF8.GetByteCount(body),
-      });
-    }
-    catch (Exception ex)
-    {
-      await MarkRetry(conn, ids, ex.Message);
-      Log.Error("Analytics outbox publish failed:", ex);
-      return res.Error500(ex);
-    }
+      ok = true,
+      claimed = result.Claimed,
+      published = result.Published,
+      retried = result.Retried,
+      pendingAfter = result.PendingAfter,
+      bucket,
+      prefix,
+    });
   }
 }

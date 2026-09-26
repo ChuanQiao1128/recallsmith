@@ -1,0 +1,15 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.identity.aws_iam_role.worker": "create",
+    "module.identity.aws_iam_role_policy.core_vpc": "create",
+    "module.identity.aws_iam_role_policy.worker": "create",
+    "module.identity.aws_iam_role_policy_attachment.core_vpc[\"ec2_full\"]": "delete",
+    "module.identity.aws_iam_role_policy_attachment.core_vpc[\"rds_full\"]": "delete",
+    "module.identity.aws_iam_role_policy_attachment.core_vpc[\"s3_full\"]": "delete",
+    "module.identity.aws_iam_role_policy_attachment.core_vpc[\"sqs_exec\"]": "delete",
+    "module.identity.aws_iam_role_policy_attachment.core_vpc[\"sqs_full\"]": "delete",
+    "module.identity.aws_iam_role_policy_attachment.snowflake[\"s3_full\"]": "delete",
+    "module.worker.aws_lambda_function.worker": { "action": "update", "keys": ["role"] }
+  }
+}
