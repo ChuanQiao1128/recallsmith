@@ -13,6 +13,7 @@ import type { RootStackParamList } from './src/navigation/types';
 import { linking } from './src/navigation/linking';
 import BottomTabBar from './src/components/BottomTabBar';
 import { RootErrorBoundary } from './src/components/RootErrorBoundary';
+import { ScreenErrorBoundary } from './src/components/ScreenErrorBoundary';
 import { getMainTabForRouteName, shouldShowMainTabBar } from './src/navigation/mainTabs';
 import { navigateToTab } from './src/navigation/tabNavigation';
 import SplashScreen from './src/screens/SplashScreen';
@@ -94,6 +95,11 @@ import { scheduleProgressSync } from './src/sync/progressSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
 import { createOtaUpdateChecker, getExpoUpdatesModule } from './src/updates/otaUpdateCheck';
+import { collectDeviceInfo } from './src/features/gacha/draw/ceremonyPerf';
+import {
+  configureClientErrorReporting,
+  installGlobalErrorHandlers,
+} from './src/telemetry/clientErrorReporter';
 
 configureAmplifyOnce();
 installAccessTokenRefresher();
@@ -125,6 +131,26 @@ Notifications.setNotificationHandler({
 const REMOTE_CONFIG_URL = 'https://raw.githubusercontent.com/ChuanQiao1128/recallsmith-mobile-config/refs/heads/main/recallsmith-config.json';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
+
+// Interim client error reporting (MSHELL-02 / MSHELL-12). The reporter imports
+// nothing at runtime; the token, device info and current screen are injected
+// here. `installGlobalErrorHandlers` chains RN's previous ErrorUtils handler and
+// (in production only) enables the Hermes unhandled-rejection tracker.
+configureClientErrorReporting({
+  getAccessToken: () => useAuthStore.getState().accessToken,
+  getEnv: () => {
+    const d = collectDeviceInfo();
+    return { appVersion: d.appVersion, updateId: d.updateId, platform: d.platform };
+  },
+  getCurrentScreen: () =>
+    navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name ?? null : null,
+});
+installGlobalErrorHandlers();
+
+// Recovery target for a per-screen error boundary's "Back to Home".
+function goHomeAfterScreenError() {
+  if (navigationRef.isReady()) navigationRef.reset({ index: 0, routes: [{ name: 'Home' }] });
+}
 
 /**
  * Opaque, absolutely-positioned, and mounted last so it sits above the whole
@@ -199,7 +225,15 @@ export default function App() {
           onReady={() => setCurrentRouteName(navigationRef.getCurrentRoute()?.name as keyof RootStackParamList | undefined)}
           onStateChange={() => setCurrentRouteName(navigationRef.getCurrentRoute()?.name as keyof RootStackParamList | undefined)}
         >
-          <Stack.Navigator initialRouteName="Splash" screenOptions={{ headerShown: false }}>
+          <Stack.Navigator
+            initialRouteName="Splash"
+            screenOptions={{ headerShown: false }}
+            screenLayout={({ children, route }) => (
+              <ScreenErrorBoundary screen={route.name} onGoHome={goHomeAfterScreenError}>
+                {children}
+              </ScreenErrorBoundary>
+            )}
+          >
         <Stack.Screen name="Splash" component={SplashScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
         <Stack.Screen name="AudienceSurvey" component={AudienceSurveyScreen} />
