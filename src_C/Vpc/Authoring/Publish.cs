@@ -260,8 +260,6 @@ public static class Publish
 
       // --- ASYNC PUBLISH LOGIC ---
 
-      Log.Info("[DEBUG] 1. Starting async publish logic.");
-
       // 💡 核心防御：防重复并发提交（幂等性）。
       // 如果用户在 15 分钟内重复点击（或 F5 刷新后再次点击），直接返回正在处理的 jobId，让前端顺滑接管轮询。
       const string checkDuplicateSql = """
@@ -276,7 +274,7 @@ public static class Publish
       if (existingRows.Count > 0)
       {
         var existingJobId = Convert.ToString(existingRows[0]["jobId"], CultureInfo.InvariantCulture);
-        Log.Info($"[DEBUG] 1.5. Found existing active job {existingJobId}. Returning it to resume polling.");
+        Log.Event("info", new { tag = "publish", outcome = "resumed", jobId = existingJobId, deckId = deckIdInt, deckSlug });
         return res.Ok(new { mode = "async", jobId = existingJobId, note = "Resumed existing job" });
       }
 
@@ -304,10 +302,7 @@ public static class Publish
         insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note)
         values ($1, $2, $3, $4, $5, 'PENDING', $6, $7)
         """;
-      Log.Info($"[DEBUG] 2. Inserting PENDING job {jobId} into database...");
       await DbUtil.ExecuteAsync(conn, null, insertJobSql, [jobId, buildId, s3Key, deckIdInt, deckSlug, adminSub, note]);
-      Log.Info("[DEBUG] 3. Database insert successful.");
-
 
       // 3. Create the SQS message payload
       var messageBody = JsonSerializer.Serialize(new
@@ -319,7 +314,6 @@ public static class Publish
         note
       });
 
-      Log.Info($"[DEBUG] 4. Preparing to send message to SQS queue: {PublishJobQueueUrl}");
       // 4. Send the message to the SQS queue
       var sendMessageRequest = new SendMessageRequest
       {
@@ -327,16 +321,16 @@ public static class Publish
         MessageBody = messageBody
       };
 
-      try 
+      try
       {
         await SQS().SendMessageAsync(sendMessageRequest);
-        Log.Info("[DEBUG] 5. SQS message sent successfully!");
+        Log.Event("info", new { tag = "publish", outcome = "enqueued", jobId, deckId = deckIdInt, deckSlug, buildId });
       }
       catch (Exception ex)
       {
         // 💡 核心防御：双写失败回退
         // 如果 SQS 网络抖动发送失败，立刻将数据库任务状态标为 FAILED，防止产生永远等不到 Worker 的孤儿订单
-        Log.Error($"[DEBUG] SQS send failed for {jobId}. Rolling back status to FAILED.", ex);
+        Log.Event("error", new { tag = "publish", outcome = "sqs_failed", jobId, deckId = deckIdInt, error = ex.Message });
         await DbUtil.ExecuteAsync(conn, null, "UPDATE deck_publishes SET status = 'FAILED', updated_at = now() WHERE job_id = $1", [jobId]);
         throw;
       }
@@ -357,7 +351,7 @@ public static class Publish
     }
     catch (Exception ex)
     {
-      Log.Error("[DEBUG] Caught unhandled exception in Publish handler", ex);
+      Log.Error("Publish handler error:", ex);
       return res.Error500(ex);
     }
   }

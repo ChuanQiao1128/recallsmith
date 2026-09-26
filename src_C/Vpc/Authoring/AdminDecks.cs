@@ -72,6 +72,7 @@ public static class AdminDecks
           d.version,
           (extract(epoch from d.updated_at) * 1000)::bigint as "updatedAtMs",
           floor(extract(epoch from d.updated_at) * 1000000)::bigint as "__cursorUs",
+          d.live_build_id as "liveBuildId",
           lp.build_id as "latestBuildId"
         from decks d
         left join lateral (

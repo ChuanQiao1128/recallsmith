@@ -23,19 +23,23 @@ public static class PublishStatus
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
+    // Editors may only poll jobs for decks they can read; a job on an unreadable deck answers
+    // the same 404 as a missing job, so existence does not leak. Super-admins read any job.
     const string sql = """
       select
-        job_id as "jobId",
-        status,
-        build_id as "buildId",
-        s3_key as "s3Key",
-        error_message as "errorMessage"
-      from deck_publishes
-      where job_id = $1
+        p.job_id as "jobId",
+        p.status,
+        p.build_id as "buildId",
+        p.s3_key as "s3Key",
+        p.error_message as "errorMessage"
+      from deck_publishes p
+      where p.job_id = $1
+        and ($2::boolean or exists (select 1 from admin_deck_permissions a
+                                    where a.deck_id = p.deck_id and a.admin_sub = $3 and a.can_read = 1))
       limit 1;
       """;
 
-    var rows = await DbUtil.QueryAsync(conn, null, sql, [jobId]);
+    var rows = await DbUtil.QueryAsync(conn, null, sql, [jobId, auth.IsSuperAdmin, auth.UserSub]);
     if (rows.Count == 0)
     {
       return res.NotFound("Job not found");
