@@ -21,7 +21,7 @@ public static class PublishStatus
     }
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
     const string sql = """
       select

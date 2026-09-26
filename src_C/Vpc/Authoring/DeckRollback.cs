@@ -65,7 +65,7 @@ public static class DeckRollback
     try
     {
       await using var conn = await Pg.OpenConnectionOrNullAsync();
-      if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars");
+      if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
       var deckRows = await DbUtil.QueryAsync(conn, null,
         "select id, slug, live_build_id from decks where id = $1 and is_deleted = 0", [deckId.Value]);

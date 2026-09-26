@@ -114,7 +114,7 @@ public static class Decks
     if (deny is not null) return deny;
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
     var isSuperAdmin = auth.IsSuperAdmin;
     var adminSub = auth.UserSub;
@@ -332,6 +332,7 @@ public static class Decks
           new("retiredAtMs", "retired_at_ms", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "retiredAtMs")),
         };
 
+        var fullSpec = spec;
         if (!isSuperAdmin)
         {
           // editors: restrict dangerous fields
@@ -339,9 +340,15 @@ public static class Decks
               f.BodyKey is not ("isDeleted" or "slug" or "tier" or "availability" or "eta" or "manifestOrder" or "totalCards" or "previewCards" or "retiredAtMs"))
             .ToList();
         }
+        var ignoredFields = Helpers.IgnoredFields(body, fullSpec, spec);
 
         var (fields, parameters) = Helpers.BuildUpdateSet(body, spec);
-        if (fields.Count == 1) return res.BadRequest("VALIDATION_ERROR", "No fields to update");
+        if (fields.Count == 1)
+        {
+          return ignoredFields.Count > 0
+            ? res.BadRequest("VALIDATION_ERROR", $"No fields to update (ignored for your role: {string.Join(", ", ignoredFields)})")
+            : res.BadRequest("VALIDATION_ERROR", "No fields to update");
+        }
 
         var sql = $"""
           update decks
@@ -384,6 +391,7 @@ public static class Decks
         }
         after["manifestRebuilt"] = rebuilt;
         after["manifestNote"] = note;
+        if (ignoredFields.Count > 0) after["ignoredFields"] = ignoredFields;
         return res.Ok(after);
       }
       catch (Exception ex) when (ex is ValidationError)

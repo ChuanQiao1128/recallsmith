@@ -14,7 +14,7 @@ public static class Permissions
     if (deny is not null) return deny;
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
     // BULK
     if (req.Path.EndsWith("/bulk", StringComparison.Ordinal))

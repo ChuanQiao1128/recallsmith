@@ -19,7 +19,7 @@ public static class ContentIntelligence
     if (req.Method != "GET") return res.MethodNotAllowed();
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
-    if (conn is null) return res.BadRequest("CONFIG_ERROR", "Missing PG env vars");
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
     var deckSlug = req.Query.TryGetValue("deckSlug", out var ds) ? NullIfBlank(ds) : null;
     var daysRaw = Validation.ParseOptionalInteger(req.Query.TryGetValue("days", out var d) ? d : null, "days");
