@@ -20,7 +20,6 @@ import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
-import { useConfirm } from '../components/ui/ConfirmDialogContext';
 
 type PageState = {
   loading: boolean;
@@ -114,8 +113,6 @@ export function AdminUsersPage() {
     error: null,
     ok: null,
   });
-
-  const confirm = useConfirm();
 
   // DB migrations (danger zone)
   const [dbState, setDbState] = useState<DbState>({
@@ -345,51 +342,19 @@ export function AdminUsersPage() {
     }
   }
 
-  async function runMigrateClick(reset: boolean) {
+  async function runMigrateClick() {
     if (dbState.running) return;
-
-    if (reset) {
-      // The only typed confirmation in the console, and the only one that
-      // should be. Three things separate it from the other three dialogs:
-      //
-      //   1. Blast radius. The others destroy one card, one deck, or nothing at
-      //      all (publish is idempotent). This one DROPs decks, cards, progress,
-      //      logs and permissions — every user's data, with no undo and no
-      //      per-row recovery.
-      //   2. Distance from a correct click. "Run migrate (no reset)" and
-      //      "Reset & migrate (DEV only)" sit in the same flex row and differ by
-      //      colour. One button over is a whole database.
-      //   3. The old dialog said "Only use this in DEV" — but the button ships
-      //      in every build and points at whatever API this console is
-      //      configured against. Prose is not a gate.
-      //
-      // Why not everywhere: typed confirmation only buys attention while it is
-      // rare. Make all four require typing and users learn to type without
-      // reading, which is strictly worse than one click — it manufactures the
-      // appearance of care. And why a token rather than a second yes/no dialog:
-      // a token is specific to this target, whereas another dialog adds
-      // habituation without adding specificity.
-      const ok = await confirm({
-        title: 'Reset the database?',
-        body: 'This DROPs and recreates the core tables (decks / cards / progress / logs / permissions) on whichever API this console is pointed at. There is no undo.',
-        destructive: true,
-        confirmLabel: 'Reset & migrate',
-        confirmPhrase: 'RESET',
-      });
-      if (!ok) return;
-    }
 
     setDbState({ running: true, lastOk: null, lastError: null });
 
     const secret = migrateSecret.trim();
-    const resp = secret === '' ? await runMigrate(reset) : await runMigrate(reset, secret);
+    const resp = secret === '' ? await runMigrate() : await runMigrate(secret);
     if (!resp.success) {
       setDbState({ running: false, lastOk: null, lastError: resp.error?.message ?? 'Migration failed.' });
       return;
     }
 
-    const resetFlag = resp.data?.reset ? ' (reset + migrate)' : '';
-    setDbState({ running: false, lastOk: `Migration completed${resetFlag}.`, lastError: null });
+    setDbState({ running: false, lastOk: 'Migration completed.', lastError: null });
 
     await loadAll(false);
   }
@@ -636,13 +601,13 @@ export function AdminUsersPage() {
             )}
           </div>
 
-          {/* Danger zone: migrations (keep for now) */}
+          {/* Database migrations */}
           <div className="bg-white border border-slate-200 rounded-lg shadow-sm">
             <details className="group">
               <summary className="cursor-pointer px-4 py-3 border-b border-slate-100 flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-slate-900">Danger zone · Database migrations</div>
-                  <div className="text-xs text-slate-500 mt-0.5">Keep this for DEV. Later we’ll move it to /admin/system.</div>
+                  <div className="text-sm font-semibold text-slate-900">Database migrations</div>
+                  <div className="text-xs text-slate-500 mt-0.5">Applies any pending migrations to the database this API uses. Safe to run again.</div>
                 </div>
                 <span className="text-xs text-slate-500 group-open:hidden">Expand</span>
                 <span className="text-xs text-slate-500 hidden group-open:inline">Collapse</span>
@@ -669,24 +634,13 @@ export function AdminUsersPage() {
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => void runMigrateClick(false)}
+                    onClick={() => void runMigrateClick()}
                     disabled={dbState.running}
                     className="inline-flex items-center px-3 py-1.5 rounded-md text-xs font-medium
                                border border-slate-300 text-slate-700 bg-white
                                hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    {dbState.running ? 'Running migrate...' : 'Run migrate (no reset)'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void runMigrateClick(true)}
-                    disabled={dbState.running}
-                    className="inline-flex items-center px-3 py-1.5 rounded-md text-xs font-medium
-                               border border-red-300 text-red-700 bg-red-50
-                               hover:bg-red-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {dbState.running ? 'Running (reset)...' : 'Reset & migrate (DEV only)'}
+                    {dbState.running ? 'Running migrations...' : 'Run migrations'}
                   </button>
                 </div>
 
@@ -705,10 +659,6 @@ export function AdminUsersPage() {
                     </Callout>
                   </div>
                 ) : null}
-
-                <p className="mt-3 text-[11px] text-slate-400 leading-relaxed">
-                  <span className="font-semibold">Hint</span>: “Run migrate (no reset)” is safe for prod. “Reset & migrate” will <span className="font-semibold">DROP</span> core tables and recreate them (DEV only).
-                </p>
               </div>
             </details>
           </div>

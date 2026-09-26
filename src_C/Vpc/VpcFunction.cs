@@ -296,30 +296,18 @@ public sealed class VpcFunction
         return await Vpc.Runtime.DrawStateSync.HandleDrawStateSync(req, res, auth);
       }
 
-      // Admin users placeholders
+      // Admin users routes are retired (CBE-01). The console lists and creates editors
+      // through edge-public's /api/v1/admin/cognito/users; core-vpc no longer answers a
+      // 501 "TODO" here. It still recognises the old paths only to reject them with 404,
+      // so legacy callers get a plain "route not found" and stay metered under their
+      // bounded RouteMetrics labels rather than minting a metric per user id.
       {
-        var p1 = RouteMatcher.Match("/api/v1/admin/users", p);
-        if (p1 is not null && req.Method == "GET")
+        var goneUsers = RouteMatcher.Match("/api/v1/admin/users", p);
+        var goneUser = RouteMatcher.Match("/api/v1/admin/users/:userSub", p);
+        var goneEntitlements = RouteMatcher.Match("/api/v1/admin/users/:userSub/entitlements", p);
+        if (goneUsers is not null || goneUser is not null || goneEntitlements is not null)
         {
-          var deny = Auth.RequireSuperAdmin(auth, res);
-          if (deny is not null) return deny;
-          return res.NotImplemented("TODO: admin users list");
-        }
-
-        var p2 = RouteMatcher.Match("/api/v1/admin/users/:userSub", p);
-        if (p2 is not null && req.Method == "GET")
-        {
-          var deny = Auth.RequireSuperAdmin(auth, res);
-          if (deny is not null) return deny;
-          return res.NotImplemented($"TODO: admin user detail for {p2["userSub"]}");
-        }
-
-        var p3 = RouteMatcher.Match("/api/v1/admin/users/:userSub/entitlements", p);
-        if (p3 is not null && req.Method == "PUT")
-        {
-          var deny = Auth.RequireSuperAdmin(auth, res);
-          if (deny is not null) return deny;
-          return res.NotImplemented($"TODO: admin set entitlements for {p3["userSub"]}");
+          return res.NotFound("Route not found");
         }
       }
 

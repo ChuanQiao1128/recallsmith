@@ -511,50 +511,6 @@ export async function deleteCard(cardId: number): Promise<ApiResult<null>> {
   }
 }
 
-// ---------------------- permissions ----------------------
-
-export async function fetchPermissions(): Promise<ApiResult<{ adminSub: string; deckId: number; canRead: boolean; canWrite: boolean }[]>> {
-  try {
-    const resp = await http.get<ApiResult<{ adminSub: string; deckId: number; canRead: boolean; canWrite: boolean }[]>>('/api/v1/admin/permissions');
-    return resp.data;
-  } catch (err) {
-    return apiResultFromError<{ adminSub: string; deckId: number; canRead: boolean; canWrite: boolean }[]>(err);
-  }
-}
-
-export async function updatePermission(params: { adminSub: string; deckId: number; canRead?: boolean; canWrite?: boolean }): Promise<ApiResult<null>> {
-  try {
-    // Parameters go in a JSON body, as everywhere else here.
-    const body: Record<string, unknown> = {
-      adminSub: params.adminSub,
-      deckId: params.deckId,
-    };
-    if (params.canRead !== undefined) body.canRead = params.canRead;
-    if (params.canWrite !== undefined) body.canWrite = params.canWrite;
-
-    const resp = await http.put<ApiResult<null>>('/api/v1/admin/permissions', body);
-    return resp.data;
-  } catch (err) {
-    return apiResultFromError<null>(err);
-  }
-}
-
-export async function bulkUpdatePermissions(params: { adminSub: string; deckIds: number[]; canRead?: boolean; canWrite?: boolean }): Promise<ApiResult<null>> {
-  try {
-    const body: Record<string, unknown> = {
-      adminSub: params.adminSub,
-      deckIds: params.deckIds,
-    };
-    if (params.canRead !== undefined) body.canRead = params.canRead;
-    if (params.canWrite !== undefined) body.canWrite = params.canWrite;
-
-    const resp = await http.put<ApiResult<null>>('/api/v1/admin/permissions/bulk', body);
-    return resp.data;
-  } catch (err) {
-    return apiResultFromError<null>(err);
-  }
-}
-
 // ---------------------- publish ----------------------
 
 export async function publishDeck(
@@ -569,15 +525,6 @@ export async function publishDeck(
     return resp.data;
   } catch (err) {
     return apiResultFromError<{ mode: string; jobId?: string }>(err);
-  }
-}
-
-export async function checkPublishJobStatus(jobId: string): Promise<ApiResult<{ jobId: string; status: string; buildId?: string; s3Key?: string; errorMessage?: string }>> {
-  try {
-    const resp = await http.get<ApiResult<{ jobId: string; status: string; buildId?: string; s3Key?: string; errorMessage?: string }>>(`/api/v1/authoring/publish/status?jobId=${encodeURIComponent(jobId)}`);
-    return resp.data;
-  } catch (err) {
-    return apiResultFromError<{ jobId: string; status: string; buildId?: string; s3Key?: string; errorMessage?: string }>(err);
   }
 }
 
@@ -693,4 +640,3 @@ export async function fetchContentIntelligence(params?: {
     return apiResultFromError<ContentIntelligenceData>(err);
   }
 }
-// experiment: tweak
