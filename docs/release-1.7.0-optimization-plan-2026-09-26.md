@@ -1009,8 +1009,3 @@ CBE-10/AWS-20（超时链）和 CBE-20（删重复数据层）由 E14 承接，�
 ### C. 审计失败的区域
 
 无（[]）。会话记录里 playwright MCP 连接超时，github/linear/slack 等连接器需要授权，但本次审计都用不到。
-
-<!-- paths-not-on-disk
-     本文档里出现、但磁盘上还没有的仓库路径（计划要新建的文件），规则见 frontend/tests/docsPaths.test.ts。
-- mobile/scripts/release/whats-new-1.7.0.txt
--->

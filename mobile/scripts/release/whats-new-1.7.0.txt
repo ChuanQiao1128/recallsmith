@@ -1,0 +1,7 @@
+• Long questions now show in full: on the card page, in multiple choice, and in pack results. Every new card opens at the top.
+• Forgot your password? Reset it from the sign-in screen. An unfinished sign-up can be confirmed later with a new code, and if your session expires the app tells you instead of silently going offline.
+• Deleting your account now also deletes your study data on our servers.
+• Daily reminders can be switched on or off any time in Settings.
+• Faster everyday use: Home opens from your saved packs, the Library keeps your place, and moving between tabs no longer stacks screens.
+• Smoother pack opening: timing runs on the animation thread, sparks no longer replay, and sound effects can be turned off in Settings.
+• Better VoiceOver labels and larger-text support, plus many small fixes.

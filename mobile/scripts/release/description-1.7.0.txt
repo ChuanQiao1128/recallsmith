@@ -1,0 +1,28 @@
+Prepping a .NET interview, the AWS SAA-C03 or the Claude Developer Foundations exam? DeveloperCards turns the prep into a collection you build by showing up. The loop in one sentence: learn a new card, earn a pull, rip a pack, and what you draw becomes what you study.
+
+WHAT'S INSIDE
+Three free decks, all in English:
+• C# / .NET — 81 interview cards, fundamentals to intermediate (async/await, boxing, controllers, OOP and more) with a C# code snippet on essentially every card.
+• AWS Associate Architect — 371 scenario cards for the SAA-C03, grouped by exam task, including 165 multiple-choice scenarios with a written reason for every wrong option.
+• Claude Developer Foundations — 441 cards for the CCDV-F exam across all eight domains, including 142 multiple-choice scenarios and code snippets for API mechanics.
+Every card is a question with a written explanation. Rarity is difficulty: Common, Rare and Legendary map to how hard the question is, so a Legendary is one of the hardest questions in the deck. Not official exam material and not an exam simulator.
+
+HOW PULLS WORK
+• Pulls are earned, never sold. Learn a new card, earn a pull: the first time you rate a card Hard, Good or Easy, one pull lands in your wallet, no claim button. Clearing everything due for the day adds one more, once a day. New players start with 3 pulls, so the first pack opens in seconds.
+• Never a duplicate. The draw pool is only the cards missing from your collection.
+• Pity: after 10 Commons in a row, the next card is guaranteed Rare or better, as long as an unowned Rare or Legendary is still in the pack.
+• Open 1 or Open 10. You are only charged for cards you actually receive.
+• Your wallet holds up to 60 pulls plus a 5-pull reserve. If you ever have nothing left to study and no pulls, you get 1 pull a day.
+• Every draw is seeded and replayable, so the app can show why you got what you got.
+• Rip the foil, watch the cards drop, tap to flip. Rare and Legendary reveals get their own sound and haptics.
+
+HOW STUDY WORKS
+Rate each card Again / Hard / Good / Easy. Multiple-choice cards ask you to pick, then say Sure or Not sure; the result maps onto the same four ratings. Cards return on a 7-stage ladder of 1, 2, 4, 8, 15, 30 and 60 days; a card is Mastered once it reaches the 15-day stage. Reviewing a single card keeps your streak alive. The Library groups cards by topic and shows each one as New, Learning or Mastered. Before an exam, sweep mode replays everything you own, longest-unseen first.
+
+OFFLINE, NO ACCOUNT NEEDED
+Decks are stored on your phone and reviews are offline-first. Signing in is optional and adds cloud backup of your progress and collection.
+
+FROM ONE DEVELOPER
+DeveloperCards is an indie project: one person built the app and the backend. Cards are drafted from the official AWS and Anthropic documentation with AI assistance and checked by me; every card records its source. All three decks are free. A monthly Premium subscription exists for future premium decks, but there is nothing premium to unlock yet. Feedback is welcome.
+
+AWS is a trademark of Amazon.com, Inc. Claude and Anthropic are trademarks of Anthropic, PBC. DeveloperCards is not affiliated with, sponsored by, or endorsed by Amazon or Anthropic.
