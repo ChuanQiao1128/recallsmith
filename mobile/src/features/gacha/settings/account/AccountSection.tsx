@@ -83,16 +83,17 @@ export function AccountSection(props: {
       <Text style={styles.sectionTitle} numberOfLines={1}>
         {ACCOUNT_COPY.title}
       </Text>
-      <Text style={styles.sectionBody} numberOfLines={1}>
+      <Text style={styles.sectionBody}>
         {ACCOUNT_COPY.body}
       </Text>
 
-      <Text style={styles.metaText} numberOfLines={1}>
+      <Text style={styles.metaText}>
         {signedIn ? ACCOUNT_COPY.signedInState(email ?? 'your account') : ACCOUNT_COPY.signedOutState}
       </Text>
 
       <Pressable
         style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+        accessibilityRole="button"
         onPress={signedIn ? onSignOut : onSignIn}
         testID={primaryCtaTestID}
       >
@@ -106,12 +107,13 @@ export function AccountSection(props: {
       <Text style={styles.sectionTitle} numberOfLines={1}>
         {ACCOUNT_COPY.freshStartTitle}
       </Text>
-      <Text style={styles.sectionBody} numberOfLines={1}>
+      <Text style={styles.sectionBody}>
         {ACCOUNT_COPY.freshStartBody}
       </Text>
 
       <Pressable
         style={({ pressed }) => [styles.secondaryButton, (pressed || resetting) && styles.pressed]}
+        accessibilityRole="button"
         onPress={onResetReviewSchedule}
         disabled={resetting}
       >
@@ -133,6 +135,7 @@ export function AccountSection(props: {
           <Text style={styles.sectionBody}>{ACCOUNT_COPY.subscriptionNotice}</Text>
           <Pressable
             style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+            accessibilityRole="button"
             onPress={() => setConfirmOpen(true)}
             testID="settings-delete-account-open"
           >
@@ -166,6 +169,7 @@ export function AccountSection(props: {
               (!armed || deleting) && styles.disabledButton,
               pressed && styles.pressed,
             ]}
+            accessibilityRole="button"
             onPress={onConfirmDelete}
             disabled={!armed || deleting}
             testID="settings-delete-account-confirm"
@@ -181,6 +185,7 @@ export function AccountSection(props: {
               setConfirmText('');
               setDeleteError(null);
             }}
+            accessibilityRole="button"
             disabled={deleting}
             testID="settings-delete-account-cancel"
           >
@@ -197,6 +202,7 @@ export function AccountSection(props: {
                   deleting && styles.disabledButton,
                   pressed && styles.pressed,
                 ]}
+                accessibilityRole="button"
                 onPress={onConfirmDelete}
                 disabled={deleting}
                 testID="settings-delete-account-retry"

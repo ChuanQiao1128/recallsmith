@@ -15,7 +15,7 @@ export function AppearanceSection() {
       <Text style={styles.sectionTitle} numberOfLines={1}>
         {APPEARANCE_COPY.title}
       </Text>
-      <Text style={styles.sectionBody} numberOfLines={1}>
+      <Text style={styles.sectionBody}>
         {APPEARANCE_COPY.body}
       </Text>
     </View>

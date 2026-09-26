@@ -249,12 +249,15 @@ describe('SettingsScreen', () => {
     );
     expect(primaryText.props.numberOfLines).toBe(1);
 
+    // G34: the momentum meta line (reminder status) no longer clamps to one
+    // line, so its explanation wraps instead of ending in an ellipsis at large
+    // text sizes. The button label above it keeps its single-line clamp.
     const reminderMeta = tree.root.findAll(
       (node) => (node.type as any) === 'Text' && nodeText(node).includes('due cards remain'),
     );
     expect(reminderMeta.length).toBeGreaterThan(0);
     reminderMeta.forEach((node) => {
-      expect(node.props.numberOfLines).toBe(1);
+      expect(node.props.numberOfLines).toBeUndefined();
     });
   });
 

@@ -371,10 +371,10 @@ export function SettingsScreen({ navigation }: Props) {
             <Text style={styles.sectionTitle} numberOfLines={1}>
               Momentum
             </Text>
-            <Text style={styles.sectionBody} numberOfLines={1}>
+            <Text style={styles.sectionBody}>
               {momentumDays} days streak · {totalSessions} qualified sessions
             </Text>
-            <Text style={styles.metaText} numberOfLines={1}>
+            <Text style={styles.metaText}>
               {reminderPlan.statusLine}
             </Text>
           </View>
@@ -414,7 +414,7 @@ export function SettingsScreen({ navigation }: Props) {
               <Text style={styles.sectionTitle} numberOfLines={1}>
                 {PREMIUM_COPY.title}
               </Text>
-              <Text style={styles.sectionBody} numberOfLines={1}>
+              <Text style={styles.sectionBody}>
                 {PREMIUM_COPY.body}
               </Text>
               <Pressable

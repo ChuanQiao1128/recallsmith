@@ -5,13 +5,29 @@ import { MAIN_TABS, type MainTabKey } from "../navigation/mainTabs";
 
 export function BottomTabBar(props: { active: MainTabKey; navigate: (route: string, params?: any) => void }) {
   return (
-    <View style={styles.shell}>
+    <View style={styles.shell} accessibilityRole="tablist">
       {MAIN_TABS.map((tab) => {
         const active = tab.key === props.active;
         return (
-          <Pressable key={tab.key} style={[styles.item, active && styles.itemActive]} onPress={() => props.navigate(tab.route)}>
-            <View style={[styles.indicator, active && styles.indicatorActive]} />
-            <View style={[styles.iconBadge, active && styles.iconBadgeActive]}>
+          <Pressable
+            key={tab.key}
+            style={[styles.item, active && styles.itemActive]}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={tab.label}
+            testID={`main-tab-${tab.key}`}
+            onPress={() => props.navigate(tab.route)}
+          >
+            <View
+              style={[styles.indicator, active && styles.indicatorActive]}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            />
+            <View
+              style={[styles.iconBadge, active && styles.iconBadgeActive]}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            >
               <Text style={[styles.icon, active && styles.iconActive]}>{tab.icon}</Text>
             </View>
             <Text style={[styles.label, active && styles.labelActive]}>{tab.label}</Text>

@@ -826,6 +826,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.backButton, pressed && styles.pressed, { marginTop: 10 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
               onPress={() => navigation.goBack()}
             >
               <Text style={styles.backText} numberOfLines={1}>
@@ -937,6 +939,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
           <View style={styles.headerRow}>
             <Pressable
               style={({ pressed }) => [styles.pauseButton, pressed && styles.pressed]}
+              accessibilityRole="button"
+              accessibilityLabel="Pause session"
               onPress={requestPause}
             >
               <Text style={styles.pauseText} numberOfLines={1}>
@@ -988,6 +992,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 </Text>
                 <Pressable
                   style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
+                  accessibilityRole="button"
                   onPress={() =>
                     navigation.replace('SessionSummary', {
                       slug: deck.Slug,
