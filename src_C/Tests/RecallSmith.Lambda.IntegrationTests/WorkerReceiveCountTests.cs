@@ -38,6 +38,8 @@ public class WorkerReceiveCountTests
       Failed.Add(jobId);
       return Task.CompletedTask;
     }
+
+    public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => Task.CompletedTask;
   }
 
   private sealed class FakeJobRepository : IJobRepository
@@ -49,6 +51,7 @@ public class WorkerReceiveCountTests
     public Task<JobInfo?> GetJobAsync(string jobId) => Task.FromResult(Job);
     public Task CompleteJobAsync(string jobId, int? exportedCardCount = null) => Task.CompletedTask;
     public Task FailJobAsync(string jobId, string errorMessage) => Task.CompletedTask;
+    public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => Task.CompletedTask;
   }
 
   private sealed class FakeUploader : IS3DeckUploader
