@@ -694,6 +694,87 @@ export async function fetchAdminManifest(): Promise<ApiResult<Record<string, unk
   });
 }
 
+// ---------------------- deck builds, rollback & maintenance (F29) ----------------------
+
+/** One SUCCESS build of a deck, as GET /api/v1/admin/decks/{id}/builds returns it. */
+export interface DeckBuild {
+  buildId: string;
+  jobId: string | null;
+  note: string | null;
+  createdAt: string;
+  isLive: boolean;
+}
+
+export interface DeckBuildsData {
+  deckId: number;
+  slug: string;
+  liveBuildId: string | null;
+  builds: DeckBuild[];
+}
+
+export interface DeckRollbackResult {
+  deckId: number;
+  slug: string;
+  liveBuildId: string;
+  previousBuildId: string | null;
+  manifestRebuilt: boolean;
+}
+
+export interface ManifestRebuildResult {
+  ok: boolean;
+  manifestKey: string;
+  generatedAtMs: number;
+  deckCount: number;
+}
+
+export interface PublishReapResult {
+  pending: number;
+  processing: number;
+  jobIds: string[];
+}
+
+/** GET /api/v1/admin/decks/{id}/builds (super_admin): a deck's SUCCESS builds, newest first. */
+export async function fetchDeckBuilds(deckId: number): Promise<ApiResult<DeckBuildsData>> {
+  try {
+    const resp = await http.get<ApiResult<DeckBuildsData>>(`/api/v1/admin/decks/${deckId}/builds`);
+    return resp.data;
+  } catch (err) {
+    return apiResultFromError<DeckBuildsData>(err);
+  }
+}
+
+/** POST /api/v1/admin/decks/{id}/rollback (super_admin): point the deck at an older SUCCESS build. */
+export async function rollbackDeck(deckId: number, buildId: string): Promise<ApiResult<DeckRollbackResult>> {
+  try {
+    const resp = await http.post<ApiResult<DeckRollbackResult>>(`/api/v1/admin/decks/${deckId}/rollback`, {
+      buildId,
+    });
+    return resp.data;
+  } catch (err) {
+    return apiResultFromError<DeckRollbackResult>(err);
+  }
+}
+
+/** POST /api/v1/admin/manifest/rebuild (super_admin): regenerate manifest.json from the database. */
+export async function rebuildManifest(): Promise<ApiResult<ManifestRebuildResult>> {
+  try {
+    const resp = await http.post<ApiResult<ManifestRebuildResult>>('/api/v1/admin/manifest/rebuild', {});
+    return resp.data;
+  } catch (err) {
+    return apiResultFromError<ManifestRebuildResult>(err);
+  }
+}
+
+/** POST /api/v1/admin/publish/reap (super_admin): fail stuck PENDING/PROCESSING jobs. */
+export async function reapStuckPublishJobs(): Promise<ApiResult<PublishReapResult>> {
+  try {
+    const resp = await http.post<ApiResult<PublishReapResult>>('/api/v1/admin/publish/reap', {});
+    return resp.data;
+  } catch (err) {
+    return apiResultFromError<PublishReapResult>(err);
+  }
+}
+
 // ---------------------- Content Intelligence ----------------------
 
 export interface ContentIntelligenceCard {

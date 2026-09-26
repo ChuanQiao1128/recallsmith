@@ -14,6 +14,7 @@ import { buildLogoutUrl } from '../auth/cognito';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { DeckBuildsPanel } from '../components/console/DeckBuildsPanel';
 
 type FormState = {
   // base fields
@@ -571,6 +572,8 @@ export function DeckEditPage() {
         </div>
 
       </div>
+
+      {superAdmin ? <DeckBuildsPanel deckId={deck.id} deckSlug={deck.slug} /> : null}
     </ConsoleShell>
   );
 }
