@@ -165,7 +165,7 @@ export function EditCardPage() {
   /**
    * The card as the server holds it right now, or null if it could not be read.
    *
-   * A fresh ?id= read that deliberately bypasses the cache: on success it writes
+   * A fresh ?id= read that deliberately skips the cache: on success it writes
    * the row into ['card', id] with setQueryData, so the next render — and the
    * next save — carries the version the server is actually holding.
    */
