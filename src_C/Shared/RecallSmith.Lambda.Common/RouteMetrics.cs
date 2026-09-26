@@ -139,6 +139,7 @@ public static class RouteMetrics
     "/api/v1/me",
     "/api/v1/user/client-errors",
     "/api/v1/user/bootstrap",
+    "/api/v1/user/me",
     "/api/v1/entitlements",
     "/api/v1/admin/manifest",
     "/api/v1/admin/decks",
