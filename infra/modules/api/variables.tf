@@ -102,3 +102,25 @@ variable "mobile_client_id" {
   type        = string
   description = "Mobile app client id; the JWT authorizer audience (module.identity.mobile_client_id)"
 }
+
+variable "domain" {
+  type        = string
+  description = "Apex hostname; the API hostname is api.<domain> unless api_hostname is set."
+}
+
+variable "api_hostname" {
+  type        = string
+  default     = ""
+  description = "Custom hostname of the HTTP API; \"\" = api.<domain> (staging: api-staging.<domain>)."
+}
+
+variable "api_cert_arn" {
+  type        = string
+  description = "Regional (ap-southeast-2) ACM certificate ARN for the custom hostname."
+}
+
+variable "zone_id" {
+  type        = string
+  default     = ""
+  description = "Hosted zone that receives the api. alias records; \"\" creates none (the staging root writes its own)."
+}

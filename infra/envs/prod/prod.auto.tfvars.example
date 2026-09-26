@@ -2,3 +2,4 @@
 # JMESPath: Role.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals."sts:ExternalId"
 snowflake_external_id = "REPLACE_ME"
 alert_email           = "alerts@example.invalid"
+domain                = "developercards.app"
