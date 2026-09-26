@@ -54,6 +54,7 @@ import {
   sortCards,
 } from '../features/gacha/session/reviewContentHelpers';
 import { resetSessionStore, useSessionStore } from '../features/gacha/session/sessionStore';
+import { useScrollToTopOnChange } from '../features/gacha/session/useScrollToTopOnChange';
 import SessionProgressHeader from '../features/gacha/components/SessionProgressHeader';
 import RatingBar from '../features/gacha/components/RatingBar';
 import ReviewBody from '../features/gacha/components/ReviewBody';
@@ -205,6 +206,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const isPremiumUser = usePremiumUser();
   const insets = useSafeAreaInsets();
   const trialRef = useRef<TrialInfo>(EMPTY_TRIAL_INFO);
+  const scrollRef = useRef<ScrollView>(null);
   const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport> } | null>(null);
   // stableUid → 1-based position in the deck's OrderInDeck order; the same
   // number the Library tile and DrawResult print, so "#011" means one card.
@@ -233,6 +235,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
       cardShownAtRef.current = Date.now();
     }
   }, [current?.card?.StableUid]);
+  // Reset the scroll surface to the top on every new card / attempt / completion,
+  // so a tall next card never opens with its first lines above the viewport
+  // (MCORE-03). Must sit above the screen's early returns to keep hook order stable.
+  useScrollToTopOnChange(
+    scrollRef,
+    current ? `${current.card.StableUid}:${mcqState.attemptIndex}:${sessionDone}` : null,
+  );
   useFocusEffect(
     useCallback(() => {
       if (slugFromRoute) {
@@ -914,6 +923,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             </Text>
           ) : null}
           <ScrollView
+            ref={scrollRef}
             testID="screen-session-card-primary-surface"
             style={styles.scroll}
             contentContainerStyle={[

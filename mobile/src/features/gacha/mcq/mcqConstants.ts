@@ -83,7 +83,7 @@ export function mcqPicksLine(picks: { landed: number; answered: number }): strin
 }
 
 export const MCQ_TEST_IDS = Object.freeze({
-  body: 'mcq-review-body', kindChip: 'mcq-kind-chip', stem: 'mcq-stem', qualifier: 'mcq-qualifier', stemHint: 'mcq-stem-hint',
+  body: 'mcq-review-body', kindChip: 'mcq-kind-chip', stem: 'mcq-stem', stemLead: 'mcq-stem-lead', qualifier: 'mcq-qualifier', stemHint: 'mcq-stem-hint',
   showFullStem: 'mcq-show-full-stem', option: (key: string) => `mcq-option-${key}`, optionLetter: (key: string) => `mcq-option-letter-${key}`,
   overLimitHint: 'mcq-over-limit-hint', verdictBanner: 'mcq-verdict-banner', scheduleLine: 'mcq-schedule-line',
   why: (key: string) => `mcq-why-${key}`, whyToggle: (key: string) => `mcq-why-toggle-${key}`,

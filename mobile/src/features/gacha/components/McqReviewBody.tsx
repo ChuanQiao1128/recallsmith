@@ -17,6 +17,7 @@ import {
   mcqWhyNotA11yLabel,
 } from '../mcq/mcqConstants';
 import { mcqRequiredCount } from '../mcq/normalizeMcq';
+import { splitStemForOptions } from '../mcq/stemAsk';
 import type { McqVerdict } from '../mcq/mcqVerdict';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
@@ -217,8 +218,12 @@ export function McqReviewBody(props: McqReviewBodyProps) {
   const requiredCount = mcqRequiredCount(mcq);
   const orderBadge = typeof rank === 'number' && rank > 0 ? `#${formatRank(rank)}` : `#${card.OrderInDeck}`;
   const difficultyLabel = card.Difficulty === 1 ? 'Easy' : card.Difficulty === 2 ? 'Medium' : 'Hard';
-  const collapsed = stage === 'options' && !stemExpanded;
-  const segments = stemSegments(card.Question, mcq.qualifier);
+  // On the options stage the scenario lead-in is clamped to two lines, but the
+  // actual ask (and its MOST/LEAST qualifier) always renders in full (MCORE-02).
+  // A one-sentence stem has no lead-in to clamp, so it is never collapsed.
+  const split = splitStemForOptions(card.Question, mcq.qualifier);
+  const collapsed = stage === 'options' && !stemExpanded && split.leadIn.length > 0;
+  const segments = stemSegments(collapsed ? split.ask : card.Question, mcq.qualifier);
   const showOptions = stage === 'options' || stage === 'verdict';
   // k for the partial banner (gap #10): distinct-by-list correct picks.
   const k = shownOrder.filter((option) => option.correct && picks.includes(option.key)).length;
@@ -304,7 +309,13 @@ export function McqReviewBody(props: McqReviewBodyProps) {
         </Text>
       </View>
 
-      <Text testID={MCQ_TEST_IDS.stem} style={styles.stem} numberOfLines={collapsed ? 3 : undefined}>
+      {collapsed ? (
+        <Text testID={MCQ_TEST_IDS.stemLead} style={[styles.stem, styles.stemLead]} numberOfLines={2}>
+          {split.leadIn}
+        </Text>
+      ) : null}
+
+      <Text testID={MCQ_TEST_IDS.stem} style={styles.stem}>
         {segments.map((seg, i) =>
           seg.emphasis === null ? (
             seg.text
@@ -524,6 +535,10 @@ const styles = StyleSheet.create({
   stemEmphasis: {
     fontWeight: '900',
     color: colors.ink,
+  },
+  // The clamped scenario lead-in reads as secondary to the ask below it.
+  stemLead: {
+    color: colors.inkMuted,
   },
   showFull: {
     marginTop: spacing.xs,
