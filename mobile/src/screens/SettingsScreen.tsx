@@ -58,7 +58,7 @@ import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
-type SettingsLoadState = 'loading' | 'ready' | 'empty' | 'error';
+type SettingsLoadState = 'loading' | 'ready' | 'error';
 
 const SUPPORT_URL =
   'https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Support-Help-2bfa758eb545809ead04d8f8321a40dc?pvs=74';
@@ -69,15 +69,6 @@ const PREMIUM_COPY = {
   body: 'Unlock premium tracks and keep upgrades in one place.',
   action: 'Open premium',
 } as const;
-
-function hasSettingsPayload(
-  prefs: ReminderPrefs | null | undefined,
-  snapshot: StreakSnapshot | null,
-): boolean {
-  if (snapshot) return true;
-  if (!prefs) return false;
-  return typeof prefs.morningTime === 'string' && typeof prefs.eveningTime === 'string';
-}
 
 function normalizeUrl(url: string): string {
   if (/^https?:\/\//i.test(url)) return url;
@@ -122,11 +113,19 @@ export function SettingsScreen({ navigation }: Props) {
   // until App.tsx's mount load runs) and refreshed from storage in the focus load below.
   const [feedbackPrefs, setFeedbackPrefs] = useState<FeedbackPrefs>(() => getFeedbackPrefsSync());
 
+  // True once the first load has succeeded. After that, refocus/auth reloads
+  // refresh the data silently instead of swapping the whole screen for a spinner
+  // (which would remount the sections and drop in-progress input such as the
+  // typed DELETE confirmation).
+  const hasLoadedRef = useRef(false);
+
   const reminderPlan = useMemo(() => buildReminderPlanVM(reminderPrefs), [reminderPrefs]);
 
   const refresh = useCallback(async () => {
-    setLoadState('loading');
-    setLoadError(null);
+    if (!hasLoadedRef.current) {
+      setLoadState('loading');
+      setLoadError(null);
+    }
     try {
       const [nextAudience, nextPrefs, nextStreak, nextFeedback] = await Promise.all([
         loadAudiencePreference(),
@@ -136,28 +135,28 @@ export function SettingsScreen({ navigation }: Props) {
       ]);
 
       setFeedbackPrefs(nextFeedback);
-
-      if (!hasSettingsPayload(nextPrefs, nextStreak)) {
-        setStreak(null);
-        setLoadState('empty');
-        return;
-      }
-
       setAudience(nextAudience);
-      setReminderPrefsState(nextPrefs);
-      setStreak(nextStreak);
+      setReminderPrefsState(nextPrefs ?? DEFAULT_REMINDER_PREFS);
+      setStreak(nextStreak ?? null);
       setLoadState('ready');
+      hasLoadedRef.current = true;
 
       // A permission read must never flip the screen to the error state, so it
-      // runs in its own try/catch after the payload check has succeeded.
+      // runs in its own try/catch after the payload load has succeeded.
       try {
         setReminderPermission(await getNotificationPermissionState());
       } catch {
         setReminderPermission('undetermined');
       }
     } catch {
-      setLoadError('Unable to load settings right now.');
-      setLoadState('error');
+      // Only surface the error screen before the first successful load. Once the
+      // screen is up, a failed background refresh keeps the current values.
+      if (!hasLoadedRef.current) {
+        setLoadError('Unable to load settings right now.');
+        setLoadState('error');
+      } else {
+        console.warn('Settings background refresh failed; keeping current values.');
+      }
     }
   }, []);
 
@@ -242,7 +241,7 @@ export function SettingsScreen({ navigation }: Props) {
   );
 
   const onResetReviewSchedule = useCallback(() => {
-    confirmResetReviewSchedule({
+    void confirmResetReviewSchedule({
       onConfirm: async () => {
         setResetting(true);
         try {
@@ -280,7 +279,7 @@ export function SettingsScreen({ navigation }: Props) {
   const momentumDays = streak?.currentDailyStreak ?? 0;
   const totalSessions = streak?.totalQualifiedSessions ?? 0;
 
-  if (authLoading || status === 'unknown' || loadState === 'loading') {
+  if (!hasLoadedRef.current && (authLoading || status === 'unknown' || loadState === 'loading')) {
     return (
       <SafeAreaView style={styles.safeArea} testID="screen-settings-root">
         <LinearGradient
@@ -323,37 +322,6 @@ export function SettingsScreen({ navigation }: Props) {
             >
               <Text style={styles.retryText} numberOfLines={1}>
                 Retry
-              </Text>
-            </Pressable>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  }
-
-  if (loadState === 'empty') {
-    return (
-      <SafeAreaView style={styles.safeArea} testID="screen-settings-root">
-        <LinearGradient
-          colors={[colors.parchmentBg, colors.parchmentBgDeep]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradient}
-        >
-          <View style={styles.centerState}>
-            <Text style={styles.errorTitle} numberOfLines={2}>
-              No settings ready yet
-            </Text>
-            <Text style={styles.errorBody} numberOfLines={2}>
-              Reload to bring back account, reminder, and appearance options.
-            </Text>
-            <Pressable
-              style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
-              onPress={() => void refresh()}
-              testID="screen-settings-primary-cta"
-            >
-              <Text style={styles.retryText} numberOfLines={1}>
-                Reload settings
               </Text>
             </Pressable>
           </View>
