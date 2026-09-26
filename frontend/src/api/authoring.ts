@@ -5,30 +5,8 @@ import type { Card } from '../types/card';
 import type { McqBlob } from '../types/mcq';
 import axios from 'axios';
 import { http } from './http';
+import { apiResultFromError, failResult } from './httpFailure';
 import { dedupeRequest, DedupeKeys } from './dedupe';
-
-function toApiErrorMessage(err: unknown): string {
-  if (axios.isAxiosError(err)) {
-    const status = err.response?.status;
-    const data = err.response?.data;
-
-    if (data && typeof data === 'object' && 'error' in data) {
-      const errorData = data as { error?: { message?: string } };
-      return errorData?.error?.message ?? `Request failed (HTTP ${status})`;
-    }
-    return `Request failed${status ? ` (HTTP ${status})` : ''}`;
-  }
-  return err instanceof Error ? err.message : 'Network error.';
-}
-
-function fail<T>(message: string, code = 'NETWORK_ERROR'): ApiResult<T> {
-  return {
-    success: false,
-    data: null,
-    error: { code, message },
-    traceId: '',
-  };
-}
 
 // ---------------------- normalization helpers ----------------------
 
@@ -121,7 +99,7 @@ export async function fetchDecks(): Promise<ApiResult<Deck[]>> {
 
       return { ...raw, data: normalized };
     } catch (err) {
-      return fail<Deck[]>(toApiErrorMessage(err));
+      return apiResultFromError<Deck[]>(err);
     }
   });
 }
@@ -137,15 +115,15 @@ export async function fetchDeckById(id: number): Promise<ApiResult<Deck>> {
 
     const list = raw.data ?? [];
     if (list.length === 0) {
-      return fail<Deck>('Deck not found', 'NOT_FOUND');
+      return failResult<Deck>('Deck not found', 'NOT_FOUND');
     }
     const normalized = normalizeDeck(list[0]);
     if (!normalized) {
-      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Invalid deck data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalized };
   } catch (err) {
-    return fail<Deck>(toApiErrorMessage(err));
+    return apiResultFromError<Deck>(err);
   }
 }
 
@@ -160,15 +138,15 @@ export async function fetchDeckBySlug(slug: string): Promise<ApiResult<Deck>> {
 
     const list = raw.data ?? [];
     if (list.length === 0) {
-      return fail<Deck>('Deck not found', 'NOT_FOUND');
+      return failResult<Deck>('Deck not found', 'NOT_FOUND');
     }
     const normalized = normalizeDeck(list[0]);
     if (!normalized) {
-      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Invalid deck data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalized };
   } catch (err) {
-    return fail<Deck>(toApiErrorMessage(err));
+    return apiResultFromError<Deck>(err);
   }
 }
 
@@ -202,15 +180,15 @@ export async function createDeck(params: {
 
     const deck = raw.data;
     if (!deck) {
-      return fail<Deck>('Create deck failed: no data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Create deck failed: no data returned', 'SERVER_ERROR');
     }
     const normalized = normalizeDeck(deck);
     if (!normalized) {
-      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Invalid deck data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalized };
   } catch (err) {
-    return fail<Deck>(toApiErrorMessage(err));
+    return apiResultFromError<Deck>(err);
   }
 }
 
@@ -259,15 +237,15 @@ export async function updateDeck(
 
     const deck = raw.data;
     if (!deck) {
-      return fail<Deck>('Update deck failed: no data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Update deck failed: no data returned', 'SERVER_ERROR');
     }
     const normalized = normalizeDeck(deck);
     if (!normalized) {
-      return fail<Deck>('Invalid deck data returned', 'SERVER_ERROR');
+      return failResult<Deck>('Invalid deck data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalized };
   } catch (err) {
-    return fail<Deck>(toApiErrorMessage(err));
+    return apiResultFromError<Deck>(err);
   }
 }
 
@@ -280,7 +258,7 @@ export async function deleteDeck(id: number): Promise<ApiResult<null>> {
     );
     return resp.data;
   } catch (err) {
-    return fail<null>(toApiErrorMessage(err));
+    return apiResultFromError<null>(err);
   }
 }
 
@@ -366,15 +344,19 @@ export async function fetchAdminDecksPage(
     return { ...raw, data: normalizeAdminDecksPage(raw.data) };
   } catch (err) {
     if (axios.isAxiosError(err) && err.response?.status === 404) {
-      return fail<AdminDecksPage>(
+      return failResult<AdminDecksPage>(
         'Paginated decks endpoint is not available (HTTP 404).',
         ADMIN_DECKS_ENDPOINT_MISSING,
       );
     }
     if (axios.isAxiosError(err) && err.response?.status === 403) {
-      return fail<AdminDecksPage>(toApiErrorMessage(err), 'FORBIDDEN');
+      // Keep the converted message/traceId/httpStatus, but force FORBIDDEN so a
+      // gateway 403 without an envelope still trips the legacy fallback.
+      const result = apiResultFromError<AdminDecksPage>(err);
+      if (result.error) result.error.code = 'FORBIDDEN';
+      return result;
     }
-    return fail<AdminDecksPage>(toApiErrorMessage(err));
+    return apiResultFromError<AdminDecksPage>(err);
   }
 }
 
@@ -393,7 +375,7 @@ export async function fetchCardsByDeck(deckId: number): Promise<ApiResult<Card[]
       const list = raw.data ?? [];
       return { ...raw, data: list.map(normalizeCard) };
     } catch (err) {
-      return fail<Card[]>(toApiErrorMessage(err));
+      return apiResultFromError<Card[]>(err);
     }
   });
 }
@@ -442,11 +424,11 @@ export async function createCard(params: {
 
     const card = raw.data;
     if (!card) {
-      return fail<Card>('Create card failed: no data returned', 'SERVER_ERROR');
+      return failResult<Card>('Create card failed: no data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalizeCard(card) };
   } catch (err) {
-    return fail<Card>(toApiErrorMessage(err));
+    return apiResultFromError<Card>(err);
   }
 }
 
@@ -511,11 +493,11 @@ export async function updateCard(params: {
 
     const card = raw.data;
     if (!card) {
-      return fail<Card>('Update card failed: no data returned', 'SERVER_ERROR');
+      return failResult<Card>('Update card failed: no data returned', 'SERVER_ERROR');
     }
     return { ...raw, data: normalizeCard(card) };
   } catch (err) {
-    return fail<Card>(toApiErrorMessage(err));
+    return apiResultFromError<Card>(err);
   }
 }
 
@@ -525,7 +507,7 @@ export async function deleteCard(cardId: number): Promise<ApiResult<null>> {
     const resp = await http.delete<ApiResult<null>>(`/api/v1/authoring/cards?id=${encodeURIComponent(cardId)}`);
     return resp.data;
   } catch (err) {
-    return fail<null>(toApiErrorMessage(err));
+    return apiResultFromError<null>(err);
   }
 }
 
@@ -536,7 +518,7 @@ export async function fetchPermissions(): Promise<ApiResult<{ adminSub: string; 
     const resp = await http.get<ApiResult<{ adminSub: string; deckId: number; canRead: boolean; canWrite: boolean }[]>>('/api/v1/admin/permissions');
     return resp.data;
   } catch (err) {
-    return fail(toApiErrorMessage(err));
+    return apiResultFromError<{ adminSub: string; deckId: number; canRead: boolean; canWrite: boolean }[]>(err);
   }
 }
 
@@ -553,7 +535,7 @@ export async function updatePermission(params: { adminSub: string; deckId: numbe
     const resp = await http.put<ApiResult<null>>('/api/v1/admin/permissions', body);
     return resp.data;
   } catch (err) {
-    return fail(toApiErrorMessage(err));
+    return apiResultFromError<null>(err);
   }
 }
 
@@ -569,7 +551,7 @@ export async function bulkUpdatePermissions(params: { adminSub: string; deckIds:
     const resp = await http.put<ApiResult<null>>('/api/v1/admin/permissions/bulk', body);
     return resp.data;
   } catch (err) {
-    return fail(toApiErrorMessage(err));
+    return apiResultFromError<null>(err);
   }
 }
 
@@ -586,7 +568,7 @@ export async function publishDeck(
     });
     return resp.data;
   } catch (err) {
-    return fail(toApiErrorMessage(err));
+    return apiResultFromError<{ mode: string; jobId?: string }>(err);
   }
 }
 
@@ -595,7 +577,7 @@ export async function checkPublishJobStatus(jobId: string): Promise<ApiResult<{ 
     const resp = await http.get<ApiResult<{ jobId: string; status: string; buildId?: string; s3Key?: string; errorMessage?: string }>>(`/api/v1/authoring/publish/status?jobId=${encodeURIComponent(jobId)}`);
     return resp.data;
   } catch (err) {
-    return fail(toApiErrorMessage(err));
+    return apiResultFromError<{ jobId: string; status: string; buildId?: string; s3Key?: string; errorMessage?: string }>(err);
   }
 }
 
@@ -613,7 +595,7 @@ export async function fetchPublishJobs(): Promise<ApiResult<PublishJob[]>> {
     const resp = await http.get<ApiResult<PublishJob[]>>('/api/v1/authoring/publish/jobs');
     return resp.data;
   } catch (err) {
-    return fail(toApiErrorMessage(err));
+    return apiResultFromError<PublishJob[]>(err);
   }
 }
 
@@ -625,7 +607,7 @@ export async function fetchAdminManifest(): Promise<ApiResult<Record<string, unk
       const resp = await http.get<ApiResult<Record<string, unknown>>>('/api/v1/admin/manifest');
       return resp.data;
     } catch (err) {
-      return fail<Record<string, unknown>>(toApiErrorMessage(err));
+      return apiResultFromError<Record<string, unknown>>(err);
     }
   });
 }
@@ -708,7 +690,7 @@ export async function fetchContentIntelligence(params?: {
     const resp = await http.get<ApiResult<ContentIntelligenceData>>(`/api/v1/authoring/content-intelligence${suffix}`);
     return resp.data;
   } catch (err) {
-    return fail<ContentIntelligenceData>(toApiErrorMessage(err));
+    return apiResultFromError<ContentIntelligenceData>(err);
   }
 }
 // experiment: tweak
