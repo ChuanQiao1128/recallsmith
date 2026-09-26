@@ -310,4 +310,5 @@ flowchart LR
 <!-- paths-not-on-disk
 任务描述里点名但仓库里没有的文件（本文以根 README.md 为索引）：
 - docs/README.md
+- src_C/Worker/Manifest/ManifestService.cs
 -->

@@ -351,6 +351,10 @@ public static class Publish
         jobId
       });
     }
+    catch (PostgresException pg) when (pg.SqlState == "23505")
+    {
+      return Helpers.MapUniqueViolation409(pg, res) ?? res.Error500(pg);
+    }
     catch (Exception ex) when (ex is ValidationError)
     {
       return res.BadRequest("VALIDATION_ERROR", ex.Message);

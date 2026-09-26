@@ -1,0 +1,26 @@
+{
+  "tags_only_updates": false,
+  "outputs": ["alerts_topic_arn"],
+  "changes": {
+    "module.observability.aws_sns_topic.alerts": "create",
+    "module.observability.aws_sns_topic_subscription.alerts_email": "create",
+    "module.observability.aws_sns_topic_policy.alerts": "create",
+    "module.observability.aws_db_event_subscription.developercards": "create",
+    "module.observability.aws_cloudwatch_log_group.api_access": "create",
+    "module.observability.aws_cloudwatch_dashboard.prod": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.api_5xx": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.core_vpc_errors": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.worker_errors": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.core_vpc_throttles": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.worker_throttles": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.core_vpc_duration_p95": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.sqs_oldest_age": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.dlq_nonempty": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.rds_cpu": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.rds_free_storage": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.rds_connections": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.outbox_backlog": "create",
+    "module.api.aws_apigatewayv2_stage.default": { "action": "update", "keys": ["access_log_settings", "default_route_settings"] },
+    "module.api.aws_apigatewayv2_stage.dev": { "action": "update", "keys": ["access_log_settings", "default_route_settings"] }
+  }
+}

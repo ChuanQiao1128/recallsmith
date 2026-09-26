@@ -139,3 +139,9 @@ await SQS().SendMessageAsync(request);
     *   *(运维注意：确保 SQS 可见性超时 Visibility Timeout 设置为 Lambda Timeout 的 6 倍以上，防止活还没干完就被 SQS 提前判死刑。)*
 
 ---
+
+<!-- paths-not-on-disk
+     本文档里出现、但磁盘上已经没有的仓库路径，逐条登记在这里（规则见 frontend/tests/docsPaths.test.ts）。
+     E03（2026-09-22）把 manifest 重建移进 src_C/Shared/RecallSmith.Lambda.Db/ManifestBuilder.cs，删除了下面这个文件；上文句子保持原样。
+- src_C/Worker/Manifest/ManifestService.cs
+-->

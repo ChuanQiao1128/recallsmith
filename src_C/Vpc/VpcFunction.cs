@@ -48,18 +48,17 @@ public sealed class VpcFunction
 
   private static async Task<APIGatewayProxyResponse> DispatchAsync(LambdaRequest req, Res res)
   {
-    Log.Info(
-      JsonSerializer.Serialize(new
-      {
-        tag = "boot",
-        lambda = ServiceName,
-        version = Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_VERSION"),
-        apiEnv = Environment.GetEnvironmentVariable("API_ENV"),
-        allowDevPremium = Environment.GetEnvironmentVariable("ALLOW_DEV_PREMIUM"),
-        disallowSandbox = Environment.GetEnvironmentVariable("DISALLOW_SANDBOX_PREMIUM"),
-        path = req.Path,
-        method = req.Method,
-      }));
+    Log.Event("info", new
+    {
+      tag = "boot",
+      lambda = ServiceName,
+      version = Environment.GetEnvironmentVariable("AWS_LAMBDA_FUNCTION_VERSION"),
+      apiEnv = Environment.GetEnvironmentVariable("API_ENV"),
+      allowDevPremium = Environment.GetEnvironmentVariable("ALLOW_DEV_PREMIUM"),
+      disallowSandbox = Environment.GetEnvironmentVariable("DISALLOW_SANDBOX_PREMIUM"),
+      path = req.Path,
+      method = req.Method,
+    });
 
     AuthContext auth;
     try
@@ -83,19 +82,18 @@ public sealed class VpcFunction
       return res.Raw(200, new { ok = true });
     }
 
-    Log.Info(
-      JsonSerializer.Serialize(new
-      {
-        traceId = req.TraceId,
-        lambda = ServiceName,
-        method = req.Method,
-        path = req.Path,
-        userSub = auth.UserSub,
-        username = auth.Username,
-        groups = auth.Groups,
-        isAdmin = auth.IsAdmin,
-        isSuperAdmin = auth.IsSuperAdmin,
-      }));
+    Log.Event("info", new
+    {
+      traceId = req.TraceId,
+      lambda = ServiceName,
+      method = req.Method,
+      path = req.Path,
+      userSub = auth.UserSub,
+      username = auth.Username,
+      groups = auth.Groups,
+      isAdmin = auth.IsAdmin,
+      isSuperAdmin = auth.IsSuperAdmin,
+    });
 
     try
     {
@@ -207,6 +205,14 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/v1/admin/manifest/rebuild", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Authoring.ManifestRebuild.HandleManifestRebuild(req, res, auth);
+      }
+      if (p.EndsWith("/rollback", StringComparison.OrdinalIgnoreCase) && p.Contains("/api/v1/admin/decks/", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.DeckRollback.HandleDeckRollback(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/publish/reap", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.PublishReaper.HandlePublishReap(req, res, auth);
       }
       // Dashboard - 合并 decks 和 manifest，减少前端请求次数
       if (p.EndsWith("/api/v1/authoring/dashboard", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
