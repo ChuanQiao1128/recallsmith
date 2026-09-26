@@ -96,6 +96,15 @@ public static class Decks
       ManifestBuilder.NormalizePrefix(Environment.GetEnvironmentVariable("PREMIUM_PREFIX"), "premium"));
   }
 
+  /// True when the deck has a SUCCESS publish or one in flight: its slug is then the key of builds,
+  /// patches and every device's progress, and must not change (CBE-13).
+  public static async Task<bool> IsSlugLockedAsync(NpgsqlConnection conn, long deckId)
+  {
+    const string sql = "select exists(select 1 from deck_publishes where deck_id = $1 and status in ('SUCCESS','PENDING','PROCESSING'))";
+    var result = await DbUtil.ExecuteScalarAsync(conn, null, sql, [deckId]);
+    return Convert.ToBoolean(result, CultureInfo.InvariantCulture);
+  }
+
   public static Task<APIGatewayProxyResponse> HandleAuthoringDecks(LambdaRequest req, Res res, AuthContext auth) =>
     HandleAuthoringDecks(req, res, auth, DefaultManifestRebuildAsync);
 
@@ -285,6 +294,23 @@ public static class Decks
           where id = $1
           """, [idInt]);
         var before = beforeRows.Count > 0 ? beforeRows[0] : null;
+
+        // CBE-13: a super_admin may not rename a deck once it has a SUCCESS or in-flight publish;
+        // the slug is the key of builds, patches and every device's progress. Only an actual change
+        // (compared after Trim, ordinal) trips the lock, so an unchanged slug on a full-form resave
+        // and a JSON-null slug keep today's paths. Editors never reach here: slug is filtered for them.
+        if (isSuperAdmin
+            && before is not null
+            && body.TryGetProperty("slug", out var slugEl)
+            && slugEl.ValueKind == JsonValueKind.String)
+        {
+          var currentSlug = Convert.ToString(before["slug"], CultureInfo.InvariantCulture);
+          var newSlug = slugEl.GetString()!.Trim();
+          if (!string.Equals(newSlug, currentSlug, StringComparison.Ordinal) && await IsSlugLockedAsync(conn, idInt))
+          {
+            return Helpers.ErrorEnvelope(res, 409, "SLUG_LOCKED", "The slug cannot change after the deck has been published; create a new deck instead.");
+          }
+        }
 
         var spec = new List<Helpers.UpdateField>
         {
