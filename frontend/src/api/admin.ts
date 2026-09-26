@@ -2,7 +2,7 @@
 // Admin console API, served under /api/v1/.
 import type { ApiResult } from '../types/api';
 import { http } from './http';
-import axios from 'axios';
+import { apiResultFromError } from './httpFailure';
 
 export type AdminDeckPermission = {
   deckId: number;
@@ -38,29 +38,12 @@ export type DeckSummary = {
   updatedAt?: string;
 };
 
-function toApiErrorMessage(err: unknown): string {
-  if (axios.isAxiosError(err)) {
-    const status = err.response?.status;
-    const data = err.response?.data;
-    if (data && typeof data === 'object' && 'error' in data) {
-      const errorData = data as { error?: { message?: string } };
-      return errorData?.error?.message ?? `Request failed (HTTP ${status})`;
-    }
-    return `Request failed${status ? ` (HTTP ${status})` : ''}`;
-  }
-  return err instanceof Error ? err.message : 'Network error.';
-}
-
-function fail<T>(message: string, code = 'NETWORK_ERROR'): ApiResult<T> {
-  return { success: false, data: null, error: { code, message }, traceId: '' };
-}
-
 async function apiGet<T>(path: string): Promise<ApiResult<T>> {
   try {
     const resp = await http.get<ApiResult<T>>(path);
     return resp.data;
   } catch (err) {
-    return fail<T>(toApiErrorMessage(err));
+    return apiResultFromError<T>(err);
   }
 }
 
@@ -69,7 +52,7 @@ async function apiPost<T>(path: string, body: unknown): Promise<ApiResult<T>> {
     const resp = await http.post<ApiResult<T>>(path, body ?? {});
     return resp.data;
   } catch (err) {
-    return fail<T>(toApiErrorMessage(err));
+    return apiResultFromError<T>(err);
   }
 }
 
@@ -89,7 +72,7 @@ export async function runMigrate(reset: boolean, secret?: string): Promise<ApiRe
     const resp = await http.post<ApiResult<{ migrated: boolean; reset: boolean }>>(path, {}, { headers: { 'x-migrate-secret': trimmed } });
     return resp.data;
   } catch (err) {
-    return fail<{ migrated: boolean; reset: boolean }>(toApiErrorMessage(err));
+    return apiResultFromError<{ migrated: boolean; reset: boolean }>(err);
   }
 }
 
