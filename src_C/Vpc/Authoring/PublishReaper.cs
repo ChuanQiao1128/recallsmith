@@ -36,9 +36,11 @@ public static class PublishReaper
     select 'PROCESSING' as was, job_id from q
     """;
 
-  public static async Task<ReapResult> ReapOrphansAsync(NpgsqlConnection conn)
+  public static Task<ReapResult> ReapOrphansAsync(NpgsqlConnection conn) => ReapOrphansAsync(conn, null);
+
+  public static async Task<ReapResult> ReapOrphansAsync(NpgsqlConnection conn, NpgsqlTransaction? tx)
   {
-    var rows = await DbUtil.QueryAsync(conn, null, ReapSql, []);
+    var rows = await DbUtil.QueryAsync(conn, tx, ReapSql, []);
 
     var pending = 0;
     var processing = 0;
@@ -65,7 +67,29 @@ public static class PublishReaper
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
-    var r = await ReapOrphansAsync(conn);
+    ReapResult r;
+    AdminAuditEntry auditEntry;
+    bool persisted;
+
+    await using (var tx = await conn.BeginTransactionAsync())
+    {
+      try
+      {
+        r = await ReapOrphansAsync(conn, tx);
+        // Record even when nothing was reaped: the click itself is the admin action.
+        auditEntry = AdminAudit.Entry(auth, res, "publish.reap", "deck_publishes", null,
+          new { pending = r.Pending, processing = r.Processing, jobIds = r.JobIds });
+        persisted = await AdminAudit.RecordAsync(conn, tx, auditEntry);
+        await tx.CommitAsync();
+      }
+      catch
+      {
+        try { await tx.RollbackAsync(); } catch { /* ignore */ }
+        throw;
+      }
+    }
+
+    AdminAudit.Emit(auditEntry, persisted);
     return res.Ok(new { pending = r.Pending, processing = r.Processing, jobIds = r.JobIds });
   }
 }

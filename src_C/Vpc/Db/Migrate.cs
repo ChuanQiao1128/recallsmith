@@ -70,7 +70,7 @@ public static class Migrate
     return rows.Select(r => Convert.ToInt32(r["version"], CultureInfo.InvariantCulture)).ToHashSet();
   }
 
-  private static async Task ApplyOne(NpgsqlConnection conn, Migration m)
+  private static async Task<bool> ApplyOne(NpgsqlConnection conn, Migration m, RecallSmith.Lambda.Vpc.Authoring.AdminAuditEntry? audit)
   {
     var sql = await File.ReadAllTextAsync(m.FullPath);
 
@@ -84,7 +84,12 @@ public static class Migrate
         "insert into schema_migrations(version, name) values ($1, $2) on conflict (version) do nothing;",
         [m.Version, m.Name]);
 
+      // For migrations before 023 on a fresh database the table does not exist yet, so nothing is
+      // written; 023 itself creates it inside this same transaction and so audits its own application.
+      var persisted = audit is not null && await RecallSmith.Lambda.Vpc.Authoring.AdminAudit.RecordAsync(conn, tx, audit);
+
       await tx.CommitAsync();
+      return persisted;
     }
     catch
     {
@@ -174,7 +179,10 @@ public static class Migrate
       var appliedNow = new List<object>();
       foreach (var m in pending)
       {
-        await ApplyOne(conn, m);
+        var audit = RecallSmith.Lambda.Vpc.Authoring.AdminAudit.Entry(
+          auth, res, "db.migrate", $"migration:{m.Version}", null, new { version = m.Version, name = m.Name, file = m.File });
+        var persisted = await ApplyOne(conn, m, audit);
+        RecallSmith.Lambda.Vpc.Authoring.AdminAudit.Emit(audit, persisted);
         appliedNow.Add(new { version = m.Version, name = m.Name, file = m.File });
       }
 
