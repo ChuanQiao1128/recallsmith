@@ -38,9 +38,9 @@ public class PublishJobProcessor : IPublishJobProcessor
       // duplicate delivery of a finished job — acknowledge it. Otherwise the row is PROCESSING
       // and not yet stale, so another container may still hold it: fail the item so SQS keeps it.
       var row = await _jobRepository.GetJobAsync(jobId);
-      if (row is null || row.Status == "SUCCESS")
+      if (row is null || row.Status is "SUCCESS" or "FAILED")
       {
-        Console.WriteLine($"[JobId={jobId}] Job already completed or unknown; acknowledging replay");
+        Console.WriteLine($"[JobId={jobId}] Job already finished ({row?.Status ?? "absent"}); acknowledging replay");
         return;
       }
       throw new JobNotAcquiredException(jobId);
@@ -91,6 +91,8 @@ public class PublishJobProcessor : IPublishJobProcessor
   {
     await _jobRepository.FailJobAsync(jobId, errorMessage);
   }
+
+  public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
 
   /// <summary>
   /// 从数据库加载卡组数据

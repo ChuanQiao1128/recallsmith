@@ -10,8 +10,10 @@ public sealed record ReapResult(int Pending, int Processing, string[] JobIds);
 
 /// <summary>
 /// POST /api/v1/admin/publish/reap (super-admin): fails orphaned PENDING (&gt; 10 min since insert)
-/// and PROCESSING (&gt; 30 min since last touch) rows so the queue can re-acquire them (the worker
-/// takes PENDING/FAILED). The core is Res-free so E12's scheduled reap can reuse it.
+/// and PROCESSING (&gt; 30 min since last touch) rows. FAILED is terminal: the worker never re-acquires
+/// a FAILED row, and if a reaped job's in-flight SQS message is later redelivered the worker
+/// acknowledges and drops it, so recovering the deck needs a fresh publish. The core is Res-free so
+/// E12's scheduled reap can reuse it.
 /// </summary>
 public static class PublishReaper
 {
