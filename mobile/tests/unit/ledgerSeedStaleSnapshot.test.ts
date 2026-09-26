@@ -38,7 +38,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
 import { scheduleNextReview } from '../../src/review/model';
 import type { CardProgress, ReviewRating } from '../../src/review/model';
-import { loadRewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
+import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { readNewCardLedger, readNewCardLedgerSeed } from '../../src/features/gacha/rewards/newCardLedger';
 import { readProgressSettled } from '../../src/features/gacha/rewards/progressSettled';
 import { settleRatingReward, ZERO_REWARD_STEP, type RatingRewardStep } from '../../src/features/gacha/rewards/sessionRewards';
@@ -211,7 +211,7 @@ describe('ledger seed vs. a stale in-memory snapshot (S8)', () => {
     // A genuinely new card still pays exactly once.
     expect((await rate(s2, 'c105', 'good', T(21))).pulls).toBe(1);
     expect((await rate(s2, 'c105', 'good', T(22))).pulls).toBe(0);
-    expect(total(await loadRewardWalletState())).toBe(1);
+    expect(total(await loadDeckWallet(SLUG))).toBe(1);
   });
 
   it('session opens settled but a second pull lands mid-session: the seed still sees it', async () => {
@@ -233,7 +233,7 @@ describe('ledger seed vs. a stale in-memory snapshot (S8)', () => {
     for (let i = 1; i < N; i += 1) await rate(s, `c${i}`, 'hard', T(20, 12));
     expect(s.paid).toBe(0);
     expect((await rate(s, 'c100', 'good', T(20, 13))).pulls).toBe(1);
-    expect(total(await loadRewardWalletState())).toBe(1);
+    expect(total(await loadDeckWallet(SLUG))).toBe(1);
   });
 
   it('the card being rated is decided by the snapshot, not by the progress the screen just saved', async () => {
@@ -253,7 +253,7 @@ describe('ledger seed vs. a stale in-memory snapshot (S8)', () => {
     // rated again pays nothing, and a new one pays once.
     expect((await rate(s, 'c0', 'good', T(21))).pulls).toBe(0);
     expect((await rate(s, 'c1', 'good', T(21))).pulls).toBe(1);
-    expect(total(await loadRewardWalletState())).toBe(2);
+    expect(total(await loadDeckWallet(SLUG))).toBe(2);
   });
 
   it('a storage error on the storage-fresh read is a seed-time storage error: zero step, nothing written', async () => {
@@ -276,7 +276,7 @@ describe('ledger seed vs. a stale in-memory snapshot (S8)', () => {
     expect(ledger.c1).toBe(0);
     expect(ledger.c2).toBe(0);
     expect((await rate(s, 'c2', 'good', T(20, 12))).pulls).toBe(0);
-    expect(total(await loadRewardWalletState())).toBe(1);
+    expect(total(await loadDeckWallet(SLUG))).toBe(1);
   });
 
   it('never reads the storage-fresh keys once the partition is seeded', async () => {

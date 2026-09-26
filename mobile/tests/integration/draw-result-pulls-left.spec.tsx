@@ -37,11 +37,12 @@ vi.mock('expo-linear-gradient', () => {
   return { LinearGradient: ({ children, ...props }: any) => React.createElement('LinearGradient', props, children) };
 });
 
-// Partial mock (only loadRewardWalletState): this is exactly the mock hazard the
+// Partial mock (only loadDeckWallet): this is exactly the mock hazard the
 // selector's dedicated module guards against — spendablePullsNow lives in its own
 // module and imports only the type, so it is unaffected by this partial mock.
-vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
-  loadRewardWalletState: vi.fn(() => walletLoader()),
+// 1.7: DrawResult reads the per-pack wallet.
+vi.mock('../../src/features/gacha/rewards/deckWallet', () => ({
+  loadDeckWallet: vi.fn((_slug: string) => walletLoader()),
 }));
 
 let permissionPromptPendingFixture = false;
