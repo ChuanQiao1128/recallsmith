@@ -5,7 +5,7 @@
 // is face up; DrawResult renders the same grid in place of its old horizontal mini strip.
 
 import React from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import * as RN from 'react-native';
 import type { ImageSourcePropType } from 'react-native';
 
@@ -76,6 +76,11 @@ export function DrawSummaryGrid(props: DrawSummaryGridProps): React.JSX.Element 
                   packArt={packArt}
                   packPaletteCover={packPaletteCover}
                 />
+                {/* Every pulled card stays "listed" for screen readers / text queries; the framed
+                    thumbnail carries the visual, so this caption is laid out with zero height. */}
+                <Text testID={`${prefix}-cell-${i}-question`} style={styles.hiddenCaption} numberOfLines={1}>
+                  {card.question}
+                </Text>
               </Pressable>
             );
           })}
@@ -90,6 +95,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   cell: { alignItems: 'center', justifyContent: 'center' },
   glow: { position: 'absolute', left: -6, right: -6, top: -6, bottom: -6, borderRadius: 16, opacity: 0.6 },
+  hiddenCaption: { fontSize: 0, lineHeight: 0, height: 0, opacity: 0 },
 });
 
 export default DrawSummaryGrid;
