@@ -247,6 +247,7 @@ public class AuthoringErrorMappingTests
     var deckId = await NewDeckAsync("editor-deck");
     var editorSub = NewSub();
     await GrantEditorAsync(editorSub, deckId);
+    var tierBefore = await DbTierAsync(deckId);
 
     var body = JsonSerializer.Serialize(new { id = deckId, title = "t2", tier = "premium" });
     var resp = await DecksAsync("PUT", editorSub, ["editor"], body);
@@ -254,7 +255,8 @@ public class AuthoringErrorMappingTests
     Assert.True(resp.StatusCode == 200, $"PUT returned {resp.StatusCode}: {resp.Body}");
     var data = Data(resp);
     Assert.Equal("t2", data.GetProperty("title").GetString());
-    Assert.Null(await DbTierAsync(deckId));
+    Assert.Equal(tierBefore, await DbTierAsync(deckId));
+    Assert.NotEqual("premium", await DbTierAsync(deckId));
     Assert.Equal(
       new[] { "tier" },
       data.GetProperty("ignoredFields").EnumerateArray().Select(e => e.GetString()).ToArray());
