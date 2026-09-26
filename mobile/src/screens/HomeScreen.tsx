@@ -36,6 +36,7 @@ import { loadStreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import { formatDateKey } from '../review/model';
 import { forceProgressSync } from '../sync/progressSync';
 import { useAuthStore } from '../auth/authStore';
+import { SessionExpiredBanner } from '../auth/SessionExpiredBanner';
 import { setIsPremiumUser, usePremiumUser } from '../premium/premiumStore';
 import { useFeatureFlags } from '../config/featureFlags';
 import { useSessionStore } from '../features/gacha/session/sessionStore';
@@ -526,6 +527,7 @@ export function HomeScreen({ navigation, route }: Props) {
           style={styles.gradient}
         >
           <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+            <SessionExpiredBanner onSignIn={() => navigation.navigate('SignIn')} />
             {/* One-shot notice toast — surfaces feedback from the
                 preceding screen (e.g. PermissionPrompt deny). Auto-fades
                 after 3.5s via the notice useEffect above. Renders as a

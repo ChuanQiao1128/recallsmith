@@ -88,12 +88,14 @@ import ConfirmSignUpScreen from './src/screens/ConfirmSignUpScreen';
 
 import { configureAmplifyOnce } from './src/auth/amplify';
 import { useAuthStore } from './src/auth/authStore';
+import { installAccessTokenRefresher, refreshAuthOnForeground } from './src/auth/freshToken';
 import { scheduleProgressSync } from './src/sync/progressSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
 import { createOtaUpdateChecker, getExpoUpdatesModule } from './src/updates/otaUpdateCheck';
 
 configureAmplifyOnce();
+installAccessTokenRefresher();
 const otaUpdateChecker = createOtaUpdateChecker({ updates: getExpoUpdatesModule() });
 
 if (__DEV__) {
@@ -175,6 +177,7 @@ export default function App() {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'background' || state === 'inactive') scheduleProgressSync({ delayMs: 0, reason: 'app_background' });
       else if (state === 'active') {
+        void refreshAuthOnForeground();
         scheduleProgressSync({ delayMs: 0, reason: 'app_foreground' });
         void otaUpdateChecker.onForeground(() => (navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : undefined));
       }

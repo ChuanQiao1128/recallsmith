@@ -8,6 +8,15 @@ function joinUrl(base: string, path: string) {
   return `${base}${p}`;
 }
 
+// Injected 401 recovery. apiClient must not import auth code (would create an
+// import cycle authStore -> apiClient -> authStore), so freshToken.ts installs
+// a refresher here. Returns a fresh access token (or null when it cannot).
+let _accessTokenRefresher: (() => Promise<string | null>) | null = null;
+
+export function setAccessTokenRefresher(fn: (() => Promise<string | null>) | null): void {
+  _accessTokenRefresher = fn;
+}
+
 function safeJsonParse(text: string): any | null {
   const t = (text ?? '').trim();
   if (!t) return null;
@@ -46,12 +55,29 @@ export async function apiJson<T>(
       headers.Authorization = `Bearer ${token}`;
     }
 
-    const resp = await fetch(url, {
-      method: opts.method ?? 'GET',
-      headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-      signal: controller.signal,
-    });
+    const send = (authToken: string) =>
+      fetch(url, {
+        method: opts.method ?? 'GET',
+        headers: authToken
+          ? { ...headers, Authorization: `Bearer ${authToken}` }
+          : headers,
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+        signal: controller.signal,
+      });
+
+    let resp = await send(token);
+
+    // A 401 on a request that carried a bearer token usually means the access
+    // token expired mid-session. Refresh once (via the injected refresher) and
+    // replay the same request with the new token. Never retry more than once,
+    // and never a request that was sent without a token.
+    if (resp.status === 401 && token && _accessTokenRefresher) {
+      const fresh = await _accessTokenRefresher().catch(() => null);
+      const next = (fresh ?? '').trim();
+      if (next && next !== token) {
+        resp = await send(next);
+      }
+    }
 
     const text = await resp.text();
     const json = safeJsonParse(text);
