@@ -489,13 +489,22 @@ public static class Auth
 
   public const string InternalSharedSecretEnv = "INTERNAL_SHARED_SECRET";
 
+  /// <summary>
+  /// Suffix of the optional variable that holds the secret being rotated out (cloud-security-resilience-11): next to
+  /// <c>INTERNAL_SHARED_SECRET</c> (or a route's own secret) the route also accepts
+  /// <c>INTERNAL_SHARED_SECRET_PREVIOUS</c> (or <c>&lt;route secret&gt;_PREVIOUS</c>) while it is set, so a rotation
+  /// needs no flag day. deploy.sh sets it only while the matching <c>-previous</c> SSM leaf exists.
+  /// </summary>
+  public const string PreviousSecretSuffix = "_PREVIOUS";
+
   public static InternalSignatureVerifyResult VerifyInternalSignature(LambdaRequest req) => VerifyInternalSignature(req, null);
 
   /// <summary>
   /// The §4.3 HMAC check. <paramref name="callerSecretEnv"/> names the route's own secret (least privilege,
   /// cloud-security-resilience-2): when that variable is set, it is the only secret this route accepts, so a caller
   /// holding the shared secret (or another route's secret) cannot sign for it. When it is unset the route falls back
-  /// to <c>INTERNAL_SHARED_SECRET</c>, the pre-split behaviour, until the per-caller secret is provisioned.
+  /// to <c>INTERNAL_SHARED_SECRET</c>, the pre-split behaviour, until the per-caller secret is provisioned. Whichever
+  /// secret is in effect, its <see cref="PreviousSecretSuffix"/> companion is accepted too when it is non-empty.
   /// </summary>
   public static InternalSignatureVerifyResult VerifyInternalSignature(LambdaRequest req, string? callerSecretEnv)
   {
@@ -519,14 +528,19 @@ public static class Auth
 
     var rawBody = Validation.GetRawBody(req);
     var msg = $"{ts}.{rawBody}";
-    var expected = "v1=" + HmacSha256Hex(secret, msg);
+    var previous = Environment.GetEnvironmentVariable(secretName + PreviousSecretSuffix);
 
     try
     {
       var a = Encoding.UTF8.GetBytes(sigRaw);
-      var b = Encoding.UTF8.GetBytes(expected);
+      var b = Encoding.UTF8.GetBytes("v1=" + HmacSha256Hex(secret, msg));
       if (a.Length != b.Length) return new InternalSignatureVerifyResult(false, "Signature length mismatch");
+      // Both comparisons always run when a previous secret is set, so timing does not reveal which one matched.
       var ok = CryptographicOperations.FixedTimeEquals(a, b);
+      if (!string.IsNullOrEmpty(previous))
+      {
+        ok |= CryptographicOperations.FixedTimeEquals(a, Encoding.UTF8.GetBytes("v1=" + HmacSha256Hex(previous, msg)));
+      }
       return ok ? new InternalSignatureVerifyResult(true, null) : new InternalSignatureVerifyResult(false, "Bad signature");
     }
     catch

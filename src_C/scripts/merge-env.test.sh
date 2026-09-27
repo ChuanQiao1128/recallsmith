@@ -115,6 +115,57 @@ test_ssm_to_env_rotation_leaf() {
   jq -e '. == {"INTERNAL_SHARED_SECRET":"PLACEHOLDER-1"}' <<<"$out" >/dev/null || fail "(j) a Python-only leaf leaked into the env"
 }
 
+# (k) every leaf a README runbook tells the owner to create under /developercards/<env> (Z01
+#     cloud-security-resilience-15): the Python-only rotation and per-subscription leaves are skipped by
+#     pattern, and the internal-secret leaves map to the env keys core-vpc verifies with.
+test_ssm_to_env_runbook_leaves() {
+  local fixture out
+  fixture='{"Parameters":[
+    {"Name":"/developercards/prod/internal-shared-secret","Value":"PLACEHOLDER-1"},
+    {"Name":"/developercards/prod/internal-shared-secret-previous","Value":"PLACEHOLDER-2"},
+    {"Name":"/developercards/prod/ai-qa-results-secret","Value":"PLACEHOLDER-3"},
+    {"Name":"/developercards/prod/ai-qa-results-secret-previous","Value":"PLACEHOLDER-4"},
+    {"Name":"/developercards/prod/webhook-report-secret","Value":"PLACEHOLDER-5"},
+    {"Name":"/developercards/prod/webhook-report-secret-previous","Value":"PLACEHOLDER-6"},
+    {"Name":"/developercards/prod/webhook-signing-secret","Value":"PLACEHOLDER-7"},
+    {"Name":"/developercards/prod/webhook-signing-secret-previous","Value":"PLACEHOLDER-8"},
+    {"Name":"/developercards/prod/webhook-signing-secret-sub-12","Value":"PLACEHOLDER-9"},
+    {"Name":"/developercards/prod/webhook-signing-secret-sub-12-previous","Value":"PLACEHOLDER-10"},
+    {"Name":"/developercards/prod/anthropic-api-key","Value":"PLACEHOLDER-11"}
+  ]}'
+  out="$(ssm_to_env "$fixture")" || fail "(k) ssm_to_env failed on a runbook leaf"
+  jq -e '. == {
+    "INTERNAL_SHARED_SECRET":"PLACEHOLDER-1",
+    "INTERNAL_SHARED_SECRET_PREVIOUS":"PLACEHOLDER-2",
+    "INTERNAL_SECRET_AI_QA_RESULTS":"PLACEHOLDER-3",
+    "INTERNAL_SECRET_AI_QA_RESULTS_PREVIOUS":"PLACEHOLDER-4",
+    "INTERNAL_SECRET_WEBHOOK_REPORT":"PLACEHOLDER-5",
+    "INTERNAL_SECRET_WEBHOOK_REPORT_PREVIOUS":"PLACEHOLDER-6"
+  }' <<<"$out" >/dev/null || fail "(k) runbook leaves did not map/skip as expected: $out"
+}
+
+# (l) the patterns are anchored: near misses are still unmapped and still a hard error.
+test_ssm_to_env_pattern_is_anchored() {
+  local leaf err
+  for leaf in webhook-signing-secret-sub-abc webhook-signing-secret-sub-12-extra previous stray-previous-name x-webhook-signing-secret-sub-1; do
+    if err="$(ssm_to_env "{\"Parameters\":[{\"Name\":\"/developercards/prod/$leaf\",\"Value\":\"PLACEHOLDER-x\"}]}" 2>&1)"; then
+      fail "(l) ssm_to_env accepted $leaf"
+    fi
+    grep -Fq "unmapped SSM parameter: $leaf" <<<"$err" || fail "(l) missing error for $leaf"
+  done
+}
+
+# (m) an optional env key outlives its leaf only until the next deploy: drop_absent_optional removes it
+#     from the live environment when the path no longer carries it, and keeps every other key.
+test_drop_absent_optional() {
+  local out
+  out="$(drop_absent_optional '{"INTERNAL_SHARED_SECRET":"PLACEHOLDER-1","INTERNAL_SHARED_SECRET_PREVIOUS":"PLACEHOLDER-2","INTERNAL_SECRET_AI_QA_RESULTS":"PLACEHOLDER-3","FOO_KEEP":"x"}' '{"INTERNAL_SHARED_SECRET":"PLACEHOLDER-1","INTERNAL_SECRET_AI_QA_RESULTS":"PLACEHOLDER-3"}')"
+  jq -e '. == {"INTERNAL_SHARED_SECRET":"PLACEHOLDER-1","INTERNAL_SECRET_AI_QA_RESULTS":"PLACEHOLDER-3","FOO_KEEP":"x"}' <<<"$out" >/dev/null \
+    || fail "(m) drop_absent_optional kept a stale optional key or dropped another: $out"
+  out="$(drop_absent_optional 'null' '{}')"
+  jq -e '. == {}' <<<"$out" >/dev/null || fail "(m) null current broke drop_absent_optional"
+}
+
 test_merge_file_over_current
 test_merge_secret_over_file
 test_ssm_to_env_all_six
@@ -125,5 +176,8 @@ test_ssm_to_env_skips_not_env_leaves
 test_ssm_to_env_unmapped_beside_skipped
 test_worker_file_keys_webhook_queue
 test_ssm_to_env_rotation_leaf
+test_ssm_to_env_runbook_leaves
+test_ssm_to_env_pattern_is_anchored
+test_drop_absent_optional
 
 echo "merge-env tests OK"
