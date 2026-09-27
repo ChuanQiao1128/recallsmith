@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import gate_records
 from test_automation_gate import (
     AUTHOR_CONFIG,
     authored_records,
@@ -21,7 +22,7 @@ from test_automation_gate import (
     write_env,
 )
 from test_b06_gate_fixes import RUN_AUTHOR, _draft, _ingest, _rewrite, _runs_dir
-from test_c06_fixes import MANTLE, MANTLE_MODEL, mantle_provider
+from test_c06_fixes import MANTLE, MANTLE_MODEL, mantle_provider, mantle_served
 
 from dc_evals import automation_gate as gate
 from dc_evals.cli import main
@@ -60,15 +61,18 @@ def test_gate_compares_the_run_effort_with_production(tmp_path: Path) -> None:
     mantle = {"provider": MANTLE, "model": MANTLE_MODEL}
     env = write_env(tmp_path, AI_QA_AUTOMATION_PROVIDER=MANTLE, AI_QA_AUTOMATION_MODEL=MANTLE_MODEL, AI_EFFORT="max")
     # reviewed at max: openai-mantle sends it as xhigh, and that is what the header records
-    seeded = seeded_run(tmp_path, **mantle, effort="max", effectiveEffort="xhigh")
-    authored = authored_run(tmp_path, spec, authored_records(rows), **mantle, effort="max", effectiveEffort="xhigh")
+    # (E04, ai-agent-19: the items name the served model the openai-mantle adapter reports)
+    seeded = seeded_run(tmp_path, mantle_served(gate_records()), **mantle, effort="max", effectiveEffort="xhigh")
+    authored = authored_run(tmp_path, spec, mantle_served(authored_records(rows)), **mantle, effort="max",
+                            effectiveEffort="xhigh")
     report = evaluate(tmp_path, seeded=seeded, authored=authored, spec=spec, env=env)
     assert report["failures"] == []
     assert (report["reviewer"]["effort"], report["reviewer"]["effectiveEffort"]) == ("max", "xhigh")
     md = gate.render_markdown(report)
-    assert "effort max (sent as xhigh), served by anthropic.claude-opus-5" in md
+    assert "effort max (sent as xhigh), served by openai.gpt-5.5" in md
     # the owner's shell effort (high) is not production's (max): both checks name it
-    stale = authored_run(tmp_path, spec, authored_records(rows), **mantle, effort="high", effectiveEffort="high")
+    stale = authored_run(tmp_path, spec, mantle_served(authored_records(rows)), **mantle, effort="high",
+                         effectiveEffort="high")
     failures = evaluate(tmp_path, seeded=seeded, authored=stale, spec=spec, env=env)["failures"]
     assert failures == [
         "authored run: effort 'high' is not the production AI_EFFORT 'max'",

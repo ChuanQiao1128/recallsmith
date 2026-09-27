@@ -28,19 +28,28 @@ AUTOMATION_PROFILE = "automation"
 PROFILES = (DEFAULT_PROFILE, AUTOMATION_PROFILE)
 AUTOMATION_PROMPT_VERSION = "qa-v4-auto"
 
-_DATED_SNAPSHOT = re.compile(r"-\d{8}$")
+# A dated snapshot suffix: Anthropic's -20260101, or OpenAI's -2026-08-07 (E04, ai-agent-19: the
+# openai-mantle adapter names what bedrock-mantle served, e.g. openai.gpt-5.5-2026-08-07).
+_DATED_SNAPSHOT = re.compile(r"-(?:\d{8}|\d{4}-\d{2}-\d{2})$")
 _BEDROCK_VERSION = re.compile(r"-v\d+(?::\d+)?$")
+# Vendor namespaces of Bedrock and bedrock-mantle ids, with any region prefix before them.
+_MODEL_NAMESPACES = ("anthropic.", "openai.")
 
 
 def _bare_model(model_id: str) -> str:
-    """anthropic.claude-opus-5 / us.anthropic.claude-opus-5-v1:0 -> claude-opus-5."""
-    bare = model_id.rsplit("anthropic.", 1)[-1]
+    """anthropic.claude-opus-5 / us.anthropic.claude-opus-5-v1:0 -> claude-opus-5;
+    openai.gpt-5.5 / global.openai.gpt-5.5 -> gpt-5.5."""
+    bare = model_id
+    for namespace in _MODEL_NAMESPACES:
+        if namespace in bare:
+            bare = bare.rsplit(namespace, 1)[-1]
+            break
     return _BEDROCK_VERSION.sub("", bare)
 
 
 def model_matches(requested: str, served: str) -> bool:
-    """The served id is the requested model, or its dated snapshot (claude-opus-5-20260101).
-    claude-opus-5-5 does not match claude-opus-5."""
+    """The served id is the requested model, or its dated snapshot (claude-opus-5-20260101,
+    openai.gpt-5.5-2026-08-07). claude-opus-5-5 does not match claude-opus-5, gpt-5.5-mini not gpt-5.5."""
     want, got = _bare_model(requested), _bare_model(served)
     return got == want or (got.startswith(want) and bool(_DATED_SNAPSHOT.fullmatch(got[len(want) :])))
 

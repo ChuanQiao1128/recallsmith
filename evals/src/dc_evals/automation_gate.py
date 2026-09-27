@@ -49,7 +49,7 @@ from .drafts_import import AUTHOR_CONFIG_ID_KEY, RUNNER_AUTHOR_PATH, author_conf
 from .jury import EXCLUDED_ALL_UNSURE, EXCLUDED_TIE, summary_path
 from .labels import labels_for
 from .report import _UNSAFE, read_run, unique_stem
-from .runner import AUTOMATION_PROFILE, AUTOMATION_PROMPT_VERSION
+from .runner import AUTOMATION_PROFILE, AUTOMATION_PROMPT_VERSION, model_matches
 from .score import (
     MIN_GATE_REPS,
     SHIPPING_ENV_PATH,
@@ -496,6 +496,32 @@ def served_models(*record_lists: list[dict[str, Any]]) -> list[str]:
     return sorted({r["servedModel"] for records in record_lists for r in records if isinstance(r.get("servedModel"), str)})
 
 
+def _served_model_failures(which: str, header: dict[str, Any], records: list[dict[str, Any]]) -> list[str]:
+    """E04 (ai-agent-19): on openai-mantle, whose adapter names the model bedrock-mantle served
+    (ai_qa.openai_mantle_client.served_model), every scored item must carry that id and it must be
+    the gated model or its dated snapshot (runner.model_matches), as score --gate requires of the
+    human gate. A missing id fails closed: a rerouted model would otherwise go unnoticed.
+    bedrock-converse replies carry no model id, so there is nothing to check on that provider."""
+    if header.get("provider") != OPENAI_MANTLE_PROVIDER:
+        return []
+    requested = str(header.get("model") or "")
+    scored = [r for r in records if is_scored(r)]
+    missing = sum(1 for r in scored if not isinstance(r.get("servedModel"), str) or not r["servedModel"])
+    wrong = sorted(
+        {
+            r["servedModel"]
+            for r in scored
+            if isinstance(r.get("servedModel"), str) and r["servedModel"] and not model_matches(requested, r["servedModel"])
+        }
+    )
+    failures = []
+    if missing:
+        failures.append(f"{which} run: {missing} scored items carry no verified served model id")
+    if wrong:
+        failures.append(f"{which} run: scored items were served by {', '.join(wrong)}, not the gated model {requested!r}")
+    return failures
+
+
 def _reps(header: dict[str, Any]) -> int:
     return int(header.get("reps") or 1)
 
@@ -512,8 +538,35 @@ def _completeness_failures(which: str, header: dict[str, Any], n: int, rows: int
     return failures
 
 
-def _jury_failures(spec: DatasetSpec, reviewer_model: str | None) -> list[str]:
-    """The authored labels must come from jurors outside the reviewer's vendor."""
+def author_vendors(rows: list[dict[str, Any]]) -> list[str]:
+    """E04 (ai-agent-25): the vendors of the authored-v2 authors. Both paths are Claude: docs rows
+    come from `dc-evals author` and new-facts rows from the author-runner's claude CLI, so
+    "anthropic" is always one, plus the vendor of every recorded author model (the docs rows'
+    authorModel, the new-facts rows' authorConfig.model)."""
+    vendors = {"anthropic"}
+    for row in rows:
+        config = row.get("authorConfig")
+        models = [row.get("authorModel"), config.get("model") if isinstance(config, dict) else None]
+        vendors.update(v for v in (vendor_of(m) for m in models if isinstance(m, str)) if v)
+    return sorted(vendors)
+
+
+# Juror providers that only serve Anthropic models, whatever the model string says.
+_ANTHROPIC_JUROR_PROVIDERS = frozenset({"claude-cli", "anthropic"})
+
+
+def juror_vendor(juror: str) -> str | None:
+    """The vendor of a jury summary's `provider:model` juror name."""
+    provider, _, model = str(juror).partition(":")
+    if provider in _ANTHROPIC_JUROR_PROVIDERS:
+        return "anthropic"
+    return vendor_of(model or str(juror))
+
+
+def _jury_failures(spec: DatasetSpec, reviewer_model: str | None, authors: list[str]) -> list[str]:
+    """The authored labels must come from jurors outside the reviewer's vendor and outside the
+    authors' vendors (E04, ai-agent-25: a juror of the author's family shares its blind spots and
+    prefers its drafts), and the summary must name them."""
     if spec.labels_path is None:
         return []
     summary_file = summary_path(spec.labels_path)
@@ -523,12 +576,21 @@ def _jury_failures(spec: DatasetSpec, reviewer_model: str | None) -> list[str]:
         jurors = json.loads(summary_file.read_text(encoding="utf-8")).get("jurors") or []
     except (ValueError, AttributeError):
         jurors = []
+    if not isinstance(jurors, list) or not jurors:
+        return [
+            f"authored run: the jury summary {_shown(summary_file, EVALS_ROOT)} names no jurors; the labels' "
+            "independence cannot be checked"
+        ]
     vendor = vendor_of(reviewer_model)
     failures = []
     for juror in jurors:
-        _, _, model = str(juror).partition(":")
-        if vendor is not None and vendor_of(model or str(juror)) == vendor:
+        juror_is = juror_vendor(juror)
+        if vendor is not None and juror_is == vendor:
             failures.append(f"juror {juror} shares the reviewer's vendor {vendor}; the authored labels are not independent")
+        elif juror_is in authors:
+            failures.append(
+                f"juror {juror} shares the author's vendor {juror_is}; the authored labels are not independent"
+            )
     return failures
 
 
@@ -693,7 +755,9 @@ def evaluate_gate(
             )
         authored_rows = len(load_rows(authored_spec))
     failures += _completeness_failures("authored", authored_header, len(authored_records), authored_rows)
-    failures += _jury_failures(authored_spec, authored_header.get("model"))
+    failures += _served_model_failures("seeded", seeded_header, seeded_records)
+    failures += _served_model_failures("authored", authored_header, authored_records)
+    failures += _jury_failures(authored_spec, authored_header.get("model"), author_vendors(_authored_rows(authored_spec)))
 
     # seeded thresholds
     seeded = seeded_metrics(seeded_header, seeded_records, seeded_spec)
