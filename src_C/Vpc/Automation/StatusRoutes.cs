@@ -198,14 +198,16 @@ public static class StatusRoutes
           count(*) filter (where status = 'sent' and sent_at >= now() - interval '24 hours') as sent_24h,
           count(*) filter (where status = 'failed' and updated_at >= now() - interval '24 hours') as failed_24h,
           count(*) filter (where status in ('queued', 'enqueue_failed')) as queued,
+          count(*) filter (where status = 'queued' and attempts > 0 and updated_at < now() - make_interval(mins => $1)) as unconfirmed,
           max(sent_at) filter (where status = 'sent') as last_sent_at
         from automation_notifications
-        """, []))[0];
+        """, [Notifications.UnconfirmedAfterMinutes]))[0];
       var notifications = new
       {
         sent24h = RunnerRoutes.Long(n["sent_24h"]),
         failed24h = RunnerRoutes.Long(n["failed_24h"]),
         queued = RunnerRoutes.Long(n["queued"]),
+        unconfirmed = RunnerRoutes.Long(n["unconfirmed"]),
         lastSentAt = RunnerRoutes.Timestamp(n["last_sent_at"]),
       };
 

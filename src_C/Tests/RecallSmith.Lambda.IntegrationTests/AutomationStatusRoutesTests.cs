@@ -40,7 +40,7 @@ public sealed class AutomationStatusRoutesTests
       "publishes7d": { "byState": { "<state>": 0 } },
       "spend": { "todayUsd": 0, "automationTodayUsd": 0, "reservedUsd": 0, "dailyCapUsd": 10 },
       "watch": { "targets": 0, "active": 0, "failing": 0, "lastCheckedAt": null, "changes7d": 0 },
-      "notifications": { "sent24h": 0, "failed24h": 0, "queued": 0, "lastSentAt": null } }
+      "notifications": { "sent24h": 0, "failed24h": 0, "queued": 0, "unconfirmed": 0, "lastSentAt": null } }
     """;
 
   private static readonly string[] RunnerKeys =
@@ -344,6 +344,12 @@ public sealed class AutomationStatusRoutesTests
           (gen_random_uuid(), 'test', 'Synthetic queued', 'body', 'dry_run', 'queued', null, now(), now()),
           (gen_random_uuid(), 'test', 'Synthetic enqueue failed', 'body', 'dry_run', 'enqueue_failed', null, now(), now())
         """);
+      // R18B K6: sent to SQS two hours ago (attempts 1) and never reported: unconfirmed, and still counted as queued.
+      await db.QueryAsync(
+        """
+        insert into automation_notifications (notification_id, kind, subject, body_text, mode, status, attempts, created_at, updated_at)
+        values (gen_random_uuid(), 'test', 'Synthetic unconfirmed', 'body', 'dry_run', 'queued', 1, now() - interval '2 hours', now() - interval '2 hours')
+        """);
 
       var data = await DataAsync(StatusPath);
 
@@ -415,7 +421,8 @@ public sealed class AutomationStatusRoutesTests
       var notifications = data.GetProperty("notifications");
       Assert.Equal(1, notifications.GetProperty("sent24h").GetInt64());
       Assert.Equal(1, notifications.GetProperty("failed24h").GetInt64());
-      Assert.Equal(2, notifications.GetProperty("queued").GetInt64());
+      Assert.Equal(3, notifications.GetProperty("queued").GetInt64());
+      Assert.Equal(1, notifications.GetProperty("unconfirmed").GetInt64());
       Assert.EndsWith("Z", notifications.GetProperty("lastSentAt").GetString());
       Assert.DoesNotContain("@", data.GetProperty("notifications").GetRawText());
 

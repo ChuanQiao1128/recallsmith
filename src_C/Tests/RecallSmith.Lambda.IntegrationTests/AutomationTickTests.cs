@@ -740,11 +740,65 @@ public class AutomationTickTests
 
       Assert.Equal(1, Action(data, "notificationsResent"));
       var row = (await sql.QueryAsync("select status, attempts, error_code from automation_notifications where notification_id = $1", failed)).Single();
-      Assert.Equal(("queued", 1), ((string)row["status"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture)));
+      // The not-configured enqueue was attempt 1 (R18B K6), the resend attempt 2.
+      Assert.Equal(("queued", 2), ((string)row["status"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture)));
       Assert.Null(row["error_code"]);
       Assert.Equal("enqueue_failed", await sql.ScalarAsync("select status from automation_notifications where notification_id = $1", exhausted));
       var message = Assert.Single(A04Kit.Messages(scope));
       Assert.Equal(failed, message.GetProperty("notificationId").GetGuid());
+    });
+  }
+
+  [Fact]
+  public async Task Tick_NeverResendsAQueuedNotification()
+  {
+    // R18B K6 (backend-design-5, cloud-security-resilience-2): the SQS send succeeded, only the notifier's report is
+    // missing. Sending again would be a second email from another container; SQS redelivery and the DLQ own retries.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      Guid queued;
+      await using (var conn = await sql.OpenAsync())
+      {
+        queued = (await Notifications.EnqueueAsync(conn, new NotificationRequest("test", null, "it-b02:unconfirmed", "dry_run",
+          EmailTemplates.Test("dry_run", "https://console.example.com"))))!.NotificationId;
+      }
+      Assert.Single(A04Kit.Messages(scope));
+      await sql.QueryAsync("update automation_notifications set updated_at = now() - interval '3 hours' where notification_id = $1", queued);
+
+      var data = await TickDataAsync();
+
+      Assert.Equal(0, Action(data, "notificationsResent"));
+      Assert.Single(A04Kit.Messages(scope));
+      var row = (await sql.QueryAsync("select status, attempts from automation_notifications where notification_id = $1", queued)).Single();
+      Assert.Equal(("queued", 1), ((string)row["status"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture)));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_NotConfiguredResends_AreBoundedByMaxSendAttempts()
+  {
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      scope.Set(AutomationEnv.NotifyQueueUrlEnv, null);
+      Guid id;
+      await using (var conn = await sql.OpenAsync())
+      {
+        id = (await Notifications.EnqueueAsync(conn, new NotificationRequest("test", null, "it-b02:not-configured", "dry_run",
+          EmailTemplates.Test("dry_run", "https://console.example.com"))))!.NotificationId;
+        var gauges = 0;
+        for (var i = 0; i < Notifications.MaxSendAttempts + 3; i++)
+        {
+          var stdout = await EmfCapture.StdoutAsync(async () => await Notifications.ResendAsync(conn, 10));
+          gauges += (int)EmfCapture.GaugeSum(stdout, Notifications.EnqueueFailuresMetric);
+        }
+        // The first enqueue was attempt 1: the tick retries it MaxSendAttempts - 1 times, then never again.
+        Assert.Equal(Notifications.MaxSendAttempts - 1, gauges);
+      }
+      var row = (await sql.QueryAsync("select status, attempts, error_code from automation_notifications where notification_id = $1", id)).Single();
+      Assert.Equal(("enqueue_failed", Notifications.MaxSendAttempts, "NOTIFY_NOT_CONFIGURED"),
+        ((string)row["status"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture), (string)row["error_code"]!));
     });
   }
 
