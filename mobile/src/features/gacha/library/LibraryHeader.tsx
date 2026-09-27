@@ -240,7 +240,7 @@ export function LibraryHeader({
         <Pressable
           testID="library-mistakes-pill"
           accessibilityRole="button"
-          accessibilityLabel={`Open Mistake Book, ${mistakeCount} to review`}
+          accessibilityLabel={`Open Mistake Book, ${mistakeCount} mistake${mistakeCount === 1 ? '' : 's'}`}
           style={({ pressed }) => [styles.mistakesPill, pressed && styles.pressed]}
           onPress={onOpenMistakes}
         >

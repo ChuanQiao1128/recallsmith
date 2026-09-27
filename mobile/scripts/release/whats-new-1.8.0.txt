@@ -1,4 +1,4 @@
-• New Mistake Book: cards you rated Again or answered wrong collect in one place (open it from the Library or More). Review them together with a few related cards from the same topic, and a card leaves the book once you get it right twice in a row.
+• New Mistake Book: cards you rated Again or answered wrong collect in one place (open it from the Library or More). Review them together with a few related cards from the same topic, and a card leaves the book once you get it right on two different days.
 • Cards with a cited source now show a Source link under the answer, with the quoted line, so you can check the fact yourself.
 • A new pack opening: the pack charges up three times, bursts open, and your card flies out full size with a rarity glow, banner and the whole question readable. A 10-pull now reveals each card in turn, then shows all ten in a grid.
 • Pulls now belong to the pack that earned them: learning a new card or clearing a pack's reviews adds pulls to that pack, and every new pack starts with 3 pulls of its own.

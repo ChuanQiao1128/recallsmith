@@ -16,7 +16,7 @@ export const MISTAKE_WINDOW_DAYS = 30;
 
 const DAY_MS = 86_400_000;
 /** Consecutive good/easy ratings, each on a different local calendar day, that resolve an entry. */
-const RESOLVE_STREAK = 2;
+export const RESOLVE_STREAK = 2;
 
 export type MistakeOutcome = {
   deckSlug: string;
