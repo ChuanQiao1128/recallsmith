@@ -344,6 +344,7 @@ def _report(
     *,
     target: str,
     profile: str,
+    effort: str | None,
 ) -> bool:
     body: dict[str, Any] = {
         "v": 1,
@@ -360,6 +361,10 @@ def _report(
         body["target"] = target
     if profile == profiles.AUTOMATION_PROFILE:
         body["profile"] = profile
+        # The effort this reviewer ran at, matched by core against the gate's reviewer effort at a
+        # live auto-accept (contract N2/O1). None only when no reviewer settings exist (CONFIG).
+        if effort is not None:
+            body["effectiveEffort"] = effort
     remaining = _remaining_s(context)
     budget = None if remaining is None else max(0.0, remaining - REPORT_BUDGET_RESERVE_S)
     # Read only if core rejects the signature: present only during a rotation (README, "Route-secret
@@ -450,12 +455,25 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
         _retry_soon(record, msg)
         return False
 
+    # providers.effective_effort, the same value evals records as the gate's reviewer effort.
+    report_effort = effective_effort(cfg_used) if cfg_used is not None else None
+
     def finish(items: list[dict[str, Any]]) -> bool:
         """Report the items. On failure keep them for the redelivery and bring it back soon."""
         if not items:
             return True  # every card was already reported by an earlier delivery of this chunk
         ok = _report(
-            msg, provider, model, items, secret, secret_name, core_api_base, context, target=target, profile=profile
+            msg,
+            provider,
+            model,
+            items,
+            secret,
+            secret_name,
+            core_api_base,
+            context,
+            target=target,
+            profile=profile,
+            effort=report_effort,
         )
         if ok:
             _remember_reported(msg, items)
