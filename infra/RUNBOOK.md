@@ -177,14 +177,32 @@ send it back unchanged except for the state:
    (or `--state DISABLED`).
 3. `aws scheduler get-schedule --name <n> --query State` shows the new state.
 
-**After enabling the tick and the source watch**, enable the actions of their heartbeat alarms (they start
-disabled because the schedules start disabled; Terraform ignores `actions_enabled`):
+**After enabling the tick and the source watch**, and once each heartbeat alarm reads `OK` after its first
+heartbeat, enable the actions of their heartbeat alarms (they start disabled because the schedules start
+disabled; Terraform ignores `actions_enabled`, so no apply ever enables them):
 `aws cloudwatch enable-alarm-actions --alarm-names developercards-prod-automation-tick-missing developercards-prod-source-watch-missing`.
 When a schedule is disabled on purpose, first run `aws cloudwatch disable-alarm-actions --alarm-names <its alarm>`
 (`developercards-automation-tick` → `developercards-prod-automation-tick-missing`, two hours;
 `developercards-source-watch` → `developercards-prod-source-watch-missing`, three hours), or it fires.
 Re-enable the alarm's actions together with its schedule; a schedule left disabled with its alarm's
 actions on is exactly what the alarm reports.
+
+**Upgrading a running system (R18D, 2026-09-28).** Production's schedules were enabled at the R18A/B/C
+dry_run deploy, so the step above is behind it, and the D04 apply created
+`developercards-prod-source-watch-missing` with its actions **disabled**; Terraform ignores
+`actions_enabled` (`alarms_r18a.tf`, `ignore_changes`), so no apply turns them on. Once, in this order
+(the pre-round-D watcher emits no `SourceWatchRuns`, and with missing data breaching, actions enabled
+before the new watcher runs page within about three hours):
+
+- [ ] Deploy source-watcher with the round-D (D03) code (`DRY_RUN=1 services/deploy-python-lambda.sh source-watcher`, then without `DRY_RUN=1`).
+- [ ] After the next hourly run, confirm one heartbeat:
+      `aws cloudwatch get-metric-statistics --namespace DeveloperCards --metric-name SourceWatchRuns --dimensions Name=Service,Value=source-watcher --start-time <UTC now − 2 h> --end-time <UTC now> --period 3600 --statistics Sum`
+      shows `Sum` ≥ 1, or the alarm's `StateValue` (`aws cloudwatch describe-alarms --alarm-names developercards-prod-source-watch-missing`) is `OK`, not `INSUFFICIENT_DATA` or `ALARM`.
+- [ ] `aws cloudwatch enable-alarm-actions --alarm-names developercards-prod-source-watch-missing`
+      (the tick alarm, `developercards-prod-automation-tick-missing`, had its actions enabled with the schedules; check
+      `ActionsEnabled` of both with `describe-alarms`).
+
+The business-side checklist is in docs/runbooks/automation-operations.md, "Upgrading a running system".
 
 **Post-apply secret step** (supervisor, once after the A10 apply; A00 §1.3): the two callback
 secrets are created as `PLACEHOLDER-set-by-supervisor`. Set each to a random 32-byte hex value:
@@ -212,7 +230,8 @@ Alarms (all on the alerts topic; one line each — what fired, first check):
 - `source-watch-missing` (R18D M6) — the source-watcher emitted no `SourceWatchRuns` heartbeat
   (`DeveloperCards`, `Service = source-watcher`; one per `{"job":"source-watch"}` invocation, emitted
   before any other work, also when there is nothing to watch) for three hours (actions enabled only once
-  the schedules are). The hourly watch stopped: cited-source changes are no longer detected. Check
+  the schedules are and the alarm is `OK`; on a system whose schedules were already enabled, see "Upgrading a
+  running system (R18D)" above). The hourly watch stopped: cited-source changes are no longer detected. Check
   `developercards-source-watch` is ENABLED (for example left DISABLED after emergency-stop step 1), the
   scheduler role's `developercards-automation-scheduler-invoke` policy on the
   `developercards-source-watcher:prod` alias, and the function's throttles (reserved concurrency 1).
