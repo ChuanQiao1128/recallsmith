@@ -9,6 +9,8 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import random
+from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
 
@@ -28,19 +30,71 @@ RETRY_WINDOW_SECONDS = 420
 CALL_TIMEOUT_RESERVE_SECONDS = 30
 REPORT_BUDGET_RESERVE_S = 2.0
 
+# After a retryable provider error the message comes back after this many seconds (plus jitter)
+# instead of the queue's 3600 s visibility, so a rate-limit blip does not stall the run for an hour.
+RETRY_VISIBILITY_MIN_SECONDS = 60
+RETRY_VISIBILITY_MAX_SECONDS = 120
+# Cards already reported by this container, so a redelivered chunk does not pay for them twice.
+REPORTED_CACHE_MAX = 2000
+
 FAIL_FAST_CODES = frozenset({"PROVIDER_AUTH", "PROVIDER_ACCESS_DENIED", "CONFIG"})
 RETRYABLE_CODES = frozenset({"PROVIDER_RATE_LIMITED", "PROVIDER_ERROR", "PROVIDER_TIMEOUT"})
 
 # Seams for tests (monkeypatched); production uses the real client factory and HTTP client.
 client_factory = make_client
 internal_client_factory = InternalClient
+jitter = random.uniform
 
 # Model clients are cached per container, keyed by what makes them differ.
 _client_cache: dict[tuple[str, str, str | None], Any] = {}
 
 
+# (runId, chunk, cardId, contentSha256, promptVersion) of items this container has reported with a
+# 200. The results route never downgrades a done item, so re-reviewing one would only cost money.
+_reported: OrderedDict[tuple[str, int, int, str, str], None] = OrderedDict()
+
+
 def reset_client_cache() -> None:
     _client_cache.clear()
+    _reported.clear()
+
+
+def _reported_key(msg: Mapping[str, Any], card: Mapping[str, Any]) -> tuple[str, int, int, str, str]:
+    return (msg["runId"], msg["chunk"], card["cardId"], card["contentSha256"], PROMPT_VERSION)
+
+
+def _remember_reported(msg: Mapping[str, Any], items: list[dict[str, Any]]) -> None:
+    for item in items:
+        _reported[_reported_key(msg, item)] = None
+        _reported.move_to_end(_reported_key(msg, item))
+    while len(_reported) > REPORTED_CACHE_MAX:
+        _reported.popitem(last=False)
+
+
+def queue_url_from_arn(arn: str) -> str:
+    """arn:aws:sqs:<region>:<account>:<name> → https://sqs.<region>.amazonaws.com/<account>/<name>."""
+    parts = arn.split(":")
+    if len(parts) != 6 or parts[2] != "sqs":
+        raise ValueError("not an SQS queue ARN")
+    _, _, _, region, account, name = parts
+    return f"https://sqs.{region}.amazonaws.com/{account}/{name}"
+
+
+def _retry_soon(record: Mapping[str, Any], msg: Mapping[str, Any]) -> None:
+    """Shorten the failed message's visibility so SQS redelivers it in 60-120 s. Best effort."""
+    arn = record.get("eventSourceARN")
+    receipt = record.get("receiptHandle")
+    if not isinstance(arn, str) or not isinstance(receipt, str):
+        return
+    seconds = int(jitter(RETRY_VISIBILITY_MIN_SECONDS, RETRY_VISIBILITY_MAX_SECONDS))
+    try:
+        settings.sqs_client().change_message_visibility(
+            QueueUrl=queue_url_from_arn(arn), ReceiptHandle=receipt, VisibilityTimeout=seconds
+        )
+    except Exception as exc:
+        log("warn", "ai-qa", event="visibility_failed", runId=msg["runId"], chunk=msg["chunk"], errorClass=type(exc).__name__)
+        return
+    log("info", "ai-qa", event="retry_scheduled", runId=msg["runId"], chunk=msg["chunk"], visibilitySeconds=seconds)
 
 
 def _is_int(value: Any) -> bool:
@@ -242,7 +296,12 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
         return False
 
     def finish(items: list[dict[str, Any]]) -> bool:
-        return _report(msg, provider, model, items, secret, core_api_base, context)
+        if not items:
+            return True  # every card was already reported by an earlier delivery of this chunk
+        ok = _report(msg, provider, model, items, secret, core_api_base, context)
+        if ok:
+            _remember_reported(msg, items)
+        return ok
 
     def fill(code: str, status: str = "error", start: int = 0) -> list[dict[str, Any]]:
         items = [_empty_item(card, status, code) for card in cards[start:]]
@@ -266,6 +325,9 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
 
     items: list[dict[str, Any]] = []
     for index, card in enumerate(cards):
+        if _reported_key(msg, card) in _reported:
+            log("info", "ai-qa", event="card_already_reported", runId=msg["runId"], chunk=msg["chunk"], cardId=card["cardId"])
+            continue
         remaining = _remaining_s(context)
         if remaining is not None and remaining < DEADLINE_MARGIN_SECONDS:
             item, calls = _empty_item(card, "error", "PROVIDER_TIMEOUT"), 0
@@ -289,8 +351,9 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
             items.extend(fill(code, start=index + 1))
             return finish(items)
         if code in RETRYABLE_CODES:
-            if items:
-                finish(items)
+            # Report what finished (remembered, so the redelivery skips it), then come back soon.
+            finish(items)
+            _retry_soon(record, msg)
             return False
         items.append(item)
 

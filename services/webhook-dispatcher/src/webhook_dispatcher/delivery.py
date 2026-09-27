@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import socket
 import ssl
+import threading
 import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -46,6 +47,19 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
         self.sock = socket.create_connection((self._connect_address, self.port), self.timeout)
 
 
+def _abort(conn: http.client.HTTPConnection, fired: threading.Event) -> None:
+    """Deadline watchdog: shut the socket down so a blocked send or recv returns at once."""
+    fired.set()
+    sock = conn.sock
+    if sock is None:
+        return
+    try:
+        # The plain socket method: SSLSocket.shutdown would also drop the TLS object under the reader.
+        socket.socket.shutdown(sock, socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 def post_json(
     url: str,
     body: bytes,
@@ -54,7 +68,12 @@ def post_json(
     *,
     connect_address: str,
 ) -> HttpResult:
-    """POST body once. Redirects are never followed; the response body is read (≤64 KiB) and dropped."""
+    """POST body once. Redirects are never followed; the response body is read (≤64 KiB) and dropped.
+
+    `timeout` bounds the whole attempt (connect, send, status line, headers and body), not only each
+    socket operation: a receiver that trickles bytes is cut off at the deadline and the attempt is a
+    retryable timeout.
+    """
     started = time.monotonic()
 
     def elapsed() -> int:
@@ -81,10 +100,19 @@ def post_json(
     except ValueError as exc:
         return HttpResult(None, f"connection error: {type(exc).__name__}", False, 0)
 
+    fired = threading.Event()
+    watchdog = threading.Timer(timeout, _abort, args=(conn, fired))
+    watchdog.daemon = True
+    watchdog.start()
     try:
+        conn.connect()
+        if fired.is_set():  # the deadline passed while connecting, before there was a socket to shut
+            return HttpResult(None, "timeout", True, elapsed())
         conn.request("POST", target, body=body, headers=headers)
         response = conn.getresponse()
         status = response.status
+        if fired.is_set():
+            return HttpResult(None, "timeout", True, elapsed())
         try:
             response.read(MAX_RESPONSE_BYTES)
         except (TimeoutError, OSError, http.client.HTTPException):
@@ -93,8 +121,11 @@ def post_json(
     except TimeoutError:
         return HttpResult(None, "timeout", True, elapsed())
     except (OSError, http.client.HTTPException) as exc:
+        if fired.is_set():
+            return HttpResult(None, "timeout", True, elapsed())
         return HttpResult(None, f"connection error: {type(exc).__name__}", False, elapsed())
     finally:
+        watchdog.cancel()
         conn.close()
 
 

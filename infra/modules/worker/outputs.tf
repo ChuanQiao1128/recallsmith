@@ -57,3 +57,11 @@ output "ai_qa_dlq_name" {
 output "ai_qa_function_name" {
   value = aws_lambda_function.ai_qa.function_name
 }
+
+output "webhook_queue_name" {
+  value = aws_sqs_queue.webhook_events.name
+}
+
+output "ai_qa_queue_name" {
+  value = aws_sqs_queue.ai_qa_jobs.name
+}

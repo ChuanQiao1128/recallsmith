@@ -40,9 +40,12 @@ locals {
     options_ai            = { route_key = "OPTIONS /api/v1/ai/{proxy+}", integration = "core_vpc", auth = "none" }
     options_billing       = { route_key = "OPTIONS /api/v1/billing/{proxy+}", integration = "core_vpc", auth = "none" }
     # R18 J05: server-to-server HMAC route (no JWT, no OPTIONS); the narrow key wins over proxy.
-    internal_webhooks = { route_key = "POST /api/internal/webhooks/{proxy+}", integration = "core_vpc", auth = "none" }
-    # R18 J15: HMAC callback from the ai-qa Lambda (no JWT, no OPTIONS).
-    internal_ai_qa = { route_key = "POST /api/internal/ai-qa/{proxy+}", integration = "core_vpc", auth = "none" }
+    # R18 X08: exact keys, never {proxy+}. A greedy key let /api/internal/webhooks/x/<any path>
+    # reach core-vpc without the JWT, where suffix routing picked the handler; with exact keys
+    # every other /api/internal/* path falls to ANY /{proxy+} and keeps the console JWT.
+    internal_webhooks = { route_key = "POST /api/internal/webhooks/deliveries/report", integration = "core_vpc", auth = "none" }
+    # R18 J15: HMAC callback from the ai-qa Lambda (no JWT, no OPTIONS). Exact key (X08).
+    internal_ai_qa = { route_key = "POST /api/internal/ai-qa/results", integration = "core_vpc", auth = "none" }
   }
 
   integration_ids = {
@@ -57,12 +60,12 @@ locals {
 
   # Lower per-route throttles layered over each stage's validated default (Changes 4).
   route_throttles = {
-    "ANY /api/v1/sync/{proxy+}"             = { burst = 40, rate = 20 }
-    "ANY /api/v1/draw-state/{proxy+}"       = { burst = 40, rate = 20 }
-    "POST /webhooks/revenuecat/production"  = { burst = 20, rate = 10 }
-    "POST /webhooks/revenuecat/development" = { burst = 10, rate = 5 }
-    "POST /api/internal/webhooks/{proxy+}"  = { burst = 20, rate = 10 }
-    "POST /api/internal/ai-qa/{proxy+}"     = { burst = 20, rate = 10 }
+    "ANY /api/v1/sync/{proxy+}"                     = { burst = 40, rate = 20 }
+    "ANY /api/v1/draw-state/{proxy+}"               = { burst = 40, rate = 20 }
+    "POST /webhooks/revenuecat/production"          = { burst = 20, rate = 10 }
+    "POST /webhooks/revenuecat/development"         = { burst = 10, rate = 5 }
+    "POST /api/internal/webhooks/deliveries/report" = { burst = 20, rate = 10 }
+    "POST /api/internal/ai-qa/results"              = { burst = 20, rate = 10 }
   }
 }
 

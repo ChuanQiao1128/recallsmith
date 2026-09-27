@@ -63,3 +63,36 @@ def test_empty_value_and_ssm_errors_count_as_missing(capsys) -> None:
     out = capsys.readouterr().out
     assert "RuntimeError" in out
     assert "boom" not in out and "test-secret" not in out
+
+
+def test_loaded_secret_expires_after_the_ttl(monkeypatch) -> None:
+    name = "/developercards/prod/webhook-signing-secret"
+    t = [1000.0]
+    monkeypatch.setattr(settings, "clock", lambda: t[0])
+    ssm = FakeSSM({name: "whsec-old"})
+    assert settings.load_secret(name, ssm) == "whsec-old"
+    ssm.values[name] = "whsec-new"
+    t[0] += settings.SECRET_TTL_SECONDS - 1
+    assert settings.load_secret(name, ssm) == "whsec-old"
+    assert len(ssm.calls) == 1
+    t[0] += 1
+    # A rotation reaches a warm container within the TTL (≤ 5 minutes).
+    assert settings.load_secret(name, ssm) == "whsec-new"
+    assert len(ssm.calls) == 2
+    assert settings.SECRET_TTL_SECONDS <= 300
+
+
+def test_optional_secret_absence_is_cached_for_the_ttl(monkeypatch, capsys) -> None:
+    name = settings.previous_secret_name("/developercards/prod/webhook-signing-secret")
+    assert name == "/developercards/prod/webhook-signing-secret-previous"
+    t = [50.0]
+    monkeypatch.setattr(settings, "clock", lambda: t[0])
+    ssm = FakeSSM(error=RuntimeError("ParameterNotFound"))
+    assert settings.load_secret(name, ssm, optional=True) is None
+    assert settings.load_secret(name, ssm, optional=True) is None
+    assert len(ssm.calls) == 1
+    assert "ssm_secret_unavailable" not in capsys.readouterr().out  # debug only
+    ssm.error = None
+    ssm.values[name] = "whsec-old"
+    t[0] += settings.SECRET_TTL_SECONDS
+    assert settings.load_secret(name, ssm, optional=True) == "whsec-old"

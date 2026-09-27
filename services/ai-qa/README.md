@@ -102,6 +102,13 @@ it and structured outputs stay off for the rest of the container.
 `refused`/`REFUSAL` (the `stop_details.category` is logged); anything else ⇒ parse the first text
 block (one surrounding code fence is tolerated). An invalid reply gets **one** repair turn (the
 validation error, ≤ 1000 chars, as a new user message); a second failure is `SCHEMA_INVALID`.
+**The category fixes the severity** (`schema.CATEGORY_SEVERITY`): `incorrect_answer`,
+`multiple_correct` → blocker; `answer_leak`, `ambiguous_stem`, `outdated_fact`,
+`qualifier_mismatch`, `source_unsupported` → major; `weak_distractor`, `other` → minor. The model
+still returns a severity (the schema and prompt are unchanged), but the reported severity is always
+the table's; a disagreement is logged as `severity_mismatch` (card id, count and the
+`category:severity` pairs the model sent). The publish gate (blocker) and `card.flagged`
+(blocker/major) therefore always follow the rubric.
 Findings are sorted blocker → major → minor, capped at 10, `message` truncated to 1000 and
 `suggestedFix` to 2000 characters, and each gets the `cardId` from the message — the model never
 chooses the card.
@@ -134,7 +141,7 @@ sum of these estimates.
 | `PROVIDER_AUTH` | `AuthenticationError` | fail fast: this and every remaining card get the code without calls; report; ack |
 | `PROVIDER_ACCESS_DENIED` | `PermissionDeniedError` (incl. "unsupported countries") | fail fast |
 | `CONFIG` | `NotFoundError`, other 4xx (`BadRequestError` included), invalid settings, missing/placeholder API key, AWS credential errors | fail fast |
-| `PROVIDER_RATE_LIMITED` | `RateLimitError` | retry: report the finished cards (if any), return the message as a batch item failure |
+| `PROVIDER_RATE_LIMITED` | `RateLimitError` | retry: report the finished cards (if any), shorten the message's visibility to 60-120 s, return it as a batch item failure |
 | `PROVIDER_ERROR` | `APIStatusError` ≥ 500 | retry |
 | `PROVIDER_TIMEOUT` | `APITimeoutError` / `APIConnectionError`, or the deadline guard | retry |
 | `SCHEMA_INVALID` | invalid reply after the repair turn | per card; the chunk continues |
@@ -147,6 +154,17 @@ The queue has `maxReceiveCount = 2`: a retried message gets one more attempt, th
 missing internal secret, a failed results report or an unexpected exception returns the message as
 a batch item failure. Any other exception class from the SDK propagates and is treated as
 unexpected.
+
+**Retry scope.** On a retryable exit the handler calls `sqs:ChangeMessageVisibility` (already
+granted) with 60-120 s (random jitter), so the retry comes after about a minute instead of the
+queue's 3600 s visibility. Every item reported with a 200 is remembered per container, keyed by
+`(runId, chunk, cardId, contentSha256, promptVersion)` (at most 2000 keys); a redelivered chunk
+skips those cards — no model call, no second report — and reviews only the rest. When every card
+was already reported, the message is acked without a call. This needs no IAM change and no core
+change; its limit is that a redelivery that lands on a *different* (or recycled) container re-reviews
+the finished cards as before (the results route keeps the first `done`, but overwrites its cost —
+`AiQaResults.cs`). Closing that gap needs core-vpc to return the chunk's done card ids in the
+results response (follow-up, outside this service).
 
 ## Deadline guard
 
@@ -180,6 +198,27 @@ counts — never card text, model output, keys or signatures.
 4. `AI_QA_ENABLED=1` in this `env/prod.env.json` and in core-vpc's `prod.env.json`, then both
    deploys (supervisor: `services/deploy-python-lambda.sh ai-qa`).
 5. Only then, optionally, `AI_QA_REQUIRED=1` on core-vpc (publish gate).
+
+### Emergency stop (runaway spend, provider incident)
+
+`AI_QA_ENABLED` in this function's environment only changes with a deploy: the SQS event source
+mapping targets the `prod` alias, and the deploy script freezes the merged environment into the
+published version, so editing the variable on the function in the console changes nothing in
+production. To stop now (supervisor only):
+
+1. Stop new runs: `AI_QA_ENABLED=0` on core-vpc (its own deploy), or skip this if speed matters.
+2. Stop the consumer; queued chunks stay in the queue (retention 4 days) and resume when re-enabled:
+   - `aws lambda list-event-source-mappings --function-name developercards-ai-qa:prod --query 'EventSourceMappings[].UUID'`
+   - `aws lambda update-event-source-mapping --uuid <uuid> --no-enabled`
+   - or, stopping in-flight retries too: `aws lambda put-function-concurrency --function-name developercards-ai-qa --reserved-concurrent-executions 0`
+3. Undo: `aws lambda update-event-source-mapping --uuid <uuid> --enabled`, and/or
+   `aws lambda put-function-concurrency --function-name developercards-ai-qa --reserved-concurrent-executions 2`
+   (the Terraform value).
+
+A run whose chunks were stopped stays `running` until they are processed or it is failed by
+core-vpc; purge the queue (`aws sqs purge-queue`) only if those runs are to be abandoned. The
+webhook dispatcher has the same procedure (`services/webhook-dispatcher/README.md`, "Emergency
+stop").
 
 ## Local development
 
