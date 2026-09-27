@@ -47,7 +47,7 @@ import {
   revealedVerdict,
   verdictShownFor,
 } from '../lib/automationSurfaces';
-import { wasVerdictSeen } from '../lib/automationVerdictSeen';
+import { verdictSeenElsewhere } from '../lib/automationVerdictSeen';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   DRAFT_NOTE_MAX_LENGTH,
@@ -97,7 +97,7 @@ type Outcome =
  */
 function withVerdictShown<B extends object>(d: Draft, body: B): B & { verdictShown?: boolean } {
   if (!d.automation) return body;
-  return { ...body, verdictShown: verdictShownFor(d.automation, d.status, wasVerdictSeen(d.draftId)) };
+  return { ...body, verdictShown: verdictShownFor(d.automation, d.status, verdictSeenElsewhere(d.draftId)) };
 }
 
 function revealedOf(d: Draft, decision: 'accepted' | 'rejected'): Revealed | null {

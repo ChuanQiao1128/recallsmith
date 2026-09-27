@@ -152,6 +152,15 @@ describe('verdictShown on accept and reject (automation-4)', () => {
     expect(api.rejectDraft.mock.calls[0][1]).toMatchObject({ reason: 'incorrect', verdictShown: true });
   });
 
+  it('sends true when another tab of the browser revealed the verdict (E05 frontend-console-32)', async () => {
+    // Written by the Automation page in another tab: the shared localStorage entry.
+    window.localStorage.setItem('dc.automation.verdictSeen.v1', JSON.stringify([41]));
+    await openReviewWith(WOULD_ACCEPT);
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(api.acceptDraft).toHaveBeenCalledTimes(1));
+    expect(api.acceptDraft.mock.calls[0][1]).toMatchObject({ verdictShown: true });
+  });
+
   it('sends true in live mode, where the verdict always shows', async () => {
     await openReviewWith({ ...WOULD_ACCEPT, state: 'human', reason: 'EXISTING_CARD', mode: 'live' });
     await userEvent.click(screen.getByRole('button', { name: 'Accept' }));

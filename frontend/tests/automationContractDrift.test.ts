@@ -12,6 +12,12 @@
 // review. The reverse check keeps the console from reading a key the server
 // never pins, except the few newer optional keys listed in TOLERATED.
 //
+// E05 frontend-console-31: key shapes alone let an enumeration drift through
+// (the server's AUTHOR_NOT_GATED reason, R18D M1, never reached the console).
+// So the decision and publish reasons and states are read from the server's
+// source (AutomationReasons.cs, StatusRoutes.cs) and compared with the
+// console's lists, in contract order.
+//
 // Hand-written fixtures stay for the page tests; they cannot drift silently any
 // more, because the fixture builders are typed with the normalizer's output.
 
@@ -31,6 +37,7 @@ import {
   listNotifications,
   listQueueItems,
 } from '../src/api/automation';
+import { DECISION_REASONS, DECISION_STATES, PUBLISH_REASONS, PUBLISH_STATES } from '../src/lib/automationRules';
 import { ok } from './support/apiResult';
 
 // A path, not a URL: under jsdom the global URL is jsdom's, which node's fileURLToPath refuses.
@@ -41,6 +48,19 @@ const SERVER_TESTS = resolve(
 
 function serverTest(name: string): string {
   return readFileSync(resolve(SERVER_TESTS, name), 'utf8');
+}
+
+const SERVER_AUTOMATION = resolve(dirname(fileURLToPath(import.meta.url)), '../../src_C/Vpc/Automation');
+
+function serverSource(name: string): string {
+  return readFileSync(resolve(SERVER_AUTOMATION, name), 'utf8');
+}
+
+/** The strings of `public static readonly IReadOnlyList<string> <name> = [ … ];` in a C# source file. */
+function serverList(source: string, name: string): string[] {
+  const match = new RegExp(`IReadOnlyList<string>\\s+${name}\\s*=\\s*\\[([\\s\\S]*?)\\];`).exec(source);
+  if (!match) throw new Error(`the server no longer declares ${name}`);
+  return [...match[1].matchAll(/"([^"]+)"/g)].map(m => m[1]);
 }
 
 /** The strings of `private static readonly string[] <name> = [ … ];` (or `{ … };`) in a C# test file. */
@@ -77,11 +97,14 @@ const IGNORED: Record<string, string[]> = {};
 
 /**
  * Keys the console reads that the server pins do not list yet: optional
- * R18D keys the console tolerates the absence of (M1 authorConfigId, M2 live).
+ * R18D keys the console tolerates the absence of (M2 live). N1 (R18E) makes
+ * the server pin evalGate.authorConfigId in GateKeys (src_C's side of
+ * frontend-console-31); once it does, the tolerance ends by itself and the
+ * check is exact, so the key can never again hide behind this list.
  */
 const TOLERATED: Record<string, string[]> = {
   status: ['live'],
-  evalGate: ['authorConfigId'],
+  evalGate: GATE_KEYS.includes('authorConfigId') ? [] : ['authorConfigId'],
 };
 
 /** A raw object with every pinned key; '1' reads as text, as a number and as an id. */
@@ -238,5 +261,37 @@ describe('the blind shadow and live keys on the wire (frontend-console-22, M2)',
   it('keeps a null override rate null', async () => {
     answer(ok({ ...base, live: { autoAccepted30d: 0, deletedByPerson: 0, editedByPerson: 0, overrideRate: null } }));
     expect((await fetchAutomationStatus()).data?.live?.overrideRate).toBeNull();
+  });
+});
+
+describe('the console knows every reason and state the server does (frontend-console-31)', () => {
+  const reasons = serverSource('AutomationReasons.cs');
+  const statusRoutes = serverSource('StatusRoutes.cs');
+
+  it('reads the lists from the server source', () => {
+    // A broken extraction would make every check below vacuous.
+    expect(serverList(reasons, 'DecisionReasons')).toContain('QA_FLAGGED');
+    expect(serverList(statusRoutes, 'DecisionStates')).toContain('would_accept');
+  });
+
+  it('DECISION_REASONS equals AutomationReasons.DecisionReasons, AUTHOR_NOT_GATED included', () => {
+    expect([...DECISION_REASONS]).toEqual(serverList(reasons, 'DecisionReasons'));
+    expect(DECISION_REASONS).toContain('AUTHOR_NOT_GATED');
+  });
+
+  it('PUBLISH_REASONS equals AutomationReasons.PublishReasons', () => {
+    expect([...PUBLISH_REASONS]).toEqual(serverList(reasons, 'PublishReasons'));
+  });
+
+  it("DECISION_STATES and PUBLISH_STATES equal StatusRoutes' state lists", () => {
+    expect([...DECISION_STATES]).toEqual(serverList(statusRoutes, 'DecisionStates'));
+    expect([...PUBLISH_STATES]).toEqual(serverList(statusRoutes, 'PublishStates'));
+  });
+
+  it('keeps the gate author id on the wire (N1)', async () => {
+    answer(ok({ current: { ...GATE_RAW, authorConfigId: 'a'.repeat(64) }, history: [{ ...GATE_RAW, authorConfigId: null }] }));
+    const res = await fetchEvalGate();
+    expect(res.data?.current?.authorConfigId).toBe('a'.repeat(64));
+    expect(res.data?.history[0].authorConfigId).toBeNull();
   });
 });

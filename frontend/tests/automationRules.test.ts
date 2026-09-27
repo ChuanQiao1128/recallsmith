@@ -56,6 +56,8 @@ const CONTRACT_DECISION_REASONS = [
   'MODE_OFF',
   'DECK_DELETED',
   'DECIDED_BY_HUMAN',
+  // Migration 036 (R18D M1); the console learned it in E05 frontend-console-31.
+  'AUTHOR_NOT_GATED',
 ];
 const CONTRACT_PUBLISH_REASONS = [
   'DECK_DELETED',
