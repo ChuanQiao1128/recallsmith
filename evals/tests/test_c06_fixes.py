@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import FakeLlm, reply, review_json
+from conftest import FakeLlm, gate_records, reply, review_json
 from test_automation_gate import (
     AUTHOR_CONFIG,
     authored_records,
@@ -259,13 +259,20 @@ def test_gate_accepts_both_automation_providers() -> None:
     assert gate.AUTOMATION_GATE_PROVIDERS == frozenset({"openai-mantle", "bedrock-converse"})
 
 
+def mantle_served(records: list[dict[str, Any]], served: str = MANTLE_MODEL) -> list[dict[str, Any]]:
+    """E04 (ai-agent-19): the records of an openai-mantle run name the served model in the mantle id
+    space the adapter reports (ai_qa.openai_mantle_client.served_model); the gate requires it."""
+    return [{**r, "servedModel": served if r["servedModel"] else None} for r in records]
+
+
 def test_gate_passes_for_an_openai_mantle_reviewer_and_pins_it(tmp_path: Path) -> None:
     spec, rows = authored_spec(tmp_path)
     env = write_env(tmp_path, AI_QA_AUTOMATION_PROVIDER=MANTLE, AI_QA_AUTOMATION_MODEL=MANTLE_MODEL,
                     AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK="5.5", AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK="33")
     # D06 (ai-agent-9): openai-mantle sends AI_EFFORT (high) as reasoning_effort high
-    seeded = seeded_run(tmp_path, provider=MANTLE, model=MANTLE_MODEL, effectiveEffort="high")
-    authored = authored_run(tmp_path, spec, authored_records(rows), provider=MANTLE, model=MANTLE_MODEL,
+    seeded = seeded_run(tmp_path, mantle_served(gate_records()), provider=MANTLE, model=MANTLE_MODEL,
+                        effectiveEffort="high")
+    authored = authored_run(tmp_path, spec, mantle_served(authored_records(rows)), provider=MANTLE, model=MANTLE_MODEL,
                             effectiveEffort="high")
     report = evaluate(tmp_path, seeded=seeded, authored=authored, spec=spec, env=env)
     assert report["failures"] == []
