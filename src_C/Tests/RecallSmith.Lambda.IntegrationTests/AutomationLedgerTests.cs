@@ -505,7 +505,7 @@ public class AutomationLedgerTests
 
     var agent = (await LedgerAsync("2008-01-01", "2008-12-31")).GetProperty("agentDrafts");
     Assert.Equal(
-      new[] { "decided", "accepted", "editedAccepted", "rejected", "defectRejects", "acceptanceRate", "editedAcceptRate", "defectRate", "avgReviewMinutes" },
+      new[] { "decided", "accepted", "editedAccepted", "rejected", "defectRejects", "acceptanceRate", "editedAcceptRate", "defectRate", "avgReviewMinutes", "reviewNotMeasured" },
       agent.EnumerateObject().Select(p => p.Name).ToArray());
     Assert.Equal(4, agent.GetProperty("decided").GetInt64());
     Assert.Equal(2, agent.GetProperty("accepted").GetInt64());
@@ -516,6 +516,8 @@ public class AutomationLedgerTests
     Assert.Equal(0.5m, agent.GetProperty("editedAcceptRate").GetDecimal());
     Assert.Equal(0.25m, agent.GetProperty("defectRate").GetDecimal());
     Assert.Equal(2m, agent.GetProperty("avgReviewMinutes").GetDecimal());
+    // automation-13: the reject sent without reviewMs is reported as not measured.
+    Assert.Equal(1, agent.GetProperty("reviewNotMeasured").GetInt64());
 
     // An empty period answers zeros and a null average.
     var empty = (await LedgerAsync("1990-01-01", "1990-12-31")).GetProperty("agentDrafts");

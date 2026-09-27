@@ -256,12 +256,13 @@ public static class LedgerRoutes
   /// <summary>
   /// The AI drafting agent's own quality over the period, from ai_review_events (automation-4): how many
   /// drafts were decided, the acceptance and edited-accept rates, the share rejected for a defect reason
-  /// (the agent's defect rate, which is not a defect caught before publish) and the average review time.
+  /// (the agent's defect rate, which is not a defect caught before publish), the average review time (each
+  /// value capped server-side at Drafts.ReviewMsCap) and how many decisions carried no review time.
   /// Zeros on a database without migration 030.
   /// </summary>
   private static async Task<object> AgentDraftQualityAsync(NpgsqlConnection conn, DateTime start, DateTime end)
   {
-    long decided = 0, accepted = 0, edited = 0, rejected = 0, defects = 0;
+    long decided = 0, accepted = 0, edited = 0, rejected = 0, defects = 0, notMeasured = 0;
     decimal? avgReviewMs = null;
 
     var hasEvents = await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.ai_review_events') is not null", []);
@@ -274,11 +275,12 @@ public static class LedgerRoutes
                count(*) filter (where action = 'edited_accepted') as "edited",
                count(*) filter (where action = 'rejected') as "rejected",
                count(*) filter (where action = 'rejected' and reason = any($3)) as "defects",
-               avg(review_ms) as "avgReviewMs"
+               avg(case when review_ms is not null then least(review_ms, $4) end) as "avgReviewMs",
+               count(*) filter (where review_ms is null) as "reviewNotMeasured"
         from ai_review_events
         where action in ('accepted','edited_accepted','rejected') and created_at >= $1 and created_at < $2
         """,
-        [start, end, Vpc.Review.Drafts.DefectReasons.ToArray()]);
+        [start, end, Vpc.Review.Drafts.DefectReasons.ToArray(), Vpc.Review.Drafts.ReviewMsCap]);
       var r = rows[0];
       decided = ToLong(r["decided"]);
       accepted = ToLong(r["accepted"]);
@@ -286,6 +288,7 @@ public static class LedgerRoutes
       rejected = ToLong(r["rejected"]);
       defects = ToLong(r["defects"]);
       avgReviewMs = r["avgReviewMs"] is null ? null : ToDecimal(r["avgReviewMs"]);
+      notMeasured = ToLong(r["reviewNotMeasured"]);
     }
 
     return new
@@ -299,6 +302,9 @@ public static class LedgerRoutes
       editedAcceptRate = Rate(edited, accepted),
       defectRate = Rate(defects, decided),
       avgReviewMinutes = avgReviewMs is { } ms ? Round2(ms / 60000m) : (decimal?)null,
+      // Decisions sent without reviewMs (automation-13): excluded from the average, and charged no human
+      // cost in the savings, so the reader can see how much of the figure rests on unmeasured reviews.
+      reviewNotMeasured = notMeasured,
     };
   }
 
