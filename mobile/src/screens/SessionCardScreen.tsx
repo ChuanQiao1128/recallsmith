@@ -40,6 +40,7 @@ import { rankCardsByOrder } from '../features/gacha/library/cardRank';
 import { computeTomorrowLoad, forecastLine } from '../features/gacha/planner/loadForecast';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import { settleRatingReward } from '../features/gacha/rewards/sessionRewards';
+import { recordMistakeOutcome } from '../features/gacha/mistakes/mistakeBook';
 import {
   buildRatedSessionState,
   buildSessionProgressVM,
@@ -627,6 +628,19 @@ export function SessionCardScreen({ navigation, route }: Props) {
         }
       } catch (e) {
         console.warn('[SessionCard] recordReviewEvent failed:', (e as any)?.message ?? e);
+      }
+      // Mistake Book (K01): fire-and-forget, after the review event, never on the rating's critical path.
+      try {
+        void recordMistakeOutcome({
+          deckSlug: deck.Slug,
+          stableUid: current.card.StableUid,
+          topic: current.card.Topic ?? null,
+          rating,
+          mcqVerdict: mcqState.mcq !== null ? mcqState.verdict : null,
+          at: nowMs,
+        }).catch(() => undefined);
+      } catch {
+        // recording must never block or break a rating
       }
       // The whole array, every time. nextState.updatedProgress is the deck's
       // full progress with one entry replaced -- never an owned-filtered view.
