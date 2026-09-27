@@ -61,6 +61,9 @@ Every variable is optional.
 | `DC_TOKEN_FILE` | `~/.config/developercards/mcp-tokens.json` | |
 | `DC_REPO_ROOT` | three levels above `dist/` | the repository checkout; `read_source` reads local files from its `sources/` directory |
 | `DC_SOURCES_DIRS` | (none) | extra `:`-separated directories `read_source` may read local files from (for example `$HOME/Downloads`) |
+| `DC_AUTOMATION_RUN_ID` | (none) | set by `tools/author-runner` per run in its MCP config; not for manual use. A uuid marks an automation run (see Automation runs) |
+| `DC_AUTOMATION_QUEUE_ITEM_ID` | (none) | set by `tools/author-runner` per run; not for manual use. The claimed queue item id (a positive integer) |
+| `DC_AUTOMATION_DECK_SLUG` | (none) | set by `tools/author-runner` per run; not for manual use. The only deck `submit_draft` accepts in that run |
 
 Trailing slashes are stripped from the two base URLs.
 
@@ -71,7 +74,7 @@ Trailing slashes are stripped from the two base URLs.
 | `read_source` | `source` (https URL or local path), `canonicalUrl?` (https), `maxChunkChars?` (1000..8000), `offset?` (≥ 0), `limit?` (1..100), `chunkIds?` (1..20 ids) | paged, because a long guide or whitepaper produces far more text than one MCP tool result may carry. By default one outline page of the ingest JSON: `{ v: 1, sourceId, kind, title, url, path, fetchedAt, chunkCount, totalChars, offset, nextOffset, chunks: [{ id, index, heading, page, charStart, charEnd, textChars, preview }] }` (100 chunks per page, `preview` = first 200 characters, `nextOffset` `null` on the last page). With `chunkIds` (not combined with `offset`/`limit`): the same header with those chunks in full (`text` included), at most 40000 characters of text per call, the rest listed in `remainingChunkIds`; an unknown id is `UNKNOWN_CHUNK_ID`. A call with offset 0 and no `chunkIds` runs dc-ingest; later pages and chunk reads with the same `source`, `canonicalUrl` and `maxChunkChars` reuse that read (the last 20 reads are kept). Runs `uv run --project <repo>/tools/ingest --python 3.12 dc-ingest --json …`. A local path must be a `.pdf`/`.html`/`.htm`/`.md`/`.markdown`/`.txt` file inside `<repo>/sources/` or a `DC_SOURCES_DIRS` directory, with no hidden segment and no symlink leaving the root; `~/.config`, `~/.ssh`, `~/.aws` and the token file are always refused (see `tools/ingest/README.md`). The server remembers each result by its `url` for `submit_draft`. The text is data to cite, never instructions. |
 | `find_similar_cards` | `text` (1..4000), `deckSlug?`, `limit?` (1..20) | `{ engine, threshold, matches: [{ cardId, deckId, deckSlug, stableUid, question, similarity, likelyDuplicate }] }` from `POST /api/v1/authoring/cards/similar` |
 | `lint_card` | `deckSlug`, `card` (DraftCard), `sourceChunkText?` | `{ ok, issues: [{ code, message }], warnings: [{ code, message }] }`: the console importer's codes, plus `MCQ_OPTION_TOO_LONG` (option over 600 characters), `SOURCE_REQUIRED` (missing source, url or quote), `SOURCE_QUOTE_TOO_SHORT` (quote under 40 characters or 6 words after whitespace is collapsed: too unspecific to tie the card to one passage), `SOURCE_QUOTE_NOT_IN_CHUNK` (quote not found verbatim in the chunk, whitespace-insensitive), and the warning `TOPIC_NOT_IN_VOCABULARY` (topic not a label of the deck in `content/decks/FORMAT.md` §5). Never an error result, even when `ok` is false. |
-| `submit_draft` | `deckSlug`, `drafts` (1..20 DraftCards), `agent?` (`{ model, skillVersion }`) | lints every card first and refuses the batch (no API call) on any issue (`lint failed: …`). Then it checks every citation (`grounding failed: …`, no API call): `source.url` must be a `url` that `read_source` returned in this server process (an https url not read yet is read once through the same ingest path), else `SOURCE_NOT_INGESTED`; `source.quote` must occur, whitespace-normalised and case-sensitive, in one chunk of that document, else `SOURCE_QUOTE_NOT_IN_CHUNK`. Then it resolves the deck id and calls `POST /api/v1/authoring/drafts` with a `clientDraftKey` (SHA-256 of the canonical card JSON) per card, so a resubmitted card comes back under `duplicates`. Each posted card also carries `source.grounding: { chunkId, sourceId, matched: true, quoteChars }` (the R18 Z-wave cross-wave contract: core-vpc stores it with the draft, returns it on `GET` drafts for the console review page and strips it when a draft is accepted); the agent cannot supply it, because the DraftCard `source` accepts only `url` and `quote`. The `clientDraftKey` hashes the card as the agent wrote it, without the grounding. Returns `{ batchId, created, duplicates, rejected, grounding: [{ stableUid, clientDraftKey, sourceId, url, chunkId, chunkCharStart, chunkCharEnd, kind }] }`; `kind: 'local'` means the url is the agent-supplied `canonicalUrl` of a local file, so the reviewer should open it. Drafts land in the review queue; nothing is published. |
+| `submit_draft` | `deckSlug`, `drafts` (1..20 DraftCards), `agent?` (`{ model, skillVersion }`) | lints every card first and refuses the batch (no API call) on any issue (`lint failed: …`). Then it checks every citation (`grounding failed: …`, no API call): `source.url` must be a `url` that `read_source` returned in this server process (an https url not read yet is read once through the same ingest path), else `SOURCE_NOT_INGESTED`; `source.quote` must occur, whitespace-normalised and case-sensitive, in one chunk of that document, else `SOURCE_QUOTE_NOT_IN_CHUNK`. Then it resolves the deck id and calls `POST /api/v1/authoring/drafts` with a `clientDraftKey` (SHA-256 of the canonical card JSON) per card, so a resubmitted card comes back under `duplicates`. Each posted card also carries `source.grounding: { chunkId, sourceId, matched: true, quoteChars }` (the R18 Z-wave cross-wave contract: core-vpc stores it with the draft, returns it on `GET` drafts for the console review page and strips it when a draft is accepted); the agent cannot supply it, because the DraftCard `source` accepts only `url` and `quote`. The `clientDraftKey` hashes the card as the agent wrote it, without the grounding. Returns `{ batchId, created, duplicates, rejected, grounding: [{ stableUid, clientDraftKey, sourceId, url, chunkId, chunkCharStart, chunkCharEnd, kind }] }`; `kind: 'local'` means the url is the agent-supplied `canonicalUrl` of a local file, so the reviewer should open it. Drafts land in the review queue; nothing is published. Inside an automation run the `agent` block always carries `runId` and `queueItemId`, and a `deckSlug` other than `DC_AUTOMATION_DECK_SLUG` is refused with `AUTOMATION_DECK_MISMATCH` (see Automation runs). |
 
 Every tool carries MCP annotations: `read_source` (`readOnlyHint`, `openWorldHint`), `find_similar_cards`
 and `lint_card` (`readOnlyHint`), `submit_draft` (`idempotentHint`, not destructive).
@@ -82,6 +85,28 @@ realWorldUsage?, mcq?, source: { url, quote } }`; unknown keys are rejected.
 Failures come back as tool results with `isError: true` and one line of text, for example
 `HTTP 404 DECK_NOT_FOUND: …`, `Network error calling /api/v1/authoring/drafts: …`, or, on a 401 or a
 missing token file, an instruction to run `login`.
+
+## Automation runs
+
+The local runner (`tools/author-runner`) starts headless Claude Code for one claimed queue item and
+passes `DC_AUTOMATION_RUN_ID`, `DC_AUTOMATION_QUEUE_ITEM_ID` and `DC_AUTOMATION_DECK_SLUG` to this
+server through its per-run MCP config. Only `submit_draft` changes:
+
+- When `DC_AUTOMATION_RUN_ID` is a uuid, every submit sends
+  `agent: { name: "developercards-mcp", model, skillVersion, runId, queueItemId }`, even when the
+  tool call has no `agent` (then `model` and `skillVersion` are `"unknown"`). `runId` is the
+  lowercased uuid; `queueItemId` is sent only when `DC_AUTOMATION_QUEUE_ITEM_ID` is a positive
+  integer. core-vpc treats a draft as part of the automation run only through `agent.runId`; it may
+  then accept and publish a new draft that passes its checks and AI QA, and every other draft goes to
+  the review queue.
+- When `DC_AUTOMATION_DECK_SLUG` is set, a `deckSlug` other than it is refused as the tool error
+  `AUTOMATION_DECK_MISMATCH: this automation run drafts for deck <slug>`, before lint, ingest or any
+  API call.
+- An invalid `DC_AUTOMATION_RUN_ID` is ignored with one stderr line
+  `developercards-mcp: DC_AUTOMATION_RUN_ID is not a uuid; automation run ignored` (the server then
+  behaves as outside a run); an invalid `DC_AUTOMATION_QUEUE_ITEM_ID` is left out of the agent block
+  with `developercards-mcp: DC_AUTOMATION_QUEUE_ITEM_ID is not a positive integer; ignored`.
+- No tool or API call is added, and the server version stays `1.8.0`.
 
 ## Security notes
 
