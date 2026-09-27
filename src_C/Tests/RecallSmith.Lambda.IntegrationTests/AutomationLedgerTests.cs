@@ -451,6 +451,32 @@ public class AutomationLedgerTests
   }
 
   [Fact]
+  public async Task Ledger_SeriesAddsUpToTotals_AcrossPeriods()
+  {
+    // backend-design-17 / automation-14: the totals and the series clamp at the same grain, so the bars
+    // always add up to the headline. 2013-03-04 and 2013-03-11 are Mondays of two weeks in one month.
+    var baseline = Automation(await LedgerAsync("2013-01-01", "2013-12-31"), "ai_draft_review").GetProperty("baselineMinutesPerUnit").GetDecimal();
+    await RecordAsync(new AutomationEvent("ai_draft_review", 1, "success", ActualMinutes: 0m, OccurredAt: At(2013, 3, 5)));
+    await RecordAsync(new AutomationEvent("ai_draft_review", 0, "success", ActualMinutes: baseline + 8m, OccurredAt: At(2013, 3, 12)));
+
+    foreach (var granularity in new[] { "day", "week", "month" })
+    {
+      var data = await LedgerAsync("2013-01-01", "2013-12-31", granularity);
+      var seriesSum = data.GetProperty("series").EnumerateArray().Sum(s => s.GetProperty("minutesSaved").GetDecimal());
+      Assert.Equal(data.GetProperty("totals").GetProperty("minutesSaved").GetDecimal(), seriesSum);
+      Assert.Equal(Automation(data, "ai_draft_review").GetProperty("minutesSaved").GetDecimal(), seriesSum);
+      Assert.Equal(data.GetProperty("totals").GetProperty("bySource").GetProperty("live").GetProperty("minutesSaved").GetDecimal(), seriesSum);
+    }
+
+    // Weekly: week 1 saves the baseline, week 2 nets negative and shows 0 in both the bar and the headline.
+    var weekly = await LedgerAsync("2013-01-01", "2013-12-31", "week");
+    Assert.Equal(baseline, weekly.GetProperty("totals").GetProperty("minutesSaved").GetDecimal());
+    // Monthly: both rows fall in one period, whose net is negative.
+    var monthly = await LedgerAsync("2013-01-01", "2013-12-31", "month");
+    Assert.Equal(0m, monthly.GetProperty("totals").GetProperty("minutesSaved").GetDecimal());
+  }
+
+  [Fact]
   public async Task Ledger_ReportsAgentDraftQuality()
   {
     // automation-4: acceptance rate, edited-accept rate, the agent's defect rate and review time.

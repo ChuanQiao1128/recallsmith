@@ -84,13 +84,18 @@ public static class LedgerRoutes
 
     try
     {
-      // Minutes saved are clamped per (automation, source) group, never per row: a row that carries only
-      // human cost (a rejected draft's review time, units 0) must reduce the savings it offsets instead of
-      // counting as 0. Backfill rows carry no actual minutes, so history is not offset by live review cost.
+      // Minutes saved are clamped per (period, automation, source) group, never per row: a row that carries
+      // only human cost (a rejected draft's review time, units 0) must reduce the savings it offsets in the
+      // same period instead of counting as 0. Backfill rows carry no actual minutes, so history is not
+      // offset by live review cost. The totals and the series clamp at the same grain (the requested
+      // granularity), so the series always adds up to totals.minutesSaved (backend-design-17,
+      // automation-14); a net-negative period shows 0 in both, and the headline can therefore differ
+      // between granularities.
       var perAutomation = await DbUtil.QueryAsync(conn, null,
         """
         with g as (
           select b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source,
+                 date_trunc($3::text, e.occurred_at at time zone 'UTC') as period,
                  count(e.id) filter (where e.units > 0 or e.outcome = 'failure') as runs,
                  coalesce(sum(e.units), 0) as units,
                  count(e.id) filter (where e.outcome = 'failure') as failures,
@@ -103,7 +108,7 @@ public static class LedgerRoutes
           from automation_baselines b
           left join automation_events e
             on e.automation = b.automation and e.occurred_at >= $1 and e.occurred_at < $2
-          group by b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source
+          group by b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source, 6
         )
         select automation as "automation", unit as "unit",
                baseline_minutes_per_unit as "baselineMinutesPerUnit", baseline_source as "baselineSource",
@@ -124,7 +129,7 @@ public static class LedgerRoutes
         group by automation, unit, baseline_minutes_per_unit, baseline_source
         order by automation collate "C"
         """,
-        [start, end]);
+        [start, end, granularity]);
 
       var seriesRows = await DbUtil.QueryAsync(conn, null,
         """
