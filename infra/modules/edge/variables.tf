@@ -73,3 +73,8 @@ variable "ses_configuration_set_name" {
   default     = "developercards-automation"
   description = "R18A A11: the SES configuration set the notifier sends through."
 }
+
+variable "automation_events_topic_arn" {
+  type        = string
+  description = "R18C: the SNS topic (developercards-alerts) that receives the automation configuration set's BOUNCE/COMPLAINT/REJECT/DELIVERY_DELAY events."
+}

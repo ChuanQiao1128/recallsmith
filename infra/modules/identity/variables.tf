@@ -114,6 +114,26 @@ variable "ai_qa_converse_profile_ids" {
   }
 }
 
+variable "ai_qa_openai_mantle_model_id" {
+  type        = string
+  default     = ""
+  description = "R18C L1: the one OpenAI model id ai-qa's openai-mantle provider may call (bedrock-mantle:Model condition on CreateInference in ai_qa_openai_mantle_region); must equal AI_QA_AUTOMATION_MODEL. Empty = no grant."
+  validation {
+    condition     = var.ai_qa_openai_mantle_model_id == "" || (can(regex("^openai\\.[A-Za-z0-9.:-]+$", var.ai_qa_openai_mantle_model_id)) && !strcontains(var.ai_qa_openai_mantle_model_id, "*"))
+    error_message = "Must be empty or one exact openai.* model id; no wildcards."
+  }
+}
+
+variable "ai_qa_openai_mantle_region" {
+  type        = string
+  default     = ""
+  description = "R18C L1: the bedrock-mantle region of ai-qa's openai-mantle provider (AI_QA_AUTOMATION_REGION). Empty = no grant."
+  validation {
+    condition     = var.ai_qa_openai_mantle_region == "" || can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]$", var.ai_qa_openai_mantle_region))
+    error_message = "Must be empty or an AWS region name."
+  }
+}
+
 variable "notify_queue_name" {
   type = string
 } # prod "developercards-notify"

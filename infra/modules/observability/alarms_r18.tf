@@ -219,7 +219,8 @@ resource "aws_cloudwatch_metric_alarm" "ai_qa_refusals" {
 
 # Spend past the daily cap. The AWS budget cannot see the Anthropic-API provider, and core-vpc
 # only checks the cap before a run starts, so one large run can still overshoot it. R18B B04: bedrock-converse
-# (the automation reviewer, A07) is summed too, so the alarm is the total of every ai-qa provider.
+# (the automation reviewer, A07) is summed too, so the alarm is the total of every ai-qa provider. R18C L1:
+# openai-mantle (the automation reviewer's GPT-5.5 transport since C03) is summed as well.
 resource "aws_cloudwatch_metric_alarm" "ai_qa_daily_cost" {
   alarm_name          = "developercards-${var.env}-ai-qa-daily-cost"
   alarm_description   = "AI QA estimated model spend over one day exceeded the daily cap (AI_QA_DAILY_USD_CAP)."
@@ -239,7 +240,7 @@ resource "aws_cloudwatch_metric_alarm" "ai_qa_daily_cost" {
   }
 
   dynamic "metric_query" {
-    for_each = ["bedrock", "anthropic", "bedrock-converse"]
+    for_each = ["bedrock", "anthropic", "bedrock-converse", "openai-mantle"]
     content {
       id = "cost_${replace(metric_query.value, "-", "_")}" # CloudWatch ids allow no hyphen
       metric {
