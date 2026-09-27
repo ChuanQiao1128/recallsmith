@@ -351,3 +351,136 @@ test('a signed-in console renders decks and navigates into a lazily-loaded route
   expect(api.unexpected).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
+
+// ---------------------------------------------------------------------------
+// Smoke 3 — the four HITL routes load their chunks from the landing page
+// ---------------------------------------------------------------------------
+//
+// Review queue, AI QA, Automation ledger and Webhooks are four more lazy()
+// routes (App.tsx). Smoke 2 proves the mechanism through one route; this one
+// proves each of these chunks exists in the built dist/ and renders its page,
+// reached the way a user reaches it: from the console header on the landing
+// page (frontend-console-7 put the links there).
+
+function superAdminSession(): string {
+  const token = fakeJwt({
+    sub: 'e2e-admin-sub',
+    email: 'e2e-admin@example.invalid',
+    'cognito:username': 'e2e-admin',
+    'cognito:groups': ['super_admin'],
+  });
+  return JSON.stringify({
+    accessToken: token,
+    idToken: token,
+    tokenType: 'Bearer',
+    expiresIn: 24 * 60 * 60,
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+  });
+}
+
+const LEDGER_REPORT = {
+  from: '2026-06-29',
+  to: '2026-09-27',
+  granularity: 'week',
+  totals: {
+    runs: 0,
+    units: 0,
+    baselineMinutes: 0,
+    actualMinutes: 0,
+    minutesSaved: 0,
+    hoursSaved: 0,
+    defectsCaught: 0,
+    qaFalsePositives: 0,
+  },
+  automations: [],
+  series: [],
+};
+
+/** The routes the four HITL pages read on first render, all empty. */
+async function stubHitlApi(page: Page): Promise<{ seen: string[]; unexpected: string[] }> {
+  const seen: string[] = [];
+  const unexpected: string[] = [];
+
+  await page.route('**/api/v1/**', (route: Route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const body = (payload: string) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: payload });
+
+    seen.push(`${path}${url.search}`);
+
+    // The landing page as a super_admin: the cursor-paged deck list.
+    if (path === '/api/v1/admin/decks') return body(ok({ items: [], nextCursor: null, hasMore: false }));
+    if (path === '/api/v1/admin/manifest') return body(ok(MANIFEST));
+    if (path === '/api/v1/authoring/publish/jobs') return body(ok([]));
+    // Review queue and AI QA without a deck: the deck picker.
+    if (path === '/api/v1/authoring/decks') return body(ok([DECK]));
+    // Automation ledger.
+    if (path === '/api/v1/admin/automation/ledger') return body(ok(LEDGER_REPORT));
+    if (path === '/api/v1/admin/automation/baselines') return body(ok({ items: [] }));
+    if (path === '/api/v1/admin/automation/events') return body(ok({ items: [], nextCursor: null }));
+    // Webhooks.
+    if (path === '/api/v1/admin/webhooks/subscriptions') return body(ok({ items: [] }));
+    if (path === '/api/v1/admin/webhooks/deliveries') return body(ok({ items: [], nextCursor: null }));
+
+    unexpected.push(`${path}${url.search}`);
+    return body(ok(null));
+  });
+
+  return { seen, unexpected };
+}
+
+test('each HITL route loads its own chunk from the built bundle and renders its heading', async ({ page }) => {
+  const api = await stubHitlApi(page);
+
+  const scripts: { url: string; status: number }[] = [];
+  page.on('response', response => {
+    if (response.url().endsWith('.js')) scripts.push({ url: response.url(), status: response.status() });
+  });
+  const consoleErrors: string[] = [];
+  page.on('console', message => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', error => consoleErrors.push(String(error)));
+
+  await page.addInitScript(
+    ([key, value]) => {
+      sessionStorage.setItem(key, value);
+    },
+    [TOKEN_KEY, superAdminSession()],
+  );
+
+  await page.goto('/');
+  await expect(page).toHaveURL('http://localhost:5173/');
+  const nav = page.getByRole('navigation', { name: 'Console sections' });
+  await expect(nav).toBeVisible();
+
+  const routes = [
+    { link: 'Review queue', url: '/review', heading: 'Review queue', chunk: /ReviewQueuePage-.*\.js$/ },
+    { link: 'AI QA', url: '/decks/qa', heading: 'AI QA', chunk: /DeckQaPage-.*\.js$/ },
+    { link: 'Automation ledger', url: '/ledger', heading: 'Automation ledger', chunk: /LedgerPage-.*\.js$/ },
+    { link: 'Webhooks', url: '/admin/webhooks', heading: 'Webhooks', chunk: /WebhooksPage-.*\.js$/ },
+  ];
+
+  // None of the four is in the first-load closure, so each assertion below
+  // measures a chunk this click fetched.
+  for (const route of routes) {
+    expect(scripts.some(s => route.chunk.test(s.url)), `${route.link} chunk loaded before its click`).toBe(false);
+  }
+
+  for (const route of routes) {
+    await page.getByRole('navigation', { name: 'Console sections' }).getByRole('link', { name: route.link, exact: true }).click();
+    await expect(page).toHaveURL(`http://localhost:5173${route.url}`);
+    await expect(page.getByRole('heading', { level: 1, name: route.heading, exact: true })).toBeVisible();
+    await expect(page.getByText('This page did not finish loading')).toHaveCount(0);
+
+    const chunk = scripts.filter(s => route.chunk.test(s.url));
+    expect(chunk.length, `${route.link}: no chunk fetched`).toBeGreaterThan(0);
+    expect(chunk.every(s => s.status === 200), `${route.link}: chunk did not load`).toBe(true);
+  }
+
+  expect(api.seen).toContain('/api/v1/admin/automation/baselines');
+  expect(api.seen.some(s => s.startsWith('/api/v1/admin/webhooks/subscriptions'))).toBe(true);
+  expect(api.unexpected).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});
