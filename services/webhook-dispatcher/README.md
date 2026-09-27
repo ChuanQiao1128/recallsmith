@@ -47,17 +47,36 @@ Every attempt with a valid message is reported to core-vpc with
 `POST /api/internal/webhooks/deliveries/report` (§6.5.3), signed with the internal HMAC (§4.3:
 `x-internal-timestamp` in epoch milliseconds, `x-internal-signature: v1=<hex>`). If the report
 answers `"stop": true` (subscription disabled or deleted) a `retry` is acked instead. A failed
-report never changes the decision; it counts in `WebhookReportFailures`. The report's `error` is at
+report never changes the decision; it counts in `WebhookReportFailures`. The report is retried
+once after 1 s on a connection error, a 5xx or a 429 (the route's throttle); a 401/403 is resent
+once signed with `/developercards/prod/internal-shared-secret-previous` when that exists (rotation:
+services/ai-qa/README.md, "Internal shared secret rotation"). The report's `error` is at
 most 500 characters and never contains the URL path/query or the response body.
 
-**Disabling, deleting or re-pointing a subscription does not recall messages already queued.** The
-URL is copied into each SQS message (§6.4) and `stop` is learnt only from the report *after* an
-attempt. So every delivery already in the queue makes at most **one** more attempt to the URL it
-was enqueued with; the report of that attempt answers `stop: true` and the message is acked instead
-of retried. If a URL must not receive anything more (it leaked, or points somewhere wrong), disable
-the subscription *and* stop the dispatcher (see "Emergency stop") until the queue holds nothing for
-that subscription, or purge the queue. A pre-send claim check needs a core-vpc route and is a
-follow-up.
+**Disabling, deleting or re-pointing a subscription does not recall messages already queued**
+while the pre-send claim is off (the default). The URL is copied into each SQS message (§6.4) and
+`stop` is learnt only from the report *after* an attempt. So every delivery already in the queue
+makes at most **one** more attempt to the URL it was enqueued with; the report of that attempt
+answers `stop: true` and the message is acked instead of retried. If a URL must not receive
+anything more (it leaked, or points somewhere wrong), disable the subscription *and* stop the
+dispatcher (see "Emergency stop") until the queue holds nothing for that subscription, or purge the
+queue.
+
+**Pre-send claim (`WEBHOOK_PRESEND_CLAIM`, off unless set to `1`/`true`/`yes`).** When on, every
+attempt first calls the signed route `POST /api/internal/webhooks/deliveries/claim` with
+`{"deliveryId", "subscriptionId", "attempt"}` and expects the usual envelope with
+`data = {"send": bool, "url"?: string}`:
+
+- `send: false` (subscription disabled or deleted; core has settled the delivery): no request, no
+  report, the message is acked (log `webhook_delivery_cancelled`).
+- `send: true`: the request goes to `data.url` when present (the subscription's current URL,
+  checked by the SSRF guard like any URL), else to the URL in the message.
+- Any failure (no internal secret, non-2xx, a missing `send`): nothing is sent; the attempt is a
+  `retry` with error `CLAIM_UNAVAILABLE`, reported and backed off as usual.
+
+The route is a core-vpc follow-up (it does not exist yet, and API Gateway's
+`/api/internal/webhooks/{proxy+}` already forwards it). Turn the flag on only after core serves
+it, or every delivery ends `dead`.
 
 ## What receivers see, and how to verify it (§6.3)
 
@@ -115,8 +134,25 @@ Runbook (supervisor only; values never in git or chat):
    `aws ssm delete-parameter --name /developercards/prod/webhook-signing-secret-previous`. Within
    5 minutes only the new signature is sent.
 
-A receiver holds the environment-wide secret and could sign events for other receivers;
-per-subscription secrets are a later step.
+## Per-subscription secrets
+
+A receiver that holds the environment-wide secret could sign events for every other receiver. A
+subscription can instead get its own secret: when `<SIGNING_SECRET_SSM_NAME>-sub-<subscriptionId>`
+(for example `/developercards/prod/webhook-signing-secret-sub-12`) exists, it replaces the
+environment-wide secret for that subscription only, and its rotation uses
+`…-sub-12-previous` exactly like the runbook above. Its absence is cached for 5 minutes like
+`-previous`, so it costs one SSM read per subscription per container per TTL.
+
+Prerequisites (supervisor): the dispatcher role needs `ssm:GetParameter` on
+`…/webhook-signing-secret-sub-*` (until then the read is denied and the environment-wide secret is
+used), and core-vpc's `src_C/scripts/merge-env.sh` must skip those leaves (`SSM_NOT_ENV`), or its
+deploy fails with "unmapped SSM parameter".
+
+To give subscription 12 its own secret: generate 32 random bytes (hex), `put-parameter` it as
+`…/webhook-signing-secret-sub-12` (SecureString), hand it to that receiver once, wait 5 minutes.
+A receiver that already held the environment-wide secret still knows it, so rotate the
+environment-wide secret afterwards if that receiver must lose it. Generating, storing and showing
+the secret from the console when a subscription is created is a core + console follow-up.
 
 ## SSRF guard and address pinning
 
