@@ -77,6 +77,16 @@ AUTHORED_V2 = DatasetSpec(
     DEFECT_CLASSES,
     labels_path=AUTHORED_V2_LABELS_PATH,
 )
+# R18B (B06): authored-v2 has two strata. "docs" rows come from `dc-evals author` (the single-shot,
+# tool-less author over established documentation pages, data/authored-sources-v2.json); a row
+# without a "stratum" key is a docs row. "new-facts" rows are drafts the production authoring path
+# wrote (the author-runner's queue-item prompt, CLAUDE args and the author-cards skill with its
+# tools and verifier, against a sandbox deck) from the announcement and release-notes pages of
+# data/authored-sources-v2-new-facts.json, imported with `dc-evals import-drafts`.
+STRATUM_DOCS = "docs"
+STRATUM_NEW_FACTS = "new-facts"
+STRATA = (STRATUM_DOCS, STRATUM_NEW_FACTS)
+AUTHORED_V2_NEW_FACTS_SOURCES_PATH = DATA_DIR / "authored-sources-v2-new-facts.json"
 RUN_DATASETS = {**DATASETS, AUTHORED.key: AUTHORED, AUTHORED_V2.key: AUTHORED_V2}
 DATASETS_BY_NAME = {spec.name: spec for spec in RUN_DATASETS.values()}
 
@@ -120,6 +130,11 @@ def load_mutations(path: Path = MUTATIONS_PATH) -> dict[str, Any]:
 
 def load_dataset(path: Path = SEEDED_PATH) -> list[dict[str, Any]]:
     return read_jsonl(path)
+
+
+def stratum_of(row: dict[str, Any]) -> str:
+    """The authored-v2 stratum of an authored row (STRATUM_DOCS when the row names none)."""
+    return row.get("stratum") or STRATUM_DOCS
 
 
 def spec_exists(spec: DatasetSpec) -> bool:

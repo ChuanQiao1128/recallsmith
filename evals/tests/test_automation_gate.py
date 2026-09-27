@@ -12,14 +12,16 @@ from typing import Any
 import pytest
 from conftest import finding, gate_header, gate_records, item
 
-from ai_qa.prompts import PROMPT_VERSION
 from dc_evals import automation_gate as gate
 from dc_evals.cli import main
 from dc_evals.dataset import AUTHORED_V2, DATA_DIR, DATASETS, DEFECT_CLASSES, DatasetSpec, dump_line, spec_sha256
 from dc_evals.jury import DEFAULT_JURORS, parse_jurors, summary_path
+from dc_evals.runner import AUTOMATION_PROFILE, AUTOMATION_PROMPT_VERSION
 from dc_evals.score import clustered_wilson_ci
 
 PROVIDER = "bedrock-converse"
+# B06 (contract K1): gate evidence is a run of the automation profile, prompt version qa-v4-auto.
+AUTOMATION = {"promptVersion": AUTOMATION_PROMPT_VERSION, "profile": AUTOMATION_PROFILE}
 MODEL = "global.openai.gpt-5.5"
 NOW = dt.datetime(2026, 9, 28, 12, 0, 0, tzinfo=dt.UTC)
 ENV = {
@@ -44,24 +46,28 @@ def write_env(tmp_path: Path, **overrides: Any) -> Path:
 
 def seeded_run(tmp_path: Path, records: list[dict[str, Any]] | None = None, **overrides: Any) -> Path:
     records = gate_records() if records is None else records
-    header = gate_header(**{"provider": PROVIDER, "model": MODEL, "n": len(records), **overrides})
+    header = gate_header(**{"provider": PROVIDER, "model": MODEL, **AUTOMATION, "n": len(records), **overrides})
     return write_lines(tmp_path / "seeded.jsonl", [header, *records])
 
 
 def authored_spec(
-    tmp_path: Path, correct: int = 130, defective: int = 10, jurors: str = DEFAULT_JURORS
+    tmp_path: Path, correct: int = 130, defective: int = 10, jurors: str = DEFAULT_JURORS, new_facts: int = 40
 ) -> tuple[DatasetSpec, list[dict[str, Any]]]:
     """An AUTHORED_V2-shaped spec in tmp_path: `correct` control cards then `defective` cards
-    labelled incorrect_answer, with a jury summary naming `jurors`. Returns (spec, run rows)."""
+    labelled incorrect_answer, with a jury summary naming `jurors`. The last `new_facts` control
+    cards (at most `correct`) are new-facts rows the author-runner wrote (B06); the others are docs
+    rows. Returns (spec, run rows)."""
     authored, labels = [], []
+    first_new = correct - min(new_facts, correct) + 1
     for index in range(1, correct + defective + 1):
         row_id = f"a-{index:04d}"
         defect = None if index <= correct else "incorrect_answer"
         card = {"stableUid": f"u{index}", "difficulty": 1, "question": "Q?", "explanation": "E."}
-        authored.append(
-            {"id": row_id, "deckSlug": "aws-saa-c03", "sourceUrl": "https://docs.aws.amazon.com/x", "chunkId": "c0001",
-             "chunkText": "t", "card": card, "authorModel": "m", "generatedAt": "g"}
-        )
+        row = {"id": row_id, "deckSlug": "aws-saa-c03", "sourceUrl": "https://docs.aws.amazon.com/x", "chunkId": "c0001",
+               "chunkText": "t", "card": card, "authorModel": "m", "generatedAt": "g"}
+        if first_new <= index <= correct:
+            row = {**row, "stratum": "new-facts", "authorPath": "author-runner", "runId": f"run-{index}"}
+        authored.append(row)
         labels.append(
             {"id": row_id, "label": "correct" if defect is None else "defective", "category": defect, "excluded": None,
              "unanimous": True, "defect": defect, "scorable": True, "counts": {}, "votes": []}
@@ -110,6 +116,7 @@ def authored_run(
         **{
             "provider": PROVIDER,
             "model": MODEL,
+            **AUTOMATION,
             "dataset": spec.name,
             "datasetSha256": spec_sha256(spec),
             "datasetRows": len(records) // reps,
@@ -149,8 +156,8 @@ def test_gate_passes_when_every_threshold_is_met(tmp_path: Path) -> None:
     assert report["passed"] is True
     assert report["createdAt"] == "2026-09-28T12:00:00Z"
     assert report["reviewer"] == {
-        "provider": PROVIDER, "model": MODEL, "promptVersion": PROMPT_VERSION, "secondProvider": None,
-        "secondModel": None,
+        "provider": PROVIDER, "model": MODEL, "promptVersion": "qa-v4-auto", "secondProvider": None,
+        "secondModel": None, "profile": "automation",
     }
     seeded = report["seeded"]
     assert (seeded["dataset"], seeded["reps"], seeded["n"], seeded["tp"], seeded["fn"]) == ("seeded-v3", 2, 452, 226, 0)
@@ -294,10 +301,10 @@ def test_configuration_mismatch_fails_the_gate(tmp_path: Path) -> None:
         "labels are not independent",
     ]
 
-    # another prompt version
+    # another prompt version (B06: the automation prompt version, not the default qa-v4)
     t = case("prompt")
-    failures = _failures_with(t, seeded=seeded_run(t, promptVersion="qa-v0"))
-    assert f"seeded run: promptVersion 'qa-v0' is not the ai_qa PROMPT_VERSION {PROMPT_VERSION!r}" in failures
+    failures = _failures_with(t, seeded=seeded_run(t, promptVersion="qa-v4"))
+    assert "seeded run: promptVersion 'qa-v4' is not the automation prompt version 'qa-v4-auto'" in failures
     assert "the seeded and authored runs used different reviewers" in failures
 
     # a second reviewer
@@ -376,12 +383,13 @@ def test_configuration_mismatch_fails_the_gate(tmp_path: Path) -> None:
     )
     _, rows = authored_spec(t)
     records = authored_records(rows)
-    authored = write_lines(t / "authored.jsonl", [gate_header(provider=PROVIDER, model=MODEL, dataset="authored-v2",
-                                                              n=len(records)), *records])
+    authored = write_lines(t / "authored.jsonl", [gate_header(provider=PROVIDER, model=MODEL, **AUTOMATION,
+                                                              dataset="authored-v2", n=len(records)), *records])
     failures = _failures_with(t, authored=authored, spec=absent)
     assert failures == [
         "authored run: data/authored-v2-absent.jsonl or data/authored-v2-absent.labels.jsonl is missing",
         "authored run: the jury summary data/authored-v2-absent.labels.summary.json is missing",
+        "authored-v2 has no new-facts rows (dc-evals import-drafts); the gate needs the new-facts stratum",
     ]
     assert not absent.path.exists()
 
@@ -403,16 +411,22 @@ def test_report_json_has_the_contract_keys(tmp_path: Path) -> None:
         "v", "kind", "createdAt", "passed", "failures", "reviewer", "thresholds", "seeded", "authored",
     ]
     assert report["v"] == 1 and report["kind"] == "automation-gate"
-    assert list(report["reviewer"]) == ["provider", "model", "promptVersion", "secondProvider", "secondModel"]
+    # B06 appends: reviewer.profile, the new-facts and jury-exclusion thresholds, and the authored
+    # strata / exclusions / owner-sample blocks; every A00 §15.4 key keeps its place.
+    assert list(report["reviewer"]) == [
+        "provider", "model", "promptVersion", "secondProvider", "secondModel", "profile",
+    ]
     assert report["thresholds"] == {
         "seededRecall": 0.90, "seededRecallCiLower": 0.85, "seededPerClassRecallFloor": 0.75, "seededControlFpr": 0.20,
         "seededControlUnscoredRate": 0.02, "autoAcceptPrecision": 0.97, "autoAcceptPrecisionCiLower": 0.93,
         "minWouldAcceptCards": 120, "defectEscapeRate": 0.20, "authoredUnscoredRate": 0.05, "minReps": 2,
+        "newFactsAutoAcceptPrecision": 0.97, "minNewFactsWouldAcceptCards": 30, "juryExcludedRate": 0.10,
     }
     assert list(report["thresholds"]) == [
         "seededRecall", "seededRecallCiLower", "seededPerClassRecallFloor", "seededControlFpr",
         "seededControlUnscoredRate", "autoAcceptPrecision", "autoAcceptPrecisionCiLower", "minWouldAcceptCards",
-        "defectEscapeRate", "authoredUnscoredRate", "minReps",
+        "defectEscapeRate", "authoredUnscoredRate", "minReps", "newFactsAutoAcceptPrecision",
+        "minNewFactsWouldAcceptCards", "juryExcludedRate",
     ]
     assert list(report["seeded"]) == [
         "report", "reportSha256", "dataset", "datasetSha256", "reps", "n", "tp", "fn", "recall", "recallCi95",
@@ -422,6 +436,7 @@ def test_report_json_has_the_contract_keys(tmp_path: Path) -> None:
         "report", "reportSha256", "dataset", "datasetSha256", "labelsSha256", "reps", "n", "scored", "wouldAccept",
         "wouldAcceptCorrect", "wouldAcceptCards", "autoAcceptPrecision", "autoAcceptPrecisionCi95",
         "defectiveLabeled", "defectEscaped", "defectEscapeRate", "humanRouteRate", "unscoredRate", "estimatedCostUsd",
+        "juryExcluded", "conservativeAutoAcceptPrecision", "strata", "ownerSample",
     ]
     json.dumps(report)
 
@@ -465,7 +480,7 @@ def test_cli_exit_codes_and_files(tmp_path: Path, capsys, monkeypatch) -> None:
     report = json.loads(json_path.read_text(encoding="utf-8"))
     assert report["passed"] is True
     assert md_path.read_text(encoding="utf-8").startswith(
-        f"# Automation gate: {PROVIDER} {MODEL} {PROMPT_VERSION} — PASS"
+        f"# Automation gate: {PROVIDER} {MODEL} {AUTOMATION_PROMPT_VERSION} — PASS"
     )
     assert "POST /api/v1/admin/automation/eval-gate" in md_path.read_text(encoding="utf-8")
 
