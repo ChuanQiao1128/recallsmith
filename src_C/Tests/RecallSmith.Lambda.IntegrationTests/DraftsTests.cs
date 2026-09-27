@@ -581,7 +581,7 @@ public class DraftsTests
   // ---------------------------------------------------------------- reject
 
   [Fact]
-  public async Task Reject_DefectReason_RecordsLedgerDefect()
+  public async Task Reject_DefectReason_RecordsReviewCostNotDefect()
   {
     var deck = await NewDeckAsync("ledger-defect");
     var ids = await SubmitCardsAsync(deck.Id, Card("defect-card"));
@@ -589,10 +589,18 @@ public class DraftsTests
     var data = Data(await RejectAsync(ids[0], new { reason = "duplicate", note = "  same as an existing card  ", reviewMs = 3000 }));
     Assert.Equal("rejected", data.GetProperty("action").GetString());
 
+    // automation-4: a rejected draft is the agent's own mistake, not a defect caught before publish; its
+    // review time is charged to the automation.
     var row = Assert.Single(await _db.QueryAsync(
-      "select units, defects_caught from automation_events where dedupe_key = $1", $"draft-reject:{ids[0]}"));
-    Assert.Equal(1, Convert.ToInt32(row["defects_caught"], CultureInfo.InvariantCulture));
+      "select units, defects_caught, actual_minutes, details::text as details from automation_events where dedupe_key = $1", $"draft-reject:{ids[0]}"));
+    Assert.Equal(0, Convert.ToInt32(row["defects_caught"], CultureInfo.InvariantCulture));
     Assert.Equal(0, Convert.ToInt32(row["units"], CultureInfo.InvariantCulture));
+    Assert.Equal(0.05m, Convert.ToDecimal(row["actual_minutes"], CultureInfo.InvariantCulture));
+    using (var details = JsonDocument.Parse((string)row["details"]!))
+    {
+      Assert.Equal("duplicate", details.RootElement.GetProperty("reason").GetString());
+      Assert.True(details.RootElement.GetProperty("defect").GetBoolean());
+    }
 
     var ev = (await _db.QueryAsync(
       "select reason, note, review_ms from ai_review_events where draft_id = $1 and action = 'rejected'", ids[0]))[0];
@@ -607,16 +615,24 @@ public class DraftsTests
   }
 
   [Fact]
-  public async Task Reject_NonDefectReason_RecordsNoLedgerDefect()
+  public async Task Reject_NonDefectReason_RecordsReviewCostWithoutDefect()
   {
     var deck = await NewDeckAsync("ledger-nodefect");
     var ids = await SubmitCardsAsync(deck.Id, Card("nodefect-card"));
 
     AssertError(await RejectAsync(ids[0], new { reason = "not-a-reason" }), 400, "VALIDATION_ERROR");
-    Data(await RejectAsync(ids[0], new { reason = "low_value" }));
+    Data(await RejectAsync(ids[0], new { reason = "low_value", reviewMs = 120000 }));
 
-    var count = await _db.ScalarAsync("select count(*) from automation_events where dedupe_key = $1", $"draft-reject:{ids[0]}");
-    Assert.Equal(0L, Convert.ToInt64(count, CultureInfo.InvariantCulture));
+    // automation-4: every reject charges its review time, whatever the reason.
+    var row = Assert.Single(await _db.QueryAsync(
+      "select units, defects_caught, actual_minutes, details::text as details from automation_events where dedupe_key = $1", $"draft-reject:{ids[0]}"));
+    Assert.Equal(0, Convert.ToInt32(row["units"], CultureInfo.InvariantCulture));
+    Assert.Equal(0, Convert.ToInt32(row["defects_caught"], CultureInfo.InvariantCulture));
+    Assert.Equal(2m, Convert.ToDecimal(row["actual_minutes"], CultureInfo.InvariantCulture));
+    using (var details = JsonDocument.Parse((string)row["details"]!))
+    {
+      Assert.False(details.RootElement.GetProperty("defect").GetBoolean());
+    }
     Assert.Equal("rejected", await StatusAsync(ids[0]));
   }
 

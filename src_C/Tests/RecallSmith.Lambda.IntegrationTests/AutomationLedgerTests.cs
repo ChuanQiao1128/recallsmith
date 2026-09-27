@@ -295,14 +295,14 @@ public class AutomationLedgerTests
     await RecordAsync(new AutomationEvent("publish_pipeline", 1, "success", OccurredAt: new DateTimeOffset(2001, 7, 1, 0, 0, 0, TimeSpan.Zero)));
 
     var data = await LedgerAsync("2001-01-01", "2001-06-30");
-    Assert.Equal(new[] { "from", "to", "granularity", "totals", "automations", "series" }, data.EnumerateObject().Select(p => p.Name).ToArray());
+    Assert.Equal(new[] { "from", "to", "granularity", "totals", "automations", "series", "agentDrafts" }, data.EnumerateObject().Select(p => p.Name).ToArray());
     Assert.Equal("2001-01-01", data.GetProperty("from").GetString());
     Assert.Equal("2001-06-30", data.GetProperty("to").GetString());
     Assert.Equal("week", data.GetProperty("granularity").GetString());
 
     var totals = data.GetProperty("totals");
     Assert.Equal(
-      new[] { "runs", "units", "baselineMinutes", "actualMinutes", "minutesSaved", "hoursSaved", "defectsCaught", "qaFalsePositives" },
+      new[] { "runs", "units", "baselineMinutes", "actualMinutes", "minutesSaved", "hoursSaved", "defectsCaught", "qaFalsePositives", "bySource", "byBaselineSource" },
       totals.EnumerateObject().Select(p => p.Name).ToArray());
     Assert.Equal(5, totals.GetProperty("runs").GetInt64());
     Assert.Equal(44, totals.GetProperty("units").GetInt64());
@@ -384,6 +384,99 @@ public class AutomationLedgerTests
     var series = data.GetProperty("series").EnumerateArray().ToList();
     Assert.All(series, s => Assert.Equal("2002-06-01", s.GetProperty("periodStart").GetString()));
     Assert.Equal(new[] { "bulk_import", "publish_gate", "publish_pipeline" }, series.Select(s => s.GetProperty("automation").GetString()).ToArray());
+  }
+
+  [Fact]
+  public async Task Ledger_ReviewCostOffsetsSavingsPerAutomation_AndSplitsBySource()
+  {
+    // automation-4: savings are clamped per automation (and source), not per row, so a reject's review time
+    // (units 0) reduces what the accepts saved.
+    await RecordAsync(new AutomationEvent("ai_draft_review", 1, "success", ActualMinutes: 2m, OccurredAt: At(2007, 3, 1)));
+    await RecordAsync(new AutomationEvent("ai_draft_review", 0, "success", ActualMinutes: 3m, OccurredAt: At(2007, 3, 2)));
+    // automation-11: live and backfilled rows are reported apart.
+    await RecordAsync(new AutomationEvent("bulk_import", 2, "success", OccurredAt: At(2007, 3, 3)));
+    await RecordAsync(new AutomationEvent("bulk_import", 10, "success", Source: "backfill", OccurredAt: At(2007, 3, 4)));
+
+    var data = await LedgerAsync("2007-01-01", "2007-12-31", "month");
+
+    var draft = Automation(data, "ai_draft_review");
+    Assert.Equal(1, draft.GetProperty("runs").GetInt64());
+    Assert.Equal(5m, draft.GetProperty("actualMinutes").GetDecimal());
+    // max(0, 1 × 12 − (2 + 3)) = 7; a per-row clamp would have reported 10.
+    Assert.Equal(7m, draft.GetProperty("minutesSaved").GetDecimal());
+
+    var totals = data.GetProperty("totals");
+    // 7 + 2 × 1.5 + 10 × 1.5 = 25.
+    Assert.Equal(25m, totals.GetProperty("minutesSaved").GetDecimal());
+    var live = totals.GetProperty("bySource").GetProperty("live");
+    var backfill = totals.GetProperty("bySource").GetProperty("backfill");
+    Assert.Equal(new[] { "runs", "units", "minutesSaved", "hoursSaved" }, live.EnumerateObject().Select(p => p.Name).ToArray());
+    Assert.Equal(10m, live.GetProperty("minutesSaved").GetDecimal());
+    Assert.Equal(3, live.GetProperty("units").GetInt64());
+    Assert.Equal(2, live.GetProperty("runs").GetInt64());
+    Assert.Equal(15m, backfill.GetProperty("minutesSaved").GetDecimal());
+    Assert.Equal(10, backfill.GetProperty("units").GetInt64());
+    Assert.Equal(1, backfill.GetProperty("runs").GetInt64());
+    Assert.Equal(0.25m, backfill.GetProperty("hoursSaved").GetDecimal());
+
+    var byBaseline = totals.GetProperty("byBaselineSource");
+    Assert.Equal(
+      totals.GetProperty("minutesSaved").GetDecimal(),
+      byBaseline.GetProperty("measured").GetProperty("minutesSaved").GetDecimal() + byBaseline.GetProperty("default").GetProperty("minutesSaved").GetDecimal());
+
+    var series = data.GetProperty("series").EnumerateArray().ToList();
+    var draftPoint = Assert.Single(series, s => s.GetProperty("automation").GetString() == "ai_draft_review");
+    Assert.Equal(7m, draftPoint.GetProperty("minutesSaved").GetDecimal());
+    var importPoint = Assert.Single(series, s => s.GetProperty("automation").GetString() == "bulk_import");
+    Assert.Equal(18m, importPoint.GetProperty("minutesSaved").GetDecimal());
+  }
+
+  [Fact]
+  public async Task Ledger_ReportsAgentDraftQuality()
+  {
+    // automation-4: acceptance rate, edited-accept rate, the agent's defect rate and review time.
+    var deckId = Convert.ToInt64(await _db.ScalarAsync(
+      "insert into decks (slug, title, author) values ($1, 'x01 agent', 'tests') returning id", $"it-x01-agent-{Guid.NewGuid():N}"), CultureInfo.InvariantCulture);
+    var batch = Guid.NewGuid();
+    var decisions = new (string Action, string? Reason, int? Ms)[]
+    {
+      ("accepted", null, 60000),
+      ("edited_accepted", null, 120000),
+      ("rejected", "incorrect", 180000),
+      ("rejected", "low_value", null),
+    };
+    for (var i = 0; i < decisions.Length; i++)
+    {
+      var draftId = Convert.ToInt64(await _db.ScalarAsync(
+        """
+        insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, status, card, submitted_by_sub)
+        values ($1, $2, $3, $4, 'pending', '{}'::jsonb, 'it-x01') returning id
+        """,
+        deckId, batch, $"k{i}", $"agent-{i}"), CultureInfo.InvariantCulture);
+      await _db.ScalarAsync(
+        "insert into ai_review_events (draft_id, action, reason, review_ms, created_at) values ($1, $2, $3, $4, $5)",
+        draftId, decisions[i].Action, decisions[i].Reason, decisions[i].Ms, At(2008, 4, 1 + i).UtcDateTime);
+    }
+
+    var agent = (await LedgerAsync("2008-01-01", "2008-12-31")).GetProperty("agentDrafts");
+    Assert.Equal(
+      new[] { "decided", "accepted", "editedAccepted", "rejected", "defectRejects", "acceptanceRate", "editedAcceptRate", "defectRate", "avgReviewMinutes" },
+      agent.EnumerateObject().Select(p => p.Name).ToArray());
+    Assert.Equal(4, agent.GetProperty("decided").GetInt64());
+    Assert.Equal(2, agent.GetProperty("accepted").GetInt64());
+    Assert.Equal(1, agent.GetProperty("editedAccepted").GetInt64());
+    Assert.Equal(2, agent.GetProperty("rejected").GetInt64());
+    Assert.Equal(1, agent.GetProperty("defectRejects").GetInt64());
+    Assert.Equal(0.5m, agent.GetProperty("acceptanceRate").GetDecimal());
+    Assert.Equal(0.5m, agent.GetProperty("editedAcceptRate").GetDecimal());
+    Assert.Equal(0.25m, agent.GetProperty("defectRate").GetDecimal());
+    Assert.Equal(2m, agent.GetProperty("avgReviewMinutes").GetDecimal());
+
+    // An empty period answers zeros and a null average.
+    var empty = (await LedgerAsync("1990-01-01", "1990-12-31")).GetProperty("agentDrafts");
+    Assert.Equal(0, empty.GetProperty("decided").GetInt64());
+    Assert.Equal(0m, empty.GetProperty("acceptanceRate").GetDecimal());
+    Assert.Equal(JsonValueKind.Null, empty.GetProperty("avgReviewMinutes").ValueKind);
   }
 
   [Fact]
