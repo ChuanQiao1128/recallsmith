@@ -55,8 +55,12 @@ export function statusFixture(overrides: Partial<AutomationStatus> = {}): Automa
       humanAccepted: 7,
       humanEditedAccepted: 1,
       humanRejected: 0,
-      agreementRate: 0.875,
+      // M3: the rate is blindAccepted / blindDecided, not humanAccepted / humanDecided.
+      agreementRate: 0.8,
+      blindDecided: 5,
+      blindAccepted: 4,
     },
+    live: { autoAccepted30d: 0, deletedByPerson: 0, editedByPerson: 0, overrideRate: null },
     publishes7d: { byState: { would_publish: 2 } },
     spend: { todayUsd: 1.25, automationTodayUsd: 0.5, reservedUsd: 0.1, dailyCapUsd: 10 },
     watch: { targets: 4, active: 3, failing: 1, lastCheckedAt: '2026-09-28T10:00:00Z', changes7d: 2 },
@@ -84,6 +88,7 @@ export function evalGateFixture(overrides: Partial<EvalGate> = {}): EvalGate {
     createdAt: '2026-09-27T09:00:00Z',
     revokedAt: null,
     revokedBySub: null,
+    authorConfigId: null,
     ...overrides,
   };
 }

@@ -9,6 +9,11 @@
 // revoked blocks live, whatever an older row says, so the card names that row,
 // and each history row says whether it is effective, blocking, revoked or
 // superseded (C07 frontend-console-17). Metric keys read as words (-11).
+//
+// M4 (D07 frontend-console-23): a failed report is recorded too, after a
+// confirm that says it blocks live. The server stores it even when it answers
+// 400 EVAL_GATE_FAILED, so that answer reloads the gate and the status exactly
+// like a success and names the gate it became.
 import { useEffect, useState } from 'react';
 
 import { fetchEvalGate, recordEvalGate, revokeEvalGate, type EvalGate, type EvalGateState } from '../../api/automation';
@@ -30,11 +35,16 @@ import {
   EVAL_METRIC_LABELS,
   automationErrorMessage,
   codeLabel,
+  EVAL_GATE_FAILED_CONFIRM,
+  evalGateRecordErrorMessage,
+  evalGateRecordedFailedText,
+  evalGateReportFailed,
   evalGateReportProblem,
   evalGateRowStatus,
   evalGateSummary,
   evalGateSummaryText,
   formatTimestamp,
+  newestGateId,
   orDash,
 } from '../../lib/automationRules';
 
@@ -43,9 +53,17 @@ type GateLoad = { forKey: string | null; error: string | null; data: EvalGateSta
 const REPORT_ID = 'automation-gate-report';
 const REPORT_PROBLEM_ID = 'automation-gate-report-problem';
 
-function refusalText(error: ApiError | null, fallback: string): string {
-  const text = automationErrorMessage(error?.code, error?.message ?? fallback);
+function refusalText(
+  error: ApiError | null,
+  fallback: string,
+  map: (code: string | undefined, message: string) => string = automationErrorMessage,
+): string {
+  const text = map(error?.code, error?.message ?? fallback);
   return error?.details ? `${text} ${error.details}` : text;
+}
+
+function serverWords(error: ApiError | null): string {
+  return [error?.message, error?.details].filter(Boolean).join(' ');
 }
 
 function metricText(value: unknown): string | null {
@@ -76,6 +94,8 @@ export function EvalGateCard({
   const [problem, setProblem] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Set when the server recorded a failed report (400 EVAL_GATE_FAILED): its words, shown with the new gate's id.
+  const [recordedFailed, setRecordedFailed] = useState<string | null>(null);
 
   const key = `${reloadKey}|${nonce}`;
 
@@ -105,12 +125,30 @@ export function EvalGateCard({
     const found = evalGateReportProblem(reportText);
     setProblem(found);
     setRefusal(null);
+    setRecordedFailed(null);
     if (found) return;
+    if (evalGateReportFailed(reportText)) {
+      const yes = await confirm({
+        title: 'Record a failed report?',
+        body: EVAL_GATE_FAILED_CONFIRM,
+        destructive: true,
+        confirmLabel: 'Record the failed report',
+      });
+      if (!yes) return;
+    }
     setBusy(true);
     const res = await recordEvalGate(reportText);
     setBusy(false);
+    if (!res.success && res.error?.code === 'EVAL_GATE_FAILED') {
+      // L3: the row is inserted before the 400, so the newest evaluation now blocks live.
+      setReportText('');
+      setRecordedFailed(serverWords(res.error));
+      setNonce(n => n + 1);
+      onChanged();
+      return;
+    }
     if (!res.success || !res.data) {
-      setRefusal(refusalText(res.error, 'The eval gate could not be recorded.'));
+      setRefusal(refusalText(res.error, 'The eval gate could not be recorded.', evalGateRecordErrorMessage));
       return;
     }
     setReportText('');
@@ -128,6 +166,7 @@ export function EvalGateCard({
     });
     if (!yes) return;
     setRefusal(null);
+    setRecordedFailed(null);
     setBusy(true);
     const res = await revokeEvalGate(gateId);
     setBusy(false);
@@ -180,6 +219,12 @@ export function EvalGateCard({
               <dt className="text-xs text-slate-500">Report SHA-256</dt>
               <dd className="font-mono">{current.reportSha256.slice(0, 12)}</dd>
             </div>
+            {current.authorConfigId ? (
+              <div>
+                <dt className="text-xs text-slate-500">Author configuration</dt>
+                <dd className="font-mono">{current.authorConfigId.slice(0, 12)}</dd>
+              </div>
+            ) : null}
             <div>
               <dt className="text-xs text-slate-500">Recorded</dt>
               <dd>
@@ -267,6 +312,14 @@ export function EvalGateCard({
               {refusal}
             </Callout>
           ) : null}
+          <div role="status" data-testid="automation-gate-recorded-failed">
+            {recordedFailed !== null && !loading ? (
+              <Callout tone="warning">
+                {evalGateRecordedFailedText(newestGateId(gate.data?.history ?? []))}
+                {recordedFailed ? ` ${recordedFailed}` : ''}
+              </Callout>
+            ) : null}
+          </div>
           <Button size="xs" disabled={busy} onClick={() => void onRecord()}>
             Record eval gate
           </Button>
