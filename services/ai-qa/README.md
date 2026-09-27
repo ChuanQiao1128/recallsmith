@@ -48,6 +48,15 @@ Both clients: timeout 120 s, `max_retries=2`. A Bedrock model id must start with
 and a first-party id must not (a bare first-party id is never sent to Bedrock); a mismatch is a
 `ConfigError`.
 
+**Bedrock IAM (R18 Y04).** The Mantle client signs for service `bedrock-mantle`, so the only action
+it needs is `bedrock-mantle:CreateInference`; it never calls `bedrock:InvokeModel`, and the role no
+longer grants it. The grant (`infra/modules/identity/roles_r18.tf`, Sid `BedrockMantleInference`)
+names one resource, the account's `default` Mantle project (the client sends no `OpenAI-Project`
+header), and pins `bedrock-mantle:Model` to one model id (prod: `anthropic.claude-opus-5`). IAM
+therefore denies any other `AI_MODEL`: changing the model means changing `ai_qa_model_id` in
+`infra/envs/prod/main.tf` (applied) together with `AI_MODEL` in `env/prod.env.json` (deployed); a
+model changed only here fails every chunk with `PROVIDER_ACCESS_DENIED`.
+
 Today Bedrock answers this account with an access error about **unsupported countries** until the
 owner submits the Anthropic use-case form in the Bedrock console. That error arrives as
 `PermissionDeniedError` → `PROVIDER_ACCESS_DENIED` (fail fast, acked). The alternative is
@@ -222,19 +231,26 @@ counts — never card text, model output, keys or signatures.
 
 ### Emergency stop (runaway spend, provider incident)
 
-`AI_QA_ENABLED` in this function's environment only changes with a deploy: the SQS event source
-mapping targets the `prod` alias, and the deploy script freezes the merged environment into the
-published version, so editing the variable on the function in the console changes nothing in
-production. To stop now (supervisor only):
+The immediate stop is disabling the SQS event source mapping; `AI_QA_ENABLED` is not. The mapping
+targets the `prod` alias, and the deploy script freezes the merged environment into the published
+version, so editing `AI_QA_ENABLED` on the function in the console changes nothing in production,
+and setting it on core-vpc (a deploy) only blocks *new* runs — chunks already queued keep spending.
+infra/RUNBOOK.md §7 "Emergency stop for the SQS consumers" is the same procedure. To stop now
+(supervisor only):
 
-1. Stop new runs: `AI_QA_ENABLED=0` on core-vpc (its own deploy), or skip this if speed matters.
-2. Stop the consumer; queued chunks stay in the queue (retention 4 days) and resume when re-enabled:
+1. Stop the consumer — takes effect at once; queued chunks stay in the queue (retention 4 days) and
+   resume when re-enabled:
    - `aws lambda list-event-source-mappings --function-name developercards-ai-qa:prod --query 'EventSourceMappings[].UUID'`
    - `aws lambda update-event-source-mapping --uuid <uuid> --no-enabled`
-   - or, stopping in-flight retries too: `aws lambda put-function-concurrency --function-name developercards-ai-qa --reserved-concurrent-executions 0`
-3. Undo: `aws lambda update-event-source-mapping --uuid <uuid> --enabled`, and/or
-   `aws lambda put-function-concurrency --function-name developercards-ai-qa --reserved-concurrent-executions 2`
-   (the Terraform value).
+2. Stop new runs: `AI_QA_ENABLED=0` in core-vpc's `prod.env.json` and its deploy (and in this
+   `env/prod.env.json` for the next ai-qa deploy).
+3. Undo: `aws lambda update-event-source-mapping --uuid <uuid> --enabled`.
+
+Do not use `put-function-concurrency --reserved-concurrent-executions 0` for ai-qa: a throttled
+SQS-triggered function still has messages received for it, and with `maxReceiveCount = 2` the queued
+chunks move to the DLQ instead of waiting. The mapping's `enabled` is in Terraform's
+`ignore_changes` (R18 Y04), so an apply does not re-enable a stopped consumer; still check
+`aws lambda get-event-source-mapping --uuid <uuid> --query State` before and after any apply.
 
 A run whose chunks were stopped stays `running` until they are processed or it is failed by
 core-vpc; purge the queue (`aws sqs purge-queue`) only if those runs are to be abandoned. The
