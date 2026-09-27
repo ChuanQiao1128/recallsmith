@@ -76,3 +76,17 @@ def test_claude_cli_refuses_structured_outputs() -> None:
 
 def test_render_prompt_single_turn_is_verbatim() -> None:
     assert render_prompt([{"role": "user", "content": "exactly this"}]) == "exactly this"
+
+
+def test_claude_cli_reports_the_model_that_answered() -> None:
+    from dc_evals.claude_cli import served_model
+
+    assert served_model({"modelUsage": {"claude-opus-5[1m]": {}}}, "claude-opus-5") == "claude-opus-5"
+    assert served_model({"modelUsage": {"claude-haiku-4-5": {}, "claude-opus-5": {}}}, "claude-opus-5") == "claude-opus-5"
+    assert served_model({"modelUsage": {"claude-sonnet-5": {}}}, "claude-opus-5") == "claude-sonnet-5"
+    assert served_model({}, "claude-opus-5") is None
+    runner = FakeRunner([{**cli_result('{"findings":[]}'), "modelUsage": {"claude-opus-5": {}}}])
+    response = ClaudeCliClient("claude-opus-5", runner=runner).messages.create(
+        system="s", messages=[{"role": "user", "content": "hi"}], output_config={"effort": "high"}
+    )
+    assert response.model == "claude-opus-5"

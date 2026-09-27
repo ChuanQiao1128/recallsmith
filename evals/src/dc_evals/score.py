@@ -1,4 +1,5 @@
-"""Scoring (contract §12.1): recall, precision, F1, control false-positive rate, latency, errors, cost."""
+"""Scoring (contract §12.1): recall, precision, F1, control false-positive rate, latency, errors, cost,
+plus the rollout gate. Every gate threshold lives in the block below and nowhere else."""
 
 from __future__ import annotations
 
@@ -8,16 +9,37 @@ from typing import Any
 
 from .dataset import DEFECT_CLASSES
 
+# --- rollout gate thresholds (contract §7.9 step 3; README "Gate") -------------------------
+# Overall recall on serious defects, pooled over every repetition.
 RECALL_GATE = 0.80
+# Overall precision at the dataset's own ~50% defect prevalence (contract §12.1 line).
 PRECISION_GATE = 0.70
+# Share of scored controls flagged blocker/major. Unlike precision it does not depend on how many
+# defects the dataset holds, so it is the gate's real bound on false alarms.
+CONTROL_FPR_GATE = 0.10
+# Every class the dataset seeds must reach this recall, so easy classes cannot hide a weak one.
+PER_CLASS_RECALL_FLOOR = 0.60
+# Controls that ended errored/refused/skipped (unscored) may be at most this share of controls.
+CONTROL_UNSCORED_RATE_GATE = 0.02
+# Only a run through a production provider is rollout evidence; claude-cli is a local preview.
+GATE_PROVIDERS = frozenset({"bedrock", "anthropic"})
+# The dataset the rollout gate is measured on (its sha256 and size are checked against data/).
+GATE_DATASET = "seeded-v2"
+# Informational: the defect prevalence expected in production, used for precisionAtPrevalence.
+PRODUCTION_PREVALENCE = 0.10
+# Two-sided 95% Wilson score interval.
+CI_Z = 1.96
 
 ACCEPTED_CATEGORIES = {
-    "incorrect_answer": {"incorrect_answer"},
+    # A wrong or outdated answer contradicts its supporting quote, so a source_unsupported finding
+    # on those cards is a correct catch too (seeded-v2 cites every card; v1 cites none).
+    "incorrect_answer": {"incorrect_answer", "source_unsupported"},
     "multiple_correct": {"multiple_correct"},
     "answer_leak": {"answer_leak"},
     "ambiguous_stem": {"ambiguous_stem"},
-    "outdated_fact": {"outdated_fact", "incorrect_answer"},
+    "outdated_fact": {"outdated_fact", "incorrect_answer", "source_unsupported"},
     "qualifier_mismatch": {"qualifier_mismatch", "ambiguous_stem"},
+    "source_unsupported": {"source_unsupported"},
 }
 
 SERIOUS_SEVERITIES = frozenset({"blocker", "major"})
@@ -31,6 +53,23 @@ def f1(precision: float, recall: float) -> float:
     return round(2 * precision * recall / (precision + recall), 4) if precision + recall else 0.0
 
 
+def wilson_ci(successes: int, n: int, z: float = CI_Z) -> list[float]:
+    """[low, high] Wilson score interval for successes/n; [0.0, 0.0] when n is 0."""
+    if n <= 0:
+        return [0.0, 0.0]
+    p = successes / n
+    denominator = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denominator
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator
+    return [round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4)]
+
+
+def precision_at_prevalence(recall: float, fpr: float, prevalence: float = PRODUCTION_PREVALENCE) -> float:
+    """Precision the same reviewer would have if `prevalence` of cards were defective."""
+    flagged = recall * prevalence + fpr * (1 - prevalence)
+    return round(recall * prevalence / flagged, 4) if flagged else 0.0
+
+
 def serious_findings(record: dict[str, Any]) -> list[dict[str, Any]]:
     return [f for f in record.get("findings") or [] if f.get("severity") in SERIOUS_SEVERITIES]
 
@@ -40,9 +79,13 @@ def is_flagged(record: dict[str, Any]) -> bool:
     return bool(serious_findings(record))
 
 
+def is_scored(record: dict[str, Any]) -> bool:
+    return record.get("status") == "done"
+
+
 def is_true_positive(record: dict[str, Any]) -> bool:
     """A defective record flagged by a blocker/major finding in its class's accepted set."""
-    if record.get("status") != "done":
+    if not is_scored(record):
         return False
     accepted = ACCEPTED_CATEGORIES[record["defect"]]
     return any(f.get("category") in accepted for f in serious_findings(record))
@@ -56,35 +99,52 @@ def nearest_rank(values: list[int], q: float) -> int:
     return ordered[max(math.ceil(q * len(ordered)) - 1, 0)]
 
 
-def score(records: list[dict[str, Any]]) -> dict[str, Any]:
+def _recall_block(records: list[dict[str, Any]]) -> dict[str, Any]:
+    tp = sum(1 for r in records if is_true_positive(r))
+    fn = len(records) - tp
+    return {"tp": tp, "fn": fn, "recall": ratio(tp, tp + fn), "recallCi95": wilson_ci(tp, tp + fn)}
+
+
+def _control_counts(records: list[dict[str, Any]]) -> tuple[int, int, int]:
+    """(controls, scored controls, flagged scored controls). An errored, refused or skipped
+    control is unscored: it is neither clean nor an FP and leaves the FPR denominator."""
+    controls = [r for r in records if r.get("defect") is None]
+    scored = [r for r in controls if is_scored(r)]
+    return len(controls), len(scored), sum(1 for r in scored if is_flagged(r))
+
+
+def score(records: list[dict[str, Any]], classes: tuple[str, ...] = DEFECT_CLASSES) -> dict[str, Any]:
     """The report's metric blocks plus flaggedWrongCategory (Markdown summary only)."""
-    per_class: dict[str, dict[str, Any]] = {}
-    tp_total = fn_total = fp = controls = wrong_category = 0
-    for defect in DEFECT_CLASSES:
-        tp = fn = 0
-        for record in records:
-            if record.get("defect") != defect:
-                continue
-            if is_true_positive(record):
-                tp += 1
-            else:
-                fn += 1
-                if record.get("status") == "done" and is_flagged(record):
-                    wrong_category += 1
-        per_class[defect] = {"tp": tp, "fn": fn, "recall": ratio(tp, tp + fn)}
-        tp_total += tp
-        fn_total += fn
-    for record in records:
-        if record.get("defect") is None:
-            controls += 1
-            if record.get("status") == "done" and is_flagged(record):
-                fp += 1
+    defective = [r for r in records if r.get("defect") is not None]
+    per_class = {c: _recall_block([r for r in defective if r["defect"] == c]) for c in classes}
+    wrong_category = sum(
+        1 for r in defective if is_scored(r) and is_flagged(r) and not is_true_positive(r)
+    )
+    tp_total = sum(block["tp"] for block in per_class.values())
+    fn_total = sum(block["fn"] for block in per_class.values())
+    controls, scored_controls, fp = _control_counts(records)
     recall = ratio(tp_total, tp_total + fn_total)
     precision = ratio(tp_total, tp_total + fp)
     raw_recall = tp_total / (tp_total + fn_total) if tp_total + fn_total else 0.0
     raw_precision = tp_total / (tp_total + fp) if tp_total + fp else 0.0
+    raw_fpr = fp / scored_controls if scored_controls else 0.0
     latencies = [int(r["latencyMs"]) for r in records if (r.get("latencyMs") or 0) > 0]
     errors = Counter(r["errorCode"] for r in records if r.get("errorCode"))
+    tiers = sorted({r["tier"] for r in defective if r.get("tier")})
+    reps = sorted({int(r.get("rep") or 1) for r in records})
+    per_rep = []
+    for rep in reps:
+        rep_records = [r for r in records if int(r.get("rep") or 1) == rep]
+        rep_defective = [r for r in rep_records if r.get("defect") is not None]
+        rep_tp = sum(1 for r in rep_defective if is_true_positive(r))
+        _, rep_scored, rep_fp = _control_counts(rep_records)
+        per_rep.append(
+            {
+                "rep": rep,
+                "recall": ratio(rep_tp, len(rep_defective)),
+                "controlFalsePositiveRate": ratio(rep_fp, rep_scored),
+            }
+        )
     return {
         "n": len(records),
         "estimatedCostUsd": round(sum(float(r.get("estimatedCostUsd") or 0.0) for r in records), 6),
@@ -96,7 +156,27 @@ def score(records: list[dict[str, Any]]) -> dict[str, Any]:
             "recall": recall,
             "precision": precision,
             "f1": f1(raw_precision, raw_recall),
-            "controlFalsePositiveRate": ratio(fp, controls),
+            "controlFalsePositiveRate": ratio(fp, scored_controls),
+            "recallCi95": wilson_ci(tp_total, tp_total + fn_total),
+            "controlFalsePositiveRateCi95": wilson_ci(fp, scored_controls),
+            "precisionAtPrevalence": {
+                "prevalence": PRODUCTION_PREVALENCE,
+                "precision": precision_at_prevalence(raw_recall, raw_fpr),
+            },
+        },
+        "unscored": {
+            "defective": sum(1 for r in defective if not is_scored(r)),
+            "controls": controls - scored_controls,
+            "controlUnscoredRate": ratio(controls - scored_controls, controls),
+        },
+        "perTier": {tier: _recall_block([r for r in defective if r.get("tier") == tier]) for tier in tiers},
+        "perRep": per_rep,
+        "servedModel": {
+            "unverified": sum(1 for r in records if is_scored(r) and not r.get("servedModel")),
+        },
+        "structuredItems": {
+            "on": sum(1 for r in records if r.get("structured") is True),
+            "off": sum(1 for r in records if r.get("structured") is False),
         },
         "latencyMs": {"p50": nearest_rank(latencies, 0.50), "p95": nearest_rank(latencies, 0.95)},
         "errors": dict(sorted(errors.items())),
@@ -104,9 +184,49 @@ def score(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def gate_passes(report: dict[str, Any]) -> bool:
-    """recall >= RECALL_GATE and precision >= PRECISION_GATE overall; a run with no items fails."""
+def gate_failures(report: dict[str, Any]) -> list[str]:
+    """Every reason the run is not rollout evidence; empty when the gate passes.
+
+    report["gate"]["expected"] carries what the committed dataset says the run must look like
+    (report.build_report fills it from data/); a report without it cannot pass."""
+    failures: list[str] = []
     if not report.get("n"):
-        return False
+        return ["the run has no items"]
+    expected = (report.get("gate") or {}).get("expected") or {}
+    if report.get("provider") not in GATE_PROVIDERS:
+        failures.append(f"provider {report.get('provider')!r} is not one of {sorted(GATE_PROVIDERS)}")
+    if report.get("dataset") != GATE_DATASET:
+        failures.append(f"dataset {report.get('dataset')!r} is not {GATE_DATASET!r}")
+    if not report.get("datasetSha256") or report.get("datasetSha256") != expected.get("datasetSha256"):
+        failures.append("the run header's dataset sha256 does not match the committed dataset file")
+    reps = report.get("reps") or 1
+    if not expected.get("rows") or report["n"] != expected["rows"] * reps:
+        failures.append(f"truncated run: {report['n']} items, expected {expected.get('rows')} rows x {reps} reps")
     overall = report["overall"]
-    return overall["recall"] >= RECALL_GATE and overall["precision"] >= PRECISION_GATE
+    if overall["recall"] < RECALL_GATE:
+        failures.append(f"recall {overall['recall']:.4f} < {RECALL_GATE:.2f}")
+    if overall["precision"] < PRECISION_GATE:
+        failures.append(f"precision {overall['precision']:.4f} < {PRECISION_GATE:.2f}")
+    if overall["controlFalsePositiveRate"] > CONTROL_FPR_GATE:
+        failures.append(
+            f"control false-positive rate {overall['controlFalsePositiveRate']:.4f} > {CONTROL_FPR_GATE:.2f}"
+        )
+    for defect, block in report["perClass"].items():
+        if block["tp"] + block["fn"] == 0:
+            failures.append(f"class {defect} has no rows")
+        elif block["recall"] < PER_CLASS_RECALL_FLOOR:
+            failures.append(f"class {defect} recall {block['recall']:.4f} < {PER_CLASS_RECALL_FLOOR:.2f}")
+    unscored = report.get("unscored") or {}
+    if unscored.get("controlUnscoredRate", 1.0) > CONTROL_UNSCORED_RATE_GATE:
+        failures.append(
+            f"{unscored.get('controls')} controls unscored (errored/refused/skipped), rate "
+            f"{unscored.get('controlUnscoredRate', 1.0):.4f} > {CONTROL_UNSCORED_RATE_GATE:.2f}"
+        )
+    unverified = (report.get("servedModel") or {}).get("unverified")
+    if unverified is None or unverified > 0:
+        failures.append(f"{unverified} scored items carry no verified served model id")
+    return failures
+
+
+def gate_passes(report: dict[str, Any]) -> bool:
+    return not gate_failures(report)
