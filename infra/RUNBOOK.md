@@ -124,7 +124,7 @@ the undo: services/ai-qa/README.md "Emergency stop", services/webhook-dispatcher
    nothing until the next deploy, and on core-vpc it only blocks new runs — chunks already queued
    keep spending until step 1 is done.
 3. Do **not** use reserved concurrency 0 for ai-qa: a throttled SQS-triggered function still
-   receives messages, and with `maxReceiveCount = 2` queued chunks move to the DLQ instead of
+   receives messages, and with `maxReceiveCount = 3` (Z03) queued chunks move to the DLQ instead of
    waiting. Disabling the mapping never burns a receive.
 4. Before any `terraform plan`/apply while stopped, re-check the mapping state
    (`aws lambda get-event-source-mapping --uuid <uuid> --query State`). Both mappings list

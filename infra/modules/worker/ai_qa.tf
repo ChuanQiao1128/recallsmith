@@ -6,7 +6,9 @@ resource "aws_sqs_queue" "ai_qa_jobs_dlq" {
   sqs_managed_sse_enabled   = true
 }
 
-# Visibility 6 x the 600 s timeout; redrive 2 = one retry for a transient provider failure (R18-00 §7.5).
+# Visibility 6 x the 600 s timeout (the handler shortens it per message). Z03: redrive 3 (was 2, R18-00 §7.5) so the
+# 540-660 s later visibility lets a provider limit of a few minutes pass; ai-qa's AI_QA_MAX_RECEIVES reports the
+# rest with the retryable code on the last receive instead of letting the chunk reach the DLQ.
 resource "aws_sqs_queue" "ai_qa_jobs" {
   name                       = var.ai_qa_queue_name
   max_message_size           = 262144
@@ -15,7 +17,7 @@ resource "aws_sqs_queue" "ai_qa_jobs" {
   visibility_timeout_seconds = 3600
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.ai_qa_jobs_dlq.arn
-    maxReceiveCount     = 2
+    maxReceiveCount     = 3
   })
 }
 
