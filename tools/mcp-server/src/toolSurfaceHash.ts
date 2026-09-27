@@ -33,7 +33,19 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** Lowercase hex SHA-256 of the canonical JSON of a tool surface. */
+/**
+ * dist/tool-surface.json: the surface plus the SHA-256 of the dist/index.js it was listed from
+ * (ai-agent-28), so the runner can refuse a surface left over from another build.
+ */
+export interface ToolSurfaceFile extends ToolSurface {
+  bundleSha256: string;
+}
+
+/**
+ * Lowercase hex SHA-256 of the canonical JSON of a tool surface: its server, tools and constants
+ * only, so the file's bundleSha256 (which moves with every rebuild) never enters the gated id.
+ */
 export function toolSurfaceSha256(surface: ToolSurface): string {
-  return createHash('sha256').update(canonicalJson(surface)).digest('hex');
+  const { server, tools, constants } = surface;
+  return createHash('sha256').update(canonicalJson({ server, tools, constants })).digest('hex');
 }

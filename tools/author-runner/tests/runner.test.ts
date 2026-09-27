@@ -249,6 +249,7 @@ describe('runOnce', () => {
 
     // ai-agent-3: the pinned author configuration and the CLI's reported usage are recorded per run.
     const meta = JSON.parse(readFileSync(join(runsDir, `${String(claimed.runId)}.meta.json`), 'utf8')) as {
+      authorConfigId: string;
       authorConfig: Record<string, unknown>;
     };
     expect(meta).toMatchObject({ runId: claimed.runId, itemId: 42, outcome: 'done', usage: { totalCostUsd: 1.25, models: ['claude-opus-5-5'] } });
@@ -262,7 +263,10 @@ describe('runOnce', () => {
     for (const key of ['skillSha256', 'promptSha256', 'claudeArgsSha256']) expect(meta.authorConfig[key]).toMatch(/^[0-9a-f]{64}$/);
     expect(meta.authorConfig.id).toMatch(/^[0-9a-f]{16}$/);
     const itemStart = s.lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.event === 'item_start');
-    expect(itemStart?.authorConfigId).toBe(meta.authorConfig.id);
+    // automation-35: the log carries the gated id the gate card shows, and the local fingerprint apart.
+    expect(itemStart?.authorConfigId).toBe(meta.authorConfigId);
+    expect(itemStart?.authorConfigId).toMatch(/^[0-9a-f]{64}$/);
+    expect(itemStart?.configId).toBe(meta.authorConfig.id);
 
     expect(JSON.parse(readFileSync(join(s.config.logDir, 'last-run.json'), 'utf8'))).toMatchObject({
       runId: claimed.runId,

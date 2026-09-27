@@ -37,7 +37,7 @@ calls exactly three API routes:
 3. Work out `loginExpiresAt` from the stored id token and read `claude --version`.
 4. Pin the author configuration (see Author configuration). A checkout it cannot pin (no
    `.claude/skills/author-cards/SKILL.md` with a `Skill version:` line, or no built
-   `tools/mcp-server/dist/index.js` and `dist/tool-surface.json`) logs `author_config_error`,
+   `tools/mcp-server/dist/index.js` and `dist/tool-surface.json`, or a surface of another build) logs `author_config_error`,
    sends an `error` heartbeat and exits 1 without claiming. While `<log dir>/runner-state.json` holds
    a `limitedUntil` in the future (a usage limit, see step 6), the run only re-sends kept `complete`s,
    sends an `error` heartbeat (`RUNNER_UNAVAILABLE: usage limit until …`, event `usage_limited`) and
@@ -111,6 +111,22 @@ and nothing else, on stdout; it writes nothing and loads nothing. The plist sets
 unless they are set when it runs), so a non-default token file checked at install time is the one
 every hourly run uses. Set any other `DC_*` variable in the plist by hand after installing.
 
+## Upgrading (after `git pull` on the Mac)
+
+The job runs the built `dist/` of both tools, so rebuild both after every pull, then check:
+
+```bash
+(cd tools/mcp-server && npm ci && npm run build)
+(cd tools/author-runner && npm ci && npm run build)
+node tools/author-runner/dist/index.js status
+```
+
+From R18E on this is required: without a `tools/mcp-server/dist/tool-surface.json` that describes the
+`dist/index.js` next to it (N4, and from R18F its `bundleSha256`) the runner claims nothing and logs
+`author_config_error`. R18E also gave every configuration a new `authorConfigId` (the tool surface
+entered `argsSha256`), so a new-facts stratum captured with a runner from before R18E must be
+re-produced before the eval gate (see the one re-gate rule under Author configuration).
+
 ## Uninstall
 
 ```bash
@@ -160,9 +176,10 @@ An invalid value logs `config_error` naming the variable and its range, and exit
 ## Logs
 
 - `~/Library/Logs/DeveloperCards/author-runner.log` (launchd stdout and stderr): one compact JSON
-  object per line, `{ ts, level, event, runnerId, runId?, itemId?, outcome?, durationMs?, authorConfigId?, costUsd?, replayed?, error? }`.
+  object per line, `{ ts, level, event, runnerId, runId?, itemId?, outcome?, durationMs?, authorConfigId?, configId?, costUsd?, replayed?, error? }`.
   Events: `start`, `locked`, `config_error`, `login_required`, `mode_off`, `claimed`, `no_items`,
-  `item_start` (with `authorConfigId`), `item_done` (with `costUsd`, the CLI's `total_cost_usd`
+  `item_start` (with `authorConfigId`, the gated id the eval gate shows, and `configId`, the
+  16-character local `id`), `item_done` (with `costUsd`, the CLI's `total_cost_usd`
   estimate), `lease_short`, `bad_item`, `author_config_error`, `heartbeat_failed`, `complete_failed`,
   `complete_pending` (a `complete` kept for the next run), `complete_replayed` (a kept `complete`
   re-sent; `replayed: true` when the server had already applied it), `runner_unavailable` (a
@@ -205,7 +222,7 @@ is needed.
 | `mode_off` / `no_items` | the server's automation mode is `off`, or the queue has nothing due; nothing to do |
 | `lease_short` | the server granted a lease that ends before `DC_RUNNER_ITEM_TIMEOUT_MINUTES` would; the item is released at once (`complete` `failed`, so the server retries it with its backoff) and the run stops; check the server's lease limit |
 | `bad_item` | the server sent an item with an invalid run id, item id, deck slug or non-https URL; it is not run and is released at once (`complete` `failed`) unless its run id itself is invalid |
-| `author_config_error` | `.claude/skills/author-cards/SKILL.md` is missing or has no `Skill version:` line in `DC_REPO_ROOT`, or `tools/mcp-server/dist/index.js` or `dist/tool-surface.json` is not built |
+| `author_config_error` | `.claude/skills/author-cards/SKILL.md` is missing or has no `Skill version:` line in `DC_REPO_ROOT`, or `tools/mcp-server/dist/index.js` or `dist/tool-surface.json` is not built, or the surface's `bundleSha256` is not the SHA-256 of `dist/index.js` (a surface from another build): rebuild `tools/mcp-server` |
 | `item_done` with `failed` | the error names the CLI result subtype and text; read `runs/<runId>.stderr.log` and `runs/<runId>.json` |
 | `RUNNER_UNAVAILABLE: …` / `runner_unavailable` | a cause that affects every item ended the run after one item; the server requeues that item with its backoff (N3). `claude could not be started: ENOENT` means `claude` is not on the job's `PATH` (reinstall after moving it) |
 | `runner_held` / `RUNNER_UNAVAILABLE: held since …` | an earlier run hit a cause that does not go away by itself (no `claude`, not on the subscription login, MCP server failed); fix it, then delete `runner-state.json` (a Claude Code update or a changed author configuration also drops the hold) |
@@ -232,7 +249,10 @@ run starts:
   the tool names, descriptions and input schemas the agent sees, the lint limits and the MCP server
   version), `mcpServerVersion`, `mcpToolNames` (sorted), `mcpServerSha256`
   (`tools/mcp-server/dist/index.js`; a checkout without it or without `tool-surface.json` runs
-  nothing, `author_config_error`), `claudeVersion` and `runnerVersion`;
+  nothing, `author_config_error`), `claudeVersion` and `runnerVersion`. The build deletes
+  `tool-surface.json` first and records in it the `bundleSha256` of the `dist/index.js` it was listed
+  from; a surface whose `bundleSha256` differs from the bundle runs nothing either (ai-agent-28).
+  `bundleSha256` is not part of `toolSurfaceSha256`;
 - `id`: the first 16 hex characters of the SHA-256 of all of the above (a local fingerprint);
 - `authorConfigId` (M1): the lowercase hex SHA-256 of the canonical JSON (sorted keys, no spaces) of
   `{ argsSha256, model, promptSha256, skillSha256, skillVersion }` (`argsSha256` is
@@ -244,7 +264,7 @@ MCP server changes `id`. The runner passes the model, skill version and `authorC
 server (`DC_AUTOMATION_AUTHOR_MODEL`, `DC_AUTOMATION_SKILL_VERSION`,
 `DC_AUTOMATION_AUTHOR_CONFIG_ID`), which sends them in every draft's `agent` block instead of what
 the model claims. The full configuration and `authorConfigId` are in `runs/<runId>.meta.json`, and
-the local `id` is on the `item_start` log line. The eval gate copies `authorConfigId` from the run
+both `authorConfigId` and the local `id` (as `configId`) are on the `item_start` log line. The eval gate copies `authorConfigId` from the run
 records of its new-facts runs, and a live auto-accept requires the draft's `agent.authorConfigId`
 to equal the gate's (else `AUTHOR_NOT_GATED`, M1).
 

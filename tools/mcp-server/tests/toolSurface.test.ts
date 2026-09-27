@@ -36,3 +36,11 @@ describe('tool surface (N4, ai-agent-24)', () => {
     expect(canonicalJson({ a: 1, b: 2 })).toBe(canonicalJson({ b: 2, a: 1 }));
   });
 });
+
+describe('tool surface file (ai-agent-28)', () => {
+  it('keeps the bundle hash of dist/tool-surface.json out of the surface hash', async () => {
+    const surface = await listToolSurface();
+    expect(toolSurfaceSha256({ ...surface, bundleSha256: 'a'.repeat(64) } as ToolSurface)).toBe(toolSurfaceSha256(surface));
+    expect(toolSurfaceSha256({ ...surface, bundleSha256: 'b'.repeat(64) } as ToolSurface)).toBe(toolSurfaceSha256(surface));
+  });
+});

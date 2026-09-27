@@ -646,22 +646,35 @@ needs both bounds, hence at least 51 distinct source pages. The 18 pages of
 `data/authored-sources-v2-new-facts.json` are not enough: add announcement pages to it (at least 51,
 more for headroom) before the owner runs; never lower the minimum.
 
-**Author binding (C06).** The author-runner pins an author configuration at the start of every run
-(`tools/author-runner/src/authorConfig.ts`): the model, the skill version and SHA-256 hashes of the
-skill files, the queue-item prompt, the claude argument list and the MCP server bundle, plus the
-Claude CLI and runner versions; its `id` changes when any of them does. The gate report writes the
-configurations of the new-facts rows into `authored.author`, so a gate is bound to the author it
-measured, and **any change of the author configuration (a new `authorConfig` id) requires a new
-gate**, just as a change of the reviewer's provider, model or prompt does.
+**Author binding (C06, M1, N4).** The author-runner pins an author configuration at the start of
+every run (`tools/author-runner/src/authorConfig.ts`): the model, the skill version and SHA-256 hashes
+of the skill files, the queue-item prompt, the claude argument list with the MCP tool surface and the
+MCP server bundle, plus the Claude CLI and runner versions. Its `id` (16 hex characters) is a local
+fingerprint of all of them; the gate records it but does not bind to it. The gated author identity is
+`authorConfigId` (contract M1): the SHA-256 of the canonical JSON of {`argsSha256`, `model`,
+`promptSha256`, `skillSha256`, `skillVersion`}, where `argsSha256` is the record's
+`claudeArgsSha256`, the claude argument list together with the SHA-256 of the MCP tool surface
+(`tools/mcp-server/dist/tool-surface.json`: the tool names, descriptions and input schemas, the lint
+limits and the MCP server version; N4). The Claude CLI and runner versions and the bundle hash are
+not part of it.
 
-R18D (contract M1) adds the one gated identity core enforces at a live auto-accept:
-`authorConfigId`, the runner's SHA-256 of the canonical JSON of {`model`, `skillVersion`,
-`skillSha256`, `promptSha256`, `argsSha256`} (not the CLI or runner version). `import-drafts` copies it
-from the run record (the top level of `<runId>.meta.json` or its `authorConfig`) after recomputing it
-from those fields, and leaves out a draft whose record carries two different ids, an id that is not
-its configuration's, or whose `agent.authorConfigId` is another. The gate writes it to
-`authored.author.authorConfigId`, and fails closed (null) when a new-facts row has none (a run record
-from before M1) or the rows carry more than one.
+**The one re-gate rule (as in `tools/author-runner/README.md`): any change of `authorConfigId` needs a
+new eval gate before the automation auto-accepts in `live` on it.** That is a change of the model, any
+skill file, the queue-item prompt, the claude arguments, or the MCP tool surface (a tool name,
+description or input schema, a lint limit, or the MCP server version). A Claude Code or runner update
+alone does not; neither does a rebuild of the MCP server that leaves its tool surface as it was (it
+changes only the local `id`). On the reviewer side, a change of the automation reviewer's provider,
+model, prompt version or effective effort needs a new gate as well (below). N4 (R18E) put the tool
+surface into `argsSha256`, so every configuration got a new `authorConfigId`: a new-facts run captured
+with a runner from before R18E measured an author no live draft carries, and must be re-produced with
+the current runner before the gate.
+
+`import-drafts` copies `authorConfigId` from the run record (the top level of `<runId>.meta.json` or
+its `authorConfig`) after recomputing it from those fields, and leaves out a draft whose record carries
+two different ids, an id that is not its configuration's, or whose `agent.authorConfigId` is another.
+The gate report writes the configurations of the new-facts rows into `authored.author` and the one
+`authorConfigId` to `authored.author.authorConfigId`, and fails closed (null) when a new-facts row has
+none (a run record from before M1) or the rows carry more than one.
 
 `automation-gate` takes the two `.jsonl` **run files** (not their `.json` reports) and writes
 `reports/<date>-automation-gate-<model>.json` and `.md` (`-2`, `-3`, … when taken; nothing is
@@ -749,13 +762,15 @@ that is expected.
 
 A passed report is committed with its two run files, then the supervisor records it with
 `POST /api/v1/admin/automation/eval-gate` (A06), where core recomputes the checks from the counts
-and stores the gate. `live` is effective only with a current recorded gate, and every auto-accept
-needs the draft's QA provider, model and prompt version to equal the gate's, so a prompt or model
-change needs a new gate. A failed report, posted, is recorded as a failed evaluation and, as the
-newest one, keeps `live` off (R18C contract L3). The author side is bound in the report
-(`authored.author`); core does not yet compare a run's author configuration with it (the runner
-does not send its `authorConfig` id), so after any author configuration change the owner reruns
-the gate before relying on `live`.
+and stores the gate. `live` is effective only with a current recorded gate, and at every live auto-accept core compares
+three things with it: the reviewer (the draft QA's provider, model and prompt version against the
+gate's), its effective effort (the QA report's `effectiveEffort` against the gate's
+`reviewer.effectiveEffort`, contracts N2 and O1; a report without it fails closed), both else
+`REVIEWER_NOT_GATED`; and the author (the draft's `agent.authorConfigId`, which the runner sends
+through the MCP server, against the gate's `authored.author.authorConfigId`, else `AUTHOR_NOT_GATED`,
+contract M1). A mismatch never auto-accepts; the draft goes to a person. So a change of any of them
+needs a new gate (the one re-gate rule above). A failed report, posted, is recorded as a failed
+evaluation and, as the newest one, keeps `live` off (R18C contract L3).
 
 ## Gate
 
