@@ -8,6 +8,7 @@ using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
 using RecallSmith.Lambda.Vpc.Authoring;
 using RecallSmith.Lambda.Vpc.Qa;
+using RecallSmith.Lambda.Vpc.Review;
 
 namespace RecallSmith.Lambda.Vpc.Automation;
 
@@ -18,7 +19,9 @@ namespace RecallSmith.Lambda.Vpc.Automation;
 /// the report's counts and records every well-formed report, a failing one with <c>passed = false</c> (R18C L3), so a
 /// newer failed evaluation blocks <c>live</c> exactly like a revoke. A revoke of the newest gate makes <c>live</c> fall
 /// back to <c>dry_run</c> on the next request; an older passed gate never takes over, and the exact report of a revoked
-/// gate cannot be posted again. Nothing here reads or writes <c>AUTOMATION_MODE</c>.
+/// gate cannot be posted again. A report generated before the newest recorded one is refused (409
+/// <c>EVAL_GATE_STALE</c>, R18D M4), and the gate stores the author configuration it measured (R18D M1), which a live
+/// auto-accept requires the draft's author to match. Nothing here reads or writes <c>AUTOMATION_MODE</c>.
 /// </summary>
 public static class EvalGate
 {
@@ -46,6 +49,12 @@ public static class EvalGate
   public const double AuthoredUnscoredRateGate = 0.05;
 
   public const string ReportKind = "automation-gate";
+
+  /// <summary>"AUTO_GAT": serialises the recording of gates (the freshness check and the insert).</summary>
+  private const long RecordLockKey = 0x4155544F5F474154;
+
+  /// <summary>The key of the new-facts stratum in <c>authored.strata</c> (the production runner's drafts, R18C C06).</summary>
+  public const string NewFactsStratum = "new-facts";
 
   /// <summary>The newest gate row, whatever its state (R18B K2): only this row can make <c>live</c> effective.</summary>
   internal const string NewestGateSql = "select * from automation_eval_gates order by id desc limit 1";
@@ -129,25 +138,66 @@ public static class EvalGate
         authoredReps = report.AuthoredReps,
       });
 
+      DateTimeOffset generatedAt;
+      try
+      {
+        generatedAt = ReportTimestamp(doc.RootElement)
+          ?? throw new InvalidReport("generatedAt (or createdAt) must be an ISO-8601 timestamp with an offset");
+      }
+      catch (InvalidReport ex)
+      {
+        return res.BadRequest("EVAL_GATE_INVALID", ex.Message);
+      }
+
       await using var conn = await Pg.OpenConnectionOrNullAsync();
       if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
+      await using var tx = await conn.BeginTransactionAsync();
+      // One recording at a time, so the freshness check below and the insert see the same newest row.
+      await DbUtil.ExecuteAsync(conn, tx, "select pg_advisory_xact_lock($1)", [RecordLockKey]);
+
       // A revoke is final (R18C L3): the same report bytes never reinstate a revoked gate.
-      var revoked = await DbUtil.ExecuteScalarAsync(conn, null,
+      var revoked = await DbUtil.ExecuteScalarAsync(conn, tx,
         "select 1 from automation_eval_gates where report_sha256 = $1 and revoked_at is not null limit 1", [sha]);
       if (revoked is not null)
       {
+        await tx.RollbackAsync();
         return Helpers.ErrorEnvelope(res, 409, "EVAL_GATE_REVOKED", "This report belongs to a revoked eval gate; run the evaluation again");
       }
 
+      // A report older than the newest recorded one never governs live (R18D M4, automation-26): re-posting an earlier
+      // passing report after a newer failed evaluation would otherwise make live effective again.
+      var newest = await DbUtil.QueryAsync(conn, tx,
+        $"select report ->> 'generatedAt' as generated_at, report ->> 'createdAt' as created_at from ({NewestGateSql}) g", []);
+      if (newest.Count > 0 && ParseTimestamp(newest[0]["generated_at"] as string ?? newest[0]["created_at"] as string) is { } newestAt
+          && generatedAt < newestAt)
+      {
+        await tx.RollbackAsync();
+        return Helpers.ErrorEnvelope(res, 409, "EVAL_GATE_STALE",
+          $"This report was generated at {Iso(generatedAt)}, before the newest recorded eval gate ({Iso(newestAt)}); run the evaluation again");
+      }
+
       // Every well-formed report is recorded (R18C L3): a failing one becomes the newest row with passed = false,
-      // which blocks live (R18B K2) until a newer passing report is recorded.
-      var rows = await DbUtil.QueryAsync(conn, null,
-        $"""
-        insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub)
-        values ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8)
-        returning {GateColumns}
-        """, [report.Provider, report.Model, report.PromptVersion, passed, metrics, sha, raw, auth.UserSub]);
+      // which blocks live (R18B K2) until a newer passing report is recorded. The gated author (R18D M1) goes into
+      // author_config_id once migration 036 added it; before, it stays readable in the stored report.
+      var authorColumn = await AuthorColumnAsync(conn, tx);
+      var rows = await DbUtil.QueryAsync(conn, tx,
+        authorColumn
+          ? $"""
+            insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub,
+              author_config_id)
+            values ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8, $9::text)
+            returning {GateColumns}
+            """
+          : $"""
+            insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub)
+            values ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8)
+            returning {GateColumns}
+            """,
+        authorColumn
+          ? [report.Provider, report.Model, report.PromptVersion, passed, metrics, sha, raw, auth.UserSub, report.AuthorConfigId]
+          : [report.Provider, report.Model, report.PromptVersion, passed, metrics, sha, raw, auth.UserSub]);
+      await tx.CommitAsync();
       if (!passed)
       {
         Log.Event("info", new { tag = "automation", reason = "eval_gate_failed_recorded", gateId = RunnerRoutes.Long(rows[0]["id"]), failures });
@@ -258,7 +308,7 @@ public static class EvalGate
     bool Passed, bool FailuresEmpty, string Provider, string Model, string PromptVersion, string? SecondProvider, string? SecondModel,
     long SeededReps, long AuthoredReps, double? SeededRecall, double SeededRecallCiLower, IReadOnlyList<double> PerClassRecall,
     double ControlFalsePositiveRate, double ControlUnscoredRate, double? AutoAcceptPrecision, double AutoAcceptPrecisionCiLower,
-    long WouldAcceptCards, double? DefectEscapeRate, double AuthoredUnscoredRate)
+    long WouldAcceptCards, double? DefectEscapeRate, double AuthoredUnscoredRate, string? AuthorConfigId)
   {
     public static GateReport Read(JsonElement root)
     {
@@ -289,6 +339,7 @@ public static class EvalGate
       var defectiveLabeled = Count(authored, "authored", "defectiveLabeled");
       var defectEscaped = Count(authored, "authored", "defectEscaped");
       if (defectEscaped > defectiveLabeled) throw new InvalidReport("authored.defectEscaped exceeds authored.defectiveLabeled");
+      var authorConfigId = AuthorConfigIdOf(authored);
 
       return new GateReport(
         passed,
@@ -309,7 +360,36 @@ public static class EvalGate
         CiLower(authored, "authored", "autoAcceptPrecisionCi95"),
         Count(authored, "authored", "wouldAcceptCards"),
         defectiveLabeled == 0 ? null : (double)defectEscaped / defectiveLabeled,
-        Number(authored, "authored", "unscoredRate"));
+        Number(authored, "authored", "unscoredRate"),
+        authorConfigId);
+    }
+
+    /// <summary>
+    /// <c>authored.author.authorConfigId</c> (R18D M1): optional, 1..128 characters when present, and required when the
+    /// report measured a new-facts stratum (<c>authored.strata["new-facts"].rows</c> &gt; 0), because live accepts only
+    /// drafts of the author a gate measured.
+    /// </summary>
+    private static string? AuthorConfigIdOf(JsonElement authored)
+    {
+      string? id = null;
+      if (authored.TryGetProperty("author", out var author) && author.ValueKind == JsonValueKind.Object &&
+          author.TryGetProperty("authorConfigId", out var el) && el.ValueKind != JsonValueKind.Null)
+      {
+        if (el.ValueKind != JsonValueKind.String || el.GetString() is not { Length: >= 1 and <= Drafts.MaxAuthorConfigIdLength } value)
+        {
+          throw new InvalidReport($"authored.author.authorConfigId must be a string of 1..{Drafts.MaxAuthorConfigIdLength} characters");
+        }
+        id = value;
+      }
+      var newFacts = authored.TryGetProperty("strata", out var strata) && strata.ValueKind == JsonValueKind.Object &&
+        strata.TryGetProperty(NewFactsStratum, out var stratum) && stratum.ValueKind == JsonValueKind.Object &&
+        stratum.TryGetProperty("rows", out var rows) && rows.ValueKind == JsonValueKind.Number && rows.TryGetInt64(out var n) && n > 0;
+      if (newFacts && id is null)
+      {
+        throw new InvalidReport(
+          $"authored.author.authorConfigId must be a string of 1..{Drafts.MaxAuthorConfigIdLength} characters: the report measured a new-facts stratum");
+      }
+      return id;
     }
 
     private static JsonElement Section(JsonElement root, string name) => Section(root, null, name);
@@ -383,6 +463,36 @@ public static class EvalGate
       $"select {GateColumns} from ({NewestGateSql}) g where passed and revoked_at is null", []);
     return rows.Count == 0 ? null : ToGate(rows[0]);
   }
+
+  /// <summary>
+  /// The report's generation time (R18D M4): <c>generatedAt</c>, else <c>createdAt</c> (what <c>dc-evals automation-gate</c>
+  /// writes). Null when neither is an ISO-8601 timestamp with an offset.
+  /// </summary>
+  internal static DateTimeOffset? ReportTimestamp(JsonElement root)
+  {
+    if (root.ValueKind != JsonValueKind.Object) return null;
+    foreach (var name in new[] { "generatedAt", "createdAt" })
+    {
+      if (root.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.String) return ParseTimestamp(el.GetString());
+    }
+    return null;
+  }
+
+  private static DateTimeOffset? ParseTimestamp(string? text)
+  {
+    if (string.IsNullOrWhiteSpace(text)) return null;
+    // An offset is required: a local time would compare differently on every machine.
+    if (!text.EndsWith('Z') && !System.Text.RegularExpressions.Regex.IsMatch(text, @"[+-]\d{2}:?\d{2}$")) return null;
+    return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var at) ? at : null;
+  }
+
+  private static string Iso(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFF'Z'", CultureInfo.InvariantCulture);
+
+  /// <summary>Whether migration 036's <c>author_config_id</c> column exists (the code runs before and after it, R18D M1).</summary>
+  private static async Task<bool> AuthorColumnAsync(NpgsqlConnection conn, NpgsqlTransaction tx) =>
+    await DbUtil.ExecuteScalarAsync(conn, tx,
+      "select exists (select 1 from pg_attribute where attrelid = 'public.automation_eval_gates'::regclass and attname = 'author_config_id' and not attisdropped)",
+      []) is true;
 
   private static APIGatewayProxyResponse GateNotFound(Res res) =>
     Helpers.ErrorEnvelope(res, 404, "EVAL_GATE_NOT_FOUND", "Eval gate not found");

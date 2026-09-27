@@ -34,7 +34,10 @@ public static class Drafts
   public const int MaxListLimit = 100;
   public const string DefaultConsoleBaseUrl = "https://console.developercards.app";
 
-  private static readonly string[] AgentKeys = ["name", "model", "skillVersion", "runId", "queueItemId"];
+  /// <summary>The runner's author configuration id in <c>agent.authorConfigId</c> (R18D M1) is at most this long.</summary>
+  public const int MaxAuthorConfigIdLength = 128;
+
+  private static readonly string[] AgentKeys = ["name", "model", "skillVersion", "runId", "queueItemId", "authorConfigId"];
   private static readonly string[] ListStatuses = ["pending", "accepted", "rejected", "all"];
 
   private const string DraftColumns = """
@@ -190,11 +193,15 @@ public static class Drafts
 
   private sealed record RejectedOutcome(string ClientDraftKey, string Code, string Message);
 
-  /// <summary>null / absent → null; otherwise canonical JSON of {name?, model?, skillVersion?, runId?, queueItemId?}.</summary>
+  /// <summary>
+  /// null / absent → null; otherwise canonical JSON of {name?, model?, skillVersion?, runId?, queueItemId?, authorConfigId?}.
+  /// <c>authorConfigId</c> (R18D M1) is the runner's author configuration, which a live auto-accept compares with the gate's.
+  /// </summary>
   private static string? ParseAgent(JsonElement body)
   {
     if (!body.TryGetProperty("agent", out var el) || el.ValueKind == JsonValueKind.Null) return null;
-    const string message = "agent must be an object with optional string fields name, model, skillVersion, runId, queueItemId (max 200)";
+    const string message = "agent must be an object with optional string fields name, model, skillVersion, runId, queueItemId (max 200) " +
+      "and authorConfigId (max 128)";
     if (el.ValueKind != JsonValueKind.Object) throw new ValidationError(message, "agent");
 
     var agent = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -202,7 +209,7 @@ public static class Drafts
     {
       if (!AgentKeys.Contains(prop.Name) || prop.Value.ValueKind != JsonValueKind.String) throw new ValidationError(message, "agent");
       var value = prop.Value.GetString() ?? string.Empty;
-      if (value.Length > MaxAgentFieldLength) throw new ValidationError(message, "agent");
+      if (value.Length > (prop.Name == "authorConfigId" ? MaxAuthorConfigIdLength : MaxAgentFieldLength)) throw new ValidationError(message, "agent");
       agent[prop.Name] = value;
     }
     return JsonSerializer.Serialize(agent);

@@ -139,6 +139,7 @@ public static class EmailTemplates
     ["QA_HASH_MISMATCH"] = "reviewed content differs from the draft",
     ["QA_FLAGGED"] = "AI QA found a blocker or major issue",
     ["REVIEWER_NOT_GATED"] = "reviewer differs from the eval gate",
+    ["AUTHOR_NOT_GATED"] = "author configuration differs from the eval gate",
     ["MODE_OFF"] = "automation was switched off",
     ["DECK_DELETED"] = "deck is deleted",
     ["DECIDED_BY_HUMAN"] = "a human decided first",
