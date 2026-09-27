@@ -4,15 +4,24 @@
 // the state and reason, the draft-QA findings and a link to the Automation
 // page. Presentational: the draft detail already carries the block (§5.10).
 //
-// Blinded (a dry-run would-accept draft nobody has decided yet), it shows only
-// that the automation decided: the verdict, the QA counts and findings, and the
-// link to the decision stay hidden until the person decides, so the dry-run
-// shadow agreement measures an unanchored decision (B07 automation-4).
+// Blinded (any dry-run draft nobody has decided yet, whatever its state), it
+// shows one neutral line: the verdict, the reason, the QA counts and findings,
+// and the link to the decision stay hidden until the person decides, so the
+// dry-run shadow agreement measures an unanchored decision (B07 automation-4,
+// C07 frontend-console-14). The mode and severities read as words (-11).
 import { Link } from 'react-router-dom';
 
 import { CARD_CLASS, H2_CLASS } from '../../components/console/consoleStyles';
 import { Badge } from '../../components/ui/Badge';
-import { decisionReasonDetailText, decisionReasonLabel, humanActionLabel } from '../../lib/automationRules';
+import {
+  FINDING_SEVERITY_LABELS,
+  MODE_LABELS,
+  codeLabel,
+  decisionReasonDetailText,
+  decisionReasonLabel,
+  findingSeverityTone,
+  humanActionLabel,
+} from '../../lib/automationRules';
 import { automationDraftHref, draftAutomationBadgeText, draftAutomationTone } from '../../lib/automationSurfaces';
 import { QA_CATEGORY_LABELS } from '../../lib/qaReview';
 import type { DraftAutomation } from '../../types/draft';
@@ -34,8 +43,8 @@ export function DraftAutomationPanel({
           <Badge tone={draftAutomationTone(automation, true)}>{draftAutomationBadgeText(automation, true)}</Badge>
         </div>
         <p className="text-xs text-slate-600">
-          Dry run: decide this draft on its own merits. The automation&apos;s verdict and its AI QA findings show
-          after you accept or reject it.
+          Dry run: decide this draft on its own merits. The automation&apos;s verdict, its reason and its AI QA
+          findings are hidden for every dry-run draft until you accept or reject it.
         </p>
       </section>
     );
@@ -57,7 +66,7 @@ export function DraftAutomationPanel({
         </p>
       ) : null}
       <p className="text-xs text-slate-600">
-        Mode: {automation.mode || '—'}
+        Mode: {codeLabel(MODE_LABELS, automation.mode)}
         {automation.acceptedCardId ? <> · Accepted as card {automation.acceptedCardId}</> : null}
       </p>
       {qa ? (
@@ -73,7 +82,7 @@ export function DraftAutomationPanel({
               {qa.findings.map((f, i) => (
                 <li key={i} className="border-t border-slate-100 pt-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone={f.severity === 'minor' ? 'warning' : 'danger'}>{f.severity}</Badge>
+                    <Badge tone={findingSeverityTone(f.severity)}>{codeLabel(FINDING_SEVERITY_LABELS, f.severity)}</Badge>
                     <span className="text-xs text-slate-600">{QA_CATEGORY_LABELS[f.category] ?? f.category}</span>
                   </div>
                   <p>{f.message}</p>

@@ -16,6 +16,7 @@ import { CARD_CLASS, H2_CLASS, TD_CLASS, TH_CLASS } from '../../components/conso
 import { Badge } from '../../components/ui/Badge';
 import { Callout } from '../../components/ui/Callout';
 import {
+  FINDING_SEVERITY_LABELS,
   MODE_LABELS,
   automationErrorMessage,
   codeLabel,
@@ -24,6 +25,7 @@ import {
   decisionReasonDetailText,
   decisionReasonLabel,
   decisionStateLabel,
+  findingSeverityTone,
   formatTimestamp,
   humanActionLabel,
   orDash,
@@ -168,7 +170,11 @@ export function DecisionDetail({
                 ) : (
                   d.findings.map((f, i) => (
                     <tr key={i} className="border-t border-slate-100 align-top">
-                      <td className={TD_CLASS}>{f.severity}</td>
+                      <td className={TD_CLASS}>
+                        <Badge tone={findingSeverityTone(f.severity)}>
+                          {codeLabel(FINDING_SEVERITY_LABELS, f.severity)}
+                        </Badge>
+                      </td>
                       <td className={TD_CLASS}>{QA_CATEGORY_LABELS[f.category] ?? f.category}</td>
                       <td className={TD_CLASS}>{f.message}</td>
                       <td className={TD_CLASS}>{orDash(f.suggestedFix)}</td>

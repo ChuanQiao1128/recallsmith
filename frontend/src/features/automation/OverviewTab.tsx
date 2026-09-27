@@ -7,11 +7,15 @@
 // "Open exceptions" is the backlog (K7): what still needs a person, whenever it
 // was routed. The 24-hour counts mix handled and open decisions, so their
 // `human` row says "Routed to a person" and links the Decisions tab filtered to
-// that state (B07 frontend-console-1, automation-10).
+// that state (B07 frontend-console-1, automation-10). The drafts link opens the
+// server-side open list (L4); the publishes waiting for a person are listed by
+// deck and reason (humanPublishItems, L4), each linked to its deck's AI QA page,
+// and the count links the Runs tab, where each run lists its publishes
+// (C07 frontend-console-15). The Email card shows the K6 unconfirmed count (L5).
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import type { AutomationStatus } from '../../api/automation';
+import { HUMAN_PUBLISH_ITEMS_MAX, type AutomationStatus } from '../../api/automation';
 import { CARD_CLASS, H2_CLASS, TD_CLASS, TH_CLASS } from '../../components/console/consoleStyles';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -19,8 +23,10 @@ import {
   DECISION_REASONS,
   OPEN_EXCEPTIONS_SEARCH,
   PUBLISH_STATES,
+  QUEUED_EMAIL_SEARCH,
   RUNNER_STATE_LABELS,
   RUN_OUTCOME_LABELS,
+  backlogLinkLabel,
   codeLabel,
   decisionReasonLabel,
   decisionStateBars,
@@ -28,10 +34,12 @@ import {
   formatTimestamp,
   loginExpiryWarning,
   orDash,
+  publishReasonLabel,
   publishStateLabel,
   runnerStateTone,
   shadowAgreementText,
 } from '../../lib/automationRules';
+import { qaPageHref } from '../../lib/qaGate';
 import { formatUsd } from '../../lib/qaReview';
 import { EvalGateCard } from './EvalGateCard';
 
@@ -118,6 +126,7 @@ export function OverviewTab({
                     <Link
                       to={{ search: OPEN_EXCEPTIONS_SEARCH }}
                       className="text-indigo-700 underline"
+                      aria-label={backlogLinkLabel(status.backlog.humanPending)}
                       data-testid="automation-backlog-human-pending"
                     >
                       {status.backlog.humanPending}
@@ -125,9 +134,47 @@ export function OverviewTab({
                   </dd>
                 </div>
                 <Stat label="Oldest waiting since" value={age(status.backlog.oldestHumanPendingAt)} />
-                <Stat label="Publishes waiting for you" value={String(status.backlog.humanPublishes)} />
+                <div>
+                  <dt className="text-xs text-slate-500">Publishes waiting for you</dt>
+                  <dd className="text-sm font-medium text-slate-900">
+                    {status.backlog.humanPublishes > 0 ? (
+                      <Link
+                        to={{ search: '?tab=runs' }}
+                        className="text-indigo-700 underline"
+                        aria-label={`${status.backlog.humanPublishes} ${status.backlog.humanPublishes === 1 ? 'publish' : 'publishes'} waiting for you: show the runs`}
+                        data-testid="automation-backlog-human-publishes"
+                      >
+                        {status.backlog.humanPublishes}
+                      </Link>
+                    ) : (
+                      '0'
+                    )}
+                  </dd>
+                </div>
               </dl>
-            ) : (
+            ) : null}
+            {status.backlog && status.backlog.humanPublishes > 0 ? (
+              status.backlog.humanPublishItems && status.backlog.humanPublishItems.length > 0 ? (
+                <ul className="mt-3 space-y-1 text-sm text-slate-700" aria-label="Publishes waiting for you">
+                  {status.backlog.humanPublishItems.slice(0, HUMAN_PUBLISH_ITEMS_MAX).map(p => (
+                    <li key={p.deckId} className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="font-medium text-slate-900">{p.deckSlug ?? `Deck ${p.deckId}`}</span>
+                      <span>{p.reason ? publishReasonLabel(p.reason) : 'Needs you'}</span>
+                      <span className="text-xs text-slate-600">since {formatTimestamp(p.since)}</span>
+                      <Link to={qaPageHref(p.deckId)} className="text-indigo-700 underline">
+                        {`AI QA of ${p.deckSlug ?? `deck ${p.deckId}`}`}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-xs text-slate-600">
+                  This server does not list the decks yet: on the Runs tab, the Publishes column shows each deck
+                  marked Needs you and why.
+                </p>
+              )
+            ) : null}
+            {status.backlog ? null : (
               <p className="text-sm text-slate-600 mt-2">
                 This server does not report the open backlog yet. The review queue lists the drafts still pending.
               </p>
@@ -305,6 +352,21 @@ export function OverviewTab({
                 <Stat label="Sent (24 h)" value={String(status.notifications.sent24h)} />
                 <Stat label="Failed (24 h)" value={String(status.notifications.failed24h)} />
                 <Stat label="Queued" value={String(status.notifications.queued)} />
+                <div>
+                  <dt className="text-xs text-slate-500">Unconfirmed (sent, no delivery report after 1 h)</dt>
+                  <dd className="text-sm font-medium text-slate-900" data-testid="automation-email-unconfirmed">
+                    {status.notifications.unconfirmed > 0 ? (
+                      <span className="flex flex-wrap items-center gap-2">
+                        <Badge tone="warning">{String(status.notifications.unconfirmed)}</Badge>
+                        <Link to={{ search: QUEUED_EMAIL_SEARCH }} className="text-indigo-700 underline">
+                          Check the queued emails
+                        </Link>
+                      </span>
+                    ) : (
+                      '0'
+                    )}
+                  </dd>
+                </div>
                 <Stat label="Last sent" value={age(status.notifications.lastSentAt)} />
               </dl>
             </section>

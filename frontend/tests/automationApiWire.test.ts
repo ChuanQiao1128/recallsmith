@@ -76,6 +76,8 @@ describe('the open backlog on the status (K7)', () => {
       humanPending: 3,
       oldestHumanPendingAt: '2026-09-25T08:00:00Z',
       humanPublishes: 1,
+      // C07 (L4): a server before humanPublishItems leaves the list null, not empty.
+      humanPublishItems: null,
     });
   });
 
