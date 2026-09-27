@@ -880,10 +880,10 @@ public class AutomationTickTests
         var capture = RecallSmith.Lambda.Vpc.Qa.QaRuns.TestSendSeam!;
         RecallSmith.Lambda.Vpc.Qa.QaRuns.TestSendSeam = async r =>
         {
-          await Task.Delay(TimeSpan.FromMilliseconds(600));
+          await Task.Delay(TimeSpan.FromMilliseconds(1500));
           await capture(r);
         };
-        AutomationTick.Budget = TimeSpan.FromMilliseconds(400);
+        AutomationTick.Budget = TimeSpan.FromSeconds(1);
 
         var data = await TickDataAsync();
 
