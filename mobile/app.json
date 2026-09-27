@@ -4,7 +4,7 @@
     "name": "DeveloperCards",
     "slug": "recallsmith",
     "scheme": "recallsmith",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -30,7 +30,7 @@
         "ITSAppUsesNonExemptEncryption": false,
         "NSPhotoLibraryAddUsageDescription": "DeveloperCards saves a pull card image to your photo library when you choose Save Image in the share sheet."
       },
-      "buildNumber": "21"
+      "buildNumber": "22"
     },
     "android": {
       "adaptiveIcon": {
