@@ -354,6 +354,30 @@ public sealed class VpcFunction
       {
         return await Vpc.Automation.WatchAdminRoutes.HandleTarget(req, res, auth, watchTarget["targetId"]);
       }
+      if (p.EndsWith("/api/v1/admin/automation/status", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.StatusRoutes.HandleStatus(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/runs", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.StatusRoutes.HandleRuns(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/decisions", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.StatusRoutes.HandleDecisions(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/decisions/:draftId", p) is { } automationDecision)
+      {
+        return await Vpc.Automation.StatusRoutes.HandleDecision(req, res, auth, automationDecision["draftId"]);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/eval-gate", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.EvalGate.HandleGate(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/eval-gate/:gateId/revoke", p) is { } gateRevoke)
+      {
+        return await Vpc.Automation.EvalGate.HandleRevoke(req, res, auth, gateRevoke["gateId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
