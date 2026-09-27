@@ -50,6 +50,18 @@ public static class RunnerRoutes
   /// </summary>
   public const string RunnerUnavailableAfterDrafts = "RUNNER_UNAVAILABLE_AFTER_DRAFTS";
 
+  /// <summary>
+  /// The <c>last_error</c> prefix of an item whose run failed in another way (a timeout, an exit, a lease expiry) after it
+  /// had submitted drafts (R18G, backend-design-25): the same rule as <see cref="RunnerUnavailableAfterDrafts"/>, the item
+  /// is finished as <c>done</c> with its attempt kept instead of requeued for re-authoring.
+  /// </summary>
+  public const string RunFailedAfterDrafts = "RUN_FAILED_AFTER_DRAFTS";
+
+  /// <summary>Whether <paramref name="lastError"/> is that of an item finished after its run submitted drafts (R18G P2).</summary>
+  internal static bool IsFinishedAfterDrafts(string? lastError) =>
+    lastError is not null && (lastError.StartsWith(RunnerUnavailableAfterDrafts, StringComparison.Ordinal) ||
+                              lastError.StartsWith(RunFailedAfterDrafts, StringComparison.Ordinal));
+
   /// <summary>From this many consecutive <c>RUNNER_UNAVAILABLE</c> completes of one item on, the item fails (N3).</summary>
   public const int MaxRunnerUnavailableCompletes = 3;
 
@@ -420,6 +432,18 @@ public static class RunnerRoutes
                 """, [itemId, error, RunnerUnavailableBackoff(n)]);
             }
           }
+          else if (!agentBlocked && attempts < MaxItemAttempts && await RunSubmittedDraftsAsync(conn, tx, runId))
+          {
+            // A retryable failure (a timeout) after submit_draft (R18G backend-design-25): the same rule as above, a
+            // retry would author the page again next to the pending drafts it cannot see.
+            itemStatus = "done";
+            await DbUtil.ExecuteAsync(conn, tx,
+              """
+              update authoring_queue_items
+              set status = 'done', lease_expires_at = null, finished_at = now(), last_error = $2, updated_at = now()
+              where id = $1
+              """, [itemId, RunFailedAfterDraftsError(error)]);
+          }
           else if (!agentBlocked && attempts < MaxItemAttempts)
           {
             itemStatus = "queued";
@@ -487,11 +511,18 @@ public static class RunnerRoutes
     return text.Length <= 500 ? text : text[..500];
   }
 
+  /// <summary>The <c>last_error</c> of an item finished after its failed run submitted drafts (R18G): the reason first, capped at 500.</summary>
+  internal static string RunFailedAfterDraftsError(string? error)
+  {
+    var text = $"{RunFailedAfterDrafts}: the run submitted draft(s) before it failed, so the item is not authored again; last: {error}";
+    return text.Length <= 500 ? text : text[..500];
+  }
+
   /// <summary>
   /// Whether the run submitted at least one draft: an <c>ai_drafts</c> row whose <c>agent.runId</c> names it, submitted by
   /// the run's owner (the join <see cref="DraftDecisions"/> uses for a run's drafts).
   /// </summary>
-  private static async Task<bool> RunSubmittedDraftsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid runId) =>
+  internal static async Task<bool> RunSubmittedDraftsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid runId) =>
     await DbUtil.ExecuteScalarAsync(conn, tx,
       """
       select 1 from ai_drafts a
@@ -571,6 +602,8 @@ public static class RunnerRoutes
               ["runnerId"] = rows.Count == 0 ? string.Empty : rows[0]["runner_id"] as string ?? string.Empty,
               ["runId"] = runId.ToString("D"),
               ["itemId"] = id,
+              // The email says the item was put back only when it was (R18G P2): a finished item was not.
+              ["itemStatus"] = itemStatus,
               ["error"] = runError ?? string.Empty,
             }, runId, ct);
         }
@@ -584,6 +617,11 @@ public static class RunnerRoutes
               ["url"] = url,
               ["error"] = runError ?? string.Empty,
             }, runId, ct);
+        }
+        var lastError = rows.Count == 0 ? null : rows[0]["last_error"] as string;
+        if (outcome == "failed" && itemStatus == "done" && IsFinishedAfterDrafts(lastError))
+        {
+          await RaiseItemPartialAsync(conn, id, url, lastError!, runId, ct);
         }
         if (itemStatus == "failed")
         {
@@ -604,6 +642,15 @@ public static class RunnerRoutes
       AutomationFailures.Record();
     }
   }
+
+  /// <summary>
+  /// The per-item exception of an item finished after its run submitted drafts (R18G P2): the <c>queue_item_failed</c>
+  /// subkind's partial variant, deduped per item, telling the owner the page is not authored again and how to re-add it.
+  /// </summary>
+  internal static Task<NotificationResult?> RaiseItemPartialAsync(NpgsqlConnection conn, string itemId, string url, string lastError,
+    Guid? runId, CancellationToken ct = default) =>
+    Notifications.RaiseExceptionAsync(conn, "queue_item_failed", $"exception:queue_item_partial:{itemId}",
+      new Dictionary<string, string> { ["itemId"] = itemId, ["url"] = url, ["lastError"] = lastError }, runId, ct);
 
   private static async Task<object> CompleteResponseAsync(NpgsqlConnection conn, Guid runId, string runStatus, string itemStatus, bool replayed)
   {

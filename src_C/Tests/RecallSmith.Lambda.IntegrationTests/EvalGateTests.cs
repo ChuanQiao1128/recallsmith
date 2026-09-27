@@ -197,6 +197,8 @@ public sealed class EvalGateTests
     var r = JsonNode.Parse(ContractReportJson)!.AsObject();
     r["createdAt"] = NextCreatedAt();
     r["reviewer"]!["promptVersion"] = QaRuns.AutomationPromptVersion;
+    // R18E N2: evals records the effort the review sent; required for an automation reviewer since R18G backend-design-26.
+    r["reviewer"]!["effectiveEffort"] = "high";
     var s = r["seeded"]!.AsObject();
     s["n"] = 400;
     s["tp"] = 184;
@@ -323,7 +325,7 @@ public sealed class EvalGateTests
       Assert.Equal(AutomationMode.Live, live.Effective);
       Assert.Null(live.LiveBlockedReason);
       Assert.Equal(gateId, live.GateId);
-      Assert.Equal(new GateReviewer("bedrock-converse", "global.openai.gpt-5.5", QaRuns.AutomationPromptVersion), live.Reviewer);
+      Assert.Equal(new GateReviewer("bedrock-converse", "global.openai.gpt-5.5", QaRuns.AutomationPromptVersion, "high"), live.Reviewer);
 
       // Exactly at every threshold still passes (the comparisons are strict the right way round).
       var edge = Patched(
@@ -678,7 +680,7 @@ public sealed class EvalGateTests
       Assert.Equal("openai.gpt-5.5", gate.GetProperty("reviewer").GetProperty("model").GetString());
 
       var live = await EffectiveAsync(AutomationMode.Live);
-      Assert.Equal(new GateReviewer("openai-mantle", "openai.gpt-5.5", QaRuns.AutomationPromptVersion), live.Reviewer);
+      Assert.Equal(new GateReviewer("openai-mantle", "openai.gpt-5.5", QaRuns.AutomationPromptVersion, "high"), live.Reviewer);
     });
   }
 
@@ -803,9 +805,50 @@ public sealed class EvalGateTests
       AutomationTestKit.Data(await PostAsync(report.ToJsonString()));
       Assert.Equal("xhigh", (await EffectiveAsync(AutomationMode.Live)).Reviewer!.Effort);
 
-      // A report that recorded no effort binds none.
-      AutomationTestKit.Data(await PostAsync(WithNewFacts(PassingReport(), GatedAuthor).ToJsonString()));
-      Assert.Null((await EffectiveAsync(AutomationMode.Live)).Reviewer!.Effort);
+      // A report that recorded no effort is refused (R18G backend-design-26), so the recorded effort still binds.
+      var unbound = WithNewFacts(PassingReport(), GatedAuthor);
+      unbound["reviewer"]!.AsObject().Remove("effectiveEffort");
+      AutomationTestKit.AssertError(await PostAsync(unbound.ToJsonString()), 400, "EVAL_GATE_INVALID");
+      Assert.Equal("xhigh", (await EffectiveAsync(AutomationMode.Live)).Reviewer!.Effort);
+    });
+  }
+
+  [Fact]
+  public async Task PostGate_AutomationReviewerWithoutEffectiveEffort_Returns400Invalid_AndRecordsNothing()
+  {
+    // R18G backend-design-26: the N2 effort binding is fail-closed at intake too. A gate without the effort would bind
+    // none, so a later AI_EFFORT change would pass unnoticed.
+    await InScratchAsync(async () =>
+    {
+      var before = await GateCountAsync();
+      foreach (var provider in EvalGate.AutomationGateProviders)
+      {
+        foreach (Action<JsonObject> patch in new Action<JsonObject>[]
+        {
+          reviewer => reviewer.Remove("effectiveEffort"),
+          reviewer => reviewer["effectiveEffort"] = null,
+          reviewer => reviewer["effectiveEffort"] = "",
+          reviewer => reviewer["effectiveEffort"] = 5,
+          reviewer => reviewer["effectiveEffort"] = new string('e', RecallSmith.Lambda.Vpc.Internal.AiQaResults.MaxLabelLength + 1),
+        })
+        {
+          var report = WithNewFacts(PassingReport(), GatedAuthor);
+          var reviewer = report["reviewer"]!.AsObject();
+          reviewer["provider"] = provider;
+          patch(reviewer);
+          var response = await PostAsync(report.ToJsonString());
+          AutomationTestKit.AssertError(response, 400, "EVAL_GATE_INVALID");
+          Assert.Contains("reviewer.effectiveEffort", response.Body);
+        }
+      }
+      Assert.Equal(before, await GateCountAsync());
+
+      // Another provider is recorded as a failing gate on reviewer.provider, with or without an effort.
+      var other = WithNewFacts(PassingReport(), GatedAuthor);
+      other["reviewer"]!["provider"] = "anthropic";
+      other["reviewer"]!.AsObject().Remove("effectiveEffort");
+      Assert.Equal(["reviewer.provider"], Failures(await PostAsync(other.ToJsonString())));
+      Assert.Equal(before + 1, await GateCountAsync());
     });
   }
 
