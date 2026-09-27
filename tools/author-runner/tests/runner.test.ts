@@ -234,7 +234,7 @@ describe('runOnce', () => {
     expect(meta.authorConfig).toMatchObject({
       model: 'claude-opus-5-5',
       skillVersion: 'author-cards@1.8.1',
-      mcpServerSha256: null,
+      mcpServerSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
       claudeVersion: '2.1.283 (Claude Code, test fake)',
       runnerVersion: '1.0.0',
     });
@@ -439,6 +439,68 @@ describe('runOnce', () => {
       exitCode: 0,
       error: 'claude did not run on the subscription login: provider model us.anthropic.claude-opus-5-5-v1:0',
     });
+  });
+
+  it('completes a blocked agent as failed with AGENT_BLOCKED and a missing outcome line as AGENT_NO_RESULT (L6, ai-agent-13)', async () => {
+    const a = await setup({ items: [item()] });
+    expect(await runOnce(a.config, { env: a.env('blocked'), log: a.log })).toBe(EXIT_OK);
+    expect(completeBody(a.api)).toMatchObject({
+      outcome: 'failed',
+      exitCode: 0,
+      numTurns: 7,
+      error: 'AGENT_BLOCKED: read_source refused the page: SOURCE_HOST_NOT_ALLOWED',
+      summary: 'could not read the source',
+    });
+    expect(a.api.requests.at(-1)!.body).toMatchObject({ state: 'error', lastRunOutcome: 'failed' });
+
+    const b = await setup({ items: [item()] });
+    await runOnce(b.config, { env: b.env('blocked_result'), log: b.log });
+    expect(completeBody(b.api)).toMatchObject({ outcome: 'failed', error: 'AGENT_BLOCKED: the developercards tools are missing' });
+
+    const c = await setup({ items: [item()] });
+    await runOnce(c.config, { env: c.env('no_outcome'), log: c.log });
+    expect(completeBody(c.api)).toMatchObject({
+      outcome: 'failed',
+      exitCode: 0,
+      error: 'AGENT_NO_RESULT: the final message does not end with the outcome JSON line',
+    });
+
+    const d = await setup({ items: [item()] });
+    await runOnce(d.config, { env: d.env('mcp_failed'), log: d.log });
+    expect(completeBody(d.api)).toMatchObject({ outcome: 'failed', error: 'the developercards MCP server did not start (failed)' });
+  });
+
+  it('fails a run whose system/init message shows an API key or is missing (ai-agent-14)', async () => {
+    const a = await setup({ items: [item()] });
+    await runOnce(a.config, { env: a.env('api_key'), log: a.log });
+    expect(completeBody(a.api)).toMatchObject({
+      outcome: 'failed',
+      exitCode: 0,
+      error: 'claude did not run on the subscription login: apiKeySource /login managed key',
+    });
+    const b = await setup({ items: [item()] });
+    await runOnce(b.config, { env: b.env('no_init'), log: b.log });
+    expect(completeBody(b.api)).toMatchObject({
+      outcome: 'failed',
+      error: 'claude did not run on the subscription login: no system/init message',
+    });
+    // The run record keeps what the init message said.
+    const c = await setup({ items: [item()] });
+    await runOnce(c.config, { env: c.env('done'), log: c.log });
+    const runId = String(completeBody(c.api).runId);
+    const meta = JSON.parse(readFileSync(join(c.config.logDir, 'runs', `${runId}.meta.json`), 'utf8')) as { usage: Record<string, unknown> };
+    expect(meta.usage).toEqual({ totalCostUsd: 1.25, models: ['claude-opus-5-5'], apiKeySource: 'none' });
+  });
+
+  it('runs nothing when the MCP server bundle is missing (ai-agent-13)', async () => {
+    const s = await setup({ items: [item()] });
+    rmSync(join(s.t.repo, 'tools', 'mcp-server', 'dist', 'index.js'));
+    expect(await runOnce(s.config, { env: s.env('done'), log: s.log })).toBe(EXIT_FAILURE);
+    expect(routes(s.api)).toEqual(['heartbeat(error)']);
+    expect(s.api.requests[0]!.body.lastError).toBe(
+      'author config: cannot read tools/mcp-server/dist/index.js in the repo root (build tools/mcp-server)',
+    );
+    expect(existsSync(s.t.recordFile)).toBe(false);
   });
 
   it('runs nothing when the author configuration cannot be pinned (ai-agent-3)', async () => {

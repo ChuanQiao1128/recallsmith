@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { LOGIN_HINT } from '../../mcp-server/src/api';
 import { createRunnerApi, type ClaimedItem, type HeartbeatRequest, type RunnerApi, type RunnerState, type RunOutcome } from './api';
-import { AuthorConfigError, readAuthorConfig, type AuthorConfig } from './authorConfig';
+import { AuthorConfigError, MCP_SERVER_BUNDLE, readAuthorConfig, type AuthorConfig } from './authorConfig';
 import { claudeOutcome, claudeUsage, claudeVersion, runClaude, type SignalGroup } from './claude';
 import { RUNNER_VERSION, type RunnerConfig } from './config';
 import { acquireLock, lockStaleMs } from './lock';
@@ -273,7 +273,7 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
         mcpServers: {
           developercards: {
             command: process.execPath,
-            args: [join(config.api.repoRoot, 'tools', 'mcp-server', 'dist', 'index.js')],
+            args: [join(config.api.repoRoot, MCP_SERVER_BUNDLE)],
             env: {
               DC_AUTOMATION_RUN_ID: runId,
               DC_AUTOMATION_QUEUE_ITEM_ID: String(itemId),

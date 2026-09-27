@@ -7,6 +7,7 @@ import {
   claudeOutcome,
   claudeUsage,
   claudeVersion,
+  readClaudeStream,
   scrubEnv,
   type ClaudeRun,
 } from '../src/claude';
@@ -14,13 +15,36 @@ import { makeHome } from './helpers';
 
 const exited = (exitCode: number | null): ClaudeRun => ({ pid: 1, exitCode, signal: null, timedOut: false, spawnError: null });
 
+/** The system/init message of `--output-format stream-json --verbose` (ai-agent-14). */
+const initLine = (extra: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    type: 'system',
+    subtype: 'init',
+    cwd: '/repo',
+    tools: ['Read'],
+    mcp_servers: [{ name: 'developercards', status: 'connected' }],
+    model: 'claude-opus-5-5',
+    apiKeySource: 'none',
+    ...extra,
+  });
+/** A whole stream: the init message (or none), an assistant message and the result message. */
+const streamOf = (resultExtra: Record<string, unknown>, init: string | null = initLine()) =>
+  [
+    init,
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'x' }] } }),
+    JSON.stringify({ type: 'result', is_error: false, num_turns: 1, result: 'x', ...resultExtra }),
+  ]
+    .filter((line): line is string => line !== null)
+    .join('\n');
+
 describe('claude invocation', () => {
   it('builds exactly the contract CLAUDE_ARGS', () => {
     expect(claudeArgs('PROMPT TEXT', 'opus', '/tmp/logs/runs/abc.mcp.json')).toEqual([
       '-p',
       'PROMPT TEXT',
       '--output-format',
-      'json',
+      'stream-json',
+      '--verbose',
       '--model',
       'opus',
       '--mcp-config',
@@ -97,30 +121,68 @@ describe('claude invocation', () => {
     );
   });
 
-  it('reads the cost and the provider signal from the claude result (ai-agent-10)', () => {
-    const out = (extra: Record<string, unknown>) => JSON.stringify({ type: 'result', is_error: false, num_turns: 1, result: 'x', ...extra });
-    expect(claudeUsage(out({ total_cost_usd: 0.5, modelUsage: { 'claude-opus-5-5': {}, 'claude-haiku-4-5-20251001': {} } }))).toEqual({
+  it('reads the cost and the provider signal from the claude stream (ai-agent-10)', () => {
+    const models = { 'claude-opus-5-5': {}, 'claude-haiku-4-5-20251001': {} };
+    expect(claudeUsage(streamOf({ total_cost_usd: 0.5, modelUsage: models }))).toEqual({
       totalCostUsd: 0.5,
       models: ['claude-haiku-4-5-20251001', 'claude-opus-5-5'],
-      apiKeySource: null,
+      apiKeySource: 'none',
       providerSignal: null,
     });
-    expect(claudeUsage(out({ apiKeySource: 'none' })).providerSignal).toBeNull();
-    expect(claudeUsage(out({ apiKeySource: 'ANTHROPIC_API_KEY' })).providerSignal).toBe('apiKeySource ANTHROPIC_API_KEY');
-    expect(claudeUsage(out({ modelUsage: { 'global.anthropic.claude-opus-5-5': {} } })).providerSignal).toBe(
+    expect(claudeUsage(streamOf({ modelUsage: { 'global.anthropic.claude-opus-5-5': {} } })).providerSignal).toBe(
       'provider model global.anthropic.claude-opus-5-5',
     );
-    expect(claudeUsage(out({ modelUsage: { 'claude-opus-5-5@20260101': {} } })).providerSignal).toBe('provider model claude-opus-5-5@20260101');
-    expect(claudeUsage('not json')).toEqual({ totalCostUsd: null, models: [], apiKeySource: null, providerSignal: null });
-    expect(claudeOutcome(exited(0), out({ apiKeySource: 'user' }), '')).toMatchObject({
+    expect(claudeUsage(streamOf({ modelUsage: { 'claude-opus-5-5@20260101': {} } })).providerSignal).toBe('provider model claude-opus-5-5@20260101');
+    expect(claudeUsage('not json')).toEqual({ totalCostUsd: null, models: [], apiKeySource: null, providerSignal: 'no system/init message' });
+  });
+
+  it('reads apiKeySource from the system/init message and fails closed unless it is none (ai-agent-14)', () => {
+    // The subscription login: init says apiKeySource "none" and the result has bare model ids.
+    expect(claudeUsage(streamOf({ modelUsage: { 'claude-opus-5-5': {} } })).providerSignal).toBeNull();
+    // An Anthropic API key with bare model ids (a Console key saved by /login, or the environment variable).
+    for (const source of ['/login managed key', 'ANTHROPIC_API_KEY', 'apiKeyHelper', 'user']) {
+      const stdout = streamOf({ modelUsage: { 'claude-opus-5-5': {} } }, initLine({ apiKeySource: source }));
+      expect(claudeUsage(stdout)).toMatchObject({ apiKeySource: source, providerSignal: `apiKeySource ${source}` });
+      expect(claudeOutcome(exited(0), stdout, '')).toMatchObject({
+        outcome: 'failed',
+        exitCode: 0,
+        error: `claude did not run on the subscription login: apiKeySource ${source}`,
+      });
+    }
+    // An apiKeySource on the result message only (the old reading) no longer counts: no init message is a failure.
+    const noInit = streamOf({ apiKeySource: 'none' }, null);
+    expect(claudeOutcome(exited(0), noInit, '')).toMatchObject({
       outcome: 'failed',
-      error: 'claude did not run on the subscription login: apiKeySource user',
+      error: 'claude did not run on the subscription login: no system/init message',
+    });
+    const { apiKeySource: _dropped, ...withoutSource } = JSON.parse(initLine()) as Record<string, unknown>;
+    expect(claudeOutcome(exited(0), streamOf({}, JSON.stringify(withoutSource)), '')).toMatchObject({
+      outcome: 'failed',
+      error: 'claude did not run on the subscription login: no apiKeySource in the system/init message',
+    });
+    // The last result message counts; non-JSON lines in between are ignored.
+    const stream = readClaudeStream(`${initLine()}\nnoise\n${JSON.stringify({ type: 'result', num_turns: 1 })}\n${JSON.stringify({ type: 'result', num_turns: 2 })}`);
+    expect(stream.init?.apiKeySource).toBe('none');
+    expect(stream.result?.num_turns).toBe(2);
+  });
+
+  it('fails a run whose developercards MCP server did not start (ai-agent-13)', () => {
+    const ok = JSON.stringify({ outcome: 'nothing_new', submitted: 0, notes: '' });
+    expect(claudeOutcome(exited(0), streamOf({ result: ok }, initLine({ mcp_servers: [{ name: 'developercards', status: 'failed' }] })), '')).toMatchObject({
+      outcome: 'failed',
+      error: 'the developercards MCP server did not start (failed)',
+    });
+    expect(claudeOutcome(exited(0), streamOf({ result: ok }, initLine({ mcp_servers: [] })), '')).toMatchObject({
+      outcome: 'failed',
+      error: 'the developercards MCP server is not loaded',
+    });
+    expect(claudeOutcome(exited(0), streamOf({ result: ok }, initLine({ mcp_servers: [{ name: 'developercards', status: 'pending' }] })), '')).toMatchObject({
+      outcome: 'nothing_new',
     });
   });
 
   it('sends blank notes as no summary and trims the rest (K3)', () => {
-    const ok = (notes: string) =>
-      JSON.stringify({ type: 'result', is_error: false, num_turns: 1, result: JSON.stringify({ outcome: 'nothing_new', submitted: 0, notes }) });
+    const ok = (notes: string) => streamOf({ result: JSON.stringify({ outcome: 'nothing_new', submitted: 0, notes }) });
     expect(claudeOutcome(exited(0), ok('   '), '').summary).toBeNull();
     expect(claudeOutcome(exited(0), ok(''), '').summary).toBeNull();
     expect(claudeOutcome(exited(0), ok('  card s3-glacier-1 says 12 hours; the page says 3 to 5  '), '').summary).toBe(
@@ -139,8 +201,7 @@ describe('claude invocation', () => {
   });
 
   it('maps a claude result to the complete outcome', () => {
-    const ok = (text: unknown, extra: Record<string, unknown> = {}) =>
-      JSON.stringify({ type: 'result', is_error: false, num_turns: 3, result: text, ...extra });
+    const ok = (text: unknown, extra: Record<string, unknown> = {}) => streamOf({ num_turns: 3, result: text, ...extra });
     expect(claudeOutcome(exited(0), ok('work\n{"outcome":"nothing_new","submitted":0,"notes":"n"}\n\n'), '')).toEqual({
       outcome: 'nothing_new',
       exitCode: 0,
@@ -148,13 +209,54 @@ describe('claude invocation', () => {
       error: null,
       summary: 'n',
     });
-    expect(claudeOutcome(exited(0), ok('no json line at the end'), '')).toMatchObject({ outcome: 'done', summary: null });
-    expect(claudeOutcome(exited(0), ok('{"outcome":"weird"}', { num_turns: 2.5 }), '')).toMatchObject({
-      outcome: 'done',
-      numTurns: null,
-    });
     expect(claudeOutcome(exited(0), ok(`{"outcome":"done","notes":"${'x'.repeat(2500)}"}`), '').summary).toHaveLength(2000);
     expect(claudeOutcome(exited(1), '', '')).toMatchObject({ outcome: 'failed', exitCode: 1, error: 'exit 1' });
     expect(claudeOutcome({ ...exited(null), timedOut: true }, '', 'x')).toMatchObject({ error: 'timeout', exitCode: null });
+    expect(claudeOutcome(exited(0), 'not json', '')).toMatchObject({ outcome: 'failed', error: 'claude output is not JSON' });
+    expect(claudeOutcome(exited(0), initLine(), '')).toMatchObject({ outcome: 'failed', error: 'claude output has no result message' });
+  });
+
+  it('never counts a missing or unknown final outcome line as a success (L6 AGENT_NO_RESULT)', () => {
+    const ok = (text: unknown, extra: Record<string, unknown> = {}) => streamOf({ num_turns: 3, result: text, ...extra });
+    expect(claudeOutcome(exited(0), ok('no json line at the end'), '')).toEqual({
+      outcome: 'failed',
+      exitCode: 0,
+      numTurns: 3,
+      error: 'AGENT_NO_RESULT: the final message does not end with the outcome JSON line',
+      summary: null,
+    });
+    expect(claudeOutcome(exited(0), ok(''), '')).toMatchObject({ outcome: 'failed', error: 'AGENT_NO_RESULT: the final message does not end with the outcome JSON line' });
+    expect(claudeOutcome(exited(0), ok(null), '')).toMatchObject({ outcome: 'failed', error: 'AGENT_NO_RESULT: the final message does not end with the outcome JSON line' });
+    expect(claudeOutcome(exited(0), ok('[1,2]'), '')).toMatchObject({ outcome: 'failed', error: 'AGENT_NO_RESULT: the final message does not end with the outcome JSON line' });
+    expect(claudeOutcome(exited(0), ok('{"outcome":"weird","notes":"hm"}', { num_turns: 2.5 }), '')).toEqual({
+      outcome: 'failed',
+      exitCode: 0,
+      numTurns: null,
+      error: 'AGENT_NO_RESULT: the outcome JSON line has no known outcome',
+      summary: 'hm',
+    });
+  });
+
+  it('completes a blocked agent as failed with AGENT_BLOCKED and a one-line capped reason (L6)', () => {
+    const ok = (line: Record<string, unknown>) => streamOf({ num_turns: 4, result: `read_source was refused.\n${JSON.stringify(line)}` });
+    expect(claudeOutcome(exited(0), ok({ outcome: 'blocked', submitted: 0, reason: 'read_source refused:\nSOURCE_HOST_NOT_ALLOWED', notes: 'n' }), '')).toEqual({
+      outcome: 'failed',
+      exitCode: 0,
+      numTurns: 4,
+      error: 'AGENT_BLOCKED: read_source refused: SOURCE_HOST_NOT_ALLOWED',
+      summary: 'n',
+    });
+    // The L6 spelling {"result":"blocked","reason":...} too.
+    expect(claudeOutcome(exited(0), ok({ result: 'blocked', reason: 'no developercards tools' }), '')).toMatchObject({
+      outcome: 'failed',
+      error: 'AGENT_BLOCKED: no developercards tools',
+      summary: null,
+    });
+    // Without a reason the notes explain it; without either a fixed text does.
+    expect(claudeOutcome(exited(0), ok({ outcome: 'blocked', notes: 'uv failed' }), '').error).toBe('AGENT_BLOCKED: uv failed');
+    expect(claudeOutcome(exited(0), ok({ outcome: 'blocked' }), '').error).toBe('AGENT_BLOCKED: no reason given');
+    const long = claudeOutcome(exited(0), ok({ outcome: 'blocked', reason: 'y'.repeat(1000) }), '').error!;
+    expect(long).toBe(`AGENT_BLOCKED: ${'y'.repeat(300)}`);
+    expect(long.length).toBeLessThanOrEqual(500);
   });
 });

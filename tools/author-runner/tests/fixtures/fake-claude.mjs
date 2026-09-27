@@ -2,11 +2,15 @@
 // A stand-in for the `claude` executable in tests (the real one is never run).
 // `--version` prints one line. Otherwise it records its argv, pid and the NAMES of its
 // environment variables into $DC_TEST_FAKE_CLAUDE_RECORD, then behaves per $DC_TEST_FAKE_CLAUDE_MODE:
-// done | nothing_new | is_error | garbage | fail | provider | hang | hang-ignore-term |
-// hang-ignore-term-child (also starts a SIGTERM-ignoring child in its process group and
-// records the child's pid as `childPid`). $DC_TEST_FAKE_CLAUDE_DELAY_MS delays the
-// done/nothing_new answer. The knobs are DC_* because the runner passes only an allowlist
-// of variables (PATH, HOME, …, DC_*) to claude.
+// done | nothing_new | blocked | blocked_result (the L6 `{"result":"blocked",…}` spelling) |
+// no_outcome | is_error | garbage | fail | provider | api_key | no_init | mcp_failed | hang |
+// hang-ignore-term | hang-ignore-term-child (also starts a SIGTERM-ignoring child in its process
+// group and records the child's pid as `childPid`). $DC_TEST_FAKE_CLAUDE_DELAY_MS delays the
+// answer. Like the real CLI, it answers in `--output-format stream-json --verbose`: a system/init
+// message (with `apiKeySource` and the MCP server status), an assistant message and a result
+// message, one JSON object per line; stream-json without --verbose is refused as the CLI does.
+// The knobs are DC_* because the runner passes only an allowlist of variables (PATH, HOME, …,
+// DC_*) to claude.
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
@@ -17,6 +21,11 @@ if (args[0] === '--version') {
 }
 
 const mode = process.env.DC_TEST_FAKE_CLAUDE_MODE ?? 'done';
+const format = args[args.indexOf('--output-format') + 1];
+if (format === 'stream-json' && !args.includes('--verbose')) {
+  process.stderr.write('Error: When using --print, --output-format=stream-json requires --verbose\n');
+  process.exit(1);
+}
 const delay = Number(process.env.DC_TEST_FAKE_CLAUDE_DELAY_MS ?? '0');
 
 let childPid = null;
@@ -35,6 +44,24 @@ if (process.env.DC_TEST_FAKE_CLAUDE_RECORD) {
   );
 }
 
+function init(apiKeySource = 'none', mcpStatus = 'connected') {
+  return JSON.stringify({
+    type: 'system',
+    subtype: 'init',
+    cwd: process.cwd(),
+    session_id: 'fake-session',
+    tools: ['Read', 'Task', 'Agent', 'Skill', 'mcp__developercards__read_source'],
+    mcp_servers: [{ name: 'developercards', status: mcpStatus }],
+    model: 'claude-opus-5-5',
+    permissionMode: 'dontAsk',
+    apiKeySource,
+  });
+}
+
+function assistant(text) {
+  return JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, session_id: 'fake-session' });
+}
+
 function result(isError, text, model = 'claude-opus-5-5') {
   return JSON.stringify({
     type: 'result',
@@ -47,27 +74,50 @@ function result(isError, text, model = 'claude-opus-5-5') {
   });
 }
 
+/** One stream-json run: init, the final assistant text, the result. */
+function stream(text, { isError = false, model, apiKeySource, mcpStatus, withInit = true } = {}) {
+  const lines = [];
+  if (withInit) lines.push(init(apiKeySource, mcpStatus));
+  lines.push(assistant(text), result(isError, text, model));
+  process.stdout.write(`${lines.join('\n')}\n`);
+  process.exit(0);
+}
+
+const DONE = 'Submitted two drafts.\n{"outcome":"done","submitted":2,"notes":"two new cards drafted"}\n';
+
 function answer() {
   switch (mode) {
     case 'done':
-      process.stdout.write(
-        result(false, 'Submitted two drafts.\n{"outcome":"done","submitted":2,"notes":"two new cards drafted"}\n'),
-      );
-      process.exit(0);
+      stream(DONE);
       break;
     case 'nothing_new':
-      process.stdout.write(result(false, 'Nothing new.\n{"outcome":"nothing_new","submitted":0,"notes":"deck already covers the page"}'));
-      process.exit(0);
+      stream('Nothing new.\n{"outcome":"nothing_new","submitted":0,"notes":"deck already covers the page"}');
+      break;
+    case 'blocked':
+      stream(
+        'read_source was refused.\n{"outcome":"blocked","submitted":0,"reason":"read_source refused the page:\\nSOURCE_HOST_NOT_ALLOWED","notes":"could not read the source"}',
+      );
+      break;
+    case 'blocked_result':
+      stream('No tools.\n{"result":"blocked","reason":"the developercards tools are missing"}');
+      break;
+    case 'no_outcome':
+      stream('I could not finish the task.');
       break;
     case 'provider':
-      process.stdout.write(
-        result(false, 'Submitted.\n{"outcome":"done","submitted":1,"notes":""}', 'us.anthropic.claude-opus-5-5-v1:0'),
-      );
-      process.exit(0);
+      stream('Submitted.\n{"outcome":"done","submitted":1,"notes":""}', { model: 'us.anthropic.claude-opus-5-5-v1:0' });
+      break;
+    case 'api_key':
+      stream(DONE, { apiKeySource: '/login managed key' });
+      break;
+    case 'no_init':
+      stream(DONE, { withInit: false });
+      break;
+    case 'mcp_failed':
+      stream('Nothing new.\n{"outcome":"nothing_new","submitted":0,"notes":""}', { mcpStatus: 'failed' });
       break;
     case 'is_error':
-      process.stdout.write(result(true, 'something went wrong'));
-      process.exit(0);
+      stream('something went wrong', { isError: true });
       break;
     case 'garbage':
       process.stdout.write('this is not json\n');
