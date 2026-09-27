@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +17,8 @@ DATASET_NAME = "seeded-v1"
 SEEDED_PATH = DATA_DIR / f"{DATASET_NAME}.jsonl"
 MUTATIONS_PATH = DATA_DIR / "mutations-v1.json"
 
-# The six defect classes in the fixed seeding order (contract §12.1).
-DEFECT_CLASSES = (
+# The six seeded-v1 defect classes in the fixed seeding order (contract §12.1).
+DEFECT_CLASSES_V1 = (
     "incorrect_answer",
     "multiple_correct",
     "answer_leak",
@@ -24,6 +26,42 @@ DEFECT_CLASSES = (
     "outdated_fact",
     "qualifier_mismatch",
 )
+# seeded-v2 adds source_unsupported (the rubric's "does the source support the answer" check).
+DEFECT_CLASSES = (*DEFECT_CLASSES_V1, "source_unsupported")
+
+
+@dataclass(frozen=True)
+class DatasetSpec:
+    """One committed dataset version: its rows file, mutation templates and defect classes."""
+
+    key: str
+    name: str
+    path: Path
+    mutations_path: Path
+    classes: tuple[str, ...]
+
+
+DATASETS = {
+    "v1": DatasetSpec("v1", DATASET_NAME, SEEDED_PATH, MUTATIONS_PATH, DEFECT_CLASSES_V1),
+    "v2": DatasetSpec(
+        "v2", "seeded-v2", DATA_DIR / "seeded-v2.jsonl", DATA_DIR / "mutations-v2.json", DEFECT_CLASSES
+    ),
+}
+DATASETS_BY_NAME = {spec.name: spec for spec in DATASETS.values()}
+
+
+def classes_for(dataset_name: str | None) -> tuple[str, ...]:
+    """The defect classes a dataset seeds; every class for an unknown or missing name."""
+    spec = DATASETS_BY_NAME.get(dataset_name or "")
+    return spec.classes if spec else DEFECT_CLASSES
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sources_path(deck_slug: str) -> Path:
+    return DATA_DIR / f"sources-{deck_slug}.jsonl"
 
 
 def cards_path(deck_slug: str) -> Path:
