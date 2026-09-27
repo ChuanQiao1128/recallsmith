@@ -307,6 +307,10 @@ public static class Publish
         return res.BadRequest("MCQ_PUBLISH_GATE", $"{gate.Value.StableUid}: {gate.Value.Code}");
       }
 
+      // AI QA gate (contract §7.10): refuses only when AI_QA_ENABLED and AI_QA_REQUIRED are both truthy.
+      var qaGate = await Qa.QaGate.EvaluatePublishAsync(conn, deckIdInt, res);
+      if (qaGate is not null) return qaGate;
+
       // --- ASYNC PUBLISH LOGIC ---
 
       // 💡 核心防御：防重复并发提交（幂等性）。

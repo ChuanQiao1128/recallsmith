@@ -167,6 +167,9 @@ public static class RouteMetrics
     "/api/v1/admin/automation/backfill",
     "/api/v1/authoring/cards/similar",
     "/api/v1/authoring/drafts",
+    "/api/v1/authoring/qa/runs",
+    "/api/v1/authoring/qa/status",
+    "/api/internal/ai-qa/results",
 
     // edge-public
     "/api/v1/billing/verify",
@@ -197,6 +200,8 @@ public static class RouteMetrics
     "/api/v1/authoring/drafts/:draftId/accept",
     "/api/v1/authoring/drafts/:draftId/reject",
     "/api/v1/authoring/drafts/:draftId",
+    "/api/v1/authoring/qa/runs/:runId",
+    "/api/v1/authoring/qa/findings/:findingId/resolve",
   ];
 
   // Longest first, so the table stays order-independent: appending an entry to the arrays
