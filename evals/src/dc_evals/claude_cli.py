@@ -59,6 +59,16 @@ class _Messages:
         return self._client.create(**kwargs)
 
 
+def served_model(data: dict[str, Any], requested: str) -> str | None:
+    """The model the CLI result says answered: a modelUsage key (a "[1m]"-style suffix dropped),
+    the requested one when it is among them; None when the result names none."""
+    usage = data.get("modelUsage")
+    if not isinstance(usage, dict) or not usage:
+        return None
+    names = sorted(str(name).split("[", 1)[0] for name in usage)
+    return requested if requested in names else names[0]
+
+
 class ClaudeCliClient:
     """Duck-types the part of anthropic.Anthropic that ai_qa.review uses: messages.create(...)."""
 
@@ -114,6 +124,7 @@ class ClaudeCliClient:
             raise ClaudeCliError("claude returned an error result")
         usage = data.get("usage") or {}
         return SimpleNamespace(
+            model=served_model(data, self.model),
             content=[SimpleNamespace(type="text", text=data["result"])],
             stop_reason="end_turn",
             stop_details=None,

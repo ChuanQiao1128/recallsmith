@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from conftest import FakeLlm, FakeUsage, finding, reply, review_json
 
+from ai_qa import providers
 from ai_qa.prompts import SYSTEM_PROMPT
-from dc_evals.dataset import load_dataset
-from dc_evals.runner import content_sha256, qa_card, run_eval
+from ai_qa.settings import load_settings
+from dc_evals.dataset import DATASETS, load_dataset
+from dc_evals.runner import MODEL_MISMATCH, content_sha256, model_matches, qa_card, run_eval
 
 
 def rows(n: int) -> list[dict[str, Any]]:
@@ -39,10 +42,13 @@ def test_run_with_fake_llm_goes_through_review_card(settings) -> None:
 
     assert [r["id"] for r in records] == [row["id"] for row in sample]
     for row, record in zip(sample, records, strict=True):
+        # X04 (ai-agent-12) adds rep, tier, the structured-output flag and the served model.
         assert list(record) == [
             "type",
             "id",
+            "rep",
             "defect",
+            "tier",
             "status",
             "errorCode",
             "findings",
@@ -50,6 +56,8 @@ def test_run_with_fake_llm_goes_through_review_card(settings) -> None:
             "latencyMs",
             "requestId",
             "estimatedCostUsd",
+            "structured",
+            "servedModel",
         ]
         assert record["type"] == "item"
         assert record["defect"] == row["defect"]
@@ -84,3 +92,56 @@ def test_run_stops_at_the_cost_ceiling(settings) -> None:
     # Up to `concurrency` rows are in flight when the ceiling is reached; nothing new is submitted after.
     assert 3 <= len(records) <= 3 + 3
     assert [r["id"] for r in records] == [row["id"] for row in sample[: len(records)]]
+
+
+def test_a_row_served_by_another_model_fails(settings) -> None:
+    """ai-agent-12: findings from a model other than the requested one are not evidence."""
+    sample = rows(3)
+    served = {sample[0]["sourceUid"]: "claude-opus-5-20260901", sample[1]["sourceUid"]: "claude-haiku-4-5"}
+
+    def respond(uid: str, kwargs: dict[str, Any]):
+        return reply(review_json(finding("blocker", "incorrect_answer")), model=served.get(uid, "claude-opus-5"))
+
+    records = run_eval(sample, client=FakeLlm(respond), settings=settings, review_date="2026-09-27")
+    assert [r["status"] for r in records] == ["done", "error", "done"]
+    assert records[1]["errorCode"] == MODEL_MISMATCH and records[1]["findings"] == []
+    assert [r["servedModel"] for r in records] == ["claude-opus-5-20260901", "claude-haiku-4-5", "claude-opus-5"]
+
+
+@pytest.mark.parametrize(
+    ("requested", "served", "matches"),
+    [
+        ("claude-opus-5", "claude-opus-5", True),
+        ("claude-opus-5", "claude-opus-5-20260901", True),
+        ("claude-opus-5", "claude-opus-5-5", False),
+        ("claude-opus-5", "claude-sonnet-5", False),
+        ("anthropic.claude-opus-5", "claude-opus-5", True),
+        ("anthropic.claude-opus-5", "anthropic.claude-opus-5", True),
+        ("us.anthropic.claude-opus-5-v1:0", "claude-opus-5", True),
+    ],
+)
+def test_model_matches(requested: str, served: str, matches: bool) -> None:
+    assert model_matches(requested, served) is matches
+
+
+def test_each_item_records_whether_it_used_structured_outputs(settings) -> None:
+    """ai-agent-12: the process-wide structured-output fallback can switch off mid-run; every item
+    records what it actually used."""
+    sample = rows(2)
+    fake = FakeLlm(lambda uid, kwargs: reply(review_json()))
+    first = run_eval(sample[:1], client=fake, settings=settings, review_date="2026-09-27")
+    providers.disable_structured_outputs()
+    second = run_eval(sample[1:], client=fake, settings=settings, review_date="2026-09-27")
+    assert first[0]["structured"] is True and second[0]["structured"] is False
+    assert "format" in fake.calls[0]["output_config"] and "format" not in fake.calls[1]["output_config"]
+
+    off = load_settings({"AI_PROVIDER": "anthropic", "AI_MODEL": "claude-opus-5", "AI_STRUCTURED_OUTPUTS": "off"})
+    assert run_eval(sample[:1], client=fake, settings=off, review_date="2026-09-27")[0]["structured"] is False
+
+
+def test_records_carry_rep_and_tier(settings) -> None:
+    sample = load_dataset(DATASETS["v2"].path)[:4]
+    fake = FakeLlm(lambda uid, kwargs: reply(review_json()))
+    records = run_eval(sample, client=fake, settings=settings, review_date="2026-09-27", rep=3)
+    assert [r["rep"] for r in records] == [3, 3, 3, 3]
+    assert [r["tier"] for r in records] == [row["tier"] for row in sample]

@@ -15,6 +15,8 @@ import pytest
 
 from ai_qa import providers
 from ai_qa.settings import Settings, load_settings
+from dc_evals.dataset import DATASETS, file_sha256, load_dataset
+from dc_evals.report import run_header
 
 AI_ENV_KEYS = (
     "AI_PROVIDER",
@@ -51,14 +53,22 @@ class FakeResponse:
     usage: FakeUsage
     _request_id: str | None
     stop_details: Any = None
+    model: str | None = "claude-opus-5"
 
 
-def reply(text: str, *, usage: FakeUsage | None = None, request_id: str = "req_test_1") -> FakeResponse:
+def reply(
+    text: str,
+    *,
+    usage: FakeUsage | None = None,
+    request_id: str = "req_test_1",
+    model: str | None = "claude-opus-5",
+) -> FakeResponse:
     return FakeResponse(
         content=[FakeBlock(type="thinking", thinking="(reasoning)", signature="sig"), FakeBlock(type="text", text=text)],
         stop_reason="end_turn",
         usage=usage or FakeUsage(input_tokens=100, output_tokens=20),
         _request_id=request_id,
+        model=model,
     )
 
 
@@ -116,12 +126,18 @@ def item(
     latency_ms: int = 1000,
     cost: float = 0.01,
     index: int = 1,
+    rep: int = 1,
+    tier: str | None = None,
+    structured: bool | None = False,
+    served_model: str | None = "anthropic.claude-opus-5",
 ) -> dict[str, Any]:
     """One run item record as the runner writes it."""
     return {
         "type": "item",
         "id": f"s-{index:04d}",
+        "rep": rep,
         "defect": defect,
+        "tier": tier,
         "status": status,
         "errorCode": error_code,
         "findings": [{"cardId": index, **f} for f in (findings or [])],
@@ -129,4 +145,63 @@ def item(
         "latencyMs": latency_ms,
         "requestId": "req_test_1",
         "estimatedCostUsd": cost,
+        "structured": structured,
+        "servedModel": served_model if status == "done" else None,
     }
+
+
+def v2_header(**overrides: Any) -> dict[str, Any]:
+    """A complete, gate-eligible run header for the committed seeded-v2 dataset."""
+    spec = DATASETS["v2"]
+    header = run_header(
+        run_id="run-1",
+        started_at="2026-09-27T00:00:00Z",
+        provider="bedrock",
+        model="anthropic.claude-opus-5",
+        prompt_version="qa-v1",
+        n=len(load_dataset(spec.path)),
+        dataset=spec.name,
+        dataset_sha256=file_sha256(spec.path),
+        dataset_rows=len(load_dataset(spec.path)),
+        reps=1,
+        review_date="2026-09-27",
+        effort="high",
+        structured_outputs="auto",
+        structured_outputs_at_start=False,
+    )
+    return {**header, **overrides}
+
+
+def v2_records(
+    *,
+    misses: dict[str, int] | None = None,
+    false_positives: int = 0,
+    unscored_controls: int = 0,
+    rep: int = 1,
+) -> list[dict[str, Any]]:
+    """One record per seeded-v2 row: each defective row is caught in its own category except the
+    first misses[class] rows of that class; the first `false_positives` controls get a major
+    finding and the next `unscored_controls` controls end in a provider error."""
+    misses = dict(misses or {})
+    records = []
+    control_index = 0
+    for index, row in enumerate(load_dataset(DATASETS["v2"].path), start=1):
+        defect = row["defect"]
+        if defect is None:
+            control_index += 1
+            if control_index <= false_positives:
+                records.append(item(None, [finding("major", "ambiguous_stem")], index=index, rep=rep))
+            elif control_index <= false_positives + unscored_controls:
+                records.append(
+                    item(None, [], status="error", error_code="PROVIDER_TIMEOUT", index=index, rep=rep)
+                )
+            else:
+                records.append(item(None, [], index=index, rep=rep))
+            continue
+        if misses.get(defect, 0) > 0:
+            misses[defect] -= 1
+            records.append(item(defect, [], index=index, rep=rep, tier=row["tier"]))
+        else:
+            hit = [finding("blocker" if defect in ("incorrect_answer", "multiple_correct") else "major", defect)]
+            records.append(item(defect, hit, index=index, rep=rep, tier=row["tier"]))
+    return records

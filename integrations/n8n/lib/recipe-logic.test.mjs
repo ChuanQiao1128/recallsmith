@@ -2,7 +2,21 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
 
-import { buildWeeklyDigest, flaggedCardMessage, summarizeDeveloperCardsEvent } from './recipe-logic.mjs';
+import {
+  buildWeeklyDigest,
+  DC_DELIVERY_MEMORY,
+  DC_RUN_MAX_WAIT_MS,
+  DC_RUN_QUIET_MS,
+  developerCardsDeliveryId,
+  dueRunSummaries,
+  flaggedCardMessage,
+  isDuplicateDelivery,
+  markRunSummariesSent,
+  queueFlaggedCard,
+  rememberDelivery,
+  reviewQueuedMessage,
+  summarizeDeveloperCardsEvent,
+} from './recipe-logic.mjs';
 
 const EVENTS = ['deck.published', 'import.failed', 'card.flagged', 'review.queued', 'webhook.test'];
 const fixture = (event) => JSON.parse(fs.readFileSync(new URL(`../fixtures/${event}.json`, import.meta.url), 'utf8'));
@@ -118,4 +132,86 @@ test('escapes HTML in the digest', () => {
   assert.ok(digest.html.includes('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;q&#39;'), digest.html);
   // The plain-text part keeps the original text.
   assert.ok(digest.text.includes(nasty));
+});
+
+test('keys a delivery by X-DeveloperCards-Delivery and remembers the last 1000', () => {
+  const body = fixture('card.flagged');
+  assert.equal(developerCardsDeliveryId({ 'x-developercards-delivery': ' d-1 ' }, body), 'd-1');
+  assert.equal(developerCardsDeliveryId({ 'x-developercards-delivery': ['d-2', 'd-3'] }, body), 'd-2');
+  assert.equal(developerCardsDeliveryId({}, body), body.eventId);
+  assert.equal(developerCardsDeliveryId(undefined, null), '');
+
+  const state = {};
+  assert.equal(isDuplicateDelivery(state, 'd-1'), false);
+  rememberDelivery(state, 'd-1');
+  assert.equal(isDuplicateDelivery(state, 'd-1'), true);
+  rememberDelivery(state, '');
+  assert.equal(isDuplicateDelivery(state, ''), false, 'an empty key is never a duplicate');
+  for (let i = 0; i < DC_DELIVERY_MEMORY; i++) rememberDelivery(state, `x-${i}`);
+  assert.equal(state.deliveries.length, DC_DELIVERY_MEMORY);
+  assert.equal(isDuplicateDelivery(state, 'd-1'), false, 'the oldest id is forgotten');
+  rememberDelivery(state, 'x-0');
+  assert.equal(state.deliveries.at(-1), 'x-0', 'a repeat moves to the newest end');
+  assert.equal(state.deliveries.length, DC_DELIVERY_MEMORY);
+});
+
+test('batches card.flagged per QA run into one summary with the count and top findings', () => {
+  const state = {};
+  const base = fixture('card.flagged');
+  const t0 = Date.parse('2026-10-01T05:20:30.000Z');
+  const card = (i, findings) => {
+    const body = structuredClone(base);
+    body.eventId = `e-${i}`;
+    body.data.stableUid = `card-${i}`;
+    if (findings) {
+      body.data.findings = findings;
+      body.data.counts = { blocker: findings.filter((f) => f.severity === 'blocker').length, major: 0, minor: 0 };
+    }
+    return body;
+  };
+  queueFlaggedCard(state, card(1), t0);
+  queueFlaggedCard(state, card(1), t0 + 1000); // redelivered: counted once
+  queueFlaggedCard(state, card(2, [{ severity: 'blocker', category: 'answer', message: 'Wrong key.' }]), t0 + 2000);
+  const other = card(3);
+  other.data.runId = 'run-b';
+  queueFlaggedCard(state, other, t0 + 2000);
+
+  assert.deepEqual(dueRunSummaries(state, t0 + 2000 + DC_RUN_QUIET_MS - 1), []);
+  const due = dueRunSummaries(state, t0 + 2000 + DC_RUN_QUIET_MS);
+  assert.deepEqual(due.map((d) => [d.runId, d.cardCount]), [
+    [base.data.runId, 2],
+    ['run-b', 1],
+  ]);
+  const text = due[0].text.split('\n');
+  assert.equal(text[0], `AI QA run ${base.data.runId} in aws-saa-c03 flagged 2 cards`);
+  assert.equal(text[1], 'Findings: 1 blocker / 2 major / 1 minor');
+  assert.equal(text[2], 'Top findings:');
+  assert.equal(text[3], '- blocker · answer (card-2): Wrong key.');
+  assert.match(text[4], /^- major · accuracy \(card-1\): /);
+  assert.equal(text.at(-1), `Review: ${base.data.consoleUrl}`);
+  assert.equal(due[1].text.split('\n')[0], 'AI QA run run-b in aws-saa-c03 flagged 1 card');
+
+  // A card that arrives after the summary was built stays pending for the next one.
+  queueFlaggedCard(state, card(4), t0 + 2000 + DC_RUN_QUIET_MS);
+  markRunSummariesSent(state, due);
+  assert.deepEqual(Object.keys(state.runs), [base.data.runId]);
+  assert.deepEqual(Object.keys(state.runs[base.data.runId].cards), ['e-4']);
+  markRunSummariesSent(state, [{ runId: 'unknown', cardKeys: ['x'] }]);
+
+  // A run that never goes quiet is still posted after the maximum wait.
+  const busy = {};
+  for (let t = 0; t <= DC_RUN_MAX_WAIT_MS; t += 60_000) queueFlaggedCard(busy, card(t), t0 + t);
+  assert.equal(dueRunSummaries(busy, t0 + DC_RUN_MAX_WAIT_MS).length, 1);
+  assert.deepEqual(dueRunSummaries(undefined, t0), []);
+});
+
+test('formats review.queued for Slack with the console link', () => {
+  const body = fixture('review.queued');
+  assert.deepEqual(reviewQueuedMessage(body), {
+    text: `3 drafts waiting for review in aws-saa-c03 (batch ${body.data.batchId})\nReview: ${body.data.consoleUrl}`,
+  });
+  const one = structuredClone(body);
+  one.data.draftCount = 1;
+  delete one.data.consoleUrl;
+  assert.equal(reviewQueuedMessage(one).text, `1 draft waiting for review in aws-saa-c03 (batch ${body.data.batchId})`);
 });

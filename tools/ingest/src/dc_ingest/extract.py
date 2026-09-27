@@ -58,6 +58,7 @@ _BLOCK_TAGS = frozenset(
         "summary",
     }
 )
+_HIDDEN_STYLE = re.compile(r"(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\b", re.IGNORECASE)
 _HEADING_TAGS = {f"h{level}": level for level in range(1, 7)}
 _SKIPPED_STRINGS = (Comment, Declaration, Doctype, ProcessingInstruction)
 _WS = re.compile(r"\s+")
@@ -73,11 +74,31 @@ class HtmlDoc:
     title: str | None
 
 
+def is_hidden(tag: Tag) -> bool:
+    """True for an element a reader never sees: ``hidden``, ``aria-hidden="true"`` or an
+    inline ``display: none`` / ``visibility: hidden`` style."""
+    if tag.has_attr("hidden"):
+        return True
+    if str(tag.get("aria-hidden", "")).strip().lower() == "true":
+        return True
+    style = tag.get("style")
+    return isinstance(style, str) and _HIDDEN_STYLE.search(style) is not None
+
+
 def extract_html(body: bytes, charset: str | None = None) -> HtmlDoc:
-    """Return the readable text of an HTML page plus its ``<title>`` / first ``h1``."""
+    """Return the readable text of an HTML page plus its ``<title>`` / first ``h1``.
+
+    Hidden elements (see ``is_hidden``) are removed first: their text is invisible on the
+    rendered page, so a reviewer could not find a quote taken from it, and it is the usual
+    carrier of instructions planted for a model.
+    """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         soup = BeautifulSoup(body, "html.parser", from_encoding=charset)
+
+    for tag in soup.find_all(is_hidden):
+        if not tag.decomposed:
+            tag.decompose()
 
     title = None
     if soup.title is not None:

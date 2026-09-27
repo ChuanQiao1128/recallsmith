@@ -22,6 +22,39 @@ describe('server', () => {
     await client.close();
   });
 
+  it('describes each tool contract and carries MCP annotations', async () => {
+    env = makeTestEnv();
+    const client = await connect(env.config);
+    const { tools } = await client.listTools();
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    for (const tool of tools) {
+      // A short man page: what it does, limits, what it does not do.
+      expect(tool.description?.split(/(?<=[.;)])\s+(?=[A-Z`])/).length ?? 0, tool.name).toBeGreaterThanOrEqual(3);
+      expect(tool.annotations?.title, tool.name).toBeTruthy();
+    }
+
+    const read = byName.get('read_source');
+    expect(read?.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
+    for (const phrase of [/sources\/ directory/, /DC_SOURCES_DIRS/, /~\/\.ssh/, /token file/, /canonicalUrl/, /1000\.\.8000/, /chunks: \[\{ id/, /no summary/]) {
+      expect(read?.description).toMatch(phrase);
+    }
+
+    const similar = byName.get('find_similar_cards');
+    expect(similar?.annotations).toMatchObject({ readOnlyHint: true });
+    for (const phrase of [/every deck/, /0\.3/, /0\.6/, /does not return/]) expect(similar?.description).toMatch(phrase);
+
+    const lint = byName.get('lint_card');
+    expect(lint?.annotations).toMatchObject({ readOnlyHint: true });
+    expect(lint?.description).toMatch(/without it the quote is not checked/);
+
+    const submit = byName.get('submit_draft');
+    expect(submit?.annotations).toMatchObject({ idempotentHint: true, readOnlyHint: false, destructiveHint: false });
+    for (const phrase of [/SOURCE_NOT_INGESTED/, /SOURCE_QUOTE_NOT_IN_CHUNK/, /idempotent/, /rejected/, /grounding/]) {
+      expect(submit?.description).toMatch(phrase);
+    }
+    await client.close();
+  });
+
   it('reports server name developercards and version 1.8.0', async () => {
     env = makeTestEnv();
     const client = await connect(env.config);

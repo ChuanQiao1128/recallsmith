@@ -108,7 +108,7 @@ function toDeckCardContent(card: DraftCard): DeckCardContent {
 }
 
 /** Collapses every whitespace run to one space and trims; nothing else, so the quote stays verbatim. */
-function normaliseWhitespace(text: string): string {
+export function normaliseWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 

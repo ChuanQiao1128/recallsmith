@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,14 @@ import pytest
 from dc_ingest.cli import main
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def allowed_sources(monkeypatch, tmp_path):
+    """Local sources are read only from allowed roots: here the fixtures and the test's tmp dir."""
+    monkeypatch.setenv("DC_SOURCES_DIRS", os.pathsep.join([str(FIXTURES), str(tmp_path)]))
+    monkeypatch.delenv("DC_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("DC_REPO_ROOT", raising=False)
 
 
 @pytest.fixture

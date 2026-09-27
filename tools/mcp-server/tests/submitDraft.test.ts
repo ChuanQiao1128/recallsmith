@@ -6,6 +6,8 @@ import {
   envelope,
   errorEnvelope,
   makeTestEnv,
+  MCQ_CHUNK,
+  SAMPLE_CHUNK,
   sampleCard,
   sampleMcqCard,
   sendJson,
@@ -73,7 +75,30 @@ describe('submit_draft', () => {
       agent: { model: 'claude-opus-5-5', skillVersion: '1.0.0' },
     });
     expect(result.isError).toBe(false);
-    expect(JSON.parse(result.text)).toEqual(SUBMIT_DATA);
+    // The API data, plus where each quote was found in the cited source (ai-agent-7).
+    expect(JSON.parse(result.text)).toEqual({
+      ...SUBMIT_DATA,
+      grounding: [
+        {
+          stableUid: 'sample-qa-topic-02',
+          clientDraftKey: clientDraftKey(cards[0] as DraftCard),
+          sourceId: 'sid-retrieval',
+          url: 'https://example.com/s3/retrieval-options',
+          chunkId: 'c0002',
+          chunkCharStart: 30,
+          chunkCharEnd: 30 + SAMPLE_CHUNK.length,
+        },
+        {
+          stableUid: 'sample-mcq-choose-two-03',
+          clientDraftKey: clientDraftKey(cards[1] as DraftCard),
+          sourceId: 'sid-encryption',
+          url: 'https://example.com/s3/encryption',
+          chunkId: 'c0001',
+          chunkCharStart: 0,
+          chunkCharEnd: MCQ_CHUNK.length,
+        },
+      ],
+    });
 
     expect(api.requests).toHaveLength(2);
     const [list, post] = api.requests;

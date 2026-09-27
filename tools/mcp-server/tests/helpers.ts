@@ -104,7 +104,41 @@ export function writeValidTokens(config: Config, expiresInMs = 60 * 60 * 1000): 
   });
 }
 
-export async function connect(config: Config, runProcess?: RunProcess): Promise<Client> {
+export interface FakeSourceDoc {
+  sourceId: string;
+  chunks: string[];
+}
+
+/** An ingest document in the dc-ingest output shape, one chunk per string. */
+export function ingestDoc(url: string, doc: FakeSourceDoc): Record<string, unknown> {
+  let offset = 0;
+  const chunks = doc.chunks.map((text, index) => {
+    const chunk = { id: `c${String(index + 1).padStart(4, '0')}`, index, heading: null, page: null, text, charStart: offset, charEnd: offset + text.length };
+    offset += text.length + 2;
+    return chunk;
+  });
+  return { v: 1, sourceId: doc.sourceId, kind: 'html', title: url, url, path: null, fetchedAt: '2026-09-27T00:00:00Z', chunks };
+}
+
+/**
+ * A RunProcess standing in for `uv run dc-ingest`: it answers the https sources in `docs`
+ * (keyed by URL, the last argument) and exits 1 like dc-ingest on an HTTP 404 otherwise.
+ * Every call is recorded; nothing is spawned and nothing reaches the network.
+ */
+export function fakeIngest(docs: Record<string, FakeSourceDoc>): { run: RunProcess; calls: string[][] } {
+  const calls: string[][] = [];
+  const run: RunProcess = async (_command, args) => {
+    calls.push(args);
+    const source = args[args.length - 1] ?? '';
+    const doc = docs[source];
+    if (doc === undefined) return { code: 1, stdout: '', stderr: `dc-ingest: error: HTTP error 404 fetching ${source}\n` };
+    return { code: 0, stdout: `${JSON.stringify(ingestDoc(source, doc))}\n`, stderr: '' };
+  };
+  return { run, calls };
+}
+
+/** Tests never spawn the real dc-ingest: without an explicit RunProcess the server reads SAMPLE_SOURCES. */
+export async function connect(config: Config, runProcess: RunProcess = fakeIngest(SAMPLE_SOURCES).run): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createServer({ config, runProcess });
   await server.connect(serverTransport);
@@ -198,3 +232,9 @@ export function sampleMcqCard(): DraftCard {
     source: { url: 'https://example.com/s3/encryption', quote: 'deny any upload that does not request SSE-KMS' },
   };
 }
+
+/** The two sample sources whose chunks contain the quotes of sampleCard() and sampleMcqCard(). */
+export const SAMPLE_SOURCES: Record<string, FakeSourceDoc> = {
+  'https://example.com/s3/retrieval-options': { sourceId: 'sid-retrieval', chunks: ['S3 storage classes overview.', SAMPLE_CHUNK] },
+  'https://example.com/s3/encryption': { sourceId: 'sid-encryption', chunks: [MCQ_CHUNK] },
+};

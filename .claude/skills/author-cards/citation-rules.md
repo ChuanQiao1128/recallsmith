@@ -4,13 +4,13 @@ Every draft carries exactly one `source: { url, quote }` (contract §5.1, §8.1)
 
 ## `source.url`
 
-- `source.url` = the chunk's `url` as returned by `read_source`.
+- `source.url` = the chunk's `url` as returned by `read_source`. `submit_draft` refuses any other url with `SOURCE_NOT_INGESTED`.
 - For a local file (PDF or text on disk) that is the `canonicalUrl` you passed to `read_source`: the https page the file was downloaded from.
 - Never a local path, never `http://` (it must match `^https://\S+$`), at most 2048 characters.
 
 ## `source.quote`
 
-- Copied **verbatim** as one contiguous passage from **one** chunk. Only whitespace may differ; `lint_card` checks this when you pass `sourceChunkText` and reports `SOURCE_QUOTE_NOT_IN_CHUNK` when the quote is not found.
+- Copied **verbatim** as one contiguous passage from **one** chunk. Only whitespace may differ; `lint_card` checks this when you pass `sourceChunkText`, and `submit_draft` always checks it against the chunks `read_source` returned for `source.url`. Either reports `SOURCE_QUOTE_NOT_IN_CHUNK` when the quote is not found.
 - No ellipses, no splicing of two passages, no paraphrase, no added or corrected words.
 - Recommended length: at most 300 characters. Hard limit: 1000 characters (`SOURCE_QUOTE_TOO_LONG`).
 - The quote must support the answer itself, not just the topic. A sentence that only introduces the service or feature is not enough.
@@ -27,4 +27,4 @@ Every draft carries exactly one `source: { url, quote }` (contract §5.1, §8.1)
 
 ## When lint complains
 
-`SOURCE_REQUIRED`, `SOURCE_QUOTE_NOT_IN_CHUNK`, `BAD_SOURCE_URL` and `SOURCE_QUOTE_TOO_LONG` are fixed by correcting the citation (copy the passage again from the chunk, shorten it to the supporting sentence, use the chunk's `url`), never by weakening the check or dropping `sourceChunkText`.
+`SOURCE_REQUIRED`, `SOURCE_QUOTE_NOT_IN_CHUNK`, `SOURCE_NOT_INGESTED`, `BAD_SOURCE_URL` and `SOURCE_QUOTE_TOO_LONG` are fixed by correcting the citation (copy the passage again from the chunk, shorten it to the supporting sentence, use the chunk's `url`), never by weakening the check or dropping `sourceChunkText`.
