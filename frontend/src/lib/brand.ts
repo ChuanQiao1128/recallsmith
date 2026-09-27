@@ -29,6 +29,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/decks/cards/import': 'Import cards',
   '/admin/users': 'Users & permissions',
   '/content-intelligence': 'Content intelligence',
+  '/admin/webhooks': 'Webhooks',
 };
 
 /**
