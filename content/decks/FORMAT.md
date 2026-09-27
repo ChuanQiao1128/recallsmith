@@ -2,7 +2,8 @@
 
 The parser is the law: `frontend/src/lib/deckImport.ts` (lexer + `validateCards` + `planImport`),
 `frontend/src/lib/mcqRules.ts` (`validateMcq`), `frontend/src/lib/cardRules.ts` (uid, difficulty),
-`frontend/src/lib/deckImportRunner.ts` (the write loop). Everything below is derived from those
+`frontend/src/lib/deckImportRunner.ts` (the write loop), `frontend/src/lib/sourceRules.ts` (source
+limits). Everything below is derived from those
 files as of `main@8a99cc2`; when this document and the code disagree, the code wins and this
 document is wrong.
 
@@ -31,10 +32,11 @@ Node 22.18+ or 24 runs the `.mts` directly (this machine: v24.9.0); nothing to i
 - A marker with an empty payload (`Q:` alone) opens a section whose body is the following lines.
   `Q: inline text` puts the text on the marker line itself; both are accepted for `Q:`, `A:`,
   `USAGE:`, `WHY:`. `CODE:` and `OPT:` take a *payload* on the marker line (language / key), never
-  body text. `TOPIC:` and `QUALIFIER:` are single line markers: the payload is the whole value.
+  body text. `SOURCE:` takes the https URL as its payload; the lines below it are the quote.
+  `TOPIC:` and `QUALIFIER:` are single line markers: the payload is the whole value.
 - Marker regexes, all anchored at column 0, tested in this order:
   `## ` (card header; needs a space or tab after `##`, so `###` and `##x` are content) ·
-  `# deck:` (case-insensitive, `#deck:` also matches) · `TOPIC:` · `QUALIFIER:` · `OPT:` ·
+  `# deck:` (case-insensitive, `#deck:` also matches) · `TOPIC:` · `QUALIFIER:` · `SOURCE:` · `OPT:` ·
   `WHY:` · `Q:` · `A:` · `USAGE:` · `CODE:`.
 - A `# deck:` line **anywhere** in the file (even inside a card body or code block) is taken as
   the deck header, never as content. Do not write one in a snippet.
@@ -84,13 +86,14 @@ Any non-blank line before the first card header that is not the deck header →
 | `A:` | `explanation` | **yes** | multi-line. Empty → `MISSING_ANSWER` (card dropped). For MCQ it is the letter-free answer sentence old clients show as the card back. |
 | `CODE: <language>` | `codeSnippet` + `codeLanguage` | no | language is the rest of the marker line (`CODE: python`, `CODE: json`, `CODE: bash`; bare `CODE:` = no language). Body is the snippet. A `CODE:` with no body is dropped entirely (no snippet, no language). |
 | `USAGE:` | `realWorldUsage` | no | multi-line. |
+| `SOURCE: <https url>` | `source.url` + `source.quote` | no | once per card. URL = the rest of the marker line, trimmed; must match `^https://\S+$` and be ≤ 2048 chars, else `BAD_SOURCE_URL` (card dropped). Quote = the following lines, trimmed; empty → `null`; internal newlines kept; ≤ 1000 chars, else `SOURCE_QUOTE_TOO_LONG`. Copy the quote word for word from the page. |
 
 - A *section* is a marker line plus every following non-blank line up to the next column-0
-  marker or card header. A card may contain each of `Q:`, `A:`, `CODE:`, `USAGE:` once; a repeat
+  marker or card header. A card may contain each of `Q:`, `A:`, `CODE:`, `USAGE:`, `SOURCE:` once; a repeat
   → `DUPLICATE_SECTION`, the first copy is kept and the repeat's body is swallowed.
 - Lines after the header but before the first section marker → `TEXT_BEFORE_SECTION`.
 - Sections may appear in any order; the round-trip (canonical) order is
-  `header, TOPIC:, QUALIFIER:, Q:, OPT:/WHY: …, A:, CODE:, USAGE:`. Write them in that order.
+  `header, TOPIC:, QUALIFIER:, Q:, OPT:/WHY: …, A:, CODE:, USAGE:, SOURCE:`. Write them in that order.
 - A card is MCQ as soon as it has one `OPT:`, `WHY:` or `QUALIFIER:` line; `shuffle` is always
   true and `v` is always 1 (the format has no marker for either).
 
@@ -138,10 +141,12 @@ parses).
 | `BAD_UID_FORMAT` | uid fails the pattern / >128 chars | blocks |
 | `DUPLICATE_UID` | uid seen earlier in the file (message names the first line) | blocks |
 | `TEXT_BEFORE_SECTION` | content between header and first marker | blocks |
-| `DUPLICATE_SECTION` | second `Q:`/`A:`/`CODE:`/`USAGE:`, or second `WHY:` for one option | first wins, blocks |
+| `DUPLICATE_SECTION` | second `Q:`/`A:`/`CODE:`/`USAGE:`/`SOURCE:` (the repeat's URL is not checked), or second `WHY:` for one option | first wins, blocks |
 | `MISSING_QUESTION` / `MISSING_ANSWER` | `Q:`/`A:` absent or whitespace-only | card dropped, blocks |
 | `BAD_TOPIC` | `TOPIC:` empty or >80 chars after trim | card dropped, blocks |
 | `DUPLICATE_TOPIC` | second `TOPIC:` | first wins, blocks |
+| `BAD_SOURCE_URL` | `SOURCE:` URL empty, not `^https://\S+$`, or >2048 chars after trim | **card dropped**, blocks |
+| `SOURCE_QUOTE_TOO_LONG` | `SOURCE:` quote >1000 chars after trim | blocks |
 | `MCQ_BAD_OPT_LINE` | `OPT:` payload not `<a-f>` or `<a-f> *` (e.g. `OPT: g`, `OPT: a text`, `OPT: A)`) | **card dropped**, later MCQ issues of that card are not reported |
 | `MCQ_WHY_WITHOUT_OPTION` | `WHY:` before the card's first `OPT:` | body swallowed, blocks |
 | `MCQ_DUPLICATE_QUALIFIER` | second `QUALIFIER:` | first wins, blocks |
@@ -201,12 +206,14 @@ does not resolve collisions. Consequences:
 ### 2.3 "Unchanged" means: no comparable field differs after normalisation
 
 `COMPARABLE_FIELDS = question, difficulty, orderInDeck, explanation, codeSnippet, codeLanguage,
-realWorldUsage, topic, mcq`. Text fields are compared after `.trim()` of the **whole value**
+realWorldUsage, topic, mcq, source`. Text fields are compared after `.trim()` of the **whole value**
 (server `null` == `""` == absent); `mcq` is compared as canonical JSON (options sorted by key,
-each text/why trimmed, empty why → null, `v` dropped, server `null` == file absence).
+each text/why trimmed, empty why → null, `v` dropped, server `null` == file absence); `source` is
+compared as `[url.trim(), quote.trim() || null]` (`normalizeSourceForCompare`; server `null` ==
+file absence).
 
-So an edit registers only if it changes one of those nine fields: changing wording, difficulty,
-topic, an option, a why, the qualifier, the code, the usage all count. Adding or removing blank
+So an edit registers only if it changes one of those ten fields: changing wording, difficulty,
+topic, an option, a why, the qualifier, the code, the usage, the source all count. Adding or removing blank
 lines and trailing spaces does **not** count (the lexer drops them); re-flowing a line break
 inside a paragraph **does** count (internal newlines are content); leading/trailing whitespace of
 a whole section does not. Renaming a uid is not an edit: it is a create plus an orphaned server
@@ -227,7 +234,8 @@ card.
 
 Serial writes in plan order; a failed card is recorded and the run continues; the failure list
 can be re-run as is. Optional fields you removed are sent as `""` (and `mcq: null` for a Q/A
-card) so a cleared section actually clears on the server. The first MCQ write is probed: if the
+card, `source: null` for a card without `SOURCE:`) so a cleared section actually clears on the
+server. The first MCQ write is probed: if the
 API echoes the card without its `mcq` blob the run stops with `SERVER_NOT_READY_MCQ` and the
 rest of the file is listed as not written.
 
@@ -316,6 +324,8 @@ Single-answer MCQ: same shape, 4 options, one `*`, no `(Choose …)` in the stem
   or choose-two/three. Q/A: concept and service cards d1–d2, pattern cards d2–d3; d0
   (orientation) and d4 (expert) exist for Q/A only and are rare. Difficulty is rarity on the
   phone, and the analytics snapshot table rejects MCQ rows outside 1–3.
+- `SOURCE:` is optional for hand-written cards; AI drafts submitted through the MCP server
+  require it (contract §8.1). The quote is copied from the page word for word, never paraphrased.
 
 ---
 
@@ -421,3 +431,31 @@ $ node frontend/scripts/lint-deck.mts …/scratchpad/lint-broken.md
 21: MCQ_BAD_OPT_LINE Card "broken-mcq-01": OPT: must be "OPT: <a-f>" or "OPT: <a-f> *" on its own line, got "OPT: g".
 1 cards, 0 mcq, 2 issues                          # exit 1
 ```
+
+### 7.5 A card with `SOURCE:`
+
+The §3.2 card with a source after its `USAGE:` block. The quote line below is a placeholder:
+in a real deck it is replaced by the passage copied word for word from that page.
+
+```markdown
+# deck: lint-sample
+
+## sample-qa-topic-02 | d1
+TOPIC: 4.1 Cost-optimized storage
+Q:
+Nightly database dumps of about 200 GB each must be kept for 90 days and are restored perhaps twice a year, always within a few hours of the request. Which S3 storage class keeps cost lowest without breaking the restore expectation?
+A:
+S3 Glacier Flexible Retrieval: it is priced for data read once or twice a year and its standard retrieval finishes in 3 to 5 hours, inside the "few hours" window. Glacier Deep Archive is cheaper per GB but its standard restore takes up to 12 hours, so it fails the requirement; S3 Standard-IA is faster than needed and costs more per GB stored.
+USAGE:
+Pick the coldest class whose restore time still fits the recovery-time objective you actually promised.
+SOURCE: https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects-retrieval-options.html
+[Placeholder, not AWS text: paste the verbatim passage from this page that supports the answer.]
+```
+
+```
+$ node frontend/scripts/lint-deck.mts …/scratchpad/source-sample.md
+1 cards, 0 mcq, 0 issues, 0 warnings              # exit 0
+```
+
+With `SOURCE: http://…` instead, the card is dropped and the lint prints
+`<line>: BAD_SOURCE_URL …` and `0 cards, 0 mcq, 1 issues, 0 warnings` (exit 1).
