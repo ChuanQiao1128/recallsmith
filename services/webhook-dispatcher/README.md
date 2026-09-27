@@ -244,9 +244,37 @@ Workers never run these.
   environment variable on the function changes nothing; stop the consumer instead. Messages stay
   in the queue (retention 4 days) and resume when re-enabled.
   - Find the mapping: `aws lambda list-event-source-mappings --function-name developercards-webhook-dispatcher:prod --query 'EventSourceMappings[].UUID'`.
-  - Stop: `aws lambda update-event-source-mapping --uuid <uuid> --no-enabled`
-    (or `aws lambda put-function-concurrency --function-name developercards-webhook-dispatcher --reserved-concurrent-executions 0`).
-  - Undo: `aws lambda update-event-source-mapping --uuid <uuid> --enabled`
-    (or restore the Terraform value: `aws lambda put-function-concurrency --function-name developercards-webhook-dispatcher --reserved-concurrent-executions 2`).
-- DLQ redrive, after fixing the cause: `aws sqs start-message-move-task --source-arn
-  <developercards-webhook-events-dlq ARN>` (messages go back to `developercards-webhook-events`).
+  - Stop (takes effect at once): `aws lambda update-event-source-mapping --uuid <uuid> --no-enabled`.
+    Do not use reserved concurrency 0: a throttled SQS-triggered function still has messages
+    received for it, which uses up `maxReceiveCount = 5` and moves deliveries to the DLQ.
+  - Undo: `aws lambda update-event-source-mapping --uuid <uuid> --enabled`.
+  - The mapping's `enabled` is in Terraform's `ignore_changes` (R18 Y04), so an apply does not
+    re-enable a stopped dispatcher; check `aws lambda get-event-source-mapping --uuid <uuid> --query State`
+    before and after any apply. infra/RUNBOOK.md §7 "Emergency stop for the SQS consumers" is the
+    same procedure.
+- Dead deliveries and the DLQ, and enqueue failures: see "Dead deliveries and the DLQ" below.
+
+## Dead deliveries and the DLQ
+
+One procedure, the same as infra/RUNBOOK.md §7 (`webhook-delivery-dead`, `webhook-enqueue-failures`):
+
+- **`dead` deliveries** (five retryable failures; the message is in
+  `developercards-webhook-events-dlq`): fix the receiver, press **Redeliver** on each `dead` row in
+  the console (a new delivery id, so the receiver processes the event once), then purge the DLQ:
+  `aws sqs purge-queue --queue-url <developercards-webhook-events-dlq URL>`. Do **not** redrive the
+  DLQ back to `developercards-webhook-events` (`aws sqs start-message-move-task`): core-vpc keeps a
+  `dead` row `dead` even when the redriven attempt succeeds (automation-12), so the console shows it
+  undelivered, the webhook_notification ledger unit is lost, and a later Redeliver makes the receiver
+  process the event twice. This section changes only after the automation-12 core-vpc fix is
+  deployed.
+- **Unsupported-version messages** (step 1 above, `webhook_unsupported_version`): these are never
+  reported, so their rows stay `queued` with 0 attempts and are never `dead`. A DLQ that holds only
+  these may be redriven once the newer dispatcher is deployed. If the DLQ was purged under the `dead`
+  procedure, the enqueue-failure sweep below re-sends those rows (it picks up `queued` rows with 0
+  attempts untouched for 10 minutes).
+- **Enqueue failures** (`WebhookEnqueueFailures`: core-vpc or the worker could not `SendMessage`; the
+  row is `enqueue_failed`, nothing reached this dispatcher): fix the queue or the send grants, wait
+  10 minutes, then call `POST /api/v1/admin/webhooks/deliveries/sweep` (super_admin JWT, optional
+  body `{"limit": 1..100}`) and repeat, 10 minutes apart, until the response's `enqueueFailures` is 0.
+  A swept row keeps its delivery id and eventId, so receivers dedupe as usual
+  (docs/delivery/r18-issues/X01-ledger-runbook.md).

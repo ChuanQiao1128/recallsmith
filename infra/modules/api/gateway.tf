@@ -8,7 +8,12 @@ locals {
   # Route map (relocated here from main.tf so the route keys live beside the
   # route/authorizer/throttle they drive). Each route resolves an integration
   # through local.integration_ids and an authorizer through local.authorizer_ids.
-  # auth: "console" | "mobile" | "none".
+  # auth: "console" | "agent" | "mobile" | "none".
+  # R18 Y04 (ai-agent-6): "console" admits only the SPA client. "agent" admits the SPA client and the
+  # agent app clients (console-dev, the local MCP server) and is attached ONLY to the exact route keys
+  # the MCP server calls (tools/mcp-server/src/api.ts, server.ts). Every other route, including all
+  # edge-public routes (Cognito admin, /api/v1/ai, billing), rejects an agent token at the gateway.
+  # core-vpc's AgentClientPolicy stays as defence in depth; keep the two lists equal.
   routes = {
     default            = { route_key = "$default", integration = "core_vpc", auth = "console" }
     proxy              = { route_key = "ANY /{proxy+}", integration = "core_vpc", auth = "console" }
@@ -46,6 +51,13 @@ locals {
     internal_webhooks = { route_key = "POST /api/internal/webhooks/deliveries/report", integration = "core_vpc", auth = "none" }
     # R18 J15: HMAC callback from the ai-qa Lambda (no JWT, no OPTIONS). Exact key (X08).
     internal_ai_qa = { route_key = "POST /api/internal/ai-qa/results", integration = "core_vpc", auth = "none" }
+
+    # R18 Y04 (ai-agent-6): the MCP server's three calls. Exact keys win over the greedy console routes
+    # (ANY /api/v1/admin/{proxy+}, ANY /api/v1/authoring/{proxy+}), so only these reach core-vpc with an
+    # agent token; a query string (GET /api/v1/admin/decks?q=...) does not affect route matching.
+    agent_admin_decks   = { route_key = "GET /api/v1/admin/decks", integration = "core_vpc", auth = "agent" }
+    agent_cards_similar = { route_key = "POST /api/v1/authoring/cards/similar", integration = "core_vpc", auth = "agent" }
+    agent_drafts_submit = { route_key = "POST /api/v1/authoring/drafts", integration = "core_vpc", auth = "agent" }
   }
 
   integration_ids = {
@@ -55,6 +67,7 @@ locals {
 
   authorizer_ids = {
     console = aws_apigatewayv2_authorizer.console.id
+    agent   = aws_apigatewayv2_authorizer.agent.id
     mobile  = aws_apigatewayv2_authorizer.mobile.id
   }
 
@@ -123,7 +136,21 @@ resource "aws_apigatewayv2_authorizer" "console" {
   identity_sources                 = ["$request.header.Authorization"]
   name                             = "cognito-jwt"
   jwt_configuration {
-    audience = concat([var.console_client_id], var.console_extra_audiences)
+    audience = [var.console_client_id]
+    issuer   = "https://${var.console_pool_endpoint}"
+  }
+}
+
+# R18 Y04 (ai-agent-6): same pool/issuer as "console", plus the agent app clients. Only the routes with
+# auth = "agent" use it.
+resource "aws_apigatewayv2_authorizer" "agent" {
+  api_id                           = aws_apigatewayv2_api.http.id
+  authorizer_result_ttl_in_seconds = 0
+  authorizer_type                  = "JWT"
+  identity_sources                 = ["$request.header.Authorization"]
+  name                             = "cognito-jwt-agent"
+  jwt_configuration {
+    audience = concat([var.console_client_id], var.agent_client_ids)
     issuer   = "https://${var.console_pool_endpoint}"
   }
 }

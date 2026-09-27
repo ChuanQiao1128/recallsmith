@@ -75,6 +75,9 @@ resource "aws_lambda_event_source_mapping" "ai_qa_sqs" {
     maximum_concurrency = 2
   }
   lifecycle {
-    ignore_changes = [metrics_config]
+    # R18 Y04 (cloud-security-resilience-14): the emergency stop is `update-event-source-mapping
+    # --no-enabled` (infra/RUNBOOK.md §7). Ignoring `enabled` keeps a later plan from quietly
+    # re-enabling a stopped consumer; re-enabling is the same CLI call with --enabled.
+    ignore_changes = [metrics_config, enabled]
   }
 }
