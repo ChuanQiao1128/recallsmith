@@ -744,11 +744,11 @@ public static class Drafts
     {
       var rows = await DbUtil.QueryAsync(conn, null,
         """
-        select draft_id, run_id, state, reason, reason_detail, mode, qa_job_id, qa_status, qa_error_code, qa_provider, qa_model,
+        select run_id, state, reason, reason_detail, mode, qa_status, qa_error_code, qa_provider, qa_model,
           qa_prompt_version, blocker_count, major_count, minor_count, accepted_card_id, human_action
-        from automation_draft_decisions where draft_id = any($1)
+        from automation_draft_decisions where draft_id = $1
         """,
-        [new[] { draftId }]);
+        [draftId]);
       if (rows.Count == 0) return null;
       var a = rows[0];
 
