@@ -9,7 +9,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 
 import { http } from '../src/api/http';
-import { fetchAutomationStatus, listAutomationRuns, recordEvalGate, RUN_SUMMARY_MAX } from '../src/api/automation';
+import {
+  fetchAutomationStatus,
+  listAutomationDecisions,
+  listAutomationRuns,
+  recordEvalGate,
+  RUN_SUMMARY_MAX,
+} from '../src/api/automation';
 import { ok } from './support/apiResult';
 import { RUN_ID } from './support/automationFixtures';
 
@@ -86,6 +92,53 @@ describe('the open backlog on the status (K7)', () => {
     const res = await fetchAutomationStatus();
     expect(res.success).toBe(true);
     expect(res.data?.backlog).toBeNull();
+  });
+});
+
+describe('the status fields of R18C (C07: L4 humanPublishItems, L5 unconfirmed)', () => {
+  it('reads notifications.unconfirmed as a number, 0 when an older server omits it', async () => {
+    answer(ok(rawStatus({ notifications: { sent24h: 1, failed24h: 0, queued: '2', unconfirmed: '2', lastSentAt: null } })));
+    const res = await fetchAutomationStatus();
+    expect(res.data?.notifications).toEqual({ sent24h: 1, failed24h: 0, queued: 2, unconfirmed: 2, lastSentAt: null });
+
+    answer(ok(rawStatus({ notifications: { sent24h: 1, failed24h: 0, queued: 0, lastSentAt: null } })));
+    expect((await fetchAutomationStatus()).data?.notifications.unconfirmed).toBe(0);
+  });
+
+  it('reads backlog.humanPublishItems field by field and drops an item without a deck id', async () => {
+    answer(
+      ok(
+        rawStatus({
+          backlog: {
+            humanPending: 0,
+            oldestHumanPendingAt: null,
+            humanPublishes: 2,
+            humanPublishItems: [
+              { deckId: '7', deckSlug: 'aws-saa-c03', reason: 'DECK_NEVER_PUBLISHED', since: '2026-09-27T12:00:00Z', x: 1 },
+              { deckSlug: 'no-id', reason: 'AI_QA_BLOCKED', since: null },
+              'junk',
+            ],
+          },
+        }),
+      ),
+    );
+    const res = await fetchAutomationStatus();
+    expect(res.data?.backlog?.humanPublishItems).toEqual([
+      { deckId: 7, deckSlug: 'aws-saa-c03', reason: 'DECK_NEVER_PUBLISHED', since: '2026-09-27T12:00:00Z' },
+    ]);
+  });
+});
+
+describe('the open filter of the decision list (C07: L4)', () => {
+  it('sends open=true only when asked', async () => {
+    const seen = answer(ok({ items: [], nextCursor: null }));
+    await listAutomationDecisions({ state: 'human', open: true, limit: 50 });
+    expect(seen[0].url).toBe('/api/v1/admin/automation/decisions');
+    expect(seen[0].params).toEqual({ state: 'human', open: true, limit: 50 });
+    expect(http.getUri(seen[0])).toContain('open=true');
+
+    await listAutomationDecisions({ state: 'human', open: undefined, limit: 50 });
+    expect(seen[1].params).toEqual({ state: 'human', limit: 50 });
   });
 });
 
