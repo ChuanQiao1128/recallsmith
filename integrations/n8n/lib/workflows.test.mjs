@@ -450,3 +450,30 @@ test('answers 401 when the signature check fails', async () => {
   const noHeader = await runVerifyNode({ ...VECTOR, headers: { 'x-developercards-event': 'webhook.test' } });
   assert.equal(noHeader.reason, 'missing_header');
 });
+
+test('the Verify signature node accepts X-DeveloperCards-Signature-Previous during a rotation', async () => {
+  const code = node(HOOK, 'Verify signature').parameters.jsCode;
+  assert.ok(code.includes("previousSignature: header('x-developercards-signature-previous')"));
+  const fromNewSecret = crypto
+    .createHmac('sha256', 'whsec-test-next')
+    .update(`${VECTOR.headers['x-developercards-timestamp']}.${VECTOR.rawBody}`)
+    .digest('hex');
+  const rotating = {
+    ...VECTOR.headers,
+    'x-developercards-signature': fromNewSecret,
+    'x-developercards-signature-previous': VECTOR.headers['x-developercards-signature'],
+  };
+  // This receiver still holds the old secret: only the previous header matches.
+  const onOldSecret = await runVerifyNode({ ...VECTOR, headers: rotating });
+  assert.deepEqual(onOldSecret, { ok: true, reason: null, event: 'webhook.test', body: { event: 'webhook.test' } });
+  // After the receiver moves to the new secret, the primary header matches.
+  const onNewSecret = await runVerifyNode({ ...VECTOR, headers: rotating, secret: 'whsec-test-next' });
+  assert.equal(onNewSecret.ok, true);
+  // Without the previous header a receiver on the old secret rejects the new signature.
+  const { 'x-developercards-signature-previous': _previous, ...primaryOnly } = rotating;
+  const rejected = await runVerifyNode({ ...VECTOR, headers: primaryOnly });
+  assert.deepEqual(rejected, { ok: false, reason: 'bad_signature', event: 'webhook.test', body: null });
+  // A multi-value header is read by its first value, like the primary header.
+  const repeated = await runVerifyNode({ ...VECTOR, headers: { ...rotating, 'x-developercards-signature-previous': [VECTOR.headers['x-developercards-signature'], 'x'] } });
+  assert.equal(repeated.ok, true);
+});
