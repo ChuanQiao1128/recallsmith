@@ -307,7 +307,7 @@ public class AutomationSchemaTests
   // ---------------------------------------------------------------- seeds
 
   [Fact]
-  public async Task Seed_WithDecks_CreatesActiveFeedTargets()
+  public async Task Seed_WithDecks_LinksTheDecks_AwsFeedStaysInactive()
   {
     var decks = new Dictionary<string, long>();
     await using var conn = await Scratch034Async("a01_034_seed_decks", async c =>
@@ -326,7 +326,8 @@ public class AutomationSchemaTests
     Assert.Equal("feed", (string)aws["kind"]!);
     Assert.Equal("rss", (string)aws["feed_format"]!);
     Assert.Equal(decks["aws-saa-c03"], Convert.ToInt64(aws["deck_id"], CultureInfo.InvariantCulture));
-    Assert.True((bool)aws["active"]!);
+    // R18B automation-5: seeded inactive even with its deck, until its relevance is measured in dry run.
+    Assert.False((bool)aws["active"]!);
     Assert.Equal(120, Convert.ToInt32(aws["check_interval_minutes"], CultureInfo.InvariantCulture));
     Assert.Equal("migration:034", (string)aws["created_by"]!);
     var pattern = (string)aws["item_title_pattern"]!;
@@ -384,7 +385,7 @@ public class AutomationSchemaTests
     var units = rows.ToDictionary(r => (string)r["automation"]!, r => (string)r["unit"]!);
     Assert.Equal("auto-accepted card", units["auto_accept"]);
     Assert.Equal("auto-published build", units["auto_publish"]);
-    Assert.Equal("page check", units["source_watch"]);
+    Assert.Equal("detected change", units["source_watch"]);
 
     // Every baseline name is a ledger automation, so the ledger routes accept the new three.
     var all = (await DbUtil.QueryAsync(conn, null, "select automation from automation_baselines", []))

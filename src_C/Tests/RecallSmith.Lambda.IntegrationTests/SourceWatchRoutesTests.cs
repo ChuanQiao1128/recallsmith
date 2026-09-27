@@ -789,17 +789,71 @@ public class SourceWatchRoutesTests
 
         var digest = A05Kit.Sha(string.Join(",", ids.Order().Select(i => i.ToString(CultureInfo.InvariantCulture))))[..16];
         var row = (await sql.QueryAsync("select * from automation_events where automation = 'source_watch'")).Single();
-        Assert.Equal(($"watch:{watchRunId:D}:{digest}", 2, "partial", "live"),
+        // R18B automation-9: a baseline and a 304 are routine checks, not detections: 0 units, 2 checks in the details.
+        Assert.Equal(($"watch:{watchRunId:D}:{digest}", 0, "partial", "live"),
           ((string)row["dedupe_key"]!, Convert.ToInt32(row["units"], CultureInfo.InvariantCulture), (string)row["outcome"]!, (string)row["source"]!));
         var details = A05Kit.Json(await sql.ScalarAsync("select details::text from automation_events where automation = 'source_watch'"));
-        Assert.Equal((0, 0, 1, 0), (details.GetProperty("changed").GetInt32(), details.GetProperty("gone").GetInt32(),
-          details.GetProperty("failed").GetInt32(), details.GetProperty("feedItemsQueued").GetInt32()));
+        Assert.Equal((0, 0, 1, 0, 2), (details.GetProperty("changed").GetInt32(), details.GetProperty("gone").GetInt32(),
+          details.GetProperty("failed").GetInt32(), details.GetProperty("feedItemsQueued").GetInt32(), details.GetProperty("checks").GetInt32()));
 
         await A05Kit.ReportDataAsync(A05Kit.Obs(ids[0], urls[0], "failed"), A05Kit.Obs(ids[1], urls[1], "failed"));
         await A05Kit.ReportDataAsync(A05Kit.Obs(ids[0], urls[0], "ok", A05Kit.Sha("l")));
         var outcomes = (await sql.QueryAsync("select outcome, units from automation_events where automation = 'source_watch' order by id"))
           .Select(r => ((string)r["outcome"]!, Convert.ToInt32(r["units"], CultureInfo.InvariantCulture))).ToArray();
-        Assert.Equal([("partial", 2), ("failure", 0), ("success", 1)], outcomes);
+        Assert.Equal([("partial", 0), ("failure", 0), ("success", 0)], outcomes);
+      });
+    });
+  }
+
+  [Fact]
+  public async Task Report_LedgerCreditsDetectionsOnly()
+  {
+    // R18B automation-9: only a changed or gone cited page and a queued feed item replace work a person did.
+    await A05Kit.WithScopeAsync(async _ =>
+    {
+      await InScratchAsync(async sql =>
+      {
+        async Task<(int Units, int Checks)> LedgerAsync(Guid watchRunId)
+        {
+          var row = (await sql.QueryAsync("select units, details::text as details from automation_events where automation = 'source_watch' and ref = $1",
+            watchRunId.ToString("D"))).Single();
+          return (Convert.ToInt32(row["units"], CultureInfo.InvariantCulture), A05Kit.Json(row["details"]).GetProperty("checks").GetInt32());
+        }
+        async Task<Guid> ReportAsync(params Dictionary<string, object?>[] observations)
+        {
+          var id = Guid.NewGuid();
+          AutomationTestKit.Data(await A05Kit.ReportAsync(new { v = 1, watchRunId = id, observations }));
+          return id;
+        }
+
+        var changed = await CitedPageAsync(sql, "credit-changed");
+        var gone = await CitedPageAsync(sql, "credit-gone");
+        var quiet = await CitedPageAsync(sql, "credit-quiet");
+
+        // Routine checks of unchanged pages: nothing credited.
+        var routine = await ReportAsync(A05Kit.Obs(quiet.PageId, quiet.Url, "ok", A05Kit.Sha("credit-quiet-v1")),
+          A05Kit.Obs(changed.PageId, changed.Url, "not_modified"));
+        Assert.Equal((0, 2), await LedgerAsync(routine));
+
+        // One page changed, one gone, one unchanged: two detections.
+        var detected = await ReportAsync(A05Kit.Obs(changed.PageId, changed.Url, "ok", A05Kit.Sha("credit-changed-v2")),
+          A05Kit.Obs(gone.PageId, gone.Url, "gone"), A05Kit.Obs(quiet.PageId, quiet.Url, "not_modified"));
+        Assert.Equal((2, 2), await LedgerAsync(detected));
+
+        // Still gone next time: not a new detection.
+        var stillGone = await ReportAsync(A05Kit.Obs(gone.PageId, gone.Url, "gone"));
+        Assert.Equal((0, 0), await LedgerAsync(stillGone));
+
+        // A feed: its baseline credits nothing, each queued item is one detection.
+        var deckId = await A05Kit.DeckAsync(sql, "credit-feed");
+        var feedUrl = Url("credit-feed");
+        var feedId = await A05Kit.FeedAsync(sql, feedUrl, deckId);
+        var oldItem = Url("cf-old");
+        var baseline = await ReportAsync(A05Kit.Obs(feedId, feedUrl, "ok", A05Kit.Sha("cf1"), feedItems: [A05Kit.Item(oldItem, "Old item")]));
+        Assert.Equal((0, 1), await LedgerAsync(baseline));
+        var items = await ReportAsync(A05Kit.Obs(feedId, feedUrl, "ok", A05Kit.Sha("cf2"), feedItems:
+          [A05Kit.Item(oldItem, "Old item"), A05Kit.Item(Url("cf-a"), "New item A"), A05Kit.Item(Url("cf-b"), "New item B")]));
+        Assert.Equal((2, 1), await LedgerAsync(items));
       });
     });
   }

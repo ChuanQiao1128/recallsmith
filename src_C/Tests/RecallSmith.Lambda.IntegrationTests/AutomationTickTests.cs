@@ -734,7 +734,9 @@ public class AutomationTickTests
     {
       await using (var conn = await sql.OpenAsync())
       {
-        await AutomationLedger.RecordAsync(conn, new AutomationEvent("source_watch", 12, "success", DedupeKey: "it-a04-digest", OccurredAt: DateTimeOffset.UtcNow.AddDays(-2)));
+        // R18B automation-9: the routine checks are counted in the details, the units are detections.
+        await AutomationLedger.RecordAsync(conn, new AutomationEvent("source_watch", 12, "success", DedupeKey: "it-a04-digest", OccurredAt: DateTimeOffset.UtcNow.AddDays(-2),
+          Details: new { checks = 40 }));
       }
       var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
@@ -750,7 +752,7 @@ public class AutomationTickTests
       Assert.Equal("weekly_digest", n["kind"]);
       Assert.Equal($"[DeveloperCards] (dry run) Weekly automation digest {from}–{to}: 0.1 h saved", n["subject"]);
       Assert.Contains("Ledger source_watch: 1 run(s), 12 unit(s)", (string)n["body_text"]!);
-      Assert.Contains("Source watch: 12 check(s)", (string)n["body_text"]!);
+      Assert.Contains("Source watch: 40 check(s)", (string)n["body_text"]!);
 
       // A repeated digest call the same day sends nothing new.
       Assert.False((await TickDataAsync("digest")).GetProperty("actions").GetProperty("digest").GetBoolean());

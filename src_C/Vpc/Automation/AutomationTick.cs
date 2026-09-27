@@ -723,7 +723,13 @@ public static class AutomationTick
         """, [start, end]))[0];
       // The open backlog, whenever it was raised (R18B K7): not the week's rows in state human.
       var backlog = await StatusRoutes.LoadBacklogAsync(conn);
-      var watchChecks = automations.FirstOrDefault(x => x.Automation == "source_watch")?.Units ?? 0;
+      // The source watch's routine checks earn no ledger units (automation-9); their count is in each row's details.
+      var watchChecks = Long(await DbUtil.ExecuteScalarAsync(conn, null,
+        """
+        select coalesce(sum(case when jsonb_typeof(details -> 'checks') = 'number' then (details ->> 'checks')::bigint else 0 end), 0)
+        from automation_events
+        where automation = 'source_watch' and occurred_at >= $1 and occurred_at < $2
+        """, [start, end]));
 
       static DateTimeOffset Ts(object? v) => v is DateTimeOffset dto ? dto : new(DateTime.SpecifyKind((DateTime)v!, DateTimeKind.Utc));
       var data = new WeeklyDigestData(from, to, totals.GetProperty("hoursSaved").GetDecimal(), totals.GetProperty("minutesSaved").GetDecimal(),
