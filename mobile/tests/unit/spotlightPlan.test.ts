@@ -5,7 +5,9 @@ import {
   resultFeaturedCardWidth,
   spotlightFlipPlan,
   spotlightFlipCues,
+  spotlightEntranceCues,
   SPOTLIGHT_ENTRANCE_MS,
+  SPOTLIGHT_FLYOUT_CUE_MS,
 } from '../../src/features/gacha/draw/spotlightPlan';
 
 describe('spotlightPlan', () => {
@@ -70,21 +72,30 @@ describe('spotlightPlan', () => {
     // sorted ascending by `at`
     expect(leg.map((c) => c.at)).toEqual([...leg.map((c) => c.at)].sort((a, b) => a - b));
     expect(leg[0]).toEqual({ at: 0, action: { kind: 'impact', style: 'soft' } });
-    expect(leg.find((c) => c.action.kind === 'hit' && c.action.name === 'card-flip')?.at).toBe(legPlan.flipStartMs);
-    expect(leg.find((c) => c.action.kind === 'hit' && c.action.name === 'legendary')?.at).toBe(legPlan.midpointMs);
+    expect(leg.find((c) => c.action.kind === 'hit' && c.action.name === 'flip')?.at).toBe(legPlan.flipStartMs);
+    expect(leg.find((c) => c.action.kind === 'hit' && c.action.name === 'stinger-leg')?.at).toBe(legPlan.midpointMs);
     // At landing LEG fires the heavy impact BEFORE the success (limiter order).
     const landCues = leg.filter((c) => c.at === legPlan.landMs);
     expect(landCues.map((c) => c.action.kind)).toEqual(['impact', 'success']);
 
     const rarPlan = spotlightFlipPlan('RAR', false);
     const rar = spotlightFlipCues('RAR', rarPlan);
-    expect(rar.find((c) => c.action.kind === 'hit' && c.action.name === 'chime')?.at).toBe(rarPlan.midpointMs);
+    expect(rar.find((c) => c.action.kind === 'hit' && c.action.name === 'stinger-rar')?.at).toBe(rarPlan.midpointMs);
     expect(rar.find((c) => c.action.kind === 'success')?.at).toBe(rarPlan.landMs);
 
-    // COM has the touch impact, the flip sound and the midpoint rigid tick, but no sting yet.
-    const com = spotlightFlipCues('COM', spotlightFlipPlan('COM', false));
+    // COM now gets its own stinger at the midpoint (I06), but no success.
+    const comPlan = spotlightFlipPlan('COM', false);
+    const com = spotlightFlipCues('COM', comPlan);
+    expect(com.find((c) => c.action.kind === 'hit' && c.action.name === 'flip')?.at).toBe(comPlan.flipStartMs);
+    expect(com.find((c) => c.action.kind === 'hit' && c.action.name === 'stinger-com')?.at).toBe(comPlan.midpointMs);
     expect(com.some((c) => c.action.kind === 'success')).toBe(false);
-    expect(com.some((c) => c.action.kind === 'hit' && c.action.name === 'chime')).toBe(false);
-    expect(com.some((c) => c.action.kind === 'hit' && c.action.name === 'legendary')).toBe(false);
+  });
+
+  it('lists the entrance flyout cue in motion and nothing under reduce motion', () => {
+    expect(SPOTLIGHT_FLYOUT_CUE_MS).toBe(100);
+    expect(spotlightEntranceCues(false)).toEqual([
+      { at: SPOTLIGHT_FLYOUT_CUE_MS, action: { kind: 'hit', name: 'flyout' } },
+    ]);
+    expect(spotlightEntranceCues(true)).toEqual([]);
   });
 });

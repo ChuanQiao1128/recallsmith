@@ -18,12 +18,10 @@ import {
   rarityAccentColor,
 } from '../theme/packArt';
 import { useFeatureFlags } from '../config/featureFlags';
-import { useCeremonyAudio } from '../components/ceremonyAudio';
+import { stingerForRarity, useCeremonyAudio } from '../components/ceremonyAudio';
 import { useCeremonyHaptics } from '../components/ceremonyHaptics';
 import { GestureHandler, Reanimated, motionAvailable, skiaAvailable } from '../components/ceremony/reanimatedGuard';
 import {
-  BED_TABLE_FADE_DELAY_MS,
-  BED_TABLE_FADE_OUT_MS,
   FAST_FORWARD_FROM_HOLD_FRACTION,
   FAST_FORWARD_TEAR_FACTOR,
   REDUCED_MOTION_FLASH_MS,
@@ -47,11 +45,12 @@ import {
 import { cancelCeremonyTimeline, playCeremonyTimeline, tableSlotLayout, useCeremonyTimeline } from '../components/ceremony/useCeremonyTimeline';
 import { buildCeremonyCues, cueTimesFromSchedule, type CeremonyCueAction } from '../features/gacha/draw/ceremonyCues';
 import { STAGE_TESTID, StageCanvas } from '../components/ceremony/StageCanvas';
+import { BurstCanvas } from '../components/ceremony/BurstCanvas';
 import { PackTear, seamProgressFromDelta } from '../components/ceremony/PackTear';
 import { TapCard, rarityLabel, type TapCardData } from '../components/ceremony/TapCard';
 import { RevealSpotlight } from '../components/ceremony/RevealSpotlight';
 import { DrawSummaryGrid } from '../components/ceremony/DrawSummaryGrid';
-import { spotlightFlipCues, type SpotlightFlipPlan } from '../features/gacha/draw/spotlightPlan';
+import { spotlightEntranceCues, spotlightFlipCues, type SpotlightCue, type SpotlightFlipPlan } from '../features/gacha/draw/spotlightPlan';
 import {
   INITIAL_SPOTLIGHT_QUEUE,
   SPOTLIGHT_AUTO_ADVANCE_MS,
@@ -158,7 +157,8 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   // the route asks for it, so the existing table-tap tests keep driving the sequence by hand.
   const autoReveal = route.params.autoReveal ?? motionAvailable;
   const slot = tableSlotLayout(cards.length);
-  const { width: windowWidth } = useWindowDimensions();
+  const win = useWindowDimensions();
+  const windowWidth = win.width;
 
   // The multi-pull spotlight queue (I05): table taps / "Reveal all" enqueue uids, the spotlight
   // walks through them one at a time carrying the current uid, and a revealed card can be opened
@@ -186,6 +186,11 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   // so a stale timer can never fire against the wrong card (the uid guard in the reducer is a
   // second line of defence).
   const spotAdvanceRef = useRef<number | null>(null);
+  // Spotlight cue timers (entrance flyout + flip cues) live in their own ref so they can be
+  // cleared independently on tap-to-finish / skip-all / unmount, and a flag remembers whether the
+  // current card's stinger has already fired (so tap-to-finish / skip-all never double it).
+  const spotCueTimers = useRef<number[]>([]);
+  const stingFiredRef = useRef(false);
   // Once-per-ceremony guard: the auto reveal runs the first time the table is reached.
   const autoRevealedRef = useRef(false);
   const swipeStartXRef = useRef<number | null>(null);
@@ -366,9 +371,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
   const startSequence = useCallback(() => {
     setSwipeProgress(0);
-    audio.hit('whoosh');
-    audio.bed('air');
-    haptics.tick();
+    // v2 (I06): no sound starts before the charge — the charge cue fires at the approach start.
     // Assign the whole approach→settle choreography once, now, on the UI thread (G43). The
     // per-phase path then skips itself via `planned`; Reduce Motion never plans (its per-phase
     // crossfades stay). The cue schedule and phase timers still ride the JS thread, both
@@ -425,7 +428,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
             setCanSkip(true);
           } else if (e.phase === 'tail') {
             if (enableTapFlow) {
-              setFlippedSet(new Set());
+              // The multi tap-table starts face down, so reset the flip set on arrival. A single
+              // hero auto-flips before the table (I06), so keep its flip so the CTA reads Continue.
+              if (isMulti) setFlippedSet(new Set());
               setPhaseAt('cards-on-table');
               setCanSkip(true);
             } else {
@@ -438,29 +443,16 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
         timers.current.push(id);
       }
     },
-    [enableTapFlow, setPhaseAt],
+    [enableTapFlow, isMulti, setPhaseAt],
   );
 
-  // Dispatch one cue to the B04 controllers. `bed` only receives `{ gain, fadeMs }` for the
-  // keys that are defined, so a plain `bed(name)` keeps its module defaults.
+  // Dispatch one cue to the B04 controllers. v2 (I06): every cue is a one-shot hit, a haptic
+  // impact or the LEG success — no bed / tail / duck.
   const fireCue = useCallback(
     (action: CeremonyCueAction) => {
       switch (action.kind) {
-        case 'bed': {
-          const opts: { gain?: number; fadeMs?: number } = {};
-          if (action.gain !== undefined) opts.gain = action.gain;
-          if (action.fadeMs !== undefined) opts.fadeMs = action.fadeMs;
-          audio.bed(action.name, Object.keys(opts).length > 0 ? opts : undefined);
-          break;
-        }
         case 'hit':
           audio.hit(action.name);
-          break;
-        case 'tail':
-          audio.tail(action.name);
-          break;
-        case 'duck':
-          audio.duck(action.gain, action.ms);
           break;
         case 'impact':
           haptics.impact(action.style);
@@ -509,7 +501,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
       }, REDUCED_MOTION_FLASH_MS) as unknown as number;
       const tail = setTimeout(() => {
         if (enableTapFlow) {
-          setFlippedSet(new Set());
+          if (isMulti) setFlippedSet(new Set());
           setPhaseAt('cards-on-table');
           setCanSkip(true);
         } else {
@@ -517,10 +509,10 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
         }
       }, REDUCED_MOTION_FLASH_MS + REDUCED_MOTION_SETTLE_MS) as unknown as number;
       timers.current.push(settleCue, tail);
-      // The reduced-motion crossfade has no tear/hold phase, so only the flash-reveal and
-      // settle cues fire — the flash burst at once, the sparkle tail on the reduced schedule.
+      // The reduced-motion crossfade has no tear/hold phase; on the featured path only the
+      // flash-reveal stinger fires (the tap flow plays the stinger from the spotlight crossfade).
       scheduleCues(
-        cueTimesFromSchedule(buildCeremonyCues({ peakRarity, isMulti, timings }), [
+        cueTimesFromSchedule(buildCeremonyCues({ peakRarity, isMulti, timings, tapFlow: enableTapFlow, reduceMotion }), [
           { at: 0, phase: 'flash-reveal' },
           { at: REDUCED_MOTION_FLASH_MS, phase: 'settle' },
         ]),
@@ -545,7 +537,13 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     const elapsed = sequenceStartedAtRef.current > 0 ? Math.max(0, Date.now() - sequenceStartedAtRef.current) : 0;
     const entries = scheduleFrom('approach', timings, 0).map((e) => ({ ...e, at: Math.max(0, e.at - elapsed) }));
     runSchedule(entries);
-    scheduleCues(cueTimesFromSchedule(buildCeremonyCues({ peakRarity, isMulti, timings }), entries));
+    // scheduleFrom('approach', …) lists only the phases AFTER approach, so the approach cues (the
+    // charge + its first pulse) would never fire. Prepend the approach entry (shifted by the same
+    // elapsed clamp) for the cue schedule only — not for runSchedule (approach is already active).
+    const cueEntries = [{ at: Math.max(0, 0 - elapsed), phase: 'approach' as const }, ...entries];
+    scheduleCues(
+      cueTimesFromSchedule(buildCeremonyCues({ peakRarity, isMulti, timings, tapFlow: enableTapFlow, reduceMotion }), cueEntries),
+    );
     const tellTimer = setTimeout(
       () => setTellLanded(true),
       Math.max(0, timings.approach + Math.round(timings.hold * FAST_FORWARD_FROM_HOLD_FRACTION) - elapsed),
@@ -593,43 +591,30 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     runSchedule(entries);
     // Reschedule the remaining cues on the compressed timeline (the plan's cues were cleared
     // with the timers above); phases already fired keep whatever cues had already played.
-    scheduleCues(cueTimesFromSchedule(buildCeremonyCues({ peakRarity, isMulti, timings: c }), entries));
+    scheduleCues(
+      cueTimesFromSchedule(buildCeremonyCues({ peakRarity, isMulti, timings: c, tapFlow: enableTapFlow, reduceMotion }), entries),
+    );
     setCompressed(true);
     setActiveTimings(c);
-    audio.duck(0, 60);
     haptics.tick();
-  }, [skipDecision, timings, phase, runSchedule, audio, haptics, timeline, scheduleCues, peakRarity, isMulti]);
+  }, [skipDecision, timings, phase, runSchedule, haptics, timeline, scheduleCues, peakRarity, isMulti, enableTapFlow, reduceMotion]);
 
-  // Reduce-motion cues on mount / RM change.
+  // Reduce-motion cues on mount / RM change. v2 (I06): no tail sound — the RM ceremony's sound
+  // is the stinger at the flash (scheduled from the sequence effect); only the haptic here.
   useEffect(() => {
     perfRef.current?.updateMeta({ reduceMotion });
     haptics.reset({ reduceMotion });
     if (reduceMotion) {
-      audio.tail('soft-chime');
       haptics.impact('light');
     }
   }, [reduceMotion]);
 
-  // The approach→settle cues now come from `buildCeremonyCues` (scheduled from the same start
-  // as the phase timers), so the per-phase cue effect only keeps the table bed fade, which
-  // happens after the cards reach the table — outside the tear timeline (G09 / MGACHA-02).
-  useEffect(() => {
-    if (phase === 'cards-on-table') {
-      // Fade the ambience bed out 1.5 s after the cards land, before expo-audio's non-gapless
-      // 8 s ambience loop can wrap (MGACHA-02). The id rides timers.current so unmount/restart
-      // clears it; tap-flip hits play afterwards on their own separate players.
-      const id = setTimeout(
-        () => audio.bed(null, { fadeMs: BED_TABLE_FADE_OUT_MS }),
-        BED_TABLE_FADE_DELAY_MS,
-      ) as unknown as number;
-      timers.current.push(id);
-    }
-  }, [phase]);
-
-  // Stop all audio on unmount.
+  // Stop all audio and clear the spotlight cue timers on unmount.
   useEffect(() => {
     return () => {
       audio.stopAll();
+      spotCueTimers.current.forEach((t) => clearTimeout(t));
+      spotCueTimers.current = [];
     };
   }, []);
 
@@ -667,14 +652,65 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     // Completion is already recorded by the phase effect on reaching settle/table; just leave.
     goResult();
   }, [goResult]);
+  // ── Spotlight cue timers (I06) — entrance flyout + flip cues on their own ref ──
+  const clearSpotCueTimers = useCallback(() => {
+    spotCueTimers.current.forEach((t) => clearTimeout(t));
+    spotCueTimers.current = [];
+  }, []);
+
+  const fireSpotCue = useCallback(
+    (action: CeremonyCueAction) => {
+      if (action.kind === 'hit' && (action.name === 'stinger-com' || action.name === 'stinger-rar' || action.name === 'stinger-leg')) {
+        stingFiredRef.current = true;
+      }
+      fireCue(action);
+    },
+    [fireCue],
+  );
+
+  const scheduleSpotCues = useCallback(
+    (list: ReadonlyArray<SpotlightCue>) => {
+      for (const cue of list) {
+        if (cue.at <= 0) {
+          fireSpotCue(cue.action);
+        } else {
+          const id = setTimeout(() => fireSpotCue(cue.action), cue.at) as unknown as number;
+          spotCueTimers.current.push(id);
+        }
+      }
+    },
+    [fireSpotCue],
+  );
+
+  // A spotlight has entered: clear any stale cue timers, reset this card's sting flag and
+  // schedule the flyout cue (the card flying out).
+  const onSpotlightEnter = useCallback(() => {
+    clearSpotCueTimers();
+    stingFiredRef.current = false;
+    scheduleSpotCues(spotlightEntranceCues(reduceMotion));
+  }, [clearSpotCueTimers, scheduleSpotCues, reduceMotion]);
+
+  // Tap-to-finish: the flip finished early. Clear the pending spotlight cue timers; if the
+  // current card's sting has not fired, play it now — nothing else.
+  const onSpotlightFinishEarly = useCallback(
+    (rarity: PeakRarity) => {
+      clearSpotCueTimers();
+      if (!stingFiredRef.current) {
+        stingFiredRef.current = true;
+        audio.hit(stingerForRarity(rarity));
+      }
+    },
+    [clearSpotCueTimers, audio],
+  );
+
   // The single-pull spotlight requests its flip: mark the card flipped (so the CTA becomes
-  // Continue) and ride the flip cue schedule on timers.current, exactly like a tap-table flip.
+  // Continue) and ride the flip cue schedule on the spotlight cue timers.
   const onSpotlightFlipStart = useCallback(
     (uid: string, rarity: PeakRarity, plan: SpotlightFlipPlan) => {
       onFlipped(uid);
-      scheduleCues(spotlightFlipCues(rarity, plan));
+      scheduleSpotCues(spotlightFlipCues(rarity, plan));
     },
-    [onFlipped, scheduleCues],
+    [onFlipped, scheduleSpotCues],
   );
 
   // ── Multi-pull spotlight sequence (I05) ──
@@ -726,13 +762,29 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
 
   const onSpotlightSkipAll = useCallback(() => {
     clearSpotAdvance();
+    clearSpotCueTimers();
+    // Play once the stinger of the highest rarity still owed a sting: the cards not yet revealed
+    // plus the current card if its own sting has not fired. No sound when there is none.
+    const remaining = cards.filter((c) => !spot.shown.includes(c.stableUid));
+    const current =
+      spot.current != null && !stingFiredRef.current
+        ? cards.find((c) => c.stableUid === spot.current) ?? null
+        : null;
+    const candidates = current ? [...remaining, current] : remaining;
+    if (candidates.length > 0) {
+      let peak: PeakRarity = 'COM';
+      for (const c of candidates) {
+        if (rarityRank(c.rarity) > rarityRank(peak)) peak = c.rarity;
+      }
+      audio.hit(stingerForRarity(peak));
+    }
     setFlippedSet((s) => {
       const next = new Set(s);
       cards.forEach((c) => next.add(c.stableUid));
       return next;
     });
     dispatchSpot({ type: 'skipAll' });
-  }, [cards, clearSpotAdvance]);
+  }, [cards, clearSpotAdvance, clearSpotCueTimers, spot.shown, spot.current, audio]);
 
   // Auto reveal: on device, the sequence starts by itself the first time the table is reached.
   useEffect(() => {
@@ -893,7 +945,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
               dismissSwipeHint();
               if (stageOwnsSwipe) {
                 swipeStartXRef.current = event?.nativeEvent?.pageX ?? event?.nativeEvent?.locationX ?? 0;
-                audio.bed('crinkle');
+                // v2 (I06): no crinkle bed on the finger — no sound starts before the charge.
                 haptics.impact('light');
               }
             }}
@@ -917,7 +969,6 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
                 }
                 setSwipeProgress(0);
                 timeline.seam.value = 0;
-                audio.bed(null);
                 return;
               }
               if (skipDecision === 'compress') {
@@ -1044,6 +1095,18 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
           {!singleSpotlight && !multiSpotlightMounted ? primaryCta : null}
         </Reanimated.View>
 
+        {/* v2 (I06): the full-screen rarity-tinted burst owns the Skia-path flash. */}
+        {renderer === 'skia' && !reduceMotion && (phase === 'tear-flip' || phase === 'flash-reveal' || phase === 'settle') ? (
+          <BurstCanvas
+            width={win.width}
+            height={win.height}
+            peakRarity={peakRarity}
+            flash={timeline.flash}
+            reduceMotion={reduceMotion}
+            particleSheet={PARTICLE_SHEET}
+          />
+        ) : null}
+
         {singleSpotlight && spotlightCard && (tablePhase || tableWarm) ? (
           <RevealSpotlight
             key={spotlightCard.stableUid}
@@ -1051,14 +1114,17 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
             index={0}
             total={1}
             visible={tablePhase}
-            interactive={phase === 'cards-on-table'}
+            interactive={phase === 'cards-on-table' || (autoReveal && tablePhase)}
+            autoFlip={autoReveal}
             reduceMotion={reduceMotion}
             cardBackImage={cardBackImage}
             packArt={coverImage}
             packPaletteCover={palette.cover}
             serialText={spotlightSerial}
             footer={primaryCta}
+            onEnter={onSpotlightEnter}
             onFlipStart={(plan) => onSpotlightFlipStart(spotlightCard.stableUid, spotlightCard.rarity, plan)}
+            onFinishEarly={() => onSpotlightFinishEarly(spotlightCard.rarity)}
           />
         ) : null}
 
@@ -1078,7 +1144,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
             packPaletteCover={palette.cover}
             progressText={spot.mode === 'reveal' ? `${spot.shown.length} / ${cards.length}` : undefined}
             footer={primaryCta}
-            onFlipStart={(plan) => scheduleCues(spotlightFlipCues(spotCard.rarity, plan))}
+            onEnter={onSpotlightEnter}
+            onFlipStart={(plan) => scheduleSpotCues(spotlightFlipCues(spotCard.rarity, plan))}
+            onFinishEarly={() => onSpotlightFinishEarly(spotCard.rarity)}
             onLanded={() => onSpotlightLanded(spotCard.stableUid, spotCard.rarity)}
             onPressFaceUp={() => onSpotlightPressFaceUp(spotCard.stableUid)}
             onSkipAll={spot.mode === 'reveal' ? onSpotlightSkipAll : undefined}

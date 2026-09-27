@@ -4,6 +4,7 @@
 // numbers, and I05/I06 can build the multi-pull sequence and the sound choreography on
 // this exact API. Type-only imports keep it OTA-safe.
 
+import { stingerForRarity } from '../../../components/ceremonyAudio';
 import type { CeremonyCueAction } from './ceremonyCues';
 import type { PeakRarity } from './ceremonyTimings';
 
@@ -81,18 +82,29 @@ export function spotlightFlipPlan(rarity: PeakRarity, reduceMotion: boolean): Sp
 /** One flip sound/haptic cue, `at` ms after the flip request. */
 export type SpotlightCue = { at: number; action: CeremonyCueAction };
 
+/** The flyout sound fires this long after the spotlight enters (I06 hero flyout). */
+export const SPOTLIGHT_FLYOUT_CUE_MS = 100;
+
+/**
+ * The entrance cue list, measured from the spotlight becoming visible: the card flies out with
+ * the flyout foley. Reduce Motion crossfades in silently.
+ */
+export function spotlightEntranceCues(reduceMotion: boolean): SpotlightCue[] {
+  if (reduceMotion) return [];
+  return [{ at: SPOTLIGHT_FLYOUT_CUE_MS, action: { kind: 'hit', name: 'flyout' } }];
+}
+
 /**
  * The flip cue list, stable-sorted ascending by `at` (ties keep their build order). The soft
- * touch impact fires at the request, the flip sound at flip start, the rarity sting at the
- * midpoint, and the success/heavy at landing. COM gets no rarity sting yet (I06 adds one).
+ * touch impact fires at the request, the flip sound at flip start, and the rarity's own stinger
+ * at the midpoint for EVERY rarity (I06 — COM included), with the success/heavy at landing.
  */
 export function spotlightFlipCues(rarity: PeakRarity, plan: SpotlightFlipPlan): SpotlightCue[] {
   const cues: SpotlightCue[] = [];
   cues.push({ at: 0, action: { kind: 'impact', style: 'soft' } });
-  cues.push({ at: plan.flipStartMs, action: { kind: 'hit', name: 'card-flip' } });
+  cues.push({ at: plan.flipStartMs, action: { kind: 'hit', name: 'flip' } });
   cues.push({ at: plan.midpointMs, action: { kind: 'impact', style: 'rigid' } });
-  if (rarity === 'RAR') cues.push({ at: plan.midpointMs, action: { kind: 'hit', name: 'chime' } });
-  if (rarity === 'LEG') cues.push({ at: plan.midpointMs, action: { kind: 'hit', name: 'legendary' } });
+  cues.push({ at: plan.midpointMs, action: { kind: 'hit', name: stingerForRarity(rarity) } });
   if (rarity === 'RAR') cues.push({ at: plan.landMs, action: { kind: 'success' } });
   if (rarity === 'LEG') {
     cues.push({ at: plan.landMs, action: { kind: 'impact', style: 'heavy' } });
