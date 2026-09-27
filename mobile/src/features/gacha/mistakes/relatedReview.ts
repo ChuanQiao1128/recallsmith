@@ -2,7 +2,7 @@ import type { CardProgress } from '../../../review/model';
 import type { CardExport, DeckExport } from '../../../types/deckExport';
 import type { OwnedGate } from '../contracts';
 import { isLearnedProgress } from '../selectors/progressSelectors';
-import type { MistakeEntry } from './mistakeBook';
+import { isSameLocalDay, type MistakeEntry } from './mistakeBook';
 
 /** How many related cards a focus run adds to the mistakes by default. */
 export const RELATED_REVIEW_COUNT = 3;
@@ -21,11 +21,17 @@ function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+function reviewedOnDay(row: CardProgress, nowMs: number): boolean {
+  const at = row.lastReviewedAt;
+  return typeof at === 'number' && at > 0 && isSameLocalDay(at, nowMs);
+}
+
 /**
  * Pure and deterministic: picks up to `count` learned, owned cards of the deck that are not
  * active mistakes, closest first to the most recent mistakes (same topic, or deck neighbours for
  * an untagged mistake), then the weakest (lowest stage, longest unseen). Never mutates its inputs.
- * `now` is part of the contract for future ranking and is not read today.
+ * A card already reviewed on `now`'s local day is left out, so repeated focus runs on the same day
+ * never deal the same related cards again.
  */
 export function pickRelatedCards(input: {
   deck: DeckExport;
@@ -36,6 +42,7 @@ export function pickRelatedCards(input: {
   count?: number;
 }): string[] {
   const { deck, progress, ownedSet } = input;
+  const nowMs = input.now.getTime();
   const count = normalizeCount(input.count);
   if (count === 0) return [];
 
@@ -72,6 +79,7 @@ export function pickRelatedCards(input: {
     .filter((card) => !mistakeUids.has(card.StableUid))
     .map((card) => ({ card, row: progressMap.get(card.StableUid) }))
     .filter((entry): entry is { card: CardExport; row: CardProgress } => !!entry.row && isLearnedProgress(entry.row))
+    .filter((entry) => !reviewedOnDay(entry.row, nowMs))
     .map((entry) => ({ ...entry, rank: affinity(entry.card) }));
 
   candidates.sort((a, b) => {

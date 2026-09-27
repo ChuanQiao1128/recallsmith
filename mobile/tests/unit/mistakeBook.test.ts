@@ -32,10 +32,12 @@ import {
   applyOutcome,
   isMistake,
   loadMistakeBook,
+  localDaysBetween,
   MISTAKE_BOOK_KEY,
   MISTAKE_BOOK_MAX_ENTRIES,
   MISTAKE_WINDOW_DAYS,
   recordMistakeOutcome,
+  resolveActiveMistakeRows,
   type MistakeBookState,
   type MistakeEntry,
   type MistakeOutcome,
@@ -270,6 +272,44 @@ describe('mistakeBook', () => {
       'recent-b',
     ]);
     expect(activeMistakes(EMPTY, { now })).toEqual([]);
+  });
+
+  // Y08 mobile-13: the one helper the Library pill and the Mistake Book both count with.
+  it('resolves only the active mistakes whose card is still in the deck', () => {
+    const now = T0 + DAY_MS;
+    const deck = {
+      Slug: 'csharp',
+      Title: 'C#',
+      Locale: 'en-US',
+      Version: '2',
+      DeckType: 1,
+      TotalCards: 2,
+      Cards: [
+        { StableUid: 'c1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' },
+        { StableUid: 'c2', OrderInDeck: 2, Difficulty: 1, Question: 'Q2' },
+      ],
+    } as any;
+    const s = bookWith(
+      entry({ stableUid: 'c1', lastWrongAt: now - 2 }),
+      // Removed by a content update: stored, active, but it can never be served.
+      entry({ stableUid: 'removed', lastWrongAt: now - 1 }),
+      entry({ stableUid: 'c2', lastWrongAt: now - 3, resolvedAt: now - 1, correctStreak: 2 }),
+      entry({ deckSlug: 'aws', stableUid: 'c2', lastWrongAt: now - 1 }),
+    );
+
+    expect(activeMistakes(s, { now, deckSlug: 'csharp' })).toHaveLength(2);
+    const rows = resolveActiveMistakeRows(s, deck, now);
+    expect(rows.map((row) => [row.entry.stableUid, row.card.Question])).toEqual([['c1', 'Q1']]);
+    expect(resolveActiveMistakeRows(s, { ...deck, Cards: undefined }, now)).toEqual([]);
+  });
+
+  it('counts local calendar days between two instants', () => {
+    const at = (day: number, hour: number) => new Date(2026, 8, day, hour, 0, 0).getTime();
+    expect(localDaysBetween(at(26, 23), at(27, 8))).toBe(1);
+    expect(localDaysBetween(at(27, 0), at(27, 23))).toBe(0);
+    expect(localDaysBetween(at(20, 12), at(27, 8))).toBe(7);
+    // Never negative, whatever the clock does.
+    expect(localDaysBetween(at(28, 8), at(27, 8))).toBe(0);
   });
 
   it('reads corrupt or absent storage as an empty book', async () => {

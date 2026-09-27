@@ -5,8 +5,10 @@ import {
   MAX_FOCUS_UIDS,
   pickFocusCard,
   sanitizeFocusUids,
+  scheduleFocusReview,
 } from '../../src/features/gacha/mistakes/focusSession';
-import type { CardProgress } from '../../src/review/model';
+import { buildRatedSessionState } from '../../src/features/gacha/session/sessionReviewHelpers';
+import { scheduleNextReview, type CardProgress } from '../../src/review/model';
 import type { CardExport, DeckExport } from '../../src/types/deckExport';
 
 const T = Date.UTC(2026, 8, 27, 9, 0, 0);
@@ -79,5 +81,50 @@ describe('focus session helpers', () => {
     // A focus card without a progress row is skipped rather than served.
     const noRowForA = progress.filter((p) => p.stableUid !== 'a');
     expect(pickFocusCard({ index, progress: noRowForA, ratedUids: new Set(['c']) })?.card.StableUid).toBe('e');
+  });
+
+  // Y08 mobile-12: a focus run gives scheduler credit only where a normal review would.
+  describe('scheduleFocusReview', () => {
+    const DAY_MS = 86_400_000;
+    const now = new Date(T);
+    const notDue: CardProgress = { stableUid: 'a', stage: 1, lastReviewedAt: T - DAY_MS, nextReviewAt: T + DAY_MS, lapses: 0, hardStreak: 1 };
+    const due: CardProgress = { stableUid: 'b', stage: 1, lastReviewedAt: T - 2 * DAY_MS, nextReviewAt: T - 1000 };
+
+    it('leaves the schedule of a card that is not due untouched for Hard, Good and Easy', () => {
+      for (const rating of ['hard', 'good', 'easy'] as const) {
+        const next = scheduleFocusReview(notDue, rating, now);
+        expect(next).toEqual({ ...notDue, lastReviewedAt: T });
+      }
+      // Repeating it changes nothing further: no stage creep on back-to-back runs.
+      const twice = scheduleFocusReview(scheduleFocusReview(notDue, 'good', now), 'good', new Date(T + 60_000));
+      expect(twice.stage).toBe(1);
+      expect(twice.nextReviewAt).toBe(notDue.nextReviewAt);
+    });
+
+    it('schedules a due card, and an Again on any card, exactly like a normal review', () => {
+      for (const rating of ['again', 'hard', 'good', 'easy'] as const) {
+        expect(scheduleFocusReview(due, rating, now)).toEqual(scheduleNextReview(due, rating, now));
+      }
+      expect(scheduleFocusReview(notDue, 'again', now)).toEqual(scheduleNextReview(notDue, 'again', now));
+    });
+
+    it('is what buildRatedSessionState applies in a focus run, and only there', () => {
+      const base = {
+        current: { card: card('a', 1), progress: notDue },
+        progress: [notDue, due],
+        rating: 'good' as const,
+        mode: 'mixed' as const,
+        sessionDone: 0,
+        sessionLimit: 2,
+        now,
+        cardIndex: null,
+      };
+      expect(buildRatedSessionState({ ...base, focusRun: true }).updatedOne).toMatchObject({
+        stage: 1,
+        nextReviewAt: T + DAY_MS,
+        lastReviewedAt: T,
+      });
+      expect(buildRatedSessionState(base).updatedOne).toMatchObject(scheduleNextReview(notDue, 'good', now));
+    });
   });
 });

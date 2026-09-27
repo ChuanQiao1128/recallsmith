@@ -236,6 +236,29 @@ describe('LibraryScreen Mistakes pill', () => {
     expect(navigation.navigate).toHaveBeenCalledWith('MistakeBook', { slug: 'csharp' });
   });
 
+  // Y08 mobile-13: the pill counts what the Mistake Book lists, so an entry for a card a content
+  // update removed (or for a deck that is not installed) never keeps the pill up.
+  it('counts only mistakes whose card is still in the selected deck', async () => {
+    seedBook([mistake('csharp', '1'), mistake('csharp', 'removed-card'), mistake('csharp', '3')]);
+    const { tree } = await mount();
+    expect(pillText(tree)).toBe('Mistakes · 2');
+    expect(pills(tree)[0].props.accessibilityLabel).toBe('Open Mistake Book, 2 to review');
+
+    // Only an orphan left: no pill, just as the book would show its empty state.
+    seedBook([mistake('csharp', 'removed-card')]);
+    await refocus();
+    await flush();
+    expect(pills(tree)).toHaveLength(0);
+  });
+
+  it('shows no pill for a selected deck that is not installed', async () => {
+    mockActiveDeckSlug = 'rust';
+    mockManifestDecks = [...mockManifestDecks, { slug: 'rust', title: 'Rust', availability: 'live' }];
+    seedBook([mistake('rust', 'r1')]);
+    const { tree } = await mount();
+    expect(pills(tree)).toHaveLength(0);
+  });
+
   it('hides the pill when the mistakeBook flag is off', async () => {
     applyRemoteFeatures(asRemoteConfig({ features: { mistakeBook: { enabled: false } } }));
     seedBook([mistake('csharp', '1')]);

@@ -55,7 +55,12 @@ vi.mock('../../src/features/gacha/draw/effectiveOwned', () => ({
   resolveEffectiveOwned: vi.fn(async () => new Set<string>()),
 }));
 
-import { MistakeBookScreen } from '../../src/screens/MistakeBookScreen';
+import {
+  DONE_FOR_TODAY_TEXT,
+  formatLastWrong,
+  MistakeBookScreen,
+  mistakeRowLabel,
+} from '../../src/screens/MistakeBookScreen';
 import { MISTAKE_BOOK_KEY, type MistakeEntry } from '../../src/features/gacha/mistakes/mistakeBook';
 import { getCachedDeck } from '../../src/content/deckCache';
 import { loadDeckProgress } from '../../src/review/storage';
@@ -384,5 +389,90 @@ describe('MistakeBookScreen', () => {
     });
     await flush();
     expect(byTestID(tree, 'mistake-row-s3-1')).toHaveLength(1);
+  });
+
+  // Y08 mobile-14: the label counts local calendar days, like resolution and the subtitle.
+  it('labels the last wrong answer by local calendar day, not by elapsed 24-hour blocks', async () => {
+    const at = (day: number, hour: number, minute = 0) => new Date(2026, 8, day, hour, minute, 0).getTime();
+    // 9 hours earlier, but before midnight: yesterday.
+    expect(formatLastWrong(at(26, 23), at(27, 8))).toBe('yesterday');
+    // 23 hours earlier, same day: today.
+    expect(formatLastWrong(at(27, 0, 30), at(27, 23, 30))).toBe('today');
+    // 33 hours across two midnights: 2 days ago.
+    expect(formatLastWrong(at(25, 23), at(27, 8))).toBe('2 days ago');
+    expect(formatLastWrong(at(27, 8, 1), at(27, 8))).toBe('today');
+    expect(mistakeRowLabel('Q', entry('aws', 's3-1', null, at(26, 23)), at(27, 8))).toBe('Q. Wrong once, last wrong yesterday');
+
+    vi.setSystemTime(at(27, 8));
+    seedBook([entry('aws', 's3-1', 's3', at(26, 23))]);
+    const { tree } = await mount();
+    const row = byTestID(tree, 'mistake-row-s3-1')[0];
+    expect(texts(row)).toContain('Last wrong yesterday');
+    expect(row.props.accessibilityLabel).toBe('Question s3-1. s3. Wrong once, last wrong yesterday');
+  });
+
+  // Y08 mobile-15: screen-reader structure.
+  it('announces the loading state and marks each deck title as a header', async () => {
+    seedBook([entry('aws', 's3-1', 's3', NOW - 1000), entry('csharp', 'linq-1', 'linq', NOW - 2000)]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(getCachedDeck).mockImplementation((async (slug: string) => {
+      await gate;
+      return slug === 'aws' ? AWS : slug === 'csharp' ? CSHARP : null;
+    }) as any);
+    const { tree } = await mount();
+
+    const loading = byTestID(tree, 'mistake-book-loading');
+    expect(loading).toHaveLength(1);
+    expect(loading[0].props.accessible).toBe(true);
+    expect(loading[0].props.accessibilityLabel).toBe('Loading mistakes');
+    expect(loading[0].props.accessibilityState).toEqual({ busy: true });
+
+    await act(async () => {
+      release();
+    });
+    await flush();
+    expect(byTestID(tree, 'mistake-book-loading')).toHaveLength(0);
+    const headers = tree.root
+      .findAll((n) => (n.type as any) === 'Text' && n.props.accessibilityRole === 'header')
+      .map((n) => n.props.children);
+    expect(headers).toEqual(['Mistake Book', 'AWS SAA', 'C# Interview']);
+  });
+
+  // Y08 mobile-12: a mistake that already got today's correct answer waits for tomorrow.
+  it('leaves out mistakes answered correctly today, and says done for today when none is left', async () => {
+    seedBook([
+      { ...entry('aws', 's3-1', 's3', NOW - 3 * DAY_MS), correctStreak: 1, lastCorrectAt: NOW - 60_000 },
+      { ...entry('aws', 'iam-1', 'iam', NOW - 2 * DAY_MS), correctStreak: 1, lastCorrectAt: NOW - DAY_MS },
+      entry('aws', 'ec2-1', null, NOW - 1000),
+      { ...entry('csharp', 'linq-1', 'linq', NOW - DAY_MS), correctStreak: 1, lastCorrectAt: NOW - 1000 },
+    ]);
+    vi.mocked(loadDeckProgress).mockResolvedValue([]);
+    const { tree, navigation } = await mount();
+
+    await act(async () => {
+      byTestID(tree, 'mistake-review-aws')[0].props.onPress();
+    });
+    await flush();
+    expect(navigation.navigate).toHaveBeenCalledWith('SessionCard', { slug: 'aws', focusUids: ['ec2-1', 'iam-1'] });
+    expect(byTestID(tree, 'mistake-done-today-aws')).toHaveLength(0);
+
+    vi.mocked(loadDeckProgress).mockClear();
+    navigation.navigate.mockClear();
+    await act(async () => {
+      byTestID(tree, 'mistake-review-csharp')[0].props.onPress();
+    });
+    await flush();
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(loadDeckProgress).not.toHaveBeenCalled();
+    const done = byTestID(tree, 'mistake-done-today-csharp');
+    expect(done).toHaveLength(1);
+    expect(texts(done[0])).toEqual([DONE_FOR_TODAY_TEXT]);
+    expect(DONE_FOR_TODAY_TEXT).toBe('Done for today, come back tomorrow.');
+    // It stays listed: the book is unresolved, only today's run is done.
+    expect(byTestID(tree, 'mistake-row-linq-1')).toHaveLength(1);
+    expect(byTestID(tree, 'mistake-review-csharp')[0].props.disabled).toBe(false);
   });
 });

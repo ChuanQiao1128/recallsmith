@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { ReviewRating } from '../../../review/model';
 import { getUserScopedKey } from '../../../review/storage';
+import type { CardExport, DeckExport } from '../../../types/deckExport';
 import type { McqVerdict } from '../mcq/mcqVerdict';
 
 /** Base key; resolved key is getUserScopedKey(MISTAKE_BOOK_KEY) → `devcards:u:{sub}:devcards:mistakes:v1`.
@@ -50,10 +51,20 @@ function entryKey(deckSlug: string, stableUid: string): string {
 }
 
 /** Same calendar day in the device's local time zone. */
-function isSameLocalDay(a: number, b: number): boolean {
+export function isSameLocalDay(a: number, b: number): boolean {
   const da = new Date(a);
   const db = new Date(b);
   return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
+}
+
+/** Local calendar days from `from` to `to` (0 on the same day, 1 for yesterday), never negative. */
+export function localDaysBetween(from: number, to: number): number {
+  const a = new Date(from);
+  const b = new Date(to);
+  const startA = new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime();
+  const startB = new Date(b.getFullYear(), b.getMonth(), b.getDate()).getTime();
+  // Rounded: a local day across a DST change is 23 or 25 hours long.
+  return Math.max(0, Math.round((startB - startA) / DAY_MS));
 }
 
 function emptyBook(): MistakeBookState {
@@ -143,6 +154,23 @@ export function activeMistakes(
       return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
     })
     .map(([, e]) => e);
+}
+
+export type MistakeRow = { entry: MistakeEntry; card: CardExport };
+
+/**
+ * The deck's active mistakes that still resolve to one of its cards, newest first. An entry for a
+ * card a content update removed can never be served, so every screen that lists or counts
+ * mistakes goes through here and agrees on the number.
+ */
+export function resolveActiveMistakeRows(s: MistakeBookState, deck: DeckExport, now: number): MistakeRow[] {
+  const cardMap = new Map((deck.Cards ?? []).map((card) => [card.StableUid, card]));
+  const rows: MistakeRow[] = [];
+  for (const entry of activeMistakes(s, { deckSlug: deck.Slug, now })) {
+    const card = cardMap.get(entry.stableUid);
+    if (card) rows.push({ entry, card });
+  }
+  return rows;
 }
 
 function isCount(value: unknown): value is number {

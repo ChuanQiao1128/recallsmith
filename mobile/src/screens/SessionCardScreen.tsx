@@ -613,6 +613,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
     try {
       const nowAtRating = new Date();
       const nowMs = nowAtRating.getTime();
+      const focusIndex = focusIndexRef.current;
       const nextState = buildRatedSessionState({
         current,
         progress,
@@ -624,9 +625,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
         cardIndex: cardIndexRef.current,
         ownedSet,
         kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()),
+        // A focus run deals cards that are not due; those get no scheduler credit (mobile-12).
+        focusRun: focusIndex !== null,
       });
       // Focus run: serve the next focus card in order instead of the planner's pick.
-      const focusIndex = focusIndexRef.current;
       if (focusIndex) focusRatedUidsRef.current.add(current.card.StableUid);
       const nextCurrent = focusIndex
         ? pickFocusCard({ index: focusIndex, progress: nextState.updatedProgress, ratedUids: focusRatedUidsRef.current })
