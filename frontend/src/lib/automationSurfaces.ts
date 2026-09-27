@@ -49,6 +49,51 @@ export function automationBlinded(a: DraftAutomation, draftStatus: string): bool
   return a.mode === 'dry_run' && draftStatus === 'pending' && !a.humanAction;
 }
 
+/**
+ * Whether a blinded draft still shows its AI QA findings (D07
+ * frontend-console-26). Blinding hides the would_accept verdict; when the
+ * automation routed the draft to a person because GPT-5.5 found a blocker or
+ * major issue, those findings are the reason a person is involved, so the
+ * person deciding sees them.
+ */
+export function automationQaFindingsShown(a: DraftAutomation, draftStatus: string): boolean {
+  if (!automationBlinded(a, draftStatus)) return false;
+  const qa = a.qa ?? null;
+  return a.state === 'human' && a.reason === 'QA_FLAGGED' && qa !== null && qa.blocker + qa.major > 0;
+}
+
+/**
+ * The `verdictShown` of an accept or reject (automation-4, D01 contract): true
+ * when the automatic verdict was visible to the person before the decision, in
+ * the review queue (not blinded, or the QA findings of a flagged draft shown)
+ * or earlier on the Automation page (`seenElsewhere`).
+ */
+export function verdictShownFor(a: DraftAutomation | null | undefined, draftStatus: string, seenElsewhere: boolean): boolean {
+  if (!a) return false;
+  if (seenElsewhere) return true;
+  return !automationBlinded(a, draftStatus) || automationQaFindingsShown(a, draftStatus);
+}
+
+/**
+ * The verdict a blinded decision hid, told once the person has decided
+ * (D07 frontend-console-26), and whether it should read as a warning: an
+ * accept of a draft AI QA found a blocker or major issue in.
+ */
+export function revealedVerdict(
+  a: DraftAutomation,
+  decision: 'accepted' | 'rejected',
+): { text: string; warn: boolean } {
+  const qa = a.qa ?? null;
+  const serious = qa ? qa.blocker + qa.major : 0;
+  const qaText = qa ? ` (AI QA: ${qa.blocker} blocker, ${qa.major} major, ${qa.minor} minor)` : '';
+  let text: string;
+  if (a.state === 'would_accept') text = `The automation would have accepted this draft${qaText}.`;
+  else if (a.state === 'human') {
+    text = `The automation had routed this draft to you: ${a.reason ? decisionReasonLabel(a.reason) : 'it needs a person'}${qaText}.`;
+  } else text = `The automation's verdict: ${decisionStateLabel(a.state)}${qaText}.`;
+  return { text, warn: decision === 'accepted' && serious > 0 };
+}
+
 export function draftAutomationBadgeText(a: DraftAutomation, blinded = false): string {
   if (blinded) return BLINDED_AUTOMATION_TEXT;
   let text = `Automation: ${decisionStateLabel(a.state)}`;

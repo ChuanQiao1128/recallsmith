@@ -12,6 +12,11 @@
 // deck and reason (humanPublishItems, L4), each linked to its deck's AI QA page,
 // and the count links the Runs tab, where each run lists its publishes
 // (C07 frontend-console-15). The Email card shows the K6 unconfirmed count (L5).
+//
+// The shadow agreement is the blind pair with the server's own rate (M3, D07
+// frontend-console-22), the totals under it and the progress toward the
+// runbook's 100 blind decisions. Live quality (M2) shows the four numbers of
+// status.live; an older server without the block gets one line instead.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -37,7 +42,10 @@ import {
   publishReasonLabel,
   publishStateLabel,
   runnerStateTone,
+  liveOverrideRateText,
   shadowAgreementText,
+  shadowThresholdText,
+  shadowTotalsText,
 } from '../../lib/automationRules';
 import { qaPageHref } from '../../lib/qaGate';
 import { formatUsd } from '../../lib/qaReview';
@@ -173,6 +181,15 @@ export function OverviewTab({
                   marked Needs you and why.
                 </p>
               )
+            ) : null}
+            {status.backlog && status.mode.effective === 'dry_run' ? (
+              <p className="mt-2 text-xs text-slate-600" data-testid="automation-backlog-dry-run">
+                Dry run: every pending draft also waits for you in the{' '}
+                <Link to="/review" className="text-indigo-700 underline">
+                  review queue
+                </Link>
+                .
+              </p>
             ) : null}
             {status.backlog ? null : (
               <p className="text-sm text-slate-600 mt-2">
@@ -331,7 +348,31 @@ export function OverviewTab({
 
           <section className={CARD_CLASS} aria-label="Dry-run shadow agreement">
             <h2 className={H2_CLASS}>Dry-run shadow agreement (30 days)</h2>
-            <p className="text-sm text-slate-700 mt-2">{shadowAgreementText(status.shadow)}</p>
+            <p className="text-sm text-slate-700 mt-2" data-testid="automation-shadow-blind">
+              {shadowAgreementText(status.shadow)}
+            </p>
+            <p className="text-xs text-slate-600 mt-1" data-testid="automation-shadow-totals">
+              {shadowTotalsText(status.shadow)}
+            </p>
+            {shadowThresholdText(status.shadow) ? (
+              <p className="text-xs text-slate-600 mt-1" data-testid="automation-shadow-threshold">
+                Go-live floor: {shadowThresholdText(status.shadow)}
+              </p>
+            ) : null}
+          </section>
+
+          <section className={CARD_CLASS} aria-label="Live quality">
+            <h2 className={H2_CLASS}>Live quality (30 days)</h2>
+            {status.live ? (
+              <dl className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="automation-live-quality">
+                <Stat label="Auto-accepted" value={String(status.live.autoAccepted30d)} />
+                <Stat label="Deleted by a person" value={String(status.live.deletedByPerson)} />
+                <Stat label="Edited by a person" value={String(status.live.editedByPerson)} />
+                <Stat label="Override rate" value={liveOverrideRateText(status.live.overrideRate)} />
+              </dl>
+            ) : (
+              <p className="text-sm text-slate-600 mt-2">This server does not report live quality yet.</p>
+            )}
           </section>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

@@ -266,11 +266,12 @@ describe('automationRules', () => {
     expect(formatAge('2026-09-26T13:00:00Z', now)).toBe('47 h ago');
     expect(formatAge('2026-09-23T12:00:00Z', now)).toBe('5 d ago');
 
-    expect(shadowAgreementText({ humanDecided: 0, humanAccepted: 0, agreementRate: null })).toBe(
-      'No person has decided a would-accept draft yet.',
+    // D07 frontend-console-22 (M3): the blind pair and the server's rate, never the all-decisions pair.
+    expect(shadowAgreementText({ humanDecided: 0, agreementRate: null, blindDecided: 0, blindAccepted: 0 })).toBe(
+      'No blind decision yet.',
     );
-    expect(shadowAgreementText({ humanDecided: 8, humanAccepted: 7, agreementRate: 0.875 })).toBe(
-      '7 of 8 would-accept drafts were accepted unedited by a person (87.5%).',
+    expect(shadowAgreementText({ humanDecided: 8, agreementRate: 0.875, blindDecided: 8, blindAccepted: 7 })).toBe(
+      '7 of 8 would-accept drafts decided blind were accepted unedited (87.5%).',
     );
 
     const bars = decisionStateBars({ human: 2, would_accept: 4 }, 200);
@@ -340,12 +341,9 @@ describe('automationRules', () => {
     expect(evalGateReportProblem('{"v":2,"kind":"automation-gate","passed":true}')).toBe(
       'This is not an automation-gate report.',
     );
-    expect(evalGateReportProblem('{"v":1,"kind":"automation-gate","passed":false}')).toBe(
-      'Only a passed gate report can be recorded.',
-    );
-    expect(evalGateReportProblem('{"v":1,"kind":"automation-gate","passed":"true"}')).toBe(
-      'Only a passed gate report can be recorded.',
-    );
+    // D07 frontend-console-23 (M4): a failed report is a valid report; the card confirms, then records it.
+    expect(evalGateReportProblem('{"v":1,"kind":"automation-gate","passed":false}')).toBeNull();
+    expect(evalGateReportProblem('{"v":1,"kind":"automation-gate","passed":"true"}')).toBeNull();
     expect(evalGateReportProblem('{"v":1,"kind":"automation-gate","passed":true,"failures":[]}')).toBeNull();
   });
 
@@ -361,7 +359,8 @@ describe('automationRules', () => {
       'Email is not configured on the server (AUTOMATION_NOTIFY_QUEUE_URL is empty).',
     );
     expect(automationErrorMessage('EVAL_GATE_FAILED', 'seededRecall 0.81 < 0.90')).toBe(
-      'The server recomputed the report and it does not pass the gate. seededRecall 0.81 < 0.90',
+      // D07 frontend-console-23: L3 wording, the failed report is recorded and now blocks live.
+      'The server recomputed the report and it does not pass the gate; it is recorded as the newest evaluation, so live mode runs as a dry run. seededRecall 0.81 < 0.90',
     );
     expect(automationErrorMessage('EVAL_GATE_INVALID', 'reviewer missing')).toBe(
       'The server could not read this gate report. reviewer missing',

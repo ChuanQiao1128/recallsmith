@@ -43,6 +43,11 @@ const TITLE_ID = 'automation-queue-title';
 const NOTE_ID = 'automation-queue-note';
 const PROBLEMS_ID = 'automation-queue-problems';
 
+/** Each problem's own id, so a field announces only its own message (D07 frontend-console-28). */
+function problemId(field: QueueField): string {
+  return `${PROBLEMS_ID}-${field}`;
+}
+
 type ListState = { forKey: string | null; error: string | null; items: QueueItem[]; nextCursor: string | null };
 
 function errorText(error: ApiError | null, fallback: string): string {
@@ -116,7 +121,7 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
     return {
       className: invalid ? INPUT_INVALID_CLASS : INPUT_CLASS,
       'aria-invalid': invalid ? true : undefined,
-      'aria-describedby': invalid ? PROBLEMS_ID : undefined,
+      'aria-describedby': invalid ? problemId(field) : undefined,
     };
   }
 
@@ -178,7 +183,7 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
                 emptyLabel="Choose a deck"
                 className={failed('deckId') ? INPUT_INVALID_CLASS : INPUT_CLASS}
                 invalid={failed('deckId')}
-                describedBy={failed('deckId') ? PROBLEMS_ID : undefined}
+                describedBy={failed('deckId') ? problemId('deckId') : undefined}
               />
             </div>
             <div>
@@ -197,7 +202,7 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
           {problems.length > 0 ? (
             <div id={PROBLEMS_ID} className="mt-2">
               {problems.map(p => (
-                <p key={p.field} className={FIELD_ERROR_CLASS} role="alert">
+                <p key={p.field} id={problemId(p.field)} className={FIELD_ERROR_CLASS} role="alert">
                   {p.message}
                 </p>
               ))}

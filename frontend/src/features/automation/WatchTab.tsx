@@ -56,6 +56,11 @@ const INTERVAL_ID = 'automation-watch-interval';
 const PROBLEMS_ID = 'automation-watch-problems';
 const EDIT_PROBLEM_ID = 'automation-watch-edit-problem';
 
+/** Each problem's own id, so a field announces only its own message (D07 frontend-console-28). */
+function problemId(field: WatchField): string {
+  return `${PROBLEMS_ID}-${field}`;
+}
+
 type WatchState = { forKey: string | null; error: string | null; data: WatchPage | null };
 type EditState = {
   targetId: number;
@@ -73,7 +78,7 @@ function deckInvalidProps(invalid: boolean) {
   return {
     className: invalid ? INPUT_INVALID_CLASS : INPUT_CLASS,
     invalid,
-    describedBy: invalid ? PROBLEMS_ID : undefined,
+    describedBy: invalid ? problemId('deckId') : undefined,
   };
 }
 
@@ -277,7 +282,7 @@ export function WatchTab({
               <input
                 id={URL_ID}
                 type="url"
-                {...invalidProps(failed('url'), PROBLEMS_ID)}
+                {...invalidProps(failed('url'), problemId('url'))}
                 value={url}
                 onChange={e => setUrl(e.target.value)}
               />
@@ -288,7 +293,7 @@ export function WatchTab({
               </label>
               <select
                 id={FORMAT_ID}
-                {...invalidProps(failed('feedFormat'), PROBLEMS_ID)}
+                {...invalidProps(failed('feedFormat'), problemId('feedFormat'))}
                 value={feedFormat}
                 onChange={e => setFeedFormat(e.target.value)}
               >
@@ -317,7 +322,7 @@ export function WatchTab({
               </label>
               <input
                 id={PATTERN_ID}
-                {...invalidProps(failed('itemTitlePattern'), PROBLEMS_ID, 'font-mono')}
+                {...invalidProps(failed('itemTitlePattern'), problemId('itemTitlePattern'), 'font-mono')}
                 value={pattern}
                 onChange={e => setPattern(e.target.value)}
               />
@@ -331,7 +336,7 @@ export function WatchTab({
                 type="number"
                 min={60}
                 max={43200}
-                {...invalidProps(failed('checkIntervalMinutes'), PROBLEMS_ID)}
+                {...invalidProps(failed('checkIntervalMinutes'), problemId('checkIntervalMinutes'))}
                 value={intervalText}
                 onChange={e => setIntervalText(e.target.value)}
               />
@@ -340,7 +345,7 @@ export function WatchTab({
           {problems.length > 0 ? (
             <div id={PROBLEMS_ID} className="mt-2">
               {problems.map(p => (
-                <p key={p.field} className={FIELD_ERROR_CLASS} role="alert">
+                <p key={p.field} id={problemId(p.field)} className={FIELD_ERROR_CLASS} role="alert">
                   {p.message}
                 </p>
               ))}

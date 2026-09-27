@@ -6,6 +6,12 @@
 // deciding it is sent as reviewMs, which feeds the Automation Ledger (§9.3
 // ai_draft_review). The lint panel runs the importer's own rules through
 // lib/draftReview.ts, the same set the MCP server's lint_card applies (§8.4).
+//
+// Every accept and reject of a draft with an automatic decision says whether
+// its verdict was visible before the decision (`verdictShown`, automation-4):
+// the dry-run shadow agreement counts only the blind ones. After a blinded
+// decision the outcome tells the verdict that was hidden, as a warning when an
+// accepted draft had AI QA blocker or major findings (D07 frontend-console-26).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
@@ -32,7 +38,16 @@ import {
 } from '../components/console/consoleStyles';
 import { DraftAutomationPanel } from '../features/automation/DraftAutomationPanel';
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
-import { automationBlinded, draftAutomationBadgeText, draftAutomationTone } from '../lib/automationSurfaces';
+import {
+  automationBlinded,
+  automationDraftHref,
+  automationQaFindingsShown,
+  draftAutomationBadgeText,
+  draftAutomationTone,
+  revealedVerdict,
+  verdictShownFor,
+} from '../lib/automationSurfaces';
+import { wasVerdictSeen } from '../lib/automationVerdictSeen';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   DRAFT_NOTE_MAX_LENGTH,
@@ -69,7 +84,26 @@ type ListState = {
   nextCursor: string | null;
 };
 type DetailState = { forDraftId: number | null; error: LoadError | null; draft: Draft | null };
-type Outcome = { kind: 'accepted'; cardId: number; deckId: number; qa: DraftAcceptQa | null } | { kind: 'rejected' };
+/** The verdict a blinded decision hid, told after the decision (D07 frontend-console-26). */
+type Revealed = { draftId: number; text: string; warn: boolean };
+type Outcome =
+  | { kind: 'accepted'; cardId: number; deckId: number; qa: DraftAcceptQa | null; revealed: Revealed | null }
+  | { kind: 'rejected'; revealed: Revealed | null };
+
+/**
+ * The body plus `verdictShown`, whether the person saw the draft's automatic
+ * verdict before deciding it. A draft without an automatic decision has no
+ * verdict, so its body stays as it was.
+ */
+function withVerdictShown<B extends object>(d: Draft, body: B): B & { verdictShown?: boolean } {
+  if (!d.automation) return body;
+  return { ...body, verdictShown: verdictShownFor(d.automation, d.status, wasVerdictSeen(d.draftId)) };
+}
+
+function revealedOf(d: Draft, decision: 'accepted' | 'rejected'): Revealed | null {
+  if (!d.automation || !automationBlinded(d.automation, d.status)) return null;
+  return { draftId: d.draftId, ...revealedVerdict(d.automation, decision) };
+}
 /** Whether AI QA is enabled for the deck, so the accept can offer to chain a run (automation-17). */
 type QaEnabledState = { forDeckId: number | null; enabled: boolean };
 
@@ -435,8 +469,15 @@ export function ReviewQueuePage() {
   function onAccept(current: Draft) {
     void decide(
       current.draftId,
-      reviewMs => acceptDraft(current.draftId, chainQa ? { reviewMs, runQa: true } : { reviewMs }),
-      data => ({ kind: 'accepted', cardId: data.cardId, deckId: current.deckId || (deckId ?? 0), qa: data.qa ?? null }),
+      reviewMs =>
+        acceptDraft(current.draftId, withVerdictShown(current, chainQa ? { reviewMs, runQa: true } : { reviewMs })),
+      data => ({
+        kind: 'accepted',
+        cardId: data.cardId,
+        deckId: current.deckId || (deckId ?? 0),
+        qa: data.qa ?? null,
+        revealed: revealedOf(current, 'accepted'),
+      }),
       'accepted',
     );
   }
@@ -449,8 +490,17 @@ export function ReviewQueuePage() {
     const problem = await decide(
       current.draftId,
       reviewMs =>
-        acceptDraft(current.draftId, chainQa ? { card: edited, reviewMs, runQa: true } : { card: edited, reviewMs }),
-      data => ({ kind: 'accepted', cardId: data.cardId, deckId: current.deckId || (deckId ?? 0), qa: data.qa ?? null }),
+        acceptDraft(
+          current.draftId,
+          withVerdictShown(current, chainQa ? { card: edited, reviewMs, runQa: true } : { card: edited, reviewMs }),
+        ),
+      data => ({
+        kind: 'accepted',
+        cardId: data.cardId,
+        deckId: current.deckId || (deckId ?? 0),
+        qa: data.qa ?? null,
+        revealed: revealedOf(current, 'accepted'),
+      }),
       'accepted',
     );
     return problem === null ? { ok: true } : { ok: false, error: problem };
@@ -470,8 +520,11 @@ export function ReviewQueuePage() {
     void decide(
       current.draftId,
       reviewMs =>
-        rejectDraft(current.draftId, trimmedNote ? { reason, note: trimmedNote, reviewMs } : { reason, reviewMs }),
-      () => ({ kind: 'rejected' }),
+        rejectDraft(
+          current.draftId,
+          withVerdictShown(current, trimmedNote ? { reason, note: trimmedNote, reviewMs } : { reason, reviewMs }),
+        ),
+      () => ({ kind: 'rejected', revealed: revealedOf(current, 'rejected') }),
       'rejected',
     );
   }
@@ -540,7 +593,7 @@ export function ReviewQueuePage() {
 
           {outcome ? (
             <div role="status" ref={outcomeRef} tabIndex={-1} data-testid="review-outcome" className="focus:outline-none">
-              <Callout tone="success">
+              <Callout tone={outcome.revealed?.warn ? 'warning' : 'success'}>
                 {outcome.kind === 'accepted' ? (
                   <>
                     Accepted as card #{outcome.cardId}{' '}
@@ -565,6 +618,14 @@ export function ReviewQueuePage() {
                 ) : (
                   'Rejected'
                 )}
+                {outcome.revealed ? (
+                  <span className="block mt-1" data-testid="review-outcome-verdict">
+                    {outcome.revealed.text}{' '}
+                    <Link to={automationDraftHref(outcome.revealed.draftId)} className="underline">
+                      Open in Automation
+                    </Link>
+                  </span>
+                ) : null}
               </Callout>
             </div>
           ) : null}
@@ -713,6 +774,7 @@ export function ReviewQueuePage() {
                           draftId={draft.draftId}
                           automation={draft.automation}
                           blinded={automationBlinded(draft.automation, draft.status)}
+                          qaFindingsShown={automationQaFindingsShown(draft.automation, draft.status)}
                         />
                       ) : null}
                       <section className={`${CARD_CLASS} space-y-2`} aria-label="Source">

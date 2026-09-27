@@ -222,6 +222,33 @@ export function decisionAwaitsPerson(d: { state: string; humanAction: string | n
   return (d.state === 'human' || d.state === 'would_accept') && d.humanAction === null;
 }
 
+/**
+ * Whether the Automation page hides a decision's verdict until the person
+ * decides (D07 frontend-console-25): a dry-run draft nobody has decided that is
+ * not routed to a person, i.e. a would-accept verdict or one still in AI QA.
+ * The dry-run shadow agreement counts a decision as blind only when this
+ * verdict was not seen first. A routed (`human`) row stays visible: it is the
+ * exception inbox, and its reason is why the person is involved.
+ */
+export function decisionVerdictHidden(d: { mode: string; state: string; humanAction: string | null }): boolean {
+  return (
+    d.mode === 'dry_run' &&
+    d.humanAction === null &&
+    (d.state === 'would_accept' || d.state === 'qa_pending' || d.state === 'qa_queued')
+  );
+}
+
+/** The badge of a hidden verdict, the review queue's words. */
+export const HIDDEN_VERDICT_TEXT = 'Verdict hidden until you decide';
+
+export const REVEAL_VERDICT_WARNING =
+  'Dry run: the verdict stays hidden so that your decision in the review queue counts as blind. Revealing it here counts that decision as not blind.';
+
+/** Whether a routed decision can be decided now: the Decide link of the exception inbox (D07 frontend-console-27). */
+export function decisionDecidable(d: { state: string; humanAction: string | null }): boolean {
+  return d.state === 'human' && d.humanAction === null;
+}
+
 /** The decision's reason detail as a person reads it: a QA_ERROR detail is an AI QA error code. */
 export function decisionReasonDetailText(reason: string | null, detail: string | null): string | null {
   if (!detail) return null;
@@ -499,6 +526,11 @@ function newestGate<G extends { gateId: number }>(history: G[]): G | null {
   return newest;
 }
 
+/** The id of the newest recorded gate, or null when none is recorded. */
+export function newestGateId(history: Array<{ gateId: number }>): number | null {
+  return newestGate(history)?.gateId ?? null;
+}
+
 export function evalGateSummaryText(summary: EvalGateSummary): string {
   switch (summary.kind) {
     case 'none':
@@ -545,15 +577,47 @@ export function formatAge(iso: string | null, nowMs: number): string {
   return `${Math.floor(hours / 24)} d ago`;
 }
 
-export function shadowAgreementText(shadow: {
+/** The runbook's go-live floor: at least this many would-accept drafts decided blind (30 days). */
+export const SHADOW_BLIND_DECISIONS_TARGET = 100;
+
+type ShadowCounts = {
   humanDecided: number;
-  humanAccepted: number;
   agreementRate: number | null;
-}): string {
-  if (shadow.humanDecided === 0) return 'No person has decided a would-accept draft yet.';
-  const rate = shadow.agreementRate ?? shadow.humanAccepted / shadow.humanDecided;
-  const pct = (rate * 100).toFixed(1);
-  return `${shadow.humanAccepted} of ${shadow.humanDecided} would-accept drafts were accepted unedited by a person (${pct}%).`;
+  blindDecided: number | null;
+  blindAccepted: number | null;
+};
+
+/**
+ * The go-live shadow agreement (M3, D07 frontend-console-22): the blind pair
+ * and the server's own rate, blindAccepted / blindDecided. The console never
+ * computes a rate, and never falls back to the counts of every decision, which
+ * include decisions taken after seeing the verdict.
+ */
+export function shadowAgreementText(shadow: ShadowCounts): string {
+  if (shadow.blindDecided === null || shadow.blindAccepted === null) {
+    return 'This server does not report blind decisions yet, so the shadow agreement cannot be read here.';
+  }
+  if (shadow.blindDecided === 0) return 'No blind decision yet.';
+  const pct = shadow.agreementRate === null ? 'rate not reported' : `${(shadow.agreementRate * 100).toFixed(1)}%`;
+  return `${shadow.blindAccepted} of ${shadow.blindDecided} would-accept drafts decided blind were accepted unedited (${pct}).`;
+}
+
+/** The totals under the blind figure: every decision, and how many were taken with the verdict shown. */
+export function shadowTotalsText(shadow: ShadowCounts): string {
+  const decidedAll = `${shadow.humanDecided} decided in all`;
+  if (shadow.blindDecided === null) return `${decidedAll}.`;
+  return `${decidedAll}, ${Math.max(0, shadow.humanDecided - shadow.blindDecided)} of them after seeing the verdict.`;
+}
+
+/** Progress toward the go-live floor of blind decisions; null when the server does not count them. */
+export function shadowThresholdText(shadow: ShadowCounts, target = SHADOW_BLIND_DECISIONS_TARGET): string | null {
+  if (shadow.blindDecided === null) return null;
+  return `${shadow.blindDecided} / ${target} blind decisions`;
+}
+
+/** M2: the live override rate as a percentage; '—' when nothing was auto-accepted. */
+export function liveOverrideRateText(rate: number | null): string {
+  return rate === null ? '—' : `${(rate * 100).toFixed(1)}%`;
 }
 
 export type DecisionStateBar = { state: string; label: string; count: number; width: number };
@@ -664,7 +728,11 @@ export function watchEditProblem(
   return null;
 }
 
-/** A first look at a pasted gate report; the server recomputes everything (A00 §15.4 step 4). */
+/**
+ * A first look at a pasted gate report; the server recomputes everything (A00
+ * §15.4 step 4). A failed report is a valid report: L3/M4 record it as the
+ * newest evaluation, which blocks live, so only the shape is checked here.
+ */
 export function evalGateReportProblem(text: string): string | null {
   if (text.trim() === '') return 'Paste the gate report JSON.';
   let parsed: unknown;
@@ -676,16 +744,36 @@ export function evalGateReportProblem(text: string): string | null {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'This is not an automation-gate report.';
   const report = parsed as Record<string, unknown>;
   if (report.kind !== 'automation-gate' || report.v !== 1) return 'This is not an automation-gate report.';
-  if (report.passed !== true) return 'Only a passed gate report can be recorded.';
   return null;
+}
+
+/** Whether a pasted (well-formed) report says it failed, so recording it asks first (M4). */
+export function evalGateReportFailed(text: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return !!parsed && typeof parsed === 'object' && (parsed as Record<string, unknown>).passed !== true;
+  } catch {
+    return false;
+  }
+}
+
+export const EVAL_GATE_FAILED_CONFIRM =
+  'This report failed. Recording it makes it the newest evaluation, which blocks live mode.';
+
+/** The line after a failed report was recorded (M4): the server stored it, so it now blocks live. */
+export function evalGateRecordedFailedText(gateId: number | null): string {
+  const which = gateId === null ? 'the newest gate' : `gate #${gateId}`;
+  return `Recorded as ${which} (failed): live mode now runs as a dry run.`;
 }
 
 export const AUTOMATION_ERROR_MESSAGES: Record<string, string> = {
   SERVER_NOT_READY_AUTOMATION: 'The server has not run the automation database migration (034).',
-  EVAL_GATE_FAILED: 'The server recomputed the report and it does not pass the gate.',
+  EVAL_GATE_FAILED:
+    'The server recomputed the report and it does not pass the gate; it is recorded as the newest evaluation, so live mode runs as a dry run.',
   EVAL_GATE_INVALID: 'The server could not read this gate report.',
   EVAL_GATE_NOT_FOUND: 'That eval gate no longer exists.',
   EVAL_GATE_REVOKED: 'That eval gate is already revoked.',
+  EVAL_GATE_STALE: 'A newer evaluation is already recorded; this report is older and cannot replace it.',
   QUEUE_ITEM_EXISTS: 'That URL is already queued or being drafted for this deck.',
   QUEUE_ITEM_NOT_FOUND: 'That queue item no longer exists.',
   QUEUE_ITEM_NOT_QUEUED: 'Only a queued item can be skipped.',
@@ -697,6 +785,20 @@ export const AUTOMATION_ERROR_MESSAGES: Record<string, string> = {
   NOTIFICATION_NOT_FOUND: 'That email is not in the log.',
   DRAFT_DECISION_NOT_FOUND: 'No automatic decision exists for that draft.',
 };
+
+/**
+ * The refusal of recording a report (POST …/eval-gate), where the codes mean
+ * something else than on a revoke: EVAL_GATE_REVOKED is "this exact report
+ * belongs to a revoked gate" (L3), not "the gate is already revoked".
+ */
+export const EVAL_GATE_RECORD_ERROR_MESSAGES: Record<string, string> = {
+  EVAL_GATE_REVOKED: 'This report belongs to a revoked eval gate; run the evaluation again.',
+};
+
+export function evalGateRecordErrorMessage(code: string | undefined, serverMessage: string): string {
+  const mapped = code === undefined ? undefined : own(EVAL_GATE_RECORD_ERROR_MESSAGES, code);
+  return mapped ?? automationErrorMessage(code, serverMessage);
+}
 
 export function automationErrorMessage(code: string | undefined, serverMessage: string): string {
   const mapped = code === undefined ? undefined : own(AUTOMATION_ERROR_MESSAGES, code);
