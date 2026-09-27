@@ -146,6 +146,16 @@ function pageIsVisible(): boolean {
   return typeof document === 'undefined' || document.visibilityState !== 'hidden';
 }
 
+/** A triage clock started now (automation-16). */
+function freshTriageClock(): ReviewClock {
+  return startReviewClock(Date.now(), pageIsVisible());
+}
+
+/** The visible triage time on `clock` so far, capped at REVIEW_MS_CAP. */
+function triageMsSoFar(clock: ReviewClock): number {
+  return reviewClockMs(clock, Date.now());
+}
+
 function cardEditHref(deckId: number, cardId: number): string {
   return `/decks/cards/edit?deckId=${deckId}&cardId=${cardId}`;
 }
@@ -342,7 +352,7 @@ export function DeckQaPage() {
   }, [shownRunId, pollKey]);
 
   useEffect(() => {
-    triageClockRef.current = startReviewClock(Date.now(), pageIsVisible());
+    triageClockRef.current = freshTriageClock();
   }, [shownRunId]);
 
   useEffect(() => {
@@ -496,12 +506,12 @@ export function DeckQaPage() {
     setResolving(new Set(resolvingRef.current));
     setResolveMessage(null);
     const note = (notes[id] ?? '').trim();
-    const reviewMs = reviewClockMs(triageClockRef.current, Date.now());
+    const reviewMs = triageMsSoFar(triageClockRef.current);
     const res = await resolveQaFinding(id, note ? { resolution, note, reviewMs } : { resolution, reviewMs });
     resolvingRef.current.delete(id);
     setResolving(new Set(resolvingRef.current));
     if (res.success) {
-      triageClockRef.current = startReviewClock(Date.now(), pageIsVisible());
+      triageClockRef.current = freshTriageClock();
       setNotes(prev => {
         const next = { ...prev };
         delete next[id];
