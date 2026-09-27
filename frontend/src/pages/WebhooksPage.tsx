@@ -22,17 +22,16 @@ import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
 import {
-  BUTTON_CLASS,
   CARD_CLASS,
   H1_CLASS,
   H2_CLASS,
   INPUT_CLASS,
   INPUT_INVALID_CLASS,
   LABEL_CLASS,
-  PRIMARY_BUTTON_CLASS,
   TD_CLASS,
   TH_CLASS,
 } from '../components/console/consoleStyles';
@@ -150,6 +149,7 @@ export function WebhooksPage() {
   // Written into the page's one persistent live region, so a screen reader
   // hears each action result (a region mounted with its text is not announced).
   const [announcement, setAnnouncement] = useState('');
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [loadingMore, setLoadingMore] = useState(false);
 
   const filterKey = deliveriesKey(filterSubscription, filterStatus, filterEvent);
@@ -253,6 +253,10 @@ export function WebhooksPage() {
     setFormProblems([]);
     setInvalidFields(NO_INVALID_FIELDS);
     setFormServerError(null);
+    // The form sits below the table: take the keyboard there and say what
+    // changed, or Edit looks like it did nothing (WCAG 2.4.3, 4.1.3).
+    setAnnouncement(`Editing subscription ${s.name}.`);
+    nameInputRef.current?.focus();
   }
 
   async function submitForm(e: React.FormEvent) {
@@ -472,42 +476,42 @@ export function WebhooksPage() {
                       <td className={`${TD_CLASS} text-slate-600 text-xs`}>{when(s.updatedAt)}</td>
                       <td className={TD_CLASS}>
                         <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          <Button
+                            variant="outline"
+                            size="xs"
                             aria-label={`Edit ${s.name}`}
                             disabled={rowBusy}
                             onClick={() => startEdit(s)}
                           >
                             Edit
-                          </button>
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
                             aria-label={`${s.isActive ? 'Disable' : 'Enable'} ${s.name}`}
                             disabled={rowBusy}
                             onClick={() => void toggleActive(s)}
                           >
                             {s.isActive ? 'Disable' : 'Enable'}
-                          </button>
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
                             aria-label={`Send test to ${s.name}`}
                             disabled={rowBusy}
                             onClick={() => void sendTest(s)}
                           >
                             Send test
-                          </button>
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
                             aria-label={`Delete ${s.name}`}
                             disabled={rowBusy}
                             onClick={() => void deleteSubscription(s)}
                           >
                             Delete
-                          </button>
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -528,6 +532,7 @@ export function WebhooksPage() {
                 Name
               </label>
               <input
+                ref={nameInputRef}
                 id="webhook-name"
                 className={invalidFields.name ? INPUT_INVALID_CLASS : INPUT_CLASS}
                 aria-invalid={invalidFields.name ? true : undefined}
@@ -594,13 +599,13 @@ export function WebhooksPage() {
           ) : null}
 
           <div className="flex flex-wrap gap-2">
-            <button type="submit" className={PRIMARY_BUTTON_CLASS} disabled={submitting}>
+            <Button variant="primary" size="xs" type="submit" disabled={submitting}>
               {editingId === null ? 'Add subscription' : 'Save changes'}
-            </button>
+            </Button>
             {editingId !== null ? (
-              <button type="button" className={BUTTON_CLASS} onClick={resetForm}>
+              <Button variant="outline" size="xs" onClick={resetForm}>
                 Cancel
-              </button>
+              </Button>
             ) : null}
           </div>
         </form>
@@ -726,15 +731,15 @@ export function WebhooksPage() {
                     <td className={`${TD_CLASS} text-slate-600 text-xs`}>{when(d.deliveredAt)}</td>
                     <td className={TD_CLASS}>
                       {isRedeliverable(d.status) ? (
-                        <button
-                          type="button"
-                          className={BUTTON_CLASS}
+                        <Button
+                          variant="outline"
+                          size="xs"
                           aria-label={`Redeliver ${d.deliveryId}`}
                           disabled={busy.has(`delivery:${d.deliveryId}`)}
                           onClick={() => void redeliver(d)}
                         >
                           Redeliver
-                        </button>
+                        </Button>
                       ) : null}
                     </td>
                   </tr>
@@ -746,14 +751,14 @@ export function WebhooksPage() {
 
         {deliveries.nextCursor ? (
           <div className="mt-3">
-            <button
-              type="button"
-              className={BUTTON_CLASS}
+            <Button
+              variant="outline"
+              size="xs"
               disabled={loadingMore || deliveriesRefetching}
               onClick={() => void loadMore()}
             >
               Load more
-            </button>
+            </Button>
           </div>
         ) : null}
       </section>

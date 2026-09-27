@@ -9,6 +9,14 @@ import { apiResultFromError, failResult } from './httpFailure';
 
 export type LedgerGranularity = 'day' | 'week' | 'month';
 
+/** One source's share of the headline: `live` is measured, `backfill` is inferred from history. */
+export type LedgerSourceTotals = {
+  runs: number;
+  units: number;
+  minutesSaved: number;
+  hoursSaved: number;
+};
+
 export type LedgerTotals = {
   runs: number;
   units: number;
@@ -18,6 +26,28 @@ export type LedgerTotals = {
   hoursSaved: number;
   defectsCaught: number;
   qaFalsePositives: number;
+  /** The live/backfill split of the headline; null when the server does not send it. */
+  bySource: { live: LedgerSourceTotals; backfill: LedgerSourceTotals } | null;
+  /** Minutes saved on measured versus seeded default baselines; null when the server does not send it. */
+  byBaselineSource: { measured: number; default: number } | null;
+};
+
+/**
+ * The AI drafting agent's own quality over the period (GET /ledger `agentDrafts`).
+ * Rates are fractions in 0..1; `defectRejects` are drafts rejected for a defect
+ * reason, which are the agent's defects, not defects caught before publish.
+ */
+export type LedgerAgentDrafts = {
+  decided: number;
+  accepted: number;
+  editedAccepted: number;
+  rejected: number;
+  defectRejects: number;
+  acceptanceRate: number;
+  editedAcceptRate: number;
+  defectRate: number;
+  /** Null when no draft in the period recorded a review time. */
+  avgReviewMinutes: number | null;
 };
 
 export type LedgerAutomationRow = {
@@ -51,6 +81,15 @@ export type LedgerReport = {
   totals: LedgerTotals;
   automations: LedgerAutomationRow[];
   series: LedgerSeriesPoint[];
+  /** Null when the server does not send the block. */
+  agentDrafts: LedgerAgentDrafts | null;
+};
+
+/** POST /backfill's answer: rows inserted and skipped (already present) per automation. */
+export type AutomationBackfillResult = {
+  dryRun: boolean;
+  inserted: Record<string, number>;
+  skipped: Record<string, number>;
 };
 
 export type AutomationBaseline = {
@@ -119,7 +158,57 @@ function normalizeTotals(value: unknown): LedgerTotals {
     hoursSaved: toNumber(raw.hoursSaved),
     defectsCaught: toNumber(raw.defectsCaught),
     qaFalsePositives: toNumber(raw.qaFalsePositives),
+    bySource: normalizeBySource(raw.bySource),
+    byBaselineSource: normalizeByBaselineSource(raw.byBaselineSource),
   };
+}
+
+function isRecord(value: unknown): value is Raw {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeSourceTotals(value: unknown): LedgerSourceTotals {
+  const raw = asRecord(value);
+  return {
+    runs: toNumber(raw.runs),
+    units: toNumber(raw.units),
+    minutesSaved: toNumber(raw.minutesSaved),
+    hoursSaved: toNumber(raw.hoursSaved),
+  };
+}
+
+function normalizeBySource(value: unknown): LedgerTotals['bySource'] {
+  if (!isRecord(value) || !isRecord(value.live) || !isRecord(value.backfill)) return null;
+  return { live: normalizeSourceTotals(value.live), backfill: normalizeSourceTotals(value.backfill) };
+}
+
+function normalizeByBaselineSource(value: unknown): LedgerTotals['byBaselineSource'] {
+  if (!isRecord(value)) return null;
+  return {
+    measured: toNumber(asRecord(value.measured).minutesSaved),
+    default: toNumber(asRecord(value.default).minutesSaved),
+  };
+}
+
+function normalizeAgentDrafts(value: unknown): LedgerAgentDrafts | null {
+  if (!isRecord(value)) return null;
+  return {
+    decided: toNumber(value.decided),
+    accepted: toNumber(value.accepted),
+    editedAccepted: toNumber(value.editedAccepted),
+    rejected: toNumber(value.rejected),
+    defectRejects: toNumber(value.defectRejects),
+    acceptanceRate: toNumber(value.acceptanceRate),
+    editedAcceptRate: toNumber(value.editedAcceptRate),
+    defectRate: toNumber(value.defectRate),
+    avgReviewMinutes: toNumber(value.avgReviewMinutes, true),
+  };
+}
+
+function normalizeCounts(value: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [key, n] of Object.entries(asRecord(value))) out[key] = toNumber(n);
+  return out;
 }
 
 function normalizeAutomationRow(value: unknown): LedgerAutomationRow {
@@ -215,6 +304,7 @@ export async function fetchAutomationLedger(
         totals: normalizeTotals(raw.totals),
         automations: raw.automations.map(normalizeAutomationRow),
         series: raw.series.map(normalizeSeriesPoint),
+        agentDrafts: normalizeAgentDrafts(raw.agentDrafts),
       };
     });
   } catch (err) {
@@ -265,5 +355,22 @@ export async function updateAutomationBaseline(
     return mapSuccess(resp.data, data => (data && typeof data === 'object' ? normalizeBaseline(data) : null));
   } catch (err) {
     return apiResultFromError<AutomationBaseline>(err);
+  }
+}
+
+/**
+ * POST /api/v1/admin/automation/backfill (super_admin): infers ledger rows from
+ * publish and import history. `dryRun: true` only counts what would be
+ * inserted; rows already present are skipped, so applying twice is harmless.
+ */
+export async function runAutomationBackfill(dryRun: boolean): Promise<ApiResult<AutomationBackfillResult>> {
+  try {
+    const resp = await http.post<ApiResult<unknown>>('/api/v1/admin/automation/backfill', { dryRun });
+    return mapSuccess(resp.data, data => {
+      if (!isRecord(data) || typeof data.dryRun !== 'boolean') return null;
+      return { dryRun: data.dryRun, inserted: normalizeCounts(data.inserted), skipped: normalizeCounts(data.skipped) };
+    });
+  } catch (err) {
+    return apiResultFromError<AutomationBackfillResult>(err);
   }
 }

@@ -10,7 +10,10 @@ import type { DraftCard, DraftRejectReason } from '../types/draft';
 import { parseDeckMarkdown, serializeDeckMarkdown } from './deckImport';
 import type { DeckCardContent } from './deckImport';
 
-/** Contract §3.5, in picker order. `defect` marks the reasons the ledger counts as caught defects (§9.1b). */
+/**
+ * Contract §3.5, in picker order. `defect` marks the reasons that count in the
+ * ledger's AI draft defect rate (the agent's defects), not as defects caught.
+ */
 export const DRAFT_REJECT_REASONS: ReadonlyArray<{ value: DraftRejectReason; label: string; defect: boolean }> = [
   { value: 'incorrect', label: 'Incorrect', defect: true },
   { value: 'ambiguous', label: 'Ambiguous', defect: true },
@@ -55,6 +58,42 @@ export function lintDraftCard(deckSlug: string, card: DraftCard): DraftLint {
   }
   const warnings = parsed.warnings.map(warning => ({ code: warning.code as string, message: warning.message }));
   return { ok: issues.length === 0, issues, warnings };
+}
+
+/**
+ * MCQ lint codes that the draft edit form can fix: the question stem (the
+ * qualifier and the "choose N" wording) and the difficulty are editable. Every
+ * other MCQ_* code is about the options, their WHY lines or the correct count,
+ * which the form shows read-only and formValuesToDraftCard carries unchanged.
+ */
+const MCQ_CODES_FIXABLE_IN_FORM: ReadonlySet<string> = new Set([
+  'MCQ_QUALIFIER_NOT_IN_STEM',
+  'MCQ_CHOOSE_N_MISMATCH',
+  'MCQ_DIFFICULTY_RANGE',
+]);
+
+export const DRAFT_LINT_EDIT_ADVICE = 'Fix the lint issues with Edit, then Accept with edits.';
+export const DRAFT_LINT_OPTIONS_ADVICE =
+  'The options cannot be edited here; reject with reason Incorrect or Ambiguous, or fix the source deck.';
+
+/** What the decision panel tells the reviewer to do about a failing lint. */
+export function draftLintAdvice(issues: ReadonlyArray<{ code: string }>): string {
+  const optionIssue = issues.some(issue => issue.code.startsWith('MCQ_') && !MCQ_CODES_FIXABLE_IN_FORM.has(issue.code));
+  return optionIssue ? DRAFT_LINT_OPTIONS_ADVICE : DRAFT_LINT_EDIT_ADVICE;
+}
+
+/** The empty-list text for each status filter of the review queue. */
+export function draftListEmptyText(status: 'pending' | 'accepted' | 'rejected' | 'all'): string {
+  switch (status) {
+    case 'pending':
+      return 'No drafts waiting for review.';
+    case 'accepted':
+      return 'No accepted drafts.';
+    case 'rejected':
+      return 'No rejected drafts.';
+    default:
+      return 'No drafts for this deck yet.';
+  }
 }
 
 export function draftToFormValues(card: DraftCard): CardFormValues {

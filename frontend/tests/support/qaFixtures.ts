@@ -126,6 +126,7 @@ export function qaStatus(overrides: Partial<QaStatus> = {}): QaStatus {
     maxCards: null,
     dailyUsdCap: null,
     spentTodayUsd: null,
+    reservedTodayUsd: null,
     ...overrides,
   };
 }

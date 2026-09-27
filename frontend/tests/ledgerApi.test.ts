@@ -131,7 +131,11 @@ describe('src/api/ledger', () => {
       hoursSaved: 1.84,
       defectsCaught: 2,
       qaFalsePositives: 0,
+      // An older server sends no split: null, never invented zeros.
+      bySource: null,
+      byBaselineSource: null,
     });
+    expect(res.data?.agentDrafts).toBeNull();
     expect(res.data?.automations[0]).toMatchObject({ baselineMinutesPerUnit: 2.5, failures: 1, failureRate: 0.5, minutesSaved: 100 });
     expect(res.data?.series[0]).toEqual({
       periodStart: '2026-09-21',
@@ -149,6 +153,76 @@ describe('src/api/ledger', () => {
     });
     const baselines = await api.fetchAutomationBaselines();
     expect(baselines.data?.items[0].baselineMinutesPerUnit).toBe(0.75);
+  });
+
+  it('keeps the live/backfill split, the baseline split and agentDrafts (automation-4, automation-11)', async () => {
+    httpMock.get.mockResolvedValueOnce({
+      data: ok(
+        report({
+          totals: {
+            runs: 3,
+            units: 40,
+            baselineMinutes: 120,
+            actualMinutes: 10,
+            minutesSaved: 110,
+            hoursSaved: 1.83,
+            defectsCaught: 2,
+            qaFalsePositives: 1,
+            bySource: {
+              live: { runs: '2', units: 30, minutesSaved: '80.5', hoursSaved: 1.34 },
+              backfill: { runs: 1, units: 10, minutesSaved: 29.5, hoursSaved: '0.49' },
+            },
+            byBaselineSource: { measured: { minutesSaved: '70' }, default: { minutesSaved: 40 } },
+          },
+          agentDrafts: {
+            decided: '10',
+            accepted: 8,
+            editedAccepted: 2,
+            rejected: 2,
+            defectRejects: 1,
+            acceptanceRate: '0.8',
+            editedAcceptRate: 0.25,
+            defectRate: 0.1,
+            avgReviewMinutes: null,
+          },
+        }),
+      ),
+    });
+    const res = await api.fetchAutomationLedger();
+    expect(res.data?.totals.bySource).toEqual({
+      live: { runs: 2, units: 30, minutesSaved: 80.5, hoursSaved: 1.34 },
+      backfill: { runs: 1, units: 10, minutesSaved: 29.5, hoursSaved: 0.49 },
+    });
+    expect(res.data?.totals.byBaselineSource).toEqual({ measured: 70, default: 40 });
+    expect(res.data?.agentDrafts).toEqual({
+      decided: 10,
+      accepted: 8,
+      editedAccepted: 2,
+      rejected: 2,
+      defectRejects: 1,
+      acceptanceRate: 0.8,
+      editedAcceptRate: 0.25,
+      defectRate: 0.1,
+      avgReviewMinutes: null,
+    });
+  });
+
+  it('posts the backfill with dryRun and reads its counts (automation-11)', async () => {
+    httpMock.post.mockResolvedValueOnce({
+      data: ok({ dryRun: true, inserted: { publish_pipeline: '4', bulk_import: 1 }, skipped: { publish_pipeline: 0, bulk_import: 2 } }),
+    });
+    const res = await api.runAutomationBackfill(true);
+    expect(httpMock.post).toHaveBeenCalledWith('/api/v1/admin/automation/backfill', { dryRun: true });
+    expect(res.data).toEqual({
+      dryRun: true,
+      inserted: { publish_pipeline: 4, bulk_import: 1 },
+      skipped: { publish_pipeline: 0, bulk_import: 2 },
+    });
+
+    httpMock.post.mockResolvedValueOnce({ data: ok({ inserted: {} }) });
+    const bad = await api.runAutomationBackfill(false);
+    expect(bad.success).toBe(false);
+    expect(bad.error?.code).toBe('BAD_RESPONSE');
   });
 
   it('pages events with the automation filter and cursor', async () => {

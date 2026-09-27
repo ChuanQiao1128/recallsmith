@@ -22,13 +22,20 @@ export function qaPageHref(deckId: number, runId?: string | null): string {
  * §7.10), or null when there is nothing to warn about. `openBlockers` is the
  * list the server returns (capped server-side); the unreviewed count comes from
  * the counters, which are not capped.
+ *
+ * With AI QA switched off on the server (AI_QA_ENABLED=0, the launch default)
+ * there is nothing to warn about: the server still counts unreviewed cards,
+ * but no run can start, so a warning and an "Open AI QA" link would be a dead
+ * end that teaches authors to ignore the QA line.
  */
 export function qaPublishPreviewLine(status: {
+  enabled: boolean;
   changedCards: number;
   reviewedCurrent: number;
   openBlockers: readonly unknown[];
   wouldBlock: boolean;
 }): string | null {
+  if (!status.enabled) return null;
   const blockers = status.openBlockers.length;
   const notReviewed = Math.max(0, status.changedCards - status.reviewedCurrent);
   if (blockers === 0 && notReviewed === 0) return null;

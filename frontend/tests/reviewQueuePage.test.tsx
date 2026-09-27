@@ -14,7 +14,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { deferred, ok, refused } from './support/apiResult';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { draft, draftSummary, mcqDraftCard, qaDraftCard } from './support/draftFixtures';
-import { renderAt } from './support/routerProbe';
+import { locationText, renderAt } from './support/routerProbe';
 import { ConsoleShell } from '../src/components/console/ConsoleShell';
 import { QueryKeys } from '../src/api/queryClient';
 import { documentTitleFor } from '../src/lib/brand';
@@ -438,5 +438,126 @@ describe('ReviewQueuePage', () => {
 
     shell(undefined);
     expect(screen.queryByRole('link', { name: 'Review queue' })).toBeNull();
+  });
+
+  it('guards unsaved edits against header links, reload and the status filter (frontend-console-19)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await openReview();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText(/question/i), { target: { value: 'An edited question?' } });
+
+    // Reload / tab close: the browser's own prompt.
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+
+    // A header link: asked, and declined, so the page stays.
+    await userEvent.click(screen.getByRole('link', { name: 'AI QA' }));
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
+    expect(locationText()).toBe('/review?deckId=7');
+    expect((screen.getByLabelText(/question/i) as HTMLTextAreaElement).value).toBe('An edited question?');
+
+    // The status filter, which would swap the auto-selected draft out.
+    const listCalls = api.listDrafts.mock.calls.length;
+    await userEvent.selectOptions(screen.getByLabelText('Status'), 'accepted');
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('pending');
+    expect(api.listDrafts.mock.calls.length).toBe(listCalls);
+    expect((screen.getByLabelText(/question/i) as HTMLTextAreaElement).value).toBe('An edited question?');
+
+    confirmSpy.mockReturnValue(true);
+    await userEvent.selectOptions(screen.getByLabelText('Status'), 'accepted');
+    await waitFor(() =>
+      expect(api.listDrafts).toHaveBeenLastCalledWith({ deckId: 7, status: 'accepted', limit: 50 }),
+    );
+    expect(confirmSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not ask again after the edits are accepted (frontend-console-19)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    api.acceptDraft.mockResolvedValue(
+      ok({ draftId: 41, cardId: 901, stableUid: 'sample-qa-topic-02', action: 'accepted' }),
+    );
+    await openReview();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText(/question/i), { target: { value: 'An edited question?' } });
+    await userEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
+    expect(await screen.findByText(/Accepted as card #901/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('link', { name: 'AI QA' }));
+    await waitFor(() => expect(locationText()).toBe('/decks/qa?deckId=7'));
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('says what the empty list means for each status filter (frontend-console-20)', async () => {
+    api.listDrafts.mockResolvedValue(ok({ items: [], nextCursor: null }));
+    renderAt(<ReviewQueuePage />, ['/review?deckId=7']);
+    expect(await screen.findByText('No drafts waiting for review.')).toBeTruthy();
+    for (const [value, text] of [
+      ['accepted', 'No accepted drafts.'],
+      ['rejected', 'No rejected drafts.'],
+      ['all', 'No drafts for this deck yet.'],
+    ] as const) {
+      await userEvent.selectOptions(screen.getByLabelText('Status'), value);
+      expect(await screen.findByText(text)).toBeTruthy();
+      expect(screen.queryByText('No drafts waiting for review.')).toBeNull();
+    }
+  });
+
+  it('points to Reject, not Edit, when an MCQ option fails lint (frontend-console-20)', async () => {
+    const card = mcqDraftCard();
+    const mcq = card.mcq as NonNullable<typeof card.mcq>;
+    // Every option marked correct: MCQ_ALL_CORRECT / MCQ_TOO_MANY_CORRECT, which
+    // only the read-only options can fix.
+    api.fetchDraft.mockResolvedValue(
+      ok(draft({ ...card, mcq: { ...mcq, options: mcq.options.map(o => ({ ...o, correct: true, why: null })) } })),
+    );
+    await openReview();
+    const advice = await screen.findByTestId('review-lint-advice');
+    expect(advice.textContent).toBe(
+      'The options cannot be edited here; reject with reason Incorrect or Ambiguous, or fix the source deck.',
+    );
+    expect((screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows where the quote was grounded when the draft carries it, and nothing otherwise', async () => {
+    api.fetchDraft.mockResolvedValue(
+      ok(
+        draft(
+          qaDraftCard({
+            source: {
+              url: 'https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html',
+              quote: 'its standard retrieval finishes in 3 to 5 hours',
+              grounding: { chunkId: 'chunk-12', sourceId: 'src-3', matched: true, quoteChars: 47 },
+            },
+          }),
+        ),
+      ),
+    );
+    await openReview();
+    const grounding = await screen.findByTestId('review-grounding');
+    expect(grounding.textContent).toContain('Quote found in the source');
+    expect(grounding.textContent).toContain('Chunk chunk-12 of source src-3 · 47 characters quoted');
+    cleanup();
+
+    api.fetchDraft.mockResolvedValue(
+      ok(
+        draft(
+          qaDraftCard({
+            source: {
+              url: 'https://example.com/doc',
+              quote: 'q',
+              grounding: { chunkId: 'chunk-1', sourceId: 'src-1', matched: false, quoteChars: 1 },
+            },
+          }),
+        ),
+      ),
+    );
+    await openReview();
+    expect((await screen.findByTestId('review-grounding')).textContent).toContain('Quote not found in the source');
+    cleanup();
+
+    api.fetchDraft.mockResolvedValue(ok(draft(qaDraftCard())));
+    await openReview();
+    expect(screen.queryByTestId('review-grounding')).toBeNull();
   });
 });

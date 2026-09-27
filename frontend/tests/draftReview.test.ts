@@ -8,6 +8,10 @@ import {
   DRAFT_NOTE_MAX_LENGTH,
   DRAFT_REJECT_REASONS,
   draftDecisionMessage,
+  draftLintAdvice,
+  draftListEmptyText,
+  DRAFT_LINT_EDIT_ADVICE,
+  DRAFT_LINT_OPTIONS_ADVICE,
   draftToDeckCardContent,
   draftToFormValues,
   formValuesToDraftCard,
@@ -144,5 +148,23 @@ describe('src/lib/draftReview', () => {
 
     expect(REVIEW_MS_CAP).toBe(30 * 60_000);
     expect(reviewClockMs(startReviewClock(0, true), 5 * 60 * 60_000)).toBe(REVIEW_MS_CAP);
+  });
+
+  it('advises Reject for option lint issues and Edit for the rest (frontend-console-20)', () => {
+    expect(draftLintAdvice([{ code: 'SOURCE_REQUIRED' }])).toBe(DRAFT_LINT_EDIT_ADVICE);
+    // The stem and the difficulty are editable in the form.
+    expect(draftLintAdvice([{ code: 'MCQ_QUALIFIER_NOT_IN_STEM' }, { code: 'MCQ_DIFFICULTY_RANGE' }])).toBe(
+      DRAFT_LINT_EDIT_ADVICE,
+    );
+    for (const code of ['MCQ_WHY_MISSING', 'MCQ_TOO_MANY_CORRECT', 'MCQ_BAD_OPT_LINE', 'MCQ_NO_CORRECT']) {
+      expect(draftLintAdvice([{ code: 'UID_FORMAT' }, { code }]), code).toBe(DRAFT_LINT_OPTIONS_ADVICE);
+    }
+  });
+
+  it('names the empty list by its status filter (frontend-console-20)', () => {
+    expect(draftListEmptyText('pending')).toBe('No drafts waiting for review.');
+    expect(draftListEmptyText('accepted')).toBe('No accepted drafts.');
+    expect(draftListEmptyText('rejected')).toBe('No rejected drafts.');
+    expect(draftListEmptyText('all')).toBe('No drafts for this deck yet.');
   });
 });

@@ -7,7 +7,11 @@ import type { McqBlob } from './mcq';
 
 export type DraftStatus = 'pending' | 'accepted' | 'rejected';
 
-/** Contract §3.5. The first four count as defects in the Automation Ledger (§9.1b). */
+/**
+ * Contract §3.5. The first four are the agent's defects: they count in the
+ * Automation Ledger's AI draft defect rate, never as defects caught before
+ * publish (a rejected draft records review time only; X01 automation-4).
+ */
 export type DraftRejectReason =
   | 'incorrect'
   | 'ambiguous'
@@ -17,8 +21,15 @@ export type DraftRejectReason =
   | 'low_value'
   | 'other';
 
+/**
+ * Where the draft's quote was found in the ingested source (Y06 contract):
+ * the chunk and source it was matched against, whether it matched, and how
+ * many characters the quote has. Absent when the draft carries none.
+ */
+export type DraftGrounding = { chunkId: string; sourceId: string; matched: boolean; quoteChars: number };
+
 /** Unlike CardSource, a draft's quote is required: it is the supporting passage. */
-export type DraftSource = { url: string; quote: string };
+export type DraftSource = { url: string; quote: string; grounding?: DraftGrounding };
 
 export type DraftCard = {
   stableUid: string;

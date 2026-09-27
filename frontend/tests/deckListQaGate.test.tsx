@@ -241,4 +241,52 @@ describe('the AI QA publish gate on the deck list', () => {
     const linked = reportBusinessFailure(emptyErrorFeed(), 'k', 't', 'm', { href: '/decks/qa?deckId=1', label: 'Open AI QA' })[0];
     expect(linked.link).toEqual({ href: '/decks/qa?deckId=1', label: 'Open AI QA' });
   });
+
+  it('adds no QA line or link when AI QA is switched off on the server (frontend-console-15)', async () => {
+    const off = qaStatus({ enabled: false, changedCards: 3, reviewedCurrent: 0, missing: [{ cardId: 1, stableUid: 'a' }] });
+    expect(qaPublishPreviewLine(off)).toBeNull();
+    expect(qaPublishPreviewLine({ ...off, enabled: true })).toContain('advisory');
+
+    qa.fetchQaStatus.mockResolvedValue(ok(off));
+    await mountConsole();
+    await userEvent.click(within(rowFor(SLUG)).getByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(qa.fetchQaStatus).toHaveBeenCalledWith(DECK_ID));
+    expect(dialog.textContent).not.toContain('AI QA:');
+    expect(dialog.textContent).not.toContain('advisory');
+    expect(within(dialog).queryByRole('link', { name: 'Open AI QA' })).toBeNull();
+  });
+
+  it('shows the row busy while the QA preview loads, and opens the plain dialog when it hangs (frontend-console-21)', async () => {
+    // A preview that never answers: the dialog must still open after the timeout.
+    qa.fetchQaStatus.mockReturnValue(new Promise(() => {}));
+    await mountConsole();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      await user.click(within(rowFor(SLUG)).getByRole('button', { name: 'Publish' }));
+      const busy = await within(rowFor(SLUG)).findByRole('button', { name: 'Checking AI QA…' });
+      expect((busy as HTMLButtonElement).disabled).toBe(true);
+      // The other row is untouched.
+      expect((within(rowFor(OTHER)).getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(false);
+      // A second click on the busy row starts nothing.
+      await user.click(busy);
+      expect(qa.fetchQaStatus).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(3000);
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog.textContent).toContain('Rebuild manifest.json');
+      expect(dialog.textContent).not.toContain('AI QA:');
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
+
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      const publish = within(rowFor(SLUG)).getByRole('button', { name: 'Publish' }) as HTMLButtonElement;
+      expect(publish.disabled).toBe(false);
+      expect(api.publishDeck).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
