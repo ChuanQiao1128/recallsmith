@@ -17,8 +17,9 @@ the `authorConfig` the author-runner pins at the start of each run and records i
 queue-item prompt, the claude argument list and the MCP server bundle, the CLI and runner
 versions). The automation gate writes those configurations into its report, so a gate is bound to
 the author it measured. R18D (contract M1) adds the gated `authorConfigId`, the runner's SHA-256 of
-the canonical JSON of {model, skillVersion, skillSha256, promptSha256, argsSha256}: it is copied onto
-the row's `authorConfig` when the run record carries it, after checking it against those fields.
+the canonical JSON of {model, skillVersion, skillSha256, promptSha256, argsSha256} (argsSha256 = the
+claude argument list together with the MCP tool surface, N4), the one id the gate binds: it is copied
+onto the row's `authorConfig` when the run record carries it, after checking it against those fields.
 
 For each draft it re-reads the cited page with dc-ingest (the read_source invocation) and keeps
 the chunk whose text holds the card's quote verbatim (whitespace aside), so the jury judges the

@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
-import { canonicalJson, TOOL_SURFACE_FILE, toolSurfaceSha256, type ToolSurface } from '../../mcp-server/src/toolSurfaceHash';
+import { canonicalJson, TOOL_SURFACE_FILE, toolSurfaceSha256, type ToolSurface, type ToolSurfaceFile } from '../../mcp-server/src/toolSurfaceHash';
 import { claudeArgs } from './claude';
 
 export interface AuthorConfig {
@@ -81,8 +81,12 @@ export const MCP_SERVER_BUNDLE = join('tools', 'mcp-server', 'dist', 'index.js')
 /** N4: the tool surface the MCP server build lists next to its bundle. */
 export const MCP_TOOL_SURFACE = join('tools', 'mcp-server', 'dist', TOOL_SURFACE_FILE);
 
-/** The tool surface file, checked for the shape the MCP server build writes; throws AuthorConfigError otherwise. */
-function readToolSurface(repoRoot: string): ToolSurface {
+/**
+ * The tool surface file, checked for the shape the MCP server build writes and for the bundle it
+ * describes (ai-agent-28: its bundleSha256 must be the SHA-256 of the dist/index.js next to it, so
+ * a surface left over from an earlier build never pins a changed bundle); throws AuthorConfigError otherwise.
+ */
+function readToolSurface(repoRoot: string, mcpServerSha256: string): ToolSurface {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(join(repoRoot, MCP_TOOL_SURFACE), 'utf8'));
@@ -102,6 +106,9 @@ function readToolSurface(repoRoot: string): ToolSurface {
     typeof p.constants === 'object' &&
     p.constants !== null;
   if (!valid) throw new AuthorConfigError(`${MCP_TOOL_SURFACE} is not a tool surface (rebuild tools/mcp-server)`);
+  if ((p as Partial<ToolSurfaceFile>).bundleSha256 !== mcpServerSha256) {
+    throw new AuthorConfigError(`${MCP_TOOL_SURFACE} does not describe ${MCP_SERVER_BUNDLE} (rebuild tools/mcp-server)`);
+  }
   return p as ToolSurface;
 }
 
@@ -130,7 +137,8 @@ export function readAuthorConfig(input: AuthorConfigInput): AuthorConfig {
   } catch {
     throw new AuthorConfigError(`cannot read ${MCP_SERVER_BUNDLE} in the repo root (build tools/mcp-server)`);
   }
-  const surface = readToolSurface(input.repoRoot);
+  const mcpServerSha256 = sha256(mcpServer);
+  const surface = readToolSurface(input.repoRoot, mcpServerSha256);
   const surfaceSha256 = toolSurfaceSha256(surface);
 
   const fields: Omit<AuthorConfig, 'id' | 'authorConfigId'> = {
@@ -142,7 +150,7 @@ export function readAuthorConfig(input: AuthorConfigInput): AuthorConfig {
     toolSurfaceSha256: surfaceSha256,
     mcpServerVersion: surface.server.version,
     mcpToolNames: surface.tools.map((tool) => tool.name).sort(),
-    mcpServerSha256: sha256(mcpServer),
+    mcpServerSha256,
     claudeVersion: input.claudeVersion,
     runnerVersion: input.runnerVersion,
   };

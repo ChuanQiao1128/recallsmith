@@ -33,12 +33,19 @@ The build bundles `frontend/src/lib/deckImport.ts` and `frontend/src/lib/sourceR
 `./deckLib.js` at runtime. `dist/` and `node_modules/` are never committed.
 
 The build then writes `dist/tool-surface.json` (N4): the canonical JSON (keys sorted, no spaces) of the
-tool surface an MCP client lists, `{ constants, server: { name, version }, tools: [{ description,
+tool surface an MCP client lists, `{ bundleSha256, constants, server: { name, version }, tools: [{ description,
 inputSchema, name }] }` sorted by tool name, with the lint limits `SOURCE_QUOTE_MIN_CHARS` and
 `SOURCE_QUOTE_MIN_WORDS` (`src/toolSurface.ts`). `tools/author-runner` hashes it into the gated
 `authorConfigId`, so a changed tool name, description, input schema, limit or server version needs a
 new eval gate before `live`. Bump `MCP_SERVER_VERSION` (`src/server.ts`) with any change of what a tool
 does, so that a change of behaviour alone is a new tool surface too.
+
+The file never describes another bundle than the one next to it (ai-agent-28,
+`scripts/buildLib.mjs`): the build deletes it before anything else, so a failed step leaves no
+surface and the runner refuses to claim (`author_config_error`); it adds `bundleSha256`, the SHA-256
+of the `dist/index.js` the surface was listed from, which the runner compares with the bundle (it is
+not part of the surface hash, so a rebuild with the same tools keeps the gated id); and it writes the
+file through a temporary file and a rename.
 
 ## Login
 
