@@ -1,12 +1,16 @@
-// The `once` flow (A00 §11.3): lock, prune old run files, heartbeat, claim, one
-// headless claude run per claimed item (each reported with `complete`), final heartbeat.
+// The `once` flow (A00 §11.3): lock, prune old run files, pin the author configuration,
+// heartbeat, then up to DC_RUNNER_MAX_ITEMS times: claim ONE item right before its run (so
+// each item gets a fresh lease, ai-agent-2), one headless claude run reported with
+// `complete`; an item that is not run is released at once with a failed `complete`
+// (automation-7). Final heartbeat.
 
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { LOGIN_HINT } from '../../mcp-server/src/api';
 import { createRunnerApi, type ClaimedItem, type HeartbeatRequest, type RunnerApi, type RunnerState, type RunOutcome } from './api';
-import { claudeOutcome, claudeVersion, runClaude } from './claude';
+import { AuthorConfigError, readAuthorConfig, type AuthorConfig } from './authorConfig';
+import { claudeOutcome, claudeUsage, claudeVersion, runClaude, type SignalGroup } from './claude';
 import { RUNNER_VERSION, type RunnerConfig } from './config';
 import { acquireLock } from './lock';
 import { loginExpiresAt } from './login';
@@ -27,6 +31,8 @@ export interface RunOnceDeps {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   log?: LogSink;
+  /** Tests only: replaces the process-group signal of the claude runs. */
+  signalGroup?: SignalGroup;
 }
 
 export interface LastRun {
@@ -93,6 +99,18 @@ function readText(file: string): string {
   }
 }
 
+/** The read_source hosts of one run: the queue item's own host first, then the configured documentation hosts. */
+export function runSourceHosts(itemUrl: string, configured: readonly string[]): string[] {
+  const hosts: string[] = [];
+  try {
+    hosts.push(new URL(itemUrl).hostname.toLowerCase());
+  } catch {
+    // invalidItem already refused a url that does not parse.
+  }
+  for (const host of configured) if (!hosts.includes(host)) hosts.push(host);
+  return hosts;
+}
+
 /** Why an item cannot be run safely, or null when every field used in a path or prompt is valid. */
 function invalidItem(item: ClaimedItem): string | null {
   if (typeof item !== 'object' || item === null) return 'item is not an object';
@@ -138,6 +156,16 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
       log('warn', 'heartbeat_failed', { error: errorMessage(err) });
     }
   };
+  /** A heartbeat or claim that failed: exit 3 when the owner must sign in again, else exit 1 with an error heartbeat. */
+  const apiFailure = async (err: unknown): Promise<number> => {
+    if (isLoginFailure(err)) {
+      log('error', 'login_required', { error: errorMessage(err) });
+      return EXIT_LOGIN_REQUIRED;
+    }
+    log('error', 'api_error', { error: errorMessage(err) });
+    await bestEffortError(errorMessage(err));
+    return EXIT_FAILURE;
+  };
 
   try {
     const runsDir = join(config.logDir, 'runs');
@@ -152,7 +180,24 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
       status.lastRunOutcome = previous.outcome;
     }
 
-    let items: ClaimedItem[];
+    // Pin the author configuration before any claim: a checkout the runner cannot pin runs nothing.
+    const template = readPromptTemplate();
+    let author: AuthorConfig;
+    try {
+      author = readAuthorConfig({
+        repoRoot: config.api.repoRoot,
+        model: config.model,
+        promptTemplate: template,
+        claudeVersion: status.claudeVersion,
+        runnerVersion: RUNNER_VERSION,
+      });
+    } catch (err) {
+      if (!(err instanceof AuthorConfigError)) throw err;
+      log('error', 'author_config_error', { error: err.message });
+      await bestEffortError(`author config: ${err.message}`);
+      return EXIT_FAILURE;
+    }
+
     try {
       const hb = await heartbeat('running');
       if (hb.effectiveMode === 'off') {
@@ -160,43 +205,69 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
         await heartbeat('idle');
         return EXIT_OK;
       }
-      const claimed = await api.claim({ runnerId: config.runnerId, max: config.maxItems, leaseMinutes: config.leaseMinutes });
-      items = claimed.effectiveMode === 'off' || !Array.isArray(claimed.items) ? [] : claimed.items;
     } catch (err) {
-      if (isLoginFailure(err)) {
-        log('error', 'login_required', { error: errorMessage(err) });
-        return EXIT_LOGIN_REQUIRED;
-      }
-      log('error', 'api_error', { error: errorMessage(err) });
-      await bestEffortError(errorMessage(err));
-      return EXIT_FAILURE;
+      return await apiFailure(err);
     }
 
-    if (items.length === 0) {
-      log('info', 'no_items');
-      await heartbeat('idle');
-      return EXIT_OK;
-    }
-    log('info', 'claimed');
-
-    const template = readPromptTemplate();
     let lastError: string | null = null;
 
-    for (const item of items) {
+    /** Hands a claimed item back at once instead of leaving it claimed until its lease lapses (automation-7). */
+    const release = async (runId: string, itemId: number | undefined, reason: string): Promise<void> => {
+      lastError = reason;
+      try {
+        await api.complete({
+          runnerId: config.runnerId,
+          runId,
+          outcome: 'failed',
+          exitCode: null,
+          durationMs: 0,
+          numTurns: null,
+          error: reason.slice(0, 500),
+          summary: null,
+        });
+      } catch (err) {
+        lastError = `complete failed for ${runId}: ${errorMessage(err)}`;
+        log('error', 'complete_failed', { runId, itemId, error: errorMessage(err) });
+      }
+    };
+
+    for (let n = 0; n < config.maxItems; n += 1) {
+      // One item per claim, right before its run, so its lease starts when its claude run starts.
+      let item: ClaimedItem | undefined;
+      try {
+        const claimed = await api.claim({ runnerId: config.runnerId, max: 1, leaseMinutes: config.leaseMinutes });
+        item = claimed.effectiveMode === 'off' || !Array.isArray(claimed.items) ? undefined : claimed.items[0];
+      } catch (err) {
+        return await apiFailure(err);
+      }
+      if (item === undefined) {
+        if (n > 0) break;
+        log('info', 'no_items');
+        await heartbeat('idle');
+        return EXIT_OK;
+      }
+      log('info', 'claimed');
+
       const invalid = invalidItem(item);
       if (invalid !== null) {
         const itemId = typeof item?.itemId === 'number' && Number.isInteger(item.itemId) ? item.itemId : undefined;
         log('warn', 'bad_item', { itemId, error: invalid });
+        const runId = typeof item?.runId === 'string' && UUID_RE.test(item.runId) ? item.runId : null;
+        if (runId !== null) await release(runId, itemId, `not run: ${invalid}`);
+        else lastError = `not run: ${invalid}`;
         continue;
       }
       const { runId, itemId, deckSlug } = item;
       if (now().getTime() + config.itemTimeoutMs > Date.parse(item.leaseExpiresAt)) {
+        // The server granted a lease shorter than one item; every later claim would be short too.
         log('warn', 'lease_short', { runId, itemId });
-        continue;
+        await release(runId, itemId, 'not run: lease_short (the lease ends before the item timeout)');
+        break;
       }
 
-      log('info', 'item_start', { runId, itemId });
+      log('info', 'item_start', { runId, itemId, authorConfigId: author.id });
       const started = now().getTime();
+      const startedAt = now().toISOString();
       const mcpConfigPath = join(runsDir, `${runId}.mcp.json`);
       const mcpConfig = {
         mcpServers: {
@@ -207,13 +278,18 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
               DC_AUTOMATION_RUN_ID: runId,
               DC_AUTOMATION_QUEUE_ITEM_ID: String(itemId),
               DC_AUTOMATION_DECK_SLUG: deckSlug,
+              DC_AUTOMATION_SOURCE_HOSTS: runSourceHosts(item.url, config.sourceHosts).join(','),
+              DC_AUTOMATION_AUTHOR_MODEL: author.model,
+              DC_AUTOMATION_SKILL_VERSION: author.skillVersion,
             },
           },
         },
       };
       writeFileSync(mcpConfigPath, `${JSON.stringify(mcpConfig, null, 2)}\n`, { mode: 0o600 });
-      const prompt = renderPrompt(template, item);
+      const prompt = renderPrompt(template, { ...item, skillVersion: author.skillVersion });
       writeFileSync(join(runsDir, `${runId}.prompt.md`), prompt, { mode: 0o600 });
+      const metaFile = join(runsDir, `${runId}.meta.json`);
+      writeFileSync(metaFile, `${JSON.stringify({ runId, itemId, startedAt, authorConfig: author }, null, 2)}\n`, { mode: 0o600 });
 
       let inFlight: Promise<void> = Promise.resolve();
       const ticker = setInterval(() => {
@@ -230,12 +306,14 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
       const stderrFile = join(runsDir, `${runId}.stderr.log`);
       let run;
       try {
-        run = await runClaude({ config, prompt, mcpConfigPath, stdoutFile, stderrFile, baseEnv: env });
+        run = await runClaude({ config, prompt, mcpConfigPath, stdoutFile, stderrFile, baseEnv: env, signalGroup: deps.signalGroup });
       } finally {
         clearInterval(ticker);
         await inFlight;
       }
-      const result = claudeOutcome(run, readText(stdoutFile), readText(stderrFile));
+      const stdout = readText(stdoutFile);
+      const result = claudeOutcome(run, stdout, readText(stderrFile));
+      const usage = claudeUsage(stdout);
       const durationMs = Math.max(0, now().getTime() - started);
       if (result.outcome === 'failed') lastError = result.error ?? 'failed';
 
@@ -256,6 +334,17 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
       }
 
       const finishedAt = now().toISOString();
+      // The local record of the run: the pinned author configuration and what the CLI reported it used.
+      const meta = {
+        runId,
+        itemId,
+        startedAt,
+        finishedAt,
+        outcome: result.outcome,
+        authorConfig: author,
+        usage: { totalCostUsd: usage.totalCostUsd, models: usage.models, apiKeySource: usage.apiKeySource },
+      };
+      writeFileSync(metaFile, `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
       const lastRun: LastRun = { runId, itemId, outcome: result.outcome, finishedAt, durationMs };
       writeFileSync(lastRunFile(config), `${JSON.stringify(lastRun)}\n`, { mode: 0o600 });
       status.lastRunId = runId;
@@ -266,6 +355,7 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
         itemId,
         outcome: result.outcome,
         durationMs,
+        costUsd: usage.totalCostUsd ?? undefined,
         error: result.error ?? undefined,
       });
     }

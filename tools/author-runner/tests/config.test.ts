@@ -39,7 +39,9 @@ describe('config', () => {
       itemTimeoutMs: 45 * 60_000,
       heartbeatIntervalMs: 300_000,
       killGraceMs: 30_000,
-      model: 'opus',
+      killSettleMs: 5_000,
+      model: 'claude-opus-5-5',
+      sourceHosts: ['docs.aws.amazon.com', 'aws.amazon.com', 'platform.claude.com', 'docs.claude.com', 'docs.anthropic.com', 'www.anthropic.com'],
       claudeBin: 'claude',
       logDir: `${HOME}/Library/Logs/DeveloperCards`,
       lockFile: `${HOME}/Library/Application Support/DeveloperCards/author-runner.lock`,
@@ -50,7 +52,7 @@ describe('config', () => {
       HOME,
       DC_RUNNER_ID: 'studio-1',
       DC_RUNNER_MAX_ITEMS: '5',
-      DC_RUNNER_LEASE_MINUTES: '15',
+      DC_RUNNER_LEASE_MINUTES: '121',
       DC_RUNNER_ITEM_TIMEOUT_MINUTES: '120',
       DC_RUNNER_MODEL: 'claude-opus-5-5',
       DC_RUNNER_CLAUDE_BIN: '/opt/bin/claude',
@@ -61,7 +63,7 @@ describe('config', () => {
     expect(custom).toMatchObject({
       runnerId: 'studio-1',
       maxItems: 5,
-      leaseMinutes: 15,
+      leaseMinutes: 121,
       itemTimeoutMs: 120 * 60_000,
       model: 'claude-opus-5-5',
       claudeBin: '/opt/bin/claude',
@@ -87,6 +89,30 @@ describe('config', () => {
     expect(configError({ DC_RUNNER_MODEL: 'two words' })).toContain('DC_RUNNER_MODEL');
     expect(configError({ DC_RUNNER_MODEL: 'x'.repeat(101) })).toContain('DC_RUNNER_MODEL');
     expect(configError({ DC_API_BASE: 'http://api.example.com' })).toContain('DC_API_BASE');
+  });
+
+  it('refuses an item timeout that one lease cannot cover (ai-agent-2)', () => {
+    const message = 'DC_RUNNER_ITEM_TIMEOUT_MINUTES + 1 must not exceed DC_RUNNER_LEASE_MINUTES';
+    expect(configError({ DC_RUNNER_LEASE_MINUTES: '15', DC_RUNNER_ITEM_TIMEOUT_MINUTES: '120' })).toBe(message);
+    expect(configError({ DC_RUNNER_LEASE_MINUTES: '45', DC_RUNNER_ITEM_TIMEOUT_MINUTES: '45' })).toBe(message);
+    expect(loadRunnerConfig({ HOME, DC_RUNNER_LEASE_MINUTES: '46', DC_RUNNER_ITEM_TIMEOUT_MINUTES: '45' }).leaseMinutes).toBe(46);
+  });
+
+  it('pins the author model to a full model id (ai-agent-3)', () => {
+    for (const alias of ['opus', 'Sonnet', 'haiku', 'default', 'opusplan', 'opus[1m]']) {
+      expect(configError({ DC_RUNNER_MODEL: alias })).toBe(
+        `DC_RUNNER_MODEL must be a full model id such as claude-opus-5-5, not the floating alias ${alias}`,
+      );
+    }
+    expect(loadRunnerConfig({ HOME, DC_RUNNER_MODEL: 'claude-sonnet-5' }).model).toBe('claude-sonnet-5');
+  });
+
+  it('reads the read_source host allowlist (ai-agent-1)', () => {
+    expect(loadRunnerConfig({ HOME, DC_RUNNER_SOURCE_HOSTS: ' Docs.Example.com, ,docs.example.com,aws.amazon.com' }).sourceHosts).toEqual([
+      'docs.example.com',
+      'aws.amazon.com',
+    ]);
+    expect(configError({ DC_RUNNER_SOURCE_HOSTS: 'https://docs.example.com/' })).toBe('DC_RUNNER_SOURCE_HOSTS must be a comma list of host names');
   });
 
   it('keeps RUNNER_VERSION equal to the package.json version', () => {
