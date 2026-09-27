@@ -125,6 +125,40 @@ public static class Publish
   }
 
   /// <summary>
+  /// The <c>publish_gate</c> ledger event of an MCQ gate refusal (R18 J08, contract §9.3): one defect per
+  /// defective card version. The dedupe key carries a fingerprint of the refused card's content, so the same
+  /// unchanged card refused again is the same defect and an edited card is a new one. Best-effort on the
+  /// handler's connection (no transaction is open); the refusal's response never depends on it.
+  /// </summary>
+  private static async Task RecordGateDefectAsync(NpgsqlConnection conn, long deckId, string stableUid, string code, IReadOnlyList<Dictionary<string, object?>> cardRows)
+  {
+    try
+    {
+      var row = cardRows.First(c => string.Equals(Convert.ToString(c["stableUid"], CultureInfo.InvariantCulture), stableUid, StringComparison.Ordinal));
+      var fingerprint = GateFingerprint(row);
+      await AutomationLedger.RecordAsync(conn, new AutomationEvent("publish_gate", 0, "success",
+        DefectsCaught: 1, DeckId: deckId, Ref: stableUid,
+        DedupeKey: $"publish-gate:{deckId}:{stableUid}:{fingerprint}",
+        Details: new { code }));
+    }
+    catch (Exception ex)
+    {
+      Log.Event("warn", new { tag = "ledger", reason = "record_failed", automation = "publish_gate", error = ex.Message });
+    }
+  }
+
+  /// <summary>First 16 lowercase hex chars of SHA-256 over question, explanation, difficulty and the mcq jsonb text.</summary>
+  internal static string GateFingerprint(IReadOnlyDictionary<string, object?> row)
+  {
+    static string Cell(IReadOnlyDictionary<string, object?> r, string key) =>
+      Convert.ToString(r.TryGetValue(key, out var v) ? v : null, CultureInfo.InvariantCulture) ?? string.Empty;
+
+    var text = Cell(row, "question") + "\n" + Cell(row, "explanation") + "\n" + Cell(row, "difficulty") + "\n" + Cell(row, "mcq");
+    var hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text));
+    return Convert.ToHexString(hash).ToLowerInvariant()[..16];
+  }
+
+  /// <summary>
   /// The cards a publish exports, in export order. Internal so the gate test reads rows with
   /// the exact production text (jsonb comes back as PG text, and that is what the gate parses).
   /// </summary>
@@ -267,7 +301,11 @@ public static class Publish
       // blob that no longer satisfies the API rules must not reach the Worker, which serialises
       // it verbatim into deck.json / chunks / patches.
       var gate = FirstMcqGateFailure(cardRows);
-      if (gate is not null) return res.BadRequest("MCQ_PUBLISH_GATE", $"{gate.Value.StableUid}: {gate.Value.Code}");
+      if (gate is not null)
+      {
+        await RecordGateDefectAsync(conn, deckIdInt, gate.Value.StableUid, gate.Value.Code, cardRows);
+        return res.BadRequest("MCQ_PUBLISH_GATE", $"{gate.Value.StableUid}: {gate.Value.Code}");
+      }
 
       // --- ASYNC PUBLISH LOGIC ---
 

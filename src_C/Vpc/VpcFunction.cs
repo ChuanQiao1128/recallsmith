@@ -250,6 +250,26 @@ public sealed class VpcFunction
       {
         return await Vpc.Integrations.WebhookDeliveries.HandleRedeliver(req, res, auth, webhookRedeliver["deliveryId"]);
       }
+      if (p.EndsWith("/api/v1/admin/automation/ledger", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleLedger(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/events", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleEvents(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/baselines", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleBaselines(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/baselines/:automation", p) is { } ledgerBaseline)
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleBaseline(req, res, auth, ledgerBaseline["automation"]);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/backfill", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleBackfill(req, res, auth);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {

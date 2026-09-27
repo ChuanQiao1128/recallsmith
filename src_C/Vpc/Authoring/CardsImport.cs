@@ -60,13 +60,27 @@ public static class CardsImport
   /// <summary>
   /// Side effects of an answered import, run after the core's connection and transaction are gone:
   /// the <c>import.failed</c> webhook (R18 J03, contract §6.1) on a 400/409/503 once auth and deck
-  /// resolution passed. Best-effort: nothing here changes the response.
+  /// resolution passed, and the <c>bulk_import</c> ledger event (R18 J08, contract §9.3) on a 2xx or on
+  /// that same failure condition. Best-effort: nothing here changes the response.
   /// </summary>
   private static async Task AfterImportAsync(APIGatewayProxyResponse response, ImportOutcome outcome)
   {
     try
     {
       if (outcome.DeckId is not { } deckId) return;
+
+      if (response.StatusCode is >= 200 and < 300)
+      {
+        await using var okConn = await Pg.OpenConnectionOrNullAsync();
+        if (okConn is null) return;
+
+        // No dedupe key: every import is its own run.
+        await AutomationLedger.RecordAsync(okConn, new AutomationEvent("bulk_import", outcome.Created + outcome.Updated, "success",
+          DeckId: deckId,
+          Details: new { received = outcome.CardCount, created = outcome.Created, updated = outcome.Updated }));
+        return;
+      }
+
       if (response.StatusCode is not (400 or 409 or 503)) return;
 
       string? errorCode = null;
@@ -96,6 +110,12 @@ public static class CardsImport
         message,
         cardCount = outcome.CardCount,
       });
+
+      // A super_admin passes the deck gate for a deck id that has no row; the ledger's foreign key
+      // only takes a deck that exists.
+      await AutomationLedger.RecordAsync(conn, new AutomationEvent("bulk_import", 0, "failure",
+        DeckId: deckSlug is not null ? deckId : null,
+        Details: new { errorCode }));
     }
     catch (Exception ex)
     {

@@ -89,7 +89,8 @@ public class PublishJobProcessor : IPublishJobProcessor
   }
 
   /// <summary>
-  /// Side effects of a completed publish: the <c>deck.published</c> webhook (R18 J03, contract §6.1).
+  /// Side effects of a completed publish: the <c>deck.published</c> webhook (R18 J03, contract §6.1) and
+  /// the <c>publish_pipeline</c> ledger event (R18 J08, contract §9.3).
   /// Best-effort on its own connection, after the job row is already SUCCESS: nothing here may fail or
   /// retry a completed job.
   /// </summary>
@@ -109,6 +110,10 @@ public class PublishJobProcessor : IPublishJobProcessor
         cardCount,
         publishedAt = WebhookEvents.FormatTimestamp(DateTimeOffset.UtcNow),
       });
+
+      // Automation Ledger (R18 J08, contract §9.3): one successful publish = one unit.
+      await AutomationLedger.RecordAsync(conn, new AutomationEvent("publish_pipeline", 1, "success",
+        DeckId: job.DeckId > 0 ? job.DeckId : null, Ref: job.JobId, DedupeKey: $"publish:{job.JobId}"));
     }
     catch (Exception ex)
     {
@@ -119,6 +124,32 @@ public class PublishJobProcessor : IPublishJobProcessor
   public async Task FailAsync(string jobId, string errorMessage)
   {
     await _jobRepository.FailJobAsync(jobId, errorMessage);
+
+    try
+    {
+      await RecordPublishFailureAsync(jobId, errorMessage);
+    }
+    catch (Exception ex)
+    {
+      Console.WriteLine($"[JobId={jobId}] Ledger failure event failed (ignored): {ex.Message}");
+    }
+  }
+
+  /// <summary>
+  /// The failure-side <c>publish_pipeline</c> ledger event (R18 J08, contract §9.3): units 0, so it saves
+  /// nothing and counts toward the failure rate. Runs only after the FAILED status is persisted.
+  /// </summary>
+  private async Task RecordPublishFailureAsync(string jobId, string errorMessage)
+  {
+    var job = await _jobRepository.GetJobAsync(jobId);
+    long? deckId = job is { DeckId: > 0 } ? job.DeckId : null;
+
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) return;
+
+    var error = errorMessage.Length > 300 ? errorMessage[..300] : errorMessage;
+    await AutomationLedger.RecordAsync(conn, new AutomationEvent("publish_pipeline", 0, "failure",
+      DeckId: deckId, Ref: jobId, DedupeKey: $"publish-fail:{jobId}", Details: new { error }));
   }
 
   public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
