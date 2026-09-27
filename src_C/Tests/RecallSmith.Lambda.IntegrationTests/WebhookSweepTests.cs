@@ -167,6 +167,55 @@ public class WebhookSweepTests
   }
 
   [Fact]
+  public async Task Redeliver_StrandedRow_ThenSweep_SendsTheEventOnce()
+  {
+    // automation-19: redelivering an enqueue_failed (or stranded queued) row copies it under a new delivery id.
+    // The source must be settled in the same step, or the runbook's sweep after the queue is fixed re-sends it
+    // and the receiver (which dedupes on delivery id) processes the event twice.
+    var live = await NewSubscriptionAsync();
+    var enqueueFailed = await SeedDeliveryAsync(live, "enqueue_failed", 0, 30);
+    var strandedQueued = await SeedDeliveryAsync(live, "queued", 0, 30);
+    // Controls: a row the dispatcher already saw, and a queued row that may still be mid-send, keep their state.
+    var failedAfterAttempts = await SeedDeliveryAsync(live, "failed", 3, 30);
+    var freshQueued = await SeedDeliveryAsync(live, "queued", 0, 1);
+
+    var sent = new List<SendMessageRequest>();
+    var copies = new Dictionary<Guid, Guid>();
+    await WithQueueAsync(r => { lock (sent) sent.Add(r); return Task.CompletedTask; }, async () =>
+    {
+      await using var conn = await _db.OpenAsync();
+      foreach (var source in new[] { enqueueFailed, strandedQueued, failedAfterAttempts, freshQueued })
+      {
+        copies[source.DeliveryId] = (await WebhookEvents.RedeliverAsync(conn, source.DeliveryId))!.Value;
+      }
+      return Data(await SweepAsync());
+    });
+
+    foreach (var source in new[] { enqueueFailed, strandedQueued })
+    {
+      Assert.Equal("failed", await StatusAsync(source.DeliveryId));
+      Assert.Equal($"superseded by redelivery {copies[source.DeliveryId]:D}",
+        await _db.ScalarAsync("select last_error from webhook_deliveries where delivery_id = $1", source.DeliveryId));
+      // One live row per event and subscription: the copy.
+      Assert.Equal(1L, Convert.ToInt64(await _db.ScalarAsync(
+        "select count(*) from webhook_deliveries where event_id = $1 and subscription_id = $2 and status not in ('failed','dead')",
+        source.EventId, live), CultureInfo.InvariantCulture));
+    }
+    Assert.Equal("failed", await StatusAsync(failedAfterAttempts.DeliveryId));
+    Assert.Null(await _db.ScalarAsync("select last_error from webhook_deliveries where delivery_id = $1", failedAfterAttempts.DeliveryId));
+    Assert.Equal("queued", await StatusAsync(freshQueued.DeliveryId));
+
+    // Each redelivered event went out once, under its new id; the sweep sent none of the sources.
+    var messages = sent.Select(r => JsonDocument.Parse(r.MessageBody).RootElement).ToList();
+    foreach (var source in new[] { enqueueFailed, strandedQueued })
+    {
+      var forEvent = messages.Where(m => m.GetProperty("eventId").GetGuid() == source.EventId).ToList();
+      var only = Assert.Single(forEvent);
+      Assert.Equal(copies[source.DeliveryId], only.GetProperty("deliveryId").GetGuid());
+    }
+  }
+
+  [Fact]
   public async Task Sweep_SkipsARowSentButNeverReported()
   {
     // backend-design-13: SQS accepted the message (enqueued_at is set) but the dispatcher's report never

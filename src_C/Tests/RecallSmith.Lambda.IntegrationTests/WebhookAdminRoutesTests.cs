@@ -378,6 +378,23 @@ public class WebhookAdminRoutesTests
   // ---------------------------------------------------------------- deliveries
 
   [Fact]
+  public async Task ListDeliveries_ReturnsEnqueuedAt()
+  {
+    // backend-design-21: the console tells a stranded queued row (never handed to SQS) from one in flight by
+    // enqueued_at, the field the sweep's predicate keys on.
+    var sub = await InsertSubscriptionAsync(["deck.published"]);
+    var stranded = await InsertDeliveryAsync(sub, DateTimeOffset.UtcNow.AddMinutes(-20));
+    var inFlight = await InsertDeliveryAsync(sub, DateTimeOffset.UtcNow.AddMinutes(-19));
+    await _db.QueryAsync("update webhook_deliveries set enqueued_at = now() - interval '19 minutes' where delivery_id = $1", inFlight);
+
+    var items = Data(await CallAsync("GET", DeliveriesPath, query: new Dictionary<string, string> { ["subscriptionId"] = Id(sub) }))
+      .GetProperty("items").EnumerateArray().ToDictionary(i => i.GetProperty("deliveryId").GetGuid());
+    Assert.Equal(JsonValueKind.Null, items[stranded].GetProperty("enqueuedAt").ValueKind);
+    Assert.Equal(JsonValueKind.String, items[inFlight].GetProperty("enqueuedAt").ValueKind);
+    Assert.True(items[inFlight].GetProperty("enqueuedAt").GetDateTimeOffset() < DateTimeOffset.UtcNow.AddMinutes(-18));
+  }
+
+  [Fact]
   public async Task ListDeliveries_FiltersAndPaginates()
   {
     var sub = await InsertSubscriptionAsync(["deck.published", "import.failed"]);
@@ -413,7 +430,7 @@ public class WebhookAdminRoutesTests
       foreach (var item in items)
       {
         Assert.Equal(
-          new[] { "deliveryId", "eventId", "event", "subscriptionId", "status", "attempts", "lastStatusCode", "lastError", "createdAt", "updatedAt", "deliveredAt" },
+          new[] { "deliveryId", "eventId", "event", "subscriptionId", "status", "attempts", "lastStatusCode", "lastError", "createdAt", "updatedAt", "deliveredAt", "enqueuedAt" },
           item.EnumerateObject().Select(p => p.Name).ToArray());
         seen.Add(item.GetProperty("deliveryId").GetGuid());
       }
