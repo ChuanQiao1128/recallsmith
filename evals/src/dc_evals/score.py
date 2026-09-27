@@ -14,22 +14,27 @@ from .dataset import DEFECT_CLASSES, EVALS_ROOT
 # --- rollout gate thresholds (contract §7.9 step 3; README "Gate") -------------------------
 # Overall recall on serious defects, pooled over every repetition.
 RECALL_GATE = 0.80
-# ...and the lower end of its 95% Wilson interval, so a small or lucky run cannot pass on the point.
+# ...and the lower end of its 95% interval, so a small or lucky run cannot pass on the point. Every
+# interval is card-clustered (Z04, ai-agent-28): the repetitions of one card are one cluster, and the
+# Wilson interval uses the design-effect-adjusted sample size (clustered_wilson_ci), never the
+# pooled item count.
 RECALL_CI_LOWER_GATE = 0.75
 # Overall precision at the dataset's own ~50% defect prevalence (contract §12.1 line).
 PRECISION_GATE = 0.70
 # Share of scored controls flagged blocker/major. Unlike precision it does not depend on how many
 # defects the dataset holds, so it is the gate's real bound on false alarms.
 CONTROL_FPR_GATE = 0.10
-# ...and the upper end of its 95% Wilson interval.
+# ...and the upper end of its card-clustered 95% interval.
 CONTROL_FPR_CI_UPPER_GATE = 0.15
 # Every class the dataset seeds must reach this recall, so easy classes cannot hide a weak one.
 PER_CLASS_RECALL_FLOOR = 0.60
-# Gate evidence reviews the dataset at least this many times; counts pool over the repetitions, so a
-# 15-row class is judged on 30 items (see README "Gate" for the resulting pass probabilities).
+# Gate evidence reviews the dataset at least this many times. The point estimates pool over the
+# repetitions, but repetitions of one card are correlated, so they add precision only as far as the
+# reviews disagree (see README "Gate").
 MIN_GATE_REPS = 2
-# Every class must have at least this many scored-or-missed items pooled over repetitions.
-MIN_CLASS_ITEMS = 30
+# Every class must have at least this many distinct cards (Z04, ai-agent-28: a card reviewed twice
+# is one card, not two independent items).
+MIN_CLASS_CARDS = 15
 # Controls that ended errored/refused/skipped (unscored) may be at most this share of controls.
 CONTROL_UNSCORED_RATE_GATE = 0.02
 # Only a run through a production provider is rollout evidence; claude-cli is proxy evidence.
@@ -43,6 +48,17 @@ SHIPPING_ENV_PATH = EVALS_ROOT.parent / "services" / "ai-qa" / "env" / "prod.env
 PRODUCTION_PREVALENCE = 0.10
 # Two-sided 95% Wilson score interval.
 CI_Z = 1.96
+# What one sample is in every interval and class count (the report's unitOfAnalysis).
+UNIT_OF_ANALYSIS = {
+    "unit": "card",
+    "interval": (
+        "95% Wilson interval on the pooled rate with the design-effect-adjusted sample size: the "
+        "repetitions of one card form one cluster, the cluster-robust variance over cards gives the "
+        "design effect, and the effective n stays between the distinct cards and the pooled items"
+    ),
+    "pointEstimates": "pooled over every repetition",
+    "classMinimum": "distinct cards",
+}
 
 ACCEPTED_CATEGORIES = {
     # Y05 (ai-agent-11): source_unsupported is only a major, and only a blocker stops a publish, so
@@ -73,6 +89,59 @@ def wilson_ci(successes: int, n: int, z: float = CI_Z) -> list[float]:
     if n <= 0:
         return [0.0, 0.0]
     p = successes / n
+    denominator = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denominator
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator
+    return [round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4)]
+
+
+def card_key(record: dict[str, Any], index: int) -> str:
+    """The card a record reviewed: its row id (the same in every repetition); a record without one
+    is its own card."""
+    return str(record.get("id") or f"#{index}")
+
+
+def clusters(records: list[dict[str, Any]], hit: Any) -> list[tuple[int, int]]:
+    """(hits, reviews) per distinct card, in first-seen order."""
+    counts: dict[str, list[int]] = {}
+    for index, record in enumerate(records):
+        tally = counts.setdefault(card_key(record, index), [0, 0])
+        tally[0] += 1 if hit(record) else 0
+        tally[1] += 1
+    return [(y, m) for y, m in counts.values()]
+
+
+def effective_n(card_counts: list[tuple[int, int]]) -> float:
+    """Design-effect-adjusted sample size of a rate pooled over cards reviewed m_i times each.
+
+    deff = (cluster-robust variance of the pooled ratio) / (binomial variance of M pooled items);
+    n_eff = M / deff, kept between the number of cards k (reviews of a card in full agreement add
+    nothing) and M (disagreeing reviews never count as more than independent ones). A rate of 0
+    or 1 has no variance to compare, so it gets the conservative n_eff = k."""
+    k = len(card_counts)
+    total = sum(m for _, m in card_counts)
+    if k == 0 or total == 0:
+        return 0.0
+    hits = sum(y for y, _ in card_counts)
+    p = hits / total
+    if k < 2 or p in (0.0, 1.0):
+        return float(k)
+    clustered = k / (k - 1) * sum((y - p * m) ** 2 for y, m in card_counts) / (total * total)
+    binomial = p * (1 - p) / total
+    if clustered <= 0:
+        return float(total)
+    return min(float(total), max(float(k), total * binomial / clustered))
+
+
+def clustered_wilson_ci(card_counts: list[tuple[int, int]], z: float = CI_Z) -> list[float]:
+    """[low, high] Wilson interval of the pooled rate sum(y)/sum(m) at n = effective_n: the same
+    as wilson_ci when every card is reviewed once, and the distinct-card interval when the
+    repetitions of every card agree."""
+    total = sum(m for _, m in card_counts)
+    n = effective_n(card_counts)
+    if total <= 0 or n <= 0:
+        return [0.0, 0.0]
+    p = sum(y for y, _ in card_counts) / total
     denominator = 1 + z * z / n
     centre = (p + z * z / (2 * n)) / denominator
     half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator
@@ -117,7 +186,20 @@ def nearest_rank(values: list[int], q: float) -> int:
 def _recall_block(records: list[dict[str, Any]]) -> dict[str, Any]:
     tp = sum(1 for r in records if is_true_positive(r))
     fn = len(records) - tp
-    return {"tp": tp, "fn": fn, "recall": ratio(tp, tp + fn), "recallCi95": wilson_ci(tp, tp + fn)}
+    return {
+        "tp": tp,
+        "fn": fn,
+        "recall": ratio(tp, tp + fn),
+        "recallCi95": clustered_wilson_ci(clusters(records, is_true_positive)),
+    }
+
+
+def _scored_controls(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [r for r in records if r.get("defect") is None and is_scored(r)]
+
+
+def distinct_cards(records: list[dict[str, Any]]) -> int:
+    return len({card_key(record, index) for index, record in enumerate(records)})
 
 
 def _control_counts(records: list[dict[str, Any]]) -> tuple[int, int, int]:
@@ -172,8 +254,8 @@ def score(records: list[dict[str, Any]], classes: tuple[str, ...] = DEFECT_CLASS
             "precision": precision,
             "f1": f1(raw_precision, raw_recall),
             "controlFalsePositiveRate": ratio(fp, scored_controls),
-            "recallCi95": wilson_ci(tp_total, tp_total + fn_total),
-            "controlFalsePositiveRateCi95": wilson_ci(fp, scored_controls),
+            "recallCi95": clustered_wilson_ci(clusters(defective, is_true_positive)),
+            "controlFalsePositiveRateCi95": clustered_wilson_ci(clusters(_scored_controls(records), is_flagged)),
             "precisionAtPrevalence": {
                 "prevalence": PRODUCTION_PREVALENCE,
                 "precision": precision_at_prevalence(raw_recall, raw_fpr),
@@ -195,6 +277,14 @@ def score(records: list[dict[str, Any]], classes: tuple[str, ...] = DEFECT_CLASS
         },
         "latencyMs": {"p50": nearest_rank(latencies, 0.50), "p95": nearest_rank(latencies, 0.95)},
         "errors": dict(sorted(errors.items())),
+        "unitOfAnalysis": {
+            **UNIT_OF_ANALYSIS,
+            "cards": {
+                "defective": distinct_cards(defective),
+                "scoredControls": distinct_cards(_scored_controls(records)),
+                "perClass": {c: distinct_cards([r for r in defective if r["defect"] == c]) for c in classes},
+            },
+        },
         "flaggedWrongCategory": wrong_category,
     }
 
@@ -269,13 +359,15 @@ def gate_failures(report: dict[str, Any]) -> list[str]:
             f"control false-positive rate 95% CI upper bound {overall['controlFalsePositiveRateCi95'][1]:.4f} > "
             f"{CONTROL_FPR_CI_UPPER_GATE:.2f}"
         )
+    class_cards = (((report.get("unitOfAnalysis") or {}).get("cards") or {}).get("perClass")) or {}
     for defect, block in report["perClass"].items():
         items = block["tp"] + block["fn"]
         if items == 0:
             failures.append(f"class {defect} has no rows")
             continue
-        if items < MIN_CLASS_ITEMS:
-            failures.append(f"class {defect} has {items} items pooled over reps, fewer than {MIN_CLASS_ITEMS}")
+        cards = class_cards.get(defect, 0)
+        if cards < MIN_CLASS_CARDS:
+            failures.append(f"class {defect} has {cards} distinct cards, fewer than {MIN_CLASS_CARDS}")
         if block["recall"] < PER_CLASS_RECALL_FLOOR:
             failures.append(f"class {defect} recall {block['recall']:.4f} < {PER_CLASS_RECALL_FLOOR:.2f}")
     unscored = report.get("unscored") or {}
@@ -294,7 +386,8 @@ def class_floor_pass_probability(true_recall: float, items: int, floor: float = 
     """P(pooled class recall >= floor) for a reviewer whose true recall is true_recall, treating
     the items as independent Bernoulli trials (exact binomial). Repetitions of the same card are
     correlated, so this is an upper bound on the pass probability of a weak class and a lower
-    bound on the noise a strong one sees; README "Gate" quotes it."""
+    bound on the noise a strong one sees; README "Gate" quotes it. The gate's intervals and class
+    minimum do not rely on it: they count cards (clustered_wilson_ci, MIN_CLASS_CARDS)."""
     need = math.ceil(round(floor * items, 9))
     return sum(
         math.comb(items, k) * true_recall**k * (1 - true_recall) ** (items - k) for k in range(need, items + 1)

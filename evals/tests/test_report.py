@@ -63,6 +63,7 @@ def test_report_json_matches_contract_schema() -> None:
         "structuredItems",
         "latencyMs",
         "errors",
+        "unitOfAnalysis",  # Z04 (ai-agent-28): what one sample is in every interval
         "gate",
     }
     assert report["v"] == 2
