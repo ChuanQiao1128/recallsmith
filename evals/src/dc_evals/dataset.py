@@ -65,7 +65,19 @@ AUTHORED = DatasetSpec(
     DEFECT_CLASSES,
     labels_path=AUTHORED_LABELS_PATH,
 )
-RUN_DATASETS = {**DATASETS, AUTHORED.key: AUTHORED}
+# R18A (A15): the automation gate's agent-authored set, 60 sources (A00 §15.2); same shape as
+# authored-v1, labeled by the same jury.
+AUTHORED_V2_SOURCES_PATH = DATA_DIR / "authored-sources-v2.json"
+AUTHORED_V2_LABELS_PATH = DATA_DIR / "authored-v2.labels.jsonl"
+AUTHORED_V2 = DatasetSpec(
+    "authored-v2",
+    "authored-v2",
+    DATA_DIR / "authored-v2.jsonl",
+    None,
+    DEFECT_CLASSES,
+    labels_path=AUTHORED_V2_LABELS_PATH,
+)
+RUN_DATASETS = {**DATASETS, AUTHORED.key: AUTHORED, AUTHORED_V2.key: AUTHORED_V2}
 DATASETS_BY_NAME = {spec.name: spec for spec in RUN_DATASETS.values()}
 
 
