@@ -338,10 +338,73 @@ public class AiQaResultsTests
     Assert.Equal("The stem names the answer.", finding["message"]);
 
     var after = await RunAsync(seeded.RunId);
-    foreach (var key in new[] { "status", "cards_done", "error_count", "blocker_count", "major_count", "minor_count", "estimated_cost_usd" })
+    foreach (var key in new[] { "status", "cards_done", "error_count", "blocker_count", "major_count", "minor_count" })
     {
       Assert.Equal(before[key], after[key]);
     }
+    // X02 (backend-design-6): the outcome is kept, but the retried call was billed, so its cost counts.
+    Assert.Equal(0.51m, Convert.ToDecimal(after["estimated_cost_usd"], CultureInfo.InvariantCulture));
+  }
+
+  [Fact]
+  public async Task Results_AllItemsFailed_MarksRunFailedWithAllItemsFailed()
+  {
+    // backend-design-5: the fail-fast PROVIDER_AUTH path fills the whole chunk with errors. Every item is terminal
+    // but none was reviewed, so the run is failed, not done.
+    var seeded = await SeedAsync("allfailed", 3);
+    var data = Data(await ReportAsync(Body(seeded.RunId, 0,
+      Item(seeded.Cards[0], "error", errorCode: "PROVIDER_AUTH"),
+      Item(seeded.Cards[1], "error", errorCode: "PROVIDER_AUTH"),
+      Item(seeded.Cards[2], "refused", errorCode: "REFUSAL"))));
+
+    Assert.Equal("failed", data.GetProperty("runStatus").GetString());
+    Assert.Equal(3, data.GetProperty("cardsDone").GetInt32());
+    var run = await RunAsync(seeded.RunId);
+    Assert.Equal("failed", run["status"]);
+    Assert.Equal("ALL_ITEMS_FAILED", run["error_code"]);
+    Assert.NotNull(run["finished_at"]);
+    Assert.Equal(3, Int(run["error_count"]));
+
+    // A chunk made only of skipped (DISABLED) items reviewed nothing either.
+    var skipped = await SeedAsync("allskipped", 1);
+    Assert.Equal("failed", Data(await ReportAsync(Body(skipped.RunId, 0, Item(skipped.Cards[0], "skipped", errorCode: "DISABLED"))))
+      .GetProperty("runStatus").GetString());
+    Assert.Equal("ALL_ITEMS_FAILED", (await RunAsync(skipped.RunId))["error_code"]);
+
+    // A retry that reviews one card turns the run into a (partially errored) done run.
+    var retried = Data(await ReportAsync(Body(seeded.RunId, 0, Item(seeded.Cards[0], "done"))));
+    Assert.Equal("done", retried.GetProperty("runStatus").GetString());
+    run = await RunAsync(seeded.RunId);
+    Assert.Equal("done", run["status"]);
+    Assert.Null(run["error_code"]);
+    Assert.Equal(2, Int(run["error_count"]));
+  }
+
+  [Fact]
+  public async Task Results_RetriedChunk_AccumulatesItemUsage_ButNotOnExactReplay()
+  {
+    // backend-design-6 / cloud-security-resilience-3: a retried chunk re-reviews and re-bills a card that was
+    // already done. The item's cost and tokens add up across attempts; an exact replay of one report (the
+    // Lambda's POST retry, same request id) is not a new call and adds nothing.
+    var seeded = await SeedAsync("accumulate", 1);
+    var card = seeded.Cards[0];
+
+    Data(await ReportAsync(Body(seeded.RunId, 0, Item(card, "done", inputTokens: 1000, outputTokens: 100, cacheRead: 10, cost: 0.01m))));
+    var retry = Body(seeded.RunId, 0, Item(card, "done", inputTokens: 2000, outputTokens: 300, cacheRead: 20, cost: 0.02m));
+    Data(await ReportAsync(retry));
+    Data(await ReportAsync(retry));
+
+    var item = (await _db.QueryAsync(
+      "select input_tokens, output_tokens, cache_read_tokens, estimated_cost_usd from ai_qa_items where run_id = $1 and card_id = $2",
+      seeded.RunId, card.CardId))[0];
+    Assert.Equal(3000, Int(item["input_tokens"]));
+    Assert.Equal(400, Int(item["output_tokens"]));
+    Assert.Equal(30, Int(item["cache_read_tokens"]));
+    Assert.Equal(0.03m, Convert.ToDecimal(item["estimated_cost_usd"], CultureInfo.InvariantCulture));
+
+    var run = await RunAsync(seeded.RunId);
+    Assert.Equal(0.03m, Convert.ToDecimal(run["estimated_cost_usd"], CultureInfo.InvariantCulture));
+    Assert.Equal(3000L, Convert.ToInt64(run["input_tokens"], CultureInfo.InvariantCulture));
   }
 
   [Fact]
