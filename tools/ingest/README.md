@@ -23,19 +23,35 @@ uv run --project <repo>/tools/ingest --python 3.12 dc-ingest https://example.com
 
 | Argument | Meaning |
 |---|---|
-| `source` | An `https://` URL or a local file path. Any other `scheme://` (`http://`, `ftp://`, `file://`) is an input error. |
+| `source` | An `https://` URL or a local file path (see [Local files](#local-files)). Any other `scheme://` (`http://`, `ftp://`, `file://`) is an input error. |
 | `--json` | Print the output object as one JSON line (UTF-8, compact separators, not ASCII-escaped). Without it, print a short summary. |
 | `--canonical-url URL` | An `https://` URL recorded as `url`. Use it for local files: a card needs a URL to cite. |
 | `--max-chunk-chars N` | Maximum characters per chunk, `1000..8000`, default `4000`. |
 | `--overlap-chars N` | Overlap after a size-driven split, `0..1000` and `< max-chunk-chars / 2`, default `400`. |
 | `--fetched-at ISO` | Overrides `fetchedAt`. Must match `YYYY-MM-DDTHH:MM:SSZ`. |
 
+### Local files
+
+A local path is read only when all of these hold, both for the path as given and after every
+symlink is resolved (otherwise exit `1` with `dc-ingest: error: refused local file …`):
+
+- The suffix is `.pdf`, `.html`, `.htm`, `.md`, `.markdown` or `.txt`.
+- The file is inside an allowed root: the repo's `sources/` directory (`$DC_REPO_ROOT/sources`,
+  default: the checkout this tool sits in) or a directory listed in `DC_SOURCES_DIRS`
+  (`:`-separated). A symlink that leaves every allowed root is refused.
+- No path segment below that root starts with `.` (no dotfiles such as `.env`, no `.git/`, `.private/` …).
+- It is not in `~/.config`, `~/.ssh` or `~/.aws`, and it is not the MCP token file (`DC_TOKEN_FILE`)
+  or any file in that file's directory. These are refused even inside an allowed root.
+
+Put downloaded PDFs and pages in `sources/` at the repo root, or set for example
+`DC_SOURCES_DIRS=$HOME/Downloads`.
+
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Success. |
-| `1` | Input error. Examples: a missing or unreadable file, a file or response larger than 10 MB, a URL that is not `https` (rejected before any request), an HTTP error, a timeout, an unsupported content type, a text file that is not UTF-8, or no extractable text. Prints one line, `dc-ingest: error: <message>`, on stderr and nothing on stdout. |
+| `1` | Input error. Examples: a refused local path (see [Local files](#local-files)), a missing or unreadable file, a file or response larger than 10 MB, a URL that is not `https` (rejected before any request), an HTTP error, a timeout, an unsupported content type, a text file that is not UTF-8, or no extractable text. Prints one line, `dc-ingest: error: <message>`, on stderr and nothing on stdout. |
 | `2` | Usage error: an unknown flag, a number out of range, a `--canonical-url` that is not `https://`, or a bad `--fetched-at`. argparse prints the usage message. |
 
 ## Output
@@ -78,7 +94,7 @@ The **full text** is the extracted document after normalisation:
 
 For a PDF, each page is normalised on its own, and the pages are joined with `"\n\n"`.
 
-For HTML, the text comes from `<main>`, else `<article>`, else `<body>`. Before any text is read, `script`, `style`, `noscript`, `template`, `iframe`, `svg`, `canvas`, `form`, `nav` and `aside` are removed. Block elements become paragraphs, and headings become `# …` lines (one `#` per level). List items become `- …`, `pre` keeps its line breaks, and table cells are joined with ` | `.
+For HTML, the text comes from `<main>`, else `<article>`, else `<body>`. Before any text is read, hidden elements are removed (the `hidden` attribute, `aria-hidden="true"`, or an inline `display: none` / `visibility: hidden` style), and so are `script`, `style`, `noscript`, `template`, `iframe`, `svg`, `canvas`, `form`, `nav` and `aside` are removed. Block elements become paragraphs, and headings become `# …` lines (one `#` per level). List items become `- …`, `pre` keeps its line breaks, and table cells are joined with ` | `.
 
 ### Chunking
 
@@ -97,6 +113,11 @@ The same input always gives byte-identical output. There is no randomness and no
 - Requests use the stdlib `urllib` with a 20 s timeout and `User-Agent: developercards-ingest/1.8.0`.
 - Responses and local files are capped at 10 MB. A larger `Content-Length` is refused, and at most 10 MB + 1 byte is ever read.
 - Accepted content types: `text/html`, `application/xhtml+xml`, `application/pdf`, `text/markdown`, `text/x-markdown` and `text/plain`. `text/plain` counts as Markdown when the URL path ends in `.md` or `.markdown`.
+- Local files are confined to the allowed roots and document suffixes above; credential locations,
+  the MCP token file and hidden files are always refused, so a prompt-injected page cannot get a
+  secret read back through `read_source`.
+- Hidden HTML is dropped, so text a reader cannot see (the usual carrier of planted instructions)
+  never reaches a chunk or a quote.
 - Page text is data. Nothing in a page is executed, evaluated or followed: no scripts, no links, no embedded frames. HTML is parsed with `html.parser`, and PDFs are read with `pypdf` without OCR.
 - The tool needs no credentials and prints only the requested output: the JSON or summary on stdout, one error line on stderr.
 
