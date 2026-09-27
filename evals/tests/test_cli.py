@@ -132,3 +132,12 @@ def test_bedrock_rejects_a_first_party_model_id(tmp_path: Path, capsys) -> None:
     code = main(["run", "--provider", "bedrock", "--model", "claude-opus-5", "--dry-run", "--out", str(tmp_path)])
     assert code == 2
     assert "anthropic." in capsys.readouterr().err
+
+
+def test_seed_v3_is_reproducible(tmp_path: Path) -> None:
+    """Y05: `dc-evals seed --dataset v3` rebuilds the gate dataset byte for byte."""
+    spec = DATASETS["v3"]
+    assert main(["seed", "--dataset", "v3", "--check"]) == 0
+    target = tmp_path / "seeded-v3.jsonl"
+    assert main(["seed", "--dataset", "v3", "--output", str(target)]) == 0
+    assert target.read_bytes() == spec.path.read_bytes()

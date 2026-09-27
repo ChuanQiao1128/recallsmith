@@ -5,7 +5,7 @@ from pathlib import Path
 
 from conftest import finding, item
 
-from dc_evals.dataset import DATASETS, DEFECT_CLASSES, REPORTS_DIR, file_sha256
+from dc_evals.dataset import DATASETS, DEFECT_CLASSES, REPORTS_DIR, file_sha256, read_jsonl
 from dc_evals.report import build_report, file_stem, read_run, render_markdown, run_header, unique_stem, write_run_files
 
 HEADER = run_header(
@@ -196,3 +196,42 @@ def test_committed_baseline_run_still_scores_and_is_refused_by_the_gate() -> Non
     assert any("sha256" in f for f in failures)
     assert any("control false-positive rate 0.2900" in f for f in failures)
     assert any("class ambiguous_stem recall" in f for f in failures)
+
+
+TUNING = REPORTS_DIR / "tuning-2026-09-27"
+
+
+def test_no_committed_run_is_rollout_evidence_and_the_readmes_say_so() -> None:
+    """Y05 ai-agent-17: every committed run is proxy evidence (claude-cli on seeded-v1) and the
+    gate refuses it; the qa-v3 holdout run also fails on substance. The READMEs must not claim a
+    passing or pending-in-this-folder run."""
+    runs = sorted(REPORTS_DIR.rglob("*.jsonl"))
+    runs = [p for p in runs if not p.name.startswith("split-")]
+    assert runs
+    for path in runs:
+        header, records = read_run(path)
+        report = build_report(header, records)
+        assert report["evidenceClass"] == "proxy" and report["gate"]["passes"] is False, path.name
+    holdout = build_report(*read_run(TUNING / "holdout-qa-v3.jsonl"))
+    assert "recall 0.7826 < 0.80" in holdout["gate"]["failures"]
+    assert "class ambiguous_stem recall 0.3750 < 0.60" in holdout["gate"]["failures"]
+    assert "class qualifier_mismatch recall 0.4286 < 0.60" in holdout["gate"]["failures"]
+    tuning = (TUNING / "README.md").read_text(encoding="utf-8")
+    assert "qa-v3 has **not** passed the rollout gate" in tuning
+    assert "Its run is the next report in this folder's parent" not in tuning
+    assert "seeded-v2` (X04) rewrites those templates" not in tuning
+    evals_readme = (REPORTS_DIR.parent / "README.md").read_text(encoding="utf-8")
+    assert "so qa-v3 has **not** passed the gate" in evals_readme
+
+
+def test_tuning_readme_discloses_that_the_holdout_informed_qa_v3() -> None:
+    """Y05 ai-agent-19: the control adjudication covered holdout rows, so the README must say the
+    holdout comparison is not clean and point to the fresh-dataset run."""
+    adjudicated = {entry["id"] for entry in json.loads((TUNING / "adjudication-controls-qa-v1.json").read_text())}
+    holdout_ids = {row["id"] for row in read_jsonl(TUNING / "split-holdout.jsonl")}
+    assert len(adjudicated) == 29 and len(adjudicated & holdout_ids) == 16
+    tuning = (TUNING / "README.md").read_text(encoding="utf-8")
+    assert "Holdout contamination" in tuning and "16 of the 29 ids are holdout rows" in tuning
+    assert "not a clean held-out result" in tuning
+    assert "Prompt changes were derived only from dev errors." not in tuning
+    assert "--dataset v3 --reps 2" in tuning
