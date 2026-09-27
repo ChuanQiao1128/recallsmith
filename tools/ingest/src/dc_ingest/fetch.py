@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -21,6 +22,8 @@ _HTML_TYPES = ("text/html", "application/xhtml+xml")
 _MARKDOWN_TYPES = ("text/markdown", "text/x-markdown")
 _MARKDOWN_SUFFIXES = (".md", ".markdown")
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+LOCAL_SUFFIXES = (".pdf", ".html", ".htm", ".md", ".markdown", ".txt")
+SOURCES_DIRS_ENV = "DC_SOURCES_DIRS"
 
 
 @dataclass(frozen=True)
@@ -113,9 +116,77 @@ class LocalFile:
     mtime: float
 
 
+def default_repo_root() -> Path:
+    """``DC_REPO_ROOT`` when set, else the checkout this package sits in (tools/ingest/src/dc_ingest)."""
+    configured = os.environ.get("DC_REPO_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parents[4]
+
+
+def allowed_source_roots() -> list[Path]:
+    """The repo's ``sources/`` directory plus every directory listed in ``DC_SOURCES_DIRS``."""
+    roots = [default_repo_root() / "sources"]
+    for entry in os.environ.get(SOURCES_DIRS_ENV, "").split(os.pathsep):
+        if entry.strip():
+            roots.append(Path(entry.strip()).expanduser())
+    return [Path(os.path.abspath(root)) for root in roots]
+
+
+def denied_paths() -> list[Path]:
+    """Credential locations that are refused even inside an allowed root."""
+    home = Path.home()
+    denied = [home / ".config", home / ".ssh", home / ".aws"]
+    token_file = os.environ.get("DC_TOKEN_FILE", "").strip()
+    if token_file:
+        token = Path(os.path.abspath(Path(token_file).expanduser()))
+        denied += [token, token.parent]
+    return denied
+
+
+def _within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _dot_segment(path: Path, root: Path) -> bool:
+    return any(part.startswith(".") for part in path.relative_to(root).parts)
+
+
+def check_local_path(source: str) -> Path:
+    """Return the resolved path of an allowed local source, or raise ``IngestError``.
+
+    A local source must be a .pdf/.html/.htm/.md/.markdown/.txt file inside the repo's
+    ``sources/`` directory or a ``DC_SOURCES_DIRS`` directory, both before and after
+    symlinks are resolved. No path segment below the root may start with ``.``, and
+    ~/.config, ~/.ssh, ~/.aws and the MCP token file (``DC_TOKEN_FILE``) are always refused.
+    """
+    lexical = Path(os.path.abspath(Path(source).expanduser()))
+    resolved = lexical.resolve()
+    for candidate in (lexical, resolved):
+        if candidate.suffix.lower() not in LOCAL_SUFFIXES:
+            raise IngestError(
+                f"refused local file {lexical}: only {', '.join(LOCAL_SUFFIXES)} files are read"
+            )
+    for denied in denied_paths():
+        for candidate in (lexical, resolved):
+            if _within(candidate, denied) or _within(candidate, denied.resolve()):
+                raise IngestError(f"refused local file {lexical}: credential locations are never read")
+    roots = allowed_source_roots()
+    lexical_root = next((root for root in roots if _within(lexical, root)), None)
+    resolved_root = next((root.resolve() for root in roots if _within(resolved, root.resolve())), None)
+    if lexical_root is None or resolved_root is None:
+        raise IngestError(
+            f"refused local file {lexical}: it is not inside the repo's sources/ directory "
+            f"or a {SOURCES_DIRS_ENV} directory (symlinks must stay inside too)"
+        )
+    if _dot_segment(lexical, lexical_root) or _dot_segment(resolved, resolved_root):
+        raise IngestError(f"refused local file {lexical}: hidden files and directories are never read")
+    return resolved
+
+
 def read_local(source: str, *, max_bytes: int = MAX_BYTES) -> LocalFile:
-    """Read a local file and pick its kind from the extension (or a ``%PDF-`` header)."""
-    path = Path(source).expanduser().resolve()
+    """Read an allowed local file (see ``check_local_path``) and pick its kind from the extension."""
+    path = check_local_path(source)
     try:
         if not path.is_file():
             raise IngestError(f"file not found: {path}")

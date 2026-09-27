@@ -4,7 +4,7 @@ Two importable [n8n](https://n8n.io) workflows that receive DeveloperCards' sign
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `workflows/card-flagged-to-slack-and-sheet.json` | `POST /webhook/developercards` | Checks the signature over the raw request bytes (401 on failure). Every verified event is written to the `Events` tab of a Google Sheet. A `card.flagged` event also posts a Slack message to `#developercards` (deck, stable uid, blocker/major/minor counts, top finding, console link) and writes a row to the `Flagged` tab. |
+| `workflows/card-flagged-to-slack-and-sheet.json` | `POST /webhook/developercards`, plus a 1-minute schedule | Checks the signature over the raw request bytes (401 on failure), then drops a delivery it already processed (`X-DeveloperCards-Delivery`). Every new verified event is written to the `Events` tab of a Google Sheet. A `card.flagged` event writes one row per card to the `Flagged` tab and joins its QA run's pending summary; the schedule posts **one** Slack message per QA run to `#developercards` (deck, number of flagged cards, blocker/major/minor totals, top 5 findings, console link) once the run has been quiet for 5 minutes. A `review.queued` event posts a Slack message with the console review link, so the human checkpoint is pushed rather than polled. The workflow answers `200` only after these writes succeed. |
 | `workflows/weekly-digest.json` | Monday 08:00 `Pacific/Auckland` (cron `0 8 * * 1`) | Reads the `Events` tab and emails a digest of the last 7 days: decks published, cards flagged, draft batches queued for review, import failures (up to 10 latest per section). An empty week still sends a "quiet week" digest. |
 
 Nothing here runs in the cloud or calls DeveloperCards; it only receives what the dispatcher sends.
@@ -15,14 +15,14 @@ Nothing here runs in the cloud or calls DeveloperCards; it only receives what th
 docker-compose.yml          pinned n8n image, port 5678, ./.n8n-data volume
 .env.example                DC_WEBHOOK_SECRET, WEBHOOK_URL placeholders (copy to .env)
 lib/verify-signature.mjs    signature check (the region between BEGIN/END is embedded in the workflow)
-lib/recipe-logic.mjs        Events row, Slack message, weekly digest (embedded in every Code node that uses it)
+lib/recipe-logic.mjs        Events row, delivery de-duplication, per-run Slack summary, review Slack message, weekly digest (embedded in every Code node that uses it)
 lib/*.test.mjs, lib/index.js  node:test suites
 workflows/*.json            n8n exports (inactive, credential placeholders only)
 scripts/send-test-event.py  stdlib signed test sender
 fixtures/<event>.json       one sample body per event
 ```
 
-The Code nodes contain the library regions **verbatim** (`lib/workflows.test.mjs` fails if they drift). When you change `lib/*.mjs`, paste the whole region (from the `// BEGIN …` line through the `// END …` line) into the matching Code nodes: `Verify signature` for the verifier; `Event row`, `Flagged message` and `Build digest` for the recipe logic.
+The Code nodes contain the library regions **verbatim** (`lib/workflows.test.mjs` fails if they drift). When you change `lib/*.mjs`, paste the whole region (from the `// BEGIN …` line through the `// END …` line) into the matching Code nodes: `Verify signature` for the verifier; `Check delivery`, `Event row`, `Flagged message`, `Queue run summary`, `Review message`, `Remember delivery`, `Due run summaries`, `Mark summaries sent` and `Build digest` for the recipe logic.
 
 ## Pinned image
 
@@ -63,7 +63,7 @@ Read from the Docker Hub registry on 2026-09-27: tag `2.40.7` was the current `s
 
 5. **Create the three credentials** and pick them in the nodes (the exports only carry placeholder ids starting with `REPLACE_`):
    - `DeveloperCards Google Sheets` (Google Sheets OAuth2) — nodes `Events sheet`, `Flagged sheet`, `Read Events sheet`.
-   - `DeveloperCards Slack` (Slack API token with `chat:write`) — node `Slack message`; invite the app to `#developercards` or change the channel.
+   - `DeveloperCards Slack` (Slack API token with `chat:write`) — nodes `Slack run summary` and `Slack review queued`; invite the app to `#developercards` or change the channel.
    - `DeveloperCards SMTP` — node `Email digest`; replace both `REPLACE_ME@example.com` addresses with the real sender and recipient.
 
 6. **Google Sheet.** Create one spreadsheet with two tabs and these header rows, then replace `REPLACE_WITH_SHEET_ID` in the three Sheets nodes with the spreadsheet id:
@@ -72,7 +72,7 @@ Read from the Docker Hub registry on 2026-09-27: tag `2.40.7` was the current `s
 
    Both writers use *append or update* matching `eventId`, so a retried delivery updates the existing row instead of adding a second one.
 
-7. **Activate** `DeveloperCards: card flagged to Slack and Sheet` (and the digest when you want the Monday email).
+7. **Activate** `DeveloperCards: card flagged to Slack and Sheet` (and the digest when you want the Monday email). The delivery memory and the pending run summaries live in the workflow's static data, which n8n keeps only for an active workflow (not for *Test workflow* runs).
 
 ## Connect the console subscription
 
@@ -110,8 +110,11 @@ It prints the HTTP status and exits 0 on 2xx, 1 otherwise, 2 on bad arguments or
 
 - **Signature check.** `HMAC-SHA256(secret, "<timestamp>.<raw body>")`, bare lowercase hex, timestamp in epoch seconds, ±300 s tolerance, constant-time compare (`crypto.timingSafeEqual`). The check runs over the raw request bytes (the webhook node has *Raw Body* on); re-serialising the parsed JSON would not reproduce the escaped bytes DeveloperCards signed.
 - **401 is permanent.** On a bad or missing signature, a stale timestamp or a missing secret, the workflow answers `401 {"ok":false,"reason":…}`. The dispatcher treats any 4xx other than 408/429 as a permanent failure and does not retry, so fix the secret and use *Redeliver* in the console.
-- **At-least-once delivery.** The dispatcher retries on 408/429/5xx/timeouts (10 s timeout), and a retry carries the same `eventId`. The sheets de-duplicate on `eventId`; the Slack message may be posted again on a retry.
-- The workflow answers `200` right after the signature check, before Sheets and Slack run, so a slow Google or Slack API never makes the dispatcher time out.
+- **Verify, then process, then answer.** A verified delivery goes through `Check delivery` → `Events sheet` → the per-event branch → `Remember delivery` → `Respond 200`. Nothing answers early, and no node continues on failure: when a Sheets or Slack write still fails after its retry, the execution stops before any Respond node and n8n answers `500`. The dispatcher retries 5xx and timeouts with the same `X-DeveloperCards-Delivery`, so the event is processed again instead of being lost, and the console does not mark the delivery `delivered` until the receiver really processed it.
+- **Retries.** `Events sheet`, `Flagged sheet` and `Slack review queued` retry once after 1 s (2 tries), so a retried write still fits the dispatcher's 10 s timeout; a slower delivery simply times out and is retried by the dispatcher. `Slack run summary` runs on the schedule, not inside a delivery, and tries 3 times 5 s apart.
+- **Duplicates.** `Remember delivery` stores the delivery id (the `X-DeveloperCards-Delivery` header, else the `eventId`) only after every write for it succeeded, keeping the last 1000 ids. A redelivered id answers `200 {"ok":true,"duplicate":true}` without touching Sheets or Slack. Both sheets also *append or update* on `eventId`, and a run summary counts each `eventId` once, so a replay after the memory is full still adds no row and no count. Trade-off: if Slack accepted a `review.queued` message but a later node failed, the retry posts it again.
+- **One Slack message per QA run.** `card.flagged` arrives once per flagged card (a 200-card run can flag dozens). Each one is written to the `Flagged` tab and added to its run (`runId`) in the static data; the `Every minute` schedule posts a run's summary once no flagged card arrived for it for 5 minutes (or after 30 minutes at most) and then drops it. A failed post stays pending and is tried again the next minute. Two executions that change the static data at the same moment can overwrite each other (n8n saves it per execution), which at worst drops a card from a Slack summary; the `Flagged` row is unaffected.
+- **Test sender.** `scripts/send-test-event.py` sends a fresh `X-DeveloperCards-Delivery` every time, so re-sending with `--keep-ids` is a new delivery: the sheets update the same row, and a `review.queued` message is posted again.
 
 ## Tests
 
