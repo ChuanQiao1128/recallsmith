@@ -33,13 +33,20 @@ the Lambda runtime and is imported lazily for the one SSM read.
    first, …, then A's second, …). Consecutive requests to one host (robots.txt included) start at
    least `WATCH_HOST_INTERVAL_SECONDS` apart. No new fetch starts once
    `WATCH_TIME_BUDGET_SECONDS` have passed since the invocation began or once the Lambda has less
-   than 40 s left. Unvisited targets are simply not reported; their lease lapses and they are due
+   left than one target's worst case plus the final report (`min_remaining_ms`: 4 robots.txt hops
+   × 10 s + 4 page hops × `WATCH_HTTP_TIMEOUT_SECONDS` + 2 host waits + the 20 s parse budget +
+   21 s report + 5 s reserve = 128 s at the prod settings; D03). Unvisited targets are simply not reported; their lease lapses and they are due
    again next hour.
 5. Per target: robots.txt (disallowed ⇒ `robots_disallowed`, nothing fetched), then a conditional
    GET with the stored `etag`/`lastModified`, then normalise and hash (pages, html-headings) or
-   parse the feed (rss, atom).
+   parse the feed (rss, atom). All the parsing of one target shares one deadline (at most 20 s,
+   and never into the time the final report needs), so html-headings, which parses twice, costs
+   one budget. Anything else parsing one page raises (html.parser raises `AssertionError` on some
+   malformed markup) is `failed` / `PARSE` with a `parse_error` warn log (`targetId`, `host`,
+   `errorClass`); an unexpected error elsewhere in one target is `failed` / `PARSE` with a
+   `target_error` log. Only `MemoryError` ends the run (D03).
 6. `POST /api/internal/source-watch/report` `{"v": 1, "watchRunId", "observations"}` in batches of
-   at most `REPORT_BATCH_SIZE = 100`, each with the remaining Lambda time minus 5 s as its budget.
+   at most `REPORT_BATCH_SIZE = 10` (D03; at `WATCH_MAX_TARGETS = 60` a batch of 100 never filled), each with the remaining Lambda time minus 5 s as its budget.
    A batch is posted **as soon as it is full** (during the loop), the rest after the loop, so a run
    killed later (timeout, OOM) has already reported every full batch (C03).
    A failed batch ⇒ `SourceWatchReportFailures` and a `report_failed` log; after all batches the
@@ -151,14 +158,16 @@ normaliser as a new baseline, not a change).
 - **HTML tree:** stdlib `html.parser.HTMLParser` (`convert_charrefs=True`) builds a minimal
   element tree. The void elements `area, base, br, col, embed, hr, img, input, link, meta, source,
   track, wbr` never open a scope; an end tag closes the nearest open element with that name (and
-  everything opened inside it); an unmatched end tag is ignored. For a repeated attribute the first
-  value wins.
+  everything opened inside it); an unmatched end tag is ignored. Only the `role` and `id`
+  attributes are kept (the only ones read); for a repeated attribute the first value wins.
 - **Bounded work (C03).** The end-tag search looks at the `END_TAG_SEARCH_DEPTH = 64` innermost
   open elements only (an opener further up counts as unmatched); beyond `MAX_OPEN_DEPTH = 512` open
   elements a start tag is appended to the innermost one without opening a scope. Both only change
   the tree of pages no real site serves, so the version stays `v1`, and parsing is linear in the
   page size. A page with more than `MAX_ELEMENTS = 200 000` elements, or whose parse takes more
-  than `PARSE_TIME_BUDGET_SECONDS = 20`, raises `ParseLimitExceeded`: the observation is `failed` /
+  than `PARSE_TIME_BUDGET_SECONDS = 20`, or with more than `MAX_ATTRIBUTES = 1024` attributes on one
+  start tag (counted before html.parser builds its attribute list, which costs about 1 KB per
+  attribute; D03), raises `ParseLimitExceeded`: the observation is `failed` /
   `PARSE` (log `parse_limit` with `targetId`, `host`, `limit`) and the run continues.
 - **Dropped subtrees:** `script, style, noscript, template, svg, nav, header, footer, aside, form,
   iframe, button` (removed before the content root is chosen).
@@ -218,6 +227,7 @@ EMF (namespace `METRICS_NAMESPACE`, `Service = "source-watcher"`):
 | `SourceWatchChecks` | Count | `Service`, `Outcome` (= the observation status) |
 | `SourceWatchLatency` | Milliseconds | `Service` (only when a request was sent) |
 | `SourceWatchReportFailures` | Count | `Service` |
+| `SourceWatchRuns` | Count | `Service`; 1 per `source-watch` invocation whatever the outcome (M6 heartbeat for the `source-watch-missing` alarm) |
 
 ## boto3 pin
 
