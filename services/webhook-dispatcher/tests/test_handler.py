@@ -48,9 +48,10 @@ class FakeInternalClient:
     result = InternalResult(True, 200, {"deliveryId": DELIVERY_ID, "status": "x", "stop": False}, None)
     posts: list[tuple[str, str, dict[str, Any], float | None]] = []
 
-    def __init__(self, base_url: str, secret: str) -> None:
+    def __init__(self, base_url: str, secret: str, *, previous_secret: Any = None) -> None:
         self.base_url = base_url
         self.secret = secret
+        self.previous_secret = previous_secret
 
     def post(self, path: str, payload: dict[str, Any], *, budget_s: float | None = None) -> InternalResult:
         FakeInternalClient.posts.append((self.base_url, path, payload, budget_s))
@@ -495,3 +496,122 @@ def test_queue_url_is_derived_from_the_event_source_arn() -> None:
     assert handler.queue_url_from_arn(ARN) == QUEUE_URL
     with pytest.raises(ValueError):
         handler.queue_url_from_arn("arn:aws:sns:ap-southeast-2:123456789012:topic")
+
+
+def test_report_passes_a_previous_internal_secret_loader(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    # cloud-security-resilience-11: the report client can fall back to "<internal name>-previous".
+    made: list[FakeInternalClient] = []
+
+    class Recording(FakeInternalClient):
+        def __init__(self, base_url: str, secret: str, *, previous_secret: Any = None) -> None:
+            super().__init__(base_url, secret, previous_secret=previous_secret)
+            made.append(self)
+
+    monkeypatch.setattr(handler, "internal_client_factory", Recording)
+    handler.lambda_handler(sqs_event(1), Context())
+    (client,) = made
+    assert client.secret == "test-secret" and client.previous_secret() is None
+    world.ssm.values[INTERNAL_NAME + "-previous"] = "old-internal"
+    settings.clear_secret_cache()
+    assert client.previous_secret() == "old-internal"
+
+
+def test_subscription_secret_replaces_the_environment_secret(world: World) -> None:
+    # cloud-security-resilience-7: a receiver with its own secret cannot verify or forge the others.
+    world.ssm.values[SIGNING_NAME + "-sub-12"] = "whsec-sub-12"
+    world.ssm.values[SIGNING_NAME + "-previous"] = "whsec-env-old"
+    assert handler.lambda_handler(sqs_event(1), Context()) == {"batchItemFailures": []}
+    headers = world.http_calls[-1]["headers"]
+    assert headers["X-DeveloperCards-Signature"] == sign_webhook("whsec-sub-12", 1790000000, BODY)
+    # The environment-wide rotation does not leak into this subscription's headers.
+    assert "X-DeveloperCards-Signature-Previous" not in headers
+
+    # Its own rotation uses "<name>-sub-12-previous".
+    world.ssm.values[SIGNING_NAME + "-sub-12-previous"] = "whsec-sub-12-old"
+    settings.clear_secret_cache()
+    handler.lambda_handler(sqs_event(1), Context())
+    headers = world.http_calls[-1]["headers"]
+    assert headers["X-DeveloperCards-Signature-Previous"] == sign_webhook("whsec-sub-12-old", 1790000000, BODY)
+
+    # Another subscription keeps the environment-wide secret (and its rotation header).
+    handler.lambda_handler(sqs_event(1, body=message(subscriptionId=13)), Context())
+    headers = world.http_calls[-1]["headers"]
+    assert headers["X-DeveloperCards-Signature"] == sign_webhook("whsec-test", 1790000000, BODY)
+    assert headers["X-DeveloperCards-Signature-Previous"] == sign_webhook("whsec-env-old", 1790000000, BODY)
+
+
+def test_missing_subscription_secret_is_looked_up_once_per_ttl(world: World, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    lookups: list[str] = []
+    original = world.ssm.get_parameter
+
+    def counting(Name: str, WithDecryption: bool) -> dict[str, Any]:
+        lookups.append(Name)
+        return original(Name=Name, WithDecryption=WithDecryption)
+
+    monkeypatch.setattr(world.ssm, "get_parameter", counting)
+    for _ in range(3):
+        handler.lambda_handler(sqs_event(1), Context())
+    assert lookups.count(SIGNING_NAME + "-sub-12") == 1
+    assert "ssm_secret_unavailable" not in capsys.readouterr().out
+
+
+class ClaimingClient(FakeInternalClient):
+    """Answers the pre-send claim with `claim`; every other path goes to FakeInternalClient."""
+
+    claim: InternalResult = InternalResult(True, 200, {"send": True}, None)
+    claims: list[dict[str, Any]] = []
+
+    def post(self, path: str, payload: dict[str, Any], *, budget_s: float | None = None) -> InternalResult:
+        if path == handler.CLAIM_PATH:
+            ClaimingClient.claims.append(payload)
+            return ClaimingClient.claim
+        return super().post(path, payload, budget_s=budget_s)
+
+
+@pytest.fixture
+def claiming(world: World, monkeypatch: pytest.MonkeyPatch) -> World:
+    monkeypatch.setenv("WEBHOOK_PRESEND_CLAIM", "1")
+    monkeypatch.setattr(handler, "internal_client_factory", ClaimingClient)
+    ClaimingClient.claims = []
+    ClaimingClient.claim = InternalResult(True, 200, {"send": True}, None)
+    return world
+
+
+def test_presend_claim_is_off_by_default(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(handler, "internal_client_factory", ClaimingClient)
+    ClaimingClient.claims = []
+    handler.lambda_handler(sqs_event(1), Context())
+    assert ClaimingClient.claims == [] and len(world.http_calls) == 1
+
+
+def test_presend_claim_cancelled_delivery_makes_no_attempt(claiming: World, capsys) -> None:
+    # cloud-security-resilience-8: a disabled subscription's queued delivery sends nothing more.
+    ClaimingClient.claim = InternalResult(True, 200, {"send": False}, None)
+    assert handler.lambda_handler(sqs_event(2), Context()) == {"batchItemFailures": []}
+    assert ClaimingClient.claims == [{"deliveryId": DELIVERY_ID, "subscriptionId": 12, "attempt": 2}]
+    assert claiming.http_calls == [] and claiming.guard_calls == [] and claiming.reports == []
+    assert "webhook_delivery_cancelled" in capsys.readouterr().out
+
+
+def test_presend_claim_uses_the_current_url(claiming: World) -> None:
+    ClaimingClient.claim = InternalResult(True, 200, {"send": True, "url": "https://new.example.test/hook"}, None)
+    assert handler.lambda_handler(sqs_event(1), Context()) == {"batchItemFailures": []}
+    # The re-pointed URL still goes through the SSRF guard.
+    assert claiming.guard_calls == ["https://new.example.test/hook"]
+    assert claiming.http_calls[-1]["url"] == "https://new.example.test/hook"
+
+    ClaimingClient.claim = InternalResult(True, 200, {"send": True}, None)
+    handler.lambda_handler(sqs_event(1), Context())
+    assert claiming.http_calls[-1]["url"] == "https://hooks.example.test/in"
+
+
+def test_presend_claim_failure_sends_nothing_and_retries(claiming: World) -> None:
+    for claim in (InternalResult(False, 503, None, "HTTP 503"), InternalResult(True, 200, {"unexpected": 1}, None)):
+        ClaimingClient.claim = claim
+        FakeInternalClient.posts = []
+        claiming.sqs.calls.clear()
+        assert handler.lambda_handler(sqs_event(1), Context()) == {"batchItemFailures": [{"itemIdentifier": "m-1"}]}
+        assert claiming.http_calls == []
+        (report,) = claiming.reports
+        assert report[2]["outcome"] == "retry" and report[2]["error"] == "CLAIM_UNAVAILABLE"
+        assert claiming.sqs.calls[-1]["VisibilityTimeout"] == 30

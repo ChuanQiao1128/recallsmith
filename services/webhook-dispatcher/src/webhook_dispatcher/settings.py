@@ -20,6 +20,10 @@ SECRET_TTL_SECONDS = 300.0
 # The optional previous signing secret lives next to the current one: "<name>-previous".
 PREVIOUS_SECRET_SUFFIX = "-previous"
 
+# Optional per-subscription signing secret: "<signing name>-sub-<subscriptionId>". When it exists it
+# replaces the environment-wide secret for that subscription only (README, "Per-subscription secrets").
+SUBSCRIPTION_SECRET_INFIX = "-sub-"
+
 DEFAULTS: dict[str, str] = {
     "SIGNING_SECRET_SSM_NAME": "/developercards/prod/webhook-signing-secret",
     "INTERNAL_SECRET_SSM_NAME": "/developercards/prod/internal-shared-secret",
@@ -28,6 +32,10 @@ DEFAULTS: dict[str, str] = {
     "WEBHOOK_HTTP_TIMEOUT_SECONDS": "10",
     "LOG_LEVEL": "info",
 }
+
+# Optional, off unless set (not part of the contract's env file): see Settings.presend_claim.
+PRESEND_CLAIM_ENV = "WEBHOOK_PRESEND_CLAIM"
+TRUTHY = ("1", "true", "yes")
 
 
 @dataclass(frozen=True)
@@ -38,6 +46,8 @@ class Settings:
     metrics_namespace: str
     http_timeout_seconds: float
     log_level: str
+    # Ask core-vpc before each POST whether (and where) to send. Off until core serves the route.
+    presend_claim: bool = False
 
 
 def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
@@ -58,6 +68,7 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         metrics_namespace=get("METRICS_NAMESPACE"),
         http_timeout_seconds=timeout,
         log_level=get("LOG_LEVEL").lower(),
+        presend_claim=(env.get(PRESEND_CLAIM_ENV) or "").strip().lower() in TRUTHY,
     )
 
 
@@ -127,6 +138,10 @@ def get_secret(name: str, *, optional: bool = False) -> str | None:
 
 def previous_secret_name(signing_secret_ssm_name: str) -> str:
     return signing_secret_ssm_name + PREVIOUS_SECRET_SUFFIX
+
+
+def subscription_secret_name(signing_secret_ssm_name: str, subscription_id: int) -> str:
+    return f"{signing_secret_ssm_name}{SUBSCRIPTION_SECRET_INFIX}{subscription_id}"
 
 
 def clear_secret_cache() -> None:

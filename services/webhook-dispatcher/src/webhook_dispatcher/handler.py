@@ -29,7 +29,10 @@ from .signing import (
 from .urlguard import URL_REJECTED, check_url
 
 REPORT_PATH = "/api/internal/webhooks/deliveries/report"
+# Pre-send check (only with WEBHOOK_PRESEND_CLAIM on): core answers whether, and to which URL, to send.
+CLAIM_PATH = "/api/internal/webhooks/deliveries/claim"
 SIGNING_SECRET_MISSING = "SIGNING_SECRET_MISSING"
+CLAIM_UNAVAILABLE = "CLAIM_UNAVAILABLE"
 MAX_ERROR_CHARS = 500
 REPORT_BUDGET_RESERVE_S = 2.0
 # Lambda time kept free after the POST so the attempt is always reported (the report client needs
@@ -146,6 +149,56 @@ def _host_of(url: str) -> str | None:
         return None
 
 
+def _signing_secrets(cfg: settings.Settings, subscription_id: int) -> tuple[str | None, str | None]:
+    """(current, previous) signing secrets for one subscription.
+
+    A per-subscription secret ("<name>-sub-<id>"), when it exists, replaces the environment-wide
+    one, so that receiver can neither verify nor forge the others' events. Its rotation uses
+    "<name>-sub-<id>-previous", just like the environment-wide secret.
+    """
+    name = settings.subscription_secret_name(cfg.signing_secret_ssm_name, subscription_id)
+    secret = settings.get_secret(name, optional=True)
+    if secret is None:
+        name = cfg.signing_secret_ssm_name
+        secret = settings.get_secret(name)
+        if secret is None:
+            return None, None
+    previous = settings.get_secret(settings.previous_secret_name(name), optional=True)
+    return secret, previous if previous != secret else None
+
+
+def _claim(msg: Message, n: int, context: Any, cfg: settings.Settings) -> tuple[str, str | None]:
+    """Ask core-vpc before sending: ("send", url) | ("cancelled", None) | ("unavailable", None).
+
+    The URL in the SQS message was frozen at enqueue time; the claim returns the subscription's
+    current URL, or send=false once it is disabled or deleted, so a queued delivery never makes
+    one more attempt to a URL an admin has already cut off.
+    """
+    internal_secret = settings.get_secret(cfg.internal_secret_ssm_name)
+    if internal_secret is None:
+        return "unavailable", None
+    client = internal_client_factory(
+        cfg.core_api_base, internal_secret, previous_secret=_previous_internal_secret(cfg)
+    )
+    payload = {"deliveryId": msg.delivery_id, "subscriptionId": msg.subscription_id, "attempt": n}
+    result = client.post(CLAIM_PATH, payload, budget_s=_report_budget(context))
+    data = result.data if result.ok else None
+    if data is None or not isinstance(data.get("send"), bool):
+        log("warn", "webhook_claim_failed", deliveryId=msg.delivery_id, status=result.status, error=result.error)
+        return "unavailable", None
+    if data["send"] is False:
+        return "cancelled", None
+    url = data.get("url")
+    return "send", url if isinstance(url, str) and url else msg.url
+
+
+def _previous_internal_secret(cfg: settings.Settings) -> Any:
+    def load() -> str | None:
+        return settings.get_secret(settings.previous_secret_name(cfg.internal_secret_ssm_name), optional=True)
+
+    return load
+
+
 def _process(record: dict[str, Any], context: Any, cfg: settings.Settings) -> bool:
     """Handle one record. True = ack (delete), False = batch item failure."""
     message_id = record.get("messageId")
@@ -158,18 +211,39 @@ def _process(record: dict[str, Any], context: Any, cfg: settings.Settings) -> bo
         return True
     n = int(record["attributes"]["ApproximateReceiveCount"])
 
-    host = _host_of(msg.url)
+    url = msg.url
+    claim = "send"
+    if cfg.presend_claim:
+        claim, claimed_url = _claim(msg, n, context, cfg)
+        if claim == "cancelled":
+            # Core has already settled the delivery (subscription disabled or deleted): no attempt,
+            # nothing to report.
+            log(
+                "info",
+                "webhook_delivery_cancelled",
+                deliveryId=msg.delivery_id,
+                subscriptionId=msg.subscription_id,
+                attempt=n,
+            )
+            return True
+        if claimed_url is not None:
+            url = claimed_url
+
+    host = _host_of(url)
     status_code: int | None = None
     duration_ms = 0
     sent = False
     error: str | None
     kind: str  # delivered | retryable | permanent
 
-    secret = settings.get_secret(cfg.signing_secret_ssm_name)
-    if secret is None:
+    secret, previous = _signing_secrets(cfg, msg.subscription_id)
+    if claim == "unavailable":
+        # Never send to a URL core has not confirmed; try again on the normal schedule.
+        kind, error = "retryable", CLAIM_UNAVAILABLE
+    elif secret is None:
         kind, error = "retryable", SIGNING_SECRET_MISSING
     else:
-        guard = check_url(msg.url)
+        guard = check_url(url)
         host = guard.host or host
         if guard.status == "rejected":
             kind, error = "permanent", f"{URL_REJECTED}: {guard.reason}"
@@ -187,13 +261,10 @@ def _process(record: dict[str, Any], context: Any, cfg: settings.Settings) -> bo
             }
             # Rotation window: while "<name>-previous" is set, also sign with the old secret so
             # receivers not yet updated keep verifying.
-            previous = settings.get_secret(
-                settings.previous_secret_name(cfg.signing_secret_ssm_name), optional=True
-            )
-            if previous is not None and previous != secret:
+            if previous is not None:
                 headers[HEADER_SIGNATURE_PREVIOUS] = sign_webhook(previous, ts, msg.body)
             result = post_json(
-                msg.url,
+                url,
                 msg.body.encode("utf-8"),
                 headers,
                 _attempt_timeout(context, cfg.http_timeout_seconds),
@@ -283,7 +354,9 @@ def _report(
         "durationMs": duration_ms,
         "error": error[:MAX_ERROR_CHARS] if error is not None else None,
     }
-    client = internal_client_factory(cfg.core_api_base, internal_secret)
+    client = internal_client_factory(
+        cfg.core_api_base, internal_secret, previous_secret=_previous_internal_secret(cfg)
+    )
     result = client.post(REPORT_PATH, payload, budget_s=_report_budget(context))
     if not result.ok:
         log(

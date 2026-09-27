@@ -124,3 +124,40 @@ def test_no_retry_when_the_budget_is_nearly_spent(local_server) -> None:
     result = client.post("/x", {"a": 1}, budget_s=1.5)
     assert result.ok is False and result.error == "budget exhausted"
     assert len(srv.requests) == 1
+
+
+def test_429_is_retried_like_a_5xx(local_server) -> None:
+    # cloud-security-resilience-12: the route throttle's 429 is transient, not permanent.
+    answers = iter([429, 200])
+    ok = json.dumps({"success": True, "data": {"stop": False}}).encode()
+    srv = local_server(lambda s, c: (next(answers), {"Content-Type": "application/json"}, ok))
+    sleeps: list[float] = []
+    result = InternalClient(srv.base_url, SECRET, timeout_s=2.0, sleep=sleeps.append).post("/x", {"a": 1})
+    assert result.ok and len(srv.requests) == 2 and sleeps == [1.0]
+
+
+def test_rejected_signature_is_sent_again_with_the_previous_internal_secret(local_server) -> None:
+    # cloud-security-resilience-11: whichever side flips first, the report still verifies.
+    ok = json.dumps({"success": True, "data": {"stop": False}}).encode()
+
+    def core(srv, captured):
+        body = captured.body.decode("ascii")
+        ts = int(captured.headers["x-internal-timestamp"])
+        if captured.headers["x-internal-signature"] != sign_internal("old-secret", ts, body):
+            return 403, {}, b"{}"
+        return 200, {"Content-Type": "application/json"}, ok
+
+    srv = local_server(core)
+    loads: list[int] = []
+
+    def previous() -> str | None:
+        loads.append(1)
+        return "old-secret"
+
+    client = InternalClient(srv.base_url, "new-secret", previous_secret=previous, timeout_s=2.0, sleep=lambda s: None)
+    assert client.post("/x", {"a": 1}).ok and len(srv.requests) == 2 and loads == [1]
+
+    srv.requests.clear()
+    no_previous = InternalClient(srv.base_url, "new-secret", previous_secret=lambda: None, timeout_s=2.0)
+    result = no_previous.post("/x", {"a": 1})
+    assert result.status == 403 and len(srv.requests) == 1
