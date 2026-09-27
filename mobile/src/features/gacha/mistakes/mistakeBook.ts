@@ -159,11 +159,9 @@ function parseEntry(key: string, raw: unknown): MistakeEntry | null {
   };
 }
 
-/** Reads the current user's book. Absent, corrupt or unreadable storage reads as an empty book. Never throws. */
-export async function loadMistakeBook(): Promise<MistakeBookState> {
+function parseBook(raw: string | null): MistakeBookState {
+  if (!raw) return emptyBook();
   try {
-    const raw = await AsyncStorage.getItem(await getUserScopedKey(MISTAKE_BOOK_KEY));
-    if (!raw) return emptyBook();
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptyBook();
     const obj = parsed as Record<string, unknown>;
@@ -181,14 +179,26 @@ export async function loadMistakeBook(): Promise<MistakeBookState> {
   }
 }
 
+/** Reads the current user's book. Absent, corrupt or unreadable storage reads as an empty book. Never throws. */
+export async function loadMistakeBook(): Promise<MistakeBookState> {
+  try {
+    return parseBook(await AsyncStorage.getItem(await getUserScopedKey(MISTAKE_BOOK_KEY)));
+  } catch {
+    return emptyBook();
+  }
+}
+
 async function recordNow(o: MistakeOutcome): Promise<void> {
   try {
-    const before = await loadMistakeBook();
+    const key = await getUserScopedKey(MISTAKE_BOOK_KEY);
+    // A storage read error throws out of here on purpose: writing a book rebuilt from an empty
+    // read would wipe every stored entry. Corrupt data, by contrast, is replaced.
+    const before = parseBook(await AsyncStorage.getItem(key));
     const after = applyOutcome(before, o);
     if (after === before) return;
-    await AsyncStorage.setItem(await getUserScopedKey(MISTAKE_BOOK_KEY), JSON.stringify(after));
+    await AsyncStorage.setItem(key, JSON.stringify(after));
   } catch {
-    // The book is best-effort; a failed write must never surface on the rating path.
+    // The book is best-effort; a failed read or write must never surface on the rating path.
   }
 }
 
