@@ -185,6 +185,8 @@ def get_recipient(name: str | None = None) -> str | None:
         return None
     value = value.strip()
     if not looks_like_one_address(value):
+        # Not cached either, so a corrected value is picked up on the next message.
+        _secret_cache.pop(parameter, None)
         log("warn", TAG, event="recipient_invalid", parameter=parameter)
         return None
     return value
