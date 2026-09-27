@@ -31,4 +31,33 @@ describe('author-cards skill', () => {
     expect(skill).toMatch(/`sources\/` directory/);
     expect(skillFile('citation-rules.md')).toMatch(/`submit_draft` always checks it/);
   });
+
+  it('has the verifier check codeSnippet and realWorldUsage against the chunk like the explanation (ai-agent-25)', () => {
+    const prompt = skillFile('verifier-prompt.md');
+    const step1 = prompt.split('\n').find((line) => line.startsWith('1. List each factual claim')) ?? '';
+    expect(step1).toMatch(/`codeSnippet`/);
+    expect(step1).toMatch(/parameter, flag or option/);
+    expect(step1).toMatch(/`realWorldUsage`/);
+    const step2 = prompt.split('\n').find((line) => line.startsWith('2. Mark each of those claims')) ?? '';
+    expect(step2).toMatch(/the same way for every field/);
+    expect(step2).toMatch(/`codeSnippet` that the chunk does not state is `not`/);
+    expect(prompt).toMatch(/"field": "explanation" \| "option" \| "codeSnippet" \| "realWorldUsage"/);
+
+    const step5 = skillFile('SKILL.md').split('\n').find((line) => line.startsWith('5. **Verify with a subagent.**')) ?? '';
+    expect(step5).toMatch(/`codeSnippet` \(API names, parameters, flags, values\) and `realWorldUsage`/);
+    expect(skillFile('checklist.md')).toMatch(/an invented flag or parameter is `incorrect_answer`, not `other`/);
+  });
+
+  it('documents read_source paging and the minimum quote length (ai-agent-23, ai-agent-24)', () => {
+    const skill = skillFile('SKILL.md');
+    const step1 = skill.split('\n').find((line) => line.startsWith('1. **Read.**')) ?? '';
+    for (const phrase of [/offset: nextOffset/, /`chunkIds`/, /`remainingChunkIds`/, /Never write a card or a quote from a `preview`/]) {
+      expect(step1).toMatch(phrase);
+    }
+    expect(skill).toMatch(/SOURCE_QUOTE_TOO_SHORT/);
+    expect(skill).toMatch(/`kind: "local"`/);
+    const rules = skillFile('citation-rules.md');
+    expect(rules).toMatch(/Minimum: 40 characters and 6 words/);
+    expect(rules).toMatch(/`kind: "local"`/);
+  });
 });
