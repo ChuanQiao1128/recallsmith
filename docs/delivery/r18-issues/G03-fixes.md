@@ -18,7 +18,7 @@ in a run).
   fetched url (`dc_ingest/core.py:54-55`). Outside a run `allowedHosts` is undefined, so nothing changes there.
 - `tools/mcp-server/src/server.ts:132`: `createServer` sets `automationRun` from `automation.runId !== null`
   (a valid `DC_AUTOMATION_RUN_ID`).
-- `tools/mcp-server/src/server.ts:286-290`: defence in depth: `submit_draft` refuses, with no API call,
+- `tools/mcp-server/src/server.ts:287-291`: defence in depth: `submit_draft` refuses, with no API call,
   any card whose `source.url` is a remembered document of kind `local` inside a run
   (`grounding failed: <stableUid>: SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION (…)`).
 - `tools/mcp-server/src/server.ts:52`: `MCP_SERVER_VERSION` `1.8.0` → `1.8.1` (tool behaviour and
