@@ -41,6 +41,8 @@ type Props = {
   // Not role-gated: the ledger's read routes are RequireAdmin, so the pages
   // that pass this decide who sees it.
   ledgerHref?: string;
+  // Not role-gated: the draft review routes decide who may act.
+  reviewHref?: string;
 
   children: React.ReactNode;
 };
@@ -59,6 +61,7 @@ export function ConsoleShell({
   adminUsersHref,
   webhooksHref,
   ledgerHref,
+  reviewHref,
   children,
 }: Props) {
   // Sign-out is the shell's own affair now, through AuthContext, so no page has
@@ -120,6 +123,12 @@ export function ConsoleShell({
               {ledgerHref ? (
                 <Link to={ledgerHref} className={NAV_LINK_CLASS}>
                   Automation ledger
+                </Link>
+              ) : null}
+
+              {reviewHref ? (
+                <Link to={reviewHref} className={NAV_LINK_CLASS}>
+                  Review queue
                 </Link>
               ) : null}
 

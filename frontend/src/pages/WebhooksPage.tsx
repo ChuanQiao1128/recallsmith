@@ -353,6 +353,7 @@ export function WebhooksPage() {
       contentIntelligenceHref="/content-intelligence"
       webhooksHref="/admin/webhooks"
       ledgerHref="/ledger"
+      reviewHref="/review"
       adminUsersHref="/admin/users"
       superAdmin
     >

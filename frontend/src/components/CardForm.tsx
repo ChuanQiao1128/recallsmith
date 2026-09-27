@@ -80,6 +80,9 @@ interface CardFormProps {
    * form itself makes no navigation decision — it only reports.
    */
   onDirtyChange?: (dirty: boolean) => void;
+
+  /** Idle text of the submit button, replacing Create Card / Save Changes; the busy text is unchanged. */
+  submitLabel?: string;
 }
 
 interface InternalState {
@@ -225,7 +228,7 @@ function slugifyWhileTyping(input: string): string {
 }
 
 export function CardForm(props: CardFormProps) {
-  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, onDirtyChange } = props;
+  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, onDirtyChange, submitLabel } = props;
 
   const mcqRequiredCount = mcq ? mcq.options.filter(option => option.correct).length : 0;
 
@@ -751,9 +754,11 @@ export function CardForm(props: CardFormProps) {
             ? mode === 'create'
               ? 'Creating...'
               : 'Saving...'
-            : mode === 'create'
-              ? 'Create Card'
-              : 'Save Changes'}
+            : submitLabel
+              ? submitLabel
+              : mode === 'create'
+                ? 'Create Card'
+                : 'Save Changes'}
         </button>
       </div>
 

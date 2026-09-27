@@ -276,6 +276,7 @@ export function LedgerPage() {
       contentIntelligenceHref="/content-intelligence"
       webhooksHref={superAdmin ? '/admin/webhooks' : undefined}
       ledgerHref="/ledger"
+      reviewHref="/review"
       adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
       <div>
