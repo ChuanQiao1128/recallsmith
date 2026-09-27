@@ -355,8 +355,11 @@ export function LedgerPage() {
   const totals = report?.totals;
   const hoursDetails: string[] = [];
   if (totals?.bySource) {
-    hoursDetails.push(`Live (measured): ${formatHours(totals.bySource.live.minutesSaved)}`);
-    hoursDetails.push(`of which inferred from history: ${formatHours(totals.bySource.backfill.minutesSaved)}`);
+    // Two disjoint parts of the headline, side by side; "measured" is kept for
+    // the baseline source on the next line (frontend-console-26).
+    hoursDetails.push(
+      `Live: ${formatHours(totals.bySource.live.minutesSaved)} · Inferred from history: ${formatHours(totals.bySource.backfill.minutesSaved)}`,
+    );
   }
   if (totals?.byBaselineSource) {
     hoursDetails.push(
@@ -376,6 +379,10 @@ export function LedgerPage() {
             `Edited-accept rate: ${formatPercent(agent.editedAcceptRate)}`,
             `Defect rate: ${formatPercent(agent.defectRate)} (${formatNumber(agent.defectRejects)} rejected for a defect)`,
             `Average review: ${agent.avgReviewMinutes === null ? '—' : `${formatNumber(agent.avgReviewMinutes)} min`}`,
+            // automation-16: how much of the figure rests on unmeasured reviews.
+            ...(agent.reviewNotMeasured
+              ? [`${formatNumber(agent.reviewNotMeasured)} decision(s) without measured review time`]
+              : []),
           ],
         }
     : null;

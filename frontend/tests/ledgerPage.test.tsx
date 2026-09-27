@@ -106,6 +106,7 @@ function report(overrides: Partial<LedgerReport> = {}): LedgerReport {
       editedAcceptRate: 0.4,
       defectRate: 0.15,
       avgReviewMinutes: 2.5,
+      reviewNotMeasured: 4,
     },
     ...overrides,
   };
@@ -548,8 +549,12 @@ describe('LedgerPage', () => {
     await mountLoaded();
     const hours = screen.getByTestId('ledger-total-hoursSaved');
     expect(hours.textContent).toContain('14.3 h');
-    expect(hours.textContent).toContain('Live (measured): 11.3 h');
-    expect(hours.textContent).toContain('of which inferred from history: 3.0 h');
+    // frontend-console-26: live and backfill are disjoint parts of the total, so
+    // they read side by side (this used to pin 'Live (measured)' followed by
+    // 'of which inferred from history', which read as a subset of live).
+    expect(hours.textContent).toContain('Live: 11.3 h · Inferred from history: 3.0 h');
+    expect(hours.textContent).not.toContain('of which');
+    expect(hours.textContent).not.toContain('Live (measured)');
     expect(hours.textContent).toContain('On measured baselines: 4.3 h · on default baselines: 10.0 h');
   });
 
@@ -572,6 +577,8 @@ describe('LedgerPage', () => {
     expect(tile.textContent).toContain('Edited-accept rate: 40.0%');
     expect(tile.textContent).toContain('Defect rate: 15.0% (3 rejected for a defect)');
     expect(tile.textContent).toContain('Average review: 2.5 min');
+    // automation-16: the unmeasured decisions are named, not dropped.
+    expect(tile.textContent).toContain('4 decision(s) without measured review time');
   });
 
   it('says no drafts were decided rather than printing 0% rates', async () => {
@@ -588,6 +595,7 @@ describe('LedgerPage', () => {
             editedAcceptRate: 0,
             defectRate: 0,
             avgReviewMinutes: null,
+            reviewNotMeasured: 0,
           },
         }),
       ),
