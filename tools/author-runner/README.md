@@ -160,9 +160,10 @@ An invalid value logs `config_error` naming the variable and its range, and exit
 ## Logs
 
 - `~/Library/Logs/DeveloperCards/author-runner.log` (launchd stdout and stderr): one compact JSON
-  object per line, `{ ts, level, event, runnerId, runId?, itemId?, outcome?, durationMs?, authorConfigId?, costUsd?, replayed?, error? }`.
+  object per line, `{ ts, level, event, runnerId, runId?, itemId?, outcome?, durationMs?, authorConfigId?, configId?, costUsd?, replayed?, error? }`.
   Events: `start`, `locked`, `config_error`, `login_required`, `mode_off`, `claimed`, `no_items`,
-  `item_start` (with `authorConfigId`), `item_done` (with `costUsd`, the CLI's `total_cost_usd`
+  `item_start` (with `authorConfigId`, the gated id the eval gate shows, and `configId`, the
+  16-character local `id`), `item_done` (with `costUsd`, the CLI's `total_cost_usd`
   estimate), `lease_short`, `bad_item`, `author_config_error`, `heartbeat_failed`, `complete_failed`,
   `complete_pending` (a `complete` kept for the next run), `complete_replayed` (a kept `complete`
   re-sent; `replayed: true` when the server had already applied it), `runner_unavailable` (a
@@ -244,7 +245,7 @@ MCP server changes `id`. The runner passes the model, skill version and `authorC
 server (`DC_AUTOMATION_AUTHOR_MODEL`, `DC_AUTOMATION_SKILL_VERSION`,
 `DC_AUTOMATION_AUTHOR_CONFIG_ID`), which sends them in every draft's `agent` block instead of what
 the model claims. The full configuration and `authorConfigId` are in `runs/<runId>.meta.json`, and
-the local `id` is on the `item_start` log line. The eval gate copies `authorConfigId` from the run
+both `authorConfigId` and the local `id` (as `configId`) are on the `item_start` log line. The eval gate copies `authorConfigId` from the run
 records of its new-facts runs, and a live auto-accept requires the draft's `agent.authorConfigId`
 to equal the gate's (else `AUTHOR_NOT_GATED`, M1).
 

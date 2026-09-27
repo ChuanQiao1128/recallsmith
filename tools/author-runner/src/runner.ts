@@ -499,7 +499,7 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
         break;
       }
 
-      log('info', 'item_start', { runId, itemId, authorConfigId: author.id });
+      log('info', 'item_start', { runId, itemId, authorConfigId: author.authorConfigId, configId: author.id });
       const started = now().getTime();
       const startedAt = now().toISOString();
       const mcpConfigPath = join(runsDir, `${runId}.mcp.json`);
