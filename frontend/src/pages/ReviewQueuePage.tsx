@@ -12,6 +12,9 @@
 // the dry-run shadow agreement counts only the blind ones. After a blinded
 // decision the outcome tells the verdict that was hidden, as a warning when an
 // accepted draft had AI QA blocker or major findings (D07 frontend-console-26).
+// Every blinded draft reads the same before the decision; accepting one that
+// AI QA flagged first opens the findings step (QaFindingsStep), which records
+// the verdict as seen (G04 frontend-console-38, P4).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
@@ -37,6 +40,7 @@ import {
   LABEL_CLASS,
 } from '../components/console/consoleStyles';
 import { DraftAutomationPanel } from '../features/automation/DraftAutomationPanel';
+import { QaFindingsStep } from '../features/automation/QaFindingsStep';
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import {
   automationBlinded,
@@ -47,7 +51,7 @@ import {
   revealedVerdict,
   verdictShownFor,
 } from '../lib/automationSurfaces';
-import { verdictSeenElsewhere } from '../lib/automationVerdictSeen';
+import { markVerdictSeen, verdictSeenElsewhere } from '../lib/automationVerdictSeen';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   DRAFT_NOTE_MAX_LENGTH,
@@ -106,6 +110,8 @@ function revealedOf(d: Draft, decision: 'accepted' | 'rejected'): Revealed | nul
 }
 /** Whether AI QA is enabled for the deck, so the accept can offer to chain a run (automation-17). */
 type QaEnabledState = { forDeckId: number | null; enabled: boolean };
+/** The open QA findings step of an accept (P4). */
+type QaStep = { draftId: number; qa: NonNullable<NonNullable<Draft['automation']>['qa']> };
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: 'pending', label: 'Pending' },
@@ -205,6 +211,8 @@ export function ReviewQueuePage() {
   // The reviewer's choice to chain an AI QA run on each accept; off by default,
   // because a run spends model budget.
   const [runQa, setRunQa] = useState(false);
+  const [qaStep, setQaStep] = useState<QaStep | null>(null);
+  const qaStepSettleRef = useRef<((acceptAnyway: boolean) => void) | null>(null);
 
   const listKey = deckId === null ? null : `${deckId}|${status}`;
 
@@ -466,7 +474,39 @@ export function ReviewQueuePage() {
     return null;
   }
 
-  function onAccept(current: Draft) {
+  /**
+   * Resolves whether the accept goes ahead. A blinded draft AI QA flagged
+   * first shows its blocker and major findings (P4); showing them records the
+   * verdict as seen, so this accept, or a later decision after Back, sends
+   * verdictShown: true. Every other draft goes ahead at once.
+   */
+  function confirmQaFindings(current: Draft): Promise<boolean> {
+    const qa = current.automation?.qa ?? null;
+    if (!current.automation || !qa || !automationQaFindingsShown(current.automation, current.status)) {
+      return Promise.resolve(true);
+    }
+    markVerdictSeen(current.draftId);
+    return new Promise<boolean>(resolve => {
+      // A step still open answers "back": only the newest click decides.
+      qaStepSettleRef.current?.(false);
+      qaStepSettleRef.current = resolve;
+      setQaStep({ draftId: current.draftId, qa });
+    });
+  }
+
+  const settleQaStep = useCallback((acceptAnyway: boolean) => {
+    const settle = qaStepSettleRef.current;
+    qaStepSettleRef.current = null;
+    setQaStep(null);
+    settle?.(acceptAnyway);
+  }, []);
+  const onQaStepBack = useCallback(() => settleQaStep(false), [settleQaStep]);
+  const onQaStepAccept = useCallback(() => settleQaStep(true), [settleQaStep]);
+  // Leaving the page with the step open answers "back", so no accept waits forever.
+  useEffect(() => () => qaStepSettleRef.current?.(false), []);
+
+  async function onAccept(current: Draft) {
+    if (!(await confirmQaFindings(current))) return;
     void decide(
       current.draftId,
       reviewMs =>
@@ -487,6 +527,9 @@ export function ReviewQueuePage() {
     const edited = formValuesToDraftCard(values, current.card);
     const editedLint = lintDraftCard(deck.slug, edited);
     if (!editedLint.ok) return { ok: false, error: editedLint.issues[0]?.message ?? 'The card has lint issues.' };
+    if (!(await confirmQaFindings(current))) {
+      return { ok: false, error: 'Not accepted yet: you went back to the draft after reading the AI QA findings.' };
+    }
     const problem = await decide(
       current.draftId,
       reviewMs =>
@@ -774,7 +817,6 @@ export function ReviewQueuePage() {
                           draftId={draft.draftId}
                           automation={draft.automation}
                           blinded={automationBlinded(draft.automation, draft.status)}
-                          qaFindingsShown={automationQaFindingsShown(draft.automation, draft.status)}
                         />
                       ) : null}
                       <section className={`${CARD_CLASS} space-y-2`} aria-label="Source">
@@ -881,7 +923,7 @@ export function ReviewQueuePage() {
                             variant="primary"
                             size="xs"
                             disabled={deciding || !lint.ok}
-                            onClick={() => onAccept(draft)}
+                            onClick={() => void onAccept(draft)}
                           >
                             Accept
                           </Button>
@@ -1010,6 +1052,9 @@ export function ReviewQueuePage() {
           </div>
         </>
       )}
+      {qaStep ? (
+        <QaFindingsStep qa={qaStep.qa} onAcceptAnyway={onQaStepAccept} onBack={onQaStepBack} />
+      ) : null}
     </ConsoleShell>
   );
 }
