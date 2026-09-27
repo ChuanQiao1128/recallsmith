@@ -9,11 +9,15 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { createApiClient, ToolFailure } from './api';
 import type { Config } from './config';
+import { credentialGuard, type CredentialGuard } from './credentialGuard';
 import { clientDraftKey, draftCardSchema, type DraftCard } from './draftCard';
-import { draftGrounding, groundQuote, SourceStore, type DraftGrounding, type GroundingLocation, type IngestedSource } from './grounding';
+import { groundQuote, SourceStore, sourceGrounding, type GroundingLocation, type IngestedSource, type SourceGrounding } from './grounding';
 import { defaultRunProcess, IngestError, readSource, type RunProcess } from './ingest';
 import { lintDraftCard, loadTopicVocabulary, SOURCE_QUOTE_MIN_CHARS, SOURCE_QUOTE_MIN_WORDS } from './lint';
 import { CHUNK_IDS_MAX, CHUNK_TEXT_BUDGET, chunksById, OUTLINE_PAGE_MAX, outlinePage, PREVIEW_CHARS, ReadCache } from './paging';
+
+/** The card as posted to the API: the agent's DraftCard with the server-computed grounding in its source. */
+type GroundedDraftCard = Omit<DraftCard, 'source'> & { source: { url: string; quote: string; grounding: SourceGrounding } };
 
 function ok(value: unknown): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(value) }] };
@@ -29,11 +33,26 @@ function failFrom(err: unknown): CallToolResult {
   return fail(`unexpected error: ${err instanceof Error ? err.message : String(err)}`);
 }
 
+/**
+ * Wraps a tool handler so that no result names the login token directory (ai-agent-29):
+ * a successful result that does becomes a tool error, and a failure message loses the path.
+ */
+function guarded<A>(guard: CredentialGuard, handler: (args: A) => Promise<CallToolResult>): (args: A) => Promise<CallToolResult> {
+  return async (args) => {
+    const result = await handler(args);
+    const texts = result.content.map((item) => (item.type === 'text' ? item.text : ''));
+    if (!texts.some((text) => guard.names(text))) return result;
+    if (result.isError === true) return fail(texts.map((text) => guard.redact(text)).join(' '));
+    return fail('refused: the result names a path in the login token directory, which is never returned');
+  };
+}
+
 export function createServer(deps: { config: Config; runProcess?: RunProcess }): McpServer {
   const { config } = deps;
   const runProcess = deps.runProcess ?? defaultRunProcess;
   const api = createApiClient(config);
   const ingestContext = { repoRoot: config.repoRoot, tokenFile: config.tokenFile };
+  const guard = credentialGuard(config.tokenFile);
   const sources = new SourceStore();
   const reads = new ReadCache();
   const server = new McpServer({ name: 'developercards', version: '1.8.0' });
@@ -70,7 +89,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       },
       annotations: { title: 'Read a source', readOnlyHint: true, openWorldHint: true },
     },
-    async ({ source, canonicalUrl, maxChunkChars, offset, limit, chunkIds }) => {
+    guarded(guard, async ({ source, canonicalUrl, maxChunkChars, offset, limit, chunkIds }) => {
       try {
         if (chunkIds !== undefined && (offset !== undefined || limit !== undefined)) {
           return fail('pass either chunkIds or offset/limit, not both');
@@ -89,7 +108,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       } catch (err) {
         return failFrom(err);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -108,7 +127,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       },
       annotations: { title: 'Find similar cards', readOnlyHint: true, openWorldHint: false },
     },
-    async ({ text, deckSlug, limit }) => {
+    guarded(guard, async ({ text, deckSlug, limit }) => {
       try {
         const body: { text: string; deckSlug?: string; limit?: number } = { text };
         if (deckSlug !== undefined) body.deckSlug = deckSlug;
@@ -117,7 +136,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       } catch (err) {
         return failFrom(err);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -136,21 +155,21 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       },
       annotations: { title: 'Lint a draft card', readOnlyHint: true, openWorldHint: false },
     },
-    async ({ deckSlug, card, sourceChunkText }) => {
+    guarded(guard, async ({ deckSlug, card, sourceChunkText }) => {
       try {
         return ok(lintDraftCard({ deckSlug, card, sourceChunkText }, loadTopicVocabulary(config.repoRoot)));
       } catch (err) {
         return failFrom(err);
       }
-    },
+    }),
   );
 
   server.registerTool(
     'submit_draft',
     {
       description: [
-        'Submits 1..20 DraftCards for deck `deckSlug` to the human review queue and returns { batchId, created: [{ draftId, clientDraftKey, stableUid }], duplicates: [{ clientDraftKey, draftId }], rejected: [{ clientDraftKey, code, message }], grounding: [{ stableUid, clientDraftKey, sourceId, url, chunkId, chunkCharStart, chunkCharEnd }] }; nothing is published until a reviewer accepts a draft.',
-        'Each submitted draft carries grounding { sourceId, chunkId, matched, quoteChars, kind, url, fetchedAt, chunkCharStart, chunkCharEnd } for the reviewer, where kind local means the url is the canonicalUrl given for a local file.',
+        'Submits 1..20 DraftCards for deck `deckSlug` to the human review queue and returns { batchId, created: [{ draftId, clientDraftKey, stableUid }], duplicates: [{ clientDraftKey, draftId }], rejected: [{ clientDraftKey, code, message }], grounding: [{ stableUid, clientDraftKey, sourceId, url, chunkId, chunkCharStart, chunkCharEnd, kind }] }; nothing is published until a reviewer accepts a draft.',
+        'The server adds source.grounding { chunkId, sourceId, matched, quoteChars } to each card it submits, which the review queue shows; never put grounding in a card yourself (it is refused). kind local in the result means the url is the canonicalUrl given for a local file: tell the user so the reviewer opens that url.',
         'Before any API call it lints every card and checks every citation: source.url must be a url read_source returned in this session (an https url not yet read is read once now) or the card fails with SOURCE_NOT_INGESTED, and source.quote must occur whitespace-normalised in one chunk of that source or it fails with SOURCE_QUOTE_NOT_IN_CHUNK; any failure refuses the whole batch as a tool error.',
         'Submitting the same card again is idempotent (it comes back under duplicates, keyed by the SHA-256 clientDraftKey of the card), and a card the server refuses comes back under rejected while the rest proceed.',
         'agent is { model, skillVersion }; the tool does not verify that the answer is correct, only that the quote is really in the cited source.',
@@ -162,7 +181,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       },
       annotations: { title: 'Submit drafts for review', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ deckSlug, drafts, agent }) => {
+    guarded(guard, async ({ deckSlug, drafts, agent }) => {
       try {
         const vocabulary = loadTopicVocabulary(config.repoRoot);
         const failures: string[] = [];
@@ -174,7 +193,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
 
         // Citation grounding at the trust boundary: the quote must be in the cited source.
         const grounding: GroundingLocation[] = [];
-        const reviewerGrounding: DraftGrounding[] = [];
+        const reviewerGrounding: SourceGrounding[] = [];
         for (const card of drafts) {
           const { url, quote } = card.source ?? { url: '', quote: '' };
           const doc = await ingestedSource(url);
@@ -195,8 +214,9 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
             chunkId: check.chunk.id,
             chunkCharStart: check.chunk.charStart,
             chunkCharEnd: check.chunk.charEnd,
+            kind: doc.kind,
           });
-          reviewerGrounding.push(draftGrounding(doc, check.chunk, quote));
+          reviewerGrounding.push(sourceGrounding(doc, check.chunk, quote));
         }
         if (failures.length > 0) return fail(`grounding failed: ${failures.join('; ')}`);
 
@@ -204,10 +224,15 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
         const body: {
           deckId: number;
           agent?: { name: string; model: string; skillVersion: string };
-          drafts: Array<{ clientDraftKey: string; card: DraftCard; grounding: DraftGrounding }>;
+          drafts: Array<{ clientDraftKey: string; card: GroundedDraftCard }>;
         } = {
           deckId,
-          drafts: drafts.map((card, i) => ({ clientDraftKey: clientDraftKey(card), card, grounding: reviewerGrounding[i] as DraftGrounding })),
+          // The key hashes the card as the agent wrote it, so a resubmit stays idempotent; the
+          // grounding travels inside card.source (cross-wave contract), which core-vpc persists.
+          drafts: drafts.map((card, i) => ({
+            clientDraftKey: clientDraftKey(card),
+            card: { ...card, source: { url: card.source?.url ?? '', quote: card.source?.quote ?? '', grounding: reviewerGrounding[i] as SourceGrounding } },
+          })),
         };
         if (agent !== undefined) {
           body.agent = { name: 'developercards-mcp', model: agent.model, skillVersion: agent.skillVersion };
@@ -218,7 +243,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       } catch (err) {
         return failFrom(err);
       }
-    },
+    }),
   );
 
   return server;

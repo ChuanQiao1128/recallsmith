@@ -5,7 +5,7 @@ Every draft carries exactly one `source: { url, quote }` (contract §5.1, §8.1)
 ## `source.url`
 
 - `source.url` = the chunk's `url` as returned by `read_source`. `submit_draft` refuses any other url with `SOURCE_NOT_INGESTED`.
-- For a local file (PDF or text on disk) that is the `canonicalUrl` you passed to `read_source`: the https page the file was downloaded from. The draft reaches the reviewer marked `kind: "local"`, because nothing checked that the file matches that page; the reviewer opens the url to confirm the quote there.
+- For a local file (PDF or text on disk) that is the `canonicalUrl` you passed to `read_source`: the https page the file was downloaded from. `submit_draft` reports that draft's grounding as `kind: "local"`, because nothing checked that the file matches that page; tell the user, so the reviewer opens the url to confirm the quote there.
 - Never a local path, never `http://` (it must match `^https://\S+$`), at most 2048 characters.
 
 ## `source.quote`
