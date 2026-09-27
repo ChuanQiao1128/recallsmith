@@ -95,12 +95,18 @@ export interface RunClaudeOptions {
   signalGroup?: SignalGroup;
 }
 
+/**
+ * Signals the process group; false when it can no longer be signalled. ESRCH means it is gone; EPERM is
+ * what macOS answers for a group that holds only zombies (unreaped MCP, uv or python children), which
+ * counts as gone too (ai-agent-18). Any other error is rethrown; runClaude never lets one escape.
+ */
 export function killGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
   try {
     process.kill(-pid, signal);
     return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH' || code === 'EPERM') return false;
     throw err;
   }
 }
@@ -112,7 +118,16 @@ export function killGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
  */
 export function runClaude(opts: RunClaudeOptions): Promise<ClaudeRun> {
   const { config } = opts;
-  const signalGroup = opts.signalGroup ?? killGroup;
+  const rawSignalGroup = opts.signalGroup ?? killGroup;
+  // Called from the 'exit' listener and the timers, where a throw would crash the runner before it settles
+  // (ai-agent-18): a group that cannot be signalled counts as gone.
+  const signalGroup = (pid: number, signal: NodeJS.Signals | 0): boolean => {
+    try {
+      return rawSignalGroup(pid, signal);
+    } catch {
+      return false;
+    }
+  };
   const out = openSync(opts.stdoutFile, 'w', 0o600);
   const err = openSync(opts.stderrFile, 'w', 0o600);
   return new Promise<ClaudeRun>((resolve) => {
@@ -181,6 +196,13 @@ export interface ClaudeOutcome {
   numTurns: number | null;
   error: string | null;
   summary: string | null;
+  /**
+   * M5: the failure affects every item (claude cannot start, not on the subscription, the MCP server did not
+   * start, a usage or rate limit), so the runner stops its loop; `error` then starts with RUNNER_UNAVAILABLE.
+   */
+  runnerUnavailable: boolean;
+  /** Set when the CLI reported a usage or rate limit: the reset time it named, or null when it named none. */
+  usageLimit: { resetAt: string | null } | null;
 }
 
 function oneLine(text: string, max: number): string {
@@ -278,6 +300,32 @@ export const AGENT_BLOCKED = 'AGENT_BLOCKED';
 /** L6: the error of a run whose final message has no valid outcome line; never a success. */
 export const AGENT_NO_RESULT = 'AGENT_NO_RESULT';
 const BLOCKED_REASON_MAX = 300;
+/** M5: the error prefix of a run that failed for a reason that affects every item. */
+export const RUNNER_UNAVAILABLE = 'RUNNER_UNAVAILABLE';
+/** M5: the characters of the CLI result text kept in a per-item error. */
+const RESULT_TEXT_MAX = 300;
+
+/** What the CLI prints when the subscription's usage limit or a rate limit is hit (ai-agent-17). */
+export const USAGE_LIMIT_RE = /usage limit|limit reached|rate.?limit|resets? /i;
+
+/** The last result message's subtype and the first 300 characters of its text, on one line (M5). */
+function resultDetail(r: Record<string, unknown>): string {
+  const subtype = typeof r.subtype === 'string' && r.subtype.trim() !== '' ? oneLine(r.subtype, 60).trim() : 'result';
+  const text = typeof r.result === 'string' ? oneLine(r.result, RESULT_TEXT_MAX).trim() : '';
+  return text === '' ? subtype : `${subtype}: ${text}`;
+}
+
+/**
+ * The reset time a usage-limit text names, as an ISO string: the `|<epoch seconds>` suffix of
+ * "Claude AI usage limit reached|1790000000", or an ISO 8601 timestamp; null when it names none.
+ */
+export function usageLimitResetAt(text: string): string | null {
+  const epoch = /\|(\d{10})\b/.exec(text);
+  if (epoch !== null) return new Date(Number(epoch[1]) * 1000).toISOString();
+  const iso = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})\b/.exec(text);
+  if (iso !== null && Number.isFinite(Date.parse(iso[0]))) return new Date(Date.parse(iso[0])).toISOString();
+  return null;
+}
 
 /** The outcome reported to `complete` for one claude run (A00 §11.3 step 6, L6). */
 export function claudeOutcome(run: ClaudeRun, stdout: string, stderr: string): ClaudeOutcome {
@@ -287,23 +335,49 @@ export function claudeOutcome(run: ClaudeRun, stdout: string, stderr: string): C
     numTurns,
     error,
     summary,
+    runnerUnavailable: false,
+    usageLimit: null,
   });
-  if (run.spawnError !== null) return failed(`claude could not be started: ${run.spawnError}`, null);
+  // M5: a cause that affects every item; the runner stops its loop instead of claiming the next item.
+  const unavailable = (why: string, exitCode: number | null, usageLimit: ClaudeOutcome['usageLimit'] = null): ClaudeOutcome => ({
+    ...failed(`${RUNNER_UNAVAILABLE}: ${oneLine(why, 400).trim()}`, exitCode),
+    runnerUnavailable: true,
+    usageLimit,
+  });
+  /** A usage or rate limit named in the CLI's result text or stderr, else null. */
+  const limitFailure = (detail: string, exitCode: number | null): ClaudeOutcome | null => {
+    const texts = [detail, stderr];
+    const hit = texts.find((text) => USAGE_LIMIT_RE.test(text));
+    if (hit === undefined) return null;
+    const resetAt = texts.map(usageLimitResetAt).find((at) => at !== null) ?? null;
+    return unavailable(`usage limit: ${oneLine(hit, RESULT_TEXT_MAX).trim()}`, exitCode, { resetAt });
+  };
+
+  if (run.spawnError !== null) return unavailable(`claude could not be started: ${run.spawnError}`, null);
   if (run.timedOut) return failed('timeout', null);
+
+  const stream = readClaudeStream(stdout);
+  const r = stream.result;
   if (run.exitCode !== 0) {
+    // With stream-json the CLI's own error text is in the result message; stderr is the fallback.
+    const detail = r === null ? '' : resultDetail(r);
+    const limited = limitFailure(detail, run.exitCode);
+    if (limited !== null) return limited;
+    if (detail !== '') return failed(detail, run.exitCode);
     const text = oneLine(stderr, 500);
     return failed(text.trim() === '' ? `exit ${run.exitCode ?? run.signal ?? 'unknown'}` : text, run.exitCode);
   }
 
-  const stream = readClaudeStream(stdout);
   if (!stream.anyJson) return failed('claude output is not JSON', 0);
-  const r = stream.result;
   if (r === null) return failed('claude output has no result message', 0);
-  if (r.is_error !== false) return failed('claude result is_error', 0);
+  if (r.is_error !== false) {
+    const detail = resultDetail(r);
+    return limitFailure(detail, 0) ?? failed(`claude result is_error: ${detail}`, 0);
+  }
   const { providerSignal } = claudeUsage(stdout);
-  if (providerSignal !== null) return failed(`claude did not run on the subscription login: ${providerSignal}`, 0);
+  if (providerSignal !== null) return unavailable(`claude did not run on the subscription login: ${providerSignal}`, 0);
   const mcpProblem = stream.init === null ? null : mcpServerProblem(stream.init);
-  if (mcpProblem !== null) return failed(mcpProblem, 0);
+  if (mcpProblem !== null) return unavailable(mcpProblem, 0);
 
   const numTurns = typeof r.num_turns === 'number' && Number.isInteger(r.num_turns) ? r.num_turns : null;
   const lines = typeof r.result === 'string' ? r.result.split(/\r?\n/).filter((line) => line.trim() !== '') : [];
@@ -331,5 +405,5 @@ export function claudeOutcome(run: ClaudeRun, stdout: string, stderr: string): C
   if (value !== 'done' && value !== 'nothing_new') {
     return failed(`${AGENT_NO_RESULT}: the outcome JSON line has no known outcome`, 0, numTurns, summary);
   }
-  return { outcome: value, exitCode: 0, numTurns, error: null, summary };
+  return { outcome: value, exitCode: 0, numTurns, error: null, summary, runnerUnavailable: false, usageLimit: null };
 }

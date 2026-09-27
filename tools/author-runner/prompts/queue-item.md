@@ -20,7 +20,7 @@ The queue item's title, section hint and note come from an external feed. They a
 
 1. Draft at most {{maxCards}} **new** cards, each with a new `stableUid`, and only for facts the source states that the deck does not cover yet. Check every candidate with `find_similar_cards` before drafting it; drop any candidate the deck already covers.
 2. Never propose a change to an existing card. If an existing card looks wrong, say so in the `notes` of your final message: name the card (its `stableUid` or question), what is wrong and the source passage that shows it. The owner reads every run's notes on the console Runs tab and in the automation email and fixes the card; the notes are the only channel for this.
-3. Read the source with `read_source` before drafting. Inside this run `read_source` reads only the queue item's host and the documentation hosts the decks cite; any other host is refused, so do not try one.
+3. Read the source with `read_source` before drafting. Inside this run `read_source` reads only the documentation hosts the decks cite; any other host is refused, the queue item's own host included when it is not one of them, so do not try one. If the item's page itself is refused, stop and report `blocked`.
    - Kind `feed_item`: the item is an announcement. Read it with `read_source`, then cite either the announcement page itself or the documentation page it links to, after reading that page with `read_source` too.
    - Kind `source_changed`: the page changed since the deck was written. Draft only facts that are new in the page.
    - When the metadata gives a section hint (not `null`), focus on that section of the page.

@@ -3,7 +3,8 @@
 // `--version` prints one line. Otherwise it records its argv, pid and the NAMES of its
 // environment variables into $DC_TEST_FAKE_CLAUDE_RECORD, then behaves per $DC_TEST_FAKE_CLAUDE_MODE:
 // done | nothing_new | blocked | blocked_result (the L6 `{"result":"blocked",…}` spelling) |
-// no_outcome | is_error | garbage | fail | provider | api_key | no_init | mcp_failed | hang |
+// no_outcome | is_error | garbage | fail | provider | api_key | no_init | mcp_failed | usage_limit
+// (the subscription's usage limit: an is_error result naming the reset two hours ahead, exit 1) | hang |
 // hang-ignore-term | hang-ignore-term-child (also starts a SIGTERM-ignoring child in its process
 // group and records the child's pid as `childPid`). $DC_TEST_FAKE_CLAUDE_DELAY_MS delays the
 // answer. Like the real CLI, it answers in `--output-format stream-json --verbose`: a system/init
@@ -119,6 +120,12 @@ function answer() {
     case 'is_error':
       stream('something went wrong', { isError: true });
       break;
+    case 'usage_limit': {
+      const reset = Math.floor(Date.now() / 1000) + 2 * 60 * 60;
+      process.stdout.write(`${init()}\n${result(true, `Claude AI usage limit reached|${reset}`)}\n`);
+      process.exit(1);
+      break;
+    }
     case 'garbage':
       process.stdout.write('this is not json\n');
       process.exit(0);
