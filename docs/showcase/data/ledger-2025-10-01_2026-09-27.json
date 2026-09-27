@@ -1,0 +1,224 @@
+{
+  "from": "2025-10-01",
+  "to": "2026-09-27",
+  "granularity": "month",
+  "totals": {
+    "runs": 128,
+    "units": 1058,
+    "baselineMinutes": 3751.50,
+    "actualMinutes": 0,
+    "minutesSaved": 3751.50,
+    "hoursSaved": 62.53,
+    "defectsCaught": 0,
+    "qaFalsePositives": 0,
+    "bySource": {
+      "live": {
+        "runs": 0,
+        "units": 0,
+        "minutesSaved": 0,
+        "hoursSaved": 0
+      },
+      "backfill": {
+        "runs": 128,
+        "units": 1058,
+        "minutesSaved": 3751.50,
+        "hoursSaved": 62.53
+      }
+    },
+    "byBaselineSource": {
+      "measured": {
+        "minutesSaved": 0
+      },
+      "default": {
+        "minutesSaved": 3751.50
+      }
+    }
+  },
+  "automations": [
+    {
+      "automation": "ai_draft_review",
+      "unit": "accepted card",
+      "baselineMinutesPerUnit": 12.00,
+      "baselineSource": "default",
+      "runs": 0,
+      "units": 0,
+      "failures": 0,
+      "failureRate": 0,
+      "baselineMinutes": 0,
+      "actualMinutes": 0,
+      "minutesSaved": 0,
+      "defectsCaught": 0
+    },
+    {
+      "automation": "ai_qa_review",
+      "unit": "reviewed card",
+      "baselineMinutesPerUnit": 3.00,
+      "baselineSource": "default",
+      "runs": 0,
+      "units": 0,
+      "failures": 0,
+      "failureRate": 0,
+      "baselineMinutes": 0,
+      "actualMinutes": 0,
+      "minutesSaved": 0,
+      "defectsCaught": 0
+    },
+    {
+      "automation": "bulk_import",
+      "unit": "card",
+      "baselineMinutesPerUnit": 1.50,
+      "baselineSource": "default",
+      "runs": 11,
+      "units": 941,
+      "failures": 0,
+      "failureRate": 0,
+      "baselineMinutes": 1411.50,
+      "actualMinutes": 0,
+      "minutesSaved": 1411.50,
+      "defectsCaught": 0
+    },
+    {
+      "automation": "publish_gate",
+      "unit": "blocked publish",
+      "baselineMinutesPerUnit": 0.00,
+      "baselineSource": "default",
+      "runs": 0,
+      "units": 0,
+      "failures": 0,
+      "failureRate": 0,
+      "baselineMinutes": 0,
+      "actualMinutes": 0,
+      "minutesSaved": 0,
+      "defectsCaught": 0
+    },
+    {
+      "automation": "publish_pipeline",
+      "unit": "publish",
+      "baselineMinutesPerUnit": 20.00,
+      "baselineSource": "default",
+      "runs": 117,
+      "units": 117,
+      "failures": 0,
+      "failureRate": 0,
+      "baselineMinutes": 2340.00,
+      "actualMinutes": 0,
+      "minutesSaved": 2340.00,
+      "defectsCaught": 0
+    },
+    {
+      "automation": "webhook_notification",
+      "unit": "delivered event",
+      "baselineMinutesPerUnit": 1.00,
+      "baselineSource": "default",
+      "runs": 0,
+      "units": 0,
+      "failures": 0,
+      "failureRate": 0,
+      "baselineMinutes": 0,
+      "actualMinutes": 0,
+      "minutesSaved": 0,
+      "defectsCaught": 0
+    }
+  ],
+  "series": [
+    {
+      "periodStart": "2025-12-01",
+      "automation": "bulk_import",
+      "runs": 3,
+      "units": 100,
+      "minutesSaved": 150.00,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2025-12-01",
+      "automation": "publish_pipeline",
+      "runs": 21,
+      "units": 21,
+      "minutesSaved": 420.00,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2026-01-01",
+      "automation": "publish_pipeline",
+      "runs": 2,
+      "units": 2,
+      "minutesSaved": 40.00,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2026-02-01",
+      "automation": "publish_pipeline",
+      "runs": 36,
+      "units": 36,
+      "minutesSaved": 720.00,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2026-03-01",
+      "automation": "publish_pipeline",
+      "runs": 24,
+      "units": 24,
+      "minutesSaved": 480.00,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2026-04-01",
+      "automation": "publish_pipeline",
+      "runs": 19,
+      "units": 19,
+      "minutesSaved": 380.00,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2026-05-01",
+      "automation": "bulk_import",
+      "runs": 1,
+      "units": 30,
+      "minutesSaved": 45.00,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2026-07-01",
+      "automation": "publish_pipeline",
+      "runs": 1,
+      "units": 1,
+      "minutesSaved": 20.00,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2026-08-01",
+      "automation": "publish_pipeline",
+      "runs": 5,
+      "units": 5,
+      "minutesSaved": 100.00,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2026-09-01",
+      "automation": "bulk_import",
+      "runs": 7,
+      "units": 811,
+      "minutesSaved": 1216.50,
+      "defectsCaught": 0
+    },
+    {
+      "periodStart": "2026-09-01",
+      "automation": "publish_pipeline",
+      "runs": 9,
+      "units": 9,
+      "minutesSaved": 180.00,
+      "defectsCaught": 0
+    }
+  ],
+  "agentDrafts": {
+    "decided": 0,
+    "accepted": 0,
+    "editedAccepted": 0,
+    "rejected": 0,
+    "defectRejects": 0,
+    "acceptanceRate": 0,
+    "editedAcceptRate": 0,
+    "defectRate": 0,
+    "avgReviewMinutes": null
+  }
+}

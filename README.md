@@ -8,6 +8,20 @@ how well each card's stated difficulty matches how people actually perform on it
 
 This is a personal project, written and maintained by one person.
 
+## Showcase
+
+Release 1.8.0 moved card authoring to a local AI agent with a human review queue, an evaluated
+AI QA check before publish, signed webhooks into n8n, and an automation ledger. Three plain-English
+documents explain it; every number in them cites a committed file:
+
+- [Reviewer guide](docs/showcase/reviewer-guide.md) (`docs/showcase/reviewer-guide.md`): how a
+  non-technical reviewer approves AI drafts and acts on AI QA findings in the console.
+- [Process redesign case study](docs/showcase/process-redesign-case-study.md)
+  (`docs/showcase/process-redesign-case-study.md`): before and after, the evaluation story, design
+  trade-offs, and what is still owner-gated.
+- [Demo video script](docs/showcase/demo-video-script.md) (`docs/showcase/demo-video-script.md`):
+  a shot list under three minutes.
+
 ## 1. What is in this repository
 
 | Directory | Stack | Responsibility |
