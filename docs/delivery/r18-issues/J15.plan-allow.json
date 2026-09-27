@@ -1,0 +1,21 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.worker.aws_sqs_queue.ai_qa_jobs_dlq": "create",
+    "module.worker.aws_sqs_queue.ai_qa_jobs": "create",
+    "module.worker.aws_sqs_queue_redrive_allow_policy.ai_qa_jobs_dlq": "create",
+    "module.worker.aws_cloudwatch_log_group.ai_qa": "create",
+    "module.worker.aws_lambda_function.ai_qa": "create",
+    "module.worker.aws_lambda_alias.ai_qa_prod": "create",
+    "module.worker.aws_lambda_event_source_mapping.ai_qa_sqs": "create",
+    "module.identity.aws_iam_role.ai_qa": "create",
+    "module.identity.aws_iam_role_policy.ai_qa": "create",
+    "module.identity.aws_iam_role_policy.core_vpc_ai_qa_send": "create",
+    "module.identity.aws_ssm_parameter.secret[\"anthropic-api-key\"]": "create",
+    "module.api.aws_apigatewayv2_route.this[\"internal_ai_qa\"]": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_dlq_nonempty": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_errors": "create",
+    "module.api.aws_apigatewayv2_stage.default": { "action": "update", "keys": ["route_settings"] },
+    "module.api.aws_apigatewayv2_stage.dev": { "action": "update", "keys": ["route_settings"] }
+  }
+}
