@@ -191,6 +191,8 @@ class ConverseClient:
     def with_options(self, *, timeout: float | None = None, max_retries: int | None = None, **_: Any) -> ConverseClient:
         """A client with this read timeout and retry count (None keeps this client's value)."""
         key = (self.timeout if timeout is None else timeout, self.max_retries if max_retries is None else max_retries)
+        if key == (self.timeout, self.max_retries):
+            return self
         variant = self._variants.get(key)
         if variant is None:
             if len(self._variants) >= MAX_VARIANTS:

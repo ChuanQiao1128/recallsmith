@@ -293,11 +293,10 @@ CLIENT_ERROR_CODES = {
     "InternalServerException": "PROVIDER_ERROR",
     "ServiceUnavailableException": "PROVIDER_ERROR",
 }
-# A ValidationException with one of these (lower-cased) in its message is an account that may not
-# use the model (Bedrock allowlisting, Marketplace terms, region), not a bad request.
+# A ValidationException whose message (lower-cased) says access is not allowed or has one of these
+# is an account that may not use the model (Bedrock allowlisting, Marketplace terms, region), not a
+# bad request.
 ACCESS_DENIED_MARKERS = (
-    "access is not allowed",
-    "not allowed to access",
     "verify you are a corporate customer",
     "unsupported countries",
     "don't have access",
@@ -312,7 +311,8 @@ def client_error_code(exc: Exception) -> str:
     name = error.get("Code")
     if name == "ValidationException":
         message = str(error.get("Message") or "").lower()
-        if any(marker in message for marker in ACCESS_DENIED_MARKERS):
+        not_allowed = "access" in message and "not allowed" in message
+        if not_allowed or any(marker in message for marker in ACCESS_DENIED_MARKERS):
             return "PROVIDER_ACCESS_DENIED"
     code = CLIENT_ERROR_CODES.get(name)
     if code is not None:
