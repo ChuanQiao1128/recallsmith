@@ -39,6 +39,8 @@ locals {
     options_admin_cognito = { route_key = "OPTIONS /api/v1/admin/cognito/{proxy+}", integration = "core_vpc", auth = "none" }
     options_ai            = { route_key = "OPTIONS /api/v1/ai/{proxy+}", integration = "core_vpc", auth = "none" }
     options_billing       = { route_key = "OPTIONS /api/v1/billing/{proxy+}", integration = "core_vpc", auth = "none" }
+    # R18 J05: server-to-server HMAC route (no JWT, no OPTIONS); the narrow key wins over proxy.
+    internal_webhooks = { route_key = "POST /api/internal/webhooks/{proxy+}", integration = "core_vpc", auth = "none" }
   }
 
   integration_ids = {
@@ -57,6 +59,7 @@ locals {
     "ANY /api/v1/draw-state/{proxy+}"       = { burst = 40, rate = 20 }
     "POST /webhooks/revenuecat/production"  = { burst = 20, rate = 10 }
     "POST /webhooks/revenuecat/development" = { burst = 10, rate = 5 }
+    "POST /api/internal/webhooks/{proxy+}"  = { burst = 20, rate = 10 }
   }
 }
 

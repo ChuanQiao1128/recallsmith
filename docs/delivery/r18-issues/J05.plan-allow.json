@@ -1,0 +1,22 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.worker.aws_sqs_queue.webhook_events_dlq": "create",
+    "module.worker.aws_sqs_queue.webhook_events": "create",
+    "module.worker.aws_sqs_queue_redrive_allow_policy.webhook_events_dlq": "create",
+    "module.worker.aws_cloudwatch_log_group.webhook_dispatcher": "create",
+    "module.worker.aws_lambda_function.webhook_dispatcher": "create",
+    "module.worker.aws_lambda_alias.webhook_dispatcher_prod": "create",
+    "module.worker.aws_lambda_event_source_mapping.webhook_dispatcher_sqs": "create",
+    "module.identity.aws_iam_role.webhook_dispatcher": "create",
+    "module.identity.aws_iam_role_policy.webhook_dispatcher": "create",
+    "module.identity.aws_iam_role_policy.core_vpc_webhooks_send": "create",
+    "module.identity.aws_iam_role_policy.worker_webhooks_send": "create",
+    "module.identity.aws_ssm_parameter.secret[\"webhook-signing-secret\"]": "create",
+    "module.api.aws_apigatewayv2_route.this[\"internal_webhooks\"]": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.webhook_dlq_nonempty": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.webhook_dispatcher_errors": "create",
+    "module.api.aws_apigatewayv2_stage.default": { "action": "update", "keys": ["route_settings"] },
+    "module.api.aws_apigatewayv2_stage.dev": { "action": "update", "keys": ["route_settings"] }
+  }
+}

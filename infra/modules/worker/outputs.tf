@@ -25,3 +25,19 @@ output "publish_dlq_arn" {
 output "publish_dlq_name" {
   value = aws_sqs_queue.publish_jobs_dlq.name
 }
+
+output "webhook_queue_arn" {
+  value = aws_sqs_queue.webhook_events.arn
+}
+
+output "webhook_queue_url" {
+  value = aws_sqs_queue.webhook_events.url
+}
+
+output "webhook_dlq_name" {
+  value = aws_sqs_queue.webhook_events_dlq.name
+}
+
+output "webhook_dispatcher_function_name" {
+  value = aws_lambda_function.webhook_dispatcher.function_name
+}

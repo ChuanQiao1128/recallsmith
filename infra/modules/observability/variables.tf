@@ -51,3 +51,7 @@ variable "metrics_namespace" {
   type    = string
   default = "DeveloperCards"
 }
+
+variable "webhook_dlq_name" { type = string }
+
+variable "webhook_dispatcher_function_name" { type = string }
