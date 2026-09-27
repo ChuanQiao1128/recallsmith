@@ -1,9 +1,14 @@
 // src/features/automation/DecisionDetail.tsx
 //
 // One automatic decision in full (A00 §16.2 GET …/decisions/:draftId): the
-// card, the draft-QA findings and the event timeline. A decision routed to a
-// person links to the review queue, where the person decides.
-import { useEffect, useState } from 'react';
+// card, the draft-QA findings and the event timeline. A draft a person may
+// still decide (routed to a person, or a dry-run would-accept) links to the
+// review queue, where the person decides.
+//
+// Opened from the page (a Details click), the heading takes focus and scrolls
+// into view, so the owner sees the detail open wherever the row was (B07
+// frontend-console-4); a deep link leaves focus where the browser put it.
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { fetchAutomationDecision, type AutomationDecisionDetail } from '../../api/automation';
@@ -11,19 +16,41 @@ import { CARD_CLASS, H2_CLASS, TD_CLASS, TH_CLASS } from '../../components/conso
 import { Badge } from '../../components/ui/Badge';
 import { Callout } from '../../components/ui/Callout';
 import {
+  MODE_LABELS,
   automationErrorMessage,
+  codeLabel,
+  decisionAwaitsPerson,
+  decisionBadge,
+  decisionReasonDetailText,
   decisionReasonLabel,
   decisionStateLabel,
-  decisionStateTone,
   formatTimestamp,
+  humanActionLabel,
   orDash,
 } from '../../lib/automationRules';
 import { QA_CATEGORY_LABELS } from '../../lib/qaReview';
 
 type DetailState = { forDraft: number | null; error: string | null; data: AutomationDecisionDetail | null };
 
-export function DecisionDetail({ draftId }: { draftId: number }) {
+export function DecisionDetail({
+  draftId,
+  focusOnOpen,
+  closeSearch,
+}: {
+  draftId: number;
+  focusOnOpen: boolean;
+  closeSearch: string;
+}) {
   const [detail, setDetail] = useState<DetailState>({ forDraft: null, error: null, data: null });
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    if (!focusOnOpen) return;
+    const heading = headingRef.current;
+    if (!heading) return;
+    heading.focus();
+    heading.scrollIntoView?.({ block: 'start' });
+  }, [draftId, focusOnOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,12 +75,16 @@ export function DecisionDetail({ draftId }: { draftId: number }) {
 
   const loading = detail.forDraft !== draftId;
   const d = loading ? null : detail.data;
+  const badge = d ? decisionBadge(d) : null;
+  const reasonDetail = d ? decisionReasonDetailText(d.reason, d.reasonDetail) : null;
 
   return (
     <section className={CARD_CLASS} aria-label="Decision detail">
       <div className="flex items-center justify-between gap-3">
-        <h2 className={H2_CLASS}>Draft {draftId}</h2>
-        <Link to={{ search: '?tab=decisions' }} className="text-sm text-indigo-700 underline">
+        <h2 ref={headingRef} tabIndex={-1} className={`${H2_CLASS} focus:outline-none`}>
+          Draft {draftId}
+        </h2>
+        <Link to={{ search: closeSearch }} className="text-sm text-indigo-700 underline">
           Close
         </Link>
       </div>
@@ -70,19 +101,26 @@ export function DecisionDetail({ draftId }: { draftId: number }) {
       {d ? (
         <div className="mt-2 space-y-4 text-sm text-slate-700">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={decisionStateTone(d.state)}>{decisionStateLabel(d.state)}</Badge>
+            {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
             {d.mode === 'dry_run' ? <span className="text-xs text-slate-500">(dry run)</span> : null}
             {d.reason ? <span>{decisionReasonLabel(d.reason)}</span> : null}
-            {d.reasonDetail ? <span className="text-xs text-slate-500">{d.reasonDetail}</span> : null}
-            {d.state === 'human' ? (
+            {reasonDetail ? <span className="text-xs text-slate-500">{reasonDetail}</span> : null}
+            {decisionAwaitsPerson(d) ? (
               <Link
                 to={`/review?deckId=${d.deckId}&draftId=${d.draftId}`}
                 className="text-sm text-indigo-700 underline"
               >
-                Open in review queue
+                Decide in review queue
               </Link>
             ) : null}
           </div>
+          {d.humanAction ? (
+            <p>
+              <span className="text-xs text-slate-500">Person: </span>
+              {humanActionLabel(d.humanAction)}
+              {d.humanReason ? <span className="text-xs text-slate-500"> · {d.humanReason}</span> : null}
+            </p>
+          ) : null}
 
           {d.card ? (
             <div className="space-y-1">
@@ -161,7 +199,7 @@ export function DecisionDetail({ draftId }: { draftId: number }) {
                     <td className={TD_CLASS}>{decisionStateLabel(e.toState)}</td>
                     <td className={TD_CLASS}>{e.reason ? decisionReasonLabel(e.reason) : '—'}</td>
                     <td className={TD_CLASS}>{e.actor}</td>
-                    <td className={TD_CLASS}>{e.mode}</td>
+                    <td className={TD_CLASS}>{codeLabel(MODE_LABELS, e.mode)}</td>
                     <td className={TD_CLASS}>{formatTimestamp(e.createdAt)}</td>
                   </tr>
                 ))}

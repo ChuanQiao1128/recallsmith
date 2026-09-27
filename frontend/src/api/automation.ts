@@ -71,6 +71,17 @@ export type AutomationStatus = {
   spend: { todayUsd: number; automationTodayUsd: number; reservedUsd: number; dailyCapUsd: number };
   watch: { targets: number; active: number; failing: number; lastCheckedAt: string | null; changes7d: number };
   notifications: { sent24h: number; failed24h: number; queued: number; lastSentAt: string | null };
+  /** K7: the open exceptions. Null when the server predates the field. */
+  backlog: AutomationBacklog | null;
+};
+
+/** K7 (R18B): what still needs a person, whenever it was routed. */
+export type AutomationBacklog = {
+  /** Decisions in state 'human' with no human_action whose draft is still pending. */
+  humanPending: number;
+  oldestHumanPendingAt: string | null;
+  /** Automation publishes routed to a person and not yet resolved. */
+  humanPublishes: number;
 };
 
 export type AutomationPublish = {
@@ -114,6 +125,8 @@ export type AutomationRun = {
   publishes: AutomationPublish[];
   summaryNotificationId: string | null;
   error: string | null;
+  /** K3: the runner's final-message notes (plain text, at most 2000 chars); null when none or on an older server. */
+  summary: string | null;
 };
 
 export type DecisionQa = {
@@ -398,7 +411,27 @@ function normalizeStatus(data: unknown): AutomationStatus | null {
       queued: toNumber(notifications.queued),
       lastSentAt: toNullableText(notifications.lastSentAt),
     },
+    backlog: normalizeBacklog(data.backlog),
   };
+}
+
+function normalizeBacklog(value: unknown): AutomationBacklog | null {
+  if (!isRecord(value)) return null;
+  return {
+    humanPending: toNumber(value.humanPending),
+    oldestHumanPendingAt: toNullableText(value.oldestHumanPendingAt),
+    humanPublishes: toNumber(value.humanPublishes),
+  };
+}
+
+/** K3 caps the notes at 2000 characters; the console never shows more, whatever arrives. */
+export const RUN_SUMMARY_MAX = 2000;
+
+function normalizeSummary(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (text === '') return null;
+  return text.length > RUN_SUMMARY_MAX ? text.slice(0, RUN_SUMMARY_MAX) : text;
 }
 
 function normalizePublish(value: unknown): AutomationPublish {
@@ -446,6 +479,7 @@ function normalizeRun(value: unknown): AutomationRun {
     publishes: Array.isArray(raw.publishes) ? raw.publishes.map(normalizePublish) : [],
     summaryNotificationId: toNullableText(raw.summaryNotificationId),
     error: toNullableText(raw.error),
+    summary: normalizeSummary(raw.summary),
   };
 }
 
@@ -719,11 +753,15 @@ export async function fetchEvalGate(): Promise<ApiResult<EvalGateState>> {
 /**
  * Sends the pasted report text unchanged: the server hashes the raw body bytes
  * (A00 §15.4 step 4), so parsing and re-serialising it here would change the hash.
+ * The identity transformRequest matters: axios's default transform JSON-parses a
+ * string body with a JSON content type and sends it trimmed, which drops the
+ * trailing newline dc-evals writes (B07 frontend-console-3).
  */
 export async function recordEvalGate(reportText: string): Promise<ApiResult<EvalGate>> {
   try {
     const resp = await http.post<ApiResult<unknown>>('/api/v1/admin/automation/eval-gate', reportText, {
       headers: { 'Content-Type': 'application/json' },
+      transformRequest: [(data: unknown) => data],
     });
     return mapSuccess(resp.data, normalizeEvalGate);
   } catch (err) {

@@ -16,16 +16,21 @@ export type ConsoleNavHrefs = {
   reviewHref?: string;
   qaHref?: string;
   ledgerHref?: string;
+  automationHref?: string;
   webhooksHref?: string;
   adminUsersHref?: string;
 };
 
+// automationHref (A00 §16.1) is listed like the ledger, so every ConsoleShell
+// page links the Automation console (B07 frontend-console-12); it used to be
+// passed only by the four pages of the automation area.
 export const CONSOLE_NAV: Readonly<Required<ConsoleNavHrefs>> = {
   decksHref: '/',
   contentIntelligenceHref: '/content-intelligence',
   reviewHref: '/review',
   qaHref: '/decks/qa',
   ledgerHref: '/ledger',
+  automationHref: '/automation',
   webhooksHref: '/admin/webhooks',
   adminUsersHref: '/admin/users',
 };
@@ -43,12 +48,6 @@ export type ConsoleSection =
   | 'automation'
   | 'webhooks'
   | 'adminUsers';
-
-// The Automation page (A00 §16.1). Deliberately NOT in CONSOLE_NAV: the landing
-// page's link set, the order of the seven links and the keys of CONSOLE_NAV are
-// pinned by tests that stay byte-identical, so the pages of the automation area
-// pass this to ConsoleShell's own optional prop instead.
-export const AUTOMATION_HREF = '/automation';
 
 /** The console section a path belongs to; the deck list and its card/deck pages are Decks. */
 export function consoleSectionFor(pathname: string): ConsoleSection | null {

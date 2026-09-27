@@ -48,7 +48,7 @@ type Props = {
   // Not role-gated: the AI QA routes decide who may act.
   qaHref?: string;
   // Not role-gated, like ledgerHref: the automation read routes are RequireAdmin.
-  // Not part of consoleNav(), so the pages of the automation area pass it.
+  // Part of consoleNav(), so every console page offers it.
   automationHref?: string;
 
   children: React.ReactNode;
