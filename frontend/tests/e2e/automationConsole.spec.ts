@@ -364,6 +364,11 @@ test('a decision with findings and events has no axe violation', async ({ page }
 
   await page.goto('/automation?draftId=41');
   const detail = page.getByRole('region', { name: 'Decision detail' });
+  // A pending dry-run draft keeps its verdict blind (N5): findings and events appear only after
+  // the person chooses to reveal them, which marks the decision as not blind.
+  await expect(detail.getByRole('table', { name: 'AI QA findings' })).toHaveCount(0);
+  await expectNoAxeViolation(page, 'blind decision detail');
+  await detail.getByRole('button', { name: 'Reveal verdict' }).click();
   await expect(detail.getByRole('table', { name: 'AI QA findings' }).getByRole('row')).toHaveCount(3);
   await expect(detail.getByRole('table', { name: 'Events' }).getByRole('row')).toHaveCount(4);
   await expectNoAxeViolation(page, 'dense decision detail');
