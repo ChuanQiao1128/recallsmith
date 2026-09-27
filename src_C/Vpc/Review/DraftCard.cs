@@ -22,10 +22,21 @@ public sealed class DraftCardError : Exception
 /// <c>ai_drafts.card</c> stores and what accept turns into a <c>cards</c> row. Pure: no database, no I/O.
 /// <see cref="McqJson"/> and <see cref="SourceJson"/> hold the canonical compact JSON produced by
 /// <see cref="McqValidation.Canonicalize"/> and <see cref="Helpers.NormalizeSource"/>.
+/// <para>
+/// A draft's source may also carry <c>source.grounding</c> (R18 cross-wave contract, ai-agent-24):
+/// <c>{"chunkId":string,"sourceId":string,"matched":true,"quoteChars":int}</c>, the MCP server's record of where the
+/// verbatim quote was found. It is kept on the draft (<see cref="GroundingJson"/>, written back into
+/// <c>source</c> by <see cref="ToJson"/>) for the review queue, but it is not card content: <see cref="SourceJson"/>
+/// never holds it, so accept writes a published card's source without it.
+/// </para>
 /// </summary>
 public sealed record DraftCard(string StableUid, int Difficulty, string? Topic, string Question, string Explanation,
-  string? CodeSnippet, string? CodeLanguage, string? RealWorldUsage, string? McqJson, string SourceJson)
+  string? CodeSnippet, string? CodeLanguage, string? RealWorldUsage, string? McqJson, string SourceJson, string? GroundingJson = null)
 {
+  public static readonly IReadOnlyList<string> GroundingKeys = ["chunkId", "sourceId", "matched", "quoteChars"];
+  public const int MaxGroundingIdLength = 200;
+  public const int MaxGroundingQuoteChars = 100_000;
+
   public static readonly IReadOnlyList<string> Keys = ["stableUid", "difficulty", "topic", "question", "explanation",
     "codeSnippet", "codeLanguage", "realWorldUsage", "mcq", "source"];
 
@@ -95,9 +106,19 @@ public sealed record DraftCard(string StableUid, int Difficulty, string? Topic, 
       throw new DraftCardError("SOURCE_REQUIRED", "source is required for a draft");
     }
     string sourceJson;
+    string? groundingJson = null;
     try
     {
-      sourceJson = Helpers.NormalizeSource(sourceEl)!;
+      if (sourceEl.ValueKind == JsonValueKind.Object && sourceEl.TryGetProperty("grounding", out var groundingEl))
+      {
+        groundingJson = NormalizeGrounding(groundingEl);
+        using var withoutGrounding = WithoutProperty(sourceEl, "grounding");
+        sourceJson = Helpers.NormalizeSource(withoutGrounding.RootElement)!;
+      }
+      else
+      {
+        sourceJson = Helpers.NormalizeSource(sourceEl)!;
+      }
     }
     catch (ValidationError ex)
     {
@@ -129,11 +150,16 @@ public sealed record DraftCard(string StableUid, int Difficulty, string? Topic, 
       }
     }
 
-    return new DraftCard(stableUid, difficulty, topic, question, explanation, codeSnippet, codeLanguage, realWorldUsage, mcqJson, sourceJson);
+    return new DraftCard(stableUid, difficulty, topic, question, explanation, codeSnippet, codeLanguage, realWorldUsage, mcqJson, sourceJson,
+      groundingJson);
   }
 
-  /// <summary>Canonical compact JSON object, keys in <see cref="Keys"/> order.</summary>
-  public string ToJson()
+  /// <summary>
+  /// Canonical compact JSON object, keys in <see cref="Keys"/> order. With <paramref name="includeGrounding"/> (the
+  /// stored draft) a present <see cref="GroundingJson"/> is written as <c>source.grounding</c>; without it the JSON
+  /// is the card content alone, which is what accept compares and records.
+  /// </summary>
+  public string ToJson(bool includeGrounding = true)
   {
     using var stream = new MemoryStream();
     using (var writer = new Utf8JsonWriter(stream))
@@ -151,10 +177,81 @@ public sealed record DraftCard(string StableUid, int Difficulty, string? Topic, 
       if (McqJson is null) writer.WriteNullValue();
       else writer.WriteRawValue(McqJson);
       writer.WritePropertyName("source");
-      writer.WriteRawValue(SourceJson);
+      if (includeGrounding && GroundingJson is not null)
+      {
+        using var source = JsonDocument.Parse(SourceJson);
+        writer.WriteStartObject();
+        foreach (var prop in source.RootElement.EnumerateObject()) prop.WriteTo(writer);
+        writer.WritePropertyName("grounding");
+        writer.WriteRawValue(GroundingJson);
+        writer.WriteEndObject();
+      }
+      else
+      {
+        writer.WriteRawValue(SourceJson);
+      }
       writer.WriteEndObject();
     }
     return Encoding.UTF8.GetString(stream.ToArray());
+  }
+
+  /// <summary>
+  /// <c>source.grounding</c> → canonical <c>{"chunkId":…,"sourceId":…,"matched":true,"quoteChars":…}</c>, or null
+  /// for JSON null. Exactly those keys; ids non-blank strings (trimmed, max <see cref="MaxGroundingIdLength"/>);
+  /// matched the literal true (an unmatched quote is not grounding); quoteChars an integer in
+  /// 0..<see cref="MaxGroundingQuoteChars"/>. Throws <see cref="ValidationError"/>.
+  /// </summary>
+  public static string? NormalizeGrounding(JsonElement el)
+  {
+    if (el.ValueKind == JsonValueKind.Null) return null;
+    if (el.ValueKind != JsonValueKind.Object) throw new ValidationError("source.grounding must be an object", "source");
+    foreach (var prop in el.EnumerateObject())
+    {
+      if (!GroundingKeys.Contains(prop.Name)) throw new ValidationError($"source.grounding has unknown key {prop.Name}", "source");
+    }
+
+    string Id(string key)
+    {
+      if (!el.TryGetProperty(key, out var v) || v.ValueKind != JsonValueKind.String)
+      {
+        throw new ValidationError($"source.grounding.{key} must be a string", "source");
+      }
+      var id = (v.GetString() ?? string.Empty).Trim();
+      if (id.Length == 0 || id.Length > MaxGroundingIdLength)
+      {
+        throw new ValidationError($"source.grounding.{key} must be 1..{MaxGroundingIdLength} characters", "source");
+      }
+      return id;
+    }
+
+    var chunkId = Id("chunkId");
+    var sourceId = Id("sourceId");
+    if (!el.TryGetProperty("matched", out var matchedEl) || matchedEl.ValueKind != JsonValueKind.True)
+    {
+      throw new ValidationError("source.grounding.matched must be true", "source");
+    }
+    if (!el.TryGetProperty("quoteChars", out var charsEl) || charsEl.ValueKind != JsonValueKind.Number ||
+        !charsEl.TryGetInt32(out var quoteChars) || quoteChars is < 0 or > MaxGroundingQuoteChars)
+    {
+      throw new ValidationError($"source.grounding.quoteChars must be an integer in 0..{MaxGroundingQuoteChars}", "source");
+    }
+    return JsonSerializer.Serialize(new { chunkId, sourceId, matched = true, quoteChars });
+  }
+
+  /// <summary>A copy of object <paramref name="el"/> without property <paramref name="name"/>.</summary>
+  private static JsonDocument WithoutProperty(JsonElement el, string name)
+  {
+    using var stream = new MemoryStream();
+    using (var writer = new Utf8JsonWriter(stream))
+    {
+      writer.WriteStartObject();
+      foreach (var prop in el.EnumerateObject())
+      {
+        if (prop.Name != name) prop.WriteTo(writer);
+      }
+      writer.WriteEndObject();
+    }
+    return JsonDocument.Parse(stream.ToArray());
   }
 
   /// <summary>Missing, non-string or blank → null; otherwise the trimmed text.</summary>
