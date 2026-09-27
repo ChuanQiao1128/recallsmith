@@ -64,3 +64,10 @@ mobile/docs/qa/agents/draw-v9/runs/
 # file that is also being edited for real.
 * [0-9].*
 * [0-9]
+
+# Python (release 1.8.0: services/*, tools/ingest, evals)
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.ruff_cache/

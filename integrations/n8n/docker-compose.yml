@@ -1,0 +1,19 @@
+# Local n8n for the DeveloperCards webhook recipes. See README.md.
+# The image is pinned to an exact tag and OCI index digest (read 2026-09-27).
+services:
+  n8n:
+    image: docker.io/n8nio/n8n:2.40.7@sha256:ffeb52485f78b1b06c9a832205853cf75da72a07a514c9a27724df85979d6c34
+    ports: ["5678:5678"]
+    env_file: .env
+    environment:
+      # Code nodes may require('crypto') (the signature check needs it).
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
+      # Code nodes may read $env.DC_WEBHOOK_SECRET.
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - GENERIC_TIMEZONE=Pacific/Auckland
+      - TZ=Pacific/Auckland
+      - DC_WEBHOOK_SECRET=${DC_WEBHOOK_SECRET}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+    volumes:
+      - ./.n8n-data:/home/node/.n8n
+    restart: unless-stopped

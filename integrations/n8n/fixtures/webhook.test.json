@@ -1,0 +1,10 @@
+{
+  "data": {
+    "subscriptionId": 12,
+    "message": "DeveloperCards test event"
+  },
+  "environment": "prod",
+  "event": "webhook.test",
+  "eventId": "4c2d6e84-1b59-4f0a-8c7d-5e6f7a8b9c07",
+  "occurredAt": "2026-10-01T07:00:00.000Z"
+}
