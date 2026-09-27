@@ -234,6 +234,22 @@ create index if not exists idx_automation_decisions_deck on automation_draft_dec
 create index if not exists idx_automation_decisions_card on automation_draft_decisions(accepted_card_id) where accepted_card_id is not null;
 create index if not exists idx_automation_decisions_created on automation_draft_decisions(created_at);
 
+-- Draft-QA spend, one row per QA attempt (job, request id; request_key is '' when the report has none), dated by when
+-- the report arrived. The shared daily cap sums spent_at of today, so a report after QA_TIMEOUT or after a released
+-- send still counts, on the day it was spent (R18B backend-design-4). The decision's cost columns are the running total.
+create table if not exists automation_qa_spend (
+  qa_job_id uuid not null,
+  request_key text not null,
+  draft_id bigint not null references automation_draft_decisions(draft_id) on delete cascade,
+  input_tokens bigint not null default 0,
+  output_tokens bigint not null default 0,
+  estimated_cost_usd numeric(12,6) not null default 0,
+  spent_at timestamptz not null default now(),
+  primary key (qa_job_id, request_key),
+  constraint ck_automation_qa_spend_request_key check (char_length(request_key) <= 200)
+);
+create index if not exists idx_automation_qa_spend_spent on automation_qa_spend(spent_at);
+
 create table if not exists automation_draft_findings (
   id bigserial primary key,
   draft_id bigint not null references automation_draft_decisions(draft_id) on delete cascade,

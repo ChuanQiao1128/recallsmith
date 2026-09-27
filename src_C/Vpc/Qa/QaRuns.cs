@@ -561,9 +561,11 @@ public static class QaRuns
   /// <summary>
   /// Today's (UTC) reported spend across all runs, and the cards still unfinished in open runs (queued or running
   /// and not stale), whatever day they started: their spend has not been reported yet but will be. Draft QA of the
-  /// automation (R18A A00 §9.5) shares the cap: today's decision spend is added, and every <c>qa_queued</c> decision
-  /// sent within <see cref="StaleAfter"/> reserves one card. The decision table is probed with <c>to_regclass</c>
-  /// (this runs inside the cap transaction, where catching 42P01 would abort it); missing ⇒ runs only.
+  /// automation (R18A A00 §9.5) shares the cap: today's draft-QA spend is added, and every <c>qa_queued</c> decision
+  /// sent within <see cref="StaleAfter"/> reserves one card. Draft-QA spend is dated by when its report arrived
+  /// (<c>automation_qa_spend.spent_at</c>), so a late report after QA_TIMEOUT or a released send still counts, on the
+  /// day it was spent (backend-design-4). The decision table is probed with <c>to_regclass</c> (this runs inside the
+  /// cap transaction, where catching 42P01 would abort it); missing ⇒ runs only.
   /// </summary>
   internal static async Task<(decimal Spent, long OpenCards)> SpendTodayAsync(NpgsqlConnection conn, NpgsqlTransaction? tx)
   {
@@ -576,10 +578,8 @@ public static class QaRuns
     var rows = await DbUtil.QueryAsync(conn, tx,
       $"""
       select
-        coalesce(sum(estimated_cost_usd) filter (where created_at >= date_trunc('day', now(), 'UTC')), 0) as spent,
-        count(*) filter (where state = 'qa_queued' and qa_enqueued_at >= now() - {StaleInterval}) as open_cards
-      from automation_draft_decisions
-      where created_at >= date_trunc('day', now(), 'UTC') or state = 'qa_queued'
+        (select coalesce(sum(estimated_cost_usd), 0) from automation_qa_spend where spent_at >= date_trunc('day', now(), 'UTC')) as spent,
+        (select count(*) from automation_draft_decisions where state = 'qa_queued' and qa_enqueued_at >= now() - {StaleInterval}) as open_cards
       """,
       []);
     return (spent + Convert.ToDecimal(rows[0]["spent"], CultureInfo.InvariantCulture),

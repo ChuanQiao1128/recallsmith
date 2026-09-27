@@ -288,6 +288,88 @@ public class DraftQaResultsTests
     });
   }
 
+  // ---------------------------------------------------------------- spend (R18B backend-design-4)
+
+  private async Task<decimal> SpentTodayAsync()
+  {
+    await using var conn = await _db.OpenAsync();
+    return (await QaRuns.SpendTodayAsync(conn, null)).Spent;
+  }
+
+  [Fact]
+  public async Task Report_AfterQaTimeout_StillReachesTheDailyCap_WithoutATransition()
+  {
+    using var scope = new AutomationTestKit.Scope();
+    var e = await AutomationTestKit.EligibleDraftAsync(_db, "latespend");
+    // The tick timed the decision out (A00 §9.3): its reservation is gone, the Bedrock call is still running.
+    await _db.QueryAsync(
+      "update automation_draft_decisions set state = 'human', reason = 'QA_TIMEOUT', decided_at = now() where draft_id = $1", e.DraftId);
+    var events = (await AutomationTestKit.EventsAsync(_db, e.DraftId)).Count;
+    var before = await SpentTodayAsync();
+    var report = AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash, requestId: "req-late");
+
+    var applied = AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(report));
+    Assert.Equal(0, applied.GetProperty("cardsDone").GetInt32());
+    Assert.Equal(before + 0.0001m, await SpentTodayAsync());
+    var d = await DecisionAsync(e.DraftId);
+    Assert.Equal(("human", "QA_TIMEOUT"), ((string)d["state"]!, (string)d["reason"]!));
+    Assert.Equal(0.0001m, Convert.ToDecimal(d["estimated_cost_usd"], CultureInfo.InvariantCulture));
+    Assert.Equal(1200L, AutomationTestKit.Long(d["input_tokens"]));
+    Assert.Null(d["qa_status"]);
+    Assert.Equal(events, (await AutomationTestKit.EventsAsync(_db, e.DraftId)).Count);
+
+    // A replay of the same attempt adds nothing; another attempt of the same job (a new request id) adds.
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(report));
+    Assert.Equal(before + 0.0001m, await SpentTodayAsync());
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash, requestId: "req-late-2")));
+    Assert.Equal(before + 0.0002m, await SpentTodayAsync());
+    Assert.Equal(0.0002m, Convert.ToDecimal((await DecisionAsync(e.DraftId))["estimated_cost_usd"], CultureInfo.InvariantCulture));
+  }
+
+  [Fact]
+  public async Task Report_OfAReleasedJobReplacedByAFreshOne_StillReachesTheDailyCap()
+  {
+    using var scope = new AutomationTestKit.Scope();
+    var e = await AutomationTestKit.EligibleDraftAsync(_db, "releasedspend");
+    // An ambiguous send released the reservation (qa_queued -> qa_pending, A00 §9.2) and the tick re-sent a fresh job.
+    await _db.QueryAsync(
+      "update automation_draft_decisions set state = 'qa_pending', reason = 'ENQUEUE_RETRY', qa_enqueued_at = null where draft_id = $1", e.DraftId);
+    await using (var conn = await _db.OpenAsync())
+    {
+      Assert.Equal("qa_queued", await DraftDecisions.EnqueueQaAsync(conn, e.DraftId));
+    }
+    var (freshJob, _) = await AutomationTestKit.QueuedJobAsync(_db, e.DraftId);
+    Assert.NotEqual(e.JobId, freshJob);
+    var before = await SpentTodayAsync();
+
+    // The first job's report arrives after all: its spend counts, the fresh job stays in flight.
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash, requestId: "req-old")));
+    Assert.Equal(before + 0.0001m, await SpentTodayAsync());
+    Assert.Equal(("qa_queued", freshJob), ((string)(await DecisionAsync(e.DraftId))["state"]!, (Guid)(await DecisionAsync(e.DraftId))["qa_job_id"]!));
+
+    // The fresh job reports as usual; both attempts are on the decision and in today's spend.
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(freshJob, e.DraftId, e.Hash, requestId: "req-new")));
+    var d = await DecisionAsync(e.DraftId);
+    Assert.Equal("would_accept", d["state"]);
+    Assert.Equal(0.0002m, Convert.ToDecimal(d["estimated_cost_usd"], CultureInfo.InvariantCulture));
+    Assert.Equal(before + 0.0002m, await SpentTodayAsync());
+  }
+
+  [Fact]
+  public async Task Report_SpendIsDatedWhenReported_NotWhenTheDecisionWasCreated()
+  {
+    using var scope = new AutomationTestKit.Scope();
+    var e = await AutomationTestKit.EligibleDraftAsync(_db, "spenddate");
+    // Submitted at 23:59 UTC yesterday, reviewed today: the money was spent today.
+    await _db.QueryAsync("update automation_draft_decisions set created_at = now() - interval '2 days' where draft_id = $1", e.DraftId);
+    var before = await SpentTodayAsync();
+
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash)));
+
+    Assert.Equal("would_accept", (await DecisionAsync(e.DraftId))["state"]);
+    Assert.Equal(before + 0.0001m, await SpentTodayAsync());
+  }
+
   // ---------------------------------------------------------------- live auto-accept (A00 §5.5–§5.6)
 
   [Fact]

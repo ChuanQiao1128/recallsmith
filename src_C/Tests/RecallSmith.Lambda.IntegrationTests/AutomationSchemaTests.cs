@@ -20,7 +20,7 @@ public class AutomationSchemaTests
   [
     "automation_runners", "source_watch_targets", "source_watch_events", "authoring_queue_items", "source_watch_feed_items",
     "automation_runs", "automation_eval_gates", "automation_draft_decisions", "automation_draft_findings",
-    "automation_decision_events", "automation_publishes", "automation_notifications",
+    "automation_decision_events", "automation_publishes", "automation_notifications", "automation_qa_spend",
   ];
 
   private static readonly string[] Indexes =
@@ -31,6 +31,7 @@ public class AutomationSchemaTests
     "idx_automation_decisions_card", "idx_automation_decisions_created", "idx_automation_draft_findings_draft",
     "idx_automation_decision_events_draft", "uq_automation_publishes_open", "idx_automation_publishes_deck",
     "idx_automation_publishes_run", "idx_automation_notifications_created", "idx_automation_notifications_retry",
+    "idx_automation_qa_spend_spent",
   ];
 
   private static readonly string[] EightEvents =

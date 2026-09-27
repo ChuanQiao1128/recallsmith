@@ -62,37 +62,54 @@ internal static class DraftQaResults
       [report.RunId, item.CardId]);
     if (rows.Count == 0)
     {
-      Log.Event("warn", new { tag = "automation", reason = "draft_qa_unknown_item", qaJobId = report.RunId, draftId = item.CardId });
+      // A job released after an ambiguous send and since replaced by a fresh job id: the decision's event log names
+      // it. Its Bedrock call was still paid for, so the spend is recorded (backend-design-4); nothing else changes.
+      var released = await DbUtil.QueryAsync(conn, tx,
+        """
+        select d.draft_id from automation_draft_decisions d
+        where d.draft_id = $2
+          and exists (select 1 from automation_decision_events e where e.draft_id = d.draft_id and e.details ->> 'qaJobId' = $1::text)
+        for update of d
+        """,
+        [report.RunId, item.CardId]);
+      if (released.Count == 0)
+      {
+        Log.Event("warn", new { tag = "automation", reason = "draft_qa_unknown_item", qaJobId = report.RunId, draftId = item.CardId });
+        return null;
+      }
+      await RecordSpendAsync(conn, tx, report.RunId, item, ct);
+      await tx.CommitAsync(ct);
+      Log.Event("info", new { tag = "automation", reason = "draft_qa_late_spend", qaJobId = report.RunId, draftId = item.CardId });
       return null;
     }
     var decision = rows[0];
 
-    // 1. a replay
-    if ((string)decision["state"]! != DraftDecisions.QaQueued) return null;
+    // 1. a replay, or a report that arrived after the decision moved on (QA_TIMEOUT, a released send, a human): no
+    // transition, but its spend reaches the shared daily cap (backend-design-4). A replayed attempt adds nothing.
+    if ((string)decision["state"]! != DraftDecisions.QaQueued)
+    {
+      await RecordSpendAsync(conn, tx, report.RunId, item, ct);
+      await tx.CommitAsync(ct);
+      return null;
+    }
 
     var draftId = item.CardId;
     var runId = (Guid)decision["run_id"]!;
     var expectedHash = decision["qa_content_sha256"] as string;
 
     // 2. QA outputs
-    var newAttempt = !string.Equals(decision["qa_request_id"] as string, item.RequestId, StringComparison.Ordinal);
-    var usageSql = newAttempt
-      ? "input_tokens = input_tokens + $9, output_tokens = output_tokens + $10, estimated_cost_usd = estimated_cost_usd + $11"
-      : "input_tokens = greatest(input_tokens, $9), output_tokens = greatest(output_tokens, $10), estimated_cost_usd = greatest(estimated_cost_usd, $11)";
     var blocker = item.Findings.Count(f => f.Severity == "blocker");
     var major = item.Findings.Count(f => f.Severity == "major");
     var minor = item.Findings.Count(f => f.Severity == "minor");
-    var cost = await DbUtil.ExecuteScalarAsync(conn, tx,
-      $"""
+    var qaCostUsd = await RecordSpendAsync(conn, tx, report.RunId, item, ct);
+    await DbUtil.ExecuteAsync(conn, tx,
+      """
       update automation_draft_decisions
       set qa_status = $2, qa_error_code = $3::text, qa_provider = $4::text, qa_model = $5::text, qa_prompt_version = $6::text,
-        qa_request_id = $7::text, blocker_count = $8, major_count = $12, minor_count = $13, {usageSql}, updated_at = now()
+        qa_request_id = $7::text, blocker_count = $8, major_count = $9, minor_count = $10, updated_at = now()
       where draft_id = $1
-      returning estimated_cost_usd
       """,
-      [draftId, item.Status, item.ErrorCode, report.Provider, report.Model, report.PromptVersion, item.RequestId, blocker,
-       (long)item.InputTokens, (long)item.OutputTokens, item.EstimatedCostUsd, major, minor]);
-    var qaCostUsd = Convert.ToDecimal(cost, CultureInfo.InvariantCulture);
+      [item.CardId, item.Status, item.ErrorCode, report.Provider, report.Model, report.PromptVersion, item.RequestId, blocker, major, minor]);
 
     var hasFindings = await DbUtil.ExecuteScalarAsync(conn, tx,
       "select 1 from automation_draft_findings where draft_id = $1 limit 1", [draftId]);
@@ -218,6 +235,53 @@ internal static class DraftQaResults
 
     return new ItemOutcome(draftId, deckId, runId, DraftDecisions.AutoAccepted, null, null, qaCostUsd, accepted.CardId, accepted.StableUid,
       minor, mode.Effective);
+  }
+
+  /// <summary>
+  /// Records one QA attempt's usage in <c>automation_qa_spend</c> (keyed by job and request id, dated by when the report
+  /// arrived; the shared daily cap sums it) and adds the change to the decision's cost columns. A new request id is a
+  /// new attempt and adds; a replayed one keeps the greater values (the former IsNewAttempt rule, now per attempt, so
+  /// it also holds for reports of an older job). The caller holds the decision row lock. Returns the decision's cost.
+  /// </summary>
+  private static async Task<decimal> RecordSpendAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid qaJobId,
+    AiQaResults.ReportItem item, CancellationToken ct)
+  {
+    ct.ThrowIfCancellationRequested();
+    var rows = await DbUtil.QueryAsync(conn, tx,
+      """
+      with prev as (
+        select input_tokens, output_tokens, estimated_cost_usd from automation_qa_spend where qa_job_id = $1 and request_key = $3
+      ), up as (
+        insert into automation_qa_spend (qa_job_id, request_key, draft_id, input_tokens, output_tokens, estimated_cost_usd)
+        values ($1, $3, $2, $4, $5, $6)
+        on conflict (qa_job_id, request_key) do update
+        set input_tokens = greatest(automation_qa_spend.input_tokens, excluded.input_tokens),
+          output_tokens = greatest(automation_qa_spend.output_tokens, excluded.output_tokens),
+          estimated_cost_usd = greatest(automation_qa_spend.estimated_cost_usd, excluded.estimated_cost_usd)
+        returning input_tokens, output_tokens, estimated_cost_usd
+      )
+      select up.input_tokens - coalesce(prev.input_tokens, 0) as d_in, up.output_tokens - coalesce(prev.output_tokens, 0) as d_out,
+        up.estimated_cost_usd - coalesce(prev.estimated_cost_usd, 0) as d_cost
+      from up left join prev on true
+      """,
+      [qaJobId, item.CardId, item.RequestId ?? string.Empty, (long)item.InputTokens, (long)item.OutputTokens, item.EstimatedCostUsd]);
+    var dIn = Convert.ToInt64(rows[0]["d_in"], CultureInfo.InvariantCulture);
+    var dOut = Convert.ToInt64(rows[0]["d_out"], CultureInfo.InvariantCulture);
+    var dCost = Convert.ToDecimal(rows[0]["d_cost"], CultureInfo.InvariantCulture);
+    if (dIn == 0 && dOut == 0 && dCost == 0)
+    {
+      return Convert.ToDecimal(await DbUtil.ExecuteScalarAsync(conn, tx,
+        "select estimated_cost_usd from automation_draft_decisions where draft_id = $1", [item.CardId]), CultureInfo.InvariantCulture);
+    }
+    // Only the cost columns: a late report changes no state and no updated_at.
+    return Convert.ToDecimal(await DbUtil.ExecuteScalarAsync(conn, tx,
+      """
+      update automation_draft_decisions
+      set input_tokens = input_tokens + $2, output_tokens = output_tokens + $3, estimated_cost_usd = estimated_cost_usd + $4
+      where draft_id = $1
+      returning estimated_cost_usd
+      """,
+      [item.CardId, dIn, dOut, dCost]), CultureInfo.InvariantCulture);
   }
 
   /// <summary>
