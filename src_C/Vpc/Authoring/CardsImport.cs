@@ -37,9 +37,93 @@ public static class CardsImport
     long Difficulty,
     int OrderInDeck,
     string? Topic,
-    string? Mcq);
+    string? Mcq,
+    string? Source);
+
+  /// <summary>What the core learned about the import, for the after-response side effects.</summary>
+  private sealed class ImportOutcome
+  {
+    public long? DeckId { get; set; }
+    public int CardCount { get; set; }
+    public int Created { get; set; }
+    public int Updated { get; set; }
+  }
 
   public static async Task<APIGatewayProxyResponse> HandleCardsImport(LambdaRequest req, Res res, AuthContext auth)
+  {
+    var outcome = new ImportOutcome();
+    var response = await HandleCardsImportCoreAsync(req, res, auth, outcome);
+    await AfterImportAsync(response, outcome);
+    return response;
+  }
+
+  /// <summary>
+  /// Side effects of an answered import, run after the core's connection and transaction are gone:
+  /// the <c>import.failed</c> webhook (R18 J03, contract §6.1) on a 400/409/503 once auth and deck
+  /// resolution passed, and the <c>bulk_import</c> ledger event (R18 J08, contract §9.3) on a 2xx or on
+  /// that same failure condition. Best-effort: nothing here changes the response.
+  /// </summary>
+  private static async Task AfterImportAsync(APIGatewayProxyResponse response, ImportOutcome outcome)
+  {
+    try
+    {
+      if (outcome.DeckId is not { } deckId) return;
+
+      if (response.StatusCode is >= 200 and < 300)
+      {
+        await using var okConn = await Pg.OpenConnectionOrNullAsync();
+        if (okConn is null) return;
+
+        // No dedupe key: every import is its own run.
+        await AutomationLedger.RecordAsync(okConn, new AutomationEvent("bulk_import", outcome.Created + outcome.Updated, "success",
+          DeckId: deckId,
+          Details: new { received = outcome.CardCount, created = outcome.Created, updated = outcome.Updated }));
+        return;
+      }
+
+      if (response.StatusCode is not (400 or 409 or 503)) return;
+
+      string? errorCode = null;
+      string? message = null;
+      using (var doc = JsonDocument.Parse(response.Body ?? "{}"))
+      {
+        if (doc.RootElement.ValueKind == JsonValueKind.Object
+            && doc.RootElement.TryGetProperty("error", out var err)
+            && err.ValueKind == JsonValueKind.Object)
+        {
+          if (err.TryGetProperty("code", out var codeEl) && codeEl.ValueKind == JsonValueKind.String) errorCode = codeEl.GetString();
+          if (err.TryGetProperty("message", out var msgEl) && msgEl.ValueKind == JsonValueKind.String) message = msgEl.GetString();
+        }
+      }
+      if (message is { Length: > 300 }) message = message[..300];
+
+      await using var conn = await Pg.OpenConnectionOrNullAsync();
+      if (conn is null) return;
+
+      var deckSlug = await DbUtil.ExecuteScalarAsync(conn, null, "select slug from decks where id = $1", [deckId]) as string;
+
+      await WebhookEvents.EnqueueAsync(conn, "import.failed", new
+      {
+        deckId,
+        deckSlug,
+        errorCode,
+        message,
+        cardCount = outcome.CardCount,
+      });
+
+      // A super_admin passes the deck gate for a deck id that has no row; the ledger's foreign key
+      // only takes a deck that exists.
+      await AutomationLedger.RecordAsync(conn, new AutomationEvent("bulk_import", 0, "failure",
+        DeckId: deckSlug is not null ? deckId : null,
+        Details: new { errorCode }));
+    }
+    catch (Exception ex)
+    {
+      Log.Event("warn", new { tag = "cards-import", reason = "after_import_failed", deckId = outcome.DeckId, error = ex.Message });
+    }
+  }
+
+  private static async Task<APIGatewayProxyResponse> HandleCardsImportCoreAsync(LambdaRequest req, Res res, AuthContext auth, ImportOutcome outcome)
   {
     var deny = Auth.RequireAdmin(auth, res);
     if (deny is not null) return deny;
@@ -76,6 +160,8 @@ public static class CardsImport
 
       var denyDeck = await Helpers.RequireDeckWrite(conn, auth.UserSub, deckId, auth.IsSuperAdmin, res);
       if (denyDeck is not null) return denyDeck;
+      outcome.DeckId = deckId;
+      outcome.CardCount = count;
 
       cards = new List<ImportCard>(count);
       var i = 0;
@@ -130,7 +216,10 @@ public static class CardsImport
             if (!McqValidation.IsMcqDifficulty(difficulty)) throw new McqValidationError("MCQ_DIFFICULTY_RANGE", "difficulty must be 1..3 for an MCQ card");
           }
 
-          cards.Add(new ImportCard(i, uid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, topic, mcq));
+          // Whole-file import: an absent source is null and clears a stored one.
+          var source = Helpers.ParseOptionalSource(cardEl);
+
+          cards.Add(new ImportCard(i, uid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, topic, mcq, source));
         }
         catch (McqValidationError ex)
         {
@@ -228,9 +317,9 @@ public static class CardsImport
       const string upsertSql = """
         insert into cards (
           deck_id, stable_uid, question, explanation, code_snippet, code_language,
-          real_world_usage, difficulty, order_in_deck, topic, mcq
+          real_world_usage, difficulty, order_in_deck, topic, mcq, source
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb)
         on conflict (deck_id, stable_uid) do update set
           question = excluded.question,
           explanation = excluded.explanation,
@@ -241,13 +330,14 @@ public static class CardsImport
           order_in_deck = excluded.order_in_deck,
           topic = excluded.topic,
           mcq = excluded.mcq,
+          source = excluded.source,
           version = cards.version + 1,
           updated_at = now()
         where (cards.question, cards.explanation, cards.code_snippet, cards.code_language, cards.real_world_usage,
-               cards.difficulty, cards.order_in_deck, cards.topic, cards.mcq)
+               cards.difficulty, cards.order_in_deck, cards.topic, cards.mcq, cards.source)
           is distinct from
               (excluded.question, excluded.explanation, excluded.code_snippet, excluded.code_language, excluded.real_world_usage,
-               excluded.difficulty, excluded.order_in_deck, excluded.topic, excluded.mcq)
+               excluded.difficulty, excluded.order_in_deck, excluded.topic, excluded.mcq, excluded.source)
         returning id, (xmax = 0) as inserted
         """;
 
@@ -256,7 +346,7 @@ public static class CardsImport
         var rows = await DbUtil.QueryAsync(conn, tx, upsertSql, new object?[]
         {
           deckId, c.StableUid, c.Question, c.Explanation, c.CodeSnippet, c.CodeLanguage,
-          c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq,
+          c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source,
         });
 
         if (rows.Count == 0)
@@ -326,6 +416,8 @@ public static class CardsImport
       action = actions[c.StableUid],
     }).ToArray();
 
+    outcome.Created = created;
+    outcome.Updated = updated;
     return res.Ok(new { deckId, created, updated, unchanged, cards = results });
   }
 }

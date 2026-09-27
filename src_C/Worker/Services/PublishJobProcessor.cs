@@ -83,13 +83,73 @@ public class PublishJobProcessor : IPublishJobProcessor
 
     // Step 5: 最终一致性提交
     await _jobRepository.CompleteJobAsync(jobId, deckData.Cards.Count);
+    await AfterPublishSucceededAsync(job, deckData.Cards.Count);
 
     Console.WriteLine($"[JobId={jobId}] Job completed successfully");
+  }
+
+  /// <summary>
+  /// Side effects of a completed publish: the <c>deck.published</c> webhook (R18 J03, contract §6.1) and
+  /// the <c>publish_pipeline</c> ledger event (R18 J08, contract §9.3).
+  /// Best-effort on its own connection, after the job row is already SUCCESS: nothing here may fail or
+  /// retry a completed job.
+  /// </summary>
+  private static async Task AfterPublishSucceededAsync(JobInfo job, int cardCount)
+  {
+    try
+    {
+      await using var conn = await Pg.OpenConnectionOrNullAsync();
+      if (conn is null) return;
+
+      await WebhookEvents.EnqueueAsync(conn, "deck.published", new
+      {
+        deckId = job.DeckId,
+        deckSlug = job.DeckSlug,
+        buildId = job.BuildId,
+        jobId = job.JobId,
+        cardCount,
+        publishedAt = WebhookEvents.FormatTimestamp(DateTimeOffset.UtcNow),
+      });
+
+      // Automation Ledger (R18 J08, contract §9.3): one successful publish = one unit.
+      await AutomationLedger.RecordAsync(conn, new AutomationEvent("publish_pipeline", 1, "success",
+        DeckId: job.DeckId > 0 ? job.DeckId : null, Ref: job.JobId, DedupeKey: $"publish:{job.JobId}"));
+    }
+    catch (Exception ex)
+    {
+      Console.WriteLine($"[JobId={job.JobId}] After-publish side effects failed (ignored): {ex.Message}");
+    }
   }
 
   public async Task FailAsync(string jobId, string errorMessage)
   {
     await _jobRepository.FailJobAsync(jobId, errorMessage);
+
+    try
+    {
+      await RecordPublishFailureAsync(jobId, errorMessage);
+    }
+    catch (Exception ex)
+    {
+      Console.WriteLine($"[JobId={jobId}] Ledger failure event failed (ignored): {ex.Message}");
+    }
+  }
+
+  /// <summary>
+  /// The failure-side <c>publish_pipeline</c> ledger event (R18 J08, contract §9.3): units 0, so it saves
+  /// nothing and counts toward the failure rate. Runs only after the FAILED status is persisted.
+  /// </summary>
+  private async Task RecordPublishFailureAsync(string jobId, string errorMessage)
+  {
+    var job = await _jobRepository.GetJobAsync(jobId);
+    long? deckId = job is { DeckId: > 0 } ? job.DeckId : null;
+
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) return;
+
+    var error = errorMessage.Length > 300 ? errorMessage[..300] : errorMessage;
+    await AutomationLedger.RecordAsync(conn, new AutomationEvent("publish_pipeline", 0, "failure",
+      DeckId: deckId, Ref: jobId, DedupeKey: $"publish-fail:{jobId}", Details: new { error }));
   }
 
   public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
@@ -139,6 +199,25 @@ public class PublishJobProcessor : IPublishJobProcessor
       Cards = cards
     };
   }
+
+  private const string CardsSqlSource = """
+    SELECT
+      stable_uid as "stableUid",
+      order_in_deck as "orderInDeck",
+      difficulty,
+      question,
+      explanation,
+      code_language as "codeLanguage",
+      code_snippet as "codeSnippet",
+      real_world_usage as "realWorldUsage",
+      revision,
+      topic,
+      mcq,
+      source
+    FROM cards
+    WHERE deck_id = $1 AND is_deleted = 0
+    ORDER BY order_in_deck ASC, id ASC
+    """;
 
   private const string CardsSql = """
     SELECT
@@ -192,9 +271,9 @@ public class PublishJobProcessor : IPublishJobProcessor
     """;
 
   /// <summary>
-  /// Cards of one deck in export order, tolerant of a database that has not yet run 018/019:
-  /// the 11-column select runs first; a 42703 (undefined_column) retries the 018-only shape,
-  /// a second 42703 the pre-018 shape. Each retry is a fresh statement on the same connection
+  /// Cards of one deck in export order, tolerant of a database that has not yet run 018/019/026:
+  /// the 12-column select runs first; a 42703 (undefined_column) retries the pre-026 11-column
+  /// shape, a second 42703 the 018-only shape, a third the pre-018 shape. Each retry is a fresh statement on the same connection
   /// (no transaction, so the failed statement leaves it usable — the ManifestRebuild precedent).
   /// A column the schema lacks maps to null, never to "" (byte identity of existing decks).
   /// </summary>
@@ -203,17 +282,24 @@ public class PublishJobProcessor : IPublishJobProcessor
     List<Dictionary<string, object?>> cardRows;
     try
     {
-      cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckId]);
+      cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlSource, [deckId]);
     }
-    catch (PostgresException pg) when (pg.SqlState == "42703")
+    catch (PostgresException pg0) when (pg0.SqlState == "42703")
     {
       try
       {
-        cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTopicOnly, [deckId]);
+        cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckId]);
       }
-      catch (PostgresException pg2) when (pg2.SqlState == "42703")
+      catch (PostgresException pg) when (pg.SqlState == "42703")
       {
-        cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlLegacy, [deckId]);
+        try
+        {
+          cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTopicOnly, [deckId]);
+        }
+        catch (PostgresException pg2) when (pg2.SqlState == "42703")
+        {
+          cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlLegacy, [deckId]);
+        }
       }
     }
 
@@ -230,6 +316,7 @@ public class PublishJobProcessor : IPublishJobProcessor
       Revision = Convert.ToInt32(c.TryGetValue("revision", out var rv) ? (rv ?? 1) : 1, CultureInfo.InvariantCulture),
       Topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
       Mcq = c.TryGetValue("mcq", out var m) && m is string s ? JsonSerializer.Deserialize<JsonElement>(s) : (JsonElement?)null,
+      Source = c.TryGetValue("source", out var so) && so is string ss ? JsonSerializer.Deserialize<JsonElement>(ss) : null,
     }).ToList();
   }
 }

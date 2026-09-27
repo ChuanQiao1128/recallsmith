@@ -51,7 +51,8 @@ public static class Cards
             c.created_at    as "createdAt",
             c.updated_at    as "updatedAt",
             c.topic,
-            c.mcq
+            c.mcq,
+            c.source
           from cards c
           """;
 
@@ -82,7 +83,11 @@ public static class Cards
         sql += " order by c.order_in_deck asc, c.id asc";
 
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
-        foreach (var row in rows) Helpers.JsonbCell(row, "mcq");
+        foreach (var row in rows)
+        {
+          Helpers.JsonbCell(row, "mcq");
+          Helpers.JsonbCell(row, "source");
+        }
         return res.Ok(rows);
       }
       catch (Exception ex) when (ex is ValidationError)
@@ -135,6 +140,7 @@ public static class Cards
         var revisionInt = body.TryGetProperty("revision", out var revEl) ? Helpers.ParseOptionalInteger(revEl, "revision") : null;
         var versionInt = body.TryGetProperty("version", out var verEl) ? Helpers.ParseOptionalInteger(verEl, "version") : null;
         var topic = Helpers.ParseOptionalTopic(body);
+        var source = Helpers.ParseOptionalSource(body);
 
         var mcq = body.TryGetProperty("mcq", out var mcqEl) && mcqEl.ValueKind != JsonValueKind.Null
           ? McqValidation.Canonicalize(mcqEl, question)
@@ -148,7 +154,7 @@ public static class Cards
         const string sql = """
           insert into cards (
             deck_id, stable_uid, question, explanation, code_snippet, code_language,
-            real_world_usage, difficulty, order_in_deck, revision, version, topic, mcq
+            real_world_usage, difficulty, order_in_deck, revision, version, topic, mcq, source
           )
           values (
             $1,$2,$3,$4,$5,$6,$7,
@@ -157,7 +163,8 @@ public static class Cards
             coalesce($10,1),
             coalesce($11,1),
             $12,
-            $13::jsonb
+            $13::jsonb,
+            $14::jsonb
           )
           returning
             id,
@@ -176,7 +183,8 @@ public static class Cards
             created_at    as "createdAt",
             updated_at    as "updatedAt",
             topic,
-            mcq;
+            mcq,
+            source;
           """;
 
         var parameters = new object?[]
@@ -192,11 +200,15 @@ public static class Cards
           orderInDeckInt,
           revisionInt,
           versionInt,
-          topic, mcq,
+          topic, mcq, source,
         };
 
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
-        if (rows.Count > 0) Helpers.JsonbCell(rows[0], "mcq");
+        if (rows.Count > 0)
+        {
+          Helpers.JsonbCell(rows[0], "mcq");
+          Helpers.JsonbCell(rows[0], "source");
+        }
         return res.Ok(rows.Count > 0 ? rows[0] : null);
       }
       catch (McqValidationError ex)
@@ -298,6 +310,7 @@ public static class Cards
           new("revision", "revision", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "revision")),
           new("topic", "topic", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.NormalizeTopic(v)),
           new("mcq", "mcq", v => v.ValueKind == JsonValueKind.Null ? null : McqValidation.Canonicalize(v, effectiveQuestion), "::jsonb"),
+          new("source", "source", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.NormalizeSource(v), "::jsonb"),
           new("isDeleted", "is_deleted", v => Helpers.ParseBoolean(v, false) ? 1 : 0),
         };
 
@@ -342,7 +355,8 @@ public static class Cards
             created_at    as "createdAt",
             updated_at    as "updatedAt",
             topic,
-            mcq;
+            mcq,
+            source;
           """;
 
         parameters.Add(idInt);
@@ -357,6 +371,7 @@ public static class Cards
         }
 
         Helpers.JsonbCell(rows[0], "mcq");
+        Helpers.JsonbCell(rows[0], "source");
         if (ignoredFields.Count > 0) rows[0]["ignoredFields"] = ignoredFields;
         return res.Ok(rows[0]);
       }
