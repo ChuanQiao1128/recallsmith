@@ -478,10 +478,15 @@ describe('accessible names and invalid fields (frontend-console-9)', () => {
     await user.type(await screen.findByLabelText('Title'), 'x'.repeat(301));
     await user.click(screen.getByRole('button', { name: 'Add to queue' }));
     await screen.findByText('Enter a URL.');
-    for (const label of ['URL', 'Deck', 'Title']) {
+    // D07 frontend-console-28: each field points at its own message, not at the whole list.
+    for (const [label, field_] of [
+      ['URL', 'url'],
+      ['Deck', 'deckId'],
+      ['Title', 'title'],
+    ] as const) {
       const field = screen.getByLabelText(label);
       expect(field.getAttribute('aria-invalid'), label).toBe('true');
-      expect(field.getAttribute('aria-describedby'), label).toBe('automation-queue-problems');
+      expect(field.getAttribute('aria-describedby'), label).toBe(`automation-queue-problems-${field_}`);
       expect(field.className, label).toContain('border-red-400');
     }
     const note = screen.getByLabelText('Note');
