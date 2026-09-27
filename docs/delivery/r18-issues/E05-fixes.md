@@ -60,7 +60,7 @@ Status: fixed (console side; the server's `authorConfigId` in `EvalGate.ToGate`/
   `AutomationReasons.DecisionReasons`. `:137` labels it "Author configuration differs from the eval gate", the email
   template's wording. The Reason select offers it (it iterates the list), `decisionFiltersFrom` keeps
   `?reason=AUTHOR_NOT_GATED`, and tables show the label instead of the raw code.
-- `frontend/src/features/automation/EvalGateCard.tsx:225-232`: the gate card always shows an "Author configuration"
+- `frontend/src/features/automation/EvalGateCard.tsx:226-232`: the gate card always shows an "Author configuration"
   row. It gives the full id (break-all), which the runbook's go-live check compares with the id the runner uses now.
   When the gate has no author id it says "Not recorded (…)". Before, the row simply disappeared. The normalizer
   already kept the key (`src/api/automation.ts:389`).
@@ -124,7 +124,7 @@ Status: fixed
   `SHADOW_BLIND_DECISIONS_TARGET`. `:667` `shadowThresholdText` now reads
   `≥ 100 blind decisions (37) and ≥ 95.0% agreement (80.0%)`, or `(no rate yet)` when the server's rate is null.
   `:674` `shadowFloorMet` is true only when both halves pass. Both numbers are the server's.
-- `frontend/src/features/automation/OverviewTab.tsx:357-370`: "Go-live floor: …" plus a Met / Not met badge.
+- `frontend/src/features/automation/OverviewTab.tsx:359-373`: "Go-live floor: …" plus a Met / Not met badge.
 - Existing assertions updated: the old floor text named only the count half, which the finding makes wrong.
   - `automationRulesRound3.test.ts`: two `shadowThresholdText` expectations.
   - `automationConsoleRound3.test.tsx`: the floor text. In "shows no rate when nothing was decided blind", the
