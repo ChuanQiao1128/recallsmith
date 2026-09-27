@@ -462,11 +462,6 @@ export const OPEN_EXCEPTIONS_SEARCH = '?tab=decisions&state=human&open=1';
 /** The Email log filtered to the rows still queued, where an unconfirmed email is (K6, L5). */
 export const QUEUED_EMAIL_SEARCH = '?tab=email&status=queued';
 
-/** The Runs tab opened on one run (A00 §12.2). */
-export function runSearch(runId: string): string {
-  return `?tab=runs&runId=${encodeURIComponent(runId)}`;
-}
-
 /** The accessible name of the backlog's link: a bare digit means nothing in a links list. */
 export function backlogLinkLabel(count: number): string {
   return `${count} ${count === 1 ? 'draft' : 'drafts'} waiting for you: show open exceptions`;

@@ -156,8 +156,8 @@ export function OverviewTab({
             {status.backlog && status.backlog.humanPublishes > 0 ? (
               status.backlog.humanPublishItems && status.backlog.humanPublishItems.length > 0 ? (
                 <ul className="mt-3 space-y-1 text-sm text-slate-700" aria-label="Publishes waiting for you">
-                  {status.backlog.humanPublishItems.slice(0, HUMAN_PUBLISH_ITEMS_MAX).map(p => (
-                    <li key={p.deckId} className="flex flex-wrap items-baseline gap-x-2">
+                  {status.backlog.humanPublishItems.slice(0, HUMAN_PUBLISH_ITEMS_MAX).map((p, i) => (
+                    <li key={`${p.deckId}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
                       <span className="font-medium text-slate-900">{p.deckSlug ?? `Deck ${p.deckId}`}</span>
                       <span>{p.reason ? publishReasonLabel(p.reason) : 'Needs you'}</span>
                       <span className="text-xs text-slate-600">since {formatTimestamp(p.since)}</span>
