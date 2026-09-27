@@ -7,6 +7,8 @@ HEADER_EVENT = "X-DeveloperCards-Event"
 HEADER_DELIVERY = "X-DeveloperCards-Delivery"
 HEADER_TIMESTAMP = "X-DeveloperCards-Timestamp"
 HEADER_SIGNATURE = "X-DeveloperCards-Signature"
+# Sent only during a signing-secret rotation: the same HMAC made with the previous secret.
+HEADER_SIGNATURE_PREVIOUS = "X-DeveloperCards-Signature-Previous"
 USER_AGENT = "DeveloperCards-Webhooks/1"
 
 

@@ -222,6 +222,102 @@ def test_retryable_codes_report_finished_items_then_fail_the_message(core, ssm, 
     assert core.requests == []
 
 
+ARN = "arn:aws:sqs:ap-southeast-2:123456789012:developercards-ai-qa-jobs"
+QUEUE_URL = "https://sqs.ap-southeast-2.amazonaws.com/123456789012/developercards-ai-qa-jobs"
+
+
+class FakeSqs:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.calls: list[dict] = []
+        self.error = error
+
+    def change_message_visibility(self, **kwargs) -> None:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+
+
+def sqs_record_event(body: str, n: int = 1) -> dict:
+    return {
+        "Records": [
+            {
+                "messageId": "m-0",
+                "receiptHandle": f"rh-{n}",
+                "body": body,
+                "attributes": {"ApproximateReceiveCount": str(n)},
+                "eventSourceARN": ARN,
+            }
+        ]
+    }
+
+
+def test_redelivered_chunk_makes_no_model_call_for_cards_already_reported(core, ssm, llm, enabled, monkeypatch) -> None:
+    sqs = FakeSqs()
+    settings.set_clients(sqs=sqs)
+    monkeypatch.setattr(handler, "jitter", lambda lo, hi: 97.6)
+
+    # Receive 1: card 101 done, card 102 rate limited.
+    llm.script = [reply(review_json(finding())), status_error(anthropic.RateLimitError, 429)]
+    result = handler.lambda_handler(sqs_record_event(message(), n=1), FakeContext(600))
+    assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
+    assert [(i["cardId"], i["status"]) for i in reports(core)[0]["items"]] == [(101, "done")]
+    # Back in 60-120 s, not after the queue's 3600 s visibility.
+    assert sqs.calls == [{"QueueUrl": QUEUE_URL, "ReceiptHandle": "rh-1", "VisibilityTimeout": 97}]
+
+    # Receive 2: only 102 and 103 reach the model; 101 is neither reviewed nor reported again.
+    llm.calls.clear()
+    llm.script = [reply(review_json()), reply(review_json())]
+    result = handler.lambda_handler(sqs_record_event(message(), n=2), FakeContext(600))
+    assert result == {"batchItemFailures": []}
+    assert len(llm.calls) == 2
+    assert [i["cardId"] for i in reports(core)[1]["items"]] == [102, 103]
+    assert len(sqs.calls) == 1
+
+    # A third copy (SQS at-least-once) has nothing left to do: no call, no report, acked.
+    llm.calls.clear()
+    assert handler.lambda_handler(sqs_record_event(message(), n=3), FakeContext(600)) == {"batchItemFailures": []}
+    assert llm.calls == [] and len(core.requests) == 2
+
+
+def test_unreported_cards_are_reviewed_again_on_redelivery(local_server, ssm, llm, enabled, monkeypatch) -> None:
+    # A failed report is not remembered: the redelivery must review and report the card again.
+    answers = iter([400, 200])
+
+    def flaky_core(srv, captured):
+        status = next(answers)
+        if status != 200:
+            return status, {}, b"{}"
+        return fake_core(srv, captured)
+
+    srv = local_server(flaky_core)
+    monkeypatch.setenv("CORE_API_BASE", srv.base_url)
+    settings.set_clients(sqs=FakeSqs())
+    llm.script = [reply(review_json()), status_error(anthropic.InternalServerError, 500)]
+    assert handler.lambda_handler(sqs_record_event(message(), n=1), FakeContext(600))["batchItemFailures"]
+    llm.calls.clear()
+    llm.script = [reply(review_json())] * 3
+    assert handler.lambda_handler(sqs_record_event(message(), n=2), FakeContext(600)) == {"batchItemFailures": []}
+    assert len(llm.calls) == 3
+
+
+def test_remembered_items_are_keyed_by_content_hash(core, ssm, llm, enabled) -> None:
+    llm.script = [reply(review_json())]
+    handler.lambda_handler(event(message([card(0)])), FakeContext(600))
+    edited = {**card(0), "contentSha256": "d" * 64}
+    llm.script = [reply(review_json())]
+    assert handler.lambda_handler(event(message([edited])), FakeContext(600)) == {"batchItemFailures": []}
+    assert len(llm.calls) == 2
+
+
+def test_visibility_change_failure_still_fails_the_message(core, ssm, llm, enabled, capsys) -> None:
+    settings.set_clients(sqs=FakeSqs(error=RuntimeError("AccessDenied")))
+    llm.script = [status_error(anthropic.RateLimitError, 429)]
+    result = handler.lambda_handler(sqs_record_event(message(), n=1), FakeContext(600))
+    assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
+    out = capsys.readouterr().out
+    assert '"visibility_failed"' in out and "RuntimeError" in out and "AccessDenied" not in out
+
+
 def test_per_card_outcomes_do_not_stop_the_chunk(core, ssm, llm, enabled) -> None:
     llm.script = [
         reply(None, stop_reason="refusal"),
@@ -283,11 +379,13 @@ def test_deadline_guard_stops_before_the_lambda_timeout(core, ssm, llm, enabled)
     assert llm.options == [{"timeout": 120.0, "max_retries": 0}]
 
     llm.options.clear()
+    handler.reset_client_cache()  # a fresh container: card 101 was already reported by this one
     llm.script = [reply(review_json())]
     handler.lambda_handler(event(message([card(0)])), FakeContext(160))
     assert llm.options == [{"timeout": 120.0, "max_retries": 0}]
 
     llm.options.clear()
+    handler.reset_client_cache()
     llm.script = [reply(review_json())]
     handler.lambda_handler(event(message([card(0)])), FakeContext(600))
     assert llm.options == [{"timeout": 120.0, "max_retries": 2}]
@@ -325,7 +423,6 @@ def test_bad_message_shape_is_acked(core, ssm, llm, enabled, body) -> None:
 def test_report_failure_fails_the_message(local_server, ssm, llm, enabled, monkeypatch) -> None:
     down = local_server(lambda s, c: (503, {}, b""))
     monkeypatch.setenv("CORE_API_BASE", down.base_url)
-    monkeypatch.setattr("ai_qa.internal_client.time.sleep", lambda s: None)
     llm.script = [reply(review_json())]
     result = handler.lambda_handler(event(message([card(0)])), None)
     assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}

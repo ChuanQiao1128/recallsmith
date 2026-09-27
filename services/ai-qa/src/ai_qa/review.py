@@ -18,7 +18,7 @@ import pydantic
 from . import providers
 from .logs import log
 from .prompts import SYSTEM_PROMPT
-from .schema import ModelReview
+from .schema import CATEGORY_SEVERITY, ModelReview
 from .settings import Settings
 
 try:
@@ -127,7 +127,18 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def finalize_findings(review: ModelReview, card_id: int) -> list[dict[str, Any]]:
-    ordered = sorted(review.findings, key=lambda f: SEVERITY_ORDER[f.severity])[:MAX_FINDINGS]
+    """The §7.7 findings. Severity is derived from the category; the model's own value is only compared."""
+    mismatches = [f for f in review.findings if f.severity != CATEGORY_SEVERITY[f.category]]
+    if mismatches:
+        log(
+            "warn",
+            "ai-qa",
+            event="severity_mismatch",
+            cardId=card_id,
+            count=len(mismatches),
+            pairs=sorted({f"{f.category}:{f.severity}" for f in mismatches}),
+        )
+    ordered = sorted(review.findings, key=lambda f: SEVERITY_ORDER[CATEGORY_SEVERITY[f.category]])[:MAX_FINDINGS]
     out: list[dict[str, Any]] = []
     for finding in ordered:
         message = _truncate(finding.message, MAX_MESSAGE_CHARS)
@@ -136,7 +147,7 @@ def finalize_findings(review: ModelReview, card_id: int) -> list[dict[str, Any]]
         out.append(
             {
                 "cardId": card_id,
-                "severity": finding.severity,
+                "severity": CATEGORY_SEVERITY[finding.category],
                 "category": finding.category,
                 "message": message if message.strip() else finding.category,
                 "suggestedFix": fix,

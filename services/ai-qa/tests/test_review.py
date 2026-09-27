@@ -19,7 +19,7 @@ from conftest import (
 from ai_qa import providers
 from ai_qa.prompts import SYSTEM_PROMPT
 from ai_qa.review import review_card
-from ai_qa.schema import ModelReview
+from ai_qa.schema import CATEGORIES, CATEGORY_SEVERITY, SEVERITIES, ModelReview
 from ai_qa.settings import load_settings
 
 REVIEW_DATE = "2026-10-01"
@@ -134,6 +134,34 @@ def test_valid_review_becomes_done_item_with_injected_card_id() -> None:
     assert list(item["findings"][0]) == ["cardId", "severity", "category", "message", "suggestedFix"]
     assert item["usage"] == {"inputTokens": 100, "outputTokens": 20, "cacheReadInputTokens": 0}
     assert isinstance(item["latencyMs"], int)
+
+
+def test_category_fixes_the_severity_whatever_the_model_says(capsys) -> None:
+    text = review_json(
+        finding("major", "incorrect_answer", "Wrong key.", None),  # must block publishing
+        finding("blocker", "other", "Typo in option c.", None),  # must not block publishing
+        finding("minor", "qualifier_mismatch", "b is cheaper.", None),
+        finding("major", "ambiguous_stem", "Two readings.", None),  # already consistent
+    )
+    item = run(FakeLlm([reply(text)]), card(2))
+    assert item["status"] == "done"
+    assert [(f["category"], f["severity"]) for f in item["findings"]] == [
+        ("incorrect_answer", "blocker"),
+        ("qualifier_mismatch", "major"),
+        ("ambiguous_stem", "major"),
+        ("other", "minor"),
+    ]
+    (line,) = [json.loads(l) for l in capsys.readouterr().out.splitlines() if '"severity_mismatch"' in l]
+    assert line["count"] == 3 and line["cardId"] == 103
+    assert line["pairs"] == ["incorrect_answer:major", "other:blocker", "qualifier_mismatch:minor"]
+    assert "Wrong key." not in json.dumps(line)
+
+
+def test_category_severity_table_covers_every_category() -> None:
+    assert set(CATEGORY_SEVERITY) == set(CATEGORIES)
+    assert set(CATEGORY_SEVERITY.values()) <= set(SEVERITIES)
+    assert [c for c, s in CATEGORY_SEVERITY.items() if s == "blocker"] == ["incorrect_answer", "multiple_correct"]
+    assert [c for c, s in CATEGORY_SEVERITY.items() if s == "minor"] == ["weak_distractor", "other"]
 
 
 def test_empty_findings_and_fenced_json_are_done() -> None:

@@ -21,6 +21,7 @@ from .signing import (
     HEADER_DELIVERY,
     HEADER_EVENT,
     HEADER_SIGNATURE,
+    HEADER_SIGNATURE_PREVIOUS,
     HEADER_TIMESTAMP,
     USER_AGENT,
     sign_webhook,
@@ -31,6 +32,11 @@ REPORT_PATH = "/api/internal/webhooks/deliveries/report"
 SIGNING_SECRET_MISSING = "SIGNING_SECRET_MISSING"
 MAX_ERROR_CHARS = 500
 REPORT_BUDGET_RESERVE_S = 2.0
+# Lambda time kept free after the POST so the attempt is always reported (the report client needs
+# at least 2 s per try plus REPORT_BUDGET_RESERVE_S).
+ATTEMPT_REPORT_RESERVE_S = 6.0
+MIN_ATTEMPT_TIMEOUT_S = 1.0
+SUPPORTED_MESSAGE_VERSION = 1
 
 # Seams for tests (monkeypatched); production uses the wall clock and the real client.
 now = time.time
@@ -60,17 +66,12 @@ def _is_uuid(value: Any) -> bool:
 
 def parse_message(raw: Any) -> Message | None:
     """The §6.4 message, or None for any other shape."""
-    if not isinstance(raw, str):
-        return None
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        return None
-    if not isinstance(data, dict):
+    data = _json_object(raw)
+    if data is None:
         return None
     v = data.get("v")
     sub = data.get("subscriptionId")
-    if type(v) is not int or v != 1:
+    if type(v) is not int or v != SUPPORTED_MESSAGE_VERSION:
         return None
     if not (_is_uuid(data.get("deliveryId")) and _is_uuid(data.get("eventId"))):
         return None
@@ -90,6 +91,29 @@ def parse_message(raw: Any) -> Message | None:
     )
 
 
+def _json_object(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def unsupported_version(raw: Any) -> bool:
+    """A delivery message from a newer (or unknown) producer: a deliveryId, but a `v` this code does not speak.
+
+    Such a message is not garbage; dropping it would leave its delivery row 'queued' forever. It is
+    failed instead, so SQS moves it to the DLQ (alarmed) where it waits for a dispatcher that knows it.
+    """
+    data = _json_object(raw)
+    if data is None or not _is_uuid(data.get("deliveryId")):
+        return False
+    v = data.get("v")
+    return not (type(v) is int and v == SUPPORTED_MESSAGE_VERSION)
+
+
 def queue_url_from_arn(arn: str) -> str:
     """arn:aws:sqs:<region>:<account>:<name> → https://sqs.<region>.amazonaws.com/<account>/<name>."""
     parts = arn.split(":")
@@ -106,6 +130,15 @@ def _report_budget(context: Any) -> float | None:
     return max(0.0, remaining() / 1000 - REPORT_BUDGET_RESERVE_S)
 
 
+def _attempt_timeout(context: Any, configured: float) -> float:
+    """The configured timeout, capped so the POST ends while there is still time to report it."""
+    remaining = getattr(context, "get_remaining_time_in_millis", None)
+    if not callable(remaining):
+        return configured
+    left = remaining() / 1000 - ATTEMPT_REPORT_RESERVE_S
+    return max(MIN_ATTEMPT_TIMEOUT_S, min(configured, left))
+
+
 def _host_of(url: str) -> str | None:
     try:
         return urlsplit(url).hostname
@@ -118,6 +151,9 @@ def _process(record: dict[str, Any], context: Any, cfg: settings.Settings) -> bo
     message_id = record.get("messageId")
     msg = parse_message(record.get("body"))
     if msg is None:
+        if unsupported_version(record.get("body")):
+            log("error", "webhook_unsupported_version", messageId=message_id)
+            return False
         log("warn", "webhook_bad_message", messageId=message_id)
         return True
     n = int(record["attributes"]["ApproximateReceiveCount"])
@@ -149,11 +185,18 @@ def _process(record: dict[str, Any], context: Any, cfg: settings.Settings) -> bo
                 HEADER_TIMESTAMP: str(ts),
                 HEADER_SIGNATURE: sign_webhook(secret, ts, msg.body),
             }
+            # Rotation window: while "<name>-previous" is set, also sign with the old secret so
+            # receivers not yet updated keep verifying.
+            previous = settings.get_secret(
+                settings.previous_secret_name(cfg.signing_secret_ssm_name), optional=True
+            )
+            if previous is not None and previous != secret:
+                headers[HEADER_SIGNATURE_PREVIOUS] = sign_webhook(previous, ts, msg.body)
             result = post_json(
                 msg.url,
                 msg.body.encode("utf-8"),
                 headers,
-                cfg.http_timeout_seconds,
+                _attempt_timeout(context, cfg.http_timeout_seconds),
                 connect_address=guard.addresses[0],
             )
             sent = True

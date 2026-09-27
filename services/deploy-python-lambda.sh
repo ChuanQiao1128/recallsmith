@@ -4,6 +4,10 @@
 # live environment, update the code, prove CodeSha256 equals the local zip, publish a version and
 # move the alias.
 #
+# The build runs the service's tests first, installs only hash-verified wheels (the hashes in
+# uv.lock, --require-hashes), and a real deploy refuses uncommitted changes under services/<svc>
+# (the published version records the commit). It prints the one-line alias rollback command.
+#
 #   DRY_RUN=1 services/deploy-python-lambda.sh webhook-dispatcher   # build + print, never calls aws
 #   AWS_PROFILE=dev services/deploy-python-lambda.sh webhook-dispatcher   # supervisor only
 #
@@ -52,13 +56,32 @@ jq -e 'type == "object" and all(.[]; type == "string")' "$ENV_FILE" >/dev/null 2
   || { echo "$ENV_FILE must be a JSON object of strings" >&2; exit 1; }
 file_env="$(jq -c . "$ENV_FILE")"
 
+# --- preflight --------------------------------------------------------------------------------
+dirty="$(git -C "$ROOT" status --porcelain -- "services/$SERVICE" 2>/dev/null || echo "not a git checkout")"
+if [ -n "$dirty" ]; then
+  if [ "${DRY_RUN:-0}" = 1 ]; then
+    echo "DRY: warning: uncommitted changes under services/$SERVICE (a real deploy refuses this)" >&2
+  else
+    echo "refusing to deploy: uncommitted changes under services/$SERVICE:" >&2
+    echo "$dirty" >&2
+    exit 1
+  fi
+fi
+
+# The tests never call AWS or a model; the credentials are removed anyway.
+(cd "$SVC_DIR" && env -u AWS_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
+  -u AWS_BEARER_TOKEN_BEDROCK -u ANTHROPIC_API_KEY \
+  AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
+  "$UV" run --frozen --python 3.12 pytest -q) || { echo "tests failed; nothing was built" >&2; exit 1; }
+
 # --- build ------------------------------------------------------------------------------------
 rm -rf "$BUILD"
 mkdir -p "$BUILD/pkg"
 # --no-emit-project: without it the file starts with `-e .` (the project itself, not a dependency).
-"$UV" export --project "$SVC_DIR" --frozen --no-dev --no-hashes --no-emit-project --quiet > "$BUILD/requirements.txt"
-"$UV" pip install --quiet --target "$BUILD/pkg" --python-version 3.12 --python-platform aarch64-manylinux2014 \
-  --only-binary :all: -r "$BUILD/requirements.txt"
+# The export keeps uv.lock's sha256 hashes and the install refuses any artifact that does not match.
+"$UV" export --project "$SVC_DIR" --frozen --no-dev --no-emit-project --quiet > "$BUILD/requirements.txt"
+"$UV" pip install --quiet --require-hashes --target "$BUILD/pkg" --python-version 3.12 \
+  --python-platform aarch64-manylinux2014 --only-binary :all: -r "$BUILD/requirements.txt"
 mkdir -p "$BUILD/pkg"   # uv does not create the target when there is nothing to install
 rm -f "$BUILD/pkg/.lock"   # uv's install lock file, not package content
 (cd "$SVC_DIR/src" && tar --exclude '__pycache__' --exclude '*.pyc' -cf - "$PKG") | (cd "$BUILD/pkg" && tar -xf -)
@@ -107,8 +130,12 @@ echo "OK $FN CodeSha256=$remote_sha"
 ver="$(aws lambda publish-version --region "$REGION" --function-name "$FN" \
   --description "deploy-python-lambda.sh $(date -u +%Y-%m-%dT%H:%M:%SZ) $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)" \
   --query 'Version' --output text)"
+prev_ver="$(aws lambda get-alias --region "$REGION" --function-name "$FN" --name "$PUBLISH_ALIAS" \
+  --query 'FunctionVersion' --output text)"
+echo "== $FN:$PUBLISH_ALIAS currently -> version $prev_ver"
 aws lambda update-alias --region "$REGION" --function-name "$FN" --name "$PUBLISH_ALIAS" --function-version "$ver" \
   --query '[Name,FunctionVersion]' --output text
 alias_sha="$(aws lambda get-function-configuration --region "$REGION" --function-name "$FN:$PUBLISH_ALIAS" --query 'CodeSha256' --output text)"
 [ "$alias_sha" = "$local_sha" ] || { echo "$FN:$PUBLISH_ALIAS CodeSha256 mismatch after alias move: $alias_sha" >&2; exit 1; }
 echo "OK $FN:$PUBLISH_ALIAS -> version $ver (CodeSha256 verified)"
+echo "ROLLBACK: aws lambda update-alias --region $REGION --function-name $FN --name $PUBLISH_ALIAS --function-version $prev_ver"

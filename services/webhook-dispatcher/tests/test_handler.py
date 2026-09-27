@@ -300,8 +300,7 @@ def test_report_failure_does_not_change_the_decision(world: World, capsys) -> No
     [
         "not json",
         "[]",
-        json.dumps(message(v=2)),
-        json.dumps(message(v=True)),
+        json.dumps(message(v=2, deliveryId="not-a-uuid")),
         json.dumps(message(deliveryId="not-a-uuid")),
         json.dumps(message(eventId=5)),
         json.dumps(message(subscriptionId="12")),
@@ -317,6 +316,83 @@ def test_bad_message_shape_is_acked_without_retry(world: World, capsys, body: st
     assert attempts_outcomes(out) == []
     assert "webhook_bad_message" in out
     assert BODY not in out
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        json.dumps(message(v=2)),
+        json.dumps(message(v=True)),
+        json.dumps({k: v for k, v in message().items() if k != "v"}),
+        json.dumps({"v": 2, "deliveryId": DELIVERY_ID, "shape": "from a newer producer"}),
+    ],
+)
+def test_unknown_message_version_goes_to_the_dlq_instead_of_being_dropped(world: World, capsys, body: str) -> None:
+    # A newer producer's message is failed (SQS redrives it to the alarmed DLQ), never silently acked.
+    assert handler.lambda_handler(sqs_event(1, body=body), Context()) == {"batchItemFailures": [{"itemIdentifier": "m-1"}]}
+    assert world.http_calls == [] and world.reports == [] and world.sqs.calls == []
+    out = capsys.readouterr().out
+    assert "webhook_unsupported_version" in out and "webhook_bad_message" not in out
+    assert attempts_outcomes(out) == []
+    assert BODY not in out
+
+
+def test_rotation_sends_a_second_signature_made_with_the_previous_secret(world: World) -> None:
+    world.ssm.values[SIGNING_NAME + "-previous"] = "whsec-old"
+    assert handler.lambda_handler(sqs_event(1), Context()) == {"batchItemFailures": []}
+    (call,) = world.http_calls
+    headers = call["headers"]
+    # The primary header is unchanged: bare hex over the current secret.
+    assert headers["X-DeveloperCards-Signature"] == sign_webhook("whsec-test", 1790000000, BODY)
+    assert headers["X-DeveloperCards-Signature-Previous"] == sign_webhook("whsec-old", 1790000000, BODY)
+
+    # Rotation finished (previous parameter deleted): after the cache TTL only one signature goes out.
+    del world.ssm.values[SIGNING_NAME + "-previous"]
+    settings.clear_secret_cache()
+    handler.lambda_handler(sqs_event(1), Context())
+    assert "X-DeveloperCards-Signature-Previous" not in world.http_calls[-1]["headers"]
+
+    # A previous value equal to the current one (or the placeholder) adds nothing.
+    for value in ("whsec-test", "PLACEHOLDER-set-by-supervisor"):
+        world.ssm.values[SIGNING_NAME + "-previous"] = value
+        settings.clear_secret_cache()
+        handler.lambda_handler(sqs_event(1), Context())
+        assert "X-DeveloperCards-Signature-Previous" not in world.http_calls[-1]["headers"]
+
+
+def test_missing_previous_secret_is_looked_up_once_per_ttl(world: World, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    lookups: list[str] = []
+    original = world.ssm.get_parameter
+
+    def counting(Name: str, WithDecryption: bool) -> dict[str, Any]:
+        lookups.append(Name)
+        return original(Name=Name, WithDecryption=WithDecryption)
+
+    monkeypatch.setattr(world.ssm, "get_parameter", counting)
+    for _ in range(3):
+        assert handler.lambda_handler(sqs_event(1), Context()) == {"batchItemFailures": []}
+    assert lookups.count(SIGNING_NAME + "-previous") == 1
+    assert lookups.count(SIGNING_NAME) == 1
+    # An absent optional parameter is normal: no warning.
+    assert "ssm_secret_unavailable" not in capsys.readouterr().out
+
+
+def test_attempt_timeout_leaves_time_to_report(world: World) -> None:
+    class Short:
+        def __init__(self, ms: int) -> None:
+            self.ms = ms
+
+        def get_remaining_time_in_millis(self) -> int:
+            return self.ms
+
+    handler.lambda_handler(sqs_event(1), Short(12_000))
+    assert world.http_calls[-1]["timeout"] == pytest.approx(12.0 - handler.ATTEMPT_REPORT_RESERVE_S)
+    handler.lambda_handler(sqs_event(1), Short(2_000))
+    assert world.http_calls[-1]["timeout"] == handler.MIN_ATTEMPT_TIMEOUT_S
+    handler.lambda_handler(sqs_event(1), Short(30_000))
+    assert world.http_calls[-1]["timeout"] == 10.0
+    handler.lambda_handler(sqs_event(1), None)
+    assert world.http_calls[-1]["timeout"] == 10.0
 
 
 def test_unexpected_exception_returns_batch_item_failure(world: World, capsys) -> None:
