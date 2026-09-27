@@ -3,6 +3,7 @@
 import dataclasses
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import FakeLlm, FakeUsage, card, finding, reply, review_json
@@ -23,6 +24,9 @@ from ai_qa.prompts import PROMPT_VERSION, PROMPT_VERSION_AUTOMATION, SYSTEM_PROM
 from ai_qa.settings import ConfigError, load_settings
 
 PROD_ENV = Path(__file__).resolve().parent.parent / "env" / "prod.env.json"
+# G02 (backend-design-27): the automation report shape shared with core's contract test
+# (src_C AutomationRound5Tests reads the same file), so either suite fails on drift from the other.
+AUTOMATION_REPORT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "automation_report.json"
 AUTOMATION_MODEL = "global.openai.gpt-5.5"
 DRAFT_ID = 4711
 AUTOMATION_ENV = {
@@ -72,6 +76,15 @@ CONTRACT_DRAFT_MESSAGE = {
         }
     ],
 }
+
+
+def json_shape(value: Any) -> Any:
+    """The keys and JSON value types of a parsed document, with the values themselves dropped."""
+    if isinstance(value, dict):
+        return {key: json_shape(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_shape(item) for item in value]
+    return type(value).__name__
 
 
 def set_env(monkeypatch, env) -> None:
@@ -528,6 +541,25 @@ class TestEffortInReport:
         assert body["effectiveEffort"] == providers.effective_effort(cfg_used) == expected
         expected_settings = profiles.settings_for(load_settings({**env, "AI_EFFORT": "max"}), "automation")
         assert body["effectiveEffort"] == providers.effective_effort(expected_settings)
+
+    def test_draft_report_matches_the_shared_automation_report_fixture(self, harness, monkeypatch) -> None:
+        """The production automation reviewer's draft report has exactly the keys and value types of
+        tests/fixtures/automation_report.json, the file core's contract test posts (backend-design-27)."""
+        core, clients, _ = harness
+        env = {**AUTOMATION_ENV, "AI_QA_AUTOMATION_PROVIDER": "openai-mantle", "AI_QA_AUTOMATION_MODEL": "openai.gpt-5.5"}
+        set_env(monkeypatch, {**env, "AI_QA_ENABLED": "1", "AI_EFFORT": "high"})
+        clients["openai-mantle"].script = [reply(review_json(), usage=FakeUsage(1000, 100), request_id="d")]
+        handler.lambda_handler(event(message([draft_card()], target="draft", profile="automation")), None)
+        (body,) = reports(core)
+        fixture = json.loads(AUTOMATION_REPORT_FIXTURE.read_text(encoding="utf-8"))
+        assert json_shape(body) == json_shape(fixture)
+        assert set(fixture) == AUTOMATION_REPORT_KEYS | {"target"}
+        # The constant values the fixture pins; placeholders stand for the rest.
+        assert (body["v"], body["target"], body["profile"]) == (fixture["v"], fixture["target"], fixture["profile"])
+        assert body["effectiveEffort"] == "high"  # the production AI_EFFORT, as the gate records it
+        # Byte-level form too: the fixture is written as handler._report serializes (sorted, compact).
+        raw = AUTOMATION_REPORT_FIXTURE.read_text(encoding="utf-8").strip()
+        assert raw == json.dumps(fixture, separators=(",", ":"), ensure_ascii=True, sort_keys=True)
 
     def test_anthropic_automation_reviewer_reports_the_configured_effort(self, harness, monkeypatch) -> None:
         core, clients, _ = harness
