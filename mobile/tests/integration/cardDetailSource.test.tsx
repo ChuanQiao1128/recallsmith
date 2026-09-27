@@ -134,7 +134,39 @@ async function press(tree: renderer.ReactTestRenderer, testID: string) {
   await flush();
 }
 
+// WCAG 2.x contrast ratio of two #RRGGBB colours.
+function contrast(fg: string, bg: string): number {
+  const luminance = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const [hi, lo] = [luminance(fg), luminance(bg)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+const flatStyle = (node: renderer.ReactTestInstance) =>
+  Object.assign({}, ...[node.props.style].flat(Infinity).filter(Boolean));
+
 describe('CardDetailScreen — source row', () => {
+  it('meets WCAG AA text contrast for every text in the Source row, SOURCE label included', async () => {
+    ownedFixture = new Set(['cs-sourced']);
+    const tree = await renderScreen('cs-sourced');
+    await press(tree, 'card-detail-show-answer');
+
+    const answerBg = flatStyle(byTestId(tree, 'card-detail-answer')[0]).backgroundColor;
+    expect(answerBg).toBe('#FFFFFF');
+    const texts = byTestId(tree, 'card-detail-source')[0].findAll((n) => (n.type as any) === 'Text');
+    const label = texts.find((n) => textOf(n) === 'SOURCE');
+    expect(label).toBeDefined();
+    // Y08 mobile-9: the 11pt SOURCE label was inkMuted #8A7B6A, 4.10:1 on white.
+    expect(contrast(flatStyle(label!).color, answerBg)).toBeGreaterThanOrEqual(4.5);
+    expect(texts.length).toBeGreaterThanOrEqual(3);
+    for (const text of texts) expect(contrast(flatStyle(text).color, answerBg)).toBeGreaterThanOrEqual(4.5);
+  });
+
   it('shows the source host and quote under an opened answer', async () => {
     ownedFixture = new Set(['cs-sourced']);
     const tree = await renderScreen('cs-sourced');

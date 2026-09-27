@@ -2,6 +2,7 @@ import type { CardExport } from '../../../types/deckExport';
 import type { CardProgress, ReviewRating } from '../../../review/model';
 import { scheduleNextReview } from '../../../review/model';
 import { countDueToday, pickNextCard } from '../planner/sessionPlanner';
+import { scheduleFocusReview } from '../mistakes/focusSession';
 import type { OwnedGate } from '../contracts';
 import type { McqKindHint } from '../mcq/mcqRotation';
 
@@ -57,6 +58,8 @@ export function buildRatedSessionState(params: {
   cardIndex: { cards: CardExport[]; cardMap: Map<string, CardExport> } | null;
   ownedSet?: OwnedGate;
   kindHint?: McqKindHint | null;
+  /** A Mistake Book focus run: a card that is not due gets no scheduler credit (scheduleFocusReview). */
+  focusRun?: boolean;
 }): {
   updatedProgress: CardProgress[];
   updatedOne: CardProgress;
@@ -65,10 +68,11 @@ export function buildRatedSessionState(params: {
   prevLearnedCount: number;
   remainingDueCount: number;
 } {
-  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null } = params;
+  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false } = params;
 
+  const schedule = focusRun ? scheduleFocusReview : scheduleNextReview;
   const updatedOne: CardProgress = {
-    ...scheduleNextReview(current.progress, rating, now),
+    ...schedule(current.progress, rating, now),
     lastSeenRevision: typeof current.card.Revision === 'number' && current.card.Revision > 0 ? current.card.Revision : 1,
   };
 

@@ -211,7 +211,7 @@ vi.mock('../../src/features/gacha/rewards/sessionRewards', () => {
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { MistakeBookScreen } from '../../src/screens/MistakeBookScreen';
 import { resolveDeckBySlug } from '../../src/content/deckRepository';
-import { loadDeckProgress } from '../../src/review/storage';
+import { loadDeckProgress, saveDeckProgress } from '../../src/review/storage';
 import { countDueToday, pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
 import { loadMistakeBook } from '../../src/features/gacha/mistakes/mistakeBook';
@@ -299,6 +299,28 @@ async function mountSession(params: Record<string, unknown>) {
   await flush();
   await flush();
   return { tree, navigation };
+}
+
+async function openMistakeBookAndTapReview(): Promise<{ focusUids: string[] | null; doneToday: boolean }> {
+  const navigation = { navigate: vi.fn(), goBack: vi.fn(), addListener: vi.fn(() => () => {}) } as any;
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => {
+    tree = renderer.create(
+      <MistakeBookScreen navigation={navigation} route={{ key: 'mb', name: 'MistakeBook', params: { slug: 'csharp' } } as any} />,
+    );
+  });
+  await flush();
+  expect(byTestID(tree, 'mistake-row-c1')).toHaveLength(1);
+  await act(async () => {
+    byTestID(tree, 'mistake-review-csharp')[0].props.onPress();
+  });
+  await flush();
+  const call = navigation.navigate.mock.calls.find((c: any[]) => c[0] === 'SessionCard');
+  const doneToday = byTestID(tree, 'mistake-done-today-csharp').length === 1;
+  await act(async () => {
+    tree.unmount();
+  });
+  return { focusUids: call ? (call[1].focusUids as string[]) : null, doneToday };
 }
 
 async function openMistakeBookAndStartFocus(): Promise<string[]> {
@@ -392,9 +414,10 @@ describe('Mistake Book loop across SessionCard and the real store', () => {
     await focusRunAllGood(focusUids);
     expect(await storedC1()).toMatchObject({ correctStreak: 1, resolvedAt: null, lastCorrectAt: DAY0_MS });
 
-    // Day 0 again, a minute later: a back-to-back run does not clear the card.
+    // Day 0 again, a minute later: a back-to-back run does not clear the card. Y08 mobile-12: the
+    // card already got today's correct answer, so the tap no longer starts a run at all.
     vi.setSystemTime(DAY0_MS + 60_000);
-    await focusRunAllGood(await openMistakeBookAndStartFocus());
+    expect(await openMistakeBookAndTapReview()).toEqual({ focusUids: null, doneToday: true });
     expect(await storedC1()).toMatchObject({ correctStreak: 1, resolvedAt: null, lastCorrectAt: DAY0_MS });
 
     // Day 1: the second correct answer on another day resolves it, and the book empties.
@@ -413,5 +436,68 @@ describe('Mistake Book loop across SessionCard and the real store', () => {
     await flush();
     expect(byTestID(tree, 'mistake-book-empty')).toHaveLength(1);
     expect(byTestID(tree, 'mistake-row-c1')).toHaveLength(0);
+  });
+
+  it('gives no scheduler credit to cards that are not due and deals nothing twice on the same day', async () => {
+    // Y08 mobile-12. Progress is stateful here: what a run saves is what the next run loads.
+    featureFlagsMock.mockReturnValue({ ...flags(), mistakeBook: { enabled: true, relatedCount: 2 } });
+    const saved = new Map<string, any>();
+    vi.mocked(loadDeckProgress).mockImplementation(async () => CARDS.map((c) => saved.get(c.StableUid)) as any);
+    vi.mocked(saveDeckProgress).mockImplementation(async (_deck: any, rows: any[]) => {
+      for (const row of rows) saved.set(row.stableUid, { ...row });
+    });
+    // c1 was missed an hour ago (Again: stage dropped, due again after 10 minutes). c2 and c3 are
+    // learned at stage 1 and not due until tomorrow.
+    saved.set('c1', { stableUid: 'c1', stage: 1, lastReviewedAt: DAY0_MS - 3_600_000, nextReviewAt: DAY0_MS - 3_000_000 });
+    for (const uid of ['c2', 'c3']) {
+      saved.set(uid, { stableUid: uid, stage: 1, lastReviewedAt: DAY0_MS - DAY_MS, nextReviewAt: DAY0_MS + DAY_MS });
+    }
+    store.set(
+      'devcards:u:test:devcards:mistakes:v1',
+      JSON.stringify({
+        v: 1,
+        entries: {
+          'csharp::c1': {
+            deckSlug: 'csharp',
+            stableUid: 'c1',
+            topic: 'linq',
+            wrongCount: 1,
+            firstWrongAt: DAY0_MS - 3_600_000,
+            lastWrongAt: DAY0_MS - 3_600_000,
+            lastOutcome: 'again',
+            correctStreak: 0,
+            resolvedAt: null,
+          },
+        },
+      }),
+    );
+    vi.mocked(pickNextCard).mockReturnValue(null);
+    const scheduleOf = (uid: string) => ({ stage: saved.get(uid).stage, nextReviewAt: saved.get(uid).nextReviewAt });
+
+    // First run: the due mistake earns its credit; the two related cards, not due, earn none.
+    const first = await openMistakeBookAndTapReview();
+    expect(first).toEqual({ focusUids: ['c1', 'c2', 'c3'], doneToday: false });
+    await focusRunAllGood(first.focusUids!);
+    expect(scheduleOf('c1')).toEqual({ stage: 2, nextReviewAt: DAY0_MS + 4 * DAY_MS });
+    expect(scheduleOf('c2')).toEqual({ stage: 1, nextReviewAt: DAY0_MS + DAY_MS });
+    expect(scheduleOf('c3')).toEqual({ stage: 1, nextReviewAt: DAY0_MS + DAY_MS });
+    expect(saved.get('c2').lastReviewedAt).toBe(DAY0_MS);
+    expect(await storedC1()).toMatchObject({ correctStreak: 1, lastCorrectAt: DAY0_MS });
+    const afterFirst = { c1: scheduleOf('c1'), c2: scheduleOf('c2'), c3: scheduleOf('c3') };
+
+    // Second tap a minute later: nothing is dealt again, and no schedule moves.
+    vi.setSystemTime(DAY0_MS + 60_000);
+    expect(await openMistakeBookAndTapReview()).toEqual({ focusUids: null, doneToday: true });
+    expect({ c1: scheduleOf('c1'), c2: scheduleOf('c2'), c3: scheduleOf('c3') }).toEqual(afterFirst);
+
+    // Next day the mistake is back for its second correct answer (not due yet: no credit), and the
+    // related cards are eligible again.
+    const day1 = DAY0_MS + DAY_MS + 60_000;
+    vi.setSystemTime(day1);
+    const next = await openMistakeBookAndTapReview();
+    expect(next.focusUids?.[0]).toBe('c1');
+    await focusRunAllGood(next.focusUids!);
+    expect(await storedC1()).toMatchObject({ correctStreak: 2, resolvedAt: day1 });
+    expect(scheduleOf('c1')).toEqual(afterFirst.c1);
   });
 });
