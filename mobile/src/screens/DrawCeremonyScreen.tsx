@@ -428,7 +428,9 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
             setCanSkip(true);
           } else if (e.phase === 'tail') {
             if (enableTapFlow) {
-              setFlippedSet(new Set());
+              // The multi tap-table starts face down, so reset the flip set on arrival. A single
+              // hero auto-flips before the table (I06), so keep its flip so the CTA reads Continue.
+              if (isMulti) setFlippedSet(new Set());
               setPhaseAt('cards-on-table');
               setCanSkip(true);
             } else {
@@ -441,7 +443,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
         timers.current.push(id);
       }
     },
-    [enableTapFlow, setPhaseAt],
+    [enableTapFlow, isMulti, setPhaseAt],
   );
 
   // Dispatch one cue to the B04 controllers. v2 (I06): every cue is a one-shot hit, a haptic
@@ -499,7 +501,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
       }, REDUCED_MOTION_FLASH_MS) as unknown as number;
       const tail = setTimeout(() => {
         if (enableTapFlow) {
-          setFlippedSet(new Set());
+          if (isMulti) setFlippedSet(new Set());
           setPhaseAt('cards-on-table');
           setCanSkip(true);
         } else {
@@ -597,8 +599,8 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
     haptics.tick();
   }, [skipDecision, timings, phase, runSchedule, haptics, timeline, scheduleCues, peakRarity, isMulti, enableTapFlow, reduceMotion]);
 
-  // Reduce-motion cues on mount / RM change. v2 (I06): no soft-chime tail — the RM ceremony's
-  // sound is the stinger at the flash (scheduled from the sequence effect); only the haptic here.
+  // Reduce-motion cues on mount / RM change. v2 (I06): no tail sound — the RM ceremony's sound
+  // is the stinger at the flash (scheduled from the sequence effect); only the haptic here.
   useEffect(() => {
     perfRef.current?.updateMeta({ reduceMotion });
     haptics.reset({ reduceMotion });
