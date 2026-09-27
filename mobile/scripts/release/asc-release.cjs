@@ -111,22 +111,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const locs = await version.getLocalizationsAsync();
     let loc = locs.find((l) => l.attributes.locale === 'en-US') || locs[0];
     if (!loc) loc = await version.createLocalizationAsync({ locale: 'en-US' });
+    // 2026-09-27: a localization PATCH through apple-utils clears every attribute it does not carry
+    // (a whatsNew-only update wiped description, keywords and supportUrl; submission then failed with
+    // "missing a required attribute"). So every update sends the FULL set: current value, else the
+    // live version's value (supportUrl/marketingUrl are not inherited by API-created versions), then
+    // whatever this run provides.
+    const live = await app.getLiveAppStoreVersionAsync({ platform: 'IOS' }).catch(() => null);
+    const liveLoc = live ? (await live.getLocalizationsAsync()).find((l) => l.attributes.locale === loc.attributes.locale) : null;
+    const keep = (k) => loc.attributes[k] || (liveLoc && liveLoc.attributes[k]) || undefined;
     const patch = {};
-    // A version created through the API starts with an EMPTY localization: supportUrl (required for
-    // submission) and marketingUrl are not inherited from the live version the way the web UI does
-    // it (2026-09-22: "This resource cannot be reviewed" until supportUrl was set). Copy them over.
-    if (!loc.attributes.supportUrl || !loc.attributes.marketingUrl) {
-      const live = await app.getLiveAppStoreVersionAsync({ platform: 'IOS' }).catch(() => null);
-      const liveLoc = live ? (await live.getLocalizationsAsync()).find((l) => l.attributes.locale === loc.attributes.locale) : null;
-      if (liveLoc) {
-        if (!loc.attributes.supportUrl && liveLoc.attributes.supportUrl) patch.supportUrl = liveLoc.attributes.supportUrl;
-        if (!loc.attributes.marketingUrl && liveLoc.attributes.marketingUrl) patch.marketingUrl = liveLoc.attributes.marketingUrl;
-      }
-    }
+    for (const k of ['whatsNew', 'description', 'keywords', 'promotionalText', 'supportUrl', 'marketingUrl']) { const v = keep(k); if (v) patch[k] = v; }
     if (whatsNew) patch.whatsNew = whatsNew;
     if (description) patch.description = description;
     if (keywords) patch.keywords = keywords;
     if (promo) patch.promotionalText = promo;
+    for (const k of ['description', 'keywords', 'supportUrl']) if (!patch[k]) throw new Error('localization would lack required ' + k + ' (pass --' + k.replace('supportUrl', 'support-url') + ' or set it on the live version)');
     await loc.updateAsync(patch);
     console.log('LOCALIZATION set on', loc.attributes.locale, Object.keys(patch).join(','));
   }
@@ -139,13 +138,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     if (!iloc) iloc = await info.createLocalizationAsync({ locale: 'en-US' });
     // App Info localization PATCH insists on `name` alongside the subtitle (2026-09-22: "You must
     // provide a value for the field 'name'"), so resend the current app name unchanged.
-    const ipatch = { name: iloc.attributes.name || 'DeveloperCards', subtitle };
-    // Same inheritance gap for the App Info localization: carry the privacy policy URL from the live record.
-    if (!iloc.attributes.privacyPolicyUrl) {
-      const liveInfo = await app.getLiveAppInfoAsync().catch(() => null);
-      const liveIl = liveInfo ? (await liveInfo.getLocalizationsAsync()).find((l) => l.attributes.locale === iloc.attributes.locale) : null;
-      if (liveIl && liveIl.attributes.privacyPolicyUrl) ipatch.privacyPolicyUrl = liveIl.attributes.privacyPolicyUrl;
-    }
+    // Same full-set rule for the App Info localization (a partial PATCH clears the rest).
+    const liveInfo = await app.getLiveAppInfoAsync().catch(() => null);
+    const liveIl = liveInfo ? (await liveInfo.getLocalizationsAsync()).find((l) => l.attributes.locale === iloc.attributes.locale) : null;
+    const ikeep = (k) => iloc.attributes[k] || (liveIl && liveIl.attributes[k]) || undefined;
+    const ipatch = { name: ikeep('name') || 'DeveloperCards', subtitle };
+    for (const k of ['privacyPolicyUrl', 'privacyChoicesUrl', 'privacyPolicyText']) { const v = ikeep(k); if (v) ipatch[k] = v; }
     await iloc.updateAsync(ipatch);
     console.log('SUBTITLE set on', iloc.attributes.locale);
   }
