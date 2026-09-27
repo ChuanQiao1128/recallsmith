@@ -288,6 +288,50 @@ public class DraftQaResultsTests
     });
   }
 
+  [Fact]
+  public async Task Report_DryRun_TwoNearIdenticalDraftsInOneBatch_SecondIsLikelyDuplicate()
+  {
+    // automation-6: live accepts the first draft as a card, then its at-accept check routes the second as a likely
+    // duplicate; dry run must record the same, not two would_accept.
+    using var scope = new AutomationTestKit.Scope();
+    var sub = AutomationTestKit.Sub("drydup");
+    var deck = await AutomationTestKit.NewDeckAsync(_db, "drydup");
+    var runId = await AutomationTestKit.NewRunAsync(_db, sub, deck.Id);
+    var firstUid = AutomationTestKit.Uid("drydup-a");
+    var ids = await AutomationTestKit.SubmitDraftsAsync(AutomationTestKit.Ctx(sub), deck.Id, runId,
+      AutomationTestKit.Card(firstUid, "Which synthetic harbour crane lifts the heaviest containers at night?"),
+      AutomationTestKit.Card(AutomationTestKit.Uid("drydup-b"), "Which synthetic harbour crane lifts the heaviest containers at night time?"));
+    var first = await AutomationTestKit.QueuedJobAsync(_db, ids[0]);
+    var second = await AutomationTestKit.QueuedJobAsync(_db, ids[1]);
+
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(first.JobId, ids[0], first.Hash)));
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(second.JobId, ids[1], second.Hash)));
+
+    Assert.Equal("would_accept", (await DecisionAsync(ids[0]))["state"]);
+    var d = await DecisionAsync(ids[1]);
+    Assert.Equal(("human", "LIKELY_DUPLICATE", $"at accept: {firstUid}"), ((string)d["state"]!, (string)d["reason"]!, (string)d["reason_detail"]!));
+    var ev = (await AutomationTestKit.EventsAsync(_db, ids[1]))[^1];
+    Assert.Equal(("qa_queued", "human", "dry_run"), ((string)ev["from_state"]!, (string)ev["to_state"]!, (string)ev["mode"]!));
+    using (var details = JsonDocument.Parse((string)ev["details"]!))
+    {
+      Assert.Equal("at_accept", details.RootElement.GetProperty("check").GetString());
+    }
+    Assert.Equal(0, await CardCountAsync(deck.Id));
+  }
+
+  [Fact]
+  public async Task Report_DryRun_StableUidTakenSinceSubmit_IsExistingCard()
+  {
+    using var scope = new AutomationTestKit.Scope();
+    var e = await AutomationTestKit.EligibleDraftAsync(_db, "dryexisting");
+    await AutomationTestKit.NewCardAsync(_db, e.DeckId, e.Uid, "A synthetic card a person accepted meanwhile about lighthouses?");
+
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash)));
+
+    var d = await DecisionAsync(e.DraftId);
+    Assert.Equal(("human", "EXISTING_CARD"), ((string)d["state"]!, (string)d["reason"]!));
+  }
+
   // ---------------------------------------------------------------- spend (R18B backend-design-4)
 
   private async Task<decimal> SpentTodayAsync()

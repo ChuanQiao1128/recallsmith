@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Npgsql;
 using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
@@ -170,11 +171,16 @@ internal static class DraftQaResults
     // 8. live needs the reviewer the eval gate measured
     if (mode.Effective == AutomationMode.Live && !reviewerMatchesGate) return await Finish(DraftDecisions.Human, "REVIEWER_NOT_GATED");
 
-    // 9. dry run: record what live would do
+    // 9. dry run: record what live would do, including live's at-accept checks (automation-6)
     if (mode.Effective == AutomationMode.DryRun)
     {
-      return await Finish(DraftDecisions.WouldAccept, null,
-        details: new Dictionary<string, object> { ["gate"] = mode.GateId is null ? "missing" : "passed", ["reviewerMatchesGate"] = reviewerMatchesGate });
+      var gateDetails = new Dictionary<string, object> { ["gate"] = mode.GateId is null ? "missing" : "passed", ["reviewerMatchesGate"] = reviewerMatchesGate };
+      if (await DryRunAcceptRouteAsync(conn, tx, draftId, deckId, expectedHash, ct) is { } route)
+      {
+        gateDetails["check"] = "at_accept";
+        return await Finish(DraftDecisions.Human, route.Reason, route.Detail, gateDetails);
+      }
+      return await Finish(DraftDecisions.WouldAccept, null, details: gateDetails);
     }
 
     // 10. live: auto-accept a brand-new card (A00 §5.5)
@@ -235,6 +241,57 @@ internal static class DraftQaResults
 
     return new ItemOutcome(draftId, deckId, runId, DraftDecisions.AutoAccepted, null, null, qaCostUsd, accepted.CardId, accepted.StableUid,
       minor, mode.Effective);
+  }
+
+  /// <summary>
+  /// The at-accept checks of step 10 without writing a card (automation-6), so a dry run routes a draft to a human
+  /// where live would: the deck is gone (<c>DECK_DELETED</c>), the stable uid is taken (<c>EXISTING_CARD</c>), the
+  /// draft's content no longer hashes to what QA reviewed (<c>QA_HASH_MISMATCH</c>), or the question is a likely
+  /// duplicate (<c>LIKELY_DUPLICATE</c>) of a card of the deck or of another pending <c>would_accept</c> draft of the
+  /// deck (live would have made that draft a card already). The deck row is locked like the live accept locks it, so
+  /// two reports of one batch see each other. Null when live would auto-accept.
+  /// </summary>
+  private static async Task<(string Reason, string? Detail)?> DryRunAcceptRouteAsync(NpgsqlConnection conn, NpgsqlTransaction tx,
+    long draftId, long deckId, string? expectedHash, CancellationToken ct)
+  {
+    var deck = await DbUtil.QueryAsync(conn, tx, "select id from decks where id = $1 and is_deleted = 0 for update", [deckId]);
+    if (deck.Count == 0) return ("DECK_DELETED", null);
+
+    DraftCard card;
+    var draftRows = await DbUtil.QueryAsync(conn, tx, "select card::text as card from ai_drafts where id = $1", [draftId]);
+    using (var doc = JsonDocument.Parse((string)draftRows[0]["card"]!))
+    {
+      card = DraftCard.Parse(doc.RootElement);
+    }
+
+    var taken = await DbUtil.ExecuteScalarAsync(conn, tx, "select 1 from cards where deck_id = $1 and stable_uid = $2", [deckId, card.StableUid]);
+    if (taken is not null) return ("EXISTING_CARD", null);
+
+    var similar = await CardSimilarity.FindAsync(conn, new SimilarityQuery(card.Question, [deckId], 3, 0.3), ct, tx);
+    if (similar.Matches.FirstOrDefault(m => m.LikelyDuplicate) is { } duplicate) return ("LIKELY_DUPLICATE", $"at accept: {duplicate.StableUid}");
+
+    var siblings = await DbUtil.QueryAsync(conn, tx,
+      """
+      select a.stable_uid, a.card->>'question' as question
+      from automation_draft_decisions d
+      join ai_drafts a on a.id = d.draft_id
+      where d.deck_id = $1 and d.state = 'would_accept' and a.status = 'pending' and d.draft_id <> $2
+      order by d.draft_id desc
+      limit $3
+      """, [deckId, draftId, CardSimilarity.FallbackCandidateLimit]);
+    foreach (var s in siblings)
+    {
+      // The rounding CardSimilarity applies before its LikelyDuplicate flag, so both comparisons agree.
+      if (s["question"] is string q &&
+          Math.Round((double)Trigram.Similarity(q, card.Question), 4, MidpointRounding.AwayFromZero) >= CardSimilarity.LikelyDuplicateThreshold)
+      {
+        return ("LIKELY_DUPLICATE", $"at accept: {s["stable_uid"]}");
+      }
+    }
+
+    var hash = await DraftDecisions.DraftContentHashAsync(conn, tx, card, ct);
+    if (!string.Equals(hash, expectedHash, StringComparison.Ordinal)) return ("QA_HASH_MISMATCH", null);
+    return null;
   }
 
   /// <summary>
