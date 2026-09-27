@@ -37,7 +37,7 @@ calls exactly three API routes:
 3. Work out `loginExpiresAt` from the stored id token and read `claude --version`.
 4. Pin the author configuration (see Author configuration). A checkout it cannot pin (no
    `.claude/skills/author-cards/SKILL.md` with a `Skill version:` line, or no built
-   `tools/mcp-server/dist/index.js` and `dist/tool-surface.json`) logs `author_config_error`,
+   `tools/mcp-server/dist/index.js` and `dist/tool-surface.json`, or a surface of another build) logs `author_config_error`,
    sends an `error` heartbeat and exits 1 without claiming. While `<log dir>/runner-state.json` holds
    a `limitedUntil` in the future (a usage limit, see step 6), the run only re-sends kept `complete`s,
    sends an `error` heartbeat (`RUNNER_UNAVAILABLE: usage limit until …`, event `usage_limited`) and
@@ -110,6 +110,22 @@ and nothing else, on stdout; it writes nothing and loads nothing. The plist sets
 `DC_TOKEN_FILE` to the values `install.sh` checked (its own checkout and the default token file
 unless they are set when it runs), so a non-default token file checked at install time is the one
 every hourly run uses. Set any other `DC_*` variable in the plist by hand after installing.
+
+## Upgrading (after `git pull` on the Mac)
+
+The job runs the built `dist/` of both tools, so rebuild both after every pull, then check:
+
+```bash
+(cd tools/mcp-server && npm ci && npm run build)
+(cd tools/author-runner && npm ci && npm run build)
+node tools/author-runner/dist/index.js status
+```
+
+From R18E on this is required: without a `tools/mcp-server/dist/tool-surface.json` that describes the
+`dist/index.js` next to it (N4, and from R18F its `bundleSha256`) the runner claims nothing and logs
+`author_config_error`. R18E also gave every configuration a new `authorConfigId` (the tool surface
+entered `argsSha256`), so a new-facts stratum captured with a runner from before R18E must be
+re-produced before the eval gate (see the one re-gate rule under Author configuration).
 
 ## Uninstall
 
