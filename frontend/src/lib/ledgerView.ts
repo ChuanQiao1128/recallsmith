@@ -23,7 +23,23 @@ export const LEDGER_AUTOMATION_LABELS: Record<string, string> = {
   ai_qa_review: 'AI QA review',
   webhook_notification: 'Webhook notifications',
   publish_gate: 'Publish gate',
+  auto_accept: 'Auto-accept',
+  auto_publish: 'Auto-publish',
+  source_watch: 'Source watch',
 };
+
+/**
+ * The six seeded automations, then every other non-empty name the server
+ * returned, de-duplicated in first-seen order (the release 1.8A automations
+ * are not seeded by migration 028).
+ */
+export function orderedLedgerAutomations(seen: readonly string[]): string[] {
+  const out: string[] = [...LEDGER_AUTOMATIONS];
+  for (const name of seen) {
+    if (name !== '' && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
 
 /** How a seeded placeholder baseline is shown (§9.1). */
 export const DEFAULT_BASELINE_LABEL = 'default — measure and replace';
