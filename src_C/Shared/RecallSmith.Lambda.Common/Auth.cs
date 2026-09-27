@@ -518,17 +518,33 @@ public static class Auth
   /// <summary>
   /// The per-route HMAC check of the R18A internal routes (A00 §8.3). The route's own secret is mandatory: when
   /// <paramref name="secretEnv"/> is unset the result is <c>(false, "Missing &lt;env&gt;")</c> and it never falls back
-  /// to <c>INTERNAL_SHARED_SECRET</c>. <c>&lt;env&gt;_PREVIOUS</c> (<see cref="PreviousSecretSuffix"/>) is accepted too
-  /// while it is set. Same headers, skew and comparison as <see cref="VerifyInternalSignature(LambdaRequest, string?)"/>.
+  /// to <c>INTERNAL_SHARED_SECRET</c>. A placeholder or short value counts as unset (<see cref="IsProvisionedSecret"/>).
+  /// <c>&lt;env&gt;_PREVIOUS</c> (<see cref="PreviousSecretSuffix"/>) is accepted too while it holds a provisioned secret. Same headers, skew and comparison as <see cref="VerifyInternalSignature(LambdaRequest, string?)"/>.
   /// </summary>
   public static InternalSignatureVerifyResult VerifyInternalSignatureStrict(LambdaRequest req, string secretEnv)
   {
     var secret = Environment.GetEnvironmentVariable(secretEnv);
-    if (string.IsNullOrEmpty(secret)) return new InternalSignatureVerifyResult(false, $"Missing {secretEnv}");
-    return VerifySignedRequest(req, secretEnv, secret);
+    if (!IsProvisionedSecret(secret)) return new InternalSignatureVerifyResult(false, $"Missing {secretEnv}");
+    return VerifySignedRequest(req, secretEnv, secret!, strict: true);
   }
 
-  private static InternalSignatureVerifyResult VerifySignedRequest(LambdaRequest req, string secretName, string secret)
+  /// <summary>The prefix of the value Terraform seeds every secret SSM leaf with until the owner sets it (R18C L2).</summary>
+  public const string PlaceholderSecretPrefix = "PLACEHOLDER-";
+
+  /// <summary>The shortest value the strict check accepts as a provisioned secret (R18C L2).</summary>
+  public const int MinStrictSecretLength = 32;
+
+  /// <summary>
+  /// Whether <paramref name="value"/> is a real per-route secret for <see cref="VerifyInternalSignatureStrict"/> (R18C L2,
+  /// cloud-security-resilience-9): not empty, not the committed <see cref="PlaceholderSecretPrefix"/> seed value and at
+  /// least <see cref="MinStrictSecretLength"/> characters. Anything else counts as missing, so a deploy that runs before
+  /// the post-apply secret step fails closed instead of verifying against a string that is public in the repo.
+  /// </summary>
+  public static bool IsProvisionedSecret(string? value) =>
+    !string.IsNullOrEmpty(value) && !value.StartsWith(PlaceholderSecretPrefix, StringComparison.Ordinal) &&
+    value.Length >= MinStrictSecretLength;
+
+  private static InternalSignatureVerifyResult VerifySignedRequest(LambdaRequest req, string secretName, string secret, bool strict = false)
   {
     var tsRaw = Validation.GetHeader(req, "x-internal-timestamp");
     var sigRaw = Validation.GetHeader(req, "x-internal-signature");
@@ -546,6 +562,8 @@ public static class Auth
     var rawBody = Validation.GetRawBody(req);
     var msg = $"{ts}.{rawBody}";
     var previous = Environment.GetEnvironmentVariable(secretName + PreviousSecretSuffix);
+    // The strict check's companion follows the same rule: a placeholder or short previous secret is simply not set.
+    if (strict && !IsProvisionedSecret(previous)) previous = null;
 
     try
     {

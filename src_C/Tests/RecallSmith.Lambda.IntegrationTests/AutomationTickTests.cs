@@ -270,6 +270,32 @@ public class AutomationTickTests
   }
 
   [Fact]
+  public async Task Tick_QaTimeout_AfterGoingLive_RecordsLiveModeAndLedger()
+  {
+    // R18C backend-design-16: submitted in dry_run, timed out under live: the decision and its ledger row say live.
+    await using var scope = new A04Kit.Scope();
+    scope.Set(AutomationEnv.QaTimeoutMinutesEnv, "30");
+    await InScratchAsync(scope, async sql =>
+    {
+      var sub = AutomationTestKit.Sub("timeout-live");
+      var deckId = await DeckAsync(sql, "timeout-live");
+      var runId = await A04Kit.RunAsync(sql, sub, deckId);
+      var ids = await AutomationTestKit.SubmitDraftsAsync(AutomationTestKit.Ctx(sub), deckId, runId,
+        AutomationTestKit.Card(AutomationTestKit.Uid("timeout-live")));
+      Assert.Equal("dry_run", await sql.ScalarAsync("select mode from automation_draft_decisions where draft_id = $1", ids[0]));
+      await sql.QueryAsync("update automation_draft_decisions set qa_enqueued_at = now() - interval '31 minutes' where draft_id = $1", ids[0]);
+
+      await scope.GateAsync(sql);
+      scope.Set(AutomationMode.EnvName, AutomationMode.Live);
+      await TickDataAsync();
+
+      var d = (await sql.QueryAsync("select state, reason, mode from automation_draft_decisions where draft_id = $1", ids[0])).Single();
+      Assert.Equal(("human", "QA_TIMEOUT", "live"), ((string)d["state"]!, (string)d["reason"]!, (string)d["mode"]!));
+      Assert.Equal(1, await sql.CountAsync("select count(*) from automation_events where dedupe_key = $1", $"auto-route:{ids[0]}"));
+    });
+  }
+
+  [Fact]
   public async Task Tick_StaleRunningRun_IsAbandonedAndFinalized()
   {
     await using var scope = new A04Kit.Scope();
@@ -388,7 +414,8 @@ public class AutomationTickTests
       var row = await A04Kit.PublishRowAsync(sql, fresh);
       Assert.Equal(("human", "PUBLISH_WAIT_TIMEOUT"), ((string)row["state"]!, (string)row["reason"]!));
       Assert.NotNull(row["finished_at"]);
-      Assert.Equal("publish_blocked", (await NotificationAsync(sql, $"exception:publish_blocked:{fresh}"))!["subkind"]);
+      // A dry-run row accepted nothing: no publish_blocked email since R18C L6 (automation-15); a live row still raises one.
+      Assert.Null(await NotificationAsync(sql, $"exception:publish_blocked:{fresh}"));
     });
   }
 

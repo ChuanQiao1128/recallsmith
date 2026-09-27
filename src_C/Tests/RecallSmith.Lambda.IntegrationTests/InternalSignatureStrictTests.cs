@@ -16,8 +16,11 @@ namespace RecallSmith.Lambda.IntegrationTests;
 public class InternalSignatureStrictTests
 {
   private const string Shared = "test-shared-secret";
-  private const string Notifier = "test-notifier-secret";
-  private const string NotifierPrevious = "test-notifier-secret-old";
+  // At least Auth.MinStrictSecretLength characters: a shorter value counts as unset (R18C L2).
+  private const string Notifier = "test-notifier-secret-0000000000000001";
+  private const string NotifierPrevious = "test-notifier-secret-0000000000000000-old";
+  private const string ContractVectorSecret = "test-secret";
+  private const string TerraformPlaceholder = "PLACEHOLDER-set-by-supervisor";
   private const string Body = "{\"a\":1}";
 
   private static string Sign(string secret, long ts, string body)
@@ -148,12 +151,71 @@ public class InternalSignatureStrictTests
     // The raw formula: v1=hex(HMAC-SHA256(secret, "<ts>.<body>")).
     Assert.Equal(expected, Sign("test-secret", 1790000000000, Body));
 
-    // The same secret through the strict check, with a fresh timestamp (the vector's own is outside the skew).
-    WithSecrets(null, "test-secret", null, () =>
+    // The vector's secret is shorter than Auth.MinStrictSecretLength, so the strict check treats it as unset (R18C L2).
+    WithSecrets(null, ContractVectorSecret, null, () =>
+      Assert.Equal("Missing INTERNAL_SECRET_NOTIFIER", Strict(ContractVectorSecret).Reason));
+
+    // A provisioned secret through the strict check, with a fresh timestamp (the vector's own is outside the skew).
+    WithSecrets(null, Notifier, null, () =>
     {
-      var v = Strict("test-secret");
+      var v = Strict(Notifier);
       Assert.True(v.Ok, v.Reason);
-      Assert.Equal("Timestamp expired", Auth.VerifyInternalSignatureStrict(Signed("test-secret", 1790000000000), AutomationEnv.NotifierSecretEnv).Reason);
+      Assert.Equal("Timestamp expired", Auth.VerifyInternalSignatureStrict(Signed(Notifier, 1790000000000), AutomationEnv.NotifierSecretEnv).Reason);
     });
   }
+
+  // R18C L2 (cloud-security-resilience-9): the value Terraform seeds the leaf with is public in the repo, so a request
+  // signed with it must be refused as if no secret were set, whatever the deploy order.
+  [Fact]
+  public void Strict_TerraformPlaceholder_IsRefusedAsMissing()
+  {
+    WithSecrets(null, TerraformPlaceholder, null, () =>
+    {
+      var v = Strict(TerraformPlaceholder);
+      Assert.False(v.Ok);
+      Assert.Equal("Missing INTERNAL_SECRET_NOTIFIER", v.Reason);
+    });
+
+    // Any PLACEHOLDER- value, even a long one, and whatever the shared secret holds.
+    var longPlaceholder = "PLACEHOLDER-" + new string('x', 40);
+    WithSecrets(Notifier, longPlaceholder, null, () =>
+    {
+      Assert.Equal("Missing INTERNAL_SECRET_NOTIFIER", Strict(longPlaceholder).Reason);
+      Assert.Equal("Missing INTERNAL_SECRET_NOTIFIER", Strict(Notifier).Reason);
+    });
+  }
+
+  [Fact]
+  public void Strict_ShortSecret_IsRefusedAsMissing()
+  {
+    var shortSecret = new string('s', Auth.MinStrictSecretLength - 1);
+    WithSecrets(null, shortSecret, null, () => Assert.Equal("Missing INTERNAL_SECRET_NOTIFIER", Strict(shortSecret).Reason));
+
+    var exact = new string('s', Auth.MinStrictSecretLength);
+    WithSecrets(null, exact, null, () => Assert.True(Strict(exact).Ok));
+  }
+
+  // The _PREVIOUS companion follows the same rule: a placeholder or short previous secret never signs.
+  [Fact]
+  public void Strict_PlaceholderPreviousSecret_IsIgnored()
+  {
+    WithSecrets(null, Notifier, TerraformPlaceholder, () =>
+    {
+      Assert.True(Strict(Notifier).Ok);
+      Assert.Equal("Bad signature", Strict(TerraformPlaceholder).Reason);
+    });
+
+    const string shortPrevious = "short-previous";
+    WithSecrets(null, Notifier, shortPrevious, () => Assert.Equal("Bad signature", Strict(shortPrevious).Reason));
+  }
+
+  [Theory]
+  [InlineData(null, false)]
+  [InlineData("", false)]
+  [InlineData("PLACEHOLDER-set-by-supervisor", false)]
+  [InlineData("PLACEHOLDER-0123456789012345678901234567890123456789", false)]
+  [InlineData("0123456789012345678901234567890", false)]
+  [InlineData("01234567890123456789012345678901", true)]
+  [InlineData("placeholder-0123456789012345678901234567890", true)]
+  public void IsProvisionedSecret_FollowsL2(string? value, bool expected) => Assert.Equal(expected, Auth.IsProvisionedSecret(value));
 }

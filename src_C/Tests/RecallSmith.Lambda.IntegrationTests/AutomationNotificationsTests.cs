@@ -409,7 +409,27 @@ public class AutomationNotificationsTests
   [Fact]
   public async Task RunnerComplete_Failed_RaisesRunnerRunFailed()
   {
+    // R18C L6 (automation-15): the item failed for good, so queue_item_failed is the one email; runner_run_failed
+    // would say the same thing again (it used to be raised too).
     await using var scope = new A04Kit.Scope();
+    var (runId, itemId) = await ClaimedRunAsync(attempts: 3);
+
+    var data = AutomationTestKit.Data(await CompleteFailedAsync(runId, "synthetic runner failure"));
+    Assert.Equal(("failed", "failed"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
+
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where dedupe_key = $1", $"exception:runner_run_failed:{runId:D}"));
+    var itemFailed = (await _sql.QueryAsync("select subkind, body_text from automation_notifications where dedupe_key = $1",
+      $"exception:queue_item_failed:{itemId}")).Single();
+    Assert.Equal("queue_item_failed", itemFailed["subkind"]);
+    Assert.Contains("synthetic runner failure", (string)itemFailed["body_text"]!);
+    Assert.Single(A04Kit.Messages(scope));
+    // No decisions: the run is final at once (and sends no summary).
+    Assert.NotNull(await _sql.ScalarAsync("select finalized_at from automation_runs where run_id = $1", runId));
+  }
+
+  /// <summary>A queue item claimed by a running run of 'it-a04-runner' after <paramref name="attempts"/> claims.</summary>
+  private async Task<(Guid RunId, long ItemId)> ClaimedRunAsync(int attempts)
+  {
     var sub = AutomationTestKit.Sub("runner");
     var deck = await AutomationTestKit.NewDeckAsync(_db, "a04-runner");
     var runId = Guid.NewGuid();
@@ -417,30 +437,73 @@ public class AutomationNotificationsTests
     var itemId = A04Kit.Long(await _sql.ScalarAsync(
       """
       insert into authoring_queue_items (kind, url, deck_id, dedupe_key, created_by, status, attempts, claimed_by_runner, claimed_at, lease_expires_at, last_run_id)
-      values ('manual', $1, $2, $3, 'owner:it-a04', 'claimed', 3, 'it-a04-runner', now(), now() + interval '1 hour', $4)
+      values ('manual', $1, $2, $3, 'owner:it-a04', 'claimed', $5, 'it-a04-runner', now(), now() + interval '1 hour', $4)
       returning id
-      """, url, deck.Id, $"it-a04:{Guid.NewGuid()}", runId));
+      """, url, deck.Id, $"it-a04:{Guid.NewGuid()}", runId, attempts));
     await _sql.QueryAsync(
       "insert into automation_runs (run_id, queue_item_id, runner_id, owner_sub, deck_id, status) values ($1, $2, 'it-a04-runner', $3, $4, 'running')",
       runId, itemId, sub, deck.Id);
-
-    var data = AutomationTestKit.Data(await AutomationTestKit.CallAsync(RunnerRoutes.HandleComplete, "POST",
-      "/api/v1/authoring/automation/runner/complete",
-      new { runnerId = "it-a04-runner", runId, outcome = "failed", exitCode = 1, durationMs = 1200, error = "synthetic runner failure" },
-      AutomationTestKit.Ctx(sub)));
-    Assert.Equal(("failed", "failed"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
-
-    var runFailed = (await _sql.QueryAsync("select kind, subkind, subject, run_id, body_text from automation_notifications where dedupe_key = $1",
-      $"exception:runner_run_failed:{runId:D}")).Single();
-    Assert.Equal(("exception", "runner_run_failed", runId), ((string)runFailed["kind"]!, (string)runFailed["subkind"]!, (Guid)runFailed["run_id"]!));
-    Assert.StartsWith("[DeveloperCards] (dry run) Action needed: authoring run failed for docs.aws.amazon.com/synthetic/", (string)runFailed["subject"]!);
-    Assert.Contains("synthetic runner failure", (string)runFailed["body_text"]!);
-    Assert.Equal("queue_item_failed", await _sql.ScalarAsync("select subkind from automation_notifications where dedupe_key = $1",
-      $"exception:queue_item_failed:{itemId}"));
-    Assert.Equal(2, A04Kit.Messages(scope).Count);
-    // No decisions: the run is final at once (and sends no summary).
-    Assert.NotNull(await _sql.ScalarAsync("select finalized_at from automation_runs where run_id = $1", runId));
+    _runOwner[runId] = sub;
+    return (runId, itemId);
   }
+
+  private readonly Dictionary<Guid, string> _runOwner = [];
+
+  private async Task<APIGatewayProxyResponse> CompleteFailedAsync(Guid runId, string error) =>
+    await AutomationTestKit.CallAsync(RunnerRoutes.HandleComplete, "POST", "/api/v1/authoring/automation/runner/complete",
+      new { runnerId = "it-a04-runner", runId, outcome = "failed", exitCode = 1, durationMs = 1200, error },
+      AutomationTestKit.Ctx(_runOwner[runId]));
+
+  [Fact]
+  public async Task RunnerComplete_TransientFirstFailure_RaisesNoEmail()
+  {
+    // R18C L6: a timeout or a lease release on the first attempt requeues itself; nobody has to act.
+    await using var scope = new A04Kit.Scope();
+    foreach (var error in new[] { "timeout", "not run: lease_short (the lease ends before the item timeout)", "AGENT_NO_RESULT: no final JSON line" })
+    {
+      var (runId, _) = await ClaimedRunAsync(attempts: 1);
+      var data = AutomationTestKit.Data(await CompleteFailedAsync(runId, error));
+      Assert.Equal(("failed", "queued"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
+      Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where run_id = $1", runId));
+    }
+    Assert.Empty(A04Kit.Messages(scope));
+  }
+
+  [Fact]
+  public async Task RunnerComplete_ActionableOrRepeatedFailure_RaisesRunnerRunFailed()
+  {
+    // R18C L6: the agent could not do the task, the runner's Claude is misconfigured, or the same item failed again.
+    await using var scope = new A04Kit.Scope();
+    var cases = new[]
+    {
+      (Attempts: 1, Error: "AGENT_BLOCKED: the page needs a login"),
+      (Attempts: 1, Error: "claude did not run on the subscription login: apiKeySource ANTHROPIC_API_KEY"),
+      (Attempts: 1, Error: "claude could not be started: spawn claude ENOENT"),
+      (Attempts: 2, Error: "timeout"),
+    };
+    foreach (var (attempts, error) in cases)
+    {
+      var (runId, _) = await ClaimedRunAsync(attempts);
+      var data = AutomationTestKit.Data(await CompleteFailedAsync(runId, error));
+      Assert.Equal("queued", data.GetProperty("itemStatus").GetString());
+      var n = (await _sql.QueryAsync("select subkind, subject, body_text from automation_notifications where dedupe_key = $1",
+        $"exception:runner_run_failed:{runId:D}")).Single();
+      Assert.Equal("runner_run_failed", n["subkind"]);
+      Assert.StartsWith("[DeveloperCards] (dry run) Action needed: authoring run failed for docs.aws.amazon.com/synthetic/", (string)n["subject"]!);
+      Assert.Contains(error.Split(':')[0], (string)n["body_text"]!);
+    }
+    Assert.Equal(cases.Length, A04Kit.Messages(scope).Count);
+  }
+
+  [Theory]
+  [InlineData("AGENT_BLOCKED: x", 1, "queued", true)]
+  [InlineData("AGENT_BLOCKED: x", 3, "failed", false)]
+  [InlineData("timeout", 1, "queued", false)]
+  [InlineData("timeout", 2, "queued", true)]
+  [InlineData(null, 1, "queued", false)]
+  [InlineData("agent_blocked: lower case is not the runner's prefix", 1, "queued", false)]
+  public void RunFailureNeedsHuman_FollowsL6(string? error, int attempts, string itemStatus, bool expected) =>
+    Assert.Equal(expected, RunnerRoutes.RunFailureNeedsHuman(error, attempts, itemStatus));
 
   [Fact]
   public async Task DraftQa_ProviderAccessDenied_RaisesQaProviderErrorOncePerDay()
