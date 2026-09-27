@@ -166,3 +166,31 @@ jobs:
       # RecallSmith.Lambda.csproj, so a bare `dotnet test` here depends on
       # which of the two MSBuild picks.
       - run: dotnet test Tests/RecallSmith.Lambda.IntegrationTests
+
+  # Every Python package (services/*, tools/ingest, evals) with a pyproject.toml:
+  # the committed uv.lock must be current and its pytest suite must pass.
+  # New Python packages are picked up without editing this job.
+  python:
+    name: python (uv lock + pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      - name: bash -n the Python Lambda deploy script
+        run: bash -n services/deploy-python-lambda.sh
+      - name: uv lock --check && pytest in every Python package
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for d in services/*/ tools/ingest/ evals/; do
+            [ -f "${d}pyproject.toml" ] || continue
+            found=1
+            echo "::group::${d}"
+            (cd "$d" && uv lock --check && uv run --python 3.12 pytest -q)
+            echo "::endgroup::"
+          done
+          [ "$found" = 1 ] || { echo "no Python package found" >&2; exit 1; }
