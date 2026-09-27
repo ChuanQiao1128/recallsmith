@@ -31,10 +31,13 @@ RETRY_WINDOW_SECONDS = 420
 CALL_TIMEOUT_RESERVE_SECONDS = 30
 REPORT_BUDGET_RESERVE_S = 2.0
 
-# After a retryable provider error or a failed results report the message comes back after this
-# many seconds (jittered) instead of the queue's 3600 s visibility, so a rate-limit blip does not
-# stall the run for an hour. From the second receive on the wait is longer, so a limit that lasts
-# a few minutes does not burn the remaining receives before the chunk reaches the DLQ.
+# After a retryable provider error, a failed results report or a missing internal secret the
+# message comes back after this many seconds (jittered) instead of the queue's 3600 s visibility,
+# so a rate-limit blip does not stall the run for an hour. From the second receive on the wait is
+# longer, so a limit that lasts a few minutes does not burn the remaining receives at once (this
+# needs maxReceiveCount >= 3). On the last receive (Settings.max_receives) a retryable error is
+# reported for the unfinished cards and the message is acked, so the run ends with visible errors
+# instead of a chunk in the DLQ.
 RETRY_VISIBILITY_MIN_SECONDS = 60
 RETRY_VISIBILITY_MAX_SECONDS = 120
 RETRY_VISIBILITY_LATER_MIN_SECONDS = 540
@@ -340,6 +343,7 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
     secret = settings.get_secret(secret_name)
     if secret is None:
         log("error", "ai-qa", event="internal_secret_missing", runId=msg["runId"], chunk=msg["chunk"])
+        _retry_soon(record, msg)
         return False
 
     def finish(items: list[dict[str, Any]]) -> bool:
@@ -403,6 +407,13 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
         _log_item(msg, item)
 
         code = item.get("errorCode")
+        if code in RETRYABLE_CODES and _receive_count(record) >= cfg.max_receives:
+            # Last receive: another failure would send the chunk to the DLQ and leave its cards
+            # 'queued' until core's stale reap. Report them with this retryable code instead.
+            log("warn", "ai-qa", event="final_receive_giving_up", runId=msg["runId"], chunk=msg["chunk"], errorCode=code)
+            items.append(item)
+            items.extend(fill(code, start=index + 1))
+            return finish(items)
         if code in FAIL_FAST_CODES:
             items.append(item)
             items.extend(fill(code, start=index + 1))
