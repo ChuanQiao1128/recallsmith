@@ -1,11 +1,25 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { claudeArgs, killGroup } from '../src/claude';
+import { authorConfigIdOf } from '../src/authorConfig';
 import type { RunnerConfig } from '../src/config';
-import { COMPLETE_ATTEMPTS, EXIT_FAILURE, EXIT_LOGIN_REQUIRED, EXIT_OK, isPermanentCompleteFailure, pendingCompleteDir, runOnce } from '../src/runner';
+import {
+  COMPLETE_ATTEMPTS,
+  EXIT_FAILURE,
+  EXIT_LOGIN_REQUIRED,
+  EXIT_OK,
+  USAGE_LIMIT_FALLBACK_MS,
+  isPermanentCompleteFailure,
+  limitedUntil,
+  pendingCompleteDir,
+  readRunnerState,
+  runOnce,
+  runSourceHosts,
+  runnerStateFile,
+} from '../src/runner';
 import {
   envelope,
   makeHome,
@@ -208,10 +222,11 @@ describe('runOnce', () => {
             DC_AUTOMATION_RUN_ID: claimed.runId,
             DC_AUTOMATION_QUEUE_ITEM_ID: '42',
             DC_AUTOMATION_DECK_SLUG: 'aws-lambda',
-            DC_AUTOMATION_SOURCE_HOSTS:
-              'docs.example.com,docs.aws.amazon.com,aws.amazon.com,platform.claude.com,docs.claude.com,docs.anthropic.com,www.anthropic.com',
+            // ai-agent-21: the item's own host (docs.example.com) gets no implicit pass.
+            DC_AUTOMATION_SOURCE_HOSTS: 'docs.aws.amazon.com,aws.amazon.com,platform.claude.com,docs.claude.com,docs.anthropic.com,www.anthropic.com',
             DC_AUTOMATION_AUTHOR_MODEL: 'claude-opus-5-5',
             DC_AUTOMATION_SKILL_VERSION: 'author-cards@1.8.1',
+            DC_AUTOMATION_AUTHOR_CONFIG_ID: expect.stringMatching(/^[0-9a-f]{64}$/),
           },
         },
       },
@@ -327,7 +342,8 @@ describe('runOnce', () => {
   it('reports is_error and non-JSON output as failed', async () => {
     const a = await setup({ items: [item()] });
     await runOnce(a.config, { env: a.env('is_error'), log: a.log });
-    expect(completeBody(a.api)).toMatchObject({ outcome: 'failed', exitCode: 0, error: 'claude result is_error' });
+    // M5: the CLI's result subtype and text are kept.
+    expect(completeBody(a.api)).toMatchObject({ outcome: 'failed', exitCode: 0, error: 'claude result is_error: error_during_execution: something went wrong' });
 
     const b = await setup({ items: [item()] });
     await runOnce(b.config, { env: b.env('garbage'), log: b.log });
@@ -342,7 +358,7 @@ describe('runOnce', () => {
     const s = await setup({ items: [item()] });
     const config = { ...s.config, claudeBin: join(s.t.dir, 'no-such-claude') };
     expect(await runOnce(config, { env: s.env('done'), log: s.log })).toBe(EXIT_OK);
-    expect(completeBody(s.api)).toMatchObject({ outcome: 'failed', error: 'claude could not be started: ENOENT' });
+    expect(completeBody(s.api)).toMatchObject({ outcome: 'failed', error: 'RUNNER_UNAVAILABLE: claude could not be started: ENOENT' });
   });
 
   it('releases invalid items and a short-lease item at once instead of leaving them claimed (automation-7)', async () => {
@@ -443,7 +459,7 @@ describe('runOnce', () => {
     expect(completeBody(s.api)).toMatchObject({
       outcome: 'failed',
       exitCode: 0,
-      error: 'claude did not run on the subscription login: provider model us.anthropic.claude-opus-5-5-v1:0',
+      error: 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: provider model us.anthropic.claude-opus-5-5-v1:0',
     });
   });
 
@@ -473,7 +489,7 @@ describe('runOnce', () => {
 
     const d = await setup({ items: [item()] });
     await runOnce(d.config, { env: d.env('mcp_failed'), log: d.log });
-    expect(completeBody(d.api)).toMatchObject({ outcome: 'failed', error: 'the developercards MCP server did not start (failed)' });
+    expect(completeBody(d.api)).toMatchObject({ outcome: 'failed', error: 'RUNNER_UNAVAILABLE: the developercards MCP server did not start (failed)' });
   });
 
   it('fails a run whose system/init message shows an API key or is missing (ai-agent-14)', async () => {
@@ -482,13 +498,13 @@ describe('runOnce', () => {
     expect(completeBody(a.api)).toMatchObject({
       outcome: 'failed',
       exitCode: 0,
-      error: 'claude did not run on the subscription login: apiKeySource /login managed key',
+      error: 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: apiKeySource /login managed key',
     });
     const b = await setup({ items: [item()] });
     await runOnce(b.config, { env: b.env('no_init'), log: b.log });
     expect(completeBody(b.api)).toMatchObject({
       outcome: 'failed',
-      error: 'claude did not run on the subscription login: no system/init message',
+      error: 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: no system/init message',
     });
     // The run record keeps what the init message said.
     const c = await setup({ items: [item()] });
@@ -511,7 +527,8 @@ describe('runOnce', () => {
 
   it('retries a failed complete, keeps it with the notes, and replays it before the next claim (automation-16)', async () => {
     const claimed = item();
-    const s = await setup({ items: [claimed], completeStatuses: [503, 0, 500] });
+    // One item per launch: this pins the replay at the next launch (the in-run replay has its own test).
+    const s = await setup({ items: [claimed], completeStatuses: [503, 0, 500] }, { maxItems: 1 });
     const waits: number[] = [];
     const sleep = async (ms: number) => {
       waits.push(ms);
@@ -550,7 +567,7 @@ describe('runOnce', () => {
 
   it('keeps a kept complete after another transient failure and drops one the server refuses for good (automation-16)', async () => {
     const claimed = item();
-    const s = await setup({ items: [claimed], completeStatuses: [500, 500, 500] });
+    const s = await setup({ items: [claimed], completeStatuses: [500, 500, 500] }, { maxItems: 1 });
     const sleep = async () => {};
     await runOnce(s.config, { env: s.env('nothing_new'), log: s.log, sleep });
     const file = join(pendingCompleteDir(s.config), `${String(claimed.runId)}.json`);
@@ -626,5 +643,157 @@ describe('runOnce', () => {
     } finally {
       held!.release();
     }
+  });
+
+  it('stops the loop on a usage limit: one attempt, no second claim, no claim before the reset (M5, ai-agent-17)', async () => {
+    const first = item({ itemId: 1 });
+    const second = item({ itemId: 2 });
+    const s = await setup({ items: [first, second] }, { maxItems: 3 });
+    const started = Date.now();
+    expect(await runOnce(s.config, { env: s.env('usage_limit'), log: s.log })).toBe(EXIT_OK);
+    // One claim, one complete with RUNNER_UNAVAILABLE and the CLI's text; the second item is never claimed.
+    expect(routes(s.api)).toEqual(['heartbeat(running)', 'claim', 'complete', 'heartbeat(error)']);
+    const body = completeBody(s.api);
+    expect(body).toMatchObject({ runId: first.runId, outcome: 'failed', exitCode: 1 });
+    expect(String(body.error)).toMatch(/^RUNNER_UNAVAILABLE: usage limit: error_during_execution: Claude AI usage limit reached\|\d{10}$/);
+    expect(s.api.requests.at(-1)!.body).toMatchObject({ state: 'error', lastError: body.error });
+    expect(s.events()).toEqual(expect.arrayContaining(['usage_limited', 'runner_unavailable']));
+
+    // The reset time the CLI named (two hours ahead) is kept.
+    const state = readRunnerState(s.config);
+    expect(state).not.toBeNull();
+    const until = Date.parse(state!.limitedUntil);
+    expect(until).toBeGreaterThan(started + 2 * 60 * 60 * 1000 - 5_000);
+    expect(until).toBeLessThanOrEqual(Date.now() + 2 * 60 * 60 * 1000 + 1_000);
+
+    // The next hourly run claims nothing before the reset: an error heartbeat and exit 0.
+    s.api.requests.length = 0;
+    s.lines.length = 0;
+    expect(await runOnce(s.config, { env: s.env('done'), log: s.log })).toBe(EXIT_OK);
+    expect(routes(s.api)).toEqual(['heartbeat(error)']);
+    expect(String(s.api.requests[0]!.body.lastError)).toMatch(/^RUNNER_UNAVAILABLE: usage limit until /);
+    expect(s.events()).toContain('usage_limited');
+    expect(existsSync(s.config.lockFile)).toBe(false);
+
+    // After the reset the runner claims again and drops the kept state.
+    writeFileSync(runnerStateFile(s.config), JSON.stringify({ limitedUntil: new Date(Date.now() - 1_000).toISOString(), reason: 'x' }));
+    s.api.requests.length = 0;
+    expect(await runOnce(s.config, { env: s.env('done'), log: s.log })).toBe(EXIT_OK);
+    expect(routes(s.api)).toEqual(['heartbeat(running)', 'claim', 'complete', 'claim', 'heartbeat(idle)']);
+    expect(completeBody(s.api)).toMatchObject({ runId: second.runId, outcome: 'done' });
+    expect(existsSync(runnerStateFile(s.config))).toBe(false);
+  });
+
+  it('holds a usage limit without a named reset for one hour, and a named one only when plausible', () => {
+    const now = new Date('2026-09-28T10:00:00Z');
+    expect(limitedUntil(null, now)).toBe(new Date(now.getTime() + USAGE_LIMIT_FALLBACK_MS).toISOString());
+    expect(limitedUntil('2026-09-28T13:00:00.000Z', now)).toBe('2026-09-28T13:00:00.000Z');
+    // In the past, or further than a weekly cap plus a day: the fallback.
+    expect(limitedUntil('2026-09-28T09:00:00.000Z', now)).toBe('2026-09-28T11:00:00.000Z');
+    expect(limitedUntil('2026-10-28T09:00:00.000Z', now)).toBe('2026-09-28T11:00:00.000Z');
+  });
+
+  it('stops the loop when claude cannot be started, without a usage-limit hold (M5, ai-agent-17)', async () => {
+    const s = await setup({ items: [item({ itemId: 1 }), item({ itemId: 2 })] }, { maxItems: 3 });
+    const config = { ...s.config, claudeBin: join(s.t.dir, 'no-such-claude') };
+    expect(await runOnce(config, { env: s.env('done'), log: s.log })).toBe(EXIT_OK);
+    expect(routes(s.api)).toEqual(['heartbeat(running)', 'claim', 'complete', 'heartbeat(error)']);
+    expect(completeBody(s.api)).toMatchObject({ outcome: 'failed', error: 'RUNNER_UNAVAILABLE: claude could not be started: ENOENT' });
+    expect(existsSync(runnerStateFile(s.config))).toBe(false);
+
+    // A per-item failure (an agent that is blocked) does not stop the loop.
+    const b = await setup({ items: [item({ itemId: 1 }), item({ itemId: 2 })] }, { maxItems: 3 });
+    await runOnce(b.config, { env: b.env('blocked'), log: b.log });
+    expect(routes(b.api).filter((r) => r === 'claim')).toHaveLength(3);
+  });
+
+  it('re-sends a kept complete before the next claim of the same run (automation-16)', async () => {
+    const first = item({ itemId: 1 });
+    const second = item({ itemId: 2 });
+    const s = await setup({ items: [first, second], completeStatuses: [500, 500, 500] }, { maxItems: 3 });
+    expect(await runOnce(s.config, { env: s.env('done'), log: s.log, sleep: async () => {} })).toBe(EXIT_OK);
+    expect(routes(s.api).filter((r) => r !== 'heartbeat(running)')).toEqual([
+      'claim',
+      'complete',
+      'complete',
+      'complete',
+      // The replay, while the first run is still within its lease.
+      'complete',
+      'claim',
+      'complete',
+      'claim',
+      'heartbeat(error)',
+    ]);
+    const completes = s.api.requests.filter((r) => r.url === `${ROUTE}complete`).map((r) => r.body);
+    expect(completes[3]).toEqual(completes[0]);
+    expect(completes[3]).toMatchObject({ runId: first.runId, summary: 'two new cards drafted' });
+    expect(completes[4]).toMatchObject({ runId: second.runId, outcome: 'done' });
+    expect(readdirSync(pendingCompleteDir(s.config))).toEqual([]);
+    expect(s.events()).toContain('complete_replayed');
+  });
+
+  it('settles a timed-out run and releases the lock when the group probe throws EPERM (ai-agent-18)', async () => {
+    const eperm = (pid: number, signal: NodeJS.Signals | 0): boolean => {
+      if (signal === 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      return killGroup(pid, signal);
+    };
+    // The probe in the 'exit' listener (the child dies on SIGTERM) ...
+    const a = await setup({ items: [item()] }, { itemTimeoutMs: 800, killGraceMs: 300, killSettleMs: 300 });
+    expect(await runOnce(a.config, { env: a.env('hang'), log: a.log, signalGroup: eperm })).toBe(EXIT_OK);
+    expect(completeBody(a.api)).toMatchObject({ outcome: 'failed', error: 'timeout', exitCode: null });
+    expect(existsSync(a.config.lockFile)).toBe(false);
+
+    // ... and the probe in the grace timer (the child ignores SIGTERM).
+    const b = await setup({ items: [item()] }, { itemTimeoutMs: 800, killGraceMs: 300, killSettleMs: 300 });
+    try {
+      const code = await Promise.race([
+        runOnce(b.config, { env: b.env('hang-ignore-term'), log: b.log, signalGroup: eperm }),
+        new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 8_000)),
+      ]);
+      expect(code).toBe(EXIT_OK);
+      expect(completeBody(b.api)).toMatchObject({ outcome: 'failed', error: 'timeout' });
+      expect(b.api.requests.at(-1)!.body).toMatchObject({ state: 'error', lastError: 'timeout' });
+      expect(existsSync(b.config.lockFile)).toBe(false);
+    } finally {
+      try {
+        process.kill(record(b.t).pid, 'SIGKILL');
+      } catch {
+        // Already gone.
+      }
+    }
+  }, 20_000);
+
+  it('gives the queue item host no implicit pass to read_source (ai-agent-21)', async () => {
+    expect(runSourceHosts(['docs.aws.amazon.com', 'Docs.Example.com', 'docs.aws.amazon.com'])).toEqual(['docs.aws.amazon.com', 'docs.example.com']);
+    const feed = item({ url: 'https://blog.third-party.example/post' });
+    const s = await setup({ items: [feed] }, { sourceHosts: ['docs.aws.amazon.com'] });
+    await runOnce(s.config, { env: s.env('done'), log: s.log });
+    const mcp = JSON.parse(readFileSync(join(s.config.logDir, 'runs', `${String(feed.runId)}.mcp.json`), 'utf8')) as {
+      mcpServers: { developercards: { env: Record<string, string> } };
+    };
+    expect(mcp.mcpServers.developercards.env.DC_AUTOMATION_SOURCE_HOSTS).toBe('docs.aws.amazon.com');
+    // A host the owner allowlists passes like every other one.
+    const allowed = await setup({ items: [feed] }, { sourceHosts: ['docs.aws.amazon.com', 'blog.third-party.example'] });
+    await runOnce(allowed.config, { env: allowed.env('done'), log: allowed.log });
+    const mcp2 = JSON.parse(readFileSync(join(allowed.config.logDir, 'runs', `${String(feed.runId)}.mcp.json`), 'utf8')) as typeof mcp;
+    expect(mcp2.mcpServers.developercards.env.DC_AUTOMATION_SOURCE_HOSTS).toBe('docs.aws.amazon.com,blog.third-party.example');
+  });
+
+  it('records the gated authorConfigId in the run meta and passes it to the MCP server (M1, ai-agent-3)', async () => {
+    const claimed = item();
+    const s = await setup({ items: [claimed] });
+    await runOnce(s.config, { env: s.env('done'), log: s.log });
+    const runsDir = join(s.config.logDir, 'runs');
+    const meta = JSON.parse(readFileSync(join(runsDir, `${String(claimed.runId)}.meta.json`), 'utf8')) as {
+      authorConfigId: string;
+      authorConfig: { authorConfigId: string; model: string; skillVersion: string; skillSha256: string; promptSha256: string; claudeArgsSha256: string };
+    };
+    expect(meta.authorConfigId).toMatch(/^[0-9a-f]{64}$/);
+    expect(meta.authorConfig.authorConfigId).toBe(meta.authorConfigId);
+    expect(authorConfigIdOf(meta.authorConfig)).toBe(meta.authorConfigId);
+    const mcp = JSON.parse(readFileSync(join(runsDir, `${String(claimed.runId)}.mcp.json`), 'utf8')) as {
+      mcpServers: { developercards: { env: Record<string, string> } };
+    };
+    expect(mcp.mcpServers.developercards.env.DC_AUTOMATION_AUTHOR_CONFIG_ID).toBe(meta.authorConfigId);
   });
 });

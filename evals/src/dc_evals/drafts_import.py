@@ -16,7 +16,9 @@ the `authorConfig` the author-runner pins at the start of each run and records i
 `<runs dir>/<runId>.meta.json` (model, skill version and the hashes of the skill files, the
 queue-item prompt, the claude argument list and the MCP server bundle, the CLI and runner
 versions). The automation gate writes those configurations into its report, so a gate is bound to
-the author it measured.
+the author it measured. R18D (contract M1) adds the gated `authorConfigId`, the runner's SHA-256 of
+the canonical JSON of {model, skillVersion, skillSha256, promptSha256, argsSha256}: it is copied onto
+the row's `authorConfig` when the run record carries it, after checking it against those fields.
 
 For each draft it re-reads the cited page with dc-ingest (the read_source invocation) and keeps
 the chunk whose text holds the card's quote verbatim (whitespace aside), so the jury judges the
@@ -33,6 +35,7 @@ Runs on the owner's machine only (it fetches the pages); the tests pass a fake i
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import sys
@@ -51,6 +54,11 @@ ROW_ID_PREFIX = "n-"
 # eval queue items.
 NEW_FACTS_AUTOMATION_MODE = "dry_run"
 NEW_FACTS_QUEUE_NOTE = "eval:new-facts"
+# R18D (automation-24): the reject reason the procedure closes every eval draft with. It is one of
+# src_C Drafts.RejectReasons and none of Drafts.DefectReasons, so an eval reject never counts as an
+# agent defect; excluding the eval drafts from the other agent-quality numbers is core's side
+# (docs/delivery/r18-issues/D06-fixes.md).
+NEW_FACTS_REJECT_REASON = "other"
 # The author-runner's AuthorConfig (tools/author-runner/src/authorConfig.ts), as recorded in
 # <runId>.meta.json; every key must be present.
 AUTHOR_CONFIG_KEYS = (
@@ -67,6 +75,35 @@ AUTHOR_CONFIG_KEYS = (
 # The keys that must be non-empty strings (claudeVersion may be null when the CLI did not report one).
 AUTHOR_CONFIG_REQUIRED = ("id", "model", "skillVersion", "skillSha256", "promptSha256", "claudeArgsSha256",
                           "mcpServerSha256", "runnerVersion")
+# R18D contract M1: the gated author identity. Run records of a runner from before M1 do not carry it;
+# their rows import without it and the automation gate fails closed on them.
+AUTHOR_CONFIG_ID_KEY = "authorConfigId"
+
+
+def gated_author_config_id(config: dict[str, Any]) -> str:
+    """The M1 authorConfigId of an AuthorConfig, as tools/author-runner/src/authorConfig.ts
+    authorConfigIdOf computes it: lowercase hex SHA-256 of the canonical JSON (sorted keys, no
+    spaces) of {argsSha256, model, promptSha256, skillSha256, skillVersion}, where argsSha256 is the
+    record's claudeArgsSha256. Neither the CLI nor the runner version is part of it."""
+    gated = {
+        "argsSha256": config["claudeArgsSha256"],
+        "model": config["model"],
+        "promptSha256": config["promptSha256"],
+        "skillSha256": config["skillSha256"],
+        "skillVersion": config["skillVersion"],
+    }
+    canonical = json.dumps(gated, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def author_config_id_problem(config: dict[str, Any]) -> str | None:
+    """Why a complete AuthorConfig does not carry its own gated authorConfigId, or None."""
+    value = config.get(AUTHOR_CONFIG_ID_KEY)
+    if not isinstance(value, str) or not value:
+        return "no authorConfigId"
+    if value != gated_author_config_id(config):
+        return f"authorConfigId {value!r} is not the id of its configuration"
+    return None
 
 
 def default_runs_dir(env: dict[str, str] | None = None) -> Path:
@@ -107,7 +144,17 @@ def read_author_config(runs_dir: Path, run_id: str) -> tuple[dict[str, Any] | No
     problem = author_config_problem(config)
     if problem is not None:
         return None, f"run record {path}: {problem}"
-    return {key: config[key] for key in AUTHOR_CONFIG_KEYS}, None
+    author = {key: config[key] for key in AUTHOR_CONFIG_KEYS}
+    # M1: runner.ts records the id at the top level of the meta and inside authorConfig.
+    ids = {value for value in (meta.get(AUTHOR_CONFIG_ID_KEY), config.get(AUTHOR_CONFIG_ID_KEY)) if value is not None}
+    if len(ids) > 1:
+        return None, f"run record {path}: two different authorConfigId values"
+    if ids:
+        author[AUTHOR_CONFIG_ID_KEY] = ids.pop()
+        problem = author_config_id_problem(author)
+        if problem is not None:
+            return None, f"run record {path}: {problem}"
+    return author, None
 
 
 def parse_deck_map(pairs: list[str]) -> dict[int, str]:
@@ -147,9 +194,9 @@ def _problem(draft: dict[str, Any], decks: dict[int, str]) -> str | None:
 
 def _author_problem(agent: dict[str, Any], config: dict[str, Any]) -> str | None:
     """The draft's own agent fields must be the ones its run pinned."""
-    for key in ("model", "skillVersion"):
-        if agent.get(key) is not None and agent.get(key) != config[key]:
-            return f"agent.{key} {agent.get(key)!r} is not its run's author {key} {config[key]!r}"
+    for key in ("model", "skillVersion", AUTHOR_CONFIG_ID_KEY):
+        if agent.get(key) is not None and agent.get(key) != config.get(key):
+            return f"agent.{key} {agent.get(key)!r} is not its run's author {key} {config.get(key)!r}"
     return None
 
 

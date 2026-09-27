@@ -18,6 +18,8 @@ export type LogEvent =
   | 'complete_failed'
   | 'complete_pending'
   | 'complete_replayed'
+  | 'runner_unavailable'
+  | 'usage_limited'
   | 'api_error'
   | 'finish'
   | 'unexpected_error';

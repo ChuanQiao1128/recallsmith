@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -48,6 +49,31 @@ describe('author configuration (ai-agent-3)', () => {
       rmSync(join(t.repo, 'tools', 'mcp-server', 'dist', 'index.js'));
       expect(() => readAuthorConfig(input)).toThrow(AuthorConfigError);
       expect(() => readAuthorConfig(input)).toThrow('cannot read tools/mcp-server/dist/index.js in the repo root (build tools/mcp-server)');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('computes the gated authorConfigId from the canonical JSON of the five M1 fields, without the CLI or runner version (M1)', () => {
+    const t = makeHome();
+    try {
+      const input = { repoRoot: t.repo, model: 'claude-opus-5-5', promptTemplate: readPromptTemplate(), claudeVersion: '2.1.283', runnerVersion: '1.0.0' };
+      const base = readAuthorConfig(input);
+      const canonical =
+        `{"argsSha256":"${base.claudeArgsSha256}","model":"claude-opus-5-5","promptSha256":"${base.promptSha256}",` +
+        `"skillSha256":"${base.skillSha256}","skillVersion":"author-cards@1.8.1"}`;
+      expect(base.authorConfigId).toBe(createHash('sha256').update(canonical).digest('hex'));
+      expect(base.authorConfigId).toMatch(/^[0-9a-f]{64}$/);
+
+      // A Claude Code auto-update or a runner release keeps the gated id; the local fingerprint still moves.
+      const updated = readAuthorConfig({ ...input, claudeVersion: '2.2.0', runnerVersion: '1.0.1' });
+      expect(updated.authorConfigId).toBe(base.authorConfigId);
+      expect(updated.id).not.toBe(base.id);
+      // A new model, prompt or skill does change it.
+      expect(readAuthorConfig({ ...input, model: 'claude-sonnet-5' }).authorConfigId).not.toBe(base.authorConfigId);
+      expect(readAuthorConfig({ ...input, promptTemplate: `${input.promptTemplate}!` }).authorConfigId).not.toBe(base.authorConfigId);
+      writeFileSync(join(t.repo, '.claude', 'skills', 'author-cards', 'checklist.md'), 'extra rule\n');
+      expect(readAuthorConfig(input).authorConfigId).not.toBe(base.authorConfigId);
     } finally {
       t.cleanup();
     }

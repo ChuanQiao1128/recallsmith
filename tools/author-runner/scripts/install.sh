@@ -3,6 +3,8 @@
 # Owner-run only, on the owner's Mac. DRY_RUN=1 runs every check and prints the rendered
 # plist on stdout as the only output; it writes nothing and runs neither plutil nor launchctl.
 # This script never executes claude and never reads the token file (it only checks it exists).
+# The repo root and token file it checks (DC_REPO_ROOT, DC_TOKEN_FILE, or their defaults) are
+# rendered into the job's environment, so every hourly run uses the ones checked here (ai-agent-22).
 set -euo pipefail
 
 LABEL="app.developercards.author-runner"
@@ -54,7 +56,7 @@ sed_value() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/\\/\\\\/g' -e 's/&/\\&/g'
 }
 
-for value in "$NODE_BIN" "$REPO" "$HOME" "$JOB_PATH"; do
+for value in "$NODE_BIN" "$REPO" "$HOME" "$JOB_PATH" "$TOKEN_FILE"; do
   case "$value" in *$'\n'*|*"$DELIM"*) die "a path contains a newline or a control character" ;; esac
 done
 
@@ -64,6 +66,7 @@ render() {
     -e "s${DELIM}__REPO__${DELIM}$(sed_value "$REPO")${DELIM}g" \
     -e "s${DELIM}__HOME__${DELIM}$(sed_value "$HOME")${DELIM}g" \
     -e "s${DELIM}__PATH__${DELIM}$(sed_value "$JOB_PATH")${DELIM}g" \
+    -e "s${DELIM}__TOKEN_FILE__${DELIM}$(sed_value "$TOKEN_FILE")${DELIM}g" \
     "$TEMPLATE"
 }
 

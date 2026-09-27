@@ -83,20 +83,28 @@ export function automationSourceHosts(run: AutomationRun, env: Record<string, st
   return hosts.length > 0 ? hosts : [...DEFAULT_AUTOMATION_SOURCE_HOSTS];
 }
 
-/** The pinned author model and skill version the runner passes (ai-agent-3); null for any that is unset. */
+/** The pinned author model, skill version and author identity the runner passes (ai-agent-3, M1); null for any that is unset. */
 export interface AutomationAuthor {
   model: string | null;
   skillVersion: string | null;
+  /** M1: the runner's gated author identity (DC_AUTOMATION_AUTHOR_CONFIG_ID), sent as agent.authorConfigId. */
+  authorConfigId: string | null;
 }
 
 const AUTHOR_VALUE_RE = /^[\x21-\x7e]{1,100}$/;
+/** M1: agent.authorConfigId is a string of at most 128 characters; the runner sends 64 lowercase hex digits. */
+const AUTHOR_CONFIG_ID_RE = /^[\x21-\x7e]{1,128}$/;
 
 export function automationAuthorFrom(env: Record<string, string | undefined>): AutomationAuthor {
-  const pick = (raw: string | undefined): string | null => {
+  const pick = (raw: string | undefined, re: RegExp = AUTHOR_VALUE_RE): string | null => {
     const value = (raw ?? '').trim();
-    return AUTHOR_VALUE_RE.test(value) ? value : null;
+    return re.test(value) ? value : null;
   };
-  return { model: pick(env.DC_AUTOMATION_AUTHOR_MODEL), skillVersion: pick(env.DC_AUTOMATION_SKILL_VERSION) };
+  return {
+    model: pick(env.DC_AUTOMATION_AUTHOR_MODEL),
+    skillVersion: pick(env.DC_AUTOMATION_SKILL_VERSION),
+    authorConfigId: pick(env.DC_AUTOMATION_AUTHOR_CONFIG_ID, AUTHOR_CONFIG_ID_RE),
+  };
 }
 
 export function createServer(deps: {
@@ -239,7 +247,7 @@ export function createServer(deps: {
         'Before any API call it lints every card and checks every citation: source.url must be a url read_source returned in this session (an https url not yet read is read once now) or the card fails with SOURCE_NOT_INGESTED, and source.quote must occur whitespace-normalised in one chunk of that source or it fails with SOURCE_QUOTE_NOT_IN_CHUNK; any failure refuses the whole batch as a tool error.',
         'Submitting the same card again is idempotent (it comes back under duplicates, keyed by the SHA-256 clientDraftKey of the card), and a card the server refuses comes back under rejected while the rest proceed.',
         'agent is { model, skillVersion }; the tool does not verify that the answer is correct, only that the quote is really in the cited source.',
-        'Inside an automation run (DC_AUTOMATION_RUN_ID set by tools/author-runner) the agent block always carries runId and queueItemId, its model and skillVersion come from the runner (DC_AUTOMATION_AUTHOR_MODEL, DC_AUTOMATION_SKILL_VERSION) when it sets them, the server may accept and publish new drafts that pass its checks and AI QA, and a deckSlug other than DC_AUTOMATION_DECK_SLUG is refused with AUTOMATION_DECK_MISMATCH.',
+        'Inside an automation run (DC_AUTOMATION_RUN_ID set by tools/author-runner) the agent block always carries runId and queueItemId, its model and skillVersion come from the runner (DC_AUTOMATION_AUTHOR_MODEL, DC_AUTOMATION_SKILL_VERSION) when it sets them, and so does its authorConfigId (DC_AUTOMATION_AUTHOR_CONFIG_ID), the server may accept and publish new drafts that pass its checks and AI QA, and a deckSlug other than DC_AUTOMATION_DECK_SLUG is refused with AUTOMATION_DECK_MISMATCH.',
       ].join(' '),
       inputSchema: {
         deckSlug: z.string(),
@@ -293,7 +301,7 @@ export function createServer(deps: {
         const deckId = await api.resolveDeckId(deckSlug);
         const body: {
           deckId: number;
-          agent?: { name: string; model: string; skillVersion: string; runId?: string; queueItemId?: string };
+          agent?: { name: string; model: string; skillVersion: string; authorConfigId?: string; runId?: string; queueItemId?: string };
           drafts: Array<{ clientDraftKey: string; card: GroundedDraftCard }>;
         } = {
           deckId,
@@ -311,6 +319,8 @@ export function createServer(deps: {
             name: 'developercards-mcp',
             model: author.model ?? agent?.model ?? 'unknown',
             skillVersion: author.skillVersion ?? agent?.skillVersion ?? 'unknown',
+            // M1: only the runner sets it; the model cannot claim an author identity.
+            ...(author.authorConfigId !== null ? { authorConfigId: author.authorConfigId } : {}),
             runId: automation.runId,
             ...(automation.queueItemId !== null ? { queueItemId: automation.queueItemId } : {}),
           };

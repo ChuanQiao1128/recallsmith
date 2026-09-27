@@ -6,7 +6,11 @@
       "Edit(~/.config/developercards/**)",
       "Grep(~/.config/developercards/**)",
       "Bash(*mcp-tokens*)",
-      "Bash(*.config/developercards*)"
+      "Bash(*.config/developercards*)",
+      "Read(./**/.env*)",
+      "Read(./**/*.tfstate*)",
+      "Read(./**/*.tfvars)",
+      "Read(./**/*.pem)"
     ]
   }
 }
