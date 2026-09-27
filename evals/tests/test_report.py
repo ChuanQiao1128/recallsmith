@@ -65,6 +65,7 @@ def test_report_json_matches_contract_schema() -> None:
         "errors",
         "unitOfAnalysis",  # Z04 (ai-agent-28): what one sample is in every interval
         "proxyFidelity",  # Z04 (ai-agent-30): what a claude-cli run cannot observe
+        "labels",  # Z04 (ai-agent-27): label provenance of the judgment classes
         "gate",
     }
     assert report["v"] == 2

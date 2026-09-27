@@ -210,8 +210,67 @@ def _control_counts(records: list[dict[str, Any]]) -> tuple[int, int, int]:
     return len(controls), len(scored), sum(1 for r in scored if is_flagged(r))
 
 
-def score(records: list[dict[str, Any]], classes: tuple[str, ...] = DEFECT_CLASSES) -> dict[str, Any]:
-    """The report's metric blocks plus flaggedWrongCategory (Markdown summary only)."""
+def _labels_block(
+    defective: list[dict[str, Any]], labels: dict[str, Any], classes: tuple[str, ...], excluded: set[str]
+) -> dict[str, Any]:
+    """Label provenance per judgment class (Z04, ai-agent-27): how its rows are evidenced, how
+    many a human judged valid or invalid, and recall per evidence tier."""
+    from .labels import EVIDENCE_TIERS, EVIDENCED_CLASSES, LABELED_CLASSES, SELF_EVIDENCED, WHY_NEUTRAL
+
+    rows = labels["rows"]
+    per_class: dict[str, Any] = {}
+    per_evidence: dict[str, Any] = {}
+    for defect in (c for c in LABELED_CLASSES if c in classes):
+        entries = [entry for entry in rows.values() if entry["defect"] == defect]
+        verdicts = Counter(entry["humanVerdict"] for entry in entries)
+        per_class[defect] = {
+            "rows": len(entries),
+            **(
+                {
+                    "selfEvidenced": sum(1 for e in entries if e["evidence"] == SELF_EVIDENCED),
+                    "whyNeutral": sum(1 for e in entries if e["evidence"] == WHY_NEUTRAL),
+                }
+                if defect in EVIDENCED_CLASSES
+                else {}
+            ),
+            "humanValid": verdicts["valid"],
+            "humanInvalid": verdicts["invalid"],
+            "unadjudicated": verdicts[None],
+        }
+        if defect in EVIDENCED_CLASSES:
+            class_records = [r for r in defective if r["defect"] == defect]
+            per_evidence[defect] = {
+                tier: _recall_block(
+                    [r for r in class_records if (rows.get(str(r.get("id"))) or {}).get("evidence") == tier]
+                )
+                for tier in EVIDENCE_TIERS
+            }
+    return {
+        "source": labels["source"],
+        "note": labels.get("note"),
+        "adjudicationFile": labels.get("adjudicationFile"),
+        "perClass": per_class,
+        "perEvidence": per_evidence,
+        "excludedRows": sorted(excluded),
+    }
+
+
+def score(
+    records: list[dict[str, Any]],
+    classes: tuple[str, ...] = DEFECT_CLASSES,
+    labels: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The report's metric blocks plus flaggedWrongCategory (Markdown summary only). With labels
+    (labels.labels_for), a defective row a human judged invalid is left out of every recall
+    figure and card count, and the labels block reports provenance per judgment class."""
+    invalid = {row_id for row_id, entry in ((labels or {}).get("rows") or {}).items() if entry["humanVerdict"] == "invalid"}
+
+    def counted(record: dict[str, Any]) -> bool:
+        return record.get("defect") is None or str(record.get("id")) not in invalid
+
+    excluded = {str(r.get("id")) for r in records if not counted(r)}
+    records_all = records
+    records = [r for r in records if counted(r)]
     defective = [r for r in records if r.get("defect") is not None]
     per_class = {c: _recall_block([r for r in defective if r["defect"] == c]) for c in classes}
     wrong_category = sum(
@@ -225,8 +284,8 @@ def score(records: list[dict[str, Any]], classes: tuple[str, ...] = DEFECT_CLASS
     raw_recall = tp_total / (tp_total + fn_total) if tp_total + fn_total else 0.0
     raw_precision = tp_total / (tp_total + fp) if tp_total + fp else 0.0
     raw_fpr = fp / scored_controls if scored_controls else 0.0
-    latencies = [int(r["latencyMs"]) for r in records if (r.get("latencyMs") or 0) > 0]
-    errors = Counter(r["errorCode"] for r in records if r.get("errorCode"))
+    latencies = [int(r["latencyMs"]) for r in records_all if (r.get("latencyMs") or 0) > 0]
+    errors = Counter(r["errorCode"] for r in records_all if r.get("errorCode"))
     tiers = sorted({r["tier"] for r in defective if r.get("tier")})
     reps = sorted({int(r.get("rep") or 1) for r in records})
     per_rep = []
@@ -243,8 +302,8 @@ def score(records: list[dict[str, Any]], classes: tuple[str, ...] = DEFECT_CLASS
             }
         )
     return {
-        "n": len(records),
-        "estimatedCostUsd": round(sum(float(r.get("estimatedCostUsd") or 0.0) for r in records), 6),
+        "n": len(records_all),
+        "estimatedCostUsd": round(sum(float(r.get("estimatedCostUsd") or 0.0) for r in records_all), 6),
         "perClass": per_class,
         "overall": {
             "tp": tp_total,
@@ -269,11 +328,11 @@ def score(records: list[dict[str, Any]], classes: tuple[str, ...] = DEFECT_CLASS
         "perTier": {tier: _recall_block([r for r in defective if r.get("tier") == tier]) for tier in tiers},
         "perRep": per_rep,
         "servedModel": {
-            "unverified": sum(1 for r in records if is_scored(r) and not r.get("servedModel")),
+            "unverified": sum(1 for r in records_all if is_scored(r) and not r.get("servedModel")),
         },
         "structuredItems": {
-            "on": sum(1 for r in records if r.get("structured") is True),
-            "off": sum(1 for r in records if r.get("structured") is False),
+            "on": sum(1 for r in records_all if r.get("structured") is True),
+            "off": sum(1 for r in records_all if r.get("structured") is False),
         },
         "latencyMs": {"p50": nearest_rank(latencies, 0.50), "p95": nearest_rank(latencies, 0.95)},
         "errors": dict(sorted(errors.items())),
@@ -285,6 +344,7 @@ def score(records: list[dict[str, Any]], classes: tuple[str, ...] = DEFECT_CLASS
                 "perClass": {c: distinct_cards([r for r in defective if r["defect"] == c]) for c in classes},
             },
         },
+        "labels": _labels_block(defective, labels, classes, excluded) if labels else None,
         "flaggedWrongCategory": wrong_category,
     }
 
@@ -370,6 +430,12 @@ def gate_failures(report: dict[str, Any]) -> list[str]:
             failures.append(f"class {defect} has {cards} distinct cards, fewer than {MIN_CLASS_CARDS}")
         if block["recall"] < PER_CLASS_RECALL_FLOOR:
             failures.append(f"class {defect} recall {block['recall']:.4f} < {PER_CLASS_RECALL_FLOOR:.2f}")
+    for defect, tiers in ((report.get("labels") or {}).get("perEvidence") or {}).items():
+        neutral = tiers.get("why-neutral") or {}
+        if neutral.get("tp", 0) + neutral.get("fn", 0) and neutral["recall"] < PER_CLASS_RECALL_FLOOR:
+            failures.append(
+                f"class {defect} why-neutral tier recall {neutral['recall']:.4f} < {PER_CLASS_RECALL_FLOOR:.2f}"
+            )
     unscored = report.get("unscored") or {}
     if unscored.get("controlUnscoredRate", 1.0) > CONTROL_UNSCORED_RATE_GATE:
         failures.append(

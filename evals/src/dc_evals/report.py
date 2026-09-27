@@ -9,6 +9,7 @@ from typing import Any
 
 from .claude_cli import PROXY_UNOBSERVABLE
 from .dataset import DATASETS_BY_NAME, classes_for, dump_line, file_sha256, read_jsonl
+from .labels import labels_for
 from .score import (
     CONTROL_FPR_CI_UPPER_GATE,
     CONTROL_FPR_GATE,
@@ -102,11 +103,22 @@ GATE_THRESHOLDS = {
 }
 
 
-def build_report(header: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any]:
+def build_report(
+    header: dict[str, Any],
+    records: list[dict[str, Any]],
+    *,
+    adjudications: Path | None = None,
+    labels: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """The §12.1 keys plus the run settings, CIs, unscored counts and the gate verdict (X04), and
     the evidence class and the shipping configuration the gate compares the run with (Y05).
-    n counts the item records scored. A header written before X04 reads its new keys as null."""
-    metrics = score(records, classes_for(header.get("dataset")))
+    n counts the item records scored. A header written before X04 reads its new keys as null.
+    Z04: the unit of analysis, what a proxy transport cannot observe, and the label provenance
+    of the judgment classes (from the dataset's committed adjudication file, or `adjudications`;
+    `labels` overrides both)."""
+    if labels is None:
+        labels = labels_for(header.get("dataset"), header.get("datasetSha256"), adjudications)
+    metrics = score(records, classes_for(header.get("dataset")), labels)
     report: dict[str, Any] = {
         "v": 2,
         "runId": header.get("runId"),
@@ -134,6 +146,7 @@ def build_report(header: dict[str, Any], records: list[dict[str, Any]]) -> dict[
         "latencyMs": metrics["latencyMs"],
         "errors": metrics["errors"],
         "unitOfAnalysis": metrics["unitOfAnalysis"],
+        "labels": metrics["labels"],
         "proxyFidelity": PROXY_UNOBSERVABLE if header.get("provider") == "claude-cli" else None,
         "gate": {
             "thresholds": GATE_THRESHOLDS,
@@ -158,6 +171,33 @@ def _unit_line(report: dict[str, Any]) -> str:
         f"CI and the class minimum count distinct cards, the repetitions of a card as one cluster): "
         f"{cards.get('defective', 0)} defective cards, {cards.get('scoredControls', 0)} scored control cards"
     )
+
+
+def _labels_lines(labels: dict[str, Any] | None) -> list[str]:
+    if not labels:
+        return []
+    lines = [
+        "",
+        "## Label provenance",
+        "",
+        f"Judgment-class labels are **{labels['source']}** (`{labels['adjudicationFile']}`). Self-evidenced rows "
+        "keep, in a why or the explanation, the criterion that makes the viable option viable; why-neutral rows "
+        "do not. Rows a human judged invalid are left out of every figure above"
+        + (f": {', '.join(labels['excludedRows'])}." if labels["excludedRows"] else " (none)."),
+        "",
+        "| Class | Rows | Self-evidenced | Why-neutral | Human valid | Human invalid |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for defect, row in labels["perClass"].items():
+        lines.append(
+            f"| {defect} | {row['rows']} | {row.get('selfEvidenced', '-')} | {row.get('whyNeutral', '-')} | "
+            f"{row['humanValid']} | {row['humanInvalid']} |"
+        )
+    lines += ["", "| Class | Evidence | TP | FN | Recall |", "|---|---|---:|---:|---:|"]
+    for defect, tiers in labels["perEvidence"].items():
+        for tier, row in tiers.items():
+            lines.append(f"| {defect} | {tier} | {row['tp']} | {row['fn']} | {row['recall']:.4f} |")
+    return lines
 
 
 def render_markdown(report: dict[str, Any], *, flagged_wrong_category: int) -> str:
@@ -244,6 +284,7 @@ def render_markdown(report: dict[str, Any], *, flagged_wrong_category: int) -> s
         lines += ["", "## Per repetition", "", "| Rep | Recall | Control FP rate |", "|---:|---:|---:|"]
         for row in report["perRep"]:
             lines.append(f"| {row['rep']} | {row['recall']:.4f} | {row['controlFalsePositiveRate']:.4f} |")
+    lines += _labels_lines(report.get("labels"))
     lines += ["", "## Errors", ""]
     if report["errors"]:
         lines += ["| Code | Count |", "|---|---:|"]

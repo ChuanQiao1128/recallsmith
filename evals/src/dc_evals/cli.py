@@ -59,6 +59,12 @@ def _parser() -> argparse.ArgumentParser:
     score = sub.add_parser("score", help="print the report JSON for a run file")
     score.add_argument("run_file", type=Path)
     score.add_argument("--gate", action="store_true", help="exit 1 unless every rollout gate condition passes")
+    score.add_argument(
+        "--adjudications",
+        type=Path,
+        default=None,
+        help="a human-adjudication file to score with (default: data/adjudications-<dataset>.json)",
+    )
     return parser
 
 
@@ -178,7 +184,7 @@ def _run(args: argparse.Namespace) -> int:
 
 def _score(args: argparse.Namespace) -> int:
     header, records = read_run(args.run_file)
-    report = build_report(header, records)
+    report = build_report(header, records, adjudications=args.adjudications)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if args.gate:
         failures = gate_failures(report)

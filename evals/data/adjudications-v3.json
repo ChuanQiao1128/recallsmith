@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "dataset": "seeded-v3",
+  "datasetSha256": "d4a350cb003d932d8e49f83e3e8143d8d829a1d3e9be3bbc90a61b71db09dce2",
+  "labelSource": "model-assisted",
+  "labelSourceNote": "The multiple_correct, ambiguous_stem and qualifier_mismatch constructions in mutations-v3.json were written and adjudicated in a model-assisted session (Y05); no independent human has reviewed them. Every ambiguous_stem and qualifier_mismatch row is self-evidenced: the viable option's why (or the explanation) still states the criterion that makes that option viable. The owner adds human verdicts below (at least 5 per class, stratified by deck and by run outcome); s-0147 is a known debatable row.",
+  "verdicts": []
+}
