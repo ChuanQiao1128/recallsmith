@@ -84,18 +84,15 @@ public static class LedgerRoutes
 
     try
     {
-      // Minutes saved are clamped per (period, automation, source) group, never per row: a row that carries
-      // only human cost (a rejected draft's review time, units 0) must reduce the savings it offsets in the
-      // same period instead of counting as 0. Backfill rows carry no actual minutes, so history is not
-      // offset by live review cost. The totals and the series clamp at the same grain (the requested
-      // granularity), so the series always adds up to totals.minutesSaved (backend-design-17,
-      // automation-14); a net-negative period shows 0 in both, and the headline can therefore differ
-      // between granularities.
+      // The headline is clamped once per (automation, source) over the whole [from, to) range, never per row
+      // and never per period (automation-18): a row that carries only human cost (a rejected draft's review
+      // time, units 0) reduces the savings it offsets anywhere in the range instead of counting as 0, and the
+      // same rows give the same headline whatever the granularity. Backfill rows carry no actual minutes, so
+      // history is not offset by live review cost. The granularity only shapes the series (below).
       var perAutomation = await DbUtil.QueryAsync(conn, null,
         """
         with g as (
           select b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source,
-                 date_trunc($3::text, e.occurred_at at time zone 'UTC') as period,
                  count(e.id) filter (where e.units > 0 or e.outcome = 'failure') as runs,
                  coalesce(sum(e.units), 0) as units,
                  count(e.id) filter (where e.outcome = 'failure') as failures,
@@ -108,7 +105,7 @@ public static class LedgerRoutes
           from automation_baselines b
           left join automation_events e
             on e.automation = b.automation and e.occurred_at >= $1 and e.occurred_at < $2
-          group by b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source, 6
+          group by b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source
         )
         select automation as "automation", unit as "unit",
                baseline_minutes_per_unit as "baselineMinutesPerUnit", baseline_source as "baselineSource",
@@ -129,17 +126,20 @@ public static class LedgerRoutes
         group by automation, unit, baseline_minutes_per_unit, baseline_source
         order by automation collate "C"
         """,
-        [start, end, granularity]);
+        [start, end]);
 
+      // The series shows net minutes per (period, automation), unclamped, so a period whose review cost exceeds
+      // its savings shows a negative bar. Per automation and source the series adds up to the unclamped net, and
+      // it equals the headline whenever that net is not negative (automation-18).
       var seriesRows = await DbUtil.QueryAsync(conn, null,
         """
         with g as (
           select date_trunc($3::text, e.occurred_at at time zone 'UTC') as period, e.automation, e.source,
                  count(*) filter (where e.units > 0 or e.outcome = 'failure') as runs,
                  coalesce(sum(e.units), 0) as units,
-                 greatest(0, coalesce(sum(case when e.outcome in ('success','partial')
-                                               then e.units * b.baseline_minutes_per_unit - coalesce(e.actual_minutes, 0)
-                                               else 0 end), 0)) as saved,
+                 coalesce(sum(case when e.outcome in ('success','partial')
+                                   then e.units * b.baseline_minutes_per_unit - coalesce(e.actual_minutes, 0)
+                                   else 0 end), 0) as net,
                  coalesce(sum(e.defects_caught), 0) as defects
           from automation_events e
           join automation_baselines b on b.automation = e.automation
@@ -150,7 +150,7 @@ public static class LedgerRoutes
                automation as "automation",
                sum(runs) as "runs",
                sum(units) as "units",
-               sum(saved) as "minutesSaved",
+               sum(net) as "netMinutes",
                sum(defects) as "defectsCaught"
         from g
         group by period, automation
@@ -220,7 +220,9 @@ public static class LedgerRoutes
         automation = (string)r["automation"]!,
         runs = ToLong(r["runs"]),
         units = ToLong(r["units"]),
-        minutesSaved = Round2(ToDecimal(r["minutesSaved"])),
+        // Net minutes for the period (may be negative); minutesSaved is kept as the same value for existing readers.
+        minutesSaved = Round2(ToDecimal(r["netMinutes"])),
+        netMinutes = Round2(ToDecimal(r["netMinutes"])),
         defectsCaught = ToLong(r["defectsCaught"]),
       }).ToArray();
 

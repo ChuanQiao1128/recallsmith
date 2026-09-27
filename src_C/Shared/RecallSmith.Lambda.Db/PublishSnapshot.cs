@@ -21,6 +21,12 @@ public static class PublishSnapshot
 {
   public const string StaleErrorCode = "AI_QA_STALE";
 
+  /// <summary>
+  /// EMF gauge emitted once per publish refused as <see cref="StaleErrorCode"/>, by core-vpc (409) or by the Worker
+  /// (failed job), so a gate/build race can be alarmed on rather than found in an info log (backend-design-20).
+  /// </summary>
+  public const string StaleMetric = "AiQaStale";
+
   /// <summary>Lowercase hex SHA-256 over the canonical JSON of <paramref name="cards"/>, in the order given (export order).</summary>
   public static string Digest(IEnumerable<PublishSnapshotCard> cards)
   {

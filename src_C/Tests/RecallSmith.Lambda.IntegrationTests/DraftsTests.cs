@@ -500,6 +500,84 @@ public class DraftsTests
     Assert.Equal("accepted", sameData.GetProperty("action").GetString());
   }
 
+  // ---------------------------------------------------------------- grounding (cross-wave contract, ai-agent-24)
+
+  private static Dictionary<string, object?> GroundedCard(string uid, object? grounding)
+  {
+    var card = Card(uid);
+    card["source"] = new Dictionary<string, object?> { ["url"] = SourceUrl, ["quote"] = SourceQuote, ["grounding"] = grounding };
+    return card;
+  }
+
+  private static object Grounding(string chunkId = "chunk-0007", string sourceId = "src-synthetic-1", object? matched = null, object? quoteChars = null) =>
+    new Dictionary<string, object?> { ["chunkId"] = chunkId, ["sourceId"] = sourceId, ["matched"] = matched ?? true, ["quoteChars"] = quoteChars ?? SourceQuote.Length };
+
+  [Fact]
+  public async Task Grounding_IsKeptOnTheDraft_ReturnedOnGet_AndStrippedOnAccept()
+  {
+    // The MCP server sends card.source.grounding on submit_draft; core keeps it on ai_drafts.card and returns it on
+    // GET, but a published card's source never carries it.
+    var deck = await NewDeckAsync("grounding");
+    var ids = await SubmitCardsAsync(deck.Id, GroundedCard("grounded-draft", Grounding()), Card("plain-draft"));
+
+    var source = Data(await GetAsync(ids[0])).GetProperty("card").GetProperty("source");
+    Assert.Equal(new[] { "grounding", "quote", "url" }, source.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+    var grounding = source.GetProperty("grounding");
+    Assert.Equal(new[] { "chunkId", "matched", "quoteChars", "sourceId" }, grounding.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+    Assert.Equal("chunk-0007", grounding.GetProperty("chunkId").GetString());
+    Assert.Equal("src-synthetic-1", grounding.GetProperty("sourceId").GetString());
+    Assert.True(grounding.GetProperty("matched").GetBoolean());
+    Assert.Equal(SourceQuote.Length, grounding.GetProperty("quoteChars").GetInt32());
+
+    // Keys outside the contract (the MCP server's kind, url, offsets) are dropped, not a reason to reject the draft.
+    var extra = new Dictionary<string, object?>
+    {
+      ["chunkId"] = "c0002", ["sourceId"] = "src-synthetic-2", ["matched"] = true, ["quoteChars"] = 43,
+      ["kind"] = "url", ["url"] = SourceUrl, ["chunkCharStart"] = 30, ["chunkCharEnd"] = 191,
+    };
+    var extraId = (await SubmitCardsAsync(deck.Id, GroundedCard("grounded-extra", extra)))[0];
+    var kept = Data(await GetAsync(extraId)).GetProperty("card").GetProperty("source").GetProperty("grounding");
+    Assert.Equal(new[] { "chunkId", "matched", "quoteChars", "sourceId" }, kept.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+    Assert.Equal(43, kept.GetProperty("quoteChars").GetInt32());
+
+    // A draft without grounding has none.
+    Assert.False(Data(await GetAsync(ids[1])).GetProperty("card").GetProperty("source").TryGetProperty("grounding", out _));
+
+    // Accepting with the same card minus grounding (a console that does not echo it) is not an edit.
+    var data = Data(await AcceptAsync(ids[0], new { card = Card("grounded-draft") }));
+    Assert.Equal("accepted", data.GetProperty("action").GetString());
+    var stored = (string)(await _db.ScalarAsync("select source::text from cards where id = $1", data.GetProperty("cardId").GetInt64()))!;
+    using var storedDoc = JsonDocument.Parse(stored);
+    Assert.Equal(new[] { "quote", "url" }, storedDoc.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+    Assert.DoesNotContain("grounding", stored, StringComparison.Ordinal);
+  }
+
+  [Theory]
+  [InlineData("notObject")]
+  [InlineData("notMatched")]
+  [InlineData("blankChunk")]
+  [InlineData("missingSource")]
+  [InlineData("negativeChars")]
+  [InlineData("fractionalChars")]
+  public async Task Grounding_BadShape_RejectsTheCard(string variant)
+  {
+    var deck = await NewDeckAsync("grounding-bad");
+    object grounding = variant switch
+    {
+      "notObject" => "chunk-1",
+      "notMatched" => Grounding(matched: false),
+      "blankChunk" => Grounding(chunkId: "  "),
+      "missingSource" => new Dictionary<string, object?> { ["chunkId"] = "c", ["matched"] = true, ["quoteChars"] = 3 },
+      "negativeChars" => Grounding(quoteChars: -1),
+      "fractionalChars" => Grounding(quoteChars: 1.5),
+      _ => throw new ArgumentOutOfRangeException(nameof(variant)),
+    };
+    var data = Data(await SubmitAsync(new { deckId = deck.Id, drafts = new[] { Entry(Key(), GroundedCard("bad-grounding", grounding)) } }));
+    Assert.Empty(data.GetProperty("created").EnumerateArray());
+    var rejected = Assert.Single(data.GetProperty("rejected").EnumerateArray());
+    Assert.Equal("VALIDATION_ERROR", rejected.GetProperty("code").GetString());
+  }
+
   [Fact]
   public async Task Accept_Twice_Returns409DraftNotPending()
   {

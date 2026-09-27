@@ -98,4 +98,69 @@ public class InternalCallerSecretTests
       Assert.Equal("Missing INTERNAL_SHARED_SECRET", v.Reason);
     });
   }
+
+  private const string SharedPrevious = "test-shared-secret-old";
+  private const string AiQaPrevious = "test-ai-qa-secret-old";
+
+  private static void WithPrevious(string? sharedPrevious, string? aiQaPrevious, Action body)
+  {
+    var names = new[] { Auth.InternalSharedSecretEnv + Auth.PreviousSecretSuffix, AiQaResults.CallerSecretEnv + Auth.PreviousSecretSuffix };
+    var saved = names.ToDictionary(n => n, Environment.GetEnvironmentVariable);
+    try
+    {
+      Environment.SetEnvironmentVariable(names[0], sharedPrevious);
+      Environment.SetEnvironmentVariable(names[1], aiQaPrevious);
+      body();
+    }
+    finally
+    {
+      foreach (var (n, v) in saved) Environment.SetEnvironmentVariable(n, v);
+    }
+  }
+
+  [Fact]
+  public void SharedSecretRotation_BothHmacRoutesAcceptCurrentAndPrevious()
+  {
+    // cloud-security-resilience-11: while INTERNAL_SHARED_SECRET_PREVIOUS is set, a caller still signing with the
+    // old value keeps working on both HMAC routes (and every shared-secret route), so a rotation has no flag day.
+    Assert.Equal("INTERNAL_SHARED_SECRET_PREVIOUS", Auth.InternalSharedSecretEnv + Auth.PreviousSecretSuffix);
+    WithSecrets(Shared, null, null, () =>
+    {
+      Assert.False(AiQaRoute(SharedPrevious));
+      Assert.False(ReportRoute(SharedPrevious));
+
+      WithPrevious(SharedPrevious, null, () =>
+      {
+        Assert.True(AiQaRoute(Shared));
+        Assert.True(AiQaRoute(SharedPrevious));
+        Assert.True(ReportRoute(Shared));
+        Assert.True(ReportRoute(SharedPrevious));
+        Assert.True(Auth.VerifyInternalSignature(Signed(SharedPrevious, "/api/internal/entitlements/apply")).Ok);
+        Assert.False(AiQaRoute("some-other-secret"));
+      });
+
+      // An empty previous is no secret at all.
+      WithPrevious("", null, () => Assert.False(AiQaRoute("")));
+    });
+  }
+
+  [Fact]
+  public void RouteSecret_PreviousIsItsOwn_NotTheSharedOne()
+  {
+    // cloud-security-resilience-2 cut-over: a route with its own secret accepts that secret's _PREVIOUS (so the
+    // Lambda may keep signing with the old value until it is redeployed), never the shared secret's.
+    WithSecrets(Shared, AiQa, Dispatcher, () =>
+    {
+      WithPrevious(SharedPrevious, AiQaPrevious, () =>
+      {
+        Assert.True(AiQaRoute(AiQa));
+        Assert.True(AiQaRoute(AiQaPrevious));
+        Assert.False(AiQaRoute(Shared));
+        Assert.False(AiQaRoute(SharedPrevious));
+        Assert.False(ReportRoute(AiQaPrevious));
+        Assert.False(ReportRoute(SharedPrevious));
+        Assert.True(ReportRoute(Dispatcher));
+      });
+    });
+  }
 }

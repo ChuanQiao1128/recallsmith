@@ -14,8 +14,8 @@ namespace RecallSmith.Lambda.Vpc.Internal;
 /// POST /api/internal/ai-qa/results (R18 J13, contract §7.7): the ai-qa Lambda reports one chunk's reviews here,
 /// HMAC-signed (§4.3). One transaction applies the item transitions, stores findings and recomputes the run's
 /// counters from its items and findings. SQS delivers at least once and a chunk may be retried whole, so a
-/// repeated report is normal: a <c>done</c> item is never downgraded, and a report never erases a finding a human
-/// has resolved. The <c>card.flagged</c> webhook and the ledger row run after commit and are best-effort.
+/// repeated report is normal: a <c>done</c> item is never downgraded and its findings are never replaced (a retried
+/// chunk's second model sample neither erases nor renumbers what the first one found; backend-design-19). The <c>card.flagged</c> webhook and the ledger row run after commit and are best-effort.
 /// </summary>
 public static class AiQaResults
 {
@@ -45,6 +45,12 @@ public static class AiQaResults
   public const string CallerSecretEnv = "INTERNAL_SECRET_AI_QA_RESULTS";
 
   /// <summary>
+  /// Items per report whose echoed content hash did not match the item (backend-design-20): the forgery signal for
+  /// cloud-security-resilience-2, counted apart from unknown card ids so it can be alarmed on.
+  /// </summary>
+  public const string HashMismatchMetric = "AiQaHashMismatch";
+
+  /// <summary>
   /// One budget for every post-commit SQS send of a report (backend-design-15). A report carries up to
   /// <see cref="MaxItems"/> flagged cards; the per-call enqueue deadline alone would let a hung SQS endpoint hold
   /// the request far past the 30 s gateway timeout, which the ai-qa Lambda would treat as a failed report and
@@ -64,7 +70,6 @@ public static class AiQaResults
     public required string Status { get; set; }
     public required string ContentSha256 { get; init; }
     public required string StableUid { get; init; }
-    public int ResolvedFindings { get; init; }
     public string? RequestId { get; set; }
   }
 
@@ -97,7 +102,7 @@ public static class AiQaResults
       string runStatus;
       int cardsDone;
       int cardCount;
-      int becameDone = 0, errored = 0, kept = 0, ignored = 0, statusChanged = 0;
+      int becameDone = 0, errored = 0, kept = 0, ignored = 0, mismatched = 0, statusChanged = 0;
       string? storedPromptVersion;
       var transitions = new List<(long CardId, string Status)>();
       var flagged = new List<(long CardId, string StableUid, List<ReportFinding> Findings)>();
@@ -117,8 +122,7 @@ public static class AiQaResults
 
         var itemRows = await DbUtil.QueryAsync(conn, tx,
           """
-          select i.card_id, i.status, i.content_sha256, i.stable_uid, i.request_id,
-            (select count(*) from ai_qa_findings f where f.run_id = i.run_id and f.card_id = i.card_id and f.resolution <> 'open') as resolved
+          select i.card_id, i.status, i.content_sha256, i.stable_uid, i.request_id
           from ai_qa_items i
           where i.run_id = $1
           order by i.card_id
@@ -132,7 +136,6 @@ public static class AiQaResults
             Status = (string)r["status"]!,
             ContentSha256 = (string)r["content_sha256"]!,
             StableUid = (string)r["stable_uid"]!,
-            ResolvedFindings = Convert.ToInt32(r["resolved"], CultureInfo.InvariantCulture),
             RequestId = r["request_id"] as string,
           });
 
@@ -150,18 +153,25 @@ public static class AiQaResults
           if (!string.Equals(item.ContentSha256, state.ContentSha256, StringComparison.Ordinal))
           {
             Log.Event("warn", new { tag = "ai_qa", reason = "hash_echo_mismatch", runId = report.RunId, chunk = report.Chunk, cardId = item.CardId });
-            ignored++;
+            mismatched++;
             continue;
           }
 
+          // A done item is final for the run (backend-design-19): whatever a later report says, its status and its
+          // findings stay. A retried chunk redelivered to another container makes a fresh model call, a different
+          // sample that may miss a blocker the first one caught; replacing the findings would let the gate's outcome
+          // depend on which sample arrived last, orphan the card.flagged webhook already sent and renumber the ids an
+          // editor resolves by. An exact replay (the Lambda's POST retry) carries the same findings, so keeping them
+          // loses nothing, and findings a human resolved are kept as before.
           var previous = state.Status;
-          var keep = previous == "done" && (item.Status != "done" || state.ResolvedFindings > 0);
+          var keep = previous == "done";
           if (keep)
           {
             kept++;
-            if (item.Status == "done")
+            if (item.Status == "done" && IsNewAttempt(state, item))
             {
-              Log.Event("warn", new { tag = "ai_qa", reason = "resolved_findings_kept", runId = report.RunId, chunk = report.Chunk, cardId = item.CardId });
+              Log.Event("info", new { tag = "ai_qa", reason = "done_findings_kept", runId = report.RunId, chunk = report.Chunk, cardId = item.CardId,
+                reportedFindings = item.Findings.Count });
             }
             // The outcome is kept, but a retried chunk re-reviewed (and re-billed) this card: its usage still
             // counts toward the daily cap (backend-design-6, cloud-security-resilience-3). The attempt's request id
@@ -176,7 +186,7 @@ public static class AiQaResults
             continue;
           }
 
-          // Usage accumulates across attempts (a retried chunk re-bills the card); an exact replay of the same
+          // Usage accumulates across attempts (a retried chunk re-bills an errored card); an exact replay of the same
           // model call (same request id, e.g. the Lambda's POST retry) replaces rather than adds.
           var usageSql = IsNewAttempt(state, item)
             ? "input_tokens = coalesce(input_tokens, 0) + $6, output_tokens = coalesce(output_tokens, 0) + $7, " +
@@ -196,7 +206,7 @@ public static class AiQaResults
 
           if (item.Status == "done")
           {
-            await DbUtil.ExecuteAsync(conn, tx, "delete from ai_qa_findings where run_id = $1 and card_id = $2", [report.RunId, item.CardId]);
+            // The item was not done before (a done item is kept above), so it has no findings to replace.
             foreach (var f in item.Findings)
             {
               await DbUtil.ExecuteAsync(conn, tx,
@@ -283,9 +293,9 @@ public static class AiQaResults
           previous = storedPromptVersion, reported = report.PromptVersion });
       }
 
-      await AfterCommitAsync(conn, report, deckId, flagged, becameDone, errored, kept, ignored, transitions);
+      await AfterCommitAsync(conn, report, deckId, flagged, becameDone, errored, kept, ignored, mismatched, transitions);
 
-      Log.Event("info", new { tag = "ai_qa", outcome = "reported", runId = report.RunId, chunk = report.Chunk, runStatus, cardsDone, cardCount, becameDone, kept, ignored });
+      Log.Event("info", new { tag = "ai_qa", outcome = "reported", runId = report.RunId, chunk = report.Chunk, runStatus, cardsDone, cardCount, becameDone, kept, ignored, mismatched });
       return res.Ok(new { runId = report.RunId, runStatus, cardsDone, cardCount });
     }
     catch (PostgresException pg) when (pg.SqlState == "42P01")
@@ -317,8 +327,11 @@ public static class AiQaResults
   /// <summary>Best-effort side effects of a committed report (contract §0.8); never throws.</summary>
   private static async Task AfterCommitAsync(NpgsqlConnection conn, Report report, long deckId,
     List<(long CardId, string StableUid, List<ReportFinding> Findings)> flagged,
-    int becameDone, int errored, int kept, int ignored, List<(long CardId, string Status)> transitions)
+    int becameDone, int errored, int kept, int ignored, int mismatched, List<(long CardId, string Status)> transitions)
   {
+    // Once per report, zero included, so the metric has data points to alarm on.
+    RouteMetrics.EmitGauge(HashMismatchMetric, mismatched);
+
     using var budget = new CancellationTokenSource(AfterCommitBudget);
     try
     {
@@ -369,12 +382,16 @@ public static class AiQaResults
       await AutomationLedger.RecordAsync(conn, new AutomationEvent(
         Automation: "ai_qa_review", Units: becameDone, Outcome: outcome, DeckId: deckId, Ref: report.RunId.ToString(),
         DedupeKey: LedgerDedupeKey(report.RunId, report.Chunk, transitions),
-        Details: new { chunk = report.Chunk, reported = report.Items.Count, becameDone, errored, kept, ignored }));
+        Details: new { chunk = report.Chunk, reported = report.Items.Count, becameDone, errored, kept, ignored, mismatched }));
     }
 
     if (ignored > 0)
     {
       Log.Event("warn", new { tag = "ai_qa", reason = "unknown_card", runId = report.RunId, chunk = report.Chunk, ignored });
+    }
+    if (mismatched > 0)
+    {
+      Log.Event("warn", new { tag = "ai_qa", reason = "hash_echo_mismatch", runId = report.RunId, chunk = report.Chunk, mismatched });
     }
   }
 

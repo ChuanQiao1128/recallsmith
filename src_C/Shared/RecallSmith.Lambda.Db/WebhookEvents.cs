@@ -388,7 +388,9 @@ public static class WebhookEvents
   /// Copies delivery <paramref name="deliveryId"/> into a new row (new delivery_id; same event_id, event,
   /// subscription and body; status queued, attempts 0) and sends its message. Returns the new id, or
   /// null when the source row does not exist (or the copy could not be recorded). Never throws; a send
-  /// failure marks the new row enqueue_failed and still returns its id.
+  /// failure marks the new row enqueue_failed and still returns its id. A source row that never reached the
+  /// dispatcher (<see cref="SupersedablePredicate"/>) is settled as <c>failed</c> in the same transaction as the
+  /// copy (automation-19), so a later sweep cannot send the event a second time under the old delivery id.
   /// </summary>
   public static async Task<Guid?> RedeliverAsync(NpgsqlConnection conn, Guid deliveryId, CancellationToken ct = default)
   {
@@ -420,14 +422,27 @@ public static class WebhookEvents
       var occurredAtText = ReadOccurredAt(body);
 
       var newId = Guid.NewGuid();
-      await DbUtil.ExecuteAsync(conn, null,
-        "insert into webhook_deliveries (delivery_id, event_id, event, subscription_id, status, attempts, body) values ($1, $2, $3, $4, 'queued', 0, $5)",
-        [newId, eventId, eventType, subscriptionId, body]);
+      int superseded;
+      await using (var tx = await conn.BeginTransactionAsync(ct))
+      {
+        await DbUtil.ExecuteAsync(conn, tx,
+          "insert into webhook_deliveries (delivery_id, event_id, event, subscription_id, status, attempts, body) values ($1, $2, $3, $4, 'queued', 0, $5)",
+          [newId, eventId, eventType, subscriptionId, body]);
+        superseded = await DbUtil.ExecuteAsync(conn, tx,
+          $"""
+          update webhook_deliveries d
+          set status = 'failed', last_error = $2, updated_at = now()
+          where d.delivery_id = $1 and {SupersedablePredicate}
+          """,
+          [deliveryId, $"superseded by redelivery {newId:D}"]);
+        await tx.CommitAsync(ct);
+      }
 
       using var deadline = Deadline(ct);
       var sent = await TrySendAsync(conn, queueUrl, newId, eventId, eventType, subscriptionId, url, occurredAtText, body, deadline.Token);
       if (!sent) RouteMetrics.EmitGauge("WebhookEnqueueFailures", 1);
-      Log.Event("info", new { tag = "webhook", op = "redeliver", @event = eventType, eventId, sourceDeliveryId = deliveryId, deliveryId = newId, enqueueFailures = sent ? 0 : 1 });
+      Log.Event("info", new { tag = "webhook", op = "redeliver", @event = eventType, eventId, sourceDeliveryId = deliveryId, deliveryId = newId,
+        sourceSuperseded = superseded > 0, enqueueFailures = sent ? 0 : 1 });
       return newId;
     }
     catch (Exception ex)
@@ -453,6 +468,18 @@ public static class WebhookEvents
     (d.status = 'enqueue_failed' or (d.status = 'queued' and d.attempts = 0 and d.enqueued_at is null))
     and d.updated_at < now() - interval '{(int)SweepStuckAfter.TotalMinutes} minutes'
     and s.deleted_at is null and s.is_active
+    """;
+
+  /// <summary>
+  /// A redelivered source row that never reached the dispatcher and so would otherwise stay eligible for the
+  /// sweep (automation-19): <c>enqueue_failed</c>, or <c>queued</c> with no attempt and no hand-off that has been
+  /// untouched for <see cref="SweepStuckAfter"/> (a fresher queued row may still be mid-send). A row the
+  /// dispatcher has seen (attempts &gt; 0 or <c>enqueued_at</c> set) keeps its own history. Alias <c>d</c>.
+  /// </summary>
+  private static string SupersedablePredicate => $"""
+    d.attempts = 0 and d.enqueued_at is null
+    and (d.status = 'enqueue_failed'
+         or (d.status = 'queued' and d.updated_at < now() - interval '{(int)SweepStuckAfter.TotalMinutes} minutes'))
     """;
 
   /// <summary>
