@@ -487,7 +487,7 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
         log("error", "ai-qa", event="client_config_invalid", runId=msg["runId"], chunk=msg["chunk"], reason=str(exc))
         return finish(fill("CONFIG"))
 
-    # The effort the reviewer really runs at; never a silent no-op (README, "Reasoning effort").
+    # The effort the reviewer really runs at; never a silent no-op (README, "Other models (Bedrock Converse)").
     effort = effective_effort(cfg_used)
     if effort != cfg_used.effort:
         log(
