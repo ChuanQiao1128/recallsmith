@@ -23,7 +23,7 @@ MAX_ITEM_URL_CHARS = 2048
 MAX_TITLE_CHARS = 300
 HEADING_TAGS = frozenset({"h2", "h3"})
 
-_UNSAFE_XML = re.compile(rb"<!\s*(doctype|entity)", re.IGNORECASE)
+_UNSAFE_XML = re.compile(rb"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
 _WHITESPACE_RUN = re.compile(r"\s+")
 _NON_ALNUM_RUN = re.compile(r"[\W_]+")
 
