@@ -1,0 +1,14 @@
+{
+  "data": {
+    "deckId": 3,
+    "deckSlug": "aws-saa-c03",
+    "buildId": "b-20261001-030405",
+    "jobId": "5d1e0c7a-8f43-4b2a-a6d9-2c7e1f0b9a11",
+    "cardCount": 371,
+    "publishedAt": "2026-10-01T03:04:05.600Z"
+  },
+  "environment": "prod",
+  "event": "deck.published",
+  "eventId": "0f6c1a52-3b7e-4d0e-9a51-6f2d7c8e1a01",
+  "occurredAt": "2026-10-01T03:04:05.678Z"
+}
