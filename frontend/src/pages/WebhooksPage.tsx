@@ -149,6 +149,7 @@ export function WebhooksPage() {
   // Written into the page's one persistent live region, so a screen reader
   // hears each action result (a region mounted with its text is not announced).
   const [announcement, setAnnouncement] = useState('');
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [loadingMore, setLoadingMore] = useState(false);
 
   const filterKey = deliveriesKey(filterSubscription, filterStatus, filterEvent);
@@ -252,6 +253,10 @@ export function WebhooksPage() {
     setFormProblems([]);
     setInvalidFields(NO_INVALID_FIELDS);
     setFormServerError(null);
+    // The form sits below the table: take the keyboard there and say what
+    // changed, or Edit looks like it did nothing (WCAG 2.4.3, 4.1.3).
+    setAnnouncement(`Editing subscription ${s.name}.`);
+    nameInputRef.current?.focus();
   }
 
   async function submitForm(e: React.FormEvent) {
@@ -527,6 +532,7 @@ export function WebhooksPage() {
                 Name
               </label>
               <input
+                ref={nameInputRef}
                 id="webhook-name"
                 className={invalidFields.name ? INPUT_INVALID_CLASS : INPUT_CLASS}
                 aria-invalid={invalidFields.name ? true : undefined}

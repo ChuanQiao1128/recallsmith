@@ -35,8 +35,8 @@ export const QA_CATEGORY_LABELS: Record<string, string> = {
 
 // Fallbacks only. The server reads the real limits from AI_QA_MAX_CARDS and
 // AI_QA_DAILY_USD_CAP (contract §7.2, defaults 200 and 10); the page uses the
-// values GET …/qa/status returns and falls back to these defaults when the
-// response does not carry them.
+// values GET …/qa/status returns in data.limits and falls back to these
+// defaults, labelled as defaults, when the response does not carry them.
 export const QA_MAX_CARDS = 200;
 export const QA_DAILY_USD_CAP = 10;
 
@@ -45,24 +45,35 @@ export interface QaLimits {
   dailyUsdCap: number;
   /** Today's spend, when the server reports it. */
   spentTodayUsd: number | null;
+  /** Today's spend reserved by runs still in flight, when the server reports it. */
+  reservedTodayUsd: number | null;
   /** True when both limits came from the server rather than the defaults. */
   fromServer: boolean;
 }
 
 export function qaLimits(
-  status: { maxCards: number | null; dailyUsdCap: number | null; spentTodayUsd: number | null } | null,
+  status: {
+    maxCards: number | null;
+    dailyUsdCap: number | null;
+    spentTodayUsd: number | null;
+    reservedTodayUsd?: number | null;
+  } | null,
 ): QaLimits {
   return {
     maxCards: status?.maxCards ?? QA_MAX_CARDS,
     dailyUsdCap: status?.dailyUsdCap ?? QA_DAILY_USD_CAP,
     spentTodayUsd: status?.spentTodayUsd ?? null,
+    reservedTodayUsd: status?.reservedTodayUsd ?? null,
     fromServer: status?.maxCards != null && status?.dailyUsdCap != null,
   };
 }
 
-/** What is left of today's cap; the whole cap when today's spend is unknown. */
+/**
+ * What is left of today's cap after what was spent and what running runs have
+ * reserved; the whole cap when neither is known.
+ */
 export function qaCapRemainingUsd(limits: QaLimits): number {
-  return Math.max(0, limits.dailyUsdCap - (limits.spentTodayUsd ?? 0));
+  return Math.max(0, limits.dailyUsdCap - (limits.spentTodayUsd ?? 0) - (limits.reservedTodayUsd ?? 0));
 }
 
 // The plan's per-card budget priced at the §7.5 default list prices. An
@@ -205,9 +216,15 @@ export const QA_START_ERROR_MESSAGES: Record<string, string> = {
   DECK_NOT_FOUND: 'This deck no longer exists.',
 };
 
-/** The start refusal text, with the run size limit filled in where it applies. */
+/**
+ * The start refusal text, with the run size limit filled in where it applies.
+ * For AI_QA_TOO_MANY_CARDS the limit is quoted only when it came from the
+ * server; otherwise the page knows only its fallback, so it shows the server's
+ * own message, which names the real AI_QA_MAX_CARDS.
+ */
 export function qaStartErrorMessage(code: string, fallback: string, limits: QaLimits): string {
   if (code === 'AI_QA_TOO_MANY_CARDS') {
+    if (!limits.fromServer) return fallback.trim() !== '' ? fallback : QA_START_ERROR_MESSAGES.AI_QA_TOO_MANY_CARDS;
     return `Too many cards for one run (the limit is ${limits.maxCards}). Narrow the scope.`;
   }
   return QA_START_ERROR_MESSAGES[code] ?? fallback;
