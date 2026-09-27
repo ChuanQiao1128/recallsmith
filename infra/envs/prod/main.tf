@@ -3,6 +3,10 @@ locals {
   # variable stays sensitive (never printed). Passing the value unmarked keeps the adopted
   # budget's notification blocks a no-op on import instead of a spurious sensitivity re-mark.
   alert_email = var.alert_email
+
+  # R18 Y04: one model id feeds both the ai-qa IAM condition (bedrock-mantle:Model) and the function's
+  # create-time AI_MODEL, so the two cannot drift apart in Terraform.
+  ai_qa_model_id = "anthropic.claude-opus-5"
 }
 
 # E03's DLQ exists in the account but is not in imports.tf (E00 §6 #20). module.worker's
@@ -53,7 +57,14 @@ module "identity" {
   core_vpc_function_name = "core-vpc"
   worker_function_name   = "worker-lambda"
 
-  secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development"]
+  webhook_queue_name               = "developercards-webhook-events"
+  webhook_dispatcher_function_name = "developercards-webhook-dispatcher"
+
+  ai_qa_queue_name        = "developercards-ai-qa-jobs"
+  ai_qa_function_name     = "developercards-ai-qa"
+  bedrock_mantle_model_id = local.ai_qa_model_id
+
+  secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development", "webhook-signing-secret", "anthropic-api-key", "webhook-report-secret", "ai-qa-results-secret"]
 
   console_hostname = "console.${var.domain}"
 }
@@ -106,6 +117,7 @@ module "api" {
   security_group_ids        = var.core_vpc_security_group_ids
   console_pool_endpoint     = module.identity.console_pool_endpoint
   console_client_id         = module.identity.console_client_id
+  agent_client_ids          = [module.identity.console_dev_client_id]
   mobile_pool_endpoint      = module.identity.mobile_pool_endpoint
   mobile_client_id          = module.identity.mobile_client_id
   cors_allowed_origins      = concat(var.cors_allowed_origins, ["https://console.${var.domain}"])
@@ -127,6 +139,41 @@ module "worker" {
   role_arn           = module.identity.worker_role_arn
   subnet_ids         = module.data.subnet_ids
   security_group_ids = var.worker_security_group_ids
+
+  webhook_queue_name               = "developercards-webhook-events"
+  webhook_dlq_name                 = "developercards-webhook-events-dlq"
+  webhook_dispatcher_function_name = "developercards-webhook-dispatcher"
+  webhook_dispatcher_role_arn      = module.identity.webhook_dispatcher_role_arn
+  # Create-time only; SSM parameter names, not values (R18-00 §6.5.1). The deploy script owns it afterwards.
+  webhook_dispatcher_environment = {
+    SIGNING_SECRET_SSM_NAME      = "/developercards/prod/webhook-signing-secret"
+    INTERNAL_SECRET_SSM_NAME     = "/developercards/prod/internal-shared-secret"
+    CORE_API_BASE                = "https://api.developercards.app"
+    METRICS_NAMESPACE            = "DeveloperCards"
+    WEBHOOK_HTTP_TIMEOUT_SECONDS = "10"
+    LOG_LEVEL                    = "info"
+  }
+
+  ai_qa_queue_name    = "developercards-ai-qa-jobs"
+  ai_qa_dlq_name      = "developercards-ai-qa-jobs-dlq"
+  ai_qa_function_name = "developercards-ai-qa"
+  ai_qa_role_arn      = module.identity.ai_qa_role_arn
+  # Create-time only; equals services/ai-qa/env/prod.env.json (R18-00 §7.5). Kill switch off; the deploy script owns it afterwards.
+  ai_qa_environment = {
+    AI_PROVIDER                = "bedrock"
+    AI_MODEL                   = local.ai_qa_model_id
+    AI_BEDROCK_REGION          = "ap-southeast-2"
+    AI_EFFORT                  = "high"
+    AI_STRUCTURED_OUTPUTS      = "auto"
+    AI_QA_ENABLED              = "0"
+    ANTHROPIC_API_KEY_SSM_NAME = "/developercards/prod/anthropic-api-key"
+    INTERNAL_SECRET_SSM_NAME   = "/developercards/prod/internal-shared-secret"
+    CORE_API_BASE              = "https://api.developercards.app"
+    METRICS_NAMESPACE          = "DeveloperCards"
+    AI_PRICE_INPUT_PER_MTOK    = "5"
+    AI_PRICE_OUTPUT_PER_MTOK   = "25"
+    LOG_LEVEL                  = "info"
+  }
 }
 
 module "observability" {
@@ -147,4 +194,12 @@ module "observability" {
   publish_queue_name     = "recallsmith-publish-jobs"
   publish_dlq_name       = module.worker.publish_dlq_name
   db_identifier          = "developercards"
+
+  webhook_queue_name               = module.worker.webhook_queue_name
+  webhook_dlq_name                 = module.worker.webhook_dlq_name
+  webhook_dispatcher_function_name = module.worker.webhook_dispatcher_function_name
+
+  ai_qa_queue_name    = module.worker.ai_qa_queue_name
+  ai_qa_dlq_name      = module.worker.ai_qa_dlq_name
+  ai_qa_function_name = module.worker.ai_qa_function_name
 }

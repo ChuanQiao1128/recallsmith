@@ -1,0 +1,197 @@
+{
+  "v": 2,
+  "runId": "ec90776e-0204-4287-93b7-c5e99db11707",
+  "startedAt": "2026-09-27T07:44:21.568785Z",
+  "provider": "claude-cli",
+  "model": "claude-opus-5",
+  "promptVersion": "qa-v4",
+  "dataset": "seeded-v3",
+  "datasetSha256": "d4a350cb003d932d8e49f83e3e8143d8d829a1d3e9be3bbc90a61b71db09dce2",
+  "reps": 2,
+  "reviewDate": "2026-09-27",
+  "effort": "high",
+  "structuredOutputs": "off",
+  "structuredOutputsAtStart": false,
+  "evidenceClass": "proxy",
+  "n": 452,
+  "estimatedCostUsd": 19.406871,
+  "perClass": {
+    "incorrect_answer": {
+      "tp": 36,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.9036,
+        1.0
+      ]
+    },
+    "multiple_correct": {
+      "tp": 30,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.8865,
+        1.0
+      ]
+    },
+    "answer_leak": {
+      "tp": 25,
+      "fn": 5,
+      "recall": 0.8333,
+      "recallCi95": [
+        0.6644,
+        0.9266
+      ]
+    },
+    "ambiguous_stem": {
+      "tp": 29,
+      "fn": 1,
+      "recall": 0.9667,
+      "recallCi95": [
+        0.8333,
+        0.9941
+      ]
+    },
+    "outdated_fact": {
+      "tp": 25,
+      "fn": 5,
+      "recall": 0.8333,
+      "recallCi95": [
+        0.6644,
+        0.9266
+      ]
+    },
+    "qualifier_mismatch": {
+      "tp": 30,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.8865,
+        1.0
+      ]
+    },
+    "source_unsupported": {
+      "tp": 40,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.9124,
+        1.0
+      ]
+    }
+  },
+  "overall": {
+    "tp": 215,
+    "fp": 13,
+    "fn": 11,
+    "recall": 0.9513,
+    "precision": 0.943,
+    "f1": 0.9471,
+    "controlFalsePositiveRate": 0.0575,
+    "recallCi95": [
+      0.915,
+      0.9726
+    ],
+    "controlFalsePositiveRateCi95": [
+      0.0339,
+      0.0959
+    ],
+    "precisionAtPrevalence": {
+      "prevalence": 0.1,
+      "precision": 0.6476
+    }
+  },
+  "unscored": {
+    "defective": 0,
+    "controls": 0,
+    "controlUnscoredRate": 0.0
+  },
+  "perTier": {
+    "adversarial": {
+      "tp": 4,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.5101,
+        1.0
+      ]
+    },
+    "source-silent": {
+      "tp": 33,
+      "fn": 5,
+      "recall": 0.8684,
+      "recallCi95": [
+        0.7267,
+        0.9425
+      ]
+    },
+    "subtle": {
+      "tp": 178,
+      "fn": 6,
+      "recall": 0.9674,
+      "recallCi95": [
+        0.9307,
+        0.985
+      ]
+    }
+  },
+  "perRep": [
+    {
+      "rep": 1,
+      "recall": 0.9381,
+      "controlFalsePositiveRate": 0.0531
+    },
+    {
+      "rep": 2,
+      "recall": 0.9646,
+      "controlFalsePositiveRate": 0.0619
+    }
+  ],
+  "servedModel": {
+    "unverified": 0
+  },
+  "structuredItems": {
+    "on": 0,
+    "off": 452
+  },
+  "latencyMs": {
+    "p50": 18245,
+    "p95": 48947
+  },
+  "errors": {},
+  "gate": {
+    "thresholds": {
+      "recall": 0.8,
+      "recallCi95Lower": 0.75,
+      "precision": 0.7,
+      "controlFalsePositiveRate": 0.1,
+      "controlFalsePositiveRateCi95Upper": 0.15,
+      "perClassRecallFloor": 0.6,
+      "minReps": 2,
+      "minClassItems": 30,
+      "controlUnscoredRate": 0.02,
+      "providers": [
+        "anthropic",
+        "bedrock"
+      ],
+      "dataset": "seeded-v3"
+    },
+    "expected": {
+      "datasetSha256": "d4a350cb003d932d8e49f83e3e8143d8d829a1d3e9be3bbc90a61b71db09dce2",
+      "rows": 226,
+      "shipping": {
+        "provider": "bedrock",
+        "model": "anthropic.claude-opus-5",
+        "promptVersion": "qa-v4",
+        "effort": "high",
+        "structuredOutputsAtStart": false
+      }
+    },
+    "passes": false,
+    "failures": [
+      "provider 'claude-cli' is not one of ['anthropic', 'bedrock'] (proxy evidence, not rollout evidence)",
+      "provider 'claude-cli' is not the shipping provider 'bedrock'",
+      "model 'claude-opus-5' is not the shipping model 'anthropic.claude-opus-5'"
+    ]
+  }
+}

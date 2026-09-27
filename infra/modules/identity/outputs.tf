@@ -56,3 +56,13 @@ output "secret_parameter_arns" {
   description = "Leaf name → parameter ARN, for the CD role policy (E11)."
   value       = { for k, p in aws_ssm_parameter.secret : k => p.arn }
 }
+
+output "webhook_dispatcher_role_arn" {
+  value      = aws_iam_role.webhook_dispatcher.arn
+  depends_on = [aws_iam_role_policy.webhook_dispatcher] # the ESM create needs the consume grant first (Context "ESM ordering")
+}
+
+output "ai_qa_role_arn" {
+  value      = aws_iam_role.ai_qa.arn
+  depends_on = [aws_iam_role_policy.ai_qa] # the ESM create needs the consume grant first
+}

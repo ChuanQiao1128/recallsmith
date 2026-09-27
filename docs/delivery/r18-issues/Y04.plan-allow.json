@@ -1,0 +1,11 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.api.aws_apigatewayv2_authorizer.console": { "action": "update", "keys": ["jwt_configuration"] },
+    "module.api.aws_apigatewayv2_authorizer.agent": "create",
+    "module.api.aws_apigatewayv2_route.this[\"agent_admin_decks\"]": "create",
+    "module.api.aws_apigatewayv2_route.this[\"agent_cards_similar\"]": "create",
+    "module.api.aws_apigatewayv2_route.this[\"agent_drafts_submit\"]": "create",
+    "module.identity.aws_iam_role_policy.ai_qa": { "action": "update", "keys": ["policy"] }
+  }
+}

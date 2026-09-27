@@ -103,6 +103,9 @@ public sealed class VpcFunction
       // 💡 彻底清除路径匹配的干扰因素：去掉尾部斜杠
       var p = req.Path.TrimEnd('/');
 
+      var agentDeny = Vpc.AgentClientPolicy.Deny(auth, req, p, res);
+      if (agentDeny is not null) return agentDeny;
+
       if (p.EndsWith("/health", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase)) return res.Ok(new { ok = true });
 
       // RevenueCat webhooks
@@ -229,6 +232,83 @@ public sealed class VpcFunction
       {
         return await Vpc.Authoring.PublishReaper.HandlePublishReap(req, res, auth);
       }
+      // R18 — console/admin routes (contract §2: later issues append below)
+      if (p.EndsWith("/api/v1/admin/webhooks/subscriptions", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Integrations.WebhookSubscriptions.HandleSubscriptions(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/webhooks/subscriptions/:subscriptionId/test", p) is { } webhookTest)
+      {
+        return await Vpc.Integrations.WebhookSubscriptions.HandleTest(req, res, auth, webhookTest["subscriptionId"]);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/webhooks/subscriptions/:subscriptionId", p) is { } webhookSubscription)
+      {
+        return await Vpc.Integrations.WebhookSubscriptions.HandleSubscription(req, res, auth, webhookSubscription["subscriptionId"]);
+      }
+      if (p.EndsWith("/api/v1/admin/webhooks/deliveries", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Integrations.WebhookDeliveries.HandleDeliveries(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/webhooks/deliveries/sweep", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Integrations.WebhookDeliveries.HandleSweep(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/webhooks/deliveries/:deliveryId/redeliver", p) is { } webhookRedeliver)
+      {
+        return await Vpc.Integrations.WebhookDeliveries.HandleRedeliver(req, res, auth, webhookRedeliver["deliveryId"]);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/ledger", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleLedger(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/events", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleEvents(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/baselines", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleBaselines(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/baselines/:automation", p) is { } ledgerBaseline)
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleBaseline(req, res, auth, ledgerBaseline["automation"]);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/backfill", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Ledger.LedgerRoutes.HandleBackfill(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/authoring/cards/similar", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.CardSimilarity.HandleSimilar(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/authoring/drafts", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Review.Drafts.HandleDrafts(req, res, auth);
+      }
+      {
+        var draftAccept = RouteMatcher.Match("/api/v1/authoring/drafts/:draftId/accept", p);
+        if (draftAccept is not null) return await Vpc.Review.Drafts.HandleAccept(req, res, auth, draftAccept["draftId"]);
+        var draftReject = RouteMatcher.Match("/api/v1/authoring/drafts/:draftId/reject", p);
+        if (draftReject is not null) return await Vpc.Review.Drafts.HandleReject(req, res, auth, draftReject["draftId"]);
+        var draftOne = RouteMatcher.Match("/api/v1/authoring/drafts/:draftId", p);
+        if (draftOne is not null) return await Vpc.Review.Drafts.HandleGetDraft(req, res, auth, draftOne["draftId"]);
+      }
+      if (p.EndsWith("/api/v1/authoring/qa/runs", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Qa.QaRuns.HandleRuns(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/authoring/qa/status", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Qa.QaRuns.HandleStatus(req, res, auth);
+      }
+      {
+        var qaRun = RouteMatcher.Match("/api/v1/authoring/qa/runs/:runId", p);
+        if (qaRun is not null) return await Vpc.Qa.QaRuns.HandleRun(req, res, auth, qaRun["runId"]);
+        var qaWaive = RouteMatcher.Match("/api/v1/authoring/qa/runs/:runId/items/:cardId/waive", p);
+        if (qaWaive is not null) return await Vpc.Qa.QaRuns.HandleWaiveItem(req, res, auth, qaWaive["runId"], qaWaive["cardId"]);
+        var qaResolve = RouteMatcher.Match("/api/v1/authoring/qa/findings/:findingId/resolve", p);
+        if (qaResolve is not null) return await Vpc.Qa.QaRuns.HandleResolveFinding(req, res, auth, qaResolve["findingId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
@@ -315,14 +395,24 @@ public sealed class VpcFunction
         }
       }
 
-      // Internal routes
-      if (p.EndsWith("/api/internal/entitlements/apply", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+      // Internal routes. These are HMAC-signed machine-caller routes (two of them sit behind a gateway
+      // route with no JWT authorizer), so they match their exact path, never a suffix: a suffix match
+      // would let /api/internal/webhooks/<anything>/api/internal/<route> reach any of them.
+      if (RouteMatcher.Match("/api/internal/entitlements/apply", p) is not null && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Internal.EntitlementsApply.HandleInternalEntitlementsApply(req, res);
       }
-      if (p.EndsWith("/api/internal/subscriptions/upsert", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+      if (RouteMatcher.Match("/api/internal/subscriptions/upsert", p) is not null && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Internal.SubscriptionsUpsert.HandleInternalSubscriptionsUpsert(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/webhooks/deliveries/report", p) is not null)
+      {
+        return await Vpc.Internal.WebhookDeliveryReport.HandleReport(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/ai-qa/results", p) is not null)
+      {
+        return await Vpc.Internal.AiQaResults.HandleAiQaResults(req, res);
       }
 
       return res.NotFound("Route not found");

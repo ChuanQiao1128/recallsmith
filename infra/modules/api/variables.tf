@@ -124,3 +124,9 @@ variable "zone_id" {
   default     = ""
   description = "Hosted zone that receives the api. alias records; \"\" creates none (the staging root writes its own)."
 }
+
+variable "agent_client_ids" {
+  type        = list(string)
+  default     = []
+  description = "Console-pool agent app client ids (R18 J06: console-dev, used by the local MCP server). R18 Y04: only the agent JWT authorizer, on the MCP routes, accepts them; the console authorizer admits the SPA client alone."
+}

@@ -1,0 +1,883 @@
+// src/pages/WebhooksPage.tsx
+//
+// super_admin console for outbound webhooks (R18 contract §6.7): subscriptions,
+// recent deliveries, where the signing secret lives, and how a receiver checks
+// a signature. The secret itself never reaches this page — only the SSM
+// parameter name that holds it.
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+import {
+  createWebhookSubscription,
+  deleteWebhookSubscription,
+  listWebhookDeliveries,
+  listWebhookSubscriptions,
+  redeliverWebhookDelivery,
+  sendWebhookTest,
+  sweepWebhookDeliveries,
+  updateWebhookSubscription,
+  type WebhookDelivery,
+  type WebhookSubscription,
+  type WebhookSubscriptionsData,
+} from '../api/webhooks';
+import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
+import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
+import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
+import { Callout } from '../components/ui/Callout';
+import { useConfirm } from '../components/ui/ConfirmDialogContext';
+import {
+  CARD_CLASS,
+  H1_CLASS,
+  H2_CLASS,
+  INPUT_CLASS,
+  INPUT_INVALID_CLASS,
+  LABEL_CLASS,
+  TD_CLASS,
+  TH_CLASS,
+} from '../components/console/consoleStyles';
+import { CONSOLE_NAME } from '../lib/brand';
+import {
+  SIGNING_SECRET_SSM_PARAMETER,
+  WEBHOOK_EVENTS,
+  WEBHOOK_HEADERS,
+  WEBHOOK_NAME_MAX_LENGTH,
+  WEBHOOK_PREVIOUS_SIGNATURE_HEADER,
+  WEBHOOK_SIGNATURE_TEST_VECTOR,
+  WEBHOOK_TOLERANCE_SECONDS,
+  WEBHOOK_VERIFY_SNIPPET,
+  isRedeliverable,
+  webhookFormProblems,
+  webhookUrlProblem,
+} from '../lib/webhookRules';
+import type { ApiError } from '../types/api';
+
+type LoadError = { code: string; message: string };
+
+type SubscriptionsState = {
+  loading: boolean;
+  error: LoadError | null;
+  data: WebhookSubscriptionsData | null;
+};
+
+type DeliveriesState = {
+  loading: boolean;
+  /** The filter the rows were loaded for; a mismatch means a refetch is on the way. */
+  forKey: string | null;
+  error: LoadError | null;
+  items: WebhookDelivery[];
+  nextCursor: string | null;
+};
+
+type FormState = {
+  name: string;
+  url: string;
+  events: string[];
+  isActive: boolean;
+};
+
+const EMPTY_FORM: FormState = { name: '', url: '', events: [], isActive: true };
+
+const DELIVERY_STATUSES = ['queued', 'delivered', 'retrying', 'failed', 'dead', 'enqueue_failed'];
+const DELIVERIES_PAGE_SIZE = 50;
+
+type InvalidFields = { name: boolean; url: boolean; events: boolean };
+const NO_INVALID_FIELDS: InvalidFields = { name: false, url: false, events: false };
+const FORM_PROBLEMS_ID = 'webhook-form-problems';
+
+function deliveriesKey(subscription: string, status: string, event: string): string {
+  return `${subscription}|${status}|${event}`;
+}
+
+function toLoadError(error: ApiError | null, fallback: string): LoadError {
+  return { code: error?.code ?? 'UNKNOWN', message: error?.message ?? fallback };
+}
+
+function isNotReady(error: LoadError | null): boolean {
+  return !!error && error.code.startsWith('SERVER_NOT_READY_');
+}
+
+function when(value: string | null | undefined): string {
+  return value ? value : '—';
+}
+
+function statusBadge(status: string) {
+  if (status === 'delivered') return <Badge tone="success">{status}</Badge>;
+  if (status === 'queued' || status === 'retrying') return <Badge tone="info">{status}</Badge>;
+  if (status === 'failed' || status === 'dead' || status === 'enqueue_failed') {
+    return <Badge tone="danger">{status}</Badge>;
+  }
+  return <Badge tone="neutral">{status}</Badge>;
+}
+
+export function WebhooksPage() {
+  const sessionUser = useMemo(() => readSessionUser(), []);
+  const superAdmin = useMemo(() => isSuperAdmin(sessionUser), [sessionUser]);
+  const confirm = useConfirm();
+
+  const [subs, setSubs] = useState<SubscriptionsState>({ loading: true, error: null, data: null });
+  const [deliveries, setDeliveries] = useState<DeliveriesState>({
+    loading: true,
+    forKey: null,
+    error: null,
+    items: [],
+    nextCursor: null,
+  });
+
+  // Bumped to refetch. refreshNonce reloads both lists; deliveriesNonce only the log.
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [deliveriesNonce, setDeliveriesNonce] = useState(0);
+
+  const [filterSubscription, setFilterSubscription] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterEvent, setFilterEvent] = useState('');
+
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [formProblems, setFormProblems] = useState<string[]>([]);
+  const [invalidFields, setInvalidFields] = useState<InvalidFields>(NO_INVALID_FIELDS);
+  const [formServerError, setFormServerError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Rows with a request in flight. The ref is the synchronous guard (a second
+  // click can arrive before React re-renders the disabled button); the state
+  // drives the disabled attribute.
+  const busyRef = useRef(new Set<string>());
+  const [busy, setBusy] = useState<Set<string>>(new Set());
+
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [redeliverMessage, setRedeliverMessage] = useState<string | null>(null);
+  const [sweeping, setSweeping] = useState(false);
+  const sweepingRef = useRef(false);
+  const [sweepMessage, setSweepMessage] = useState<string | null>(null);
+  // Written into the page's one persistent live region, so a screen reader
+  // hears each action result (a region mounted with its text is not announced).
+  const [announcement, setAnnouncement] = useState('');
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const filterKey = deliveriesKey(filterSubscription, filterStatus, filterEvent);
+
+  useEffect(() => {
+    if (!superAdmin) return;
+    let cancelled = false;
+    async function run() {
+      const res = await listWebhookSubscriptions();
+      if (cancelled) return;
+      if (!res.success || !res.data) {
+        setSubs({ loading: false, error: toLoadError(res.error, 'Failed to load webhook subscriptions.'), data: null });
+        return;
+      }
+      setSubs({ loading: false, error: null, data: res.data });
+    }
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [superAdmin, refreshNonce]);
+
+  useEffect(() => {
+    if (!superAdmin) return;
+    let cancelled = false;
+    async function run() {
+      const res = await listWebhookDeliveries({
+        subscriptionId: filterSubscription === '' ? undefined : Number(filterSubscription),
+        status: filterStatus,
+        event: filterEvent,
+        limit: DELIVERIES_PAGE_SIZE,
+      });
+      if (cancelled) return;
+      const forKey = deliveriesKey(filterSubscription, filterStatus, filterEvent);
+      if (!res.success || !res.data) {
+        setDeliveries({
+          loading: false,
+          forKey,
+          error: toLoadError(res.error, 'Failed to load webhook deliveries.'),
+          items: [],
+          nextCursor: null,
+        });
+        return;
+      }
+      setDeliveries({ loading: false, forKey, error: null, items: res.data.items, nextCursor: res.data.nextCursor });
+    }
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [superAdmin, refreshNonce, deliveriesNonce, filterSubscription, filterStatus, filterEvent]);
+
+  function beginBusy(key: string): boolean {
+    if (busyRef.current.has(key)) return false;
+    busyRef.current.add(key);
+    setBusy(new Set(busyRef.current));
+    return true;
+  }
+
+  function endBusy(key: string) {
+    busyRef.current.delete(key);
+    setBusy(new Set(busyRef.current));
+  }
+
+  if (!superAdmin) {
+    return (
+      <ConsoleShell title={CONSOLE_NAME} subtitle="Admin · Webhooks" superAdmin={false} {...consoleNav()}>
+        <Callout tone="danger" title="Access denied">
+          This page requires super_admin.
+        </Callout>
+      </ConsoleShell>
+    );
+  }
+
+  const subscriptions = subs.data?.items ?? [];
+  const eventOptions = subs.data?.events ?? [...WEBHOOK_EVENTS];
+  const ssmName = subs.data?.signingSecretSsmName || SIGNING_SECRET_SSM_PARAMETER;
+  const nameById = new Map(subscriptions.map(s => [s.id, s.name]));
+  const notReady = isNotReady(subs.error) || isNotReady(deliveries.error);
+  // The rows on screen belong to a previous filter while its refetch is in flight.
+  const deliveriesRefetching = !deliveries.loading && deliveries.forKey !== filterKey;
+
+  function toggleFormEvent(event: string, checked: boolean) {
+    setForm(prev => ({
+      ...prev,
+      events: checked ? [...prev.events.filter(e => e !== event), event] : prev.events.filter(e => e !== event),
+    }));
+  }
+
+  function resetForm() {
+    setForm(EMPTY_FORM);
+    setEditingId(null);
+    setFormProblems([]);
+    setInvalidFields(NO_INVALID_FIELDS);
+    setFormServerError(null);
+  }
+
+  function startEdit(s: WebhookSubscription) {
+    setForm({ name: s.name, url: s.url, events: [...s.events], isActive: s.isActive });
+    setEditingId(s.id);
+    setFormProblems([]);
+    setInvalidFields(NO_INVALID_FIELDS);
+    setFormServerError(null);
+    // The form sits below the table: take the keyboard there and say what
+    // changed, or Edit looks like it did nothing (WCAG 2.4.3, 4.1.3).
+    setAnnouncement(`Editing subscription ${s.name}.`);
+    nameInputRef.current?.focus();
+  }
+
+  async function submitForm(e: React.FormEvent) {
+    e.preventDefault();
+    if (submitting) return;
+    const input = { name: form.name.trim(), url: form.url.trim(), events: form.events, isActive: form.isActive };
+    const problems = webhookFormProblems(input);
+    setFormProblems(problems);
+    setInvalidFields(
+      problems.length === 0
+        ? NO_INVALID_FIELDS
+        : {
+            name: input.name.length === 0 || input.name.length > WEBHOOK_NAME_MAX_LENGTH,
+            url: webhookUrlProblem(input.url) !== null,
+            events: input.events.length === 0,
+          },
+    );
+    setFormServerError(null);
+    if (problems.length > 0) return;
+
+    setSubmitting(true);
+    const res =
+      editingId === null
+        ? await createWebhookSubscription(input)
+        : await updateWebhookSubscription(editingId, input);
+    setSubmitting(false);
+    if (!res.success) {
+      setFormServerError(res.error?.message ?? 'The subscription could not be saved.');
+      return;
+    }
+    resetForm();
+    // The table change alone is silent to a screen reader (frontend-console-25).
+    setAnnouncement(`Subscription ${input.name} saved.`);
+    setRefreshNonce(n => n + 1);
+  }
+
+  async function toggleActive(s: WebhookSubscription) {
+    const key = `sub:${s.id}`;
+    if (!beginBusy(key)) return;
+    setActionError(null);
+    const res = await updateWebhookSubscription(s.id, { isActive: !s.isActive });
+    endBusy(key);
+    if (!res.success) {
+      setActionError(res.error?.message ?? 'The subscription could not be updated.');
+      return;
+    }
+    setAnnouncement(`Subscription ${s.name} ${s.isActive ? 'disabled' : 'enabled'}.`);
+    setRefreshNonce(n => n + 1);
+  }
+
+  async function deleteSubscription(s: WebhookSubscription) {
+    const key = `sub:${s.id}`;
+    if (busyRef.current.has(key)) return;
+    const confirmed = await confirm({
+      title: `Delete webhook "${s.name}"?`,
+      body: 'Deliveries to this endpoint stop immediately. Past deliveries stay in the log.',
+      destructive: true,
+      confirmLabel: 'Delete subscription',
+    });
+    if (!confirmed) return;
+    if (!beginBusy(key)) return;
+    setActionError(null);
+    const res = await deleteWebhookSubscription(s.id);
+    endBusy(key);
+    if (!res.success) {
+      setActionError(res.error?.message ?? 'The subscription could not be deleted.');
+      return;
+    }
+    if (editingId === s.id) resetForm();
+    setAnnouncement(`Subscription ${s.name} deleted.`);
+    setRefreshNonce(n => n + 1);
+  }
+
+  async function sendTest(s: WebhookSubscription) {
+    const key = `sub:${s.id}`;
+    if (!beginBusy(key)) return;
+    setTestResult(null);
+    const res = await sendWebhookTest(s.id);
+    endBusy(key);
+    const result =
+      res.success && res.data
+        ? `Test event queued: delivery ${res.data.deliveryId}`
+        : res.error?.code === 'WEBHOOKS_NOT_CONFIGURED'
+          ? 'The webhook queue is not configured on the server yet.'
+          : (res.error?.message ?? 'The test event could not be sent.');
+    setTestResult(result);
+    setAnnouncement(result);
+    setDeliveriesNonce(n => n + 1);
+  }
+
+  async function redeliver(d: WebhookDelivery) {
+    const key = `delivery:${d.deliveryId}`;
+    if (!beginBusy(key)) return;
+    setRedeliverMessage(null);
+    const res = await redeliverWebhookDelivery(d.deliveryId);
+    endBusy(key);
+    if (!res.success) {
+      const message =
+        res.error?.code === 'SUBSCRIPTION_INACTIVE'
+          ? 'Enable the subscription before redelivering.'
+          : (res.error?.message ?? 'The delivery could not be redelivered.');
+      setRedeliverMessage(message);
+      setAnnouncement(message);
+      return;
+    }
+    const message = `Redelivery queued: delivery ${res.data?.deliveryId ?? d.deliveryId}`;
+    setRedeliverMessage(message);
+    setAnnouncement(message);
+    setDeliveriesNonce(n => n + 1);
+  }
+
+  /**
+   * Re-sends deliveries stranded 'queued' or 'enqueue_failed' (automation-1):
+   * the operator's path for the post-commit enqueue gap, which used to need
+   * curl and a super_admin token.
+   */
+  async function sweepStranded() {
+    if (sweepingRef.current) return;
+    sweepingRef.current = true;
+    setSweeping(true);
+    setSweepMessage(null);
+    const res = await sweepWebhookDeliveries();
+    sweepingRef.current = false;
+    setSweeping(false);
+    let message: string;
+    if (!res.success || !res.data) {
+      message =
+        res.error?.code === 'WEBHOOKS_NOT_CONFIGURED'
+          ? 'The webhook queue is not configured on the server yet.'
+          : (res.error?.message ?? 'The stranded deliveries could not be re-sent.');
+    } else if (res.data.swept === 0) {
+      message = 'No stranded deliveries to re-send.';
+    } else {
+      message =
+        `Re-sent ${res.data.resent} of ${res.data.swept} stranded deliveries` +
+        (res.data.enqueueFailures > 0 ? `; ${res.data.enqueueFailures} failed to enqueue again.` : '.');
+      setDeliveriesNonce(n => n + 1);
+    }
+    setSweepMessage(message);
+    setAnnouncement(message);
+  }
+
+  async function loadMore() {
+    if (loadingMore || !deliveries.nextCursor || deliveriesRefetching) return;
+    // The page belongs to the filter it was asked for: if the filter changes
+    // while it is in flight, the result is dropped rather than appended to the
+    // new filter's rows (and its cursor is not followed).
+    const keyAtClick = filterKey;
+    setLoadingMore(true);
+    const res = await listWebhookDeliveries({
+      subscriptionId: filterSubscription === '' ? undefined : Number(filterSubscription),
+      status: filterStatus,
+      event: filterEvent,
+      limit: DELIVERIES_PAGE_SIZE,
+      cursor: deliveries.nextCursor,
+    });
+    setLoadingMore(false);
+    if (!res.success || !res.data) {
+      setDeliveries(prev =>
+        prev.forKey !== keyAtClick ? prev : { ...prev, error: toLoadError(res.error, 'Failed to load more deliveries.') },
+      );
+      return;
+    }
+    const page = res.data;
+    setDeliveries(prev =>
+      prev.forKey !== keyAtClick
+        ? prev
+        : { ...prev, error: null, items: [...prev.items, ...page.items], nextCursor: page.nextCursor },
+    );
+  }
+
+  const V = WEBHOOK_SIGNATURE_TEST_VECTOR;
+
+  return (
+    <ConsoleShell
+      title={CONSOLE_NAME}
+      subtitle="Admin · Webhooks"
+      superAdmin
+      {...consoleNav()}
+    >
+      <h1 className={H1_CLASS}>Webhooks</h1>
+
+      <div role="status" aria-live="polite" className="sr-only" data-testid="webhooks-live">
+        {announcement}
+      </div>
+
+      {notReady ? (
+        <div data-testid="webhooks-not-ready">
+          <Callout tone="warning" title="Webhooks are not set up yet">
+            The server has not run the webhooks database migration.
+          </Callout>
+        </div>
+      ) : null}
+
+      <section className={CARD_CLASS}>
+        <h2 className={H2_CLASS}>Subscriptions</h2>
+
+        {subs.error && !isNotReady(subs.error) ? (
+          <div className="mt-3">
+            <Callout tone="danger" title="Could not load subscriptions" role="alert">
+              {subs.error.message}
+            </Callout>
+          </div>
+        ) : null}
+        {actionError ? (
+          <div className="mt-3">
+            <Callout tone="danger" role="alert">
+              {actionError}
+            </Callout>
+          </div>
+        ) : null}
+        {testResult ? (
+          <div className="mt-3 text-sm text-slate-700" data-testid="webhooks-test-result">
+            {testResult}
+          </div>
+        ) : null}
+
+        <div className="mt-3 overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className={TH_CLASS}>Name</th>
+                <th className={TH_CLASS}>Endpoint URL</th>
+                <th className={TH_CLASS}>Events</th>
+                <th className={TH_CLASS}>Status</th>
+                <th className={TH_CLASS}>Updated</th>
+                <th className={TH_CLASS}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subs.loading ? (
+                <tr>
+                  <td className="px-4 py-6 text-slate-600" colSpan={6}>
+                    Loading…
+                  </td>
+                </tr>
+              ) : subscriptions.length === 0 ? (
+                <tr>
+                  <td className="px-4 py-6 text-center text-slate-500" colSpan={6}>
+                    No subscriptions yet.
+                  </td>
+                </tr>
+              ) : (
+                subscriptions.map(s => {
+                  const rowBusy = busy.has(`sub:${s.id}`);
+                  return (
+                    <tr key={s.id} className="border-t border-slate-100">
+                      <td className={TD_CLASS}>{s.name}</td>
+                      <td className={`${TD_CLASS} font-mono text-xs text-slate-800`}>{s.url}</td>
+                      <td className={TD_CLASS}>{s.events.join(', ')}</td>
+                      <td className={TD_CLASS}>{s.isActive ? 'Active' : 'Disabled'}</td>
+                      <td className={`${TD_CLASS} text-slate-600 text-xs`}>{when(s.updatedAt)}</td>
+                      <td className={TD_CLASS}>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            aria-label={`Edit ${s.name}`}
+                            disabled={rowBusy}
+                            onClick={() => startEdit(s)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            aria-label={`${s.isActive ? 'Disable' : 'Enable'} ${s.name}`}
+                            disabled={rowBusy}
+                            onClick={() => void toggleActive(s)}
+                          >
+                            {s.isActive ? 'Disable' : 'Enable'}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            aria-label={`Send test to ${s.name}`}
+                            disabled={rowBusy}
+                            onClick={() => void sendTest(s)}
+                          >
+                            Send test
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            aria-label={`Delete ${s.name}`}
+                            disabled={rowBusy}
+                            onClick={() => void deleteSubscription(s)}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <form className="mt-4 space-y-3" onSubmit={e => void submitForm(e)} noValidate>
+          <div className="text-sm font-semibold text-slate-900">
+            {editingId === null ? 'New subscription' : 'Edit subscription'}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className={LABEL_CLASS} htmlFor="webhook-name">
+                Name
+              </label>
+              <input
+                ref={nameInputRef}
+                id="webhook-name"
+                className={invalidFields.name ? INPUT_INVALID_CLASS : INPUT_CLASS}
+                aria-invalid={invalidFields.name ? true : undefined}
+                aria-describedby={invalidFields.name ? FORM_PROBLEMS_ID : undefined}
+                value={form.name}
+                onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className={LABEL_CLASS} htmlFor="webhook-url">
+                Endpoint URL
+              </label>
+              <input
+                id="webhook-url"
+                type="url"
+                className={invalidFields.url ? INPUT_INVALID_CLASS : INPUT_CLASS}
+                aria-invalid={invalidFields.url ? true : undefined}
+                aria-describedby={invalidFields.url ? FORM_PROBLEMS_ID : undefined}
+                value={form.url}
+                onChange={e => setForm(prev => ({ ...prev, url: e.target.value }))}
+              />
+            </div>
+          </div>
+          <fieldset
+            aria-invalid={invalidFields.events ? true : undefined}
+            aria-describedby={invalidFields.events ? FORM_PROBLEMS_ID : undefined}
+          >
+            <legend className={LABEL_CLASS}>Events</legend>
+            <div className="flex flex-wrap gap-2">
+              {WEBHOOK_EVENTS.map(event => (
+                <label key={event} className="text-xs text-slate-700 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.events.includes(event)}
+                    onChange={e => toggleFormEvent(event, e.target.checked)}
+                  />
+                  {event}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label className="text-xs text-slate-700 flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={form.isActive}
+              onChange={e => setForm(prev => ({ ...prev, isActive: e.target.checked }))}
+            />
+            Active
+          </label>
+
+          {formProblems.length > 0 ? (
+            <Callout tone="danger" title="Fix these first" role="alert" id={FORM_PROBLEMS_ID}>
+              <ul>
+                {formProblems.map(p => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+            </Callout>
+          ) : null}
+          {formServerError ? (
+            <Callout tone="danger" role="alert">
+              {formServerError}
+            </Callout>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" size="xs" type="submit" disabled={submitting}>
+              {editingId === null ? 'Add subscription' : 'Save changes'}
+            </Button>
+            {editingId !== null ? (
+              <Button variant="outline" size="xs" onClick={resetForm}>
+                Cancel
+              </Button>
+            ) : null}
+          </div>
+        </form>
+      </section>
+
+      <section className={CARD_CLASS}>
+        <h2 className={H2_CLASS}>Recent deliveries</h2>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="xs" disabled={sweeping} onClick={() => void sweepStranded()}>
+            Re-send stranded deliveries
+          </Button>
+          <span className="text-xs text-slate-500">
+            Re-sends deliveries that never reached the queue (queued or enqueue_failed for 10 minutes or more).
+          </span>
+        </div>
+        {sweepMessage ? (
+          <div className="mt-2 text-sm text-slate-700" data-testid="webhooks-sweep-result">
+            {sweepMessage}
+          </div>
+        ) : null}
+
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className={LABEL_CLASS} htmlFor="webhook-filter-subscription">
+              Subscription
+            </label>
+            <select
+              id="webhook-filter-subscription"
+              className={INPUT_CLASS}
+              value={filterSubscription}
+              onChange={e => setFilterSubscription(e.target.value)}
+            >
+              <option value="">Any</option>
+              {subscriptions.map(s => (
+                <option key={s.id} value={String(s.id)}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={LABEL_CLASS} htmlFor="webhook-filter-status">
+              Status
+            </label>
+            <select
+              id="webhook-filter-status"
+              className={INPUT_CLASS}
+              value={filterStatus}
+              onChange={e => setFilterStatus(e.target.value)}
+            >
+              <option value="">Any</option>
+              {DELIVERY_STATUSES.map(s => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={LABEL_CLASS} htmlFor="webhook-filter-event">
+              Event
+            </label>
+            <select
+              id="webhook-filter-event"
+              className={INPUT_CLASS}
+              value={filterEvent}
+              onChange={e => setFilterEvent(e.target.value)}
+            >
+              <option value="">Any</option>
+              {[...eventOptions.filter(e => e !== 'webhook.test'), 'webhook.test'].map(e => (
+                <option key={e} value={e}>
+                  {e}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {deliveries.error && !isNotReady(deliveries.error) ? (
+          <div className="mt-3">
+            <Callout tone="danger" title="Could not load deliveries" role="alert">
+              {deliveries.error.message}
+            </Callout>
+          </div>
+        ) : null}
+        {redeliverMessage ? <div className="mt-3 text-sm text-slate-700">{redeliverMessage}</div> : null}
+
+        {deliveriesRefetching ? (
+          <p className="mt-3 text-sm text-slate-500" data-testid="webhooks-deliveries-refetching">
+            Loading deliveries for the new filter…
+          </p>
+        ) : null}
+
+        <div className={`mt-3 overflow-x-auto ${deliveriesRefetching ? 'opacity-50' : ''}`}>
+          <table
+            className="min-w-full text-sm"
+            data-testid="webhooks-deliveries-table"
+            aria-busy={deliveriesRefetching ? true : undefined}
+          >
+            <thead className="bg-slate-50">
+              <tr>
+                <th className={TH_CLASS}>Created</th>
+                <th className={TH_CLASS}>Event</th>
+                <th className={TH_CLASS}>Subscription</th>
+                <th className={TH_CLASS}>Status</th>
+                <th className={TH_CLASS}>Attempts</th>
+                <th className={TH_CLASS}>HTTP status</th>
+                <th className={TH_CLASS}>Last error</th>
+                <th className={TH_CLASS}>Delivered</th>
+                <th className={TH_CLASS}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {deliveries.loading ? (
+                <tr>
+                  <td className="px-4 py-6 text-slate-600" colSpan={9}>
+                    Loading…
+                  </td>
+                </tr>
+              ) : deliveries.items.length === 0 ? (
+                <tr>
+                  <td className="px-4 py-6 text-center text-slate-500" colSpan={9}>
+                    No deliveries match.
+                  </td>
+                </tr>
+              ) : (
+                deliveries.items.map(d => (
+                  <tr key={d.deliveryId} className="border-t border-slate-100">
+                    <td className={`${TD_CLASS} text-slate-600 text-xs`}>{when(d.createdAt)}</td>
+                    <td className={TD_CLASS}>{d.event}</td>
+                    <td className={TD_CLASS}>{nameById.get(d.subscriptionId) ?? `#${d.subscriptionId}`}</td>
+                    <td className={TD_CLASS}>{statusBadge(d.status)}</td>
+                    <td className={TD_CLASS}>{d.attempts}</td>
+                    <td className={TD_CLASS}>{d.lastStatusCode ?? '—'}</td>
+                    <td className={`${TD_CLASS} text-slate-600 text-xs`}>{d.lastError ?? '—'}</td>
+                    <td className={`${TD_CLASS} text-slate-600 text-xs`}>{when(d.deliveredAt)}</td>
+                    <td className={TD_CLASS}>
+                      {isRedeliverable(d.status, d) ? (
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          aria-label={`Redeliver ${d.deliveryId}`}
+                          disabled={busy.has(`delivery:${d.deliveryId}`)}
+                          onClick={() => void redeliver(d)}
+                        >
+                          Redeliver
+                        </Button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {deliveries.nextCursor ? (
+          <div className="mt-3">
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={loadingMore || deliveriesRefetching}
+              onClick={() => void loadMore()}
+            >
+              Load more
+            </Button>
+          </div>
+        ) : null}
+      </section>
+
+      <section className={CARD_CLASS}>
+        <h2 className={H2_CLASS}>Signing secret</h2>
+        <p className="mt-3 text-slate-600 text-sm">
+          Every delivery is signed with one shared secret, stored in the SSM parameter{' '}
+          <code data-testid="webhooks-ssm-name" className="font-mono text-xs text-slate-800">
+            {ssmName}
+          </code>
+          .
+        </p>
+        <p className="mt-2 text-slate-600 text-sm">
+          The console never shows the secret value. Read it with your own AWS credentials:
+        </p>
+        <pre className="mt-2 overflow-x-auto border border-slate-200 rounded p-4 font-mono text-xs text-slate-800">
+          <code>{`aws ssm get-parameter --name ${ssmName} --with-decryption --query Parameter.Value --output text`}</code>
+        </pre>
+      </section>
+
+      <section className={CARD_CLASS}>
+        <h2 className={H2_CLASS}>Verify a delivery</h2>
+        <p className="mt-3 text-slate-600 text-sm">Each delivery is a POST carrying these headers:</p>
+        <ul className="mt-2 text-sm">
+          {WEBHOOK_HEADERS.map(h => (
+            <li key={h}>
+              <code className="font-mono text-xs text-slate-800">{h}</code>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-3 text-slate-600 text-sm">
+          The signature is HMAC-SHA256 over <code className="font-mono text-xs text-slate-800">{'"<timestamp>.<body>"'}</code>{' '}
+          with the signing secret, as lowercase hex. While the secret is being rotated, the same signature under the
+          previous secret arrives in{' '}
+          <code className="font-mono text-xs text-slate-800">{WEBHOOK_PREVIOUS_SIGNATURE_HEADER}</code>; accept a match
+          on either header. The timestamp is in seconds; reject a delivery more than{' '}
+          {WEBHOOK_TOLERANCE_SECONDS} s from your clock. Compare signatures in constant time, and deduplicate on the
+          body&apos;s <code className="font-mono text-xs text-slate-800">eventId</code>, since a delivery can arrive more
+          than once.
+        </p>
+        <pre className="mt-3 overflow-x-auto border border-slate-200 rounded p-4 font-mono text-xs text-slate-800">
+          <code>{WEBHOOK_VERIFY_SNIPPET}</code>
+        </pre>
+        <div className="mt-3" data-testid="webhooks-test-vector">
+          <div className="text-xs font-medium text-slate-900">Test vector (a published fake secret)</div>
+          <dl className="mt-1 text-xs text-slate-600">
+            <div>
+              <dt className="font-semibold">Secret</dt>
+              <dd className="font-mono">{V.secret}</dd>
+            </div>
+            <div>
+              <dt className="font-semibold">Timestamp</dt>
+              <dd className="font-mono">{V.timestamp}</dd>
+            </div>
+            <div>
+              <dt className="font-semibold">Body</dt>
+              <dd className="font-mono">{V.body}</dd>
+            </div>
+            <div>
+              <dt className="font-semibold">Expected signature</dt>
+              <dd className="font-mono break-words">{V.signature}</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+    </ConsoleShell>
+  );
+}

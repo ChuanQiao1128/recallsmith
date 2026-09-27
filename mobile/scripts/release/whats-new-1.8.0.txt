@@ -1,0 +1,11 @@
+• New Mistake Book: cards you rated Again or answered wrong collect in one place (open it from the Library or More). Review them together with a few related cards from the same topic, and a card leaves the book once you get it right on two different days.
+• Cards with a cited source now show a Source link under the answer, with the quoted line, so you can check the fact yourself.
+• A new pack opening: the pack charges up three times, bursts open, and your card flies out full size with a rarity glow, banner and the whole question readable. A 10-pull now reveals each card in turn, then shows all ten in a grid.
+• Pulls now belong to the pack that earned them: learning a new card or clearing a pack's reviews adds pulls to that pack, and every new pack starts with 3 pulls of its own.
+• New pack-opening sounds, and a setting to turn sound effects off.
+• Long questions now show in full on the card page, in multiple choice and in pack results.
+• Forgot your password? Reset it from the sign-in screen. An unfinished sign-up can be confirmed later, and you stay signed in for much longer.
+• Deleting your account now also deletes your study data on our servers.
+• Daily reminders can be switched on or off any time in Settings.
+• Faster everyday use: Home opens from your saved packs, the Library keeps your place, and moving between tabs no longer stacks screens.
+• Better VoiceOver labels and larger-text support, plus many fixes.

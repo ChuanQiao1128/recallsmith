@@ -239,9 +239,11 @@ describe('the legacy deck list path', () => {
     // Falling back here would hide a real server fault behind a slower query
     // against a different endpoint, and would also make L2 unfalsifiable: a
     // page that falls back on everything passes L2 for the wrong reason.
+    // findBy*: the error surfaces after the page's async loads settle, which a slow CI runner can
+    // stretch past mountConsole(); the assertions are unchanged.
+    expect(await screen.findByText('Failed to load decks')).not.toBeNull();
+    expect(await screen.findByText('deck index is rebuilding')).not.toBeNull();
     expect(api.fetchDecks).not.toHaveBeenCalled();
     expect(api.fetchAdminManifest).not.toHaveBeenCalled();
-    expect(screen.getByText('Failed to load decks')).not.toBeNull();
-    expect(screen.getByText('deck index is rebuilding')).not.toBeNull();
   });
 });

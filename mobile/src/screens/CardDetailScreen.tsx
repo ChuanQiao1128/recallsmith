@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -83,6 +83,29 @@ async function resolveEffectiveOwnedSafe(
     // an empty one -- would lock a user out of cards they own because one
     // storage read went wrong.
     return null;
+  }
+}
+// K03: the card's citation, read from the installed raw deck file. Same lazy,
+// guarded shape: the reader reaches expo-file-system and aws-amplify too.
+type LoadedCardSource = { url: string; quote: string | null; host: string };
+async function loadCardSourceSafe(slug: string, uid: string): Promise<LoadedCardSource | null> {
+  try {
+    const mod = await import('../content/cardSource');
+    const s = await mod?.getCardSource?.(slug, uid);
+    return s ? { url: s.url, quote: s.quote, host: mod.sourceHostLabel(s.url) } : null;
+  } catch {
+    return null;
+  }
+}
+
+function openSourceUrl(url: string) {
+  // https only, checked again at the tap. Linking is touched here and nowhere
+  // else, inside the try, so an environment without it cannot throw.
+  if (!/^https:\/\//.test(url)) return;
+  try {
+    void Linking.openURL(url).catch(() => undefined);
+  } catch {
+    /* no-op */
   }
 }
 
@@ -211,6 +234,28 @@ export function CardDetailScreen({ navigation, route }: Props) {
   useEffect(() => {
     setAnswerOpen(false);
   }, [route.params.cardId]);
+
+  // Source row: per-card like the toggle, and loaded only for an owned card
+  // whose answer is open. A result that lands after the card changed, the
+  // answer closed or the screen unmounted is dropped.
+  const [source, setSource] = useState<LoadedCardSource | null>(null);
+  useEffect(() => {
+    setSource(null);
+  }, [route.params.cardId]);
+  const sourceDeckSlug = deck?.Slug ?? null;
+  const sourceCardUid = card?.StableUid ?? null;
+  useEffect(() => {
+    if (!answerOpen || isLocked || !sourceDeckSlug || !sourceCardUid) return undefined;
+    // Defensive read: other suites mock getFeatureFlags without the key.
+    if (getFeatureFlags().cardSource?.enabled === false) return undefined;
+    let cancelled = false;
+    void loadCardSourceSafe(sourceDeckSlug, sourceCardUid).then((loaded) => {
+      if (!cancelled) setSource(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [answerOpen, isLocked, sourceDeckSlug, sourceCardUid]);
 
   // While loading we cannot honestly draw the hero (#000 Common New) or claim
   // the card is missing — a neutral skeleton stands in until the lookup lands.
@@ -448,6 +493,30 @@ export function CardDetailScreen({ navigation, route }: Props) {
                     </View>
                   ) : null}
                   <CardAnswerSections card={card} />
+                  {source ? (
+                    <Pressable
+                      testID="card-detail-source"
+                      accessibilityRole="link"
+                      // The label replaces the children's text for VoiceOver, so it carries the quote
+                      // (the evidence) as well as the host; the action lives in the hint.
+                      accessibilityLabel={`Source, ${source.host}${source.quote !== null ? `: ${source.quote}` : ''}`}
+                      accessibilityHint="Opens the source in your browser"
+                      style={({ pressed }) => [styles.sourceRow, pressed && styles.pressed]}
+                      onPress={() => openSourceUrl(source.url)}
+                    >
+                      <Text style={styles.sourceLabel} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                        SOURCE
+                      </Text>
+                      <Text testID="card-detail-source-host" style={styles.sourceHost} numberOfLines={1}>
+                        {source.host}
+                      </Text>
+                      {source.quote !== null ? (
+                        <Text testID="card-detail-source-quote" style={styles.sourceQuote} numberOfLines={3}>
+                          {source.quote}
+                        </Text>
+                      ) : null}
+                    </Pressable>
+                  ) : null}
                 </View>
               ) : null}
             </View>
@@ -765,5 +834,28 @@ const styles = StyleSheet.create({
     color: colors.inkSoft,
     fontWeight: '600',
     marginBottom: 6,
+  },
+  sourceRow: {
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
+  // 11pt is not large text, so it needs WCAG AA 4.5:1 on the white answer body: inkSecondary is
+  // 8.41:1 (inkMuted was 4.10:1).
+  sourceLabel: {
+    fontSize: typography.caption,
+    color: colors.inkSecondary,
+    fontWeight: '900',
+    letterSpacing: 1.0,
+    marginBottom: 4,
+  },
+  // inkSecondary on white is 8.41:1 (pokeBlueDeep was 3.17:1, under WCAG AA 4.5:1).
+  sourceHost: { fontSize: typography.bodySmall, color: colors.inkSecondary, fontWeight: '800' },
+  sourceQuote: {
+    marginTop: 4,
+    fontSize: typography.bodySmall,
+    lineHeight: 20,
+    color: colors.inkSoft,
+    fontStyle: 'italic',
   },
 });

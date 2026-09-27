@@ -1,0 +1,70 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Title (DeveloperCards sample PDF) /Producer (make_sample_pdf.py) >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 244 >>
+stream
+BT
+/F1 12 Tf
+16 TL
+72 720 Td
+(DeveloperCards sample PDF) Tj
+T*
+(This first page explains what a study card is.) Tj
+T*
+(A card asks one question and offers a few options.) Tj
+T*
+(The explanation tells the learner why one option is right.) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 254 >>
+stream
+BT
+/F1 12 Tf
+16 TL
+72 720 Td
+(Citing a source) Tj
+T*
+(This second page explains how a card cites its source.) Tj
+T*
+(The card quotes one chunk of the document word for word.) Tj
+T*
+(A reviewer checks the quote against the chunk before publishing.) Tj
+ET
+endstream
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000224 00000 n 
+0000000311 00000 n 
+0000000437 00000 n 
+0000000731 00000 n 
+0000000857 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R /Info 4 0 R >>
+startxref
+1161
+%%EOF

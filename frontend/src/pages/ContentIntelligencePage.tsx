@@ -8,6 +8,7 @@ import {
 } from '../api/authoring';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import type { Deck } from '../types/deck';
 
 type PageState = {
@@ -194,8 +195,7 @@ export function ContentIntelligencePage() {
       subtitle="Difficulty Calibration · Content Quality"
       userLabel={user ? `${user.email ?? user.username ?? 'Signed in'}${superAdmin ? ' · super_admin' : ' · editor'}` : '—'}
       superAdmin={superAdmin}
-      decksHref="/"
-      adminUsersHref={superAdmin ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="space-y-6">
         <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-end sm:justify-between">

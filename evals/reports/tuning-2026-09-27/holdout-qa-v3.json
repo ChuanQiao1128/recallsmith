@@ -1,0 +1,56 @@
+{
+  "v": 1,
+  "runId": "d6a67fd5-3a07-404a-8bad-978f6a1f4167",
+  "startedAt": "2026-09-27T05:57:48.954707Z",
+  "provider": "claude-cli",
+  "model": "claude-opus-5",
+  "promptVersion": "qa-v3",
+  "n": 100,
+  "estimatedCostUsd": 3.92048,
+  "perClass": {
+    "incorrect_answer": {
+      "tp": 8,
+      "fn": 0,
+      "recall": 1.0
+    },
+    "multiple_correct": {
+      "tp": 9,
+      "fn": 0,
+      "recall": 1.0
+    },
+    "answer_leak": {
+      "tp": 7,
+      "fn": 0,
+      "recall": 1.0
+    },
+    "ambiguous_stem": {
+      "tp": 3,
+      "fn": 5,
+      "recall": 0.375
+    },
+    "outdated_fact": {
+      "tp": 6,
+      "fn": 1,
+      "recall": 0.8571
+    },
+    "qualifier_mismatch": {
+      "tp": 3,
+      "fn": 4,
+      "recall": 0.4286
+    }
+  },
+  "overall": {
+    "tp": 36,
+    "fp": 5,
+    "fn": 10,
+    "recall": 0.7826,
+    "precision": 0.878,
+    "f1": 0.8276,
+    "controlFalsePositiveRate": 0.0926
+  },
+  "latencyMs": {
+    "p50": 17237,
+    "p95": 39777
+  },
+  "errors": {}
+}

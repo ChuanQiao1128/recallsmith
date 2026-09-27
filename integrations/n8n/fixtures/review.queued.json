@@ -1,0 +1,18 @@
+{
+  "data": {
+    "deckId": 3,
+    "deckSlug": "aws-saa-c03",
+    "batchId": "e2b7c9d1-4f6a-4e8b-a3c5-7d9e0f1a2b06",
+    "draftCount": 3,
+    "draftIds": [
+      501,
+      502,
+      503
+    ],
+    "consoleUrl": "https://console.developercards.app/review?deckId=3"
+  },
+  "environment": "prod",
+  "event": "review.queued",
+  "eventId": "9e1f5b73-2c48-4a9d-b6e0-3f7a8c9d0e05",
+  "occurredAt": "2026-10-01T06:00:00.000Z"
+}

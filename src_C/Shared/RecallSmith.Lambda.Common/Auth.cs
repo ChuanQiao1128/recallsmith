@@ -21,6 +21,12 @@ namespace RecallSmith.Lambda.Common;
 /// <see cref="Auth.RequireSuperAdmin"/> answer 403 "Requires a console token". Null when the
 /// binding passed or the claims never carried an admin group.
 /// </param>
+/// <param name="IsAgentClient">
+/// True when the token was minted for a local authoring-agent app client (<see cref="AuthOptions.AgentClientIds"/>,
+/// the <c>console-dev</c> client the MCP server signs in with). Such a token keeps its identity and roles, but
+/// core-vpc answers every route outside the agent allowlist with 403 <c>AGENT_CLIENT_FORBIDDEN</c> (R18 X02,
+/// ai-agent-6): agents draft, humans decide.
+/// </param>
 public sealed record AuthContext(
   IReadOnlyDictionary<string, JsonElement> Claims,
   string? UserSub,
@@ -30,7 +36,8 @@ public sealed record AuthContext(
   bool IsEditor,
   bool IsAdmin,
   string? RejectReason = null,
-  string? AdminDenyReason = null);
+  string? AdminDenyReason = null,
+  bool IsAgentClient = false);
 
 /// <summary>
 /// The two environment-driven knobs of bearer verification, parsed once per container.
@@ -52,7 +59,13 @@ public sealed record AuthContext(
 /// carry a matching <c>client_id</c> (access tokens) or <c>aud</c> (id tokens). Empty means the
 /// client check is off and only the issuer is enforced.
 /// </param>
-public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnverified, string? ConsoleIssuer = null, IReadOnlyList<string>? ConsoleClientIds = null)
+/// <param name="AgentClientIds">
+/// The app client ids whose tokens belong to a local authoring agent (AUTH_AGENT_CLIENT_IDS, defaulting to the
+/// <c>console-dev</c> client). A token carrying one of them as <c>client_id</c>/<c>aud</c> is least-authority
+/// (<see cref="AuthContext.IsAgentClient"/>). Null or empty only for a hand-built <see cref="AuthOptions"/>.
+/// </param>
+public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnverified, string? ConsoleIssuer = null, IReadOnlyList<string>? ConsoleClientIds = null,
+  IReadOnlyList<string>? AgentClientIds = null)
 {
   public const string IssuersEnv = "AUTH_ISSUERS";
   public const string AllowUnverifiedEnv = "AUTH_ALLOW_UNVERIFIED";
@@ -60,9 +73,13 @@ public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnveri
   public const string ConsoleIssuerEnv = "AUTH_CONSOLE_ISSUER";
   public const string ConsoleClientIdsEnv = "AUTH_CONSOLE_CLIENT_IDS";
   public const string DefaultConsolePool = "ap-southeast-2_4Vf8uCXKt";
+  public const string AgentClientIdsEnv = "AUTH_AGENT_CLIENT_IDS";
+  /// <summary>The console pool's <c>console-dev</c> app client (contract §10.3, infra/README.md), used by the local MCP server.</summary>
+  public const string DefaultAgentClientId = "5au94igdq00nipsst7spsqepb7";
 
   /// <summary>Pure: the whole policy as a function of its strings, so it can be tested without touching the process environment.</summary>
-  public static AuthOptions Parse(string? issuersEnv, string? allowUnverifiedEnv, string? apiEnv, string? consoleIssuerEnv = null, string? consoleClientIdsEnv = null)
+  public static AuthOptions Parse(string? issuersEnv, string? allowUnverifiedEnv, string? apiEnv, string? consoleIssuerEnv = null, string? consoleClientIdsEnv = null,
+    string? agentClientIdsEnv = null)
   {
     var issuers = CognitoJwtVerifier.ParseIssuers(issuersEnv);
     var flagOn = string.Equals(allowUnverifiedEnv?.Trim(), "1", StringComparison.Ordinal);
@@ -73,24 +90,32 @@ public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnveri
     var consoleIssuer = CognitoJwtVerifier.NormalizeIssuer(
       string.IsNullOrWhiteSpace(consoleIssuerEnv) ? DefaultConsolePool : consoleIssuerEnv);
 
-    var consoleClientIds = (consoleClientIdsEnv ?? string.Empty)
-      .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-      .Distinct(StringComparer.Ordinal)
-      .ToList();
+    var consoleClientIds = SplitIds(consoleClientIdsEnv);
+
+    // Fail closed like the console issuer: an unset or blank AUTH_AGENT_CLIENT_IDS still restricts console-dev.
+    var agentClientIds = SplitIds(agentClientIdsEnv);
+    if (agentClientIds.Count == 0) agentClientIds = [DefaultAgentClientId];
 
     return new AuthOptions(
       issuers,
       AllowUnverified: flagOn && !isProduction,
       ConsoleIssuer: consoleIssuer,
-      ConsoleClientIds: consoleClientIds);
+      ConsoleClientIds: consoleClientIds,
+      AgentClientIds: agentClientIds);
   }
+
+  private static List<string> SplitIds(string? raw) => (raw ?? string.Empty)
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    .Distinct(StringComparer.Ordinal)
+    .ToList();
 
   public static AuthOptions FromEnvironment() => Parse(
     Environment.GetEnvironmentVariable(IssuersEnv),
     Environment.GetEnvironmentVariable(AllowUnverifiedEnv),
     Environment.GetEnvironmentVariable(ApiEnvEnv),
     Environment.GetEnvironmentVariable(ConsoleIssuerEnv),
-    Environment.GetEnvironmentVariable(ConsoleClientIdsEnv));
+    Environment.GetEnvironmentVariable(ConsoleClientIdsEnv),
+    Environment.GetEnvironmentVariable(AgentClientIdsEnv));
 }
 
 public readonly record struct InternalSignatureVerifyResult(bool Ok, string? Reason);
@@ -403,6 +428,9 @@ public static class Auth
       }
     }
 
+    var isAgentClient = Options.AgentClientIds is { Count: > 0 } agentIds &&
+      GetClientClaims(claims).Any(c => agentIds.Contains(c, StringComparer.Ordinal));
+
     var userSub = GetStringClaim(claims, "sub");
     var username =
       GetStringClaim(claims, "cognito:username") ??
@@ -417,7 +445,8 @@ public static class Auth
       IsEditor: isEditor,
       IsAdmin: isAdmin,
       RejectReason: rejectReason,
-      AdminDenyReason: adminDenyReason);
+      AdminDenyReason: adminDenyReason,
+      IsAgentClient: isAgentClient);
   }
 
   /// <summary>
@@ -458,10 +487,31 @@ public static class Auth
     return null;
   }
 
-  public static InternalSignatureVerifyResult VerifyInternalSignature(LambdaRequest req)
+  public const string InternalSharedSecretEnv = "INTERNAL_SHARED_SECRET";
+
+  /// <summary>
+  /// Suffix of the optional variable that holds the secret being rotated out (cloud-security-resilience-11): next to
+  /// <c>INTERNAL_SHARED_SECRET</c> (or a route's own secret) the route also accepts
+  /// <c>INTERNAL_SHARED_SECRET_PREVIOUS</c> (or <c>&lt;route secret&gt;_PREVIOUS</c>) while it is set, so a rotation
+  /// needs no flag day. deploy.sh sets it only while the matching <c>-previous</c> SSM leaf exists.
+  /// </summary>
+  public const string PreviousSecretSuffix = "_PREVIOUS";
+
+  public static InternalSignatureVerifyResult VerifyInternalSignature(LambdaRequest req) => VerifyInternalSignature(req, null);
+
+  /// <summary>
+  /// The §4.3 HMAC check. <paramref name="callerSecretEnv"/> names the route's own secret (least privilege,
+  /// cloud-security-resilience-2): when that variable is set, it is the only secret this route accepts, so a caller
+  /// holding the shared secret (or another route's secret) cannot sign for it. When it is unset the route falls back
+  /// to <c>INTERNAL_SHARED_SECRET</c>, the pre-split behaviour, until the per-caller secret is provisioned. Whichever
+  /// secret is in effect, its <see cref="PreviousSecretSuffix"/> companion is accepted too when it is non-empty.
+  /// </summary>
+  public static InternalSignatureVerifyResult VerifyInternalSignature(LambdaRequest req, string? callerSecretEnv)
   {
-    var secret = Environment.GetEnvironmentVariable("INTERNAL_SHARED_SECRET");
-    if (string.IsNullOrEmpty(secret)) return new InternalSignatureVerifyResult(false, "Missing INTERNAL_SHARED_SECRET");
+    var callerSecret = callerSecretEnv is null ? null : Environment.GetEnvironmentVariable(callerSecretEnv);
+    var secretName = string.IsNullOrEmpty(callerSecret) ? InternalSharedSecretEnv : callerSecretEnv!;
+    var secret = string.IsNullOrEmpty(callerSecret) ? Environment.GetEnvironmentVariable(InternalSharedSecretEnv) : callerSecret;
+    if (string.IsNullOrEmpty(secret)) return new InternalSignatureVerifyResult(false, $"Missing {secretName}");
 
     var tsRaw = Validation.GetHeader(req, "x-internal-timestamp");
     var sigRaw = Validation.GetHeader(req, "x-internal-signature");
@@ -478,14 +528,19 @@ public static class Auth
 
     var rawBody = Validation.GetRawBody(req);
     var msg = $"{ts}.{rawBody}";
-    var expected = "v1=" + HmacSha256Hex(secret, msg);
+    var previous = Environment.GetEnvironmentVariable(secretName + PreviousSecretSuffix);
 
     try
     {
       var a = Encoding.UTF8.GetBytes(sigRaw);
-      var b = Encoding.UTF8.GetBytes(expected);
+      var b = Encoding.UTF8.GetBytes("v1=" + HmacSha256Hex(secret, msg));
       if (a.Length != b.Length) return new InternalSignatureVerifyResult(false, "Signature length mismatch");
+      // Both comparisons always run when a previous secret is set, so timing does not reveal which one matched.
       var ok = CryptographicOperations.FixedTimeEquals(a, b);
+      if (!string.IsNullOrEmpty(previous))
+      {
+        ok |= CryptographicOperations.FixedTimeEquals(a, Encoding.UTF8.GetBytes("v1=" + HmacSha256Hex(previous, msg)));
+      }
       return ok ? new InternalSignatureVerifyResult(true, null) : new InternalSignatureVerifyResult(false, "Bad signature");
     }
     catch

@@ -61,6 +61,11 @@ const SPLIT_DIR = path.join(FRONTEND, 'src/features/deckList/components');
  * call. A fifth `useEffect` was added for that visibilitychange listener, right
  * after the mount poll effect.
  *
+ * The third update was Y07 (2026-09-27, frontend-console-21). A `useState`
+ * and a `useRef` for the row whose Publish click is waiting on the AI QA
+ * preview (`checkingQaSlug`, `checkingQaRef`) sit right after
+ * `publishingSlug`, the state they extend.
+ *
  * The two useMemos at the end are still `decks` and `viewRows`.
  */
 const EXPECTED_HOOK_SEQUENCE = [
@@ -75,6 +80,8 @@ const EXPECTED_HOOK_SEQUENCE = [
   'usePublishDeck',
   'useState',
   'useState',
+  'useState',
+  'useRef',
   'useRef',
   'useState',
   'useState',
@@ -188,7 +195,7 @@ describe('C1: the page calls its hooks in a fixed order', () => {
     // A scanner that silently found nothing would agree with an empty literal
     // forever. Three independent floors: the length, the presence of the one
     // non-React hook, and the fact that more than one distinct hook appears.
-    expect(EXPECTED_HOOK_SEQUENCE.length).toBe(37);
+    expect(EXPECTED_HOOK_SEQUENCE.length).toBe(39);
     expect(EXPECTED_HOOK_SEQUENCE).toContain('useDeckPagination');
     expect(new Set(EXPECTED_HOOK_SEQUENCE).size).toBeGreaterThan(4);
   });

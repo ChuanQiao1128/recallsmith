@@ -10,10 +10,10 @@ import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
 import type { Card } from '../types/card';
 import { CardForm, type CardFormValues } from '../components/CardForm';
-import { buildCardBody } from '../lib/authoringBodies';
+import { buildCardBody, buildCardSource } from '../lib/authoringBodies';
 import { CONSOLE_NAME } from '../lib/brand';
-import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 
 /**
  * The label on the recovery button, and the sentence that explains it.
@@ -44,9 +44,7 @@ function EditCardErrorScreen({ message }: { message: string }) {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · Edit card"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
@@ -174,6 +172,8 @@ export function EditCardPage() {
     revision:
       (card as unknown as { revision?: number | null }).revision ?? 1,
     topic: card.topic ?? '',
+    sourceUrl: card.source?.url ?? '',
+    sourceQuote: card.source?.quote ?? '',
   };
 
   /**
@@ -203,11 +203,13 @@ export function EditCardPage() {
     // omits undefined keys, and an absent key leaves the old value in the row.
     // topic is sent beside the builder (F20 pins that the builder never carries
     // it): '' is sent on purpose, because the server stores null for a blank
-    // topic, which is how a topic is cleared. mcq stays absent, so a stored MCQ
-    // blob is left alone.
+    // topic, which is how a topic is cleared. source is always sent too: null
+    // when the Source URL box is blank, which clears the column. mcq stays
+    // absent, so a stored MCQ blob is left alone.
     const { result } = await updateCardMutation.mutateAsync({
       ...buildCardBody(values),
       topic: values.topic.trim(),
+      source: buildCardSource(values),
       id: Number(card.id),
       deckId: Number(card.deckId),
       stableUid: card.stableUid,
@@ -254,9 +256,7 @@ export function EditCardPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · Edit card"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <div>

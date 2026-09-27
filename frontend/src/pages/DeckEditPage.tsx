@@ -14,6 +14,7 @@ import type { DeckAvailability, DeckTier } from '../types/deck';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import { DeckBuildsPanel } from '../components/console/DeckBuildsPanel';
 
 type FormState = {
@@ -325,7 +326,7 @@ export function DeckEditPage() {
           : '—'
       }
       superAdmin={superAdmin}
-      adminUsersHref={superAdmin ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

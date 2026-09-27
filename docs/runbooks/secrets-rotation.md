@@ -1,12 +1,16 @@
 # Secrets rotation runbook
 
-How the five `/developercards/prod/*` secrets and the RDS master password are held and
-rotated. No value or example-that-looks-like-a-value appears here — always `<…>` placeholders.
+How the nine `/developercards/prod/*` secrets (`secret_parameter_names` in
+`infra/envs/prod/main.tf`) and the RDS master password are held and rotated. No value or
+example-that-looks-like-a-value appears here — always `<…>` placeholders.
 
 Secrets live only as SSM `SecureString` parameters (values written by the supervisor, ignored
-by Terraform state) and, at deploy time, as Lambda environment variables written by
-`src_C/deploy.sh`. There is no runtime fetch from the function and no SSM VPC endpoint
-(E00 §6 #8): the Lambda role has no `ssm:GetParameter*`.
+by Terraform state) and, at deploy time, as core-vpc / worker-lambda environment variables written
+by `src_C/deploy.sh`. Those two functions do no runtime fetch and there is no SSM VPC endpoint
+(E00 §6 #8): their roles have no `ssm:GetParameter*`. The two R18 Python Lambdas outside the VPC
+(developercards-webhook-dispatcher, developercards-ai-qa) are the exception: each reads only its own
+leaves, by exact name, at runtime (`ssm:GetParameter` in `infra/modules/identity/roles_r18.tf`) and
+keeps a value for at most 5 minutes, so a new value reaches them without a deploy.
 
 ## Inventory
 
@@ -14,9 +18,20 @@ by Terraform state) and, at deploy time, as Lambda environment variables written
 | --- | --- | --- | --- |
 | `PGPASSWORD` | `pg-password` | `src_C/Shared/RecallSmith.Lambda.Db/Pg.cs:30` | RDS (the app-role login password) |
 | `MIGRATE_SECRET` | `migrate-secret` | `src_C/Vpc/Db/Migrate.cs:138`, `src_C/Vpc/Db/AppRole.cs` (`x-migrate-secret` gate) | supervisor (invoke header) |
-| `INTERNAL_SHARED_SECRET` | `internal-shared-secret` | `src_C/Shared/RecallSmith.Lambda.Common/Auth.cs:314` | edge-public (internal HMAC caller) |
+| `INTERNAL_SHARED_SECRET` | `internal-shared-secret` | `src_C/Shared/RecallSmith.Lambda.Common/Auth.cs:509` (core-vpc verifies `/api/internal/entitlements/apply` and `/api/internal/subscriptions/upsert`) | edge-public (internal HMAC caller) only; neither Python Lambda since Z08 |
+| `INTERNAL_SECRET_WEBHOOK_REPORT` | `webhook-report-secret` | `src_C/Vpc/Internal/WebhookDeliveryReport.cs:43` (core-vpc verifies the delivery report) | developercards-webhook-dispatcher (signs; reads the leaf at runtime) |
+| `INTERNAL_SECRET_AI_QA_RESULTS` | `ai-qa-results-secret` | `src_C/Vpc/Internal/AiQaResults.cs:82` (core-vpc verifies the results report) | developercards-ai-qa (signs; reads the leaf at runtime) |
+| — (never an env var; `SSM_NOT_ENV`, `SSM_NOT_ENV_PATTERN`) | `webhook-signing-secret`, per subscription `webhook-signing-secret-sub-<id>` | developercards-webhook-dispatcher, runtime (`services/webhook-dispatcher/src/webhook_dispatcher/handler.py:152`) | every webhook receiver (a `-sub-<id>` secret: that subscription's receiver only) |
+| — (never an env var; `SSM_NOT_ENV`) | `anthropic-api-key` | developercards-ai-qa, runtime, only with `AI_PROVIDER=anthropic` (`services/ai-qa/src/ai_qa/handler.py:240`) | Anthropic (the issuer) |
 | `RC_WEBHOOK_AUTH_PRODUCTION` | `rc-webhook-auth-production` | `src_C/Vpc/Webhooks/RevenuecatWebhook.cs` | RevenueCat dashboard (production Authorization header) |
 | `RC_WEBHOOK_AUTH_DEVELOPMENT` | `rc-webhook-auth-development` | `src_C/Vpc/Webhooks/RevenuecatWebhook.cs` | RevenueCat dashboard (development Authorization header) |
+
+While a rotation is in progress some leaves have a `<leaf>-previous` companion, read in these
+cases only: `internal-shared-secret-previous`, `webhook-report-secret-previous` and
+`ai-qa-results-secret-previous` become core-vpc's `<env var>_PREVIOUS` (`SSM_TO_ENV_INTERNAL` in
+`src_C/scripts/merge-env.sh`), accepted next to the current value, and the last two are also the
+callers' fallback on a 401/403; `webhook-signing-secret-previous` (and `…-sub-<id>-previous`) is read
+by the dispatcher only and skipped by `deploy.sh`.
 
 The RDS master password is **not** in this table: nothing in the app uses it after E06, and it
 is never in SSM (see below).
@@ -26,9 +41,14 @@ is never in SSM (see below).
 - A secret value is **never** in Terraform, in git, or in Terraform state. `modules/identity/ssm.tf`
   creates the parameters as placeholders with `ignore_changes = [value]`; the real values are
   written outside Terraform.
-- Rotation is always: `aws ssm put-parameter … --overwrite --value <new>` **then**
-  `ENV=<env> ./src_C/deploy.sh` (which overlays the environment before `publish-version`). No
-  runtime fetch happens, so a value only takes effect on the next deploy.
+- A leaf with an env var: `aws ssm put-parameter … --overwrite --value <new>` **then**
+  `ENV=<env> ./src_C/deploy.sh` (which overlays the environment before `publish-version`). core-vpc
+  does no runtime fetch, so a value only takes effect on the next deploy, and a deleted optional leaf
+  (`SSM_OPTIONAL_ENV` in `src_C/scripts/merge-env.sh`) only leaves the environment on the next deploy.
+  The two route secrets change on both sides and use "Route secrets" below instead.
+- A leaf only the Python Lambdas read (`webhook-signing-secret*`, `anthropic-api-key`):
+  `put-parameter` alone, no deploy; it reaches every warm container within 5 minutes. `deploy.sh`
+  skips these leaves (`SSM_NOT_ENV`, `SSM_NOT_ENV_PATTERN`).
 - `deploy.sh` merges `$cur + env/<env>.env.json + <ssm values>` (later wins), so the two
   unspellable core-vpc keys and any stray keys survive untouched.
 
@@ -70,11 +90,44 @@ Rotates `MIGRATE_SECRET` (the `x-migrate-secret` gate on the admin DB routes).
 
 ## Internal shared secret
 
-Rotates `INTERNAL_SHARED_SECRET` (the HMAC secret shared with edge-public).
+Rotates `INTERNAL_SHARED_SECRET`, the HMAC secret shared by edge-public (the caller) and core-vpc
+(which verifies `/api/internal/entitlements/apply` and `/api/internal/subscriptions/upsert` with it).
+Since Z08 the webhook dispatcher and ai-qa sign with their own route secrets (below), and their roles
+cannot read this leaf. core-vpc falls back to it on a route-secret route only when that route's own
+env var is unset.
 
 1. `aws ssm put-parameter --name /developercards/prod/internal-shared-secret --type SecureString --overwrite --value <new>`
 2. `ENV=prod ./src_C/deploy.sh` for core-vpc, and update edge-public's copy the same way, so both
    sides sign and verify with the same value (rotate both in the maintenance window).
+
+core-vpc also accepts `INTERNAL_SHARED_SECRET_PREVIOUS` (from `internal-shared-secret-previous`), so
+the route-secret procedure below works for this leaf too and removes the flag day on core's side:
+update edge-public's copy in its step 5 instead of waiting, and never skip its last deploy.
+
+## Route secrets (webhook-report-secret, ai-qa-results-secret)
+
+`webhook-report-secret` (dispatcher → core-vpc `INTERNAL_SECRET_WEBHOOK_REPORT`) and
+`ai-qa-results-secret` (ai-qa → core-vpc `INTERNAL_SECRET_AI_QA_RESULTS`) rotate with one procedure:
+services/ai-qa/README.md, "Route-secret rotation". In short: put `<leaf>-previous` = the current
+value, deploy, put a new `<leaf>`, deploy, wait 10 minutes, delete `<leaf>-previous`, deploy. The
+last deploy is the revocation: until it has run, core-vpc still accepts the old value.
+
+## Webhook signing secret
+
+`webhook-signing-secret` (and, with `WEBHOOK_SUBSCRIPTION_SECRETS` on, each
+`webhook-signing-secret-sub-<id>`) is read only by the dispatcher; no deploy is involved. Receivers
+must accept either signature header first. Procedure: services/webhook-dispatcher/README.md,
+"Signing-secret rotation" and "Per-subscription secrets".
+
+## Anthropic API key
+
+Read by ai-qa only with `AI_PROVIDER=anthropic`; the committed `services/ai-qa/env/prod.env.json`
+sets `bedrock`, so with that file the key is not read at all.
+
+1. Issue a new key in the Anthropic Console.
+2. `aws ssm put-parameter --name /developercards/prod/anthropic-api-key --type SecureString --overwrite --value <new>`
+   (no deploy; every warm ai-qa container picks it up within 5 minutes).
+3. Wait 5 minutes, then revoke the old key in the Anthropic Console.
 
 ## RevenueCat webhook auth
 

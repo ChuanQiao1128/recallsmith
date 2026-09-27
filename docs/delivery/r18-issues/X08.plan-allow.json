@@ -1,0 +1,23 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.api.aws_apigatewayv2_route.this[\"internal_webhooks\"]": { "action": "update", "keys": ["route_key"] },
+    "module.api.aws_apigatewayv2_route.this[\"internal_ai_qa\"]": { "action": "update", "keys": ["route_key"] },
+    "module.api.aws_apigatewayv2_stage.default": { "action": "update", "keys": ["route_settings"] },
+    "module.api.aws_apigatewayv2_stage.dev": { "action": "update", "keys": ["route_settings"] },
+    "module.identity.aws_iam_role_policy.webhook_dispatcher": { "action": "update", "keys": ["policy"] },
+    "module.observability.aws_cloudwatch_metric_alarm.webhook_delivery_failed": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.webhook_delivery_dead": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.webhook_report_failures": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.webhook_enqueue_failures": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ledger_write_failures": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_enqueue_failures": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_fatal_errors[\"PROVIDER_AUTH\"]": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_fatal_errors[\"PROVIDER_ACCESS_DENIED\"]": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_fatal_errors[\"CONFIG\"]": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_refusals": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_daily_cost": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.webhook_queue_oldest_age": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_queue_oldest_age": "create"
+  }
+}

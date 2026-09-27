@@ -1,0 +1,178 @@
+{
+  "v": 2,
+  "runId": "7b9ed62e-4d01-49d3-a93e-3e5448798f46",
+  "startedAt": "2026-09-27T06:07:04.529012Z",
+  "provider": "claude-cli",
+  "model": "claude-opus-5",
+  "promptVersion": "qa-v3",
+  "dataset": "seeded-v2",
+  "datasetSha256": "21eb85a9df8a435694b45fc3c4e6beaa53307f206c998fc5127f345ff90c0564",
+  "reps": 1,
+  "reviewDate": "2026-09-27",
+  "effort": "high",
+  "structuredOutputs": "off",
+  "n": 240,
+  "estimatedCostUsd": 9.871509,
+  "perClass": {
+    "incorrect_answer": {
+      "tp": 20,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.8389,
+        1.0
+      ]
+    },
+    "multiple_correct": {
+      "tp": 14,
+      "fn": 6,
+      "recall": 0.7,
+      "recallCi95": [
+        0.481,
+        0.8545
+      ]
+    },
+    "answer_leak": {
+      "tp": 14,
+      "fn": 1,
+      "recall": 0.9333,
+      "recallCi95": [
+        0.7018,
+        0.9881
+      ]
+    },
+    "ambiguous_stem": {
+      "tp": 6,
+      "fn": 9,
+      "recall": 0.4,
+      "recallCi95": [
+        0.1982,
+        0.6425
+      ]
+    },
+    "outdated_fact": {
+      "tp": 14,
+      "fn": 1,
+      "recall": 0.9333,
+      "recallCi95": [
+        0.7018,
+        0.9881
+      ]
+    },
+    "qualifier_mismatch": {
+      "tp": 10,
+      "fn": 5,
+      "recall": 0.6667,
+      "recallCi95": [
+        0.4171,
+        0.8482
+      ]
+    },
+    "source_unsupported": {
+      "tp": 20,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.8389,
+        1.0
+      ]
+    }
+  },
+  "overall": {
+    "tp": 98,
+    "fp": 11,
+    "fn": 22,
+    "recall": 0.8167,
+    "precision": 0.8991,
+    "f1": 0.8559,
+    "controlFalsePositiveRate": 0.0917,
+    "recallCi95": [
+      0.738,
+      0.8757
+    ],
+    "controlFalsePositiveRateCi95": [
+      0.052,
+      0.1567
+    ],
+    "precisionAtPrevalence": {
+      "prevalence": 0.1,
+      "precision": 0.4975
+    }
+  },
+  "unscored": {
+    "defective": 0,
+    "controls": 0,
+    "controlUnscoredRate": 0.0
+  },
+  "perTier": {
+    "adversarial": {
+      "tp": 2,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.3424,
+        1.0
+      ]
+    },
+    "easy": {
+      "tp": 15,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.7961,
+        1.0
+      ]
+    },
+    "subtle": {
+      "tp": 81,
+      "fn": 22,
+      "recall": 0.7864,
+      "recallCi95": [
+        0.6977,
+        0.8545
+      ]
+    }
+  },
+  "perRep": [
+    {
+      "rep": 1,
+      "recall": 0.8167,
+      "controlFalsePositiveRate": 0.0917
+    }
+  ],
+  "servedModel": {
+    "unverified": 0
+  },
+  "structuredItems": {
+    "on": 0,
+    "off": 240
+  },
+  "latencyMs": {
+    "p50": 17626,
+    "p95": 33984
+  },
+  "errors": {},
+  "gate": {
+    "thresholds": {
+      "recall": 0.8,
+      "precision": 0.7,
+      "controlFalsePositiveRate": 0.1,
+      "perClassRecallFloor": 0.6,
+      "controlUnscoredRate": 0.02,
+      "providers": [
+        "anthropic",
+        "bedrock"
+      ],
+      "dataset": "seeded-v2"
+    },
+    "expected": {
+      "datasetSha256": "21eb85a9df8a435694b45fc3c4e6beaa53307f206c998fc5127f345ff90c0564",
+      "rows": 240
+    },
+    "passes": false,
+    "failures": [
+      "provider 'claude-cli' is not one of ['anthropic', 'bedrock']",
+      "class ambiguous_stem recall 0.4000 < 0.60"
+    ]
+  }
+}

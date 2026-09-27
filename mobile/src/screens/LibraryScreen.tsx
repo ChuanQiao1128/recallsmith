@@ -42,6 +42,7 @@ import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
 import { ensureDeckBootstrap, loadDeckWallet } from '../features/gacha/rewards/deckWallet';
+import { loadMistakeBook, resolveActiveMistakeRows } from '../features/gacha/mistakes/mistakeBook';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Library'>;
 
@@ -78,6 +79,11 @@ export function LibraryScreen({ navigation, route }: Props) {
   // wallet=0 → banner sends user to SessionCard (earn pulls first);
   // wallet>0 → banner sends user to Draw (open the pack now).
   const [walletPulls, setWalletPulls] = useState<number>(0);
+  // Active Mistake Book entries (K02 pill), stored with the deck they were counted for. A count read
+  // for another deck reads as 0 until the selected deck's read lands; a plain re-focus keeps the
+  // last count on screen while it re-reads, so the pill (and the measured header) does not blink.
+  const [mistakeTally, setMistakeTally] = useState<{ slug: string; count: number } | null>(null);
+  const mistakeCount = mistakeTally !== null && mistakeTally.slug === selectedSlug ? mistakeTally.count : 0;
   // Measured header height. Feeds getItemLayout's head offset so a row's offset
   // includes the real header instead of a guess. Starts at 0 until onLayout.
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -120,6 +126,31 @@ export function LibraryScreen({ navigation, route }: Props) {
       cancelled = true;
     };
   }, [selectedSlug]);
+
+  // Re-read on every focus as well as on a deck switch: a session or a focus run changes the book.
+  // Off the grid's load path; the pill simply appears once the count lands.
+  useFocusEffect(
+    useCallback(() => {
+      if (!selectedSlug) return;
+      let cancelled = false;
+      const slug = selectedSlug;
+      (async () => {
+        let count = 0;
+        try {
+          // Counted like the Mistake Book lists them: an entry whose card is gone from the deck,
+          // or whose deck is not installed, can never be served, so it never shows in the count.
+          const deck = await getCachedDeck(slug);
+          count = deck ? resolveActiveMistakeRows(await loadMistakeBook(), deck, Date.now()).length : 0;
+        } catch {
+          /* 0 hides the pill */
+        }
+        if (!cancelled) setMistakeTally({ slug, count });
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [selectedSlug]),
+  );
 
   const refresh = useCallback(
     async (preferredSlug?: string | null) => {
@@ -490,6 +521,12 @@ export function LibraryScreen({ navigation, route }: Props) {
                 openFirstPackHasPulls={walletPulls > 0}
                 sweepCount={vm.counts.learningCount + vm.counts.masteredCount}
                 onStartSweep={() => navigation.navigate('SessionCard', { slug: vm.selectedDeckSlug, mode: 'sweep' })}
+                {...(getFeatureFlags().mistakeBook?.enabled !== false
+                  ? {
+                      mistakeCount,
+                      onOpenMistakes: () => navigation.navigate('MistakeBook', { slug: vm.selectedDeckSlug }),
+                    }
+                  : {})}
               />
               </View>
             }

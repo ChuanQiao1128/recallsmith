@@ -1,0 +1,199 @@
+{
+  "v": 2,
+  "runId": "3083e7a3-28be-43de-b14f-ad5fcf4a7e3f",
+  "startedAt": "2026-09-27T06:45:40.704615Z",
+  "provider": "claude-cli",
+  "model": "claude-opus-5",
+  "promptVersion": "qa-v3",
+  "dataset": "seeded-v3",
+  "datasetSha256": "d4a350cb003d932d8e49f83e3e8143d8d829a1d3e9be3bbc90a61b71db09dce2",
+  "reps": 2,
+  "reviewDate": "2026-09-27",
+  "effort": "high",
+  "structuredOutputs": "off",
+  "structuredOutputsAtStart": false,
+  "evidenceClass": "proxy",
+  "n": 452,
+  "estimatedCostUsd": 19.120028,
+  "perClass": {
+    "incorrect_answer": {
+      "tp": 36,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.9036,
+        1.0
+      ]
+    },
+    "multiple_correct": {
+      "tp": 30,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.8865,
+        1.0
+      ]
+    },
+    "answer_leak": {
+      "tp": 26,
+      "fn": 4,
+      "recall": 0.8667,
+      "recallCi95": [
+        0.7032,
+        0.9469
+      ]
+    },
+    "ambiguous_stem": {
+      "tp": 29,
+      "fn": 1,
+      "recall": 0.9667,
+      "recallCi95": [
+        0.8333,
+        0.9941
+      ]
+    },
+    "outdated_fact": {
+      "tp": 26,
+      "fn": 4,
+      "recall": 0.8667,
+      "recallCi95": [
+        0.7032,
+        0.9469
+      ]
+    },
+    "qualifier_mismatch": {
+      "tp": 29,
+      "fn": 1,
+      "recall": 0.9667,
+      "recallCi95": [
+        0.8333,
+        0.9941
+      ]
+    },
+    "source_unsupported": {
+      "tp": 40,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.9124,
+        1.0
+      ]
+    }
+  },
+  "overall": {
+    "tp": 216,
+    "fp": 17,
+    "fn": 10,
+    "recall": 0.9558,
+    "precision": 0.927,
+    "f1": 0.9412,
+    "controlFalsePositiveRate": 0.0756,
+    "recallCi95": [
+      0.9205,
+      0.9758
+    ],
+    "controlFalsePositiveRateCi95": [
+      0.0477,
+      0.1177
+    ],
+    "precisionAtPrevalence": {
+      "prevalence": 0.1,
+      "precision": 0.5843
+    }
+  },
+  "unscored": {
+    "defective": 0,
+    "controls": 1,
+    "controlUnscoredRate": 0.0044
+  },
+  "perTier": {
+    "adversarial": {
+      "tp": 4,
+      "fn": 0,
+      "recall": 1.0,
+      "recallCi95": [
+        0.5101,
+        1.0
+      ]
+    },
+    "source-silent": {
+      "tp": 34,
+      "fn": 4,
+      "recall": 0.8947,
+      "recallCi95": [
+        0.7587,
+        0.9583
+      ]
+    },
+    "subtle": {
+      "tp": 178,
+      "fn": 6,
+      "recall": 0.9674,
+      "recallCi95": [
+        0.9307,
+        0.985
+      ]
+    }
+  },
+  "perRep": [
+    {
+      "rep": 1,
+      "recall": 0.9646,
+      "controlFalsePositiveRate": 0.0619
+    },
+    {
+      "rep": 2,
+      "recall": 0.9469,
+      "controlFalsePositiveRate": 0.0893
+    }
+  ],
+  "servedModel": {
+    "unverified": 0
+  },
+  "structuredItems": {
+    "on": 0,
+    "off": 452
+  },
+  "latencyMs": {
+    "p50": 17323,
+    "p95": 41929
+  },
+  "errors": {
+    "SCHEMA_INVALID": 1
+  },
+  "gate": {
+    "thresholds": {
+      "recall": 0.8,
+      "recallCi95Lower": 0.75,
+      "precision": 0.7,
+      "controlFalsePositiveRate": 0.1,
+      "controlFalsePositiveRateCi95Upper": 0.15,
+      "perClassRecallFloor": 0.6,
+      "minReps": 2,
+      "minClassItems": 30,
+      "controlUnscoredRate": 0.02,
+      "providers": [
+        "anthropic",
+        "bedrock"
+      ],
+      "dataset": "seeded-v3"
+    },
+    "expected": {
+      "datasetSha256": "d4a350cb003d932d8e49f83e3e8143d8d829a1d3e9be3bbc90a61b71db09dce2",
+      "rows": 226,
+      "shipping": {
+        "provider": "bedrock",
+        "model": "anthropic.claude-opus-5",
+        "promptVersion": "qa-v3",
+        "effort": "high",
+        "structuredOutputsAtStart": false
+      }
+    },
+    "passes": false,
+    "failures": [
+      "provider 'claude-cli' is not one of ['anthropic', 'bedrock'] (proxy evidence, not rollout evidence)",
+      "provider 'claude-cli' is not the shipping provider 'bedrock'",
+      "model 'claude-opus-5' is not the shipping model 'anthropic.claude-opus-5'"
+    ]
+  }
+}

@@ -17,6 +17,7 @@ import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 
 import { CONSOLE_NAME } from '../lib/brand';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
 
@@ -357,6 +358,7 @@ export function AdminUsersPage() {
         subtitle="Admin · Users & Permissions"
         userLabel={sessionUser ? `${sessionUser.email ?? sessionUser.username ?? 'Signed in'} · editor` : '—'}
         superAdmin={false}
+        {...consoleNav()}
       >
         <Callout tone="danger" title="Access denied">
           This page requires <span className="font-semibold">super_admin</span>.
@@ -379,7 +381,7 @@ export function AdminUsersPage() {
       subtitle="Admin · Users & Permissions"
       userLabel={sessionUser ? `${sessionUser.email ?? sessionUser.username ?? 'Signed in'} · super_admin` : '—'}
       superAdmin={true}
-      adminUsersHref="/admin/users"
+      {...consoleNav()}
     >
       {!AUTH_CONFIGURED ? (
         <Callout tone="warning" title="Auth not configured">

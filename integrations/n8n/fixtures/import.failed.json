@@ -1,0 +1,13 @@
+{
+  "data": {
+    "deckId": 3,
+    "deckSlug": "aws-saa-c03",
+    "errorCode": "VALIDATION_ERROR",
+    "message": "Card aws-sqs-visibility-timeout-dlq: the answer section is empty.",
+    "cardCount": 12
+  },
+  "environment": "prod",
+  "event": "import.failed",
+  "eventId": "2a9d4e61-7c35-4f8b-b0e2-91c4d5a6f702",
+  "occurredAt": "2026-10-01T04:10:00.000Z"
+}

@@ -10,8 +10,8 @@ import {
   type DeckExportPreview,
 } from '../lib/deckExportPreview';
 import { CONSOLE_NAME } from '../lib/brand';
-import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 
 async function copyToClipboard(text: string) {
   if (navigator.clipboard && (window.isSecureContext || location.hostname === 'localhost')) {
@@ -101,9 +101,7 @@ export function DeckPreviewPage() {
       <ConsoleShell
         title={CONSOLE_NAME}
         subtitle="Authoring · Preview"
-        decksHref="/"
-        contentIntelligenceHref="/content-intelligence"
-        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+        {...consoleNav()}
       >
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-slate-800">Deck Preview</h1>
@@ -128,9 +126,7 @@ export function DeckPreviewPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · Preview"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <div>

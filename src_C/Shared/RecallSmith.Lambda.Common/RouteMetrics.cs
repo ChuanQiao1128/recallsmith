@@ -156,8 +156,17 @@ public static class RouteMetrics
     "/api/v1/sync/pull",
     "/api/v1/draw-state/sync",
     "/api/v1/admin/users",
-    "/api/internal/entitlements/apply",
-    "/api/internal/subscriptions/upsert",
+    "/api/v1/admin/webhooks/subscriptions",
+    "/api/v1/admin/webhooks/deliveries",
+    "/api/v1/admin/webhooks/deliveries/sweep",
+    "/api/v1/admin/automation/ledger",
+    "/api/v1/admin/automation/events",
+    "/api/v1/admin/automation/baselines",
+    "/api/v1/admin/automation/backfill",
+    "/api/v1/authoring/cards/similar",
+    "/api/v1/authoring/drafts",
+    "/api/v1/authoring/qa/runs",
+    "/api/v1/authoring/qa/status",
 
     // edge-public
     "/api/v1/billing/verify",
@@ -181,6 +190,23 @@ public static class RouteMetrics
     "/api/v1/admin/users/:userSub",
     "/api/v1/admin/cognito/users/:username/disable",
     "/api/v1/admin/cognito/users/:username/delete",
+    "/api/v1/admin/webhooks/subscriptions/:subscriptionId",
+    "/api/v1/admin/webhooks/subscriptions/:subscriptionId/test",
+    "/api/v1/admin/webhooks/deliveries/:deliveryId/redeliver",
+    "/api/v1/admin/automation/baselines/:automation",
+    "/api/v1/authoring/drafts/:draftId/accept",
+    "/api/v1/authoring/drafts/:draftId/reject",
+    "/api/v1/authoring/drafts/:draftId",
+    "/api/v1/authoring/qa/runs/:runId",
+    "/api/v1/authoring/qa/runs/:runId/items/:cardId/waive",
+    "/api/v1/authoring/qa/findings/:findingId/resolve",
+
+    // Internal machine-caller routes: the dispatcher matches these exactly (no suffix match, see
+    // VpcFunction), so they are labelled by exact match too.
+    "/api/internal/entitlements/apply",
+    "/api/internal/subscriptions/upsert",
+    "/api/internal/webhooks/deliveries/report",
+    "/api/internal/ai-qa/results",
   ];
 
   // Longest first, so the table stays order-independent: appending an entry to the arrays

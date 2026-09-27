@@ -6,10 +6,10 @@ import { useDeck } from '../hooks/useDecks';
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
 import { CardForm, type CardFormValues } from '../components/CardForm';
-import { buildCardBody } from '../lib/authoringBodies';
+import { buildCardBody, buildCardSource } from '../lib/authoringBodies';
 import { CONSOLE_NAME } from '../lib/brand';
-import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 
 /**
  * Where the next card goes in the deck's running order.
@@ -73,9 +73,7 @@ export function NewCardPage() {
       <ConsoleShell
         title={CONSOLE_NAME}
         subtitle="Authoring · New card"
-        decksHref="/"
-        contentIntelligenceHref="/content-intelligence"
-        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+        {...consoleNav()}
       >
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
@@ -109,9 +107,7 @@ export function NewCardPage() {
       <ConsoleShell
         title={CONSOLE_NAME}
         subtitle="Authoring · New card"
-        decksHref="/"
-        contentIntelligenceHref="/content-intelligence"
-        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+        {...consoleNav()}
       >
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
@@ -147,6 +143,8 @@ export function NewCardPage() {
     orderInDeck: nextOrder,
     revision: 1,
     topic: '',
+    sourceUrl: '',
+    sourceQuote: '',
   };
 
   async function handleSubmit(
@@ -156,11 +154,14 @@ export function NewCardPage() {
     // never reaches validation and a cleared optional text field is sent as ''.
     // topic goes beside the builder (F20 pins that the builder never carries it)
     // and only when non-empty: on create there is nothing to clear, so the key
-    // stays absent otherwise. mcq is never sent from the form.
+    // stays absent otherwise. source follows the same rule: sent only when a
+    // URL was entered. mcq is never sent from the form.
     const trimmedTopic = values.topic.trim();
+    const source = buildCardSource(values);
     const { result } = await createCardMutation.mutateAsync({
       ...buildCardBody(values),
       ...(trimmedTopic ? { topic: trimmedTopic } : {}),
+      ...(source ? { source } : {}),
       deckId: Number(deck.id),
       stableUid: values.stableUid,
     });
@@ -183,9 +184,7 @@ export function NewCardPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · New card"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <div>

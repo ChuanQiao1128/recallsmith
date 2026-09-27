@@ -146,7 +146,91 @@ afterEach(() => {
   signOut();
 });
 
+/** A page that stays mounted after its save, like the review queue: two in-page moves. */
+function StayingEditor() {
+  const guard = useUnsavedChangesGuard(true);
+  const navigate = useNavigate();
+  return (
+    <div>
+      <span>staying editor</span>
+      <button
+        type="button"
+        onClick={() => {
+          guard.allowNextNavigation();
+          navigate('/?step=saved');
+        }}
+      >
+        save and stay
+      </button>
+      <Link to="/?step=other">other view</Link>
+      <button
+        type="button"
+        onClick={() => {
+          guard.allowNextNavigation();
+          navigate('/');
+        }}
+      >
+        save in place
+      </button>
+    </div>
+  );
+}
+
 describe('the unsaved-changes guard', () => {
+  it('lets exactly one navigation through after allowNextNavigation (frontend-console-19)', async () => {
+    const user = userEvent.setup();
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/',
+          element: (
+            <ConfirmDialogProvider>
+              <StayingEditor />
+            </ConfirmDialogProvider>
+          ),
+        },
+      ],
+      { initialEntries: ['/'] },
+    );
+    render(<RouterProvider router={router} />);
+
+    await user.click(screen.getByRole('button', { name: 'save and stay' }));
+    await waitFor(() => expect(router.state.location.search).toBe('?step=saved'));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+
+    // The page is still dirty and still mounted: the next move is guarded again.
+    await user.click(screen.getByRole('link', { name: 'other view' }));
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(router.state.location.search).toBe('?step=saved');
+  });
+
+  it('spends the allowance on a navigation that does not move (frontend-console-19, round 3)', async () => {
+    const user = userEvent.setup();
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/',
+          element: (
+            <ConfirmDialogProvider>
+              <StayingEditor />
+            </ConfirmDialogProvider>
+          ),
+        },
+      ],
+      { initialEntries: ['/'] },
+    );
+    render(<RouterProvider router={router} />);
+
+    // Same pathname and search: nothing moves, and the allowance must not survive it.
+    await user.click(screen.getByRole('button', { name: 'save in place' }));
+    expect(router.state.location.search).toBe('');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+
+    await user.click(screen.getByRole('link', { name: 'other view' }));
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(router.state.location.search).toBe('');
+  });
+
   it('lets a clean page navigate without asking', async () => {
     const user = userEvent.setup();
     renderRoutes(false);

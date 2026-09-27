@@ -1,10 +1,12 @@
 // src/components/console/ConsoleShell.tsx
 
 import { useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 import { useSignOut } from '../../auth/AuthContext';
 import { isSuperAdmin, readSessionUser } from '../../auth/sessionUser';
+import { consoleSectionFor } from './consoleNav';
+import type { ConsoleSection } from './consoleNav';
 
 type Props = {
   title: string;
@@ -36,13 +38,29 @@ type Props = {
   decksHref?: string;
   contentIntelligenceHref?: string;
   adminUsersHref?: string;
+  // super_admin only, like adminUsersHref: rendered only for a super_admin session.
+  webhooksHref?: string;
+  // Not role-gated: the ledger's read routes are RequireAdmin, so the pages
+  // that pass this decide who sees it.
+  ledgerHref?: string;
+  // Not role-gated: the draft review routes decide who may act.
+  reviewHref?: string;
+  // Not role-gated: the AI QA routes decide who may act.
+  qaHref?: string;
 
   children: React.ReactNode;
 };
 
-/** One spelling for all three, so a link cannot drift away from its neighbours. */
-const NAV_LINK_CLASS =
-  'text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-50';
+/**
+ * One spelling for every section link, so a link cannot drift away from its
+ * neighbours: the same focus-visible ring as the HITL pages' controls
+ * (frontend-console-22), and an active look for the current section
+ * (frontend-console-27).
+ */
+const NAV_LINK_BASE =
+  'text-xs px-2 py-1 rounded border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500';
+const NAV_LINK_CLASS = `${NAV_LINK_BASE} border-slate-300 text-slate-700 hover:bg-slate-50`;
+const NAV_LINK_ACTIVE_CLASS = `${NAV_LINK_BASE} bg-indigo-50 border-indigo-300 text-indigo-700`;
 
 export function ConsoleShell({
   title,
@@ -52,6 +70,10 @@ export function ConsoleShell({
   decksHref,
   contentIntelligenceHref,
   adminUsersHref,
+  webhooksHref,
+  ledgerHref,
+  reviewHref,
+  qaHref,
   children,
 }: Props) {
   // Sign-out is the shell's own affair now, through AuthContext, so no page has
@@ -74,6 +96,13 @@ export function ConsoleShell({
       : '—');
   const resolvedSuperAdmin = superAdmin ?? isSuperAdmin(derivedUser);
 
+  const current = consoleSectionFor(useLocation().pathname);
+  /** aria-current and the active look for the link of the section on screen. */
+  const navProps = (section: ConsoleSection) =>
+    section === current
+      ? { className: NAV_LINK_ACTIVE_CLASS, 'aria-current': 'page' as const }
+      : { className: NAV_LINK_CLASS };
+
   return (
     <div className="min-h-screen bg-slate-100">
       {/* Top bar */}
@@ -92,22 +121,49 @@ export function ConsoleShell({
                 Management — that position was incidental, and identity beside
                 Sign out is where a shell usually puts it. */}
             <nav aria-label="Console sections" className="flex items-center gap-2 flex-wrap">
+              {/* Grouped: authoring (Decks, Review queue, AI QA, Content
+                  Intelligence), then the ledger, then the super_admin-only
+                  sections together at the end (frontend-console-27). */}
               {decksHref ? (
-                <Link to={decksHref} className={NAV_LINK_CLASS}>
+                <Link to={decksHref} {...navProps('decks')}>
                   Decks
                 </Link>
               ) : null}
 
+              {reviewHref ? (
+                <Link to={reviewHref} {...navProps('review')}>
+                  Review queue
+                </Link>
+              ) : null}
+
+              {qaHref ? (
+                <Link to={qaHref} {...navProps('qa')}>
+                  AI QA
+                </Link>
+              ) : null}
+
               {contentIntelligenceHref ? (
-                <Link to={contentIntelligenceHref} className={NAV_LINK_CLASS}>
+                <Link to={contentIntelligenceHref} {...navProps('contentIntelligence')}>
                   Content Intelligence
+                </Link>
+              ) : null}
+
+              {ledgerHref ? (
+                <Link to={ledgerHref} {...navProps('ledger')}>
+                  Automation ledger
+                </Link>
+              ) : null}
+
+              {resolvedSuperAdmin && webhooksHref ? (
+                <Link to={webhooksHref} {...navProps('webhooks')}>
+                  Webhooks
                 </Link>
               ) : null}
 
               {resolvedSuperAdmin && adminUsersHref ? (
                 <Link
                   to={adminUsersHref}
-                  className={NAV_LINK_CLASS}
+                  {...navProps('adminUsers')}
                   title="Manage users and permissions (super_admin only)"
                 >
                   Admin Management

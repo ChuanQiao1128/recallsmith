@@ -41,6 +41,31 @@ vi.mock('../src/api/authoring', async importOriginal => {
   return { ...actual, ...api };
 });
 
+// The publish dialog previews the AI QA status first (contract §7.10); a status
+// with nothing to report keeps the dialog's body as it was.
+vi.mock('../src/api/qa', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/api/qa')>();
+  return {
+    ...actual,
+    fetchQaStatus: vi.fn(async () => ({
+      success: true,
+      data: {
+        enabled: true,
+        required: false,
+        changedCards: 0,
+        reviewedCurrent: 0,
+        missing: [],
+        openBlockers: [],
+        wouldBlock: false,
+        maxCards: null,
+        dailyUsdCap: null,
+        spentTodayUsd: null,
+      },
+      error: null,
+    })),
+  };
+});
+
 const { DeckListPage } = await import('../src/pages/DeckListPage');
 
 const SLUG = 'csharp-async';
@@ -190,7 +215,7 @@ describe('publishing a deck', () => {
     // wrong in the other direction — marking everything an alertdialog — is
     // invisible on screen and tells a screen-reader user that a routine action
     // is an emergency.
-    const dialog = screen.getByRole('dialog');
+    const dialog = await screen.findByRole('dialog');
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(dialog.textContent).toContain('1) Upload deck.json to S3');
     expect(dialog.textContent).toContain('2) Rebuild manifest.json');
@@ -203,14 +228,14 @@ describe('publishing a deck', () => {
 
     await userEvent.click(rowButton('Publish'));
     await userEvent.click(
-      within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }),
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(api.publishDeck).not.toHaveBeenCalled();
 
     await userEvent.click(rowButton('Publish'));
     await userEvent.click(
-      within(screen.getByRole('dialog')).getByRole('button', { name: 'Publish' }),
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Publish' }),
     );
     await waitFor(() => expect(api.publishDeck).toHaveBeenCalledWith(DECK_ID));
   });

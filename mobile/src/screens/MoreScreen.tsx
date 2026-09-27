@@ -6,6 +6,7 @@ import AppInfoScreen from '../components/AppInfoScreen';
 import { loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import { listDrawStateSlugs, loadDrawState } from '../features/gacha/draw/drawStateStore';
 import appJson from '../../app.json';
+import { useFeatureFlags } from '../config/featureFlags';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
@@ -26,6 +27,8 @@ export const MORE_BYLINE = 'Made by one developer in Auckland';
 export function MoreScreen({ navigation }: Props) {
   const [snapshot, setSnapshot] = useState<StreakSnapshot | null>(null);
   const [collected, setCollected] = useState<number | null>(null);
+  // Read defensively: some suites mock the flags without the mistakeBook key.
+  const showMistakeBook = useFeatureFlags().mistakeBook?.enabled !== false;
 
   // Load stats once at mount and again on every focus. Once tab hops reuse the
   // mounted More (pop-navigation, MSHELL-01), a mount-only effect would leave
@@ -89,6 +92,17 @@ export function MoreScreen({ navigation }: Props) {
               <Text style={styles.rowTitle}>Profile</Text>
               <Text style={styles.rowSubtitle}>Streak, week and audience</Text>
             </Pressable>
+            {showMistakeBook ? (
+              <Pressable
+                accessibilityRole="button"
+                testID="more-row-mistakes"
+                style={styles.row}
+                onPress={() => navigation.navigate('MistakeBook')}
+              >
+                <Text style={styles.rowTitle}>Mistake Book</Text>
+                <Text style={styles.rowSubtitle}>Cards you missed, plus related review</Text>
+              </Pressable>
+            ) : null}
             <Pressable
               accessibilityRole="button"
               testID="more-row-settings"

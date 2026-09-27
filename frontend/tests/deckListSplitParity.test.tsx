@@ -87,6 +87,14 @@ vi.mock('../src/api/authoring', async importOriginal => {
   return { ...actual, ...api };
 });
 
+// Publish now previews the AI QA status first (contract §7.10). This file is
+// not about that preview: a clean status keeps the dialog as it was, and the
+// module is imported here so the page's dynamic import resolves from cache.
+vi.mock('../src/api/qa', async importOriginal =>
+  (await import('./support/qaStatusMock')).withCleanQaStatus(importOriginal),
+);
+await import('../src/api/qa');
+
 const { DeckListPage } = await import('../src/pages/DeckListPage');
 
 const SLUGS = ['alpha-deck', 'beta-deck', 'gamma-deck'];
@@ -179,35 +187,60 @@ interface Baseline {
 // alone (+26 B). publishJobsTab renders the switcher but not the filter bar, so
 // it moves by the tab attributes alone (+112 B). initialLoading and
 // fatalErrorRetry are still the early returns and are unchanged to the character.
+//
+// RE-MEASURED AGAIN, 2026-09-27, X06 (frontend-console-7). Nine of the eleven
+// moved when every page started passing the console's full section set through
+// consoleNav(), so the deck list's header now links to Webhooks, Automation
+// ledger, Review queue and AI QA. Verified BEFORE the numbers were touched, by
+// tag-diffing the recorded superAdminPaginated snapshot: the ONLY added tokens
+// are those four <a> elements inside the existing <nav>, with nothing removed.
+// Every super-admin scenario moved by +588 B (four links); editorLegacy by
+// +438 B (three: ConsoleShell hides Webhooks from an editor). initialLoading
+// and fatalErrorRetry are still the early returns and are unchanged. The
+// values were stable across two separate vitest processes.
+//
+// RE-MEASURED AGAIN, 2026-09-27, Z06 (frontend-console-27). Nine of the eleven
+// moved when ConsoleShell's section links gained the focus-visible ring and
+// were regrouped (authoring, then the ledger, then the super_admin sections).
+// Verified BEFORE the numbers were touched: the markup outside <nav> is
+// identical to the character, and each link's class grew by exactly
+// "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 "
+// (78 B). Every super-admin scenario moved by +468 B (six links); editorLegacy
+// by +312 B (four). The deck list is the Decks section but renders no Decks
+// link, so no aria-current appears here. initialLoading and fatalErrorRetry are
+// unchanged.
 const B1: Record<string, Baseline> = {
   // The three reachable role/mode cells.
-  superAdminPaginated: { hash: 'bd7ce896ee264dcfb074b317e80b0a8d550d9eefdce66f33e336a9fd9505a5a6', bytes: 11484 },
-  superAdminLegacyFallback: { hash: '5bca1832341285ca3c14852e361205fdcfcc5632ab43ba4f8d2d670132130f12', bytes: 11730 },
-  editorLegacy: { hash: '514ac7fa6ea01bad8a28b878805e8dd15c95fbf1087f1f8895da38e9812a54b8', bytes: 8793 },
+  superAdminPaginated: { hash: '8c2e889b967db81a4df15f6276ee19046ca56cf72e4312d98df4a78505a35667', bytes: 12540 },
+  superAdminLegacyFallback: { hash: 'e4e92f3c7ac1752614d5a6b6287c90816182de36afe41ab196e6b4acaf1d42e7', bytes: 12786 },
+  editorLegacy: { hash: '1abdfa4f8c08a763278317a242cdcc2ce8c0b6e7b49541e031483de4f76e60ab', bytes: 9543 },
   // The two early returns, which never reach the main tree at all.
   initialLoading: { hash: 'da5e91db42c7895c31e1fba36b34c6aaeb456d4ef2efde3a425f5b5066a52974', bytes: 147 },
   fatalErrorRetry: { hash: '22809bb57f98a29737e080c405194d891a62ee389911aae33891f12b55c1c396', bytes: 421 },
   // Both halves of the empty-state ternary. These two differ by ONE WORD, and
   // the split turns that ternary into an `emptyMessage` prop — which is exactly
   // the kind of change that keeps one branch and loses the other.
-  emptySearchResult: { hash: '1ae49976cc7e097fe1afbc9a7a2c90989d1c62d24650e60e3dc842d16963651d', bytes: 5468 },
-  emptyWithNoQuery: { hash: '62951107210f2a2af1a16626b78da86a5869ce3e331d9df207ee8aba3120c079', bytes: 5458 },
+  emptySearchResult: { hash: 'acb20c57609be96867f84c486febaa18bf1af39231e86e8810a6e3f6c05cd30e', bytes: 6524 },
+  emptyWithNoQuery: { hash: 'd2152c58b3127050a567fb5457d0f4b06ecc522f4c2bae2731d69e755c0045ad', bytes: 6514 },
   // The three banners/panels that only appear in one state each.
-  manifestErrorBanner: { hash: '855acf09e2d102a19cba1ed6651f7be02776a8ab5efb484037b0b4c0063f7a77', bytes: 11982 },
+  manifestErrorBanner: { hash: '2b2c5d9dad22ed551c990ff2e6ff614c0057774ff9a6e1fe8f570e8c496a4637', bytes: 13038 },
   // F24 (2026-09-26): the Publish Jobs table gained an Error column after Status
   // (CFE-09) and a title on the Job ID cell, so this scenario's markup grew by
   // 99 B. No other scenario renders that table, so only this hash moved.
-  publishJobsTab: { hash: '676605fecd38f6fcb82d2a1713b5134de9ef5f9c93217c85a4718af86afaa7a1', bytes: 4440 },
-  pollFailureBanner: { hash: '3839db8b82b18e1ebcef70fd2af9d517b9f9d9b899a517c06c7c8204c1366ab0', bytes: 12369 },
+  publishJobsTab: { hash: 'd02aeb2d8c8e18e7fa6562f9298d81d5c868f4dd9bd7577f9f47c70989517a27', bytes: 5496 },
+  pollFailureBanner: { hash: '0e76a7695c56f40bef0f4b8a451845f7e6af465c924dc147989f45df85fee0e0', bytes: 13425 },
   // A row mid-publish, so the pending markup is inside a hash too.
-  publishingRow: { hash: '6af41038e9b8dabde2e27ece9ea025b27a7064dc1e8876a3b35fd8dcc326297d', bytes: 11500 },
+  publishingRow: { hash: '9ce0053c3c364982147660c8bfc9b36f8dec3cc1357f80308b2427bb2852da20', bytes: 12556 },
 };
 
 // B2: one Profiler onRender entry per commit of the profiled subtree.
 const B2_AFTER_MOUNT = ['mount', 'update'];
 const B2_AFTER_SEARCH = ['mount', 'update', 'update', 'update', 'update', 'update'];
 const B2_AFTER_FILTER = [...B2_AFTER_SEARCH, 'update'];
-const B2_FINAL = [...B2_AFTER_FILTER, 'update', 'update'];
+// Y07 (frontend-console-21) added one commit to the publish step: the row
+// shows "Checking AI QA…" from the click until the dialog answers. buildViewRows
+// (B3) is unchanged, because that state is not a dependency of the rows memo.
+const B2_FINAL = [...B2_AFTER_FILTER, 'update', 'update', 'update'];
 
 // B3: buildViewRows calls at the same four checkpoints.
 const B3_AFTER_MOUNT = 2;

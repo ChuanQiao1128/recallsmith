@@ -13,11 +13,13 @@ import {
   isValidStableUid,
 } from '../lib/cardRules';
 import { checkMcqForm } from '../lib/mcqFormCheck';
+import { isValidSourceUrl, SOURCE_QUOTE_MAX_LENGTH } from '../lib/sourceRules';
 import { highlightSnippet, mapToHlLanguage } from '../lib/highlightSnippet';
 
 // The highlight.js theme stays here so it rides the lazy CardForm chunk; the
 // engine setup and mapToHlLanguage moved to lib/highlightSnippet.ts.
 import 'highlight.js/styles/atom-one-dark.css';
+import './codePreview.css';
 
 export interface CardFormValues {
   question: string;
@@ -30,6 +32,9 @@ export interface CardFormValues {
   orderInDeck: number;
   revision: number;
   topic: string;
+  /** Optional so callers that predate the source fields still type-check; blank means no source. */
+  sourceUrl?: string;
+  sourceQuote?: string;
 }
 
 interface CardFormProps {
@@ -76,12 +81,31 @@ interface CardFormProps {
    * form itself makes no navigation decision — it only reports.
    */
   onDirtyChange?: (dirty: boolean) => void;
+
+  /** Idle text of the submit button, replacing Create Card / Save Changes; the busy text is unchanged. */
+  submitLabel?: string;
+
+  /**
+   * 'draft' is the review queue's "Accept with edits" form. The server assigns
+   * the order and the revision on accept, so those fields are hidden, and a
+   * draft must cite a source, so the Source URL and quote become required.
+   * Defaults to 'card'.
+   */
+  variant?: 'card' | 'draft';
 }
 
 interface InternalState {
   submitting: boolean;
   error: string | null;
+  /**
+   * Set when `error` came from a Source URL/quote check, so those two inputs
+   * are marked invalid and point at the message (frontend-console-25).
+   */
+  errorField?: 'source';
 }
+
+/** The id of the form's error message, which the invalid inputs reference. */
+const FORM_ERROR_ID = 'card-form-error';
 
 const CODE_LANG_OPTIONS = [
   { value: '', label: 'None' },
@@ -221,7 +245,8 @@ function slugifyWhileTyping(input: string): string {
 }
 
 export function CardForm(props: CardFormProps) {
-  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, onDirtyChange } = props;
+  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, onDirtyChange, submitLabel } = props;
+  const isDraft = props.variant === 'draft';
 
   const mcqRequiredCount = mcq ? mcq.options.filter(option => option.correct).length : 0;
 
@@ -315,21 +340,46 @@ export function CardForm(props: CardFormProps) {
     const trimmedUid = values.stableUid.trim();
 
     if (!hasContent(values.question)) {
-      setState(prev => ({ ...prev, error: 'Question is required.' }));
+      setState(prev => ({ ...prev, error: 'Question is required.', errorField: undefined }));
       return;
     }
     if (!hasContent(values.stableUid)) {
-      setState(prev => ({ ...prev, error: 'StableUid is required.' }));
+      setState(prev => ({ ...prev, error: 'StableUid is required.', errorField: undefined }));
       return;
     }
 
     if (!Number.isFinite(values.orderInDeck) || values.orderInDeck <= 0) {
-      setState(prev => ({ ...prev, error: 'orderInDeck must be a positive number (e.g. 10, 20, 30).' }));
+      setState(prev => ({ ...prev, error: 'orderInDeck must be a positive number (e.g. 10, 20, 30).', errorField: undefined }));
       return;
     }
 
     if (!Number.isFinite(values.revision) || values.revision <= 0) {
-      setState(prev => ({ ...prev, error: 'revision must be a positive number (e.g. 1).' }));
+      setState(prev => ({ ...prev, error: 'revision must be a positive number (e.g. 1).', errorField: undefined }));
+      return;
+    }
+
+    // The source checks mirror lib/sourceRules.ts, the same rules the importer
+    // and the server apply, so a refused source never reaches the network.
+    const trimmedSourceUrl = (values.sourceUrl ?? '').trim();
+    const trimmedSourceQuote = (values.sourceQuote ?? '').trim();
+    if (isDraft && (trimmedSourceUrl === '' || trimmedSourceQuote === '')) {
+      setState(prev => ({ ...prev, error: 'A draft needs a Source URL and a source quote.', errorField: 'source' }));
+      return;
+    }
+    if (trimmedSourceUrl !== '' && !isValidSourceUrl(trimmedSourceUrl)) {
+      setState(prev => ({
+        ...prev,
+        error: 'Source URL must start with https:// and contain no spaces (max 2048 characters).',
+        errorField: 'source',
+      }));
+      return;
+    }
+    if (trimmedSourceUrl === '' && trimmedSourceQuote !== '') {
+      setState(prev => ({ ...prev, error: 'Add a Source URL for the source quote, or clear the quote.', errorField: 'source' }));
+      return;
+    }
+    if (trimmedSourceQuote.length > SOURCE_QUOTE_MAX_LENGTH) {
+      setState(prev => ({ ...prev, error: 'Source quote is too long (max 1000 characters).', errorField: 'source' }));
       return;
     }
 
@@ -337,7 +387,7 @@ export function CardForm(props: CardFormProps) {
     // refuse against the edited stem/explanation/difficulty, so submitting would
     // fail with a server code; refuse here instead. Advisory issues never block.
     if (mcqCheck && mcqCheck.blocking.length > 0) {
-      setState(prev => ({ ...prev, error: 'Fix the multiple-choice issues listed below before saving.' }));
+      setState(prev => ({ ...prev, error: 'Fix the multiple-choice issues listed below before saving.', errorField: undefined }));
       return;
     }
 
@@ -363,6 +413,9 @@ export function CardForm(props: CardFormProps) {
   }
 
   const hlLanguage = mapToHlLanguage(values.codeLanguage);
+  const sourceInvalid = state.error !== null && state.errorField === 'source';
+  // The help text is linked in both variants; a source error is linked too.
+  const sourceDescribedBy = sourceInvalid ? `source-help ${FORM_ERROR_ID}` : 'source-help';
 
   // The preview reads DEFERRED copies of the snippet and language, so typing
   // stays on the urgent render path and highlighting happens at lower priority
@@ -383,7 +436,9 @@ export function CardForm(props: CardFormProps) {
       className="bg-white border border-slate-200 rounded-lg shadow-sm px-6 py-6 space-y-4"
     >
       {state.error && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
+        // role=alert: every refusal lands here, including the review queue's
+        // lint and STABLE_UID_TAKEN answers, and must be announced (frontend-console-25).
+        <div id={FORM_ERROR_ID} role="alert" className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
           <div>{state.error}</div>
 
           {recoveryLabel ? (
@@ -504,8 +559,48 @@ export function CardForm(props: CardFormProps) {
         </p>
       </div>
 
-      {/* Language + Difficulty + Order + Revision */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* Source */}
+      <div className="space-y-3">
+        <div>
+          <label htmlFor="sourceUrl" className="block text-sm font-medium text-slate-700 mb-1">Source URL</label>
+          <input
+            type="text"
+            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            id="sourceUrl"
+            inputMode="url"
+            autoComplete="off"
+            required={isDraft}
+            aria-invalid={sourceInvalid ? true : undefined}
+            aria-describedby={sourceDescribedBy}
+            value={values.sourceUrl ?? ''}
+            onChange={e => handleChange('sourceUrl', e.target.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="sourceQuote" className="block text-sm font-medium text-slate-700 mb-1">Source quote</label>
+          <textarea
+            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            id="sourceQuote"
+            rows={3}
+            required={isDraft}
+            aria-invalid={sourceInvalid ? true : undefined}
+            aria-describedby={sourceDescribedBy}
+            value={values.sourceQuote ?? ''}
+            onChange={e => handleChange('sourceQuote', e.target.value)}
+          />
+        </div>
+        <p id="source-help" className="text-xs text-slate-500">
+          {isDraft
+            ? 'Required. The https page that supports the answer and the passage copied from it word for word (up to 1000 characters). A draft cannot be accepted without both.'
+            : 'Optional. The https page that supports the answer and the passage copied from it word for word (up to 1000 characters). Clear both to remove the source.'}
+        </p>
+      </div>
+
+      {/* Language + Difficulty + Order + Revision (a draft gets its order and
+          revision from the server on accept, so it shows only the first two) */}
+      <div className={`grid grid-cols-1 gap-4 ${isDraft ? 'md:grid-cols-2' : 'md:grid-cols-4'}`}>
         <div>
           <label htmlFor="codeLanguage" className="block text-sm font-medium text-slate-700 mb-1">Code Language</label>
           <select
@@ -557,31 +652,35 @@ export function CardForm(props: CardFormProps) {
           )}
         </div>
 
-        <div>
-          <label htmlFor="orderInDeck" className="block text-sm font-medium text-slate-700 mb-1">Order in Deck</label>
-          <input
-            id="orderInDeck"
-            type="number"
-            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
-                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-            value={values.orderInDeck}
-            onChange={e => handleChange('orderInDeck', Number(e.target.value))}
-          />
-          <p className="mt-1 text-xs text-slate-500">Leave gaps &mdash; 10, 20, 30 &mdash; so a later card can slot between two of these.</p>
-        </div>
+        {isDraft ? null : (
+          <>
+            <div>
+              <label htmlFor="orderInDeck" className="block text-sm font-medium text-slate-700 mb-1">Order in Deck</label>
+              <input
+                id="orderInDeck"
+                type="number"
+                className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                value={values.orderInDeck}
+                onChange={e => handleChange('orderInDeck', Number(e.target.value))}
+              />
+              <p className="mt-1 text-xs text-slate-500">Leave gaps &mdash; 10, 20, 30 &mdash; so a later card can slot between two of these.</p>
+            </div>
 
-        <div>
-          <label htmlFor="revision" className="block text-sm font-medium text-slate-700 mb-1">Revision</label>
-          <input
-            id="revision"
-            type="number"
-            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
-                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-            value={values.revision}
-            onChange={e => handleChange('revision', Number(e.target.value))}
-          />
-          <p className="mt-1 text-xs text-slate-500">Content revision number. Optional, but worth bumping as you edit.</p>
-        </div>
+            <div>
+              <label htmlFor="revision" className="block text-sm font-medium text-slate-700 mb-1">Revision</label>
+              <input
+                id="revision"
+                type="number"
+                className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                value={values.revision}
+                onChange={e => handleChange('revision', Number(e.target.value))}
+              />
+              <p className="mt-1 text-xs text-slate-500">Content revision number. Optional, but worth bumping as you edit.</p>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Code Snippet + Preview */}
@@ -600,7 +699,7 @@ export function CardForm(props: CardFormProps) {
         <div className="mt-3">
           <div className="flex items-center justify-between mb-1">
             <span className="text-xs font-medium text-slate-600">Preview</span>
-            <span className="text-[10px] text-slate-400">{values.codeLanguage || 'auto'}</span>
+            <span className="text-[10px] text-slate-500">{values.codeLanguage || 'auto'}</span>
           </div>
 
           <div className="border border-slate-200 rounded text-xs overflow-auto">
@@ -696,9 +795,11 @@ export function CardForm(props: CardFormProps) {
             ? mode === 'create'
               ? 'Creating...'
               : 'Saving...'
-            : mode === 'create'
-              ? 'Create Card'
-              : 'Save Changes'}
+            : submitLabel
+              ? submitLabel
+              : mode === 'create'
+                ? 'Create Card'
+                : 'Save Changes'}
         </button>
       </div>
 

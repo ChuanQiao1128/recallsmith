@@ -22,6 +22,8 @@
 //   <code lines>
 //   USAGE:
 //   <real world usage lines>
+//   SOURCE: <https url>    (optional; the lines below it are the quote)
+//   <quote lines>
 //
 // Two deliberate lexing rules make hand written files predictable:
 //
@@ -33,11 +35,17 @@
 //    code snippet is dropped rather than preserved. Paying that price here
 //    keeps "insert a blank line to make it readable" a safe edit for authors.
 
-import type { Card } from '../types/card';
+import type { Card, CardSource } from '../types/card';
 import type { McqBlob } from '../types/mcq';
 import { hasContent, isValidDifficulty, isValidStableUid } from './cardRules';
 import { validateMcq, normalizeMcqForCompare, mcqOf, OPT_PAYLOAD, type McqIssueCode } from './mcqRules';
 import { warnMcq, sortWarnings, type ImportWarning } from './mcqWarnings';
+import {
+  isValidSourceUrl,
+  normalizeSourceForCompare,
+  SOURCE_QUOTE_MAX_LENGTH,
+  SOURCE_URL_MAX_LENGTH,
+} from './sourceRules';
 
 // ---------------------- types ----------------------
 
@@ -54,6 +62,8 @@ export interface DeckCardContent {
   topic?: string;
   /** MCQ payload (server column cards.mcq). ABSENT, never null, on a Q/A card (a card with no OPT:/WHY:/QUALIFIER: line). */
   mcq?: McqBlob;
+  /** Citation (server column cards.source). ABSENT, never null, when the card has no SOURCE: line. */
+  source?: CardSource;
 }
 
 export interface ParsedCard extends DeckCardContent {
@@ -80,7 +90,9 @@ export type ImportIssueCode =
   | 'BAD_TOPIC'
   | 'DUPLICATE_TOPIC'
   | McqIssueCode
-  | 'MCQ_DUPLICATE_QUALIFIER';
+  | 'MCQ_DUPLICATE_QUALIFIER'
+  | 'BAD_SOURCE_URL'
+  | 'SOURCE_QUOTE_TOO_LONG';
 
 export interface ImportIssue {
   code: ImportIssueCode;
@@ -116,7 +128,8 @@ export type ComparableField =
   | 'codeLanguage'
   | 'realWorldUsage'
   | 'topic'
-  | 'mcq';
+  | 'mcq'
+  | 'source';
 
 export interface ImportCreate {
   kind: 'create';
@@ -173,6 +186,9 @@ export const TOPIC_MAX_LENGTH = 80;
 const OPT_MARKER = /^OPT:(.*)$/;
 const WHY_MARKER = /^WHY:(.*)$/;
 const QUALIFIER_MARKER = /^QUALIFIER:(.*)$/;
+// Loose on purpose, like TOPIC_MARKER: a column-0 SOURCE: line is always this
+// marker; the payload is the URL, the lines below it are the quote.
+const SOURCE_MARKER = /^SOURCE:(.*)$/;
 
 /**
  * The card uid rule moved to cardRules.ts (UID_PATTERN + MAX_UID_LENGTH,
@@ -188,7 +204,7 @@ const QUALIFIER_MARKER = /^QUALIFIER:(.*)$/;
  */
 const SLUG_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 
-type SectionKind = 'question' | 'answer' | 'code' | 'usage' | `option:${string}` | `why:${string}`;
+type SectionKind = 'question' | 'answer' | 'code' | 'usage' | 'source' | `option:${string}` | `why:${string}`;
 
 interface Section {
   line: number;
@@ -212,6 +228,10 @@ interface CardDraft {
   topic: string | null;
   topicSeen: boolean;
   topicInvalid: boolean;
+  /** The valid SOURCE: url; null when the card has no SOURCE: line or its url was refused. */
+  sourceUrl: string | null;
+  /** Set by BAD_SOURCE_URL: finishCard drops the card, like a BAD_TOPIC. */
+  sourceInvalid: boolean;
   /** null until the first OPT:/WHY:/QUALIFIER: line. A card that never sees one is a Q/A card and gets no `mcq` key. */
   mcq: McqDraft | null;
   /** Set by MCQ_BAD_OPT_LINE: finishCard drops the card and reports nothing further for it. */
@@ -301,7 +321,7 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
         d.stableUid,
       );
     }
-    if (!question || !explanation || d.topicInvalid) return;
+    if (!question || !explanation || d.topicInvalid || d.sourceInvalid) return;
 
     const codeSnippet = sectionText(d.sections.code) || null;
     const realWorldUsage = sectionText(d.sections.usage) || null;
@@ -341,6 +361,9 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       orderInDeck: cards.length === 0 ? 5 : cards.length * 10,
       sourceLine: d.headerLine,
       ...(mcq ? { mcq } : {}),
+      ...(d.sourceUrl !== null
+        ? { source: { url: d.sourceUrl, quote: sectionText(d.sections.source).trim() || null } }
+        : {}),
     });
   };
 
@@ -436,6 +459,8 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
         topic: null,
         topicSeen: false,
         topicInvalid: false,
+        sourceUrl: null,
+        sourceInvalid: false,
         mcq: null,
         dropped: false,
       };
@@ -527,6 +552,32 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       // An empty payload is stored as '' so validateMcq reports MCQ_QUALIFIER_EMPTY.
       mcq.qualifier = qualifierMatch[1].trim();
       mcq.qualifierSeen = true;
+      continue;
+    }
+
+    const sourceMatch = SOURCE_MARKER.exec(raw);
+    if (sourceMatch) {
+      // A repeat reports DUPLICATE_SECTION, keeps the first and swallows its
+      // body; its payload is never evaluated.
+      if (draft.sections.source) {
+        currentSection = openSection('source', lineNo, '');
+        continue;
+      }
+      const url = sourceMatch[1].trim();
+      if (!isValidSourceUrl(url)) {
+        pushIssue(
+          'BAD_SOURCE_URL',
+          lineNo,
+          `Card "${draft.stableUid}" has a SOURCE: url that is not an https:// URL without spaces of at most ${SOURCE_URL_MAX_LENGTH} characters.`,
+          draft.stableUid,
+        );
+        draft.sourceInvalid = true;
+      } else {
+        draft.sourceUrl = url;
+      }
+      // Either way the quote lines below belong to this section, so they never
+      // raise TEXT_BEFORE_SECTION.
+      currentSection = openSection('source', lineNo, '');
       continue;
     }
 
@@ -726,6 +777,27 @@ export function validateCards(cards: readonly ParsedCard[]): ImportIssue[] {
         issues.push({ code: issue.code, line: card.sourceLine, message: issue.message, stableUid: card.stableUid });
       }
     }
+
+    if (card.source) {
+      if (card.source.quote !== null && card.source.quote.length > SOURCE_QUOTE_MAX_LENGTH) {
+        issues.push({
+          code: 'SOURCE_QUOTE_TOO_LONG',
+          line: card.sourceLine,
+          message: `Card "${card.stableUid}" has a source quote longer than ${SOURCE_QUOTE_MAX_LENGTH} characters.`,
+          stableUid: card.stableUid,
+        });
+      }
+      // Never fires for a parsed card (the parser drops it); it guards an
+      // edited list that planImport re-validates.
+      if (!isValidSourceUrl(card.source.url)) {
+        issues.push({
+          code: 'BAD_SOURCE_URL',
+          line: card.sourceLine,
+          message: `Card "${card.stableUid}" has a source url that is not an https:// URL without spaces of at most ${SOURCE_URL_MAX_LENGTH} characters.`,
+          stableUid: card.stableUid,
+        });
+      }
+    }
   }
 
   return sortIssues(issues);
@@ -743,6 +815,7 @@ const COMPARABLE_FIELDS: readonly ComparableField[] = [
   'realWorldUsage',
   'topic',
   'mcq',
+  'source',
 ];
 
 /**
@@ -765,6 +838,12 @@ function fieldsThatDiffer(card: ParsedCard, existing: Card): ComparableField[] {
       // Server null, a missing key on an old server, and file absence all
       // normalize to '' (mcqOf reads the wire key without a typed Card.mcq).
       if (normalizeMcqForCompare(card.mcq) !== normalizeMcqForCompare(mcqOf(existing))) changed.push(field);
+      continue;
+    }
+    if (field === 'source') {
+      // Server null, a missing key on an old server, and file absence all
+      // normalize to ''; a blank quote equals a null one.
+      if (normalizeSourceForCompare(card.source) !== normalizeSourceForCompare(existing.source)) changed.push(field);
       continue;
     }
     if (normalizeText(card[field]) !== normalizeText(existing[field])) changed.push(field);
@@ -909,6 +988,10 @@ export function serializeDeckMarkdown(
     if (card.realWorldUsage) {
       out.push('USAGE:');
       out.push(card.realWorldUsage);
+    }
+    if (card.source) {
+      out.push(`SOURCE: ${card.source.url}`);
+      if (card.source.quote !== null) out.push(card.source.quote);
     }
     out.push('');
   }

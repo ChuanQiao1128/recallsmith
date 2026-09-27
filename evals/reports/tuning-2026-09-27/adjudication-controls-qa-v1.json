@@ -1,0 +1,463 @@
+[
+  {
+    "id": "s-0010",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-bedrock-messages-endpoint",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "The live 'Claude in Amazon Bedrock (Opus 4.7 and later)' page installs anthropic[bedrock] and uses `from anthropic import AnthropicBedrockMantle` / `AnthropicBedrockMantle(aws_region=...)`; `AnthropicBedrock` is the legacy InvokeModel/Converse client documented for Opus 4.6 and earlier. The card explicitly scopes itself to Opus 4.7 and later, so its client class is correct and the reviewer's knowledge predates the Mantle endpoint.",
+    "evidence": [
+      "https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock",
+      "https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/model-migration.md:513",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:10"
+    ]
+  },
+  {
+    "id": "s-0010",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-bedrock-messages-endpoint",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "The live Bedrock page states 'The endpoint follows the pattern https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages' with standard SSE streaming and the first-party request body; bedrock-runtime /model/{id}/invoke is the legacy integration. The card's endpoint, anthropic.-prefixed IDs, credential chain, 12-hour caps and 10% regional premium all match the live page. (Side note: the bundled skill's platform-availability.md:11 marks structured outputs 'Yes' on Bedrock, but the live Mantle page lists them as not supported, as the card says.)",
+    "evidence": [
+      "https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/model-migration.md:513",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/platform-availability.md:11",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:10"
+    ]
+  },
+  {
+    "id": "s-0018",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-resume-vs-fork-mcq",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "debatable",
+    "reason": "Key a appends a 'so ...' clause that paraphrases the stem's requirement (copy of the history, original unchanged), making it the longest and only self-justifying option, which is a recognised testwiseness cue. It is a paraphrase rather than a verbatim clang, though, and distractor c (new session + paste the analysis) also meets both stated requirements on its face, so a learner with no knowledge cannot pick a reliably from the cue alone. Trimming a to 'Resume the session by ID with fork_session=True' is a cheap fix.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:18",
+      "/Users/qc/src/recallsmith-rel18/services/ai-qa/src/ai_qa/prompts.py:43 (qa-v2 rubric, working tree: a merely longer/self-explaining key is at most weak_distractor/minor)"
+    ]
+  },
+  {
+    "id": "s-0022",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-skill-vs-mcp-choice-mcq-02",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "debatable",
+    "reason": "Key a is about twice as long as the distractors and echoes stem elements ('scripts'; 'loaded on demand' against 'do not want the procedure repeated in every prompt'), a classic longest/most-complete-option cue. After the stem rules out c, distractors b (MCP server tool) and d (tool description) still look plausible to a learner who does not know what Skills or MCP are, so the cue is suggestive, not decisive. Shortening a is worthwhile, but the item is not broken.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:22",
+      "/Users/qc/src/recallsmith-rel18/services/ai-qa/src/ai_qa/prompts.py:43 (qa-v2 rubric, working tree: a merely longer/self-explaining key is at most weak_distractor/minor)"
+    ]
+  },
+  {
+    "id": "s-0024",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-prompt-chaining-vs-single-call",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "debatable",
+    "reason": "The stem's example pipeline lists 'draft, review, refine' next to each other, which can prompt recognition of the draft-review-refine self-correction chain. It does not say which subset is the 'most common chain' or name the pattern. The larger first half of the answer (when chaining still earns its place: inspect, log or evaluate, branch, enforce structure) is not cued at all. It is a mild recall aid, not a reliable giveaway; a generic stage description would remove it.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:24"
+    ]
+  },
+  {
+    "id": "s-0026",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-foundry-hosting-option-choice",
+    "findingCategory": "ambiguous_stem",
+    "findingSeverity": "major",
+    "verdict": "debatable",
+    "reason": "The stem's meaning is clear (which factors decide Hosted on Azure vs Hosted on Anthropic, and what each gives up), so it is not ambiguous in the rubric's sense. The reviewer's underlying point is a real design weakness: the answer packs about 12 discrete facts (deployment types, 400-returning features, exact tool version strings, CCU billing, missing APIs and headers), so a learner cannot reliably self-grade (minimum-information principle). The facts I spot-checked against the platform table are consistent. This calls for splitting the card, not correcting it.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:26",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/platform-availability.md:25-27",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/platform-availability.md:34-35",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/platform-availability.md:40-42"
+    ]
+  },
+  {
+    "id": "s-0029",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-rekognition-service-card",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "AWS's Rekognition Developer Guide ('What is Amazon Rekognition?' > Key capabilities) says 'Text Detection - Detect and recognize printed and handwritten text in images in a variety of languages', with the same wording for video. The card's 'printed and handwritten text' matches AWS documentation, which contradicts the reviewer's claim that Rekognition does not support handwriting. The card already routes document forms and tables to Textract.",
+    "evidence": [
+      "https://docs.aws.amazon.com/rekognition/latest/dg/what-is.html",
+      "https://docs.aws.amazon.com/rekognition/latest/dg/text-detection.html",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:29"
+    ]
+  },
+  {
+    "id": "s-0031",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-cc-skills-progressive-disclosure",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "false_alarm",
+    "reason": "This is a free-recall card. In the learner app the codeSnippet renders only in the answer's CODING SAMPLE section after the learner taps Reveal answer (and on CardDetail only behind 'Show answer'). The disable-model-invocation line is not visible during recall, so it cannot leak the answer. The reviewer prompt only said code is 'shown with the card', which probably caused this finding.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:31",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/ReviewBody.tsx:94-126 (answer sections render only after 'Reveal answer')",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/CardAnswerSections.tsx:79-99 (CODING SAMPLE / REAL USAGE are answer-side sections)",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/screens/CardDetailScreen.tsx:476-495 (CardDetail shows them only behind 'Show answer')"
+    ]
+  },
+  {
+    "id": "s-0037",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-tool-definition-fields",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "real_defect",
+    "reason": "The Messages API reference marks only `name` and `input_schema` as required on a custom tool; `description` is Optional (though strongly recommended). The card's stem and answer both call description one of the 'three required fields', which teaches a false requirement. The Define-tools guide lists the three fields without marking description optional (only input_examples is marked), which likely explains the drift, but the API schema is authoritative. Fix: 'three core fields: name and input_schema are required, description is optional but strongly recommended'. The impact is low, so blocker severity is overstated.",
+    "evidence": [
+      "https://platform.claude.com/docs/en/api/messages/create",
+      "https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:37"
+    ]
+  },
+  {
+    "id": "s-0037",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-tool-definition-fields",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "false_alarm",
+    "reason": "The code snippet does list the field names, but for this free-recall card the app shows it only after reveal (answer-side CODING SAMPLE section), so the learner cannot read the answer off it while recalling.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:37",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/ReviewBody.tsx:94-126 (answer sections render only after 'Reveal answer')",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/CardAnswerSections.tsx:79-99 (CODING SAMPLE / REAL USAGE are answer-side sections)",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/screens/CardDetailScreen.tsx:476-495 (CardDetail shows them only behind 'Show answer')"
+    ]
+  },
+  {
+    "id": "s-0038",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-files-api-lifecycle",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "The live Files API page (File storage and limits) says 'Maximum file size: 500 MB per file' and 'Total storage: 1 TB per organization', and its error list reads 'Your organization has reached the 1 TB storage limit'. The card is correct as of 2026-09. The bundled claude-api skill still says 100 GB (files-api.md:10), which is stale and is the same figure the reviewer used.",
+    "evidence": [
+      "https://platform.claude.com/docs/en/build-with-claude/files",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/python/claude-api/files-api.md:10 (stale: 100 GB)",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:38"
+    ]
+  },
+  {
+    "id": "s-0038",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-files-api-lifecycle",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "The live Files API 'File expiration' section says to include an `expires_in_seconds` form field at upload, an integer between 3,600 (1 hour) and 7,776,000 (90 days). The resulting `expires_at` appears on every file object (null when unset), and files 'persist until you delete them ... or they reach their expires_at'. The card's range and semantics match exactly; the reviewer's knowledge predates the feature.",
+    "evidence": [
+      "https://platform.claude.com/docs/en/build-with-claude/files",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:38"
+    ]
+  },
+  {
+    "id": "s-0038",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-files-api-lifecycle",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "false_alarm",
+    "reason": "The '# store server-side, keyed to your tenant and user' comment is in the codeSnippet, which the app shows only after reveal, so the learner does not see it while answering. Even if it were visible, it states the fix, not the diagnosis (workspace-scoped file IDs) or the Files API limits, which make up most of the answer.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:38",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/ReviewBody.tsx:94-126 (answer sections render only after 'Reveal answer')",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/CardAnswerSections.tsx:79-99 (CODING SAMPLE / REAL USAGE are answer-side sections)",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/screens/CardDetailScreen.tsx:476-495 (CardDetail shows them only behind 'Show answer')"
+    ]
+  },
+  {
+    "id": "s-0047",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-few-shot-format-drift-mcq-21",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "The bundled Claude API docs say temperature/top_p/top_k are no longer accepted on Claude Opus 4.7 and return a 400, that they remain rejected on Opus 4.8 and Opus 5, and that on Claude Sonnet 5 'Setting temperature, top_p, or top_k to a non-default value returns a 400'. The error-code table lists the same 400. The card's claims ('rejected on 4.7 and later models'; 'returns a 400 on Sonnet 5') are correct; the reviewer applied pre-4.7 sampling behaviour.",
+    "evidence": [
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/model-migration.md:613",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/model-migration.md:960",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/model-migration.md:1184",
+      "/private/tmp/claude-501/bundled-skills/2.1.281/a15273f202ac3f27bdbb0d0dd241276f/claude-api/shared/error-codes.md:184",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:47"
+    ]
+  },
+  {
+    "id": "s-0057",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-subagent-budget-cap-mcq",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "real_defect",
+    "reason": "Each keyed option maps onto one of the stem's two requirements by keyword. 'Hard ceiling on spend' matches max_budget_usd / 'total_cost_usd, including subagent spend, reaches the cap', and 'how deep delegation can go' matches 'SPAWN_DEPTH ... how many layers of subagents can nest'. The distractors (a prompt instruction, max_tokens, max_turns) make no comparable claim to cap total spend or nesting depth. With 'Choose two', a test-wise learner with no Agent SDK knowledge picks a+b reliably. Because the setting names describe themselves, trimming the clauses is not enough: add at least one plausible spend- or depth-sounding distractor.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:57",
+      "/Users/qc/src/recallsmith-rel18/evals/reports/2026-09-27-claude-cli-claude-opus-5-qa-v1.jsonl:58"
+    ]
+  },
+  {
+    "id": "s-0074",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-aws-compliance-choice-mcq",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "real_defect",
+    "reason": "Keyed options a and c restate the stem's two requirements almost verbatim ('FedRAMP High'; AWS 'as the ... inference data processor'). The three distractors (anthropic-beta passthrough, Batches/Agent Skills, CCU billing) are about features and billing, which the stem never asks about. A learner who knows nothing about Bedrock vs Claude Platform on AWS can pick both keys by clang matching, so the item does not test the comparison. Generalise the stem, or make the distractors compliance-flavoured claims that are false for Bedrock.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:74",
+      "/Users/qc/src/recallsmith-rel18/evals/reports/2026-09-27-claude-cli-claude-opus-5-qa-v1.jsonl:75"
+    ]
+  },
+  {
+    "id": "s-0078",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-programmatic-20-lookups-mcq-09",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "real_defect",
+    "reason": "Key a's clause ('writes one script that loops over the employees, filters, and prints only the offenders') restates the stem's goal ('report only those over budget', 'keeping raw data out of Claude's context'). It is the only option that claims to keep raw data out of context. Option b addresses round trips but on its face returns 20 raw results, and c and d are unrelated. A learner with no knowledge can match a reliably without knowing programmatic tool calling or allowed_callers. Trim a to the mechanism only.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:78",
+      "/Users/qc/src/recallsmith-rel18/evals/reports/2026-09-27-claude-cli-claude-opus-5-qa-v1.jsonl:79"
+    ]
+  },
+  {
+    "id": "s-0081",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-automatic-caching-top-level",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "false_alarm",
+    "reason": "The top-level cache_control line is in the codeSnippet, which this free-recall card shows only after reveal (answer-side CODING SAMPLE). The learner cannot read the field name off it while recalling.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:81",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/ReviewBody.tsx:94-126 (answer sections render only after 'Reveal answer')",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/CardAnswerSections.tsx:79-99 (CODING SAMPLE / REAL USAGE are answer-side sections)",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/screens/CardDetailScreen.tsx:476-495 (CardDetail shows them only behind 'Show answer')"
+    ]
+  },
+  {
+    "id": "s-0083",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-s3-lifecycle-rules-minimums",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "On 2026-07-16 AWS removed the 30-day minimum in S3 Standard before lifecycle transitions to Standard-IA or One Zone-IA (objects can now transition 'as soon as the day they are created'), and the current lifecycle constraints page no longer lists it. The remaining rule is that one lifecycle rule cannot move objects out of a class before its minimum storage duration (Standard-IA 30 days, so Deep Archive no earlier than day 37). That is exactly what the card teaches, so the card is correct and the reviewer is out of date. Consider adding 'as of 2026-07', because older SAA-C03 prep material still teaches the 30-day rule.",
+    "evidence": [
+      "https://aws.amazon.com/about-aws/whats-new/2026/07/s3-removes-30-day-transitions-standard-ia-one-zone-ia/",
+      "https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-transition-general-considerations.html",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:83"
+    ]
+  },
+  {
+    "id": "s-0089",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-nat-gateway-per-az-mcq-20",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "AWS launched regional availability mode for NAT Gateway on 2025-11-19: a single NAT gateway that automatically expands and contracts across AZs based on workload presence and needs no public subnet. The realWorldUsage note is therefore factually grounded, and the reviewer's 'NAT gateways are always zonal' predates the launch. Minor nuance: regional mode is not limited to brand-new VPCs, so 'For a brand-new VPC' slightly understates it.",
+    "evidence": [
+      "https://aws.amazon.com/about-aws/whats-new/2025/11/aws-nat-gateway-regional-availability/",
+      "https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html",
+      "https://aws.amazon.com/blogs/networking-and-content-delivery/introducing-amazon-vpc-regional-nat-gateway/",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:89"
+    ]
+  },
+  {
+    "id": "s-0095",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-image-request-limits",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "The live Vision page (Request limits) gives a maximum per image of '10 MB (base64-encoded) when using the Claude API directly', '5 MB (base64-encoded) on Amazon Bedrock and Google Cloud', and '10 MB on claude.ai'. It also confirms the card's other numbers: 600 images per request (100 on 200k-context models), 8000x8000 px, the stricter 2000 px limit above 20 images (counting earlier turns and tool_result images), and the 32 MB request limit. The card is correct; the reviewer used the older 5 MB API figure.",
+    "evidence": [
+      "https://platform.claude.com/docs/en/build-with-claude/vision",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:95"
+    ]
+  },
+  {
+    "id": "s-0116",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-claude-mcp-add-transports",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "false_alarm",
+    "reason": "The snippet does contain the exact commands the stem asks for, so it would be a real leak if shown with the question. The app renders codeSnippet only after reveal (answer-side CODING SAMPLE), so the learner does not see it while recalling.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:116",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/ReviewBody.tsx:94-126 (answer sections render only after 'Reveal answer')",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/CardAnswerSections.tsx:79-99 (CODING SAMPLE / REAL USAGE are answer-side sections)",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/screens/CardDetailScreen.tsx:476-495 (CardDetail shows them only behind 'Show answer')"
+    ]
+  },
+  {
+    "id": "s-0118",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-tool-use-block-anatomy",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "false_alarm",
+    "reason": "The tool_result/is_error JSON is the codeSnippet, which the app shows only after the learner reveals the answer. While recalling, the learner sees only the stem, so the snippet does not leak the answer.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:118",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/ReviewBody.tsx:94-126 (answer sections render only after 'Reveal answer')",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/CardAnswerSections.tsx:79-99 (CODING SAMPLE / REAL USAGE are answer-side sections)",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/screens/CardDetailScreen.tsx:476-495 (CardDetail shows them only behind 'Show answer')"
+    ]
+  },
+  {
+    "id": "s-0119",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-s3-sse-kms-audit-revoke-mcq-36",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "AWS's 'Default SSE-C setting for new buckets' FAQ and the S3 security best-practices page say that in April 2026 S3 disabled SSE-C by default for all new general purpose buckets, and for existing buckets in accounts with no SSE-C objects. SSE-C writes are then rejected with 403 AccessDenied unless re-enabled via PutBucketEncryption. The AWS Storage Blog advance notice put the start at 2026-04-06. The card's clause is accurate (minor caveat: the Bahrain and UAE regions are excepted).",
+    "evidence": [
+      "https://docs.aws.amazon.com/AmazonS3/latest/userguide/default-s3-c-encryption-setting-faq.html",
+      "https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html",
+      "https://aws.amazon.com/blogs/storage/advanced-notice-amazon-s3-to-disable-the-use-of-sse-c-encryption-by-default-for-all-new-buckets-and-select-existing-buckets-in-april-2026/",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:119"
+    ]
+  },
+  {
+    "id": "s-0123",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-mfa-pattern",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "false_alarm",
+    "reason": "AWS's 'Secure API access with MFA' page says 'The temporary credentials returned by AssumeRole do not include MFA information in the context, so you cannot check individual API operations for MFA'. It also says the credentials 'don't include the MFA information' even when MFA was supplied to assume the role. The card's claim and its advice (enforce MFA on sts:AssumeRole in the trust policy) match AWS's documented model. The same page says CloudTrail's mfaAuthenticated=true for such sessions is separate from IAM evaluation, which is the likely source of the reviewer's error.",
+    "evidence": [
+      "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa_configure-api-require.html",
+      "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:123"
+    ]
+  },
+  {
+    "id": "s-0138",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-iam-mfa-for-destructive-api-mcq-02",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "debatable",
+    "reason": "Key a carries a 'so that ...' justification clause and is the longest option, which is a mild cue. Distractor d also names TerminateInstances/DeleteBucket, and reaching a requires eliminating b/c/d against the stem's stated constraints, which is legitimate reasoning rather than a surface giveaway. The bigger weakness is that no distractor tests the Bool vs BoolIfExists distinction the explanation stresses (a weak_distractor issue). Trimming the clause and adding a plain-Bool variant would sharpen the item.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:138",
+      "/Users/qc/src/recallsmith-rel18/services/ai-qa/src/ai_qa/prompts.py:43 (qa-v2 rubric, working tree: a merely longer/self-explaining key is at most weak_distractor/minor)"
+    ]
+  },
+  {
+    "id": "s-0146",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-lake-formation-service-card",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "false_alarm",
+    "reason": "The realWorldUsage note does name Lake Formation and would leak the answer if shown with the question. The app renders REAL USAGE only after reveal (answer side), so the learner does not see it while recalling.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:146",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/ReviewBody.tsx:94-126 (answer sections render only after 'Reveal answer')",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/CardAnswerSections.tsx:79-99 (CODING SAMPLE / REAL USAGE are answer-side sections)",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/screens/CardDetailScreen.tsx:476-495 (CardDetail shows them only behind 'Show answer')"
+    ]
+  },
+  {
+    "id": "s-0158",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-lambda-event-source-mappings-sqs-batching",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "false_alarm",
+    "reason": "On MCQ cards, McqReviewBody adds the code sample (with the explanation and usage sections) only when stage === 'verdict', after the learner has submitted a choice. The batchItemFailures JSON is not visible while the options are being chosen, so it cannot cue option b.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:158",
+      "/Users/qc/src/recallsmith-rel18/mobile/src/features/gacha/components/McqReviewBody.tsx:250-290 (MCQ explanation/usage/code sections built only when stage === 'verdict')"
+    ]
+  },
+  {
+    "id": "s-0163",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-foundry-deployment-name-mcq",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "debatable",
+    "reason": "The stem's error text 'Deployment not found' and key b share the word 'deployment', but distractor d also turns on deployments and addressing by name, so the clang is not unique to the key. Key b's 'because ...' clause states the tested rule and is the only self-justifying option: a recognised but minor cue, which the team's qa-v2 rubric classes as weak_distractor/minor. Trimming the clause is a cheap improvement; a test-wise guesser would still be torn between b and d.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:163",
+      "/Users/qc/src/recallsmith-rel18/services/ai-qa/src/ai_qa/prompts.py:43 (qa-v2 rubric, working tree: a merely longer/self-explaining key is at most weak_distractor/minor)"
+    ]
+  },
+  {
+    "id": "s-0168",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-nacl-ephemeral-ports-timeout-mcq-21",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "debatable",
+    "reason": "Key a is the only option with a 'so that ...' clause, a mild longest/self-explaining cue. The stem itself legitimately signals the fault ('denies everything else in both directions'), and distractor b (an outbound security-group rule) competes on the surface for a learner who does not know SG statefulness. So the clause does not make the key reliably pickable. Trim it as a polish item.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:168",
+      "/Users/qc/src/recallsmith-rel18/services/ai-qa/src/ai_qa/prompts.py:43 (qa-v2 rubric, working tree: a merely longer/self-explaining key is at most weak_distractor/minor)"
+    ]
+  },
+  {
+    "id": "s-0174",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-s3-glacier-retrieval-tiers",
+    "findingCategory": "ambiguous_stem",
+    "findingSeverity": "major",
+    "verdict": "debatable",
+    "reason": "The stem has no explicit cost qualifier, so Glacier Instant Retrieval (millisecond access) technically meets 'back within minutes'. Its cues still point to Flexible Retrieval: AWS positions Flexible Retrieval for data 'accessed 1-2 times per year' and Instant Retrieval for 'once per quarter', and the stem asks for a 'retrieval tier', which Instant Retrieval does not have. The explanation also addresses Instant Retrieval explicitly. Adding 'at the lowest storage cost' would remove the remaining ambiguity.",
+    "evidence": [
+      "https://aws.amazon.com/s3/storage-classes/glacier/",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:174"
+    ]
+  },
+  {
+    "id": "s-0189",
+    "deckSlug": "aws-saa-c03",
+    "stableUid": "aws-s3-deny-non-tls-mcq-41",
+    "findingCategory": "incorrect_answer",
+    "findingSeverity": "blocker",
+    "verdict": "debatable",
+    "reason": "The facts are right: aws:SecureTransport is true only for HTTPS, and a Deny when it is false rejects plain HTTP. But the sentence 'denies ... when aws:SecureTransport is false: the condition is true only for HTTPS requests' says 'the condition' where it means 'the key'. Read literally, the Deny condition (SecureTransport = false) is true only for HTTP, so the reviewer's reading is defensible. This is a wording defect that can confuse a learner, not an incorrect answer (keyed option a is correct); change 'the condition' to 'the key'.",
+    "evidence": [
+      "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-securetransport",
+      "https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html",
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:189"
+    ]
+  },
+  {
+    "id": "s-0192",
+    "deckSlug": "claude-ccdv-f",
+    "stableUid": "ccdvf-web-fetch-url-not-in-context-mcq-08",
+    "findingCategory": "answer_leak",
+    "findingSeverity": "major",
+    "verdict": "real_defect",
+    "reason": "The stem's error code url_not_in_prior_context and key a's clause ('so it appears in the conversation context web fetch is allowed to use') form a clang that no other option shares; b, c and d never mention context. A learner with no web-fetch knowledge can map the error name to the key, bypassing the tested rule (a URL only in the system prompt does not count as prior context). Keep the realistic error code, trim the key to a bare action, and consider a distractor that also touches context, such as moving the URL within the system prompt.",
+    "evidence": [
+      "/Users/qc/src/recallsmith-rel18/evals/data/seeded-v1.jsonl:192",
+      "/Users/qc/src/recallsmith-rel18/evals/reports/2026-09-27-claude-cli-claude-opus-5-qa-v1.jsonl:193"
+    ]
+  }
+]

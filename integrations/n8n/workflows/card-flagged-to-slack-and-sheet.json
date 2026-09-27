@@ -1,0 +1,865 @@
+{
+  "name": "DeveloperCards: card flagged to Slack and Sheet",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "developercards",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "a1f0c2d4-0001-4c1e-9d0a-000000000001",
+      "name": "DeveloperCards webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "a1f0c2d4-1001-4c1e-9d0a-000000000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-verify-signature\nconst DC_SIGNATURE_TOLERANCE_SECONDS = 300;\n\n// `previousSignature` is the optional X-DeveloperCards-Signature-Previous header. During a\n// secret rotation the sender signs with the new secret (primary header) and with the old one\n// (previous header), so a receiver still holding the old secret keeps verifying. The delivery\n// is accepted when either signature matches; both are compared in constant time.\nfunction verifyDeveloperCardsSignature({ secret, timestamp, signature, previousSignature, rawBody, nowSeconds, toleranceSeconds = DC_SIGNATURE_TOLERANCE_SECONDS }) {\n  try {\n    if (typeof secret !== 'string' || secret.length === 0) return { ok: false, reason: 'missing_secret' };\n    if (typeof timestamp !== 'string' || typeof signature !== 'string' || timestamp.length === 0 || signature.length === 0) {\n      return { ok: false, reason: 'missing_header' };\n    }\n    const ts = timestamp.trim();\n    if (!/^\\d{1,12}$/.test(ts)) return { ok: false, reason: 'bad_timestamp' };\n    if (typeof nowSeconds !== 'number' || !Number.isFinite(nowSeconds)) return { ok: false, reason: 'bad_timestamp' };\n    if (Math.abs(nowSeconds - Number(ts)) > toleranceSeconds) return { ok: false, reason: 'stale_timestamp' };\n    const sig = signature.trim().toLowerCase();\n    if (!/^[0-9a-f]{64}$/.test(sig)) return { ok: false, reason: 'bad_signature' };\n    let bodyBuffer;\n    if (Buffer.isBuffer(rawBody)) bodyBuffer = rawBody;\n    else if (typeof rawBody === 'string') bodyBuffer = Buffer.from(rawBody, 'utf8');\n    else return { ok: false, reason: 'bad_signature' };\n    const expected = crypto\n      .createHmac('sha256', secret)\n      .update(Buffer.concat([Buffer.from(ts + '.', 'utf8'), bodyBuffer]))\n      .digest();\n    if (expected.length !== 32) return { ok: false, reason: 'bad_signature' };\n    const candidates = [sig];\n    // A missing, repeated or malformed previous header is ignored: it can only add a match.\n    if (typeof previousSignature === 'string') {\n      const prev = previousSignature.trim().toLowerCase();\n      if (/^[0-9a-f]{64}$/.test(prev)) candidates.push(prev);\n    }\n    let matched = false;\n    for (const candidate of candidates) {\n      const given = Buffer.from(candidate, 'hex');\n      if (given.length === 32 && crypto.timingSafeEqual(expected, given)) matched = true;\n    }\n    return matched ? { ok: true } : { ok: false, reason: 'bad_signature' };\n  } catch (err) {\n    return { ok: false, reason: 'bad_signature' };\n  }\n}\n// END developercards-verify-signature\n\n// Glue: raw request bytes + DeveloperCards headers -> { ok, reason, body }.\nconst item = $input.first();\nconst headers = (item && item.json && item.json.headers) || {};\nconst header = (name) => {\n  const value = headers[name];\n  return Array.isArray(value) ? value[0] : value;\n};\nlet rawBody;\ntry {\n  rawBody = await this.helpers.getBinaryDataBuffer(0, 'data');\n} catch (err) {\n  rawBody = undefined;\n}\nlet secret;\ntry {\n  secret = $env.DC_WEBHOOK_SECRET;\n} catch (err) {\n  secret = undefined;\n}\nconst result = verifyDeveloperCardsSignature({\n  secret,\n  timestamp: header('x-developercards-timestamp'),\n  signature: header('x-developercards-signature'),\n  previousSignature: header('x-developercards-signature-previous'),\n  rawBody,\n  nowSeconds: Math.floor(Date.now() / 1000),\n});\nconst event = header('x-developercards-event') || null;\nif (!result.ok) {\n  return [{ json: { ok: false, reason: result.reason, event, body: null } }];\n}\nlet body;\ntry {\n  body = JSON.parse(rawBody.toString('utf8'));\n} catch (err) {\n  return [{ json: { ok: false, reason: 'bad_body', event, body: null } }];\n}\nreturn [{ json: { ok: true, reason: null, event, body } }];\n"
+      },
+      "id": "a1f0c2d4-0002-4c1e-9d0a-000000000002",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c0a8f1e2-0001-4b7a-8e61-000000000001",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1f0c2d4-0003-4c1e-9d0a-000000000003",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, reason: $json.reason }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "a1f0c2d4-0004-4c1e-9d0a-000000000004",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        660,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1f0c2d4-0005-4c1e-9d0a-000000000005",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2640,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nconst DC_DELIVERY_MEMORY = 1000;\nconst DC_RUN_QUIET_MS = 5 * 60 * 1000;\nconst DC_RUN_MAX_WAIT_MS = 30 * 60 * 1000;\nconst DC_RUN_TOP_FINDINGS = 5;\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n\nfunction dcHeader(headers, name) {\n  const h = headers && typeof headers === 'object' ? headers : {};\n  const value = h[name];\n  return Array.isArray(value) ? value[0] : value;\n}\n\n// The dispatcher sends the same X-DeveloperCards-Delivery on every retry of a delivery;\n// the eventId is the fallback for a sender that omits the header.\nfunction developerCardsDeliveryId(headers, body) {\n  const header = dcHeader(headers, 'x-developercards-delivery');\n  if (header !== undefined && header !== null && String(header).trim() !== '') return String(header).trim();\n  const b = body && typeof body === 'object' ? body : {};\n  return dcText(b.eventId, '');\n}\n\nfunction dcDeliveries(state) {\n  if (!Array.isArray(state.deliveries)) state.deliveries = [];\n  return state.deliveries;\n}\n\nfunction isDuplicateDelivery(state, deliveryId) {\n  return deliveryId !== '' && dcDeliveries(state).includes(deliveryId);\n}\n\n// Called only after every write for the delivery succeeded, so a failed delivery is\n// retried in full by the dispatcher. Keeps the last DC_DELIVERY_MEMORY ids.\nfunction rememberDelivery(state, deliveryId) {\n  if (deliveryId === '') return;\n  const list = dcDeliveries(state).filter((id) => id !== deliveryId);\n  list.push(deliveryId);\n  state.deliveries = list.slice(-DC_DELIVERY_MEMORY);\n}\n\nfunction dcFindings(data) {\n  return Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n}\n\n// Adds one card.flagged event to its QA run's pending Slack summary. Idempotent per\n// eventId, so a redelivered event does not count twice.\nfunction queueFlaggedCard(state, body, nowMs) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  if (!state.runs || typeof state.runs !== 'object') state.runs = {};\n  const runId = dcText(data.runId, 'deck ' + dcDeckLabel(data));\n  const run = state.runs[runId] || { runId, deckSlug: dcDeckLabel(data), consoleUrl: '', firstAt: nowMs, lastAt: nowMs, cards: {} };\n  const key = dcText(b.eventId, dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')));\n  run.cards[key] = {\n    stableUid: dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')),\n    counts: dcCounts(data),\n    findings: dcFindings(data).map((f) => ({\n      severity: dcText(f.severity, 'minor'),\n      category: dcText(f.category, 'uncategorised'),\n      message: dcText(f.message, ''),\n    })),\n  };\n  run.lastAt = nowMs;\n  if (data.consoleUrl) run.consoleUrl = String(data.consoleUrl);\n  state.runs[runId] = run;\n  return runId;\n}\n\nfunction runSummaryMessage(run) {\n  const keys = Object.keys(run.cards || {});\n  const totals = { blocker: 0, major: 0, minor: 0 };\n  const findings = [];\n  for (const key of keys) {\n    const card = run.cards[key];\n    for (const severity of DC_SEVERITIES) totals[severity] += dcCount(card.counts && card.counts[severity]);\n    for (const f of card.findings || []) findings.push({ ...f, stableUid: card.stableUid });\n  }\n  const rank = (f) => {\n    const i = DC_SEVERITIES.indexOf(f.severity);\n    return i < 0 ? DC_SEVERITIES.length : i;\n  };\n  const top = findings\n    .map((f, i) => ({ f, i }))\n    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)\n    .slice(0, DC_RUN_TOP_FINDINGS)\n    .map(({ f }) => '- ' + f.severity + ' · ' + f.category + ' (' + f.stableUid + '): ' + f.message);\n  const lines = [\n    'AI QA run ' + run.runId + ' in ' + run.deckSlug + ' flagged ' + keys.length + (keys.length === 1 ? ' card' : ' cards'),\n    'Findings: ' + totals.blocker + ' blocker / ' + totals.major + ' major / ' + totals.minor + ' minor',\n  ];\n  if (top.length > 0) lines.push('Top findings:', ...top);\n  if (run.consoleUrl) lines.push('Review: ' + run.consoleUrl);\n  return lines.join('\\n');\n}\n\n// One Slack message per QA run, once no card.flagged event arrived for DC_RUN_QUIET_MS\n// (or the run has waited DC_RUN_MAX_WAIT_MS). The run stays pending until marked sent.\nfunction dueRunSummaries(state, nowMs) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  const due = [];\n  for (const runId of Object.keys(runs).sort()) {\n    const run = runs[runId];\n    if (nowMs - run.lastAt < DC_RUN_QUIET_MS && nowMs - run.firstAt < DC_RUN_MAX_WAIT_MS) continue;\n    const cardKeys = Object.keys(run.cards || {});\n    if (cardKeys.length === 0) continue;\n    due.push({ runId, cardCount: cardKeys.length, cardKeys, text: runSummaryMessage(run) });\n  }\n  return due;\n}\n\n// Drops the cards a posted summary covered; cards that arrived meanwhile stay pending.\nfunction markRunSummariesSent(state, sent) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  for (const summary of Array.isArray(sent) ? sent : []) {\n    const run = summary && runs[summary.runId];\n    if (!run) continue;\n    for (const key of summary.cardKeys || []) delete run.cards[key];\n    if (Object.keys(run.cards).length === 0) delete runs[summary.runId];\n  }\n}\n\nfunction reviewQueuedMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const count = dcCount(data.draftCount);\n  const lines = [\n    count + (count === 1 ? ' draft' : ' drafts') + ' waiting for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')',\n  ];\n  if (data.consoleUrl) lines.push('Review: ' + String(data.consoleUrl));\n  return { text: lines.join('\\n') };\n}\n// END developercards-recipe-logic\n\n// Glue: one Events-tab row per verified delivery.\nreturn $input.all().map((item) => ({ json: summarizeDeveloperCardsEvent(item.json.body) }));\n"
+      },
+      "id": "a1f0c2d4-0006-4c1e-9d0a-000000000006",
+      "name": "Event row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Events",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "eventId": "={{ $json.eventId }}",
+            "occurredAt": "={{ $json.occurredAt }}",
+            "event": "={{ $json.event }}",
+            "deckSlug": "={{ $json.deckSlug }}",
+            "summary": "={{ $json.summary }}"
+          },
+          "matchingColumns": [
+            "eventId"
+          ],
+          "schema": [
+            {
+              "id": "eventId",
+              "displayName": "eventId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "occurredAt",
+              "displayName": "occurredAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event",
+              "displayName": "event",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "deckSlug",
+              "displayName": "deckSlug",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "a1f0c2d4-0007-4c1e-9d0a-000000000007",
+      "name": "Events sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1320,
+        400
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "DeveloperCards Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "c0a8f1e2-0002-4b7a-8e61-000000000002",
+                    "leftValue": "={{ $('Check delivery').first().json.body.event }}",
+                    "rightValue": "card.flagged",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "card.flagged"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "c0a8f1e2-0004-4b7a-8e61-000000000004",
+                    "leftValue": "={{ $('Check delivery').first().json.body.event }}",
+                    "rightValue": "review.queued",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "review.queued"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "a1f0c2d4-0008-4c1e-9d0a-000000000008",
+      "name": "Route by event",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1540,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nconst DC_DELIVERY_MEMORY = 1000;\nconst DC_RUN_QUIET_MS = 5 * 60 * 1000;\nconst DC_RUN_MAX_WAIT_MS = 30 * 60 * 1000;\nconst DC_RUN_TOP_FINDINGS = 5;\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n\nfunction dcHeader(headers, name) {\n  const h = headers && typeof headers === 'object' ? headers : {};\n  const value = h[name];\n  return Array.isArray(value) ? value[0] : value;\n}\n\n// The dispatcher sends the same X-DeveloperCards-Delivery on every retry of a delivery;\n// the eventId is the fallback for a sender that omits the header.\nfunction developerCardsDeliveryId(headers, body) {\n  const header = dcHeader(headers, 'x-developercards-delivery');\n  if (header !== undefined && header !== null && String(header).trim() !== '') return String(header).trim();\n  const b = body && typeof body === 'object' ? body : {};\n  return dcText(b.eventId, '');\n}\n\nfunction dcDeliveries(state) {\n  if (!Array.isArray(state.deliveries)) state.deliveries = [];\n  return state.deliveries;\n}\n\nfunction isDuplicateDelivery(state, deliveryId) {\n  return deliveryId !== '' && dcDeliveries(state).includes(deliveryId);\n}\n\n// Called only after every write for the delivery succeeded, so a failed delivery is\n// retried in full by the dispatcher. Keeps the last DC_DELIVERY_MEMORY ids.\nfunction rememberDelivery(state, deliveryId) {\n  if (deliveryId === '') return;\n  const list = dcDeliveries(state).filter((id) => id !== deliveryId);\n  list.push(deliveryId);\n  state.deliveries = list.slice(-DC_DELIVERY_MEMORY);\n}\n\nfunction dcFindings(data) {\n  return Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n}\n\n// Adds one card.flagged event to its QA run's pending Slack summary. Idempotent per\n// eventId, so a redelivered event does not count twice.\nfunction queueFlaggedCard(state, body, nowMs) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  if (!state.runs || typeof state.runs !== 'object') state.runs = {};\n  const runId = dcText(data.runId, 'deck ' + dcDeckLabel(data));\n  const run = state.runs[runId] || { runId, deckSlug: dcDeckLabel(data), consoleUrl: '', firstAt: nowMs, lastAt: nowMs, cards: {} };\n  const key = dcText(b.eventId, dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')));\n  run.cards[key] = {\n    stableUid: dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')),\n    counts: dcCounts(data),\n    findings: dcFindings(data).map((f) => ({\n      severity: dcText(f.severity, 'minor'),\n      category: dcText(f.category, 'uncategorised'),\n      message: dcText(f.message, ''),\n    })),\n  };\n  run.lastAt = nowMs;\n  if (data.consoleUrl) run.consoleUrl = String(data.consoleUrl);\n  state.runs[runId] = run;\n  return runId;\n}\n\nfunction runSummaryMessage(run) {\n  const keys = Object.keys(run.cards || {});\n  const totals = { blocker: 0, major: 0, minor: 0 };\n  const findings = [];\n  for (const key of keys) {\n    const card = run.cards[key];\n    for (const severity of DC_SEVERITIES) totals[severity] += dcCount(card.counts && card.counts[severity]);\n    for (const f of card.findings || []) findings.push({ ...f, stableUid: card.stableUid });\n  }\n  const rank = (f) => {\n    const i = DC_SEVERITIES.indexOf(f.severity);\n    return i < 0 ? DC_SEVERITIES.length : i;\n  };\n  const top = findings\n    .map((f, i) => ({ f, i }))\n    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)\n    .slice(0, DC_RUN_TOP_FINDINGS)\n    .map(({ f }) => '- ' + f.severity + ' · ' + f.category + ' (' + f.stableUid + '): ' + f.message);\n  const lines = [\n    'AI QA run ' + run.runId + ' in ' + run.deckSlug + ' flagged ' + keys.length + (keys.length === 1 ? ' card' : ' cards'),\n    'Findings: ' + totals.blocker + ' blocker / ' + totals.major + ' major / ' + totals.minor + ' minor',\n  ];\n  if (top.length > 0) lines.push('Top findings:', ...top);\n  if (run.consoleUrl) lines.push('Review: ' + run.consoleUrl);\n  return lines.join('\\n');\n}\n\n// One Slack message per QA run, once no card.flagged event arrived for DC_RUN_QUIET_MS\n// (or the run has waited DC_RUN_MAX_WAIT_MS). The run stays pending until marked sent.\nfunction dueRunSummaries(state, nowMs) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  const due = [];\n  for (const runId of Object.keys(runs).sort()) {\n    const run = runs[runId];\n    if (nowMs - run.lastAt < DC_RUN_QUIET_MS && nowMs - run.firstAt < DC_RUN_MAX_WAIT_MS) continue;\n    const cardKeys = Object.keys(run.cards || {});\n    if (cardKeys.length === 0) continue;\n    due.push({ runId, cardCount: cardKeys.length, cardKeys, text: runSummaryMessage(run) });\n  }\n  return due;\n}\n\n// Drops the cards a posted summary covered; cards that arrived meanwhile stay pending.\nfunction markRunSummariesSent(state, sent) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  for (const summary of Array.isArray(sent) ? sent : []) {\n    const run = summary && runs[summary.runId];\n    if (!run) continue;\n    for (const key of summary.cardKeys || []) delete run.cards[key];\n    if (Object.keys(run.cards).length === 0) delete runs[summary.runId];\n  }\n}\n\nfunction reviewQueuedMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const count = dcCount(data.draftCount);\n  const lines = [\n    count + (count === 1 ? ' draft' : ' drafts') + ' waiting for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')',\n  ];\n  if (data.consoleUrl) lines.push('Review: ' + String(data.consoleUrl));\n  return { text: lines.join('\\n') };\n}\n// END developercards-recipe-logic\n\n// Glue: Flagged-tab row for the card.flagged delivery (one row per card).\nreturn [{ json: flaggedCardMessage($('Check delivery').first().json.body) }];\n"
+      },
+      "id": "a1f0c2d4-0009-4c1e-9d0a-000000000009",
+      "name": "Flagged message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#developercards",
+          "mode": "name"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {}
+      },
+      "id": "a1f0c2d4-0010-4c1e-9d0a-000000000010",
+      "name": "Slack review queued",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1980,
+        440
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_SLACK_CREDENTIAL_ID",
+          "name": "DeveloperCards Slack"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Flagged",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "eventId": "={{ $('Flagged message').first().json.row.eventId }}",
+            "occurredAt": "={{ $('Flagged message').first().json.row.occurredAt }}",
+            "deckSlug": "={{ $('Flagged message').first().json.row.deckSlug }}",
+            "stableUid": "={{ $('Flagged message').first().json.row.stableUid }}",
+            "blocker": "={{ $('Flagged message').first().json.row.blocker }}",
+            "major": "={{ $('Flagged message').first().json.row.major }}",
+            "minor": "={{ $('Flagged message').first().json.row.minor }}",
+            "topFinding": "={{ $('Flagged message').first().json.row.topFinding }}",
+            "consoleUrl": "={{ $('Flagged message').first().json.row.consoleUrl }}"
+          },
+          "matchingColumns": [
+            "eventId"
+          ],
+          "schema": [
+            {
+              "id": "eventId",
+              "displayName": "eventId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "occurredAt",
+              "displayName": "occurredAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "deckSlug",
+              "displayName": "deckSlug",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "stableUid",
+              "displayName": "stableUid",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "blocker",
+              "displayName": "blocker",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "major",
+              "displayName": "major",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "minor",
+              "displayName": "minor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "topFinding",
+              "displayName": "topFinding",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "consoleUrl",
+              "displayName": "consoleUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "a1f0c2d4-0011-4c1e-9d0a-000000000011",
+      "name": "Flagged sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1980,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "DeveloperCards Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nconst DC_DELIVERY_MEMORY = 1000;\nconst DC_RUN_QUIET_MS = 5 * 60 * 1000;\nconst DC_RUN_MAX_WAIT_MS = 30 * 60 * 1000;\nconst DC_RUN_TOP_FINDINGS = 5;\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n\nfunction dcHeader(headers, name) {\n  const h = headers && typeof headers === 'object' ? headers : {};\n  const value = h[name];\n  return Array.isArray(value) ? value[0] : value;\n}\n\n// The dispatcher sends the same X-DeveloperCards-Delivery on every retry of a delivery;\n// the eventId is the fallback for a sender that omits the header.\nfunction developerCardsDeliveryId(headers, body) {\n  const header = dcHeader(headers, 'x-developercards-delivery');\n  if (header !== undefined && header !== null && String(header).trim() !== '') return String(header).trim();\n  const b = body && typeof body === 'object' ? body : {};\n  return dcText(b.eventId, '');\n}\n\nfunction dcDeliveries(state) {\n  if (!Array.isArray(state.deliveries)) state.deliveries = [];\n  return state.deliveries;\n}\n\nfunction isDuplicateDelivery(state, deliveryId) {\n  return deliveryId !== '' && dcDeliveries(state).includes(deliveryId);\n}\n\n// Called only after every write for the delivery succeeded, so a failed delivery is\n// retried in full by the dispatcher. Keeps the last DC_DELIVERY_MEMORY ids.\nfunction rememberDelivery(state, deliveryId) {\n  if (deliveryId === '') return;\n  const list = dcDeliveries(state).filter((id) => id !== deliveryId);\n  list.push(deliveryId);\n  state.deliveries = list.slice(-DC_DELIVERY_MEMORY);\n}\n\nfunction dcFindings(data) {\n  return Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n}\n\n// Adds one card.flagged event to its QA run's pending Slack summary. Idempotent per\n// eventId, so a redelivered event does not count twice.\nfunction queueFlaggedCard(state, body, nowMs) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  if (!state.runs || typeof state.runs !== 'object') state.runs = {};\n  const runId = dcText(data.runId, 'deck ' + dcDeckLabel(data));\n  const run = state.runs[runId] || { runId, deckSlug: dcDeckLabel(data), consoleUrl: '', firstAt: nowMs, lastAt: nowMs, cards: {} };\n  const key = dcText(b.eventId, dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')));\n  run.cards[key] = {\n    stableUid: dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')),\n    counts: dcCounts(data),\n    findings: dcFindings(data).map((f) => ({\n      severity: dcText(f.severity, 'minor'),\n      category: dcText(f.category, 'uncategorised'),\n      message: dcText(f.message, ''),\n    })),\n  };\n  run.lastAt = nowMs;\n  if (data.consoleUrl) run.consoleUrl = String(data.consoleUrl);\n  state.runs[runId] = run;\n  return runId;\n}\n\nfunction runSummaryMessage(run) {\n  const keys = Object.keys(run.cards || {});\n  const totals = { blocker: 0, major: 0, minor: 0 };\n  const findings = [];\n  for (const key of keys) {\n    const card = run.cards[key];\n    for (const severity of DC_SEVERITIES) totals[severity] += dcCount(card.counts && card.counts[severity]);\n    for (const f of card.findings || []) findings.push({ ...f, stableUid: card.stableUid });\n  }\n  const rank = (f) => {\n    const i = DC_SEVERITIES.indexOf(f.severity);\n    return i < 0 ? DC_SEVERITIES.length : i;\n  };\n  const top = findings\n    .map((f, i) => ({ f, i }))\n    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)\n    .slice(0, DC_RUN_TOP_FINDINGS)\n    .map(({ f }) => '- ' + f.severity + ' · ' + f.category + ' (' + f.stableUid + '): ' + f.message);\n  const lines = [\n    'AI QA run ' + run.runId + ' in ' + run.deckSlug + ' flagged ' + keys.length + (keys.length === 1 ? ' card' : ' cards'),\n    'Findings: ' + totals.blocker + ' blocker / ' + totals.major + ' major / ' + totals.minor + ' minor',\n  ];\n  if (top.length > 0) lines.push('Top findings:', ...top);\n  if (run.consoleUrl) lines.push('Review: ' + run.consoleUrl);\n  return lines.join('\\n');\n}\n\n// One Slack message per QA run, once no card.flagged event arrived for DC_RUN_QUIET_MS\n// (or the run has waited DC_RUN_MAX_WAIT_MS). The run stays pending until marked sent.\nfunction dueRunSummaries(state, nowMs) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  const due = [];\n  for (const runId of Object.keys(runs).sort()) {\n    const run = runs[runId];\n    if (nowMs - run.lastAt < DC_RUN_QUIET_MS && nowMs - run.firstAt < DC_RUN_MAX_WAIT_MS) continue;\n    const cardKeys = Object.keys(run.cards || {});\n    if (cardKeys.length === 0) continue;\n    due.push({ runId, cardCount: cardKeys.length, cardKeys, text: runSummaryMessage(run) });\n  }\n  return due;\n}\n\n// Drops the cards a posted summary covered; cards that arrived meanwhile stay pending.\nfunction markRunSummariesSent(state, sent) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  for (const summary of Array.isArray(sent) ? sent : []) {\n    const run = summary && runs[summary.runId];\n    if (!run) continue;\n    for (const key of summary.cardKeys || []) delete run.cards[key];\n    if (Object.keys(run.cards).length === 0) delete runs[summary.runId];\n  }\n}\n\nfunction reviewQueuedMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const count = dcCount(data.draftCount);\n  const lines = [\n    count + (count === 1 ? ' draft' : ' drafts') + ' waiting for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')',\n  ];\n  if (data.consoleUrl) lines.push('Review: ' + String(data.consoleUrl));\n  return { text: lines.join('\\n') };\n}\n// END developercards-recipe-logic\n\n// Glue: flag a delivery this workflow already processed (X-DeveloperCards-Delivery, else eventId).\nconst state = $getWorkflowStaticData('global');\nconst hook = $('DeveloperCards webhook').first().json;\nreturn $input.all().map((item) => {\n  const deliveryId = developerCardsDeliveryId(hook.headers, item.json.body);\n  return { json: { ...item.json, deliveryId, duplicate: isDuplicateDelivery(state, deliveryId) } };\n});\n"
+      },
+      "name": "Check delivery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "a1f0c2d4-0012-4c1e-9d0a-000000000012",
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c0a8f1e2-0003-4b7a-8e61-000000000003",
+              "leftValue": "={{ $json.duplicate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1f0c2d4-0013-4c1e-9d0a-000000000013",
+      "name": "Duplicate delivery?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"duplicate\":true}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "name": "Respond duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "id": "a1f0c2d4-0014-4c1e-9d0a-000000000014",
+      "position": [
+        1100,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nconst DC_DELIVERY_MEMORY = 1000;\nconst DC_RUN_QUIET_MS = 5 * 60 * 1000;\nconst DC_RUN_MAX_WAIT_MS = 30 * 60 * 1000;\nconst DC_RUN_TOP_FINDINGS = 5;\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n\nfunction dcHeader(headers, name) {\n  const h = headers && typeof headers === 'object' ? headers : {};\n  const value = h[name];\n  return Array.isArray(value) ? value[0] : value;\n}\n\n// The dispatcher sends the same X-DeveloperCards-Delivery on every retry of a delivery;\n// the eventId is the fallback for a sender that omits the header.\nfunction developerCardsDeliveryId(headers, body) {\n  const header = dcHeader(headers, 'x-developercards-delivery');\n  if (header !== undefined && header !== null && String(header).trim() !== '') return String(header).trim();\n  const b = body && typeof body === 'object' ? body : {};\n  return dcText(b.eventId, '');\n}\n\nfunction dcDeliveries(state) {\n  if (!Array.isArray(state.deliveries)) state.deliveries = [];\n  return state.deliveries;\n}\n\nfunction isDuplicateDelivery(state, deliveryId) {\n  return deliveryId !== '' && dcDeliveries(state).includes(deliveryId);\n}\n\n// Called only after every write for the delivery succeeded, so a failed delivery is\n// retried in full by the dispatcher. Keeps the last DC_DELIVERY_MEMORY ids.\nfunction rememberDelivery(state, deliveryId) {\n  if (deliveryId === '') return;\n  const list = dcDeliveries(state).filter((id) => id !== deliveryId);\n  list.push(deliveryId);\n  state.deliveries = list.slice(-DC_DELIVERY_MEMORY);\n}\n\nfunction dcFindings(data) {\n  return Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n}\n\n// Adds one card.flagged event to its QA run's pending Slack summary. Idempotent per\n// eventId, so a redelivered event does not count twice.\nfunction queueFlaggedCard(state, body, nowMs) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  if (!state.runs || typeof state.runs !== 'object') state.runs = {};\n  const runId = dcText(data.runId, 'deck ' + dcDeckLabel(data));\n  const run = state.runs[runId] || { runId, deckSlug: dcDeckLabel(data), consoleUrl: '', firstAt: nowMs, lastAt: nowMs, cards: {} };\n  const key = dcText(b.eventId, dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')));\n  run.cards[key] = {\n    stableUid: dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')),\n    counts: dcCounts(data),\n    findings: dcFindings(data).map((f) => ({\n      severity: dcText(f.severity, 'minor'),\n      category: dcText(f.category, 'uncategorised'),\n      message: dcText(f.message, ''),\n    })),\n  };\n  run.lastAt = nowMs;\n  if (data.consoleUrl) run.consoleUrl = String(data.consoleUrl);\n  state.runs[runId] = run;\n  return runId;\n}\n\nfunction runSummaryMessage(run) {\n  const keys = Object.keys(run.cards || {});\n  const totals = { blocker: 0, major: 0, minor: 0 };\n  const findings = [];\n  for (const key of keys) {\n    const card = run.cards[key];\n    for (const severity of DC_SEVERITIES) totals[severity] += dcCount(card.counts && card.counts[severity]);\n    for (const f of card.findings || []) findings.push({ ...f, stableUid: card.stableUid });\n  }\n  const rank = (f) => {\n    const i = DC_SEVERITIES.indexOf(f.severity);\n    return i < 0 ? DC_SEVERITIES.length : i;\n  };\n  const top = findings\n    .map((f, i) => ({ f, i }))\n    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)\n    .slice(0, DC_RUN_TOP_FINDINGS)\n    .map(({ f }) => '- ' + f.severity + ' · ' + f.category + ' (' + f.stableUid + '): ' + f.message);\n  const lines = [\n    'AI QA run ' + run.runId + ' in ' + run.deckSlug + ' flagged ' + keys.length + (keys.length === 1 ? ' card' : ' cards'),\n    'Findings: ' + totals.blocker + ' blocker / ' + totals.major + ' major / ' + totals.minor + ' minor',\n  ];\n  if (top.length > 0) lines.push('Top findings:', ...top);\n  if (run.consoleUrl) lines.push('Review: ' + run.consoleUrl);\n  return lines.join('\\n');\n}\n\n// One Slack message per QA run, once no card.flagged event arrived for DC_RUN_QUIET_MS\n// (or the run has waited DC_RUN_MAX_WAIT_MS). The run stays pending until marked sent.\nfunction dueRunSummaries(state, nowMs) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  const due = [];\n  for (const runId of Object.keys(runs).sort()) {\n    const run = runs[runId];\n    if (nowMs - run.lastAt < DC_RUN_QUIET_MS && nowMs - run.firstAt < DC_RUN_MAX_WAIT_MS) continue;\n    const cardKeys = Object.keys(run.cards || {});\n    if (cardKeys.length === 0) continue;\n    due.push({ runId, cardCount: cardKeys.length, cardKeys, text: runSummaryMessage(run) });\n  }\n  return due;\n}\n\n// Drops the cards a posted summary covered; cards that arrived meanwhile stay pending.\nfunction markRunSummariesSent(state, sent) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  for (const summary of Array.isArray(sent) ? sent : []) {\n    const run = summary && runs[summary.runId];\n    if (!run) continue;\n    for (const key of summary.cardKeys || []) delete run.cards[key];\n    if (Object.keys(run.cards).length === 0) delete runs[summary.runId];\n  }\n}\n\nfunction reviewQueuedMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const count = dcCount(data.draftCount);\n  const lines = [\n    count + (count === 1 ? ' draft' : ' drafts') + ' waiting for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')',\n  ];\n  if (data.consoleUrl) lines.push('Review: ' + String(data.consoleUrl));\n  return { text: lines.join('\\n') };\n}\n// END developercards-recipe-logic\n\n// Glue: add the flagged card to its QA run's pending Slack summary (posted by the schedule below).\nconst state = $getWorkflowStaticData('global');\nconst runId = queueFlaggedCard(state, $('Check delivery').first().json.body, Date.now());\nreturn [{ json: { runId } }];\n"
+      },
+      "name": "Queue run summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "a1f0c2d4-0015-4c1e-9d0a-000000000015",
+      "position": [
+        2200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nconst DC_DELIVERY_MEMORY = 1000;\nconst DC_RUN_QUIET_MS = 5 * 60 * 1000;\nconst DC_RUN_MAX_WAIT_MS = 30 * 60 * 1000;\nconst DC_RUN_TOP_FINDINGS = 5;\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n\nfunction dcHeader(headers, name) {\n  const h = headers && typeof headers === 'object' ? headers : {};\n  const value = h[name];\n  return Array.isArray(value) ? value[0] : value;\n}\n\n// The dispatcher sends the same X-DeveloperCards-Delivery on every retry of a delivery;\n// the eventId is the fallback for a sender that omits the header.\nfunction developerCardsDeliveryId(headers, body) {\n  const header = dcHeader(headers, 'x-developercards-delivery');\n  if (header !== undefined && header !== null && String(header).trim() !== '') return String(header).trim();\n  const b = body && typeof body === 'object' ? body : {};\n  return dcText(b.eventId, '');\n}\n\nfunction dcDeliveries(state) {\n  if (!Array.isArray(state.deliveries)) state.deliveries = [];\n  return state.deliveries;\n}\n\nfunction isDuplicateDelivery(state, deliveryId) {\n  return deliveryId !== '' && dcDeliveries(state).includes(deliveryId);\n}\n\n// Called only after every write for the delivery succeeded, so a failed delivery is\n// retried in full by the dispatcher. Keeps the last DC_DELIVERY_MEMORY ids.\nfunction rememberDelivery(state, deliveryId) {\n  if (deliveryId === '') return;\n  const list = dcDeliveries(state).filter((id) => id !== deliveryId);\n  list.push(deliveryId);\n  state.deliveries = list.slice(-DC_DELIVERY_MEMORY);\n}\n\nfunction dcFindings(data) {\n  return Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n}\n\n// Adds one card.flagged event to its QA run's pending Slack summary. Idempotent per\n// eventId, so a redelivered event does not count twice.\nfunction queueFlaggedCard(state, body, nowMs) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  if (!state.runs || typeof state.runs !== 'object') state.runs = {};\n  const runId = dcText(data.runId, 'deck ' + dcDeckLabel(data));\n  const run = state.runs[runId] || { runId, deckSlug: dcDeckLabel(data), consoleUrl: '', firstAt: nowMs, lastAt: nowMs, cards: {} };\n  const key = dcText(b.eventId, dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')));\n  run.cards[key] = {\n    stableUid: dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')),\n    counts: dcCounts(data),\n    findings: dcFindings(data).map((f) => ({\n      severity: dcText(f.severity, 'minor'),\n      category: dcText(f.category, 'uncategorised'),\n      message: dcText(f.message, ''),\n    })),\n  };\n  run.lastAt = nowMs;\n  if (data.consoleUrl) run.consoleUrl = String(data.consoleUrl);\n  state.runs[runId] = run;\n  return runId;\n}\n\nfunction runSummaryMessage(run) {\n  const keys = Object.keys(run.cards || {});\n  const totals = { blocker: 0, major: 0, minor: 0 };\n  const findings = [];\n  for (const key of keys) {\n    const card = run.cards[key];\n    for (const severity of DC_SEVERITIES) totals[severity] += dcCount(card.counts && card.counts[severity]);\n    for (const f of card.findings || []) findings.push({ ...f, stableUid: card.stableUid });\n  }\n  const rank = (f) => {\n    const i = DC_SEVERITIES.indexOf(f.severity);\n    return i < 0 ? DC_SEVERITIES.length : i;\n  };\n  const top = findings\n    .map((f, i) => ({ f, i }))\n    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)\n    .slice(0, DC_RUN_TOP_FINDINGS)\n    .map(({ f }) => '- ' + f.severity + ' · ' + f.category + ' (' + f.stableUid + '): ' + f.message);\n  const lines = [\n    'AI QA run ' + run.runId + ' in ' + run.deckSlug + ' flagged ' + keys.length + (keys.length === 1 ? ' card' : ' cards'),\n    'Findings: ' + totals.blocker + ' blocker / ' + totals.major + ' major / ' + totals.minor + ' minor',\n  ];\n  if (top.length > 0) lines.push('Top findings:', ...top);\n  if (run.consoleUrl) lines.push('Review: ' + run.consoleUrl);\n  return lines.join('\\n');\n}\n\n// One Slack message per QA run, once no card.flagged event arrived for DC_RUN_QUIET_MS\n// (or the run has waited DC_RUN_MAX_WAIT_MS). The run stays pending until marked sent.\nfunction dueRunSummaries(state, nowMs) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  const due = [];\n  for (const runId of Object.keys(runs).sort()) {\n    const run = runs[runId];\n    if (nowMs - run.lastAt < DC_RUN_QUIET_MS && nowMs - run.firstAt < DC_RUN_MAX_WAIT_MS) continue;\n    const cardKeys = Object.keys(run.cards || {});\n    if (cardKeys.length === 0) continue;\n    due.push({ runId, cardCount: cardKeys.length, cardKeys, text: runSummaryMessage(run) });\n  }\n  return due;\n}\n\n// Drops the cards a posted summary covered; cards that arrived meanwhile stay pending.\nfunction markRunSummariesSent(state, sent) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  for (const summary of Array.isArray(sent) ? sent : []) {\n    const run = summary && runs[summary.runId];\n    if (!run) continue;\n    for (const key of summary.cardKeys || []) delete run.cards[key];\n    if (Object.keys(run.cards).length === 0) delete runs[summary.runId];\n  }\n}\n\nfunction reviewQueuedMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const count = dcCount(data.draftCount);\n  const lines = [\n    count + (count === 1 ? ' draft' : ' drafts') + ' waiting for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')',\n  ];\n  if (data.consoleUrl) lines.push('Review: ' + String(data.consoleUrl));\n  return { text: lines.join('\\n') };\n}\n// END developercards-recipe-logic\n\n// Glue: Slack text for a review.queued delivery (the human checkpoint).\nreturn [{ json: reviewQueuedMessage($('Check delivery').first().json.body) }];\n"
+      },
+      "name": "Review message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "a1f0c2d4-0016-4c1e-9d0a-000000000016",
+      "position": [
+        1760,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nconst DC_DELIVERY_MEMORY = 1000;\nconst DC_RUN_QUIET_MS = 5 * 60 * 1000;\nconst DC_RUN_MAX_WAIT_MS = 30 * 60 * 1000;\nconst DC_RUN_TOP_FINDINGS = 5;\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n\nfunction dcHeader(headers, name) {\n  const h = headers && typeof headers === 'object' ? headers : {};\n  const value = h[name];\n  return Array.isArray(value) ? value[0] : value;\n}\n\n// The dispatcher sends the same X-DeveloperCards-Delivery on every retry of a delivery;\n// the eventId is the fallback for a sender that omits the header.\nfunction developerCardsDeliveryId(headers, body) {\n  const header = dcHeader(headers, 'x-developercards-delivery');\n  if (header !== undefined && header !== null && String(header).trim() !== '') return String(header).trim();\n  const b = body && typeof body === 'object' ? body : {};\n  return dcText(b.eventId, '');\n}\n\nfunction dcDeliveries(state) {\n  if (!Array.isArray(state.deliveries)) state.deliveries = [];\n  return state.deliveries;\n}\n\nfunction isDuplicateDelivery(state, deliveryId) {\n  return deliveryId !== '' && dcDeliveries(state).includes(deliveryId);\n}\n\n// Called only after every write for the delivery succeeded, so a failed delivery is\n// retried in full by the dispatcher. Keeps the last DC_DELIVERY_MEMORY ids.\nfunction rememberDelivery(state, deliveryId) {\n  if (deliveryId === '') return;\n  const list = dcDeliveries(state).filter((id) => id !== deliveryId);\n  list.push(deliveryId);\n  state.deliveries = list.slice(-DC_DELIVERY_MEMORY);\n}\n\nfunction dcFindings(data) {\n  return Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n}\n\n// Adds one card.flagged event to its QA run's pending Slack summary. Idempotent per\n// eventId, so a redelivered event does not count twice.\nfunction queueFlaggedCard(state, body, nowMs) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  if (!state.runs || typeof state.runs !== 'object') state.runs = {};\n  const runId = dcText(data.runId, 'deck ' + dcDeckLabel(data));\n  const run = state.runs[runId] || { runId, deckSlug: dcDeckLabel(data), consoleUrl: '', firstAt: nowMs, lastAt: nowMs, cards: {} };\n  const key = dcText(b.eventId, dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')));\n  run.cards[key] = {\n    stableUid: dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')),\n    counts: dcCounts(data),\n    findings: dcFindings(data).map((f) => ({\n      severity: dcText(f.severity, 'minor'),\n      category: dcText(f.category, 'uncategorised'),\n      message: dcText(f.message, ''),\n    })),\n  };\n  run.lastAt = nowMs;\n  if (data.consoleUrl) run.consoleUrl = String(data.consoleUrl);\n  state.runs[runId] = run;\n  return runId;\n}\n\nfunction runSummaryMessage(run) {\n  const keys = Object.keys(run.cards || {});\n  const totals = { blocker: 0, major: 0, minor: 0 };\n  const findings = [];\n  for (const key of keys) {\n    const card = run.cards[key];\n    for (const severity of DC_SEVERITIES) totals[severity] += dcCount(card.counts && card.counts[severity]);\n    for (const f of card.findings || []) findings.push({ ...f, stableUid: card.stableUid });\n  }\n  const rank = (f) => {\n    const i = DC_SEVERITIES.indexOf(f.severity);\n    return i < 0 ? DC_SEVERITIES.length : i;\n  };\n  const top = findings\n    .map((f, i) => ({ f, i }))\n    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)\n    .slice(0, DC_RUN_TOP_FINDINGS)\n    .map(({ f }) => '- ' + f.severity + ' · ' + f.category + ' (' + f.stableUid + '): ' + f.message);\n  const lines = [\n    'AI QA run ' + run.runId + ' in ' + run.deckSlug + ' flagged ' + keys.length + (keys.length === 1 ? ' card' : ' cards'),\n    'Findings: ' + totals.blocker + ' blocker / ' + totals.major + ' major / ' + totals.minor + ' minor',\n  ];\n  if (top.length > 0) lines.push('Top findings:', ...top);\n  if (run.consoleUrl) lines.push('Review: ' + run.consoleUrl);\n  return lines.join('\\n');\n}\n\n// One Slack message per QA run, once no card.flagged event arrived for DC_RUN_QUIET_MS\n// (or the run has waited DC_RUN_MAX_WAIT_MS). The run stays pending until marked sent.\nfunction dueRunSummaries(state, nowMs) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  const due = [];\n  for (const runId of Object.keys(runs).sort()) {\n    const run = runs[runId];\n    if (nowMs - run.lastAt < DC_RUN_QUIET_MS && nowMs - run.firstAt < DC_RUN_MAX_WAIT_MS) continue;\n    const cardKeys = Object.keys(run.cards || {});\n    if (cardKeys.length === 0) continue;\n    due.push({ runId, cardCount: cardKeys.length, cardKeys, text: runSummaryMessage(run) });\n  }\n  return due;\n}\n\n// Drops the cards a posted summary covered; cards that arrived meanwhile stay pending.\nfunction markRunSummariesSent(state, sent) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  for (const summary of Array.isArray(sent) ? sent : []) {\n    const run = summary && runs[summary.runId];\n    if (!run) continue;\n    for (const key of summary.cardKeys || []) delete run.cards[key];\n    if (Object.keys(run.cards).length === 0) delete runs[summary.runId];\n  }\n}\n\nfunction reviewQueuedMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const count = dcCount(data.draftCount);\n  const lines = [\n    count + (count === 1 ? ' draft' : ' drafts') + ' waiting for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')',\n  ];\n  if (data.consoleUrl) lines.push('Review: ' + String(data.consoleUrl));\n  return { text: lines.join('\\n') };\n}\n// END developercards-recipe-logic\n\n// Glue: remember the delivery only after every write for it succeeded.\nconst state = $getWorkflowStaticData('global');\nconst deliveryId = $('Check delivery').first().json.deliveryId;\nrememberDelivery(state, deliveryId);\nreturn [{ json: { ok: true, deliveryId } }];\n"
+      },
+      "name": "Remember delivery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "a1f0c2d4-0017-4c1e-9d0a-000000000017",
+      "position": [
+        2420,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "id": "a1f0c2d4-0018-4c1e-9d0a-000000000018",
+      "position": [
+        0,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nconst DC_DELIVERY_MEMORY = 1000;\nconst DC_RUN_QUIET_MS = 5 * 60 * 1000;\nconst DC_RUN_MAX_WAIT_MS = 30 * 60 * 1000;\nconst DC_RUN_TOP_FINDINGS = 5;\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n\nfunction dcHeader(headers, name) {\n  const h = headers && typeof headers === 'object' ? headers : {};\n  const value = h[name];\n  return Array.isArray(value) ? value[0] : value;\n}\n\n// The dispatcher sends the same X-DeveloperCards-Delivery on every retry of a delivery;\n// the eventId is the fallback for a sender that omits the header.\nfunction developerCardsDeliveryId(headers, body) {\n  const header = dcHeader(headers, 'x-developercards-delivery');\n  if (header !== undefined && header !== null && String(header).trim() !== '') return String(header).trim();\n  const b = body && typeof body === 'object' ? body : {};\n  return dcText(b.eventId, '');\n}\n\nfunction dcDeliveries(state) {\n  if (!Array.isArray(state.deliveries)) state.deliveries = [];\n  return state.deliveries;\n}\n\nfunction isDuplicateDelivery(state, deliveryId) {\n  return deliveryId !== '' && dcDeliveries(state).includes(deliveryId);\n}\n\n// Called only after every write for the delivery succeeded, so a failed delivery is\n// retried in full by the dispatcher. Keeps the last DC_DELIVERY_MEMORY ids.\nfunction rememberDelivery(state, deliveryId) {\n  if (deliveryId === '') return;\n  const list = dcDeliveries(state).filter((id) => id !== deliveryId);\n  list.push(deliveryId);\n  state.deliveries = list.slice(-DC_DELIVERY_MEMORY);\n}\n\nfunction dcFindings(data) {\n  return Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n}\n\n// Adds one card.flagged event to its QA run's pending Slack summary. Idempotent per\n// eventId, so a redelivered event does not count twice.\nfunction queueFlaggedCard(state, body, nowMs) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  if (!state.runs || typeof state.runs !== 'object') state.runs = {};\n  const runId = dcText(data.runId, 'deck ' + dcDeckLabel(data));\n  const run = state.runs[runId] || { runId, deckSlug: dcDeckLabel(data), consoleUrl: '', firstAt: nowMs, lastAt: nowMs, cards: {} };\n  const key = dcText(b.eventId, dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')));\n  run.cards[key] = {\n    stableUid: dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')),\n    counts: dcCounts(data),\n    findings: dcFindings(data).map((f) => ({\n      severity: dcText(f.severity, 'minor'),\n      category: dcText(f.category, 'uncategorised'),\n      message: dcText(f.message, ''),\n    })),\n  };\n  run.lastAt = nowMs;\n  if (data.consoleUrl) run.consoleUrl = String(data.consoleUrl);\n  state.runs[runId] = run;\n  return runId;\n}\n\nfunction runSummaryMessage(run) {\n  const keys = Object.keys(run.cards || {});\n  const totals = { blocker: 0, major: 0, minor: 0 };\n  const findings = [];\n  for (const key of keys) {\n    const card = run.cards[key];\n    for (const severity of DC_SEVERITIES) totals[severity] += dcCount(card.counts && card.counts[severity]);\n    for (const f of card.findings || []) findings.push({ ...f, stableUid: card.stableUid });\n  }\n  const rank = (f) => {\n    const i = DC_SEVERITIES.indexOf(f.severity);\n    return i < 0 ? DC_SEVERITIES.length : i;\n  };\n  const top = findings\n    .map((f, i) => ({ f, i }))\n    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)\n    .slice(0, DC_RUN_TOP_FINDINGS)\n    .map(({ f }) => '- ' + f.severity + ' · ' + f.category + ' (' + f.stableUid + '): ' + f.message);\n  const lines = [\n    'AI QA run ' + run.runId + ' in ' + run.deckSlug + ' flagged ' + keys.length + (keys.length === 1 ? ' card' : ' cards'),\n    'Findings: ' + totals.blocker + ' blocker / ' + totals.major + ' major / ' + totals.minor + ' minor',\n  ];\n  if (top.length > 0) lines.push('Top findings:', ...top);\n  if (run.consoleUrl) lines.push('Review: ' + run.consoleUrl);\n  return lines.join('\\n');\n}\n\n// One Slack message per QA run, once no card.flagged event arrived for DC_RUN_QUIET_MS\n// (or the run has waited DC_RUN_MAX_WAIT_MS). The run stays pending until marked sent.\nfunction dueRunSummaries(state, nowMs) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  const due = [];\n  for (const runId of Object.keys(runs).sort()) {\n    const run = runs[runId];\n    if (nowMs - run.lastAt < DC_RUN_QUIET_MS && nowMs - run.firstAt < DC_RUN_MAX_WAIT_MS) continue;\n    const cardKeys = Object.keys(run.cards || {});\n    if (cardKeys.length === 0) continue;\n    due.push({ runId, cardCount: cardKeys.length, cardKeys, text: runSummaryMessage(run) });\n  }\n  return due;\n}\n\n// Drops the cards a posted summary covered; cards that arrived meanwhile stay pending.\nfunction markRunSummariesSent(state, sent) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  for (const summary of Array.isArray(sent) ? sent : []) {\n    const run = summary && runs[summary.runId];\n    if (!run) continue;\n    for (const key of summary.cardKeys || []) delete run.cards[key];\n    if (Object.keys(run.cards).length === 0) delete runs[summary.runId];\n  }\n}\n\nfunction reviewQueuedMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const count = dcCount(data.draftCount);\n  const lines = [\n    count + (count === 1 ? ' draft' : ' drafts') + ' waiting for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')',\n  ];\n  if (data.consoleUrl) lines.push('Review: ' + String(data.consoleUrl));\n  return { text: lines.join('\\n') };\n}\n// END developercards-recipe-logic\n\n// Glue: one item per QA run whose card.flagged events have gone quiet.\nconst state = $getWorkflowStaticData('global');\nreturn dueRunSummaries(state, Date.now()).map((summary) => ({ json: summary }));\n"
+      },
+      "name": "Due run summaries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "a1f0c2d4-0019-4c1e-9d0a-000000000019",
+      "position": [
+        220,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#developercards",
+          "mode": "name"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {}
+      },
+      "id": "a1f0c2d4-0020-4c1e-9d0a-000000000020",
+      "name": "Slack run summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        440,
+        800
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_SLACK_CREDENTIAL_ID",
+          "name": "DeveloperCards Slack"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nconst DC_DELIVERY_MEMORY = 1000;\nconst DC_RUN_QUIET_MS = 5 * 60 * 1000;\nconst DC_RUN_MAX_WAIT_MS = 30 * 60 * 1000;\nconst DC_RUN_TOP_FINDINGS = 5;\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n\nfunction dcHeader(headers, name) {\n  const h = headers && typeof headers === 'object' ? headers : {};\n  const value = h[name];\n  return Array.isArray(value) ? value[0] : value;\n}\n\n// The dispatcher sends the same X-DeveloperCards-Delivery on every retry of a delivery;\n// the eventId is the fallback for a sender that omits the header.\nfunction developerCardsDeliveryId(headers, body) {\n  const header = dcHeader(headers, 'x-developercards-delivery');\n  if (header !== undefined && header !== null && String(header).trim() !== '') return String(header).trim();\n  const b = body && typeof body === 'object' ? body : {};\n  return dcText(b.eventId, '');\n}\n\nfunction dcDeliveries(state) {\n  if (!Array.isArray(state.deliveries)) state.deliveries = [];\n  return state.deliveries;\n}\n\nfunction isDuplicateDelivery(state, deliveryId) {\n  return deliveryId !== '' && dcDeliveries(state).includes(deliveryId);\n}\n\n// Called only after every write for the delivery succeeded, so a failed delivery is\n// retried in full by the dispatcher. Keeps the last DC_DELIVERY_MEMORY ids.\nfunction rememberDelivery(state, deliveryId) {\n  if (deliveryId === '') return;\n  const list = dcDeliveries(state).filter((id) => id !== deliveryId);\n  list.push(deliveryId);\n  state.deliveries = list.slice(-DC_DELIVERY_MEMORY);\n}\n\nfunction dcFindings(data) {\n  return Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n}\n\n// Adds one card.flagged event to its QA run's pending Slack summary. Idempotent per\n// eventId, so a redelivered event does not count twice.\nfunction queueFlaggedCard(state, body, nowMs) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  if (!state.runs || typeof state.runs !== 'object') state.runs = {};\n  const runId = dcText(data.runId, 'deck ' + dcDeckLabel(data));\n  const run = state.runs[runId] || { runId, deckSlug: dcDeckLabel(data), consoleUrl: '', firstAt: nowMs, lastAt: nowMs, cards: {} };\n  const key = dcText(b.eventId, dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')));\n  run.cards[key] = {\n    stableUid: dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')),\n    counts: dcCounts(data),\n    findings: dcFindings(data).map((f) => ({\n      severity: dcText(f.severity, 'minor'),\n      category: dcText(f.category, 'uncategorised'),\n      message: dcText(f.message, ''),\n    })),\n  };\n  run.lastAt = nowMs;\n  if (data.consoleUrl) run.consoleUrl = String(data.consoleUrl);\n  state.runs[runId] = run;\n  return runId;\n}\n\nfunction runSummaryMessage(run) {\n  const keys = Object.keys(run.cards || {});\n  const totals = { blocker: 0, major: 0, minor: 0 };\n  const findings = [];\n  for (const key of keys) {\n    const card = run.cards[key];\n    for (const severity of DC_SEVERITIES) totals[severity] += dcCount(card.counts && card.counts[severity]);\n    for (const f of card.findings || []) findings.push({ ...f, stableUid: card.stableUid });\n  }\n  const rank = (f) => {\n    const i = DC_SEVERITIES.indexOf(f.severity);\n    return i < 0 ? DC_SEVERITIES.length : i;\n  };\n  const top = findings\n    .map((f, i) => ({ f, i }))\n    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)\n    .slice(0, DC_RUN_TOP_FINDINGS)\n    .map(({ f }) => '- ' + f.severity + ' · ' + f.category + ' (' + f.stableUid + '): ' + f.message);\n  const lines = [\n    'AI QA run ' + run.runId + ' in ' + run.deckSlug + ' flagged ' + keys.length + (keys.length === 1 ? ' card' : ' cards'),\n    'Findings: ' + totals.blocker + ' blocker / ' + totals.major + ' major / ' + totals.minor + ' minor',\n  ];\n  if (top.length > 0) lines.push('Top findings:', ...top);\n  if (run.consoleUrl) lines.push('Review: ' + run.consoleUrl);\n  return lines.join('\\n');\n}\n\n// One Slack message per QA run, once no card.flagged event arrived for DC_RUN_QUIET_MS\n// (or the run has waited DC_RUN_MAX_WAIT_MS). The run stays pending until marked sent.\nfunction dueRunSummaries(state, nowMs) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  const due = [];\n  for (const runId of Object.keys(runs).sort()) {\n    const run = runs[runId];\n    if (nowMs - run.lastAt < DC_RUN_QUIET_MS && nowMs - run.firstAt < DC_RUN_MAX_WAIT_MS) continue;\n    const cardKeys = Object.keys(run.cards || {});\n    if (cardKeys.length === 0) continue;\n    due.push({ runId, cardCount: cardKeys.length, cardKeys, text: runSummaryMessage(run) });\n  }\n  return due;\n}\n\n// Drops the cards a posted summary covered; cards that arrived meanwhile stay pending.\nfunction markRunSummariesSent(state, sent) {\n  const runs = state && state.runs && typeof state.runs === 'object' ? state.runs : {};\n  for (const summary of Array.isArray(sent) ? sent : []) {\n    const run = summary && runs[summary.runId];\n    if (!run) continue;\n    for (const key of summary.cardKeys || []) delete run.cards[key];\n    if (Object.keys(run.cards).length === 0) delete runs[summary.runId];\n  }\n}\n\nfunction reviewQueuedMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const count = dcCount(data.draftCount);\n  const lines = [\n    count + (count === 1 ? ' draft' : ' drafts') + ' waiting for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')',\n  ];\n  if (data.consoleUrl) lines.push('Review: ' + String(data.consoleUrl));\n  return { text: lines.join('\\n') };\n}\n// END developercards-recipe-logic\n\n// Glue: drop the posted runs from the pending state (a failed post stays pending and is retried next minute).\nconst state = $getWorkflowStaticData('global');\nmarkRunSummariesSent(state, $('Due run summaries').all().map((item) => item.json));\nreturn [{ json: { sent: $('Due run summaries').all().length } }];\n"
+      },
+      "name": "Mark summaries sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "a1f0c2d4-0021-4c1e-9d0a-000000000021",
+      "position": [
+        660,
+        800
+      ]
+    }
+  ],
+  "connections": {
+    "DeveloperCards webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Check delivery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check delivery": {
+      "main": [
+        [
+          {
+            "node": "Duplicate delivery?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate delivery?": {
+      "main": [
+        [
+          {
+            "node": "Respond duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Event row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event row": {
+      "main": [
+        [
+          {
+            "node": "Events sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Events sheet": {
+      "main": [
+        [
+          {
+            "node": "Route by event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by event": {
+      "main": [
+        [
+          {
+            "node": "Flagged message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Review message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Remember delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flagged message": {
+      "main": [
+        [
+          {
+            "node": "Flagged sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flagged sheet": {
+      "main": [
+        [
+          {
+            "node": "Queue run summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue run summary": {
+      "main": [
+        [
+          {
+            "node": "Remember delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review message": {
+      "main": [
+        [
+          {
+            "node": "Slack review queued",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack review queued": {
+      "main": [
+        [
+          {
+            "node": "Remember delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remember delivery": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every minute": {
+      "main": [
+        [
+          {
+            "node": "Due run summaries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Due run summaries": {
+      "main": [
+        [
+          {
+            "node": "Slack run summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack run summary": {
+      "main": [
+        [
+          {
+            "node": "Mark summaries sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Pacific/Auckland"
+  },
+  "active": false,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

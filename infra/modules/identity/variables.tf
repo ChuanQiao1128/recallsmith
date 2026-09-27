@@ -76,3 +76,30 @@ variable "console_hostname" {
   default     = ""
   description = "Console hostname added to the spa client's callback/logout URLs; \"\" adds nothing (staging)."
 }
+
+variable "webhook_queue_name" {
+  type = string
+} # prod "developercards-webhook-events"
+
+variable "webhook_dispatcher_function_name" {
+  type = string
+} # prod "developercards-webhook-dispatcher"
+
+variable "ai_qa_queue_name" {
+  type = string
+} # prod "developercards-ai-qa-jobs"
+
+variable "ai_qa_function_name" {
+  type = string
+} # prod "developercards-ai-qa"
+
+variable "bedrock_mantle_model_id" {
+  type        = string
+  description = "The one model id ai-qa may call through bedrock-mantle:CreateInference (bedrock-mantle:Model condition); must equal the function's AI_MODEL."
+} # prod "anthropic.claude-opus-5"
+
+variable "bedrock_mantle_project_id" {
+  type        = string
+  default     = "default"
+  description = "The Mantle project ai-qa's calls land in. The client sends no OpenAI-Project header, so this is the account's default project."
+}

@@ -4,9 +4,11 @@ import { useDeck } from '../hooks/useDecks';
 import { useCards, useDeleteCard } from '../hooks/useCards';
 import { ApiFailureError, NOT_FOUND } from '../api/errors';
 import { parseDeckId } from '../lib/parseDeckId';
+import { qaPageHref } from '../lib/qaGate';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { CONSOLE_NAME } from '../lib/brand';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import { RarityBadge } from '../components/RarityBadge';
 import { RarityDistribution } from '../components/RarityDistribution';
 import { ErrorBannerList } from '../components/ui/ErrorBanner';
@@ -61,9 +63,7 @@ function LoadFailureScreen({
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · Cards"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-slate-800">Deck Cards</h1>
@@ -254,9 +254,7 @@ export function CardListPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · Cards"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav({ reviewHref: `/review?deckId=${deckId}`, qaHref: qaPageHref(deckId) })}
     >
       <div className="flex items-center justify-between">
         <div>
