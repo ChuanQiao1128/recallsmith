@@ -68,10 +68,16 @@ dev/holdout are the baseline run re-scored on each half.
   reports a minor "qualifier does not discriminate" note instead of a major finding.
 - `seeded-v2` (X04) adds a `source_unsupported` class and gives every card a source, but it
   reuses the v1 `ambiguous_stem` and `qualifier_mismatch` templates unchanged (an earlier version
-  of this line said it rewrote them; it did not), and no run on it exists. `seeded-v3` (Y05)
-  replaces those two classes with adjudicated constructions that are ambiguous or mismatched by
-  construction, removes the surface cues of the v2 subtle tiers, and is the gate dataset. No
-  seeded-v3 run exists yet either; it is the next report in this folder's parent.
+  of this line said it rewrote them; it did not). qa-v3 on it (`../2026-09-27-claude-cli-claude-opus-5-qa-v3.md`,
+  240 cards, 1 rep): recall 0.817, precision 0.899, control FP rate 0.092; `ambiguous_stem` 0.40
+  is the template problem, not the reviewer.
+- `seeded-v3` (Y05) replaces those two classes with constructions that are ambiguous or mismatched
+  by construction and removes the surface cues of the v2 subtle tiers. qa-v3 on it
+  (`../2026-09-27-claude-cli-claude-opus-5-qa-v3-seeded-v3.md`, 226 cards x 2 reps = 452 reviews):
+  recall 0.956 (95% CI 0.92-0.98), precision 0.927, F1 0.941, control FP rate 0.076 (0.05-0.12),
+  every class >= 0.87. Every substantive gate condition passes; the gate still reports FAIL only on
+  provenance (claude-cli is proxy evidence; the shipping provider is Bedrock), so `AI_QA_ENABLED`
+  stays `0` until the same command runs on Bedrock.
 
-Estimated cost of all runs at Bedrock list prices: ≈ $23 (the runs used the owner's local
+Estimated cost of all runs at Bedrock list prices: ≈ $52 (seeded-v1 tuning $23, seeded-v2 $9.87, seeded-v3 $19.12) (the runs used the owner's local
 subscription, so nothing was billed).
