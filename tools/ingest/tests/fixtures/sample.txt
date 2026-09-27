@@ -1,0 +1,7 @@
+DeveloperCards sample text
+
+DeveloperCards is a study app built around small multiple-choice cards. Each card asks one question, offers a handful of options and explains why the right answer is right.
+
+Cards live in decks. A deck groups the cards for one subject, and every card carries a topic so a learner can see which areas still need practice.
+
+When an author writes a new card, the card should point back to the page it was drawn from. The ingest tool exists so that every quote on a card can be traced to one numbered chunk of that page.
