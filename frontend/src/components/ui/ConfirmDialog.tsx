@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from './Button';
 import { ConfirmContext, type ConfirmOptions } from './ConfirmDialogContext';
 
@@ -57,6 +58,7 @@ export function ConfirmDialog({
   destructive = false,
   confirmLabel,
   confirmPhrase,
+  link,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -224,6 +226,16 @@ export function ConfirmDialog({
             className="mt-2 text-sm text-slate-600 whitespace-pre-line"
           >
             {body}
+          </p>
+        )}
+        {link && (
+          <p className="mt-2 text-sm">
+            {/* Following the link answers the dialog "no": the user went to
+                look instead of confirming. Only dialogs that pass a link need a
+                router above them. */}
+            <Link to={link.href} onClick={onCancel} className="text-indigo-600 hover:underline">
+              {link.label}
+            </Link>
           </p>
         )}
 

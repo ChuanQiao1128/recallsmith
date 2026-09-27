@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
-// The deck list's half of the AI QA publish gate (R18 contract §7.10): the two
-// gate refusals become a banner that links to the AI QA page, and nothing else
-// changes. The mount and mocks are copied from deckListPageActionFailures.test.tsx,
-// so DeckListPage gains no request of its own here.
+// The deck list's half of the AI QA publish gate (R18 contract §7.10): the
+// publish confirm dialog previews GET …/qa/status (loaded lazily after the
+// click), and the two gate refusals become a banner that links to the AI QA
+// page. The mount and mocks are copied from deckListPageActionFailures.test.tsx;
+// src/api/qa is mocked so the preview never leaves the process.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
@@ -15,6 +16,8 @@ import { ok, refused } from './support/apiResult';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 import { emptyErrorFeed, reportBusinessFailure } from '../src/lib/errorFeed';
+import { qaPublishPreviewLine } from '../src/lib/qaGate';
+import { qaStatus } from './support/qaFixtures';
 
 const api = vi.hoisted(() => ({
   fetchPublishJobs: vi.fn(),
@@ -24,6 +27,13 @@ const api = vi.hoisted(() => ({
   deleteDeck: vi.fn(),
   publishDeck: vi.fn(),
 }));
+
+const qa = vi.hoisted(() => ({ fetchQaStatus: vi.fn() }));
+
+vi.mock('../src/api/qa', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/api/qa')>();
+  return { ...actual, ...qa };
+});
 
 vi.mock('../src/api/authoring', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/api/authoring')>();
@@ -104,6 +114,7 @@ beforeEach(() => {
   api.fetchAdminManifest.mockResolvedValue(ok({ manifest: { Decks: [] } }));
   api.deleteDeck.mockResolvedValue(ok(null));
   api.publishDeck.mockResolvedValue(ok({ jobId: 'job-1' }));
+  qa.fetchQaStatus.mockResolvedValue(ok(qaStatus({ changedCards: 0, reviewedCurrent: 0 })));
   consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
   consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
@@ -147,6 +158,80 @@ describe('the AI QA publish gate on the deck list', () => {
     const alert = await waitFor(() => alertContaining(`Publishing deck "${SLUG}" failed`));
     expect(alert.textContent).toContain('Another build holds the lock.');
     expect(screen.queryByRole('link', { name: 'Open AI QA' })).toBeNull();
+  });
+
+  it('the publish dialog previews open blockers and unreviewed cards from the QA status', async () => {
+    qa.fetchQaStatus.mockResolvedValue(
+      ok(
+        qaStatus({
+          required: false,
+          changedCards: 3,
+          reviewedCurrent: 1,
+          openBlockers: [
+            { findingId: 501, cardId: 101, stableUid: 's3-01', category: 'incorrect_answer', message: 'm' },
+          ],
+          wouldBlock: false,
+        }),
+      ),
+    );
+    await mountConsole();
+    await userEvent.click(within(rowFor(SLUG)).getByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog');
+
+    expect(qa.fetchQaStatus).toHaveBeenCalledWith(DECK_ID);
+    expect(dialog.textContent).toContain('Upload deck.json to S3');
+    expect(dialog.textContent).toContain(
+      'AI QA: 1 open blocker(s), 2 card(s) not reviewed. AI QA is advisory, so publishing is not blocked.',
+    );
+    expect(within(dialog).getByRole('link', { name: 'Open AI QA' }).getAttribute('href')).toBe(
+      `/decks/qa?deckId=${DECK_ID}`,
+    );
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Publish' }));
+    await waitFor(() => expect(api.publishDeck).toHaveBeenCalledWith(DECK_ID));
+  });
+
+  it('following Open AI QA from the dialog does not publish', async () => {
+    qa.fetchQaStatus.mockResolvedValue(
+      ok(qaStatus({ required: true, changedCards: 2, reviewedCurrent: 0, wouldBlock: true })),
+    );
+    await mountConsole();
+    await userEvent.click(within(rowFor(SLUG)).getByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('The server will refuse this publish until they are resolved.');
+
+    await userEvent.click(within(dialog).getByRole('link', { name: 'Open AI QA' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.publishDeck).not.toHaveBeenCalled();
+  });
+
+  it('the publish dialog falls back to its plain body when the QA status cannot be read', async () => {
+    for (const failure of [
+      () => qa.fetchQaStatus.mockResolvedValue(refused('SERVER_NOT_READY_AI_QA', 'not migrated')),
+      () => qa.fetchQaStatus.mockRejectedValue(new Error('network down')),
+    ]) {
+      failure();
+      await mountConsole();
+      await userEvent.click(within(rowFor(SLUG)).getByRole('button', { name: 'Publish' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog.textContent).toContain('Rebuild manifest.json');
+      expect(dialog.textContent).not.toContain('AI QA:');
+      expect(within(dialog).queryByRole('link', { name: 'Open AI QA' })).toBeNull();
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Publish' }));
+      await waitFor(() => expect(api.publishDeck).toHaveBeenCalledWith(DECK_ID));
+      cleanup();
+      api.publishDeck.mockClear();
+    }
+  });
+
+  it('a clean QA status adds nothing to the publish dialog', async () => {
+    expect(qaPublishPreviewLine(qaStatus({ changedCards: 2, reviewedCurrent: 2 }))).toBeNull();
+    await mountConsole();
+    await userEvent.click(within(rowFor(SLUG)).getByRole('button', { name: 'Publish' }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(qa.fetchQaStatus).toHaveBeenCalledWith(DECK_ID));
+    expect(dialog.textContent).not.toContain('AI QA:');
+    expect(within(dialog).queryByRole('link', { name: 'Open AI QA' })).toBeNull();
   });
 
   it('a notice without a link has no link key', () => {
