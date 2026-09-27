@@ -10,7 +10,14 @@ import { join } from 'node:path';
 import { claudeArgs } from './claude';
 
 export interface AuthorConfig {
+  /** The local fingerprint of everything the run pinned, CLI and runner versions included. */
   id: string;
+  /**
+   * M1: the author identity an eval gate is bound to: lowercase hex SHA-256 of the canonical JSON (sorted keys,
+   * no spaces) of { argsSha256, model, promptSha256, skillSha256, skillVersion }. It leaves out the CLI and runner
+   * versions, so a routine Claude Code auto-update does not change it (ai-agent-3).
+   */
+  authorConfigId: string;
   model: string;
   skillVersion: string;
   skillSha256: string;
@@ -84,7 +91,7 @@ export function readAuthorConfig(input: AuthorConfigInput): AuthorConfig {
     throw new AuthorConfigError(`cannot read ${MCP_SERVER_BUNDLE} in the repo root (build tools/mcp-server)`);
   }
 
-  const fields: Omit<AuthorConfig, 'id'> = {
+  const fields: Omit<AuthorConfig, 'id' | 'authorConfigId'> = {
     model: input.model,
     skillVersion,
     skillSha256: skillDirSha256(skillDir),
@@ -94,5 +101,22 @@ export function readAuthorConfig(input: AuthorConfigInput): AuthorConfig {
     claudeVersion: input.claudeVersion,
     runnerVersion: input.runnerVersion,
   };
-  return { id: sha256(JSON.stringify(fields)).slice(0, 16), ...fields };
+  return { id: sha256(JSON.stringify(fields)).slice(0, 16), authorConfigId: authorConfigIdOf(fields), ...fields };
+}
+
+/** M1: the gated author identity of a configuration (see AuthorConfig.authorConfigId). */
+export function authorConfigIdOf(config: Pick<AuthorConfig, 'model' | 'skillVersion' | 'skillSha256' | 'promptSha256' | 'claudeArgsSha256'>): string {
+  const gated: Record<string, string> = {
+    argsSha256: config.claudeArgsSha256,
+    model: config.model,
+    promptSha256: config.promptSha256,
+    skillSha256: config.skillSha256,
+    skillVersion: config.skillVersion,
+  };
+  // Canonical JSON: keys sorted (as written above), no spaces.
+  const canonical = `{${Object.keys(gated)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${JSON.stringify(gated[key])}`)
+    .join(',')}}`;
+  return sha256(canonical);
 }

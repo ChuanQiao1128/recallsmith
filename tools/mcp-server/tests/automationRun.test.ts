@@ -39,6 +39,8 @@ const DECKS_PAGE = {
 const SUBMIT_DATA = { batchId: 'b-1', created: [], duplicates: [], rejected: [] };
 
 const RUN_ID = '3F2504E0-4F89-41D3-9A0C-0305E82C3301';
+/** M1: the runner's gated author identity (64 lowercase hex digits). */
+const AUTHOR_CONFIG_ID = 'a'.repeat(32) + '0123456789abcdef'.repeat(2);
 // The runner always passes the run's source hosts (ai-agent-1); the sample sources live on example.com.
 const AUTOMATION_ENV = {
   DC_AUTOMATION_RUN_ID: RUN_ID,
@@ -277,7 +279,12 @@ describe('the pinned author configuration (ai-agent-3)', () => {
     const server = createServer({
       config: env.config,
       runProcess: fakeIngest(SAMPLE_SOURCES).run,
-      env: { ...AUTOMATION_ENV, DC_AUTOMATION_AUTHOR_MODEL: 'claude-opus-5-5', DC_AUTOMATION_SKILL_VERSION: 'author-cards@1.8.1' },
+      env: {
+        ...AUTOMATION_ENV,
+        DC_AUTOMATION_AUTHOR_MODEL: 'claude-opus-5-5',
+        DC_AUTOMATION_SKILL_VERSION: 'author-cards@1.8.1',
+        DC_AUTOMATION_AUTHOR_CONFIG_ID: AUTHOR_CONFIG_ID,
+      },
       warn: () => undefined,
     });
     await server.connect(serverTransport);
@@ -295,9 +302,32 @@ describe('the pinned author configuration (ai-agent-3)', () => {
       name: 'developercards-mcp',
       model: 'claude-opus-5-5',
       skillVersion: 'author-cards@1.8.1',
+      authorConfigId: AUTHOR_CONFIG_ID,
       runId: RUN_ID.toLowerCase(),
       queueItemId: '42',
     });
+    await client.close();
+  });
+
+  it('sends no authorConfigId when the runner set none, and never takes one from the model (M1)', async () => {
+    api = await startFakeServer(happy);
+    env = makeTestEnv({ apiBase: api.base });
+    writeValidTokens(env.config);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({ config: env.config, runProcess: fakeIngest(SAMPLE_SOURCES).run, env: AUTOMATION_ENV, warn: () => undefined });
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'dc-mcp-test', version: '0.0.0' });
+    await client.connect(clientTransport);
+    const refused = await callTool(client, 'submit_draft', {
+      deckSlug: 'aws-saa-c03',
+      drafts: [sampleCard()],
+      agent: { model: 'm', skillVersion: 'author-cards@1.8.1', authorConfigId: AUTHOR_CONFIG_ID },
+    });
+    expect(refused.isError).toBe(true);
+    const result = await callTool(client, 'submit_draft', { deckSlug: 'aws-saa-c03', drafts: [sampleCard()] });
+    expect(result.isError).toBe(false);
+    const post = api.requests.find((req) => req.method === 'POST' && req.url === '/api/v1/authoring/drafts');
+    expect((JSON.parse(post?.body ?? '{}') as { agent: Record<string, unknown> }).agent).not.toHaveProperty('authorConfigId');
     await client.close();
   });
 
@@ -305,8 +335,14 @@ describe('the pinned author configuration (ai-agent-3)', () => {
     expect(automationAuthorFrom({ DC_AUTOMATION_AUTHOR_MODEL: ' claude-opus-5-5 ', DC_AUTOMATION_SKILL_VERSION: 'bad value' })).toEqual({
       model: 'claude-opus-5-5',
       skillVersion: null,
+      authorConfigId: null,
     });
-    expect(automationAuthorFrom({})).toEqual({ model: null, skillVersion: null });
+    expect(automationAuthorFrom({})).toEqual({ model: null, skillVersion: null, authorConfigId: null });
+    // M1: at most 128 printable characters, one token.
+    expect(automationAuthorFrom({ DC_AUTOMATION_AUTHOR_CONFIG_ID: ` ${AUTHOR_CONFIG_ID} ` }).authorConfigId).toBe(AUTHOR_CONFIG_ID);
+    expect(automationAuthorFrom({ DC_AUTOMATION_AUTHOR_CONFIG_ID: 'a'.repeat(128) }).authorConfigId).toBe('a'.repeat(128));
+    expect(automationAuthorFrom({ DC_AUTOMATION_AUTHOR_CONFIG_ID: 'a'.repeat(129) }).authorConfigId).toBeNull();
+    expect(automationAuthorFrom({ DC_AUTOMATION_AUTHOR_CONFIG_ID: 'two words' }).authorConfigId).toBeNull();
   });
 });
 

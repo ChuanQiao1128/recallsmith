@@ -2,7 +2,8 @@
 // without a network call or a claude call, `--help` prints the usage.
 
 import { existsSync } from 'node:fs';
-import { ConfigError, loadRunnerConfig, type RunnerConfig } from './config';
+import { ConfigError, DEFAULT_RUNNER_MODEL, loadRunnerConfig, type RunnerConfig } from './config';
+import { DEFAULT_AUTOMATION_SOURCE_HOSTS } from '../../mcp-server/src/config';
 import { loginExpiresAt } from './login';
 import { logLine, stdoutSink } from './logs';
 import { EXIT_OK, EXIT_USAGE, readLastRun, runOnce } from './runner';
@@ -23,7 +24,10 @@ Environment (all optional):
   DC_RUNNER_MAX_ITEMS             items claimed per run, 1..5 (default 3)
   DC_RUNNER_LEASE_MINUTES         claim lease, 15..240 (default 90)
   DC_RUNNER_ITEM_TIMEOUT_MINUTES  claude time limit per item, 5..120 (default 45)
-  DC_RUNNER_MODEL                 claude --model value (default opus)
+  DC_RUNNER_MODEL                 claude --model value, a full model id (default ${DEFAULT_RUNNER_MODEL});
+                                  floating aliases such as opus or sonnet are refused
+  DC_RUNNER_SOURCE_HOSTS          the only hosts read_source may fetch in a run, comma list; the queue
+                                  item's own host is not added (default ${DEFAULT_AUTOMATION_SOURCE_HOSTS.join(',')})
   DC_RUNNER_CLAUDE_BIN            claude executable (default claude on PATH)
   DC_RUNNER_LOG_DIR               run files and last-run.json (default $HOME/Library/Logs/DeveloperCards)
   DC_API_BASE                     API base URL (default https://api.developercards.app)
