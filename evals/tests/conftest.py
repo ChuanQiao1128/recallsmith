@@ -191,27 +191,35 @@ def dataset_records(
     false_positives: int = 0,
     unscored_controls: int = 0,
     rep: int = 1,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     """One record per dataset row: each defective row is caught in its own category except the
-    first misses[class] rows of that class; the first `false_positives` controls get a major
+    first misses[class] rows of that class after its first `offset` * misses[class] rows; the
+    first `false_positives` controls (after the first `offset` * false_positives) get a major
     finding and the next `unscored_controls` controls end in a provider error."""
     misses = dict(misses or {})
+    skips = {defect: offset * count for defect, count in misses.items()}
+    fp_skip = offset * false_positives
     records = []
     control_index = 0
     for index, row in enumerate(load_dataset(DATASETS[version].path), start=1):
         defect = row["defect"]
         if defect is None:
             control_index += 1
-            if control_index <= false_positives:
+            if fp_skip < control_index <= fp_skip + false_positives:
                 records.append(item(None, [finding("major", "ambiguous_stem")], index=index, rep=rep))
-            elif control_index <= false_positives + unscored_controls:
+            elif fp_skip + false_positives < control_index <= fp_skip + false_positives + unscored_controls:
                 records.append(
                     item(None, [], status="error", error_code="PROVIDER_TIMEOUT", index=index, rep=rep)
                 )
             else:
                 records.append(item(None, [], index=index, rep=rep))
             continue
-        if misses.get(defect, 0) > 0:
+        if skips.get(defect, 0) > 0:
+            skips[defect] -= 1
+            hit = [finding("blocker" if defect in ("incorrect_answer", "multiple_correct") else "major", defect)]
+            records.append(item(defect, hit, index=index, rep=rep, tier=row["tier"]))
+        elif misses.get(defect, 0) > 0:
             misses[defect] -= 1
             records.append(item(defect, [], index=index, rep=rep, tier=row["tier"]))
         else:
@@ -230,13 +238,20 @@ def gate_records(
     false_positives: int = 0,
     unscored_controls: int = 0,
     reps: int = 2,
+    independent: bool = False,
 ) -> list[dict[str, Any]]:
     """dataset_records over the gate dataset for each of `reps` repetitions; misses, false
-    positives and unscored controls apply to every repetition."""
+    positives and unscored controls apply to every repetition. By default every repetition misses
+    and flags the same cards (fully correlated reviews); with `independent` each repetition misses
+    and flags different cards (Z04, ai-agent-28: the intervals count cards, so the two differ)."""
     return [
         record
         for rep in range(1, reps + 1)
         for record in dataset_records(
-            misses=misses, false_positives=false_positives, unscored_controls=unscored_controls, rep=rep
+            misses=misses,
+            false_positives=false_positives,
+            unscored_controls=unscored_controls,
+            rep=rep,
+            offset=rep - 1 if independent else 0,
         )
     ]

@@ -90,3 +90,58 @@ def test_claude_cli_reports_the_model_that_answered() -> None:
         system="s", messages=[{"role": "user", "content": "hi"}], output_config={"effort": "high"}
     )
     assert response.model == "claude-opus-5"
+
+
+def test_claude_cli_maps_a_reported_max_tokens_stop_to_the_production_error() -> None:
+    """Z04 (ai-agent-30): a CLI result that says the reply was cut at max_tokens reaches
+    ai_qa.review as stop_reason max_tokens, so the item is MAX_TOKENS as on Bedrock, and the
+    request's max_tokens reaches the CLI."""
+    runner = FakeRunner([{**cli_result('{"findings":['), "stop_reason": "max_tokens"}])
+    item = review_card(CARD, client=ClaudeCliClient("claude-opus-5", runner=runner), settings=settings(), review_date="2026-09-27")
+    assert (item["status"], item["errorCode"]) == ("error", "MAX_TOKENS")
+    from ai_qa.review import MAX_TOKENS
+
+    assert runner.calls[0]["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == str(MAX_TOKENS)
+
+
+def test_claude_cli_maps_a_reported_refusal_to_the_production_outcome() -> None:
+    runner = FakeRunner([{**cli_result(""), "stop_reason": "refusal", "stop_details": {"category": "cyber"}}])
+    item = review_card(CARD, client=ClaudeCliClient("claude-opus-5", runner=runner), settings=settings(), review_date="2026-09-27")
+    assert (item["status"], item["errorCode"]) == ("refused", "REFUSAL")
+    # An error result that names the refusal is still a refusal, not a transport failure.
+    runner = FakeRunner([{"type": "result", "subtype": "success", "is_error": True, "result": "",
+                          "stop_reason": "refusal"}])
+    response = ClaudeCliClient("claude-opus-5", runner=runner).messages.create(
+        system="s", messages=[{"role": "user", "content": "hi"}], output_config={"effort": "high"}
+    )
+    assert response.stop_reason == "refusal"
+
+
+def test_claude_cli_without_a_stop_reason_is_end_turn() -> None:
+    response = ClaudeCliClient("claude-opus-5", runner=FakeRunner([cli_result('{"findings":[]}')])).messages.create(
+        system="s", messages=[{"role": "user", "content": "hi"}], output_config={"effort": "high"}
+    )
+    assert response.stop_reason == "end_turn" and response.stop_details is None
+
+
+def test_claude_cli_error_subtype_becomes_a_distinct_error_code() -> None:
+    """Z04 (ai-agent-30): the runner records a CLI error result under its own code, not the
+    generic UNEXPECTED."""
+    from dc_evals.runner import _review_row
+
+    client = ClaudeCliClient(
+        "claude-opus-5",
+        runner=FakeRunner([{"type": "result", "subtype": "error_during_execution", "is_error": True}]),
+    )
+    with pytest.raises(ClaudeCliError) as caught:
+        client.messages.create(system="s", messages=[{"role": "user", "content": "hi"}], output_config={"effort": "high"})
+    assert caught.value.error_code == "CLI_ERROR_DURING_EXECUTION"
+    assert ClaudeCliError("x").error_code == "CLI_ERROR"
+
+    row = {"id": "s-0007", "defect": None, "tier": None, "card": {k: v for k, v in CARD.items() if k not in ("cardId", "contentSha256")}}
+    client = ClaudeCliClient(
+        "claude-opus-5",
+        runner=FakeRunner([{"type": "result", "subtype": "error_max_turns", "is_error": True}]),
+    )
+    record = _review_row(row, client, settings(), "2026-09-27")
+    assert (record["status"], record["errorCode"]) == ("error", "CLI_ERROR_MAX_TURNS")

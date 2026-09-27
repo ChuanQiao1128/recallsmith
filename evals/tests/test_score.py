@@ -17,7 +17,7 @@ from dc_evals.score import (
     CONTROL_UNSCORED_RATE_GATE,
     GATE_DATASET,
     GATE_PROVIDERS,
-    MIN_CLASS_ITEMS,
+    MIN_CLASS_CARDS,
     MIN_GATE_REPS,
     PER_CLASS_RECALL_FLOOR,
     PRECISION_GATE,
@@ -33,6 +33,8 @@ from dc_evals.score import (
     precision_at_prevalence,
     score,
     shipping_config,
+    clustered_wilson_ci,
+    effective_n,
     wilson_ci,
 )
 
@@ -136,7 +138,7 @@ def test_gate_thresholds_live_in_one_place() -> None:
     assert CONTROL_FPR_CI_UPPER_GATE == 0.15
     assert PER_CLASS_RECALL_FLOOR == 0.60
     assert MIN_GATE_REPS == 2
-    assert MIN_CLASS_ITEMS == 30
+    assert MIN_CLASS_CARDS == 15  # Z04 (ai-agent-28): distinct cards, not items pooled over reps
     assert CONTROL_UNSCORED_RATE_GATE == 0.02
     assert GATE_PROVIDERS == {"bedrock", "anthropic"}
     # Y05 (ai-agent-11/-18): the gate moved to seeded-v3, which has no surface cues and valid
@@ -161,12 +163,15 @@ MISSES = {"incorrect_answer": 3, "multiple_correct": 3, "answer_leak": 3, "ambig
 
 def test_gate_checks_recall_and_its_lower_bound_on_a_complete_run() -> None:
     """ai-agent-21: recall must reach 0.80 and the lower end of its 95% interval 0.75; at 226
-    pooled defects the bound is the binding condition (0.8053 still has a lower bound of 0.7488)."""
-    assert gate_passes(build_report(gate_header(), gate_records(misses=MISSES)))
-    report = build_report(gate_header(), gate_records(misses={**MISSES, "incorrect_answer": 4}))
+    pooled defects the bound is the binding condition (0.8053 still has a lower bound of 0.7488).
+    Z04 (ai-agent-28): the bound is card-clustered, so these pooled-item numbers now hold for
+    repetitions that miss different cards (independent=True); the same misses in both
+    repetitions are 113 cards, not 226 items (test_intervals_cluster_the_repetitions_of_a_card)."""
+    assert gate_passes(build_report(gate_header(), gate_records(misses=MISSES, independent=True)))
+    report = build_report(gate_header(), gate_records(misses={**MISSES, "incorrect_answer": 4}, independent=True))
     assert report["overall"]["recall"] == 0.8053
     assert gate_failures(report) == ["recall 95% CI lower bound 0.7488 < 0.75"]
-    report = build_report(gate_header(), gate_records(misses={**MISSES, "incorrect_answer": 5}))
+    report = build_report(gate_header(), gate_records(misses={**MISSES, "incorrect_answer": 5}, independent=True))
     assert gate_failures(report) == ["recall 0.7965 < 0.80", "recall 95% CI lower bound 0.7392 < 0.75"]
 
 
@@ -183,14 +188,16 @@ def test_gate_bounds_the_control_false_positive_rate_independently_of_prevalence
     assert old["overall"]["precision"] == 0.7018 and old["overall"]["controlFalsePositiveRate"] == 0.34
     assert old["overall"]["precisionAtPrevalence"] == {"prevalence": 0.1, "precision": 0.2073}
 
-    report = build_report(gate_header(), gate_records(false_positives=39))  # 78/226 = 0.3451
+    # Z04 (ai-agent-28): independent=True (each repetition flags different controls) keeps the
+    # pooled-item bounds this X04/Y05 test pinned; the same controls flagged twice count once.
+    report = build_report(gate_header(), gate_records(false_positives=39, independent=True))  # 78/226 = 0.3451
     assert report["overall"]["precision"] >= PRECISION_GATE
     assert gate_failures(report) == [
         "control false-positive rate 0.3451 > 0.10",
         "control false-positive rate 95% CI upper bound 0.4092 > 0.15",
     ]
-    assert gate_passes(build_report(gate_header(), gate_records(false_positives=11)))  # 22/226 = 0.0973
-    assert not gate_passes(build_report(gate_header(), gate_records(false_positives=12)))  # 0.1062
+    assert gate_passes(build_report(gate_header(), gate_records(false_positives=11, independent=True)))  # 0.0973
+    assert not gate_passes(build_report(gate_header(), gate_records(false_positives=12, independent=True)))  # 0.1062
 
 
 def test_gate_uses_the_interval_bounds_not_only_the_point_estimates() -> None:
@@ -208,7 +215,7 @@ def test_gate_uses_the_interval_bounds_not_only_the_point_estimates() -> None:
 def test_gate_requires_every_class_to_reach_the_recall_floor_on_pooled_counts() -> None:
     """ai-agent-1/-21: easy classes at 100% must not hide a judgment class at 0.53, judged on the
     class's items pooled over both repetitions."""
-    report = build_report(gate_header(), gate_records(misses={"ambiguous_stem": 7}))  # 16/30 = 0.5333
+    report = build_report(gate_header(), gate_records(misses={"ambiguous_stem": 7}, independent=True))  # 16/30
     assert report["overall"]["recall"] >= RECALL_GATE
     assert report["perClass"]["ambiguous_stem"]["tp"] + report["perClass"]["ambiguous_stem"]["fn"] == 30
     assert gate_failures(report) == ["class ambiguous_stem recall 0.5333 < 0.60"]
@@ -217,13 +224,13 @@ def test_gate_requires_every_class_to_reach_the_recall_floor_on_pooled_counts() 
 
 
 def test_gate_requires_repetitions_and_a_minimum_class_sample() -> None:
-    """ai-agent-21: one repetition of a 15-row class is 15 items; the gate wants at least two
-    repetitions and 30 pooled items per class."""
+    """ai-agent-21: the gate wants at least two repetitions. Z04 (ai-agent-28) updates the Y05
+    assertion that one repetition of a 15-row class fails a 30-item minimum: the minimum now
+    counts distinct cards (15), and a second repetition of the same card is not a new card, so
+    the repetition condition alone refuses a one-rep run."""
     report = build_report(gate_header(reps=1), gate_records(reps=1))
-    failures = gate_failures(report)
-    assert "1 repetition(s); gate evidence needs at least 2" in failures
-    assert "class ambiguous_stem has 15 items pooled over reps, fewer than 30" in failures
-    assert "class incorrect_answer has 18 items pooled over reps, fewer than 30" in failures
+    assert gate_failures(report) == ["1 repetition(s); gate evidence needs at least 2"]
+    assert report["unitOfAnalysis"]["cards"]["perClass"]["ambiguous_stem"] == 15
     assert gate_passes(build_report(gate_header(reps=3), gate_records(reps=3)))
 
 
@@ -370,3 +377,79 @@ def test_percentiles_use_nearest_rank() -> None:
     assert nearest_rank([50, 10, 40, 20, 30], 0.95) == 50
     records = [item(None, [], latency_ms=ms) for ms in (0, 300, 100, 200)]
     assert score(records)["latencyMs"] == {"p50": 200, "p95": 300}  # the 0 ms record is ignored
+
+
+def test_intervals_cluster_the_repetitions_of_a_card() -> None:
+    """Z04 (ai-agent-28): two repetitions of one card are one cluster. When every card gets the
+    same verdict in both repetitions the interval is the distinct-card one (113 cards, not 226
+    items); when the repetitions miss different cards it stays the pooled one."""
+    correlated = score(gate_records(misses=MISSES))
+    independent = score(gate_records(misses=MISSES, independent=True))
+    assert correlated["overall"]["recall"] == independent["overall"]["recall"] == 0.8142
+    assert correlated["overall"]["recallCi95"] == wilson_ci(92, 113) == [0.7325, 0.8751]
+    assert independent["overall"]["recallCi95"] == wilson_ci(184, 226) == [0.7583, 0.8595]
+    report = build_report(gate_header(), gate_records(misses=MISSES))
+    assert gate_failures(report) == ["recall 95% CI lower bound 0.7325 < 0.75"]
+
+    flagged_twice = score(gate_records(false_positives=10))
+    assert flagged_twice["overall"]["controlFalsePositiveRate"] == 0.0885
+    assert flagged_twice["overall"]["controlFalsePositiveRateCi95"] == wilson_ci(10, 113)
+    assert score(gate_records(misses={"ambiguous_stem": 7}))["perClass"]["ambiguous_stem"]["recallCi95"] == wilson_ci(8, 15)
+
+
+def test_effective_n_stays_between_the_cards_and_the_pooled_items() -> None:
+    """Design effect over cards: full agreement gives k, disagreement at most M, a rate of 0 or
+    1 the conservative k, and one review per card the plain Wilson interval."""
+    agree = [(2, 2)] * 8 + [(0, 2)] * 2
+    assert effective_n(agree) == 10.0
+    split = [(1, 2)] * 10
+    assert effective_n(split) == 20.0
+    assert effective_n([(2, 2)] * 10) == 10.0 and effective_n([(0, 2)] * 10) == 10.0
+    assert effective_n([]) == 0.0 and clustered_wilson_ci([]) == [0.0, 0.0]
+    assert clustered_wilson_ci([(1, 1)] * 8 + [(0, 1)] * 2) == wilson_ci(8, 10)
+    mixed = [(2, 2)] * 6 + [(1, 2)] * 2 + [(0, 2)] * 2
+    assert 10.0 < effective_n(mixed) < 20.0
+
+
+def test_the_class_minimum_counts_distinct_cards() -> None:
+    """Z04 (ai-agent-28): MIN_CLASS_CARDS counts cards; three repetitions of 14 cards are still
+    14 cards."""
+    records = gate_records(reps=3)
+    dropped = next(r["id"] for r in records if r["defect"] == "ambiguous_stem")
+    report = build_report(gate_header(reps=3), [r for r in records if r["id"] != dropped])
+    assert report["perClass"]["ambiguous_stem"]["tp"] == 42
+    assert report["unitOfAnalysis"]["cards"]["perClass"]["ambiguous_stem"] == 14
+    assert "class ambiguous_stem has 14 distinct cards, fewer than 15" in gate_failures(report)
+
+
+def test_the_report_states_its_unit_of_analysis() -> None:
+    report = build_report(gate_header(), gate_records())
+    unit = report["unitOfAnalysis"]
+    assert unit["unit"] == "card" and unit["classMinimum"] == "distinct cards"
+    assert unit["cards"]["defective"] == 113 and unit["cards"]["scoredControls"] == 113
+    assert report["gate"]["thresholds"]["minClassCards"] == 15
+    markdown = render_markdown(report, flagged_wrong_category=0)
+    assert "- Unit of analysis: the card" in markdown and "113 defective cards" in markdown
+
+
+def test_the_committed_seeded_v3_proxy_run_scores_on_cards() -> None:
+    """Z04 (ai-agent-28): in the committed seeded-v3 proxy run 4 of the 6 cards with a miss
+    missed in both repetitions, so its card-clustered recall interval is wider than the pooled
+    one it was published with (the committed report file itself is unchanged)."""
+    from dc_evals.dataset import REPORTS_DIR
+    from dc_evals.report import read_run
+
+    stem = REPORTS_DIR / "2026-09-27-claude-cli-claude-opus-5-qa-v3-seeded-v3"
+    header, records = read_run(stem.with_suffix(".jsonl"))
+    published = json.loads(stem.with_suffix(".json").read_text(encoding="utf-8"))
+    report = build_report(header, records)
+    assert report["overall"]["recall"] == published["overall"]["recall"]
+    assert report["overall"]["recallCi95"][0] < published["overall"]["recallCi95"][0]
+    assert report["unitOfAnalysis"]["cards"]["defective"] == 113
+    from dc_evals.score import is_true_positive
+
+    missed: dict[str, int] = {}
+    for r in records:
+        if r["defect"] and not is_true_positive(r):
+            missed[r["id"]] = missed.get(r["id"], 0) + 1
+    assert {"s-0112", "s-0126", "s-0133", "s-0221"} <= {k for k, v in missed.items() if v == 2}

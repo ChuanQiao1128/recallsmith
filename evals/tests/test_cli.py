@@ -23,7 +23,9 @@ def test_score_gate_exit_codes(tmp_path: Path, capsys) -> None:
     # seeded-v3 run of the shipping configuration.
     misses = {"incorrect_answer": 3, "multiple_correct": 3, "answer_leak": 3, "ambiguous_stem": 3,
               "outdated_fact": 3, "qualifier_mismatch": 3, "source_unsupported": 3}
-    passing = write_run(tmp_path / "pass.jsonl", gate_records(misses=misses))
+    # Z04 (ai-agent-28): the intervals count cards, so the passing run misses different cards in
+    # each repetition (the same 21 cards missed twice have a clustered lower bound of 0.7325).
+    passing = write_run(tmp_path / "pass.jsonl", gate_records(misses=misses, independent=True))
     failing = write_run(tmp_path / "fail.jsonl", gate_records(misses={**misses, "incorrect_answer": 5}))
     truncated = write_run(tmp_path / "short.jsonl", [item("incorrect_answer", [finding("blocker", "incorrect_answer")])])
     empty = write_run(tmp_path / "empty.jsonl", [])
