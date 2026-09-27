@@ -286,6 +286,20 @@ public sealed class VpcFunction
         var draftOne = RouteMatcher.Match("/api/v1/authoring/drafts/:draftId", p);
         if (draftOne is not null) return await Vpc.Review.Drafts.HandleGetDraft(req, res, auth, draftOne["draftId"]);
       }
+      if (p.EndsWith("/api/v1/authoring/qa/runs", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Qa.QaRuns.HandleRuns(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/authoring/qa/status", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Qa.QaRuns.HandleStatus(req, res, auth);
+      }
+      {
+        var qaRun = RouteMatcher.Match("/api/v1/authoring/qa/runs/:runId", p);
+        if (qaRun is not null) return await Vpc.Qa.QaRuns.HandleRun(req, res, auth, qaRun["runId"]);
+        var qaResolve = RouteMatcher.Match("/api/v1/authoring/qa/findings/:findingId/resolve", p);
+        if (qaResolve is not null) return await Vpc.Qa.QaRuns.HandleResolveFinding(req, res, auth, qaResolve["findingId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
@@ -384,6 +398,10 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/internal/webhooks/deliveries/report", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Internal.WebhookDeliveryReport.HandleReport(req, res);
+      }
+      if (p.EndsWith("/api/internal/ai-qa/results", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Internal.AiQaResults.HandleAiQaResults(req, res);
       }
 
       return res.NotFound("Route not found");
