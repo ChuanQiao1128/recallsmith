@@ -65,3 +65,23 @@ output "webhook_queue_name" {
 output "ai_qa_queue_name" {
   value = aws_sqs_queue.ai_qa_jobs.name
 }
+
+output "notify_queue_arn" {
+  value = aws_sqs_queue.notify.arn
+}
+
+output "notify_queue_url" {
+  value = aws_sqs_queue.notify.url
+}
+
+output "notify_dlq_name" {
+  value = aws_sqs_queue.notify_dlq.name
+}
+
+output "notifier_function_name" {
+  value = aws_lambda_function.notifier.function_name
+}
+
+output "source_watcher_function_name" {
+  value = aws_lambda_function.source_watcher.function_name
+}

@@ -69,3 +69,9 @@ variable "ai_qa_daily_cost_cap_micro_usd" {
   type    = number
   default = 10000000
 }
+
+variable "notify_dlq_name" { type = string }
+
+variable "notifier_function_name" { type = string }
+
+variable "source_watcher_function_name" { type = string }
