@@ -68,6 +68,78 @@ public class EmailTemplatesTests
       "Action needed: agent blocked on queue item 8"];
     yield return ["agent_note", new Dictionary<string, string> { ["runId"] = "3f2a9c1e-0000-4000-8000-000000000001", ["itemId"] = "7", ["url"] = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html", ["notes"] = "Card aws-s3-synthetic-07 looks outdated." },
       "Action needed: agent note on docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html"];
+    // R18G P1: alive, but its state is error.
+    yield return ["runner_stalled", new Dictionary<string, string> { ["runnerId"] = "owner-mac", ["state"] = "error", ["lastError"] = "author config: no tool-surface.json", ["since"] = "2026-09-27T21:59:00.000Z", ["loginExpiresAt"] = "2026-10-20T00:00:00.000Z", ["lastRunId"] = "none", ["lastRunAt"] = "never", ["queued"] = "2" },
+      "Action needed: authoring runner owner-mac is running but cannot work"];
+    // R18G P2: finished after its run submitted drafts.
+    yield return ["queue_item_failed", new Dictionary<string, string> { ["itemId"] = "9", ["url"] = "https://docs.example.com/partial", ["lastError"] = "RUNNER_UNAVAILABLE_AFTER_DRAFTS: the run submitted draft(s) before it stopped, so the item is not authored again; last: RUNNER_UNAVAILABLE: usage limit" },
+      "Action needed: queue item 9 stopped after submitting drafts"];
+  }
+
+  [Fact]
+  public void Exception_RunnerStalledInError_NamesTheLastErrorAndTheFix()
+  {
+    // R18G P1 (automation-37): the email of a runner that heartbeats 'error' names its last_error, not a silence.
+    var facts = new Dictionary<string, string>
+    {
+      ["runnerId"] = "owner-mac", ["state"] = "error", ["queued"] = "3", ["since"] = "2026-09-27T21:59:00.000Z",
+      ["lastError"] = "author config: tool-surface.json bundleSha256 does not match dist/index.js",
+    };
+    var email = EmailTemplates.Exception("live", "runner_stalled", facts, Console);
+    Assert.Equal("[DeveloperCards] Action needed: authoring runner owner-mac is running but cannot work", email.Subject);
+    Assert.StartsWith("The local authoring runner owner-mac is running but cannot work: author config: tool-surface.json bundleSha256 does not match " +
+      "dist/index.js. It started no run in 2 h while 3 due queue item(s) are waiting.\n", email.BodyText);
+    Assert.Contains("rebuild tools/mcp-server and tools/author-runner", email.BodyText);
+    Assert.Contains("\nstate: error\n", email.BodyText);
+    Assert.DoesNotContain("silent since", email.BodyText);
+  }
+
+  [Fact]
+  public void Exception_RunnerUnavailable_SaysPutBackOnlyForARequeuedItem()
+  {
+    // R18G P2 (automation-36, cloud-security-resilience-1): a finished item was not put back.
+    Dictionary<string, string> Facts(string? status)
+    {
+      var f = new Dictionary<string, string> { ["runnerId"] = "owner-mac", ["itemId"] = "7", ["error"] = "RUNNER_UNAVAILABLE: usage limit" };
+      if (status is not null) f["itemStatus"] = status;
+      return f;
+    }
+    string Body(string? status) => EmailTemplates.Exception("live", "runner_unavailable", Facts(status), Console).BodyText;
+
+    Assert.Contains("could not work on any queue item. Queue item 7 was put back without using an attempt.\n", Body("queued"));
+    Assert.Contains("could not work on any queue item. Queue item 7 was put back without using an attempt.\n", Body(null));
+    Assert.Contains("Queue item 7 had submitted drafts before it stopped: its drafts are in the review queue and the item is not authored again.\n",
+      Body("done"));
+    Assert.DoesNotContain("put back", Body("done"));
+    Assert.Contains("Queue item 7 was not put back: it failed for a person to look at.\n", Body("failed"));
+    Assert.DoesNotContain("put back without", Body("failed"));
+  }
+
+  [Fact]
+  public void Exception_QueueItemPartial_TellsHowToAuthorTheRest()
+  {
+    foreach (var lastError in new[]
+    {
+      RunnerRoutes.RunnerUnavailableAfterDraftsError("RUNNER_UNAVAILABLE: usage limit"),
+      RunnerRoutes.RunFailedAfterDraftsError("timeout"),
+    })
+    {
+      var email = EmailTemplates.Exception("live", "queue_item_failed",
+        new Dictionary<string, string> { ["itemId"] = "9", ["url"] = "https://docs.example.com/partial", ["lastError"] = lastError }, Console);
+      Assert.Equal("[DeveloperCards] Action needed: queue item 9 stopped after submitting drafts", email.Subject);
+      Assert.Contains("Its drafts are in the review queue; any part of the page it had not drafted yet was not authored.\n", email.BodyText);
+      Assert.Contains("re-add the URL in the Queue tab to author the remaining facts — https://console.developercards.app/automation?tab=queue", email.BodyText);
+      Assert.DoesNotContain("failed 3 times", email.BodyText);
+    }
+  }
+
+  [Fact]
+  public void WeeklyDigest_RunnerLine_ShowsStateAndLastError()
+  {
+    // R18G P1: an alive runner in error no longer reads as healthy in the digest.
+    var runner = new DigestRunner("owner-mac", new DateTimeOffset(2026, 9, 27, 22, 5, 0, TimeSpan.Zero), null, "error", "author config:\nno tool-surface.json");
+    var body = EmailTemplates.WeeklyDigest("live", Digest() with { Runners = [runner] }, Console).BodyText;
+    Assert.Contains("\nRunner owner-mac: state error, last heartbeat 2026-09-27T22:05Z, login expires unknown, last error: author config: no tool-surface.json\n", body);
   }
 
   [Fact]
@@ -322,7 +394,7 @@ Live quality (30 days): 25 auto-accepted, 1 deleted by a person, 1 edited by a p
 Publishes by state: would_publish 2
 Source watch: 36 check(s), 2 change(s), 1 failure(s)
 Emails: 9 sent, 0 failed
-Runner owner-mac: last heartbeat 2026-09-27T22:05Z, login expires 2026-10-20T00:00Z
+Runner owner-mac: state idle, last heartbeat 2026-09-27T22:05Z, login expires 2026-10-20T00:00Z
 AI QA spend: $1.2500 human runs, $0.4000 automation
 
 Console: https://console.developercards.app/automation

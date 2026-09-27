@@ -316,7 +316,7 @@ public static class EvalGate
     bool Passed, bool FailuresEmpty, string Provider, string Model, string PromptVersion, string? SecondProvider, string? SecondModel,
     long SeededReps, long AuthoredReps, double? SeededRecall, double SeededRecallCiLower, IReadOnlyList<double> PerClassRecall,
     double ControlFalsePositiveRate, double ControlUnscoredRate, double? AutoAcceptPrecision, double AutoAcceptPrecisionCiLower,
-    long WouldAcceptCards, double? DefectEscapeRate, double AuthoredUnscoredRate, string? AuthorConfigId)
+    long WouldAcceptCards, double? DefectEscapeRate, double AuthoredUnscoredRate, string? AuthorConfigId, string? EffectiveEffort)
   {
     public static GateReport Read(JsonElement root)
     {
@@ -348,11 +348,13 @@ public static class EvalGate
       var defectEscaped = Count(authored, "authored", "defectEscaped");
       if (defectEscaped > defectiveLabeled) throw new InvalidReport("authored.defectEscaped exceeds authored.defectiveLabeled");
       var authorConfigId = AuthorConfigIdOf(authored);
+      var provider = Text(reviewer, "reviewer", "provider");
+      var effectiveEffort = EffectiveEffortOf(reviewer, provider);
 
       return new GateReport(
         passed,
         failuresEmpty,
-        Text(reviewer, "reviewer", "provider"),
+        provider,
         Text(reviewer, "reviewer", "model"),
         Text(reviewer, "reviewer", "promptVersion"),
         NullableText(reviewer, "reviewer", "secondProvider"),
@@ -369,7 +371,35 @@ public static class EvalGate
         Count(authored, "authored", "wouldAcceptCards"),
         defectiveLabeled == 0 ? null : (double)defectEscaped / defectiveLabeled,
         Number(authored, "authored", "unscoredRate"),
-        authorConfigId);
+        authorConfigId,
+        effectiveEffort);
+    }
+
+    /// <summary>
+    /// <c>reviewer.effectiveEffort</c> (R18E N2, R18G backend-design-26): the reasoning effort the gate's review really
+    /// sent, a string of 1..<see cref="Internal.AiQaResults.MaxLabelLength"/> characters (the most a QA report's
+    /// <c>effectiveEffort</c> can carry, so a longer one could never match). Required when the reviewer is an automation
+    /// provider: a gate without it would bind no effort, and AI_EFFORT, shared with the human reviewer, could then change
+    /// the gated reviewer unnoticed. For another provider it is optional (the gate fails on <c>reviewer.provider</c>).
+    /// </summary>
+    private static string? EffectiveEffortOf(JsonElement reviewer, string provider)
+    {
+      var max = Internal.AiQaResults.MaxLabelLength;
+      var message = $"reviewer.effectiveEffort must be a string of 1..{max} characters";
+      string? effort = null;
+      if (reviewer.TryGetProperty("effectiveEffort", out var el) && el.ValueKind != JsonValueKind.Null)
+      {
+        if (el.ValueKind != JsonValueKind.String || el.GetString() is not { Length: >= 1 } value || value.Length > max)
+        {
+          throw new InvalidReport(message);
+        }
+        effort = value;
+      }
+      if (effort is null && AutomationGateProviders.Contains(provider, StringComparer.Ordinal))
+      {
+        throw new InvalidReport($"{message}: the reviewer is the automation provider {provider}");
+      }
+      return effort;
     }
 
     /// <summary>

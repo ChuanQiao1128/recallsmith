@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using RecallSmith.Lambda.Vpc.Automation;
@@ -23,32 +24,52 @@ public class AutomationRound5Tests
 
   // An ai-qa automation report exactly as handler._report serializes it (json.dumps, sort_keys, compact separators):
   // v, runId, chunk, provider, model, promptVersion, items, target, profile and, for the automation profile (O1),
-  // effectiveEffort. The item is review.py's done-item shape (services/ai-qa tests/test_profiles.py,
-  // test_draft_report_carries_target_and_profile_and_the_automation_reviewer).
-  private const string AiQaAutomationReportJson = """
-    {"chunk":0,"effectiveEffort":"<effort>","items":[{"cardId":<draft_id>,"contentSha256":"<sha>","errorCode":null,"estimatedCostUsd":0.0088,"findings":[],"latencyMs":2140,"requestId":"<request_id>","status":"done","usage":{"cacheReadInputTokens":0,"inputTokens":1000,"outputTokens":100}}],"model":"<model>","profile":"automation","promptVersion":"<prompt_version>","provider":"<provider>","runId":"<run_id>","target":"draft","v":1}
-    """;
+  // effectiveEffort. The item is review.py's done-item shape. It is one shared golden file (R18G backend-design-27):
+  // services/ai-qa's suite asserts that handler._report's automation body has its key set and value types, and this
+  // class loads the same file, so a rename on either side fails the other suite instead of leaving both green.
+  internal static readonly string AiQaAutomationReportPath = Path.Combine("services", "ai-qa", "tests", "fixtures", "automation_report.json");
+
+  /// <summary>The shared fixture's text, read from the repository.</summary>
+  internal static string AiQaAutomationReportJson() => File.ReadAllText(Path.Combine(RepoRoot(), AiQaAutomationReportPath));
 
   private readonly PostgresFixture _db;
 
   public AutomationRound5Tests(PostgresFixture db) => _db = db;
 
-  /// <summary>The ai-qa report for <paramref name="e"/>; without the <c>effectiveEffort</c> key when <paramref name="effort"/> is null.</summary>
+  /// <summary>
+  /// The shared ai-qa report with the values of <paramref name="e"/> put into the fixture's fields; without the
+  /// <c>effectiveEffort</c> key when <paramref name="effort"/> is null. Only values change: the keys, their order and the
+  /// value types are the fixture's.
+  /// </summary>
   private static string AiQaReport(AutomationTestKit.Eligible e, string? effort)
   {
-    var raw = AiQaAutomationReportJson.Trim()
-      .Replace("<effort>", effort ?? string.Empty, StringComparison.Ordinal)
-      .Replace("<draft_id>", e.DraftId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
-      .Replace("<sha>", e.Hash, StringComparison.Ordinal)
-      .Replace("<request_id>", $"req-{Guid.NewGuid():N}", StringComparison.Ordinal)
-      .Replace("<model>", MantleModel, StringComparison.Ordinal)
-      .Replace("<prompt_version>", QaRuns.AutomationPromptVersion, StringComparison.Ordinal)
-      .Replace("<provider>", MantleProvider, StringComparison.Ordinal)
-      .Replace("<run_id>", e.JobId.ToString("D"), StringComparison.Ordinal);
-    if (effort is not null) return raw;
-    var node = JsonNode.Parse(raw)!.AsObject();
-    node.Remove("effectiveEffort");
+    var node = JsonNode.Parse(AiQaAutomationReportJson())!.AsObject();
+    Set(node, "effectiveEffort", effort ?? string.Empty);
+    Set(node, "model", MantleModel);
+    Set(node, "promptVersion", QaRuns.AutomationPromptVersion);
+    Set(node, "provider", MantleProvider);
+    Set(node, "runId", e.JobId.ToString("D"));
+    var item = node["items"]!.AsArray().Single()!.AsObject();
+    Set(item, "cardId", e.DraftId);
+    Set(item, "contentSha256", e.Hash);
+    Set(item, "requestId", $"req-{Guid.NewGuid():N}");
+    if (effort is null) node.Remove("effectiveEffort");
     return node.ToJsonString();
+  }
+
+  /// <summary>Replaces the value of an existing fixture key, keeping its JSON type (a renamed key fails here).</summary>
+  private static void Set(JsonObject node, string key, JsonNode value)
+  {
+    Assert.True(node.ContainsKey(key), $"{AiQaAutomationReportPath} has no key {key}");
+    Assert.Equal(node[key]!.GetValueKind(), value.GetValueKind());
+    node[key] = value;
+  }
+
+  private static string RepoRoot()
+  {
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    while (dir is not null && !File.Exists(Path.Combine(dir.FullName, AiQaAutomationReportPath))) dir = dir.Parent;
+    return dir?.FullName ?? throw new FileNotFoundException($"no {AiQaAutomationReportPath} above {AppContext.BaseDirectory}");
   }
 
   private async Task WithMantleGateAsync(string mode, Func<Task> body)
@@ -74,6 +95,35 @@ public class AutomationRound5Tests
     Assert.Equal(
       ["chunk", "effectiveEffort", "items", "model", "profile", "promptVersion", "provider", "runId", "target", "v"],
       doc.RootElement.EnumerateObject().Select(p => p.Name).ToArray());
+  }
+
+  [Fact]
+  public void AiQaReportFixture_IsTheSharedFile_WithTheProducersSerialization()
+  {
+    // R18G backend-design-27: the fixture is the checked-in file both suites read, not an inline copy.
+    var raw = AiQaAutomationReportJson().TrimEnd('\n');
+    // json.dumps(sort_keys=True, separators=(",", ":")): the keys sorted and no whitespace, at every level.
+    var parsed = JsonNode.Parse(raw)!;
+    Assert.Equal(raw, parsed.ToJsonString(new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+    AssertSorted(parsed);
+    Assert.Equal(("automation", "draft", 1), ((string)parsed["profile"]!, (string)parsed["target"]!, (int)parsed["v"]!));
+    Assert.Equal(
+      ["cardId", "contentSha256", "errorCode", "estimatedCostUsd", "findings", "latencyMs", "requestId", "status", "usage"],
+      parsed["items"]!.AsArray().Single()!.AsObject().Select(p => p.Key).ToArray());
+
+    static void AssertSorted(JsonNode? node)
+    {
+      if (node is JsonObject o)
+      {
+        var keys = o.Select(p => p.Key).ToArray();
+        Assert.Equal(keys.OrderBy(k => k, StringComparer.Ordinal).ToArray(), keys);
+        foreach (var p in o) AssertSorted(p.Value);
+      }
+      else if (node is JsonArray a)
+      {
+        foreach (var v in a) AssertSorted(v);
+      }
+    }
   }
 
   [Fact]

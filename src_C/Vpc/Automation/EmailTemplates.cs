@@ -27,8 +27,9 @@ public sealed record BatchSummaryData(Guid RunId, long? DeckId, string DeckSlug,
 /// <summary>One per-automation row of the digest, from the ledger computation.</summary>
 public sealed record DigestAutomation(string Automation, long Runs, long Units, long Failures, decimal MinutesSaved);
 
-/// <summary>A runner as the digest reports it.</summary>
-public sealed record DigestRunner(string RunnerId, DateTimeOffset LastHeartbeatAt, DateTimeOffset? LoginExpiresAt);
+/// <summary>A runner as the digest reports it, with its state and last error (R18G P1: an alive runner in <c>error</c> is not healthy).</summary>
+public sealed record DigestRunner(string RunnerId, DateTimeOffset LastHeartbeatAt, DateTimeOffset? LoginExpiresAt, string State = "idle",
+  string? LastError = null);
 
 /// <summary>What the weekly digest shows (A00 §12.5); <see cref="From"/>..<see cref="To"/> are inclusive UTC days.</summary>
 public sealed record WeeklyDigestData(DateOnly From, DateOnly To, decimal HoursSaved, decimal MinutesSaved, long LedgerRuns, long LedgerUnits,
@@ -195,6 +196,15 @@ public static class EmailTemplates
 
     switch (subkind)
     {
+      case "runner_stalled" when facts.GetValueOrDefault("state") == "error":
+        // R18G P1: the runner heartbeats but cannot work (an author_config_error claims nothing).
+        subject = $"Action needed: authoring runner {F("runnerId")} is running but cannot work";
+        summary = $"The local authoring runner {F("runnerId")} is running but cannot work: {F("lastError")}. " +
+          $"It started no run in {AutomationTick.ErrorRunnerIdleHours} h while {F("queued")} due queue item(s) are waiting.";
+        needs.Add($"- runner {F("runnerId")} — {F("lastError")} — for an author config error, rebuild tools/mcp-server and " +
+          $"tools/author-runner, then run: node tools/author-runner/dist/index.js status — {console}");
+        factKeys = ["runnerId", "state", "lastError", "since", "loginExpiresAt", "lastRunId", "lastRunAt", "queued"];
+        break;
       case "runner_stalled":
         subject = $"Action needed: authoring runner {F("runnerId")} silent since {F("since")}";
         summary = $"The local authoring runner {F("runnerId")} has not sent a heartbeat since {F("since")}; {F("queued")} queue item(s) are waiting.";
@@ -227,6 +237,15 @@ public static class EmailTemplates
         summary = $"The runner could not run queue item {F("itemId")} {RunnerRoutes.MaxRunnerUnavailableCompletes} times in a row; " +
           "it will not be retried until you add it again. Check the runner and the item.";
         needs.Add($"- {F("url")} — {F("lastError")} — {AutomationUrl(consoleBaseUrl, "tab=queue")}");
+        factKeys = ["itemId", "url", "lastError"];
+        break;
+      case "queue_item_failed" when RunnerRoutes.IsFinishedAfterDrafts(facts.GetValueOrDefault("lastError")):
+        // R18G P2: the run stopped after it submitted drafts, so the item is done and never authored again on its own.
+        subject = $"Action needed: queue item {F("itemId")} stopped after submitting drafts";
+        summary = $"The run of queue item {F("itemId")} stopped after it had submitted drafts, so the item is finished and will not be " +
+          "authored again. Its drafts are in the review queue; any part of the page it had not drafted yet was not authored.";
+        needs.Add($"- {F("url")} — {F("lastError")} — review its drafts, then re-add the URL in the Queue tab to author the remaining " +
+          $"facts — {AutomationUrl(consoleBaseUrl, "tab=queue")}");
         factKeys = ["itemId", "url", "lastError"];
         break;
       case "queue_item_failed":
@@ -280,9 +299,15 @@ public static class EmailTemplates
         break;
       case "runner_unavailable":
         subject = $"Action needed: authoring runner {F("runnerId")} cannot run";
-        summary = $"The authoring runner {F("runnerId")} stopped: it could not work on any queue item. Queue item {F("itemId")} was put back without using an attempt.";
+        // R18G P2: only a requeued item was put back (a missing itemStatus is a caller from before it was passed).
+        summary = $"The authoring runner {F("runnerId")} stopped: it could not work on any queue item. " + facts.GetValueOrDefault("itemStatus") switch
+        {
+          "done" => $"Queue item {F("itemId")} had submitted drafts before it stopped: its drafts are in the review queue and the item is not authored again.",
+          "failed" => $"Queue item {F("itemId")} was not put back: it failed for a person to look at.",
+          _ => $"Queue item {F("itemId")} was put back without using an attempt.",
+        };
         needs.Add($"- runner {F("runnerId")} — {F("error")} — check the Mac's claude login, subscription and MCP server — {console}");
-        factKeys = ["runnerId", "runId", "itemId", "error"];
+        factKeys = ["runnerId", "runId", "itemId", "itemStatus", "error"];
         break;
       case "live_override_high":
         subject = $"Action needed: people overrode {F("overrideRate")} of auto-accepted cards";
@@ -476,7 +501,9 @@ public static class EmailTemplates
     details.Add($"Emails: {data.EmailsSent} sent, {data.EmailsFailed} failed");
     if (data.Runners.Count == 0) details.Add("Runners: none registered");
     details.AddRange(data.Runners.Select(r =>
-      $"Runner {r.RunnerId}: last heartbeat {Timestamp(r.LastHeartbeatAt)}, login expires {(r.LoginExpiresAt is { } l ? Timestamp(l) : "unknown")}"));
+      $"Runner {r.RunnerId}: state {OneLine(r.State)}, last heartbeat {Timestamp(r.LastHeartbeatAt)}, " +
+      $"login expires {(r.LoginExpiresAt is { } l ? Timestamp(l) : "unknown")}" +
+      (string.IsNullOrWhiteSpace(r.LastError) ? string.Empty : $", last error: {OneLine(r.LastError)}")));
     details.Add($"AI QA spend: {Usd(data.HumanQaSpendUsd)} human runs, {Usd(data.AutomationQaSpendUsd)} automation");
     return Render(mode, subject, summary, needs, done, details, console);
   }
