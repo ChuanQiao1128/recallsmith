@@ -35,6 +35,9 @@ AUTHORED_SOURCES = {AUTHORED.name: AUTHORED_SOURCES_PATH, AUTHORED_V2.name: AUTH
 
 # The second reviewer's providers (ai-qa AI_QA_SECOND_PROVIDER); claude-cli is local only.
 SECOND_PROVIDERS = ("bedrock-converse", "bedrock", "anthropic")
+# `run --provider`: ai-qa's providers (openai-mantle is R18C contract L1, the automation reviewer's
+# transport) plus the local claude-cli proxy.
+RUN_PROVIDERS = ("bedrock", "anthropic", "bedrock-converse", "openai-mantle", "claude-cli")
 
 DRY_RUN_INPUT_TOKENS = 3000
 DRY_RUN_OUTPUT_TOKENS = 1500
@@ -63,10 +66,12 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--provider",
         required=True,
-        choices=("bedrock", "anthropic", "bedrock-converse", "claude-cli"),
+        choices=RUN_PROVIDERS,
         help=(
             "claude-cli = the owner's local Claude Code CLI (their subscription, this machine only); "
-            "bedrock-converse = a non-Anthropic Bedrock model through the Converse API"
+            "bedrock-converse = a non-Anthropic Bedrock model through the Converse API; "
+            "openai-mantle = Chat Completions on bedrock-mantle (the automation reviewer openai.gpt-5.5, "
+            "region AI_QA_AUTOMATION_REGION, default us-east-1)"
         ),
     )
     run.add_argument("--model", required=True)
@@ -125,13 +130,23 @@ def _parser() -> argparse.ArgumentParser:
     )
     drafts.add_argument(
         "--drafts", required=True, type=Path,
-        help="JSONL, one GET /api/v1/authoring/drafts/:draftId response per line (the sandbox deck's drafts)",
+        help=(
+            "JSONL, one GET /api/v1/authoring/drafts/:draftId response per line (the drafts of the "
+            "eval:new-facts queue items)"
+        ),
     )
     drafts.add_argument(
         "--deck", action="append", default=[], metavar="DECK_ID=DECK_SLUG",
         help="the deck slug of a deckId in the drafts file (repeat per deck)",
     )
     drafts.add_argument("--output", type=Path, default=None, help="default data/authored-v2.jsonl")
+    drafts.add_argument(
+        "--runs-dir", type=Path, default=None,
+        help=(
+            "the author-runner's run records (<runId>.meta.json with the pinned authorConfig); default "
+            "$DC_RUNNER_LOG_DIR/runs, else ~/Library/Logs/DeveloperCards/runs"
+        ),
+    )
 
     jury = sub.add_parser("jury", help="label the authored cards with a jury of models (spends money; owner only)")
     jury.add_argument(
@@ -349,7 +364,7 @@ def _author(args: argparse.Namespace) -> int:
 
 
 def _import_drafts(args: argparse.Namespace) -> int:
-    from .drafts_import import import_drafts, parse_deck_map
+    from .drafts_import import default_runs_dir, import_drafts, parse_deck_map
 
     try:
         decks = parse_deck_map(args.deck)
@@ -359,7 +374,11 @@ def _import_drafts(args: argparse.Namespace) -> int:
     if not args.drafts.is_file():
         print(f"dc-evals: drafts file {args.drafts} does not exist", file=sys.stderr)
         return 2
-    return import_drafts(drafts_path=args.drafts, decks=decks, output=args.output or AUTHORED_V2.path)
+    runs_dir = args.runs_dir or default_runs_dir()
+    if not runs_dir.is_dir():
+        print(f"dc-evals: runs directory {runs_dir} does not exist (pass --runs-dir)", file=sys.stderr)
+        return 2
+    return import_drafts(drafts_path=args.drafts, decks=decks, output=args.output or AUTHORED_V2.path, runs_dir=runs_dir)
 
 
 def _jury(args: argparse.Namespace) -> int:

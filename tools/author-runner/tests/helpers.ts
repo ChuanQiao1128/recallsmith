@@ -103,6 +103,10 @@ export function makeHome(): TestHome {
   const skillDir = join(repo, '.claude', 'skills', 'author-cards');
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(join(skillDir, 'SKILL.md'), '# Author cards (test)\n\nSkill version: `author-cards@1.8.1`.\n');
+  // ... and the MCP server bundle the run's MCP config starts (a stand-in; the fake claude never starts it).
+  const mcpDist = join(repo, 'tools', 'mcp-server', 'dist');
+  mkdirSync(mcpDist, { recursive: true });
+  writeFileSync(join(mcpDist, 'index.js'), '// test stand-in for the MCP server bundle\n');
   const claudeBin = join(bin, 'claude');
   copyFileSync(FAKE_CLAUDE_SOURCE, claudeBin);
   chmodSync(claudeBin, 0o755);

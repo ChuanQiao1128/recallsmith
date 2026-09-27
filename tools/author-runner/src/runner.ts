@@ -2,17 +2,27 @@
 // heartbeat, then up to DC_RUNNER_MAX_ITEMS times: claim ONE item right before its run (so
 // each item gets a fresh lease, ai-agent-2), one headless claude run reported with
 // `complete`; an item that is not run is released at once with a failed `complete`
-// (automation-7). Final heartbeat.
+// (automation-7). Final heartbeat. A `complete` is retried with a jittered backoff; one that
+// still fails is kept in <logDir>/pending-complete/<runId>.json and re-sent by the next run
+// before its first claim, so the run result and the agent's notes are not lost (automation-16).
 
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { LOGIN_HINT } from '../../mcp-server/src/api';
-import { createRunnerApi, type ClaimedItem, type HeartbeatRequest, type RunnerApi, type RunnerState, type RunOutcome } from './api';
-import { AuthorConfigError, readAuthorConfig, type AuthorConfig } from './authorConfig';
+import {
+  createRunnerApi,
+  type ClaimedItem,
+  type CompleteRequest,
+  type HeartbeatRequest,
+  type RunnerApi,
+  type RunnerState,
+  type RunOutcome,
+} from './api';
+import { AuthorConfigError, MCP_SERVER_BUNDLE, readAuthorConfig, type AuthorConfig } from './authorConfig';
 import { claudeOutcome, claudeUsage, claudeVersion, runClaude, type SignalGroup } from './claude';
 import { RUNNER_VERSION, type RunnerConfig } from './config';
-import { acquireLock } from './lock';
+import { acquireLock, lockStaleMs } from './lock';
 import { loginExpiresAt } from './login';
 import { logLine, stdoutSink, type LogEvent, type LogFields, type LogSink } from './logs';
 import { readPromptTemplate, renderPrompt } from './prompt';
@@ -24,6 +34,11 @@ export const EXIT_LOGIN_REQUIRED = 3;
 
 export const RUNS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
+/** Attempts of one `complete` call before it is kept for the next run (automation-16). */
+export const COMPLETE_ATTEMPTS = 3;
+/** The backoff before the second attempt; it doubles per attempt and is jittered to 50–150 %. */
+export const COMPLETE_BACKOFF_MS = 2_000;
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DECK_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -33,6 +48,8 @@ export interface RunOnceDeps {
   log?: LogSink;
   /** Tests only: replaces the process-group signal of the claude runs. */
   signalGroup?: SignalGroup;
+  /** Tests only: replaces the wait between `complete` attempts. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface LastRun {
@@ -62,6 +79,42 @@ export function readLastRun(config: Pick<RunnerConfig, 'logDir'>): LastRun | nul
       finishedAt: p.finishedAt,
       durationMs: typeof p.durationMs === 'number' ? p.durationMs : 0,
     };
+  } catch {
+    return null;
+  }
+}
+
+export function pendingCompleteDir(config: Pick<RunnerConfig, 'logDir'>): string {
+  return join(config.logDir, 'pending-complete');
+}
+
+/**
+ * A `complete` the server refused with a client error (a validation error, RUN_NOT_FOUND, a runner
+ * mismatch, RUN_NOT_RUNNING with a different outcome): sending it again can never succeed. A network
+ * error, a 5xx, 401 (login), 408 and 429 are worth sending again.
+ */
+export function isPermanentCompleteFailure(err: unknown): boolean {
+  const match = /^HTTP (\d{3})\b/.exec(err instanceof Error ? err.message : String(err));
+  if (match === null) return false;
+  const status = Number(match[1]);
+  return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
+}
+
+interface PendingComplete {
+  savedAt: string;
+  itemId: number | null;
+  request: CompleteRequest;
+}
+
+function readPending(file: string): PendingComplete | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const p = parsed as Partial<PendingComplete>;
+    const r = p.request;
+    if (typeof r !== 'object' || r === null || typeof r.runId !== 'string' || !UUID_RE.test(r.runId)) return null;
+    if (r.outcome !== 'done' && r.outcome !== 'nothing_new' && r.outcome !== 'failed') return null;
+    return { savedAt: typeof p.savedAt === 'string' ? p.savedAt : '', itemId: typeof p.itemId === 'number' ? p.itemId : null, request: r };
   } catch {
     return null;
   }
@@ -126,11 +179,12 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
   const env = deps.env ?? process.env;
   const now = deps.now ?? (() => new Date());
   const sink = deps.log ?? stdoutSink;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const log = (level: 'info' | 'warn' | 'error', event: LogEvent, fields?: LogFields): void =>
     logLine(sink, now, level, event, config.runnerId, fields);
 
   log('info', 'start');
-  const lock = acquireLock(config.lockFile, now);
+  const lock = acquireLock(config.lockFile, lockStaleMs(config), now);
   if (lock === null) {
     log('info', 'locked');
     return EXIT_OK;
@@ -170,6 +224,8 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
   try {
     const runsDir = join(config.logDir, 'runs');
     pruneRuns(runsDir, now());
+    // A kept complete older than the runs retention is long past its lease; the server has requeued its item.
+    pruneRuns(pendingCompleteDir(config), now());
 
     status.loginExpiresAt = loginExpiresAt(config.api.tokenFile);
     status.claudeVersion = claudeVersion(config.claudeBin, env);
@@ -198,24 +254,99 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
       return EXIT_FAILURE;
     }
 
-    try {
-      const hb = await heartbeat('running');
-      if (hb.effectiveMode === 'off') {
-        log('info', 'mode_off');
-        await heartbeat('idle');
-        return EXIT_OK;
+    const pendingDir = pendingCompleteDir(config);
+    const pendingFile = (runId: string): string => join(pendingDir, `${runId}.json`);
+
+    /**
+     * Sends one `complete`, up to COMPLETE_ATTEMPTS times with a jittered backoff. When every attempt fails
+     * with an error worth retrying, the request (with the agent's notes) is kept for the next run
+     * (automation-16). Returns the error of a call that did not reach the server, or null.
+     */
+    const sendComplete = async (request: CompleteRequest, itemId: number | undefined): Promise<string | null> => {
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= COMPLETE_ATTEMPTS; attempt += 1) {
+        try {
+          await api.complete(request);
+          return null;
+        } catch (err) {
+          lastErr = err;
+          if (isPermanentCompleteFailure(err)) break;
+          if (attempt < COMPLETE_ATTEMPTS) await sleep(COMPLETE_BACKOFF_MS * 2 ** (attempt - 1) * (0.5 + Math.random()));
+        }
       }
+      const error = errorMessage(lastErr);
+      log('error', 'complete_failed', { runId: request.runId, itemId, error });
+      if (!isPermanentCompleteFailure(lastErr)) {
+        mkdirSync(pendingDir, { recursive: true, mode: 0o700 });
+        const pending: PendingComplete = { savedAt: now().toISOString(), itemId: itemId ?? null, request };
+        writeFileSync(pendingFile(request.runId), `${JSON.stringify(pending)}\n`, { mode: 0o600 });
+        log('warn', 'complete_pending', { runId: request.runId, itemId });
+      }
+      return error;
+    };
+
+    /**
+     * Re-sends every kept `complete` once, before the first claim; one that still fails stays for the next run.
+     * Returns the error of the last one that failed, or null.
+     */
+    const replayPending = async (): Promise<string | null> => {
+      let failure: string | null = null;
+      let names: string[];
+      try {
+        names = readdirSync(pendingDir).filter((name) => name.endsWith('.json')).sort();
+      } catch {
+        return null;
+      }
+      for (const name of names) {
+        const file = join(pendingDir, name);
+        const pending = readPending(file);
+        if (pending === null || name !== `${pending.request.runId}.json`) {
+          rmSync(file, { force: true });
+          continue;
+        }
+        const { request } = pending;
+        const itemId = pending.itemId ?? undefined;
+        try {
+          const res = await api.complete(request);
+          rmSync(file, { force: true });
+          log('info', 'complete_replayed', { runId: request.runId, itemId, outcome: request.outcome, replayed: res.replayed === true });
+        } catch (err) {
+          if (isPermanentCompleteFailure(err)) {
+            rmSync(file, { force: true });
+            log('warn', 'complete_failed', { runId: request.runId, itemId, error: `dropped kept complete: ${errorMessage(err)}` });
+          } else {
+            failure = `complete failed for ${request.runId}: ${errorMessage(err)}`;
+            log('error', 'complete_failed', { runId: request.runId, itemId, error: errorMessage(err) });
+          }
+        }
+      }
+      return failure;
+    };
+
+    let effectiveMode: string;
+    try {
+      effectiveMode = (await heartbeat('running')).effectiveMode;
     } catch (err) {
       return await apiFailure(err);
     }
-
-    let lastError: string | null = null;
+    // Before any claim, also when the mode is off: the kept result and notes reach the server first.
+    let lastError: string | null = await replayPending();
+    if (effectiveMode === 'off') {
+      log('info', 'mode_off');
+      try {
+        if (lastError === null) await heartbeat('idle');
+        else await heartbeat('error', { lastError: lastError.slice(0, 500) });
+      } catch (err) {
+        return await apiFailure(err);
+      }
+      return EXIT_OK;
+    }
 
     /** Hands a claimed item back at once instead of leaving it claimed until its lease lapses (automation-7). */
     const release = async (runId: string, itemId: number | undefined, reason: string): Promise<void> => {
       lastError = reason;
-      try {
-        await api.complete({
+      const failure = await sendComplete(
+        {
           runnerId: config.runnerId,
           runId,
           outcome: 'failed',
@@ -224,11 +355,10 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
           numTurns: null,
           error: reason.slice(0, 500),
           summary: null,
-        });
-      } catch (err) {
-        lastError = `complete failed for ${runId}: ${errorMessage(err)}`;
-        log('error', 'complete_failed', { runId, itemId, error: errorMessage(err) });
-      }
+        },
+        itemId,
+      );
+      if (failure !== null) lastError = `complete failed for ${runId}: ${failure}`;
     };
 
     for (let n = 0; n < config.maxItems; n += 1) {
@@ -273,7 +403,7 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
         mcpServers: {
           developercards: {
             command: process.execPath,
-            args: [join(config.api.repoRoot, 'tools', 'mcp-server', 'dist', 'index.js')],
+            args: [join(config.api.repoRoot, MCP_SERVER_BUNDLE)],
             env: {
               DC_AUTOMATION_RUN_ID: runId,
               DC_AUTOMATION_QUEUE_ITEM_ID: String(itemId),
@@ -317,8 +447,8 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
       const durationMs = Math.max(0, now().getTime() - started);
       if (result.outcome === 'failed') lastError = result.error ?? 'failed';
 
-      try {
-        await api.complete({
+      const completeFailure = await sendComplete(
+        {
           runnerId: config.runnerId,
           runId,
           outcome: result.outcome,
@@ -327,11 +457,10 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
           numTurns: result.numTurns,
           error: result.error === null ? null : result.error.slice(0, 500),
           summary: result.summary,
-        });
-      } catch (err) {
-        lastError = `complete failed for ${runId}: ${errorMessage(err)}`;
-        log('error', 'complete_failed', { runId, itemId, error: errorMessage(err) });
-      }
+        },
+        itemId,
+      );
+      if (completeFailure !== null) lastError = `complete failed for ${runId}: ${completeFailure}`;
 
       const finishedAt = now().toISOString();
       // The local record of the run: the pinned author configuration and what the CLI reported it used.
