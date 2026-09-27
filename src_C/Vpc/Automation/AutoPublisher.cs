@@ -421,13 +421,17 @@ public static class AutoPublisher
   /// <summary>
   /// A live human outcome (after the row update): the <c>publish_blocked</c> alert and the ledger row. A dry-run row
   /// accepted nothing, so no person has anything to publish: no alert (R18C automation-15, L6); the batch summary's
-  /// "publish would need you" and the Runs tab carry it.
+  /// "publish would need you" and the Runs tab carry it. One unresolved blockage of a deck is one exception (R18D
+  /// backend-design-19, automation-25): the alert is keyed on the deck's oldest open human row with the same reason
+  /// (<see cref="OpenBlockageAnchorAsync"/>), so a later run into the still-blocked deck adds its row but no second
+  /// email. A human publish of the deck, or a new reason, starts a new exception.
   /// </summary>
   private static async Task RouteHumanAsync(NpgsqlConnection conn, long publishId, long deckId, string? deckSlug, Guid? runId, string mode,
     string reason, string? detail, CancellationToken ct)
   {
     if (mode != AutomationMode.Live) return;
     var id = publishId.ToString(CultureInfo.InvariantCulture);
+    var anchor = (await OpenBlockageAnchorAsync(conn, deckId, reason, ct) ?? publishId).ToString(CultureInfo.InvariantCulture);
     var facts = new Dictionary<string, string>
     {
       ["publishId"] = id,
@@ -437,9 +441,23 @@ public static class AutoPublisher
       ["reasonDetail"] = detail ?? string.Empty,
     };
     if (runId is { } r) facts["runId"] = r.ToString("D");
-    await Notifications.RaiseExceptionAsync(conn, "publish_blocked", $"exception:publish_blocked:{id}", facts, runId, ct, labelMode: mode);
+    await Notifications.RaiseExceptionAsync(conn, "publish_blocked", $"exception:publish_blocked:{anchor}", facts, runId, ct, labelMode: mode);
     await AutomationLedger.RecordAsync(conn, new AutomationEvent("auto_publish", 0, "success", DeckId: deckId, Ref: id,
       DedupeKey: $"auto-publish-human:{id}", Details: new { reason }), ct);
+  }
+
+  /// <summary>
+  /// The id of the deck's oldest open publish exception with <paramref name="reason"/> (<see cref="StatusRoutes.OpenHumanPublishSql"/>):
+  /// the row that opened the blockage the current row continues. The current row is itself open, so this is its own id
+  /// when nothing older is unresolved.
+  /// </summary>
+  private static async Task<long?> OpenBlockageAnchorAsync(NpgsqlConnection conn, long deckId, string reason, CancellationToken ct)
+  {
+    ct.ThrowIfCancellationRequested();
+    var anchor = await DbUtil.ExecuteScalarAsync(conn, null,
+      $"select min(p.id) from automation_publishes p where p.deck_id = $1 and p.reason = $2 and {StatusRoutes.OpenHumanPublishSql}",
+      [deckId, reason]);
+    return anchor is null or DBNull ? null : Convert.ToInt64(anchor, CultureInfo.InvariantCulture);
   }
 
   // ---------------------------------------------------------------------------------------------

@@ -13,7 +13,8 @@ namespace RecallSmith.Lambda.Vpc.Automation;
 /// <summary>
 /// <c>POST /api/internal/automation/tick</c> (R18A A04, contract A00 §12.6): the housekeeping that keeps the automated
 /// flow moving, called by the notifier Lambda every 15 minutes (<c>job: "tick"</c>) and on Monday 08:00 NZ
-/// (<c>job: "digest"</c>). Single-flight through a session advisory lock; effective <c>off</c> does nothing; every
+/// (<c>job: "digest"</c>). The tick steps are single-flight through a session advisory lock (the digest, deduped per
+/// day, runs whether or not a tick holds it); effective <c>off</c> does nothing; every
 /// step, and every item of a step's loop, checks the time budget first and leaves the rest for the next tick (the tick
 /// then lists <see cref="BudgetExhausted"/> in <c>failedSteps</c>). Each step is idempotent, so a crashed or skipped tick
 /// is caught up by the next one. A failing step, or a failure a step swallows, emits <c>AutomationStepFailures</c> and
@@ -101,20 +102,23 @@ public static class AutomationTick
       if (mode.LiveBlockedReason == AutomationMode.ServerNotReady) return RunnerRoutes.NotReady(res);
       if (mode.Effective == AutomationMode.Off) return Answer(res, tickId, mode, "off", actions, sink);
 
-      var locked = await DbUtil.ExecuteScalarAsync(conn, null, "select pg_try_advisory_lock($1)", [LockKey]);
-      if (locked is not true) return Answer(res, tickId, mode, "locked", actions, sink);
+      // A digest job whose Monday slot collides with a running tick still sends the digest (R18D
+      // cloud-security-resilience-13): the digest is idempotent on its own dedupe key and needs no single-flight, so
+      // only the tick steps wait for the lock; the answer still says "locked" for them.
+      var locked = await DbUtil.ExecuteScalarAsync(conn, null, "select pg_try_advisory_lock($1)", [LockKey]) is true;
+      if (!locked && job != "digest") return Answer(res, tickId, mode, "locked", actions, sink);
       try
       {
-        await RunStepsAsync(conn, job, mode, actions, sink);
+        await RunStepsAsync(conn, job, mode, actions, sink, tickSteps: locked);
       }
       finally
       {
-        await DbUtil.ExecuteAsync(conn, null, "select pg_advisory_unlock($1)", [LockKey]);
+        if (locked) await DbUtil.ExecuteAsync(conn, null, "select pg_advisory_unlock($1)", [LockKey]);
       }
 
       Log.Event(sink.Failed.Count == 0 ? "info" : "warn", new { tag = "automation", outcome = "tick", tickId, job, mode = mode.Effective,
-        actions = actions.ToJson(), failedSteps = sink.Failed });
-      return Answer(res, tickId, mode, null, actions, sink);
+        skipped = locked ? null : "locked", actions = actions.ToJson(), failedSteps = sink.Failed });
+      return Answer(res, tickId, mode, locked ? null : "locked", actions, sink);
     }
     catch (Exception ex)
     {
@@ -126,7 +130,9 @@ public static class AutomationTick
     AutomationFailures.TickSink sink) =>
     res.Ok(new { tickId, mode = mode.Configured, effectiveMode = mode.Effective, skipped, actions = actions.ToJson(), failedSteps = sink.Failed });
 
-  private static async Task RunStepsAsync(NpgsqlConnection conn, string job, EffectiveMode mode, Actions a, AutomationFailures.TickSink sink)
+  /// <summary>The digest (job <c>digest</c>), then, when <paramref name="tickSteps"/> (this call holds the tick lock), the tick steps.</summary>
+  private static async Task RunStepsAsync(NpgsqlConnection conn, string job, EffectiveMode mode, Actions a, AutomationFailures.TickSink sink,
+    bool tickSteps)
   {
     var clock = Stopwatch.StartNew();
     AutomationFailures.Collect(sink);
@@ -164,6 +170,7 @@ public static class AutomationTick
     }
 
     if (job == "digest") await Step("digest", async () => a.Digest = await DigestAsync(conn, mode.Effective));
+    if (!tickSteps) return;
     await Step("leases", () => ExpireLeasesAsync(conn, a, Spent));
     // Before the QA steps and finalisation: a draft whose submit hook was lost gets its decision first.
     await Step("decision_sweep", () => DraftDecisions.SweepMissingAsync(conn, StepBatch, Spent));

@@ -358,13 +358,15 @@ public static class StatusRoutes
   /// <summary>
   /// The open-exception backlog (R18B K7). <c>humanPending</c>: decisions in state <c>human</c> with no
   /// <c>human_action</c> whose draft is still <c>pending</c>; <c>oldestHumanPendingAt</c>: the earliest time one of them
-  /// was routed (<c>decided_at</c>, else <c>created_at</c>). <c>humanPublishes</c>: live <c>automation_publishes</c> rows
-  /// in state <c>human</c> that no later successful deck publish resolved. The row never leaves <c>human</c> (the
+  /// was routed (<c>decided_at</c>, else <c>created_at</c>). <c>humanPublishes</c>: the decks with a live
+  /// <c>automation_publishes</c> row in state <c>human</c> that no later successful deck publish resolved (one deck is
+  /// one publish a person has to do, however many runs hit it: R18D backend-design-19, automation-25). The row never leaves <c>human</c> (the
   /// person publishes from the console, not through the row), so a <c>deck_publishes</c> row of the same deck with
   /// status <c>SUCCESS</c> created after the row's last change resolves it; a newer automation publish of the deck
   /// that reached <c>published</c> implies one. A dry-run <c>human</c> row accepted nothing and is not counted (a row
   /// holding cards accepted in live keeps the <c>live</c> label after a rollback, R18C automation-12).
-  /// <c>humanPublishItems</c> lists the oldest <see cref="MaxHumanPublishItems"/> of the counted rows (R18C L4).
+  /// <c>humanPublishItems</c> lists the oldest <see cref="MaxHumanPublishItems"/> of the counted decks (R18C L4), one item
+  /// per deck: its newest reason, and since its oldest open row.
   /// </summary>
   internal static async Task<Backlog> LoadBacklogAsync(NpgsqlConnection conn)
   {
@@ -375,15 +377,17 @@ public static class StatusRoutes
          where {OpenDecisionSql}) as human_pending,
         (select min(coalesce(dd.decided_at, dd.created_at)) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
          where {OpenDecisionSql}) as oldest_human_pending_at,
-        (select count(*) from automation_publishes p where {OpenHumanPublishSql}) as human_publishes
+        (select count(distinct p.deck_id) from automation_publishes p where {OpenHumanPublishSql}) as human_publishes
       """, []))[0];
     var items = await DbUtil.QueryAsync(conn, null,
       $"""
-      select p.deck_id, d.slug as deck_slug, p.reason, p.updated_at
+      select p.deck_id, min(d.slug) as deck_slug, (array_agg(p.reason order by p.updated_at desc, p.id desc))[1] as reason,
+             min(p.updated_at) as updated_at
       from automation_publishes p
       left join decks d on d.id = p.deck_id
       where {OpenHumanPublishSql}
-      order by p.updated_at, p.id
+      group by p.deck_id
+      order by min(p.updated_at), p.deck_id
       limit $1
       """, [MaxHumanPublishItems]);
     return new Backlog(RunnerRoutes.Long(row["human_pending"]), row["oldest_human_pending_at"], RunnerRoutes.Long(row["human_publishes"]), items);
