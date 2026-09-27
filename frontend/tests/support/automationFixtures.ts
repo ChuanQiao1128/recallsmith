@@ -69,6 +69,8 @@ export function statusFixture(overrides: Partial<AutomationStatus> = {}): Automa
       humanPending: 2,
       oldestHumanPendingAt: '2026-09-26T12:00:00Z',
       humanPublishes: 1,
+      // Live rows only (OpenHumanPublishSql has p.mode = 'live'), in any effective mode: their drafts were
+      // auto-accepted, so the Overview lists them in dry run too (G04 frontend-console-41).
       humanPublishItems: [
         { deckId: 7, deckSlug: 'aws-saa-c03', reason: 'DECK_NEVER_PUBLISHED', since: '2026-09-27T12:00:00Z' },
       ],

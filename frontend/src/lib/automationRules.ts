@@ -276,6 +276,43 @@ export function automationCountsBlind(effectiveMode: string | null): boolean {
 }
 
 /**
+ * The prefix of a blind count's note, by effective mode (G04
+ * frontend-console-41): the counts stay blind in every mode but live, and the
+ * note names the mode the page is in rather than always saying "Dry run".
+ */
+export function blindNotePrefix(effectiveMode: string | null): string {
+  if (effectiveMode === 'dry_run') return 'Dry run';
+  if (effectiveMode === 'off') return 'Automation off';
+  return 'Outside live mode';
+}
+
+/**
+ * The 7-day publish states whose count tells a dry-run verdict (G04
+ * frontend-console-39): a dry-run publish row exists only when a finalized run
+ * had a would_accept draft, and it is would_publish or human. While the counts
+ * are blind the Overview shows them as one hidden line, as the Runs cell and
+ * the digest (which drops the publishes of a run with an undecided draft) do.
+ */
+export const BLIND_PUBLISH_STATES: readonly string[] = ['would_publish', 'human'];
+
+/**
+ * Whether a verdict-revealing Decisions filter leaves out the pending dry-run
+ * rows (G04 frontend-console-40). A list of the routed drafts, or of any reason
+ * or state but would_accept, tells every pending draft it leaves out apart by
+ * elimination, and those would never be recorded as seen. So such a list shows
+ * decided rows only, as the Overview and the digest do. A would_accept filter
+ * names the shadow agreement's own population: it keeps its rows and records
+ * them as seen, and the drafts it leaves out are not counted by the agreement.
+ */
+export function decisionListWithholdsPending(filters: { state: string; reason: string; openOnly: boolean }): boolean {
+  return decisionListShowsVerdict(filters) && filters.state !== 'would_accept';
+}
+
+/** The Decisions tab's note under a filter that leaves out the pending dry-run rows (G04 frontend-console-40). */
+export const PENDING_WITHHELD_TEXT =
+  'In a dry run, drafts still waiting for your decision are not listed under this filter; decide them in the review queue.';
+
+/**
  * Whether the Runs table shows a run's split by state (submitted / auto-accepted
  * / would accept / need you / superseded, and In QA) (frontend-console-30, N5).
  * The split tells the verdict of a run's drafts by elimination, so while the

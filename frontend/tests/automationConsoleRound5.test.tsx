@@ -155,7 +155,7 @@ describe('the Runs table hides the publish outcome of a run with pending drafts 
 });
 
 describe('the dry-run Overview keeps its counts blind (frontend-console-35)', () => {
-  it('shows no routed-draft count, no per-state would-accept or routed count, no reasons and no publish decks', async () => {
+  it('shows no routed-draft count, no per-state would-accept or routed count and no reasons', async () => {
     mountAt('/automation');
     const backlog = await screen.findByRole('region', { name: 'Open exceptions' });
     expect(within(backlog).queryByTestId('automation-backlog-human-pending')).toBeNull();
@@ -163,11 +163,12 @@ describe('the dry-run Overview keeps its counts blind (frontend-console-35)', ()
     expect(within(backlog).queryByText('Oldest waiting since')).toBeNull();
     expect(within(backlog).queryByRole('link', { name: /show open exceptions/ })).toBeNull();
     expect(within(backlog).getByTestId('automation-backlog-dry-run')).toBeTruthy();
-    // The count stays, as in the weekly digest; the decks do not.
+    // The count stays, as in the weekly digest. G04 frontend-console-41 replaced "and no publish decks":
+    // the server lists live publishes only, whose drafts were auto-accepted, so their decks tell no
+    // dry-run verdict and stay listed (automationConsoleRound6.test.tsx).
     expect(within(backlog).getByTestId('automation-backlog-human-publishes').textContent).toBe('1');
-    expect(within(backlog).queryByRole('list', { name: 'Publishes waiting for you' })).toBeNull();
-    expect(backlog.textContent).not.toContain('aws-saa-c03');
-    expect(within(backlog).getByTestId('automation-backlog-publishes-blind')).toBeTruthy();
+    expect(within(backlog).getByRole('list', { name: 'Publishes waiting for you' })).toBeTruthy();
+    expect(within(backlog).queryByTestId('automation-backlog-publishes-blind')).toBeNull();
 
     const recent = screen.getByRole('region', { name: 'Decisions in the last 24 hours' });
     for (const text of ['Would be accepted', 'Routed to a person', 'Waiting for AI QA', 'In AI QA', 'QA_FLAGGED']) {
@@ -208,8 +209,11 @@ describe('the dry-run Overview keeps its counts blind (frontend-console-35)', ()
 });
 
 describe('the open-only Decisions list shows the verdict (frontend-console-36)', () => {
-  it('shows each routed row and the filter note with only the checkbox ticked, and records them as seen', async () => {
-    api.listAutomationDecisions.mockResolvedValue(ok({ items: [routed], nextCursor: null }));
+  // G04 frontend-console-40 replaced "shows each routed row ... and records them as seen" for dry-run
+  // rows: a pending dry-run row is withheld from the list (automationConsoleRound6.test.tsx). A live
+  // routed row still shows its verdict with only the checkbox ticked.
+  it('shows each live routed row and the filter note with only the checkbox ticked', async () => {
+    api.listAutomationDecisions.mockResolvedValue(ok({ items: [{ ...routed, mode: 'live' }], nextCursor: null }));
     mountAt('/automation?tab=decisions&open=1');
     const section = await screen.findByRole('region', { name: 'Decisions' });
     await within(section).findByRole('button', { name: 'Details of draft 41' });
@@ -218,15 +222,16 @@ describe('the open-only Decisions list shows the verdict (frontend-console-36)',
     expect(within(table).queryByText('Verdict hidden until you decide')).toBeNull();
     expect(within(table).queryByRole('button', { name: /Reveal the verdict/ })).toBeNull();
     expect(screen.getByTestId('automation-decisions-verdict-filter')).toBeTruthy();
-    await waitFor(() => expect(wasVerdictSeen(41)).toBe(true));
   });
 
-  it('records no row the open-only list drops (an older server that ignores open=true)', async () => {
+  it('records no row the open-only list drops or withholds (an older server that ignores open=true)', async () => {
     const wouldAccept = decisionFixture({ draftId: 51, state: 'would_accept', reason: null, reasonDetail: null });
     api.listAutomationDecisions.mockResolvedValue(ok({ items: [wouldAccept, routed], nextCursor: null }));
     mountAt('/automation?tab=decisions&open=1');
-    await waitFor(() => expect(wasVerdictSeen(41)).toBe(true));
+    await screen.findByTestId('automation-decisions-pending-withheld');
     expect(screen.queryByRole('button', { name: 'Details of draft 51' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Details of draft 41' })).toBeNull();
     expect(wasVerdictSeen(51)).toBe(false);
+    expect(wasVerdictSeen(41)).toBe(false);
   });
 });
