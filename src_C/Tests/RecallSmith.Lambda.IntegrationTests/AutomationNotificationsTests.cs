@@ -107,7 +107,8 @@ public class AutomationNotificationsTests
 
     Assert.Equal("enqueue_failed", result!.Status);
     var row = await RowAsync(result.NotificationId);
-    Assert.Equal(("enqueue_failed", "NOTIFY_NOT_CONFIGURED", 0),
+    // R18B K6 (backend-design-5): a not-configured send counts as an attempt, so MaxSendAttempts bounds its retries.
+    Assert.Equal(("enqueue_failed", "NOTIFY_NOT_CONFIGURED", 1),
       ((string)row["status"]!, (string)row["error_code"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture)));
     Assert.Equal(1, EmfCapture.GaugeSum(stdout, Notifications.EnqueueFailuresMetric));
     Assert.Empty(scope.NotifySent);

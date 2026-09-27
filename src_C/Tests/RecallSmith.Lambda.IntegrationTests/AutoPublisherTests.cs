@@ -130,7 +130,7 @@ internal static class A04Kit
       var id = Long(await db.ScalarAsync(
         "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub) " +
         "values ($1, $2, $3, true, '{}'::jsonb, $4, '{}'::jsonb, 'it-a04') returning id",
-        AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, RecallSmith.Lambda.Vpc.Qa.QaRuns.PromptVersion, new string('c', 64)));
+        AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, RecallSmith.Lambda.Vpc.Qa.QaRuns.AutomationPromptVersion, new string('c', 64)));
       _gates.Add((db, id));
       return id;
     }
@@ -438,6 +438,30 @@ public class AutoPublisherTests
     AssertOutcome(outcome, "human", "DECK_HAS_HUMAN_CHANGES");
     Assert.Contains(deck.OldUid, outcome!.ReasonDetail);
     Assert.Empty(scope.PublishSent);
+  }
+
+  [Fact]
+  public async Task Evaluate_DryRun_GateRefusal_RoutesHumanWithCode()
+  {
+    // automation-6: dry run evaluates check 9's publish gates read-only; a refusal is what live would do.
+    await using var scope = new A04Kit.Scope(AutomationMode.DryRun);
+    var deck = await A04Kit.PublishedDeckAsync(_sql, "drygate");
+    var runId = await A04Kit.RunAsync(_sql, AutomationTestKit.Sub("drygate"), deck.Id, "completed");
+    const string validMcq =
+      """{"v":1,"options":[{"key":"a","why":null,"text":"queue","correct":true},{"key":"b","why":"no buffer","text":"resize","correct":false},{"key":"c","why":"one shard","text":"stream","correct":false}],"shuffle":true,"qualifier":null}""";
+    await _sql.QueryAsync("update cards set mcq = $3::jsonb, difficulty = 4, updated_at = now() - interval '2 hours' where deck_id = $1 and stable_uid = $2",
+      deck.Id, deck.OldUid, validMcq);
+    var defects = await _sql.CountAsync("select count(*) from automation_events");
+
+    var outcome = await EvaluateAsync(deck.Id, runId);
+
+    AssertOutcome(outcome, "human", "MCQ_PUBLISH_GATE");
+    Assert.Equal($"{deck.OldUid}: MCQ_DIFFICULTY_RANGE", outcome!.ReasonDetail);
+    Assert.Equal("dry_run", (await A04Kit.PublishRowAsync(_sql, outcome.PublishId))["mode"]);
+    Assert.Empty(scope.PublishSent);
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from deck_publishes where deck_id = $1 and status = 'PENDING'", deck.Id));
+    // Read-only: no gate defect is recorded for a publish that never started.
+    Assert.Equal(defects, await _sql.CountAsync("select count(*) from automation_events"));
   }
 
   [Fact]

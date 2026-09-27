@@ -29,7 +29,11 @@ public static class Notifications
 {
   public const string EnqueueFailuresMetric = "AutomationNotifyEnqueueFailures";
   public const int MaxSendAttempts = 5;
-  public const int ResendQueuedAfterMinutes = 15;
+  /// <summary>
+  /// A row still <c>queued</c> this long after a successful SQS send, with no notifier report, is "unconfirmed" in the
+  /// status API's email health (R18B K6). It is never sent again: SQS redelivery and the notify DLQ own its retries.
+  /// </summary>
+  public const int UnconfirmedAfterMinutes = 60;
   public const int DefaultListLimit = 50, MaxListLimit = 100;
 
   public static readonly IReadOnlyList<string> Kinds = ["exception", "batch_summary", "weekly_digest", "source_changed", "test"];
@@ -148,9 +152,10 @@ public static class Notifications
   }
 
   /// <summary>
-  /// Tick step 11: rows <c>enqueue_failed</c>, or <c>queued</c> untouched for more than 15 minutes, with fewer than
-  /// <see cref="MaxSendAttempts"/> attempts, oldest first, at most <paramref name="max"/>, are sent again (the same
-  /// message). Returns how many were sent again. Never throws.
+  /// Tick step 11: rows <c>enqueue_failed</c> with fewer than <see cref="MaxSendAttempts"/> attempts, oldest first, at
+  /// most <paramref name="max"/>, are sent again (the same message). A <c>queued</c> row is never sent again (R18B K6):
+  /// its SQS send succeeded, so SQS redelivery and the notify DLQ own its retries, and a second send would be a second
+  /// email when only the notifier's report was lost. Returns how many were sent again. Never throws.
   /// </summary>
   internal static async Task<int> ResendAsync(NpgsqlConnection conn, int max, CancellationToken ct = default)
   {
@@ -160,8 +165,7 @@ public static class Notifications
         $"""
         select notification_id, kind, subkind, subject, body_text, mode
         from automation_notifications
-        where attempts < $1
-          and (status = 'enqueue_failed' or (status = 'queued' and updated_at < now() - interval '{ResendQueuedAfterMinutes} minutes'))
+        where attempts < $1 and status = 'enqueue_failed'
         order by created_at, id
         limit $2
         """,
@@ -197,7 +201,7 @@ public static class Notifications
       await DbUtil.ExecuteAsync(conn, null,
         """
         update automation_notifications
-        set status = 'enqueue_failed', error_code = 'NOTIFY_NOT_CONFIGURED', error = $2, updated_at = now()
+        set status = 'enqueue_failed', error_code = 'NOTIFY_NOT_CONFIGURED', error = $2, attempts = attempts + 1, updated_at = now()
         where notification_id = $1 and status in ('queued', 'enqueue_failed')
         """,
         [notificationId, $"{AutomationEnv.NotifyQueueUrlEnv} is not set"]);

@@ -161,8 +161,8 @@ public static class StatusRoutes
       var perCard = QaRuns.DecimalEnv(QaRuns.EstUsdPerCardEnv, QaRuns.DefaultEstUsdPerCard);
       var automationToday = await DbUtil.ExecuteScalarAsync(conn, null,
         """
-        select coalesce(sum(estimated_cost_usd), 0) from automation_draft_decisions
-        where created_at >= date_trunc('day', now(), 'UTC')
+        select coalesce(sum(estimated_cost_usd), 0) from automation_qa_spend
+        where spent_at >= date_trunc('day', now(), 'UTC')
         """, []);
       var spend = new
       {
@@ -198,18 +198,27 @@ public static class StatusRoutes
           count(*) filter (where status = 'sent' and sent_at >= now() - interval '24 hours') as sent_24h,
           count(*) filter (where status = 'failed' and updated_at >= now() - interval '24 hours') as failed_24h,
           count(*) filter (where status in ('queued', 'enqueue_failed')) as queued,
+          count(*) filter (where status = 'queued' and attempts > 0 and updated_at < now() - make_interval(mins => $1)) as unconfirmed,
           max(sent_at) filter (where status = 'sent') as last_sent_at
         from automation_notifications
-        """, []))[0];
+        """, [Notifications.UnconfirmedAfterMinutes]))[0];
       var notifications = new
       {
         sent24h = RunnerRoutes.Long(n["sent_24h"]),
         failed24h = RunnerRoutes.Long(n["failed_24h"]),
         queued = RunnerRoutes.Long(n["queued"]),
+        unconfirmed = RunnerRoutes.Long(n["unconfirmed"]),
         lastSentAt = RunnerRoutes.Timestamp(n["last_sent_at"]),
       };
 
       var evalGate = await EvalGate.LoadCurrentAsync(conn);
+      var open = await LoadBacklogAsync(conn);
+      var backlog = new
+      {
+        humanPending = open.HumanPending,
+        oldestHumanPendingAt = RunnerRoutes.Timestamp(open.OldestHumanPendingAt),
+        humanPublishes = open.HumanPublishes,
+      };
 
       return res.Ok(new
       {
@@ -230,12 +239,42 @@ public static class StatusRoutes
         spend,
         watch,
         notifications,
+        backlog,
       });
     }
     catch (Exception ex)
     {
       return RunnerRoutes.HandleError(ex, res);
     }
+  }
+
+  /// <summary>The open exceptions a person still has to handle, whenever they were raised (R18B K7).</summary>
+  internal sealed record Backlog(long HumanPending, object? OldestHumanPendingAt, long HumanPublishes);
+
+  /// <summary>
+  /// The open-exception backlog (R18B K7). <c>humanPending</c>: decisions in state <c>human</c> with no
+  /// <c>human_action</c> whose draft is still <c>pending</c>; <c>oldestHumanPendingAt</c>: the earliest time one of them
+  /// was routed (<c>decided_at</c>, else <c>created_at</c>). <c>humanPublishes</c>: live <c>automation_publishes</c> rows
+  /// in state <c>human</c> that no later successful deck publish resolved. The row never leaves <c>human</c> (the
+  /// person publishes from the console, not through the row), so a <c>deck_publishes</c> row of the same deck with
+  /// status <c>SUCCESS</c> created after the row's last change resolves it; a newer automation publish of the deck
+  /// that reached <c>published</c> implies one. A dry-run <c>human</c> row accepted nothing and is not counted.
+  /// </summary>
+  internal static async Task<Backlog> LoadBacklogAsync(NpgsqlConnection conn)
+  {
+    var row = (await DbUtil.QueryAsync(conn, null,
+      """
+      select
+        (select count(*) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
+         where dd.state = 'human' and dd.human_action is null and a.status = 'pending') as human_pending,
+        (select min(coalesce(dd.decided_at, dd.created_at)) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
+         where dd.state = 'human' and dd.human_action is null and a.status = 'pending') as oldest_human_pending_at,
+        (select count(*) from automation_publishes p
+         where p.state = 'human' and p.mode = 'live'
+           and not exists (select 1 from deck_publishes dp
+                           where dp.deck_id = p.deck_id and dp.status = 'SUCCESS' and dp.created_at > p.updated_at)) as human_publishes
+      """, []))[0];
+    return new Backlog(RunnerRoutes.Long(row["human_pending"]), row["oldest_human_pending_at"], RunnerRoutes.Long(row["human_publishes"]));
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -287,7 +326,7 @@ public static class StatusRoutes
       var rows = await DbUtil.QueryAsync(conn, null,
         $"""
         select r.run_id, r.queue_item_id, q.kind, q.url, q.title, r.deck_id, d.slug as deck_slug, r.runner_id, r.status, r.outcome,
-          r.started_at, r.completed_at, r.finalized_at, r.summary_notification_id, r.error
+          r.started_at, r.completed_at, r.finalized_at, r.summary_notification_id, r.error, r.summary
         from automation_runs r
         join authoring_queue_items q on q.id = r.queue_item_id
         left join decks d on d.id = r.deck_id
@@ -383,6 +422,8 @@ public static class StatusRoutes
             }).ToList(),
           summaryNotificationId = r["summary_notification_id"] as Guid?,
           error = r["error"],
+          // The runner's final-message notes (R18B K3): plain text, at most 2000 characters (ck_automation_runs_text).
+          summary = r["summary"] as string is { } notes && !string.IsNullOrWhiteSpace(notes) ? notes : null,
         };
       }).ToList();
 

@@ -583,12 +583,17 @@ public class AutomationTickTests
       AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport((Guid)jobs[0]["qa_job_id"]!, ids[0], (string)jobs[0]["qa_content_sha256"]!)));
       AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport((Guid)jobs[1]["qa_job_id"]!, ids[1], (string)jobs[1]["qa_content_sha256"]!,
         findings: [AutomationTestKit.Finding("major", "ambiguous_stem")])));
-      await sql.QueryAsync("update automation_runs set status = 'completed', outcome = 'done', completed_at = now() where run_id = $1", runId);
+      await sql.QueryAsync(
+        "update automation_runs set status = 'completed', outcome = 'done', completed_at = now(), summary = $2 where run_id = $1",
+        runId, "Synthetic note:\n  card synthetic-07 looks outdated.");
 
       var data = await TickDataAsync();
 
       Assert.Equal(1, Action(data, "runsFinalized"));
       Assert.Equal(1, Action(data, "summaries"));
+      // R18B K3: the agent's notes are a DETAILS line of the batch summary; no agent_note exception for a run with drafts.
+      Assert.Contains("\nAgent notes: Synthetic note: card synthetic-07 looks outdated.\n", (string)(await NotificationAsync(sql, $"batch:{runId:D}"))!["body_text"]!);
+      Assert.Null(await NotificationAsync(sql, $"exception:agent_note:{runId:D}"));
       var publish = (await sql.QueryAsync("select state from automation_publishes where run_id = $1", runId)).Single();
       Assert.Equal("would_publish", publish["state"]);
       var n = (await NotificationAsync(sql, $"batch:{runId:D}"))!;
@@ -617,6 +622,42 @@ public class AutomationTickTests
       Assert.Equal(0, Action(await TickDataAsync(), "summaries"));
       Assert.Equal(1, await sql.CountAsync("select count(*) from automation_notifications where kind = 'batch_summary'"));
       Assert.Single(A04Kit.Messages(scope, "Batch "));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_RunWithNotesAndNoDecisions_RaisesOneAgentNote()
+  {
+    // R18B K3 (automation-3): a nothing_new run whose agent only spotted a wrong existing card still reaches the owner.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "note");
+      var noted = await A04Kit.RunAsync(sql, "sub", deckId);
+      var silent = await A04Kit.RunAsync(sql, "sub", deckId);
+      var blank = await A04Kit.RunAsync(sql, "sub", deckId);
+      await sql.QueryAsync("update automation_runs set status = 'completed', outcome = 'nothing_new', completed_at = now(), summary = $2 where run_id = $1",
+        noted, "Card synthetic-07 says the limit is 5 GB; the page now says 50 GB.");
+      await sql.QueryAsync("update automation_runs set status = 'completed', outcome = 'nothing_new', completed_at = now() where run_id = $1", silent);
+      await sql.QueryAsync("update automation_runs set status = 'completed', outcome = 'nothing_new', completed_at = now(), summary = '  ' where run_id = $1", blank);
+
+      var data = await TickDataAsync();
+
+      Assert.Equal(3, Action(data, "runsFinalized"));
+      Assert.Equal(0, Action(data, "summaries"));
+      var n = (await NotificationAsync(sql, $"exception:agent_note:{noted:D}"))!;
+      Assert.Equal(("exception", "agent_note", noted), ((string)n["kind"]!, (string)n["subkind"]!, (Guid)n["run_id"]!));
+      Assert.StartsWith("[DeveloperCards] (dry run) Action needed: agent note on ", (string)n["subject"]!);
+      var body = (string)n["body_text"]!;
+      Assert.Contains("Card synthetic-07 says the limit is 5 GB; the page now says 50 GB.", body);
+      Assert.Contains($"https://console.example.com/automation?runId={noted:D}", body);
+      Assert.Equal(1, await sql.CountAsync("select count(*) from automation_notifications where subkind = 'agent_note'"));
+      Assert.Null(await sql.ScalarAsync("select summary_notification_id from automation_runs where run_id = $1", noted));
+
+      // One per run.
+      await TickDataAsync();
+      Assert.Equal(1, await sql.CountAsync("select count(*) from automation_notifications where subkind = 'agent_note'"));
+      Assert.Single(A04Kit.Messages(scope, "Action needed: agent note"));
     });
   }
 
@@ -693,7 +734,9 @@ public class AutomationTickTests
     {
       await using (var conn = await sql.OpenAsync())
       {
-        await AutomationLedger.RecordAsync(conn, new AutomationEvent("source_watch", 12, "success", DedupeKey: "it-a04-digest", OccurredAt: DateTimeOffset.UtcNow.AddDays(-2)));
+        // R18B automation-9: the routine checks are counted in the details, the units are detections.
+        await AutomationLedger.RecordAsync(conn, new AutomationEvent("source_watch", 12, "success", DedupeKey: "it-a04-digest", OccurredAt: DateTimeOffset.UtcNow.AddDays(-2),
+          Details: new { checks = 40 }));
       }
       var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
@@ -709,11 +752,52 @@ public class AutomationTickTests
       Assert.Equal("weekly_digest", n["kind"]);
       Assert.Equal($"[DeveloperCards] (dry run) Weekly automation digest {from}–{to}: 0.1 h saved", n["subject"]);
       Assert.Contains("Ledger source_watch: 1 run(s), 12 unit(s)", (string)n["body_text"]!);
-      Assert.Contains("Source watch: 12 check(s)", (string)n["body_text"]!);
+      Assert.Contains("Source watch: 40 check(s)", (string)n["body_text"]!);
 
       // A repeated digest call the same day sends nothing new.
       Assert.False((await TickDataAsync("digest")).GetProperty("actions").GetProperty("digest").GetBoolean());
       Assert.Single(A04Kit.Messages(scope, "Weekly automation digest"));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_Digest_ReportsTheOpenBacklog_NotTheWeeksHumanRows()
+  {
+    // R18B K7 (automation-10): a human publish the owner already made by hand is not "needs you"; an older open
+    // exception still is.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "backlog");
+      var otherDeck = await DeckAsync(sql, "backlog-other");
+      var runId = await A04Kit.RunAsync(sql, "sub", deckId);
+      await sql.QueryAsync(
+        """
+        insert into automation_publishes (deck_id, run_id, mode, state, reason, created_at, updated_at) values
+          ($1, $3, 'live', 'human', 'DECK_HAS_HUMAN_CHANGES', now() - interval '3 days', now() - interval '3 days'),
+          ($1, $3, 'live', 'human', 'AI_QA_REQUIRED', now() - interval '2 days', now() - interval '2 days'),
+          ($2, $3, 'live', 'human', 'DECK_HAS_HUMAN_CHANGES', now() - interval '20 days', now() - interval '20 days')
+        """, deckId, otherDeck, runId);
+      await sql.QueryAsync(
+        "insert into deck_publishes (deck_id, deck_slug, build_id, s3_key, status, created_at) select id, slug, 'b02-hand', 'decks/b02', 'SUCCESS', now() - interval '1 day' from decks where id = $1",
+        deckId);
+      var draftId = A04Kit.Long(await sql.ScalarAsync(
+        """
+        insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, card, "similar", agent, submitted_by_sub)
+        values ($1, gen_random_uuid(), $2, $3, '{}'::jsonb, '[]'::jsonb, null, 'it-b02')
+        returning id
+        """, deckId, Guid.NewGuid().ToString("N"), AutomationTestKit.Uid("backlog")));
+      await sql.QueryAsync(
+        """
+        insert into automation_draft_decisions (draft_id, run_id, deck_id, mode, state, reason, created_at, decided_at)
+        values ($1, $2, $3, 'dry_run', 'human', 'QA_FLAGGED', now() - interval '20 days', now() - interval '20 days')
+        """, draftId, runId, deckId);
+
+      AutomationTestKit.Data(await A04Kit.TickAsync("digest", Guid.NewGuid()));
+
+      var body = (string)(await NotificationAsync(sql, $"digest:{Today()}"))!["body_text"]!;
+      Assert.Contains("- 1 publish(es) need you — ", body);
+      Assert.Contains("- 1 draft(s) routed to you are still pending — ", body);
     });
   }
 
@@ -740,11 +824,65 @@ public class AutomationTickTests
 
       Assert.Equal(1, Action(data, "notificationsResent"));
       var row = (await sql.QueryAsync("select status, attempts, error_code from automation_notifications where notification_id = $1", failed)).Single();
-      Assert.Equal(("queued", 1), ((string)row["status"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture)));
+      // The not-configured enqueue was attempt 1 (R18B K6), the resend attempt 2.
+      Assert.Equal(("queued", 2), ((string)row["status"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture)));
       Assert.Null(row["error_code"]);
       Assert.Equal("enqueue_failed", await sql.ScalarAsync("select status from automation_notifications where notification_id = $1", exhausted));
       var message = Assert.Single(A04Kit.Messages(scope));
       Assert.Equal(failed, message.GetProperty("notificationId").GetGuid());
+    });
+  }
+
+  [Fact]
+  public async Task Tick_NeverResendsAQueuedNotification()
+  {
+    // R18B K6 (backend-design-5, cloud-security-resilience-2): the SQS send succeeded, only the notifier's report is
+    // missing. Sending again would be a second email from another container; SQS redelivery and the DLQ own retries.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      Guid queued;
+      await using (var conn = await sql.OpenAsync())
+      {
+        queued = (await Notifications.EnqueueAsync(conn, new NotificationRequest("test", null, "it-b02:unconfirmed", "dry_run",
+          EmailTemplates.Test("dry_run", "https://console.example.com"))))!.NotificationId;
+      }
+      Assert.Single(A04Kit.Messages(scope));
+      await sql.QueryAsync("update automation_notifications set updated_at = now() - interval '3 hours' where notification_id = $1", queued);
+
+      var data = await TickDataAsync();
+
+      Assert.Equal(0, Action(data, "notificationsResent"));
+      Assert.Single(A04Kit.Messages(scope));
+      var row = (await sql.QueryAsync("select status, attempts from automation_notifications where notification_id = $1", queued)).Single();
+      Assert.Equal(("queued", 1), ((string)row["status"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture)));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_NotConfiguredResends_AreBoundedByMaxSendAttempts()
+  {
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      scope.Set(AutomationEnv.NotifyQueueUrlEnv, null);
+      Guid id;
+      await using (var conn = await sql.OpenAsync())
+      {
+        id = (await Notifications.EnqueueAsync(conn, new NotificationRequest("test", null, "it-b02:not-configured", "dry_run",
+          EmailTemplates.Test("dry_run", "https://console.example.com"))))!.NotificationId;
+        var gauges = 0;
+        for (var i = 0; i < Notifications.MaxSendAttempts + 3; i++)
+        {
+          var stdout = await EmfCapture.StdoutAsync(async () => await Notifications.ResendAsync(conn, 10));
+          gauges += (int)EmfCapture.GaugeSum(stdout, Notifications.EnqueueFailuresMetric);
+        }
+        // The first enqueue was attempt 1: the tick retries it MaxSendAttempts - 1 times, then never again.
+        Assert.Equal(Notifications.MaxSendAttempts - 1, gauges);
+      }
+      var row = (await sql.QueryAsync("select status, attempts, error_code from automation_notifications where notification_id = $1", id)).Single();
+      Assert.Equal(("enqueue_failed", Notifications.MaxSendAttempts, "NOTIFY_NOT_CONFIGURED"),
+        ((string)row["status"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture), (string)row["error_code"]!));
     });
   }
 

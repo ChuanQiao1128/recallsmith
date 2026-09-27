@@ -358,6 +358,34 @@ public static class AutomationTick
       if (spent()) break;
       if (await SummaryAsync(conn, (Guid)row["run_id"]!, mode)) a.Summaries++;
     }
+
+    // A finalised run with agent notes and no decisions sends no batch summary, so its notes (the only channel for a
+    // wrong existing card) go out as an agent_note exception, one per run (R18B K3).
+    var noted = await DbUtil.QueryAsync(conn, null,
+      """
+      select r.run_id, r.queue_item_id, r.summary, q.url
+      from automation_runs r
+      join authoring_queue_items q on q.id = r.queue_item_id
+      where r.finalized_at is not null and nullif(btrim(r.summary), '') is not null
+        and not exists (select 1 from automation_draft_decisions d where d.run_id = r.run_id)
+        and not exists (select 1 from automation_notifications n where n.dedupe_key = 'exception:agent_note:' || r.run_id::text)
+      order by r.finalized_at, r.run_id
+      limit $1
+      """, [StepBatch]);
+    foreach (var row in noted)
+    {
+      if (spent()) break;
+      var runId = (Guid)row["run_id"]!;
+      var raised = await Notifications.RaiseExceptionAsync(conn, "agent_note", $"exception:agent_note:{runId:D}",
+        new Dictionary<string, string>
+        {
+          ["runId"] = runId.ToString("D"),
+          ["itemId"] = Long(row["queue_item_id"]).ToString(CultureInfo.InvariantCulture),
+          ["url"] = (string)row["url"]!,
+          ["notes"] = (string)row["summary"]!,
+        }, runId);
+      if (raised?.Created == true) a.Alerts++;
+    }
   }
 
   private static async Task<bool> SummaryAsync(NpgsqlConnection conn, Guid runId, string mode)
@@ -366,7 +394,7 @@ public static class AutomationTick
     {
       var runRows = await DbUtil.QueryAsync(conn, null,
         """
-        select r.queue_item_id, r.runner_id, r.deck_id, r.outcome, r.duration_ms, d.slug as deck_slug, q.kind, q.url, q.title
+        select r.queue_item_id, r.runner_id, r.deck_id, r.outcome, r.duration_ms, r.summary, d.slug as deck_slug, q.kind, q.url, q.title
         from automation_runs r
         join authoring_queue_items q on q.id = r.queue_item_id
         left join decks d on d.id = r.deck_id
@@ -402,7 +430,7 @@ public static class AutomationTick
         publishes.Select(p => new BatchPublish(Long(p["deck_id"]), p["deck_slug"] as string ?? "(deleted deck)", (string)p["state"]!,
           p["reason"] as string, p["reason_detail"] as string, p["job_id"] as string, p["build_id"] as string)).ToList(),
         (string)run["runner_id"]!, run["duration_ms"] is null ? null : Convert.ToInt32(run["duration_ms"], CultureInfo.InvariantCulture),
-        run["outcome"] as string);
+        run["outcome"] as string, run["summary"] as string);
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var consoleUrl = EmailTemplates.AutomationUrl(baseUrl, $"runId={runId:D}");
@@ -691,14 +719,17 @@ public static class AutomationTick
         select
           coalesce((select sum(estimated_cost_usd) from ai_qa_runs where created_at >= $1 and created_at < $2 and requested_by_sub <> 'automation'), 0) as human,
           coalesce((select sum(estimated_cost_usd) from ai_qa_runs where created_at >= $1 and created_at < $2 and requested_by_sub = 'automation'), 0)
-          + coalesce((select sum(estimated_cost_usd) from automation_draft_decisions where created_at >= $1 and created_at < $2), 0) as automation
+          + coalesce((select sum(estimated_cost_usd) from automation_qa_spend where spent_at >= $1 and spent_at < $2), 0) as automation
         """, [start, end]))[0];
-      var pendingHuman = Long(await DbUtil.ExecuteScalarAsync(conn, null,
+      // The open backlog, whenever it was raised (R18B K7): not the week's rows in state human.
+      var backlog = await StatusRoutes.LoadBacklogAsync(conn);
+      // The source watch's routine checks earn no ledger units (automation-9); their count is in each row's details.
+      var watchChecks = Long(await DbUtil.ExecuteScalarAsync(conn, null,
         """
-        select count(*) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
-        where dd.state = 'human' and a.status = 'pending'
-        """, []));
-      var watchChecks = automations.FirstOrDefault(x => x.Automation == "source_watch")?.Units ?? 0;
+        select coalesce(sum(case when jsonb_typeof(details -> 'checks') = 'number' then (details ->> 'checks')::bigint else 0 end), 0)
+        from automation_events
+        where automation = 'source_watch' and occurred_at >= $1 and occurred_at < $2
+        """, [start, end]));
 
       static DateTimeOffset Ts(object? v) => v is DateTimeOffset dto ? dto : new(DateTime.SpecifyKind((DateTime)v!, DateTimeKind.Utc));
       var data = new WeeklyDigestData(from, to, totals.GetProperty("hoursSaved").GetDecimal(), totals.GetProperty("minutesSaved").GetDecimal(),
@@ -709,7 +740,7 @@ public static class AutomationTick
         runners.Select(r => new DigestRunner((string)r["runner_id"]!, Ts(r["last_heartbeat_at"]),
           r["login_expires_at"] is null ? null : Ts(r["login_expires_at"]))).ToList(),
         Convert.ToDecimal(spend["human"], CultureInfo.InvariantCulture), Convert.ToDecimal(spend["automation"], CultureInfo.InvariantCulture),
-        pendingHuman, publishesByState.TryGetValue(AutoPublisher.Human, out var hp) ? hp : 0);
+        backlog.HumanPending, backlog.HumanPublishes);
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.WeeklyDigest(mode, data, baseUrl);

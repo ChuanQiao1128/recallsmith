@@ -34,7 +34,7 @@ internal static class AutomationTestKit
 
   // A00 §9.2, verbatim: the draft-QA message every cross-wave shape is asserted against.
   public const string ContractMessageJson = """
-    { "v": 1, "runId": "<qa_job_id>", "chunk": 0, "chunkCount": 1, "promptVersion": "qa-v4",
+    { "v": 1, "runId": "<qa_job_id>", "chunk": 0, "chunkCount": 1, "promptVersion": "qa-v4-auto",
       "target": "draft", "profile": "automation",
       "deck": { "id": 12, "slug": "aws-saa-c03", "title": "AWS SAA-C03" },
       "reviewDate": "2026-10-01",
@@ -235,7 +235,7 @@ internal static class AutomationTestKit
 
   /// <summary>A passed eval gate for the automation reviewer (the latest wins); revoke it in <c>finally</c>.</summary>
   public static async Task<long> InsertGateAsync(PostgresFixture db, string provider = ReviewerProvider, string model = ReviewerModel,
-    string promptVersion = QaRuns.PromptVersion) =>
+    string promptVersion = QaRuns.AutomationPromptVersion) =>
     Long(await db.ScalarAsync(
       "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub) " +
       "values ($1, $2, $3, true, '{}'::jsonb, $4, '{}'::jsonb, 'it-a03') returning id",
@@ -260,7 +260,7 @@ internal static class AutomationTestKit
       ["chunk"] = 0,
       ["provider"] = ReviewerProvider,
       ["model"] = model,
-      ["promptVersion"] = QaRuns.PromptVersion,
+      ["promptVersion"] = QaRuns.AutomationPromptVersion,
       ["profile"] = "automation",
       ["items"] = new object[]
       {
@@ -636,7 +636,7 @@ public class DraftDecisionsTests
     Assert.Equal(e.JobId, m.GetProperty("runId").GetGuid());
     Assert.Equal(0, m.GetProperty("chunk").GetInt32());
     Assert.Equal(1, m.GetProperty("chunkCount").GetInt32());
-    Assert.Equal(QaRuns.PromptVersion, m.GetProperty("promptVersion").GetString());
+    Assert.Equal(QaRuns.AutomationPromptVersion, m.GetProperty("promptVersion").GetString());
     Assert.Equal(c.GetProperty("target").GetString(), m.GetProperty("target").GetString());
     Assert.Equal(c.GetProperty("profile").GetString(), m.GetProperty("profile").GetString());
     Assert.Equal(e.DeckId, m.GetProperty("deck").GetProperty("id").GetInt64());

@@ -7,7 +7,7 @@
 --   * automation_draft_decisions + automation_draft_findings + the append-only automation_decision_events log;
 --   * automation_publishes (auto-publish attempts) and automation_notifications (the email log);
 --   * the auto_accept, auto_publish and source_watch ledger baselines ('default' placeholders);
---   * the two seeded feed targets (inactive when their deck does not exist).
+--   * the two seeded feed targets (inactive when their deck does not exist; the AWS What's New feed always inactive).
 -- Additive except one declared exception: part 10 replaces ck_webhook_subscriptions_events by a strictly weaker
 -- CHECK (every row valid before is valid after; code running before 034 never writes the new event names).
 -- Deploy order: migrate, then code.
@@ -234,6 +234,22 @@ create index if not exists idx_automation_decisions_deck on automation_draft_dec
 create index if not exists idx_automation_decisions_card on automation_draft_decisions(accepted_card_id) where accepted_card_id is not null;
 create index if not exists idx_automation_decisions_created on automation_draft_decisions(created_at);
 
+-- Draft-QA spend, one row per QA attempt (job, request id; request_key is '' when the report has none), dated by when
+-- the report arrived. The shared daily cap sums spent_at of today, so a report after QA_TIMEOUT or after a released
+-- send still counts, on the day it was spent (R18B backend-design-4). The decision's cost columns are the running total.
+create table if not exists automation_qa_spend (
+  qa_job_id uuid not null,
+  request_key text not null,
+  draft_id bigint not null references automation_draft_decisions(draft_id) on delete cascade,
+  input_tokens bigint not null default 0,
+  output_tokens bigint not null default 0,
+  estimated_cost_usd numeric(12,6) not null default 0,
+  spent_at timestamptz not null default now(),
+  primary key (qa_job_id, request_key),
+  constraint ck_automation_qa_spend_request_key check (char_length(request_key) <= 200)
+);
+create index if not exists idx_automation_qa_spend_spent on automation_qa_spend(spent_at);
+
 create table if not exists automation_draft_findings (
   id bigserial primary key,
   draft_id bigint not null references automation_draft_decisions(draft_id) on delete cascade,
@@ -340,7 +356,7 @@ create index if not exists idx_automation_notifications_retry on automation_noti
 insert into automation_baselines(automation, unit, baseline_minutes_per_unit, note) values
   ('auto_accept',  'auto-accepted card',   3.00, 'human review of one agent draft avoided; replace with the measured median review time'),
   ('auto_publish', 'auto-published build', 5.00, 'human publish check and click per build'),
-  ('source_watch', 'page check',           0.50, 'opening one cited page or feed and comparing it by eye')
+  ('source_watch', 'detected change',      0.50, 'a changed or gone cited page, or a new feed item, found without a person checking; routine checks earn nothing')
 on conflict (automation) do nothing;
 
 -- 10. widen the subscribable webhook events (declared exception, see above)
@@ -350,11 +366,15 @@ alter table webhook_subscriptions add constraint ck_webhook_subscriptions_events
   and events <@ array['deck.published','import.failed','card.flagged','review.queued',
                       'draft.auto_accepted','automation.batch_completed','automation.exception','source.changed']::text[]);
 
--- 11. seed the two watched feeds (deck resolved by slug; inactive when the deck does not exist)
+-- 11. seed the two watched feeds (deck resolved by slug; inactive when the deck does not exist). The AWS What's New
+-- feed is always seeded inactive (R18B automation-5): the aws-saa-c03 deck prepares for a fixed exam guide, the title
+-- pattern matches nearly every core service, and no check measures exam relevance. The owner turns it on
+-- (PUT /api/v1/admin/automation/watch/targets/:id {"active": true}) only after its feed_item drafts' human reject
+-- rate has been measured in dry run.
 insert into source_watch_targets (kind, url, feed_format, deck_id, item_title_pattern, active, check_interval_minutes, created_by)
 select 'feed', 'https://aws.amazon.com/about-aws/whats-new/recent/feed/', 'rss', d.id,
   '\m(S3|EC2|EBS|EFS|FSx|RDS|Aurora|DynamoDB|ElastiCache|CloudFront|Route 53|VPC|Transit Gateway|Direct Connect|PrivateLink|Global Accelerator|Elastic Load Balancing|Load Balancer|Auto Scaling|Lambda|Fargate|ECS|EKS|SQS|SNS|Kinesis|EventBridge|Step Functions|API Gateway|Cognito|IAM|KMS|Secrets Manager|Shield|WAF|GuardDuty|Macie|Organizations|Control Tower|CloudTrail|CloudWatch|Config|Backup|Storage Gateway|DataSync|Snow|Redshift|Athena|Glue|EMR|Lake Formation|Savings Plans|Spot)\M',
-  d.id is not null, 120, 'migration:034'
+  false, 120, 'migration:034'
 from (select (select id from decks where slug = 'aws-saa-c03' and is_deleted = 0 order by id limit 1) as id) d
 on conflict (url) do nothing;
 

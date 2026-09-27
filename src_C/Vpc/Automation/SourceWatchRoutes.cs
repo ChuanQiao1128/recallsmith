@@ -154,7 +154,7 @@ public static class SourceWatchRoutes
 
   private sealed class ReportCounts
   {
-    public int Applied, Changed, Gone, Failed, Units, Queued, FeedItemsQueued, Rechecks;
+    public int Applied, Changed, Gone, Failed, Checks, Detections, Queued, FeedItemsQueued, Rechecks;
   }
 
   public static async Task<APIGatewayProxyResponse> HandleReport(LambdaRequest req, Res res)
@@ -323,7 +323,7 @@ public static class SourceWatchRoutes
         counts.Failed++;
         break;
     }
-    if (o.Status is "ok" or "not_modified") counts.Units++;
+    if (o.Status is "ok" or "not_modified") counts.Checks++;
 
     await DbUtil.ExecuteAsync(conn, tx,
       """
@@ -370,6 +370,7 @@ public static class SourceWatchRoutes
       var queued = await QueueFeedItemsAsync(conn, tx, o.TargetId, t, fresh, feedEventId);
       counts.Queued += queued.Count;
       counts.FeedItemsQueued += queued.Count;
+      counts.Detections += queued.Count;
       if (feedEventId is { } fe)
       {
         await DbUtil.ExecuteAsync(conn, tx,
@@ -386,6 +387,7 @@ public static class SourceWatchRoutes
       return;
     }
     if (eventKind is not ("changed" or "gone")) return;
+    counts.Detections++;
 
     var citing = await DbUtil.QueryAsync(conn, tx,
       """
@@ -647,15 +649,21 @@ public static class SourceWatchRoutes
     }
   }
 
-  /// <summary>The <c>source_watch</c> ledger row of one report (A00 §14), written in dry_run and live.</summary>
+  /// <summary>
+  /// The <c>source_watch</c> ledger row of one report (A00 §14), written in dry_run and live. Its units are detections
+  /// only (R18B automation-9): a cited page found changed or newly gone, and a new feed item queued for authoring. Those
+  /// replace work a person did before automation (noticing the change and acting on it). The routine checks of
+  /// unchanged pages and feed polls replace nothing (nobody re-read every cited page weekly or the feeds every two
+  /// hours), so they earn no minutes; their count stays in the row's details as <c>checks</c> for the digest.
+  /// </summary>
   private static Task RecordLedgerAsync(NpgsqlConnection conn, Guid watchRunId, List<Observation> observations, ReportCounts c)
   {
     var sortedIds = string.Join(",", observations.Select(o => o.TargetId).Distinct().Order().Select(i => i.ToString(CultureInfo.InvariantCulture)));
     var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sortedIds))).ToLowerInvariant()[..16];
     var outcome = c.Failed == c.Applied ? "failure" : c.Failed > 0 ? "partial" : "success";
-    return AutomationLedger.RecordAsync(conn, new AutomationEvent("source_watch", c.Units, outcome, Ref: watchRunId.ToString("D"),
+    return AutomationLedger.RecordAsync(conn, new AutomationEvent("source_watch", c.Detections, outcome, Ref: watchRunId.ToString("D"),
       DedupeKey: $"watch:{watchRunId:D}:{digest}",
-      Details: new { changed = c.Changed, gone = c.Gone, failed = c.Failed, feedItemsQueued = c.FeedItemsQueued }));
+      Details: new { changed = c.Changed, gone = c.Gone, failed = c.Failed, feedItemsQueued = c.FeedItemsQueued, checks = c.Checks }));
   }
 
   private static async Task<bool> ReadyAsync(NpgsqlConnection conn) =>

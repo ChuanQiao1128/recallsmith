@@ -12,9 +12,13 @@ public sealed record BatchDraft(string StableUid, string Question, string State,
 /// <summary>One auto-publish attempt a run touched.</summary>
 public sealed record BatchPublish(long DeckId, string DeckSlug, string State, string? Reason, string? ReasonDetail, string? JobId, string? BuildId);
 
-/// <summary>What the batch summary of one finalised run shows (A00 §12.5).</summary>
+/// <summary>
+/// What the batch summary of one finalised run shows (A00 §12.5). <see cref="AgentNotes"/> is the runner's final-message
+/// notes (<c>automation_runs.summary</c>, R18B K3), null or blank when the agent left none.
+/// </summary>
 public sealed record BatchSummaryData(Guid RunId, long? DeckId, string DeckSlug, string SourceKind, string SourceUrl, string? SourceTitle,
-  IReadOnlyList<BatchDraft> Drafts, decimal QaSpendUsd, IReadOnlyList<BatchPublish> Publishes, string RunnerId, int? DurationMs, string? Outcome);
+  IReadOnlyList<BatchDraft> Drafts, decimal QaSpendUsd, IReadOnlyList<BatchPublish> Publishes, string RunnerId, int? DurationMs, string? Outcome,
+  string? AgentNotes = null);
 
 /// <summary>One per-automation row of the digest, from the ledger computation.</summary>
 public sealed record DigestAutomation(string Automation, long Runs, long Units, long Failures, decimal MinutesSaved);
@@ -59,16 +63,31 @@ public static class EmailTemplates
   public const int MaxLineLength = 998, MaxBodyLength = 100_000;
   public const int MaxSubjectLength = 200, MaxSummaryLength = 300, MaxQuestionLength = 120, MaxPathLength = 60;
 
+  /// <summary>The agent's notes in an email: one line, capped (the stored notes are at most 2000 characters).</summary>
+  public const int MaxAgentNotesLength = 900;
+  public const string AgentNotesLabel = "Agent notes: ";
+
   public const string NeedsYouHeading = "NEEDS YOU", DoneHeading = "DONE AUTOMATICALLY", DetailsHeading = "DETAILS";
   private const string NoneLine = "- nothing";
   private const int InitialListLimit = 500;
 
-  /// <summary>The eleven exception subkinds of A00 §12.4, in table order.</summary>
+  /// <summary>
+  /// The eleven exception subkinds of A00 §12.4, in table order, then <c>agent_note</c> (R18B K3: a finalised run with
+  /// agent notes and no decisions).
+  /// </summary>
   public static readonly IReadOnlyList<string> ExceptionSubkinds =
   [
     "runner_stalled", "runner_login_expiring", "runner_run_failed", "queue_item_failed", "qa_provider_error", "ai_qa_daily_cap",
-    "publish_blocked", "publish_failed", "eval_gate_missing", "watch_failing", "source_gone",
+    "publish_blocked", "publish_failed", "eval_gate_missing", "watch_failing", "source_gone", "agent_note",
   ];
+
+  /// <summary>The agent's notes as one capped line (whitespace runs collapsed), or null when there are none.</summary>
+  public static string? AgentNotesLine(string? notes)
+  {
+    if (string.IsNullOrWhiteSpace(notes)) return null;
+    var line = string.Join(' ', OneLine(notes).Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    return Cap(line, MaxAgentNotesLength);
+  }
 
   // ---------------------------------------------------------------------------------------------
   // shared parts
@@ -222,6 +241,12 @@ public static class EmailTemplates
         needs.Add($"- {F("url")} — {F("errorCode")} — {AutomationUrl(consoleBaseUrl, $"tab=watch&targetId={F("targetId")}")}");
         factKeys = ["targetId", "eventId", "url", "errorCode"];
         break;
+      case "agent_note":
+        subject = $"Action needed: agent note on {HostPath(facts.GetValueOrDefault("url"))}";
+        summary = $"Authoring run {F("runId")} submitted no drafts and left a note for you.";
+        needs.Add($"- {AgentNotesLine(facts.GetValueOrDefault("notes")) ?? "unknown"} — {console}");
+        factKeys = ["runId", "itemId", "url"];
+        break;
       case "source_gone":
         subject = $"Cited source gone: {F("url")}";
         summary = $"The cited source {F("url")} is gone; {F("citingCards")} card(s) cite it.";
@@ -279,6 +304,7 @@ public static class EmailTemplates
       (string.IsNullOrWhiteSpace(d.ReasonDetail) ? string.Empty : $" ({OneLine(d.ReasonDetail)})") +
       $" — {Cap(OneLine(d.Question), MaxQuestionLength)}" +
       (d.State == DraftDecisions.Human ? $" — {consoleBaseUrl.TrimEnd('/')}/review?deckId={d.DeckId.ToString(CultureInfo.InvariantCulture)}" : string.Empty)));
+    if (AgentNotesLine(data.AgentNotes) is { } notes) details.Add(AgentNotesLabel + notes);
     details.Add($"Draft QA spend: {Usd(data.QaSpendUsd)}");
     if (data.Publishes.Count == 0) details.Add("Publish: none");
     details.AddRange(data.Publishes.Select(p =>

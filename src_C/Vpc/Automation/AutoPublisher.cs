@@ -311,14 +311,42 @@ public static class AutoPublisher
     var snapshot = PublishSnapshot.Digest(export.Select(PublishSnapshot.FromRow));
     await tx.CommitAsync(ct);
 
-    // 7. dry run stops here
-    if (mode != AutomationMode.Live) return new Verdict(WouldPublish, null, null, slug, null, null, false);
+    // 7. dry run stops here, after the publish gates check 9 would meet, evaluated read-only (automation-6): a gate
+    // refusal is the human route live would take, so dry run is not optimistic about it.
+    if (mode != AutomationMode.Live)
+    {
+      var refusal = await DryRunGateRefusalAsync(conn, deckId, export, ct);
+      return refusal is { } r
+        ? new Verdict(Human, r.Code, Detail(r.Message), slug, null, null, false)
+        : new Verdict(WouldPublish, null, null, slug, null, null, false);
+    }
 
     // 8. nothing pending: an earlier build already shipped these cards
     if (pending.Count == 0) return new Verdict(Published, null, null, slug, liveBuildId, null, false);
 
     // 9. publish
     return new Verdict(Waiting, null, null, slug, null, snapshot, true);
+  }
+
+  /// <summary>
+  /// The refusals <see cref="Publish.StartPublishAsync"/> would answer for the deck's current cards, without its side
+  /// effects (no gate defect row, no refusal gauge, no chained QA run): the MCQ publish gate, then the AI QA gate when
+  /// it is enforced. Null when both pass.
+  /// </summary>
+  private static async Task<(string Code, string Message)?> DryRunGateRefusalAsync(NpgsqlConnection conn, long deckId,
+    IReadOnlyList<Dictionary<string, object?>> export, CancellationToken ct)
+  {
+    if (Publish.FirstMcqGateFailure(export) is { } mcq) return ("MCQ_PUBLISH_GATE", $"{mcq.StableUid}: {mcq.Code}");
+    if (!QaGate.IsEnforced()) return null;
+    var state = await QaGate.ComputeAsync(conn, deckId, ct);
+    var missing = state.Changed.Where(c => !c.ReviewedAtCurrentHash).Select(c => c.StableUid).ToList();
+    if (missing.Count > 0) return ("AI_QA_REQUIRED", $"AI QA required for {missing.Count} card(s): {string.Join(", ", missing.Take(MaxListedUids))}");
+    if (state.OpenBlockers.Count > 0)
+    {
+      return ("AI_QA_BLOCKED", $"AI QA blocked by {state.OpenBlockers.Count} open blocker finding(s): " +
+        string.Join(", ", state.OpenBlockers.Take(MaxListedUids).Select(b => $"{b.StableUid}: {b.Category}")));
+    }
+    return null;
   }
 
   /// <summary>
