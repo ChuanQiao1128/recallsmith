@@ -197,8 +197,10 @@ Workers never run these.
   `AWS_PROFILE=dev services/deploy-python-lambda.sh webhook-dispatcher`. It builds
   `build/webhook-dispatcher.zip`, overlays `env/prod.env.json` onto the live environment, runs
   `aws lambda update-function-code`, checks `CodeSha256`, publishes a version and moves the `prod`
-  alias. `DRY_RUN=1 services/deploy-python-lambda.sh webhook-dispatcher` builds and prints the
-  function name, zip size, sha and env key names without calling AWS.
+  alias. It runs the tests first, installs only hash-verified wheels (`--require-hashes`), refuses
+  uncommitted changes under `services/webhook-dispatcher`, and prints the rollback command for the
+  alias's previous version. `DRY_RUN=1 services/deploy-python-lambda.sh webhook-dispatcher` tests,
+  builds and prints the function name, zip size, sha and env key names without calling AWS.
 - Set the signing secret: `aws ssm put-parameter --name /developercards/prod/webhook-signing-secret
   --type SecureString --overwrite --value …` (value from the owner, never pasted into git or chat).
 - Emergency stop (a receiver incident, a leaked URL, a runaway producer). The event source mapping
