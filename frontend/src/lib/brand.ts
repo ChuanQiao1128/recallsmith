@@ -31,6 +31,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/content-intelligence': 'Content intelligence',
   '/admin/webhooks': 'Webhooks',
   '/ledger': 'Automation ledger',
+  '/review': 'Review queue',
 };
 
 /**

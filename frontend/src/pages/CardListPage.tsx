@@ -256,6 +256,7 @@ export function CardListPage() {
       subtitle="Authoring · Cards"
       decksHref="/"
       contentIntelligenceHref="/content-intelligence"
+      reviewHref={`/review?deckId=${deckId}`}
       adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
     >
       <div className="flex items-center justify-between">
