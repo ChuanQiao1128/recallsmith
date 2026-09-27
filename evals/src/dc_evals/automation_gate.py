@@ -364,7 +364,7 @@ def _configuration_failures(runs: dict[str, dict[str, Any]], env: dict[str, Any]
         if header.get("profile") != AUTOMATION_PROFILE:
             failures.append(
                 f"{which} run: profile {header.get('profile') or 'default'!r} is not {AUTOMATION_PROFILE!r} "
-                "(dc-evals run --profile automation)"
+                "(review with the run command's --profile automation)"
             )
         version = header.get("promptVersion")
         if version != AUTOMATION_PROMPT_VERSION:

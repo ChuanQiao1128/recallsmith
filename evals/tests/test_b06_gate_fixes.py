@@ -65,7 +65,7 @@ def test_gate_refuses_default_profile_runs(tmp_path: Path) -> None:
     authored_path = authored_run(tmp_path, spec, authored_records(rows), **default, profile=None)
     failures = evaluate(tmp_path, seeded=seeded, authored=authored_path, spec=spec)["failures"]
     for which in ("seeded", "authored"):
-        assert f"{which} run: profile 'default' is not 'automation' (dc-evals run --profile automation)" in failures
+        assert f"{which} run: profile 'default' is not 'automation' (review with the run command's --profile automation)" in failures
         assert f"{which} run: promptVersion 'qa-v4' is not the automation prompt version 'qa-v4-auto'" in failures
 
 
