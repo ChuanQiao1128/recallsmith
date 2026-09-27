@@ -69,6 +69,14 @@ public class PublishJobProcessor : IPublishJobProcessor
 
     Console.WriteLine($"[JobId={jobId}] Loaded {deckData.Cards.Count} cards");
 
+    // The AI QA publish gate passed a specific set of cards (backend-design-16): never build anything else. A card
+    // edited since then may be at a hash nobody reviewed; the author publishes again and the gate re-checks.
+    if (!string.IsNullOrEmpty(job.QaSnapshotSha256) &&
+        !string.Equals(SnapshotDigest(deckData.Cards), job.QaSnapshotSha256, StringComparison.Ordinal))
+    {
+      throw new BusinessException($"{PublishSnapshot.StaleErrorCode}: cards changed after the AI QA publish gate passed; publish again");
+    }
+
     // 💡 契约修复：deck.json 的 version 必须等于本次构建的 buildId（字符串），
     // 与 manifest entry 的 version 保持一致 —— 客户端全量安装校验 deck.json.version === manifest version。
     if (!string.IsNullOrEmpty(job.BuildId))
@@ -148,6 +156,11 @@ public class PublishJobProcessor : IPublishJobProcessor
     await AutomationLedger.RecordAsync(conn, new AutomationEvent("publish_pipeline", 0, "failure",
       DeckId: deckId, Ref: jobId, DedupeKey: $"publish-fail:{jobId}", Details: new { error }));
   }
+
+  /// <summary>The <see cref="PublishSnapshot"/> digest of the cards this job is about to build.</summary>
+  public static string SnapshotDigest(IEnumerable<CardExportData> cards) =>
+    PublishSnapshot.Digest(cards.Select(c => new PublishSnapshotCard(c.StableUid, c.OrderInDeck, c.Difficulty, c.Question, c.Explanation,
+      c.CodeLanguage, c.CodeSnippet, c.RealWorldUsage, c.Revision, c.Topic, c.Mcq?.GetRawText(), c.Source?.GetRawText())));
 
   public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
 

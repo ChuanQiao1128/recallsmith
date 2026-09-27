@@ -46,13 +46,35 @@ public class JobRepository : IJobRepository
         s3_key as "s3Key",
         deck_id as "deckId",
         deck_slug as "deckSlug",
+        status,
+        qa_snapshot_sha256 as "qaSnapshotSha256"
+      FROM deck_publishes
+      WHERE job_id = $1
+      LIMIT 1
+      """;
+    // Pre-033 schema: no snapshot column, so no job carries a snapshot.
+    const string sqlPre033 = """
+      SELECT 
+        job_id as "jobId",
+        build_id as "buildId",
+        s3_key as "s3Key",
+        deck_id as "deckId",
+        deck_slug as "deckSlug",
         status
       FROM deck_publishes
       WHERE job_id = $1
       LIMIT 1
       """;
 
-    var rows = await DbUtil.QueryAsync(conn, null, sql, [jobId]);
+    List<Dictionary<string, object?>> rows;
+    try
+    {
+      rows = await DbUtil.QueryAsync(conn, null, sql, [jobId]);
+    }
+    catch (PostgresException pg) when (pg.SqlState == "42703")
+    {
+      rows = await DbUtil.QueryAsync(conn, null, sqlPre033, [jobId]);
+    }
     if (rows.Count == 0) return null;
 
     var row = rows[0];
@@ -63,7 +85,8 @@ public class JobRepository : IJobRepository
       S3Key = Convert.ToString(row["s3Key"]) ?? string.Empty,
       DeckId = Convert.ToInt32(row["deckId"]),
       DeckSlug = Convert.ToString(row["deckSlug"]) ?? string.Empty,
-      Status = Convert.ToString(row["status"]) ?? string.Empty
+      Status = Convert.ToString(row["status"]) ?? string.Empty,
+      QaSnapshotSha256 = row.TryGetValue("qaSnapshotSha256", out var snapshot) ? snapshot as string : null,
     };
   }
 

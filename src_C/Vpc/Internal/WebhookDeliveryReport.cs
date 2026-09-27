@@ -22,6 +22,12 @@ public static class WebhookDeliveryReport
   public const int MaxErrorLength = 500;
   public const string SubscriptionInactiveError = "subscription inactive";
 
+  /// <summary>
+  /// The route's own HMAC secret (cloud-security-resilience-2): when set, only the webhook dispatcher's secret is
+  /// accepted here, and the dispatcher no longer needs a credential that other internal routes accept.
+  /// </summary>
+  public const string CallerSecretEnv = "INTERNAL_SECRET_WEBHOOK_REPORT";
+
   private static readonly Dictionary<string, string> OutcomeStatus = new(StringComparer.Ordinal)
   {
     ["delivered"] = "delivered",
@@ -34,7 +40,7 @@ public static class WebhookDeliveryReport
   {
     if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
 
-    var v = Auth.VerifyInternalSignature(req);
+    var v = Auth.VerifyInternalSignature(req, CallerSecretEnv);
     if (!v.Ok) return res.Forbidden($"Internal auth failed: {v.Reason}");
 
     Guid deliveryId;

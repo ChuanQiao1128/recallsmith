@@ -20,7 +20,14 @@ namespace RecallSmith.Lambda.Vpc.Qa;
 /// </summary>
 public static class QaRuns
 {
-  public const string PromptVersion = "qa-v1";
+  /// <summary>
+  /// The prompt version core-vpc expects the ai-qa Lambda to run (services/ai-qa/src/ai_qa/prompts.py
+  /// <c>PROMPT_VERSION</c>; a contract test keeps the two equal). It is only the expectation the §7.4 message carries
+  /// (the Lambda requires the field and warns on a mismatch): core-vpc never pins it on a run. A run's
+  /// <c>prompt_version</c> is null until a chunk reports, and then records the version the Lambda actually ran
+  /// (backend-design-12).
+  /// </summary>
+  public const string PromptVersion = "qa-v3";
   public const int ChunkSize = 5;
   public const int MaxChunkBytes = 200_000;
   public const int MaxCardIds = 200;
@@ -98,7 +105,6 @@ public static class QaRuns
     if (string.IsNullOrWhiteSpace(queueUrl)) return Helpers.ConfigError(res, $"Missing env {QueueUrlEnv}");
     queueUrl = queueUrl.Trim();
 
-    Guid? runId = null;
     try
     {
       StartBody body;
@@ -111,128 +117,226 @@ public static class QaRuns
       await using var conn = await Pg.OpenConnectionOrNullAsync();
       if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
-      var deckRows = await DbUtil.QueryAsync(conn, null, "select id, slug, title from decks where id = $1 and is_deleted = 0", [body.DeckId]);
-      if (deckRows.Count == 0) return DeckNotFound(res);
-      var deck = deckRows[0];
-      var deckSlug = Convert.ToString(deck["slug"], CultureInfo.InvariantCulture) ?? string.Empty;
-      var deckTitle = Convert.ToString(deck["title"], CultureInfo.InvariantCulture) ?? string.Empty;
+      var deck = await LiveDeckAsync(conn, body.DeckId);
+      if (deck is null) return DeckNotFound(res);
 
       var denyDeck = await Helpers.RequireDeckWrite(conn, auth.UserSub, body.DeckId, auth.IsSuperAdmin, res);
       if (denyDeck is not null) return denyDeck;
       if (string.IsNullOrEmpty(auth.UserSub)) return res.Forbidden("Requires authenticated admin user");
 
-      var reaped = await DbUtil.ExecuteAsync(conn, null,
-        $"""
-        update ai_qa_runs
-        set status = 'failed', error_code = 'TIMEOUT', finished_at = now(), updated_at = now()
-        where deck_id = $1 and status in ('queued','running') and updated_at < now() - {StaleInterval}
-        """,
-        [body.DeckId]);
-      if (reaped > 0) Log.Event("warn", new { tag = "ai_qa", reason = "stale_run_reaped", deckId = body.DeckId, reaped });
-
-      var active = await DbUtil.ExecuteScalarAsync(conn, null,
-        "select id from ai_qa_runs where deck_id = $1 and status in ('queued','running') limit 1", [body.DeckId]);
-      if (active is not null) return RunInProgress(res);
-
-      var rows = await SelectCardsAsync(conn, body);
-      if (rows.Count == 0) return Helpers.ErrorEnvelope(res, 400, "AI_QA_NOTHING_TO_REVIEW", "No cards need AI QA for this scope");
-
-      var maxCards = IntEnv(MaxCardsEnv, DefaultMaxCards);
-      if (rows.Count > maxCards)
+      var started = await StartRunAsync(conn, body, deck.Value.Slug, deck.Value.Title, auth.UserSub, queueUrl);
+      return started.Outcome switch
       {
-        return Helpers.ErrorEnvelope(res, 400, "AI_QA_TOO_MANY_CARDS", $"{rows.Count} cards exceed the per-run cap of {maxCards}");
-      }
-
-      var cap = DecimalEnv(DailyCapEnv, DefaultDailyCapUsd);
-      var perCard = DecimalEnv(EstUsdPerCardEnv, DefaultEstUsdPerCard);
-
-      var cards = rows.Select(QaCard.FromRow).ToList();
-      var chunks = Chunk(cards);
-
-      var id = Guid.NewGuid();
-      await using (var tx = await conn.BeginTransactionAsync())
-      {
-        // The cap is a reservation, not an admission check on reported spend alone (backend-design-6,
-        // cloud-security-resilience-3, ai-agent-8): today's reported spend, plus the estimate for the unfinished
-        // cards of every open run, plus this run's estimate must fit. The lock makes concurrent starts on
-        // different decks see each other's reservations.
-        await DbUtil.ExecuteAsync(conn, tx, "select pg_advisory_xact_lock($1)", [DailyCapLockKey]);
-        var (spent, openCards) = await SpendTodayAsync(conn, tx);
-        var reserved = openCards * perCard;
-        var estimate = cards.Count * perCard;
-        if (spent >= cap || spent + reserved + estimate > cap)
-        {
-          await tx.RollbackAsync();
-          return Helpers.ErrorEnvelope(res, 429, "AI_QA_DAILY_CAP",
-            $"Today's AI QA spend {Usd(spent)} USD plus {Usd(reserved)} USD reserved for open runs and {Usd(estimate)} USD " +
-            $"estimated for this run ({cards.Count} cards at {Usd(perCard)} USD) exceeds the daily cap of {Usd(cap)} USD");
-        }
-
-        await DbUtil.ExecuteAsync(conn, tx,
-          """
-          insert into ai_qa_runs (id, deck_id, scope, status, prompt_version, requested_by_sub, card_count, chunk_count)
-          values ($1, $2, $3, 'queued', $4, $5, $6, $7)
-          """,
-          [id, body.DeckId, body.Scope, PromptVersion, auth.UserSub, cards.Count, chunks.Count]);
-
-        await DbUtil.ExecuteAsync(conn, tx,
-          """
-          insert into ai_qa_items (run_id, card_id, stable_uid, content_sha256, status)
-          select $1, x.card_id, x.stable_uid, x.content_sha256, 'queued'
-          from unnest($2::bigint[], $3::text[], $4::text[]) as x(card_id, stable_uid, content_sha256)
-          """,
-          [id, cards.Select(c => c.CardId).ToArray(), cards.Select(c => c.StableUid).ToArray(), cards.Select(c => c.ContentSha256).ToArray()]);
-
-        await tx.CommitAsync();
-      }
-      runId = id;
-
-      var reviewDate = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-      for (var i = 0; i < chunks.Count; i++)
-      {
-        var message = JsonSerializer.Serialize(new
-        {
-          v = 1,
-          runId = id,
-          chunk = i,
-          chunkCount = chunks.Count,
-          promptVersion = PromptVersion,
-          deck = new { id = body.DeckId, slug = deckSlug, title = deckTitle },
-          reviewDate,
-          cards = chunks[i].Select(c => c.Wire).ToList(),
-        });
-        var request = new SendMessageRequest { QueueUrl = queueUrl, MessageBody = message };
-
-        try
-        {
-          if (TestSendSeam is not null) await TestSendSeam(request);
-          else await SQS().SendMessageAsync(request);
-        }
-        catch (Exception ex)
-        {
-          Log.Event("error", new { tag = "ai_qa", outcome = "enqueue_failed", runId = id, deckId = body.DeckId, chunk = i, error = ex.Message });
-          RouteMetrics.EmitGauge(EnqueueFailuresMetric, 1);
-          await DbUtil.ExecuteAsync(conn, null,
-            """
-            update ai_qa_runs set status = 'failed', error_code = 'ENQUEUE_FAILED', finished_at = now(), updated_at = now()
-            where id = $1
-            """,
-            [id]);
-          return res.Error500(ex);
-        }
-      }
-
-      Log.Event("info", new { tag = "ai_qa", outcome = "enqueued", runId = id, deckId = body.DeckId, cardCount = cards.Count, chunkCount = chunks.Count });
-      return res.Ok(new { runId = id, status = "queued", cardCount = cards.Count, chunkCount = chunks.Count });
-    }
-    catch (PostgresException pg) when (pg is { SqlState: "23505", ConstraintName: "uq_ai_qa_runs_active" } && runId is null)
-    {
-      return RunInProgress(res);
+        StartOutcome.Queued => res.Ok(new { runId = started.RunId, status = "queued", cardCount = started.CardCount, chunkCount = started.ChunkCount }),
+        StartOutcome.InProgress => RunInProgress(res),
+        StartOutcome.NothingToReview => Helpers.ErrorEnvelope(res, 400, "AI_QA_NOTHING_TO_REVIEW", started.Message!),
+        StartOutcome.TooManyCards => Helpers.ErrorEnvelope(res, 400, "AI_QA_TOO_MANY_CARDS", started.Message!),
+        StartOutcome.DailyCap => Helpers.ErrorEnvelope(res, 429, "AI_QA_DAILY_CAP", started.Message!),
+        _ => res.Error500(started.Error),
+      };
     }
     catch (Exception ex)
     {
       return HandleError(ex, res);
     }
+  }
+
+  internal enum StartOutcome { Queued, InProgress, NothingToReview, TooManyCards, DailyCap, EnqueueFailed }
+
+  /// <summary>
+  /// What <see cref="StartRunAsync"/> did. <see cref="RunId"/> is the new run (Queued, EnqueueFailed) or the deck's
+  /// open run (InProgress, when it could be read).
+  /// </summary>
+  internal sealed record StartResult(StartOutcome Outcome, Guid? RunId = null, int CardCount = 0, int ChunkCount = 0,
+    string? Message = null, Exception? Error = null);
+
+  /// <summary>
+  /// The start checks in contract order after the caller's own (flag, queue, deck, permission): reap stale runs,
+  /// one open run per deck, the cards of the scope, the per-run card cap, the daily-cap reservation; then the run
+  /// and its items are recorded and every chunk is enqueued. Shared by <c>POST /qa/runs</c> and the
+  /// accept/publish chain (automation-17). A <see cref="ValidationError"/> from the scope propagates.
+  /// </summary>
+  private static async Task<StartResult> StartRunAsync(NpgsqlConnection conn, StartBody body, string deckSlug, string deckTitle,
+    string requestedBySub, string queueUrl)
+  {
+    var reaped = await DbUtil.ExecuteAsync(conn, null,
+      $"""
+      update ai_qa_runs
+      set status = 'failed', error_code = 'TIMEOUT', finished_at = now(), updated_at = now()
+      where deck_id = $1 and status in ('queued','running') and updated_at < now() - {StaleInterval}
+      """,
+      [body.DeckId]);
+    if (reaped > 0) Log.Event("warn", new { tag = "ai_qa", reason = "stale_run_reaped", deckId = body.DeckId, reaped });
+
+    var active = await ActiveRunIdAsync(conn, body.DeckId);
+    if (active is not null) return new StartResult(StartOutcome.InProgress, active);
+
+    var rows = await SelectCardsAsync(conn, body);
+    if (rows.Count == 0) return new StartResult(StartOutcome.NothingToReview, Message: "No cards need AI QA for this scope");
+
+    var maxCards = IntEnv(MaxCardsEnv, DefaultMaxCards);
+    if (rows.Count > maxCards)
+    {
+      return new StartResult(StartOutcome.TooManyCards, Message: $"{rows.Count} cards exceed the per-run cap of {maxCards}");
+    }
+
+    var cap = DecimalEnv(DailyCapEnv, DefaultDailyCapUsd);
+    var perCard = DecimalEnv(EstUsdPerCardEnv, DefaultEstUsdPerCard);
+
+    var cards = rows.Select(QaCard.FromRow).ToList();
+    var chunks = Chunk(cards);
+
+    var id = Guid.NewGuid();
+    try
+    {
+      await using var tx = await conn.BeginTransactionAsync();
+      // The cap is a reservation, not an admission check on reported spend alone (backend-design-6,
+      // cloud-security-resilience-3, ai-agent-8): today's reported spend, plus the estimate for the unfinished
+      // cards of every open run, plus this run's estimate must fit. The lock makes concurrent starts on
+      // different decks see each other's reservations.
+      await DbUtil.ExecuteAsync(conn, tx, "select pg_advisory_xact_lock($1)", [DailyCapLockKey]);
+      var (spent, openCards) = await SpendTodayAsync(conn, tx);
+      var reserved = openCards * perCard;
+      var estimate = cards.Count * perCard;
+      if (spent >= cap || spent + reserved + estimate > cap)
+      {
+        await tx.RollbackAsync();
+        return new StartResult(StartOutcome.DailyCap, Message:
+          $"Today's AI QA spend {Usd(spent)} USD plus {Usd(reserved)} USD reserved for open runs and {Usd(estimate)} USD " +
+          $"estimated for this run ({cards.Count} cards at {Usd(perCard)} USD) exceeds the daily cap of {Usd(cap)} USD");
+      }
+
+      // prompt_version stays null until the Lambda reports the version it ran (backend-design-12).
+      await DbUtil.ExecuteAsync(conn, tx,
+        """
+        insert into ai_qa_runs (id, deck_id, scope, status, requested_by_sub, card_count, chunk_count)
+        values ($1, $2, $3, 'queued', $4, $5, $6)
+        """,
+        [id, body.DeckId, body.Scope, requestedBySub, cards.Count, chunks.Count]);
+
+      await DbUtil.ExecuteAsync(conn, tx,
+        """
+        insert into ai_qa_items (run_id, card_id, stable_uid, content_sha256, status)
+        select $1, x.card_id, x.stable_uid, x.content_sha256, 'queued'
+        from unnest($2::bigint[], $3::text[], $4::text[]) as x(card_id, stable_uid, content_sha256)
+        """,
+        [id, cards.Select(c => c.CardId).ToArray(), cards.Select(c => c.StableUid).ToArray(), cards.Select(c => c.ContentSha256).ToArray()]);
+
+      await tx.CommitAsync();
+    }
+    catch (PostgresException pg) when (pg is { SqlState: "23505", ConstraintName: "uq_ai_qa_runs_active" })
+    {
+      return new StartResult(StartOutcome.InProgress, await ActiveRunIdAsync(conn, body.DeckId));
+    }
+
+    var reviewDate = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    for (var i = 0; i < chunks.Count; i++)
+    {
+      var message = JsonSerializer.Serialize(new
+      {
+        v = 1,
+        runId = id,
+        chunk = i,
+        chunkCount = chunks.Count,
+        promptVersion = PromptVersion,
+        deck = new { id = body.DeckId, slug = deckSlug, title = deckTitle },
+        reviewDate,
+        cards = chunks[i].Select(c => c.Wire).ToList(),
+      });
+      var request = new SendMessageRequest { QueueUrl = queueUrl, MessageBody = message };
+
+      try
+      {
+        if (TestSendSeam is not null) await TestSendSeam(request);
+        else await SQS().SendMessageAsync(request);
+      }
+      catch (Exception ex)
+      {
+        Log.Event("error", new { tag = "ai_qa", outcome = "enqueue_failed", runId = id, deckId = body.DeckId, chunk = i, error = ex.Message });
+        RouteMetrics.EmitGauge(EnqueueFailuresMetric, 1);
+        await DbUtil.ExecuteAsync(conn, null,
+          """
+          update ai_qa_runs set status = 'failed', error_code = 'ENQUEUE_FAILED', finished_at = now(), updated_at = now()
+          where id = $1
+          """,
+          [id]);
+        return new StartResult(StartOutcome.EnqueueFailed, id, cards.Count, chunks.Count, Error: ex);
+      }
+    }
+
+    Log.Event("info", new { tag = "ai_qa", outcome = "enqueued", runId = id, deckId = body.DeckId, cardCount = cards.Count, chunkCount = chunks.Count });
+    return new StartResult(StartOutcome.Queued, id, cards.Count, chunks.Count);
+  }
+
+  private static async Task<Guid?> ActiveRunIdAsync(NpgsqlConnection conn, long deckId) =>
+    await DbUtil.ExecuteScalarAsync(conn, null,
+      "select id from ai_qa_runs where deck_id = $1 and status in ('queued','running') limit 1", [deckId]) as Guid?;
+
+  private static async Task<(string Slug, string Title)?> LiveDeckAsync(NpgsqlConnection conn, long deckId)
+  {
+    var rows = await DbUtil.QueryAsync(conn, null, "select id, slug, title from decks where id = $1 and is_deleted = 0", [deckId]);
+    if (rows.Count == 0) return null;
+    return (Convert.ToString(rows[0]["slug"], CultureInfo.InvariantCulture) ?? string.Empty,
+      Convert.ToString(rows[0]["title"], CultureInfo.InvariantCulture) ?? string.Empty);
+  }
+
+  /// <summary>
+  /// What the accept → QA → publish chain did about AI QA (automation-17): <c>queued</c> (a new run),
+  /// <c>in_progress</c> (the deck's open run, reused), <c>nothing_to_review</c> (every changed card is reviewed at
+  /// its current hash), <c>not_started</c> (the run could not start: <see cref="Code"/> says why).
+  /// </summary>
+  public sealed record ChainedRun(string Status, Guid? RunId, string? Code, string? Message);
+
+  /// <summary>
+  /// Starts, or reuses, a <c>scope=changed</c> run on <paramref name="deckId"/> without a human re-orchestrating
+  /// it (automation-17): called after drafts are accepted with <c>runQa</c>, and by the publish gate when it refuses
+  /// with <c>AI_QA_REQUIRED</c>. Returns null (and does nothing) when <c>AI_QA_ENABLED</c> is off. Every other check
+  /// of a console start applies unchanged: one open run per deck (reused, so repeated calls never stack runs),
+  /// the per-run card cap and the daily-cap reservation. Never throws: the caller's own outcome stands.
+  /// </summary>
+  public static async Task<ChainedRun?> StartChangedRunAsync(NpgsqlConnection conn, long deckId, string? requestedBySub, string trigger)
+  {
+    if (!Env.Flag(QaGate.EnabledEnv)) return null;
+
+    ChainedRun result;
+    try
+    {
+      var queueUrl = Environment.GetEnvironmentVariable(QueueUrlEnv);
+      if (string.IsNullOrWhiteSpace(queueUrl))
+      {
+        result = new ChainedRun("not_started", null, "CONFIG_ERROR", $"Missing env {QueueUrlEnv}");
+      }
+      else if (string.IsNullOrEmpty(requestedBySub))
+      {
+        result = new ChainedRun("not_started", null, "FORBIDDEN", "Requires authenticated admin user");
+      }
+      else if (await LiveDeckAsync(conn, deckId) is not { } deck)
+      {
+        result = new ChainedRun("not_started", null, "DECK_NOT_FOUND", "Deck not found");
+      }
+      else
+      {
+        var started = await StartRunAsync(conn, new StartBody(deckId, "changed", null), deck.Slug, deck.Title, requestedBySub, queueUrl.Trim());
+        result = started.Outcome switch
+        {
+          StartOutcome.Queued => new ChainedRun("queued", started.RunId, null, null),
+          StartOutcome.InProgress => new ChainedRun("in_progress", started.RunId, "AI_QA_RUN_IN_PROGRESS", null),
+          StartOutcome.NothingToReview => new ChainedRun("nothing_to_review", null, "AI_QA_NOTHING_TO_REVIEW", started.Message),
+          StartOutcome.TooManyCards => new ChainedRun("not_started", null, "AI_QA_TOO_MANY_CARDS", started.Message),
+          StartOutcome.DailyCap => new ChainedRun("not_started", null, "AI_QA_DAILY_CAP", started.Message),
+          _ => new ChainedRun("not_started", started.RunId, "ENQUEUE_FAILED", "The AI QA run could not be enqueued"),
+        };
+      }
+    }
+    catch (Exception ex)
+    {
+      Log.Event("warn", new { tag = "ai_qa", reason = "chained_run_failed", deckId, trigger, error = ex.Message });
+      return new ChainedRun("not_started", null, ex is PostgresException { SqlState: "42P01" } ? "SERVER_NOT_READY_AI_QA" : "INTERNAL_ERROR",
+        "The AI QA run could not be started");
+    }
+
+    Log.Event("info", new { tag = "ai_qa", outcome = "chained_run", deckId, trigger, status = result.Status, runId = result.RunId, code = result.Code });
+    return result;
   }
 
   private static StartBody ParseStartBody(JsonElement body)
@@ -594,6 +698,11 @@ public static class QaRuns
       var required = Env.Flag(QaGate.RequiredEnv);
       var missing = state.Changed.Where(c => !c.ReviewedAtCurrentHash).ToList();
 
+      // The caps a start is checked against (cross-wave contract, Y02/Y07): the console shows these instead of
+      // its own copies of the defaults.
+      var perCard = DecimalEnv(EstUsdPerCardEnv, DefaultEstUsdPerCard);
+      var (spent, openCards) = await SpendTodayAsync(conn, null);
+
       return res.Ok(new
       {
         enabled,
@@ -610,6 +719,13 @@ public static class QaRuns
           message = b.Message,
         }).ToList(),
         wouldBlock = enabled && required && (missing.Count > 0 || state.OpenBlockers.Count > 0),
+        limits = new
+        {
+          maxCards = IntEnv(MaxCardsEnv, DefaultMaxCards),
+          dailyUsdCap = DecimalEnv(DailyCapEnv, DefaultDailyCapUsd),
+          spentTodayUsd = spent,
+          reservedTodayUsd = openCards * perCard,
+        },
       });
     }
     catch (Exception ex)
@@ -643,10 +759,12 @@ public static class QaRuns
 
       string resolution;
       string? note;
+      int? reviewMs;
+      int? rawReviewMs;
       using (var doc = Validation.ParseJsonBody(req))
       {
         if (doc is null) return res.BadRequest("BAD_REQUEST", "Invalid JSON body");
-        (resolution, note) = ParseResolveBody(doc.RootElement);
+        (resolution, note, reviewMs, rawReviewMs) = ParseResolveBody(doc.RootElement);
       }
 
       if (!await IsLiveDeckAsync(conn, deckId)) return DeckNotFound(res);
@@ -671,6 +789,14 @@ public static class QaRuns
           Automation: "ai_qa_review", Units: 0, Outcome: "success", DefectsCaught: 1,
           DeckId: deckId, Ref: id.ToString(CultureInfo.InvariantCulture), DedupeKey: $"qa-fix:{id.ToString(CultureInfo.InvariantCulture)}"));
       }
+
+      // The human cost of AI QA (automation-16): every resolution, fixed or dismissed (a false positive), charges
+      // the editor's triage time against ai_qa_review's per-card credit, as a reject does for drafts (units 0).
+      await AutomationLedger.RecordAsync(conn, new AutomationEvent(
+        Automation: "ai_qa_review", Units: 0, Outcome: "success",
+        ActualMinutes: reviewMs is null ? null : reviewMs.Value / 60000m,
+        DeckId: deckId, Ref: id.ToString(CultureInfo.InvariantCulture), DedupeKey: $"qa-resolve:{id.ToString(CultureInfo.InvariantCulture)}",
+        Details: new { resolution, severity, reviewTimeMeasured = reviewMs is not null, rawReviewMs = rawReviewMs != reviewMs ? rawReviewMs : null }));
 
       var rows = await DbUtil.QueryAsync(conn, null,
         $"""
@@ -788,7 +914,7 @@ public static class QaRuns
     return note;
   }
 
-  private static (string Resolution, string? Note) ParseResolveBody(JsonElement body)
+  private static (string Resolution, string? Note, int? ReviewMs, int? RawReviewMs) ParseResolveBody(JsonElement body)
   {
     if (body.ValueKind != JsonValueKind.Object) throw new ValidationError("Body must be a JSON object", "body");
 
@@ -806,7 +932,18 @@ public static class QaRuns
       note = n.Length == 0 ? null : n;
     }
 
-    return (resEl.GetString()!, note);
+    // Optional triage time, capped like a draft decision's (Drafts.ReviewMsCap): only the capped value is charged.
+    int? reviewMs = null, rawReviewMs = null;
+    if (body.TryGetProperty("reviewMs", out var msEl) && msEl.ValueKind != JsonValueKind.Null)
+    {
+      if (msEl.ValueKind != JsonValueKind.Number || !msEl.TryGetInt32(out var ms) || ms < 0)
+      {
+        throw new ValidationError("reviewMs must be an integer in 0..2147483647", "reviewMs");
+      }
+      (reviewMs, rawReviewMs) = (Math.Min(ms, Review.Drafts.ReviewMsCap), ms);
+    }
+
+    return (resEl.GetString()!, note, reviewMs, rawReviewMs);
   }
 
   // ---------------------------------------------------------------------------------------------
