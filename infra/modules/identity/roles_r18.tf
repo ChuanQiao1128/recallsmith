@@ -38,11 +38,13 @@ resource "aws_iam_role_policy" "webhook_dispatcher" {
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = [local.webhook_dispatcher_log_arn]
       },
+      # X08: "-previous" is read only during a signing-secret rotation (X03); the owner creates and
+      # deletes that parameter by hand, Terraform never manages it. A missing parameter is not an error.
       {
         Sid      = "SsmRead"
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = ["${local.ssm_param_prefix}/webhook-signing-secret", "${local.ssm_param_prefix}/internal-shared-secret"]
+        Resource = ["${local.ssm_param_prefix}/webhook-signing-secret", "${local.ssm_param_prefix}/webhook-signing-secret-previous", "${local.ssm_param_prefix}/internal-shared-secret"]
       },
     ]
   })

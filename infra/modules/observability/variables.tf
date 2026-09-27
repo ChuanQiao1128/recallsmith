@@ -59,3 +59,13 @@ variable "webhook_dispatcher_function_name" { type = string }
 variable "ai_qa_dlq_name" { type = string }
 
 variable "ai_qa_function_name" { type = string }
+
+variable "webhook_queue_name" { type = string }
+
+variable "ai_qa_queue_name" { type = string }
+
+# AI_QA_DAILY_USD_CAP (10 USD, contract §7.2) in the unit AiQaEstimatedCostMicroUsd is emitted in.
+variable "ai_qa_daily_cost_cap_micro_usd" {
+  type    = number
+  default = 10000000
+}
