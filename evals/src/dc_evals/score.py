@@ -3,41 +3,56 @@ plus the rollout gate. Every gate threshold lives in the block below and nowhere
 
 from __future__ import annotations
 
+import json
 import math
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
-from .dataset import DEFECT_CLASSES
+from .dataset import DEFECT_CLASSES, EVALS_ROOT
 
 # --- rollout gate thresholds (contract §7.9 step 3; README "Gate") -------------------------
 # Overall recall on serious defects, pooled over every repetition.
 RECALL_GATE = 0.80
+# ...and the lower end of its 95% Wilson interval, so a small or lucky run cannot pass on the point.
+RECALL_CI_LOWER_GATE = 0.75
 # Overall precision at the dataset's own ~50% defect prevalence (contract §12.1 line).
 PRECISION_GATE = 0.70
 # Share of scored controls flagged blocker/major. Unlike precision it does not depend on how many
 # defects the dataset holds, so it is the gate's real bound on false alarms.
 CONTROL_FPR_GATE = 0.10
+# ...and the upper end of its 95% Wilson interval.
+CONTROL_FPR_CI_UPPER_GATE = 0.15
 # Every class the dataset seeds must reach this recall, so easy classes cannot hide a weak one.
 PER_CLASS_RECALL_FLOOR = 0.60
+# Gate evidence reviews the dataset at least this many times; counts pool over the repetitions, so a
+# 15-row class is judged on 30 items (see README "Gate" for the resulting pass probabilities).
+MIN_GATE_REPS = 2
+# Every class must have at least this many scored-or-missed items pooled over repetitions.
+MIN_CLASS_ITEMS = 30
 # Controls that ended errored/refused/skipped (unscored) may be at most this share of controls.
 CONTROL_UNSCORED_RATE_GATE = 0.02
-# Only a run through a production provider is rollout evidence; claude-cli is a local preview.
+# Only a run through a production provider is rollout evidence; claude-cli is proxy evidence.
 GATE_PROVIDERS = frozenset({"bedrock", "anthropic"})
 # The dataset the rollout gate is measured on (its sha256 and size are checked against data/).
-GATE_DATASET = "seeded-v2"
+GATE_DATASET = "seeded-v3"
+# The configuration that ships: the run must match its provider, model, effort, resolved
+# structured-output mode and the current ai_qa PROMPT_VERSION.
+SHIPPING_ENV_PATH = EVALS_ROOT.parent / "services" / "ai-qa" / "env" / "prod.env.json"
 # Informational: the defect prevalence expected in production, used for precisionAtPrevalence.
 PRODUCTION_PREVALENCE = 0.10
 # Two-sided 95% Wilson score interval.
 CI_Z = 1.96
 
 ACCEPTED_CATEGORIES = {
-    # A wrong or outdated answer contradicts its supporting quote, so a source_unsupported finding
-    # on those cards is a correct catch too (seeded-v2 cites every card; v1 cites none).
-    "incorrect_answer": {"incorrect_answer", "source_unsupported"},
+    # Y05 (ai-agent-11): source_unsupported is only a major, and only a blocker stops a publish, so
+    # it is no longer a hit on a wrong or outdated answer: every accepted category of a blocker
+    # class is itself a blocker.
+    "incorrect_answer": {"incorrect_answer"},
     "multiple_correct": {"multiple_correct"},
     "answer_leak": {"answer_leak"},
     "ambiguous_stem": {"ambiguous_stem"},
-    "outdated_fact": {"outdated_fact", "incorrect_answer", "source_unsupported"},
+    "outdated_fact": {"outdated_fact", "incorrect_answer"},
     "qualifier_mismatch": {"qualifier_mismatch", "ambiguous_stem"},
     "source_unsupported": {"source_unsupported"},
 }
@@ -184,37 +199,84 @@ def score(records: list[dict[str, Any]], classes: tuple[str, ...] = DEFECT_CLASS
     }
 
 
+def shipping_config(path: Path = SHIPPING_ENV_PATH) -> dict[str, Any]:
+    """What ships: provider, model, effort and resolved structured-output mode of the production
+    env file, and the prompt version the ai_qa package carries."""
+    from ai_qa.prompts import PROMPT_VERSION
+    from ai_qa.providers import structured_outputs_on
+    from ai_qa.settings import load_settings
+
+    settings = load_settings(json.loads(path.read_text(encoding="utf-8")))
+    return {
+        "provider": settings.provider,
+        "model": settings.model,
+        "promptVersion": PROMPT_VERSION,
+        "effort": settings.effort,
+        "structuredOutputsAtStart": structured_outputs_on(settings),
+    }
+
+
+def evidence_class(provider: str | None) -> str:
+    """"rollout" for a production provider; "proxy" for anything else (claude-cli): a proxy run
+    can inform prompt work but never satisfies the rollout gate by itself."""
+    return "rollout" if provider in GATE_PROVIDERS else "proxy"
+
+
 def gate_failures(report: dict[str, Any]) -> list[str]:
     """Every reason the run is not rollout evidence; empty when the gate passes.
 
-    report["gate"]["expected"] carries what the committed dataset says the run must look like
-    (report.build_report fills it from data/); a report without it cannot pass."""
+    report["gate"]["expected"] carries what the committed dataset says the run must look like and
+    the configuration that ships (report.build_report fills both); a report without them cannot
+    pass."""
     failures: list[str] = []
     if not report.get("n"):
         return ["the run has no items"]
     expected = (report.get("gate") or {}).get("expected") or {}
     if report.get("provider") not in GATE_PROVIDERS:
-        failures.append(f"provider {report.get('provider')!r} is not one of {sorted(GATE_PROVIDERS)}")
+        failures.append(
+            f"provider {report.get('provider')!r} is not one of {sorted(GATE_PROVIDERS)} "
+            "(proxy evidence, not rollout evidence)"
+        )
+    shipping = expected.get("shipping")
+    if not shipping:
+        failures.append("the shipping configuration is unknown")
+    else:
+        for key in ("provider", "model", "promptVersion", "effort", "structuredOutputsAtStart"):
+            if report.get(key) != shipping[key]:
+                failures.append(f"{key} {report.get(key)!r} is not the shipping {key} {shipping[key]!r}")
     if report.get("dataset") != GATE_DATASET:
         failures.append(f"dataset {report.get('dataset')!r} is not {GATE_DATASET!r}")
     if not report.get("datasetSha256") or report.get("datasetSha256") != expected.get("datasetSha256"):
         failures.append("the run header's dataset sha256 does not match the committed dataset file")
     reps = report.get("reps") or 1
+    if reps < MIN_GATE_REPS:
+        failures.append(f"{reps} repetition(s); gate evidence needs at least {MIN_GATE_REPS}")
     if not expected.get("rows") or report["n"] != expected["rows"] * reps:
         failures.append(f"truncated run: {report['n']} items, expected {expected.get('rows')} rows x {reps} reps")
     overall = report["overall"]
     if overall["recall"] < RECALL_GATE:
         failures.append(f"recall {overall['recall']:.4f} < {RECALL_GATE:.2f}")
+    if overall["recallCi95"][0] < RECALL_CI_LOWER_GATE:
+        failures.append(f"recall 95% CI lower bound {overall['recallCi95'][0]:.4f} < {RECALL_CI_LOWER_GATE:.2f}")
     if overall["precision"] < PRECISION_GATE:
         failures.append(f"precision {overall['precision']:.4f} < {PRECISION_GATE:.2f}")
     if overall["controlFalsePositiveRate"] > CONTROL_FPR_GATE:
         failures.append(
             f"control false-positive rate {overall['controlFalsePositiveRate']:.4f} > {CONTROL_FPR_GATE:.2f}"
         )
+    if overall["controlFalsePositiveRateCi95"][1] > CONTROL_FPR_CI_UPPER_GATE:
+        failures.append(
+            f"control false-positive rate 95% CI upper bound {overall['controlFalsePositiveRateCi95'][1]:.4f} > "
+            f"{CONTROL_FPR_CI_UPPER_GATE:.2f}"
+        )
     for defect, block in report["perClass"].items():
-        if block["tp"] + block["fn"] == 0:
+        items = block["tp"] + block["fn"]
+        if items == 0:
             failures.append(f"class {defect} has no rows")
-        elif block["recall"] < PER_CLASS_RECALL_FLOOR:
+            continue
+        if items < MIN_CLASS_ITEMS:
+            failures.append(f"class {defect} has {items} items pooled over reps, fewer than {MIN_CLASS_ITEMS}")
+        if block["recall"] < PER_CLASS_RECALL_FLOOR:
             failures.append(f"class {defect} recall {block['recall']:.4f} < {PER_CLASS_RECALL_FLOOR:.2f}")
     unscored = report.get("unscored") or {}
     if unscored.get("controlUnscoredRate", 1.0) > CONTROL_UNSCORED_RATE_GATE:
@@ -226,6 +288,17 @@ def gate_failures(report: dict[str, Any]) -> list[str]:
     if unverified is None or unverified > 0:
         failures.append(f"{unverified} scored items carry no verified served model id")
     return failures
+
+
+def class_floor_pass_probability(true_recall: float, items: int, floor: float = PER_CLASS_RECALL_FLOOR) -> float:
+    """P(pooled class recall >= floor) for a reviewer whose true recall is true_recall, treating
+    the items as independent Bernoulli trials (exact binomial). Repetitions of the same card are
+    correlated, so this is an upper bound on the pass probability of a weak class and a lower
+    bound on the noise a strong one sees; README "Gate" quotes it."""
+    need = math.ceil(round(floor * items, 9))
+    return sum(
+        math.comb(items, k) * true_recall**k * (1 - true_recall) ** (items - k) for k in range(need, items + 1)
+    )
 
 
 def gate_passes(report: dict[str, Any]) -> bool:

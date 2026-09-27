@@ -582,3 +582,285 @@ MUTATIONS_V2: dict[str, dict[str, tuple[Eligible, Apply]]] = {
     "qualifier_mismatch": {"subtle": MUTATIONS["qualifier_mismatch"]},
     "source_unsupported": {"subtle": (eligible_source_unsupported, apply_source_unsupported)},
 }
+
+
+# === seeded-v3 ================================================================================
+#
+# v3 (Y05, audit round 2) drops the "easy" tier and every mutation that left a surface cue:
+#
+# - incorrect_answer / outdated_fact: the same swap rules, split by what the source shows. Tier
+#   "subtle" keeps a quote that still states the true value (the reviewer can catch the defect by
+#   reading the source); tier "source-silent" drops from the quote every clause that states the
+#   fact, so only domain knowledge catches it (the case of a hallucinated fact in an AI draft whose
+#   verbatim excerpt never mentions it). "adversarial" is source-silent plus the reviewer note.
+# - multiple_correct, ambiguous_stem, qualifier_mismatch: adjudicated constructions committed in
+#   mutations-v3.json ("constructions"), one per card, each with a machine-readable rationale that
+#   names the option that becomes correct or viable and the card text that shows why. They are
+#   valid by construction: ambiguous_stem removes the stated constraint that a distractor's own
+#   why cites as its only reason for failing; qualifier_mismatch swaps in a qualifier that the
+#   card's own text shows a distractor wins on; multiple_correct rewrites a distractor into a
+#   hand-written paraphrase of the keyed answer with a why in the card's style (no copied
+#   explanation text, no cleared why).
+
+def fact_markers(rule: dict[str, Any]) -> list[str]:
+    """Strings that state the true value of a swap rule: its `find` text plus its `quoteMarkers`
+    (how the ledger quotes phrase the same fact, e.g. "11 nines" for 99.999999999 percent)."""
+    return [*dict.fromkeys([rule["find"], *rule.get("quoteMarkers", [])])]
+
+
+def _mentions(text: str, marker: str) -> bool:
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(marker)}(?![A-Za-z0-9])", text, re.IGNORECASE) is not None
+
+
+def mentions_fact(text: str, markers: list[str]) -> bool:
+    return any(_mentions(text, marker) for marker in markers)
+
+
+_CLAUSE_SPLIT = re.compile(r"(;\s+|(?<=[.!?])\s+(?=[A-Z0-9]))")
+
+
+def silence_quote(quote: str, markers: list[str]) -> str | None:
+    """The quote without every clause (split at "; " and sentence ends) that states the fact;
+    None when nothing is left."""
+    parts = _CLAUSE_SPLIT.split(quote)
+    clauses = parts[0::2]
+    separators = [*parts[1::2], ""]
+    kept = [(c, s) for c, s in zip(clauses, separators, strict=True) if not mentions_fact(c, markers)]
+    if not kept:
+        return None
+    text = "".join(c + s for c, s in kept[:-1]) + kept[-1][0]
+    text = text.strip().rstrip(";").strip()
+    return text or None
+
+
+def _swap_rule(defect: str, card: Card, ctx: Context) -> dict[str, Any] | None:
+    return fact_swap_rule(card, ctx) if defect == "incorrect_answer" else outdated_rule(card, ctx)
+
+
+def _silent_source(defect: str, card: Card, deck_slug: str, ctx: Context) -> dict[str, Any] | None:
+    """The card's source with the fact silenced: its own supporting citation first, then its other
+    ledger citations by answer overlap; None when every one of them only states the fact."""
+    rule = _swap_rule(defect, card, ctx)
+    if rule is None or not card.get("source"):
+        return None
+    markers = fact_markers(rule)
+    words = content_words(_answer_text(card))
+    own = [e for e in ctx.sources.get(deck_slug, {}).get(card["stableUid"], []) if e["url"] != card["source"]["url"]]
+    candidates = [card["source"], *sorted(own, key=lambda e: -len(words & content_words(e["quote"])))]
+    for entry in candidates:
+        quote = silence_quote(entry["quote"], markers)
+        if quote is not None and len(content_words(quote)) >= 5:
+            return {"url": entry["url"], "quote": quote}
+    return None
+
+
+def _source_states_fact(defect: str, card: Card, ctx: Context) -> bool:
+    rule = _swap_rule(defect, card, ctx)
+    return bool(rule and card.get("source") and mentions_fact(card["source"]["quote"], fact_markers(rule)))
+
+
+def _group(rule: dict[str, Any]) -> str:
+    return rule.get("group", rule["id"])
+
+
+def eligible_fact_swap_contradicted(card: Card, deck_slug: str, ctx: Context) -> str | None:
+    """Tier "subtle": the swap applies and the card's quote still states the true value."""
+    rule = fact_swap_rule(card, ctx)
+    return _group(rule) if rule and _source_states_fact("incorrect_answer", card, ctx) else None
+
+
+def eligible_fact_swap_silent(card: Card, deck_slug: str, ctx: Context) -> str | None:
+    rule = fact_swap_rule(card, ctx)
+    return _group(rule) if rule and _silent_source("incorrect_answer", card, deck_slug, ctx) else None
+
+
+def _silence(defect: str, out: Card, card: Card, deck_slug: str, ctx: Context) -> str:
+    source = _silent_source(defect, card, deck_slug, ctx)
+    assert source is not None
+    changed = source != card["source"]
+    out["source"] = source
+    return "; the source is silent on the fact" + (
+        " (clauses stating it were dropped from the quote)" if changed else " (its quote never states it)"
+    )
+
+
+def apply_fact_swap_silent(card: Card, deck_slug: str, ctx: Context, rng: random.Random) -> tuple[Card, str]:
+    out, description = apply_fact_swap(card, deck_slug, ctx, rng)
+    return out, description + _silence("incorrect_answer", out, card, deck_slug, ctx)
+
+
+def apply_fact_swap_silent_adversarial(
+    card: Card, deck_slug: str, ctx: Context, rng: random.Random
+) -> tuple[Card, str]:
+    out, description = apply_fact_swap_silent(card, deck_slug, ctx, rng)
+    note = ctx.templates["adversarial"]["defectNote"]
+    _append_usage(out, note)
+    return out, f"{description}; appended to realWorldUsage: {note}"
+
+
+def eligible_outdated_contradicted(card: Card, deck_slug: str, ctx: Context) -> str | None:
+    rule = outdated_rule(card, ctx)
+    return _group(rule) if rule and _source_states_fact("outdated_fact", card, ctx) else None
+
+
+def eligible_outdated_silent(card: Card, deck_slug: str, ctx: Context) -> str | None:
+    rule = outdated_rule(card, ctx)
+    return _group(rule) if rule and _silent_source("outdated_fact", card, deck_slug, ctx) else None
+
+
+def apply_outdated_silent(card: Card, deck_slug: str, ctx: Context, rng: random.Random) -> tuple[Card, str]:
+    out, description = apply_outdated_fact(card, deck_slug, ctx, rng)
+    return out, description + _silence("outdated_fact", out, card, deck_slug, ctx)
+
+
+# --- adjudicated constructions ---------------------------------------------------------------
+
+
+class ConstructionError(ValueError):
+    """A committed construction does not apply to its card as recorded."""
+
+
+def construction(defect: str, card: Card, deck_slug: str, ctx: Context) -> dict[str, Any] | None:
+    for entry in ctx.templates[defect].get("constructions", []):
+        if entry["deck"] == deck_slug and entry["uid"] == card["stableUid"]:
+            return entry
+    return None
+
+
+def _option(card: Card, key: str) -> dict[str, Any]:
+    for option in card["mcq"]["options"]:
+        if option["key"] == key:
+            return option
+    raise ConstructionError(f"{card['stableUid']}: no option {key!r}")
+
+
+def _edited_stem(card: Card, edits: list[list[str]]) -> str:
+    stem = card["question"]
+    for find, replace in edits:
+        if stem.count(find) != 1:
+            raise ConstructionError(f"{card['stableUid']}: {find!r} does not occur exactly once in the stem")
+        stem = stem.replace(find, replace, 1)
+    return stem
+
+
+def _distractor(card: Card, key: str) -> dict[str, Any]:
+    option = _option(card, key)
+    if option["correct"]:
+        raise ConstructionError(f"{card['stableUid']}: option {key!r} is the key, not a distractor")
+    return option
+
+
+def eligible_constructed(defect: str) -> Eligible:
+    def eligible(card: Card, deck_slug: str, ctx: Context) -> str | None:
+        return "constructed" if is_single_answer_mcq(card) and construction(defect, card, deck_slug, ctx) else None
+
+    return eligible
+
+
+def rationale(defect: str, card: Card, deck_slug: str, ctx: Context) -> dict[str, Any] | None:
+    """The machine-readable reason a constructed row is a real defect: the option that becomes
+    correct or viable, what changed, the card text that shows it, and the adjudicator's reason."""
+    entry = construction(defect, card, deck_slug, ctx) if defect in CONSTRUCTED_CLASSES else None
+    if entry is None:
+        return None
+    keyed = card["mcq"]["options"][keyed_indexes(card)[0]]["key"]
+    if defect == "multiple_correct":
+        return {"keyedOption": keyed, "viableOption": entry["option"], "reason": entry["rationale"]}
+    if defect == "ambiguous_stem":
+        return {
+            "keyedOption": keyed,
+            "viableOption": entry["viable"],
+            "removedConstraint": entry["removedConstraint"],
+            "evidence": {"field": "why", "option": entry["viable"], "text": entry["evidence"]},
+            "reason": entry["rationale"],
+        }
+    return {
+        "keyedOption": keyed,
+        "viableOption": entry["wins"],
+        "qualifierFrom": entry["from"],
+        "qualifierTo": entry["to"],
+        "evidence": {
+            "field": entry["evidenceField"],
+            "option": entry["wins"] if entry["evidenceField"] == "why" else None,
+            "text": entry["evidence"],
+        },
+        "reason": entry["rationale"],
+    }
+
+
+def apply_constructed_multiple_correct(
+    card: Card, deck_slug: str, ctx: Context, rng: random.Random
+) -> tuple[Card, str]:
+    entry = construction("multiple_correct", card, deck_slug, ctx)
+    assert entry is not None
+    out = copy.deepcopy(card)
+    option = _distractor(out, entry["option"])
+    option["text"], option["why"] = entry["text"], entry["why"]
+    keyed = card["mcq"]["options"][keyed_indexes(card)[0]]["key"]
+    return out, (
+        f"rewrote distractor {entry['option']} as a paraphrase of keyed option {keyed} with a why in the "
+        "card's style that rejects it on a wrong ground; still one option keyed"
+    )
+
+
+def apply_constructed_ambiguous_stem(
+    card: Card, deck_slug: str, ctx: Context, rng: random.Random
+) -> tuple[Card, str]:
+    entry = construction("ambiguous_stem", card, deck_slug, ctx)
+    assert entry is not None
+    why = _distractor(card, entry["viable"]).get("why") or ""
+    if entry["evidence"] not in why:
+        raise ConstructionError(f"{card['stableUid']}: the evidence is not in option {entry['viable']}'s why")
+    out = copy.deepcopy(card)
+    out["question"] = _edited_stem(card, entry["stemEdits"])
+    out["mcq"]["qualifier"] = entry["qualifier"]
+    return out, (
+        f"removed the stated constraint {entry['removedConstraint']!r}, which option {entry['viable']}'s why "
+        "cites as its reason for failing, so that option now meets every stated requirement too"
+    )
+
+
+def apply_constructed_qualifier_mismatch(
+    card: Card, deck_slug: str, ctx: Context, rng: random.Random
+) -> tuple[Card, str]:
+    entry = construction("qualifier_mismatch", card, deck_slug, ctx)
+    assert entry is not None
+    if card["mcq"].get("qualifier") != entry["from"]:
+        raise ConstructionError(f"{card['stableUid']}: the card's qualifier is not {entry['from']!r}")
+    source = _distractor(card, entry["wins"]).get("why") if entry["evidenceField"] == "why" else card["explanation"]
+    if entry["evidence"] not in (source or ""):
+        raise ConstructionError(f"{card['stableUid']}: the evidence is not in the {entry['evidenceField']}")
+    out = copy.deepcopy(card)
+    out["question"] = _edited_stem(card, entry["stemEdits"])
+    if entry["to"] not in out["question"]:
+        raise ConstructionError(f"{card['stableUid']}: the edited stem does not state {entry['to']!r}")
+    out["mcq"]["qualifier"] = entry["to"]
+    return out, (
+        f"changed the qualifier {entry['from']!r} to {entry['to']!r}, on which option {entry['wins']} beats "
+        "the keyed option (the card's own text says so)"
+    )
+
+
+CONSTRUCTED_CLASSES = ("multiple_correct", "ambiguous_stem", "qualifier_mismatch")
+
+
+# --- v3 registry: class -> tier -> (eligible, apply) ---------------------------------------------
+
+MUTATIONS_V3: dict[str, dict[str, tuple[Eligible, Apply]]] = {
+    "incorrect_answer": {
+        "subtle": (eligible_fact_swap_contradicted, apply_fact_swap),
+        "source-silent": (eligible_fact_swap_silent, apply_fact_swap_silent),
+        "adversarial": (eligible_fact_swap_silent, apply_fact_swap_silent_adversarial),
+    },
+    "multiple_correct": {"subtle": (eligible_constructed("multiple_correct"), apply_constructed_multiple_correct)},
+    "answer_leak": {"subtle": (eligible_key_term_leak, apply_key_term_leak)},
+    "ambiguous_stem": {"subtle": (eligible_constructed("ambiguous_stem"), apply_constructed_ambiguous_stem)},
+    "outdated_fact": {
+        "subtle": (eligible_outdated_contradicted, apply_outdated_fact),
+        "source-silent": (eligible_outdated_silent, apply_outdated_silent),
+    },
+    "qualifier_mismatch": {
+        "subtle": (eligible_constructed("qualifier_mismatch"), apply_constructed_qualifier_mismatch)
+    },
+    "source_unsupported": {"subtle": (eligible_source_unsupported, apply_source_unsupported)},
+}
