@@ -16,6 +16,11 @@ export type FeatureFlags = {
   // post-release shader/GPU crash class without an OTA. forceFallback = diagnostic twin of the
   // DebugMenu's in-memory override, published remotely.
   ceremony: { seamOfLight: boolean; forceFallback: boolean };
+  // K02: hides the Mistake Book entry points (recording continues regardless); relatedCount =
+  // related cards added to a focus run, integer 0..5.
+  mistakeBook: { enabled: boolean; relatedCount: number };
+  // K03: hides the Source row under an opened answer on CardDetail.
+  cardSource: { enabled: boolean };
 };
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
@@ -29,6 +34,8 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
     hidden: false,
   }),
   ceremony: Object.freeze({ seamOfLight: true, forceFallback: false }),
+  mistakeBook: Object.freeze({ enabled: true, relatedCount: 3 }),
+  cardSource: Object.freeze({ enabled: true }),
 });
 
 let snapshot = DEFAULT_FEATURE_FLAGS;
@@ -47,6 +54,9 @@ function snapshotsEqual(left: FeatureFlags, right: FeatureFlags): boolean {
     && left.paywall.hidden === right.paywall.hidden
     && left.ceremony.seamOfLight === right.ceremony.seamOfLight
     && left.ceremony.forceFallback === right.ceremony.forceFallback
+    && left.mistakeBook.enabled === right.mistakeBook.enabled
+    && left.mistakeBook.relatedCount === right.mistakeBook.relatedCount
+    && left.cardSource.enabled === right.cardSource.enabled
   );
 }
 
@@ -69,8 +79,13 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
   const mcq = isRecord(remoteMcq) ? remoteMcq : undefined;
   const paywall = isRecord(remotePaywall) ? remotePaywall : undefined;
   const ceremony = isRecord(remoteCeremony) ? remoteCeremony : undefined;
+  const remoteMistakeBook = features?.mistakeBook;
+  const mistakeBook = isRecord(remoteMistakeBook) ? remoteMistakeBook : undefined;
+  const remoteCardSource = features?.cardSource;
+  const cardSource = isRecord(remoteCardSource) ? remoteCardSource : undefined;
 
   const maxPerRun = mcq?.maxPerRun;
+  const relatedCount = mistakeBook?.relatedCount;
   const nextSnapshot: FeatureFlags = Object.freeze({
     mcq: Object.freeze({
       enabled:
@@ -105,6 +120,25 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
         typeof ceremony?.forceFallback === 'boolean'
           ? ceremony.forceFallback
           : DEFAULT_FEATURE_FLAGS.ceremony.forceFallback,
+    }),
+    mistakeBook: Object.freeze({
+      enabled:
+        typeof mistakeBook?.enabled === 'boolean'
+          ? mistakeBook.enabled
+          : DEFAULT_FEATURE_FLAGS.mistakeBook.enabled,
+      relatedCount:
+        typeof relatedCount === 'number'
+          && Number.isInteger(relatedCount)
+          && relatedCount >= 0
+          && relatedCount <= 5
+          ? relatedCount
+          : DEFAULT_FEATURE_FLAGS.mistakeBook.relatedCount,
+    }),
+    cardSource: Object.freeze({
+      enabled:
+        typeof cardSource?.enabled === 'boolean'
+          ? cardSource.enabled
+          : DEFAULT_FEATURE_FLAGS.cardSource.enabled,
     }),
   });
 

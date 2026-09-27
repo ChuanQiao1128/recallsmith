@@ -1,0 +1,300 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+
+import type { RootStackParamList } from '../navigation/types';
+import type { CardExport, DeckExport } from '../types/deckExport';
+import { getCachedDeck } from '../content/deckCache';
+import { loadDeckProgress } from '../review/storage';
+import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
+import {
+  activeMistakes,
+  loadMistakeBook,
+  MISTAKE_WINDOW_DAYS,
+  type MistakeEntry,
+} from '../features/gacha/mistakes/mistakeBook';
+import { pickRelatedCards, RELATED_REVIEW_COUNT } from '../features/gacha/mistakes/relatedReview';
+import { useFeatureFlags } from '../config/featureFlags';
+import { colors } from '../theme/colors';
+import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
+import { spacing } from '../theme/spacing';
+import { typography } from '../theme/typography';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'MistakeBook'>;
+
+/** Mistakes handed to a focus run, newest first; related cards come after them. */
+const FOCUS_MISTAKE_LIMIT = 10;
+const DAY_MS = 86_400_000;
+
+type MistakeRow = { entry: MistakeEntry; card: CardExport };
+type DeckGroup = { deck: DeckExport; rows: MistakeRow[] };
+
+/** Relative "last wrong" label. Every entry has a real timestamp, so it never reads as a dash. */
+export function formatLastWrong(lastWrongAt: number, now: number): string {
+  const days = Math.floor(Math.max(0, now - lastWrongAt) / DAY_MS);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  return `${days} days ago`;
+}
+
+/** Groups active mistakes per deck, decks ordered by their newest mistake (the input is newest first). */
+async function loadGroups(slug: string | undefined): Promise<DeckGroup[]> {
+  const book = await loadMistakeBook();
+  const mistakes = activeMistakes(book, { deckSlug: slug, now: Date.now() });
+  const bySlug = new Map<string, MistakeEntry[]>();
+  for (const entry of mistakes) {
+    const list = bySlug.get(entry.deckSlug);
+    if (list) list.push(entry);
+    else bySlug.set(entry.deckSlug, [entry]);
+  }
+  const groups: DeckGroup[] = [];
+  for (const [deckSlug, entries] of bySlug) {
+    let deck: DeckExport | null = null;
+    try {
+      deck = await getCachedDeck(deckSlug);
+    } catch {
+      deck = null;
+    }
+    if (!deck) continue;
+    const cardMap = new Map((deck.Cards ?? []).map((card) => [card.StableUid, card]));
+    const rows: MistakeRow[] = [];
+    for (const entry of entries) {
+      const card = cardMap.get(entry.stableUid);
+      if (card) rows.push({ entry, card });
+    }
+    if (rows.length > 0) groups.push({ deck, rows });
+  }
+  return groups;
+}
+
+export function MistakeBookScreen({ navigation, route }: Props) {
+  const slug = route.params?.slug;
+  const flags = useFeatureFlags();
+  const relatedCount = flags.mistakeBook?.relatedCount ?? RELATED_REVIEW_COUNT;
+  const [groups, setGroups] = useState<DeckGroup[] | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [starting, setStarting] = useState<string | null>(null);
+
+  // Load at mount and again on every focus: a focus run that clears mistakes returns here.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      let next: DeckGroup[];
+      try {
+        next = await loadGroups(slug);
+      } catch {
+        next = [];
+      }
+      if (cancelled) return;
+      setNow(Date.now());
+      setGroups(next);
+    };
+    void load();
+    const unsubscribe = navigation.addListener?.('focus', () => {
+      void load();
+    });
+    return () => {
+      cancelled = true;
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [navigation, slug]);
+
+  const startFocus = useCallback(
+    async (group: DeckGroup) => {
+      if (starting) return;
+      setStarting(group.deck.Slug);
+      const deck = group.deck;
+      const deckMistakes = group.rows.map((row) => row.entry);
+      const mistakeUids = deckMistakes.map((entry) => entry.stableUid).slice(0, FOCUS_MISTAKE_LIMIT);
+      let related: string[] = [];
+      try {
+        const progress = await loadDeckProgress(deck);
+        const ownedSet = await resolveEffectiveOwned(deck.Slug, progress);
+        related = pickRelatedCards({
+          deck,
+          progress,
+          ownedSet,
+          mistakes: deckMistakes,
+          now: new Date(),
+          count: relatedCount,
+        });
+      } catch {
+        // Progress or ownership unreadable: review the mistakes alone.
+        related = [];
+      }
+      setStarting(null);
+      navigation.navigate('SessionCard', { slug: deck.Slug, focusUids: [...mistakeUids, ...related] });
+    },
+    [navigation, relatedCount, starting],
+  );
+
+  const reviewLabel = relatedCount > 0 ? `Review mistakes + ${relatedCount} related` : 'Review mistakes';
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <LinearGradient colors={[colors.softCream, colors.softPeach, colors.softLavender]} style={styles.gradient}>
+        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+          <View style={styles.topBar}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+              testID="mistake-book-back"
+              style={({ pressed }) => [styles.backChip, pressed && styles.pressed]}
+              onPress={() => navigation.goBack()}
+            >
+              <Text style={styles.backChipText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>← Back</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.title} accessibilityRole="header">Mistake Book</Text>
+          <Text style={styles.subtitle}>
+            {`Cards you missed in the last ${MISTAKE_WINDOW_DAYS} days. Two correct answers in a row clear a card.`}
+          </Text>
+
+          {groups === null ? (
+            <View testID="mistake-book-loading">
+              <View style={styles.skeletonRow} />
+              <View style={styles.skeletonRow} />
+            </View>
+          ) : groups.length === 0 ? (
+            <View testID="mistake-book-empty" style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>No mistakes to review</Text>
+              <Text style={styles.emptyBody}>
+                Cards you rate Again or miss in a multiple-choice question show up here.
+              </Text>
+            </View>
+          ) : (
+            groups.map((group) => (
+              <View key={group.deck.Slug} testID={`mistake-deck-${group.deck.Slug}`} style={styles.deckSection}>
+                <Text style={styles.deckTitle}>{group.deck.Title}</Text>
+                <View style={styles.card}>
+                  {group.rows.map(({ entry, card }) => (
+                    <Pressable
+                      key={entry.stableUid}
+                      testID={`mistake-row-${entry.stableUid}`}
+                      accessibilityRole="button"
+                      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                      onPress={() => navigation.navigate('CardDetail', { cardId: entry.stableUid })}
+                    >
+                      <Text style={styles.rowQuestion} numberOfLines={2}>
+                        {card.Question}
+                      </Text>
+                      <View style={styles.rowMeta}>
+                        {entry.topic ? <Text style={styles.rowTopic}>{entry.topic}</Text> : null}
+                        <Text style={styles.rowMetaText}>{`Wrong ×${entry.wrongCount}`}</Text>
+                        <Text style={styles.rowMetaText}>{`Last wrong ${formatLastWrong(entry.lastWrongAt, now)}`}</Text>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+                <Pressable
+                  testID={`mistake-review-${group.deck.Slug}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: starting !== null }}
+                  style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}
+                  onPress={() => {
+                    void startFocus(group);
+                  }}
+                >
+                  <Text style={styles.primaryActionText}>{reviewLabel}</Text>
+                </Pressable>
+              </View>
+            ))
+          )}
+        </ScrollView>
+      </LinearGradient>
+    </SafeAreaView>
+  );
+}
+
+export default MistakeBookScreen;
+
+const cardShadow = {
+  shadowColor: colors.shadowSoft,
+  shadowOpacity: 1,
+  shadowRadius: 6,
+  shadowOffset: { width: 0, height: 2 },
+  elevation: 2,
+} as const;
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: colors.softCream },
+  gradient: { flex: 1 },
+  container: { paddingHorizontal: spacing.screenPadding, paddingTop: spacing.sm, paddingBottom: spacing.xl },
+  pressed: { opacity: 0.85 },
+  topBar: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
+  backChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    ...cardShadow,
+  },
+  backChipText: { color: colors.inkSoft, fontWeight: '900', fontSize: typography.bodySmall },
+  title: { color: colors.inkSoft, fontSize: typography.title1, fontWeight: '900', marginBottom: spacing.xs },
+  subtitle: {
+    color: colors.inkMuted,
+    fontSize: typography.bodySmall,
+    lineHeight: 19,
+    fontWeight: '600',
+    marginBottom: spacing.md,
+  },
+  skeletonRow: {
+    height: 64,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    marginBottom: spacing.sm,
+  },
+  emptyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: spacing.lg,
+    marginTop: spacing.sm,
+    ...cardShadow,
+  },
+  emptyTitle: { color: colors.inkSoft, fontSize: typography.title3, fontWeight: '900', marginBottom: spacing.sm },
+  emptyBody: { color: colors.inkMuted, fontSize: typography.body, lineHeight: 22, fontWeight: '600' },
+  deckSection: { marginBottom: spacing.lg },
+  deckTitle: {
+    color: colors.inkSoft,
+    fontSize: typography.title3,
+    fontWeight: '900',
+    marginBottom: spacing.sm,
+  },
+  card: { backgroundColor: '#FFFFFF', borderRadius: 14, marginBottom: spacing.sm, ...cardShadow },
+  row: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.hairline,
+  },
+  rowQuestion: { color: colors.inkSoft, fontSize: typography.body, lineHeight: 21, fontWeight: '800' },
+  rowMeta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 6, gap: 8 },
+  rowTopic: {
+    color: colors.pokeBlueDeep,
+    fontSize: typography.caption,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlueFaint,
+    overflow: 'hidden',
+  },
+  rowMetaText: { color: colors.inkMuted, fontSize: typography.caption, fontWeight: '800' },
+  primaryAction: {
+    minHeight: 52,
+    borderRadius: 999,
+    backgroundColor: colors.pokeBlue,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    shadowColor: 'rgba(44,156,192,0.5)',
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  primaryActionText: { color: '#FFFFFF', fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+});

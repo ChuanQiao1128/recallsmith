@@ -27,6 +27,8 @@ export type RootStackParamList = {
   // highlight card #1.
   Library: { focusSlug?: string; scrollToNew?: boolean; highlightUids?: string[] } | undefined;
   CardDetail: { cardId: string };
+  // K02: slug narrows the book to one deck; absent lists every deck.
+  MistakeBook: { slug?: string } | undefined;
   More: undefined;
   Profile: undefined;
   HelpFAQ: undefined;
@@ -116,6 +118,8 @@ export type RootStackParamList = {
     mode?: StudyMode;
     limit?: number;
     previewLimit?: number;
+    /** K02 focus run: these cards, in this order, due state ignored (sanitised on read). */
+    focusUids?: string[];
   };
 
   Draw: {
