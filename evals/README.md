@@ -5,9 +5,13 @@ reviewer before the gate is switched on. Contract §7.9 step 3 requires a commit
 with overall **recall ≥ 0.80** and **precision ≥ 0.70** on serious (blocker/major) defects before
 `AI_QA_ENABLED=1` is set anywhere. Since X04 the gate also bounds the control false-positive rate,
 sets a per-class recall floor and refuses incomplete, errored or non-production runs. Since Y05
-it is measured on `seeded-v3` (no surface cues, adjudicated judgment classes), needs at least two
-repetitions and the 95% interval bounds, and binds the run to the configuration that ships
-(provider, model, prompt version, effort, structured-output mode); see [Gate](#gate).
+it is measured on `seeded-v3` (no length or artifact cues the cue check measures; judgment classes
+built from constructions), needs at least two repetitions and the 95% interval bounds, and binds
+the run to the configuration that ships (provider, model, prompt version, effort,
+structured-output mode); see [Gate](#gate). Since Z04 every interval and the class minimum count
+distinct cards, not items pooled over repetitions, and the judgment-class labels carry their
+provenance: they are model-assisted and self-evidenced (see
+[Label provenance](#label-provenance-of-the-judgment-classes)).
 
 The harness does not re-implement the reviewer. It depends on `services/ai-qa` through a uv path
 source and calls `ai_qa.review.review_card` directly, so the prompt (`ai_qa.prompts.SYSTEM_PROMPT`,
@@ -159,7 +163,9 @@ templates `data/mutations-v3.json`): the v2 procedure (cited cards only, per-tie
   reviewer note. Report the tiers separately (`perTier`).
 - **Adjudicated judgment classes.** `multiple_correct`, `ambiguous_stem` and
   `qualifier_mismatch` come from `constructions` committed in `mutations-v3.json`, one per card,
-  each reviewed by hand (the review rejected constructions whose viability was doubtful). The
+  each reviewed in the Y05 session (the review rejected constructions whose viability was
+  doubtful). That review was model-assisted; no independent human has reviewed them yet (see
+  [Label provenance](#label-provenance-of-the-judgment-classes)). The
   seed picks the class count from them at random; a card named by a construction is used by no
   other class. They are valid by construction:
   - `ambiguous_stem`: the stem loses the stated constraint (or the qualifier) that a distractor's
@@ -204,6 +210,42 @@ templates `data/mutations-v3.json`): the v2 procedure (cited cards only, per-tie
   within the bands (artifacts 0.4-0.6 per class; lengths 0.38-0.62 pooled, 0.15-0.85 per class,
   since which cards a rule can apply to changes lengths too), and
   `test_cue_check_catches_the_v2_artifacts` shows the same check flags v2.
+  The check has no feature for the self-evidence cue below (a why that still cites what the stem
+  no longer states), which every `ambiguous_stem` and `qualifier_mismatch` row carries, so "no
+  surface cues" means no cue among the features above.
+
+### Label provenance of the judgment classes
+
+Z04 (ai-agent-27). The current `ambiguous_stem` and `qualifier_mismatch` rows are
+**self-evidenced**: by construction (`mutations.apply_constructed_ambiguous_stem` and
+`apply_constructed_qualifier_mismatch` refuse anything else) the viable option's `why`, or the
+explanation, still states the criterion that makes that option viable, for example s-0019's
+option-b why still says "the question asks for the smallest change" after the stem lost that
+requirement. The reviewer prompt names exactly that inconsistency as a sign, so recall on these
+rows shows that the reviewer applies that rule. It does not show that it finds ambiguity no why
+points to. Their labels, and those of `multiple_correct`, are **model-assisted**: the Y05 session
+wrote and adjudicated the constructions, and no independent human has reviewed them (s-0147, where
+option b keeps public IPs behind an ALB-only security group against a stem that says users must
+"never" reach the instances directly, is debatable).
+
+- `src/dc_evals/labels.py` derives each judgment-class row's provenance from the committed
+  dataset: `evidence` is `self-evidenced` when `rationale.evidence.text` is still in the field it
+  quotes, else `why-neutral`; `humanVerdict` comes from the adjudication file.
+- `data/adjudications-v3.json` is the owner's adjudication file (format in `labels.py`): the
+  dataset name and sha256, `labelSource` (`model-assisted`) and a list of verdicts
+  `{id, verdict: "valid" | "invalid", adjudicator, date, note}`. It is committed with no verdicts.
+  Adjudicate at least 5 rows per judgment class, stratified by deck and by run outcome (caught in
+  both repetitions, missed in any), and add them there; `dc-evals score --adjudications <file>`
+  scores with a draft file.
+- The scorer drops a row judged `invalid` from every recall figure and from its class's card
+  count (so the class falls under the 15-card minimum and needs a new dataset version with a
+  replacement row) and lists it in `labels.excludedRows`. The report's `labels` block and the
+  Markdown "Label provenance" section give, per class, the rows, how many are self-evidenced or
+  why-neutral, the human verdicts, and recall per evidence tier.
+- A **why-neutral** tier (the evidencing why rewritten to reject the option on a requirement the
+  stem still states, or a card whose whys never mention the removed criterion) is reported
+  separately and must reach the per-class floor on its own. seeded-v3 has no such row; building
+  them needs new hand-reviewed constructions and therefore a new dataset version.
 
 ### Regeneration
 
@@ -228,7 +270,7 @@ uv run --python 3.12 dc-evals export-sources [--check]
 uv run --python 3.12 dc-evals seed [--dataset v1|v2|v3] [--check]
 uv run --python 3.12 dc-evals run --provider bedrock|anthropic|claude-cli --model <id> [--dataset v3|v2|v1] \
     [--reps 2] [--limit N] [--concurrency 4] [--max-cost-usd 30] [--review-date YYYY-MM-DD] [--dry-run] --out reports/
-uv run --python 3.12 dc-evals score reports/<stem>.jsonl [--gate]
+uv run --python 3.12 dc-evals score reports/<stem>.jsonl [--gate] [--adjudications data/adjudications-v3.json]
 ```
 
 - `dc-evals run` **spends money and is run by the owner only**: never in CI, a verify or a
@@ -265,6 +307,13 @@ uv run --python 3.12 dc-evals score reports/<stem>.jsonl [--gate]
   message quoting the rejected reply. Use it to measure the prompt before Bedrock model access
   exists; its report is labelled `claude-cli` and `evidenceClass: "proxy"` and never replaces the
   Bedrock run the rollout below requires. `src/dc_evals/claude_cli.py`; tests fake the subprocess.
+  Z04 (ai-agent-30): the request's `max_tokens` reaches the CLI as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+  (`thinking` is not sent; effort is), and a CLI result whose `stop_reason` is `max_tokens` or
+  `refusal` is recorded as `MAX_TOKENS` / `REFUSAL` exactly as on Bedrock. A result without a
+  stop reason reads as `end_turn`, and the run file does not say which results carried one, so a
+  proxy run cannot show that no card is truncated or refused; its report says so
+  (`proxyFidelity`, and a "Proxy fidelity" line in the Markdown). A CLI error result is recorded
+  as `CLI_<SUBTYPE>` (e.g. `CLI_ERROR_MAX_TURNS`), not `UNEXPECTED`.
 
 Rollout (contract §7.9 step 3): dry run, then the run of the shipping configuration,
 
@@ -276,7 +325,10 @@ uv run --python 3.12 dc-evals score reports/<stem>.jsonl --gate    # must exit 0
 then commit the `.jsonl` + `.json` + `.md` files. Only after that may `AI_QA_ENABLED` be switched
 on. As of 2026-09-27 no such run exists: the prompt that ships (`qa-v3`) has only proxy
 (`claude-cli`) runs on `seeded-v1`, which fail the gate on substance too (see
-`reports/tuning-2026-09-27/README.md`), so qa-v3 has **not** passed the gate.
+`reports/tuning-2026-09-27/README.md`), so qa-v3 has **not** passed the gate. The Bedrock gate run
+is also where the `MAX_TOKENS` and `REFUSAL` rates (`errors`) are checked: the proxy cannot
+observe them reliably (ai-agent-30), and at `MAX_TOKENS` = 16000 with effort `high` a truncation
+has only been ruled out for Bedrock once that run exists.
 
 ## Gate
 
@@ -288,12 +340,13 @@ All thresholds are constants in one block at the top of `src/dc_evals/score.py`;
 | provider is `bedrock` or `anthropic` | `GATE_PROVIDERS` | `claude-cli` is proxy evidence (`evidenceClass: "proxy"`) and never satisfies the gate by itself |
 | provider, model, `promptVersion`, `effort` and `structuredOutputsAtStart` equal the shipping configuration | `SHIPPING_ENV_PATH` | the run must measure what ships: `services/ai-qa/env/prod.env.json` (read through `ai_qa.settings.load_settings`, the mode resolved by `ai_qa.providers.structured_outputs_on`) and the current `ai_qa.prompts.PROMPT_VERSION`; today Bedrock, `anthropic.claude-opus-5`, `qa-v3`, effort `high`, structured outputs off. An `--provider anthropic` run resolves structured outputs to on and measures a different request and repair path |
 | dataset is `seeded-v3` and the header's `datasetSha256` equals the committed file's | `GATE_DATASET` | the numbers belong to the committed dataset |
-| at least 2 repetitions | `MIN_GATE_REPS` | one repetition of a 15-row class decides its floor by noise |
+| at least 2 repetitions | `MIN_GATE_REPS` | one repetition of a 15-row class decides its floor by noise; a second one adds precision as far as the two reviews of a card disagree |
 | `n` = dataset rows × `reps` | – | a `--limit` or cost-ceiling run is not evidence |
-| overall recall ≥ 0.80 and its 95% Wilson lower bound ≥ 0.75 | `RECALL_GATE`, `RECALL_CI_LOWER_GATE` | contract §12.1; the bound keeps a small or lucky sample from passing (at 226 pooled defects it needs recall ≥ 0.8097) |
+| overall recall ≥ 0.80 and its card-clustered 95% lower bound ≥ 0.75 | `RECALL_GATE`, `RECALL_CI_LOWER_GATE` | contract §12.1; the bound keeps a small or lucky sample from passing (on 113 defective cards reviewed twice it needs recall ≥ 0.8097 when the two repetitions miss different cards and ≥ 0.8319 when they miss the same ones) |
 | overall precision ≥ 0.70 | `PRECISION_GATE` | contract §12.1 (at the dataset's 50% prevalence) |
-| control false-positive rate ≤ 0.10 and its 95% Wilson upper bound ≤ 0.15 | `CONTROL_FPR_GATE`, `CONTROL_FPR_CI_UPPER_GATE` | prevalence-independent bound on false alarms |
-| every class the dataset seeds has ≥ 30 items pooled over repetitions and recall ≥ 0.60 on them | `MIN_CLASS_ITEMS`, `PER_CLASS_RECALL_FLOOR` | easy classes cannot hide a weak judgment class, and a class is judged on enough items |
+| control false-positive rate ≤ 0.10 and its card-clustered 95% upper bound ≤ 0.15 | `CONTROL_FPR_GATE`, `CONTROL_FPR_CI_UPPER_GATE` | prevalence-independent bound on false alarms (the same 9 of 113 controls flagged in both repetitions, 0.0796, is the most that passes) |
+| every class the dataset seeds has ≥ 15 distinct cards and recall ≥ 0.60 on its items pooled over repetitions | `MIN_CLASS_CARDS`, `PER_CLASS_RECALL_FLOOR` | easy classes cannot hide a weak judgment class, and a class is judged on enough cards (a card reviewed twice is one card; Z04 replaced the 30-pooled-item minimum `MIN_CLASS_ITEMS`) |
+| every judgment class's why-neutral tier, when the dataset has one, reaches recall ≥ 0.60 on its own | `PER_CLASS_RECALL_FLOOR` | self-evidenced rows cannot carry the rows no why points to ([Label provenance](#label-provenance-of-the-judgment-classes)) |
 | unscored (errored/refused/skipped) controls ≤ 2% of controls | `CONTROL_UNSCORED_RATE_GATE` | a failing harness must not look precise |
 | every scored item has a verified `servedModel` | – | findings must come from the requested model |
 
@@ -307,8 +360,17 @@ same card are correlated, so these are optimistic; three repetitions (`--reps 3`
 further. For the control FP rate, a reviewer with true FPR 0.07 exceeds 0.10 on 226 pooled
 controls about 5% of the time.
 
-Reported for information: 95% Wilson intervals for overall recall, every class's recall, every
-tier's recall and the control FP rate, and `precisionAtPrevalence`: the precision the same
+**Unit of analysis (Z04, ai-agent-28).** Point estimates (recall, precision, FP rate, per class
+and per tier) pool every repetition. Every 95% interval treats the repetitions of a card as one
+cluster (`score.clustered_wilson_ci`): the cluster-robust variance of the pooled rate over cards
+gives a design effect, and the Wilson interval uses the effective sample size pooled items /
+design effect, kept between the number of distinct cards (the reviews of every card agree) and
+the pooled items (they disagree as often as independent reviews would). A rate of 0 or 1 uses the
+distinct cards. The class minimum counts distinct cards. The report's `unitOfAnalysis` says so
+and gives the card counts; the Markdown summary has a "Unit of analysis" line.
+
+Reported for information: card-clustered 95% Wilson intervals for overall recall, every class's
+recall, every tier's recall and the control FP rate, and `precisionAtPrevalence`: the precision the same
 reviewer would have at a 10% defect prevalence (`PRODUCTION_PREVALENCE`),
 `R·π / (R·π + FPR·(1−π))`.
 
@@ -341,14 +403,18 @@ reviewer would have at a 10% defect prevalence (`PRODUCTION_PREVALENCE`),
   Markdown summary also shows how many defective rows were flagged under a wrong category.
 - Constants: see [Gate](#gate) and `ACCEPTED_CATEGORIES`.
 
-Report JSON (`v: 2`; X04 and Y05 added keys, every §12.1 key keeps its meaning): `v, runId,
+Report JSON (`v: 2`; X04, Y05 and Z04 added keys, every §12.1 key keeps its meaning): `v, runId,
 startedAt, provider, model, promptVersion, dataset, datasetSha256, reps, reviewDate, effort,
 structuredOutputs, structuredOutputsAtStart, evidenceClass ("rollout" | "proxy"), n, estimatedCostUsd, perClass{<class>: tp, fn, recall, recallCi95},
 overall{tp, fp, fn, recall, precision, f1, controlFalsePositiveRate, recallCi95,
 controlFalsePositiveRateCi95, precisionAtPrevalence{prevalence, precision}},
 unscored{defective, controls, controlUnscoredRate}, perTier{<tier>: tp, fn, recall, recallCi95},
 perRep[{rep, recall, controlFalsePositiveRate}], servedModel{unverified}, structuredItems{on, off},
-latencyMs{p50, p95}, errors{<code>: n}, gate{thresholds, expected{datasetSha256, rows, shipping{provider,
+latencyMs{p50, p95}, errors{<code>: n}, unitOfAnalysis{unit, interval, pointEstimates, classMinimum,
+cards{defective, scoredControls, perClass{<class>: n}}}, labels (null unless the dataset has an
+adjudication file){source, note, adjudicationFile, perClass{<class>: rows, selfEvidenced, whyNeutral,
+humanValid, humanInvalid, unadjudicated}, perEvidence{<class>: {self-evidenced, why-neutral: tp, fn,
+recall, recallCi95}}, excludedRows[]}, proxyFidelity (null unless claude-cli){outcomes[], note}, gate{thresholds, expected{datasetSha256, rows, shipping{provider,
 model, promptVersion, effort, structuredOutputsAtStart}}, passes, failures[]}`. `perClass` lists the classes the run's dataset seeds (six for v1, seven for v2 and v3).
 
 ## Versioning
