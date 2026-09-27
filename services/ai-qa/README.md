@@ -83,6 +83,9 @@ Committed in `env/prod.env.json` (overlaid by the deploy script; no secret value
 | `METRICS_NAMESPACE` | `DeveloperCards` | EMF namespace |
 | `AI_PRICE_INPUT_PER_MTOK` / `AI_PRICE_OUTPUT_PER_MTOK` | `5` / `25` | USD per million tokens for the cost estimate |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `AI_QA_AUTOMATION_PROVIDER` | empty = unset | the automation reviewer's provider (see "Automation profile (R18A)"); committed as `bedrock-converse` |
+| `AI_QA_AUTOMATION_MODEL` | provider default; required for `bedrock-converse` | the automation reviewer's model id (same rules as `AI_MODEL`); committed as `global.openai.gpt-5.5` |
+| `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK` / `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` | unset | USD per million tokens for the automation reviewer's estimate; not committed yet (prices pending), so the automation profile answers `CONFIG` |
 | `AI_QA_MAX_RECEIVES` | `2` | optional, not in `env/prod.env.json`: the ai-qa queue's `maxReceiveCount`; the receive on which a retryable error ends the chunk (below). Invalid or < 1 = default |
 
 `AI_QA_REQUIRED`, `AI_QA_MAX_CARDS`, `AI_QA_DAILY_USD_CAP` and `AI_QA_QUEUE_URL` belong to core-vpc
@@ -273,8 +276,9 @@ stop").
 ## Other models (Bedrock Converse) and the second opinion
 
 Cards are authored by Claude, and a Claude reviewer shares its blind spots. Two optional switches
-let a model from another vendor review them. **Both are off**: `env/prod.env.json` is unchanged
-(`AI_PROVIDER=bedrock`, no `AI_QA_SECOND_*` key), so production behaviour is exactly as above.
+let a model from another vendor review them. **Both are off**: `env/prod.env.json` keeps
+`AI_PROVIDER=bedrock` and has no `AI_QA_SECOND_*` key, so production behaviour is exactly as above
+(the separate automation reviewer is described in "Automation profile (R18A)").
 
 **Provider `bedrock-converse`** (`src/ai_qa/converse_client.py`). `ConverseClient` offers the same
 `messages.create(...)` / `with_options(...)` as the anthropic clients, and each call is one
@@ -353,6 +357,77 @@ The Anthropic SDK mappings above are unchanged.
   `bedrock:InvokeModel` on the chosen model / inference profile. That grant is an infra change
   outside this service; without it the calls fail with `AccessDeniedException` →
   `PROVIDER_ACCESS_DENIED`.
+
+## Automation profile (R18A)
+
+The automation flow (contract A00 §4, §9) has core-vpc send each draft card to the same queue as
+**one draft per message**, and source re-check chunks with the automation reviewer. Two optional
+message keys select this (`src/ai_qa/profiles.py`):
+
+| Key | Values | Absent means |
+|---|---|---|
+| `target` | `card` \| `draft` | `card` (the human QA path; in a `draft` message `cards[].cardId` is the draft id, only echoed) |
+| `profile` | `default` \| `automation` | `default` (the configured `AI_PROVIDER` / `AI_MODEL` reviewer) |
+
+Any other value (`null`, a number, `"deck"`, `"fast"`, …) makes the message a bad message: logged
+`bad_message`, acked, no report, no model call. This Lambda never reads `AUTOMATION_MODE` and
+decides nothing about drafts: it reviews and reports; core decides.
+
+**Report keys.** The results report adds `"target": "draft"` only when the target is `draft`, and
+`"profile": "automation"` only when the profile is `automation`. A human run's report therefore
+keeps exactly the seven keys `v`, `runId`, `chunk`, `provider`, `model`, `promptVersion`, `items`
+(pinned by `tests/test_handler.py`, `test_results_body_matches_contract`) and stays byte-identical.
+Core treats an absent `target` as the card path, so this is wire-compatible. A source re-check
+chunk (`profile` only) reports `"profile": "automation"` and no `target`. `provider` / `model` are
+the reviewer actually used.
+
+| Var | Default | Meaning |
+|---|---|---|
+| `AI_QA_AUTOMATION_PROVIDER` | empty = unset | `bedrock-converse` \| `bedrock` \| `anthropic`; anything else is `CONFIG` at load time |
+| `AI_QA_AUTOMATION_MODEL` | provider default; required for `bedrock-converse` | same prefix rules as `AI_MODEL` (no `anthropic.` id for `bedrock-converse`) |
+| `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK` | unset | USD per million input tokens for the automation estimate |
+| `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` | unset | USD per million output tokens for the automation estimate |
+
+With `AI_QA_AUTOMATION_PROVIDER` empty the other three keys are ignored. An invalid provider,
+model or price is a load-time `ConfigError` (every message answers `CONFIG`, as for any invalid
+setting); an **absent** automation price never fails loading, so human runs and the evals (which
+load `env/prod.env.json`) are unaffected.
+
+**`settings_for(cfg, profile)`** derives the reviewer for one message: `default` returns the loaded
+settings unchanged; `automation` returns them with the automation provider, model and both prices,
+and the second reviewer switched off. It raises `ConfigError` (logged `profile_config_invalid` with
+`runId`, `chunk`, `profile` and the key names; every card reported `error` / `CONFIG`, no model
+call, message acked) when:
+
+- `AI_QA_AUTOMATION_PROVIDER` or `AI_QA_AUTOMATION_MODEL` is unset;
+- either `AI_QA_AUTOMATION_PRICE_*` key is unset: a zero estimate would disable the daily USD cap
+  (`AI_QA_DAILY_USD_CAP`, enforced by core from the reported estimates) for drafts;
+- the profile is not `default` or `automation`.
+
+In that case the report's `provider` / `model` are the automation keys' values (or `unset`), never
+the default Claude reviewer's names, which would mislabel the draft decision. The order of outcomes
+is unchanged: invalid settings ⇒ `CONFIG`; `AI_QA_ENABLED` off ⇒ every card `skipped` / `DISABLED`
+(for every profile); then the profile check; then the client.
+
+**Second opinion.** Never for the automation profile: `settings_for` clears the second reviewer and
+the handler runs it only for `default`. A default message on the same Lambda still gets it when
+`AI_QA_SECOND_*` is set.
+
+**Why GPT-5.5.** The drafts are authored by Claude; a reviewer from another vendor does not share
+its blind spots (owner decision 4), so the committed reviewer is `bedrock-converse` /
+`global.openai.gpt-5.5` with no second opinion. Its findings route a draft to a human; core decides
+(A00 §5.4).
+
+**Pricing: pending.** `global.openai.gpt-5.5` has no entry in the AWS Price List for Amazon
+Bedrock (read-only check on 2026-09-27: the `AmazonBedrock` service lists only `gpt-oss-*` OpenAI
+models; GPT-5.5 is sold through AWS Marketplace), so no published on-demand `ap-southeast-2` price
+could be confirmed and both `AI_QA_AUTOMATION_PRICE_*` keys are left out of `env/prod.env.json`.
+The supervisor adds both keys before draft QA is enabled (A00 §19.3 step 11). Until then every
+automation-profile message answers `CONFIG`, and core routes the draft `human` / `QA_ERROR`.
+
+**IAM.** Nothing new: the ai-qa role already holds the Converse grant for `global.openai.gpt-5.5`
+(Q02, `infra/modules/identity/roles_r18.tf`). No new SSM parameter, dependency or metric; EMF item
+metrics carry the provider actually used.
 
 ## Local development
 

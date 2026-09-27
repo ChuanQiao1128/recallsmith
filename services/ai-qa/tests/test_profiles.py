@@ -249,7 +249,7 @@ def test_draft_report_carries_target_and_profile_and_the_automation_reviewer(set
 
 
 def test_automation_profile_never_runs_the_second_opinion(setup, monkeypatch) -> None:
-    core, clients, made = setup
+    core, clients, _ = setup
     set_env(monkeypatch, {**AUTOMATION_ENV, **SECOND_ENV, "AI_QA_ENABLED": "1"})
     clients["bedrock-converse"].script = [reply(review_json()), reply(review_json())]
     handler.lambda_handler(event(message([draft_card(), card(1)], target="draft", profile="automation")), None)
@@ -284,7 +284,7 @@ def test_automation_profile_missing_price_reports_config_for_every_card(setup, m
 
 
 def test_default_profile_report_has_no_target_or_profile_key(setup, monkeypatch) -> None:
-    core, clients, made = setup
+    core, clients, _ = setup
     set_env(monkeypatch, {**AUTOMATION_ENV, "AI_QA_ENABLED": "1"})
     clients["bedrock"].script = [reply(review_json()), reply(review_json())]
     handler.lambda_handler(event(message([card(0)]), message([card(1)], target="card", profile="default")), None)
@@ -297,7 +297,7 @@ def test_default_profile_report_has_no_target_or_profile_key(setup, monkeypatch)
 
 
 def test_recheck_message_with_automation_profile_reports_profile_only(setup, monkeypatch) -> None:
-    core, clients, made = setup
+    core, clients, _ = setup
     set_env(monkeypatch, {**AUTOMATION_ENV, "AI_QA_ENABLED": "1"})
     clients["bedrock-converse"].script = [reply(review_json())]
     handler.lambda_handler(event(message([card(0)], profile="automation")), None)
