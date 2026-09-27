@@ -20,6 +20,8 @@ export type LogEvent =
   | 'complete_replayed'
   | 'runner_unavailable'
   | 'usage_limited'
+  | 'runner_held'
+  | 'hold_cleared'
   | 'api_error'
   | 'finish'
   | 'unexpected_error';
