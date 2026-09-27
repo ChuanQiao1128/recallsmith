@@ -227,9 +227,10 @@ the promotion checklist):
 All must hold on the day of step 7; record the numbers in the release notes.
 
 - **Eval gate** (enforced by core; A00 §15.3): the newest gate is passed and unrevoked, for the exact
-  reviewer above: provider, model, prompt version **and effective effort** (rollout step 5, Check). Its thresholds: seeded recall ≥ 0.90 (95 % CI lower bound ≥ 0.85), every class
-  ≥ 0.75, control false-positive rate ≤ 0.20; auto-accept precision ≥ 0.97 (CI lower bound ≥ 0.93) on
-  ≥ 120 distinct would-accept cards; defect escape rate ≤ 0.20; two reps each; a new-facts stratum of
+  reviewer above: provider, model, prompt version **and effective effort** (rollout step 5, Check).
+  Its thresholds: seeded recall ≥ 0.90 (95 % CI lower bound ≥ 0.85), every class ≥ 0.75,
+  control false-positive rate ≤ 0.20; auto-accept precision ≥ 0.97 (CI lower bound ≥ 0.93) on ≥ 120
+  distinct would-accept cards; defect escape rate ≤ 0.20; two reps each; a new-facts stratum of
   ≥ 51 distinct would-accept cards with precision ≥ 0.97 (CI lower bound ≥ 0.93).
 - **Author = the gated author** (R18D M1): the gate's author configuration id equals the `authorConfigId`
   in the runner's current run meta. If the runner's model, skill, prompt or arguments changed since the
