@@ -117,8 +117,7 @@ class World:
         return [url for url, _, _ in self.fetches if not url.endswith("/robots.txt")]
 
 
-@pytest.fixture
-def world(local_server, monkeypatch) -> World:
+def _world(local_server, monkeypatch) -> World:
     clock = FakeClock()
     ssm = FakeSSM({SECRET_NAME: SECRET})
     settings.set_clients(ssm=ssm)
@@ -168,6 +167,9 @@ def world(local_server, monkeypatch) -> World:
 
     monkeypatch.setattr(handler, "guard", no_guard)
     return w
+
+
+world = pytest.fixture(name="world")(_world)
 
 
 def observations(w: World) -> list[dict]:

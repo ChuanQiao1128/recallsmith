@@ -25,8 +25,8 @@ class TestUrlGuard:
         for url in (
             "http://docs.example.com/page",
             "ftp://docs.example.com/page",
-            "https://user:pw@docs.example.com/page",
-            "https://user@docs.example.com/page",
+            "https://user:pw@example.com/page",
+            "https://user@example.com/page",
             "https://localhost/page",
             "https://api.localhost./page",
             "https:///nohost",
