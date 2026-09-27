@@ -11,7 +11,7 @@ import pytest
 from botocore.exceptions import ClientError
 from conftest import fixture_bytes
 
-from source_watcher import handler, settings
+from source_watcher import handler, normalize, settings
 from source_watcher.feeds import feed_hash, parse_rss
 from source_watcher.fetch import FetchResult
 from source_watcher.internal_client import InternalClient
@@ -476,3 +476,61 @@ class TestHandler:
         for line in per_obs:
             assert set(line) == {"level", "tag", "event", "watchRunId", "targetId", "host", "status", "httpStatus", "errorCode", "bytes", "latencyMs"}
             assert line["host"] == "docs.example.com"
+
+
+class TestHostilePages:
+    """C03, cloud-security-resilience-8: one pathological page never stops the run."""
+
+    def test_pathological_page_is_failed_parse_and_the_run_goes_on(self, world, monkeypatch, capsys):
+        n = 280_000 // 7
+        urls = ["https://evil.example.com/p", "https://puny.example.com/p", "https://cap.example.com/p", "https://docs.example.com/ok"]
+        world.pages = {
+            urls[0]: html_ok(("<i>x" * n + "</b>" * n).encode()),
+            urls[1]: FetchResult("ok", http_status=200, body=b'<meta charset="punycode">' + ("café-" * 40_000).encode(),
+                                 media_type="text/html", charset=None, bytes=0, latency_ms=10, requested=True),
+            urls[2]: html_ok(b"<br>" * 45_001),
+            urls[3]: html_ok(b"<main>fine</main>"),
+        }
+        monkeypatch.setattr(normalize, "MAX_ELEMENTS", 45_000)  # page 0 has 40 000 elements
+        world.set_targets([target(i, url) for i, url in enumerate(urls)])
+        started = time.perf_counter()
+        result = handler.lambda_handler(EVENT, Context())
+        assert time.perf_counter() - started < 3.0
+        by_id = {o["targetId"]: o for o in observations(world)}
+        assert (by_id[0]["status"], by_id[0]["errorCode"]) == ("ok", None)  # bounded, so it just parses
+        assert (by_id[1]["status"], by_id[1]["contentSha256"]) == ("ok", sha256_hex(normalize.normalize_html("café-" * 40_000)))
+        assert (by_id[2]["status"], by_id[2]["errorCode"], by_id[2]["contentSha256"]) == ("failed", "PARSE", None)
+        assert by_id[3]["status"] == "ok"
+        assert result["checked"] == 4 and result["failed"] == 1
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+        (limit,) = [line for line in logs if line.get("event") == "parse_limit"]
+        assert (limit["targetId"], limit["host"], limit["limit"]) == (2, "cap.example.com", "element cap")
+
+    def test_target_id_is_logged_before_the_fetch(self, world, capsys):
+        url = "https://docs.example.com/a"
+
+        def crash(url: str, kwargs: dict) -> FetchResult:
+            raise MemoryError("simulated OOM while fetching")
+
+        world.pages = {url: crash}
+        world.set_targets([target(77, url)])
+        with pytest.raises(MemoryError):
+            handler.lambda_handler(EVENT, Context())
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+        (start,) = [line for line in logs if line.get("event") == "observe_start"]
+        assert (start["targetId"], start["host"], start["kind"]) == (77, "docs.example.com", "page")
+
+    def test_full_batches_are_reported_before_the_run_ends(self, world, monkeypatch):
+        """A run killed later (timeout, OOM) has already reported every full batch."""
+        monkeypatch.setattr(handler, "REPORT_BATCH_SIZE", 2)
+        urls = [f"https://h{i}.example.com/p" for i in range(4)]
+        world.pages = {url: html_ok(b"<main>x</main>") for url in urls}
+
+        def killed(url: str, kwargs: dict) -> FetchResult:
+            raise MemoryError("simulated OOM")
+
+        world.pages[urls[3]] = killed
+        world.set_targets([target(i, url) for i, url in enumerate(urls)])
+        with pytest.raises(MemoryError):
+            handler.lambda_handler(EVENT, Context())
+        assert [[o["targetId"] for o in r["observations"]] for r in world.posts(REPORT)] == [[0, 1]]

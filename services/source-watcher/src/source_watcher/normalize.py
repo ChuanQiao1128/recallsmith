@@ -9,6 +9,7 @@ from __future__ import annotations
 import codecs
 import hashlib
 import re
+import time
 import unicodedata
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -32,6 +33,35 @@ BLOCK_ELEMENTS = frozenset(
 META_SNIFF_BYTES = 4096
 DEFAULT_CHARSET = "utf-8"
 
+# Bounds on the work one untrusted page may cost (C03, cloud-security-resilience-8). A page that
+# reaches the element cap or the time budget raises ParseLimitExceeded (the handler reports it
+# failed/PARSE); the depth and end-tag bounds only change the tree of pages no real site serves
+# (more than 512 open elements, or an end tag whose opener is more than 64 open elements up), so
+# the `v1` output of real pages is unchanged.
+MAX_OPEN_DEPTH = 512
+END_TAG_SEARCH_DEPTH = 64
+MAX_ELEMENTS = 200_000
+PARSE_TIME_BUDGET_SECONDS = 20.0
+# Parser callbacks between two clock reads.
+CLOCK_CHECK_INTERVAL = 1024
+
+# The text encodings of the WHATWG Encoding Standard that a page may name, by the canonical name of
+# the Python codec its label resolves to. Any other codec (punycode, idna, rot13, the utf-7 family,
+# raw_unicode_escape, …) decodes as UTF-8: some of those cost quadratic time or raise.
+ALLOWED_CODECS = frozenset(
+    {
+        "utf-8", "utf-16", "utf-16-le", "utf-16-be", "ascii", "mac-roman", "cp866",
+        "iso8859-1", "iso8859-2", "iso8859-3", "iso8859-4", "iso8859-5", "iso8859-6", "iso8859-7",
+        "iso8859-8", "iso8859-10", "iso8859-13", "iso8859-14", "iso8859-15", "iso8859-16",
+        "cp874", "cp1250", "cp1251", "cp1252", "cp1253", "cp1254", "cp1255", "cp1256", "cp1257", "cp1258",
+        "koi8-r", "koi8-u", "shift_jis", "cp932", "euc_jp", "iso2022_jp", "euc_kr", "gb2312", "gbk",
+        "gb18030", "big5",
+    }
+)
+
+# Seam for tests; production uses the monotonic clock.
+clock = time.monotonic
+
 # Matches both <meta charset="x"> and <meta http-equiv="Content-Type" content="text/html; charset=x">.
 _META_CHARSET = re.compile(rb"""<meta\b[^>]*?\bcharset\s*=\s*["']?\s*([A-Za-z0-9._:-]+)""", re.IGNORECASE)
 _WHITESPACE_RUN = re.compile(r"\s+")
@@ -44,43 +74,69 @@ class Element:
     children: list["Element | str"] = field(default_factory=list)
 
 
+class ParseLimitExceeded(Exception):
+    """The page needs more elements or parse time than one page may cost."""
+
+
 class _TreeBuilder(HTMLParser):
     """A minimal, forgiving element tree: void elements never open a scope, an end tag closes the
-    nearest open element with that name, and an unmatched end tag is ignored."""
+    nearest open element with that name among the END_TAG_SEARCH_DEPTH innermost open elements, and
+    an unmatched end tag is ignored. Beyond MAX_OPEN_DEPTH open elements a start tag is appended to
+    the innermost one without opening a scope. Every step is O(1) (bounded search), so the work is
+    linear in the page size; MAX_ELEMENTS and the time budget cap it absolutely."""
 
-    def __init__(self) -> None:
+    def __init__(self, deadline: float) -> None:
         super().__init__(convert_charrefs=True)
         self.root = Element("#document")
         self._stack: list[Element] = [self.root]
+        self._elements = 0
+        self._calls = 0
+        self._deadline = deadline
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def _tick(self) -> None:
+        self._calls += 1
+        if self._calls % CLOCK_CHECK_INTERVAL == 0 and clock() > self._deadline:
+            raise ParseLimitExceeded("time budget")
+
+    def _add(self, tag: str, attrs: list[tuple[str, str | None]]) -> Element:
+        self._tick()
+        self._elements += 1
+        if self._elements > MAX_ELEMENTS:
+            raise ParseLimitExceeded("element cap")
         element = Element(tag)
         # The first occurrence of a repeated attribute wins, as in browsers.
         for name, value in attrs:
             element.attrs.setdefault(name, value or "")
         self._stack[-1].children.append(element)
-        if tag not in VOID_ELEMENTS:
+        return element
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        element = self._add(tag, attrs)
+        if tag not in VOID_ELEMENTS and len(self._stack) <= MAX_OPEN_DEPTH:
             self._stack.append(element)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        element = Element(tag)
-        for name, value in attrs:
-            element.attrs.setdefault(name, value or "")
-        self._stack[-1].children.append(element)
+        self._add(tag, attrs)
 
     def handle_endtag(self, tag: str) -> None:
-        for index in range(len(self._stack) - 1, 0, -1):
+        self._tick()
+        lowest = max(1, len(self._stack) - END_TAG_SEARCH_DEPTH)
+        for index in range(len(self._stack) - 1, lowest - 1, -1):
             if self._stack[index].tag == tag:
                 del self._stack[index:]
                 return
 
     def handle_data(self, data: str) -> None:
+        self._tick()
         self._stack[-1].children.append(data)
 
 
-def parse_document(text: str) -> Element:
-    """The element tree of an HTML document, with the dropped subtrees already removed."""
-    builder = _TreeBuilder()
+def parse_document(text: str, *, budget_seconds: float = PARSE_TIME_BUDGET_SECONDS) -> Element:
+    """The element tree of an HTML document, with the dropped subtrees already removed.
+
+    Raises ParseLimitExceeded when the page has more than MAX_ELEMENTS elements or parsing takes
+    longer than budget_seconds."""
+    builder = _TreeBuilder(clock() + budget_seconds)
     builder.feed(text)
     builder.close()
     _drop_subtrees(builder.root)
@@ -170,15 +226,17 @@ def normalize_text(text: str) -> str:
 
 
 def _known_codec(name: str | None) -> str | None:
+    """The Python codec for a charset label when it is an allowed text encoding, else None."""
     if not name:
         return None
     name = name.strip().strip("\"'").strip()
     if not name:
         return None
     try:
-        return codecs.lookup(name).name
+        codec = codecs.lookup(name).name
     except LookupError:
         return None
+    return codec if codec in ALLOWED_CODECS else None
 
 
 def sniff_meta_charset(body: bytes) -> str | None:
@@ -189,7 +247,8 @@ def sniff_meta_charset(body: bytes) -> str | None:
 def decode_html(body: bytes, charset: str | None) -> str:
     """Charset from the Content-Type parameter, else a <meta> in the first 4096 bytes, else UTF-8.
 
-    An unknown codec name means UTF-8; undecodable bytes become U+FFFD.
+    An unknown or disallowed codec name (not in ALLOWED_CODECS) means UTF-8; undecodable bytes
+    become U+FFFD.
     """
     name = charset if charset and charset.strip() else sniff_meta_charset(body)
     codec = _known_codec(name) or DEFAULT_CHARSET
