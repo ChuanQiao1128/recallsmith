@@ -15,7 +15,7 @@ RUBRIC = {
 
 
 def test_system_prompt_states_rubric_and_treats_card_as_data() -> None:
-    assert PROMPT_VERSION == "qa-v1"
+    assert PROMPT_VERSION == "qa-v3"
     for category in CATEGORIES:
         assert category in SYSTEM_PROMPT, category
         assert f"- {category} ({RUBRIC[category]}):" in SYSTEM_PROMPT, category
@@ -31,3 +31,15 @@ def test_system_prompt_states_rubric_and_treats_card_as_data() -> None:
     # Static prefix: no card data and no date.
     assert "<card>" in SYSTEM_PROMPT and "2026" not in SYSTEM_PROMPT
     assert '{"findings":[' in SYSTEM_PROMPT
+
+
+def test_system_prompt_v3_rules_from_the_eval() -> None:
+    """qa-v3 (tuned on the dev half of seeded-v1, measured on the held-out half): code and
+    realWorldUsage are answer-side; a multiple-choice card is reviewed by an explicit procedure
+    that separates ambiguous_stem / qualifier_mismatch / multiple_correct; claims newer than the
+    model's knowledge are not blocked on uncertainty."""
+    assert "answer-side" in SYSTEM_PROMPT
+    assert "# How to review a multiple-choice card" in SYSTEM_PROMPT
+    for phrase in ("does not separate them", "missing its qualifier", "newer than your training data",
+                   "is not evidence that it is false", "raise other (minor)"):
+        assert phrase in SYSTEM_PROMPT, phrase
