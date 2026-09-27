@@ -17,6 +17,8 @@ import { QueryClient, QueryClientContext } from '@tanstack/react-query';
  *   deck publish                    invalidates ['decks'].
  *   import run                      invalidates ['cards', deckId] and
  *                                   ['decks', id] in DeckImportPage's finally.
+ *   draft accept                    invalidates ['cards', deckId] and ['decks']
+ *                                   in ReviewQueuePage (accepting creates a card).
  *
  * With that in place a short cache is safe rather than a trap, so the defaults
  * are no longer pinned to zero:

@@ -12,7 +12,11 @@ import {
   draftToFormValues,
   formValuesToDraftCard,
   lintDraftCard,
+  REVIEW_MS_CAP,
+  reviewClockMs,
   reviewDurationMs,
+  setReviewClockVisible,
+  startReviewClock,
   sourceHostLabel,
 } from '../src/lib/draftReview';
 import { DRAFT_DECK_SLUG, mcqDraftCard, qaDraftCard } from './support/draftFixtures';
@@ -122,5 +126,23 @@ describe('src/lib/draftReview', () => {
     expect(sourceHostLabel('https://docs.aws.amazon.com/s3/')).toBe('docs.aws.amazon.com');
     expect(sourceHostLabel('http://example.com/')).toBeNull();
     expect(sourceHostLabel('not a url')).toBeNull();
+  });
+
+  it('counts review time only across visible stretches and caps it', () => {
+    let clock = startReviewClock(1_000, true);
+    expect(reviewClockMs(clock, 11_000)).toBe(10_000);
+    clock = setReviewClockVisible(clock, false, 11_000);
+    expect(reviewClockMs(clock, 3_611_000)).toBe(10_000);
+    // A repeated hidden event changes nothing.
+    expect(setReviewClockVisible(clock, false, 20_000)).toEqual(clock);
+    clock = setReviewClockVisible(clock, true, 3_611_000);
+    expect(setReviewClockVisible(clock, true, 3_612_000)).toEqual(clock);
+    expect(reviewClockMs(clock, 3_616_000)).toBe(15_000);
+
+    const hiddenAtOpen = startReviewClock(1_000, false);
+    expect(reviewClockMs(hiddenAtOpen, 900_000)).toBe(0);
+
+    expect(REVIEW_MS_CAP).toBe(30 * 60_000);
+    expect(reviewClockMs(startReviewClock(0, true), 5 * 60 * 60_000)).toBe(REVIEW_MS_CAP);
   });
 });

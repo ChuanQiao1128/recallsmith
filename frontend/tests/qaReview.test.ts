@@ -8,13 +8,19 @@ import {
   QA_CATEGORY_LABELS,
   QA_ITEM_ERROR_LABELS,
   QA_START_ERROR_MESSAGES,
+  QA_DAILY_USD_CAP,
+  QA_MAX_CARDS,
   cardPasses,
+  cardVerdict,
   estimateQaCostUsd,
   formatUsd,
   groupFindingsByCard,
   isQaRunActive,
   qaCardsToReview,
+  qaCapRemainingUsd,
   qaItemErrorLabel,
+  qaLimits,
+  qaStartErrorMessage,
 } from '../src/lib/qaReview';
 import { QA_PUBLISH_GATE_CODES, isQaPublishGateCode, qaPageHref } from '../src/lib/qaGate';
 import { qaCards, qaFinding, qaItem } from './support/qaFixtures';
@@ -50,8 +56,59 @@ describe('qaReview', () => {
     expect(groups[1].findings.map(f => f.findingId)).toEqual([1, 3]);
     expect(groups[0]).toMatchObject({ stableUid: 'aws-s3-cloudfront-oac', passes: false, itemStatus: 'done' });
     expect(groups[0].question).toContain('CloudFront');
-    expect(groups[2]).toMatchObject({ cardId: 999, itemStatus: null, question: null, passes: true });
-    expect(groups[3]).toMatchObject({ itemStatus: 'error', itemErrorCode: 'PROVIDER_TIMEOUT', passes: true, findings: [] });
+    expect(groups[0].verdict).toBe('flagged');
+    expect(groups[2]).toMatchObject({ cardId: 999, itemStatus: null, question: null, passes: true, verdict: 'passed' });
+    // An errored item was never reviewed, so it must not read as passed
+    // (frontend-console-1; this assertion used to expect passes: true).
+    expect(groups[3]).toMatchObject({
+      itemStatus: 'error',
+      itemErrorCode: 'PROVIDER_TIMEOUT',
+      passes: false,
+      verdict: 'not_reviewed',
+      findings: [],
+    });
+  });
+
+  it('gives a three-state verdict from the item status, never Passed for an unreviewed card', () => {
+    const items = [
+      qaItem(101, 'aws-s3-storage-classes', { status: 'queued' }),
+      qaItem(102, 'aws-s3-cloudfront-oac', { status: 'refused', errorCode: 'REFUSAL' }),
+      qaItem(103, 'aws-iam-roles-vs-users', { status: 'skipped' }),
+      qaItem(104, 'x-done'),
+      qaItem(105, 'x-done-minor'),
+    ];
+    const findings = [qaFinding({ findingId: 1, cardId: 105, severity: 'minor' })];
+    const byId = new Map(groupFindingsByCard(findings, items, qaCards).map(g => [g.cardId, g]));
+    expect(byId.get(101)).toMatchObject({ verdict: 'pending', passes: false });
+    expect(byId.get(102)).toMatchObject({ verdict: 'not_reviewed', passes: false });
+    expect(byId.get(103)).toMatchObject({ verdict: 'not_reviewed', passes: false });
+    expect(byId.get(104)).toMatchObject({ verdict: 'passed', passes: true });
+    expect(byId.get(105)).toMatchObject({ verdict: 'passed', passes: true });
+
+    expect(cardVerdict('queued', [])).toBe('pending');
+    expect(cardVerdict('error', [])).toBe('not_reviewed');
+    expect(cardVerdict('done', [{ severity: 'major' }])).toBe('flagged');
+    expect(cardVerdict('queued', [{ severity: 'blocker' }])).toBe('flagged');
+    expect(cardVerdict(null, [{ severity: 'minor' }])).toBe('passed');
+  });
+
+  it('uses the server run limits when the status carries them, else the labelled defaults', () => {
+    expect(qaLimits(null)).toEqual({
+      maxCards: QA_MAX_CARDS,
+      dailyUsdCap: QA_DAILY_USD_CAP,
+      spentTodayUsd: null,
+      fromServer: false,
+    });
+    const limits = qaLimits({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 1.5 });
+    expect(limits).toEqual({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 1.5, fromServer: true });
+    expect(qaCapRemainingUsd(limits)).toBeCloseTo(0.5, 10);
+    expect(qaCapRemainingUsd(qaLimits({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 9 }))).toBe(0);
+    expect(qaStartErrorMessage('AI_QA_TOO_MANY_CARDS', 'x', limits)).toBe(
+      'Too many cards for one run (the limit is 50). Narrow the scope.',
+    );
+    expect(qaStartErrorMessage('AI_QA_TOO_MANY_CARDS', 'x', qaLimits(null))).toContain('the limit is 200');
+    expect(qaStartErrorMessage('AI_QA_DAILY_CAP', 'x', limits)).toBe(QA_START_ERROR_MESSAGES.AI_QA_DAILY_CAP);
+    expect(qaStartErrorMessage('SOMETHING_NEW', 'Server text.', limits)).toBe('Server text.');
   });
 
   it('passes a card with only minor findings', () => {

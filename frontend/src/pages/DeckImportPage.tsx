@@ -32,8 +32,8 @@ import {
 import { formatWarning, type ImportWarning, type McqWarningCode } from '../lib/mcqWarnings';
 import { markEnd, markStart } from '../perf/journey';
 import { CONSOLE_NAME } from '../lib/brand';
-import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import type { Deck } from '../types/deck';
 
 type Step = 'input' | 'preview' | 'result';
@@ -325,9 +325,7 @@ export function DeckImportPage() {
       <ConsoleShell
         title={CONSOLE_NAME}
         subtitle="Authoring · Import"
-        decksHref="/"
-        contentIntelligenceHref="/content-intelligence"
-        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+        {...consoleNav()}
       >
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-slate-800">Import Markdown</h1>
@@ -349,9 +347,7 @@ export function DeckImportPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · Import"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <div>

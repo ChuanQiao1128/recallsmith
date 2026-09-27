@@ -77,6 +77,14 @@ export type QaStatus = {
   missing: Array<{ cardId: number; stableUid: string }>;
   openBlockers: Array<{ findingId: number; cardId: number; stableUid: string; category: string; message: string }>;
   wouldBlock: boolean;
+  /**
+   * The server's run limits (AI_QA_MAX_CARDS, AI_QA_DAILY_USD_CAP) and today's
+   * spend, when the status response carries them; null otherwise, and the page
+   * falls back to the documented defaults in src/lib/qaReview.ts.
+   */
+  maxCards: number | null;
+  dailyUsdCap: number | null;
+  spentTodayUsd: number | null;
 };
 
 export type QaStartResult = { runId: string; status: string; cardCount: number; chunkCount: number };
@@ -205,6 +213,16 @@ function normalizeRunDetail(data: unknown): QaRunDetail | null {
   return { run, items: normalizeList(raw.items, normalizeQaItem), findings: normalizeList(raw.findings, normalizeQaFinding) };
 }
 
+function toPositiveOrNull(value: unknown): number | null {
+  const n = toNumberOrNull(value);
+  return n !== null && n > 0 ? n : null;
+}
+
+function toNonNegativeOrNull(value: unknown): number | null {
+  const n = toNumberOrNull(value);
+  return n !== null && n >= 0 ? n : null;
+}
+
 function normalizeStatus(data: unknown): QaStatus | null {
   const raw = asRecord(data);
   if (!raw || typeof raw.enabled !== 'boolean') return null;
@@ -235,6 +253,9 @@ function normalizeStatus(data: unknown): QaStatus | null {
     missing,
     openBlockers,
     wouldBlock: raw.wouldBlock === true,
+    maxCards: toPositiveOrNull(raw.maxCards),
+    dailyUsdCap: toPositiveOrNull(raw.dailyUsdCap),
+    spentTodayUsd: toNonNegativeOrNull(raw.spentTodayUsd),
   };
 }
 
