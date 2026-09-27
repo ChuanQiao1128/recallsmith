@@ -51,6 +51,10 @@ const DeckEditPage = lazy(() => import('./pages/DeckEditPage').then(m => ({ defa
 const ContentIntelligencePage = lazy(() =>
   import('./pages/ContentIntelligencePage').then(m => ({ default: m.ContentIntelligencePage })),
 );
+const WebhooksPage = lazy(() => import('./pages/WebhooksPage').then(m => ({ default: m.WebhooksPage })));
+const LedgerPage = lazy(() => import('./pages/LedgerPage').then(m => ({ default: m.LedgerPage })));
+const ReviewQueuePage = lazy(() => import('./pages/ReviewQueuePage').then(m => ({ default: m.ReviewQueuePage })));
+const DeckQaPage = lazy(() => import('./pages/DeckQaPage').then(m => ({ default: m.DeckQaPage })));
 
 if (typeof window !== 'undefined') {
   void loadDeckList();
@@ -126,6 +130,10 @@ function App() {
                 <Route path="/admin/users" element={<AdminUsersPage />} />
                 <Route path="/content-intelligence" element={<ContentIntelligencePage />} />
                 <Route path="/decks/edit" element={<DeckEditPage />} />
+                <Route path="/admin/webhooks" element={<WebhooksPage />} />
+                <Route path="/ledger" element={<LedgerPage />} />
+                <Route path="/review" element={<ReviewQueuePage />} />
+                <Route path="/decks/qa" element={<DeckQaPage />} />
               </Route>
 
               <Route path="*" element={<Navigate to="/" replace />} />

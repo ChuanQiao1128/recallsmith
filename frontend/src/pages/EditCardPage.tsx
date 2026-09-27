@@ -10,7 +10,7 @@ import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
 import type { Card } from '../types/card';
 import { CardForm, type CardFormValues } from '../components/CardForm';
-import { buildCardBody } from '../lib/authoringBodies';
+import { buildCardBody, buildCardSource } from '../lib/authoringBodies';
 import { CONSOLE_NAME } from '../lib/brand';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
@@ -174,6 +174,8 @@ export function EditCardPage() {
     revision:
       (card as unknown as { revision?: number | null }).revision ?? 1,
     topic: card.topic ?? '',
+    sourceUrl: card.source?.url ?? '',
+    sourceQuote: card.source?.quote ?? '',
   };
 
   /**
@@ -203,11 +205,13 @@ export function EditCardPage() {
     // omits undefined keys, and an absent key leaves the old value in the row.
     // topic is sent beside the builder (F20 pins that the builder never carries
     // it): '' is sent on purpose, because the server stores null for a blank
-    // topic, which is how a topic is cleared. mcq stays absent, so a stored MCQ
-    // blob is left alone.
+    // topic, which is how a topic is cleared. source is always sent too: null
+    // when the Source URL box is blank, which clears the column. mcq stays
+    // absent, so a stored MCQ blob is left alone.
     const { result } = await updateCardMutation.mutateAsync({
       ...buildCardBody(values),
       topic: values.topic.trim(),
+      source: buildCardSource(values),
       id: Number(card.id),
       deckId: Number(card.deckId),
       stableUid: card.stableUid,

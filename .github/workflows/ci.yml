@@ -194,3 +194,33 @@ jobs:
             echo "::endgroup::"
           done
           [ "$found" = 1 ] || { echo "no Python package found" >&2; exit 1; }
+
+  mcp-server:
+    name: tools/mcp-server (build + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/mcp-server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tools/mcp-server/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  n8n-recipes:
+    name: integrations/n8n (signature verifier + recipe logic)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/n8n
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - run: node --test lib/

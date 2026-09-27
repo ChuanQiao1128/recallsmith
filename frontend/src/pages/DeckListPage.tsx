@@ -25,6 +25,7 @@ import {
   reportThrownFailure,
 } from '../lib/errorFeed';
 import type { ErrorNotice, PollFailure } from '../lib/errorFeed';
+import { isQaPublishGateCode, qaPageHref } from '../lib/qaGate';
 import { ErrorBanner, ErrorBannerList } from '../components/ui/ErrorBanner';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
 import { removeDeckBySlug } from '../features/deckList/deckListPagination';
@@ -449,6 +450,7 @@ export function DeckListPage() {
             ERR_PUBLISH_DECK,
             `Publishing deck "${row.slug}" failed`,
             pub.error?.message,
+            isQaPublishGateCode(pub.error?.code) ? { href: qaPageHref(deckId), label: 'Open AI QA' } : undefined,
           ),
         );
         return;

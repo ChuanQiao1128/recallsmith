@@ -379,6 +379,8 @@ export function AdminUsersPage() {
       subtitle="Admin · Users & Permissions"
       userLabel={sessionUser ? `${sessionUser.email ?? sessionUser.username ?? 'Signed in'} · super_admin` : '—'}
       superAdmin={true}
+      webhooksHref="/admin/webhooks"
+      ledgerHref="/ledger"
       adminUsersHref="/admin/users"
     >
       {!AUTH_CONFIGURED ? (

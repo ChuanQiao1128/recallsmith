@@ -36,6 +36,15 @@ type Props = {
   decksHref?: string;
   contentIntelligenceHref?: string;
   adminUsersHref?: string;
+  // super_admin only, like adminUsersHref: rendered only for a super_admin session.
+  webhooksHref?: string;
+  // Not role-gated: the ledger's read routes are RequireAdmin, so the pages
+  // that pass this decide who sees it.
+  ledgerHref?: string;
+  // Not role-gated: the draft review routes decide who may act.
+  reviewHref?: string;
+  // Not role-gated: the AI QA routes decide who may act.
+  qaHref?: string;
 
   children: React.ReactNode;
 };
@@ -52,6 +61,10 @@ export function ConsoleShell({
   decksHref,
   contentIntelligenceHref,
   adminUsersHref,
+  webhooksHref,
+  ledgerHref,
+  reviewHref,
+  qaHref,
   children,
 }: Props) {
   // Sign-out is the shell's own affair now, through AuthContext, so no page has
@@ -101,6 +114,30 @@ export function ConsoleShell({
               {contentIntelligenceHref ? (
                 <Link to={contentIntelligenceHref} className={NAV_LINK_CLASS}>
                   Content Intelligence
+                </Link>
+              ) : null}
+
+              {resolvedSuperAdmin && webhooksHref ? (
+                <Link to={webhooksHref} className={NAV_LINK_CLASS}>
+                  Webhooks
+                </Link>
+              ) : null}
+
+              {ledgerHref ? (
+                <Link to={ledgerHref} className={NAV_LINK_CLASS}>
+                  Automation ledger
+                </Link>
+              ) : null}
+
+              {reviewHref ? (
+                <Link to={reviewHref} className={NAV_LINK_CLASS}>
+                  Review queue
+                </Link>
+              ) : null}
+
+              {qaHref ? (
+                <Link to={qaHref} className={NAV_LINK_CLASS}>
+                  AI QA
                 </Link>
               ) : null}
 

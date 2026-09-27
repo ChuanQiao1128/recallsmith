@@ -4,6 +4,7 @@ import { useDeck } from '../hooks/useDecks';
 import { useCards, useDeleteCard } from '../hooks/useCards';
 import { ApiFailureError, NOT_FOUND } from '../api/errors';
 import { parseDeckId } from '../lib/parseDeckId';
+import { qaPageHref } from '../lib/qaGate';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { CONSOLE_NAME } from '../lib/brand';
 import { ConsoleShell } from '../components/console/ConsoleShell';
@@ -256,6 +257,8 @@ export function CardListPage() {
       subtitle="Authoring · Cards"
       decksHref="/"
       contentIntelligenceHref="/content-intelligence"
+      reviewHref={`/review?deckId=${deckId}`}
+      qaHref={qaPageHref(deckId)}
       adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
     >
       <div className="flex items-center justify-between">
