@@ -45,6 +45,35 @@ public static class StatusRoutes
     left join decks dk on dk.id = dd.deck_id
     """;
 
+  /// <summary>
+  /// An open decision exception (R18B K7, R18C L4) over <c>dd</c> = automation_draft_decisions and <c>a</c> = its
+  /// ai_drafts row: routed to a human, no human action yet, the draft still pending. The backlog count and the
+  /// <c>open=true</c> decisions list share it.
+  /// </summary>
+  internal const string OpenDecisionSql = "dd.state = 'human' and dd.human_action is null and a.status = 'pending'";
+
+  /// <summary>
+  /// An open publish exception (R18B K7) over <c>p</c> = automation_publishes: a live row in state <c>human</c> that no
+  /// successful deck publish created after the row's last change resolved.
+  /// </summary>
+  internal const string OpenHumanPublishSql = """
+    p.state = 'human' and p.mode = 'live'
+      and not exists (select 1 from deck_publishes dp
+                      where dp.deck_id = p.deck_id and dp.status = 'SUCCESS' and dp.created_at > p.updated_at)
+    """;
+
+  /// <summary>The most <c>humanPublishItems</c> the status backlog lists (R18C L4).</summary>
+  public const int MaxHumanPublishItems = 20;
+
+  /// <summary>
+  /// A <c>would_accept</c> decision (<c>dd</c>) a person decided while its verdict was hidden from them (R18C
+  /// automation-4): its <c>HUMAN_ACTION</c> event records <c>blinded: true</c>.
+  /// </summary>
+  private const string BlindDecidedSql = """
+    exists (select 1 from automation_decision_events e
+            where e.draft_id = dd.draft_id and e.reason = 'HUMAN_ACTION' and e.details->>'blinded' = 'true')
+    """;
+
   // ---------------------------------------------------------------------------------------------
   // GET /api/v1/admin/automation/status
   // ---------------------------------------------------------------------------------------------
@@ -126,27 +155,33 @@ public static class StatusRoutes
       }
       var decisions24h = new { byState, byReason };
 
+      // The shadow agreement counts only blind decisions (R18C automation-4): a person who saw the would_accept
+      // verdict before deciding measures nothing. The other counts cover every human decision.
       var s = (await DbUtil.QueryAsync(conn, null,
-        """
+        $"""
         select
           count(*) as would_accept,
-          count(*) filter (where human_action is not null) as human_decided,
-          count(*) filter (where human_action = 'accepted') as human_accepted,
-          count(*) filter (where human_action = 'edited_accepted') as human_edited_accepted,
-          count(*) filter (where human_action = 'rejected') as human_rejected
-        from automation_draft_decisions
-        where state = 'would_accept' and created_at >= now() - interval '30 days'
+          count(*) filter (where dd.human_action is not null) as human_decided,
+          count(*) filter (where dd.human_action = 'accepted') as human_accepted,
+          count(*) filter (where dd.human_action = 'edited_accepted') as human_edited_accepted,
+          count(*) filter (where dd.human_action = 'rejected') as human_rejected,
+          count(*) filter (where dd.human_action is not null and {BlindDecidedSql}) as blind_decided,
+          count(*) filter (where dd.human_action = 'accepted' and {BlindDecidedSql}) as blind_accepted
+        from automation_draft_decisions dd
+        where dd.state = 'would_accept' and dd.created_at >= now() - interval '30 days'
         """, []))[0];
-      var humanDecided = RunnerRoutes.Long(s["human_decided"]);
-      var humanAccepted = RunnerRoutes.Long(s["human_accepted"]);
+      var blindDecided = RunnerRoutes.Long(s["blind_decided"]);
+      var blindAccepted = RunnerRoutes.Long(s["blind_accepted"]);
       var shadow = new
       {
         wouldAccept = RunnerRoutes.Long(s["would_accept"]),
-        humanDecided,
-        humanAccepted,
+        humanDecided = RunnerRoutes.Long(s["human_decided"]),
+        humanAccepted = RunnerRoutes.Long(s["human_accepted"]),
         humanEditedAccepted = RunnerRoutes.Long(s["human_edited_accepted"]),
         humanRejected = RunnerRoutes.Long(s["human_rejected"]),
-        agreementRate = humanDecided == 0 ? (decimal?)null : Math.Round((decimal)humanAccepted / humanDecided, 4, MidpointRounding.AwayFromZero),
+        agreementRate = blindDecided == 0 ? (decimal?)null : Math.Round((decimal)blindAccepted / blindDecided, 4, MidpointRounding.AwayFromZero),
+        blindDecided,
+        blindAccepted,
       };
 
       var publishStates = ZeroFilled(PublishStates);
@@ -218,6 +253,13 @@ public static class StatusRoutes
         humanPending = open.HumanPending,
         oldestHumanPendingAt = RunnerRoutes.Timestamp(open.OldestHumanPendingAt),
         humanPublishes = open.HumanPublishes,
+        humanPublishItems = open.HumanPublishItems.Select(i => new
+        {
+          deckId = RunnerRoutes.Long(i["deck_id"]),
+          deckSlug = i["deck_slug"],
+          reason = i["reason"],
+          since = RunnerRoutes.Timestamp(i["updated_at"]),
+        }).ToList(),
       };
 
       return res.Ok(new
@@ -249,7 +291,8 @@ public static class StatusRoutes
   }
 
   /// <summary>The open exceptions a person still has to handle, whenever they were raised (R18B K7).</summary>
-  internal sealed record Backlog(long HumanPending, object? OldestHumanPendingAt, long HumanPublishes);
+  internal sealed record Backlog(long HumanPending, object? OldestHumanPendingAt, long HumanPublishes,
+    IReadOnlyList<Dictionary<string, object?>> HumanPublishItems);
 
   /// <summary>
   /// The open-exception backlog (R18B K7). <c>humanPending</c>: decisions in state <c>human</c> with no
@@ -258,23 +301,31 @@ public static class StatusRoutes
   /// in state <c>human</c> that no later successful deck publish resolved. The row never leaves <c>human</c> (the
   /// person publishes from the console, not through the row), so a <c>deck_publishes</c> row of the same deck with
   /// status <c>SUCCESS</c> created after the row's last change resolves it; a newer automation publish of the deck
-  /// that reached <c>published</c> implies one. A dry-run <c>human</c> row accepted nothing and is not counted.
+  /// that reached <c>published</c> implies one. A dry-run <c>human</c> row accepted nothing and is not counted (a row
+  /// holding cards accepted in live keeps the <c>live</c> label after a rollback, R18C automation-12).
+  /// <c>humanPublishItems</c> lists the oldest <see cref="MaxHumanPublishItems"/> of the counted rows (R18C L4).
   /// </summary>
   internal static async Task<Backlog> LoadBacklogAsync(NpgsqlConnection conn)
   {
     var row = (await DbUtil.QueryAsync(conn, null,
-      """
+      $"""
       select
         (select count(*) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
-         where dd.state = 'human' and dd.human_action is null and a.status = 'pending') as human_pending,
+         where {OpenDecisionSql}) as human_pending,
         (select min(coalesce(dd.decided_at, dd.created_at)) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
-         where dd.state = 'human' and dd.human_action is null and a.status = 'pending') as oldest_human_pending_at,
-        (select count(*) from automation_publishes p
-         where p.state = 'human' and p.mode = 'live'
-           and not exists (select 1 from deck_publishes dp
-                           where dp.deck_id = p.deck_id and dp.status = 'SUCCESS' and dp.created_at > p.updated_at)) as human_publishes
+         where {OpenDecisionSql}) as oldest_human_pending_at,
+        (select count(*) from automation_publishes p where {OpenHumanPublishSql}) as human_publishes
       """, []))[0];
-    return new Backlog(RunnerRoutes.Long(row["human_pending"]), row["oldest_human_pending_at"], RunnerRoutes.Long(row["human_publishes"]));
+    var items = await DbUtil.QueryAsync(conn, null,
+      $"""
+      select p.deck_id, d.slug as deck_slug, p.reason, p.updated_at
+      from automation_publishes p
+      left join decks d on d.id = p.deck_id
+      where {OpenHumanPublishSql}
+      order by p.updated_at, p.id
+      limit $1
+      """, [MaxHumanPublishItems]);
+    return new Backlog(RunnerRoutes.Long(row["human_pending"]), row["oldest_human_pending_at"], RunnerRoutes.Long(row["human_publishes"]), items);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -366,10 +417,10 @@ public static class StatusRoutes
         publishes = await DbUtil.QueryAsync(conn, null,
           """
           select p.id, p.deck_id, d.slug as deck_slug, p.run_id, p.mode, p.state, p.reason, p.reason_detail, p.job_id, p.build_id,
-            p.card_ids, p.updated_at
+            p.card_ids || p.deferred_card_ids as run_card_ids, p.updated_at
           from automation_publishes p
           left join decks d on d.id = p.deck_id
-          where p.run_id = any($1) or p.card_ids && $2::bigint[]
+          where p.run_id = any($1) or (p.card_ids || p.deferred_card_ids) && $2::bigint[]
           order by p.id
           """, [runIds, allAccepted]);
       }
@@ -406,7 +457,9 @@ public static class StatusRoutes
             superseded = Count("superseded"),
           },
           publishes = publishes
-            .Where(p => p["run_id"] as Guid? == runId || ((long[])p["card_ids"]!).Any(mine.Contains))
+            // The batch summary's rule (R18C backend-design-17): the run's row, or a row holding one of the run's
+            // accepted cards, built (card_ids) or deferred behind the deck's in-flight build (deferred_card_ids).
+            .Where(p => p["run_id"] as Guid? == runId || ((long[])p["run_card_ids"]!).Any(mine.Contains))
             .Select(p => new
             {
               publishId = RunnerRoutes.Long(p["id"]),
@@ -439,7 +492,7 @@ public static class StatusRoutes
   }
 
   // ---------------------------------------------------------------------------------------------
-  // GET /api/v1/admin/automation/decisions?runId=&deckId=&state=&reason=&limit=&cursor=
+  // GET /api/v1/admin/automation/decisions?runId=&deckId=&state=&reason=&open=&limit=&cursor=
   // ---------------------------------------------------------------------------------------------
 
   public static async Task<APIGatewayProxyResponse> HandleDecisions(LambdaRequest req, Res res, AuthContext auth)
@@ -458,6 +511,7 @@ public static class StatusRoutes
       var deckId = QueryId(req, "deckId");
       var state = QueryEnum(req, "state", DecisionStates);
       var reason = QueryEnum(req, "reason", AutomationReasons.DecisionReasons);
+      var open = QueryFlag(req, "open");
       var limit = QueryLimit(req);
       var cursor = QueryCursor(req);
       long? cursorDraftId = null;
@@ -484,6 +538,8 @@ public static class StatusRoutes
       if (deckId is not null) Filter("dd.deck_id", deckId.Value);
       if (state is not null) Filter("dd.state", state);
       if (reason is not null) Filter("dd.reason", reason);
+      // R18C L4: only the open exceptions the backlog counts (same predicate, same keyset order).
+      if (open) where.Add(OpenDecisionSql);
       if (cursor is { } cur)
       {
         parameters.Add(cur.At);
@@ -610,6 +666,18 @@ public static class StatusRoutes
     if (!req.Query.TryGetValue(name, out var v) || string.IsNullOrEmpty(v)) return null;
     if (!allowed.Contains(v, StringComparer.Ordinal)) throw new ValidationError($"{name} must be one of {string.Join(", ", allowed)}", name);
     return v;
+  }
+
+  /// <summary>A boolean query flag: <c>true</c>/<c>1</c> or <c>false</c>/<c>0</c>; absent or empty is false.</summary>
+  private static bool QueryFlag(LambdaRequest req, string name)
+  {
+    if (!req.Query.TryGetValue(name, out var v) || string.IsNullOrEmpty(v)) return false;
+    return v switch
+    {
+      "true" or "1" => true,
+      "false" or "0" => false,
+      _ => throw new ValidationError($"{name} must be true or false", name),
+    };
   }
 
   private static long? QueryId(LambdaRequest req, string name)
