@@ -354,6 +354,7 @@ export function WebhooksPage() {
       webhooksHref="/admin/webhooks"
       ledgerHref="/ledger"
       reviewHref="/review"
+      qaHref="/decks/qa"
       adminUsersHref="/admin/users"
       superAdmin
     >
