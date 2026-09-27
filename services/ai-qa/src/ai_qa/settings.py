@@ -174,10 +174,20 @@ def ssm_client() -> Any:
     return _clients["ssm"]
 
 
-def set_clients(*, ssm: Any = None) -> None:
+def sqs_client() -> Any:
+    if "sqs" not in _clients:
+        import boto3  # shipped with anthropic[bedrock]; also in the Lambda runtime
+
+        _clients["sqs"] = boto3.client("sqs")
+    return _clients["sqs"]
+
+
+def set_clients(*, ssm: Any = None, sqs: Any = None) -> None:
     """Inject clients (tests). A None argument leaves that client untouched."""
     if ssm is not None:
         _clients["ssm"] = ssm
+    if sqs is not None:
+        _clients["sqs"] = sqs
 
 
 def reset_clients() -> None:
