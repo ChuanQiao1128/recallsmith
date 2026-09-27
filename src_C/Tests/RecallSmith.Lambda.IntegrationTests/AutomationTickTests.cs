@@ -625,10 +625,13 @@ public class AutomationTickTests
       Assert.Equal("would_publish", publish["state"]);
       var n = (await NotificationAsync(sql, $"batch:{runId:D}"))!;
       Assert.Equal(("batch_summary", "dry_run", runId), ((string)n["kind"]!, (string)n["mode"]!, (Guid)n["run_id"]!));
-      Assert.Equal($"[DeveloperCards] (dry run) Batch {runId.ToString("D")[..8]} {deck.Slug}: 1 auto-accepted, 1 need you, would publish", n["subject"]);
+      // R18E N6: both drafts still wait for a person, so the dry-run summary gives no per-state count or reason
+      // (updated from the R18D assertions of "1 auto-accepted, 1 need you, would publish" and "QA_FLAGGED").
+      Assert.Equal($"[DeveloperCards] (dry run) Batch {runId.ToString("D")[..8]} {deck.Slug}: 2 draft(s) wait for you", n["subject"]);
       var body = (string)n["body_text"]!;
       Assert.Contains($"https://console.example.com/review?deckId={deck.Id}", body);
-      Assert.Contains("QA_FLAGGED", body);
+      Assert.DoesNotContain("QA_FLAGGED", body);
+      Assert.DoesNotContain("would_accept", body);
       Assert.Equal(n["notification_id"], await sql.ScalarAsync("select summary_notification_id from automation_runs where run_id = $1", runId));
 
       var delivery = (await sql.QueryAsync("select body from webhook_deliveries where subscription_id = $1", subscriptionId)).Single();
@@ -957,7 +960,11 @@ public class AutomationTickTests
 
       var body = (string)(await NotificationAsync(sql, $"digest:{Today()}"))!["body_text"]!;
       Assert.Contains("- 1 publish(es) need you — ", body);
-      Assert.Contains("- 1 draft(s) routed to you are still pending — ", body);
+      // R18E N6: in dry_run the digest counts every draft waiting for a person, not the ones routed to one (updated
+      // from "- 1 draft(s) routed to you are still pending", which reveals the rest's verdict by elimination).
+      Assert.Contains("- 1 draft(s) wait for your decision — ", body);
+      Assert.DoesNotContain("routed to you", body);
+      Assert.Contains("Not counted above: 1 run(s) with a draft still waiting for your decision", body);
     });
   }
 

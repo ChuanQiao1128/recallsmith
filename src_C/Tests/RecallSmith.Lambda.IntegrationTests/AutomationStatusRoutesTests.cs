@@ -1168,6 +1168,58 @@ public sealed class AutomationStatusRoutesTests
   }
 
   [Fact]
+  public async Task Status_Live_AnEditAfterASourceChange_IsNotAnOverride()
+  {
+    // R18E automation-29: the source watch found the cited page changed after the accept, and a person then updated the
+    // card to the new page; that is not an automation error. An edit before the change still counts.
+    await InFreshAsync("it_e01_status_live_source", async db =>
+    {
+      var (deckId, _) = await db.NewDeckAsync("live-src");
+      var run = await db.NewRunAsync(deckId);
+      var url = "https://docs.aws.amazon.com/synthetic/e01/changed.html";
+      async Task<long> AcceptedAsync(string tag, string? sourceUrl)
+      {
+        var cardId = await db.NewCardAsync(deckId, Uid(tag));
+        await db.QueryAsync("update cards set source = case when $2::text is null then null else jsonb_build_object('url', $2::text) end, " +
+          "updated_at = now() - interval '2 hours' where id = $1", cardId, sourceUrl);
+        var draftId = await db.NewDecisionAsync(deckId, run, "auto_accepted", qa: true, acceptedCardId: cardId,
+          createdAt: "now() - interval '2 hours'", mode: "live");
+        var row = (await db.QueryAsync($"select {CardContentHash.CardColumnsSql} from cards c where c.id = $1", cardId)).Single();
+        await db.QueryAsync("update automation_draft_decisions set accepted_content_sha256 = $2 where draft_id = $1", draftId, CardContentHash.Compute(row));
+        return cardId;
+      }
+
+      var updated = await AcceptedAsync("src-updated", url);
+      var gone = await AcceptedAsync("src-deleted", url);
+      var before = await AcceptedAsync("src-before", url);
+      var other = await AcceptedAsync("src-other", "https://docs.aws.amazon.com/synthetic/e01/unchanged.html");
+
+      // The person edits "before" first, then the watch records the change an hour after the accept, then the rest.
+      await db.QueryAsync("update cards set explanation = 'Edited before the change.', updated_at = now() - interval '90 minutes' where id = $1", before);
+      var targetId = Convert.ToInt64(await db.ScalarAsync(
+        "insert into source_watch_targets (kind, url, check_interval_minutes) values ('page', $1, 10080) returning id", url),
+        System.Globalization.CultureInfo.InvariantCulture);
+      await db.QueryAsync(
+        "insert into source_watch_events (target_id, watch_run_id, kind, created_at) values ($1, $2, 'changed', now() - interval '1 hour')",
+        targetId, Guid.NewGuid());
+      await db.QueryAsync("update cards set explanation = 'Updated to the changed page.', updated_at = now() where id = $1", updated);
+      await db.QueryAsync("update cards set is_deleted = 1, updated_at = now() where id = $1", gone);
+      await db.QueryAsync("update cards set explanation = 'A wrong card.', updated_at = now() where id = $1", other);
+
+      var live = (await DataAsync(StatusPath)).GetProperty("live");
+      Assert.Equal(4, live.GetProperty("autoAccepted30d").GetInt64());
+      Assert.Equal(0, live.GetProperty("deletedByPerson").GetInt64());
+      Assert.Equal(2, live.GetProperty("editedByPerson").GetInt64());
+      Assert.Equal(0.5m, live.GetProperty("overrideRate").GetDecimal());
+
+      await using var conn = new NpgsqlConnection(db.ConnectionString);
+      await conn.OpenAsync();
+      var quality = await StatusRoutes.LoadLiveQualityAsync(conn);
+      Assert.Equal(2, quality.EditedAfterSourceChange);
+    });
+  }
+
+  [Fact]
   public async Task Decisions_OpenTrue_ListsOnlyOpenExceptions_WithTheBacklogPredicate()
   {
     // R18C L4 (backend-design-13): handled rows newer than the open ones no longer hide them behind a page.

@@ -220,6 +220,15 @@ public static class EmailTemplates
         needs.Add($"- {F("url")} — {F("lastError")} — {AutomationUrl(consoleBaseUrl, "tab=queue")}");
         factKeys = ["itemId", "url", "lastError"];
         break;
+      case "queue_item_failed" when facts.GetValueOrDefault("lastError") is { } repeated &&
+                                     repeated.StartsWith(RunnerRoutes.RunnerUnavailableRepeated, StringComparison.Ordinal):
+        // R18E N3: the runner could not run the item several times in a row; the item is not requeued again.
+        subject = $"Action needed: queue item {F("itemId")} could not run {RunnerRoutes.MaxRunnerUnavailableCompletes} times in a row";
+        summary = $"The runner could not run queue item {F("itemId")} {RunnerRoutes.MaxRunnerUnavailableCompletes} times in a row; " +
+          "it will not be retried until you add it again. Check the runner and the item.";
+        needs.Add($"- {F("url")} — {F("lastError")} — {AutomationUrl(consoleBaseUrl, "tab=queue")}");
+        factKeys = ["itemId", "url", "lastError"];
+        break;
       case "queue_item_failed":
         subject = $"Action needed: queue item {F("itemId")} failed 3 times";
         summary = $"Queue item {F("itemId")} failed 3 times and will not be retried.";

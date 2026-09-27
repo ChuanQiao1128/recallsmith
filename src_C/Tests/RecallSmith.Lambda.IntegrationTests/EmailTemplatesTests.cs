@@ -23,6 +23,9 @@ public class EmailTemplatesTests
     ],
     0.0012m, [new BatchPublish(12, "aws-saa-c03", "would_publish", null, null, null, null)], "owner-mac", 184000, "done");
 
+  /// <summary><see cref="Batch"/> with every draft decided (R18E N6): a dry-run summary then states its counts.</summary>
+  internal static BatchSummaryData DecidedBatch() => Batch() with { Drafts = [.. Batch().Drafts.Select(d => d with { Decided = true })] };
+
   internal static WeeklyDigestData Digest() => new(new DateOnly(2026, 9, 21), new DateOnly(2026, 9, 27), 3.5m, 210m, 14, 42, 2,
     [new DigestAutomation("auto_accept", 6, 6, 0, 18m), new DigestAutomation("source_watch", 8, 36, 1, 18m)],
     new Dictionary<string, long> { ["would_accept"] = 6, ["human"] = 2 }, new Dictionary<string, long> { ["QA_FLAGGED"] = 2 },
@@ -170,7 +173,9 @@ public class EmailTemplatesTests
       Assert.DoesNotContain(hidden, dry);
     }
     Assert.Contains("- 3 draft(s) of this run wait for your decision in the review queue", dry);
-    Assert.Contains("Drafts by state: human 1, would_accept 2", dry);
+    // R18E N6: nor are the per-state counts shown while a draft is undecided (updated from the R18D assertion that
+    // pinned them: on a one-draft or single-verdict run they state each verdict).
+    Assert.DoesNotContain("Drafts by state", dry);
 
     // Live lists what it accepted and what needs a person, as before.
     var live = Batch() with
@@ -190,24 +195,24 @@ public class EmailTemplatesTests
   [Fact]
   public void BatchSummary_GoldenText()
   {
+    // R18E N6 (automation-4): a dry run with an undecided draft is state-free (updated from the R18D golden text, which
+    // gave the per-state counts and the publish outcome in the subject, summary and DETAILS).
     var email = EmailTemplates.BatchSummary("dry_run", Batch(), Console);
-    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 2 auto-accepted, 1 need you, would publish", email.Subject);
+    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 3 draft(s) wait for you", email.Subject);
     Assert.Equal("""
 DRY RUN — AUTOMATION_MODE=dry_run: nothing was accepted or published. "Auto-accepted" below reads "would be accepted".
-Run 3f2a9c1e on aws-saa-c03 submitted 3 draft(s): 2 auto-accepted, 1 need you; publish: would publish.
+Run 3f2a9c1e on aws-saa-c03 submitted 3 draft(s); 3 wait for your decision, and their verdicts and the publish outcome stay hidden until you decide.
 
 NEEDS YOU
 - 3 draft(s) of this run wait for your decision in the review queue; verdicts stay hidden until you decide (the shadow agreement counts blind decisions only) — https://console.developercards.app/review?deckId=12
 
 DONE AUTOMATICALLY
-- publish aws-saa-c03 — would_publish
+- nothing
 
 DETAILS
 Source: feed_item https://aws.amazon.com/about-aws/whats-new/2026/09/synthetic-item/ (Synthetic launch)
-Drafts by state: human 1, would_accept 2
-Routed to you by reason: QA_FLAGGED 1
 Draft QA spend: $0.0012
-Publish aws-saa-c03: would_publish
+Publish: hidden until every draft of this run is decided
 Runner: owner-mac, duration 184 s, outcome done
 
 Console: https://console.developercards.app/automation?runId=3f2a9c1e-0000-4000-8000-000000000001
@@ -221,8 +226,65 @@ Mode: dry_run. Sent by developercards-notifier to the owner alert address; repli
     };
     Assert.Equal("[DeveloperCards] Batch 3f2a9c1e aws-saa-c03: 1 auto-accepted, 0 need you, publish needs you",
       EmailTemplates.BatchSummary("live", live, Console).Subject);
+    // R18E N6: a dry run states counts and the publish outcome only once every draft is decided.
     Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 0 auto-accepted, 0 need you, publish would need you",
-      EmailTemplates.BatchSummary("dry_run", live, Console).Subject);
+      EmailTemplates.BatchSummary("dry_run", live with { Drafts = [.. live.Drafts.Select(d => d with { Decided = true })] }, Console).Subject);
+  }
+
+  [Fact]
+  public void BatchSummary_DryRun_NoVerdictLeaksWhileADraftIsUndecided()
+  {
+    // N6: neither the subject nor the body of a dry run with an undecided draft names a verdict, a state count, a
+    // reason or the publish outcome, for a one-draft run and for a single-verdict run alike.
+    var one = Batch() with { Drafts = [new BatchDraft("aws-s3-synthetic-01", "Q?", "would_accept", null, null, 12)] };
+    var allHuman = Batch() with
+    {
+      Drafts = [new BatchDraft("a-1", "Q1?", "human", "QA_FLAGGED", null, 12), new BatchDraft("a-2", "Q2?", "human", "QA_FLAGGED", null, 12)],
+      Publishes = [],
+    };
+    var partly = Batch() with
+    {
+      Drafts = [.. Batch().Drafts.Select((d, i) => d with { Decided = i > 0 })],
+    };
+    foreach (var data in new[] { Batch(), one, allHuman, partly })
+    {
+      var email = EmailTemplates.BatchSummary("dry_run", data, Console);
+      foreach (var text in new[] { email.Subject, email.BodyText })
+      {
+        foreach (var leak in new[] { "would_accept", "auto-accepted", "need you", "would publish", "would_publish", "QA_FLAGGED", "human 1", "human 2" })
+        {
+          Assert.DoesNotContain(leak, text);
+        }
+      }
+    }
+    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 1 draft(s) wait for you", EmailTemplates.BatchSummary("dry_run", one, Console).Subject);
+    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 1 draft(s) wait for you",
+      EmailTemplates.BatchSummary("dry_run", partly, Console).Subject);
+  }
+
+  [Fact]
+  public void BatchSummary_DryRun_AllDecided_ShowsTheCounts()
+  {
+    // N6: once every draft of the run is decided the verdicts are no longer blind, and the counts come back.
+    var decided = Batch() with { Drafts = [.. Batch().Drafts.Select(d => d with { Decided = true })] };
+    var email = EmailTemplates.BatchSummary("dry_run", decided, Console);
+    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 2 auto-accepted, 1 need you, would publish", email.Subject);
+    Assert.Contains("\nDrafts by state: human 1, would_accept 2\n", email.BodyText);
+    Assert.Contains("\nRouted to you by reason: QA_FLAGGED 1\n", email.BodyText);
+    Assert.Contains("\nPublish aws-saa-c03: would_publish\n", email.BodyText);
+    Assert.Contains("\nNEEDS YOU\n- nothing\n", email.BodyText);
+  }
+
+  [Fact]
+  public void WeeklyDigest_DryRun_CountsOnlyTheWaitingDrafts()
+  {
+    // N6: in dry_run the digest names how many drafts wait, not how many of them a person was routed.
+    var data = Digest() with { BlindPendingDrafts = 5, BlindPendingRuns = 2 };
+    var body = EmailTemplates.WeeklyDigest("dry_run", data, Console).BodyText;
+    Assert.Contains("- 5 draft(s) wait for your decision — https://console.developercards.app/review\n", body);
+    Assert.DoesNotContain("routed to you", body);
+    Assert.Contains("Not counted above: 2 run(s) with a draft still waiting for your decision (shown once all are decided)", body);
+    Assert.Contains("- 2 draft(s) routed to you are still pending", EmailTemplates.WeeklyDigest("live", data, Console).BodyText);
   }
 
   [Fact]
@@ -249,7 +311,7 @@ Ledger source_watch: 8 run(s), 36 unit(s), 1 failure(s), 18 min saved
 Decisions by state: human 2, would_accept 6
 Decisions by reason: QA_FLAGGED 2
 Dry-run agreement: 6 would-accept, 4 decided by a human (3 accepted, 1 edited, 0 rejected); decided blind 3, accepted unedited 2, agreement 0.6667
-Live quality (30 days): 25 auto-accepted, 1 deleted by a person, 1 edited by a person, override rate 0.0800
+Live quality (30 days): 25 auto-accepted, 1 deleted by a person, 1 edited by a person, override rate 0.0800; 0 updated after a source change (not counted)
 Publishes by state: would_publish 2
 Source watch: 36 check(s), 2 change(s), 1 failure(s)
 Emails: 9 sent, 0 failed

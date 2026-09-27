@@ -43,7 +43,7 @@ public sealed class EvalGateTests
 
   // A00 §15.4 EvalGate, in contract order.
   private static readonly string[] GateKeys =
-    ["gateId", "reviewer", "passed", "metrics", "reportSha256", "createdBySub", "createdAt", "revokedAt", "revokedBySub"];
+    ["gateId", "reviewer", "passed", "metrics", "reportSha256", "createdBySub", "createdAt", "revokedAt", "revokedBySub", "authorConfigId"];
 
   private static readonly string[] MetricKeys =
   [
@@ -764,15 +764,48 @@ public sealed class EvalGateTests
   {
     await InScratchAsync(async () =>
     {
-      var gateId = AutomationTestKit.Data(await PostAsync(WithNewFacts(PassingReport(), GatedAuthor).ToJsonString())).GetProperty("gateId").GetInt64();
+      var posted = AutomationTestKit.Data(await PostAsync(WithNewFacts(PassingReport(), GatedAuthor).ToJsonString()));
+      var gateId = posted.GetProperty("gateId").GetInt64();
       Assert.Equal(GatedAuthor, await ScalarAsync("select author_config_id from automation_eval_gates where id = $1", gateId));
       var live = await EffectiveAsync(AutomationMode.Live);
       Assert.Equal((AutomationMode.Live, (long?)gateId, GatedAuthor), (live.Effective, live.GateId, live.GateAuthorConfigId));
 
+      // R18E N1 (backend-design-21, automation-28): every gate surface names the author the gate measured.
+      Assert.Equal(GatedAuthor, posted.GetProperty("authorConfigId").GetString());
+      var got = AutomationTestKit.Data(await GetAsync());
+      Assert.Equal(GatedAuthor, got.GetProperty("current").GetProperty("authorConfigId").GetString());
+      Assert.Equal(GatedAuthor, got.GetProperty("history")[0].GetProperty("authorConfigId").GetString());
+
       // A report that measured no author binds none: live then routes every draft to a human (AUTHOR_NOT_GATED).
-      var unbound = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString())).GetProperty("gateId").GetInt64();
-      Assert.Null(await ScalarAsync("select author_config_id from automation_eval_gates where id = $1", unbound));
+      var unbound = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString()));
+      var unboundId = unbound.GetProperty("gateId").GetInt64();
+      Assert.Null(await ScalarAsync("select author_config_id from automation_eval_gates where id = $1", unboundId));
       Assert.Null((await EffectiveAsync(AutomationMode.Live)).GateAuthorConfigId);
+      Assert.Equal(JsonValueKind.Null, unbound.GetProperty("authorConfigId").ValueKind);
+      var after = AutomationTestKit.Data(await GetAsync());
+      Assert.Equal(JsonValueKind.Null, after.GetProperty("current").GetProperty("authorConfigId").ValueKind);
+      Assert.Equal(GatedAuthor, after.GetProperty("history")[1].GetProperty("authorConfigId").GetString());
+
+      // The revoke answer names it too.
+      var revoked = AutomationTestKit.Data(await RevokeAsync(unboundId.ToString(CultureInfo.InvariantCulture)));
+      Assert.Equal(JsonValueKind.Null, revoked.GetProperty("authorConfigId").ValueKind);
+    });
+  }
+
+  [Fact]
+  public async Task PostGate_RecordsTheReviewerEffort_AndLiveReadsIt()
+  {
+    // R18E N2 (ai-agent-26): the effort the gate's review sent (reviewer.effectiveEffort) binds the live reviewer.
+    await InScratchAsync(async () =>
+    {
+      var report = WithNewFacts(PassingReport(), GatedAuthor);
+      report["reviewer"]!["effectiveEffort"] = "xhigh";
+      AutomationTestKit.Data(await PostAsync(report.ToJsonString()));
+      Assert.Equal("xhigh", (await EffectiveAsync(AutomationMode.Live)).Reviewer!.Effort);
+
+      // A report that recorded no effort binds none.
+      AutomationTestKit.Data(await PostAsync(WithNewFacts(PassingReport(), GatedAuthor).ToJsonString()));
+      Assert.Null((await EffectiveAsync(AutomationMode.Live)).Reviewer!.Effort);
     });
   }
 
@@ -816,6 +849,9 @@ public sealed class EvalGateTests
       RecallSmith.Lambda.Vpc.Db.Pg.Reset();
       var gate = AutomationTestKit.Data(await PostAsync(WithNewFacts(PassingReport(), GatedAuthor).ToJsonString()));
       Assert.True(gate.GetProperty("passed").GetBoolean());
+      // R18E N1: before 036 the gate shape reads the author from the stored report, as the mode resolver does.
+      Assert.Equal(GatedAuthor, gate.GetProperty("authorConfigId").GetString());
+      Assert.Equal(GatedAuthor, AutomationTestKit.Data(await GetAsync()).GetProperty("current").GetProperty("authorConfigId").GetString());
 
       var saved = Environment.GetEnvironmentVariable(AutomationMode.EnvName);
       try

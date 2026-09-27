@@ -529,7 +529,7 @@ public class AutomationLedgerTests
 
     var agent = (await LedgerAsync("2008-01-01", "2008-12-31")).GetProperty("agentDrafts");
     Assert.Equal(
-      new[] { "decided", "accepted", "editedAccepted", "rejected", "defectRejects", "acceptanceRate", "editedAcceptRate", "defectRate", "avgReviewMinutes", "reviewNotMeasured" },
+      new[] { "decided", "accepted", "editedAccepted", "rejected", "defectRejects", "acceptanceRate", "editedAcceptRate", "defectRate", "avgReviewMinutes", "reviewNotMeasured", "evalRejects" },
       agent.EnumerateObject().Select(p => p.Name).ToArray());
     Assert.Equal(4, agent.GetProperty("decided").GetInt64());
     Assert.Equal(2, agent.GetProperty("accepted").GetInt64());
@@ -548,6 +548,62 @@ public class AutomationLedgerTests
     Assert.Equal(0, empty.GetProperty("decided").GetInt64());
     Assert.Equal(0m, empty.GetProperty("acceptanceRate").GetDecimal());
     Assert.Equal(JsonValueKind.Null, empty.GetProperty("avgReviewMinutes").ValueKind);
+  }
+
+  [Fact]
+  public async Task Ledger_AgentDraftQuality_LeavesEvalDraftsOut()
+  {
+    // R18E automation-24: the new-facts eval window rejects every draft it produced ('other', note 'eval:new-facts', its
+    // queue items noted 'eval:new-facts'); none of it may lower the agent's acceptance rate.
+    var deckId = Convert.ToInt64(await _db.ScalarAsync(
+      "insert into decks (slug, title, author) values ($1, 'e01 eval', 'tests') returning id", $"it-e01-eval-{Guid.NewGuid():N}"), CultureInfo.InvariantCulture);
+    var batch = Guid.NewGuid();
+    var i = 0;
+    async Task<long> DecidedAsync(string action, string? reason, string? note, int day)
+    {
+      i++;
+      var draftId = Convert.ToInt64(await _db.ScalarAsync(
+        """
+        insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, status, card, submitted_by_sub)
+        values ($1, $2, $3, $4, 'pending', '{}'::jsonb, 'it-e01') returning id
+        """,
+        deckId, batch, $"e{i}", $"eval-{i}-{Guid.NewGuid():N}"), CultureInfo.InvariantCulture);
+      await _db.ScalarAsync(
+        "insert into ai_review_events (draft_id, action, reason, note, review_ms, created_at) values ($1, $2, $3, $4, 60000, $5)",
+        draftId, action, reason, note, At(2006, 5, day).UtcDateTime);
+      return draftId;
+    }
+
+    // Before the eval window: one accept, one defect reject.
+    await DecidedAsync("accepted", null, null, 1);
+    await DecidedAsync("rejected", "incorrect", null, 2);
+    var before = (await LedgerAsync("2006-01-01", "2006-12-31")).GetProperty("agentDrafts");
+    Assert.Equal((2L, 0.5m, 0L), (before.GetProperty("decided").GetInt64(), before.GetProperty("acceptanceRate").GetDecimal(),
+      before.GetProperty("evalRejects").GetInt64()));
+
+    // Eval rejects tagged by their note, and one whose reject carries no note but whose queue item does.
+    await DecidedAsync("rejected", "other", "eval:new-facts", 3);
+    await DecidedAsync("rejected", "other", "eval:new-facts", 4);
+    var untagged = await DecidedAsync("rejected", "other", null, 5);
+    var itemId = await _db.ScalarAsync(
+      "insert into authoring_queue_items (kind, url, deck_id, note, dedupe_key, created_by, status) " +
+      "values ('manual', 'https://docs.aws.amazon.com/synthetic/e01/eval.html', $1, 'eval:new-facts', $2, 'owner:it-e01', 'done') returning id",
+      deckId, $"it-e01:{Guid.NewGuid()}");
+    var runId = Guid.NewGuid();
+    await _db.ScalarAsync(
+      "insert into automation_runs (run_id, queue_item_id, runner_id, owner_sub, deck_id, status) values ($1, $2, 'it-e01-runner', 'it-e01', $3, 'completed')",
+      runId, itemId, deckId);
+    await _db.ScalarAsync(
+      "insert into automation_draft_decisions (draft_id, run_id, deck_id, mode, state, human_action) values ($1, $2, $3, 'dry_run', 'would_accept', 'rejected')",
+      untagged, runId, deckId);
+
+    var after = (await LedgerAsync("2006-01-01", "2006-12-31")).GetProperty("agentDrafts");
+    Assert.Equal(2, after.GetProperty("decided").GetInt64());
+    Assert.Equal(1, after.GetProperty("rejected").GetInt64());
+    Assert.Equal(1, after.GetProperty("defectRejects").GetInt64());
+    Assert.Equal(0.5m, after.GetProperty("acceptanceRate").GetDecimal());
+    Assert.Equal(0.5m, after.GetProperty("defectRate").GetDecimal());
+    Assert.Equal(3, after.GetProperty("evalRejects").GetInt64());
   }
 
   [Fact]
