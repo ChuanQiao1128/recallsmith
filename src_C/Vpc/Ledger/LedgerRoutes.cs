@@ -298,14 +298,14 @@ public static class LedgerRoutes
       var hasAutomation = await DbUtil.ExecuteScalarAsync(conn, null,
         "select to_regclass('public.automation_draft_decisions') is not null and to_regclass('public.automation_runs') is not null", []) is true;
       var evalDraft = hasAutomation
-        ? """
-          (e.note like 'eval:%' or exists (
+        ? $"""
+          (e.note like '{EvalNotePrefix}%' or exists (
             select 1 from automation_draft_decisions dd
             join automation_runs ar on ar.run_id = dd.run_id
             join authoring_queue_items q on q.id = ar.queue_item_id
-            where dd.draft_id = e.draft_id and q.note like 'eval:%'))
+            where dd.draft_id = e.draft_id and q.note like '{EvalNotePrefix}%'))
           """
-        : "(e.note like 'eval:%')";
+        : $"(e.note like '{EvalNotePrefix}%')";
       var rows = await DbUtil.QueryAsync(conn, null,
         $"""
         select count(*) filter (where not x.eval) as "decided",
