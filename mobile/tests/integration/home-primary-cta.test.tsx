@@ -164,8 +164,15 @@ vi.mock('../../src/features/gacha/home/homeRemote', () => ({
   fetchServerPremium: (token: string) => fetchServerPremiumMock(token),
 }));
 
-vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
-  loadRewardWalletState: vi.fn(async () => walletFixture),
+// 1.7: Home builds per-pack wallets. Every studiable pack gets the fixture, so
+// the badge for the selected pack reads the fixture the same way it read the
+// global wallet before.
+vi.mock('../../src/features/gacha/rewards/economyFloor', () => ({
+  prepareHomeDeckWallets: vi.fn(async ({ deckSummaries }: { deckSummaries: Array<{ slug: string }> }) => {
+    const out: Record<string, typeof walletFixture> = {};
+    for (const s of deckSummaries) out[s.slug] = walletFixture;
+    return out;
+  }),
 }));
 
 vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
@@ -295,7 +302,7 @@ describe('home primary CTA uniqueness', () => {
       label: 'available',
       wallet: { availablePulls: 2, reservePulls: 0 },
       expectedPrimaryCta: 'Start today’s challenge',
-      expectedDrawBadge: '2 pulls ready',
+      expectedDrawBadge: '2 pulls ready for this pack',
       expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },
@@ -303,7 +310,7 @@ describe('home primary CTA uniqueness', () => {
       label: 'reserve',
       wallet: { availablePulls: 1, reservePulls: 2 },
       expectedPrimaryCta: 'Start today’s challenge',
-      expectedDrawBadge: '1 pull ready · 2 more waiting',
+      expectedDrawBadge: '1 pull ready for this pack · 2 more waiting',
       expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },
@@ -311,7 +318,7 @@ describe('home primary CTA uniqueness', () => {
       label: 'wallet-full',
       wallet: { availablePulls: 60, reservePulls: 5 },
       expectedPrimaryCta: 'Start today’s challenge',
-      expectedDrawBadge: 'Wallet full (60 + 5)',
+      expectedDrawBadge: 'Pack wallet full (60 + 5)',
       expectedRoute: 'SessionCard',
       expectedParams: { slug: 'csharp' },
     },

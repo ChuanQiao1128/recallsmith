@@ -63,7 +63,7 @@ import {
   mergeTimingOverride,
 } from '../../src/screens/dev/CeremonyTuning';
 import { DebugMenuScreen } from '../../src/screens/DebugMenuScreen';
-import { DEVICE, getCeremonyTimingOverride, setCeremonyTimingOverride } from '../../src/features/gacha/draw/ceremonyTimings';
+import { DEVICE, TO_TABLE_CAP_MS, getCeremonyTimingOverride, resolveCeremonyTimings, setCeremonyTimingOverride } from '../../src/features/gacha/draw/ceremonyTimings';
 import { getCeremonyDevOverrides, setCeremonyDevOverride } from '../../src/features/gacha/draw/ceremonyPrefs';
 import { saveRewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
 import { loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
@@ -176,15 +176,25 @@ describe('CeremonyTuning screen + DebugMenu ceremony seeds', () => {
     act(() => {
       tree = renderer.create(<CeremonyTuningScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 't', name: 'CeremonyTuning' } as any} />);
     });
-    expect(textOf(tree, 'ceremony-tuning-cap-single-LEG')).toContain('3120 / 3300');
+    const baseSingleLEG = resolveCeremonyTimings({ isMulti: false, peakRarity: 'LEG', motionAvailable: true }).toTableMs;
+    const capSingle = TO_TABLE_CAP_MS.single;
+    const baseMultiLEG = resolveCeremonyTimings({ isMulti: true, peakRarity: 'LEG', motionAvailable: true }).toTableMs;
+    const capMulti = TO_TABLE_CAP_MS.multi;
+
+    expect(textOf(tree, 'ceremony-tuning-cap-single-LEG')).toContain(`${baseSingleLEG} / ${capSingle}`);
     expect(String(textOf(tree, 'ceremony-tuning-cap-single-LEG'))).not.toContain('OVER');
-    for (let i = 0; i < 10; i += 1) {
+    // Press single.approach up enough that its toTableMs goes over the single ceiling.
+    const presses = Math.floor((capSingle - baseSingleLEG) / TUNING_STEP_MS) + 1;
+    for (let i = 0; i < presses; i += 1) {
       act(() => {
         tree.root.findByProps({ testID: 'ceremony-tuning-slider-single.approach-plus' }).props.onPress();
       });
     }
-    expect(textOf(tree, 'ceremony-tuning-cap-single-LEG')).toContain('3320 / 3300 OVER');
-    expect(textOf(tree, 'ceremony-tuning-cap-multi-LEG')).toContain('5000 / 5500');
+    const overValue = baseSingleLEG + presses * TUNING_STEP_MS;
+    expect(overValue).toBeGreaterThan(capSingle);
+    expect(textOf(tree, 'ceremony-tuning-cap-single-LEG')).toContain(`${overValue} / ${capSingle} OVER`);
+    // multi.approach is untouched, so the multi row stays under its own ceiling.
+    expect(textOf(tree, 'ceremony-tuning-cap-multi-LEG')).toContain(`${baseMultiLEG} / ${capMulti}`);
     expect(String(textOf(tree, 'ceremony-tuning-cap-multi-LEG'))).not.toContain('OVER');
   });
 
@@ -223,6 +233,33 @@ describe('CeremonyTuning screen + DebugMenu ceremony seeds', () => {
     }
     expect(queue.length).toBe(0);
     expect((globalThis as any).cancelAnimationFrame).toHaveBeenCalled();
+  });
+
+  it('opens a forced-rarity ceremony preview from the tuning screen', () => {
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<CeremonyTuningScreen navigation={{ navigate } as any} route={{ key: 't', name: 'CeremonyTuning' } as any} />);
+    });
+
+    act(() => {
+      tree.root.findByProps({ testID: 'ceremony-tuning-preview-LEG' }).props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    const [screen, params] = navigate.mock.calls[0];
+    expect(screen).toBe('DrawCeremony');
+    expect(params.drawResult.cards).toHaveLength(1);
+    expect(params.drawResult.cards[0].rarity).toBe('LEG');
+    expect(params.drawResult.cards[0].question.length).toBeGreaterThanOrEqual(160);
+
+    act(() => {
+      tree.root.findByProps({ testID: 'ceremony-tuning-preview-multi' }).props.onPress();
+    });
+    const multiParams = navigate.mock.calls[1][1];
+    expect(multiParams.drawResult.cards).toHaveLength(10);
+    expect(multiParams.drawResult.cards.filter((c: { rarity: string }) => c.rarity === 'LEG')).toHaveLength(1);
+    expect(multiParams.drawResult.cards.filter((c: { rarity: string }) => c.rarity === 'RAR')).toHaveLength(3);
+    expect(multiParams.drawResult.cards.filter((c: { rarity: string }) => c.rarity === 'COM')).toHaveLength(6);
   });
 
   it('DebugMenu seeds the wallet at 60/5 and reports it', async () => {

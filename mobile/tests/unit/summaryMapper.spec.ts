@@ -28,7 +28,7 @@ describe('summaryMapper wallet scenarios', () => {
     expect(summary.vm.reward.walletAfter).toEqual({ available: 0, reserve: 0 });
     expect(summary.vm.progress.completionLabel).toBe('You kept the streak.');
     expect(summary.vm.reward.body).toContain('No free pulls this run');
-    expect(summary.vm.reward.body).toContain('0 ready to use');
+    expect(summary.vm.reward.body).toContain('0 ready for this pack');
   });
 
   it('maps mid-wallet state with no pull when the run earned nothing', () => {
@@ -71,7 +71,7 @@ describe('summaryMapper wallet scenarios', () => {
     // +1 fits exactly in the remaining available room, so nothing spills into reserve.
     expect(summary.vm.reward.walletAfter).toEqual({ available: 60, reserve: 0 });
     expect(summary.vm.reward.body).toContain('+1 pull · 1 new card learned');
-    expect(summary.vm.reward.body).toContain('60 ready to use');
+    expect(summary.vm.reward.body).toContain('60 ready for this pack');
   });
 
   it('maps wallet-full state with reserve-pending copy', () => {
@@ -95,7 +95,7 @@ describe('summaryMapper wallet scenarios', () => {
     });
 
     expect(summary.vm.reward.walletAfter).toEqual({ available: 60, reserve: 5 });
-    expect(summary.vm.reward.body).toContain('Free pulls full · 5 pending in reserve');
+    expect(summary.vm.reward.body).toContain('Pack pulls full · 5 pending in reserve');
   });
 
   it('maps next-action titles across ready states', () => {

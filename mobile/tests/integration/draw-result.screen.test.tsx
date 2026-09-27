@@ -40,8 +40,9 @@ vi.mock('expo-linear-gradient', () => {
   return { LinearGradient: ({ children, ...props }: any) => React.createElement('LinearGradient', props, children) };
 });
 
-vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
-  loadRewardWalletState: vi.fn(() => walletLoader()),
+// 1.7: DrawResult reads the per-pack wallet for the "N pulls left" CTA.
+vi.mock('../../src/features/gacha/rewards/deckWallet', () => ({
+  loadDeckWallet: vi.fn((_slug: string) => walletLoader()),
 }));
 
 let permissionPromptPendingFixture = false;
@@ -468,6 +469,34 @@ describe('DrawResultScreen v9', () => {
       tree.root.findByProps({ testID: 'draw-result-open-all-cards' }).props.onPress();
     });
     expect(tree.root.findAllByProps({ testID: 'draw-result-all-cards-sheet' })).toHaveLength(0);
+  });
+
+  it('shows every pulled card in the summary grid, Legendary first', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'result', name: 'DrawResult', params: makeParams() } as any} />,
+      );
+    });
+    await flush();
+
+    const hostByTestID = (id: string) => tree.root.findAll((n) => typeof n.type === 'string' && n.props.testID === id);
+
+    // The grid exists with exactly one cell per pulled card.
+    expect(hostByTestID('draw-result-summary-grid')).toHaveLength(1);
+    for (let i = 0; i < DRAW_RESULT_FIXTURE.cards.length; i += 1) {
+      expect(hostByTestID(`draw-result-summary-cell-${i}`)).toHaveLength(1);
+    }
+    expect(hostByTestID(`draw-result-summary-cell-${DRAW_RESULT_FIXTURE.cards.length}`)).toHaveLength(0);
+
+    // Legendary first.
+    expect(hostByTestID('draw-result-summary-cell-0')[0].props.accessibilityLabel.startsWith('Legendary')).toBe(true);
+
+    // Tapping a cell opens the detail modal.
+    act(() => {
+      hostByTestID('draw-result-summary-cell-0')[0].props.onPress();
+    });
+    expect(tree.root.findByProps({ testID: 'screen-draw-result-detail-close' })).toBeTruthy();
   });
 
   it.each([360, 375, 390, 430])(

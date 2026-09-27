@@ -175,6 +175,32 @@ export function useFrameGapProbe(active: boolean): FrameGapSummary {
 
 const RARITIES: ReadonlyArray<PeakRarity> = ['COM', 'RAR', 'LEG'];
 
+// A long-ish sample stem (> 160 chars) so the spotlight's text size and the "Tap to read full
+// question" link can be judged on device. The preview only navigates: it never touches the
+// wallet, draw state or sync.
+const PREVIEW_QUESTION =
+  'Explain how the .NET garbage collector decides when to promote an object from generation 0 to generation 1, and why large objects live on a separate heap that is collected far less frequently.';
+
+function previewCard(index: number, rarity: PeakRarity) {
+  return {
+    stableUid: `preview-${index}`,
+    question: PREVIEW_QUESTION,
+    difficulty: rarity === 'LEG' ? 9 : rarity === 'RAR' ? 5 : 2,
+    rarity,
+    tag: 'Preview',
+    rank: index + 1,
+  };
+}
+
+/** The four preview decks: one card of each rarity, and a 10-card mix (1 LEG, 3 RAR, 6 COM). */
+function previewCards(kind: PeakRarity | 'multi'): Array<ReturnType<typeof previewCard>> {
+  if (kind === 'multi') {
+    const rarities: PeakRarity[] = ['LEG', 'RAR', 'RAR', 'RAR', 'COM', 'COM', 'COM', 'COM', 'COM', 'COM'];
+    return rarities.map((rarity, i) => previewCard(i, rarity));
+  }
+  return [previewCard(0, kind)];
+}
+
 export function CeremonyTuningScreen(props: NativeStackScreenProps<RootStackParamList, 'CeremonyTuning'>) {
   const [table, setTable] = React.useState<CeremonyTimingTable>(() => mergeTimingOverride(DEVICE, getCeremonyTimingOverride()));
   const [probing, setProbing] = React.useState(false);
@@ -259,6 +285,36 @@ export function CeremonyTuningScreen(props: NativeStackScreenProps<RootStackPara
         <Text testID="ceremony-tuning-probe" style={styles.meta}>
           {`p95 ${probe.p95.toFixed(1)} ms · max ${probe.max.toFixed(1)} ms · n ${probe.count} · ${verdict}`}
         </Text>
+
+        {/* Big-reveal previews (I04): force a rarity into the ceremony to judge the spotlight
+            sizing, banner and "Tap to read full question" on device. Navigate only. */}
+        <View style={styles.capGrid}>
+          {(['COM', 'RAR', 'LEG', 'multi'] as const).map((kind) => (
+            <Pressable
+              key={kind}
+              testID={`ceremony-tuning-preview-${kind}`}
+              accessibilityRole="button"
+              accessibilityLabel={`Preview ${kind} ceremony`}
+              style={styles.action}
+              onPress={() =>
+                props.navigation.navigate('DrawCeremony', {
+                  slug: 'csharp',
+                  deckTitle: 'Ceremony preview',
+                  drawResult: {
+                    poolId: 'csharp',
+                    cards: previewCards(kind),
+                    pityBefore: 0,
+                    pityAfter: 0,
+                    pityTriggered: false,
+                    highlightedRarity: kind === 'LEG' || kind === 'multi' ? 'LEG' : kind === 'RAR' ? 'RAR' : null,
+                  },
+                })
+              }
+            >
+              <Text style={styles.actionText}>{kind === 'multi' ? 'Preview multi (×10)' : `Preview ${kind}`}</Text>
+            </Pressable>
+          ))}
+        </View>
 
         <Pressable testID="ceremony-tuning-open-draw" accessibilityRole="button" style={styles.action} onPress={() => props.navigation.navigate('Draw')}>
           <Text style={styles.actionText}>Open Draw</Text>

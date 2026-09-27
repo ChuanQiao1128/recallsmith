@@ -24,9 +24,9 @@ export const COPY = {
     sectionNoReward: 'Session update',
     badge: (pulls: number) => (pulls > 0 ? `+${pulls} pull${pulls === 1 ? '' : 's'}` : 'Progress saved'),
     noPull: 'No free pulls this run',
-    walletReady: (available: number) => `${available} ready to use`,
-    walletReserve: (available: number, reserve: number) => `${available} ready · ${reserve} pending in reserve`,
-    walletFull: (reserve: number) => `Free pulls full · ${reserve} pending in reserve`,
+    walletReady: (available: number) => `${available} ready for this pack`,
+    walletReserve: (available: number, reserve: number) => `${available} ready for this pack · ${reserve} pending in reserve`,
+    walletFull: (reserve: number) => `Pack pulls full · ${reserve} pending in reserve`,
   },
   progress: {
     fullClearLabel: (done: number, total: number) => `${done} / ${total} cards · full clear`,

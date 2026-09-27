@@ -38,8 +38,9 @@ vi.mock('expo-linear-gradient', () => {
   return { LinearGradient: ({ children, ...props }: any) => React.createElement('LinearGradient', props, children) };
 });
 
-vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
-  loadRewardWalletState: vi.fn(() => walletLoader()),
+// 1.7: DrawResult reads the per-pack wallet for the "N pulls left" CTA.
+vi.mock('../../src/features/gacha/rewards/deckWallet', () => ({
+  loadDeckWallet: vi.fn((_slug: string) => walletLoader()),
 }));
 
 let permissionPromptPendingFixture = false;

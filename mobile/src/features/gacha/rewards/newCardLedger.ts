@@ -155,6 +155,35 @@ export async function payNewCardIfUnpaid(slug: string, stableUid: string, nowMs:
   }
 }
 
+/** Per-pack R1 weights for the legacy-wallet migration (deckWallet.ts): scans getAllKeys() for the
+ *  scoped NEW_CARD_LEDGER_PREFIX and, for each slug, counts ledger entries with paidAtMs > 0 (a
+ *  backfilled 0 does not count). Slugs with a zero count are omitted. Never throws: a storage error
+ *  returns whatever was collected so far. */
+export async function countPaidEntriesBySlug(): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  try {
+    const prefix = await getUserScopedKey(NEW_CARD_LEDGER_PREFIX);
+    const keys = await AsyncStorage.getAllKeys();
+    for (const key of keys) {
+      if (!key.startsWith(prefix)) continue;
+      const slug = key.slice(prefix.length);
+      if (!slug) continue;
+      const raw = await AsyncStorage.getItem(key);
+      if (raw == null) continue;
+      const ledger = parseLedger(raw);
+      let count = 0;
+      for (const paidAtMs of Object.values(ledger)) {
+        if (paidAtMs > 0) count += 1;
+      }
+      if (count > 0) out[slug] = count;
+    }
+  } catch {
+    // Partial results are acceptable: the migration treats an empty map as
+    // "no paid ledger anywhere" and routes to the target pack.
+  }
+  return out;
+}
+
 /** Entries with paidAtMs > 0 whose local day (formatDateKey, model.ts:221-226) equals that of `now`. */
 export function countPaidOnDay(ledger: NewCardLedger, now: Date): number {
   const today = formatDateKey(now);
@@ -165,14 +194,16 @@ export function countPaidOnDay(ledger: NewCardLedger, now: Date): number {
   return count;
 }
 
-/** R2 day marker (economyFloor pattern, :114-121): getUserScopedKey(DUE_CLEAR_MARKER_KEY) holds
- *  formatDateKey(now). Returns true and writes the marker only when it differs from today. Never throws
- *  (storage error → false). */
+/** R2 day marker (economyFloor pattern, :114-121). Per-pack in 1.7: the resolved key is
+ *  getUserScopedKey(`${DUE_CLEAR_MARKER_KEY}:${slug}`), so clearing due cards pays once per pack per
+ *  local day (option A). Holds formatDateKey(now); returns true and writes the marker only when it
+ *  differs from today. Never throws (storage error → false). DUE_CLEAR_MARKER_KEY stays exported and
+ *  unchanged as the base. */
 export const DUE_CLEAR_MARKER_KEY = 'recallsmith:due-clear:v1';
-export async function markDueClearedIfFirstToday(now: Date): Promise<boolean> {
+export async function markDueClearedIfFirstToday(now: Date, slug: string): Promise<boolean> {
   const today = formatDateKey(now);
   try {
-    const key = await getUserScopedKey(DUE_CLEAR_MARKER_KEY);
+    const key = await getUserScopedKey(`${DUE_CLEAR_MARKER_KEY}:${slug}`);
     const marker = await AsyncStorage.getItem(key);
     if (marker === today) return false;
     await AsyncStorage.setItem(key, today);

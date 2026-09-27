@@ -95,6 +95,8 @@ export type TapCardProps = {
   reduceMotion: boolean;
   focused?: boolean; onFocusToggle?: (uid: string) => void;   // RAR/LEG focus fly-in
   timings: Pick<ResolvedCeremonyTimings, 'flipMs' | 'rimSettleMs' | 'liftMs' | 'landMs'>;
+  /** When true, the LEG landing haptic is suppressed (the spotlight owns the reveal cues, I05). */
+  silent?: boolean;
 };
 
 // Memoised (2026-09-21 perf): every prop is a primitive or a stable reference from the
@@ -104,7 +106,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
   const {
     card, index, total, width, height, disabled, flipped,
     onTapStart, onFlipped, cardBackImage, frameImage, reduceMotion,
-    focused, onFocusToggle, timings,
+    focused, onFocusToggle, timings, silent = false,
   } = props;
 
   const flip = useSharedValue(flipped ? 1 : 0);
@@ -129,8 +131,10 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
   const onLanded = React.useCallback(() => {
     // S6: LEG adds a Heavy impact at landing (B04 owns the rolling rate limit).
     // The literals below are the canonical copy in CEREMONY_COPY_V10 (B10).
+    // Silent cards (I05 multi-pull: the spotlight owns the reveal cues) fire nothing.
+    if (silent) return;
     if (card.rarity === 'LEG') getCeremonyHaptics().impact('heavy');
-  }, [card.rarity]);
+  }, [card.rarity, silent]);
 
   const handlePress = React.useCallback(() => {
     if (disabled) return;
@@ -247,9 +251,12 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
         )}
       </Reanimated.View>
 
-      {/* CARD FRONT */}
+      {/* CARD FRONT — the side stays mounted (so the flip has something to rotate), but its
+          children mount only once flipped so the rarity word is never in the tree face down. */}
       <Reanimated.View style={[ceremonyStyles.tapCardSide, frontStyle]}>
         <View style={[ceremonyStyles.tapCardFace, { borderColor: accent, shadowColor: accent }]}>
+          {flipped ? (
+          <>
           {frameImage && RNImage ? (
             // With a rarity frame the face is laid out to the frame's windows (B12 geometry:
             // art window y 11–64 %, text slab y 68–95 %, both x 7–93 %) so nothing sits under
@@ -263,7 +270,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
                   style={ceremonyStyles.tapCardArtGradient}
                 />
                 <View style={[ceremonyStyles.tapCardChip, ceremonyStyles.tapCardChipInWindow, { backgroundColor: accent }]}>
-                  <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>★ {card.rarity}</Text>
+                  <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>{flipped ? `★ ${rarityLabel(card.rarity)}` : '★'}</Text>
                 </View>
               </View>
               <View style={ceremonyStyles.tapCardSlab}>
@@ -274,7 +281,7 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
           ) : (
             <>
               <View style={[ceremonyStyles.tapCardChip, { backgroundColor: accent }]}>
-                <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>★ {card.rarity}</Text>
+                <Text style={ceremonyStyles.tapCardChipText} numberOfLines={1}>{flipped ? `★ ${rarityLabel(card.rarity)}` : '★'}</Text>
               </View>
               <Text style={ceremonyStyles.tapCardQuestion} numberOfLines={3}>{card.question}</Text>
             </>
@@ -286,6 +293,8 @@ export const TapCard: React.NamedExoticComponent<TapCardProps> = React.memo(func
                 <FoilLayer width={width} height={height} accentColor={accent} rarity={card.rarity} active tilt={tilt} lut={FOIL_LUT} />
               </View>
             </PanHost>
+          ) : null}
+          </>
           ) : null}
         </View>
       </Reanimated.View>

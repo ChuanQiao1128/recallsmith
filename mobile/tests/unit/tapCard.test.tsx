@@ -176,6 +176,58 @@ describe('TapCard', () => {
     expect(rarityLabel('LEG')).toBe('Legendary');
   });
 
+  it('shows the rarity word on the chip only once the card is face up', () => {
+    // The card front is always in the tree (hidden by opacity), so the chip
+    // must withhold the rarity word until the card is flipped — otherwise the
+    // ceremony's "rarity word withheld until face up" grammar breaks.
+    const textNodes = (tree: any) =>
+      tree.root
+        .findAll((n: any) => (n.type as any) === 'Text')
+        .map((n: any) => {
+          const c = n.props.children;
+          return Array.isArray(c) ? c.join('') : String(c ?? '');
+        });
+
+    const down = renderCard({ card: { stableUid: 'r', question: 'Q?', difficulty: 5, rarity: 'RAR' }, flipped: false });
+    for (const text of textNodes(down.tree)) {
+      expect(text).not.toContain('Rare');
+      expect(text).not.toContain('RAR');
+    }
+
+    const up = renderCard({ card: { stableUid: 'r', question: 'Q?', difficulty: 5, rarity: 'RAR' }, flipped: true });
+    expect(textNodes(up.tree)).toContain('★ Rare');
+
+    const leg = renderCard({ card: { stableUid: 'l', question: 'Q?', difficulty: 9, rarity: 'LEG' }, flipped: true });
+    expect(textNodes(leg.tree)).toContain('★ Legendary');
+  });
+
+  it('labels the chip with rarityLabel and mounts the face only once flipped', () => {
+    const textNodes = (tree: any) =>
+      tree.root
+        .findAll((n: any) => (n.type as any) === 'Text')
+        .map((n: any) => {
+          const c = n.props.children;
+          return Array.isArray(c) ? c.join('') : String(c ?? '');
+        });
+
+    // Face down: no chip and no question text in the tree (the front side is mounted but empty).
+    const down = renderCard({ card: { stableUid: 'r', question: 'What is a struct?', difficulty: 5, rarity: 'RAR' }, flipped: false });
+    expect(textNodes(down.tree)).not.toContain('What is a struct?');
+    for (const text of textNodes(down.tree)) {
+      expect(text).not.toContain('Rare');
+      expect(text).not.toContain('RAR');
+    }
+
+    // Face up: the chip carries the rarity WORD (never the raw code) and the question mounts.
+    const up = renderCard({ card: { stableUid: 'r', question: 'What is a struct?', difficulty: 5, rarity: 'RAR' }, flipped: true });
+    expect(textNodes(up.tree)).toContain('★ Rare');
+    expect(textNodes(up.tree)).toContain('What is a struct?');
+    expect(textNodes(up.tree).join(' ')).not.toContain('RAR');
+
+    const leg = renderCard({ card: { stableUid: 'l', question: 'Q?', difficulty: 9, rarity: 'LEG' }, flipped: true, frameImage: { uri: 'frame' } as any });
+    expect(textNodes(leg.tree)).toContain('★ Legendary');
+  });
+
   it('mounts the foil only for a focused rare card', () => {
     const rare = renderCard({ card: { stableUid: 'u1', question: 'Q?', difficulty: 5, rarity: 'RAR' }, focused: true, flipped: true });
     expect(rare.tree.root.findAll((n: any) => n.type === 'Skia.Canvas')).toHaveLength(0);

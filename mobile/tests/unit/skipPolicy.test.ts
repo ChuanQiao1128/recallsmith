@@ -117,12 +117,14 @@ describe('skipPolicy', () => {
       reduceMotion: false,
       alreadyCompressed: false,
     });
-    const holdRAR = DEVICE.single.hold.RAR; // 620
-    expect(skipPolicy(hold(372, holdRAR))).toBe('compress');
-    expect(skipPolicy(hold(371, holdRAR))).toBe('none');
-    const holdLEG = DEVICE.multi.hold.LEG; // 1100
-    expect(skipPolicy(hold(660, holdLEG))).toBe('compress');
-    expect(skipPolicy(hold(659, holdLEG))).toBe('none');
+    const holdRAR = DEVICE.single.hold.RAR;
+    const boundaryRAR = Math.ceil(FAST_FORWARD_FROM_HOLD_FRACTION * holdRAR);
+    expect(skipPolicy(hold(boundaryRAR, holdRAR))).toBe('compress');
+    expect(skipPolicy(hold(boundaryRAR - 1, holdRAR))).toBe('none');
+    const holdLEG = DEVICE.multi.hold.LEG;
+    const boundaryLEG = Math.ceil(FAST_FORWARD_FROM_HOLD_FRACTION * holdLEG);
+    expect(skipPolicy(hold(boundaryLEG, holdLEG))).toBe('compress');
+    expect(skipPolicy(hold(boundaryLEG - 1, holdLEG))).toBe('none');
   });
 
   it('compresses tear and flash on a repeat ceremony', () => {

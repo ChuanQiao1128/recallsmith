@@ -93,8 +93,13 @@ vi.mock('../../src/features/gacha/home/homeRemote', () => ({
   fetchServerPremium: vi.fn(async () => false),
 }));
 
-vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
-  loadRewardWalletState: vi.fn(async () => walletFixture),
+// 1.7: Home builds per-pack wallets; each studiable pack gets the fixture.
+vi.mock('../../src/features/gacha/rewards/economyFloor', () => ({
+  prepareHomeDeckWallets: vi.fn(async ({ deckSummaries }: { deckSummaries: Array<{ slug: string }> }) => {
+    const out: Record<string, typeof walletFixture> = {};
+    for (const s of deckSummaries) out[s.slug] = walletFixture;
+    return out;
+  }),
 }));
 
 vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({

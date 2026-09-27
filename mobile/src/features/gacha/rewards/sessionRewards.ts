@@ -1,6 +1,6 @@
 import type { ReviewRating, CardProgress } from '../../../review/model';
 import type { AppliedRewardWalletState, RewardWalletState } from './rewardWallet';
-import { grantPullsToStoredWallet } from './rewardWallet';
+import { grantDeckPulls } from './deckWallet';
 import {
   countPaidOnDay,
   markDueClearedIfFirstToday,
@@ -35,10 +35,10 @@ export type RatingRewardSkipReason = 'progress-unsettled' | 'storage-error';
 
 export type RatingRewardStep = {
   newCardPaid: boolean;        // R1 fired for this uid
-  dueClearPaid: boolean;       // R2 fired (dueBefore > 0 && remainingDueCount === 0 && first time today)
+  dueClearPaid: boolean;       // R2 fired (dueBefore > 0 && remainingDueCount === 0 && first time today for this pack)
   pulls: number;               // Number(newCardPaid) + Number(dueClearPaid), 0..2
-  walletBefore: RewardWalletState | null;   // null when pulls === 0
-  walletAfter: RewardWalletState | null;
+  walletBefore: RewardWalletState | null;   // this pack's wallet before the grant; null when pulls === 0
+  walletAfter: RewardWalletState | null;    // this pack's wallet after the grant
   applied: AppliedRewardWalletState | null;
   /** countPaidOnDay(ledger, now) for this slug AFTER the step (feeds R7 / C02). */
   newCardsLearnedToday: number;
@@ -59,7 +59,7 @@ export const ZERO_REWARD_STEP: RatingRewardStep = Object.freeze({
 /** Order: (0) readProgressSettled(slug) -- unsettled → skip (1) and (2), report skipped:'progress-unsettled';
  *  (1) seedNewCardLedgerIfAbsent(slug, progressBefore, now, storage-fresh source); (2) R1: newCardEligible
  *  && rating !== 'again' → payNewCardIfUnpaid; (3) R2: dueBefore > 0 && remainingDueCount === 0 →
- *  markDueClearedIfFirstToday; (4) pulls > 0 → grantPullsToStoredWallet(pulls). Ledger and marker land
+ *  markDueClearedIfFirstToday(now, slug); (4) pulls > 0 → grantDeckPulls(slug, pulls). Ledger and marker land
  *  before the wallet. Never throws: a storage failure at (1) returns the zero step (no pay,
  *  skipped:'storage-error'); at (4) the ledger/marker are already written and the step reports pulls with
  *  walletAfter === null (under-grant, never double-grant).
@@ -135,7 +135,7 @@ export async function settleRatingReward(input: RatingRewardInput): Promise<Rati
   // (3) R2: clearing today's due cards pays one pull, at most once per local day.
   let dueClearPaid = false;
   if (dueBefore > 0 && remainingDueCount === 0) {
-    dueClearPaid = await markDueClearedIfFirstToday(now);
+    dueClearPaid = await markDueClearedIfFirstToday(now, slug);
   }
 
   const pulls = Number(newCardPaid) + Number(dueClearPaid);
@@ -145,7 +145,7 @@ export async function settleRatingReward(input: RatingRewardInput): Promise<Rati
   // here reports the pulls with a null wallet -- under-grant, never double-grant.
   if (pulls > 0) {
     try {
-      const grant = await grantPullsToStoredWallet(pulls);
+      const grant = await grantDeckPulls(slug, pulls);
       return {
         newCardPaid,
         dueClearPaid,

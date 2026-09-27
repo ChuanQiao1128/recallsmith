@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
+using Npgsql;
 using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
 
@@ -24,6 +25,17 @@ namespace RecallSmith.Lambda.Vpc.Runtime;
 /// DrawStateMerge.cs for the executable spec): owned is a grow-only set union,
 /// pity and wallet are last-writer-wins on a client updated_at_ms that is
 /// clamped to server now + 5 minutes.
+///
+/// Release 1.7 (economy option A) adds an optional per-deck pull pool,
+/// decks[i].pulls, with the same shape as the legacy wallet. Each pool merges by
+/// the wallet's last-writer-wins operator (DrawStateMerge.MergeWallet) applied
+/// per (user, deck) row, and lands in user_deck_wallet (migration 025). The
+/// top-level wallet stays the legacy GLOBAL pool that 1.6.1 keeps using: it is
+/// untouched here in shape and behaviour. A request that carries no pulls
+/// anywhere never writes a deck-pool row, and a deck that carries only a pool
+/// (no owned, no pity) is stored and echoed back. The 1.7 client owns splitting
+/// the legacy wallet into pools and then zeroing it; the server never migrates
+/// balances.
 /// </summary>
 public static class DrawStateSync
 {
@@ -39,7 +51,13 @@ public static class DrawStateSync
 
   private const long ClientClockSlackMs = 5 * 60 * 1000;
 
-  private sealed record DeckInput(string DeckSlug, List<string> Owned, PitySnapshot? Pity);
+  private sealed record DeckInput(string DeckSlug, List<string> Owned, PitySnapshot? Pity, WalletSnapshot? Pulls);
+
+  // Set once the table has been seen, never cached as false: a migration that lands after this
+  // container started is picked up on the next request.
+  private static volatile bool s_deckWalletTableSeen;
+
+  internal static void ResetDeckWalletProbe() => s_deckWalletTableSeen = false;
 
   public static async Task<APIGatewayProxyResponse> HandleDrawStateSync(LambdaRequest req, Res res, AuthContext auth)
   {
@@ -129,6 +147,22 @@ public static class DrawStateSync
             pity = new PitySnapshot(draws, threshold, ts);
           }
 
+          // Release 1.7 per-deck pull pool, same shape and same count/stamp rules
+          // as the legacy wallet below. An absent, null or non-object `pulls`
+          // leaves Pulls null: "this device says nothing about this pool", which
+          // never writes a zero row.
+          WalletSnapshot? pulls = null;
+          if (d.TryGetProperty("pulls", out var pullsEl) && pullsEl.ValueKind == JsonValueKind.Object)
+          {
+            var availablePulls = Math.Max(0, OptionalInt(pullsEl.TryGetProperty("availablePulls", out var pa) ? pa : (JsonElement?)null) ?? 0);
+            var reservePulls = Math.Max(0, OptionalInt(pullsEl.TryGetProperty("reservePulls", out var pr) ? pr : (JsonElement?)null) ?? 0);
+            // Missing or non-positive stamp defaults to 0, NOT to now(), for the
+            // same reason as the pity and wallet stamps: 0 means "never observed".
+            var pullsTs = OptionalMs(pullsEl.TryGetProperty("updatedAtMs", out var ptu) ? ptu : (JsonElement?)null) ?? 0;
+            if (pullsTs > clientClockCeilingMs) pullsTs = clientClockCeilingMs;
+            pulls = new WalletSnapshot(availablePulls, reservePulls, pullsTs);
+          }
+
           // Deck slugs are deduped rather than trusted to be distinct. The app
           // derives them from storage keys so they always are, but a repeated
           // slug would make the meta upsert touch one row twice in a single
@@ -145,12 +179,13 @@ public static class DrawStateSync
               Pity = existing.Pity is { } ep
                 ? (pity is { } np ? DrawStateMerge.MergePity(ep, np) : ep)
                 : pity,
+              Pulls = existing.Pulls is { } ew ? (pulls is { } nw ? DrawStateMerge.MergeWallet(ew, nw) : ew) : pulls,
             };
           }
           else
           {
             deckIndex[deckSlug] = decks.Count;
-            decks.Add(new DeckInput(deckSlug, owned, pity));
+            decks.Add(new DeckInput(deckSlug, owned, pity, pulls));
           }
         }
       }
@@ -316,6 +351,63 @@ public static class DrawStateSync
           await DbUtil.ExecuteAsync(conn, tx, upsertWallet, [userSub, w.AvailablePulls, w.ReservePulls, w.UpdatedAtMs]);
         }
 
+        // Probe once per request, inside the transaction, before the deck-pool
+        // write and reused by the read-back. This keeps a core-vpc deploy that
+        // beats migration 025 from turning every sync (including 1.6.1's) into a
+        // 500: the pools are simply absent until the table exists.
+        var deckWalletTableExists = await DeckWalletTableExistsAsync(conn, tx);
+
+        var poolSlugs = new List<string>();
+        var poolAvailable = new List<int>();
+        var poolReserve = new List<int>();
+        var poolStamps = new List<long>();
+        foreach (var deck in decks)
+        {
+          if (deck.Pulls is not { } pw) continue;
+          poolSlugs.Add(deck.DeckSlug);
+          poolAvailable.Add(pw.AvailablePulls);
+          poolReserve.Add(pw.ReservePulls);
+          poolStamps.Add(pw.UpdatedAtMs);
+        }
+
+        if (poolSlugs.Count > 0 && deckWalletTableExists)
+        {
+          // The same row comparison as upsertWallet -- DrawStateMerge.CompareWallet
+          // -- applied per (user, deck) row. Per option A a pool draws only its own
+          // deck, so each pool is an independent last-writer-wins snapshot.
+          const string upsertDeckWallet = """
+            insert into user_deck_wallet (user_sub, deck_slug, available_pulls, reserve_pulls, updated_at_ms)
+            select $1, w.slug, w.available, w.reserve, w.ts
+            from unnest($2::text[], $3::int[], $4::int[], $5::bigint[]) as w(slug, available, reserve, ts)
+            on conflict (user_sub, deck_slug) do update set
+              available_pulls = case
+                when (excluded.updated_at_ms, excluded.available_pulls, excluded.reserve_pulls)
+                     >= (user_deck_wallet.updated_at_ms, user_deck_wallet.available_pulls, user_deck_wallet.reserve_pulls)
+                  then excluded.available_pulls
+                else user_deck_wallet.available_pulls
+              end,
+              reserve_pulls = case
+                when (excluded.updated_at_ms, excluded.available_pulls, excluded.reserve_pulls)
+                     >= (user_deck_wallet.updated_at_ms, user_deck_wallet.available_pulls, user_deck_wallet.reserve_pulls)
+                  then excluded.reserve_pulls
+                else user_deck_wallet.reserve_pulls
+              end,
+              updated_at_ms = case
+                when (excluded.updated_at_ms, excluded.available_pulls, excluded.reserve_pulls)
+                     >= (user_deck_wallet.updated_at_ms, user_deck_wallet.available_pulls, user_deck_wallet.reserve_pulls)
+                  then excluded.updated_at_ms
+                else user_deck_wallet.updated_at_ms
+              end
+            """;
+          await DbUtil.ExecuteAsync(conn, tx, upsertDeckWallet, [
+            userSub,
+            poolSlugs.ToArray(),
+            poolAvailable.ToArray(),
+            poolReserve.ToArray(),
+            poolStamps.ToArray(),
+          ]);
+        }
+
         // Read back inside the same transaction, so the answer is the state the
         // write just produced and not a state some concurrent device left behind
         // between commit and select.
@@ -346,6 +438,20 @@ public static class DrawStateSync
           """;
         var walletRows = await DbUtil.QueryAsync(conn, tx, selectWallet, [userSub]);
 
+        // Only read the pools back when the probe saw the table this request. A
+        // pre-025 schema answers exactly as 1.6.1 does, with no pulls anywhere.
+        var deckWalletRows = new List<Dictionary<string, object?>>();
+        if (deckWalletTableExists)
+        {
+          const string selectDeckWallet = """
+            select deck_slug as "deckSlug", available_pulls as "availablePulls", reserve_pulls as "reservePulls", updated_at_ms as "updatedAtMs"
+            from user_deck_wallet
+            where user_sub = $1
+            order by deck_slug asc
+            """;
+          deckWalletRows = await DbUtil.QueryAsync(conn, tx, selectDeckWallet, [userSub]);
+        }
+
         await tx.CommitAsync();
 
         var ownedByDeck = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -375,15 +481,30 @@ public static class DrawStateSync
           };
         }
 
+        var pullsByDeck = new Dictionary<string, object>(StringComparer.Ordinal);
+        foreach (var row in deckWalletRows)
+        {
+          var slug = AsString(row, "deckSlug");
+          if (slug.Length == 0) continue;
+          pullsByDeck[slug] = new
+          {
+            availablePulls = AsInt(row, "availablePulls"),
+            reservePulls = AsInt(row, "reservePulls"),
+            updatedAtMs = AsLong(row, "updatedAtMs"),
+          };
+        }
+
         var slugs = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var slug in ownedByDeck.Keys) slugs.Add(slug);
         foreach (var slug in metaByDeck.Keys) slugs.Add(slug);
+        foreach (var slug in pullsByDeck.Keys) slugs.Add(slug);
 
         var deckPayload = slugs.Select(slug => new
         {
           deckSlug = slug,
           owned = ownedByDeck.TryGetValue(slug, out var list) ? list : [],
           pity = metaByDeck.TryGetValue(slug, out var m) ? m : null,
+          pulls = pullsByDeck.TryGetValue(slug, out var pw) ? pw : null,
         }).ToList();
 
         object? walletPayload = null;
@@ -419,6 +540,23 @@ public static class DrawStateSync
     {
       return res.Error500(ex);
     }
+  }
+
+  private static async Task<bool> DeckWalletTableExistsAsync(NpgsqlConnection conn, NpgsqlTransaction tx)
+  {
+    if (s_deckWalletTableSeen) return true;
+
+    var exists = await DbUtil.ExecuteScalarAsync(conn, tx, "select to_regclass('user_deck_wallet') is not null", []);
+    if (exists is true)
+    {
+      // Cache only the true answer: false must stay re-probed so a migration that
+      // lands after this container started is picked up on the next request.
+      s_deckWalletTableSeen = true;
+      return true;
+    }
+
+    Log.Event("warn", new { tag = "draw-state-sync", message = "user_deck_wallet missing; run migration 025" });
+    return false;
   }
 
   private static string RequireString(JsonElement obj, string prop, string fieldName)

@@ -10,7 +10,8 @@ import { RewardSummaryCard } from '../features/gacha/components/RewardSummaryCar
 import { SummaryProgressBlock } from '../features/gacha/components/SummaryProgressBlock';
 import { buildDrawState } from '../features/gacha/draw/drawState';
 import { resolveNewMilestones, type Milestone } from '../features/gacha/milestones/milestoneTracker';
-import { loadRewardWalletState, type RewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import type { RewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { loadDeckWallet } from '../features/gacha/rewards/deckWallet';
 import { buildSessionSummaryVM, resolveSecondaryAction } from '../features/gacha/session/summaryMapper';
 import { mcqPicksLine } from '../features/gacha/mcq/mcqConstants';
 import { applySessionStreak, loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
@@ -64,7 +65,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
       try {
         if (sessionId) {
           const [loadedWallet, streakResult] = await Promise.all([
-            loadRewardWalletState(),
+            loadDeckWallet(slug),
             applySessionStreak({ sessionId, earned: streakEarned }),
           ]);
 
@@ -78,7 +79,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
           return;
         }
 
-        const [currentWallet, currentStreak] = await Promise.all([loadRewardWalletState(), loadStreakSnapshot()]);
+        const [currentWallet, currentStreak] = await Promise.all([loadDeckWallet(slug), loadStreakSnapshot()]);
         if (!cancelled) {
           setWalletBeforeReward(currentWallet);
           setStreakBeforeSnapshot(currentStreak);
@@ -96,7 +97,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, sessionDone, sessionLimit, minimumGoal, streakEarned, summaryRetryToken]);
+  }, [sessionId, sessionDone, sessionLimit, minimumGoal, streakEarned, summaryRetryToken, slug]);
 
   const walletForSummary = reward?.walletBefore ?? walletBeforeReward;
 

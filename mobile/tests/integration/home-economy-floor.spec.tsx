@@ -30,6 +30,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
       for (const key of keys) store.delete(key);
     }),
     getAllKeys: vi.fn(async () => [...store.keys()]),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((k) => [k, store.get(k) ?? null] as [string, string | null])),
   },
 }));
 
@@ -154,10 +155,8 @@ import { HomeScreen } from '../../src/screens/HomeScreen';
 import { saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
-import {
-  loadRewardWalletState,
-  saveRewardWalletState,
-} from '../../src/features/gacha/rewards/rewardWallet';
+import { saveRewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
+import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
 import type { CardProgress } from '../../src/review/model';
 
@@ -172,6 +171,13 @@ async function seed(owned: string[]) {
   await saveDeckProgress(DECK, [untouched('c1'), untouched('c2'), untouched('c3')]);
   await saveDrawState('csharp', { owned, pity: null });
   await saveRewardWalletState({ availablePulls: 0, reservePulls: 0 });
+  // Per-pack wallet: the pack starts empty but already migrated and already
+  // bootstrapped, so the daily economy floor is the only thing that can add a
+  // pull on load (the first-visit bootstrap is out of the picture).
+  store.set(
+    'devcards:u:anon:recallsmith:deck-wallets:v1',
+    JSON.stringify({ migratedAtMs: 1, decks: {}, bootstrappedAtMs: { csharp: 1 } }),
+  );
 }
 
 async function renderHome() {
@@ -215,9 +221,9 @@ describe('HomeScreen — economy floor wiring', () => {
     // load instead would leave this reading "Clear today's route to unlock
     // pulls" until the next focus -- the screen telling the user they are
     // stuck on the very load that unstuck them.
-    expect(badgeText(tree)).toBe('1 pull ready');
-    expect(await loadRewardWalletState()).toEqual({ availablePulls: 1, reservePulls: 0 });
-    expect(store.get('devcards:u:anon:recallsmith:economy-floor:v1')).toBeTruthy();
+    expect(badgeText(tree)).toBe('1 pull ready for this pack');
+    expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 1, reservePulls: 0 });
+    expect(store.get('devcards:u:anon:recallsmith:economy-floor:v1:csharp')).toBeTruthy();
   });
 
   it('leaves a user with cards to study exactly as poor as they were', async () => {
@@ -226,7 +232,7 @@ describe('HomeScreen — economy floor wiring', () => {
     const tree = await renderHome();
 
     expect(badgeText(tree)).toBe('Learn a new card to earn a pull');
-    expect(await loadRewardWalletState()).toEqual({ availablePulls: 0, reservePulls: 0 });
-    expect(store.has('devcards:u:anon:recallsmith:economy-floor:v1')).toBe(false);
+    expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
+    expect(store.has('devcards:u:anon:recallsmith:economy-floor:v1:csharp')).toBe(false);
   });
 });

@@ -19,10 +19,12 @@ import { loadDrawState } from '../features/gacha/draw/drawStateStore';
 import { buildPityProgressLabelV9, DEFAULT_PITY_STATE, normalizePityState } from '../features/gacha/draw/pity';
 import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../features/gacha/draw/ceremonyTimings';
 import {
-  consumePullsFromStoredWallet,
-  loadRewardWalletState,
-  refundPullsToStoredWallet,
-} from '../features/gacha/rewards/rewardWallet';
+  consumeDeckPulls,
+  ensureDeckBootstrap,
+  loadDeckWallet,
+  migrateLegacyWalletIfNeeded,
+  refundDeckPulls,
+} from '../features/gacha/rewards/deckWallet';
 import { spendablePullsNow } from '../features/gacha/rewards/spendablePulls';
 import { scheduleProgressSync } from '../sync/progressSync';
 import { a11y } from '../theme/a11y';
@@ -68,6 +70,9 @@ const SWIPE_ARM_DISTANCE = 72;
 const SWIPE_TRACK_WIDTH = 200;
 const PACK_WIDTH = 240;
 const PACK_HEIGHT = 336;
+// Black letterbox for the contain'd cover: the ~8 pt bars blend into the art's
+// black foil surround instead of showing the pack gradient behind them.
+const COVER_MATTE = ['#000000', '#000000'] as const;
 
 function normalizeTitle(raw: any, fallback: string): string {
   const fromManifest = String(raw?.title ?? raw?.Title ?? raw?.name ?? raw?.displayName ?? '').trim();
@@ -227,6 +232,9 @@ function PackArt({
   // Y-axis tilt so the pack's right side edge becomes visible — gives real 3D depth.
   const wobbleRotateY = hasAnimated && bobbingValue ? bobbingValue.interpolate({ inputRange: [0, 0.5, 1], outputRange: ['-7deg', '0deg', '7deg'] }) : '0deg';
   const shineLeft = hasAnimated && shineValue ? shineValue.interpolate({ inputRange: [0, 1], outputRange: [-packSize.width * 0.6, packSize.width * 1.1] }) : -packSize.width * 0.6;
+  // PNG path: the cover PNG is the whole pack, drawn with `contain` on a black
+  // matte. Procedural path keeps the palette gradient + its own padding.
+  const showCover = coverImage && RNImage;
 
   return (
     <AnimatedView
@@ -250,14 +258,22 @@ function PackArt({
           },
         ]}
       />
-      <LinearGradient colors={palette.cover} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={[styles.pack, { width: packSize.width, height: packSize.height, borderColor: palette.ring }]}>
-        {coverImage && RNImage ? (
+      <LinearGradient
+        testID="draw-pack-face"
+        colors={showCover ? COVER_MATTE : palette.cover}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
+        style={showCover
+          ? [styles.pack, { width: packSize.width, height: packSize.height, borderColor: palette.ring }, styles.packOnCover]
+          : [styles.pack, { width: packSize.width, height: packSize.height, borderColor: palette.ring }]}
+      >
+        {showCover ? (
           // PNG path: cover image is the complete artwork. We DO NOT layer on
           // packBadge / brand stripe / blob window / title slab — those would
           // obscure the PNG. Only the moving shine sweep stays.
           <>
-            <RNImage source={coverImage} resizeMode="cover" style={StyleSheet.absoluteFillObject} pointerEvents="none" />
-            <AnimatedView pointerEvents="none" style={[styles.packShine, { height: packSize.height + 40 }, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
+            <RNImage testID="draw-pack-cover-image" source={coverImage} resizeMode="contain" style={styles.packCoverImage} pointerEvents="none" />
+            <AnimatedView pointerEvents="none" testID="draw-pack-shine" style={[styles.packShineOnCover, { height: packSize.height + 40 }, hasAnimated ? { transform: [{ translateX: shineLeft }, { rotate: '14deg' }] } : null]} />
           </>
         ) : (
           // Fallback path: no PNG → render full procedural pack with brand
@@ -328,6 +344,12 @@ export function DrawScreen({ navigation, route }: Props) {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(route.params?.slug ?? null);
   const [swipePrimed, setSwipePrimed] = useState(false);
   const [swipeDelta, setSwipeDelta] = useState(0);
+  // Bumped on every successful load() so the auto-arm effect re-runs even when
+  // the slug and loadState are unchanged (a reload of the same pack).
+  const [armEpoch, setArmEpoch] = useState(0);
+  // True only while resolveOrInstall is downloading the pack, so the status
+  // copy can say "Downloading pack…" instead of the generic "Preparing draw…".
+  const [installingPack, setInstallingPack] = useState(false);
   const swipeStartXRef = useRef<number | null>(null);
   const swipeResetTimerRef = useRef<number | null>(null);
   // Mirrors `ready` for reads inside load() (which closes over the value from
@@ -386,9 +408,12 @@ export function DrawScreen({ navigation, route }: Props) {
     if (loadState !== 'ready') return;
     const t = setTimeout(() => setSwipePrimed(true), 250) as unknown as number;
     return () => clearTimeout(t);
-    // Keyed on ready.slug too: a neighbour switch never passes through
-    // 'loading', so without it the pack would stay disarmed after a switch.
-  }, [loadState, ready?.slug]);
+    // Keyed on ready.slug and armEpoch: a neighbour switch never passes through
+    // 'loading', and a reload of the same slug leaves both loadState and slug
+    // unchanged. armEpoch bumps on every successful load, so the pack re-arms
+    // after the first load, a neighbour switch, a refocus, a retry, and a
+    // return after a pull.
+  }, [loadState, ready?.slug, armEpoch]);
 
   useEffect(() => {
     if (!hasAnimated) return;
@@ -422,6 +447,7 @@ export function DrawScreen({ navigation, route }: Props) {
         const updates = await checkManifestForUpdates(false);
         const update = updates[slug];
         if (!update?.remoteUrl) return null;
+        if (!cancelled) setInstallingPack(true);
         const installed = await installDeckAndInvalidate(slug, update.remoteUrl, update.remoteVersion, update.remoteSha256);
         if (!installed) return null;
         return getCachedDeck(slug);
@@ -433,6 +459,7 @@ export function DrawScreen({ navigation, route }: Props) {
         // chamber on screen and shows the inline pack loader instead.
         if (readyRef.current === null) setLoadState('loading');
         setError(null);
+        setInstallingPack(false);
         try {
           // Cache first. `{ preferRemote: true }` put a manifest fetch in
           // front of the spinner, so opening the Draw tab on a slow network
@@ -470,15 +497,22 @@ export function DrawScreen({ navigation, route }: Props) {
             return;
           }
 
+          // 1.7 per-pack wallet: drain any legacy global balance into packs
+          // once, then run the pack's first-visit bootstrap, before the pack
+          // wallet is read. Both are no-ops after their first effect, but they
+          // must precede the read so the badge shows the armed pack's balance.
+          await migrateLegacyWalletIfNeeded();
+          await ensureDeckBootstrap(slug);
+
           // Wallet and status are independent reads; awaiting them one after
           // the other doubled the storage latency in front of the pack for no
           // reason. loadDrawStatus owns its own failure (returns a blank
           // status), so Promise.all cannot fail the load on its account.
-          const [wallet, status] = await Promise.all([
-            loadRewardWalletState(),
+          const [deckWallet, status] = await Promise.all([
+            loadDeckWallet(slug),
             loadDrawStatus(slug, (deck as any)?.Cards ?? []),
           ]);
-          const pulls = spendablePullsNow(wallet);
+          const pulls = spendablePullsNow(deckWallet);
           const deckTitle = normalizeTitle(deck, slug);
           const mergedOptions = mergeSelectedDeck(deckOptions, slug, deckTitle);
 
@@ -523,6 +557,7 @@ export function DrawScreen({ navigation, route }: Props) {
             setSelectedSlug(slug);
             setSwipePrimed(false);
             setSwipeDelta(0);
+            setArmEpoch((n) => n + 1);
             setLoadState('ready');
           }
         } catch (loadError: any) {
@@ -531,6 +566,8 @@ export function DrawScreen({ navigation, route }: Props) {
             setLoadState('error');
             setError(errorToMessage(loadError));
           }
+        } finally {
+          if (!cancelled) setInstallingPack(false);
         }
       };
 
@@ -603,7 +640,7 @@ export function DrawScreen({ navigation, route }: Props) {
         // here spent all ten. The near-complete collector, who is exactly who
         // this pack is for by then, paid six pulls for nothing and was told
         // nothing about it.
-        const spent = await consumePullsFromStoredWallet(Math.min(drawCount, result.cards.length));
+        const spent = await consumeDeckPulls(ready.slug, Math.min(drawCount, result.cards.length));
         chargedPulls = spent.spent;
 
         // The gacha half of the sync had no trigger of its own: draw state
@@ -640,7 +677,7 @@ export function DrawScreen({ navigation, route }: Props) {
         });
       } catch {
         if (chargedPulls > 0) {
-          await refundPullsToStoredWallet(chargedPulls).catch(() => {});
+          await refundDeckPulls(ready.slug, chargedPulls).catch(() => {});
         }
         setLoadState('error');
         setError('Unable to open this pack right now.');
@@ -658,7 +695,7 @@ export function DrawScreen({ navigation, route }: Props) {
           <View style={styles.centerWrap}>
             <ActivityIndicator size="large" color={colors.pokeBlueDeep} />
             <Text style={styles.loadingText} numberOfLines={1}>
-              Preparing draw...
+              {installingPack ? 'Downloading pack…' : 'Preparing draw...'}
             </Text>
           </View>
         </LinearGradient>
@@ -742,6 +779,24 @@ export function DrawScreen({ navigation, route }: Props) {
   // spinner; the header, badge, rail and footer stay put.
   const switchingDeck = selectedSlug !== null && selectedSlug !== ready.slug;
   const openDisabled = opening || !swipePrimed || switchingDeck;
+  // With 1–9 pulls the affordable action is Open 1, so it takes the loud
+  // primary style and the disabled Open 10 is demoted to the ghost and says
+  // why. With 10+ (or 0) pulls the buttons keep their default emphasis.
+  const emphasizeSingle = ready.canPullSingle && !ready.canPullMulti;
+  const open10BaseStyle = emphasizeSingle ? styles.secondaryCta : styles.primaryCta;
+  const open10TextStyle = emphasizeSingle ? styles.secondaryCtaText : styles.primaryCtaText;
+  const open10Label = emphasizeSingle ? 'Open 10 · need 10 pulls' : 'Open 10';
+  const open1BaseStyle = emphasizeSingle ? styles.primaryCta : styles.secondaryCta;
+  const open1TextStyle = emphasizeSingle ? styles.primaryCtaText : styles.secondaryCtaText;
+  // One always-present status line under the footer. minHeight keeps the
+  // footer from jumping as the copy appears and clears.
+  const statusText = opening
+    ? 'Opening…'
+    : switchingDeck && installingPack
+      ? 'Downloading pack…'
+      : switchingDeck
+        ? 'Loading pack…'
+        : '';
 
   return (
     <SafeAreaView style={styles.safeArea} testID="screen-draw-root">
@@ -759,7 +814,12 @@ export function DrawScreen({ navigation, route }: Props) {
                 {ready.deckTitle}
               </Text>
             </View>
-            <View style={styles.pullsBadge} testID="draw-pack-pulls-badge" nativeID="draw-wallet-badge">
+            <View
+              style={styles.pullsBadge}
+              testID="draw-pack-pulls-badge"
+              nativeID="draw-wallet-badge"
+              accessibilityLabel={`${ready.walletPulls} pull${ready.walletPulls === 1 ? '' : 's'} for ${ready.deckTitle}`}
+            >
               {/* Currency token — solid gold gem with subtle inner facet.
                   Replaced the Pokeball-style 2-tone token (top blue / bottom
                   white / divider / center dot) which was an obvious Pokemon
@@ -833,7 +893,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   composited above the halo as a whole. No layout of its own. */}
               <View testID="draw-pack-3d-wrapper" collapsable={false} style={styles.pack3dWrapper}>
                 {switchingDeck ? (
-                  <View testID="draw-pack-inline-loader" style={styles.packInlineLoader}>
+                  <View testID="draw-pack-inline-loader" style={[styles.packInlineLoader, { width: packSize.width, height: packSize.height }]}>
                     <ActivityIndicator size="large" color={colors.pokeBlueDeep} />
                   </View>
                 ) : (
@@ -856,7 +916,7 @@ export function DrawScreen({ navigation, route }: Props) {
                 via a hidden probe when the empty-pulls CTA takes over. */}
             {!ready.canPullSingle ? (
               <Text style={styles.swipeHintHidden} numberOfLines={1}>
-                No pulls left. Study sessions grant more pulls.
+                No pulls for this pack yet. Learn its cards to earn more.
               </Text>
             ) : null}
           </View>
@@ -954,13 +1014,13 @@ export function DrawScreen({ navigation, route }: Props) {
                 accessibilityRole="button"
                 accessibilityLabel={`Open ten cards from ${ready.deckTitle}`}
                 disabled={openDisabled || !ready.canPullMulti}
-                style={({ pressed }) => [styles.primaryCta, (openDisabled || !ready.canPullMulti) && styles.ctaDisabled, pressed && styles.pressed]}
+                style={({ pressed }) => [open10BaseStyle, (openDisabled || !ready.canPullMulti) && styles.ctaDisabled, pressed && styles.pressed]}
                 onPress={() => {
                   void open(10);
                 }}
               >
-                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-                  Open 10
+                <Text style={open10TextStyle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                  {open10Label}
                 </Text>
               </Pressable>
               <Pressable
@@ -968,17 +1028,20 @@ export function DrawScreen({ navigation, route }: Props) {
                 accessibilityRole="button"
                 accessibilityLabel={`Open one card from ${ready.deckTitle}`}
                 disabled={openDisabled || !ready.canPullSingle}
-                style={({ pressed }) => [styles.secondaryCta, (openDisabled || !ready.canPullSingle) && styles.ctaDisabled, pressed && styles.pressed]}
+                style={({ pressed }) => [open1BaseStyle, (openDisabled || !ready.canPullSingle) && styles.ctaDisabled, pressed && styles.pressed]}
                 onPress={() => {
                   void open(1);
                 }}
               >
-                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                <Text style={open1TextStyle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Open 1
                 </Text>
               </Pressable>
             </View>
           )}
+          <Text testID="draw-open-status" style={styles.openStatus} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+            {statusText}
+          </Text>
         </View>
       </LinearGradient>
     </SafeAreaView>
@@ -1112,6 +1175,16 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   pack: { width: PACK_WIDTH, height: PACK_HEIGHT, borderRadius: 22, borderWidth: 2, overflow: 'hidden', paddingHorizontal: spacing.sm, paddingVertical: spacing.sm },
+  // Cover PNG fills the whole (unpadded) pack: RN gives a bundled image its
+  // intrinsic size when the style names neither width nor height, and that
+  // beats the absolute insets — so the frame draws at 1024×1536 clipped to the
+  // top-left corner (the same bug ceremonyStyles.tapCardFrame records, seen
+  // 2026-09-20). Explicit 100%/100% + `contain` shows the whole art instead.
+  packCoverImage: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' },
+  // `pack` sets paddingHorizontal/paddingVertical, so zeroing only `padding`
+  // would not win — override both, and go black so the letterbox bars match
+  // the art's black surround.
+  packOnCover: { paddingHorizontal: 0, paddingVertical: 0, backgroundColor: '#000000' },
   packBadge: {
     position: 'absolute', top: 10, right: 10, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
     minWidth: 30, alignItems: 'center', justifyContent: 'center',
@@ -1125,6 +1198,10 @@ const styles = StyleSheet.create({
   packTitleSlab: { marginTop: 6, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.30)', alignSelf: 'center', maxWidth: '92%' },
   packTitle: { fontSize: 18, fontWeight: '900', textAlign: 'center', letterSpacing: 0.4 },
   packShine: { position: 'absolute', top: -20, width: 60, height: PACK_HEIGHT + 40, backgroundColor: colors.shine },
+  // Over a dark PNG cover the 88 %-white shine reads as a white wedge, so the
+  // PNG path uses a much fainter band. colors.shine (a shared text token) is
+  // left untouched; the procedural path keeps packShine.
+  packShineOnCover: { position: 'absolute', top: -20, width: 60, height: PACK_HEIGHT + 40, backgroundColor: 'rgba(255,255,255,0.18)' },
   // Pack-sized box so a neighbour switch spins in place instead of collapsing
   // the stage and shifting the header/rail/footer around it.
   packInlineLoader: { width: PACK_WIDTH, height: PACK_HEIGHT, alignItems: 'center', justifyContent: 'center' },
@@ -1153,6 +1230,9 @@ const styles = StyleSheet.create({
   walletHintVisible: { marginTop: spacing.sm, alignSelf: 'center', color: colors.inkMuted, fontSize: typography.caption, fontWeight: '700' },
   walletHint: { marginTop: 2, color: colors.inkMuted, fontSize: typography.caption, fontWeight: '700' },
   footerActions: { marginTop: spacing.md, gap: spacing.sm },
+  // Always-present status line under the footer. The fixed minHeight reserves
+  // the row so the footer does not jump when the copy appears and clears.
+  openStatus: { marginTop: spacing.xs, minHeight: 16, alignSelf: 'center', color: colors.inkMuted, fontSize: typography.caption, fontWeight: '700' },
   primaryCta: {
     minHeight: 56, borderRadius: 999, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md,
     backgroundColor: colors.pokeBlue, shadowColor: 'rgba(44,156,192,0.5)', shadowOpacity: 1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 6,

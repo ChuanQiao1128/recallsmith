@@ -21,7 +21,7 @@ public class AccountDeletionTests
 
   private static string NewSub() => $"it-f15-{Guid.NewGuid():N}";
 
-  // The ten (table, column) pairs of every row keyed by a single app user. analytics_event_outbox
+  // The eleven (table, column) pairs of every row keyed by a single app user. analytics_event_outbox
   // has no user column and is counted separately, through the event id.
   private static readonly (string Table, string Column)[] UserTables =
   [
@@ -33,6 +33,7 @@ public class AccountDeletionTests
     ("user_draw_owned", "user_sub"),
     ("user_draw_meta", "user_sub"),
     ("user_wallet", "user_sub"),
+    ("user_deck_wallet", "user_sub"),
     ("user_premium_state", "app_user_id"),
     ("rc_webhook_events", "app_user_id"),
   ];
@@ -105,6 +106,8 @@ public class AccountDeletionTests
     await DbUtil.ExecuteAsync(conn, null,
       "insert into user_wallet (user_sub) values ($1)", [sub]);
     await DbUtil.ExecuteAsync(conn, null,
+      "insert into user_deck_wallet (user_sub, deck_slug) values ($1, 'd')", [sub]);
+    await DbUtil.ExecuteAsync(conn, null,
       "insert into user_premium_state (app_user_id) values ($1)", [sub]);
     await DbUtil.ExecuteAsync(conn, null,
       "insert into rc_webhook_events (event_id, mode, app_user_id, raw) values ('rc-' || $1, 'development', $1, '{}'::jsonb)", [sub]);
@@ -158,8 +161,8 @@ public class AccountDeletionTests
 
     Assert.Equal(204, resp.StatusCode);
     Assert.Equal(0, await CountsAsync(subA, eventA));
-    // All eleven of B's rows remain: ten user-keyed tables plus the outbox row.
-    Assert.Equal(11, await CountsAsync(subB, eventB));
+    // All twelve of B's rows remain: eleven user-keyed tables plus the outbox row.
+    Assert.Equal(12, await CountsAsync(subB, eventB));
   }
 
   [Fact]

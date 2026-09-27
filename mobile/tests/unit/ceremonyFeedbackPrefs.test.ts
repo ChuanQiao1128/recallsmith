@@ -36,8 +36,8 @@ function makeFakeAudio() {
 }
 
 const SOURCES = {
-  ambience: 'ambience.wav', whoosh: 'whoosh.wav', rip: 'rip.wav', 'card-drop': 'card-drop.wav',
-  'card-flip': 'card-flip.wav', shimmer: 'shimmer.wav', legendary: 'legendary.wav',
+  charge: 'charge.wav', tear: 'tear.wav', burst: 'burst.wav', flyout: 'flyout.wav', flip: 'flip.wav',
+  'stinger-com': 'stinger-com.wav', 'stinger-rar': 'stinger-rar.wav', 'stinger-leg': 'stinger-leg.wav',
 };
 
 function makeFakeHaptics() {
@@ -71,18 +71,17 @@ describe('ceremony feedback prefs gate', () => {
       return { players, ctrl: createCeremonyAudioController({ audio, sources: SOURCES, isEnabled: () => false }) };
     })();
     ctrl.warmUp();
-    ctrl.hit('rip');
-    ctrl.tail('sparkle-tail');
-    ctrl.play('legendary');
-    ctrl.bed('air');
-    ctrl.play('air');
+    ctrl.hit('charge');
+    ctrl.hit('tear');
+    ctrl.hit('burst');
+    ctrl.hit('stinger-leg');
     vi.advanceTimersByTime(1000);
     for (const p of players) expect(p.play).not.toHaveBeenCalled();
 
     // Sanity: with the gate on, the same calls do play.
     const on = makeFakeAudio();
     const onCtrl = createCeremonyAudioController({ audio: on.audio, sources: SOURCES, isEnabled: () => true });
-    onCtrl.hit('rip');
+    onCtrl.hit('tear');
     expect(on.players.some((p) => p.play.mock.calls.length > 0)).toBe(true);
   });
 

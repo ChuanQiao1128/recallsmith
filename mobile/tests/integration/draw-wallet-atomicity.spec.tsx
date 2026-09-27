@@ -45,6 +45,8 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
     removeItem: vi.fn(async (key: string) => {
       store.delete(key);
     }),
+    getAllKeys: vi.fn(async () => [...store.keys()]),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((k) => [k, store.get(k) ?? null] as [string, string | null])),
   },
 }));
 
@@ -52,7 +54,22 @@ const SLUG = 'csharp';
 const SCOPE = 'devcards:u:anon:';
 const STATE_KEY = `${SCOPE}devcards:draw-state:${SLUG}`;
 const HISTORY_KEY = `${SCOPE}devcards:draw-history:${SLUG}`;
-const WALLET_KEY = `${SCOPE}recallsmith:reward-wallet:v1`;
+// 1.7: the wallet is the per-pack record. WALLET_KEY is the deck-wallets key and
+// the balance lives at decks[SLUG]. migratedAtMs is pre-set so the legacy
+// migration is a no-op, and the pack is pre-marked bootstrapped, so neither runs
+// on load.
+const WALLET_KEY = `${SCOPE}recallsmith:deck-wallets:v1`;
+
+function seedWallet(availablePulls: number, reservePulls = 0): void {
+  store.set(
+    WALLET_KEY,
+    JSON.stringify({
+      migratedAtMs: 1,
+      decks: { [SLUG]: { availablePulls, reservePulls } },
+      bootstrappedAtMs: { [SLUG]: 1 },
+    }),
+  );
+}
 
 const deckCards = Array.from({ length: 3 }, (_, index) => ({
   StableUid: `c${index + 1}`,
@@ -189,7 +206,9 @@ async function mountDraw(navigate: ReturnType<typeof vi.fn>) {
 }
 
 function readWallet(): { availablePulls: number; reservePulls: number } {
-  return JSON.parse(store.get(WALLET_KEY) ?? '{"availablePulls":0,"reservePulls":0}');
+  const raw = store.get(WALLET_KEY);
+  if (!raw) return { availablePulls: 0, reservePulls: 0 };
+  return JSON.parse(raw).decks?.[SLUG] ?? { availablePulls: 0, reservePulls: 0 };
 }
 
 describe('draw screen · exhausted pool', () => {
@@ -208,7 +227,7 @@ describe('draw screen · exhausted pool', () => {
   });
 
   it('charges nothing and refuses the pull when every card is already owned', async () => {
-    store.set(WALLET_KEY, JSON.stringify({ availablePulls: 12, reservePulls: 0 }));
+    seedWallet(12);
     store.set(STATE_KEY, JSON.stringify({ owned: ['c1', 'c2', 'c3'], pity: { draws: 0, threshold: 10 } }));
 
     const navigate = vi.fn();
@@ -240,7 +259,7 @@ describe('draw screen · exhausted pool', () => {
   });
 
   it('tells the user the collection is complete instead of offering a dead Open button', async () => {
-    store.set(WALLET_KEY, JSON.stringify({ availablePulls: 12, reservePulls: 0 }));
+    seedWallet(12);
     store.set(STATE_KEY, JSON.stringify({ owned: ['c1', 'c2', 'c3'], pity: { draws: 0, threshold: 10 } }));
 
     const navigate = vi.fn();
@@ -264,7 +283,7 @@ describe('draw screen · exhausted pool', () => {
     // The screen loaded while one card was still missing, so its buttons are
     // live; another device (or another tab) took the last card before the
     // press landed. This is the race the disabled state above cannot cover.
-    store.set(WALLET_KEY, JSON.stringify({ availablePulls: 12, reservePulls: 0 }));
+    seedWallet(12);
     store.set(STATE_KEY, JSON.stringify({ owned: ['c1', 'c2'], pity: { draws: 0, threshold: 10 } }));
 
     const navigate = vi.fn();
@@ -308,7 +327,7 @@ describe('draw screen · sync trigger', () => {
   });
 
   it('asks for a sync as soon as a draw commits', async () => {
-    store.set(WALLET_KEY, JSON.stringify({ availablePulls: 12, reservePulls: 0 }));
+    seedWallet(12);
     store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
 
     const tree = await mountDraw(vi.fn());
@@ -327,7 +346,7 @@ describe('draw screen · sync trigger', () => {
   });
 
   it('does not ask for a sync when the pull bought nothing', async () => {
-    store.set(WALLET_KEY, JSON.stringify({ availablePulls: 12, reservePulls: 0 }));
+    seedWallet(12);
     store.set(STATE_KEY, JSON.stringify({ owned: ['c1', 'c2'], pity: { draws: 0, threshold: 10 } }));
 
     const tree = await mountDraw(vi.fn());
@@ -363,7 +382,7 @@ describe('draw screen · wallet/draw-state ordering', () => {
   });
 
   it('does not touch the wallet until the draw state has landed', async () => {
-    store.set(WALLET_KEY, JSON.stringify({ availablePulls: 12, reservePulls: 0 }));
+    seedWallet(12);
     store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
 
     const navigate = vi.fn();
@@ -390,7 +409,7 @@ describe('draw screen · wallet/draw-state ordering', () => {
     // reach, so the property under test is "was the wallet written at all",
     // not "was it written back". Charging second is the only ordering where
     // a kill costs the user nothing.
-    store.set(WALLET_KEY, JSON.stringify({ availablePulls: 12, reservePulls: 0 }));
+    seedWallet(12);
     store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
     const navigate = vi.fn();
     const tree = await mountDraw(navigate);
@@ -415,7 +434,7 @@ describe('draw screen · wallet/draw-state ordering', () => {
     // snapshot restore would write the pre-draw wallet back over it and the
     // grant would vanish; an incremental refund adds the spend back to
     // whatever the wallet holds now.
-    store.set(WALLET_KEY, JSON.stringify({ availablePulls: 12, reservePulls: 0 }));
+    seedWallet(12);
     store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
     const navigate = vi.fn(() => {
       throw new Error('navigation exploded after the charge landed');
@@ -428,10 +447,9 @@ describe('draw screen · wallet/draw-state ordering', () => {
       if (key !== WALLET_KEY || granted) return;
       granted = true;
       const current = JSON.parse(store.get(WALLET_KEY)!);
-      store.set(
-        WALLET_KEY,
-        JSON.stringify({ ...current, availablePulls: current.availablePulls + 3 }),
-      );
+      const pack = current.decks[SLUG];
+      current.decks[SLUG] = { ...pack, availablePulls: pack.availablePulls + 3 };
+      store.set(WALLET_KEY, JSON.stringify(current));
     };
 
     await act(async () => {

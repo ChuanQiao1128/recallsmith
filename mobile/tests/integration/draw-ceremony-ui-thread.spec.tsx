@@ -62,11 +62,7 @@ vi.mock('../../src/components/ceremonyAudio', async (importOriginal) => {
     prewarm: () => {},
     warmUp: () => {},
     isWarm: () => true,
-    bed: (name: string | null) => rec.audio.push(`bed:${name ?? 'null'}`),
-    duck: () => rec.audio.push('duck'),
     hit: (name: string) => rec.audio.push(`hit:${name}`),
-    tail: (name: string) => rec.audio.push(`tail:${name}`),
-    play: () => {},
     stopAll: () => {},
     available: true,
   };
@@ -155,7 +151,7 @@ describe('DrawCeremonyScreen UI-thread ceremony (G43)', () => {
     expect(phaseTitle(tree)).toContain('Pack inbound');
   });
 
-  it('fires the tear, flash and settle cues on the schedule from the tear', async () => {
+  it('fires the charge, tear and burst cues on the schedule from the tear', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -168,24 +164,27 @@ describe('DrawCeremonyScreen UI-thread ceremony (G43)', () => {
     });
     armCeremonySwipe(tree);
 
-    // TEST_BASE multi: approach 620, hold 300, tearFlip 940, flashReveal 280.
-    // rip (tear start) at 620 + 300 = 920, not before.
+    // TEST_BASE multi (featured path — no tapFlow): approach 620, hold 300, tearFlip 940, flash 280.
+    // The charge fires right at the tear (approach start).
+    expect(rec.audio).toContain('hit:charge');
+
+    // tear (tear-flip start) at 620 + 300 = 920, not before.
     await advance(919);
-    expect(rec.audio).not.toContain('hit:rip');
+    expect(rec.audio).not.toContain('hit:tear');
     await advance(1);
-    expect(rec.audio).toContain('hit:rip'); // 920
+    expect(rec.audio).toContain('hit:tear'); // 920
 
-    // seam-burst (flash start) at 920 + 940 = 1860.
+    // burst + the featured stinger (flash start) at 920 + 940 = 1860.
     await advance(1859 - 920);
-    expect(rec.audio).not.toContain('hit:seam-burst');
+    expect(rec.audio).not.toContain('hit:burst');
     await advance(1);
-    expect(rec.audio).toContain('hit:seam-burst'); // 1860
+    expect(rec.audio).toContain('hit:burst'); // 1860
+    expect(rec.audio).toContain('hit:stinger-leg'); // 1860
 
-    // sparkle-tail (settle start) at 1860 + 280 = 2140.
-    await advance(2139 - 1860);
-    expect(rec.audio).not.toContain('tail:sparkle-tail');
-    await advance(1);
-    expect(rec.audio).toContain('tail:sparkle-tail'); // 2140
+    // settle (1860 + 280 = 2140) fires no new cue.
+    const beforeSettle = [...rec.audio];
+    await advance(2140 - 1860);
+    expect(rec.audio).toEqual(beforeSettle);
   });
 
   it('fires the reduced-motion cues on the reduced schedule', async () => {
@@ -201,16 +200,18 @@ describe('DrawCeremonyScreen UI-thread ceremony (G43)', () => {
       await Promise.resolve();
     });
 
-    // The reduced-motion path never plans; the flash burst fires as soon as RM resolves…
+    // The reduced-motion path never plans; on the featured path only the peak stinger fires,
+    // as soon as RM resolves — no charge / tear / burst.
     expect(planSpies.play).not.toHaveBeenCalled();
-    expect(rec.audio).toContain('hit:seam-burst');
-    expect(rec.audio).not.toContain('tail:sparkle-tail');
+    expect(rec.audio).toContain('hit:stinger-leg');
+    expect(rec.audio).not.toContain('hit:burst');
+    expect(rec.audio).not.toContain('hit:charge');
+    expect(rec.audio).not.toContain('hit:tear');
 
-    // …and the sparkle tail lands on the reduced schedule at REDUCED_MOTION_FLASH_MS.
-    await advance(REDUCED_MOTION_FLASH_MS - 1);
-    expect(rec.audio).not.toContain('tail:sparkle-tail');
-    await advance(1);
-    expect(rec.audio).toContain('tail:sparkle-tail');
+    // Nothing new lands at REDUCED_MOTION_FLASH_MS (settle has no cues).
+    const before = [...rec.audio];
+    await advance(REDUCED_MOTION_FLASH_MS);
+    expect(rec.audio).toEqual(before);
   });
 
   it('hands animation back to the per-phase path when a repeat user fast-forwards', async () => {
