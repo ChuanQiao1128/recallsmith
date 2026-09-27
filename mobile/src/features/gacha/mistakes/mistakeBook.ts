@@ -13,7 +13,7 @@ export const MISTAKE_BOOK_MAX_ENTRIES = 500;
 export const MISTAKE_WINDOW_DAYS = 30;
 
 const DAY_MS = 86_400_000;
-/** Consecutive good/easy ratings that resolve an entry. */
+/** Consecutive good/easy ratings, each on a different local calendar day, that resolve an entry. */
 const RESOLVE_STREAK = 2;
 
 export type MistakeOutcome = {
@@ -35,6 +35,9 @@ export type MistakeEntry = {
   lastOutcome: 'again' | 'mcq-wrong' | 'mcq-partial';
   correctStreak: number;
   resolvedAt: number | null;
+  /** When the last correct answer that counted toward correctStreak landed. Absent until the
+   *  first one, and cleared by a new mistake. Optional so books written before it still parse. */
+  lastCorrectAt?: number;
 };
 
 /** Entries are keyed `${deckSlug}::${stableUid}`. */
@@ -44,6 +47,13 @@ const LAST_OUTCOMES: ReadonlySet<string> = new Set(['again', 'mcq-wrong', 'mcq-p
 
 function entryKey(deckSlug: string, stableUid: string): string {
   return `${deckSlug}::${stableUid}`;
+}
+
+/** Same calendar day in the device's local time zone. */
+function isSameLocalDay(a: number, b: number): boolean {
+  const da = new Date(a);
+  const db = new Date(b);
+  return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
 }
 
 function emptyBook(): MistakeBookState {
@@ -101,12 +111,16 @@ export function applyOutcome(s: MistakeBookState, o: MistakeOutcome): MistakeBoo
 
   if (!prev || prev.resolvedAt !== null) return s;
   if (o.rating !== 'good' && o.rating !== 'easy') return s;
+  // Spaced, not crammed: a second correct answer on the same local day as the one before it does
+  // not count, so back-to-back focus runs cannot clear the book.
+  if (prev.lastCorrectAt !== undefined && isSameLocalDay(prev.lastCorrectAt, o.at)) return s;
 
   const correctStreak = prev.correctStreak + 1;
   const next: MistakeEntry = {
     ...prev,
     correctStreak,
     resolvedAt: correctStreak >= RESOLVE_STREAK ? o.at : null,
+    lastCorrectAt: o.at,
   };
   return { v: 1, entries: { ...s.entries, [key]: next } };
 }
@@ -146,6 +160,8 @@ function parseEntry(key: string, raw: unknown): MistakeEntry | null {
   }
   if (typeof e.lastOutcome !== 'string' || !LAST_OUTCOMES.has(e.lastOutcome)) return null;
   if (e.resolvedAt !== null && !isCount(e.resolvedAt)) return null;
+  // Lenient: a missing or malformed lastCorrectAt only drops that field, never the entry.
+  const lastCorrectAt = isCount(e.lastCorrectAt) ? { lastCorrectAt: e.lastCorrectAt } : {};
   return {
     deckSlug: e.deckSlug,
     stableUid: e.stableUid,
@@ -156,6 +172,7 @@ function parseEntry(key: string, raw: unknown): MistakeEntry | null {
     lastOutcome: e.lastOutcome as MistakeEntry['lastOutcome'],
     correctStreak: e.correctStreak,
     resolvedAt: e.resolvedAt,
+    ...lastCorrectAt,
   };
 }
 
