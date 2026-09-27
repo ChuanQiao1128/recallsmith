@@ -37,6 +37,20 @@ public static class RunnerRoutes
   public const string RunnerUnavailablePrefix = "RUNNER_UNAVAILABLE:";
 
   /// <summary>
+  /// The error of an item whose runs the runner could not do <see cref="MaxRunnerUnavailableCompletes"/> times in a row
+  /// (R18E N3, automation-31): the item is not requeued again but failed for a person, so one misclassified item never
+  /// loops at the head of the queue.
+  /// </summary>
+  public const string RunnerUnavailableRepeated = "RUNNER_UNAVAILABLE_REPEATED";
+
+  /// <summary>From this many consecutive <c>RUNNER_UNAVAILABLE</c> completes of one item on, the item fails (N3).</summary>
+  public const int MaxRunnerUnavailableCompletes = 3;
+
+  /// <summary>The first <c>RUNNER_UNAVAILABLE</c> backoff; it doubles with every consecutive one, up to a day (N3).</summary>
+  public const int RunnerUnavailableBackoffMinutes = 15;
+  public const int MaxRunnerUnavailableBackoffMinutes = 24 * 60;
+
+  /// <summary>
   /// The error prefix of a run whose agent said it could not do the task (R18C L6, written by the runner as
   /// <c>AGENT_BLOCKED: &lt;reason&gt;</c>). Retrying repeats the block, so the item fails on the first such run and a
   /// person resolves it (R18D M5, automation-27): one <c>queue_item_failed</c> email carries the reason.
@@ -303,6 +317,20 @@ public static class RunnerRoutes
 
         if ((string)run["status"]! != "running")
         {
+          // A kept complete replayed after the tick abandoned the run on lease expiry (automation-16): the runner's
+          // notes and error are still worth keeping. Only they are stored; the run, its item and the item's attempts
+          // stay as the lease expiry left them, and the tick's agent_note step mails notes of a run without drafts.
+          if ((string)run["status"]! == "abandoned" && run["outcome"] is null)
+          {
+            await DbUtil.ExecuteAsync(conn, tx,
+              "update automation_runs set error = coalesce($2, error), summary = coalesce($3, summary), updated_at = now() where run_id = $1",
+              [runId, error, summary]);
+            var abandonedItem = await DbUtil.ExecuteScalarAsync(conn, tx, "select status from authoring_queue_items where id = $1", [itemId]);
+            await tx.CommitAsync();
+            Log.Event("info", new { tag = "automation", reason = "abandoned_run_complete_kept", runId, itemId, outcome });
+            await AutomationRuns.TryFinalizeAsync(conn, runId);
+            return res.Ok(await CompleteResponseAsync(conn, runId, "abandoned", (string)abandonedItem!, replayed: true));
+          }
           if (!string.Equals(run["outcome"] as string, outcome, StringComparison.Ordinal))
           {
             await tx.RollbackAsync();
@@ -344,16 +372,32 @@ public static class RunnerRoutes
           }
           else if (runnerUnavailable)
           {
-            // Not the item's failure: the claim's attempt is given back and the item is due again at once; the runner
-            // stopped its loop, so the next claim comes from its next start (R18D M5).
-            itemStatus = "queued";
-            await DbUtil.ExecuteAsync(conn, tx,
-              """
-              update authoring_queue_items
-              set status = 'queued', lease_expires_at = null, attempts = greatest(attempts - 1, 0), not_before = now(), last_error = $2,
-                  updated_at = now()
-              where id = $1
-              """, [itemId, error]);
+            // Not the item's failure: the claim's attempt is given back (R18D M5). The item waits 15 min × 2^(n-1), at
+            // most a day, n = the item's consecutive RUNNER_UNAVAILABLE completes including this one, so the items
+            // behind it run; at n >= 3 it fails for a person instead (R18E N3, automation-31).
+            var n = await ConsecutiveRunnerUnavailableAsync(conn, tx, itemId);
+            if (n >= MaxRunnerUnavailableCompletes)
+            {
+              itemStatus = "failed";
+              await DbUtil.ExecuteAsync(conn, tx,
+                """
+                update authoring_queue_items
+                set status = 'failed', lease_expires_at = null, attempts = greatest(attempts - 1, 0), finished_at = now(), last_error = $2,
+                    updated_at = now()
+                where id = $1
+                """, [itemId, RunnerUnavailableRepeatedError(n, error)]);
+            }
+            else
+            {
+              itemStatus = "queued";
+              await DbUtil.ExecuteAsync(conn, tx,
+                """
+                update authoring_queue_items
+                set status = 'queued', lease_expires_at = null, attempts = greatest(attempts - 1, 0),
+                    not_before = now() + make_interval(mins => $3), last_error = $2, updated_at = now()
+                where id = $1
+                """, [itemId, error, RunnerUnavailableBackoff(n)]);
+            }
           }
           else if (!agentBlocked && attempts < MaxItemAttempts)
           {
@@ -403,6 +447,33 @@ public static class RunnerRoutes
   /// </summary>
   public static readonly IReadOnlyList<string> ActionableRunErrorPrefixes =
     ["AGENT_BLOCKED", "claude could not be started", "claude did not run on the subscription login"];
+
+  /// <summary>The N3 backoff in minutes after the <paramref name="n"/>-th consecutive RUNNER_UNAVAILABLE complete (n &gt;= 1).</summary>
+  internal static int RunnerUnavailableBackoff(int n) =>
+    (int)Math.Min((long)RunnerUnavailableBackoffMinutes << Math.Clamp(n - 1, 0, 20), MaxRunnerUnavailableBackoffMinutes);
+
+  /// <summary>The <c>last_error</c> of an item failed by N3: the repeated reason first, then the last run's error, capped at 500.</summary>
+  internal static string RunnerUnavailableRepeatedError(int n, string? error)
+  {
+    var text = $"{RunnerUnavailableRepeated}: {n.ToString(CultureInfo.InvariantCulture)} runs in a row could not run; last: {error}";
+    return text.Length <= 500 ? text : text[..500];
+  }
+
+  /// <summary>
+  /// How many of the item's newest terminal runs, newest first and up to <see cref="MaxRunnerUnavailableCompletes"/>, are
+  /// RUNNER_UNAVAILABLE completes without a break (N3). Called after the current run's row was updated, so it counts it.
+  /// </summary>
+  private static async Task<int> ConsecutiveRunnerUnavailableAsync(NpgsqlConnection conn, NpgsqlTransaction tx, long itemId)
+  {
+    var runs = await DbUtil.QueryAsync(conn, tx,
+      """
+      select outcome, error from automation_runs
+      where queue_item_id = $1 and status <> 'running'
+      order by started_at desc, run_id desc
+      limit $2
+      """, [itemId, MaxRunnerUnavailableCompletes]);
+    return runs.TakeWhile(r => r["outcome"] as string == "failed" && IsRunnerUnavailable(r["error"] as string)).Count();
+  }
 
   internal static bool IsRunnerUnavailable(string? error) => error?.StartsWith(RunnerUnavailablePrefix, StringComparison.Ordinal) == true;
 

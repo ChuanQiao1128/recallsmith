@@ -66,9 +66,12 @@ public static class AiQaResults
   /// <summary>
   /// A parsed report. <see cref="Target"/> is <c>card</c> (an <c>ai_qa_runs</c> chunk, absent in the body) or
   /// <c>draft</c> (an automation draft-QA job, R18A A00 §5.4, applied by <see cref="Automation.DraftQaResults"/>).
+  /// <see cref="EffectiveEffort"/> is the reasoning effort the review really ran at (ai-qa's
+  /// <c>providers.effective_effort</c>, the same name and value the eval gate's <c>reviewer.effectiveEffort</c> records;
+  /// R18E N2), null when the reviewer did not report it.
   /// </summary>
   internal sealed record Report(Guid RunId, int Chunk, string? Provider, string? Model, string? PromptVersion, List<ReportItem> Items,
-    string Target);
+    string Target, string? EffectiveEffort = null);
 
   public const string TargetCard = "card", TargetDraft = "draft";
 
@@ -482,6 +485,7 @@ public static class AiQaResults
     var provider = OptionalString(body, "provider", MaxLabelLength, "provider");
     var model = OptionalString(body, "model", MaxLabelLength, "model");
     var promptVersion = OptionalString(body, "promptVersion", MaxLabelLength, "promptVersion");
+    var effectiveEffort = OptionalString(body, "effectiveEffort", MaxLabelLength, "effectiveEffort");
 
     if (!body.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array || itemsEl.GetArrayLength() > MaxItems)
     {
@@ -496,7 +500,7 @@ public static class AiQaResults
       index++;
     }
 
-    return new Report(runId, chunk, provider, model, promptVersion, items, target);
+    return new Report(runId, chunk, provider, model, promptVersion, items, target, effectiveEffort);
   }
 
   private static ReportItem ParseItem(JsonElement el, int index)

@@ -463,8 +463,9 @@ public static class AutomationTick
       var run = runRows[0];
 
       var decisions = await DbUtil.QueryAsync(conn, null,
-        """
-        select dd.deck_id, dd.state, dd.reason, dd.reason_detail, dd.estimated_cost_usd, a.stable_uid, a.card->>'question' as question
+        $"""
+        select dd.deck_id, dd.state, dd.reason, dd.reason_detail, dd.estimated_cost_usd, a.stable_uid, a.card->>'question' as question,
+          not {StatusRoutes.UndecidedDraftSql("dd")} as decided
         from automation_draft_decisions dd
         join ai_drafts a on a.id = dd.draft_id
         where dd.run_id = $1
@@ -484,7 +485,7 @@ public static class AutomationTick
       var data = new BatchSummaryData(runId, run["deck_id"] is null ? null : Long(run["deck_id"]), deckSlug, (string)run["kind"]!,
         (string)run["url"]!, run["title"] as string,
         decisions.Select(d => new BatchDraft((string)d["stable_uid"]!, d["question"] as string ?? string.Empty, (string)d["state"]!,
-          d["reason"] as string, d["reason_detail"] as string, Long(d["deck_id"]))).ToList(),
+          d["reason"] as string, d["reason_detail"] as string, Long(d["deck_id"]), d["decided"] is true)).ToList(),
         decisions.Sum(d => Convert.ToDecimal(d["estimated_cost_usd"], CultureInfo.InvariantCulture)),
         publishes.Select(p => new BatchPublish(Long(p["deck_id"]), p["deck_slug"] as string ?? "(deleted deck)", (string)p["state"]!,
           p["reason"] as string, p["reason_detail"] as string, p["job_id"] as string, p["build_id"] as string)).ToList(),
@@ -765,17 +766,33 @@ public static class AutomationTick
         return rows.ToDictionary(r => (string)r["k"]!, r => Long(r["n"]), StringComparer.Ordinal);
       }
 
+      // In dry_run the decisions of a run with a draft still waiting for a person are left out of every per-state and
+      // per-reason count and only counted as waiting (R18E N6): on a small run the counts would state each verdict.
+      var dry = mode == AutomationMode.DryRun;
+      var decided = dry
+        ? $"and not exists (select 1 from automation_draft_decisions pd where pd.run_id = dd.run_id and {StatusRoutes.UndecidedDraftSql("pd")})"
+        : string.Empty;
       var byState = await CountsAsync(
-        "select state as k, count(*) as n from automation_draft_decisions where created_at >= $1 and created_at < $2 group by state");
+        $"select dd.state as k, count(*) as n from automation_draft_decisions dd where dd.created_at >= $1 and dd.created_at < $2 {decided} group by dd.state");
       var byReason = await CountsAsync(
-        "select reason as k, count(*) as n from automation_draft_decisions where created_at >= $1 and created_at < $2 and reason is not null group by reason");
+        $"""
+        select dd.reason as k, count(*) as n from automation_draft_decisions dd
+        where dd.created_at >= $1 and dd.created_at < $2 and dd.reason is not null {decided}
+        group by dd.reason
+        """);
+      var blindPending = (await DbUtil.QueryAsync(conn, null,
+        $"""
+        select count(*) filter (where {StatusRoutes.UndecidedDraftSql("dd")}) as drafts,
+          count(distinct dd.run_id) filter (where {StatusRoutes.UndecidedDraftSql("dd")}) as runs
+        from automation_draft_decisions dd
+        """, []))[0];
       var publishesByState = await CountsAsync(
         "select state as k, count(*) as n from automation_publishes where created_at >= $1 and created_at < $2 group by state");
 
       // The status's blind definition (R18D M3): the digest's agreement is accepted unedited over decided blind.
       var shadow = (await DbUtil.QueryAsync(conn, null,
         $"""
-        select count(*) as would_accept,
+        select count(*) filter (where true {decided}) as would_accept,
           count(*) filter (where dd.human_action is not null) as decided,
           count(*) filter (where dd.human_action = 'accepted') as accepted,
           count(*) filter (where dd.human_action = 'edited_accepted') as edited,
@@ -825,7 +842,9 @@ public static class AutomationTick
           r["login_expires_at"] is null ? null : Ts(r["login_expires_at"]))).ToList(),
         Convert.ToDecimal(spend["human"], CultureInfo.InvariantCulture), Convert.ToDecimal(spend["automation"], CultureInfo.InvariantCulture),
         backlog.HumanPending, backlog.HumanPublishes, Long(shadow["blind_decided"]), Long(shadow["blind_accepted"]),
-        new DigestLive(liveQuality.AutoAccepted30d, liveQuality.DeletedByPerson, liveQuality.EditedByPerson, liveQuality.OverrideRate));
+        new DigestLive(liveQuality.AutoAccepted30d, liveQuality.DeletedByPerson, liveQuality.EditedByPerson, liveQuality.OverrideRate,
+          liveQuality.EditedAfterSourceChange),
+        Long(blindPending["drafts"]), Long(blindPending["runs"]));
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.WeeklyDigest(mode, data, baseUrl);

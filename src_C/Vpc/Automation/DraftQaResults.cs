@@ -45,6 +45,14 @@ internal static class DraftQaResults
     return new DraftQaApplyResult(applied, report.Items.Count);
   }
 
+  /// <summary>
+  /// The AUTHOR_NOT_GATED reason detail (R18E N1): the draft's author and the gate's, so the mismatch can be read without
+  /// the database. Both ids are at most 128 characters, so the detail stays under the 300-character column check.
+  /// </summary>
+  internal static string AuthorNotGatedDetail(string? draftAuthor, string? gateAuthor) =>
+    (draftAuthor is null ? "draft has no authorConfigId" : $"draft author {draftAuthor}") + ", " +
+    (gateAuthor is null ? "gate names no author" : $"gate author {gateAuthor}");
+
   /// <summary>Steps 0–10 of A00 §5.4 for one item; null when the item was ignored or replayed.</summary>
   private static async Task<ItemOutcome?> ApplyItemAsync(NpgsqlConnection conn, AiQaResults.Report report,
     AiQaResults.ReportItem item, CancellationToken ct)
@@ -164,10 +172,14 @@ internal static class DraftQaResults
     // 7. blocker or major findings
     if (blocker + major > 0) return await Finish(DraftDecisions.Human, "QA_FLAGGED");
 
+    // The reviewer the eval gate measured, including its reasoning effort when the gate recorded one (R18E N2,
+    // ai-agent-26): AI_EFFORT is shared with the human reviewer, so a later change of it must not silently alter the
+    // gated reviewer. A report without an effective effort matches no gate that recorded one.
     var reviewerMatchesGate = mode.Reviewer is { } reviewer &&
       string.Equals(reviewer.Provider, report.Provider, StringComparison.Ordinal) &&
       string.Equals(reviewer.Model, report.Model, StringComparison.Ordinal) &&
-      string.Equals(reviewer.PromptVersion, report.PromptVersion, StringComparison.Ordinal);
+      string.Equals(reviewer.PromptVersion, report.PromptVersion, StringComparison.Ordinal) &&
+      (reviewer.Effort is null || string.Equals(reviewer.Effort, report.EffectiveEffort, StringComparison.Ordinal));
 
     // The author the eval gate measured (R18D M1, automation-20): a gate without an author id binds no author, and a
     // draft without one (a runner that does not send it) matches no gate.
@@ -178,7 +190,7 @@ internal static class DraftQaResults
     if (mode.Effective == AutomationMode.Live && !reviewerMatchesGate) return await Finish(DraftDecisions.Human, "REVIEWER_NOT_GATED");
     if (mode.Effective == AutomationMode.Live && !authorMatchesGate)
     {
-      return await Finish(DraftDecisions.Human, "AUTHOR_NOT_GATED", draftAuthor is null ? "draft has no authorConfigId" : $"draft author {draftAuthor}");
+      return await Finish(DraftDecisions.Human, "AUTHOR_NOT_GATED", AuthorNotGatedDetail(draftAuthor, mode.GateAuthorConfigId));
     }
 
     // 9. dry run: record what live would do, including live's at-accept checks (automation-6)

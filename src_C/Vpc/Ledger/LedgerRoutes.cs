@@ -277,30 +277,54 @@ public static class LedgerRoutes
   /// drafts were decided, the acceptance and edited-accept rates, the share rejected for a defect reason
   /// (the agent's defect rate, which is not a defect caught before publish), the average review time (each
   /// value capped server-side at Drafts.ReviewMsCap) and how many decisions carried no review time.
+  /// Eval drafts are left out of every number (R18E, automation-24): a decision whose note starts with
+  /// <see cref="EvalNotePrefix"/>, or a draft of an automation run whose queue item's note does (the new-facts
+  /// procedure queues its items with the note <c>eval:new-facts</c> and rejects every draft it produced). They are
+  /// counted apart as <c>evalRejects</c> (rejects) so an eval window neither lowers the acceptance rate nor hides.
   /// Zeros on a database without migration 030.
   /// </summary>
+  /// <summary>The note prefix of an eval decision or eval queue item (evals drafts_import: <c>eval:new-facts</c>).</summary>
+  public const string EvalNotePrefix = "eval:";
+
   private static async Task<object> AgentDraftQualityAsync(NpgsqlConnection conn, DateTime start, DateTime end)
   {
-    long decided = 0, accepted = 0, edited = 0, rejected = 0, defects = 0, notMeasured = 0;
+    long decided = 0, accepted = 0, edited = 0, rejected = 0, defects = 0, notMeasured = 0, evalRejects = 0;
     decimal? avgReviewMs = null;
 
     var hasEvents = await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.ai_review_events') is not null", []);
     if (hasEvents is true)
     {
+      // The automation tables arrive with migration 034; without them only the note marks an eval decision.
+      var hasAutomation = await DbUtil.ExecuteScalarAsync(conn, null,
+        "select to_regclass('public.automation_draft_decisions') is not null and to_regclass('public.automation_runs') is not null", []) is true;
+      var evalDraft = hasAutomation
+        ? $"""
+          (e.note like '{EvalNotePrefix}%' or exists (
+            select 1 from automation_draft_decisions dd
+            join automation_runs ar on ar.run_id = dd.run_id
+            join authoring_queue_items q on q.id = ar.queue_item_id
+            where dd.draft_id = e.draft_id and q.note like '{EvalNotePrefix}%'))
+          """
+        : $"(e.note like '{EvalNotePrefix}%')";
       var rows = await DbUtil.QueryAsync(conn, null,
-        """
-        select count(*) as "decided",
-               count(*) filter (where action in ('accepted','edited_accepted')) as "accepted",
-               count(*) filter (where action = 'edited_accepted') as "edited",
-               count(*) filter (where action = 'rejected') as "rejected",
-               count(*) filter (where action = 'rejected' and reason = any($3)) as "defects",
-               avg(case when review_ms is not null then least(review_ms, $4) end) as "avgReviewMs",
-               count(*) filter (where review_ms is null) as "reviewNotMeasured"
-        from ai_review_events
-        where action in ('accepted','edited_accepted','rejected') and created_at >= $1 and created_at < $2
+        $"""
+        select count(*) filter (where not x.eval) as "decided",
+               count(*) filter (where not x.eval and action in ('accepted','edited_accepted')) as "accepted",
+               count(*) filter (where not x.eval and action = 'edited_accepted') as "edited",
+               count(*) filter (where not x.eval and action = 'rejected') as "rejected",
+               count(*) filter (where not x.eval and action = 'rejected' and reason = any($3)) as "defects",
+               avg(case when not x.eval and review_ms is not null then least(review_ms, $4) end) as "avgReviewMs",
+               count(*) filter (where not x.eval and review_ms is null) as "reviewNotMeasured",
+               count(*) filter (where x.eval and action = 'rejected') as "evalRejects"
+        from (
+          select e.action, e.reason, e.review_ms, coalesce({evalDraft}, false) as eval
+          from ai_review_events e
+          where e.action in ('accepted','edited_accepted','rejected') and e.created_at >= $1 and e.created_at < $2
+        ) x
         """,
         [start, end, Vpc.Review.Drafts.DefectReasons.ToArray(), Vpc.Review.Drafts.ReviewMsCap]);
       var r = rows[0];
+      evalRejects = ToLong(r["evalRejects"]);
       decided = ToLong(r["decided"]);
       accepted = ToLong(r["accepted"]);
       edited = ToLong(r["edited"]);
@@ -324,6 +348,8 @@ public static class LedgerRoutes
       // Decisions sent without reviewMs (automation-13): excluded from the average, and charged no human
       // cost in the savings, so the reader can see how much of the figure rests on unmeasured reviews.
       reviewNotMeasured = notMeasured,
+      // Rejects of eval drafts (automation-24), left out of every number above.
+      evalRejects,
     };
   }
 

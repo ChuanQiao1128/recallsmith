@@ -237,12 +237,14 @@ internal static class AutomationTestKit
     Long(await db.ScalarAsync(sql, parameters));
 
   /// <summary>A passed eval gate for the automation reviewer (the latest wins); revoke it in <c>finally</c>.</summary>
+  /// <summary>A passed gate row; <paramref name="effectiveEffort"/> goes into the stored report's reviewer (R18E N2).</summary>
   public static async Task<long> InsertGateAsync(PostgresFixture db, string provider = ReviewerProvider, string model = ReviewerModel,
-    string promptVersion = QaRuns.AutomationPromptVersion, string? authorConfigId = AuthorConfigId) =>
+    string promptVersion = QaRuns.AutomationPromptVersion, string? authorConfigId = AuthorConfigId, string? effectiveEffort = null) =>
     Long(await db.ScalarAsync(
       "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub, author_config_id) " +
-      "values ($1, $2, $3, true, '{}'::jsonb, $4, '{}'::jsonb, 'it-a03', $5::text) returning id",
-      provider, model, promptVersion, new string('b', 64), authorConfigId));
+      "values ($1, $2, $3, true, '{}'::jsonb, $4, case when $6::text is null then '{}'::jsonb " +
+      "else jsonb_build_object('reviewer', jsonb_build_object('effectiveEffort', $6::text)) end, 'it-a03', $5::text) returning id",
+      provider, model, promptVersion, new string('b', 64), authorConfigId, effectiveEffort));
 
   public static Task RevokeGateAsync(PostgresFixture db, long id) =>
     db.QueryAsync("update automation_eval_gates set revoked_at = now(), revoked_by_sub = 'it-a03' where id = $1 and revoked_at is null", id);
