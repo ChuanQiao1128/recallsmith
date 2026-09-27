@@ -311,7 +311,8 @@ The three Q03 commands (`author`, `jury`, `compare`) are described in
   and `structuredOutputsAtStart` (resolved). Each item records `rep`, `tier`, `structured` (what
   its request actually used: the ai-qa fallback can switch structured outputs off process-wide
   mid-run) and `servedModel` (the model id the response reports). A row whose response came from
-  a model other than the requested one (a dated snapshot of it matches) is recorded as
+  a model other than the requested one (a dated snapshot of it matches: `-20260101`, or OpenAI's
+  `-2026-08-07`; the `anthropic.`/`openai.` namespace and a region prefix are ignored) is recorded as
   `status: "error"`, `errorCode: "MODEL_MISMATCH"` with no findings.
 - A run writes three files under `--out`, named
   `<YYYY-MM-DD>-<provider>-<model>-<promptVersion>` (UTC run date; `-2`, `-3`, … when the name is
@@ -391,7 +392,8 @@ Each juror (`--jurors provider:model,…`; providers `claude-cli`, `bedrock-conv
 `{ verdict: "correct" | "defective" | "unsure", category: <QA category> | null, basis: "source" |
 "knowledge", reason }`; `basis: "knowledge"` flags a verdict that rests on the juror's own
 knowledge rather than the chunk. A failed call or an unparseable reply is an `unsure` vote with
-its error code. Default jurors (vendors not under test):
+its error code. Default jurors (vendors not under test: neither the reviewer's nor the author's;
+authored-v2 is Claude-authored, so the automation gate refuses any Anthropic juror):
 
 ```
 bedrock-converse:qwen.qwen3-235b-a22b-2507-v1:0,bedrock-converse:deepseek.v3.2,bedrock-converse:global.moonshotai.kimi-k3
@@ -673,7 +675,8 @@ or is not a run file (nothing written). `--date` defaults to UTC today, `--out` 
 | model / prompt version | `AI_QA_AUTOMATION_MODEL` / `qa-v4-auto` with header `profile` `automation` (and ai_qa `PROMPT_VERSION_AUTOMATION`, when installed, equal to it); no second reviewer; both runs the same reviewer |
 | prices | `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK`, `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` set and > 0 |
 | datasets | `seeded-v3` and `authored-v2`, sha256 of the committed files, complete runs, >= 2 reps each |
-| jury | the labels summary exists and no juror shares the reviewer's vendor |
+| jury | the labels summary exists and names its jurors, and no juror shares the reviewer's vendor or an author's vendor (always `anthropic`: both authored-v2 paths are Claude, plus the vendor of every recorded `authorModel` / `authorConfig.model`; a `claude-cli` or `anthropic` juror is `anthropic`) |
+| served model | on `openai-mantle`, every scored item of both runs carries the `servedModel` the adapter reports, and it is the gated model or its dated snapshot (`openai.gpt-5.5-2026-08-07` matches `openai.gpt-5.5`); a missing or other id fails closed. `bedrock-converse` replies name no model, so nothing is checked there |
 | seeded recall (95% CI lower bound) | >= 0.90 (>= 0.85) |
 | seeded per-class recall | >= 0.75 for every class |
 | seeded control false-positive rate | <= 0.20 (a false flag only routes a card to a human) |
