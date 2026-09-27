@@ -7,7 +7,11 @@ import crypto from 'node:crypto';
 // BEGIN developercards-verify-signature
 const DC_SIGNATURE_TOLERANCE_SECONDS = 300;
 
-function verifyDeveloperCardsSignature({ secret, timestamp, signature, rawBody, nowSeconds, toleranceSeconds = DC_SIGNATURE_TOLERANCE_SECONDS }) {
+// `previousSignature` is the optional X-DeveloperCards-Signature-Previous header. During a
+// secret rotation the sender signs with the new secret (primary header) and with the old one
+// (previous header), so a receiver still holding the old secret keeps verifying. The delivery
+// is accepted when either signature matches; both are compared in constant time.
+function verifyDeveloperCardsSignature({ secret, timestamp, signature, previousSignature, rawBody, nowSeconds, toleranceSeconds = DC_SIGNATURE_TOLERANCE_SECONDS }) {
   try {
     if (typeof secret !== 'string' || secret.length === 0) return { ok: false, reason: 'missing_secret' };
     if (typeof timestamp !== 'string' || typeof signature !== 'string' || timestamp.length === 0 || signature.length === 0) {
@@ -27,9 +31,19 @@ function verifyDeveloperCardsSignature({ secret, timestamp, signature, rawBody, 
       .createHmac('sha256', secret)
       .update(Buffer.concat([Buffer.from(ts + '.', 'utf8'), bodyBuffer]))
       .digest();
-    const given = Buffer.from(sig, 'hex');
-    if (given.length !== 32 || expected.length !== 32) return { ok: false, reason: 'bad_signature' };
-    return crypto.timingSafeEqual(expected, given) ? { ok: true } : { ok: false, reason: 'bad_signature' };
+    if (expected.length !== 32) return { ok: false, reason: 'bad_signature' };
+    const candidates = [sig];
+    // A missing, repeated or malformed previous header is ignored: it can only add a match.
+    if (typeof previousSignature === 'string') {
+      const prev = previousSignature.trim().toLowerCase();
+      if (/^[0-9a-f]{64}$/.test(prev)) candidates.push(prev);
+    }
+    let matched = false;
+    for (const candidate of candidates) {
+      const given = Buffer.from(candidate, 'hex');
+      if (given.length === 32 && crypto.timingSafeEqual(expected, given)) matched = true;
+    }
+    return matched ? { ok: true } : { ok: false, reason: 'bad_signature' };
   } catch (err) {
     return { ok: false, reason: 'bad_signature' };
   }

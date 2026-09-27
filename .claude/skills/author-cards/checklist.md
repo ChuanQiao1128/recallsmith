@@ -6,7 +6,7 @@ Walk this list for every card before `submit_draft` (workflow step 7). The categ
 
 ## Content
 
-- [ ] `incorrect_answer` (blocker): the answer and explanation state only what the cited quote says; nothing in them is false or outdated relative to the source.
+- [ ] `incorrect_answer` (blocker): the answer and explanation state only what the cited quote says; nothing in them is false or outdated relative to the source. The same holds for `codeSnippet` and `realWorldUsage`: every API name, parameter, flag and value in the snippet and every fact in the usage line is stated in the cited chunk (the verifier checks them in step 5); an invented flag or parameter is `incorrect_answer`, not `other`.
 - [ ] `multiple_correct` (blocker): exactly the starred options are correct under the stem's constraints; no unstarred option could also be defended as right.
 - [ ] `answer_leak` (major): the stem does not give the answer away (no key term of the correct option repeated only in the stem, no longest-option or grammar cue).
 - [ ] `ambiguous_stem` (major): a reader who knows the fact can answer from the stem alone; every constraint that decides the answer is stated.
@@ -14,7 +14,7 @@ Walk this list for every card before `submit_draft` (workflow step 7). The categ
 - [ ] `qualifier_mismatch` (major): the qualifier (for example `MOST cost-effective`, `LEAST operational overhead`) is what actually separates the correct option from the others.
 - [ ] `source_unsupported` (major): the quote supports the answer itself, not just the topic (see [citation-rules.md](citation-rules.md)).
 - [ ] `weak_distractor` (minor): each wrong option is plausible to someone who does not know the fact, and its WHY explains why it fails here.
-- [ ] `other` (minor): anything else a reviewer would flag (typos, unclear wording, a code snippet that would not run, a `realWorldUsage` line that adds nothing).
+- [ ] `other` (minor): anything else a reviewer would flag (typos, unclear wording, a code snippet with a syntax slip that the chunk does not decide, a `realWorldUsage` line that adds nothing).
 
 ## Format
 

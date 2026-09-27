@@ -9,16 +9,22 @@ from typing import Any
 
 from .dataset import DATASETS_BY_NAME, classes_for, dump_line, file_sha256, read_jsonl
 from .score import (
+    CONTROL_FPR_CI_UPPER_GATE,
     CONTROL_FPR_GATE,
     CONTROL_UNSCORED_RATE_GATE,
     GATE_DATASET,
     GATE_PROVIDERS,
+    MIN_CLASS_ITEMS,
+    MIN_GATE_REPS,
     PER_CLASS_RECALL_FLOOR,
     PRECISION_GATE,
+    RECALL_CI_LOWER_GATE,
     RECALL_GATE,
+    evidence_class,
     gate_failures,
     gate_passes,
     score,
+    shipping_config,
 )
 
 HEADER_KEYS = ("runId", "startedAt", "provider", "model", "promptVersion")
@@ -82,9 +88,13 @@ def expected_run(dataset_name: str | None) -> dict[str, Any]:
 
 GATE_THRESHOLDS = {
     "recall": RECALL_GATE,
+    "recallCi95Lower": RECALL_CI_LOWER_GATE,
     "precision": PRECISION_GATE,
     "controlFalsePositiveRate": CONTROL_FPR_GATE,
+    "controlFalsePositiveRateCi95Upper": CONTROL_FPR_CI_UPPER_GATE,
     "perClassRecallFloor": PER_CLASS_RECALL_FLOOR,
+    "minReps": MIN_GATE_REPS,
+    "minClassItems": MIN_CLASS_ITEMS,
     "controlUnscoredRate": CONTROL_UNSCORED_RATE_GATE,
     "providers": sorted(GATE_PROVIDERS),
     "dataset": GATE_DATASET,
@@ -92,7 +102,8 @@ GATE_THRESHOLDS = {
 
 
 def build_report(header: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any]:
-    """The §12.1 keys plus the run settings, CIs, unscored counts and the gate verdict (X04).
+    """The §12.1 keys plus the run settings, CIs, unscored counts and the gate verdict (X04), and
+    the evidence class and the shipping configuration the gate compares the run with (Y05).
     n counts the item records scored. A header written before X04 reads its new keys as null."""
     metrics = score(records, classes_for(header.get("dataset")))
     report: dict[str, Any] = {
@@ -108,6 +119,8 @@ def build_report(header: dict[str, Any], records: list[dict[str, Any]]) -> dict[
         "reviewDate": header.get("reviewDate"),
         "effort": header.get("effort"),
         "structuredOutputs": header.get("structuredOutputs"),
+        "structuredOutputsAtStart": header.get("structuredOutputsAtStart"),
+        "evidenceClass": evidence_class(header.get("provider")),
         "n": metrics["n"],
         "estimatedCostUsd": metrics["estimatedCostUsd"],
         "perClass": metrics["perClass"],
@@ -119,7 +132,10 @@ def build_report(header: dict[str, Any], records: list[dict[str, Any]]) -> dict[
         "structuredItems": metrics["structuredItems"],
         "latencyMs": metrics["latencyMs"],
         "errors": metrics["errors"],
-        "gate": {"thresholds": GATE_THRESHOLDS, "expected": expected_run(header.get("dataset"))},
+        "gate": {
+            "thresholds": GATE_THRESHOLDS,
+            "expected": {**expected_run(header.get("dataset")), "shipping": shipping_config()},
+        },
     }
     failures = gate_failures(report)
     report["gate"]["passes"] = not failures
@@ -149,10 +165,20 @@ def render_markdown(report: dict[str, Any], *, flagged_wrong_category: int) -> s
             f"off {report['structuredItems']['off']})"
         ),
         (
-            f"- Gate (recall >= {RECALL_GATE:.2f}, precision >= {PRECISION_GATE:.2f}, control FP rate <= "
-            f"{CONTROL_FPR_GATE:.2f}, every class recall >= {PER_CLASS_RECALL_FLOOR:.2f}, unscored controls <= "
-            f"{CONTROL_UNSCORED_RATE_GATE:.2f}, provider in {'/'.join(sorted(GATE_PROVIDERS))}, complete "
-            f"`{GATE_DATASET}` run): **{gate}**"
+            f"- Evidence class: **{report['evidenceClass']}**"
+            + (
+                " (a proxy run informs prompt work; it never satisfies the rollout gate by itself)"
+                if report["evidenceClass"] == "proxy"
+                else ""
+            )
+        ),
+        (
+            f"- Gate (recall >= {RECALL_GATE:.2f} with 95% CI lower bound >= {RECALL_CI_LOWER_GATE:.2f}, precision >= "
+            f"{PRECISION_GATE:.2f}, control FP rate <= {CONTROL_FPR_GATE:.2f} with 95% CI upper bound <= "
+            f"{CONTROL_FPR_CI_UPPER_GATE:.2f}, every class recall >= {PER_CLASS_RECALL_FLOOR:.2f} on >= "
+            f"{MIN_CLASS_ITEMS} pooled items, >= {MIN_GATE_REPS} reps, unscored controls <= "
+            f"{CONTROL_UNSCORED_RATE_GATE:.2f}, provider in {'/'.join(sorted(GATE_PROVIDERS))}, the shipping "
+            f"provider/model/prompt version/effort/structured mode, complete `{GATE_DATASET}` run): **{gate}**"
         ),
     ]
     lines += [f"  - {reason}" for reason in report["gate"]["failures"]]

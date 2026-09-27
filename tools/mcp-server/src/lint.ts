@@ -20,6 +20,22 @@ export interface LintResult {
 /** Mirrors McqValidation.cs step 9 (`options[i].Text.Length > 600`), as lint-deck.mts does. */
 const MCQ_OPTION_MAX_LENGTH = 600;
 
+/**
+ * A quote must be specific enough to tie the card to one passage (ai-agent-24): at least
+ * this many characters and this many words after whitespace normalisation. A two-word
+ * quote such as "Amazon S3" occurs on almost every page of a document and proves nothing.
+ */
+export const SOURCE_QUOTE_MIN_CHARS = 40;
+export const SOURCE_QUOTE_MIN_WORDS = 6;
+
+/** Null when the quote is specific enough, else why it is not. */
+export function quoteTooShort(quote: string): string | null {
+  const normalised = normaliseWhitespace(quote);
+  const words = normalised === '' ? 0 : normalised.split(' ').length;
+  if (normalised.length >= SOURCE_QUOTE_MIN_CHARS && words >= SOURCE_QUOTE_MIN_WORDS) return null;
+  return `${normalised.length} characters and ${words} words; a quote needs at least ${SOURCE_QUOTE_MIN_CHARS} characters and ${SOURCE_QUOTE_MIN_WORDS} words`;
+}
+
 function splitRow(line: string): string[] {
   return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
 }
@@ -144,9 +160,17 @@ export function lintDraftCard(
       code: 'SOURCE_REQUIRED',
       message: `Card "${card.stableUid}" ${missing}; every draft needs source.url and a verbatim source.quote.`,
     });
-  } else if (sourceChunkText !== undefined) {
-    // 4. The quote must appear in the chunk it claims to come from.
-    if (!normaliseWhitespace(sourceChunkText).includes(normaliseWhitespace(source.quote))) {
+  } else {
+    // 4. The quote must be specific enough to identify the supporting passage.
+    const short = quoteTooShort(source.quote);
+    if (short !== null) {
+      issues.push({
+        code: 'SOURCE_QUOTE_TOO_SHORT',
+        message: `The source quote of card "${card.stableUid}" is ${short}; quote the whole sentence that supports the answer.`,
+      });
+    }
+    // 5. The quote must appear in the chunk it claims to come from.
+    if (sourceChunkText !== undefined && !normaliseWhitespace(sourceChunkText).includes(normaliseWhitespace(source.quote))) {
       issues.push({
         code: 'SOURCE_QUOTE_NOT_IN_CHUNK',
         message: `The source quote of card "${card.stableUid}" is not a verbatim substring of the given chunk text (whitespace-insensitive, case-sensitive).`,
@@ -154,7 +178,7 @@ export function lintDraftCard(
     }
   }
 
-  // 5. Topic vocabulary (a warning; decks without a vocabulary are not checked).
+  // 6. Topic vocabulary (a warning; decks without a vocabulary are not checked).
   const labels = vocabulary.get(deckSlug);
   if (labels !== undefined && labels.length > 0) {
     const topic = typeof card.topic === 'string' ? card.topic : '';
