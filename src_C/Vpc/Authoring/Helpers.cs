@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Amazon.Lambda.APIGatewayEvents;
 using Npgsql;
 using RecallSmith.Lambda.Common;
@@ -184,6 +185,79 @@ public static class Helpers
       default:
         throw new ValidationError("topic must be a string", "topic");
     }
+  }
+
+  /// <summary>Upper bound on cards.source.url in UTF-16 code units.</summary>
+  public const int SourceUrlMaxLength = 2048;
+
+  /// <summary>Upper bound on cards.source.quote in UTF-16 code units.</summary>
+  public const int SourceQuoteMaxLength = 1000;
+
+  private static readonly Regex SourceUrlPattern = new(@"^https://\S+$", RegexOptions.CultureInvariant);
+
+  /// <summary>
+  /// POST body → cards.source as a canonical jsonb string. absent / JSON null → null; otherwise
+  /// <see cref="NormalizeSource"/>.
+  /// </summary>
+  public static string? ParseOptionalSource(JsonElement body)
+  {
+    return body.TryGetProperty("source", out var el) ? NormalizeSource(el) : null;
+  }
+
+  /// <summary>
+  /// One element → canonical {"url":…,"quote":…} (compact, keys in that order) or null.
+  /// Undefined / Null → null; non-object → "source must be an object"; any key other than url/quote →
+  /// "source has unknown key {name}"; url missing, not a string, or (trimmed) over 2048 or not
+  /// ^https://\S+$ → "source.url must be an https URL (max 2048)"; quote absent / null / blank → null,
+  /// string trimmed (internal newlines kept), over 1000 → "source.quote too long (max 1000)", any other
+  /// kind → "source.quote must be a string or null".
+  /// </summary>
+  public static string? NormalizeSource(JsonElement el)
+  {
+    switch (el.ValueKind)
+    {
+      case JsonValueKind.Undefined:
+      case JsonValueKind.Null:
+        return null;
+      case JsonValueKind.Object:
+        break;
+      default:
+        throw new ValidationError("source must be an object", "source");
+    }
+
+    foreach (var prop in el.EnumerateObject())
+    {
+      if (prop.Name is not ("url" or "quote")) throw new ValidationError($"source has unknown key {prop.Name}", "source");
+    }
+
+    if (!el.TryGetProperty("url", out var urlEl) || urlEl.ValueKind != JsonValueKind.String)
+    {
+      throw new ValidationError("source.url must be an https URL (max 2048)", "source");
+    }
+    var url = (urlEl.GetString() ?? string.Empty).Trim();
+    if (url.Length > SourceUrlMaxLength || !SourceUrlPattern.IsMatch(url))
+    {
+      throw new ValidationError("source.url must be an https URL (max 2048)", "source");
+    }
+
+    string? quote = null;
+    if (el.TryGetProperty("quote", out var quoteEl))
+    {
+      switch (quoteEl.ValueKind)
+      {
+        case JsonValueKind.Null:
+          break;
+        case JsonValueKind.String:
+          var q = (quoteEl.GetString() ?? string.Empty).Trim();
+          if (q.Length > SourceQuoteMaxLength) throw new ValidationError("source.quote too long (max 1000)", "source");
+          quote = q.Length == 0 ? null : q;
+          break;
+        default:
+          throw new ValidationError("source.quote must be a string or null", "source");
+      }
+    }
+
+    return JsonSerializer.Serialize(new { url, quote });
   }
 
   private static async Task<bool> DeckPerm(NpgsqlConnection conn, string adminSub, long deckId, string column)

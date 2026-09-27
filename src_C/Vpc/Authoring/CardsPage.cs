@@ -80,7 +80,11 @@ public static class CardsPage
       var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
 
       // jsonb arrives from DbUtil as PG text; the console reads an object (C08's JsonbCell).
-      foreach (var row in rows) Helpers.JsonbCell(row, "mcq");
+      foreach (var row in rows)
+      {
+        Helpers.JsonbCell(row, "mcq");
+        Helpers.JsonbCell(row, "source");
+      }
 
       // Same rule as the paged deck list: a full page means "ask again", and the
       // last page of an exactly-divisible walk therefore costs one extra empty
@@ -147,7 +151,8 @@ public static class CardsPage
         c.created_at    as "createdAt",
         c.updated_at    as "updatedAt",
         c.topic,
-        c.mcq
+        c.mcq,
+        c.source
       from cards c
       """;
 

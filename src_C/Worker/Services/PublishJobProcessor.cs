@@ -140,6 +140,25 @@ public class PublishJobProcessor : IPublishJobProcessor
     };
   }
 
+  private const string CardsSqlSource = """
+    SELECT
+      stable_uid as "stableUid",
+      order_in_deck as "orderInDeck",
+      difficulty,
+      question,
+      explanation,
+      code_language as "codeLanguage",
+      code_snippet as "codeSnippet",
+      real_world_usage as "realWorldUsage",
+      revision,
+      topic,
+      mcq,
+      source
+    FROM cards
+    WHERE deck_id = $1 AND is_deleted = 0
+    ORDER BY order_in_deck ASC, id ASC
+    """;
+
   private const string CardsSql = """
     SELECT
       stable_uid as "stableUid",
@@ -192,9 +211,9 @@ public class PublishJobProcessor : IPublishJobProcessor
     """;
 
   /// <summary>
-  /// Cards of one deck in export order, tolerant of a database that has not yet run 018/019:
-  /// the 11-column select runs first; a 42703 (undefined_column) retries the 018-only shape,
-  /// a second 42703 the pre-018 shape. Each retry is a fresh statement on the same connection
+  /// Cards of one deck in export order, tolerant of a database that has not yet run 018/019/026:
+  /// the 12-column select runs first; a 42703 (undefined_column) retries the pre-026 11-column
+  /// shape, a second 42703 the 018-only shape, a third the pre-018 shape. Each retry is a fresh statement on the same connection
   /// (no transaction, so the failed statement leaves it usable — the ManifestRebuild precedent).
   /// A column the schema lacks maps to null, never to "" (byte identity of existing decks).
   /// </summary>
@@ -203,17 +222,24 @@ public class PublishJobProcessor : IPublishJobProcessor
     List<Dictionary<string, object?>> cardRows;
     try
     {
-      cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckId]);
+      cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlSource, [deckId]);
     }
-    catch (PostgresException pg) when (pg.SqlState == "42703")
+    catch (PostgresException pg0) when (pg0.SqlState == "42703")
     {
       try
       {
-        cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTopicOnly, [deckId]);
+        cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckId]);
       }
-      catch (PostgresException pg2) when (pg2.SqlState == "42703")
+      catch (PostgresException pg) when (pg.SqlState == "42703")
       {
-        cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlLegacy, [deckId]);
+        try
+        {
+          cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTopicOnly, [deckId]);
+        }
+        catch (PostgresException pg2) when (pg2.SqlState == "42703")
+        {
+          cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlLegacy, [deckId]);
+        }
       }
     }
 
@@ -230,6 +256,7 @@ public class PublishJobProcessor : IPublishJobProcessor
       Revision = Convert.ToInt32(c.TryGetValue("revision", out var rv) ? (rv ?? 1) : 1, CultureInfo.InvariantCulture),
       Topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
       Mcq = c.TryGetValue("mcq", out var m) && m is string s ? JsonSerializer.Deserialize<JsonElement>(s) : (JsonElement?)null,
+      Source = c.TryGetValue("source", out var so) && so is string ss ? JsonSerializer.Deserialize<JsonElement>(ss) : null,
     }).ToList();
   }
 }

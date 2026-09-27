@@ -279,6 +279,7 @@ public class ContentArtifactsGenerator : IContentArtifactsGenerator
         Revision = c.Revision ?? 1,
         Topic = c.Topic,
         Mcq = c.Mcq,
+        Source = c.Source,
       });
     }
 
@@ -308,5 +309,6 @@ public class ContentArtifactsGenerator : IContentArtifactsGenerator
     public int? Revision { get; set; }
     public string? Topic { get; set; }
     public JsonElement? Mcq { get; set; }
+    public JsonElement? Source { get; set; }
   }
 }
