@@ -26,11 +26,11 @@ describe('mistakeBook feature flag', () => {
   });
 
   it('applies remote mistakeBook overrides and falls back per field', () => {
-    expect(applyRemoteFeatures({ features: { mistakeBook: { enabled: false, relatedCount: 5 } } }).mistakeBook).toEqual({
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { mistakeBook: { enabled: false, relatedCount: 5 } } })).mistakeBook).toEqual({
       enabled: false,
       relatedCount: 5,
     });
-    expect(applyRemoteFeatures({ features: { mistakeBook: { relatedCount: 0 } } }).mistakeBook).toEqual({
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { mistakeBook: { relatedCount: 0 } } })).mistakeBook).toEqual({
       enabled: true,
       relatedCount: 0,
     });
@@ -59,15 +59,15 @@ describe('mistakeBook feature flag', () => {
     const unsubscribe = subscribeFeatureFlags(listener);
     const before = getFeatureFlags();
 
-    const same = applyRemoteFeatures({ features: { mistakeBook: { enabled: true, relatedCount: 3 } } });
+    const same = applyRemoteFeatures(asRemoteConfig({ features: { mistakeBook: { enabled: true, relatedCount: 3 } } }));
     expect(same).toBe(before);
     expect(listener).not.toHaveBeenCalled();
 
-    const disabled = applyRemoteFeatures({ features: { mistakeBook: { enabled: false } } });
+    const disabled = applyRemoteFeatures(asRemoteConfig({ features: { mistakeBook: { enabled: false } } }));
     expect(disabled).not.toBe(before);
     expect(listener).toHaveBeenCalledTimes(1);
 
-    applyRemoteFeatures({ features: { mistakeBook: { enabled: false, relatedCount: 1 } } });
+    applyRemoteFeatures(asRemoteConfig({ features: { mistakeBook: { enabled: false, relatedCount: 1 } } }));
     expect(listener).toHaveBeenCalledTimes(2);
 
     unsubscribe();
