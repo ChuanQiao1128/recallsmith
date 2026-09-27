@@ -512,7 +512,24 @@ public static class Auth
     var secretName = string.IsNullOrEmpty(callerSecret) ? InternalSharedSecretEnv : callerSecretEnv!;
     var secret = string.IsNullOrEmpty(callerSecret) ? Environment.GetEnvironmentVariable(InternalSharedSecretEnv) : callerSecret;
     if (string.IsNullOrEmpty(secret)) return new InternalSignatureVerifyResult(false, $"Missing {secretName}");
+    return VerifySignedRequest(req, secretName, secret);
+  }
 
+  /// <summary>
+  /// The per-route HMAC check of the R18A internal routes (A00 §8.3). The route's own secret is mandatory: when
+  /// <paramref name="secretEnv"/> is unset the result is <c>(false, "Missing &lt;env&gt;")</c> and it never falls back
+  /// to <c>INTERNAL_SHARED_SECRET</c>. <c>&lt;env&gt;_PREVIOUS</c> (<see cref="PreviousSecretSuffix"/>) is accepted too
+  /// while it is set. Same headers, skew and comparison as <see cref="VerifyInternalSignature(LambdaRequest, string?)"/>.
+  /// </summary>
+  public static InternalSignatureVerifyResult VerifyInternalSignatureStrict(LambdaRequest req, string secretEnv)
+  {
+    var secret = Environment.GetEnvironmentVariable(secretEnv);
+    if (string.IsNullOrEmpty(secret)) return new InternalSignatureVerifyResult(false, $"Missing {secretEnv}");
+    return VerifySignedRequest(req, secretEnv, secret);
+  }
+
+  private static InternalSignatureVerifyResult VerifySignedRequest(LambdaRequest req, string secretName, string secret)
+  {
     var tsRaw = Validation.GetHeader(req, "x-internal-timestamp");
     var sigRaw = Validation.GetHeader(req, "x-internal-signature");
     if (string.IsNullOrEmpty(tsRaw) || string.IsNullOrEmpty(sigRaw))
