@@ -1,8 +1,10 @@
+import dataclasses
+
 import anthropic
 import pytest
 
 from ai_qa import providers
-from ai_qa.providers import make_client, structured_outputs_on
+from ai_qa.providers import effective_effort, make_client, structured_outputs_on
 from ai_qa.settings import ConfigError, load_settings
 
 
@@ -38,3 +40,12 @@ def test_structured_outputs_auto_is_on_for_anthropic_off_for_bedrock() -> None:
     providers.disable_structured_outputs()
     assert structured_outputs_on(load_settings({"AI_PROVIDER": "anthropic"})) is False
     assert structured_outputs_on(load_settings({"AI_STRUCTURED_OUTPUTS": "on"})) is False
+
+
+def test_effective_effort_per_provider() -> None:
+    """B03 ai-agent-9: the Converse client does not send AI_EFFORT, and says so."""
+    cfg = load_settings({"AI_EFFORT": "xhigh"})
+    assert effective_effort(cfg) == "xhigh"
+    assert effective_effort(dataclasses.replace(cfg, provider="anthropic", model="claude-opus-5")) == "xhigh"
+    converse = dataclasses.replace(cfg, provider="bedrock-converse", model="global.openai.gpt-5.5")
+    assert effective_effort(converse) == "provider-default"

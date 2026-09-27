@@ -48,8 +48,10 @@ def emit(
     dimensions: Mapping[str, str] | None = None,
     *,
     timestamp_ms: int | None = None,
+    properties: Mapping[str, Any] | None = None,
 ) -> None:
-    """Print one EMF line carrying every metric in `metrics` ({name: (value, unit)}). Never raises."""
+    """Print one EMF line carrying every metric in `metrics` ({name: (value, unit)}), plus
+    `properties` as plain (non-dimension, non-metric) keys. Never raises."""
     try:
         dims = {"Service": SERVICE, **(dimensions or {})}
         line: dict[str, Any] = {
@@ -63,6 +65,7 @@ def emit(
                     }
                 ],
             },
+            **(properties or {}),
             **dims,
         }
         for name, (value, _) in metrics.items():
@@ -77,8 +80,11 @@ def _count(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def emit_item(namespace: str, provider: str, item: Mapping[str, Any], *, model_called: bool) -> None:
-    """All EMF lines for one result item. Never raises."""
+def emit_item(
+    namespace: str, provider: str, item: Mapping[str, Any], *, model_called: bool, effort: str | None = None
+) -> None:
+    """All EMF lines for one result item. Never raises. `effort` (providers.effective_effort) rides on
+    the usage line as the plain property "Effort", never as a dimension."""
     try:
         if model_called:
             usage = item.get("usage") or {}
@@ -94,6 +100,7 @@ def emit_item(namespace: str, provider: str, item: Mapping[str, Any], *, model_c
                     ESTIMATED_COST_MICRO_USD: (int(round(float(cost) * 1_000_000)), "Count"),
                 },
                 {"Provider": provider},
+                properties={"Effort": effort} if effort is not None else None,
             )
         counts = {severity: 0 for severity in SEVERITIES}
         for finding in item.get("findings") or []:

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import FakeLlm, FakeUsage, card, reply, review_json
+from conftest import FakeLlm, FakeUsage, card, finding, reply, review_json
 from test_handler import (
     INTERNAL_NAME,
     RUN_ID,
@@ -19,6 +19,7 @@ from test_handler import (
 )
 
 from ai_qa import handler, profiles, settings
+from ai_qa.prompts import PROMPT_VERSION, PROMPT_VERSION_AUTOMATION, SYSTEM_PROMPT, SYSTEM_PROMPT_AUTOMATION
 from ai_qa.settings import ConfigError, load_settings
 
 PROD_ENV = Path(__file__).resolve().parent.parent / "env" / "prod.env.json"
@@ -160,8 +161,14 @@ class TestSettingsFor:
         ],
     )
     def test_invalid_automation_settings_are_config_errors(self, env, match) -> None:
+        # B03 cloud-security-resilience-7: an invalid automation key no longer fails load_settings
+        # (that took down the default human card QA); it is a CONFIG error for the automation
+        # profile only.
+        cfg = load_settings(env)
+        assert cfg.automation_config_error is not None
+        assert profiles.settings_for(cfg, "default") is cfg
         with pytest.raises(ConfigError, match=match):
-            load_settings(env)
+            profiles.settings_for(cfg, "automation")
 
     def test_prod_env_loads_with_the_automation_reviewer(self) -> None:
         env = json.loads(PROD_ENV.read_text())
@@ -320,3 +327,145 @@ class TestHandler:
         assert [(i["status"], i["errorCode"]) for i in body["items"]] == [("skipped", "DISABLED")] * 2
         assert body["items"][0]["cardId"] == DRAFT_ID
         assert body["target"] == "draft" and body["profile"] == "automation"
+
+
+class TestAutomationPromptAndIsolation:
+    """B03 (R18B): the qa-v4-auto prompt for the automation profile (K1), and an invalid automation
+    setting that disables only the automation profile (cloud-security-resilience-7)."""
+
+    @pytest.fixture(autouse=True)
+    def no_automation_env(self, monkeypatch):
+        for key in AUTOMATION_ENV:
+            monkeypatch.delenv(key, raising=False)
+
+    @pytest.fixture
+    def harness(self, local_server, monkeypatch):
+        srv = local_server(fake_core)
+        monkeypatch.setenv("CORE_API_BASE", srv.base_url)
+        settings.set_clients(ssm=FakeSsm({INTERNAL_NAME: SECRET}))
+        clients = {"bedrock": FakeLlm(), "bedrock-converse": FakeLlm()}
+        made = []
+
+        def factory(cfg, *, api_key=None):
+            made.append(cfg)
+            return clients[cfg.provider]
+
+        monkeypatch.setattr(handler, "client_factory", factory)
+        return srv, clients, made
+
+    def test_prompt_version_and_system_prompt_per_profile(self) -> None:
+        assert profiles.prompt_version_for("default") == PROMPT_VERSION == "qa-v4"
+        assert profiles.system_prompt_for("default") is SYSTEM_PROMPT
+        assert profiles.prompt_version_for("automation") == PROMPT_VERSION_AUTOMATION == "qa-v4-auto"
+        assert profiles.system_prompt_for("automation") is SYSTEM_PROMPT_AUTOMATION
+
+    def test_automation_message_reviews_with_qa_v4_auto_and_echoes_it(self, harness, monkeypatch, capsys) -> None:
+        core, clients, _ = harness
+        set_env(monkeypatch, {**AUTOMATION_ENV, "AI_QA_ENABLED": "1"})
+        clients["bedrock-converse"].script = [reply(review_json())]
+        handler.lambda_handler(
+            event(message([draft_card()], target="draft", profile="automation", promptVersion="qa-v4-auto")), None
+        )
+        (call,) = clients["bedrock-converse"].calls
+        assert call["system"][0]["text"] == SYSTEM_PROMPT_AUTOMATION
+        (body,) = reports(core)
+        assert body["promptVersion"] == "qa-v4-auto"
+        assert '"prompt_version_mismatch"' not in capsys.readouterr().out
+
+    def test_default_message_still_reviews_with_qa_v4(self, harness, monkeypatch, capsys) -> None:
+        core, clients, _ = harness
+        set_env(monkeypatch, {**AUTOMATION_ENV, "AI_QA_ENABLED": "1"})
+        clients["bedrock"].script = [reply(review_json())]
+        handler.lambda_handler(event(message([card(0)], promptVersion="qa-v4")), None)
+        (call,) = clients["bedrock"].calls
+        assert call["system"][0]["text"] == SYSTEM_PROMPT
+        (body,) = reports(core)
+        assert body["promptVersion"] == "qa-v4"
+        assert '"prompt_version_mismatch"' not in capsys.readouterr().out
+
+    def test_version_check_is_against_the_profile_version(self, harness, monkeypatch, capsys) -> None:
+        core, clients, _ = harness
+        set_env(monkeypatch, {**AUTOMATION_ENV, "AI_QA_ENABLED": "1"})
+        clients["bedrock-converse"].script = [reply(review_json())]
+        # An automation message still asking for the human prompt version is logged as a mismatch.
+        handler.lambda_handler(event(message([draft_card()], profile="automation", promptVersion="qa-v4")), None)
+        logged = [
+            json.loads(line) for line in capsys.readouterr().out.splitlines() if '"prompt_version_mismatch"' in line
+        ]
+        assert len(logged) == 1
+        assert (logged[0]["requested"], logged[0]["running"], logged[0]["profile"]) == ("qa-v4", "qa-v4-auto", "automation")
+        (body,) = reports(core)
+        assert body["promptVersion"] == "qa-v4-auto"  # what actually ran
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"AI_QA_AUTOMATION_PROVIDER": "openai"},
+            {"AI_QA_AUTOMATION_PROVIDER": "bedrock-converse", "AI_QA_AUTOMATION_MODEL": "anthropic.claude-opus-5"},
+        ],
+    )
+    def test_invalid_automation_setting_keeps_default_card_qa_running(self, harness, monkeypatch, bad) -> None:
+        core, clients, made = harness
+        set_env(monkeypatch, {**AUTOMATION_ENV, **bad, "AI_QA_ENABLED": "1"})
+        clients["bedrock"].script = [reply(review_json(finding()))]
+        result = handler.lambda_handler(event(message([card(0)])), None)
+        assert result == {"batchItemFailures": []}
+        (body,) = reports(core)
+        assert set(body) == REPORT_KEYS
+        assert (body["provider"], body["model"]) == ("bedrock", "anthropic.claude-opus-5")
+        (item,) = body["items"]
+        assert (item["status"], item["errorCode"]) == ("done", None)
+        assert len(item["findings"]) == 1
+        assert [cfg.provider for cfg in made] == ["bedrock"]
+
+    @pytest.mark.parametrize(
+        "bad,provider",
+        [
+            ({"AI_QA_AUTOMATION_PROVIDER": "openai"}, "unset"),
+            (
+                {"AI_QA_AUTOMATION_PROVIDER": "bedrock-converse", "AI_QA_AUTOMATION_MODEL": "anthropic.claude-opus-5"},
+                "bedrock-converse",
+            ),
+        ],
+    )
+    def test_invalid_automation_setting_fails_automation_messages_with_config(
+        self, harness, monkeypatch, capsys, bad, provider
+    ) -> None:
+        core, clients, made = harness
+        set_env(monkeypatch, {**AUTOMATION_ENV, **bad, "AI_QA_ENABLED": "1"})
+        result = handler.lambda_handler(event(message([draft_card()], target="draft", profile="automation")), None)
+        assert result == {"batchItemFailures": []}  # acked
+        assert made == [] and model_calls(clients) == 0
+        (body,) = reports(core)
+        assert body["provider"] == provider and body["model"] == "unset"
+        assert body["promptVersion"] == "qa-v4-auto"
+        assert [(i["status"], i["errorCode"]) for i in body["items"]] == [("error", "CONFIG")]
+        out = capsys.readouterr().out
+        assert '"profile_config_invalid"' in out and '"config_invalid"' not in out
+
+    def test_effective_effort_is_recorded_never_dropped_silently(self, harness, monkeypatch, capsys) -> None:
+        """B03 ai-agent-9: AI_EFFORT is not sent on the Converse path (no documented field), so the
+        effort is recorded as provider-default in the card log and the usage EMF line; the Mantle
+        reviewer records the configured effort."""
+        core, clients, _ = harness
+        set_env(monkeypatch, {**AUTOMATION_ENV, "AI_QA_ENABLED": "1", "AI_EFFORT": "high"})
+        clients["bedrock-converse"].script = [reply(review_json())]
+        clients["bedrock"].script = [reply(review_json())]
+        handler.lambda_handler(event(message([draft_card()], target="draft", profile="automation")), None)
+        handler.lambda_handler(event(message([card(1)])), None)
+        lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+
+        (not_sent,) = [line for line in lines if line.get("event") == "effort_not_sent"]
+        assert (not_sent["provider"], not_sent["configuredEffort"], not_sent["effectiveEffort"]) == (
+            "bedrock-converse",
+            "high",
+            "provider-default",
+        )
+        results = {line["cardId"]: line for line in lines if line.get("event") == "card_result"}
+        assert results[DRAFT_ID]["effort"] == "provider-default"
+        assert results[102]["effort"] == "high"
+        usage = {line["Provider"]: line for line in lines if "AiQaCardsReviewed" in line}
+        assert usage["bedrock-converse"]["Effort"] == "provider-default"
+        assert usage["bedrock"]["Effort"] == "high"
+        # A plain property, never a dimension: the metric series are unchanged.
+        assert usage["bedrock"]["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [["Service", "Provider"]]
