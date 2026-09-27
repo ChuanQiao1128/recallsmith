@@ -1,0 +1,8 @@
+# Sample robots.txt for the source watcher tests.
+User-agent: *
+Disallow: /private/
+Disallow: /drafts/
+
+User-agent: DeveloperCards-SourceWatch
+Disallow: /no-watchers/
+Allow: /

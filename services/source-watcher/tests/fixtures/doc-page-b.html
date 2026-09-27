@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Queues guide | Sample Docs</title>
+    <style>
+      main { max-width: 40rem; }
+      .banner { display: none; }
+    </style>
+    <script src="/static/app.4f2c.js"></script>
+    <noscript>Please enable JavaScript for the full experience.</noscript>
+  </head>
+  <body>
+    <header class="banner">
+      <a href="/">Sample&nbsp;Docs</a>
+      <iframe src="/promo"></iframe>
+    </header>
+    <nav aria-label="Guides">
+      <ol><li>Queues</li><li>Topics</li><li>Streams</li></ol>
+    </nav>
+    <aside class="toc">On this page: Visibility timeouts</aside>
+    <main id="content">
+      <h1>   Visibility    timeouts   </h1>
+
+      <p>When a consumer receives a message,   the queue hides it from other consumers for the
+visibility timeout.</p>
+      <svg width="10" height="10"><text>icon</text></svg>
+      <p>If the consumer does not delete the message before the timeout expires, the message becomes visible again &#38; another consumer can receive it.</p>
+
+      <ul>
+        <li>Default timeout:&#32;30 seconds</li>
+        <li>Maximum timeout: 12 hours</li>
+      </ul>
+      <template><p>Hidden template text</p></template>
+      <pre>receive --queue orders --wait 20</pre>
+    </main>
+    <footer>
+      <p>&copy; 2026 Sample Docs. Version B, built 2026-09-28.</p>
+    </footer>
+    <script>
+      track("b");
+    </script>
+  </body>
+</html>
