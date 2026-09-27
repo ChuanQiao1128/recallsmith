@@ -206,7 +206,7 @@ is needed.
 | `mode_off` / `no_items` | the server's automation mode is `off`, or the queue has nothing due; nothing to do |
 | `lease_short` | the server granted a lease that ends before `DC_RUNNER_ITEM_TIMEOUT_MINUTES` would; the item is released at once (`complete` `failed`, so the server retries it with its backoff) and the run stops; check the server's lease limit |
 | `bad_item` | the server sent an item with an invalid run id, item id, deck slug or non-https URL; it is not run and is released at once (`complete` `failed`) unless its run id itself is invalid |
-| `author_config_error` | `.claude/skills/author-cards/SKILL.md` is missing or has no `Skill version:` line in `DC_REPO_ROOT`, or `tools/mcp-server/dist/index.js` or `dist/tool-surface.json` is not built |
+| `author_config_error` | `.claude/skills/author-cards/SKILL.md` is missing or has no `Skill version:` line in `DC_REPO_ROOT`, or `tools/mcp-server/dist/index.js` or `dist/tool-surface.json` is not built, or the surface's `bundleSha256` is not the SHA-256 of `dist/index.js` (a surface from another build): rebuild `tools/mcp-server` |
 | `item_done` with `failed` | the error names the CLI result subtype and text; read `runs/<runId>.stderr.log` and `runs/<runId>.json` |
 | `RUNNER_UNAVAILABLE: …` / `runner_unavailable` | a cause that affects every item ended the run after one item; the server requeues that item with its backoff (N3). `claude could not be started: ENOENT` means `claude` is not on the job's `PATH` (reinstall after moving it) |
 | `runner_held` / `RUNNER_UNAVAILABLE: held since …` | an earlier run hit a cause that does not go away by itself (no `claude`, not on the subscription login, MCP server failed); fix it, then delete `runner-state.json` (a Claude Code update or a changed author configuration also drops the hold) |
@@ -233,7 +233,10 @@ run starts:
   the tool names, descriptions and input schemas the agent sees, the lint limits and the MCP server
   version), `mcpServerVersion`, `mcpToolNames` (sorted), `mcpServerSha256`
   (`tools/mcp-server/dist/index.js`; a checkout without it or without `tool-surface.json` runs
-  nothing, `author_config_error`), `claudeVersion` and `runnerVersion`;
+  nothing, `author_config_error`), `claudeVersion` and `runnerVersion`. The build deletes
+  `tool-surface.json` first and records in it the `bundleSha256` of the `dist/index.js` it was listed
+  from; a surface whose `bundleSha256` differs from the bundle runs nothing either (ai-agent-28).
+  `bundleSha256` is not part of `toolSurfaceSha256`;
 - `id`: the first 16 hex characters of the SHA-256 of all of the above (a local fingerprint);
 - `authorConfigId` (M1): the lowercase hex SHA-256 of the canonical JSON (sorted keys, no spaces) of
   `{ argsSha256, model, promptSha256, skillSha256, skillVersion }` (`argsSha256` is

@@ -1,7 +1,8 @@
 // Test helpers: a loopback fake API, a temp HOME, a copied fake claude and a token file.
 // Nothing here touches the network beyond 127.0.0.1 or runs the real claude.
 
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -22,6 +23,16 @@ export const TEST_TOOL_SURFACE = {
     name,
   })),
 };
+
+/**
+ * Writes a tool surface into a test repo's tools/mcp-server/dist/tool-surface.json the way the MCP
+ * server build does: bound to the dist/index.js next to it by its SHA-256 (ai-agent-28).
+ */
+export function writeTestToolSurface(repo: string, surface: object = TEST_TOOL_SURFACE, space?: number): void {
+  const mcpDist = join(repo, 'tools', 'mcp-server', 'dist');
+  const bundleSha256 = createHash('sha256').update(readFileSync(join(mcpDist, 'index.js'))).digest('hex');
+  writeFileSync(join(mcpDist, 'tool-surface.json'), `${JSON.stringify({ ...surface, bundleSha256 }, null, space)}\n`);
+}
 
 export interface RecordedRequest {
   method: string;
@@ -119,7 +130,7 @@ export function makeHome(): TestHome {
   mkdirSync(mcpDist, { recursive: true });
   writeFileSync(join(mcpDist, 'index.js'), '// test stand-in for the MCP server bundle\n');
   // ... and the tool surface its build lists next to it (N4).
-  writeFileSync(join(mcpDist, 'tool-surface.json'), `${JSON.stringify(TEST_TOOL_SURFACE)}\n`);
+  writeTestToolSurface(repo);
   const claudeBin = join(bin, 'claude');
   copyFileSync(FAKE_CLAUDE_SOURCE, claudeBin);
   chmodSync(claudeBin, 0o755);
