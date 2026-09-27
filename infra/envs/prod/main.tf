@@ -3,6 +3,10 @@ locals {
   # variable stays sensitive (never printed). Passing the value unmarked keeps the adopted
   # budget's notification blocks a no-op on import instead of a spurious sensitivity re-mark.
   alert_email = var.alert_email
+
+  # R18 Y04: one model id feeds both the ai-qa IAM condition (bedrock-mantle:Model) and the function's
+  # create-time AI_MODEL, so the two cannot drift apart in Terraform.
+  ai_qa_model_id = "anthropic.claude-opus-5"
 }
 
 # E03's DLQ exists in the account but is not in imports.tf (E00 §6 #20). module.worker's
@@ -56,10 +60,9 @@ module "identity" {
   webhook_queue_name               = "developercards-webhook-events"
   webhook_dispatcher_function_name = "developercards-webhook-dispatcher"
 
-  ai_qa_queue_name             = "developercards-ai-qa-jobs"
-  ai_qa_function_name          = "developercards-ai-qa"
-  bedrock_inference_profile_id = "global.anthropic.claude-opus-5"
-  bedrock_foundation_model_id  = "anthropic.claude-opus-5"
+  ai_qa_queue_name        = "developercards-ai-qa-jobs"
+  ai_qa_function_name     = "developercards-ai-qa"
+  bedrock_mantle_model_id = local.ai_qa_model_id
 
   secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development", "webhook-signing-secret", "anthropic-api-key"]
 
@@ -114,7 +117,7 @@ module "api" {
   security_group_ids        = var.core_vpc_security_group_ids
   console_pool_endpoint     = module.identity.console_pool_endpoint
   console_client_id         = module.identity.console_client_id
-  console_extra_audiences   = [module.identity.console_dev_client_id]
+  agent_client_ids          = [module.identity.console_dev_client_id]
   mobile_pool_endpoint      = module.identity.mobile_pool_endpoint
   mobile_client_id          = module.identity.mobile_client_id
   cors_allowed_origins      = concat(var.cors_allowed_origins, ["https://console.${var.domain}"])
@@ -158,7 +161,7 @@ module "worker" {
   # Create-time only; equals services/ai-qa/env/prod.env.json (R18-00 §7.5). Kill switch off; the deploy script owns it afterwards.
   ai_qa_environment = {
     AI_PROVIDER                = "bedrock"
-    AI_MODEL                   = "anthropic.claude-opus-5"
+    AI_MODEL                   = local.ai_qa_model_id
     AI_BEDROCK_REGION          = "ap-southeast-2"
     AI_EFFORT                  = "high"
     AI_STRUCTURED_OUTPUTS      = "auto"
