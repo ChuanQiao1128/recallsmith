@@ -16,7 +16,7 @@ export const FAKE_CLAUDE_SOURCE = join(dirname(fileURLToPath(import.meta.url)), 
 /** A stand-in for tools/mcp-server/dist/tool-surface.json (N4). */
 export const TEST_TOOL_SURFACE = {
   constants: { SOURCE_QUOTE_MIN_CHARS: 40, SOURCE_QUOTE_MIN_WORDS: 6 },
-  server: { name: 'developercards', version: '1.8.0' },
+  server: { name: 'developercards', version: '1.8.1' },
   tools: ['submit_draft', 'read_source', 'lint_card', 'find_similar_cards'].map((name) => ({
     description: `the ${name} tool`,
     inputSchema: { type: 'object', properties: {} },
