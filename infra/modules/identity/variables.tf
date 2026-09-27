@@ -103,3 +103,13 @@ variable "bedrock_mantle_project_id" {
   default     = "default"
   description = "The Mantle project ai-qa's calls land in. The client sends no OpenAI-Project header, so this is the account's default project."
 }
+
+variable "ai_qa_converse_profile_ids" {
+  type        = list(string)
+  default     = []
+  description = "Owner-approved Bedrock inference profile ids (global./au./apac. prefixed) ai-qa may call through Converse (bedrock:InvokeModel). Empty = no Converse grant."
+  validation {
+    condition     = alltrue([for id in var.ai_qa_converse_profile_ids : can(regex("^(global|au|apac)\\.[a-z0-9-]+\\.[A-Za-z0-9.:-]+$", id)) && !strcontains(id, "*")])
+    error_message = "Each entry must be an exact inference profile id with a global./au./apac. prefix; no wildcards."
+  }
+}
