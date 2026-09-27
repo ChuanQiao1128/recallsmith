@@ -108,20 +108,53 @@ describe('submit_draft', () => {
     expect(post?.method).toBe('POST');
     expect(post?.headers.authorization).toBe(`Bearer ${TEST_ACCESS_TOKEN}`);
     expect(post?.headers['content-type']).toBe('application/json');
+    // Each draft entry carries its grounding next to `card` for the reviewer (ai-agent-24).
     expect(JSON.parse(post?.body ?? '')).toEqual({
       deckId: 12,
       agent: { name: 'developercards-mcp', model: 'claude-opus-5-5', skillVersion: '1.0.0' },
-      drafts: cards.map((card) => ({ clientDraftKey: clientDraftKey(card), card })),
+      drafts: [
+        {
+          clientDraftKey: clientDraftKey(cards[0] as DraftCard),
+          card: cards[0],
+          grounding: {
+            sourceId: 'sid-retrieval',
+            chunkId: 'c0002',
+            matched: true,
+            quoteChars: 'standard retrieval finishes in 3 to 5 hours'.length,
+            kind: 'url',
+            url: 'https://example.com/s3/retrieval-options',
+            fetchedAt: '2026-09-27T00:00:00Z',
+            chunkCharStart: 30,
+            chunkCharEnd: 30 + SAMPLE_CHUNK.length,
+          },
+        },
+        {
+          clientDraftKey: clientDraftKey(cards[1] as DraftCard),
+          card: cards[1],
+          grounding: {
+            sourceId: 'sid-encryption',
+            chunkId: 'c0001',
+            matched: true,
+            quoteChars: 'deny any upload that does not request SSE-KMS'.length,
+            kind: 'url',
+            url: 'https://example.com/s3/encryption',
+            fetchedAt: '2026-09-27T00:00:00Z',
+            chunkCharStart: 0,
+            chunkCharEnd: MCQ_CHUNK.length,
+          },
+        },
+      ],
     });
 
     // The deck id is cached per process: a second submit skips the lookup.
     const again = await callTool(client, 'submit_draft', { deckSlug: 'aws-saa-c03', drafts: [sampleCard()] });
     expect(again.isError).toBe(false);
     expect(api.requests).toHaveLength(3);
-    expect(JSON.parse(api.requests[2]?.body ?? '')).toEqual({
+    expect(JSON.parse(api.requests[2]?.body ?? '')).toMatchObject({
       deckId: 12,
-      drafts: [{ clientDraftKey: clientDraftKey(sampleCard()), card: sampleCard() }],
+      drafts: [{ clientDraftKey: clientDraftKey(sampleCard()), card: sampleCard(), grounding: { chunkId: 'c0002', matched: true } }],
     });
+    expect(JSON.parse(api.requests[2]?.body ?? '')).not.toHaveProperty('agent');
     await client.close();
   });
 

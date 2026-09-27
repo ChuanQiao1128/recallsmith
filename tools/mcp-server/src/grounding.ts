@@ -2,6 +2,8 @@
 // every document read_source returned in this process, keyed by its citable url, and
 // submit_draft accepts a draft only when its source.url is such a document and its
 // source.quote occurs (whitespace-normalised) in one of that document's chunks.
+// The result travels with each submitted draft as `grounding` (ai-agent-24), so the
+// human reviewer sees where the quote was found and whether it came from a local file.
 
 import { normaliseWhitespace } from './lint';
 
@@ -15,6 +17,9 @@ export interface IngestedChunk {
 export interface IngestedSource {
   sourceId: string;
   url: string;
+  /** 'local' when dc-ingest read a file on disk: its url is the agent-supplied canonicalUrl. */
+  kind: 'url' | 'local';
+  fetchedAt: string | null;
   chunks: IngestedChunk[];
 }
 
@@ -27,6 +32,37 @@ export interface GroundingLocation {
   chunkId: string;
   chunkCharStart: number;
   chunkCharEnd: number;
+}
+
+/**
+ * The grounding record sent with each draft to POST /api/v1/authoring/drafts, next to
+ * `card` in the draft entry (not inside card.source, whose keys the API validates strictly).
+ * `quoteChars` is the length of the whitespace-normalised quote that matched.
+ */
+export interface DraftGrounding {
+  sourceId: string;
+  chunkId: string;
+  matched: true;
+  quoteChars: number;
+  kind: 'url' | 'local';
+  url: string;
+  fetchedAt: string | null;
+  chunkCharStart: number;
+  chunkCharEnd: number;
+}
+
+export function draftGrounding(source: IngestedSource, chunk: IngestedChunk, quote: string): DraftGrounding {
+  return {
+    sourceId: source.sourceId,
+    chunkId: chunk.id,
+    matched: true,
+    quoteChars: normaliseWhitespace(quote).length,
+    kind: source.kind,
+    url: source.url,
+    fetchedAt: source.fetchedAt,
+    chunkCharStart: chunk.charStart,
+    chunkCharEnd: chunk.charEnd,
+  };
 }
 
 export type GroundingCheck =
@@ -59,6 +95,8 @@ export class SourceStore {
     const source: IngestedSource = {
       sourceId: record.sourceId,
       url: record.url.trim(),
+      kind: typeof record.path === 'string' && record.path !== '' ? 'local' : 'url',
+      fetchedAt: typeof record.fetchedAt === 'string' ? record.fetchedAt : null,
       chunks: record.chunks.map(({ id, text, charStart, charEnd }) => ({ id, text, charStart, charEnd })),
     };
     this.byUrl.delete(source.url);
