@@ -23,16 +23,30 @@ import { ConsoleShell } from '../components/console/ConsoleShell';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
+import {
+  BUTTON_CLASS,
+  CARD_CLASS,
+  H1_CLASS,
+  H2_CLASS,
+  INPUT_CLASS,
+  INPUT_INVALID_CLASS,
+  LABEL_CLASS,
+  PRIMARY_BUTTON_CLASS,
+  TD_CLASS,
+  TH_CLASS,
+} from '../components/console/consoleStyles';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   SIGNING_SECRET_SSM_PARAMETER,
   WEBHOOK_EVENTS,
   WEBHOOK_HEADERS,
+  WEBHOOK_NAME_MAX_LENGTH,
   WEBHOOK_SIGNATURE_TEST_VECTOR,
   WEBHOOK_TOLERANCE_SECONDS,
   WEBHOOK_VERIFY_SNIPPET,
   isRedeliverable,
   webhookFormProblems,
+  webhookUrlProblem,
 } from '../lib/webhookRules';
 import type { ApiError } from '../types/api';
 
@@ -46,6 +60,8 @@ type SubscriptionsState = {
 
 type DeliveriesState = {
   loading: boolean;
+  /** The filter the rows were loaded for; a mismatch means a refetch is on the way. */
+  forKey: string | null;
   error: LoadError | null;
   items: WebhookDelivery[];
   nextCursor: string | null;
@@ -63,15 +79,13 @@ const EMPTY_FORM: FormState = { name: '', url: '', events: [], isActive: true };
 const DELIVERY_STATUSES = ['queued', 'delivered', 'retrying', 'failed', 'dead', 'enqueue_failed'];
 const DELIVERIES_PAGE_SIZE = 50;
 
-const BUTTON_CLASS =
-  'text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed';
-const PRIMARY_BUTTON_CLASS =
-  'text-sm px-3 py-2 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed';
-const INPUT_CLASS = 'w-full rounded-md border border-slate-300 px-3 py-2 text-sm';
-const LABEL_CLASS = 'block text-xs font-medium text-slate-700 mb-1';
-const CARD_CLASS = 'bg-white border border-slate-200 rounded-lg shadow-sm p-4';
-const TH_CLASS = 'px-4 py-2 text-left font-semibold text-slate-600';
-const TD_CLASS = 'px-4 py-2';
+type InvalidFields = { name: boolean; url: boolean; events: boolean };
+const NO_INVALID_FIELDS: InvalidFields = { name: false, url: false, events: false };
+const FORM_PROBLEMS_ID = 'webhook-form-problems';
+
+function deliveriesKey(subscription: string, status: string, event: string): string {
+  return `${subscription}|${status}|${event}`;
+}
 
 function toLoadError(error: ApiError | null, fallback: string): LoadError {
   return { code: error?.code ?? 'UNKNOWN', message: error?.message ?? fallback };
@@ -102,6 +116,7 @@ export function WebhooksPage() {
   const [subs, setSubs] = useState<SubscriptionsState>({ loading: true, error: null, data: null });
   const [deliveries, setDeliveries] = useState<DeliveriesState>({
     loading: true,
+    forKey: null,
     error: null,
     items: [],
     nextCursor: null,
@@ -118,6 +133,7 @@ export function WebhooksPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formProblems, setFormProblems] = useState<string[]>([]);
+  const [invalidFields, setInvalidFields] = useState<InvalidFields>(NO_INVALID_FIELDS);
   const [formServerError, setFormServerError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -130,7 +146,12 @@ export function WebhooksPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [redeliverMessage, setRedeliverMessage] = useState<string | null>(null);
+  // Written into the page's one persistent live region, so a screen reader
+  // hears each action result (a region mounted with its text is not announced).
+  const [announcement, setAnnouncement] = useState('');
   const [loadingMore, setLoadingMore] = useState(false);
+
+  const filterKey = deliveriesKey(filterSubscription, filterStatus, filterEvent);
 
   useEffect(() => {
     if (!superAdmin) return;
@@ -161,16 +182,18 @@ export function WebhooksPage() {
         limit: DELIVERIES_PAGE_SIZE,
       });
       if (cancelled) return;
+      const forKey = deliveriesKey(filterSubscription, filterStatus, filterEvent);
       if (!res.success || !res.data) {
         setDeliveries({
           loading: false,
+          forKey,
           error: toLoadError(res.error, 'Failed to load webhook deliveries.'),
           items: [],
           nextCursor: null,
         });
         return;
       }
-      setDeliveries({ loading: false, error: null, items: res.data.items, nextCursor: res.data.nextCursor });
+      setDeliveries({ loading: false, forKey, error: null, items: res.data.items, nextCursor: res.data.nextCursor });
     }
     void run();
     return () => {
@@ -205,6 +228,8 @@ export function WebhooksPage() {
   const ssmName = subs.data?.signingSecretSsmName || SIGNING_SECRET_SSM_PARAMETER;
   const nameById = new Map(subscriptions.map(s => [s.id, s.name]));
   const notReady = isNotReady(subs.error) || isNotReady(deliveries.error);
+  // The rows on screen belong to a previous filter while its refetch is in flight.
+  const deliveriesRefetching = !deliveries.loading && deliveries.forKey !== filterKey;
 
   function toggleFormEvent(event: string, checked: boolean) {
     setForm(prev => ({
@@ -217,6 +242,7 @@ export function WebhooksPage() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setFormProblems([]);
+    setInvalidFields(NO_INVALID_FIELDS);
     setFormServerError(null);
   }
 
@@ -224,6 +250,7 @@ export function WebhooksPage() {
     setForm({ name: s.name, url: s.url, events: [...s.events], isActive: s.isActive });
     setEditingId(s.id);
     setFormProblems([]);
+    setInvalidFields(NO_INVALID_FIELDS);
     setFormServerError(null);
   }
 
@@ -233,6 +260,15 @@ export function WebhooksPage() {
     const input = { name: form.name.trim(), url: form.url.trim(), events: form.events, isActive: form.isActive };
     const problems = webhookFormProblems(input);
     setFormProblems(problems);
+    setInvalidFields(
+      problems.length === 0
+        ? NO_INVALID_FIELDS
+        : {
+            name: input.name.length === 0 || input.name.length > WEBHOOK_NAME_MAX_LENGTH,
+            url: webhookUrlProblem(input.url) !== null,
+            events: input.events.length === 0,
+          },
+    );
     setFormServerError(null);
     if (problems.length > 0) return;
 
@@ -291,13 +327,14 @@ export function WebhooksPage() {
     setTestResult(null);
     const res = await sendWebhookTest(s.id);
     endBusy(key);
-    if (res.success && res.data) {
-      setTestResult(`Test event queued: delivery ${res.data.deliveryId}`);
-    } else if (res.error?.code === 'WEBHOOKS_NOT_CONFIGURED') {
-      setTestResult('The webhook queue is not configured on the server yet.');
-    } else {
-      setTestResult(res.error?.message ?? 'The test event could not be sent.');
-    }
+    const result =
+      res.success && res.data
+        ? `Test event queued: delivery ${res.data.deliveryId}`
+        : res.error?.code === 'WEBHOOKS_NOT_CONFIGURED'
+          ? 'The webhook queue is not configured on the server yet.'
+          : (res.error?.message ?? 'The test event could not be sent.');
+    setTestResult(result);
+    setAnnouncement(result);
     setDeliveriesNonce(n => n + 1);
   }
 
@@ -308,19 +345,26 @@ export function WebhooksPage() {
     const res = await redeliverWebhookDelivery(d.deliveryId);
     endBusy(key);
     if (!res.success) {
-      setRedeliverMessage(
+      const message =
         res.error?.code === 'SUBSCRIPTION_INACTIVE'
           ? 'Enable the subscription before redelivering.'
-          : (res.error?.message ?? 'The delivery could not be redelivered.'),
-      );
+          : (res.error?.message ?? 'The delivery could not be redelivered.');
+      setRedeliverMessage(message);
+      setAnnouncement(message);
       return;
     }
-    setRedeliverMessage(`Redelivery queued: delivery ${res.data?.deliveryId ?? d.deliveryId}`);
+    const message = `Redelivery queued: delivery ${res.data?.deliveryId ?? d.deliveryId}`;
+    setRedeliverMessage(message);
+    setAnnouncement(message);
     setDeliveriesNonce(n => n + 1);
   }
 
   async function loadMore() {
-    if (loadingMore || !deliveries.nextCursor) return;
+    if (loadingMore || !deliveries.nextCursor || deliveriesRefetching) return;
+    // The page belongs to the filter it was asked for: if the filter changes
+    // while it is in flight, the result is dropped rather than appended to the
+    // new filter's rows (and its cursor is not followed).
+    const keyAtClick = filterKey;
     setLoadingMore(true);
     const res = await listWebhookDeliveries({
       subscriptionId: filterSubscription === '' ? undefined : Number(filterSubscription),
@@ -331,16 +375,17 @@ export function WebhooksPage() {
     });
     setLoadingMore(false);
     if (!res.success || !res.data) {
-      setDeliveries(prev => ({ ...prev, error: toLoadError(res.error, 'Failed to load more deliveries.') }));
+      setDeliveries(prev =>
+        prev.forKey !== keyAtClick ? prev : { ...prev, error: toLoadError(res.error, 'Failed to load more deliveries.') },
+      );
       return;
     }
     const page = res.data;
-    setDeliveries(prev => ({
-      ...prev,
-      error: null,
-      items: [...prev.items, ...page.items],
-      nextCursor: page.nextCursor,
-    }));
+    setDeliveries(prev =>
+      prev.forKey !== keyAtClick
+        ? prev
+        : { ...prev, error: null, items: [...prev.items, ...page.items], nextCursor: page.nextCursor },
+    );
   }
 
   const V = WEBHOOK_SIGNATURE_TEST_VECTOR;
@@ -358,7 +403,11 @@ export function WebhooksPage() {
       adminUsersHref="/admin/users"
       superAdmin
     >
-      <h1 className="text-lg font-semibold text-slate-900">Webhooks</h1>
+      <h1 className={H1_CLASS}>Webhooks</h1>
+
+      <div role="status" aria-live="polite" className="sr-only" data-testid="webhooks-live">
+        {announcement}
+      </div>
 
       {notReady ? (
         <div data-testid="webhooks-not-ready">
@@ -369,18 +418,20 @@ export function WebhooksPage() {
       ) : null}
 
       <section className={CARD_CLASS}>
-        <h2 className="text-sm font-semibold text-slate-900">Subscriptions</h2>
+        <h2 className={H2_CLASS}>Subscriptions</h2>
 
         {subs.error && !isNotReady(subs.error) ? (
           <div className="mt-3">
-            <Callout tone="danger" title="Could not load subscriptions">
+            <Callout tone="danger" title="Could not load subscriptions" role="alert">
               {subs.error.message}
             </Callout>
           </div>
         ) : null}
         {actionError ? (
           <div className="mt-3">
-            <Callout tone="danger">{actionError}</Callout>
+            <Callout tone="danger" role="alert">
+              {actionError}
+            </Callout>
           </div>
         ) : null}
         {testResult ? (
@@ -483,7 +534,9 @@ export function WebhooksPage() {
               </label>
               <input
                 id="webhook-name"
-                className={INPUT_CLASS}
+                className={invalidFields.name ? INPUT_INVALID_CLASS : INPUT_CLASS}
+                aria-invalid={invalidFields.name ? true : undefined}
+                aria-describedby={invalidFields.name ? FORM_PROBLEMS_ID : undefined}
                 value={form.name}
                 onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))}
               />
@@ -495,13 +548,18 @@ export function WebhooksPage() {
               <input
                 id="webhook-url"
                 type="url"
-                className={INPUT_CLASS}
+                className={invalidFields.url ? INPUT_INVALID_CLASS : INPUT_CLASS}
+                aria-invalid={invalidFields.url ? true : undefined}
+                aria-describedby={invalidFields.url ? FORM_PROBLEMS_ID : undefined}
                 value={form.url}
                 onChange={e => setForm(prev => ({ ...prev, url: e.target.value }))}
               />
             </div>
           </div>
-          <fieldset>
+          <fieldset
+            aria-invalid={invalidFields.events ? true : undefined}
+            aria-describedby={invalidFields.events ? FORM_PROBLEMS_ID : undefined}
+          >
             <legend className={LABEL_CLASS}>Events</legend>
             <div className="flex flex-wrap gap-2">
               {WEBHOOK_EVENTS.map(event => (
@@ -526,7 +584,7 @@ export function WebhooksPage() {
           </label>
 
           {formProblems.length > 0 ? (
-            <Callout tone="danger" title="Fix these first">
+            <Callout tone="danger" title="Fix these first" role="alert" id={FORM_PROBLEMS_ID}>
               <ul>
                 {formProblems.map(p => (
                   <li key={p}>{p}</li>
@@ -534,14 +592,18 @@ export function WebhooksPage() {
               </ul>
             </Callout>
           ) : null}
-          {formServerError ? <Callout tone="danger">{formServerError}</Callout> : null}
+          {formServerError ? (
+            <Callout tone="danger" role="alert">
+              {formServerError}
+            </Callout>
+          ) : null}
 
           <div className="flex flex-wrap gap-2">
             <button type="submit" className={PRIMARY_BUTTON_CLASS} disabled={submitting}>
               {editingId === null ? 'Add subscription' : 'Save changes'}
             </button>
             {editingId !== null ? (
-              <button type="button" className={PRIMARY_BUTTON_CLASS} onClick={resetForm}>
+              <button type="button" className={BUTTON_CLASS} onClick={resetForm}>
                 Cancel
               </button>
             ) : null}
@@ -550,7 +612,7 @@ export function WebhooksPage() {
       </section>
 
       <section className={CARD_CLASS}>
-        <h2 className="text-sm font-semibold text-slate-900">Recent deliveries</h2>
+        <h2 className={H2_CLASS}>Recent deliveries</h2>
 
         <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
@@ -611,15 +673,25 @@ export function WebhooksPage() {
 
         {deliveries.error && !isNotReady(deliveries.error) ? (
           <div className="mt-3">
-            <Callout tone="danger" title="Could not load deliveries">
+            <Callout tone="danger" title="Could not load deliveries" role="alert">
               {deliveries.error.message}
             </Callout>
           </div>
         ) : null}
         {redeliverMessage ? <div className="mt-3 text-sm text-slate-700">{redeliverMessage}</div> : null}
 
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm" data-testid="webhooks-deliveries-table">
+        {deliveriesRefetching ? (
+          <p className="mt-3 text-sm text-slate-500" data-testid="webhooks-deliveries-refetching">
+            Loading deliveries for the new filter…
+          </p>
+        ) : null}
+
+        <div className={`mt-3 overflow-x-auto ${deliveriesRefetching ? 'opacity-50' : ''}`}>
+          <table
+            className="min-w-full text-sm"
+            data-testid="webhooks-deliveries-table"
+            aria-busy={deliveriesRefetching ? true : undefined}
+          >
             <thead className="bg-slate-50">
               <tr>
                 <th className={TH_CLASS}>Created</th>
@@ -679,7 +751,12 @@ export function WebhooksPage() {
 
         {deliveries.nextCursor ? (
           <div className="mt-3">
-            <button type="button" className={PRIMARY_BUTTON_CLASS} disabled={loadingMore} onClick={() => void loadMore()}>
+            <button
+              type="button"
+              className={BUTTON_CLASS}
+              disabled={loadingMore || deliveriesRefetching}
+              onClick={() => void loadMore()}
+            >
               Load more
             </button>
           </div>
@@ -687,7 +764,7 @@ export function WebhooksPage() {
       </section>
 
       <section className={CARD_CLASS}>
-        <h2 className="text-sm font-semibold text-slate-900">Signing secret</h2>
+        <h2 className={H2_CLASS}>Signing secret</h2>
         <p className="mt-3 text-slate-600 text-sm">
           Every delivery is signed with one shared secret, stored in the SSM parameter{' '}
           <code data-testid="webhooks-ssm-name" className="font-mono text-xs text-slate-800">
@@ -704,7 +781,7 @@ export function WebhooksPage() {
       </section>
 
       <section className={CARD_CLASS}>
-        <h2 className="text-sm font-semibold text-slate-900">Verify a delivery</h2>
+        <h2 className={H2_CLASS}>Verify a delivery</h2>
         <p className="mt-3 text-slate-600 text-sm">Each delivery is a POST carrying these headers:</p>
         <ul className="mt-2 text-sm">
           {WEBHOOK_HEADERS.map(h => (
