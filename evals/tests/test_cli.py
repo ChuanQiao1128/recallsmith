@@ -143,3 +143,129 @@ def test_seed_v3_is_reproducible(tmp_path: Path) -> None:
     target = tmp_path / "seeded-v3.jsonl"
     assert main(["seed", "--dataset", "v3", "--output", str(target)]) == 0
     assert target.read_bytes() == spec.path.read_bytes()
+
+
+def test_run_passes_the_second_reviewer_through_to_the_ai_qa_second_opinion(monkeypatch, tmp_path: Path) -> None:
+    """Q03: --second-provider/--second-model set ai-qa's second-opinion env for the in-process
+    review; the second reviewer's in-scope findings merge as in the handler, and the header and the
+    report record both reviewers. Fake clients only."""
+    from dc_evals.report import build_report
+
+    def respond(uid, kwargs):
+        if kwargs["model"] == "mistral.mistral-large-3":
+            return reply(review_json(finding("blocker", "incorrect_answer", "wrong fact")), model=None)
+        return reply(review_json())
+
+    fake = FakeLlm(respond)
+    built: list[tuple[str, str]] = []
+
+    def make_client(settings, api_key=None):
+        built.append((settings.provider, settings.model))
+        return fake
+
+    monkeypatch.setattr("ai_qa.providers.make_client", make_client)
+    out = tmp_path / "reports"
+    code = main(["run", "--provider", "anthropic", "--model", "claude-opus-5", "--second-provider", "bedrock-converse",
+                 "--second-model", "mistral.mistral-large-3", "--limit", "2", "--reps", "1", "--concurrency", "1",
+                 "--out", str(out)])
+    assert code == 0
+    assert built == [("anthropic", "claude-opus-5"), ("bedrock-converse", "mistral.mistral-large-3")]
+    header, records = read_run(next(out.glob("*.jsonl")))
+    assert (header["secondProvider"], header["secondModel"]) == ("bedrock-converse", "mistral.mistral-large-3")
+    assert all(r["secondOpinion"] == {"added": 1, "errorCode": None} for r in records)
+    assert all(
+        r["findings"][0]["message"].startswith("[second opinion: mistral.mistral-large-3] ") for r in records
+    )
+    report = build_report(header, records)
+    assert (report["secondProvider"], report["secondModel"]) == ("bedrock-converse", "mistral.mistral-large-3")
+    md = next(out.glob("*.md")).read_text(encoding="utf-8")
+    assert "second opinion bedrock-converse mistral.mistral-large-3" in md
+
+
+def test_run_second_reviewer_is_off_unless_asked(monkeypatch, tmp_path: Path, capsys) -> None:
+    """An exported AI_QA_SECOND_PROVIDER never turns the second reviewer on by itself."""
+    monkeypatch.setenv("AI_QA_SECOND_PROVIDER", "bedrock-converse")
+    monkeypatch.setenv("AI_QA_SECOND_MODEL", "mistral.mistral-large-3")
+    fake = FakeLlm(lambda uid, kwargs: reply(review_json()))
+    built: list[str] = []
+
+    def make_client(settings, api_key=None):
+        built.append(settings.provider)
+        return fake
+
+    monkeypatch.setattr("ai_qa.providers.make_client", make_client)
+    out = tmp_path / "reports"
+    assert main(["run", "--provider", "anthropic", "--model", "claude-opus-5", "--limit", "1", "--reps", "1",
+                 "--out", str(out)]) == 0
+    header, records = read_run(next(out.glob("*.jsonl")))
+    assert built == ["anthropic"]
+    assert header["secondProvider"] is None and header["secondModel"] is None
+    assert "secondOpinion" not in records[0]
+    capsys.readouterr()
+    assert main(["run", "--provider", "anthropic", "--model", "claude-opus-5", "--second-model", "x", "--dry-run",
+                 "--out", str(out)]) == 2
+    assert "--second-model needs --second-provider" in capsys.readouterr().err
+    # bedrock-converse requires a non-Anthropic model id, for the primary and the second reviewer
+    assert main(["run", "--provider", "anthropic", "--model", "claude-opus-5", "--second-provider",
+                 "bedrock-converse", "--second-model", "anthropic.claude-opus-5", "--dry-run", "--out", str(out)]) == 2
+
+
+def test_run_accepts_bedrock_converse_and_the_authored_dataset(monkeypatch, tmp_path: Path, capsys) -> None:
+    from dc_evals import dataset as dataset_mod
+    from dc_evals.dataset import DEFECT_CLASSES, DatasetSpec, dump_line
+
+    code = main(["run", "--provider", "bedrock-converse", "--model", "qwen.qwen3-235b-a22b-2507-v1:0", "--limit", "5",
+                 "--reps", "1", "--dry-run", "--out", str(tmp_path)])
+    assert code == 0 and "rows: 5" in capsys.readouterr().out
+
+    authored = tmp_path / "authored-v1.jsonl"
+    labels = tmp_path / "authored-v1.labels.jsonl"
+    card = {"stableUid": "u1", "difficulty": 1, "question": "Q?", "explanation": "E."}
+    authored.write_text(
+        dump_line({"id": "a-0001", "deckSlug": "aws-saa-c03", "sourceUrl": "https://x", "chunkId": "c0001",
+                   "chunkText": "t", "card": card, "authorModel": "m", "generatedAt": "g"}),
+        encoding="utf-8",
+    )
+    labels.write_text(
+        dump_line({"id": "a-0001", "label": "defective", "category": "outdated_fact", "excluded": None,
+                   "unanimous": True, "defect": "outdated_fact", "scorable": True, "counts": {}, "votes": []}),
+        encoding="utf-8",
+    )
+    spec = DatasetSpec("authored-v1", "authored-v1", authored, None, DEFECT_CLASSES, labels_path=labels)
+    monkeypatch.setitem(dataset_mod.RUN_DATASETS, "authored-v1", spec)
+    monkeypatch.setitem(dataset_mod.DATASETS_BY_NAME, "authored-v1", spec)
+    fake = FakeLlm(lambda uid, kwargs: reply(review_json(finding("major", "outdated_fact"))))
+    monkeypatch.setattr("ai_qa.providers.make_client", lambda settings, api_key=None: fake)
+    out = tmp_path / "reports"
+    assert main(["run", "--provider", "anthropic", "--model", "claude-opus-5", "--dataset", "authored-v1", "--reps",
+                 "1", "--out", str(out)]) == 0
+    header, records = read_run(next(out.glob("*.jsonl")))
+    assert header["dataset"] == "authored-v1" and header["datasetRows"] == 1
+    assert [(r["id"], r["defect"]) for r in records] == [("a-0001", "outdated_fact")]
+    capsys.readouterr()
+    run_file = next(out.glob("*.jsonl"))
+    assert main(["score", str(run_file)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["overall"]["tp"] == 1 and report["gate"]["expected"]["rows"] == 1
+
+
+def test_author_and_jury_commands_are_wired(monkeypatch, capsys) -> None:
+    """The subcommands parse their defaults and reach author.author / jury.jury (stubbed: no model)."""
+    from dc_evals import author as author_mod
+    from dc_evals import jury as jury_mod
+    from dc_evals.dataset import AUTHORED, AUTHORED_LABELS_PATH
+
+    seen: dict = {}
+    monkeypatch.setattr(author_mod, "author", lambda **kwargs: seen.setdefault("author", kwargs) and 0)
+    monkeypatch.setattr(jury_mod, "jury", lambda **kwargs: seen.setdefault("jury", kwargs) and 0)
+    assert main(["author"]) == 0
+    assert seen["author"]["model"] == "claude-opus-5-5" and seen["author"]["output"] == AUTHORED.path
+    assert main(["jury"]) == 0
+    assert [j.name for j in seen["jury"]["jurors"]] == [
+        "bedrock-converse:qwen.qwen3-235b-a22b-2507-v1:0",
+        "bedrock-converse:deepseek.v3.2",
+        "bedrock-converse:global.moonshotai.kimi-k3",
+    ]
+    assert seen["jury"]["output"] == AUTHORED_LABELS_PATH
+    assert main(["jury", "--jurors", "openai:gpt"]) == 2
+    assert "not one of" in capsys.readouterr().err
