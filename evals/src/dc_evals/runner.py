@@ -9,6 +9,7 @@ import sys
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Any
 
+from ai_qa import second_opinion
 from ai_qa.review import review_card
 from ai_qa.settings import Settings
 
@@ -87,8 +88,30 @@ def _record(
     }
 
 
+def _second_review(
+    row: dict[str, Any], item: dict[str, Any], second_client: Any, settings: Settings, review_date: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The primary item merged with the second reviewer's (ai_qa.second_opinion, the handler's merge
+    policy) and what happened: {"added": n, "errorCode": None} or {"added": None, "errorCode": code}.
+    A failed second review leaves the primary item unchanged."""
+    second: dict[str, Any] | None = None
+    try:
+        second = review_card(
+            qa_card(row), client=second_client, settings=second_opinion.second_settings(settings), review_date=review_date
+        )
+    except Exception as exc:
+        print(f"{row['id']}: second review raised {type(exc).__name__}", file=sys.stderr)
+    merged, added, code = second_opinion.apply(item, second, settings)
+    return merged, {"added": added, "errorCode": code}
+
+
 def _review_row(
-    row: dict[str, Any], client: Any, settings: Settings, review_date: str, rep: int = 1
+    row: dict[str, Any],
+    client: Any,
+    settings: Settings,
+    review_date: str,
+    rep: int = 1,
+    second_client: Any = None,
 ) -> dict[str, Any]:
     recording = RecordingClient(client)
     try:
@@ -114,7 +137,13 @@ def _review_row(
         print(f"{row['id']}: served by {wrong[0]}, requested {settings.model}", file=sys.stderr)
         item = {**item, "status": "error", "errorCode": MODEL_MISMATCH, "findings": []}
     served = wrong[0] if wrong else (known[-1] if known else None)
-    return _record(row, item, rep=rep, structured=recording.structured, served_model=served)
+    outcome: dict[str, Any] | None = None
+    if second_client is not None and item["status"] == "done":
+        item, outcome = _second_review(row, item, second_client, settings, review_date)
+    record = _record(row, item, rep=rep, structured=recording.structured, served_model=served)
+    if second_client is not None:
+        record["secondOpinion"] = outcome
+    return record
 
 
 def run_eval(
@@ -126,10 +155,12 @@ def run_eval(
     concurrency: int = 4,
     max_cost_usd: float = 30.0,
     rep: int = 1,
+    second_client: Any = None,
 ) -> list[dict[str, Any]]:
     """Review rows with `concurrency` workers; stop submitting once the summed estimated cost
     reaches max_cost_usd. Returns one item record per reviewed row, in dataset order, each
-    tagged with repetition `rep`."""
+    tagged with repetition `rep`. With `second_client` (settings.second_provider set), a done
+    review also goes to the second reviewer and the findings merge as in the ai-qa handler."""
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
     results: dict[int, dict[str, Any]] = {}
@@ -139,7 +170,9 @@ def run_eval(
         pending: dict[Future[dict[str, Any]], int] = {}
         while True:
             while next_index < len(rows) and len(pending) < concurrency and spent < max_cost_usd:
-                future = pool.submit(_review_row, rows[next_index], client, settings, review_date, rep)
+                future = pool.submit(
+                    _review_row, rows[next_index], client, settings, review_date, rep, second_client
+                )
                 pending[future] = next_index
                 next_index += 1
             if not pending:

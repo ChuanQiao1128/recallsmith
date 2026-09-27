@@ -51,6 +51,8 @@ def test_report_json_matches_contract_schema() -> None:
         "effort",
         "structuredOutputs",
         "structuredOutputsAtStart",
+        "secondProvider",  # Q03: the second reviewer (null when the second opinion is off)
+        "secondModel",
         "evidenceClass",
         "n",
         "estimatedCostUsd",
@@ -144,6 +146,8 @@ def test_report_file_stem_uses_date_provider_model_prompt_version(tmp_path: Path
         "effort",
         "structuredOutputs",
         "structuredOutputsAtStart",
+        "secondProvider",
+        "secondModel",
     ]
     assert records == RECORDS
     assert json.loads(first[1].read_text(encoding="utf-8")) == build_report(HEADER, RECORDS)

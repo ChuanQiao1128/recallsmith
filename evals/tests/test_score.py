@@ -304,6 +304,12 @@ def test_gate_requires_a_production_provider_and_the_committed_dataset(override:
             "structuredOutputsAtStart True is not the shipping structuredOutputsAtStart False",
         ),
         ({"provider": "anthropic"}, "provider 'anthropic' is not the shipping provider 'bedrock'"),
+        # Q03: a run with a second reviewer measures another configuration than the one that ships.
+        (
+            {"secondProvider": "bedrock-converse", "secondModel": "mistral.mistral-large-3"},
+            "secondProvider 'bedrock-converse' is not the shipping secondProvider None\n"
+            "secondModel 'mistral.mistral-large-3' is not the shipping secondModel None",
+        ),
     ],
 )
 def test_gate_binds_the_run_to_the_shipping_configuration(override: dict, reason: str) -> None:
@@ -311,7 +317,7 @@ def test_gate_binds_the_run_to_the_shipping_configuration(override: dict, reason
     different request path from Bedrock's; a run of another prompt, model or effort is not
     evidence for the configuration that ships."""
     report = build_report(gate_header(**override), gate_records())
-    assert gate_failures(report) == [reason.format(pv=PROMPT_VERSION)]
+    assert gate_failures(report) == reason.format(pv=PROMPT_VERSION).split("\n")
 
 
 def test_shipping_config_is_read_from_the_production_env_file(tmp_path) -> None:
@@ -321,6 +327,8 @@ def test_shipping_config_is_read_from_the_production_env_file(tmp_path) -> None:
         "promptVersion": PROMPT_VERSION,
         "effort": "high",
         "structuredOutputsAtStart": False,
+        "secondProvider": None,  # Q03: the second opinion is off in the production env file
+        "secondModel": None,
     }
     env = json.loads(SHIPPING_ENV_PATH.read_text(encoding="utf-8"))
     other = tmp_path / "prod.env.json"

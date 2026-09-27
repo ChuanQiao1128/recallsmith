@@ -363,6 +363,8 @@ def shipping_config(path: Path = SHIPPING_ENV_PATH) -> dict[str, Any]:
         "promptVersion": PROMPT_VERSION,
         "effort": settings.effort,
         "structuredOutputsAtStart": structured_outputs_on(settings),
+        "secondProvider": settings.second_provider,
+        "secondModel": settings.second_model,
     }
 
 
@@ -394,6 +396,10 @@ def gate_failures(report: dict[str, Any]) -> list[str]:
         for key in ("provider", "model", "promptVersion", "effort", "structuredOutputsAtStart"):
             if report.get(key) != shipping[key]:
                 failures.append(f"{key} {report.get(key)!r} is not the shipping {key} {shipping[key]!r}")
+        # Q03: a run with a second reviewer is another configuration than one without.
+        for key in ("secondProvider", "secondModel"):
+            if report.get(key) != shipping.get(key):
+                failures.append(f"{key} {report.get(key)!r} is not the shipping {key} {shipping.get(key)!r}")
     if report.get("dataset") != GATE_DATASET:
         failures.append(f"dataset {report.get('dataset')!r} is not {GATE_DATASET!r}")
     if not report.get("datasetSha256") or report.get("datasetSha256") != expected.get("datasetSha256"):
