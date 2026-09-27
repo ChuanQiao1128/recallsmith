@@ -648,13 +648,16 @@ def _new_facts_failures(block: dict[str, Any], rows: list[dict[str, Any]]) -> li
 
 def author_binding(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
     """(the `authored.author` block, failures): the author configurations of the new-facts rows,
-    as import-drafts copied them from the runner's run records (R18C, C06 ai-agent-3). The gate is
-    bound to exactly these: a change of the model, the skill, the queue-item prompt, the claude
-    arguments, the MCP server bundle or the CLI/runner version gives a new id and needs a new gate.
-    Every new-facts row must carry a complete configuration, and all of them one model and one
-    skill version. R18D contract M1: `authorConfigId` is the one gated author identity core compares
-    at a live auto-accept; every new-facts row must carry it (checked against its configuration) and
-    all of them the same one, else it is null and the gate fails closed."""
+    as import-drafts copied them from the runner's run records (R18C, C06 ai-agent-3). Every
+    new-facts row must carry a complete configuration, and all of them one model and one skill
+    version. R18D contract M1: `authorConfigId` is the one gated author identity core compares at a
+    live auto-accept (the draft's agent.authorConfigId, else AUTHOR_NOT_GATED); every new-facts row
+    must carry it (checked against its configuration) and all of them the same one, else it is null
+    and the gate fails closed. It hashes the model, the skill version and files, the queue-item
+    prompt and argsSha256, the claude arguments together with the MCP tool surface (N4).
+    The one re-gate rule (tools/author-runner/README.md): any change of `authorConfigId` needs a new
+    gate. A Claude Code or runner update alone does not, nor does an MCP server rebuild that keeps
+    the tool surface; those change only the local configuration `id`."""
     new_facts = [row for row in rows if stratum_of(row) == STRATUM_NEW_FACTS]
     configs: dict[str, dict[str, Any]] = {}
     unbound = ungated = 0
