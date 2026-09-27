@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "developercards": {
+      "command": "node",
+      "args": ["tools/mcp-server/dist/index.js"]
+    }
+  }
+}

@@ -54,7 +54,9 @@ coverage/
 # the screenshot-quality scripts in mobile/scripts; the logs alone reach 86 MB.
 .releaseguard/
 mobile/docs/qa/autopilot-logs/
-.claude/
+# Project skills under .claude/skills/ are tracked configuration; every other .claude/ path stays local.
+.claude/*
+!.claude/skills/
 mobile/docs/qa/agents/draw-v9/runs/
 
 # iCloud conflict copies. This repository lives in an iCloud-synced folder, which
