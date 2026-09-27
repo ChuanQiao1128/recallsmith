@@ -150,20 +150,26 @@ def item(
     }
 
 
-def v2_header(**overrides: Any) -> dict[str, Any]:
-    """A complete, gate-eligible run header for the committed seeded-v2 dataset."""
-    spec = DATASETS["v2"]
+def gate_header(version: str = "v3", **overrides: Any) -> dict[str, Any]:
+    """A complete, gate-eligible run header: the gate dataset (seeded-v3), two repetitions, and the
+    shipping configuration (Bedrock, anthropic.claude-opus-5, the current prompt version, effort
+    high, structured outputs auto = off on Bedrock)."""
+    from ai_qa.prompts import PROMPT_VERSION
+
+    spec = DATASETS[version]
+    rows = len(load_dataset(spec.path))
+    reps = overrides.pop("reps", 2)
     header = run_header(
         run_id="run-1",
         started_at="2026-09-27T00:00:00Z",
         provider="bedrock",
         model="anthropic.claude-opus-5",
-        prompt_version="qa-v1",
-        n=len(load_dataset(spec.path)),
+        prompt_version=PROMPT_VERSION,
+        n=rows * reps,
         dataset=spec.name,
         dataset_sha256=file_sha256(spec.path),
-        dataset_rows=len(load_dataset(spec.path)),
-        reps=1,
+        dataset_rows=rows,
+        reps=reps,
         review_date="2026-09-27",
         effort="high",
         structured_outputs="auto",
@@ -172,20 +178,27 @@ def v2_header(**overrides: Any) -> dict[str, Any]:
     return {**header, **overrides}
 
 
-def v2_records(
+def v2_header(**overrides: Any) -> dict[str, Any]:
+    """A complete one-repetition run header for the committed seeded-v2 dataset (no longer the gate
+    dataset: Y05 moved the gate to seeded-v3)."""
+    return gate_header("v2", **{"reps": 1, **overrides})
+
+
+def dataset_records(
+    version: str = "v3",
     *,
     misses: dict[str, int] | None = None,
     false_positives: int = 0,
     unscored_controls: int = 0,
     rep: int = 1,
 ) -> list[dict[str, Any]]:
-    """One record per seeded-v2 row: each defective row is caught in its own category except the
+    """One record per dataset row: each defective row is caught in its own category except the
     first misses[class] rows of that class; the first `false_positives` controls get a major
     finding and the next `unscored_controls` controls end in a provider error."""
     misses = dict(misses or {})
     records = []
     control_index = 0
-    for index, row in enumerate(load_dataset(DATASETS["v2"].path), start=1):
+    for index, row in enumerate(load_dataset(DATASETS[version].path), start=1):
         defect = row["defect"]
         if defect is None:
             control_index += 1
@@ -205,3 +218,25 @@ def v2_records(
             hit = [finding("blocker" if defect in ("incorrect_answer", "multiple_correct") else "major", defect)]
             records.append(item(defect, hit, index=index, rep=rep, tier=row["tier"]))
     return records
+
+
+def v2_records(**kwargs: Any) -> list[dict[str, Any]]:
+    return dataset_records("v2", **kwargs)
+
+
+def gate_records(
+    *,
+    misses: dict[str, int] | None = None,
+    false_positives: int = 0,
+    unscored_controls: int = 0,
+    reps: int = 2,
+) -> list[dict[str, Any]]:
+    """dataset_records over the gate dataset for each of `reps` repetitions; misses, false
+    positives and unscored controls apply to every repetition."""
+    return [
+        record
+        for rep in range(1, reps + 1)
+        for record in dataset_records(
+            misses=misses, false_positives=false_positives, unscored_controls=unscored_controls, rep=rep
+        )
+    ]

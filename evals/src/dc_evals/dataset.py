@@ -46,6 +46,10 @@ DATASETS = {
     "v2": DatasetSpec(
         "v2", "seeded-v2", DATA_DIR / "seeded-v2.jsonl", DATA_DIR / "mutations-v2.json", DEFECT_CLASSES
     ),
+    # Y05: no surface cues, source-silent fact swaps, adjudicated judgment classes (seed.build_rows_v3).
+    "v3": DatasetSpec(
+        "v3", "seeded-v3", DATA_DIR / "seeded-v3.jsonl", DATA_DIR / "mutations-v3.json", DEFECT_CLASSES
+    ),
 }
 DATASETS_BY_NAME = {spec.name: spec for spec in DATASETS.values()}
 
