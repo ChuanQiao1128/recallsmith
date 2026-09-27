@@ -423,7 +423,7 @@ public static class RunnerRoutes
     Helpers.ErrorEnvelope(res, 403, "RUNNER_MISMATCH", "The runner id belongs to another owner or run");
 
   internal static APIGatewayProxyResponse NotReady(Res res) =>
-    Helpers.ErrorEnvelope(res, 503, AutomationMode.ServerNotReady, "Automation tables are not migrated yet (migration 034)");
+    Helpers.ErrorEnvelope(res, 503, "SERVER_NOT_READY_AUTOMATION", "Automation tables are not migrated yet (migration 034)");
 
   internal static APIGatewayProxyResponse HandleError(Exception ex, Res res)
   {
