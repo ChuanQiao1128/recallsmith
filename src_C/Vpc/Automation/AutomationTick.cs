@@ -358,6 +358,34 @@ public static class AutomationTick
       if (spent()) break;
       if (await SummaryAsync(conn, (Guid)row["run_id"]!, mode)) a.Summaries++;
     }
+
+    // A finalised run with agent notes and no decisions sends no batch summary, so its notes (the only channel for a
+    // wrong existing card) go out as an agent_note exception, one per run (R18B K3).
+    var noted = await DbUtil.QueryAsync(conn, null,
+      """
+      select r.run_id, r.queue_item_id, r.summary, q.url
+      from automation_runs r
+      join authoring_queue_items q on q.id = r.queue_item_id
+      where r.finalized_at is not null and nullif(btrim(r.summary), '') is not null
+        and not exists (select 1 from automation_draft_decisions d where d.run_id = r.run_id)
+        and not exists (select 1 from automation_notifications n where n.dedupe_key = 'exception:agent_note:' || r.run_id::text)
+      order by r.finalized_at, r.run_id
+      limit $1
+      """, [StepBatch]);
+    foreach (var row in noted)
+    {
+      if (spent()) break;
+      var runId = (Guid)row["run_id"]!;
+      var raised = await Notifications.RaiseExceptionAsync(conn, "agent_note", $"exception:agent_note:{runId:D}",
+        new Dictionary<string, string>
+        {
+          ["runId"] = runId.ToString("D"),
+          ["itemId"] = Long(row["queue_item_id"]).ToString(CultureInfo.InvariantCulture),
+          ["url"] = (string)row["url"]!,
+          ["notes"] = (string)row["summary"]!,
+        }, runId);
+      if (raised?.Created == true) a.Alerts++;
+    }
   }
 
   private static async Task<bool> SummaryAsync(NpgsqlConnection conn, Guid runId, string mode)
@@ -366,7 +394,7 @@ public static class AutomationTick
     {
       var runRows = await DbUtil.QueryAsync(conn, null,
         """
-        select r.queue_item_id, r.runner_id, r.deck_id, r.outcome, r.duration_ms, d.slug as deck_slug, q.kind, q.url, q.title
+        select r.queue_item_id, r.runner_id, r.deck_id, r.outcome, r.duration_ms, r.summary, d.slug as deck_slug, q.kind, q.url, q.title
         from automation_runs r
         join authoring_queue_items q on q.id = r.queue_item_id
         left join decks d on d.id = r.deck_id
@@ -402,7 +430,7 @@ public static class AutomationTick
         publishes.Select(p => new BatchPublish(Long(p["deck_id"]), p["deck_slug"] as string ?? "(deleted deck)", (string)p["state"]!,
           p["reason"] as string, p["reason_detail"] as string, p["job_id"] as string, p["build_id"] as string)).ToList(),
         (string)run["runner_id"]!, run["duration_ms"] is null ? null : Convert.ToInt32(run["duration_ms"], CultureInfo.InvariantCulture),
-        run["outcome"] as string);
+        run["outcome"] as string, run["summary"] as string);
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var consoleUrl = EmailTemplates.AutomationUrl(baseUrl, $"runId={runId:D}");

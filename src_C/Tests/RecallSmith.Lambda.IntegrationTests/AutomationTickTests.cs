@@ -583,12 +583,17 @@ public class AutomationTickTests
       AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport((Guid)jobs[0]["qa_job_id"]!, ids[0], (string)jobs[0]["qa_content_sha256"]!)));
       AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport((Guid)jobs[1]["qa_job_id"]!, ids[1], (string)jobs[1]["qa_content_sha256"]!,
         findings: [AutomationTestKit.Finding("major", "ambiguous_stem")])));
-      await sql.QueryAsync("update automation_runs set status = 'completed', outcome = 'done', completed_at = now() where run_id = $1", runId);
+      await sql.QueryAsync(
+        "update automation_runs set status = 'completed', outcome = 'done', completed_at = now(), summary = $2 where run_id = $1",
+        runId, "Synthetic note:\n  card synthetic-07 looks outdated.");
 
       var data = await TickDataAsync();
 
       Assert.Equal(1, Action(data, "runsFinalized"));
       Assert.Equal(1, Action(data, "summaries"));
+      // R18B K3: the agent's notes are a DETAILS line of the batch summary; no agent_note exception for a run with drafts.
+      Assert.Contains("\nAgent notes: Synthetic note: card synthetic-07 looks outdated.\n", (string)(await NotificationAsync(sql, $"batch:{runId:D}"))!["body_text"]!);
+      Assert.Null(await NotificationAsync(sql, $"exception:agent_note:{runId:D}"));
       var publish = (await sql.QueryAsync("select state from automation_publishes where run_id = $1", runId)).Single();
       Assert.Equal("would_publish", publish["state"]);
       var n = (await NotificationAsync(sql, $"batch:{runId:D}"))!;
@@ -617,6 +622,42 @@ public class AutomationTickTests
       Assert.Equal(0, Action(await TickDataAsync(), "summaries"));
       Assert.Equal(1, await sql.CountAsync("select count(*) from automation_notifications where kind = 'batch_summary'"));
       Assert.Single(A04Kit.Messages(scope, "Batch "));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_RunWithNotesAndNoDecisions_RaisesOneAgentNote()
+  {
+    // R18B K3 (automation-3): a nothing_new run whose agent only spotted a wrong existing card still reaches the owner.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "note");
+      var noted = await A04Kit.RunAsync(sql, "sub", deckId);
+      var silent = await A04Kit.RunAsync(sql, "sub", deckId);
+      var blank = await A04Kit.RunAsync(sql, "sub", deckId);
+      await sql.QueryAsync("update automation_runs set status = 'completed', outcome = 'nothing_new', completed_at = now(), summary = $2 where run_id = $1",
+        noted, "Card synthetic-07 says the limit is 5 GB; the page now says 50 GB.");
+      await sql.QueryAsync("update automation_runs set status = 'completed', outcome = 'nothing_new', completed_at = now() where run_id = $1", silent);
+      await sql.QueryAsync("update automation_runs set status = 'completed', outcome = 'nothing_new', completed_at = now(), summary = '  ' where run_id = $1", blank);
+
+      var data = await TickDataAsync();
+
+      Assert.Equal(3, Action(data, "runsFinalized"));
+      Assert.Equal(0, Action(data, "summaries"));
+      var n = (await NotificationAsync(sql, $"exception:agent_note:{noted:D}"))!;
+      Assert.Equal(("exception", "agent_note", noted), ((string)n["kind"]!, (string)n["subkind"]!, (Guid)n["run_id"]!));
+      Assert.StartsWith("[DeveloperCards] (dry run) Action needed: agent note on ", (string)n["subject"]!);
+      var body = (string)n["body_text"]!;
+      Assert.Contains("Card synthetic-07 says the limit is 5 GB; the page now says 50 GB.", body);
+      Assert.Contains($"https://console.example.com/automation?runId={noted:D}", body);
+      Assert.Equal(1, await sql.CountAsync("select count(*) from automation_notifications where subkind = 'agent_note'"));
+      Assert.Null(await sql.ScalarAsync("select summary_notification_id from automation_runs where run_id = $1", noted));
+
+      // One per run.
+      await TickDataAsync();
+      Assert.Equal(1, await sql.CountAsync("select count(*) from automation_notifications where subkind = 'agent_note'"));
+      Assert.Single(A04Kit.Messages(scope, "Action needed: agent note"));
     });
   }
 

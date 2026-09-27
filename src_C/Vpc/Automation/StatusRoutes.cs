@@ -289,7 +289,7 @@ public static class StatusRoutes
       var rows = await DbUtil.QueryAsync(conn, null,
         $"""
         select r.run_id, r.queue_item_id, q.kind, q.url, q.title, r.deck_id, d.slug as deck_slug, r.runner_id, r.status, r.outcome,
-          r.started_at, r.completed_at, r.finalized_at, r.summary_notification_id, r.error
+          r.started_at, r.completed_at, r.finalized_at, r.summary_notification_id, r.error, r.summary
         from automation_runs r
         join authoring_queue_items q on q.id = r.queue_item_id
         left join decks d on d.id = r.deck_id
@@ -385,6 +385,8 @@ public static class StatusRoutes
             }).ToList(),
           summaryNotificationId = r["summary_notification_id"] as Guid?,
           error = r["error"],
+          // The runner's final-message notes (R18B K3): plain text, at most 2000 characters (ck_automation_runs_text).
+          summary = r["summary"] as string is { } notes && !string.IsNullOrWhiteSpace(notes) ? notes : null,
         };
       }).ToList();
 

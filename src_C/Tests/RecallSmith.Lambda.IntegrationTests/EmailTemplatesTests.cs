@@ -57,6 +57,27 @@ public class EmailTemplatesTests
       "Source watch failing: https://docs.example.com/feed"];
     yield return ["source_gone", new Dictionary<string, string> { ["targetId"] = "5", ["eventId"] = "78", ["url"] = "https://docs.example.com/gone", ["citingCards"] = "2" },
       "Cited source gone: https://docs.example.com/gone"];
+    yield return ["agent_note", new Dictionary<string, string> { ["runId"] = "3f2a9c1e-0000-4000-8000-000000000001", ["itemId"] = "7", ["url"] = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html", ["notes"] = "Card aws-s3-synthetic-07 looks outdated." },
+      "Action needed: agent note on docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html"];
+  }
+
+  [Fact]
+  public void BatchSummary_AgentNotes_AreOneCappedDetailsLine()
+  {
+    // R18B K3 (automation-3): the agent's notes reach the owner in the batch summary's DETAILS.
+    Assert.DoesNotContain("Agent notes:", EmailTemplates.BatchSummary("live", Batch(), Console).BodyText);
+    Assert.DoesNotContain("Agent notes:", EmailTemplates.BatchSummary("live", Batch() with { AgentNotes = " \n " }, Console).BodyText);
+
+    var body = EmailTemplates.BatchSummary("live", Batch() with { AgentNotes = "Card aws-s3-synthetic-07:\n\tthe limit\r\nchanged." }, Console).BodyText;
+    var lines = body.Split('\n');
+    Assert.Contains("Agent notes: Card aws-s3-synthetic-07: the limit changed.", lines);
+    Assert.True(Array.IndexOf(lines, "DETAILS") < Array.IndexOf(lines, "Agent notes: Card aws-s3-synthetic-07: the limit changed."));
+
+    var longNotes = new string('n', 2000);
+    var capped = EmailTemplates.BatchSummary("live", Batch() with { AgentNotes = longNotes }, Console).BodyText.Split('\n')
+      .Single(l => l.StartsWith("Agent notes: ", StringComparison.Ordinal));
+    Assert.Equal("Agent notes: ".Length + EmailTemplates.MaxAgentNotesLength, capped.Length);
+    Assert.EndsWith("…", capped);
   }
 
   [Fact]

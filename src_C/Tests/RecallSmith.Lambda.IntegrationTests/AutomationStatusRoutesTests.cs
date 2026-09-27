@@ -52,7 +52,7 @@ public sealed class AutomationStatusRoutesTests
   private static readonly string[] RunKeys =
   [
     "runId", "queueItemId", "kind", "url", "title", "deckId", "deckSlug", "runnerId", "status", "outcome", "startedAt", "completedAt",
-    "finalizedAt", "counts", "publishes", "summaryNotificationId", "error",
+    "finalizedAt", "counts", "publishes", "summaryNotificationId", "error", "summary",
   ];
 
   private static readonly string[] RunCountKeys = ["submitted", "qaPending", "qaQueued", "wouldAccept", "autoAccepted", "human", "superseded"];
@@ -570,6 +570,8 @@ public sealed class AutomationStatusRoutesTests
       var (otherDeck, _) = await db.NewDeckAsync("runs-other");
       var runA = await db.NewRunAsync(deckId, startedAt: "now() - interval '1 minute'");
       var runB = await db.NewRunAsync(deckId, "failed");
+      // R18B K3 (automation-3): the runner's final-message notes are readable.
+      await db.QueryAsync("update automation_runs set summary = $2 where run_id = $1", runA, "Card synthetic-07 looks outdated.");
 
       var cardId = await db.NewCardAsync(deckId, Uid("card"));
       await db.NewDecisionAsync(deckId, runA, "qa_pending", "AI_QA_DAILY_CAP");
@@ -608,6 +610,7 @@ public sealed class AutomationStatusRoutesTests
       Assert.EndsWith("Z", a.GetProperty("startedAt").GetString());
       Assert.Equal(JsonValueKind.Null, a.GetProperty("finalizedAt").ValueKind);
       Assert.Equal(JsonValueKind.Null, a.GetProperty("summaryNotificationId").ValueKind);
+      Assert.Equal("Card synthetic-07 looks outdated.", a.GetProperty("summary").GetString());
 
       var counts = a.GetProperty("counts");
       Assert.Equal(RunCountKeys, Keys(counts));
@@ -632,6 +635,7 @@ public sealed class AutomationStatusRoutesTests
       var b = items[0];
       Assert.Equal("failed", b.GetProperty("status").GetString());
       Assert.Equal("synthetic failure", b.GetProperty("error").GetString());
+      Assert.Equal(JsonValueKind.Null, b.GetProperty("summary").ValueKind);
       Assert.All(RunCountKeys, k => Assert.Equal(0, b.GetProperty("counts").GetProperty(k).GetInt64()));
       Assert.Empty(b.GetProperty("publishes").EnumerateArray());
 
