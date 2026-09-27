@@ -12,6 +12,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
       store.delete(key);
     }),
     getAllKeys: vi.fn(async () => [...store.keys()]),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((k) => [k, store.get(k) ?? null] as [string, string | null])),
   },
 }));
 
@@ -72,8 +73,15 @@ describe('draw state cloud sync', () => {
     expect(apiJson).toHaveBeenCalledTimes(1);
 
     const body = lastRequestBody();
+    // 1.7: every pushed deck also carries its per-pack pulls. SLUG has no pool,
+    // so it pushes {0, 0} at an unknown stamp.
     expect(body.decks).toEqual([
-      { deckSlug: SLUG, owned: ['c1'], pity: { draws: 4, threshold: 10, updatedAtMs: 0 } },
+      {
+        deckSlug: SLUG,
+        owned: ['c1'],
+        pity: { draws: 4, threshold: 10, updatedAtMs: 0 },
+        pulls: { availablePulls: 0, reservePulls: 0, updatedAtMs: 0 },
+      },
     ]);
 
     const merged = await loadDrawState(SLUG);

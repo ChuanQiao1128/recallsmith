@@ -120,6 +120,12 @@ export const ceremonyStyles = StyleSheet.create({
   // 400×560 size when the style names neither, and that beats the absolute insets — the frame
   // then renders at natural size clipped to the card's top-left corner (seen 2026-09-20).
   tapCardFrame: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  // Same 2026-09-20 note as tapCardFrame: a bundled Image drawn with only the
+  // absolute insets renders at its intrinsic 1024×1536 size clipped to the
+  // top-left corner. Explicit 100%/100% + `contain` shows the whole cover; the
+  // black matte hides the letterbox bars. Used by FeaturedCard / FallbackStage.
+  packCoverImage: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' },
+  packOnCover: { padding: 0, paddingHorizontal: 0, paddingVertical: 0, backgroundColor: '#000000' },
   // Frame-window layout (percentages of CARD_FRAME_SIZE 400×560: art window 28,64 → 344×296;
   // text slab starts at y≈380). Used only when a frameImage is supplied.
   tapCardArtWindow: { position: 'absolute', left: '7%', top: '11.4%', width: '86%', height: '52.9%', overflow: 'hidden', borderRadius: 3 },

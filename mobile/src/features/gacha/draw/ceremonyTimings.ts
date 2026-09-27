@@ -33,11 +33,15 @@ export const TEST_BASE: CeremonyTimingTable = Object.freeze({
   liftMs: 0, landMs: 0, tapQueueMs: 90,
 });
 
+// v2 (I06): the ceremony choreography is now charge ×3 → tear → full-screen burst → hero
+// flyout. The pack pulses three times on the three charge plucks, so hold is the same for
+// every rarity (the colour only turns true on the third pulse). toTableMs = 3050 for every
+// single and multi row, which keeps the single LEG hero landing inside TO_TABLE_CAP_MS.single.
 export const DEVICE: CeremonyTimingTable = Object.freeze({
-  single: { approach: 600, hold: { COM: 360, RAR: 620, LEG: 880 }, tearFlip: 600, flashReveal: 320, settleMs: 520 },
-  multi:  { approach: 900, hold: { COM: 600, RAR: 860, LEG: 1100 }, tearFlip: 1800, flashReveal: 400, settleMs: 600 },
+  single: { approach: 350, hold: { COM: 700, RAR: 700, LEG: 700 }, tearFlip: 300, flashReveal: 1000, settleMs: 500 },
+  multi:  { approach: 350, hold: { COM: 700, RAR: 700, LEG: 700 }, tearFlip: 900, flashReveal: 500, settleMs: 400 },
   tableTailMs: 200,
-  beatMs: { COM: 120, RAR: 180, LEG: 300 },
+  beatMs: { COM: 280, RAR: 280, LEG: 280 },
   flipMs: { COM: 380, RAR: 480, LEG: 640 },
   rimSettleMs: { COM: 800, RAR: 1000, LEG: 1200 },
   liftMs: 80, landMs: 200, tapQueueMs: 90,
@@ -47,10 +51,6 @@ export const TO_TABLE_CAP_MS = Object.freeze({ single: 3300, multi: 5500 });
 // draw_committed's pull + draw-state sync (network / JSON / AsyncStorage) is deferred past the
 // longest possible ceremony so its work never lands on the JS thread mid-ceremony (MGACHA-03).
 export const DRAW_COMMITTED_SYNC_DELAY_MS = TO_TABLE_CAP_MS.multi + 1000;
-// The ambience bed fades out this long after the cards reach the table, before expo-audio's
-// non-gapless 8 s ambience loop can wrap on a normal pull (MGACHA-02).
-export const BED_TABLE_FADE_DELAY_MS = 1500;
-export const BED_TABLE_FADE_OUT_MS = 600;
 export const REDUCED_MOTION_FLASH_MS = 180;
 export const REDUCED_MOTION_SETTLE_MS = 240;
 export const SWIPE_TRIGGER_DISTANCE = 72;
@@ -61,6 +61,29 @@ export const SPILL_STAGGER_MS = 60;
 export const SPILL_START_FRACTION = 0.5;
 export const SPILL_TRAVEL_FRACTION = 1 / 6;
 
+// v2 charge / burst tuning (I06). The stage dims to CHARGE_DIM for every rarity from the
+// charge; the pack punches three times (approach start, hold start, mid-hold) on the three
+// charge plucks, then the full-screen burst punches the camera at the flash.
+export const CHARGE_DIM = 0.55;
+export const CHARGE_PULSE_FRACTION_OF_HOLD = 0.5;
+export const CHARGE_PULSE_SCALE = 1.06;
+export const CHARGE_SHAKE_PX = 6;
+export const CHARGE_SHAKE_DEG = 3;
+export const CHARGE_SHAKE_MS = 120;
+export const BURST_CAMERA_PUNCH = 1.08;
+export const FLASH_RISE_MS = 50;
+export const FLASH_HOLD_MS = 40;
+export const FLASH_FADE_MS = 300;
+
+/**
+ * The three charge-pulse offsets in ms from the start of approach: approach start, hold start
+ * and mid-hold. On the DEVICE table (approach 350, hold 700) → [0, 350, 700], matching the
+ * plucks in charge.wav (0 / 350 / 700 ms).
+ */
+export function chargePulseOffsets(t: Pick<ResolvedCeremonyTimings, 'approach' | 'hold'>): [number, number, number] {
+  return [0, t.approach, t.approach + Math.round(t.hold * CHARGE_PULSE_FRACTION_OF_HOLD)];
+}
+
 export type ResolvedCeremonyTimings = {
   table: 'TEST_BASE' | 'DEVICE';
   isMulti: boolean; peakRarity: PeakRarity;
@@ -70,21 +93,6 @@ export type ResolvedCeremonyTimings = {
   liftMs: number; landMs: number; tapQueueMs: number;
   toTableMs: number;
 };
-
-/**
- * When a tap flip's sound cues should fire, relative to the tap (MGACHA-07). The visual flip
- * starts after the queue delay plus the lift, and the face crosses at the flip midpoint, so the
- * flip sound lands at lift end and the RAR/LEG sting lands with the face turning (COM has none).
- */
-export function tapFlipCueOffsets(
-  rarity: PeakRarity,
-  queueDelayMs: number,
-  timings: Pick<ResolvedCeremonyTimings, 'liftMs' | 'flipMs'>,
-): { flipAtMs: number; stingAtMs: number | null } {
-  const flipAtMs = Math.max(0, Math.round(queueDelayMs)) + timings.liftMs;
-  const stingAtMs = rarity === 'COM' ? null : flipAtMs + Math.round(timings.flipMs[rarity] / 2);
-  return { flipAtMs, stingAtMs };
-}
 
 type TimingRow = CeremonyTimingTable['single'];
 

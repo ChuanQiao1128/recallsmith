@@ -59,6 +59,8 @@ export type RootStackParamList = {
     totalCards?: number;
     /** Test hook (design §3.3): forces tap-to-flip on/off; undefined → motionAvailable && cards.length > 0. */
     tapFlow?: boolean;
+    /** Test hook: auto-start the multi-pull reveal sequence on the table; undefined → motionAvailable. */
+    autoReveal?: boolean;
     pityThreshold?: number;
     /** Slot whose card the guarantee paid out on, null when it did not fire this pull. */
     pityCardIndex?: number | null;

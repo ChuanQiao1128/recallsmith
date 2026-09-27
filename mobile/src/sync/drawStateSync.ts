@@ -18,6 +18,13 @@ import {
   type RewardWalletState,
 } from '../features/gacha/rewards/rewardWallet';
 import { adoptAnonNewCardLedger, type AnonLedgerAdoption } from '../features/gacha/rewards/newCardLedger';
+import {
+  adoptAnonDeckWallets,
+  loadDeckWallet,
+  loadDeckWallets,
+  migrateLegacyWalletIfNeeded,
+  saveDeckWallet,
+} from '../features/gacha/rewards/deckWallet';
 import type { PityState } from '../features/gacha/draw/pity';
 import { setDrawStateSyncInFlight } from './syncActivity';
 
@@ -50,6 +57,12 @@ import { setDrawStateSyncInFlight } from './syncActivity';
  *             re-grantable; the real fix is a wallet event log (grants and
  *             spends as facts, balance as a projection) and that is a separate
  *             change, deliberately not bolted on here.
+ *   pulls  -> the per-pack pull pools (1.7, option A). Each pack's pool is its
+ *             own last-writer-wins snapshot on a client stamp, exactly like the
+ *             legacy wallet above and with the same accepted offline loss. A
+ *             response deck that carries no `pulls` means the server knows
+ *             nothing about that pack, so the local pool is kept and a zero is
+ *             never written.
  *
  * NOT synced, and this is a decision rather than an omission: the session
  * settlement receipts (`recallsmith:reward-session:<id>`). They are a dedupe
@@ -81,10 +94,13 @@ type ApiOk<T> = {
 
 type RemotePity = { draws: number; threshold: number; updatedAtMs: number };
 
+type RemotePulls = { availablePulls: number; reservePulls: number; updatedAtMs: number };
+
 type RemoteDeck = {
   deckSlug: string;
   owned?: string[] | null;
   pity?: RemotePity | null;
+  pulls?: RemotePulls | null;
 };
 
 type DrawStateSyncResp = {
@@ -151,11 +167,15 @@ type DeckStamp = {
 type Stamps = {
   decks: Record<string, DeckStamp>;
   wallet: { value: RewardWalletState; updatedAtMs: number } | null;
+  // Per-pack pull pools (1.7). Keyed by slug, same value+stamp shape as `wallet`.
+  // The first sighting of a pack is stamped UNKNOWN_STAMP_MS so a local bootstrap
+  // can never outrank a real server balance.
+  deckPulls: Record<string, { value: RewardWalletState; updatedAtMs: number }>;
   lastSyncedAtMs: number;
 };
 
 function emptyStamps(): Stamps {
-  return { decks: {}, wallet: null, lastSyncedAtMs: 0 };
+  return { decks: {}, wallet: null, deckPulls: {}, lastSyncedAtMs: 0 };
 }
 
 function toFiniteInt(v: any, fallback = 0): number {
@@ -195,6 +215,8 @@ async function readStamps(): Promise<Stamps> {
     return {
       decks: parsed.decks && typeof parsed.decks === 'object' ? parsed.decks : {},
       wallet: parsed.wallet ?? null,
+      // Defaults to {} for stamp files written by builds before per-pack pulls.
+      deckPulls: parsed.deckPulls && typeof parsed.deckPulls === 'object' ? parsed.deckPulls : {},
       lastSyncedAtMs: toFiniteInt(parsed.lastSyncedAtMs, 0),
     };
   } catch {
@@ -222,6 +244,7 @@ export type DrawStateSyncResult = {
   appliedOwned: number;
   appliedPity: number;
   appliedWallet: boolean;
+  appliedDeckPulls: number;
 };
 
 const SKIPPED: DrawStateSyncResult = {
@@ -230,9 +253,15 @@ const SKIPPED: DrawStateSyncResult = {
   appliedOwned: 0,
   appliedPity: 0,
   appliedWallet: false,
+  appliedDeckPulls: 0,
 };
 
-export type AnonGachaAdoption = AnonDrawStateAdoption & AnonWalletAdoption & AnonLedgerAdoption;
+type AnonDeckWalletAdoption = { deckWalletDecks: number; deckPullsAdded: number; deckPullsDropped: number };
+
+export type AnonGachaAdoption = AnonDrawStateAdoption &
+  AnonWalletAdoption &
+  AnonLedgerAdoption &
+  AnonDeckWalletAdoption;
 
 // One adoption at a time. Two callers race in production: the sign-in path in
 // authStore calls adoptAnonGachaState directly, and the 'user_changed' progress
@@ -252,7 +281,10 @@ export function adoptAnonGachaState(): Promise<AnonGachaAdoption> {
     const draw = await adoptAnonDrawState();
     const wallet = await adoptAnonRewardWallet();
     const ledger = await adoptAnonNewCardLedger();
-    return { ...draw, ...wallet, ...ledger };
+    // Per-pack pull pools adopt after the ledger, so a card drawn before sign-in
+    // and the pack pulls it earned reach the account in the same run.
+    const deckWallets = await adoptAnonDeckWallets();
+    return { ...draw, ...wallet, ...ledger, ...deckWallets };
   })().finally(() => {
     _adopting = null;
   });
@@ -278,6 +310,9 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
     // UNKNOWN_STAMP_MS in this same run -- this is what makes the anon
     // collection reach the server's union on the first sync.
     await adoptAnonGachaState();
+    // Drain the legacy global wallet into packs before reading local state, so
+    // the pack pulls this run pushes already include a just-migrated balance.
+    await migrateLegacyWalletIfNeeded();
     const stamps = await readStamps();
     const nowMs = Date.now();
 
@@ -327,30 +362,70 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
       localChanged = true;
     }
 
+    // Per-pack pulls, stamped exactly like the wallet. First sighting is UNKNOWN,
+    // so a local bootstrap can never outrank the server; a change from the stamped
+    // value gets a real time and counts as a local change.
+    const deckWallets = await loadDeckWallets();
+    for (const slug of new Set<string>([...Object.keys(deckWallets), ...Object.keys(stamps.deckPulls)])) {
+      const wallet = deckWallets[slug] ?? { availablePulls: 0, reservePulls: 0 };
+      const prev = stamps.deckPulls[slug];
+      if (!prev) {
+        stamps.deckPulls[slug] = { value: wallet, updatedAtMs: UNKNOWN_STAMP_MS };
+        localChanged = true;
+      } else if (!sameWallet(prev.value, wallet)) {
+        stamps.deckPulls[slug] = { value: wallet, updatedAtMs: nowMs };
+        localChanged = true;
+      }
+    }
+
     await writeStamps(stamps);
 
     if (!localChanged && nowMs - stamps.lastSyncedAtMs < MIN_IDLE_SYNC_INTERVAL_MS) {
       return SKIPPED;
     }
 
-    // 2) Push. Decks with nothing in them are left out: an empty owned set and a
-    //    null pity carry no information, and sending them would only grow the
-    //    request on devices that never played that deck.
+    // 2) Push. The deck list is every deck this device has draw state, a pull
+    //    pool, or a pull stamp for. A deck is left out only when it has no owned
+    //    cards, null pity, no pulls AND no deckPulls stamp -- an empty owned set,
+    //    null pity and no pool carry no information. Every pushed deck carries its
+    //    owned set (possibly []) and its pulls with the pull stamp.
     const pushDecks: Array<{
       deckSlug: string;
       owned: string[];
       pity?: { draws: number; threshold: number; updatedAtMs: number };
+      pulls: { availablePulls: number; reservePulls: number; updatedAtMs: number };
     }> = [];
+    // What this run pushed for each pack's pulls, so the apply pass can
+    // compare-and-set against it (absent counts as {0, 0}).
+    const pushedDeckPulls = new Map<string, RewardWalletState>();
 
-    for (const [slug, local] of localDecks.entries()) {
-      if (local.owned.length === 0 && local.pity == null) continue;
+    const pushSlugs = new Set<string>([
+      ...localDecks.keys(),
+      ...Object.keys(deckWallets),
+      ...Object.keys(stamps.deckPulls),
+    ]);
+
+    for (const slug of pushSlugs) {
+      const local = localDecks.get(slug) ?? { owned: [], pity: null };
+      const pullWallet = deckWallets[slug] ?? { availablePulls: 0, reservePulls: 0 };
+      const hasPulls = pullWallet.availablePulls + pullWallet.reservePulls > 0;
+      const hasPullStamp = stamps.deckPulls[slug] != null;
+      if (local.owned.length === 0 && local.pity == null && !hasPulls && !hasPullStamp) continue;
+
       const stamp = stamps.decks[slug]?.updatedAtMs ?? UNKNOWN_STAMP_MS;
+      const pullStamp = stamps.deckPulls[slug]?.updatedAtMs ?? UNKNOWN_STAMP_MS;
+      pushedDeckPulls.set(slug, pullWallet);
       pushDecks.push({
         deckSlug: slug,
         owned: local.owned,
         ...(local.pity
           ? { pity: { draws: local.pity.draws, threshold: local.pity.threshold, updatedAtMs: stamp } }
           : {}),
+        pulls: {
+          availablePulls: pullWallet.availablePulls,
+          reservePulls: pullWallet.reservePulls,
+          updatedAtMs: pullStamp,
+        },
       });
     }
 
@@ -373,6 +448,7 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
 
     let appliedOwned = 0;
     let appliedPity = 0;
+    let appliedDeckPulls = 0;
 
     // 3) Apply the answer. Every write below re-reads local state first, because
     //    the user can pull a card while the request is in flight. Owned is a
@@ -428,6 +504,29 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
         if (ownedGrew) appliedOwned += mergedOwned.length - current.owned.length;
         if (pityChanged) appliedPity += 1;
       }
+
+      // Per-pack pulls, compare-and-set exactly like the legacy wallet below.
+      // A response deck with no `pulls` (or null) means the server knows nothing
+      // about that pack: keep the local wallet and NEVER write a zero over it.
+      const remotePulls = remote?.pulls;
+      if (remotePulls) {
+        const pushedPulls = pushedDeckPulls.get(slug) ?? { availablePulls: 0, reservePulls: 0 };
+        // Re-read: the user can spend from this pack while the request is in
+        // flight. If the pool moved on, the server answered an older question --
+        // skip, and the next run pushes the newer value.
+        const currentPulls = await loadDeckWallet(slug);
+        if (sameWallet(currentPulls, pushedPulls)) {
+          const adoptedPulls: RewardWalletState = {
+            availablePulls: toFiniteInt(remotePulls.availablePulls, 0),
+            reservePulls: toFiniteInt(remotePulls.reservePulls, 0),
+          };
+          if (!sameWallet(currentPulls, adoptedPulls)) {
+            await saveDeckWallet(slug, adoptedPulls);
+            appliedDeckPulls += 1;
+          }
+          stamps.deckPulls[slug] = { value: adoptedPulls, updatedAtMs: toFiniteInt(remotePulls.updatedAtMs, 0) };
+        }
+      }
     }
 
     let appliedWallet = false;
@@ -447,6 +546,11 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
       }
     }
 
+    // Sweep a legacy balance just adopted from the server (for example one earned
+    // on a 1.6.1 device) into a pack. The next run pushes the zeroed legacy wallet
+    // and the pack change.
+    await migrateLegacyWalletIfNeeded();
+
     stamps.lastSyncedAtMs = Date.now();
     await writeStamps(stamps);
 
@@ -456,6 +560,7 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
       appliedOwned,
       appliedPity,
       appliedWallet,
+      appliedDeckPulls,
     };
   } catch {
     // Offline, a 500, a malformed body: all the same answer. The state is still

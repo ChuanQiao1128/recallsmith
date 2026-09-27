@@ -40,7 +40,7 @@ import {
   type CeremonyTimeline,
   type TimelineInput,
 } from '../../src/components/ceremony/useCeremonyTimeline';
-import { resolveCeremonyTimings } from '../../src/features/gacha/draw/ceremonyTimings';
+import { BURST_CAMERA_PUNCH, CHARGE_PULSE_SCALE, resolveCeremonyTimings } from '../../src/features/gacha/draw/ceremonyTimings';
 
 function Probe(props: { input: TimelineInput; onTimeline: (tl: CeremonyTimeline) => void }): null {
   props.onTimeline(useCeremonyTimeline(props.input));
@@ -96,6 +96,27 @@ describe('playCeremonyTimeline', () => {
     expect((tl.flash.value as any).delayMs).toBe(tFlash);
     expect((tl.rim[0].value as any).delayMs).toBe(tSettle); // i=0 → +0
     expect((tl.rim[1].value as any).delayMs).toBe(tSettle + 40); // i=1 → +40
+  });
+
+  it('pulses the camera three times during the charge before the burst punch', () => {
+    const { get } = mount(base('swipe', { planned: true }));
+    const tl = get();
+    playCeremonyTimeline(tl, { peakRarity: 'LEG', isMulti: true, timings: TIMINGS, spill: null });
+
+    const cam = tl.cameraScale.value as any;
+    expect(cam.type).toBe('sequence');
+    // A part is either a bare animation (gap 0) or a withDelay wrapper — unwrap the delay.
+    const unwrap = (s: any) => (s.type === 'delay' ? s.animation : s);
+    const parts = cam.steps.map(unwrap);
+    const isPulse = (p: any) => p.type === 'sequence' && p.steps[0]?.to === CHARGE_PULSE_SCALE;
+    const isBurst = (p: any) => p.type === 'sequence' && p.steps[0]?.to === BURST_CAMERA_PUNCH;
+    // Three charge pulses, then the burst punch last.
+    expect(parts.filter(isPulse)).toHaveLength(3);
+    expect(isBurst(parts[parts.length - 1])).toBe(true);
+    // The burst punch is fronted by a UI-thread delay (it comes after the three pulses).
+    const lastStep = cam.steps[cam.steps.length - 1];
+    expect(lastStep.type).toBe('delay');
+    expect(lastStep.delayMs).toBeGreaterThan(0);
   });
 
   it('skips per-phase animation while a plan is playing', () => {

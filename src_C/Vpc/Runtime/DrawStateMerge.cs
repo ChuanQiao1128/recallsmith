@@ -29,6 +29,8 @@ public readonly record struct WalletSnapshot(int AvailablePulls, int ReservePull
 ///             invent draws nobody made.
 ///   wallet -> last-writer-wins on updated_at_ms. Same shape, same accepted
 ///             loss (see the migration comment in 014_draw_state_sync.sql).
+///   deck pulls -> last-writer-wins per (user, deck) row: the wallet operator
+///             (MergeWallet), applied per pool.
 ///
 /// Unlike ProgressMerge, this spec has NO known gap against its SQL. The tie
 /// rule below (order by the whole snapshot, stamp first, contents after) is

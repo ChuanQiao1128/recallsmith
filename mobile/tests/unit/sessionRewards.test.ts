@@ -26,17 +26,18 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 
 import { setActiveUserSubForStorage } from '../../src/review/storage';
 import type { CardProgress, ReviewRating } from '../../src/review/model';
-import { loadRewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
+import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { adoptAnonNewCardLedger, readNewCardLedger, readNewCardLedgerSeed } from '../../src/features/gacha/rewards/newCardLedger';
 import { readProgressSettled } from '../../src/features/gacha/rewards/progressSettled';
 import { settleRatingReward, ZERO_REWARD_STEP } from '../../src/features/gacha/rewards/sessionRewards';
 
 const LEDGER_KEY = 'devcards:u:anon:recallsmith:newCardPullPaidUids:csharp';
 const SEEDED_KEY = 'devcards:u:anon:recallsmith:newCardPullSeeded:csharp';
-const WALLET_KEY = 'devcards:u:anon:recallsmith:reward-wallet:v1';
+// 1.7: R1/R2 pay into the per-pack wallet record, not the legacy global wallet.
+const WALLET_KEY = 'devcards:u:anon:recallsmith:deck-wallets:v1';
 const USER_LEDGER_KEY = 'devcards:u:user-a:recallsmith:newCardPullPaidUids:csharp';
 const USER_SEEDED_KEY = 'devcards:u:user-a:recallsmith:newCardPullSeeded:csharp';
-const USER_WALLET_KEY = 'devcards:u:user-a:recallsmith:reward-wallet:v1';
+const USER_WALLET_KEY = 'devcards:u:user-a:recallsmith:deck-wallets:v1';
 // The frozen progressSync.ts writes these only after a pull page came back and was applied
 // (progressSettled.ts); their names are part of the gate's contract.
 const USER_REMOTE_CACHE_KEY = 'devcards:u:user-a:sync:remoteCache:v1:csharp';
@@ -89,7 +90,7 @@ describe('sessionRewards', () => {
 
           expect(paidCount).toBe(firstNonAgain === -1 ? 0 : 1);
           if (firstNonAgain !== -1) expect(paidIndex).toBe(firstNonAgain);
-          expect((await loadRewardWalletState()).availablePulls).toBe(paidCount);
+          expect((await loadDeckWallet('csharp')).availablePulls).toBe(paidCount);
         },
       ),
     );
@@ -109,7 +110,7 @@ describe('sessionRewards', () => {
 
     expect(step.newCardPaid).toBe(false);
     expect(step.pulls).toBe(0);
-    expect((await loadRewardWalletState()).availablePulls).toBe(0);
+    expect((await loadDeckWallet('csharp')).availablePulls).toBe(0);
   });
 
   it('fires the due-clear pull once per local day and only on a due-to-zero transition', async () => {
@@ -289,7 +290,7 @@ describe('sessionRewards', () => {
       }
       expect(store.has(USER_LEDGER_KEY)).toBe(false);
       expect(store.has(USER_SEEDED_KEY)).toBe(false);
-      expect((await loadRewardWalletState()).availablePulls).toBe(1);
+      expect((await loadDeckWallet('csharp')).availablePulls).toBe(1);
     });
 
     it('settled later: seeds with the backfill and only the genuinely new card pays, exactly once', async () => {
@@ -319,7 +320,7 @@ describe('sessionRewards', () => {
         if (step.newCardPaid) paid += 1;
       }
       expect(paid).toBe(0);
-      expect(totalPulls(await loadRewardWalletState())).toBe(1);
+      expect(totalPulls(await loadDeckWallet('csharp'))).toBe(1);
     });
 
     it('anon adoption before the pull neither seeds the user partition nor lets adopted stamps pay twice', async () => {

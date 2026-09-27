@@ -876,10 +876,45 @@ describe('DrawCeremonyScreen v9', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress();
+      tree.root.findByProps({ testID: 'reveal-spotlight-card' }).props.onPress();
       await Promise.resolve();
     });
     expect(collectText(tree)).toContain('Rare');
+  });
+
+  it('labels the featured reveal with the rarity word, not the raw code', async () => {
+    // The featured card (tapFlow off) is face up whenever mounted, so it shows
+    // the rarity word. It must read 'Rare', never the raw 'RAR' code.
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: SINGLE_DRAW_RESULT, tapFlow: false } } as any}
+        />,
+      );
+      await Promise.resolve();
+    });
+    armCeremonySwipe(tree);
+
+    const recorded: string[] = [];
+    for (let i = 0; i < 60; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(100);
+        await Promise.resolve();
+      });
+      const found = tree.root.findAllByProps({ testID: 'draw-ceremony-reveal-rarity' });
+      if (found.length > 0) {
+        const c = found[0].props.children;
+        recorded.push(Array.isArray(c) ? c.join('') : String(c ?? ''));
+      }
+    }
+
+    expect(recorded.length).toBeGreaterThan(0);
+    for (const text of recorded) {
+      expect(text).toBe('Rare');
+    }
   });
 
   it('reduced motion with tapFlow keeps the reveal on the table with no flash', async () => {

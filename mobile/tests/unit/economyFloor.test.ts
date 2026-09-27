@@ -35,11 +35,20 @@ import {
   applyEconomyFloorIfStarved,
   isEconomyStarved,
 } from '../../src/features/gacha/rewards/economyFloor';
-import { loadRewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
+import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 
 // Nobody is signed in here, so the real scope helper resolves to "anon".
-const MARKER_KEY = 'devcards:u:anon:recallsmith:economy-floor:v1';
-const WALLET_KEY = 'devcards:u:anon:recallsmith:reward-wallet:v1';
+// 1.7: the floor marker is per-pack and the wallet is the per-pack record.
+const SLUG = 'csharp';
+const MARKER_KEY = `devcards:u:anon:recallsmith:economy-floor:v1:${SLUG}`;
+const WALLET_KEY = 'devcards:u:anon:recallsmith:deck-wallets:v1';
+
+function seedPackWallet(available: number, reserve: number): void {
+  store.set(
+    WALLET_KEY,
+    JSON.stringify({ migratedAtMs: null, decks: { [SLUG]: { availablePulls: available, reservePulls: reserve } }, bootstrappedAtMs: {} }),
+  );
+}
 
 const EMPTY = { availablePulls: 0, reservePulls: 0 };
 const TODAY = new Date(2026, 7, 19, 9, 0, 0);
@@ -90,6 +99,7 @@ describe('applyEconomyFloorIfStarved', () => {
 
   it('grants exactly one pull and stamps the day', async () => {
     const outcome = await applyEconomyFloorIfStarved({
+      slug: SLUG,
       ownedNewCount: 0,
       dueCount: 0,
       wallet: EMPTY,
@@ -107,6 +117,7 @@ describe('applyEconomyFloorIfStarved', () => {
 
   it('touches no storage at all when the account is not starved', async () => {
     const outcome = await applyEconomyFloorIfStarved({
+      slug: SLUG,
       ownedNewCount: 3,
       dueCount: 0,
       wallet: EMPTY,
@@ -125,9 +136,10 @@ describe('applyEconomyFloorIfStarved', () => {
     // Home reads the wallet in parallel with the deck summaries, so a
     // settlement can land between that read and this call. The caller's
     // snapshot says empty; storage says otherwise, and storage wins.
-    store.set(WALLET_KEY, JSON.stringify({ availablePulls: 2, reservePulls: 0 }));
+    seedPackWallet(2, 0);
 
     const outcome = await applyEconomyFloorIfStarved({
+      slug: SLUG,
       ownedNewCount: 0,
       dueCount: 0,
       wallet: EMPTY,
@@ -143,7 +155,7 @@ describe('applyEconomyFloorIfStarved', () => {
     failSetItemFor = (key) => key === WALLET_KEY;
 
     await expect(
-      applyEconomyFloorIfStarved({ ownedNewCount: 0, dueCount: 0, wallet: EMPTY, now: TODAY }),
+      applyEconomyFloorIfStarved({ slug: SLUG, ownedNewCount: 0, dueCount: 0, wallet: EMPTY, now: TODAY }),
     ).resolves.toEqual({ wallet: EMPTY, granted: 0, reason: 'unavailable' });
 
     // The marker landed first, so the crash cost the user today's floor pull
@@ -153,19 +165,21 @@ describe('applyEconomyFloorIfStarved', () => {
 
     failSetItemFor = null;
     const retry = await applyEconomyFloorIfStarved({
+      slug: SLUG,
       ownedNewCount: 0,
       dueCount: 0,
       wallet: EMPTY,
       now: TODAY,
     });
     expect(retry.granted).toBe(0);
-    expect(await loadRewardWalletState()).toEqual(EMPTY);
+    expect(await loadDeckWallet(SLUG)).toEqual(EMPTY);
   });
 
   it('leaves Home standing when storage is unreadable', async () => {
     failGetItem = true;
 
     const outcome = await applyEconomyFloorIfStarved({
+      slug: SLUG,
       ownedNewCount: 0,
       dueCount: 0,
       wallet: EMPTY,

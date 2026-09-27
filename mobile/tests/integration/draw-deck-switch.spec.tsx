@@ -23,7 +23,7 @@ let resolveDeckFixture: any = {
 };
 let updatesFixture: Record<string, any> = {};
 
-const consumePullsFromStoredWalletMock = vi.fn(async (count: number) => {
+const consumeDeckPullsMock = vi.fn(async (_slug: string, count: number) => {
   const spent = Math.min(count, walletFixture.availablePulls);
   const nextWallet = {
     availablePulls: Math.max(0, walletFixture.availablePulls - spent),
@@ -111,11 +111,14 @@ vi.mock('../../src/content/deckRepository', () => ({
   installDeckFromUrl: vi.fn(async () => false),
 }));
 
-vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
-  loadRewardWalletState: vi.fn(async () => (walletLoader ? walletLoader() : walletFixture)),
-  consumePullsFromStoredWallet: vi.fn(async (count: number) => consumePullsFromStoredWalletMock(count)),
-  saveRewardWalletState: vi.fn(async () => {}),
-  refundPullsToStoredWallet: vi.fn(async () => walletFixture),
+// 1.7: DrawScreen reads/spends/refunds the per-pack wallet and runs the
+// first-visit bootstrap + legacy migration on load (both inert no-ops here).
+vi.mock('../../src/features/gacha/rewards/deckWallet', () => ({
+  loadDeckWallet: vi.fn(async () => (walletLoader ? walletLoader() : walletFixture)),
+  consumeDeckPulls: vi.fn(async (slug: string, count: number) => consumeDeckPullsMock(slug, count)),
+  refundDeckPulls: vi.fn(async () => walletFixture),
+  ensureDeckBootstrap: vi.fn(async () => ({ granted: 0, wallet: walletFixture })),
+  migrateLegacyWalletIfNeeded: vi.fn(async () => ({ kind: 'noop', moved: {} })),
 }));
 
 vi.mock('../../src/features/gacha/draw/drawCommit', () => ({
@@ -178,7 +181,7 @@ describe('DrawScreen deck switch (G38)', () => {
       Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
     };
     updatesFixture = {};
-    consumePullsFromStoredWalletMock.mockClear();
+    consumeDeckPullsMock.mockClear();
     commitDrawMock.mockClear();
     loadDrawStateMock.mockClear();
   });

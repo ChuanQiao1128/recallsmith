@@ -35,8 +35,8 @@ import {
 } from '../features/gacha/home/homeRefresh';
 import type { HomeDeckSummarySnapshot } from '../features/gacha/home/deckActionResolver';
 import { fetchServerPremium } from '../features/gacha/home/homeRemote';
-import { applyEconomyFloorIfStarved } from '../features/gacha/rewards/economyFloor';
-import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { prepareHomeDeckWallets } from '../features/gacha/rewards/economyFloor';
+import { loadDeckWallet } from '../features/gacha/rewards/deckWallet';
 import { loadStreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import { forceProgressSync } from '../sync/progressSync';
 import { useAuthStore } from '../auth/authStore';
@@ -279,9 +279,8 @@ export function HomeScreen({ navigation, route }: Props) {
     // Phase 1 (cache-first): build the VM from the cached manifest and the
     // decks already on the phone -- no network -- so Home paints immediately.
     try {
-      const [summary, walletBeforeFloor, streak] = await Promise.all([
+      const [summary, streak] = await Promise.all([
         loadHomeDeckSummaries({ premium: isPremiumUser, remote: false }),
-        loadRewardWalletState(),
         loadStreakSnapshot(),
       ]);
       if (!isMountedRef.current) return;
@@ -291,34 +290,31 @@ export function HomeScreen({ navigation, route }: Props) {
         setSelectedSlug(activeSlug);
       }
       const now = new Date(summary.asOfISO);
-      // The economy floor lives here, and only here, because this is the one
-      // point in the app where its three inputs are in hand at the same
-      // instant: the deck summaries brought owned-new and due, the wallet read
-      // brought the balance. Pushing it down into loadHomeDeckSummaries would
-      // put the grant on the far side of a Promise.all from the wallet read
-      // that renders it -- the write would land after the read that the view
-      // model uses, so the load that granted a pull would still draw "Clear
-      // today's route to unlock pulls" and the user would be told they are
-      // stuck on the very screen that just unstuck them. Sequencing it after
-      // the join costs one storage round-trip on starved loads only (the
-      // predicate short-circuits before touching storage otherwise) and buys
-      // the guarantee that the wallet Home renders is the wallet Home wrote.
-      const { wallet } = await applyEconomyFloorIfStarved({
-        ownedNewCount: summary.totalNewAllDecks,
-        dueCount: summary.totalDueAllDecks,
-        wallet: walletBeforeFloor,
+      // Per-pack wallets live here, and only here, because this is the one point
+      // in the app where the deck summaries (owned-new and due per pack) are in
+      // hand at the same instant. prepareHomeDeckWallets migrates the legacy
+      // balance, bootstraps never-drawn packs, then floors each starved pack --
+      // all writes -- and returns the wallets Home renders, so the map Home
+      // shows is the map Home wrote. Sequencing it after the summaries load (not
+      // inside loadHomeDeckSummaries) keeps the wallet writes on the near side of
+      // the read that the view model uses.
+      const deckWallets = await prepareHomeDeckWallets({
+        deckSummaries: summary.deckSummaries,
         now,
       });
       if (!isMountedRef.current) return;
-      homeInputsRef.current = { summary, wallet, streak };
+      homeInputsRef.current = { summary, deckWallets, streak };
       startAutoUpdates(summary);
       publishReadyVm(homeInputsRef.current);
     } catch {
       if (!isMountedRef.current) return;
-      const fallbackWallet = await loadRewardWalletState().catch(() => ({
-        availablePulls: 0,
-        reservePulls: 0,
-      }));
+      const currentSelectedSlug = selectedSlugRef.current;
+      const fallbackWallet = currentSelectedSlug
+        ? await loadDeckWallet(currentSelectedSlug).catch(() => ({
+            availablePulls: 0,
+            reservePulls: 0,
+          }))
+        : { availablePulls: 0, reservePulls: 0 };
       const vm = buildHomeScreenVM({
         state: 'error',
         hasSignedInUser: isSignedIn,

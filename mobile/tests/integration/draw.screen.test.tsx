@@ -20,7 +20,7 @@ let resolveDeckFixture: any = {
 let installDeckOkFixture = false;
 let updatesFixture: Record<string, any> = {};
 
-const consumePullsFromStoredWalletMock = vi.fn(async (count: number) => {
+const consumeDeckPullsMock = vi.fn(async (_slug: string, count: number) => {
   const spent = Math.min(count, walletFixture.availablePulls);
   const nextWallet = {
     availablePulls: Math.max(0, walletFixture.availablePulls - spent),
@@ -124,7 +124,7 @@ vi.mock('../../src/content/deckRepository', () => ({
   installDeckFromUrl: vi.fn(async () => installDeckOkFixture),
 }));
 
-const refundPullsToStoredWalletMock = vi.fn(async (count: number) => {
+const refundDeckPullsMock = vi.fn(async (_slug: string, count: number) => {
   walletFixture = {
     availablePulls: walletFixture.availablePulls + count,
     reservePulls: walletFixture.reservePulls,
@@ -132,11 +132,15 @@ const refundPullsToStoredWalletMock = vi.fn(async (count: number) => {
   return walletFixture;
 });
 
-vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
-  loadRewardWalletState: vi.fn(async () => walletFixture),
-  consumePullsFromStoredWallet: vi.fn(async (count: number) => consumePullsFromStoredWalletMock(count)),
-  saveRewardWalletState: vi.fn(async (wallet: { availablePulls: number; reservePulls: number }) => saveRewardWalletStateMock(wallet)),
-  refundPullsToStoredWallet: vi.fn(async (count: number) => refundPullsToStoredWalletMock(count)),
+// 1.7: DrawScreen reads, spends and refunds the per-pack wallet, and runs the
+// first-visit bootstrap + legacy migration on load. Both of the latter are inert
+// no-ops here; the fixture is the pack's balance.
+vi.mock('../../src/features/gacha/rewards/deckWallet', () => ({
+  loadDeckWallet: vi.fn(async () => walletFixture),
+  consumeDeckPulls: vi.fn(async (slug: string, count: number) => consumeDeckPullsMock(slug, count)),
+  refundDeckPulls: vi.fn(async (slug: string, count: number) => refundDeckPullsMock(slug, count)),
+  ensureDeckBootstrap: vi.fn(async () => ({ granted: 0, wallet: walletFixture })),
+  migrateLegacyWalletIfNeeded: vi.fn(async () => ({ kind: 'noop', moved: {} })),
 }));
 
 vi.mock('../../src/features/gacha/draw/drawCommit', () => ({
@@ -201,7 +205,7 @@ describe('DrawScreen v9', () => {
     updatesFixture = {};
     manifestCalls.length = 0;
     remoteManifestLoader = null;
-    consumePullsFromStoredWalletMock.mockClear();
+    consumeDeckPullsMock.mockClear();
     saveRewardWalletStateMock.mockClear();
     commitDrawMock.mockClear();
   });
@@ -275,7 +279,7 @@ describe('DrawScreen v9', () => {
       await Promise.resolve();
     });
 
-    expect(consumePullsFromStoredWalletMock).toHaveBeenCalledWith(10);
+    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 10);
     expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
     expect(navigate).toHaveBeenCalledWith(
       'DrawCeremony',
@@ -303,7 +307,7 @@ describe('DrawScreen v9', () => {
       await Promise.resolve();
     });
 
-    expect(consumePullsFromStoredWalletMock).toHaveBeenCalledWith(1);
+    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 1);
     expect(commitDrawMock).toHaveBeenCalledWith('csharp', 1);
     const params = (navigate.mock.calls.at(-1) ?? [])[1];
     expect(params.drawResult.cards).toHaveLength(1);
@@ -351,9 +355,9 @@ describe('DrawScreen v9', () => {
     expect(open10.props.disabled).toBe(true);
     expect(open1.props.disabled).toBe(true);
 
-    // The legacy "No pulls left" text is preserved (hidden) for any
+    // The per-pack "no pulls" text is preserved (hidden) for any
     // accessibility / collectText harness that checks for it.
-    expect(collectText(tree)).toContain('No pulls left. Study sessions grant more pulls.');
+    expect(collectText(tree)).toContain('No pulls for this pack yet. Learn its cards to earn more.');
 
     // New escape CTA — visible + actionable
     const earnCta = tree.root.findByProps({ testID: 'draw-earn-pulls-cta' });
@@ -462,7 +466,7 @@ describe('DrawScreen v9', () => {
     });
 
     expect(commitDrawMock).not.toHaveBeenCalled();
-    expect(consumePullsFromStoredWalletMock).not.toHaveBeenCalled();
+    expect(consumeDeckPullsMock).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -512,7 +516,7 @@ describe('DrawScreen v9', () => {
     });
 
     expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
-    expect(consumePullsFromStoredWalletMock).not.toHaveBeenCalled();
+    expect(consumeDeckPullsMock).not.toHaveBeenCalled();
     // No snapshot write either -- the old restore is what erased pulls that
     // arrived while the draw was in flight.
     expect(saveRewardWalletStateMock).not.toHaveBeenCalled();
@@ -560,7 +564,7 @@ describe('DrawScreen v9', () => {
     });
 
     expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
-    expect(consumePullsFromStoredWalletMock).not.toHaveBeenCalled();
+    expect(consumeDeckPullsMock).not.toHaveBeenCalled();
     expect(walletFixture).toEqual(walletBeforeOpen);
     expect(navigate).not.toHaveBeenCalled();
     expect(collectText(tree)).toContain('Every card in this pack is already yours.');
@@ -613,7 +617,7 @@ describe('DrawScreen v9', () => {
     // The number on the wire, not only the resulting balance. Charging ten
     // against a wallet holding twelve leaves eight either way once the mock
     // clamps, so a test watching the balance alone would pass on the bug.
-    expect(consumePullsFromStoredWalletMock).toHaveBeenCalledWith(4);
+    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 4);
     expect(walletFixture.availablePulls).toBe(8);
     // A short pack is still a pack: real cards came out, so the ceremony runs.
     expect(navigate).toHaveBeenCalled();

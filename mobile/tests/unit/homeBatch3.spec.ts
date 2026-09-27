@@ -181,21 +181,21 @@ describe('C03 Home F9 / F10 / F11', () => {
       wallet: { availablePulls: 1, reservePulls: 0 },
     });
     expect(available.draw.state).toBe('available');
-    expect(available.draw.label).toBe('1 pull ready');
+    expect(available.draw.label).toBe('1 pull ready for this pack');
 
     const reserve = homeVM({
       deck: makeDeck({ dueToday: 0, newToday: 0 }),
       wallet: { availablePulls: 1, reservePulls: 2 },
     });
     expect(reserve.draw.state).toBe('reserve');
-    expect(reserve.draw.label).toBe('1 pull ready · 2 more waiting');
+    expect(reserve.draw.label).toBe('1 pull ready for this pack · 2 more waiting');
 
     const full = homeVM({
       deck: makeDeck({ dueToday: 0, newToday: 0 }),
       wallet: { availablePulls: FREE_PULL_CAP, reservePulls: FREE_PULL_OVERFLOW_CAP },
     });
     expect(full.draw.state).toBe('wallet-full');
-    expect(full.draw.label).toBe(`Wallet full (${FREE_PULL_CAP} + ${FREE_PULL_OVERFLOW_CAP})`);
+    expect(full.draw.label).toBe(`Pack wallet full (${FREE_PULL_CAP} + ${FREE_PULL_OVERFLOW_CAP})`);
   });
 
   it('tells a done-for-today user that each new card earns a pull while locked', () => {

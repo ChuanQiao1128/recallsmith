@@ -413,8 +413,8 @@ describe('Home copy glossary', () => {
       wallet: { availablePulls: 0, reservePulls: 0 },
     });
 
-    expect(onePull.draw.label).toBe('1 pull ready · 2 more waiting');
-    expect(twoPulls.draw.label).toBe('2 pulls ready · 3 more waiting');
+    expect(onePull.draw.label).toBe('1 pull ready for this pack · 2 more waiting');
+    expect(twoPulls.draw.label).toBe('2 pulls ready for this pack · 3 more waiting');
     expect(locked.draw.label).toBe('Learn a new card to earn a pull');
   });
 

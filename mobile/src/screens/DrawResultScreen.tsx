@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import * as RN from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,17 +16,12 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import { goHome } from '../navigation/tabNavigation';
-import { loadRewardWalletState } from '../features/gacha/rewards/rewardWallet';
+import { loadDeckWallet } from '../features/gacha/rewards/deckWallet';
 import { spendablePullsNow } from '../features/gacha/rewards/spendablePulls';
 import { clearPermissionPromptPending, isPermissionPromptPending } from './PermissionPromptScreen';
 import { colors } from '../theme/colors';
 import {
-  CARD_FRAME_ART_WINDOW,
-  CARD_FRAME_SIZE,
-  CARD_FRAME_SLAB,
-  CARD_FRAME_TITLE_STRIP,
   PAGE_GRADIENT_LIGHT,
-  cardFrameForRarity,
   GLOW_9SLICE,
   GLOW_9SLICE_INSET,
   packImageForSlug,
@@ -33,6 +29,13 @@ import {
   rarityAccentColor,
   rarityHaloColor,
 } from '../theme/packArt';
+import { RevealCardFace } from '../components/ceremony/RevealCardFace';
+import { DrawSummaryGrid } from '../components/ceremony/DrawSummaryGrid';
+import { resultFeaturedCardWidth } from '../features/gacha/draw/spotlightPlan';
+import { spacing } from '../theme/spacing';
+// The featured face and its frame layout now live in RevealCardFace so DrawResult and the
+// single-pull RevealSpotlight render the same card; the old names stay exported here.
+export { REVEAL_FRAME_LAYOUT as FEATURED_FRAME_LAYOUT, REVEAL_STEM_LINES as FEATURED_STEM_LINES } from '../components/ceremony/RevealCardFace';
 import { CEREMONY_COPY_V10 } from '../features/gacha/draw/ceremonyCopy';
 import { COLLECTION_COPY } from '../features/gacha/copy/collectionCopy';
 import { formatRank } from '../features/gacha/library/cardRank';
@@ -99,79 +102,17 @@ function cardKindText(card: DrawResultCard): string {
     : MCQ_COPY.faceMark;
 }
 
-const FEATURED_GRADIENT_BY_RARITY: Record<
-  'COM' | 'RAR' | 'LEG',
-  readonly [string, string, string]
-> = {
-  LEG: [colors.softCream, colors.rarityLegendary, colors.glowGold],
-  RAR: [colors.softLavender, colors.rarityRare, colors.pokeBlue],
-  COM: [colors.softPeach, colors.rarityCommon, colors.gold],
-} as const;
-
-// The B12 rarity frame (CARD_FRAME_SIZE 400×560) is stretched over the whole 260×364 card,
-// so the face is laid out at the frame's own cut-outs — art window, question slab, title
-// strip — as percentages of the card, the rule TapCard follows. Percentages of the CARD, not
-// of a padded content box: Yoga resolves `%` against the parent's content box, which is how
-// the frame used to shrink to 88 % × 91 % inside the padded gradient and sit top-left.
-function framePct(part: number, whole: number): `${number}%` {
-  return `${Math.round((part / whole) * 100 * 100) / 100}%`;
-}
-const FRAME_W = CARD_FRAME_SIZE.width;
-const FRAME_H = CARD_FRAME_SIZE.height;
-export const FEATURED_FRAME_LAYOUT = {
-  artWindow: {
-    left: framePct(CARD_FRAME_ART_WINDOW.x, FRAME_W),
-    top: framePct(CARD_FRAME_ART_WINDOW.y, FRAME_H),
-    width: framePct(CARD_FRAME_ART_WINDOW.width, FRAME_W),
-    height: framePct(CARD_FRAME_ART_WINDOW.height, FRAME_H),
-  },
-  slab: {
-    left: framePct(CARD_FRAME_SLAB.x, FRAME_W),
-    top: framePct(CARD_FRAME_SLAB.y, FRAME_H),
-    width: framePct(CARD_FRAME_SLAB.width, FRAME_W),
-    height: framePct(CARD_FRAME_SLAB.height, FRAME_H),
-  },
-  titleStrip: {
-    left: framePct(CARD_FRAME_TITLE_STRIP.x, FRAME_W),
-    top: framePct(CARD_FRAME_TITLE_STRIP.y, FRAME_H),
-    width: framePct(CARD_FRAME_TITLE_STRIP.width, FRAME_W),
-    height: framePct(CARD_FRAME_TITLE_STRIP.height, FRAME_H),
-  },
-} as const;
-/** The featured card is a summary, not the study surface: the stem gets six lines, then an ellipsis. */
-export const FEATURED_STEM_LINES = 6;
-
 const localStyles = StyleSheet.create({
-  // Fills the Pressable (no padding there), so 100 % is the full card.
-  featuredFrame: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
-  featuredArtWindow: { position: 'absolute', ...FEATURED_FRAME_LAYOUT.artWindow, overflow: 'hidden', borderRadius: 8 },
-  featuredArtImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
-  // The rarity chip and the MCQ kind mark share ONE column at the window's top-left (review
-  // 2026-09-22 #3): the kind mark used to be pinned top-right, and at Dynamic Type >= 1.2x the two
-  // grew into each other across the 224-pt window. Stacked, each mark can only push the next one
-  // down; both texts are capped at 1.3x so the column stays clear of the topic chip at the bottom.
-  featuredMarkStack: { position: 'absolute', left: 8, top: 8, alignItems: 'flex-start', gap: 4, maxWidth: '80%' },
-  featuredChipInWindow: { marginBottom: 0 },
-  featuredTopicChip: {
-    position: 'absolute', left: 8, bottom: 8, maxWidth: '80%', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
-    backgroundColor: 'rgba(20,23,55,0.72)',
-  },
-  featuredTopicText: { color: colors.softCream, fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
-  featuredKindChip: {
-    alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999,
-    backgroundColor: 'rgba(20,23,55,0.72)',
-  },
   modalScroll: { maxHeight: 420 },
   modalMeta: { marginTop: 8, color: colors.inkMuted, fontSize: 11, fontWeight: '800', letterSpacing: 0.4 },
-  featuredSlab: { position: 'absolute', ...FEATURED_FRAME_LAYOUT.slab, justifyContent: 'center' },
-  featuredTitleStrip: {
-    position: 'absolute', ...FEATURED_FRAME_LAYOUT.titleStrip, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end',
-    paddingHorizontal: 8,
-  },
 });
 
 export function DrawResultScreen({ navigation, route }: Props) {
   const params = route.params as DrawResultRouteParams;
+  // Sized from the window (was a fixed 260 pt): wider featured card on bigger phones. Called
+  // before any early return so the hook order never depends on the loading/error branches.
+  const { width: windowWidth } = useWindowDimensions();
+  const featuredWidth = resultFeaturedCardWidth(windowWidth);
   const drawResult = params.drawResult ?? null;
   const [remainingPulls, setRemainingPulls] = useState<number | null>(null);
   const [detailUid, setDetailUid] = useState<string | null>(null);
@@ -237,7 +178,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    loadRewardWalletState()
+    loadDeckWallet(params.slug)
       .then((wallet) => {
         if (cancelled) return;
         setRemainingPulls(spendablePullsNow(wallet));
@@ -248,7 +189,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [params.slug]);
 
   useEffect(() => {
     let cancelled = false;
@@ -406,12 +347,9 @@ export function DrawResultScreen({ navigation, route }: Props) {
     );
   }
 
-  const featuredAccent = featured ? rarityAccentColor(featured.rarity) : colors.rarityCommon;
   const featuredHalo = featured ? rarityHaloColor(featured.rarity) : colors.softPeach;
   const packPalette = packPaletteFromSlug(params.slug);
   const packArt = packImageForSlug(params.slug);
-  const featuredTopic = featured ? cardTagText(featured) : '';
-  const featuredKind = featured ? cardKindText(featured) : '';
   const featuredScale =
     hasAnimated && featuredEntryRef.current
       ? featuredEntryRef.current.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] })
@@ -506,106 +444,29 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   source={GLOW_9SLICE}
                   resizeMode="stretch"
                   capInsets={{ top: GLOW_9SLICE_INSET, left: GLOW_9SLICE_INSET, bottom: GLOW_9SLICE_INSET, right: GLOW_9SLICE_INSET }}
-                  style={[styles.featuredHalo, { tintColor: featuredHalo }]}
+                  style={[styles.featuredHalo, { width: featuredWidth * 0.92, height: featuredWidth * 0.92, borderRadius: featuredWidth * 0.92, tintColor: featuredHalo }]}
                 />
               ) : (
                 <View
                   pointerEvents="none"
-                  style={[styles.featuredHalo, { backgroundColor: featuredHalo }]}
+                  style={[styles.featuredHalo, { width: featuredWidth * 0.92, height: featuredWidth * 0.92, borderRadius: featuredWidth * 0.92, backgroundColor: featuredHalo }]}
                 />
               )}
-              <Pressable
+              {/* The featured face is the shared RevealCardFace (same host structure the
+                  single-pull spotlight renders), sized from the window and opening the detail
+                  modal on tap. */}
+              <RevealCardFace
                 testID="screen-draw-result-featured-card"
-                style={({ pressed }) => [styles.featured, pressed && styles.pressed]}
-                accessibilityRole="button"
+                testIDPrefix="draw-result-featured"
+                card={featured}
+                width={featuredWidth}
+                packArt={packArt}
+                packPaletteCover={packPalette.cover}
+                serialText={`No. ${formatRank(typeof featured.rank === 'number' && featured.rank > 0 ? featured.rank : ownedAfter)} / ${totalCards}`}
+                style={({ pressed }: { pressed: boolean }) => [styles.featured, { width: featuredWidth }, pressed && styles.pressed]}
                 accessibilityLabel={`Open featured card detail: ${featured.question}`}
                 onPress={() => setDetailUid(featured.stableUid)}
-              >
-                {/* Base: the rarity gradient — the frame's own colour when the PNG is absent,
-                    and the corner fill behind it when it is. */}
-                <LinearGradient
-                  colors={FEATURED_GRADIENT_BY_RARITY[featured.rarity]}
-                  start={{ x: 0.1, y: 0 }}
-                  end={{ x: 0.9, y: 1 }}
-                  style={styles.featuredGradient}
-                />
-
-                {/* Art window (CARD_FRAME_ART_WINDOW): the deck's pack cover, cropped to the
-                    window, over the pack palette as the no-image fallback. */}
-                <View style={localStyles.featuredArtWindow} testID="draw-result-featured-art-window">
-                  <LinearGradient
-                    colors={packPalette.cover}
-                    start={{ x: 0.1, y: 0 }}
-                    end={{ x: 0.9, y: 1 }}
-                    style={styles.featuredArtGradient}
-                  />
-                  {RNImage && packArt ? (
-                    <RNImage
-                      testID="draw-result-featured-art"
-                      pointerEvents="none"
-                      source={packArt}
-                      resizeMode="cover"
-                      style={localStyles.featuredArtImage}
-                    />
-                  ) : null}
-                  <View testID="draw-result-featured-marks" style={localStyles.featuredMarkStack}>
-                    <View style={[styles.featuredRarityChip, localStyles.featuredChipInWindow, { backgroundColor: featuredAccent }]}>
-                      <Text style={styles.featuredRarity} numberOfLines={1} maxFontSizeMultiplier={1.3}>
-                        ★ {rarityLabel(featured.rarity)}
-                      </Text>
-                    </View>
-                    {featuredKind ? (
-                      <View testID="draw-result-featured-kind" style={localStyles.featuredKindChip}>
-                        <Text style={localStyles.featuredTopicText} numberOfLines={1} maxFontSizeMultiplier={1.3}>
-                          {featuredKind}
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
-                  {featuredTopic ? (
-                    <View testID="draw-result-featured-topic" style={localStyles.featuredTopicChip}>
-                      <Text style={localStyles.featuredTopicText} numberOfLines={1}>
-                        {featuredTopic}
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
-
-                {/* Question slab (CARD_FRAME_SLAB) — leads the card, six lines then an ellipsis. */}
-                <View style={[localStyles.featuredSlab, styles.featuredQuestionSlab]}>
-                  <Text
-                    testID="draw-result-featured-question"
-                    style={styles.featuredQuestion}
-                    numberOfLines={FEATURED_STEM_LINES}
-                    ellipsizeMode="tail"
-                  >
-                    {featured.question}
-                  </Text>
-                </View>
-
-                {/* Registry serial on the frame's title strip. "No. 011 / 441": this card's
-                    rank in the deck over the deck size, the same number the Library tile and
-                    the session header print for it. It used to show ownedAfter here, which is
-                    the collection bar's figure, not the card's. Cards without a rank (older
-                    callers) fall back to the collection count. */}
-                <View style={localStyles.featuredTitleStrip} pointerEvents="none">
-                  <Text style={styles.featuredSerial} numberOfLines={1} testID="draw-result-featured-serial">
-                    {`No. ${formatRank(typeof featured.rank === 'number' && featured.rank > 0 ? featured.rank : ownedAfter)} / ${totalCards}`}
-                  </Text>
-                </View>
-
-                {/* B12 rarity frame PNG — transparent art window + question slab — over the
-                    FULL card (a sibling of the face, not a child of a padded box). */}
-                {RNImage ? (
-                  <RNImage
-                    testID="draw-result-featured-frame"
-                    pointerEvents="none"
-                    source={cardFrameForRarity(featured.rarity)}
-                    resizeMode="stretch"
-                    style={localStyles.featuredFrame}
-                  />
-                ) : null}
-              </Pressable>
+              />
             </AnimatedView>
           ) : null}
 
@@ -639,49 +500,18 @@ export function DrawResultScreen({ navigation, route }: Props) {
 
           {cards.length > 1 ? (
             <>
-              {/* Always-visible compact horizontal strip — fills the bottom of
-                  the page so the user immediately sees what they pulled. The
-                  detailed grid remains behind the existing toggle below. */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.miniStripContent}
-                style={styles.miniStrip}
-              >
-                {cards.map((card, index) => {
-                  const accent = rarityAccentColor(card.rarity);
-                  const stars = rarityStars(card.rarity);
-                  return (
-                    <Pressable
-                      key={`mini-${card.stableUid}-${index}`}
-                      style={({ pressed }) => [styles.miniCard, pressed && styles.pressed]}
-                      onPress={() => setDetailUid(card.stableUid)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Open card ${index + 1}: ${card.question}`}
-                    >
-                      <View style={[styles.miniCardRarityBar, { backgroundColor: accent }]} />
-                      <Text style={styles.miniCardSlot} numberOfLines={1}>
-                        {String(index + 1).padStart(2, '0')}
-                      </Text>
-                      {/* Gold rarity stars — top-right, only visible for
-                          RAR/LEG (matches Library tile language) */}
-                      {stars ? (
-                        <Text style={styles.miniCardStars} numberOfLines={1}>
-                          {stars}
-                        </Text>
-                      ) : null}
-                      <Text style={styles.miniCardQuestion} numberOfLines={3}>
-                        {card.question}
-                      </Text>
-                      <View style={[styles.miniCardChip, { backgroundColor: accent }]}>
-                        <Text style={styles.miniCardChipText} numberOfLines={1}>
-                          {card.rarity}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+              {/* Full-width 2×5 summary grid of framed mini cards (Legendary first, rares glowing)
+                  — the same grid the ceremony ends on. Tapping a cell opens the detail modal. */}
+              <View style={styles.summaryGridWrap}>
+                <DrawSummaryGrid
+                  testIDPrefix="draw-result-summary"
+                  cards={cards}
+                  width={windowWidth - 2 * spacing.screenPadding}
+                  packArt={packArt}
+                  packPaletteCover={packPalette.cover}
+                  onPressCard={(uid) => setDetailUid(uid)}
+                />
+              </View>
 
               <Pressable
                 testID="draw-result-open-all-cards"

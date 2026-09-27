@@ -47,7 +47,6 @@ import { scheduleProgressSync } from './src/sync/progressSync';
 import { createAppStateSyncHandler } from './src/sync/appStateSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { DEFAULT_APP_STORE_URL } from './src/config/remoteConfig';
-import { seedStarterPullsIfNeeded } from './src/features/gacha/rewards/rewardWallet';
 import { loadFeedbackPrefs } from './src/features/gacha/settings/feedbackPrefs';
 import { createOtaUpdateChecker, getExpoUpdatesModule } from './src/updates/otaUpdateCheck';
 import { collectDeviceInfo } from './src/features/gacha/draw/ceremonyPerf';
@@ -148,11 +147,9 @@ export default function App() {
 
   useEffect(() => {
     void useAuthStore.getState().init();
-    // Seed the brand-new-user starter wallet on first boot. Idempotent
-    // (guarded by its own AsyncStorage flag), so safe to fire on every
-    // launch — pre-existing users with non-empty wallets are skipped,
-    // and we never re-grant after a user has spent their pulls.
-    void seedStarterPullsIfNeeded();
+    // 1.7: the per-pack first-visit bootstrap (deckWallet.ts ensureDeckBootstrap,
+    // run from Draw/Home/Library on load) replaces the global starter grant. No
+    // boot-time migration here: boot can run before auth resolves.
     // Load the device-global sound/haptics choice early so the ceremony audio,
     // ceremony haptics and study haptics see the stored value on first use.
     void loadFeedbackPrefs();
