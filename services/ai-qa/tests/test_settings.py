@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 from ai_qa import settings
 from ai_qa.settings import ConfigError, Settings, is_truthy, load_secret, load_settings
@@ -104,6 +105,11 @@ def test_prod_env_file_matches_contract() -> None:
     assert s == load_settings({})  # the committed file is exactly the defaults
 
 
+def client_error(code: str) -> ClientError:
+    """What boto3 raises for an SSM error response with this code."""
+    return ClientError({"Error": {"Code": code, "Message": "test"}}, "GetParameter")
+
+
 class FakeSsm:
     def __init__(self, values):
         self.values = values
@@ -153,7 +159,7 @@ def test_loaded_secret_expires_after_the_ttl(monkeypatch) -> None:
 def test_optional_secret_absence_is_cached_for_the_ttl(monkeypatch, capsys) -> None:
     now = {"t": 1000.0}
     monkeypatch.setattr(settings, "clock", lambda: now["t"])
-    ssm = FakeSsm({"/p/secret-previous": RuntimeError("ParameterNotFound")})
+    ssm = FakeSsm({"/p/secret-previous": client_error("ParameterNotFound")})
     assert load_secret("/p/secret-previous", ssm, optional=True) is None
     assert load_secret("/p/secret-previous", ssm, optional=True) is None
     assert len(ssm.calls) == 1
@@ -162,3 +168,42 @@ def test_optional_secret_absence_is_cached_for_the_ttl(monkeypatch, capsys) -> N
     ssm.values["/p/secret-previous"] = "old"
     assert load_secret("/p/secret-previous", ssm, optional=True) == "old"
     assert settings.previous_secret_name("/p/secret") == "/p/secret-previous"
+
+
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        pytest.param(lambda: client_error("ThrottlingException"), id="throttling"),
+        pytest.param(lambda: client_error("AccessDeniedException"), id="access-denied"),
+        pytest.param(lambda: EndpointConnectionError(endpoint_url="https://ssm.test"), id="network"),
+        pytest.param(lambda: RuntimeError("boom"), id="unexpected"),
+    ],
+)
+def test_optional_read_error_is_not_cached_as_absent(monkeypatch, capsys, make_error) -> None:
+    # cloud-security-resilience-16 (same rule as the dispatcher): only ParameterNotFound means
+    # "absent". A throttle during a rotation must not hide "-previous" for the whole TTL.
+    monkeypatch.setattr(settings, "clock", lambda: 1000.0)
+    ssm = FakeSsm({"/p/secret-previous": make_error()})
+    assert load_secret("/p/secret-previous", ssm, optional=True) is None
+    assert '"ssm_secret_unavailable"' in capsys.readouterr().out  # a real problem: warn level
+    ssm.values["/p/secret-previous"] = "old"
+    assert load_secret("/p/secret-previous", ssm, optional=True) == "old"
+    assert len(ssm.calls) == 2
+
+
+def test_parameter_not_found_is_recognised_by_code_and_by_modeled_class() -> None:
+    class ParameterNotFound(Exception):
+        pass
+
+    assert settings.is_parameter_not_found(client_error("ParameterNotFound"))
+    assert settings.is_parameter_not_found(ParameterNotFound())
+    assert not settings.is_parameter_not_found(client_error("ThrottlingException"))
+    assert not settings.is_parameter_not_found(RuntimeError("ParameterNotFound"))
+
+
+def test_max_receives_defaults_to_the_deployed_redrive_policy() -> None:
+    # cloud-security-resilience-12: must equal the ai-qa queue's maxReceiveCount (2 today).
+    assert load_settings({}).max_receives == 2
+    assert load_settings({"AI_QA_MAX_RECEIVES": "3"}).max_receives == 3
+    for bad in ("0", "-1", "x", " "):
+        assert load_settings({"AI_QA_MAX_RECEIVES": bad}).max_receives == 2

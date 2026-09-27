@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 from webhook_dispatcher import handler, settings
 from webhook_dispatcher.delivery import HttpResult
@@ -22,14 +23,24 @@ BODY = '{"data":{"deckId":3,"deckSlug":"aws-saa-c03"},"environment":"prod","even
 NOW = 1790000000.75
 
 
+def client_error(code: str) -> ClientError:
+    """What boto3 raises for an SSM error response with this code."""
+    return ClientError({"Error": {"Code": code, "Message": "test"}}, "GetParameter")
+
+
 class FakeSSM:
     def __init__(self, values: dict[str, str]) -> None:
         self.values = values
+        # Name -> errors raised by the next reads of that name, one per read.
+        self.errors: dict[str, list[Exception]] = {}
 
     def get_parameter(self, Name: str, WithDecryption: bool) -> dict[str, Any]:
         assert WithDecryption is True
+        pending = self.errors.get(Name)
+        if pending:
+            raise pending.pop(0)
         if Name not in self.values:
-            raise LookupError("ParameterNotFound")
+            raise client_error("ParameterNotFound")
         return {"Parameter": {"Name": Name, "Value": self.values[Name]}}
 
 
@@ -107,7 +118,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> World:
     monkeypatch.setattr(handler, "post_json", fake_post)
     monkeypatch.setattr(handler, "internal_client_factory", FakeInternalClient)
     monkeypatch.setattr(handler, "now", lambda: NOW)
-    for key in ("SIGNING_SECRET_SSM_NAME", "INTERNAL_SECRET_SSM_NAME", "CORE_API_BASE", "METRICS_NAMESPACE", "WEBHOOK_HTTP_TIMEOUT_SECONDS"):
+    for key in ("SIGNING_SECRET_SSM_NAME", "INTERNAL_SECRET_SSM_NAME", "CORE_API_BASE", "METRICS_NAMESPACE", "WEBHOOK_HTTP_TIMEOUT_SECONDS", "WEBHOOK_SUBSCRIPTION_SECRETS"):
         monkeypatch.delenv(key, raising=False)
     return w
 
@@ -516,8 +527,9 @@ def test_report_passes_a_previous_internal_secret_loader(world: World, monkeypat
     assert client.previous_secret() == "old-internal"
 
 
-def test_subscription_secret_replaces_the_environment_secret(world: World) -> None:
+def test_subscription_secret_replaces_the_environment_secret(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     # cloud-security-resilience-7: a receiver with its own secret cannot verify or forge the others.
+    monkeypatch.setenv("WEBHOOK_SUBSCRIPTION_SECRETS", "1")
     world.ssm.values[SIGNING_NAME + "-sub-12"] = "whsec-sub-12"
     world.ssm.values[SIGNING_NAME + "-previous"] = "whsec-env-old"
     assert handler.lambda_handler(sqs_event(1), Context()) == {"batchItemFailures": []}
@@ -541,6 +553,7 @@ def test_subscription_secret_replaces_the_environment_secret(world: World) -> No
 
 
 def test_missing_subscription_secret_is_looked_up_once_per_ttl(world: World, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setenv("WEBHOOK_SUBSCRIPTION_SECRETS", "1")
     lookups: list[str] = []
     original = world.ssm.get_parameter
 
@@ -553,6 +566,91 @@ def test_missing_subscription_secret_is_looked_up_once_per_ttl(world: World, mon
         handler.lambda_handler(sqs_event(1), Context())
     assert lookups.count(SIGNING_NAME + "-sub-12") == 1
     assert "ssm_secret_unavailable" not in capsys.readouterr().out
+
+
+# cloud-security-resilience-16 / automation-20: a read error other than ParameterNotFound on a
+# secret that may exist fails closed. Nothing is signed with a fallback secret; the attempt is a
+# retry (SIGNING_SECRET_MISSING) and the next receive reads SSM again.
+READ_ERRORS = [
+    pytest.param(lambda: client_error("ThrottlingException"), id="throttling"),
+    pytest.param(lambda: client_error("AccessDeniedException"), id="access-denied"),
+    pytest.param(lambda: EndpointConnectionError(endpoint_url="https://ssm.test"), id="network"),
+]
+
+
+def assert_retried_without_sending(world: World) -> None:
+    assert world.http_calls == [] and world.guard_calls == []
+    assert [c["VisibilityTimeout"] for c in world.sqs.calls] == [30]
+    payload = world.reports[-1][2]
+    assert payload["outcome"] == "retry" and payload["error"] == "SIGNING_SECRET_MISSING"
+
+
+@pytest.mark.parametrize("make_error", READ_ERRORS)
+def test_subscription_secret_read_error_retries_instead_of_signing_with_the_shared_secret(
+    world: World, monkeypatch: pytest.MonkeyPatch, make_error: Any
+) -> None:
+    monkeypatch.setenv("WEBHOOK_SUBSCRIPTION_SECRETS", "1")
+    world.ssm.values[SIGNING_NAME + "-sub-12"] = "whsec-sub-12"
+    world.ssm.errors[SIGNING_NAME + "-sub-12"] = [make_error()]
+    assert handler.lambda_handler(sqs_event(1), Context()) == {"batchItemFailures": [{"itemIdentifier": "m-1"}]}
+    assert_retried_without_sending(world)
+
+    # The error was not cached as "absent": the next receive (no cache reset) signs with the
+    # subscription's own secret.
+    assert handler.lambda_handler(sqs_event(2), Context()) == {"batchItemFailures": []}
+    (call,) = world.http_calls
+    assert call["headers"]["X-DeveloperCards-Signature"] == sign_webhook("whsec-sub-12", 1790000000, BODY)
+
+
+@pytest.mark.parametrize("make_error", READ_ERRORS)
+def test_previous_secret_read_error_retries_instead_of_dropping_the_previous_signature(
+    world: World, make_error: Any
+) -> None:
+    world.ssm.values[SIGNING_NAME + "-previous"] = "whsec-old"
+    world.ssm.errors[SIGNING_NAME + "-previous"] = [make_error()]
+    assert handler.lambda_handler(sqs_event(1), Context()) == {"batchItemFailures": [{"itemIdentifier": "m-1"}]}
+    assert_retried_without_sending(world)
+
+    assert handler.lambda_handler(sqs_event(2), Context()) == {"batchItemFailures": []}
+    (call,) = world.http_calls
+    assert call["headers"]["X-DeveloperCards-Signature-Previous"] == sign_webhook("whsec-old", 1790000000, BODY)
+
+
+def test_subscription_secrets_off_never_reads_a_subscription_parameter(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The deployed role has no grant on "-sub-*" (every read would be AccessDenied, which now fails
+    # closed), so the per-subscription lookup happens only with WEBHOOK_SUBSCRIPTION_SECRETS on.
+    lookups: list[str] = []
+    original = world.ssm.get_parameter
+
+    def counting(Name: str, WithDecryption: bool) -> dict[str, Any]:
+        lookups.append(Name)
+        return original(Name=Name, WithDecryption=WithDecryption)
+
+    monkeypatch.setattr(world.ssm, "get_parameter", counting)
+    world.ssm.values[SIGNING_NAME + "-sub-12"] = "whsec-sub-12"
+    assert handler.lambda_handler(sqs_event(1), Context()) == {"batchItemFailures": []}
+    assert not any("-sub-" in name for name in lookups)
+    headers = world.http_calls[-1]["headers"]
+    assert headers["X-DeveloperCards-Signature"] == sign_webhook("whsec-test", 1790000000, BODY)
+
+
+def test_unreadable_previous_internal_secret_is_not_cached(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    made: list[FakeInternalClient] = []
+
+    class Recording(FakeInternalClient):
+        def __init__(self, base_url: str, secret: str, *, previous_secret: Any = None) -> None:
+            super().__init__(base_url, secret, previous_secret=previous_secret)
+            made.append(self)
+
+    monkeypatch.setattr(handler, "internal_client_factory", Recording)
+    handler.lambda_handler(sqs_event(1), Context())
+    (client,) = made
+    world.ssm.values[INTERNAL_NAME + "-previous"] = "old-internal"
+    world.ssm.errors[INTERNAL_NAME + "-previous"] = [client_error("ThrottlingException")]
+    with pytest.raises(settings.SecretUnreadable):
+        client.previous_secret()
+    # No cache reset: the throttle was not remembered as "no previous secret".
+    assert client.previous_secret() == "old-internal"
 
 
 class ClaimingClient(FakeInternalClient):

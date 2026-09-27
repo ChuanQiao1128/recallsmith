@@ -81,13 +81,17 @@ Committed in `env/prod.env.json` (overlaid by the deploy script; no secret value
 | `METRICS_NAMESPACE` | `DeveloperCards` | EMF namespace |
 | `AI_PRICE_INPUT_PER_MTOK` / `AI_PRICE_OUTPUT_PER_MTOK` | `5` / `25` | USD per million tokens for the cost estimate |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `AI_QA_MAX_RECEIVES` | `2` | optional, not in `env/prod.env.json`: the ai-qa queue's `maxReceiveCount`; the receive on which a retryable error ends the chunk (below). Invalid or < 1 = default |
 
 `AI_QA_REQUIRED`, `AI_QA_MAX_CARDS`, `AI_QA_DAILY_USD_CAP` and `AI_QA_QUEUE_URL` belong to core-vpc
 and are not read here. SSM is read by exact name only (never by path); secrets are cached per
 container only once they load successfully, and for at most **5 minutes** (`SECRET_TTL_SECONDS =
 300`, the dispatcher's value), so a rotated value reaches every warm container within that window.
 The optional `INTERNAL_SECRET_SSM_NAME` + `-previous` is read only when core answers 401/403 to a
-results report (see "Internal shared secret rotation"); its absence is cached for the same TTL.
+results report (see "Internal shared secret rotation"). Only `ParameterNotFound` counts as
+absent and is cached for the same TTL; any other read error (throttling, a network error,
+AccessDenied) is logged `ssm_secret_unavailable` at warn level and not cached, so the next 401/403
+reads SSM again.
 
 ## The model call
 
@@ -170,10 +174,16 @@ sum of these estimates.
 | `DISABLED` | `AI_QA_ENABLED` not truthy (status `skipped`) | every card, no call, no key read |
 
 The queue has `maxReceiveCount = 2` (raising it to 3 is an infra follow-up, see
-docs/delivery/r18-issues/Y03-fixes.md): a retried message gets one more attempt, then goes to the
-DLQ (alarm `developercards-prod-ai-qa-dlq-nonempty`). A message with a bad shape is logged and
-acked. A missing internal secret, a failed results report or an unexpected exception returns the
-message as a batch item failure.
+docs/delivery/r18-issues/Z02-fixes.md). **Last receive:** when `ApproximateReceiveCount >=
+AI_QA_MAX_RECEIVES` (default 2, the deployed value) a retryable code does not fail the message:
+that card and every remaining one are reported with the retryable code (no calls), and the message
+is acked (log `final_receive_giving_up`), so the run finishes with visible errors instead of the
+chunk going to the DLQ and its cards staying `queued` until core's 2 h stale reap. Change
+`AI_QA_MAX_RECEIVES` together with the queue's `maxReceiveCount`. A message with a bad shape is
+logged and acked. A missing internal secret (its visibility is shortened like a retryable error),
+a failed results report or an unexpected exception returns the message as a batch item failure;
+when that happens on the last receive the message goes to the DLQ (alarm
+`developercards-prod-ai-qa-dlq-nonempty`).
 
 **Results report.** The POST is tried up to 4 times: a connection error, a 5xx or a **429** (the
 route's throttle) is retried after jittered pauses of 1-3 s, 4-8 s and 15-30 s, always within the
@@ -185,9 +195,10 @@ unexpected.
 
 **Retry scope.** On a retryable exit the handler calls `sqs:ChangeMessageVisibility` (already
 granted) with 60-120 s (random jitter) on the first receive and 540-660 s on later receives, so
-the retry comes after about a minute instead of the queue's 3600 s visibility, and a rate limit that
-lasts a few minutes does not use up the remaining receives at once. The same happens after a
-failed results report. Every item reported with a 200 is remembered per container, keyed by
+the retry comes after about a minute instead of the queue's 3600 s visibility. The longer later
+wait only spreads the receives out: with `maxReceiveCount = 2` there is one retry, and a rate limit
+that outlasts it ends the chunk on the last receive (above). The same happens after a failed
+results report and after a missing internal secret. Every item reported with a 200 is remembered per container, keyed by
 `(runId, chunk, cardId, contentSha256, promptVersion)` (at most 2000 keys); a redelivered chunk
 skips those cards — no model call, no second report — and reviews only the rest. When every card
 was already reported, the message is acked without a call. This needs no IAM change and no core
@@ -285,8 +296,8 @@ core answers 401/403, resend once signed with `/developercards/prod/internal-sha
 if that parameter exists. So the Python side works whichever side switches first.
 
 IAM prerequisite: both roles need `ssm:GetParameter` on `…/internal-shared-secret-previous`
-(infra follow-up). Until then the read is denied, treated as "no previous secret" (debug log
-only), and a 401/403 stands as before.
+(infra follow-up). Until then the read is denied: it is logged `ssm_secret_unavailable` (warn,
+error class only) on each 401/403, never cached as "no previous secret", and the 401/403 stands.
 
 Runbook (supervisor only; values never in git or chat):
 

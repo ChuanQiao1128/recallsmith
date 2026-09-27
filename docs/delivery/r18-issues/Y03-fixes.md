@@ -147,8 +147,10 @@ core-vpc and the console note is `frontend`, both outside this issue's paths)
   `tests/test_settings.py::test_presend_claim_flag_is_off_unless_set`.
 - Handoff: core-vpc route `POST /api/internal/webhooks/deliveries/claim` (HMAC like `/report`).
   It returns `send=false` and settles the delivery row when the subscription is disabled or
-  deleted, and the subscription's current `url` otherwise. The existing gateway route
-  `/api/internal/webhooks/{proxy+}` already forwards it. After it is deployed, set
+  deleted, and the subscription's current `url` otherwise. (Corrected in Z02: no gateway route
+  forwards it. R18 X08 replaced `/api/internal/webhooks/{proxy+}` with exact route keys, so the
+  claim also needs an exact gateway route `POST /api/internal/webhooks/deliveries/claim`, auth
+  none, its own throttle; see Z02-fixes.md.) After it is deployed, set
   `WEBHOOK_PRESEND_CLAIM=1` in `env/prod.env.json` (and the contract test) and deploy. Console:
   surface the behaviour in `WebhooksPage` (`frontend`).
 
