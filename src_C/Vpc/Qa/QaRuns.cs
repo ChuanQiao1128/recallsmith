@@ -157,7 +157,7 @@ public static class QaRuns
   /// accept/publish chain (automation-17). A <see cref="ValidationError"/> from the scope propagates.
   /// </summary>
   private static async Task<StartResult> StartRunAsync(NpgsqlConnection conn, StartBody body, string deckSlug, string deckTitle,
-    string requestedBySub, string queueUrl)
+    string requestedBySub, string queueUrl, string? profile = null)
   {
     var reaped = await DbUtil.ExecuteAsync(conn, null,
       $"""
@@ -232,17 +232,31 @@ public static class QaRuns
     var reviewDate = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     for (var i = 0; i < chunks.Count; i++)
     {
-      var message = JsonSerializer.Serialize(new
-      {
-        v = 1,
-        runId = id,
-        chunk = i,
-        chunkCount = chunks.Count,
-        promptVersion = PromptVersion,
-        deck = new { id = body.DeckId, slug = deckSlug, title = deckTitle },
-        reviewDate,
-        cards = chunks[i].Select(c => c.Wire).ToList(),
-      });
+      // A human run's message is exactly the §7.4 shape; only an automation run (A00 §9.6) carries "profile".
+      var message = profile is null
+        ? JsonSerializer.Serialize(new
+        {
+          v = 1,
+          runId = id,
+          chunk = i,
+          chunkCount = chunks.Count,
+          promptVersion = PromptVersion,
+          deck = new { id = body.DeckId, slug = deckSlug, title = deckTitle },
+          reviewDate,
+          cards = chunks[i].Select(c => c.Wire).ToList(),
+        })
+        : JsonSerializer.Serialize(new
+        {
+          v = 1,
+          runId = id,
+          chunk = i,
+          chunkCount = chunks.Count,
+          promptVersion = PromptVersion,
+          profile,
+          deck = new { id = body.DeckId, slug = deckSlug, title = deckTitle },
+          reviewDate,
+          cards = chunks[i].Select(c => c.Wire).ToList(),
+        });
       var request = new SendMessageRequest { QueueUrl = queueUrl, MessageBody = message };
 
       try
@@ -336,6 +350,70 @@ public static class QaRuns
     }
 
     Log.Event("info", new { tag = "ai_qa", outcome = "chained_run", deckId, trigger, status = result.Status, runId = result.RunId, code = result.Code });
+    return result;
+  }
+
+  /// <summary>
+  /// Starts a <c>scope=cards</c> run over <paramref name="cardIds"/> of <paramref name="deckId"/> (R18A A00 §9.6): the
+  /// source watch's re-check of the cards citing a changed or vanished page, with <paramref name="profile"/> carried in
+  /// every chunk message. Shaped like <see cref="StartChangedRunAsync"/>: null when <c>AI_QA_ENABLED</c> is off; one
+  /// open run per deck (<c>in_progress</c>), the per-run card cap and the daily-cap reservation apply; a card id not
+  /// live in the deck is <c>not_started</c> / <c>VALIDATION_ERROR</c>. Never throws.
+  /// </summary>
+  public static async Task<ChainedRun?> StartCardsRunAsync(NpgsqlConnection conn, long deckId, long[] cardIds /* 1..200 */, string requestedBySub, string trigger, string? profile)
+  {
+    if (!Env.Flag(QaGate.EnabledEnv)) return null;
+
+    ChainedRun result;
+    try
+    {
+      var queueUrl = Environment.GetEnvironmentVariable(QueueUrlEnv);
+      if (string.IsNullOrWhiteSpace(queueUrl))
+      {
+        result = new ChainedRun("not_started", null, "CONFIG_ERROR", $"Missing env {QueueUrlEnv}");
+      }
+      else if (string.IsNullOrEmpty(requestedBySub))
+      {
+        result = new ChainedRun("not_started", null, "FORBIDDEN", "Requires a requester");
+      }
+      else if (cardIds.Length is < 1 or > MaxCardIds || cardIds.Distinct().Count() != cardIds.Length)
+      {
+        result = new ChainedRun("not_started", null, "VALIDATION_ERROR", $"cardIds must be an array of 1..{MaxCardIds} distinct integers");
+      }
+      else if (await LiveDeckAsync(conn, deckId) is not { } deck)
+      {
+        result = new ChainedRun("not_started", null, "DECK_NOT_FOUND", "Deck not found");
+      }
+      else
+      {
+        StartResult started;
+        try
+        {
+          started = await StartRunAsync(conn, new StartBody(deckId, "cards", cardIds), deck.Slug, deck.Title, requestedBySub, queueUrl.Trim(), profile);
+        }
+        catch (ValidationError ve)
+        {
+          started = new StartResult(StartOutcome.EnqueueFailed, Message: ve.Message, Error: ve);
+        }
+        result = started.Error is ValidationError ? new ChainedRun("not_started", null, "VALIDATION_ERROR", started.Message) : started.Outcome switch
+        {
+          StartOutcome.Queued => new ChainedRun("queued", started.RunId, null, null),
+          StartOutcome.InProgress => new ChainedRun("in_progress", started.RunId, "AI_QA_RUN_IN_PROGRESS", null),
+          StartOutcome.NothingToReview => new ChainedRun("nothing_to_review", null, "AI_QA_NOTHING_TO_REVIEW", started.Message),
+          StartOutcome.TooManyCards => new ChainedRun("not_started", null, "AI_QA_TOO_MANY_CARDS", started.Message),
+          StartOutcome.DailyCap => new ChainedRun("not_started", null, "AI_QA_DAILY_CAP", started.Message),
+          _ => new ChainedRun("not_started", started.RunId, "ENQUEUE_FAILED", "The AI QA run could not be enqueued"),
+        };
+      }
+    }
+    catch (Exception ex)
+    {
+      Log.Event("warn", new { tag = "ai_qa", reason = "cards_run_failed", deckId, trigger, error = ex.Message });
+      return new ChainedRun("not_started", null, ex is PostgresException { SqlState: "42P01" } ? "SERVER_NOT_READY_AI_QA" : "INTERNAL_ERROR",
+        "The AI QA run could not be started");
+    }
+
+    Log.Event("info", new { tag = "ai_qa", outcome = "cards_run", deckId, trigger, status = result.Status, runId = result.RunId, code = result.Code });
     return result;
   }
 

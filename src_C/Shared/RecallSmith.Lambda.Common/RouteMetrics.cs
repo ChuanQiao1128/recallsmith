@@ -173,6 +173,8 @@ public static class RouteMetrics
     "/api/v1/admin/automation/queue",
     "/api/v1/admin/automation/notifications",
     "/api/v1/admin/automation/notifications/test",
+    "/api/v1/admin/automation/watch",
+    "/api/v1/admin/automation/watch/targets",
 
     // edge-public
     "/api/v1/billing/verify",
@@ -208,6 +210,7 @@ public static class RouteMetrics
     "/api/v1/authoring/qa/findings/:findingId/resolve",
     "/api/v1/admin/automation/queue/:itemId/skip",
     "/api/v1/admin/automation/notifications/:notificationId",
+    "/api/v1/admin/automation/watch/targets/:targetId",
 
     // Internal machine-caller routes: the dispatcher matches these exactly (no suffix match, see
     // VpcFunction), so they are labelled by exact match too.
@@ -217,6 +220,8 @@ public static class RouteMetrics
     "/api/internal/ai-qa/results",
     "/api/internal/automation/tick",
     "/api/internal/automation/notifications/report",
+    "/api/internal/source-watch/targets",
+    "/api/internal/source-watch/report",
   ];
 
   // Longest first, so the table stays order-independent: appending an entry to the arrays

@@ -429,6 +429,8 @@ public static class AutomationTick
   /// </summary>
   private static async Task SourceEventsAsync(NpgsqlConnection conn, string mode, Actions a)
   {
+    a.RechecksStarted += await SourceWatchRoutes.RetryWaitingRechecksAsync(conn, 20);
+
     a.RechecksDone += await DbUtil.ExecuteAsync(conn, null,
       """
       update source_watch_events e set recheck_state = 'done', updated_at = now()
