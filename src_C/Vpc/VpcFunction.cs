@@ -270,6 +270,10 @@ public sealed class VpcFunction
       {
         return await Vpc.Ledger.LedgerRoutes.HandleBackfill(req, res, auth);
       }
+      if (p.EndsWith("/api/v1/authoring/cards/similar", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.CardSimilarity.HandleSimilar(req, res, auth);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
