@@ -47,9 +47,43 @@ function guarded<A>(guard: CredentialGuard, handler: (args: A) => Promise<CallTo
   };
 }
 
-export function createServer(deps: { config: Config; runProcess?: RunProcess }): McpServer {
+/** The automation run the local runner (tools/author-runner) started this server for, from its per-run MCP config. */
+export interface AutomationRun {
+  runId: string | null;
+  queueItemId: string | null;
+  deckSlug: string | null;
+}
+
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const QUEUE_ITEM_ID_RE = /^[1-9][0-9]{0,18}$/;
+
+/** Reads DC_AUTOMATION_*; an invalid run id or queue item id is ignored with one warning line. */
+export function automationRunFrom(env: Record<string, string | undefined>, warn: (line: string) => void): AutomationRun {
+  const rawRunId = (env.DC_AUTOMATION_RUN_ID ?? '').trim();
+  let runId: string | null = null;
+  if (UUID_RE.test(rawRunId)) runId = rawRunId.toLowerCase();
+  else if (rawRunId !== '') warn('developercards-mcp: DC_AUTOMATION_RUN_ID is not a uuid; automation run ignored');
+
+  const rawQueueItemId = (env.DC_AUTOMATION_QUEUE_ITEM_ID ?? '').trim();
+  let queueItemId: string | null = null;
+  if (QUEUE_ITEM_ID_RE.test(rawQueueItemId)) queueItemId = rawQueueItemId;
+  else if (rawQueueItemId !== '') warn('developercards-mcp: DC_AUTOMATION_QUEUE_ITEM_ID is not a positive integer; ignored');
+
+  const deckSlug = (env.DC_AUTOMATION_DECK_SLUG ?? '').trim();
+  return { runId, queueItemId, deckSlug: deckSlug === '' ? null : deckSlug };
+}
+
+export function createServer(deps: {
+  config: Config;
+  runProcess?: RunProcess;
+  env?: Record<string, string | undefined>;
+  warn?: (line: string) => void;
+}): McpServer {
   const { config } = deps;
   const runProcess = deps.runProcess ?? defaultRunProcess;
+  // stdout is the MCP protocol, so a warning goes to stderr.
+  const warn = deps.warn ?? ((line: string) => void process.stderr.write(`${line}\n`));
+  const automation = automationRunFrom(deps.env ?? process.env, warn);
   const api = createApiClient(config);
   const ingestContext = { repoRoot: config.repoRoot, tokenFile: config.tokenFile };
   const guard = credentialGuard(config.tokenFile);
@@ -173,6 +207,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
         'Before any API call it lints every card and checks every citation: source.url must be a url read_source returned in this session (an https url not yet read is read once now) or the card fails with SOURCE_NOT_INGESTED, and source.quote must occur whitespace-normalised in one chunk of that source or it fails with SOURCE_QUOTE_NOT_IN_CHUNK; any failure refuses the whole batch as a tool error.',
         'Submitting the same card again is idempotent (it comes back under duplicates, keyed by the SHA-256 clientDraftKey of the card), and a card the server refuses comes back under rejected while the rest proceed.',
         'agent is { model, skillVersion }; the tool does not verify that the answer is correct, only that the quote is really in the cited source.',
+        'Inside an automation run (DC_AUTOMATION_RUN_ID set by tools/author-runner) the agent block always carries runId and queueItemId, the server may accept and publish new drafts that pass its checks and AI QA, and a deckSlug other than DC_AUTOMATION_DECK_SLUG is refused with AUTOMATION_DECK_MISMATCH.',
       ].join(' '),
       inputSchema: {
         deckSlug: z.string(),
@@ -183,6 +218,9 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
     },
     guarded(guard, async ({ deckSlug, drafts, agent }) => {
       try {
+        if (automation.deckSlug !== null && deckSlug !== automation.deckSlug) {
+          return fail(`AUTOMATION_DECK_MISMATCH: this automation run drafts for deck ${automation.deckSlug}`);
+        }
         const vocabulary = loadTopicVocabulary(config.repoRoot);
         const failures: string[] = [];
         for (const card of drafts) {
@@ -223,7 +261,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
         const deckId = await api.resolveDeckId(deckSlug);
         const body: {
           deckId: number;
-          agent?: { name: string; model: string; skillVersion: string };
+          agent?: { name: string; model: string; skillVersion: string; runId?: string; queueItemId?: string };
           drafts: Array<{ clientDraftKey: string; card: GroundedDraftCard }>;
         } = {
           deckId,
@@ -234,7 +272,16 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
             card: { ...card, source: { url: card.source?.url ?? '', quote: card.source?.quote ?? '', grounding: reviewerGrounding[i] as SourceGrounding } },
           })),
         };
-        if (agent !== undefined) {
+        if (automation.runId !== null) {
+          // core-vpc creates an automation decision only for a draft whose agent.runId names an automation run.
+          body.agent = {
+            name: 'developercards-mcp',
+            model: agent?.model ?? 'unknown',
+            skillVersion: agent?.skillVersion ?? 'unknown',
+            runId: automation.runId,
+            ...(automation.queueItemId !== null ? { queueItemId: automation.queueItemId } : {}),
+          };
+        } else if (agent !== undefined) {
           body.agent = { name: 'developercards-mcp', model: agent.model, skillVersion: agent.skillVersion };
         }
         const submitted = await api.request('POST', '/api/v1/authoring/drafts', body);

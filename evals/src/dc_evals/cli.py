@@ -13,10 +13,24 @@ from pathlib import Path
 from ai_qa.settings import SECOND_MODEL_ENV, SECOND_PROVIDER_ENV, SECOND_SCOPE_ENV
 
 from .author import DEFAULT_AUTHOR_MODEL
-from .dataset import AUTHORED, AUTHORED_LABELS_PATH, AUTHORED_SOURCES_PATH, DATASETS, REPORTS_DIR, RUN_DATASETS, load_rows, spec_sha256
+from .dataset import (
+    AUTHORED,
+    AUTHORED_SOURCES_PATH,
+    AUTHORED_V2,
+    AUTHORED_V2_SOURCES_PATH,
+    DATASETS,
+    REPORTS_DIR,
+    RUN_DATASETS,
+    load_rows,
+    spec_sha256,
+)
 from .jury import DEFAULT_JURORS, JUROR_PROVIDERS
 from .report import build_report, file_stem, read_run, run_header, write_run_files
-from .score import gate_failures
+from .score import SHIPPING_ENV_PATH, gate_failures
+
+# A15: `author` / `jury --dataset` picks the authored set; it only chooses the default paths.
+AUTHORED_SPECS = {AUTHORED.name: AUTHORED, AUTHORED_V2.name: AUTHORED_V2}
+AUTHORED_SOURCES = {AUTHORED.name: AUTHORED_SOURCES_PATH, AUTHORED_V2.name: AUTHORED_V2_SOURCES_PATH}
 
 # The second reviewer's providers (ai-qa AI_QA_SECOND_PROVIDER); claude-cli is local only.
 SECOND_PROVIDERS = ("bedrock-converse", "bedrock", "anthropic")
@@ -78,15 +92,21 @@ def _parser() -> argparse.ArgumentParser:
         "--dataset",
         choices=sorted(RUN_DATASETS),
         default="v3",
-        help="dataset version (default v3); authored-v1 = the jury-labeled authored cards",
+        help="dataset version (default v3); authored-v1 / authored-v2 = the jury-labeled authored cards",
     )
 
     author = sub.add_parser(
         "author", help="write the agent-authored card set with the local Claude CLI (owner's machine only)"
     )
-    author.add_argument("--sources", type=Path, default=AUTHORED_SOURCES_PATH)
+    author.add_argument(
+        "--dataset",
+        choices=sorted(AUTHORED_SPECS),
+        default=AUTHORED.name,
+        help="the authored set whose default --sources and --output to use (default authored-v1)",
+    )
+    author.add_argument("--sources", type=Path, default=None, help="default data/authored-sources-<v>.json")
     author.add_argument("--model", default=DEFAULT_AUTHOR_MODEL, help=f"default {DEFAULT_AUTHOR_MODEL}")
-    author.add_argument("--output", type=Path, default=AUTHORED.path)
+    author.add_argument("--output", type=Path, default=None, help="default data/<dataset>.jsonl")
     author.add_argument("--limit", type=int, default=None, help="author from only the first N sources")
 
     jury = sub.add_parser("jury", help="label the authored cards with a jury of models (spends money; owner only)")
@@ -95,8 +115,14 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_JURORS,
         help=f"comma-separated provider:model list (providers {', '.join(JUROR_PROVIDERS)}); default {DEFAULT_JURORS}",
     )
-    jury.add_argument("--input", type=Path, default=AUTHORED.path)
-    jury.add_argument("--output", type=Path, default=AUTHORED_LABELS_PATH)
+    jury.add_argument(
+        "--dataset",
+        choices=sorted(AUTHORED_SPECS),
+        default=AUTHORED.name,
+        help="the authored set whose default --input and --output to use (default authored-v1)",
+    )
+    jury.add_argument("--input", type=Path, default=None, help="default data/<dataset>.jsonl")
+    jury.add_argument("--output", type=Path, default=None, help="default data/<dataset>.labels.jsonl")
     jury.add_argument("--limit", type=int, default=None, help="label only the first N rows")
 
     compare = sub.add_parser("compare", help="compare reviewer configurations across run files")
@@ -110,6 +136,16 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="the jury summary for authored-v1 runs (default: data/authored-v1.labels.summary.json)",
     )
+
+    gate = sub.add_parser(
+        "automation-gate",
+        help="score the two automation-reviewer runs against the auto-decision gate (A00 §15; no model call)",
+    )
+    gate.add_argument("--seeded", required=True, type=Path, help="the seeded-v3 run file (.jsonl)")
+    gate.add_argument("--authored", required=True, type=Path, help="the authored-v2 run file (.jsonl)")
+    gate.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
+    gate.add_argument("--out", type=Path, default=REPORTS_DIR)
+    gate.add_argument("--ai-qa-env", type=Path, default=SHIPPING_ENV_PATH, help=argparse.SUPPRESS)
 
     score = sub.add_parser("score", help="print the report JSON for a run file")
     score.add_argument("run_file", type=Path)
@@ -267,7 +303,13 @@ def second_reviewer_env(args: argparse.Namespace) -> dict[str, str]:
 def _author(args: argparse.Namespace) -> int:
     from .author import author
 
-    return author(sources_path=args.sources, output=args.output, model=args.model, limit=args.limit)
+    spec = AUTHORED_SPECS[args.dataset]
+    return author(
+        sources_path=args.sources or AUTHORED_SOURCES[spec.name],
+        output=args.output or spec.path,
+        model=args.model,
+        limit=args.limit,
+    )
 
 
 def _jury(args: argparse.Namespace) -> int:
@@ -278,7 +320,30 @@ def _jury(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"dc-evals: {exc}", file=sys.stderr)
         return 2
-    return jury(input_path=args.input, output=args.output, jurors=jurors, limit=args.limit)
+    spec = AUTHORED_SPECS[args.dataset]
+    return jury(
+        input_path=args.input or spec.path,
+        output=args.output or spec.labels_path,
+        jurors=jurors,
+        limit=args.limit,
+        dataset=spec.name,
+    )
+
+
+def _automation_gate(args: argparse.Namespace) -> int:
+    from .automation_gate import evaluate_gate, write_gate_report
+
+    try:
+        report = evaluate_gate(args.seeded, args.authored, env_path=args.ai_qa_env)
+    except ValueError as exc:
+        print(f"dc-evals: {exc}", file=sys.stderr)
+        return 2
+    date = args.date or dt.datetime.now(dt.UTC).date().isoformat()
+    for path in write_gate_report(report, args.out, date):
+        print(path)
+    for reason in report["failures"]:
+        print(f"gate: {reason}", file=sys.stderr)
+    return 0 if report["passed"] else 1
 
 
 def _compare(args: argparse.Namespace) -> int:
@@ -314,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         "author": _author,
         "jury": _jury,
         "compare": _compare,
+        "automation-gate": _automation_gate,
     }
     return handlers[args.command](args)
 

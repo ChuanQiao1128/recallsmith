@@ -224,3 +224,20 @@ jobs:
         with:
           node-version: '24'
       - run: node --test lib/
+
+  author-runner:
+    name: tools/author-runner (build + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/author-runner
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tools/author-runner/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
