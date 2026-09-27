@@ -199,6 +199,44 @@ public class WebhookDeliveryReportTests
   }
 
   [Fact]
+  public async Task Report_DeadThenDelivered_AfterRedrive_IsDelivered_AndCountsOnce()
+  {
+    // automation-12: the dispatcher README's DLQ redrive sends a dead message back to the source queue,
+    // where its attempt count starts again. Its later success must win over 'dead' and count once.
+    var (subscriptionId, deliveryId) = await SeedAsync();
+    var eventId = (Guid)(await _db.QueryAsync("select event_id from webhook_deliveries where delivery_id = $1", deliveryId)).Single()["event_id"]!;
+
+    Assert.Equal("dead", Data(await ReportAsync(Body(deliveryId, 5, "dead", 502, "HTTP 502"))).GetProperty("status").GetString());
+
+    var redriven = await ReportAsync(Body(deliveryId, 1, "delivered", 200, null));
+    Assert.Equal(200, redriven.StatusCode);
+    Assert.Equal("delivered", Data(redriven).GetProperty("status").GetString());
+    var row = await RowAsync(deliveryId);
+    Assert.Equal("delivered", (string)row["status"]!);
+    Assert.NotNull(row["delivered_at"]);
+    Assert.Equal(200, Convert.ToInt32(row["last_status_code"], CultureInfo.InvariantCulture));
+    Assert.Null(row["last_error"]);
+    Assert.Equal(5, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture));
+
+    // A second success (the redriven message run twice) keeps the first delivered_at and adds no unit.
+    Assert.Equal("delivered", Data(await ReportAsync(Body(deliveryId, 6, "delivered", 200, null))).GetProperty("status").GetString());
+    var again = await RowAsync(deliveryId);
+    Assert.Equal(row["delivered_at"], again["delivered_at"]);
+
+    var key = $"webhook:{eventId:D}:{subscriptionId.ToString(CultureInfo.InvariantCulture)}";
+    var units = await _db.QueryAsync("select units from automation_events where dedupe_key = $1", key);
+    Assert.Equal(1, Convert.ToInt32(Assert.Single(units)["units"], CultureInfo.InvariantCulture));
+
+    // Dead still holds against a later retry or failure.
+    var (_, other) = await SeedAsync();
+    await ReportAsync(Body(other, 5, "dead", 500, "HTTP 500"));
+    foreach (var outcome in new[] { "retry", "failed" })
+    {
+      Assert.Equal("dead", Data(await ReportAsync(Body(other, 1, outcome, 503, "redriven"))).GetProperty("status").GetString());
+    }
+  }
+
+  [Fact]
   public async Task Report_Delivered_IsNeverMovedBackwards()
   {
     var (_, deliveryId) = await SeedAsync();
