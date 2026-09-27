@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# deploy-python-lambda.sh <service> — package one Python Lambda (contract §10.6) and, outside
+# DRY_RUN, upload it the src_C/deploy.sh way: overlay the committed non-secret env file onto the
+# live environment, update the code, prove CodeSha256 equals the local zip, publish a version and
+# move the alias.
+#
+#   DRY_RUN=1 services/deploy-python-lambda.sh webhook-dispatcher   # build + print, never calls aws
+#   AWS_PROFILE=dev services/deploy-python-lambda.sh webhook-dispatcher   # supervisor only
+#
+# No secret is ever injected: both Python functions read their two SSM parameters at cold start.
+# This script never reads SSM and never prints an environment value (key names only).
+set -euo pipefail
+set +x
+
+usage() {
+  echo "usage: $(basename "$0") <webhook-dispatcher|ai-qa>" >&2
+  echo "  env: ENV (prod), AWS_REGION (ap-southeast-2), AWS_PROFILE (dev), PUBLISH_ALIAS (prod), UV, DRY_RUN=1" >&2
+  exit 2
+}
+
+[ "$#" -eq 1 ] || usage
+SERVICE="$1"
+case "$SERVICE" in
+  webhook-dispatcher) FN="developercards-webhook-dispatcher"; PKG="webhook_dispatcher" ;;
+  ai-qa)              FN="developercards-ai-qa";              PKG="ai_qa" ;;
+  *) usage ;;
+esac
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+ENV="${ENV:-prod}"
+REGION="${AWS_REGION:-ap-southeast-2}"
+export AWS_PROFILE="${AWS_PROFILE:-dev}"
+PUBLISH_ALIAS="${PUBLISH_ALIAS:-prod}"
+UV="${UV:-uv}"
+if ! command -v "$UV" >/dev/null 2>&1; then UV="$HOME/.local/bin/uv"; fi
+command -v "$UV" >/dev/null 2>&1 || { echo "uv is required (set UV=/path/to/uv)" >&2; exit 1; }
+for tool in jq zip openssl; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "$tool is required" >&2; exit 1; }
+done
+
+SVC_DIR="$HERE/$SERVICE"
+ENV_FILE="$SVC_DIR/env/$ENV.env.json"
+BUILD="$SVC_DIR/build"
+ZIP="$BUILD/$SERVICE.zip"
+MAX_ZIP_BYTES=52428800   # direct-upload limit of update-function-code --zip-file
+
+[ -f "$SVC_DIR/pyproject.toml" ] || { echo "$SVC_DIR/pyproject.toml not found" >&2; exit 1; }
+[ -d "$SVC_DIR/src/$PKG" ] || { echo "$SVC_DIR/src/$PKG not found" >&2; exit 1; }
+[ -f "$ENV_FILE" ] || { echo "$ENV_FILE not found" >&2; exit 1; }
+jq -e 'type == "object" and all(.[]; type == "string")' "$ENV_FILE" >/dev/null 2>&1 \
+  || { echo "$ENV_FILE must be a JSON object of strings" >&2; exit 1; }
+file_env="$(jq -c . "$ENV_FILE")"
+
+# --- build ------------------------------------------------------------------------------------
+rm -rf "$BUILD"
+mkdir -p "$BUILD/pkg"
+# --no-emit-project: without it the file starts with `-e .` (the project itself, not a dependency).
+"$UV" export --project "$SVC_DIR" --frozen --no-dev --no-hashes --no-emit-project --quiet > "$BUILD/requirements.txt"
+"$UV" pip install --quiet --target "$BUILD/pkg" --python-version 3.12 --python-platform aarch64-manylinux2014 \
+  --only-binary :all: -r "$BUILD/requirements.txt"
+mkdir -p "$BUILD/pkg"   # uv does not create the target when there is nothing to install
+rm -f "$BUILD/pkg/.lock"   # uv's install lock file, not package content
+(cd "$SVC_DIR/src" && tar --exclude '__pycache__' --exclude '*.pyc' -cf - "$PKG") | (cd "$BUILD/pkg" && tar -xf -)
+(cd "$BUILD/pkg" && zip -qr -X "../$SERVICE.zip" .)
+
+zip_bytes="$(wc -c < "$ZIP" | tr -d ' ')"
+if [ "$zip_bytes" -gt "$MAX_ZIP_BYTES" ]; then
+  echo "$ZIP is $zip_bytes bytes, above the $MAX_ZIP_BYTES-byte direct-upload limit" >&2
+  exit 1
+fi
+
+sha_b64() { openssl dgst -sha256 -binary "$1" | openssl base64 -A; }   # Lambda's CodeSha256 is base64(sha256)
+local_sha="$(sha_b64 "$ZIP")"
+
+if [ "${DRY_RUN:-0}" = 1 ]; then
+  echo "DRY: function $FN (region $REGION, alias $PUBLISH_ALIAS)"
+  echo "DRY: zip $ZIP ($zip_bytes bytes, sha256 $local_sha)"
+  echo "DRY: $FN env overlay keys: $(jq -r 'keys | join(",")' <<<"$file_env")"
+  exit 0
+fi
+
+# --- deploy (supervisor only) -----------------------------------------------------------------
+command -v aws >/dev/null 2>&1 || { echo "aws CLI is required" >&2; exit 1; }
+# shellcheck source=../src_C/scripts/merge-env.sh
+source "$ROOT/src_C/scripts/merge-env.sh"
+echo "== $FN <- $ZIP"
+
+# Overlay the environment BEFORE publish-version, so the published version freezes the merged env.
+current="$(aws lambda get-function-configuration --region "$REGION" --function-name "$FN" --query 'Environment.Variables' --output json)"
+merged="$(merge_env "$current" "$file_env" '{}')"
+aws lambda update-function-configuration --region "$REGION" --function-name "$FN" \
+  --environment "$(jq -cn --argjson v "$merged" '{Variables: $v}')" --query 'LastUpdateStatus' --output text >/dev/null
+aws lambda wait function-updated --region "$REGION" --function-name "$FN"
+echo "OK $FN environment: $(jq -r 'keys | length' <<<"$merged") keys"
+
+aws lambda update-function-code --region "$REGION" --function-name "$FN" --zip-file "fileb://$ZIP" \
+  --query '[FunctionName,LastUpdateStatus,CodeSha256]' --output text
+aws lambda wait function-updated --region "$REGION" --function-name "$FN"
+st="$(aws lambda get-function-configuration --region "$REGION" --function-name "$FN" --query 'LastUpdateStatus' --output text)"
+remote_sha="$(aws lambda get-function-configuration --region "$REGION" --function-name "$FN" --query 'CodeSha256' --output text)"
+[ "$st" = Successful ] || { echo "$FN LastUpdateStatus=$st" >&2; exit 1; }
+[ "$remote_sha" = "$local_sha" ] || { echo "$FN CodeSha256 mismatch: remote=$remote_sha local=$local_sha" >&2; exit 1; }
+echo "OK $FN CodeSha256=$remote_sha"
+
+# update-function-code only moves $LATEST; the SQS event source mapping targets the alias.
+ver="$(aws lambda publish-version --region "$REGION" --function-name "$FN" \
+  --description "deploy-python-lambda.sh $(date -u +%Y-%m-%dT%H:%M:%SZ) $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)" \
+  --query 'Version' --output text)"
+aws lambda update-alias --region "$REGION" --function-name "$FN" --name "$PUBLISH_ALIAS" --function-version "$ver" \
+  --query '[Name,FunctionVersion]' --output text
+alias_sha="$(aws lambda get-function-configuration --region "$REGION" --function-name "$FN:$PUBLISH_ALIAS" --query 'CodeSha256' --output text)"
+[ "$alias_sha" = "$local_sha" ] || { echo "$FN:$PUBLISH_ALIAS CodeSha256 mismatch after alias move: $alias_sha" >&2; exit 1; }
+echo "OK $FN:$PUBLISH_ALIAS -> version $ver (CodeSha256 verified)"

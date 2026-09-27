@@ -39,6 +39,10 @@ locals {
     options_admin_cognito = { route_key = "OPTIONS /api/v1/admin/cognito/{proxy+}", integration = "core_vpc", auth = "none" }
     options_ai            = { route_key = "OPTIONS /api/v1/ai/{proxy+}", integration = "core_vpc", auth = "none" }
     options_billing       = { route_key = "OPTIONS /api/v1/billing/{proxy+}", integration = "core_vpc", auth = "none" }
+    # R18 J05: server-to-server HMAC route (no JWT, no OPTIONS); the narrow key wins over proxy.
+    internal_webhooks = { route_key = "POST /api/internal/webhooks/{proxy+}", integration = "core_vpc", auth = "none" }
+    # R18 J15: HMAC callback from the ai-qa Lambda (no JWT, no OPTIONS).
+    internal_ai_qa = { route_key = "POST /api/internal/ai-qa/{proxy+}", integration = "core_vpc", auth = "none" }
   }
 
   integration_ids = {
@@ -57,6 +61,8 @@ locals {
     "ANY /api/v1/draw-state/{proxy+}"       = { burst = 40, rate = 20 }
     "POST /webhooks/revenuecat/production"  = { burst = 20, rate = 10 }
     "POST /webhooks/revenuecat/development" = { burst = 10, rate = 5 }
+    "POST /api/internal/webhooks/{proxy+}"  = { burst = 20, rate = 10 }
+    "POST /api/internal/ai-qa/{proxy+}"     = { burst = 20, rate = 10 }
   }
 }
 
@@ -114,7 +120,7 @@ resource "aws_apigatewayv2_authorizer" "console" {
   identity_sources                 = ["$request.header.Authorization"]
   name                             = "cognito-jwt"
   jwt_configuration {
-    audience = [var.console_client_id]
+    audience = concat([var.console_client_id], var.console_extra_audiences)
     issuer   = "https://${var.console_pool_endpoint}"
   }
 }

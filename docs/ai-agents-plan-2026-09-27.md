@@ -467,5 +467,4 @@
 
 <!-- paths-not-on-disk
      本文档提到、但磁盘上还没有的路径（计划要新建的目录），规则见 frontend/tests/docsPaths.test.ts。
-- evals/
 -->

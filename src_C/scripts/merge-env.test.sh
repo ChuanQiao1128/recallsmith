@@ -66,11 +66,49 @@ test_merge_null_current() {
   jq -e '.LOG_LEVEL == "info"' <<<"$out" >/dev/null || fail "(f) null current broke merge_env"
 }
 
+# (g) SSM_NOT_ENV leaves are skipped: they never become env vars.
+test_ssm_to_env_skips_not_env_leaves() {
+  local fixture out
+  fixture='{"Parameters":[
+    {"Name":"/developercards/prod/pg-password","Value":"PLACEHOLDER-1"},
+    {"Name":"/developercards/prod/webhook-signing-secret","Value":"PLACEHOLDER-2"},
+    {"Name":"/developercards/prod/anthropic-api-key","Value":"PLACEHOLDER-3"}
+  ]}'
+  out="$(ssm_to_env "$fixture")"
+  jq -e '. == {"PGPASSWORD":"PLACEHOLDER-1"}' <<<"$out" >/dev/null || fail "(g) skipped leaves leaked into the env"
+  if grep -Fq 'PLACEHOLDER-2' <<<"$out" || grep -Fq 'PLACEHOLDER-3' <<<"$out"; then
+    fail "(g) a skipped value appears in the output"
+  fi
+}
+
+# (h) an unmapped leaf beside a skipped one is still a hard error.
+test_ssm_to_env_unmapped_beside_skipped() {
+  local fixture err
+  fixture='{"Parameters":[
+    {"Name":"/developercards/prod/webhook-signing-secret","Value":"PLACEHOLDER-2"},
+    {"Name":"/developercards/prod/stray-name","Value":"PLACEHOLDER-x"}
+  ]}'
+  if err="$(ssm_to_env "$fixture" 2>&1)"; then
+    fail "(h) ssm_to_env accepted stray-name beside a skipped leaf"
+  fi
+  grep -Fq 'unmapped SSM parameter' <<<"$err" || fail "(h) missing 'unmapped SSM parameter' message"
+}
+
+# (i) the worker projection carries the webhook events queue URL.
+test_worker_file_keys_webhook_queue() {
+  local out
+  out="$(pick_keys '{"PGUSER":"a","WEBHOOK_EVENTS_QUEUE_URL":"u","API_ENV":"production"}' "$WORKER_FILE_KEYS")"
+  jq -e '. == {"PGUSER":"a","WEBHOOK_EVENTS_QUEUE_URL":"u"}' <<<"$out" >/dev/null || fail "(i) worker projection lacks WEBHOOK_EVENTS_QUEUE_URL"
+}
+
 test_merge_file_over_current
 test_merge_secret_over_file
 test_ssm_to_env_all_six
 test_ssm_to_env_unmapped
 test_pick_keys
 test_merge_null_current
+test_ssm_to_env_skips_not_env_leaves
+test_ssm_to_env_unmapped_beside_skipped
+test_worker_file_keys_webhook_queue
 
 echo "merge-env tests OK"

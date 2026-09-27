@@ -30,3 +30,43 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "webhook_queue_name" {
+  type = string
+}
+
+variable "webhook_dlq_name" {
+  type = string
+}
+
+variable "webhook_dispatcher_function_name" {
+  type = string
+}
+
+variable "webhook_dispatcher_role_arn" {
+  type = string
+}
+
+variable "webhook_dispatcher_environment" {
+  type = map(string)
+}
+
+variable "ai_qa_queue_name" {
+  type = string
+}
+
+variable "ai_qa_dlq_name" {
+  type = string
+}
+
+variable "ai_qa_function_name" {
+  type = string
+}
+
+variable "ai_qa_role_arn" {
+  type = string
+}
+
+variable "ai_qa_environment" {
+  type = map(string)
+}
