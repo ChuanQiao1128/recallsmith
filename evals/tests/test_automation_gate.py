@@ -30,6 +30,12 @@ ENV = {
     "AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK": "2.5",
     "AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK": "15",
 }
+# C06 (ai-agent-3): the author-runner's pinned AuthorConfig, as import-drafts copies it onto new-facts rows.
+AUTHOR_CONFIG = {
+    "id": "0123456789abcdef", "model": "claude-opus-5-5", "skillVersion": "author-cards@1.2.0",
+    "skillSha256": "a" * 64, "promptSha256": "b" * 64, "claudeArgsSha256": "c" * 64, "mcpServerSha256": "d" * 64,
+    "claudeVersion": "2.1.0", "runnerVersion": "0.3.0",
+}
 
 
 def write_lines(path: Path, lines: list[dict[str, Any]]) -> Path:
@@ -51,12 +57,14 @@ def seeded_run(tmp_path: Path, records: list[dict[str, Any]] | None = None, **ov
 
 
 def authored_spec(
-    tmp_path: Path, correct: int = 130, defective: int = 10, jurors: str = DEFAULT_JURORS, new_facts: int = 40
+    tmp_path: Path, correct: int = 130, defective: int = 10, jurors: str = DEFAULT_JURORS, new_facts: int = 60
 ) -> tuple[DatasetSpec, list[dict[str, Any]]]:
     """An AUTHORED_V2-shaped spec in tmp_path: `correct` control cards then `defective` cards
     labelled incorrect_answer, with a jury summary naming `jurors`. The last `new_facts` control
-    cards (at most `correct`) are new-facts rows the author-runner wrote (B06); the others are docs
-    rows. Returns (spec, run rows)."""
+    cards (at most `correct`) are new-facts rows the author-runner wrote (B06) with its author
+    configuration (C06); the others are docs rows. C06 (ai-agent-15) raised the default from 40 to
+    60 new-facts cards: 40 all-correct cards no longer pass the stratum's CI bound (51 is the
+    minimum). Returns (spec, run rows)."""
     authored, labels = [], []
     first_new = correct - min(new_facts, correct) + 1
     for index in range(1, correct + defective + 1):
@@ -66,7 +74,8 @@ def authored_spec(
         row = {"id": row_id, "deckSlug": "aws-saa-c03", "sourceUrl": "https://docs.aws.amazon.com/x", "chunkId": "c0001",
                "chunkText": "t", "card": card, "authorModel": "m", "generatedAt": "g"}
         if first_new <= index <= correct:
-            row = {**row, "stratum": "new-facts", "authorPath": "author-runner", "runId": f"run-{index}"}
+            row = {**row, "stratum": "new-facts", "authorPath": "author-runner", "runId": f"run-{index}",
+                   "authorConfig": AUTHOR_CONFIG}
         authored.append(row)
         labels.append(
             {"id": row_id, "label": "correct" if defect is None else "defective", "category": defect, "excluded": None,
@@ -239,13 +248,15 @@ def test_each_threshold_failure_is_reported(tmp_path: Path) -> None:
         "defect escape rate 0.5000 > 0.20",
     ]
 
-    # its CI: 40 cards all correct, precision 1.0 but a wide interval (and too few cards)
+    # its CI: 40 cards all correct, precision 1.0 but a wide interval (and too few cards; C06: all 40
+    # are new-facts cards, fewer than that stratum's minimum of 51)
     t = case("precision-ci")
     report = evaluate(t, **_authored_case(t, correct=40))
     lower = report["authored"]["autoAcceptPrecisionCi95"][0]
     assert report["failures"] == [
         f"auto-accept precision 95% CI lower bound {lower:.4f} < 0.93",
         "40 distinct would-accept cards, fewer than 120",
+        "new-facts stratum: 40 distinct would-accept cards, fewer than 51; too few to measure its precision",
     ]
 
     # would-accept cards
@@ -284,7 +295,7 @@ def test_configuration_mismatch_fails_the_gate(tmp_path: Path) -> None:
     # wrong provider on the seeded run
     t = case("provider")
     assert _failures_with(t, seeded=seeded_run(t, provider="bedrock")) == [
-        "seeded run: provider 'bedrock' is not one of ['bedrock-converse']",
+        "seeded run: provider 'bedrock' is not one of ['bedrock-converse', 'openai-mantle']",
         "seeded run: provider 'bedrock' is not AI_QA_AUTOMATION_PROVIDER 'bedrock-converse'",
         "the seeded and authored runs used different reviewers",
     ]
@@ -420,13 +431,14 @@ def test_report_json_has_the_contract_keys(tmp_path: Path) -> None:
         "seededRecall": 0.90, "seededRecallCiLower": 0.85, "seededPerClassRecallFloor": 0.75, "seededControlFpr": 0.20,
         "seededControlUnscoredRate": 0.02, "autoAcceptPrecision": 0.97, "autoAcceptPrecisionCiLower": 0.93,
         "minWouldAcceptCards": 120, "defectEscapeRate": 0.20, "authoredUnscoredRate": 0.05, "minReps": 2,
-        "newFactsAutoAcceptPrecision": 0.97, "minNewFactsWouldAcceptCards": 30, "juryExcludedRate": 0.10,
+        "newFactsAutoAcceptPrecision": 0.97, "minNewFactsWouldAcceptCards": 51, "juryExcludedRate": 0.10,
+        "newFactsAutoAcceptPrecisionCiLower": 0.93,
     }
     assert list(report["thresholds"]) == [
         "seededRecall", "seededRecallCiLower", "seededPerClassRecallFloor", "seededControlFpr",
         "seededControlUnscoredRate", "autoAcceptPrecision", "autoAcceptPrecisionCiLower", "minWouldAcceptCards",
         "defectEscapeRate", "authoredUnscoredRate", "minReps", "newFactsAutoAcceptPrecision",
-        "minNewFactsWouldAcceptCards", "juryExcludedRate",
+        "minNewFactsWouldAcceptCards", "juryExcludedRate", "newFactsAutoAcceptPrecisionCiLower",
     ]
     assert list(report["seeded"]) == [
         "report", "reportSha256", "dataset", "datasetSha256", "reps", "n", "tp", "fn", "recall", "recallCi95",
@@ -436,7 +448,7 @@ def test_report_json_has_the_contract_keys(tmp_path: Path) -> None:
         "report", "reportSha256", "dataset", "datasetSha256", "labelsSha256", "reps", "n", "scored", "wouldAccept",
         "wouldAcceptCorrect", "wouldAcceptCards", "autoAcceptPrecision", "autoAcceptPrecisionCi95",
         "defectiveLabeled", "defectEscaped", "defectEscapeRate", "humanRouteRate", "unscoredRate", "estimatedCostUsd",
-        "juryExcluded", "conservativeAutoAcceptPrecision", "strata", "ownerSample",
+        "juryExcluded", "conservativeAutoAcceptPrecision", "strata", "ownerSample", "author",
     ]
     json.dumps(report)
 

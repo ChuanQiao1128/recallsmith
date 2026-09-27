@@ -431,12 +431,21 @@ vendor with a juror.
 and the account's Bedrock allowlisting (model access in the region, and the IAM grant for
 `bedrock:InvokeModel` / Converse on the model or inference profile) before `jury` or a
 `bedrock-converse` run can call them. Until then those calls fail with an access error and the
-vote is recorded as `unsure`.
+vote is recorded as `unsure`. The `openai-mantle` reviewer (`openai.gpt-5.5`) likewise needs the
+account's allowlisting for GPT-5.5 on bedrock-mantle in `AI_QA_AUTOMATION_REGION`; until then its
+probe (Automation gate, below) ends in an error item, never a `done` one.
 
 ### Configurations in `run`
 
 `--provider bedrock-converse --model <id>` reviews with a non-Anthropic Bedrock model through the
-Converse API (ai-qa Q01; the id must not start with `anthropic.`). `--second-provider` /
+Converse API (ai-qa Q01; the id must not start with `anthropic.`). `--provider openai-mantle --model
+openai.gpt-5.5` (R18C contract L1) reviews in-process through ai-qa's openai-mantle client: Chat
+Completions on the bedrock-mantle endpoint, the only one the GPT-5.5 model card lists
+(https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html), in the region
+`AI_QA_AUTOMATION_REGION` names (default `us-east-1`; GPT-5.5 is In-Region in us-east-1 and
+us-east-2 only). The card text of such a run is processed in that region, outside ap-southeast-2; the
+cards are public study content only. `run` refuses the provider (exit 2) when the installed ai_qa does
+not have it. `--second-provider` /
 `--second-model` (and optionally `--second-scope`) set ai-qa's `AI_QA_SECOND_PROVIDER` /
 `AI_QA_SECOND_MODEL` / `AI_QA_SECOND_SCOPE` for the in-process review: a `done` review also goes
 to the second reviewer and the findings merge exactly as in the ai-qa handler (Q01 merge policy).
@@ -479,9 +488,11 @@ so the authored-v1 figures stay independent of the labels.
 ## Automation gate (R18A)
 
 `AUTOMATION_MODE=live` (A00 §3.2) is effective only with a passed, recorded eval gate (A00 §15).
-The gate measures the **exact** automation reviewer: provider `bedrock-converse`, model
-`global.openai.gpt-5.5`, the **automation profile** (prompt version `qa-v4-auto`, R18B contract K1),
-no second reviewer. It checks (a) its recall on seeded serious defects and (b) its **auto-accept
+The gate measures the **exact** automation reviewer: provider `openai-mantle` (R18C contract L1;
+`bedrock-converse` stays accepted as the fallback), model `openai.gpt-5.5`, the **automation
+profile** (prompt version `qa-v4-auto`, R18B contract K1), no second reviewer; the report's
+`reviewer` block pins the provider the runs actually used, and both runs must use the one
+`AI_QA_AUTOMATION_PROVIDER` names. It checks (a) its recall on seeded serious defects and (b) its **auto-accept
 precision** on agent-authored cards: of the cards it would accept (scored, no blocker or major
 finding), how many the jury labelled correct, overall and on the new-facts stratum on its own.
 `src/dc_evals/automation_gate.py`; nothing in it calls a model.
@@ -520,52 +531,99 @@ Datasets:
     New posts for `aws-saa-c03`; Claude Developer Platform release notes, model "what's new" pages,
     feature pages the release notes link and one Anthropic announcement for `claude-ccdv-f`): the
     post-cutoff input the runner actually sees. Imported with `dc-evals import-drafts` (below); each
-    row carries `"stratum": "new-facts"`, `"authorPath": "author-runner"` and the draft's `runId`,
-    `skillVersion`, `queueItemId` and `draftId`.
+    row carries `"stratum": "new-facts"`, `"authorPath": "author-runner"`, the draft's `runId`,
+    `skillVersion`, `queueItemId` and `draftId`, and the `authorConfig` its run pinned (below).
 
 Owner only (spends money; never CI, a verify or a worker session), each `run` with `--dry-run`
 first, and with `AI_PRICE_INPUT_PER_MTOK` / `AI_PRICE_OUTPUT_PER_MTOK` exported to the automation
-prices so the recorded cost is real:
+prices (`AI_QA_AUTOMATION_PRICE_*` in `services/ai-qa/env/prod.env.json`) so the recorded cost is
+real. After the Bedrock allowlisting, and before any paid run, probe the reviewer's path with one
+call (one card, one repetition; the probe's run file is never gate evidence, so write it outside
+`reports/`); for the fallback path, probe `--provider bedrock-converse` with its model id the same way:
 
 ```
 cd evals
+export AI_QA_AUTOMATION_REGION=us-east-1                        # where openai-mantle sends the card text
+uv run --python 3.12 dc-evals run --provider openai-mantle --model openai.gpt-5.5 --profile automation \
+    --dataset v3 --limit 1 --reps 1 --out /tmp/automation-probe  # expect one "done" item and its servedModel
 uv run --python 3.12 dc-evals author --dataset authored-v2      # docs stratum; local Claude CLI; data/authored-v2.jsonl
-# new-facts stratum: the production runner path against a sandbox deck (next section), then
+# new-facts stratum: the production runner path in AUTOMATION_MODE=dry_run (next section), then
 uv run --python 3.12 dc-evals import-drafts --drafts <drafts>.jsonl --deck <deckId>=aws-saa-c03 \
-    --deck <deckId>=claude-ccdv-f                                # appends the new-facts rows
+    --deck <deckId>=claude-ccdv-f                                # appends the new-facts rows (runner's Mac)
 uv run --python 3.12 dc-evals jury --dataset authored-v2        # the labels + summary, both strata
 export AI_PRICE_INPUT_PER_MTOK=<automation input price> AI_PRICE_OUTPUT_PER_MTOK=<automation output price>
 for ds in v3 authored-v2; do
-  uv run --python 3.12 dc-evals run --provider bedrock-converse --model global.openai.gpt-5.5 \
+  uv run --python 3.12 dc-evals run --provider openai-mantle --model openai.gpt-5.5 \
       --profile automation --dataset $ds --reps 2 --out reports/ --dry-run
-  uv run --python 3.12 dc-evals run --provider bedrock-converse --model global.openai.gpt-5.5 \
+  uv run --python 3.12 dc-evals run --provider openai-mantle --model openai.gpt-5.5 \
       --profile automation --dataset $ds --reps 2 --out reports/
 done
 uv run --python 3.12 dc-evals automation-gate --seeded reports/<v3 run>.jsonl --authored reports/<authored-v2 run>.jsonl
 ```
 
-### New-facts stratum (owner, local)
+### New-facts stratum (owner, production in dry_run)
 
-The new-facts drafts come from the same code path the automation runs, never from `dc-evals author`:
+The new-facts drafts come from the same code path the automation runs, never from `dc-evals author`.
+There is one stack, production (`infra/envs/prod`), so the procedure runs there, in
+`AUTOMATION_MODE=dry_run`: the mode in which the runner claims queue items and drafts them while the
+automation auto-accepts and publishes nothing. Under `off` the runner exits idle before it claims
+(`tools/author-runner/src/runner.ts`) and the claim route answers no items (src_C `RunnerRoutes`), so
+`off` produces no draft at all; `live` would auto-accept and publish the eval drafts, and needs the
+very gate this procedure feeds. `tests/test_c06_fixes.py` pins the mode below to one the runner claims
+under.
 
-1. On a **sandbox** stack (never production) with `AUTOMATION_MODE=off`, so no draft is decided or
-   published, and with the two decks present, queue every page of
-   `data/authored-sources-v2-new-facts.json` on its deck with `POST /api/v1/admin/automation/queue`
-   `{ "url", "deckId", "title" }` (the file's `title`). The admin route creates `manual` items; the
-   queue-item prompt, CLAUDE args, MCP tools, skill and verifier are the runner's own.
-2. Run the author-runner (`node tools/author-runner/dist/index.js once`, pointed at the sandbox) until
-   the queue is drained. Each run drafts with `read_source`, `find_similar_cards`, `lint_card` and
-   `submit_draft`, exactly as in production.
-3. Save each resulting draft's `GET /api/v1/authoring/drafts/:draftId` response as one line of a JSONL
-   file, and run `dc-evals import-drafts --drafts <file> --deck <deckId>=<deckSlug> ...`. It re-reads
-   each cited page with dc-ingest and keeps the chunk holding the card's quote (the jury judges the
-   card against it), leaves out and reports (exit 1) any draft without `agent.runId`, with an unmapped
-   deck or whose quote is in no chunk, replaces earlier new-facts rows and keeps every docs row.
+1. Set `AUTOMATION_MODE=dry_run` and keep `AI_QA_ENABLED=0` for the whole window (the explicit QA
+   choice). With QA off, every eval draft's decision routes to a human with `QA_UNAVAILABLE` and never
+   reaches `would_accept`: no QA money is spent, and the console's shadow agreement, which counts
+   `would_accept` decisions only, never includes an eval draft, also not after the rejection in step 5.
+   Do not turn `AI_QA_ENABLED=1` on during the window: eval drafts would be reviewed, some would reach
+   `would_accept`, and rejecting them would count as disagreement. The reviewer is measured offline by
+   the `run` commands above, not here.
+2. Queue every page of `data/authored-sources-v2-new-facts.json` on its deck with
+   `POST /api/v1/admin/automation/queue` `{ "url", "deckId", "title", "note": "eval:new-facts" }` (the
+   file's `title`) and write down the item ids the route answers. The note tags the eval items on the
+   console Queue tab; the agent sees it only as data in the queue-item metadata block. The admin route
+   creates `manual` items, so this stratum does not run the prompt's `feed_item` branch (it is queued
+   by the source watcher only); the queue-item prompt, CLAUDE args, MCP tools, skill and verifier are
+   otherwise the runner's own.
+3. Let the author-runner drain them (`node tools/author-runner/dist/index.js once`, or its launchd
+   schedule). Each run drafts with `read_source`, `find_similar_cards`, `lint_card` and `submit_draft`,
+   exactly as in production. In `dry_run` it also claims any feed item the source watcher queued
+   meanwhile; those drafts are not eval drafts and stay in the review queue as usual.
+4. For every draft whose `agent.queueItemId` is one of the eval item ids, save its
+   `GET /api/v1/authoring/drafts/:draftId` response as one line of a JSONL file, and run
+   `dc-evals import-drafts --drafts <file> --deck <deckId>=<deckSlug> ... [--runs-dir <dir>]` on the
+   runner's Mac within the runner's 30-day run-record retention. It re-reads each cited page with
+   dc-ingest and keeps the chunk holding the card's quote (the jury judges the card against it), and
+   copies onto each row the `authorConfig` its run pinned, from the run record
+   `<runs dir>/<runId>.meta.json` (default `$DC_RUNNER_LOG_DIR/runs`, else
+   `~/Library/Logs/DeveloperCards/runs`). It leaves out and reports (exit 1) any draft without
+   `agent.runId`, without a complete run record, whose model or skill version is not its run's, with an
+   unmapped deck or whose quote is in no chunk, replaces earlier new-facts rows and keeps every docs row.
+5. Reject every exported eval draft in the console review queue
+   (`POST /api/v1/authoring/drafts/:draftId/reject`), so none stays in the queue or can be accepted
+   into a deck; skip any eval queue item still waiting
+   (`POST /api/v1/admin/automation/queue/:itemId/skip`).
+   Their decisions are `human` / `QA_UNAVAILABLE`, so the rejection closes them and leaves the shadow
+   agreement untouched.
+6. Set `AUTOMATION_MODE` and `AI_QA_ENABLED` back to their values before step 1.
 
 The gate needs this stratum: without new-facts rows, with a new-facts row that is not from the
-runner, with fewer than 30 distinct would-accept new-facts cards, or with new-facts precision below
-0.97, it fails closed. Add pages to the source file (or rerun with more `maxCards`) when the stratum is
-too small; never lower the minimum.
+runner or has no complete `authorConfig`, with new-facts rows from more than one author model or skill
+version, with fewer than 51 distinct would-accept new-facts cards, or with new-facts precision below
+0.97 or its card-clustered 95% CI lower bound below 0.93, it fails closed. 51 is the smallest stratum
+that can pass: with every card correct in both repetitions the bound is the distinct-card Wilson bound
+51 / (51 + 1.96²) = 0.93; one wrong card needs 77 cards, two need 100. The 18 pages give that only
+with about three accepted cards per page, so add pages to the source file (or rerun with more
+`maxCards`) when the stratum is too small; never lower the minimum.
+
+**Author binding (C06).** The author-runner pins an author configuration at the start of every run
+(`tools/author-runner/src/authorConfig.ts`): the model, the skill version and SHA-256 hashes of the
+skill files, the queue-item prompt, the claude argument list and the MCP server bundle, plus the
+Claude CLI and runner versions; its `id` changes when any of them does. The gate report writes the
+configurations of the new-facts rows into `authored.author`, so a gate is bound to the author it
+measured, and **any change of the author configuration (a new `authorConfig` id) requires a new
+gate**, just as a change of the reviewer's provider, model or prompt does.
 
 `automation-gate` takes the two `.jsonl` **run files** (not their `.json` reports) and writes
 `reports/<date>-automation-gate-<model>.json` and `.md` (`-2`, `-3`, … when taken; nothing is
@@ -575,7 +633,7 @@ or is not a run file (nothing written). `--date` defaults to UTC today, `--out` 
 
 | Check | Threshold |
 |---|---|
-| provider | in `{"bedrock-converse"}`, equal to `AI_QA_AUTOMATION_PROVIDER` |
+| provider | in `{"openai-mantle", "bedrock-converse"}`, equal to `AI_QA_AUTOMATION_PROVIDER` |
 | model / prompt version | `AI_QA_AUTOMATION_MODEL` / `qa-v4-auto` with header `profile` `automation` (and ai_qa `PROMPT_VERSION_AUTOMATION`, when installed, equal to it); no second reviewer; both runs the same reviewer |
 | prices | `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK`, `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` set and > 0 |
 | datasets | `seeded-v3` and `authored-v2`, sha256 of the committed files, complete runs, >= 2 reps each |
@@ -588,7 +646,8 @@ or is not a run file (nothing written). `--date` defaults to UTC today, `--out` 
 | distinct would-accept cards | >= 120 |
 | defect escape rate (defective items it would accept) | <= 0.20; no defective item at all fails |
 | authored unscored rate | <= 0.05 |
-| new-facts stratum | present, every row from the author-runner, >= 30 distinct would-accept cards, precision >= 0.97 on its own |
+| new-facts stratum | present, every row from the author-runner, >= 51 distinct would-accept cards, precision >= 0.97 and its 95% CI lower bound >= 0.93 on its own |
+| author configuration | every new-facts row carries its run's complete `authorConfig`; one author model and one skill version |
 | jury excluded rate (ties + all-unsure rows / labelled rows) | <= 0.10 overall and in every stratum |
 | owner sample (optional) | when `data/adjudications-authored-v2.json` exists it must be valid; its figures are information |
 
@@ -616,6 +675,12 @@ thresholds `newFactsAutoAcceptPrecision`, `minNewFactsWouldAcceptCards`, `juryEx
   and its conservative precision.
 - `ownerSample`: null, or the owner-adjudicated sample scored on its own (below).
 
+R18C (C06) appends the threshold `newFactsAutoAcceptPrecisionCiLower` (0.93; `minNewFactsWouldAcceptCards`
+is 51) and, as the last key of `authored`, `author` {`model`, `skillVersion` (null when the rows
+disagree), `authorConfigIds` (sorted), `configs` (the full configurations: `id`, `model`,
+`skillVersion`, `skillSha256`, `promptSha256`, `claudeArgsSha256`, `mcpServerSha256`,
+`claudeVersion`, `runnerVersion`)}. The Markdown names the author on an "Author (new-facts stratum)" line.
+
 ### Owner-adjudicated sample (optional)
 
 By default every authored-v2 label is a model-jury label. The owner may adjudicate a sample in
@@ -628,16 +693,21 @@ items of adjudicated cards judged valid / would-accept items of adjudicated card
 `juryOwnerAgreement` (adjudicated cards the jury labelled whose label matches). An invalid file fails
 the gate; a valid one never passes or fails it by itself.
 
-The gate reads the four `AI_QA_AUTOMATION_*` keys from `services/ai-qa/env/prod.env.json` directly
-(never through `ai_qa.settings`). Until A07 adds the provider and model keys and the owner adds the
-two prices, that file has none of them and **every gate run fails its configuration check**; that
-is expected.
+The gate reads the four `AI_QA_AUTOMATION_*` provider, model and price keys from
+`services/ai-qa/env/prod.env.json` directly (never through `ai_qa.settings`); R18C (contract L1)
+commits `openai-mantle`, `openai.gpt-5.5` and `AI_QA_AUTOMATION_REGION` `us-east-1` there. While a key
+is missing or a price is not a positive number, **every gate run fails its configuration check**;
+that is expected.
 
 A passed report is committed with its two run files, then the supervisor records it with
 `POST /api/v1/admin/automation/eval-gate` (A06), where core recomputes the checks from the counts
 and stores the gate. `live` is effective only with a current recorded gate, and every auto-accept
 needs the draft's QA provider, model and prompt version to equal the gate's, so a prompt or model
-change needs a new gate.
+change needs a new gate. A failed report, posted, is recorded as a failed evaluation and, as the
+newest one, keeps `live` off (R18C contract L3). The author side is bound in the report
+(`authored.author`); core does not yet compare a run's author configuration with it (the runner
+does not send its `authorConfig` id), so after any author configuration change the owner reruns
+the gate before relying on `live`.
 
 ## Gate
 

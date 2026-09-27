@@ -5,15 +5,25 @@ The docs stratum of authored-v2 comes from `dc-evals author`, a single-shot, too
 established documentation pages. The automation runner, by contrast, drafts from announcements and
 changed pages with the full author-cards skill (read_source, find_similar_cards, lint_card,
 submit_draft and the verifier subagent), the queue-item prompt and the runner's CLAUDE args. The
-new-facts stratum is authored exactly that way (README, "New-facts stratum"): the owner queues each
-page of data/authored-sources-v2-new-facts.json on a sandbox deck, lets the author-runner draft
+new-facts stratum is authored exactly that way (README, "New-facts stratum"): on production with
+AUTOMATION_MODE=dry_run and AI_QA_ENABLED=0 the owner queues each page of
+data/authored-sources-v2-new-facts.json with the note "eval:new-facts", lets the author-runner draft
 them, and saves each resulting draft's `GET /api/v1/authoring/drafts/:draftId` response as one
 line of a JSONL file. This module turns that file into authored-v2 rows.
+
+Every row also carries the author configuration of the run that wrote it (R18C, C06 ai-agent-3):
+the `authorConfig` the author-runner pins at the start of each run and records in
+`<runs dir>/<runId>.meta.json` (model, skill version and the hashes of the skill files, the
+queue-item prompt, the claude argument list and the MCP server bundle, the CLI and runner
+versions). The automation gate writes those configurations into its report, so a gate is bound to
+the author it measured.
 
 For each draft it re-reads the cited page with dc-ingest (the read_source invocation) and keeps
 the chunk whose text holds the card's quote verbatim (whitespace aside), so the jury judges the
 card against the same source text as every other row. A draft that did not come from the runner
-(no agent.runId), names an unknown deck, or whose quote is in no chunk is left out and reported.
+(no agent.runId), whose run has no recorded author configuration (or one of another model or skill
+version than the draft), names an unknown deck, or whose quote is in no chunk is left out and
+reported.
 
 The rows replace any earlier new-facts rows in the output file and keep every docs row, so the
 order is: `dc-evals author --dataset authored-v2`, then `import-drafts`, then `jury`.
@@ -23,6 +33,8 @@ Runs on the owner's machine only (it fetches the pages); the tests pass a fake i
 from __future__ import annotations
 
 import datetime as dt
+import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,6 +45,69 @@ from .dataset import AUTHORED_V2, STRATUM_NEW_FACTS, dump_line, read_jsonl, stra
 # The authorPath every new-facts row carries; the automation gate refuses a new-facts row without it.
 RUNNER_AUTHOR_PATH = "author-runner"
 ROW_ID_PREFIX = "n-"
+# How the new-facts drafts are produced (README "New-facts stratum", ai-agent-12): the automation
+# mode the runner claims under without deciding or publishing anything (it claims nothing under
+# "off": tools/author-runner/src/runner.ts, src_C RunnerRoutes claim), and the note that tags the
+# eval queue items.
+NEW_FACTS_AUTOMATION_MODE = "dry_run"
+NEW_FACTS_QUEUE_NOTE = "eval:new-facts"
+# The author-runner's AuthorConfig (tools/author-runner/src/authorConfig.ts), as recorded in
+# <runId>.meta.json; every key must be present.
+AUTHOR_CONFIG_KEYS = (
+    "id",
+    "model",
+    "skillVersion",
+    "skillSha256",
+    "promptSha256",
+    "claudeArgsSha256",
+    "mcpServerSha256",
+    "claudeVersion",
+    "runnerVersion",
+)
+# The keys that must be non-empty strings (claudeVersion may be null when the CLI did not report one).
+AUTHOR_CONFIG_REQUIRED = ("id", "model", "skillVersion", "skillSha256", "promptSha256", "claudeArgsSha256",
+                          "mcpServerSha256", "runnerVersion")
+
+
+def default_runs_dir(env: dict[str, str] | None = None) -> Path:
+    """The author-runner's run records: $DC_RUNNER_LOG_DIR/runs, else ~/Library/Logs/DeveloperCards/runs
+    (tools/author-runner/src/config.ts logDir, runner.ts runsDir)."""
+    env = dict(os.environ) if env is None else env
+    log_dir = (env.get("DC_RUNNER_LOG_DIR") or "").strip()
+    return (Path(log_dir) if log_dir else Path.home() / "Library" / "Logs" / "DeveloperCards") / "runs"
+
+
+def author_config_problem(config: Any) -> str | None:
+    """Why `config` is not a complete author-runner AuthorConfig, or None."""
+    if not isinstance(config, dict):
+        return "no authorConfig"
+    missing = [key for key in AUTHOR_CONFIG_KEYS if key not in config]
+    if missing:
+        return f"authorConfig lacks {', '.join(missing)}"
+    empty = [key for key in AUTHOR_CONFIG_REQUIRED if not isinstance(config[key], str) or not config[key].strip()]
+    if empty:
+        return f"authorConfig has no {', '.join(empty)}"
+    return None
+
+
+def read_author_config(runs_dir: Path, run_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    """(the authorConfig of run `run_id` from <runs_dir>/<run_id>.meta.json, None) or (None, why not)."""
+    if not run_id or "/" in run_id or "\\" in run_id or run_id.startswith("."):
+        return None, f"run id {run_id!r} is not a run record name"
+    path = runs_dir / f"{run_id}.meta.json"
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None, f"no run record {path} (import before the runner prunes it)"
+    except ValueError:
+        return None, f"run record {path} is not JSON"
+    if not isinstance(meta, dict) or meta.get("runId") != run_id:
+        return None, f"run record {path} is not the record of run {run_id}"
+    config = meta.get("authorConfig")
+    problem = author_config_problem(config)
+    if problem is not None:
+        return None, f"run record {path}: {problem}"
+    return {key: config[key] for key in AUTHOR_CONFIG_KEYS}, None
 
 
 def parse_deck_map(pairs: list[str]) -> dict[int, str]:
@@ -70,16 +145,36 @@ def _problem(draft: dict[str, Any], decks: dict[int, str]) -> str | None:
     return None
 
 
+def _author_problem(agent: dict[str, Any], config: dict[str, Any]) -> str | None:
+    """The draft's own agent fields must be the ones its run pinned."""
+    for key in ("model", "skillVersion"):
+        if agent.get(key) is not None and agent.get(key) != config[key]:
+            return f"agent.{key} {agent.get(key)!r} is not its run's author {key} {config[key]!r}"
+    return None
+
+
 def draft_rows(
-    drafts: list[dict[str, Any]], decks: dict[int, str], *, ingest_fn: IngestFn = ingest, imported_at: str
+    drafts: list[dict[str, Any]],
+    decks: dict[int, str],
+    *,
+    runs_dir: Path,
+    ingest_fn: IngestFn = ingest,
+    imported_at: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """(new-facts rows n-0001, n-0002, ... in file order, why each left-out draft was left out)."""
+    """(new-facts rows n-0001, n-0002, ... in file order, why each left-out draft was left out).
+    `runs_dir` holds the author-runner's <runId>.meta.json run records."""
     rows: list[dict[str, Any]] = []
     dropped: list[str] = []
     cache: dict[str, dict[str, Any]] = {}
     for draft in drafts:
         name = f"draft {draft.get('draftId')!r}"
         problem = _problem(draft, decks)
+        if problem is not None:
+            dropped.append(f"{name}: {problem}")
+            continue
+        author, problem = read_author_config(runs_dir, str(draft["agent"]["runId"]))
+        if author is not None:
+            problem = _author_problem(draft["agent"], author)
         if problem is not None:
             dropped.append(f"{name}: {problem}")
             continue
@@ -109,6 +204,7 @@ def draft_rows(
                 "runId": agent["runId"],
                 "queueItemId": agent.get("queueItemId"),
                 "draftId": draft.get("draftId"),
+                "authorConfig": author,
                 "generatedAt": imported_at,
             }
         )
@@ -120,13 +216,17 @@ def import_drafts(
     drafts_path: Path,
     decks: dict[int, str],
     output: Path = AUTHORED_V2.path,
+    runs_dir: Path | None = None,
     ingest_fn: IngestFn | None = None,
     now: dt.datetime | None = None,
 ) -> int:
-    """Writes `output`: its docs rows unchanged, then the new-facts rows. 1 when a draft was left out."""
+    """Writes `output`: its docs rows unchanged, then the new-facts rows. 1 when a draft was left out.
+    `runs_dir` defaults to the author-runner's run records (default_runs_dir)."""
     drafts = read_jsonl(drafts_path)
     imported_at = (now or dt.datetime.now(dt.UTC)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    rows, dropped = draft_rows(drafts, decks, ingest_fn=ingest_fn or ingest, imported_at=imported_at)
+    rows, dropped = draft_rows(
+        drafts, decks, runs_dir=runs_dir or default_runs_dir(), ingest_fn=ingest_fn or ingest, imported_at=imported_at
+    )
     kept = [row for row in read_jsonl(output) if stratum_of(row) != STRATUM_NEW_FACTS] if output.exists() else []
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as fh:

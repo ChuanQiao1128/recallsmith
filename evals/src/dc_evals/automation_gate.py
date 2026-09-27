@@ -35,7 +35,7 @@ from .dataset import (
     spec_sha256,
     stratum_of,
 )
-from .drafts_import import RUNNER_AUTHOR_PATH
+from .drafts_import import RUNNER_AUTHOR_PATH, author_config_problem
 from .jury import EXCLUDED_ALL_UNSURE, EXCLUDED_TIE, summary_path
 from .labels import labels_for
 from .report import _UNSAFE, read_run, unique_stem
@@ -53,8 +53,12 @@ from .score import (
 )
 
 # --- automation gate thresholds (A00 §15.3; the same numbers in src_C/Vpc/Automation/EvalGate.cs) ---
-# Only the automation reviewer's own provider is gate evidence.
-AUTOMATION_GATE_PROVIDERS = frozenset({"bedrock-converse"})
+# Only the automation reviewer's own providers are gate evidence (R18C contract L1): openai-mantle,
+# Chat Completions on bedrock-mantle, the endpoint the GPT-5.5 model card lists, and bedrock-converse
+# as the fallback. The report's reviewer block pins the one the runs actually used.
+OPENAI_MANTLE_PROVIDER = "openai-mantle"
+CONVERSE_PROVIDER = "bedrock-converse"
+AUTOMATION_GATE_PROVIDERS = frozenset({OPENAI_MANTLE_PROVIDER, CONVERSE_PROVIDER})
 # seeded-v3: recall on serious defects, pooled over the repetitions, and its card-clustered 95% CI.
 SEEDED_RECALL_GATE = 0.90
 SEEDED_RECALL_CI_LOWER_GATE = 0.85
@@ -72,11 +76,16 @@ MIN_WOULD_ACCEPT_CARDS = 120
 # Defective-labelled items the automation would accept / defective-labelled items.
 DEFECT_ESCAPE_RATE_GATE = 0.20
 AUTHORED_UNSCORED_RATE_GATE = 0.05
-# R18B (B06). The new-facts stratum (drafts the production runner path wrote from announcements and
-# release notes) must reach AUTO_ACCEPT_PRECISION_GATE on its own, over at least this many distinct
-# would-accept cards; below that the sample is too small to say anything and the gate fails closed.
+# R18B (B06), R18C (C06 ai-agent-15). The new-facts stratum (drafts the production runner path wrote
+# from announcements and release notes) must reach both precision gates of the pooled set on its own:
+# the point estimate and the lower bound of its card-clustered 95% Wilson interval. The bound is what
+# makes a small sample fail: with every would-accept card correct in every repetition the interval is
+# the distinct-card Wilson interval, whose lower bound first reaches 0.93 at 51 cards (50 give
+# 0.9286), so 51 is the smallest stratum that can pass and the minimum below. With one card wrong in
+# both repetitions it takes 77 cards, with two 100. Below the minimum the gate fails closed.
 NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE = AUTO_ACCEPT_PRECISION_GATE
-MIN_NEW_FACTS_WOULD_ACCEPT_CARDS = 30
+NEW_FACTS_AUTO_ACCEPT_PRECISION_CI_LOWER_GATE = AUTO_ACCEPT_PRECISION_CI_LOWER_GATE
+MIN_NEW_FACTS_WOULD_ACCEPT_CARDS = 51
 # Rows the jury could not label (a tie, or no decisive vote) are not in the run, so precision says
 # nothing about them. Their share of the labelled rows, overall and in every stratum, is bounded.
 JURY_EXCLUDED_RATE_GATE = 0.10
@@ -112,6 +121,7 @@ THRESHOLDS = {
     "newFactsAutoAcceptPrecision": NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE,
     "minNewFactsWouldAcceptCards": MIN_NEW_FACTS_WOULD_ACCEPT_CARDS,
     "juryExcludedRate": JURY_EXCLUDED_RATE_GATE,
+    "newFactsAutoAcceptPrecisionCiLower": NEW_FACTS_AUTO_ACCEPT_PRECISION_CI_LOWER_GATE,
 }
 JURY_LABEL_NOTE = (
     "The authored-v2 labels are model-jury labels: a jury of models from vendors not under test labelled "
@@ -442,12 +452,59 @@ def _new_facts_failures(block: dict[str, Any], rows: list[dict[str, Any]]) -> li
             f"new-facts stratum: {block['wouldAcceptCards']} distinct would-accept cards, fewer than "
             f"{MIN_NEW_FACTS_WOULD_ACCEPT_CARDS}; too few to measure its precision"
         )
-    elif block["autoAcceptPrecision"] < NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE:
+        return failures
+    if block["autoAcceptPrecision"] < NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE:
         failures.append(
             f"new-facts stratum auto-accept precision {block['autoAcceptPrecision']:.4f} < "
             f"{NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE:.2f}"
         )
+    lower = block["autoAcceptPrecisionCi95"][0]
+    if lower < NEW_FACTS_AUTO_ACCEPT_PRECISION_CI_LOWER_GATE:
+        failures.append(
+            f"new-facts stratum auto-accept precision 95% CI lower bound {lower:.4f} < "
+            f"{NEW_FACTS_AUTO_ACCEPT_PRECISION_CI_LOWER_GATE:.2f}"
+        )
     return failures
+
+
+def author_binding(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
+    """(the `authored.author` block, failures): the author configurations of the new-facts rows,
+    as import-drafts copied them from the runner's run records (R18C, C06 ai-agent-3). The gate is
+    bound to exactly these: a change of the model, the skill, the queue-item prompt, the claude
+    arguments, the MCP server bundle or the CLI/runner version gives a new id and needs a new gate.
+    Every new-facts row must carry a complete configuration, and all of them one model and one
+    skill version."""
+    new_facts = [row for row in rows if stratum_of(row) == STRATUM_NEW_FACTS]
+    configs: dict[str, dict[str, Any]] = {}
+    unbound = 0
+    for row in new_facts:
+        config = row.get("authorConfig")
+        if author_config_problem(config) is not None:
+            unbound += 1
+        else:
+            configs.setdefault(config["id"], config)
+    ordered = [configs[key] for key in sorted(configs)]
+    models = sorted({config["model"] for config in ordered})
+    skills = sorted({config["skillVersion"] for config in ordered})
+    block = {
+        "model": models[0] if len(models) == 1 else None,
+        "skillVersion": skills[0] if len(skills) == 1 else None,
+        "authorConfigIds": [config["id"] for config in ordered],
+        "configs": ordered,
+    }
+    failures = []
+    if unbound:
+        failures.append(
+            f"{unbound} new-facts row(s) have no complete authorConfig (rerun dc-evals import-drafts with the "
+            "runner's run records)"
+        )
+    if len(models) > 1:
+        failures.append(f"the new-facts rows come from {len(models)} author models ({', '.join(models)}); the gate measures one")
+    if len(skills) > 1:
+        failures.append(
+            f"the new-facts rows come from {len(skills)} skill versions ({', '.join(skills)}); the gate measures one"
+        )
+    return block, failures
 
 
 def _excluded_failures(what: str, block: dict[str, Any]) -> list[str]:
@@ -553,6 +610,9 @@ def evaluate_gate(
     reps = _reps(authored_header)
     strata = strata_metrics(authored_records, authored_rows, labels, reps)
     failures += _new_facts_failures(strata[STRATUM_NEW_FACTS], authored_rows)
+    author, author_failures = author_binding(authored_rows)
+    if strata[STRATUM_NEW_FACTS]["rows"]:
+        failures += author_failures
     excluded = exclusion_metrics(labels)
     failures += _excluded_failures("jury", excluded)
     for stratum, block in strata.items():
@@ -601,6 +661,7 @@ def evaluate_gate(
             ),
             "strata": strata,
             "ownerSample": sample,
+            "author": author,
         },
     }
 
@@ -618,7 +679,8 @@ def _strata_lines(authored: dict[str, Any], thresholds: dict[str, Any]) -> list[
     ]
     for stratum, block in authored["strata"].items():
         gate = (
-            f">= {thresholds['newFactsAutoAcceptPrecision']:.2f} on >= {thresholds['minNewFactsWouldAcceptCards']} cards"
+            f">= {thresholds['newFactsAutoAcceptPrecision']:.2f}, CI lower >= "
+            f"{thresholds['newFactsAutoAcceptPrecisionCiLower']:.2f}, on >= {thresholds['minNewFactsWouldAcceptCards']} cards"
             if stratum == STRATUM_NEW_FACTS
             else "overall only"
         )
@@ -669,6 +731,17 @@ def _owner_sample_lines(authored: dict[str, Any]) -> list[str]:
     ]
 
 
+def _author_line(authored: dict[str, Any]) -> str:
+    author = authored.get("author") or {}
+    ids = author.get("authorConfigIds") or []
+    if not ids:
+        return "- Author (new-facts stratum): no recorded author configuration"
+    return (
+        f"- Author (new-facts stratum): {author.get('model')}, skill {author.get('skillVersion')}, author "
+        f"configuration {', '.join(f'`{i}`' for i in ids)} (any change of the author configuration needs a new gate)"
+    )
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     reviewer = report["reviewer"]
     seeded = report["seeded"]
@@ -687,6 +760,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Authored run: `{authored['report']}` (sha256 `{authored['reportSha256']}`), dataset "
         f"`{authored['dataset']}`, {authored['reps']} rep(s)",
         f"- Estimated cost of the authored run: ${authored['estimatedCostUsd']:.4f}",
+        _author_line(authored),
         "",
         "## Failures",
         "",
@@ -746,7 +820,10 @@ def render_markdown(report: dict[str, Any]) -> str:
             "recorded by the supervisor with `POST /api/v1/admin/automation/eval-gate`, where core recomputes the "
             "checks from the counts; `AUTOMATION_MODE=live` is effective only with a current recorded gate."
             if report["passed"]
-            else "The gate failed: fix the failures above and rerun the owner runs; a failed report is never recorded."
+            else (
+                "The gate failed: fix the failures above and rerun the owner runs. Posted, a failed report is "
+                "recorded as a failed evaluation and, as the newest one, keeps `live` off (R18C contract L3)."
+            )
         ),
     ]
     return "\n".join(lines) + "\n"
