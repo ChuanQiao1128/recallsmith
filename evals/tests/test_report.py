@@ -36,6 +36,7 @@ def test_report_json_matches_contract_schema() -> None:
     report = build_report(HEADER, RECORDS)
     # X04 (ai-agent-1/-2/-12) extends the §12.1 keys with the run settings, CIs, unscored counts,
     # tiers, repetitions and the gate verdict; every §12.1 key is still present with its meaning.
+    # Y05 (ai-agent-20) adds the resolved structured-output mode and the evidence class.
     assert set(report) == {
         "v",
         "runId",
@@ -49,6 +50,8 @@ def test_report_json_matches_contract_schema() -> None:
         "reviewDate",
         "effort",
         "structuredOutputs",
+        "structuredOutputsAtStart",
+        "evidenceClass",
         "n",
         "estimatedCostUsd",
         "perClass",

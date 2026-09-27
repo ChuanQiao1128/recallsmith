@@ -150,13 +150,13 @@ def item(
     }
 
 
-def gate_header(dataset: str = "v3", **overrides: Any) -> dict[str, Any]:
+def gate_header(version: str = "v3", **overrides: Any) -> dict[str, Any]:
     """A complete, gate-eligible run header: the gate dataset (seeded-v3), two repetitions, and the
     shipping configuration (Bedrock, anthropic.claude-opus-5, the current prompt version, effort
     high, structured outputs auto = off on Bedrock)."""
     from ai_qa.prompts import PROMPT_VERSION
 
-    spec = DATASETS[dataset]
+    spec = DATASETS[version]
     rows = len(load_dataset(spec.path))
     reps = overrides.pop("reps", 2)
     header = run_header(
@@ -185,7 +185,7 @@ def v2_header(**overrides: Any) -> dict[str, Any]:
 
 
 def dataset_records(
-    dataset: str = "v3",
+    version: str = "v3",
     *,
     misses: dict[str, int] | None = None,
     false_positives: int = 0,
@@ -198,7 +198,7 @@ def dataset_records(
     misses = dict(misses or {})
     records = []
     control_index = 0
-    for index, row in enumerate(load_dataset(DATASETS[dataset].path), start=1):
+    for index, row in enumerate(load_dataset(DATASETS[version].path), start=1):
         defect = row["defect"]
         if defect is None:
             control_index += 1

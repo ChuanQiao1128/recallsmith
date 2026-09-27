@@ -4,7 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
-from conftest import FakeLlm, finding, item, reply, review_json, v2_header, v2_records
+from conftest import FakeLlm, finding, gate_header, gate_records, item, reply, review_json
 
 from dc_evals.cli import main
 from dc_evals.dataset import DATASETS, SEEDED_PATH, file_sha256
@@ -12,26 +12,27 @@ from dc_evals.report import read_run
 
 
 def write_run(path: Path, records: list[dict], **header_overrides) -> Path:
-    header = v2_header(n=len(records), **header_overrides)
+    header = gate_header(n=len(records), **header_overrides)
     path.write_text("".join(json.dumps(line) + "\n" for line in [header, *records]), encoding="utf-8")
     return path
 
 
 def test_score_gate_exit_codes(tmp_path: Path, capsys) -> None:
     # X04 (ai-agent-2): the old passing fixture was a 20-item run, which is exactly the truncated
-    # run the gate must now refuse; a passing run is a complete seeded-v2 run.
-    misses = {"incorrect_answer": 4, "multiple_correct": 5, "answer_leak": 3, "ambiguous_stem": 3,
+    # run the gate must now refuse. Y05 (ai-agent-20/-21): a passing run is a complete two-rep
+    # seeded-v3 run of the shipping configuration.
+    misses = {"incorrect_answer": 3, "multiple_correct": 3, "answer_leak": 3, "ambiguous_stem": 3,
               "outdated_fact": 3, "qualifier_mismatch": 3, "source_unsupported": 3}
-    passing = write_run(tmp_path / "pass.jsonl", v2_records(misses=misses))
-    failing = write_run(tmp_path / "fail.jsonl", v2_records(misses={**misses, "incorrect_answer": 5}))
+    passing = write_run(tmp_path / "pass.jsonl", gate_records(misses=misses))
+    failing = write_run(tmp_path / "fail.jsonl", gate_records(misses={**misses, "incorrect_answer": 5}))
     truncated = write_run(tmp_path / "short.jsonl", [item("incorrect_answer", [finding("blocker", "incorrect_answer")])])
     empty = write_run(tmp_path / "empty.jsonl", [])
 
     assert main(["score", str(passing), "--gate"]) == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["overall"]["recall"] == 0.8 and report["overall"]["precision"] == 1.0
+    assert report["overall"]["recall"] == 0.8142 and report["overall"]["precision"] == 1.0
     assert main(["score", str(failing), "--gate"]) == 1
-    assert "gate: recall 0.7917 < 0.80" in capsys.readouterr().err
+    assert "gate: recall 0.7965 < 0.80" in capsys.readouterr().err
     assert main(["score", str(failing)]) == 0  # without --gate, score only reports
     capsys.readouterr()
     assert main(["score", str(truncated), "--gate"]) == 1
@@ -74,11 +75,12 @@ def test_dry_run_prints_estimate_without_a_client(monkeypatch, tmp_path: Path, c
     monkeypatch.setattr("ai_qa.providers.make_client", no_client)
     out = tmp_path / "reports"
     code = main(
-        ["run", "--provider", "anthropic", "--model", "claude-opus-5", "--limit", "10", "--dry-run", "--out", str(out)]
+        ["run", "--provider", "anthropic", "--model", "claude-opus-5", "--limit", "10", "--reps", "1", "--dry-run",
+         "--out", str(out)]
     )
     assert code == 0
     printed = capsys.readouterr().out
-    assert "rows: 10" in printed
+    assert "rows: 10" in printed and "reps" not in printed
     # 10 rows x (3000 x $5 + 1500 x $25) / 1e6 = $0.525
     assert "$0.53" in printed or "$0.52" in printed
     assert not out.exists()
@@ -89,6 +91,10 @@ def test_dry_run_prints_estimate_without_a_client(monkeypatch, tmp_path: Path, c
     printed = capsys.readouterr().out
     assert "rows: 10 x 3 reps" in printed
     assert "$1.57" in printed or "$1.58" in printed  # three times the single-rep estimate
+    # Y05 (ai-agent-21): the default is two repetitions, the gate's minimum.
+    assert main(["run", "--provider", "anthropic", "--model", "claude-opus-5", "--limit", "10", "--dry-run",
+                 "--out", str(out)]) == 0
+    assert "rows: 10 x 2 reps" in capsys.readouterr().out
     assert main(["run", "--provider", "anthropic", "--model", "claude-opus-5", "--reps", "0", "--dry-run",
                  "--out", str(out)]) == 2
 
@@ -104,10 +110,10 @@ def test_run_writes_a_full_header_and_per_item_provenance(monkeypatch, tmp_path:
     assert code == 0
     run_file = next(out.glob("*.jsonl"))
     header, records = read_run(run_file)
-    spec = DATASETS["v2"]
-    assert header["dataset"] == "seeded-v2"
+    spec = DATASETS["v3"]  # Y05: the default dataset is the gate dataset, seeded-v3
+    assert header["dataset"] == "seeded-v3"
     assert header["datasetSha256"] == file_sha256(spec.path)
-    assert header["datasetRows"] == 240 and header["reps"] == 2 and header["n"] == 6
+    assert header["datasetRows"] == 226 and header["reps"] == 2 and header["n"] == 6
     assert header["reviewDate"] == "2026-01-02"
     assert header["effort"] == "high"
     assert header["structuredOutputs"] == "auto" and header["structuredOutputsAtStart"] is True
@@ -116,7 +122,10 @@ def test_run_writes_a_full_header_and_per_item_provenance(monkeypatch, tmp_path:
     assert all("Review date: 2026-01-02" in call["messages"][0]["content"] for call in fake.calls)
     capsys.readouterr()
     assert main(["score", str(run_file), "--gate"]) == 1  # a --limit run is never gate evidence
-    assert "truncated run: 6 items, expected 240 rows x 2 reps" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "truncated run: 6 items, expected 226 rows x 2 reps" in err
+    # Y05 (ai-agent-20): the Anthropic API resolves structured outputs to on; Bedrock ships off.
+    assert "structuredOutputsAtStart True is not the shipping structuredOutputsAtStart False" in err
 
 
 def test_bedrock_rejects_a_first_party_model_id(tmp_path: Path, capsys) -> None:

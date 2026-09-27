@@ -46,13 +46,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--model", required=True)
     run.add_argument("--limit", type=int, default=None, help="review only the first N rows (never gate evidence)")
-    run.add_argument("--reps", type=int, default=1, help="review the dataset N times (default 1)")
+    run.add_argument(
+        "--reps", type=int, default=2, help="review the dataset N times (default 2, the gate's minimum)"
+    )
     run.add_argument("--concurrency", type=int, default=4)
     run.add_argument("--max-cost-usd", type=float, default=30.0)
     run.add_argument("--review-date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
     run.add_argument("--dry-run", action="store_true", help="print row count and cost estimate; no client")
     run.add_argument("--out", required=True, type=Path)
-    run.add_argument("--dataset", choices=sorted(DATASETS), default="v2", help="dataset version (default v2)")
+    run.add_argument("--dataset", choices=sorted(DATASETS), default="v3", help="dataset version (default v3)")
 
     score = sub.add_parser("score", help="print the report JSON for a run file")
     score.add_argument("run_file", type=Path)
