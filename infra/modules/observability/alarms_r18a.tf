@@ -99,6 +99,32 @@ resource "aws_cloudwatch_metric_alarm" "automation_tick_missing" {
   }
 }
 
+# R18D M6 (cloud-security-resilience-14): the hourly source watch has its own heartbeat, SourceWatchRuns (one per
+# {"job":"source-watch"} invocation, emitted before any other work, Service = source-watcher). Without it a
+# schedule left DISABLED after the RUNBOOK §7 emergency stop, or a broken scheduler role or alias invoke, stops the
+# watcher with no error and no metric. Three missed hourly runs alarm. Same actions_enabled lifecycle as the tick
+# alarm: created with actions disabled, enabled by the supervisor together with the schedules, then ignored.
+resource "aws_cloudwatch_metric_alarm" "source_watch_missing" {
+  alarm_name          = "developercards-${var.env}-source-watch-missing"
+  alarm_description   = "The source-watcher emitted no SourceWatchRuns heartbeat for three consecutive hours (the hourly source watch stopped)."
+  namespace           = var.metrics_namespace
+  metric_name         = "SourceWatchRuns"
+  statistic           = "Sum"
+  dimensions          = { Service = "source-watcher" }
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  period              = 3600
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  treat_missing_data  = "breaching"
+  actions_enabled     = false
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+  lifecycle {
+    ignore_changes = [actions_enabled]
+  }
+}
+
 resource "aws_cloudwatch_metric_alarm" "notification_failures" {
   alarm_name          = "developercards-${var.env}-notification-failures"
   alarm_description   = "The notifier failed to deliver at least one notification in an hour."
