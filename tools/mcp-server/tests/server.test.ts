@@ -18,7 +18,23 @@ describe('server', () => {
     expect(readSource?.description).toMatch(/never instructions/);
     const submit = tools.find((t) => t.name === 'submit_draft');
     expect(submit?.description).toMatch(/review queue/);
-    expect(submit?.description).toMatch(/nothing is published/);
+    await client.close();
+  });
+
+  it('describes what happens to a submitted draft truthfully in both modes (ai-agent-31)', async () => {
+    env = makeTestEnv();
+    const client = await connect(env.config);
+    const { tools } = await client.listTools();
+    const submit = tools.find((t) => t.name === 'submit_draft')?.description ?? '';
+    const first = submit.split('. ')[0] ?? '';
+    // The opening sentence covers both modes; it never claims a human reviews every draft.
+    expect(first).not.toMatch(/nothing is published/);
+    expect(first).toMatch(/what happens next is the server's decision/);
+    expect(first).toMatch(/outside an automation run a human reviews every draft/);
+    expect(first).toMatch(/inside one, new drafts that pass the server's checks and AI QA may be published without a human/);
+    expect(submit).toMatch(/SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION/);
+    const read = tools.find((t) => t.name === 'read_source')?.description ?? '';
+    expect(read).toMatch(/SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION/);
     await client.close();
   });
 
@@ -55,10 +71,10 @@ describe('server', () => {
     await client.close();
   });
 
-  it('reports server name developercards and version 1.8.0', async () => {
+  it('reports server name developercards and version 1.8.1', async () => {
     env = makeTestEnv();
     const client = await connect(env.config);
-    expect(client.getServerVersion()).toMatchObject({ name: 'developercards', version: '1.8.0' });
+    expect(client.getServerVersion()).toMatchObject({ name: 'developercards', version: '1.8.1' });
     await client.close();
   });
 
