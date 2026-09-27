@@ -39,9 +39,11 @@ before the next.
 
 1. **off** (release, A00 §19.2 steps 3–8). Migrate (`034_automation.sql` listed by
    `GET /api/v1/admin/db/migrations`), deploy core with `"AUTOMATION_MODE":"off"`, deploy the ai-qa,
-   source-watcher and notifier Lambdas (`DRY_RUN=1` first), enable the three schedules and the
-   actions of the two heartbeat alarms, tick-missing and source-watch-missing (infra/RUNBOOK.md §7
-   recipe), deploy the console.
+   source-watcher and notifier Lambdas (`DRY_RUN=1` first), enable the three schedules, then the
+   actions of the two heartbeat alarms, tick-missing and source-watch-missing, each only once its alarm
+   is `OK` after the first heartbeat (infra/RUNBOOK.md §7 recipe), deploy the console. Terraform
+   ignores `actions_enabled`, so no apply turns them on. A system whose schedules are already enabled
+   follows "Upgrading a running system" below instead.
    Check: `GET /api/v1/admin/automation/status` shows `mode.effective = "off"`; the Email log's test email
    shows `sent` and the owner received it; the notifier log shows ticks answered `skipped: "off"`;
    `developercards-prod-automation-tick-missing` and `developercards-prod-source-watch-missing` are `OK`
@@ -148,6 +150,29 @@ before the next.
     runner arguments), produce a new new-facts stratum with the new configuration (step 5.1, QA off around the window), run and
     record a new gate (5.2–5.3) before expecting auto-accepts again.
 
+## Upgrading a running system (R18D, 2026-09-28)
+
+Production has run the automation since the R18A/B/C dry_run deploy, so its schedules are already
+enabled and rollout step 1 is behind it. The round-D `developercards-prod-source-watch-missing` alarm
+(R18D M6) was created by the D04 apply with its actions **disabled**, and Terraform ignores
+`actions_enabled` (`infra/modules/observability/alarms_r18a.tf`, `lifecycle { ignore_changes }`), so
+no apply ever turns them on. Enable them by hand, in this order; enabling them before the round-D
+watcher runs pages within about three hours, because the older watcher emits no `SourceWatchRuns` and
+missing data counts as breaching.
+
+- [ ] Deploy the source-watcher with the round-D (D03) code: `DRY_RUN=1 services/deploy-python-lambda.sh
+      source-watcher`, then the same without `DRY_RUN=1`.
+- [ ] Wait for the next hourly `{"job":"source-watch"}` run and confirm one heartbeat datapoint:
+      `aws cloudwatch get-metric-statistics --namespace DeveloperCards --metric-name SourceWatchRuns --dimensions Name=Service,Value=source-watcher --start-time <UTC now − 2 h> --end-time <UTC now> --period 3600 --statistics Sum`
+      shows a `Sum` ≥ 1, or `aws cloudwatch describe-alarms --alarm-names developercards-prod-source-watch-missing --query 'MetricAlarms[0].StateValue'`
+      reads `OK` (not `INSUFFICIENT_DATA` or `ALARM`).
+- [ ] Enable its actions: `aws cloudwatch enable-alarm-actions --alarm-names developercards-prod-source-watch-missing`.
+- [ ] Check: `aws cloudwatch describe-alarms --alarm-names developercards-prod-source-watch-missing developercards-prod-automation-tick-missing --query 'MetricAlarms[].[AlarmName,StateValue,ActionsEnabled]'`
+      shows both `OK` and `true` (the tick alarm's actions were enabled with the schedules in rollout
+      step 1; if not, enable them the same way once it is `OK`).
+
+The same step is in infra/RUNBOOK.md §7, next to the tick alarm step.
+
 ## Promotion checklist (dry_run → live)
 
 All must hold on the day of step 7; record the numbers in the release notes.
@@ -175,7 +200,7 @@ All must hold on the day of step 7; record the numbers in the release notes.
   error. The Overview reads "X of Y would-accept drafts decided blind were accepted unedited (Z%)" from
   exactly these server fields, with a second line for all human decisions (`humanDecided`, of which some
   after seeing the verdict); decisions made after seeing the verdict do not count toward the criterion.
-  The digest and batch summaries show the same blind rate.
+  The weekly digest shows the same blind rate; the batch summary shows no rate.
 - **Human-route reasons** (Decisions tab, last two weeks): no reason you do not understand; `QA_TIMEOUT`,
   `ENQUEUE_FAILED` and QA provider errors are rare and explained.
 - **Quiet health:** no `automation-step-failures`, `notifier-errors` or `notify-dlq-nonempty` alarm in the
@@ -194,9 +219,15 @@ One line each: what it means → what to do.
 - `runner_login_expiring` — the runner's agent login expires soon → on the Mac,
   `node tools/mcp-server/dist/index.js login`.
 - `runner_run_failed` — one authoring run failed → read the error in the Runs tab (`?tab=runs&runId=`);
-  the queue item is retried up to three times on its own.
-- `queue_item_failed` — a queue item failed three times and is dropped → open the URL; if the source is
-  unusable, leave it; otherwise re-add it in the Queue tab after fixing the cause.
+  the queue item is retried on its own (up to three attempts, one hour apart per attempt), except an
+  agent block (next entry).
+- `queue_item_failed` (subject "queue item N failed 3 times") — a queue item failed three times and is
+  dropped → open the URL; if the source is unusable, leave it; otherwise re-add it in the Queue tab after
+  fixing the cause.
+- `queue_item_failed` (agent blocked; subject "agent blocked on queue item N", `lastError` starting with
+  `AGENT_BLOCKED`) — the agent said it could not do the item; the item failed on this first attempt and
+  is **not** retried → read the reason in `lastError`, then fix the source (a better URL, a different
+  deck) and re-add the item in the Queue tab, or leave it.
 - `qa_provider_error` — the automation reviewer answered `PROVIDER_ACCESS_DENIED`, `PROVIDER_AUTH` or
   `CONFIG`; its drafts went to the review queue → check Bedrock model access and the ai-qa
   environment, then review the queued drafts by hand.
@@ -218,19 +249,35 @@ One line each: what it means → what to do.
   automation auto-accepted in the last 30 days (at least 20 cards; once per ISO week) → revoke the gate
   (Rollback step 1), open the Decisions tab (state `auto_accepted`) and read what people changed and why;
   restore live only with a new passed gate after the cause (source, skill, reviewer) is fixed.
-- `runner_unavailable` (R18D M5) — the runner could not run at all (claude does not start, not on the
-  subscription, MCP server does not start, usage or rate limit) and stopped; the claimed items went back
-  to `queued` without using an attempt (once per UTC day) → read the `RUNNER_UNAVAILABLE:` error in the
-  Runs tab, fix it on the Mac (log in, wait for the limit, `status`), and the next scheduled run resumes.
+- `runner_unavailable` (R18D M5, R18E N3) — the runner could not run at all (claude does not start, not
+  on the subscription, MCP server does not start, usage or rate limit) and stopped; the claimed item went
+  back to `queued` without using an attempt, but not at once: it is due again after 15 min, then 30 min
+  (15 min × 2^(n−1), at most 24 h, n = its consecutive `RUNNER_UNAVAILABLE` completes). At the third
+  consecutive one the item is not requeued: it stops for a person with `RUNNER_UNAVAILABLE_REPEATED`
+  and one exception email says so (deduped). For a cause a retry cannot fix (wrong provider, the MCP
+  server failing, claude missing) the runner also holds itself on the Mac, like after a usage limit
+  (`<log dir>/runner-state.json`, tools/author-runner/README.md), and the hold clears only when the
+  author configuration or the Claude CLI changes → read the `RUNNER_UNAVAILABLE:` error in the Runs
+  tab, fix it on the Mac (log in, wait for the limit, `status`); the next scheduled run resumes the
+  requeued items, and a `RUNNER_UNAVAILABLE_REPEATED` item must be re-added in the Queue tab.
 - `agent_note` (R18B K3) — a run finished with notes from the agent and no decisions (it drafted nothing)
   → read the notes in the Runs tab (`?tab=runs&runId=`) or the email; they usually say why nothing was
   drafted (source unsuitable, every card already exists, the deck needs a different source). Act on it:
   skip or re-queue the item, add a better URL, or adjust the deck.
 
-Non-exception emails: a **batch summary** per run (its "NEEDS YOU" block lists the drafts routed to a
-person; "Agent notes:" shows the agent's notes when present), **source changed** (cards re-checked after a
-source changed; flagged cards need a person), and the Monday **weekly digest** (hours saved, decisions,
-blind shadow agreement, live override rate, open human backlog).
+Non-exception emails:
+
+- **Batch summary**, one per run. In `dry_run` it lists no draft: "NEEDS YOU" is one count line ("N
+  draft(s) of this run wait for your decision in the review queue; verdicts stay hidden until you
+  decide") with a review-queue link, so a later decision stays blind (R18D M3). Its per-state counts
+  appear only once none of the run's drafts is pending a human decision; until then it shows only the
+  total (R18E N6). In `live` "NEEDS YOU" has one line per draft routed to a person (uid, reason,
+  review-queue link) and "DONE" one line per auto-accepted card. "Agent notes:" shows the agent's notes
+  when present. It shows no shadow agreement rate.
+- **Source changed**: cards re-checked after a source changed; flagged cards need a person.
+- The Monday **weekly digest**: hours saved, decisions, the blind shadow agreement (the same rate as the
+  Overview), the live override rate (R18D M2), the open human backlog. In `dry_run` it, too, keeps a
+  run's per-state counts back while any of its drafts is pending a human decision (R18E N6).
 
 ## Reading the Automation page
 
@@ -239,15 +286,23 @@ Console → Automation (`/automation`); mutating controls need super_admin.
 - **Overview.** The mode banner shows configured vs effective mode and `liveBlockedReason` (for example
   `EVAL_GATE_MISSING`). The eval-gate card shows the current gate and has *Revoke gate*. Also: runners
   (heartbeat age; login expiry turns red at `AUTOMATION_LOGIN_WARN_DAYS`), queue counts, decisions of the
-  last 24 h by state and reason, the dry-run shadow agreement (blind, R18D M3), the live override rate
+  last 24 h by state and reason (in `dry_run` a drill-down hides pending drafts' verdicts, as the
+  Decisions tab does), the dry-run shadow agreement (blind, R18D M3), the live override rate
   (`autoAccepted30d`, `deletedByPerson`, `editedByPerson`, `overrideRate`; R18D M2), today's AI QA spend vs the cap (automation
   share), the open human backlog (R18B K7), watch and email summaries.
 - **Runs.** One row per authoring run with counts and publish outcomes, and the agent's notes; a row
-  opens its decisions.
+  opens its decisions. In `dry_run` a run's split by state shows only once none of its drafts is
+  pending a human decision (R18E N5).
 - **Decisions.** Every automatic decision: state (`would_accept`, `auto_accepted`, `human`, `superseded`,
   …), reason, QA reviewer and finding counts. A `human` decision that a person already handled shows the
   person's action instead of "Needs human". The drawer shows the card, the QA findings and the event
-  timeline, and links to the review queue for `human` drafts.
+  timeline, and links to the review queue for `human` drafts. **Blind in `dry_run`** (R18E N5): while the
+  effective mode is `dry_run`, every draft still pending a human decision hides its state, reason, QA
+  counts and decide links here, in the run sections and in the Overview drill-downs, as the review
+  queue does. Revealing one (or filtering by a verdict) is recorded in the browser, so a later decision
+  on that draft, from any tab of the same browser, is sent as not blind (`verdictShown: true`) and does
+  not count toward the blind shadow agreement. Decide from the review queue without revealing to keep
+  a decision blind.
 - **Queue.** Authoring queue items; add a URL for a deck, skip an item.
 - **Watch.** Watched feeds and pages, their last check and failures, citing cards and recent events.
 - **Email log.** Every automation email and its status; a row shows the body; send a test email.
