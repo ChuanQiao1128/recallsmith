@@ -165,6 +165,7 @@ public static class RouteMetrics
     "/api/v1/admin/automation/events",
     "/api/v1/admin/automation/baselines",
     "/api/v1/admin/automation/backfill",
+    "/api/v1/authoring/cards/similar",
 
     // edge-public
     "/api/v1/billing/verify",
