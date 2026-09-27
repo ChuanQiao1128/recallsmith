@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Npgsql;
+using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
 using RecallSmith.Lambda.Worker.Repositories;
 using RecallSmith.Lambda.Worker.S3;
@@ -74,6 +75,7 @@ public class PublishJobProcessor : IPublishJobProcessor
     if (!string.IsNullOrEmpty(job.QaSnapshotSha256) &&
         !string.Equals(SnapshotDigest(deckData.Cards), job.QaSnapshotSha256, StringComparison.Ordinal))
     {
+      RouteMetrics.EmitGauge(PublishSnapshot.StaleMetric, 1);
       throw new BusinessException($"{PublishSnapshot.StaleErrorCode}: cards changed after the AI QA publish gate passed; publish again");
     }
 

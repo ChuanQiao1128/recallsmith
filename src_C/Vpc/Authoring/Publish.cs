@@ -322,6 +322,7 @@ public static class Publish
         if (!string.Equals(gated, current, StringComparison.Ordinal))
         {
           Log.Event("info", new { tag = "publish", outcome = "refused", code = PublishSnapshot.StaleErrorCode, deckId = deckIdInt });
+          RouteMetrics.EmitGauge(PublishSnapshot.StaleMetric, 1);
           return Helpers.ErrorEnvelope(res, 409, PublishSnapshot.StaleErrorCode,
             "Cards changed while the publish was being checked; publish again so the AI QA gate sees the current cards");
         }

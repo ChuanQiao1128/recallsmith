@@ -423,4 +423,85 @@ public class WebhookDeliveryReportTests
       Assert.Equal(route, RouteMetrics.RouteFor(route));
     }
   }
+
+  // ---------------------------------------------------------------- transition table (backend-design-23)
+
+  private static readonly string[] RowStatuses = ["queued", "enqueue_failed", "retrying", "delivered", "failed", "dead"];
+  private static readonly string[] Outcomes = ["delivered", "retry", "failed", "dead"];
+  private const int SeededAttempts = 2;
+  private const int SeededStatusCode = 418;
+  private const string SeededError = "seeded error";
+  private static readonly DateTime SeededDeliveredAt = new(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+
+  /// <summary>Every (row status, outcome, attempt relative to the stored one, subscription live) combination: 144.</summary>
+  public static TheoryData<string, string, int, bool> TransitionCases()
+  {
+    var data = new TheoryData<string, string, int, bool>();
+    foreach (var status in RowStatuses)
+    foreach (var outcome in Outcomes)
+    foreach (var delta in new[] { -1, 0, 1 })
+    foreach (var live in new[] { true, false })
+      data.Add(status, outcome, delta, live);
+    return data;
+  }
+
+  private sealed record Expected(string Status, int Attempts, int? StatusCode, string? Error, bool DeliveredAtSet, bool DeliveredAtChanged, bool Stop);
+
+  /// <summary>
+  /// The report transition stated as a plain table, independent of the SQL: delivered and failed rows are terminal;
+  /// a dead row yields only to a success (DLQ redrive, any attempt); any other row ignores a stale (lower) attempt;
+  /// a retry for an inactive subscription is recorded as failed; attempts only grow.
+  /// </summary>
+  private static Expected Reference(string rowStatus, bool rowDelivered, string outcome, int attempt, bool live)
+  {
+    var reported = outcome == "retry" ? "retrying" : outcome;
+    var terminal = rowStatus is "delivered" or "failed";
+    var deadKeeps = rowStatus == "dead" && reported != "delivered";
+    var stale = attempt < SeededAttempts && !(rowStatus == "dead" && reported == "delivered");
+    var keep = terminal || deadKeeps || stale;
+    var attempts = Math.Max(SeededAttempts, attempt);
+    if (keep) return new Expected(rowStatus, attempts, SeededStatusCode, SeededError, rowDelivered, false, !live);
+
+    var stoppedRetry = reported == "retrying" && !live;
+    var status = stoppedRetry ? "failed" : reported;
+    var error = stoppedRetry ? WebhookDeliveryReport.SubscriptionInactiveError : $"reported {outcome}";
+    var delivered = reported == "delivered";
+    return new Expected(status, attempts, 299, error, delivered || rowDelivered, delivered, !live);
+  }
+
+  [Theory]
+  [MemberData(nameof(TransitionCases))]
+  public async Task Report_TransitionTable_MatchesReference(string rowStatus, string outcome, int attemptDelta, bool live)
+  {
+    var (_, deliveryId) = await SeedAsync(active: live);
+    var rowDelivered = rowStatus == "delivered";
+    await _db.QueryAsync(
+      """
+      update webhook_deliveries set status = $2, attempts = $3, last_status_code = $4, last_error = $5,
+        delivered_at = case when $6 then $7::timestamptz else null end
+      where delivery_id = $1
+      """,
+      deliveryId, rowStatus, SeededAttempts, SeededStatusCode, SeededError, rowDelivered, SeededDeliveredAt);
+
+    var attempt = SeededAttempts + attemptDelta;
+    var resp = await ReportAsync(Body(deliveryId, attempt, outcome, 299, $"reported {outcome}"));
+    Assert.True(resp.StatusCode == 200, resp.Body);
+
+    var expected = Reference(rowStatus, rowDelivered, outcome, attempt, live);
+    var data = Data(resp);
+    Assert.Equal(expected.Status, data.GetProperty("status").GetString());
+    Assert.Equal(expected.Stop, data.GetProperty("stop").GetBoolean());
+
+    var row = await RowAsync(deliveryId);
+    Assert.Equal(expected.Status, (string)row["status"]!);
+    Assert.Equal(expected.Attempts, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture));
+    Assert.Equal(expected.StatusCode, row["last_status_code"] is null ? null : Convert.ToInt32(row["last_status_code"], CultureInfo.InvariantCulture));
+    Assert.Equal(expected.Error, (string?)row["last_error"]);
+    Assert.Equal(expected.DeliveredAtSet, row["delivered_at"] is not null);
+    if (row["delivered_at"] is not null)
+    {
+      var deliveredAt = Convert.ToDateTime(row["delivered_at"], CultureInfo.InvariantCulture).ToUniversalTime();
+      Assert.Equal(expected.DeliveredAtChanged, deliveredAt != SeededDeliveredAt);
+    }
+  }
 }

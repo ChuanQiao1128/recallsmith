@@ -302,25 +302,44 @@ public class AiQaResultsTests
   }
 
   [Fact]
-  public async Task Results_ReReport_ReplacesFindings()
+  public async Task Results_ReReport_NewSample_KeepsFirstFindings()
   {
+    // backend-design-19 (replaces Results_ReReport_ReplacesFindings, which pinned the defect): a retried chunk
+    // redelivered to another container re-reviews a done card with a fresh model call (a different request id).
+    // That sample must not erase the blocker the first one caught, nor renumber the finding an editor resolves by;
+    // both calls are billed.
     var seeded = await SeedAsync("replace", 1);
     var card = seeded.Cards[0];
 
     Data(await ReportAsync(Body(seeded.RunId, 0,
-      Item(card, "done", findings: [Finding("major", "outdated_fact", "First finding."), Finding("minor", "other", "Second finding.")]))));
-    Assert.Equal(2, (await FindingsAsync(seeded.RunId, card.CardId)).Count);
+      Item(card, "done", cost: 0.01m, findings: [Finding("blocker", "incorrect_answer", "First blocker."), Finding("minor", "other", "Second finding.")]))));
+    var first = await FindingsAsync(seeded.RunId, card.CardId);
+    Assert.Equal(2, first.Count);
+    var firstRequestId = (string?)(await ItemAsync(seeded.RunId, card.CardId))["request_id"];
 
-    Data(await ReportAsync(Body(seeded.RunId, 0, Item(card, "done", findings: [Finding("blocker", "incorrect_answer", "Replacement finding.")]))));
-    var findings = await FindingsAsync(seeded.RunId, card.CardId);
-    var only = Assert.Single(findings);
-    Assert.Equal("Replacement finding.", only["message"]);
-    Assert.Equal("blocker", only["severity"]);
+    var resample = JsonSerializer.Serialize(Body(seeded.RunId, 0, Item(card, "done", cost: 0.02m, findings: [Finding("minor", "weak_distractor", "Only a minor note.")])));
+    Data(await ReportAsync(resample));
+    Assert.NotEqual(firstRequestId, (string?)(await ItemAsync(seeded.RunId, card.CardId))["request_id"]);
+    // The Lambda's POST retry of that second report (same request id) does not replace the findings either.
+    Data(await ReportAsync(resample));
+
+    var after = await FindingsAsync(seeded.RunId, card.CardId);
+    Assert.Equal(first.Count, after.Count);
+    for (var i = 0; i < first.Count; i++)
+    {
+      foreach (var key in first[i].Keys) Assert.Equal(first[i][key], after[i][key]);
+    }
+    Assert.Equal("First blocker.", after[0]["message"]);
 
     var run = await RunAsync(seeded.RunId);
     Assert.Equal(1, Int(run["blocker_count"]));
     Assert.Equal(0, Int(run["major_count"]));
-    Assert.Equal(0, Int(run["minor_count"]));
+    Assert.Equal(1, Int(run["minor_count"]));
+    Assert.Equal(0.03m, Convert.ToDecimal(run["estimated_cost_usd"], CultureInfo.InvariantCulture));
+
+    // The finding the editor is looking at still resolves by its original id.
+    Assert.Equal(1L, Convert.ToInt64(await _db.ScalarAsync(
+      "select count(*) from ai_qa_findings where id = $1 and run_id = $2", first[0]["id"], seeded.RunId), CultureInfo.InvariantCulture));
   }
 
   [Fact]
@@ -637,13 +656,33 @@ public class AiQaResultsTests
     var card = seeded.Cards[0];
     var forged = (card.CardId, card.Uid, Hash: new string('a', 64));
 
-    var data = Data(await ReportAsync(Body(seeded.RunId, 0, Item(forged, "done", cost: 0.2m))));
+    APIGatewayProxyResponse? response = null;
+    var stdout = await EmfCapture.StdoutAsync(async () => response = await ReportAsync(Body(seeded.RunId, 0, Item(forged, "done", cost: 0.2m))));
+    var data = Data(response!);
     Assert.Equal(0, data.GetProperty("cardsDone").GetInt32());
+    // backend-design-20: the mismatch is its own gauge, apart from unknown card ids.
+    Assert.Equal("AiQaHashMismatch", AiQaResults.HashMismatchMetric);
+    Assert.Equal(1, EmfCapture.GaugeSum(stdout, AiQaResults.HashMismatchMetric));
     Assert.Equal("queued", (await ItemAsync(seeded.RunId, card.CardId))["status"]);
     Assert.Equal(0m, Convert.ToDecimal((await RunAsync(seeded.RunId))["estimated_cost_usd"], CultureInfo.InvariantCulture));
 
-    // The item's own hash is still accepted.
-    Assert.Equal(1, Data(await ReportAsync(Body(seeded.RunId, 0, Item(card, "done")))).GetProperty("cardsDone").GetInt32());
+    // The item's own hash is still accepted, and a clean report emits a zero data point.
+    stdout = await EmfCapture.StdoutAsync(async () => response = await ReportAsync(Body(seeded.RunId, 0, Item(card, "done"))));
+    Assert.Equal(1, Data(response!).GetProperty("cardsDone").GetInt32());
+    Assert.Equal(0, EmfCapture.GaugeSum(stdout, AiQaResults.HashMismatchMetric));
+    Assert.Contains(AiQaResults.HashMismatchMetric, stdout, StringComparison.Ordinal);
+
+    // In the ledger the mismatch is counted apart from unknown cards.
+    var mixed = await SeedAsync("hashecho-mixed", 2);
+    var stranger = (CardId: long.MaxValue - 17, Uid: "stranger", Hash: new string('0', 64));
+    stdout = await EmfCapture.StdoutAsync(async () => response = await ReportAsync(Body(mixed.RunId, 0,
+      Item((mixed.Cards[0].CardId, mixed.Cards[0].Uid, new string('b', 64)), "done"), Item(stranger, "done"), Item(mixed.Cards[1], "done"))));
+    Assert.Equal(1, Data(response!).GetProperty("cardsDone").GetInt32());
+    Assert.Equal(1, EmfCapture.GaugeSum(stdout, AiQaResults.HashMismatchMetric));
+    var ledger = await _db.QueryAsync("select details from automation_events where dedupe_key like $1", $"qa:{mixed.RunId}:0:%");
+    using var details = JsonDocument.Parse((string)Assert.Single(ledger)["details"]!);
+    Assert.Equal(1, details.RootElement.GetProperty("mismatched").GetInt32());
+    Assert.Equal(1, details.RootElement.GetProperty("ignored").GetInt32());
   }
 
   [Fact]

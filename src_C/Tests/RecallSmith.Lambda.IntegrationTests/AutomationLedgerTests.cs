@@ -451,29 +451,41 @@ public class AutomationLedgerTests
   }
 
   [Fact]
-  public async Task Ledger_SeriesAddsUpToTotals_AcrossPeriods()
+  public async Task Ledger_Headline_IsIndependentOfGranularity_SeriesIsNet()
   {
-    // backend-design-17 / automation-14: the totals and the series clamp at the same grain, so the bars
-    // always add up to the headline. 2013-03-04 and 2013-03-11 are Mondays of two weeks in one month.
+    // automation-18 (replaces Ledger_SeriesAddsUpToTotals_AcrossPeriods, which pinned a headline that changed with
+    // the granularity): the headline is clamped once per automation and source over the range, so the same rows
+    // give the same "Hours saved" for day, week and month; the series shows unclamped net minutes per period.
+    // 2013-03-04 and 2013-03-11 are Mondays of two weeks in one month.
     var baseline = Automation(await LedgerAsync("2013-01-01", "2013-12-31"), "ai_draft_review").GetProperty("baselineMinutesPerUnit").GetDecimal();
     await RecordAsync(new AutomationEvent("ai_draft_review", 1, "success", ActualMinutes: 0m, OccurredAt: At(2013, 3, 5)));
     await RecordAsync(new AutomationEvent("ai_draft_review", 0, "success", ActualMinutes: baseline + 8m, OccurredAt: At(2013, 3, 12)));
+    await RecordAsync(new AutomationEvent("bulk_import", 4, "success", OccurredAt: At(2013, 3, 6)));
+    await RecordAsync(new AutomationEvent("bulk_import", 2, "success", Source: "backfill", OccurredAt: At(2013, 3, 13)));
 
+    var headlines = new List<decimal>();
     foreach (var granularity in new[] { "day", "week", "month" })
     {
       var data = await LedgerAsync("2013-01-01", "2013-12-31", granularity);
-      var seriesSum = data.GetProperty("series").EnumerateArray().Sum(s => s.GetProperty("minutesSaved").GetDecimal());
-      Assert.Equal(data.GetProperty("totals").GetProperty("minutesSaved").GetDecimal(), seriesSum);
-      Assert.Equal(Automation(data, "ai_draft_review").GetProperty("minutesSaved").GetDecimal(), seriesSum);
-      Assert.Equal(data.GetProperty("totals").GetProperty("bySource").GetProperty("live").GetProperty("minutesSaved").GetDecimal(), seriesSum);
-    }
+      headlines.Add(data.GetProperty("totals").GetProperty("minutesSaved").GetDecimal());
+      // The draft automation nets −8 over the range and is clamped to 0 once, at every grain.
+      Assert.Equal(0m, Automation(data, "ai_draft_review").GetProperty("minutesSaved").GetDecimal());
 
-    // Weekly: week 1 saves the baseline, week 2 nets negative and shows 0 in both the bar and the headline.
+      var series = data.GetProperty("series").EnumerateArray().ToList();
+      var draftNet = series.Where(s => s.GetProperty("automation").GetString() == "ai_draft_review").Sum(s => s.GetProperty("netMinutes").GetDecimal());
+      // Σ series(net) = Σ (units × baseline − actual) for the automation.
+      Assert.Equal(1 * baseline - (baseline + 8m), draftNet);
+      var importPoints = series.Where(s => s.GetProperty("automation").GetString() == "bulk_import").ToList();
+      var importBaseline = Automation(data, "bulk_import").GetProperty("baselineMinutesPerUnit").GetDecimal();
+      Assert.Equal(6 * importBaseline, importPoints.Sum(s => s.GetProperty("netMinutes").GetDecimal()));
+      Assert.All(series, s => Assert.Equal(s.GetProperty("netMinutes").GetDecimal(), s.GetProperty("minutesSaved").GetDecimal()));
+    }
+    Assert.Single(headlines.Distinct());
+
+    // At week grain the second week's bar is negative instead of floored to 0.
     var weekly = await LedgerAsync("2013-01-01", "2013-12-31", "week");
-    Assert.Equal(baseline, weekly.GetProperty("totals").GetProperty("minutesSaved").GetDecimal());
-    // Monthly: both rows fall in one period, whose net is negative.
-    var monthly = await LedgerAsync("2013-01-01", "2013-12-31", "month");
-    Assert.Equal(0m, monthly.GetProperty("totals").GetProperty("minutesSaved").GetDecimal());
+    var weeks = weekly.GetProperty("series").EnumerateArray().Where(s => s.GetProperty("automation").GetString() == "ai_draft_review").ToList();
+    Assert.Equal(new[] { baseline, -(baseline + 8m) }, weeks.Select(s => s.GetProperty("netMinutes").GetDecimal()).ToArray());
   }
 
   [Fact]
@@ -538,7 +550,7 @@ public class AutomationLedgerTests
     var data = await LedgerAsync("2003-01-01", "2003-01-31", "week");
     var series = data.GetProperty("series").EnumerateArray().ToList();
     Assert.Equal(
-      new[] { "periodStart", "automation", "runs", "units", "minutesSaved", "defectsCaught" },
+      new[] { "periodStart", "automation", "runs", "units", "minutesSaved", "netMinutes", "defectsCaught" },
       series[0].EnumerateObject().Select(p => p.Name).ToArray());
     Assert.Equal(
       new[] { "2002-12-30 publish_pipeline 2", "2003-01-06 publish_pipeline 1", "2003-01-06 webhook_notification 1" },

@@ -508,9 +508,11 @@ public static class Drafts
         {
           stored = DraftCard.Parse(storedDoc.RootElement);
         }
-        var storedJson = stored.ToJson();
+        // Card content only: source.grounding is review metadata, so an edit that drops it is not an edit and the
+        // published card (final.SourceJson) never carries it.
+        var storedJson = stored.ToJson(includeGrounding: false);
         var final = edited ?? stored;
-        var finalJson = final.ToJson();
+        var finalJson = final.ToJson(includeGrounding: false);
         action = edited is not null && finalJson != storedJson ? "edited_accepted" : "accepted";
         stableUid = final.StableUid;
 

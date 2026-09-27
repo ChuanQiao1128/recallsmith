@@ -82,6 +82,7 @@ public static class WebhookDeliveries
       select d.delivery_id as "deliveryId", d.event_id as "eventId", d.event as "event", d.subscription_id as "subscriptionId",
              d.status as "status", d.attempts as "attempts", d.last_status_code as "lastStatusCode", d.last_error as "lastError",
              d.created_at as "createdAt", d.updated_at as "updatedAt", d.delivered_at as "deliveredAt",
+             d.enqueued_at as "enqueuedAt",
              (extract(epoch from d.created_at) * 1000000)::bigint as "t"
       from webhook_deliveries d
       {(where.Count > 0 ? "where " + string.Join(" and ", where) : string.Empty)}
@@ -105,6 +106,9 @@ public static class WebhookDeliveries
         createdAt = r["createdAt"],
         updatedAt = r["updatedAt"],
         deliveredAt = r["deliveredAt"],
+        // When SQS accepted the hand-off (migration 032); a queued row without it never reached the dispatcher
+        // and is what the sweep re-sends (backend-design-21).
+        enqueuedAt = r["enqueuedAt"],
       }).ToArray();
 
       string? nextCursor = null;
@@ -170,7 +174,8 @@ public static class WebhookDeliveries
 
   /// <summary>
   /// POST /api/v1/admin/webhooks/deliveries/sweep (super_admin, automation-1): re-sends deliveries that
-  /// never reached the dispatcher (enqueue_failed, or queued with no attempt) and have been untouched for
+  /// never reached the dispatcher (enqueue_failed, or queued with no attempt and <c>enqueued_at is null</c>, i.e.
+  /// SQS never accepted the hand-off; migration 032) and have been untouched for
   /// <see cref="WebhookEvents.SweepStuckAfter"/>, up to <c>limit</c> (default and max
   /// <see cref="WebhookEvents.SweepMaxBatch"/>) per call. Each keeps its delivery_id and event_id, so a
   /// receiver sees the same eventId. Idempotent: a swept row is fresh again and is not picked up by the

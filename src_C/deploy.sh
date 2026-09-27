@@ -61,6 +61,8 @@ deploy_one() {
     local current secrets merged
     current="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn" --query 'Environment.Variables' --output json)"
     secrets="$(pick_keys "$SECRETS_ALL" "$4")"
+    # An optional secret (a -previous rotation leaf, a per-route secret) whose leaf is gone leaves the env too.
+    current="$(drop_absent_optional "$current" "$secrets")"
     merged="$(merge_env "$current" "$3" "$secrets")"
     aws lambda update-function-configuration --region "$REGION" --function-name "$fn" --environment "$(jq -cn --argjson v "$merged" '{Variables: $v}')" --query 'LastUpdateStatus' --output text
     aws lambda wait function-updated --region "$REGION" --function-name "$fn"
