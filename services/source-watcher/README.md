@@ -246,3 +246,10 @@ placeholder code; at release (A00 §19.2 step 5) the supervisor deploys the code
 key names without calling `aws`), sets the SSM secret, and then enables the schedule
 `developercards-source-watch` (A00 §19.2 step 6). The first hour records a `baseline` for the
 seeded feeds.
+
+**First deploy (C03).** Terraform creates the `prod` alias on `$LATEST`. The deploy
+(`services/lambda-release.sh`) therefore first publishes the live `$LATEST` (the placeholder) and
+moves the alias to that version, so the code and environment updates that follow do not go live
+at once. It then publishes the new code, checks that the version is `Active` / `Successful` with
+the local `CodeSha256` (no invoke), and only then moves the alias. The printed `ROLLBACK:` names the
+frozen placeholder version, never `$LATEST`. The same applies to `notifier`.
