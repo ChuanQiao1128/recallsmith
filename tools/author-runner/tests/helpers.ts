@@ -12,6 +12,17 @@ import { loadRunnerConfig, type RunnerConfig } from '../src/config';
 
 export const FAKE_CLAUDE_SOURCE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-claude.mjs');
 
+/** A stand-in for tools/mcp-server/dist/tool-surface.json (N4). */
+export const TEST_TOOL_SURFACE = {
+  constants: { SOURCE_QUOTE_MIN_CHARS: 40, SOURCE_QUOTE_MIN_WORDS: 6 },
+  server: { name: 'developercards', version: '1.8.0' },
+  tools: ['submit_draft', 'read_source', 'lint_card', 'find_similar_cards'].map((name) => ({
+    description: `the ${name} tool`,
+    inputSchema: { type: 'object', properties: {} },
+    name,
+  })),
+};
+
 export interface RecordedRequest {
   method: string;
   url: string;
@@ -107,6 +118,8 @@ export function makeHome(): TestHome {
   const mcpDist = join(repo, 'tools', 'mcp-server', 'dist');
   mkdirSync(mcpDist, { recursive: true });
   writeFileSync(join(mcpDist, 'index.js'), '// test stand-in for the MCP server bundle\n');
+  // ... and the tool surface its build lists next to it (N4).
+  writeFileSync(join(mcpDist, 'tool-surface.json'), `${JSON.stringify(TEST_TOOL_SURFACE)}\n`);
   const claudeBin = join(bin, 'claude');
   copyFileSync(FAKE_CLAUDE_SOURCE, claudeBin);
   chmodSync(claudeBin, 0o755);

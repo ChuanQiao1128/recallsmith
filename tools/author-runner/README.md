@@ -37,11 +37,15 @@ calls exactly three API routes:
 3. Work out `loginExpiresAt` from the stored id token and read `claude --version`.
 4. Pin the author configuration (see Author configuration). A checkout it cannot pin (no
    `.claude/skills/author-cards/SKILL.md` with a `Skill version:` line, or no built
-   `tools/mcp-server/dist/index.js`) logs `author_config_error`,
+   `tools/mcp-server/dist/index.js` and `dist/tool-surface.json`) logs `author_config_error`,
    sends an `error` heartbeat and exits 1 without claiming. While `<log dir>/runner-state.json` holds
    a `limitedUntil` in the future (a usage limit, see step 6), the run only re-sends kept `complete`s,
    sends an `error` heartbeat (`RUNNER_UNAVAILABLE: usage limit until …`, event `usage_limited`) and
-   exits 0 without claiming; a past `limitedUntil` is deleted.
+   exits 0 without claiming; a past `limitedUntil` is deleted. While it holds a hold (N3,
+   `holdUntilCleared: true`, see step 6) whose `authorId` and `claudeVersion` are the pinned
+   configuration's `id` and the current `claude --version`, the run does the same with
+   `RUNNER_UNAVAILABLE: held since … until the owner clears …` (event `runner_held`); a hold that
+   names another configuration or CLI version (the owner changed either) is deleted (`hold_cleared`).
 5. `heartbeat` (`running`). A login failure exits 3. Then re-send every kept `complete` in
    `<log dir>/pending-complete/` (see step 6) once, before any claim; one the server applies (or
    answers `replayed: true`) or refuses with a client error (for example 409 `RUN_NOT_RUNNING` after
@@ -53,7 +57,7 @@ calls exactly three API routes:
    item that fails either check is released at once with `complete` (`failed`, `not run: …`) instead
    of staying claimed until its lease lapses, and a short lease ends the run. Otherwise write
    `runs/<runId>.mcp.json`, `runs/<runId>.prompt.md` and `runs/<runId>.meta.json`, run claude (stdout,
-   `--output-format stream-json --verbose`, to `runs/<runId>.json`, stderr to
+   `--output-format stream-json --verbose`, piped through the runner into `runs/<runId>.json`, stderr to
    `runs/<runId>.stderr.log`), then `complete` with the outcome and write `last-run.json`. Every
    `complete` is tried up to 3 times with a jittered backoff (about 2 s, then 4 s) unless the server
    refuses it with a client error; when all attempts fail, the request with the agent's notes is kept
@@ -65,7 +69,17 @@ calls exactly three API routes:
    CLI's result text or stderr) completes the run as `failed` with the error
    `RUNNER_UNAVAILABLE: <one line>` and ends the loop (`runner_unavailable`): nothing more is claimed,
    so no other item is charged an attempt. A usage limit also writes `<log dir>/runner-state.json`
-   (`{ limitedUntil, reason }`: the reset time the CLI named, else one hour later). Any other failed
+   (`{ limitedUntil, reason }`: the reset time the CLI named, else one hour later). A cause that does
+   not go away by itself (N3: claude cannot be started, it did not run on the subscription login, or
+   the developercards MCP server failed or is missing) writes a hold there instead,
+   `{ holdUntilCleared: true, reason, since, authorId, claudeVersion }` (event `runner_held`), so no
+   later hourly run claims, re-authors or bills anything until the owner fixes the cause and deletes
+   the file (or changes the author configuration or the CLI). The login and the MCP server are
+   judged when claude's `system`/`init` message arrives: one that shows another `apiKeySource` than
+   `none`, a developercards server that `failed` or is missing, or a model message before any init
+   message ends claude's process group at once (SIGTERM, then SIGKILL after the grace period), before
+   the first model turn; the same check runs again on every outcome (a timeout, an `is_error` result,
+   a non-zero exit, a success). Any other failed
    run carries the CLI's result subtype and the first 300 characters of its result text on one line
    (stderr when there is no result message), and the loop goes on with the next item.
 7. Final `heartbeat`: `idle`, or `error` with the last error when a run failed, an item was not run
@@ -153,7 +167,8 @@ An invalid value logs `config_error` naming the variable and its range, and exit
   `complete_pending` (a `complete` kept for the next run), `complete_replayed` (a kept `complete`
   re-sent; `replayed: true` when the server had already applied it), `runner_unavailable` (a
   run-level failure ended the loop), `usage_limited` (a usage limit holds the runner until the time in
-  `error`), `api_error`, `finish`,
+  `error`), `runner_held` (a run-level hold was written, or holds this run), `hold_cleared` (a hold of
+  another author configuration or CLI version was dropped), `api_error`, `finish`,
   `unexpected_error`. For example `grep '"event":"login_required"'`.
 - `~/Library/Logs/DeveloperCards/runs/<runId>.{mcp.json,prompt.md,meta.json,json,stderr.log}`: the
   MCP config, the prompt, the run record (`{ runId, itemId, startedAt, finishedAt, outcome,
@@ -164,7 +179,9 @@ An invalid value logs `config_error` naming the variable and its range, and exit
   `complete` request (with the notes as `summary`) that could not be sent; re-sent before the next
   claim or by the next run.
 - `~/Library/Logs/DeveloperCards/runner-state.json`: `{ limitedUntil, reason }` after a usage limit;
-  no run claims before `limitedUntil`. Delete it to retry earlier.
+  no run claims before `limitedUntil`. Delete it to retry earlier. `{ holdUntilCleared: true, reason,
+  since, authorId, claudeVersion }` after a run-level cause that does not go away by itself (N3); no
+  run claims until the owner deletes it or the author configuration or the CLI changes.
 - `~/Library/Logs/DeveloperCards/last-run.json`: `{ runId, itemId, outcome, finishedAt, durationMs }`
   of the last item; `status` shows it and heartbeats report it.
 
@@ -188,9 +205,10 @@ is needed.
 | `mode_off` / `no_items` | the server's automation mode is `off`, or the queue has nothing due; nothing to do |
 | `lease_short` | the server granted a lease that ends before `DC_RUNNER_ITEM_TIMEOUT_MINUTES` would; the item is released at once (`complete` `failed`, so the server retries it with its backoff) and the run stops; check the server's lease limit |
 | `bad_item` | the server sent an item with an invalid run id, item id, deck slug or non-https URL; it is not run and is released at once (`complete` `failed`) unless its run id itself is invalid |
-| `author_config_error` | `.claude/skills/author-cards/SKILL.md` is missing or has no `Skill version:` line in `DC_REPO_ROOT`, or `tools/mcp-server/dist/index.js` is not built |
+| `author_config_error` | `.claude/skills/author-cards/SKILL.md` is missing or has no `Skill version:` line in `DC_REPO_ROOT`, or `tools/mcp-server/dist/index.js` or `dist/tool-surface.json` is not built |
 | `item_done` with `failed` | the error names the CLI result subtype and text; read `runs/<runId>.stderr.log` and `runs/<runId>.json` |
-| `RUNNER_UNAVAILABLE: …` / `runner_unavailable` | a cause that affects every item ended the run after one item; the server requeues that item without charging an attempt. `claude could not be started: ENOENT` means `claude` is not on the job's `PATH` (reinstall after moving it) |
+| `RUNNER_UNAVAILABLE: …` / `runner_unavailable` | a cause that affects every item ended the run after one item; the server requeues that item with its backoff (N3). `claude could not be started: ENOENT` means `claude` is not on the job's `PATH` (reinstall after moving it) |
+| `runner_held` / `RUNNER_UNAVAILABLE: held since …` | an earlier run hit a cause that does not go away by itself (no `claude`, not on the subscription login, MCP server failed); fix it, then delete `runner-state.json` (a Claude Code update or a changed author configuration also drops the hold) |
 | `usage_limited` | the Claude subscription's usage or rate limit was hit; no run claims before `limitedUntil` in `runner-state.json` (delete the file to retry earlier) |
 | `timeout` | claude ran longer than the item timeout; its process group got SIGTERM, then SIGKILL 30 s later, and the run is settled at most 5 s after that even if a member of the group lingers |
 | `claude did not run on the subscription login` | claude's `system`/`init` message had no `apiKeySource` or one other than `none` (for example `/login managed key`: a Console API key saved by `/login`), or its result named a Bedrock/Vertex model id; sign `claude` in with the Claude subscription (`/login`, claude.ai account) |
@@ -209,13 +227,17 @@ run starts:
 - `skillVersion`: parsed from the `Skill version:` line of `.claude/skills/author-cards/SKILL.md`
   and rendered into the prompt (never a literal in the prompt);
 - `skillSha256` (every file of the skill directory), `promptSha256` (`prompts/queue-item.md`),
-  `claudeArgsSha256` (the claude argument list), `mcpServerSha256` (`tools/mcp-server/dist/index.js`;
-  a checkout without it runs nothing, `author_config_error`), `claudeVersion` and `runnerVersion`;
+  `claudeArgsSha256` (the claude argument list together with `toolSurfaceSha256`, N4),
+  `toolSurfaceSha256` (the SHA-256 of the canonical JSON of `tools/mcp-server/dist/tool-surface.json`:
+  the tool names, descriptions and input schemas the agent sees, the lint limits and the MCP server
+  version), `mcpServerVersion`, `mcpToolNames` (sorted), `mcpServerSha256`
+  (`tools/mcp-server/dist/index.js`; a checkout without it or without `tool-surface.json` runs
+  nothing, `author_config_error`), `claudeVersion` and `runnerVersion`;
 - `id`: the first 16 hex characters of the SHA-256 of all of the above (a local fingerprint);
 - `authorConfigId` (M1): the lowercase hex SHA-256 of the canonical JSON (sorted keys, no spaces) of
   `{ argsSha256, model, promptSha256, skillSha256, skillVersion }` (`argsSha256` is
-  `claudeArgsSha256`). It leaves out the Claude Code and runner versions, so a routine Claude Code
-  auto-update does not change it.
+  `claudeArgsSha256`, so it covers the MCP tool surface, N4). It leaves out the Claude Code and runner
+  versions, so a routine Claude Code auto-update does not change it.
 
 The job runs in the owner's working tree, so a branch switch, an uncommitted skill edit or a rebuilt
 MCP server changes `id`. The runner passes the model, skill version and `authorConfigId` to the MCP
@@ -226,8 +248,11 @@ the local `id` is on the `item_start` log line. The eval gate copies `authorConf
 records of its new-facts runs, and a live auto-accept requires the draft's `agent.authorConfigId`
 to equal the gate's (else `AUTHOR_NOT_GATED`, M1).
 
-**A change of `authorConfigId` (model, skill, prompt or claude arguments) needs a new eval gate
-before the automation auto-accepts in `live` on it.** A Claude Code update alone does not.
+**The one re-gate rule: any change of `authorConfigId` needs a new eval gate before the automation
+auto-accepts in `live` on it.** That is a change of the model, any skill file, the queue-item prompt,
+the claude arguments, or the MCP tool surface (a tool name, description or input schema, a lint
+limit, or the MCP server version). A Claude Code or runner update alone does not; neither does a
+rebuild of the MCP server that leaves its tool surface as it was (it changes only the local `id`).
 
 ## Agent notes
 
@@ -255,10 +280,13 @@ success. The server API is unchanged.
   or proxy reaches it, also on a manual `once` run from a shell.
 - **Subscription check.** Claude Code reports where its credential came from as `apiKeySource` in the
   `system`/`init` message of `--output-format stream-json --verbose` (not in the result message);
-  `none` means no API key is in use (the claude.ai subscription login). After the run, a missing init
-  message or `apiKeySource`, any other value (`ANTHROPIC_API_KEY`, `apiKeyHelper`,
-  `/login managed key`, …), or a `modelUsage` model id of a cloud provider (`anthropic.` segment,
-  ARN or `@version`) in the result fails the run (`claude did not run on the subscription login: …`).
+  `none` means no API key is in use (the claude.ai subscription login). The runner reads that message
+  as it arrives (N3) and ends the process group before the first model turn when it has no
+  `apiKeySource` or any other value (`ANTHROPIC_API_KEY`, `apiKeyHelper`, `/login managed key`, …), or
+  when a model message comes first. On every outcome it checks again, and a `modelUsage` model id of
+  a cloud provider (`anthropic.` segment, ARN or `@version`) in the result fails the run too
+  (`claude did not run on the subscription login: …`); each of these holds the runner until the owner
+  clears it.
   This catches a Console API key that `/login` stored in the keychain, which the environment
   allowlist cannot remove. The CLI's cost estimate and model ids are
   recorded in `runs/<runId>.meta.json`.

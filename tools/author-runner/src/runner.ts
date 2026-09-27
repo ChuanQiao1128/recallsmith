@@ -8,7 +8,9 @@
 // A failure that affects every item (M5: claude cannot start, not on the subscription, the MCP
 // server did not start, a usage or rate limit) completes the run with RUNNER_UNAVAILABLE and ends
 // the loop; a usage limit also keeps <logDir>/runner-state.json, and until its reset time a run
-// claims nothing (ai-agent-17).
+// claims nothing (ai-agent-17). N3: a cause that does not go away by itself (claude cannot be
+// started, not on the subscription login, the MCP server failed or is missing) keeps a hold in the
+// same file that lasts until the owner deletes it or the author configuration or the CLI changes.
 
 import { hostname } from 'node:os';
 import { join } from 'node:path';
@@ -97,20 +99,50 @@ export function runnerStateFile(config: Pick<RunnerConfig, 'logDir'>): string {
   return join(config.logDir, 'runner-state.json');
 }
 
-/** <logDir>/runner-state.json: until when a usage limit holds the runner (ai-agent-17). */
-export interface RunnerLocalState {
+/** <logDir>/runner-state.json after a usage limit: until when it holds the runner (ai-agent-17). */
+export interface UsageLimitState {
   limitedUntil: string;
   reason: string;
 }
 
-/** The kept usage-limit state, or null when it is missing or malformed. */
+/**
+ * <logDir>/runner-state.json after a run-level cause that does not go away by itself (N3): no run claims
+ * while the author configuration (its local `id`, which covers the CLI version) and the CLI version are the
+ * ones the hold names; the owner deletes the file once the cause is fixed (for example after `/login`).
+ */
+export interface HoldState {
+  holdUntilCleared: true;
+  reason: string;
+  since: string;
+  authorId: string;
+  claudeVersion: string | null;
+}
+
+export type RunnerLocalState = UsageLimitState | HoldState;
+
+export function isHold(state: RunnerLocalState): state is HoldState {
+  return 'holdUntilCleared' in state;
+}
+
+/** The kept state, or null when it is missing or malformed. */
 export function readRunnerState(config: Pick<RunnerConfig, 'logDir'>): RunnerLocalState | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(runnerStateFile(config), 'utf8'));
     if (typeof parsed !== 'object' || parsed === null) return null;
-    const p = parsed as Partial<RunnerLocalState>;
+    const p = parsed as Partial<UsageLimitState> & Partial<Omit<HoldState, 'holdUntilCleared'>> & { holdUntilCleared?: unknown };
+    const reason = typeof p.reason === 'string' ? p.reason : '';
+    if (p.holdUntilCleared === true) {
+      // A hold that names no configuration still holds; it matches none, so the next run clears it.
+      return {
+        holdUntilCleared: true,
+        reason,
+        since: typeof p.since === 'string' ? p.since : '',
+        authorId: typeof p.authorId === 'string' ? p.authorId : '',
+        claudeVersion: typeof p.claudeVersion === 'string' ? p.claudeVersion : null,
+      };
+    }
     if (typeof p.limitedUntil !== 'string' || !Number.isFinite(Date.parse(p.limitedUntil))) return null;
-    return { limitedUntil: p.limitedUntil, reason: typeof p.reason === 'string' ? p.reason : '' };
+    return { limitedUntil: p.limitedUntil, reason };
   } catch {
     return null;
   }
@@ -360,19 +392,34 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
       return failure;
     };
 
-    // A usage limit hit by an earlier run holds until its reset: claim nothing, only re-send kept completes.
+    // A usage limit hit by an earlier run holds until its reset, and a run-level hold (N3) until the owner
+    // clears it or the author configuration or the CLI changes: claim nothing, only re-send kept completes.
     const state = readRunnerState(config);
-    if (state !== null && now().getTime() < Date.parse(state.limitedUntil)) {
-      log('warn', 'usage_limited', { error: `until ${state.limitedUntil}` });
+    const holding =
+      state === null
+        ? null
+        : isHold(state)
+          ? state.authorId === author.id && state.claudeVersion === status.claudeVersion
+            ? `${RUNNER_UNAVAILABLE}: held since ${state.since} until the owner clears ${runnerStateFile(config)}: ${state.reason}`
+            : null
+          : now().getTime() < Date.parse(state.limitedUntil)
+            ? `${RUNNER_UNAVAILABLE}: usage limit until ${state.limitedUntil}: ${state.reason}`
+            : null;
+    if (state !== null && holding !== null) {
+      if (isHold(state)) log('warn', 'runner_held', { error: state.reason });
+      else log('warn', 'usage_limited', { error: `until ${state.limitedUntil}` });
       const failure = await replayPending();
       try {
-        await heartbeat('error', { lastError: (failure ?? `${RUNNER_UNAVAILABLE}: usage limit until ${state.limitedUntil}: ${state.reason}`).slice(0, 500) });
+        await heartbeat('error', { lastError: (failure ?? holding).slice(0, 500) });
       } catch (err) {
         return await apiFailure(err);
       }
       return EXIT_OK;
     }
-    if (state !== null) rmSync(runnerStateFile(config), { force: true });
+    if (state !== null) {
+      rmSync(runnerStateFile(config), { force: true });
+      if (isHold(state)) log('info', 'hold_cleared', { error: state.reason });
+    }
 
     let effectiveMode: string;
     try {
@@ -558,6 +605,17 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
           const kept: RunnerLocalState = { limitedUntil: until, reason: (result.error ?? '').slice(0, 300) };
           writeFileSync(runnerStateFile(config), `${JSON.stringify(kept)}\n`, { mode: 0o600 });
           log('warn', 'usage_limited', { runId, itemId, error: `until ${until}` });
+        } else if (result.holdUntilCleared === true) {
+          // N3: the next hourly run would hit the same cause; nothing is claimed until the owner clears it.
+          const kept: HoldState = {
+            holdUntilCleared: true,
+            reason: (result.error ?? '').slice(0, 300),
+            since: now().toISOString(),
+            authorId: author.id,
+            claudeVersion: status.claudeVersion,
+          };
+          writeFileSync(runnerStateFile(config), `${JSON.stringify(kept)}\n`, { mode: 0o600 });
+          log('warn', 'runner_held', { runId, itemId, error: kept.reason });
         }
         log('warn', 'runner_unavailable', { runId, itemId, error: result.error ?? undefined });
         break;
