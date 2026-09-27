@@ -1,0 +1,7 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.identity.aws_iam_role_policy.webhook_dispatcher": { "action": "update", "keys": ["policy"] },
+    "module.worker.aws_sqs_queue.ai_qa_jobs": { "action": "update", "keys": ["redrive_policy"] }
+  }
+}
