@@ -33,12 +33,17 @@ calls exactly three API routes:
    finds it held exits 0; a lock whose process is gone is taken over, and a lock of a live process only
    once it is older than the longest run the configuration allows: `DC_RUNNER_MAX_ITEMS` x
    (`DC_RUNNER_ITEM_TIMEOUT_MINUTES` + 1.6 min) + 30 min).
-2. Delete files older than 30 days in `<log dir>/runs/`.
+2. Delete files older than 30 days in `<log dir>/runs/` and `<log dir>/pending-complete/`.
 3. Work out `loginExpiresAt` from the stored id token and read `claude --version`.
 4. Pin the author configuration (see Author configuration). A checkout it cannot pin (no
-   `.claude/skills/author-cards/SKILL.md` with a `Skill version:` line) logs `author_config_error`,
+   `.claude/skills/author-cards/SKILL.md` with a `Skill version:` line, or no built
+   `tools/mcp-server/dist/index.js`) logs `author_config_error`,
    sends an `error` heartbeat and exits 1 without claiming.
-5. `heartbeat` (`running`). A login failure exits 3; an effective mode of `off` sends `idle` and exits 0.
+5. `heartbeat` (`running`). A login failure exits 3. Then re-send every kept `complete` in
+   `<log dir>/pending-complete/` (see step 6) once, before any claim; one the server applies (or
+   answers `replayed: true`) or refuses with a client error (for example 409 `RUN_NOT_RUNNING` after
+   the lease lapsed) is deleted, any other failure keeps it for the next run. An effective mode of
+   `off` then sends `idle` (or `error` when a re-send failed) and exits 0.
 6. Up to `DC_RUNNER_MAX_ITEMS` times: `claim` **one** item (`max: 1`), right before its run, so every
    item gets a lease that starts when its claude run starts. Nothing claimed: stop (`idle`, exit 0 when
    it is the first claim). Check the item's fields and that its lease covers a full claude run; an
@@ -46,7 +51,10 @@ calls exactly three API routes:
    of staying claimed until its lease lapses, and a short lease ends the run. Otherwise write
    `runs/<runId>.mcp.json`, `runs/<runId>.prompt.md` and `runs/<runId>.meta.json`, run claude (stdout,
    `--output-format stream-json --verbose`, to `runs/<runId>.json`, stderr to
-   `runs/<runId>.stderr.log`), then `complete` with the outcome and write `last-run.json`.
+   `runs/<runId>.stderr.log`), then `complete` with the outcome and write `last-run.json`. Every
+   `complete` is tried up to 3 times with a jittered backoff (about 2 s, then 4 s) unless the server
+   refuses it with a client error; when all attempts fail, the request with the agent's notes is kept
+   in `<log dir>/pending-complete/<runId>.json` (`complete_pending`) for the next run.
 7. Final `heartbeat`: `idle`, or `error` with the last error when a run failed, an item was not run
    or `complete` failed.
 
@@ -122,16 +130,20 @@ An invalid value logs `config_error` naming the variable and its range, and exit
 ## Logs
 
 - `~/Library/Logs/DeveloperCards/author-runner.log` (launchd stdout and stderr): one compact JSON
-  object per line, `{ ts, level, event, runnerId, runId?, itemId?, outcome?, durationMs?, authorConfigId?, costUsd?, error? }`.
+  object per line, `{ ts, level, event, runnerId, runId?, itemId?, outcome?, durationMs?, authorConfigId?, costUsd?, replayed?, error? }`.
   Events: `start`, `locked`, `config_error`, `login_required`, `mode_off`, `claimed`, `no_items`,
   `item_start` (with `authorConfigId`), `item_done` (with `costUsd`, the CLI's `total_cost_usd`
   estimate), `lease_short`, `bad_item`, `author_config_error`, `heartbeat_failed`, `complete_failed`,
-  `api_error`, `finish`, `unexpected_error`. For example `grep '"event":"login_required"'`.
+  `complete_pending` (a `complete` kept for the next run), `complete_replayed` (a kept `complete`
+  re-sent; `replayed: true` when the server had already applied it), `api_error`, `finish`,
+  `unexpected_error`. For example `grep '"event":"login_required"'`.
 - `~/Library/Logs/DeveloperCards/runs/<runId>.{mcp.json,prompt.md,meta.json,json,stderr.log}`: the
   MCP config, the prompt, the run record (`{ runId, itemId, startedAt, finishedAt, outcome,
   authorConfig, usage: { totalCostUsd, models, apiKeySource } }`), claude's stream-json output (one
   message per line: `system`/`init`, the conversation, `result`) and its
   stderr for one item. Files older than **30 days** are deleted at the start of every run.
+- `~/Library/Logs/DeveloperCards/pending-complete/<runId>.json`: `{ savedAt, itemId, request }`, a
+  `complete` request (with the notes as `summary`) that could not be sent; re-sent by the next run.
 - `~/Library/Logs/DeveloperCards/last-run.json`: `{ runId, itemId, outcome, finishedAt, durationMs }`
   of the last item; `status` shows it and heartbeats report it.
 
