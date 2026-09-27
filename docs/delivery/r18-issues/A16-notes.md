@@ -26,6 +26,10 @@ here they are contract-only, and every test mocks the network.
   - A17: `ReviewQueuePage` and `DeckQaPage`.
 
   `consoleNav.ts` exports `AUTOMATION_HREF` for them.
+
+  **Superseded by B07 (frontend-console-12):** `automationHref` is now in `CONSOLE_NAV`, every console
+  page links Automation, `AUTOMATION_HREF` and the explicit props are gone, and the pinned nav tests were
+  updated. See `B07-fixes.md`.
 - **The eval gate report is posted as pasted.** The server hashes the raw body bytes (A00 §15.4
   step 4).
 - **The title pattern of a watched feed is not compiled in the browser.** It is a PostgreSQL ARE; the
