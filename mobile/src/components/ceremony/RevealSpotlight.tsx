@@ -72,6 +72,9 @@ const RAYS_CANCEL_AFTER_LAND_MS = 1500;
 
 export const REVEAL_SPOTLIGHT_TESTID = 'reveal-spotlight';
 
+/** The light pillar colour behind the hero, per rarity (I06). */
+export const SPOTLIGHT_PILLAR_COLORS = Object.freeze({ COM: '#FFE3A3', RAR: '#A78BD8', LEG: '#F5C95E' });
+
 type FaceState = 'down' | 'flipping' | 'up';
 
 export type RevealSpotlightProps = {
@@ -94,6 +97,11 @@ export type RevealSpotlightProps = {
   onFlipStart?: (plan: SpotlightFlipPlan) => void;
   onLanded?: () => void;
   onPressFaceUp?: () => void;
+  /** Called once when the spotlight first becomes visible (I06 — the screen schedules the flyout cue). */
+  onEnter?: () => void;
+  /** A tap during the flip finished it early (I06) — fired just before onLanded so the screen can
+   *  play the stinger now if it has not already played. */
+  onFinishEarly?: () => void;
   testID?: string;
 };
 
@@ -101,7 +109,7 @@ function RevealSpotlightImpl(props: RevealSpotlightProps): React.JSX.Element {
   const {
     card, index, total, visible, interactive, initialFaceUp = false, autoFlip = false, reduceMotion,
     cardBackImage, packArt, packPaletteCover, serialText, footer, progressText, onSkipAll,
-    onFlipStart, onLanded, onPressFaceUp, testID,
+    onFlipStart, onLanded, onPressFaceUp, onEnter, onFinishEarly, testID,
   } = props;
 
   const win = useWindowDimensions();
@@ -117,6 +125,7 @@ function RevealSpotlightImpl(props: RevealSpotlightProps): React.JSX.Element {
   faceRef.current = face;
   const flipRequestedRef = React.useRef(initialFaceUp);
   const timersRef = React.useRef<number[]>([]);
+  const enteredRef = React.useRef(false);
 
   // Motion state.
   const appear = useSharedValue(visible ? 1 : 0);
@@ -187,9 +196,17 @@ function RevealSpotlightImpl(props: RevealSpotlightProps): React.JSX.Element {
   const requestFlipRef = React.useRef(requestFlip);
   requestFlipRef.current = requestFlip;
 
+  // Keep a live handle so the entrance effect calls the latest onEnter.
+  const onEnterRef = React.useRef(onEnter);
+  onEnterRef.current = onEnter;
+
   // Entrance + autoFlip: both keyed on the spotlight first becoming visible.
   React.useEffect(() => {
     if (!visible) return;
+    if (!enteredRef.current) {
+      enteredRef.current = true;
+      onEnterRef.current?.();
+    }
     if (reduceMotion) {
       appear.value = withTiming(1, { duration: SPOTLIGHT_RM_FADE_MS, easing: Easing.linear });
     } else {
@@ -222,13 +239,35 @@ function RevealSpotlightImpl(props: RevealSpotlightProps): React.JSX.Element {
     };
   }, []);
 
+  // Tap-to-finish (I06): a tap during the flip jumps straight to face up — cancel the flip
+  // timers, snap the animations to their end, then report onFinishEarly() and onLanded().
+  const finishEarly = React.useCallback(() => {
+    timersRef.current.forEach((t) => clearTimeout(t));
+    timersRef.current = [];
+    cancelAnimation(flip);
+    cancelAnimation(shakeX);
+    cancelAnimation(scale);
+    cancelAnimation(glow);
+    flip.value = 1;
+    shakeX.value = 0;
+    scale.value = 1;
+    glow.value = 1;
+    faceRef.current = 'up';
+    setRevealed(true);
+    setFace('up');
+    onFinishEarly?.();
+    onLanded?.();
+  }, [flip, shakeX, scale, glow, onFinishEarly, onLanded]);
+
   const onCardPress = React.useCallback(() => {
     if (faceRef.current === 'down') {
       if (interactive) requestFlip();
+    } else if (faceRef.current === 'flipping') {
+      if (interactive) finishEarly();
     } else if (faceRef.current === 'up') {
       onPressFaceUp?.();
     }
-  }, [interactive, requestFlip, onPressFaceUp]);
+  }, [interactive, requestFlip, finishEarly, onPressFaceUp]);
 
   const flipRequested = face !== 'down';
   const accessibilityLabel = flipRequested
@@ -290,6 +329,7 @@ function RevealSpotlightImpl(props: RevealSpotlightProps): React.JSX.Element {
           raysAngle={raysAngle}
           revealed={revealed}
           center={{ x: win.width / 2, y: win.height / 2 }}
+          cardWidth={size.width}
         />
       ) : null}
 
@@ -388,12 +428,18 @@ type SpotlightCanvasProps = {
   raysAngle: { value: number };
   revealed: boolean;
   center: { x: number; y: number };
+  cardWidth: number;
 };
 
 function SpotlightCanvas(props: SpotlightCanvasProps): React.JSX.Element | null {
   if (!skiaAvailable || !SkiaModule) return null;
-  const { width, height, rarity, glow, raysAngle, revealed, center } = props;
-  const { Canvas, Rect, Atlas, SweepGradient, RadialGradient, useImage, useRSXformBuffer, vec, rect } = SkiaModule;
+  const { width, height, rarity, glow, raysAngle, revealed, center, cardWidth } = props;
+  const { Canvas, Rect, Atlas, SweepGradient, RadialGradient, LinearGradient, useImage, useRSXformBuffer, vec, rect } = SkiaModule;
+
+  // The light pillar behind the hero: a vertical beam centred on the card, transparent → rarity
+  // colour → transparent, fading in with the flip (glow rises to 1 across the flip midpoint).
+  const pillar = SPOTLIGHT_PILLAR_COLORS[rarity];
+  const pillarWidth = 0.6 * cardWidth;
 
   const stops = rayStops();
   const spread = width * 0.35;
@@ -437,6 +483,15 @@ function SpotlightCanvas(props: SpotlightCanvasProps): React.JSX.Element | null 
 
   return (
     <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }} pointerEvents="none">
+      {/* Light pillar behind the card (fades in with the flip). */}
+      <Rect testID="reveal-spotlight-pillar" x={center.x - pillarWidth / 2} y={0} width={pillarWidth} height={height} opacity={glow}>
+        <LinearGradient
+          start={vec(center.x, 0)}
+          end={vec(center.x, height)}
+          colors={[`${pillar}00`, pillar, `${pillar}00`]}
+          positions={[0, 0.5, 1]}
+        />
+      </Rect>
       <Rect x={0} y={0} width={width} height={height} opacity={glow} transform={rayTransform} origin={vec(center.x, center.y)}>
         <SweepGradient c={vec(center.x, center.y)} colors={stops.colors} positions={stops.positions} />
       </Rect>

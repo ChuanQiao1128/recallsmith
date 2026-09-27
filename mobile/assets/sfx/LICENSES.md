@@ -87,3 +87,9 @@ with ffmpeg and loudness-matched per role (loudnorm, true peak -1.5 dBTP).
 - stinger-com.wav: music-jingles jingles_PIZZI00
 - stinger-rar.wav: music-jingles jingles_STEEL00
 - stinger-leg.wav: music-jingles jingles_STEEL07
+
+From release 1.7.0 the app loads **only** the eight `v2/` files (`ceremonyAudio.ts` requires
+`assets/sfx/v2/*.wav`); every ceremony sound is a one-shot hit that plays its own file 1:1, with
+no bed, loop, ducking or tail. The v1 files above (`ambience.wav`, `whoosh.wav`, `rip.wav`,
+`card-flip.wav`, `card-drop.wav`, `shimmer.wav`, `legendary.wav`) and `scripts/gen_sfx.py` stay on
+disk for reference but are no longer referenced by the code.

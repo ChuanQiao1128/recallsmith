@@ -128,6 +128,33 @@ describe('RevealSpotlight', () => {
     expect(onPressFaceUp).toHaveBeenCalledTimes(1);
   });
 
+  it('a tap during the flip finishes it at once and reports onFinishEarly', () => {
+    vi.useFakeTimers();
+    const onFinishEarly = vi.fn();
+    const onLanded = vi.fn();
+    const { tree } = render({ onFinishEarly, onLanded });
+    const card = () => tree.root.findByProps({ testID: 'reveal-spotlight-card' });
+
+    act(() => {
+      card().props.onPress(); // face down → flipping
+    });
+    expect(card().props.accessibilityLabel).toBe('Card 1 of 1, Rare revealed');
+    expect(onFinishEarly).not.toHaveBeenCalled();
+
+    act(() => {
+      card().props.onPress(); // tap during the flip → finish early
+    });
+    expect(onFinishEarly).toHaveBeenCalledTimes(1);
+    expect(onLanded).toHaveBeenCalledTimes(1);
+
+    // The flip timers were cancelled: no second landing fires later.
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(onFinishEarly).toHaveBeenCalledTimes(1);
+    expect(onLanded).toHaveBeenCalledTimes(1);
+  });
+
   it('omits every transform under reduce motion', () => {
     const { tree } = render({ reduceMotion: true });
     // Every animated node's transform is empty under Reduce Motion (no scale/shake/rotateY).

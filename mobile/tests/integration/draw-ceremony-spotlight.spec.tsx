@@ -209,8 +209,8 @@ describe('DrawCeremony single-pull spotlight', () => {
   it('fires the flip sound at flip start and the rarity sting at the flip midpoint', () => {
     const { tree } = renderScreen('LEG');
     reachTable(tree);
-    const flip = () => rec.audio.filter((x) => x === 'hit:card-flip').length;
-    const leg = () => rec.audio.filter((x) => x === 'hit:legendary').length;
+    const flip = () => rec.audio.filter((x) => x === 'hit:flip').length;
+    const leg = () => rec.audio.filter((x) => x === 'hit:stinger-leg').length;
     const success = () => rec.haptics.filter((x) => x === 'success').length;
     const baseSuccess = success();
 
@@ -231,6 +231,21 @@ describe('DrawCeremony single-pull spotlight', () => {
 
     advance(950 - 700); // landMs = 950
     expect(success()).toBe(baseSuccess + 1);
+  });
+
+  it('fires a Common stinger at the flip midpoint', () => {
+    const { tree } = renderScreen('COM');
+    reachTable(tree);
+    const flip = () => rec.audio.filter((x) => x === 'hit:flip').length;
+    const com = () => rec.audio.filter((x) => x === 'hit:stinger-com').length;
+    act(() => {
+      tree.root.findByProps({ testID: 'reveal-spotlight-card' }).props.onPress();
+    });
+    // COM flips at once (flipStartMs 0); its stinger waits for the midpoint (175).
+    expect(flip()).toBe(1);
+    expect(com()).toBe(0);
+    advance(175 + 5);
+    expect(com()).toBe(1);
   });
 
   it('renders the primary CTA inside the spotlight while it is visible', () => {

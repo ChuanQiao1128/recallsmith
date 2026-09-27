@@ -300,7 +300,7 @@ describe('DrawCeremony multi-pull reveal', () => {
     });
     expect(gridPresent(tree)).toBe(true);
 
-    const flipsBefore = rec.audio.filter((x) => x === 'hit:card-flip').length;
+    const flipsBefore = rec.audio.filter((x) => x === 'hit:flip').length;
 
     // Tapping a grid cell re-opens that card in the spotlight, already face up (no flip).
     act(() => {
@@ -311,7 +311,7 @@ describe('DrawCeremony multi-pull reveal', () => {
     expect(bannerText(tree)).not.toBeNull();
     expect(progressText(tree)).toBeNull();
     advance(2000);
-    expect(rec.audio.filter((x) => x === 'hit:card-flip').length).toBe(flipsBefore);
+    expect(rec.audio.filter((x) => x === 'hit:flip').length).toBe(flipsBefore);
 
     // Tapping the inspected card closes it back to the grid.
     act(() => {
@@ -332,12 +332,25 @@ describe('DrawCeremony multi-pull reveal', () => {
       tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress();
     });
     // The table tap itself is silent — no flip sound fired at tap time.
-    expect(rec.audio.filter((x) => x === 'hit:card-flip').length).toBe(0);
+    expect(rec.audio.filter((x) => x === 'hit:flip').length).toBe(0);
 
-    // Walk the single tapped RAR through its flip: exactly one flip and one chime.
-    advanceUntil(tree, () => rec.audio.filter((x) => x === 'hit:chime').length > 0, 2000);
-    expect(rec.audio.filter((x) => x === 'hit:card-flip').length).toBe(1);
-    expect(rec.audio.filter((x) => x === 'hit:chime').length).toBe(1);
+    // Walk the single tapped RAR through its flip: exactly one flip and one stinger.
+    advanceUntil(tree, () => rec.audio.filter((x) => x === 'hit:stinger-rar').length > 0, 2000);
+    expect(rec.audio.filter((x) => x === 'hit:flip').length).toBe(1);
+    expect(rec.audio.filter((x) => x === 'hit:stinger-rar').length).toBe(1);
+  });
+
+  it('plays a Common stinger when a Common card is revealed', () => {
+    const rarities: Rarity[] = ['COM', 'RAR'];
+    const { tree } = renderScreen(rarities);
+    reachTable(tree, rarities);
+
+    rec.audio.length = 0;
+    act(() => {
+      tree.root.findByProps({ testID: 'tap-card-0' }).props.onPress(); // the Common
+    });
+    advanceUntil(tree, () => rec.audio.filter((x) => x === 'hit:stinger-com').length > 0, 2000);
+    expect(rec.audio.filter((x) => x === 'hit:stinger-com').length).toBe(1);
   });
 
   it('auto-reveals every card when autoReveal is on', () => {

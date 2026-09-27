@@ -4,8 +4,6 @@
 import { describe, it, expect } from 'vitest';
 
 import {
-  BED_TABLE_FADE_DELAY_MS,
-  BED_TABLE_FADE_OUT_MS,
   DRAW_COMMITTED_SYNC_DELAY_MS,
   TO_TABLE_CAP_MS,
   type CeremonyPhase,
@@ -17,12 +15,6 @@ describe('ceremony quick fixes (G09)', () => {
     // MGACHA-03: the pull + draw-state sync must land after the longest possible ceremony, so
     // its network / JSON / AsyncStorage work never stutters the JS thread mid-ceremony.
     expect(DRAW_COMMITTED_SYNC_DELAY_MS).toBeGreaterThan(TO_TABLE_CAP_MS.multi);
-  });
-
-  it('fades the table bed out before the 8 s ambience loop can wrap', () => {
-    // MGACHA-02: ambience.wav is an 8 s non-gapless loop; the fade must complete before the
-    // loop boundary would be reached on a normal pull.
-    expect(BED_TABLE_FADE_DELAY_MS + BED_TABLE_FADE_OUT_MS).toBeLessThan(8000);
   });
 
   it('marks the ceremony complete once it reaches settle or the table, exactly once', () => {

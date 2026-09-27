@@ -30,7 +30,7 @@ import {
   type TimelineInput,
 } from '../../src/components/ceremony/useCeremonyTimeline';
 import type { CeremonyPhase, PeakRarity } from '../../src/features/gacha/draw/ceremonyTimings';
-import { resolveCeremonyTimings } from '../../src/features/gacha/draw/ceremonyTimings';
+import { CHARGE_DIM, resolveCeremonyTimings } from '../../src/features/gacha/draw/ceremonyTimings';
 import { buildSpillSchedule, centreSlot } from '../../src/features/gacha/draw/spillSchedule';
 
 const PHASES: CeremonyPhase[] = ['swipe', 'approach', 'hold', 'tear-flip', 'flash-reveal', 'settle', 'cards-on-table'];
@@ -56,9 +56,15 @@ describe('useCeremonyTimeline', () => {
     expect(aMulti.packScale).toBe(1.1);
     expect(aMulti.rays).toBe(0.26);
 
-    // hold: LEG dims the backdrop by 0.3; RAR does not dim.
-    expect(timelineTargets({ phase: 'hold', peakRarity: 'LEG', isMulti: false, reduceMotion: false }).dim).toBe(0.3);
-    expect(timelineTargets({ phase: 'hold', peakRarity: 'RAR', isMulti: false, reduceMotion: false }).dim).toBe(0);
+    // v2 (I06): every rarity dims to CHARGE_DIM from approach through the table; only swipe is 0.
+    const dimmed: CeremonyPhase[] = ['approach', 'hold', 'tear-flip', 'flash-reveal', 'settle', 'cards-on-table'];
+    for (const r of RARITIES) {
+      expect(timelineTargets({ phase: 'swipe', peakRarity: r, isMulti: false, reduceMotion: false }).dim).toBe(0);
+      for (const phase of dimmed) {
+        expect(timelineTargets({ phase, peakRarity: r, isMulti: false, reduceMotion: false }).dim).toBe(CHARGE_DIM);
+        expect(timelineTargets({ phase, peakRarity: r, isMulti: false, reduceMotion: true }).dim).toBe(CHARGE_DIM);
+      }
+    }
 
     // tear-flip: peel and cardOut reach 1.
     const tf = timelineTargets({ phase: 'tear-flip', peakRarity: 'RAR', isMulti: false, reduceMotion: false });
