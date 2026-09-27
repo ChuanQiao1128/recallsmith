@@ -12,6 +12,8 @@
 // No React and no runtime imports: this is pure data-shaping so it can be tested
 // as a node module and reused from anywhere.
 
+import type { CardSource } from '../types/card';
+
 export const DEFAULT_DECK_LOCALE = 'en-US';
 
 export const DRAFT_VERSION_ERROR = 'Draft version must be a whole number of 1 or more.';
@@ -102,4 +104,17 @@ export function buildCardBody(input: CardBodyInput): CardBody {
     orderInDeck: Number(input.orderInDeck) || 1,
     revision: Number.isFinite(revision) ? revision : 1,
   };
+}
+
+export interface CardSourceInput {
+  sourceUrl?: string;
+  sourceQuote?: string;
+}
+
+/** The `source` the card pages send beside buildCardBody: null when the URL box is blank. */
+export function buildCardSource(input: CardSourceInput): CardSource | null {
+  const url = (input.sourceUrl ?? '').trim();
+  if (url === '') return null;
+  const quote = (input.sourceQuote ?? '').trim();
+  return { url, quote: quote === '' ? null : quote };
 }

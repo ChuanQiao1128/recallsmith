@@ -20,9 +20,10 @@
 //    cards are recorded as failures and the next batch is attempted, so the
 //    operator gets every failure at once.
 // 4. Cleared optional fields are sent as "" instead of being omitted, and mcq is
-//    always sent as an explicit value (null on a Q/A card). F01 upserts every
-//    column from the payload, and the planner compares the same normalized
-//    strings, so a re-import of the same file is a no-op — idempotence has to
+//    always sent as an explicit value (null on a Q/A card), and so is source
+//    (null on a card without SOURCE:, so a removed SOURCE: clears the column).
+//    F01 upserts every column from the payload, and the planner compares the
+//    same normalized strings, so a re-import of the same file is a no-op — idempotence has to
 //    survive deletions too.
 
 import { VERSION_CONFLICT } from '../api/errors';
@@ -117,7 +118,8 @@ function optionalText(value: string | null): string {
 /**
  * Builds the F01 card body for one action. Mirrors the create/update field rules
  * the per-card path used: cleared optional text becomes "", mcq is always an
- * explicit value (null on a Q/A card), and there is no expectedVersion because
+ * explicit value (null on a Q/A card), source is explicit too (null without
+ * SOURCE:), and there is no expectedVersion because
  * F01 ignores it.
  */
 function cardInputFor(action: ImportAction): ImportCardInput {
@@ -131,6 +133,7 @@ function cardInputFor(action: ImportAction): ImportCardInput {
     realWorldUsage: optionalText(card.realWorldUsage),
     topic: optionalText(card.topic ?? null),
     mcq: card.mcq ?? null,
+    source: card.source ?? null,
     difficulty: card.difficulty,
     orderInDeck: card.orderInDeck,
   };
