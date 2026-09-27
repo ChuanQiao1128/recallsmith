@@ -14,13 +14,14 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import emf
+from . import emf, normalize
 from .feeds import FeedItem, FeedParseError, feed_hash, html_heading_items, parse_atom, parse_rss
-from .fetch import FAILED, OK, PARSE, FetchResult, fetch
+from .fetch import FAILED, MAX_REDIRECTS, OK, PARSE, FetchResult, fetch
 from .internal_client import REPORT_PATH, TARGETS_PATH, InternalClient
 from .logs import log
 from .normalize import (
     NORMALIZER,
+    PARSE_TIME_BUDGET_SECONDS,
     ParseLimitExceeded,
     decode_html,
     decode_text,
@@ -29,20 +30,37 @@ from .normalize import (
     quote_present,
     sha256_hex,
 )
-from .robots import RobotsCache
+from .robots import ROBOTS_TIMEOUT_SECONDS, RobotsCache
 from .settings import Settings, get_secret, load_settings, previous_secret_name
 from .urlguard import check_url
 
 TAG = "source-watcher"
 JOB = "source-watch"
 
-REPORT_BATCH_SIZE = 100
+# D03: small enough that a production run (WATCH_MAX_TARGETS = 60) reports while it goes, so a run
+# killed later (timeout, OOM) has already reported all but its last few observations.
+REPORT_BATCH_SIZE = 10
 MAX_FEED_ITEMS = 200
 MAX_MISSING_QUOTE_IDS = 50
-# No new fetch starts when the Lambda has less than this left.
-MIN_REMAINING_MS = 40_000
 # Kept back from the report budget for the function's own return.
 REPORT_RESERVE_MS = 5_000
+# The longest one report call may take: two 10 s attempts and the 1 s pause between them.
+REPORT_WORST_MS = 21_000
+# Every hop of a fetch (the first request and MAX_REDIRECTS redirects) has its own whole-hop timeout.
+HOPS = MAX_REDIRECTS + 1
+
+
+def min_remaining_ms(settings: Settings) -> int:
+    """No new target starts when the Lambda has less than this left (D03): the worst case of one
+    target (robots.txt and the page, every hop at its timeout, each after the per-host wait, then
+    the parse budget) plus the final report, so the report of what finished always fits."""
+    worst_s = (
+        HOPS * ROBOTS_TIMEOUT_SECONDS
+        + HOPS * settings.watch_http_timeout_seconds
+        + 2 * settings.watch_host_interval_seconds
+        + PARSE_TIME_BUDGET_SECONDS
+    )
+    return int(worst_s * 1000) + REPORT_WORST_MS + REPORT_RESERVE_MS
 
 ROBOTS_DISALLOWED = "robots_disallowed"
 KINDS = ("page", "feed")
@@ -162,7 +180,16 @@ class _Run:
         if clock() - self.started >= self.settings.watch_time_budget_seconds:
             return False
         remaining = _remaining_ms(self.context)
-        return remaining is None or remaining >= MIN_REMAINING_MS
+        return remaining is None or remaining >= min_remaining_ms(self.settings)
+
+    def parse_deadline(self) -> float:
+        """One deadline (a value of normalize.clock) for all the parsing of one target: at most
+        PARSE_TIME_BUDGET_SECONDS, and never into the time the final report needs."""
+        budget = PARSE_TIME_BUDGET_SECONDS
+        remaining = _remaining_ms(self.context)
+        if remaining is not None:
+            budget = min(budget, max(0.0, (remaining - REPORT_WORST_MS - REPORT_RESERVE_MS) / 1000))
+        return normalize.clock() + budget
 
     def pace(self, host: str) -> None:
         """Wait until WATCH_HOST_INTERVAL_SECONDS have passed since the last request to host."""
@@ -198,24 +225,43 @@ def _observe(target: dict[str, Any], run: _Run, robots: RobotsCache) -> tuple[di
     if result.outcome != OK:
         return _observation(target, result.outcome, result, _fetched_at(sent_at)), result.requested
     try:
-        return _ok_observation(target, result, _fetched_at(sent_at)), result.requested
+        return _ok_observation(target, result, _fetched_at(sent_at), run.parse_deadline()), result.requested
     except ParseLimitExceeded as exc:
         # A page too costly to parse is a failed check of this target, never a lost run.
         log("warn", TAG, event="parse_limit", targetId=target["targetId"], host=_host(url), limit=str(exc))
         return _observation(target, FAILED, result, _fetched_at(sent_at), error_code=PARSE), result.requested
+    except MemoryError:
+        raise
+    except Exception as exc:
+        # D03: html.parser raises on some malformed markup (AssertionError on `<![ ]>`); whatever
+        # parsing one untrusted page raises is a failed check of this target, never a lost run.
+        log("warn", TAG, event="parse_error", targetId=target["targetId"], host=_host(url), errorClass=type(exc).__name__)
+        return _observation(target, FAILED, result, _fetched_at(sent_at), error_code=PARSE), result.requested
 
 
-def _normalized_page(result: FetchResult) -> str:
+def _observe_isolated(target: dict[str, Any], run: _Run, robots: RobotsCache) -> tuple[dict[str, Any], bool] | None:
+    """_observe, with anything else one target raises (MemoryError aside) recorded as a failed
+    check of that target, so the rest of the run is still observed and reported."""
+    try:
+        return _observe(target, run, robots)
+    except MemoryError:
+        raise
+    except Exception as exc:
+        log("warn", TAG, event="target_error", targetId=target["targetId"], host=_host(target["url"]), errorClass=type(exc).__name__)
+        return _observation(target, FAILED, None, _fetched_at(utcnow()), error_code=PARSE), False
+
+
+def _normalized_page(result: FetchResult, deadline: float) -> str:
     body = result.body or b""
     if result.media_type == "text/plain":
         return normalize_text(decode_text(body, result.charset))
-    return normalize_html(decode_html(body, result.charset))
+    return normalize_html(decode_html(body, result.charset), deadline=deadline)
 
 
-def _ok_observation(target: dict[str, Any], result: FetchResult, fetched_at: str) -> dict[str, Any]:
+def _ok_observation(target: dict[str, Any], result: FetchResult, fetched_at: str, deadline: float) -> dict[str, Any]:
     items: list[FeedItem] | None = None
     if target["kind"] == "page":
-        text = _normalized_page(result)
+        text = _normalized_page(result, deadline)
         observation = _observation(target, OK, result, fetched_at, content_sha256=sha256_hex(text))
         missing = [card_id for card_id, quote in target["quotes"] if not quote_present(quote, text)]
         observation["missingQuoteCardIds"] = missing[:MAX_MISSING_QUOTE_IDS]
@@ -223,8 +269,9 @@ def _ok_observation(target: dict[str, Any], result: FetchResult, fetched_at: str
     body = result.body or b""
     if target["feedFormat"] == "html-headings":
         html_text = decode_html(body, result.charset)
-        digest = sha256_hex(normalize_html(html_text))
-        items = html_heading_items(target["url"], html_text)
+        # Both parses share the target's one parse deadline.
+        digest = sha256_hex(normalize_html(html_text, deadline=deadline))
+        items = html_heading_items(target["url"], html_text, deadline=deadline)
     else:
         parse = parse_rss if target["feedFormat"] == "rss" else parse_atom
         try:
@@ -303,6 +350,8 @@ def lambda_handler(event: Any, context: Any) -> dict[str, Any]:
 
     started = clock()
     settings = load_settings()
+    # M6 heartbeat: one per source-watch invocation, whatever happens next.
+    emf.run(settings.metrics_namespace)
     secret_name = settings.internal_secret_ssm_name
     secret = get_secret(secret_name)
     if secret is None:
@@ -345,7 +394,7 @@ def lambda_handler(event: Any, context: Any) -> dict[str, Any]:
         if not run.can_start():
             log("info", TAG, event="budget_reached", watchRunId=run_id, visited=reporter.checked, due=len(targets))
             break
-        visit = _observe(target, run, robots)
+        visit = _observe_isolated(target, run, robots)
         if visit is None:
             log("info", TAG, event="budget_reached", watchRunId=run_id, visited=reporter.checked, due=len(targets))
             break

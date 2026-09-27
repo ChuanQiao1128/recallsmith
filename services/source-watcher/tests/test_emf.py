@@ -31,3 +31,12 @@ class TestEmf:
 
         emf.emit("DeveloperCards", "SourceWatchChecks", Unserialisable(), "Count")  # never raises
         assert capsys.readouterr().out == ""
+
+    def test_run_heartbeat_line(self, capsys):
+        emf.run("DeveloperCards")
+        (line,) = [json.loads(l) for l in capsys.readouterr().out.splitlines()]
+        directive = line["_aws"]["CloudWatchMetrics"][0]
+        assert directive["Namespace"] == "DeveloperCards"
+        assert directive["Metrics"] == [{"Name": "SourceWatchRuns", "Unit": "Count"}]
+        assert directive["Dimensions"] == [["Service"]]
+        assert line["Service"] == "source-watcher" and line["SourceWatchRuns"] == 1

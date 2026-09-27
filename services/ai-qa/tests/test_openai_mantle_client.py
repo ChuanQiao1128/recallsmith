@@ -420,3 +420,28 @@ class TestHandler:
         (report,) = reports(core)
         assert [(i["status"], i["errorCode"]) for i in report["items"]] == [("error", "PROVIDER_ACCESS_DENIED")]
         assert len(transport.requests) == 1
+
+
+def _served(model_field: object) -> object:
+    reply = completion()
+    body = json.loads(reply[2])
+    if model_field is None:
+        body.pop("model")
+    else:
+        body["model"] = model_field
+    client, _, _ = client_with((reply[0], reply[1], json.dumps(body).encode()))
+    response = client.messages.create(model=MODEL, system="s", messages=[{"role": "user", "content": "u"}], max_tokens=9)
+    # The eval harness's RecordingClient reads the served id exactly this way.
+    return getattr(response, "model", None)
+
+
+def test_served_model_id_is_kept_from_the_reply() -> None:
+    """D03, ai-agent-19: the reply's model id reaches the response, so a reroute is visible."""
+    assert _served(MODEL) == MODEL
+    assert _served("openai.gpt-5.5-2026-09-01") == "openai.gpt-5.5-2026-09-01"
+    assert _served("openai.gpt-oss-120b") == "openai.gpt-oss-120b"  # a reroute is recorded as served
+    # A reply that omits the namespace reads in the configured id space.
+    assert _served("gpt-5.5") == MODEL
+    assert _served(" gpt-5.5 ") == MODEL
+    for missing in (None, "", "  ", 55, ["openai.gpt-5.5"]):
+        assert _served(missing) is None

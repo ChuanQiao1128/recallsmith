@@ -44,6 +44,12 @@ MAX_ELEMENTS = 200_000
 PARSE_TIME_BUDGET_SECONDS = 20.0
 # Parser callbacks between two clock reads.
 CLOCK_CHECK_INTERVAL = 1024
+# D03: the only attributes the normaliser and the heading feed read; the others are not kept.
+KEPT_ATTRIBUTES = frozenset({"role", "id"})
+# D03: attributes one start tag may have. html.parser's start-tag scan costs about 1 KB per
+# attribute before any callback runs, so a single tag with a million attributes would exhaust the
+# Lambda's memory; the attributes are counted first, with a scan that keeps nothing.
+MAX_ATTRIBUTES = 1024
 
 # The text encodings of the WHATWG Encoding Standard that a page may name, by the canonical name of
 # the Python codec its label resolves to. Any other codec (punycode, idna, rot13, the utf-7 family,
@@ -65,6 +71,11 @@ clock = time.monotonic
 # Matches both <meta charset="x"> and <meta http-equiv="Content-Type" content="text/html; charset=x">.
 _META_CHARSET = re.compile(rb"""<meta\b[^>]*?\bcharset\s*=\s*["']?\s*([A-Za-z0-9._:-]+)""", re.IGNORECASE)
 _WHITESPACE_RUN = re.compile(r"\s+")
+# One attribute of a start tag, as html.parser's tolerant attribute scan reads it.
+_ATTRIBUTE = re.compile(
+    r"((?<=['\"\s/])[^\s/>][^\s/=>]*)(\s*=+\s*('[^']*'|\"[^\"]*\"|(?!['\"])[^>\s]*))?(?:\s|/(?!>))*"
+)
+_TAG_NAME = re.compile(r"[a-zA-Z][^\t\n\r\f />\x00]*(?:\s|/(?!>))*")
 
 
 @dataclass
@@ -98,6 +109,10 @@ class _TreeBuilder(HTMLParser):
         if self._calls % CLOCK_CHECK_INTERVAL == 0 and clock() > self._deadline:
             raise ParseLimitExceeded("time budget")
 
+    def parse_starttag(self, i: int) -> int:
+        _check_attribute_count(self.rawdata, i)
+        return super().parse_starttag(i)
+
     def _add(self, tag: str, attrs: list[tuple[str, str | None]]) -> Element:
         self._tick()
         self._elements += 1
@@ -106,7 +121,8 @@ class _TreeBuilder(HTMLParser):
         element = Element(tag)
         # The first occurrence of a repeated attribute wins, as in browsers.
         for name, value in attrs:
-            element.attrs.setdefault(name, value or "")
+            if name in KEPT_ATTRIBUTES:
+                element.attrs.setdefault(name, value or "")
         self._stack[-1].children.append(element)
         return element
 
@@ -131,12 +147,33 @@ class _TreeBuilder(HTMLParser):
         self._stack[-1].children.append(data)
 
 
-def parse_document(text: str, *, budget_seconds: float = PARSE_TIME_BUDGET_SECONDS) -> Element:
+def _check_attribute_count(rawdata: str, i: int) -> None:
+    """Raise ParseLimitExceeded when the start tag at rawdata[i] has more than MAX_ATTRIBUTES
+    attributes. Every step consumes at least one character and stops at the cap, so the scan is
+    bounded by the tag and by MAX_ATTRIBUTES, and allocates nothing that outlives one step."""
+    name = _TAG_NAME.match(rawdata, i + 1)
+    if name is None:
+        return
+    position, count = name.end(), 0
+    while True:
+        match = _ATTRIBUTE.match(rawdata, position)
+        if match is None or match.end() == position:
+            return
+        count += 1
+        if count > MAX_ATTRIBUTES:
+            raise ParseLimitExceeded("attribute cap")
+        position = match.end()
+
+
+def parse_document(
+    text: str, *, budget_seconds: float = PARSE_TIME_BUDGET_SECONDS, deadline: float | None = None
+) -> Element:
     """The element tree of an HTML document, with the dropped subtrees already removed.
 
-    Raises ParseLimitExceeded when the page has more than MAX_ELEMENTS elements or parsing takes
-    longer than budget_seconds."""
-    builder = _TreeBuilder(clock() + budget_seconds)
+    Raises ParseLimitExceeded when the page has more than MAX_ELEMENTS elements or more than
+    MAX_ATTRIBUTES attributes on one element, or parsing takes longer than budget_seconds (or runs
+    past `deadline`, a value of `clock`, when one is given)."""
+    builder = _TreeBuilder(deadline if deadline is not None else clock() + budget_seconds)
     builder.feed(text)
     builder.close()
     _drop_subtrees(builder.root)
@@ -217,8 +254,8 @@ def normalize_lines(text: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def normalize_html(text: str) -> str:
-    return normalize_lines(collect_text(content_root(parse_document(text))))
+def normalize_html(text: str, *, deadline: float | None = None) -> str:
+    return normalize_lines(collect_text(content_root(parse_document(text, deadline=deadline))))
 
 
 def normalize_text(text: str) -> str:

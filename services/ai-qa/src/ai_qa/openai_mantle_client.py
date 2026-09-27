@@ -41,6 +41,10 @@ RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 RETRY_BACKOFF_SECONDS = 0.5
 RETRY_BACKOFF_CAP_SECONDS = 4.0
 
+# The namespace of bedrock-mantle's OpenAI model ids (`openai.gpt-5.5`). A reply whose `model` omits
+# it gets it prepended, so the served id reads in the same id space as the configured one.
+MODEL_NAMESPACE = "openai."
+
 # with_options variants kept per client (the handler asks for one per card).
 MAX_VARIANTS = 8
 
@@ -151,7 +155,16 @@ def to_response(raw: dict[str, Any], request_id: str | None) -> ConverseResponse
         ),
         _request_id=request_id or (raw.get("id") if isinstance(raw.get("id"), str) else None),
         raw_stop_reason=finish if isinstance(finish, str) else None,
+        model=served_model(raw.get("model")),
     )
+
+
+def served_model(value: Any) -> str | None:
+    """The reply's `model` (D03, ai-agent-19), in the bedrock-mantle id space; None when absent."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    return value if value.startswith(MODEL_NAMESPACE) else MODEL_NAMESPACE + value
 
 
 def to_error(status: int, headers: dict[str, str], body: bytes) -> MantleError:
