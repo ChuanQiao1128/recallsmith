@@ -17,6 +17,28 @@ resource "aws_cloudwatch_metric_alarm" "notify_dlq_nonempty" {
   ok_actions          = [aws_sns_topic.alerts.arn]
 }
 
+# R18C (cloud-security-resilience-11): the notify queue carries every exception email. A consumer that stops
+# (the email mapping left disabled after RUNBOOK §7 step 2, or a mapping that no longer invokes) raises no
+# error, no DLQ entry and no tick-missing alarm, and core does not re-send a queued message (K6), so it would
+# expire after the 4-day retention unseen. Same shape as webhook/ai-qa-queue-oldest-age. A healthy message is
+# gone within seconds; one that keeps failing reaches the DLQ after 5 receives x 180 s, well under 1800 s.
+resource "aws_cloudwatch_metric_alarm" "notify_queue_oldest_age" {
+  alarm_name          = "developercards-${var.env}-notify-queue-oldest-age"
+  alarm_description   = "The oldest message on the notify queue is at least 30 minutes old: the email consumer is not draining it (check the notify event source mapping is Enabled)."
+  namespace           = "AWS/SQS"
+  metric_name         = "ApproximateAgeOfOldestMessage"
+  statistic           = "Maximum"
+  dimensions          = { QueueName = var.notify_queue_name }
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1800
+  period              = 300
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+}
+
 resource "aws_cloudwatch_metric_alarm" "notifier_errors" {
   alarm_name          = "developercards-${var.env}-notifier-errors"
   alarm_description   = "The notifier function reported at least one error in a five-minute period."

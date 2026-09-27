@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # deploy-python-lambda.sh <service> — package one Python Lambda (contract §10.6) and, outside
-# DRY_RUN, upload it the src_C/deploy.sh way: overlay the committed non-secret env file onto the
-# live environment, update the code, prove CodeSha256 equals the local zip, publish a version and
-# move the alias.
+# DRY_RUN, upload it the src_C/deploy.sh way (lambda-release.sh): if the alias is still on $LATEST
+# (first deploy of a Terraform-created function), publish the live code and move the alias to it
+# first; overlay the committed non-secret env file onto the live environment, update the code, prove
+# CodeSha256 equals the local zip, publish a version, verify it is Active/Successful, then move the
+# alias.
 #
 # The build runs the service's tests first, installs only hash-verified wheels (the hashes in
 # uv.lock, --require-hashes), and a real deploy refuses uncommitted changes under services/<svc>
@@ -109,35 +111,10 @@ fi
 command -v aws >/dev/null 2>&1 || { echo "aws CLI is required" >&2; exit 1; }
 # shellcheck source=../src_C/scripts/merge-env.sh
 source "$ROOT/src_C/scripts/merge-env.sh"
+# shellcheck source=lambda-release.sh
+source "$HERE/lambda-release.sh"
 echo "== $FN <- $ZIP"
-
-# Overlay the environment BEFORE publish-version, so the published version freezes the merged env.
-current="$(aws lambda get-function-configuration --region "$REGION" --function-name "$FN" --query 'Environment.Variables' --output json)"
-merged="$(merge_env "$current" "$file_env" '{}')"
-aws lambda update-function-configuration --region "$REGION" --function-name "$FN" \
-  --environment "$(jq -cn --argjson v "$merged" '{Variables: $v}')" --query 'LastUpdateStatus' --output text >/dev/null
-aws lambda wait function-updated --region "$REGION" --function-name "$FN"
-echo "OK $FN environment: $(jq -r 'keys | length' <<<"$merged") keys"
-
-aws lambda update-function-code --region "$REGION" --function-name "$FN" --zip-file "fileb://$ZIP" \
-  --query '[FunctionName,LastUpdateStatus,CodeSha256]' --output text
-aws lambda wait function-updated --region "$REGION" --function-name "$FN"
-st="$(aws lambda get-function-configuration --region "$REGION" --function-name "$FN" --query 'LastUpdateStatus' --output text)"
-remote_sha="$(aws lambda get-function-configuration --region "$REGION" --function-name "$FN" --query 'CodeSha256' --output text)"
-[ "$st" = Successful ] || { echo "$FN LastUpdateStatus=$st" >&2; exit 1; }
-[ "$remote_sha" = "$local_sha" ] || { echo "$FN CodeSha256 mismatch: remote=$remote_sha local=$local_sha" >&2; exit 1; }
-echo "OK $FN CodeSha256=$remote_sha"
-
-# update-function-code only moves $LATEST; the SQS event source mapping targets the alias.
-ver="$(aws lambda publish-version --region "$REGION" --function-name "$FN" \
-  --description "deploy-python-lambda.sh $(date -u +%Y-%m-%dT%H:%M:%SZ) $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)" \
-  --query 'Version' --output text)"
-prev_ver="$(aws lambda get-alias --region "$REGION" --function-name "$FN" --name "$PUBLISH_ALIAS" \
-  --query 'FunctionVersion' --output text)"
-echo "== $FN:$PUBLISH_ALIAS currently -> version $prev_ver"
-aws lambda update-alias --region "$REGION" --function-name "$FN" --name "$PUBLISH_ALIAS" --function-version "$ver" \
-  --query '[Name,FunctionVersion]' --output text
-alias_sha="$(aws lambda get-function-configuration --region "$REGION" --function-name "$FN:$PUBLISH_ALIAS" --query 'CodeSha256' --output text)"
-[ "$alias_sha" = "$local_sha" ] || { echo "$FN:$PUBLISH_ALIAS CodeSha256 mismatch after alias move: $alias_sha" >&2; exit 1; }
-echo "OK $FN:$PUBLISH_ALIAS -> version $ver (CodeSha256 verified)"
-echo "ROLLBACK: aws lambda update-alias --region $REGION --function-name $FN --name $PUBLISH_ALIAS --function-version $prev_ver"
+# Freeze the live code when the alias is still on $LATEST, update and verify $LATEST, publish and verify
+# the version (no invoke), then move the alias and print the rollback (lambda-release.sh).
+lambda_release "$FN" "$REGION" "$PUBLISH_ALIAS" "$ZIP" "$local_sha" "$file_env" \
+  "deploy-python-lambda.sh $(date -u +%Y-%m-%dT%H:%M:%SZ) $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)"

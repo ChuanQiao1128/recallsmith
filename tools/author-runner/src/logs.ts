@@ -16,6 +16,8 @@ export type LogEvent =
   | 'author_config_error'
   | 'heartbeat_failed'
   | 'complete_failed'
+  | 'complete_pending'
+  | 'complete_replayed'
   | 'api_error'
   | 'finish'
   | 'unexpected_error';
@@ -27,6 +29,8 @@ export interface LogFields {
   durationMs?: number;
   authorConfigId?: string;
   costUsd?: number;
+  /** complete_replayed: the server had already applied the kept complete. */
+  replayed?: boolean;
   error?: string;
 }
 

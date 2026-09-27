@@ -7,9 +7,14 @@
 //
 // The filters live in the URL (`?tab=decisions&state=human&open=1`), so the
 // Overview's backlog can link to the open exceptions (B07 frontend-console-1).
-// "Open only" keeps the decisions nobody has acted on yet; it filters the
-// loaded pages on the client, since the list route has no such parameter yet.
-import { useEffect, useState } from 'react';
+// "Open only" asks the server for the open exceptions (`open=true`, L4): the
+// same predicate and keyset order as the backlog count, so the oldest open
+// item is reachable however many handled ones are newer (C07 frontend-console-13).
+// The client check stays only for an older server that ignores the parameter.
+//
+// Closing the detail returns focus to the row's Details button, or to the
+// Decisions heading when that row is not loaded (C07 frontend-console-18).
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { listAutomationDecisions, type AutomationDecision } from '../../api/automation';
@@ -23,6 +28,7 @@ import {
   decisionFiltersFrom,
   decisionReasonLabel,
   decisionStateLabel,
+  hiddenDecidedText,
   isOpenDecision,
   withDecisionFilters,
   type DecisionFilters,
@@ -49,6 +55,7 @@ function requestOf(filters: DecisionFilters) {
     deckId: filters.deckId ?? undefined,
     state: filters.state || undefined,
     reason: filters.reason || undefined,
+    open: filters.openOnly ? true : undefined,
     limit: PAGE_SIZE,
   };
 }
@@ -67,17 +74,20 @@ export function DecisionsTab({
   const { deckId, state, reason, openOnly } = filters;
   const [nonce, setNonce] = useState(0);
   const [list, setList] = useState<ListState>({ forKey: null, error: null, items: [], nextCursor: null });
-  const [loadingMore, setLoadingMore] = useState(false);
+  // The list key a Load more is running for; another key's Load more is not busy.
+  const [loadingMoreKey, setLoadingMoreKey] = useState<string | null>(null);
   const [moreError, setMoreError] = useState<{ forKey: string; text: string } | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const openedRef = useRef<number | null>(draftId);
 
-  // "Open only" is client-side, so it is not part of the request key.
-  const key = `${deckId ?? ''}|${state}|${reason}|${nonce}`;
+  const key = `${deckId ?? ''}|${state}|${reason}|${openOnly}|${nonce}`;
 
   useEffect(() => {
     let cancelled = false;
-    const forKey = `${deckId ?? ''}|${state}|${reason}|${nonce}`;
+    const forKey = `${deckId ?? ''}|${state}|${reason}|${openOnly}|${nonce}`;
     async function run() {
-      const res = await listAutomationDecisions(requestOf({ deckId, state, reason, openOnly: false }));
+      const res = await listAutomationDecisions(requestOf({ deckId, state, reason, openOnly }));
       if (cancelled) return;
       if (!res.success || !res.data) {
         setList({ forKey, error: errorText(res.error, 'Failed to load the decisions.'), items: [], nextCursor: null });
@@ -89,7 +99,15 @@ export function DecisionsTab({
     return () => {
       cancelled = true;
     };
-  }, [deckId, state, reason, nonce]);
+  }, [deckId, state, reason, openOnly, nonce]);
+
+  useEffect(() => {
+    const closed = openedRef.current;
+    openedRef.current = draftId;
+    if (closed === null || draftId !== null) return;
+    const row = sectionRef.current?.querySelector<HTMLElement>(`button[aria-label="Details of draft ${closed}"]`);
+    (row ?? headingRef.current)?.focus();
+  }, [draftId]);
 
   function setFilters(patch: Partial<DecisionFilters>) {
     const next = withDecisionFilters(searchParams, { ...filters, ...patch });
@@ -103,10 +121,10 @@ export function DecisionsTab({
     // The cursor belongs to the list on screen; while a new filter loads it is foreign.
     if (!list.nextCursor || loading) return;
     const startKey = key;
-    setLoadingMore(true);
+    setLoadingMoreKey(startKey);
     setMoreError(null);
     const res = await listAutomationDecisions({ ...requestOf(filters), cursor: list.nextCursor });
-    setLoadingMore(false);
+    setLoadingMoreKey(k => (k === startKey ? null : k));
     if (!res.success || !res.data) {
       setMoreError({ forKey: startKey, text: errorText(res.error, 'Failed to load more decisions.') });
       return;
@@ -127,9 +145,11 @@ export function DecisionsTab({
         <DecisionDetail draftId={draftId} focusOnOpen={focusOnOpen} closeSearch={closeSearch} />
       ) : null}
 
-      <section className={CARD_CLASS} aria-label="Decisions">
+      <section ref={sectionRef} className={CARD_CLASS} aria-label="Decisions">
         <div className="flex flex-wrap items-end gap-3">
-          <h2 className={H2_CLASS}>Decisions</h2>
+          <h2 ref={headingRef} tabIndex={-1} className={`${H2_CLASS} focus:outline-none`}>
+            Decisions
+          </h2>
           <div>
             <label htmlFor={DECK_ID} className={LABEL_CLASS}>
               Deck
@@ -205,9 +225,7 @@ export function DecisionsTab({
           )}
         </div>
         {openOnly && !list.error && list.items.length > shown.length ? (
-          <p className="mt-1 text-xs text-slate-500">
-            {list.items.length - shown.length} decided by a person are hidden on the loaded pages.
-          </p>
+          <p className="mt-1 text-xs text-slate-600">{hiddenDecidedText(list.items.length - shown.length)}</p>
         ) : null}
 
         {moreError && moreError.forKey === key ? (
@@ -219,7 +237,7 @@ export function DecisionsTab({
         ) : null}
         {list.nextCursor && !loading ? (
           <div className="mt-2">
-            <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
+            <Button variant="outline" size="xs" loading={loadingMoreKey === key} onClick={() => void onLoadMore()}>
               Load more
             </Button>
           </div>

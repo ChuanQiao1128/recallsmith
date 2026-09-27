@@ -32,18 +32,21 @@ export function automationQaRunLabel(run: {
 }
 
 /** The badge text of a draft whose automatic verdict is hidden until the person decides. */
-export const BLINDED_AUTOMATION_TEXT = 'Automation: decided (hidden until you decide)';
+export const BLINDED_AUTOMATION_TEXT = 'Automation: dry run — verdict hidden until you decide';
 
 /**
  * Whether the review queue hides the automation's verdict on a draft (B07
- * automation-4). The dry-run shadow agreement compares the person's decision
- * with a would_accept verdict, so the person must not see that verdict before
- * deciding: a dry-run would_accept draft that is still pending and has no
- * human action is blinded. Human-routed drafts keep their reason (the person
- * needs it), and so does every draft once a person has decided it.
+ * automation-4, C07 frontend-console-14). The dry-run shadow agreement compares
+ * the person's decision with the automation's verdict, so the person must not
+ * see it before deciding. Blinding only would_accept drafts gave it away: the
+ * hidden badge then meant would_accept one to one. So every dry-run draft that
+ * is still pending with no human action is blinded the same way, whatever its
+ * state, with one neutral badge and no reason. A dry-run draft is never
+ * accepted by the automation, so the person reviews it in full anyway. State,
+ * reason and findings show once the draft is decided, and in live mode always.
  */
 export function automationBlinded(a: DraftAutomation, draftStatus: string): boolean {
-  return a.state === 'would_accept' && a.mode === 'dry_run' && draftStatus === 'pending' && !a.humanAction;
+  return a.mode === 'dry_run' && draftStatus === 'pending' && !a.humanAction;
 }
 
 export function draftAutomationBadgeText(a: DraftAutomation, blinded = false): string {

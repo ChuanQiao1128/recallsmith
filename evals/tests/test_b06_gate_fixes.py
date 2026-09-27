@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from conftest import FakeLlm, reply, review_json
 from test_automation_gate import (
+    AUTHOR_CONFIG,
     AUTOMATION,
     authored_records,
     authored_run,
@@ -153,13 +154,14 @@ def test_report_has_per_stratum_precision(tmp_path: Path) -> None:
     report = evaluate(tmp_path)
     strata = report["authored"]["strata"]
     assert list(strata) == ["docs", "new-facts"]
+    # C06 (ai-agent-15): the fixture's new-facts stratum grew from 40 to 60 cards (40 cannot pass the CI bound)
     assert (strata["docs"]["rows"], strata["docs"]["wouldAcceptCards"], strata["docs"]["defectiveLabeled"]) == (
-        100, 90, 20,
+        80, 70, 20,
     )
     new = strata[STRATUM_NEW_FACTS]
-    assert (new["rows"], new["wouldAccept"], new["wouldAcceptCards"], new["autoAcceptPrecision"]) == (40, 80, 40, 1.0)
+    assert (new["rows"], new["wouldAccept"], new["wouldAcceptCards"], new["autoAcceptPrecision"]) == (60, 120, 60, 1.0)
     md = gate.render_markdown(report)
-    assert "### Per stratum" in md and "| new-facts | 40 | 80 (80) | 40 | 1.0000 |" in md
+    assert "### Per stratum" in md and "| new-facts | 60 | 120 (120) | 60 | 1.0000 |" in md
     assert "not the production path" in md
 
 
@@ -172,10 +174,11 @@ def test_gate_fails_closed_without_a_new_facts_stratum(tmp_path: Path) -> None:
 
 
 def test_gate_fails_closed_below_the_new_facts_minimum_sample(tmp_path: Path) -> None:
-    spec, rows = authored_spec(tmp_path, new_facts=29)
+    # C06 (ai-agent-15): the minimum is 51 cards, the smallest stratum whose CI bound can reach 0.93
+    spec, rows = authored_spec(tmp_path, new_facts=50)
     failures = evaluate(tmp_path, spec=spec, authored=authored_run(tmp_path, spec, authored_records(rows)))["failures"]
     assert failures == [
-        "new-facts stratum: 29 distinct would-accept cards, fewer than 30; too few to measure its precision"
+        "new-facts stratum: 50 distinct would-accept cards, fewer than 51; too few to measure its precision"
     ]
 
 
@@ -184,15 +187,21 @@ def test_new_facts_stratum_must_meet_the_precision_gate_on_its_own(tmp_path: Pat
 
     def to_new_facts(row: dict[str, Any]) -> dict[str, Any]:
         if row["id"] > "a-0130":  # the ten defective cards
-            return {**row, "stratum": "new-facts", "authorPath": RUNNER_AUTHOR_PATH, "runId": "run-x"}
+            return {**row, "stratum": "new-facts", "authorPath": RUNNER_AUTHOR_PATH, "runId": "run-x",
+                    "authorConfig": AUTHOR_CONFIG}
         return row
 
     _rewrite(spec, to_new_facts)
     report = evaluate(tmp_path, spec=spec, authored=authored_run(tmp_path, spec, authored_records(rows, escaped=2)))
-    # overall: 260 of 264 would-accept items correct (0.9848) passes; new-facts alone: 80 of 84
+    # overall: 260 of 264 would-accept items correct (0.9848) passes; new-facts alone: 120 of 124 (C06: the
+    # fixture has 60 new-facts cards, was 40), and so does its CI lower bound (C06, ai-agent-15)
     assert report["authored"]["autoAcceptPrecision"] >= 0.97
-    assert report["authored"]["strata"]["new-facts"]["autoAcceptPrecision"] == 0.9524
-    assert report["failures"] == ["new-facts stratum auto-accept precision 0.9524 < 0.97"]
+    new = report["authored"]["strata"]["new-facts"]
+    assert new["autoAcceptPrecision"] == 0.9677
+    assert report["failures"] == [
+        "new-facts stratum auto-accept precision 0.9677 < 0.97",
+        f"new-facts stratum auto-accept precision 95% CI lower bound {new['autoAcceptPrecisionCi95'][0]:.4f} < 0.93",
+    ]
 
 
 def test_new_facts_rows_must_come_from_the_runner(tmp_path: Path) -> None:
@@ -244,6 +253,20 @@ def _draft(draft_id: int, *, run_id: str | None = "run-1", quote: str = QUOTE, d
     return {"draftId": draft_id, "deckId": deck_id, "status": "pending", "card": card, "agent": agent}
 
 
+# C06 (ai-agent-3): the author configuration run-1 pinned (its model and skill version are the drafts').
+RUN_AUTHOR = {**AUTHOR_CONFIG, "skillVersion": "abc123"}
+
+
+def _runs_dir(tmp_path: Path, runs: dict[str, dict[str, Any]] | None = None) -> Path:
+    """The author-runner's run records: <runId>.meta.json as runner.ts writes them."""
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(exist_ok=True)
+    for run_id, config in (runs if runs is not None else {"run-1": RUN_AUTHOR}).items():
+        meta = {"runId": run_id, "itemId": 1, "startedAt": "2026-09-28T00:00:00Z", "authorConfig": config}
+        (runs_dir / f"{run_id}.meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    return runs_dir
+
+
 def _ingest(url: str) -> dict[str, Any]:
     return {"url": url, "chunks": [{"id": "c0001", "text": "Intro."}, {"id": "c0002", "text": f"News. {QUOTE} More."}]}
 
@@ -263,7 +286,10 @@ def test_import_drafts_builds_new_facts_rows(tmp_path: Path, capsys) -> None:
         seen.append(url)
         return _ingest(url)
 
-    assert import_drafts(drafts_path=drafts, decks={7: "aws-saa-c03"}, output=output, ingest_fn=ingest) == 1
+    runs_dir = _runs_dir(tmp_path)
+    assert import_drafts(
+        drafts_path=drafts, decks={7: "aws-saa-c03"}, output=output, runs_dir=runs_dir, ingest_fn=ingest
+    ) == 1
     rows = read_jsonl(output)
     assert [row["id"] for row in rows] == ["a-0001", "n-0001", "n-0002"]
     new = rows[1]
@@ -272,6 +298,7 @@ def test_import_drafts_builds_new_facts_rows(tmp_path: Path, capsys) -> None:
         "run-1", 1, "abc123", "claude-opus-5-5",
     )
     assert (new["chunkId"], new["deckSlug"]) == ("c0002", "aws-saa-c03") and QUOTE in new["chunkText"]
+    assert new["authorConfig"] == RUN_AUTHOR
     assert len(seen) == 1  # one read per page
     err = capsys.readouterr().err
     assert "draft 2: not authored by the author-runner" in err
@@ -280,7 +307,10 @@ def test_import_drafts_builds_new_facts_rows(tmp_path: Path, capsys) -> None:
 
 
 def test_import_drafts_rows_join_the_jury_and_the_run(tmp_path: Path) -> None:
-    rows, dropped = draft_rows([_draft(1)], {7: "aws-saa-c03"}, ingest_fn=_ingest, imported_at="2026-09-28T00:00:00Z")
+    rows, dropped = draft_rows(
+        [_draft(1)], {7: "aws-saa-c03"}, runs_dir=_runs_dir(tmp_path), ingest_fn=_ingest,
+        imported_at="2026-09-28T00:00:00Z",
+    )
     assert dropped == []
     authored = write_lines(tmp_path / "authored-v2.jsonl", rows)
     labels = write_lines(tmp_path / "authored-v2.labels.jsonl", [
@@ -300,7 +330,9 @@ def test_cli_import_drafts_arguments(tmp_path: Path, capsys, monkeypatch) -> Non
 
     monkeypatch.setattr(drafts_import, "ingest", _ingest)
     output = tmp_path / "out.jsonl"
-    assert main(["import-drafts", "--drafts", str(drafts), "--deck", "7=aws-saa-c03", "--output", str(output)]) == 0
+    runs_dir = _runs_dir(tmp_path)
+    assert main(["import-drafts", "--drafts", str(drafts), "--deck", "7=aws-saa-c03", "--output", str(output),
+                 "--runs-dir", str(runs_dir)]) == 0
     assert [row["id"] for row in read_jsonl(output)] == ["n-0001"]
 
 
@@ -314,7 +346,7 @@ def _with_excluded(spec: DatasetSpec, tie: int, unsure: int, stratum: str | None
         row_id = f"x-{index + 1:04d}"
         row = {"id": row_id, "deckSlug": "aws-saa-c03", "card": {}}
         if stratum:
-            row = {**row, "stratum": stratum, "authorPath": RUNNER_AUTHOR_PATH, "runId": "r"}
+            row = {**row, "stratum": stratum, "authorPath": RUNNER_AUTHOR_PATH, "runId": "r", "authorConfig": AUTHOR_CONFIG}
         authored.append(row)
         labels.append({"id": row_id, "label": None, "category": None, "excluded": "tie" if index < tie else "all_unsure",
                        "unanimous": False, "defect": None, "scorable": False, "counts": {}, "votes": []})
@@ -342,10 +374,10 @@ def test_report_counts_the_rows_the_jury_excluded(tmp_path: Path) -> None:
 
 def test_gate_fails_closed_when_the_jury_excluded_too_many_rows(tmp_path: Path) -> None:
     spec, rows = authored_spec(tmp_path)
-    _with_excluded(spec, tie=4, unsure=1, stratum="new-facts")
+    _with_excluded(spec, tie=5, unsure=2, stratum="new-facts")
     failures = evaluate(tmp_path, spec=spec, authored=authored_run(tmp_path, spec, authored_records(rows)))["failures"]
-    # 5 of 145 overall passes; 5 of 45 new-facts rows does not
-    assert failures == ["new-facts stratum: jury excluded rate 0.1111 (5 of 45 rows: 4 tie, 1 all unsure) > 0.10"]
+    # 7 of 147 overall passes; 7 of 67 new-facts rows does not (C06: the fixture has 60 new-facts cards, was 40)
+    assert failures == ["new-facts stratum: jury excluded rate 0.1045 (7 of 67 rows: 5 tie, 2 all unsure) > 0.10"]
     other = tmp_path / "overall"
     other.mkdir()
     spec2, rows2 = authored_spec(other)
@@ -353,7 +385,7 @@ def test_gate_fails_closed_when_the_jury_excluded_too_many_rows(tmp_path: Path) 
     failures = evaluate(other, spec=spec2, authored=authored_run(other, spec2, authored_records(rows2)))["failures"]
     assert failures == [
         "jury excluded rate 0.1139 (18 of 158 rows: 10 tie, 8 all unsure) > 0.10",
-        "docs stratum: jury excluded rate 0.1525 (18 of 118 rows: 10 tie, 8 all unsure) > 0.10",
+        "docs stratum: jury excluded rate 0.1837 (18 of 98 rows: 10 tie, 8 all unsure) > 0.10",
     ]
 
 

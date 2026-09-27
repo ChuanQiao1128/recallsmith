@@ -231,10 +231,10 @@ internal static class DraftQaResults
       """
       update automation_draft_decisions
       set state = 'auto_accepted', reason = null, reason_detail = null, accepted_card_id = $2, accepted_content_sha256 = $3,
-        gate_id = $4::bigint, decided_at = now(), updated_at = now()
+        gate_id = $4::bigint, mode = $5, decided_at = now(), updated_at = now()
       where draft_id = $1
       """,
-      [draftId, accepted.CardId, cardHash, mode.GateId]);
+      [draftId, accepted.CardId, cardHash, mode.GateId, mode.Effective]);
     await DraftDecisions.AppendEventAsync(conn, tx, draftId, DraftDecisions.QaQueued, DraftDecisions.AutoAccepted, null,
       DraftDecisions.AutomationEventActor, mode.Effective, new { cardId = accepted.CardId, gateId = mode.GateId }, ct);
     await tx.CommitAsync(ct);
@@ -393,9 +393,15 @@ internal static class DraftQaResults
           Automation: "auto_accept", Units: 1, Outcome: "success", DeckId: outcome.DeckId, Ref: draftRef,
           DedupeKey: $"auto-accept:{draftRef}",
           Details: new { runId = outcome.RunId, qaCostUsd = outcome.QaCostUsd, provider = report.Provider, model = report.Model }), ct);
+        // The avoided human review is credited once, by auto_accept (R18C automation-14): like a human accept nets
+        // its measured review time, the automated ai_draft_review row nets the auto_accept baseline, so one card
+        // saves the ai_draft_review baseline in all, not that plus the review again.
+        var avoidedReview = await DbUtil.ExecuteScalarAsync(conn, null,
+          "select baseline_minutes_per_unit from automation_baselines where automation = 'auto_accept'", []);
         await AutomationLedger.RecordAsync(conn, new AutomationEvent(
-          Automation: "ai_draft_review", Units: 1, Outcome: "success", ActualMinutes: null, DeckId: outcome.DeckId, Ref: draftRef,
-          DedupeKey: $"draft-accept:{draftRef}", Details: new { automated = true }), ct);
+          Automation: "ai_draft_review", Units: 1, Outcome: "success",
+          ActualMinutes: avoidedReview is null ? null : Convert.ToDecimal(avoidedReview, CultureInfo.InvariantCulture),
+          DeckId: outcome.DeckId, Ref: draftRef, DedupeKey: $"draft-accept:{draftRef}", Details: new { automated = true }), ct);
       }
       else if (live && outcome.To == DraftDecisions.Human)
       {

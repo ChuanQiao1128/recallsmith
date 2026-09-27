@@ -34,6 +34,13 @@ public static class AutomationTick
   public const int SummaryAfterMinutes = 120;
   public const int NoRunnerQueueHours = 24;
 
+  /// <summary>
+  /// A <c>qa_pending</c> decision untouched for this many draft-QA timeouts (other than one waiting for the daily cap)
+  /// keeps failing before its enqueue can even start; it goes to a human with <c>ENQUEUE_FAILED</c> (R18C,
+  /// backend-design-10), so its run can finalise.
+  /// </summary>
+  public const int QaPendingTimeoutFactor = 2;
+
   /// <summary>The <c>failedSteps</c> entry of a tick that stopped at its budget with work left for the next tick.</summary>
   public const string BudgetExhausted = "budget_exhausted";
 
@@ -158,6 +165,8 @@ public static class AutomationTick
 
     if (job == "digest") await Step("digest", async () => a.Digest = await DigestAsync(conn, mode.Effective));
     await Step("leases", () => ExpireLeasesAsync(conn, a, Spent));
+    // Before the QA steps and finalisation: a draft whose submit hook was lost gets its decision first.
+    await Step("decision_sweep", () => DraftDecisions.SweepMissingAsync(conn, StepBatch, Spent));
     await Step("qa_retry", () => RetryQaAsync(conn, a, Spent));
     await Step("qa_timeout", () => TimeOutQaAsync(conn, a, Spent));
     // Reconcile before finalising: a job that already ended frees its deck before the runs finalised now are evaluated.
@@ -275,9 +284,9 @@ public static class AutomationTick
           for update
           """, [draftId, AutomationEnv.QaTimeoutMinutes()]);
         if (locked.Count == 0) continue;
-        decisionMode = (string)locked[0]["mode"]!;
         deckId = Long(locked[0]["deck_id"]);
-        await DraftDecisions.TransitionAsync(conn, tx, draftId, DraftDecisions.QaQueued, DraftDecisions.Human, "QA_TIMEOUT", null,
+        // The ledger follows the mode this transition applied (R18C backend-design-16).
+        decisionMode = await DraftDecisions.TransitionAsync(conn, tx, draftId, DraftDecisions.QaQueued, DraftDecisions.Human, "QA_TIMEOUT", null,
           DraftDecisions.AutomationEventActor, mode.Effective, new { timeoutMinutes = AutomationEnv.QaTimeoutMinutes() }, CancellationToken.None);
         await tx.CommitAsync();
       }
@@ -285,6 +294,48 @@ public static class AutomationTick
       if (decisionMode == AutomationMode.Live)
       {
         await AutomationLedger.RecordAsync(conn, DraftDecisions.RouteLedgerEvent(draftId, deckId, "QA_TIMEOUT", null));
+      }
+    }
+
+    // A qa_pending decision whose enqueue fails on every retry before it can change anything (R18C, backend-design-10):
+    // after QaPendingTimeoutFactor draft-QA timeouts without an update it goes to a human, so its run can finalise.
+    // A decision waiting for the daily cap is not stuck; it is re-checked on every retry and waits for the next day.
+    var pendingMinutes = AutomationEnv.QaTimeoutMinutes() * QaPendingTimeoutFactor;
+    var stuck = await DbUtil.QueryAsync(conn, null,
+      """
+      select draft_id from automation_draft_decisions
+      where state = 'qa_pending' and reason is distinct from 'AI_QA_DAILY_CAP' and updated_at < now() - make_interval(mins => $1)
+      order by updated_at, draft_id
+      limit $2
+      """, [pendingMinutes, StepBatch]);
+    foreach (var row in stuck)
+    {
+      if (spent()) break;
+      var draftId = Long(row["draft_id"]);
+      var mode = await AutomationMode.EffectiveAsync(conn);
+      string decisionMode;
+      long deckId;
+      await using (var tx = await conn.BeginTransactionAsync())
+      {
+        var locked = await DbUtil.QueryAsync(conn, tx,
+          """
+          select mode, deck_id from automation_draft_decisions
+          where draft_id = $1 and state = 'qa_pending' and reason is distinct from 'AI_QA_DAILY_CAP'
+            and updated_at < now() - make_interval(mins => $2)
+          for update
+          """, [draftId, pendingMinutes]);
+        if (locked.Count == 0) continue;
+        deckId = Long(locked[0]["deck_id"]);
+        decisionMode = await DraftDecisions.TransitionAsync(conn, tx, draftId, DraftDecisions.QaPending, DraftDecisions.Human, "ENQUEUE_FAILED",
+          $"draft QA could not be enqueued for {pendingMinutes} minutes", DraftDecisions.AutomationEventActor, mode.Effective,
+          new { pendingMinutes }, CancellationToken.None);
+        await tx.CommitAsync();
+      }
+      a.QaTimedOut++;
+      Log.Event("warn", new { tag = "automation", outcome = "qa_pending_timed_out", draftId, pendingMinutes });
+      if (decisionMode == AutomationMode.Live)
+      {
+        await AutomationLedger.RecordAsync(conn, DraftDecisions.RouteLedgerEvent(draftId, deckId, "ENQUEUE_FAILED", null));
       }
     }
   }

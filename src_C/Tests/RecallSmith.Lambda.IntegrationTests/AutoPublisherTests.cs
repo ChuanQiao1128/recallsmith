@@ -17,7 +17,7 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// PublishExtractionTests), on top of <see cref="AutomationTestKit"/>: an env scope that also captures notifier and
 /// publish sends and revokes every eval gate it inserted, a small SQL helper that works against the shared or a scratch
 /// database, decks with a live build, auto-accepted cards through the real draft-QA path, and signed internal calls
-/// with the fake <c>test-secret</c>. No recipient address exists anywhere.
+/// with the fake <see cref="FakeSecret"/>. No recipient address exists anywhere.
 /// </summary>
 internal static class A04Kit
 {
@@ -26,7 +26,8 @@ internal static class A04Kit
   public const string FakeContentBucket = "developercards-content-test";
   public const string TickPath = "/api/internal/automation/tick";
   public const string ReportPath = "/api/internal/automation/notifications/report";
-  public const string FakeSecret = "test-secret";
+  // The notifier and source-watch routes use the strict check, which needs at least 32 characters (R18C L2).
+  public const string FakeSecret = "test-secret-automation-routes-000000001";
 
   // A00 §12.5, verbatim: the notifier message every cross-wave shape is asserted against.
   public const string ContractNotifyMessageJson = """
@@ -633,15 +634,17 @@ public class AutoPublisherTests
     Assert.Equal(("auto_publish", 0, "success"), ((string)ledger["automation"]!, Convert.ToInt32(ledger["units"], CultureInfo.InvariantCulture), (string)ledger["outcome"]!));
     Assert.Contains("DECK_HAS_HUMAN_CHANGES", (string)ledger["details"]!);
 
-    // Dry run: the alert (marked) but no ledger row (A00 §14).
+    // Dry run: no ledger row (A00 §14) and, since R18C L6 (automation-15), no alert either: nothing was accepted, so
+    // nobody has to publish; the batch summary's "publish would need you" and the Runs tab carry it.
     scope.Set(AutomationMode.EnvName, AutomationMode.DryRun);
     var dryDeck = await A04Kit.PublishedDeckAsync(_sql, "blocked-dry");
     var dryRun = await A04Kit.RunAsync(_sql, AutomationTestKit.Sub("blocked-dry"), dryDeck.Id, "completed");
     await _sql.QueryAsync("update decks set updated_at = now() where id = $1", dryDeck.Id);
     var dry = await EvaluateAsync(dryDeck.Id, dryRun);
     AssertOutcome(dry, "human", "DECK_HAS_HUMAN_CHANGES");
-    Assert.Equal($"[DeveloperCards] (dry run) Action needed: publish {dryDeck.Slug} (DECK_HAS_HUMAN_CHANGES)",
-      await _sql.ScalarAsync("select subject from automation_notifications where dedupe_key = $1", $"exception:publish_blocked:{dry!.PublishId}"));
+    Assert.Equal("dry_run", (await A04Kit.PublishRowAsync(_sql, dry!.PublishId))["mode"]);
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where dedupe_key = $1", $"exception:publish_blocked:{dry.PublishId}"));
+    Assert.Empty(A04Kit.Messages(scope, dryDeck.Slug));
     Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_events where dedupe_key = $1", $"auto-publish-human:{dry.PublishId}"));
   }
 

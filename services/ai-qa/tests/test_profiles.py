@@ -173,15 +173,15 @@ class TestSettingsFor:
     def test_prod_env_loads_with_the_automation_reviewer(self) -> None:
         env = json.loads(PROD_ENV.read_text())
         cfg = load_settings(env)
-        assert cfg.automation_provider == "bedrock-converse"
-        assert cfg.automation_model == AUTOMATION_MODEL
+        # C03 (ai-agent-11): GPT-5.5 is reachable only on bedrock-mantle Chat Completions, In-Region.
+        assert cfg.automation_provider == "openai-mantle"
+        assert cfg.automation_model == "openai.gpt-5.5"
+        assert cfg.automation_region == "us-east-1"
         assert (cfg.provider, cfg.model) == ("bedrock", "anthropic.claude-opus-5")  # the human reviewer is unchanged
-        if "AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK" not in env or "AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK" not in env:
-            with pytest.raises(ConfigError, match="AI_QA_AUTOMATION_PRICE_"):
-                profiles.settings_for(cfg, "automation")
-        else:
-            derived = profiles.settings_for(cfg, "automation")
-            assert (derived.provider, derived.model) == ("bedrock-converse", AUTOMATION_MODEL)
+        assert cfg.bedrock_region == "ap-southeast-2"
+        derived = profiles.settings_for(cfg, "automation")
+        assert (derived.provider, derived.model) == ("openai-mantle", "openai.gpt-5.5")
+        assert (derived.price_input_per_mtok, derived.price_output_per_mtok) == (5.5, 33.0)
 
 
 # --- messages -----------------------------------------------------------------------------------

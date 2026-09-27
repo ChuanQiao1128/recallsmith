@@ -7,6 +7,13 @@
 // axe WCAG 2 A/AA scan of the settled page. It also opens a decision from the
 // table and checks that focus moved to it (frontend-console-4).
 //
+// C07 frontend-console-21: the scans above see sparse states only, so a
+// second, dense stub fills every panel that can hold more (a current gate with
+// metrics and history, a failing runner, a blocked live mode, the open backlog
+// with its publishes, unconfirmed email, a decision with findings and events,
+// a watched feed with a title pattern) and the dense pages are scanned too:
+// the Overview, ?draftId=41, and ?tab=watch&targetId=3 with the editor open.
+//
 // Nothing here leaves the machine: every /api/v1/ call is answered from memory
 // and anything unrecognised is recorded and fails the test.
 
@@ -158,23 +165,97 @@ const NOTIFICATION = {
   sentAt: '2026-09-28T11:30:05Z',
 };
 
-async function stubAutomationApi(page: Page): Promise<{ unexpected: string[] }> {
+const GATE = {
+  gateId: 4,
+  reviewer: { provider: 'openai-mantle', model: 'openai.gpt-5.5', promptVersion: 'qa-v4-auto' },
+  passed: true,
+  metrics: { autoAcceptPrecision: 0.98, autoAcceptPrecisionCiLower: 0.95, seededRecall: 0.93, wouldAcceptCards: 212 },
+  reportSha256: 'a'.repeat(64),
+  createdBySub: 'owner-sub',
+  createdAt: '2026-09-27T09:00:00Z',
+  revokedAt: null,
+  revokedBySub: null,
+};
+
+const DENSE_STATUS = {
+  ...STATUS,
+  mode: { configured: 'live', effective: 'dry_run', liveBlockedReason: 'EVAL_GATE_MISSING', autoPublish: true },
+  runners: [
+    ...STATUS.runners,
+    {
+      runnerId: 'owner-mac-2',
+      host: 'mac-studio',
+      state: 'error',
+      lastHeartbeatAt: '2026-09-27T11:45:00Z',
+      stale: true,
+      loginExpiresInDays: 2,
+      lastRunOutcome: 'failed',
+      lastError: 'AGENT_BLOCKED: the source page needs a login',
+    },
+  ],
+  notifications: { sent24h: 4, failed24h: 1, queued: 2, unconfirmed: 2, lastSentAt: '2026-09-28T11:05:00Z' },
+  backlog: {
+    humanPending: 3,
+    oldestHumanPendingAt: '2026-09-20T12:00:00Z',
+    humanPublishes: 2,
+    humanPublishItems: [
+      { deckId: 7, deckSlug: 'aws-saa-c03', reason: 'DECK_NEVER_PUBLISHED', since: '2026-09-27T12:00:00Z' },
+      { deckId: 9, deckSlug: 'aws-dva-c02', reason: 'AI_QA_BLOCKED', since: '2026-09-28T08:00:00Z' },
+    ],
+  },
+};
+
+const DENSE_DETAIL = {
+  ...DECISION,
+  card: {
+    stableUid: 's3-versioning-01',
+    difficulty: 2,
+    topic: 'S3',
+    question: DECISION.question,
+    explanation: 'S3 Versioning keeps every version of every object in a bucket.',
+    source: {
+      url: 'https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html',
+      quote: 'Versioning in Amazon S3 is a means of keeping multiple variants of an object in the same bucket.',
+    },
+  },
+  findings: [
+    { severity: 'major', category: 'weak_distractor', message: 'Option C is obviously wrong.', suggestedFix: 'Use Object Lock.' },
+    { severity: 'minor', category: 'clarity', message: 'Wordy stem.', suggestedFix: null },
+  ],
+  events: [
+    { fromState: null, toState: 'qa_pending', reason: null, actor: 'automation', mode: 'dry_run', createdAt: '2026-09-28T11:10:00Z' },
+    { fromState: 'qa_pending', toState: 'qa_queued', reason: null, actor: 'automation', mode: 'dry_run', createdAt: '2026-09-28T11:11:00Z' },
+    { fromState: 'qa_queued', toState: 'human', reason: 'QA_FLAGGED', actor: 'automation', mode: 'dry_run', createdAt: '2026-09-28T11:15:00Z' },
+  ],
+};
+
+const DENSE_WATCH_TARGET = { ...WATCH_TARGET, itemTitlePattern: '\\m(S3|EC2)\\M' };
+
+async function stubAutomationApi(page: Page, dense = false): Promise<{ unexpected: string[] }> {
   const unexpected: string[] = [];
   await page.route('**/api/v1/**', (route: Route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
     const body = (payload: string) => route.fulfill({ status: 200, contentType: 'application/json', body: payload });
 
-    if (path === '/api/v1/admin/automation/status') return body(ok(STATUS));
-    if (path === '/api/v1/admin/automation/eval-gate') return body(ok({ current: null, history: [] }));
+    if (path === '/api/v1/admin/automation/status') return body(ok(dense ? DENSE_STATUS : STATUS));
+    if (path === '/api/v1/admin/automation/eval-gate') {
+      return body(
+        ok(
+          dense
+            ? { current: GATE, history: [GATE, { ...GATE, gateId: 3, revokedAt: '2026-09-26T09:00:00Z' }] }
+            : { current: null, history: [] },
+        ),
+      );
+    }
     if (path === '/api/v1/admin/automation/runs') return body(ok({ items: [RUN], nextCursor: null }));
     if (path === '/api/v1/admin/automation/decisions') return body(ok({ items: [DECISION], nextCursor: null }));
     if (path === '/api/v1/admin/automation/decisions/41') {
-      return body(ok({ ...DECISION, card: null, findings: [], events: [] }));
+      return body(ok(dense ? DENSE_DETAIL : { ...DECISION, card: null, findings: [], events: [] }));
     }
     if (path === '/api/v1/admin/automation/queue') return body(ok({ items: [QUEUE_ITEM], nextCursor: null }));
     if (path === '/api/v1/admin/automation/watch') {
-      return body(ok({ items: [WATCH_TARGET], recentEvents: [], nextCursor: null }));
+      return body(ok({ items: [dense ? DENSE_WATCH_TARGET : WATCH_TARGET], recentEvents: [], nextCursor: null }));
     }
     if (path === '/api/v1/admin/automation/notifications') {
       return body(ok({ items: [NOTIFICATION], nextCursor: null }));
@@ -232,5 +313,58 @@ test('Details moves focus to the opened decision', async ({ page }) => {
   await expect(heading).toBeInViewport();
   const scan = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
   expect(scan.violations.map(v => v.id)).toEqual([]);
+  expect(api.unexpected).toEqual([]);
+});
+
+async function expectNoAxeViolation(page: Page, what: string): Promise<void> {
+  const scan = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(
+    scan.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target.join(' ')).join(', ')}`),
+    `${what}: axe violations`,
+  ).toEqual([]);
+}
+
+test('the dense Overview (gate metrics, failing runner, backlog, unconfirmed email) has no axe violation', async ({
+  page,
+}) => {
+  const api = await stubAutomationApi(page, true);
+  await signIn(page);
+
+  await page.goto('/automation');
+  await expect(page.getByTestId('automation-gate-current')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Revoke gate' })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Publishes waiting for you' }).getByRole('listitem')).toHaveCount(2);
+  await expect(page.getByTestId('automation-email-unconfirmed')).toContainText('2');
+  await expect(page.getByText(/^Loading/)).toHaveCount(0);
+  await expectNoAxeViolation(page, 'dense overview');
+  expect(api.unexpected).toEqual([]);
+});
+
+test('a decision with findings and events has no axe violation', async ({ page }) => {
+  const api = await stubAutomationApi(page, true);
+  await signIn(page);
+
+  await page.goto('/automation?draftId=41');
+  const detail = page.getByRole('region', { name: 'Decision detail' });
+  await expect(detail.getByRole('table', { name: 'AI QA findings' }).getByRole('row')).toHaveCount(3);
+  await expect(detail.getByRole('table', { name: 'Events' }).getByRole('row')).toHaveCount(4);
+  await expectNoAxeViolation(page, 'dense decision detail');
+  expect(api.unexpected).toEqual([]);
+});
+
+test('the linked watch row with a title pattern and its open editor has no axe violation', async ({ page }) => {
+  const api = await stubAutomationApi(page, true);
+  await signIn(page);
+
+  await page.goto('/automation?tab=watch&targetId=3');
+  const row = page.getByTestId('automation-watch-target-3');
+  await expect(row).toHaveAttribute('aria-current', 'true');
+  await expect(row).toBeInViewport();
+  await expect(row.getByText('\\m(S3|EC2)\\M')).toBeVisible();
+  await expectNoAxeViolation(page, 'linked watch row');
+
+  await page.getByRole('button', { name: 'Edit target 3' }).click();
+  await expect(row.getByLabel('Title pattern (PostgreSQL regex)')).toBeFocused();
+  await expectNoAxeViolation(page, 'watch editor');
   expect(api.unexpected).toEqual([]);
 });

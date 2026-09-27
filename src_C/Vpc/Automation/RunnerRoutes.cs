@@ -368,9 +368,33 @@ public static class RunnerRoutes
   }
 
   /// <summary>
-  /// Runs after a complete commits (never on a replay): the <c>runner_run_failed</c> exception email for a failed run,
-  /// <c>queue_item_failed</c> when the item failed for good, then <see cref="AutomationRuns.TryFinalizeAsync"/>
-  /// (A00 §6.1, §8.5, §12.4). It never throws: the business commit already happened.
+  /// The error prefixes of a failed run a person has to act on whatever the retries do (R18C L6): the agent said it
+  /// could not do the task (<c>AGENT_BLOCKED</c>, written by the runner), or the runner's Claude could not start or ran
+  /// off the subscription login (a Mac or login configuration problem that every retry would repeat).
+  /// </summary>
+  public static readonly IReadOnlyList<string> ActionableRunErrorPrefixes =
+    ["AGENT_BLOCKED", "claude could not be started", "claude did not run on the subscription login"];
+
+  /// <summary>From this many attempts on one queue item a failed run is a repeated failure a person should look at.</summary>
+  public const int RepeatedFailureAttempts = 2;
+
+  /// <summary>
+  /// Whether a failed run needs the <c>runner_run_failed</c> email (R18C L6, automation-15): not when the item failed
+  /// for good (<c>queue_item_failed</c> carries that), otherwise for an actionable error or a repeated failure of the
+  /// item. A first transient failure (a timeout, a lease release) is retried on its own and shows on the Runs tab.
+  /// </summary>
+  internal static bool RunFailureNeedsHuman(string? error, int itemAttempts, string itemStatus)
+  {
+    if (itemStatus == "failed") return false;
+    if (error is { } e && ActionableRunErrorPrefixes.Any(p => e.StartsWith(p, StringComparison.Ordinal))) return true;
+    return itemAttempts >= RepeatedFailureAttempts;
+  }
+
+  /// <summary>
+  /// Runs after a complete commits (never on a replay): the <c>runner_run_failed</c> exception email for a failed run a
+  /// person can act on (<see cref="RunFailureNeedsHuman"/>), <c>queue_item_failed</c> when the item failed for good,
+  /// then <see cref="AutomationRuns.TryFinalizeAsync"/> (A00 §6.1, §8.5, §12.4). It never throws: the business commit
+  /// already happened.
   /// </summary>
   internal static async Task AfterCompleteAsync(NpgsqlConnection conn, Guid runId, long itemId, string outcome, string itemStatus, CancellationToken ct = default)
   {
@@ -381,13 +405,15 @@ public static class RunnerRoutes
       {
         var rows = await DbUtil.QueryAsync(conn, null,
           """
-          select q.url, q.last_error, r.error
+          select q.url, q.last_error, q.attempts, r.error
           from automation_runs r join authoring_queue_items q on q.id = r.queue_item_id
           where r.run_id = $1
           """, [runId]);
         var url = rows.Count == 0 ? string.Empty : (string)rows[0]["url"]!;
         var id = itemId.ToString(CultureInfo.InvariantCulture);
-        if (outcome == "failed")
+        var runError = rows.Count == 0 ? null : rows[0]["error"] as string;
+        var attempts = rows.Count == 0 ? 0 : Convert.ToInt32(rows[0]["attempts"], CultureInfo.InvariantCulture);
+        if (outcome == "failed" && RunFailureNeedsHuman(runError, attempts, itemStatus))
         {
           await Notifications.RaiseExceptionAsync(conn, "runner_run_failed", $"exception:runner_run_failed:{runId:D}",
             new Dictionary<string, string>
@@ -395,7 +421,7 @@ public static class RunnerRoutes
               ["runId"] = runId.ToString("D"),
               ["itemId"] = id,
               ["url"] = url,
-              ["error"] = rows.Count == 0 ? string.Empty : rows[0]["error"] as string ?? string.Empty,
+              ["error"] = runError ?? string.Empty,
             }, runId, ct);
         }
         if (itemStatus == "failed")
@@ -414,6 +440,7 @@ public static class RunnerRoutes
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "after_complete_failed", runId, error = ex.Message });
+      AutomationFailures.Record();
     }
   }
 

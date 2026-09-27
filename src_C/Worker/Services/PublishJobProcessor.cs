@@ -79,6 +79,14 @@ public class PublishJobProcessor : IPublishJobProcessor
       throw new BusinessException($"{PublishSnapshot.StaleErrorCode}: cards changed after the AI QA publish gate passed; publish again");
     }
 
+    // An automation publish checked the deck's settings too (R18C, backend-design-11): a settings edit since then is a
+    // human change, which only a human publishes. Read after the deck, so an edit that the build read is always seen.
+    if (await DeckSettingsChangedAsync(jobId))
+    {
+      RouteMetrics.EmitGauge(PublishSnapshot.StaleMetric, 1);
+      throw new BusinessException($"{PublishSnapshot.StaleErrorCode}: deck settings changed after the automation checked them; publish again");
+    }
+
     // 💡 契约修复：deck.json 的 version 必须等于本次构建的 buildId（字符串），
     // 与 manifest entry 的 version 保持一致 —— 客户端全量安装校验 deck.json.version === manifest version。
     if (!string.IsNullOrEmpty(job.BuildId))
@@ -165,6 +173,31 @@ public class PublishJobProcessor : IPublishJobProcessor
       c.CodeLanguage, c.CodeSnippet, c.RealWorldUsage, c.Revision, c.Topic, c.Mcq?.GetRawText(), c.Source?.GetRawText())));
 
   public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
+
+  /// <summary>
+  /// Whether the job carries the deck settings an automation publish checked (<c>deck_publishes.deck_updated_at</c>,
+  /// migration 035) and the deck's <c>updated_at</c> is no longer that value. False for every other job, and before 035.
+  /// </summary>
+  public static async Task<bool> DeckSettingsChangedAsync(string jobId)
+  {
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) throw new InvalidOperationException("Failed to open database connection");
+    try
+    {
+      var changed = await DbUtil.ExecuteScalarAsync(conn, null,
+        """
+        select d.updated_at is distinct from p.deck_updated_at
+        from deck_publishes p join decks d on d.id = p.deck_id
+        where p.job_id = $1 and p.deck_updated_at is not null
+        """, [jobId]);
+      return changed is true;
+    }
+    catch (PostgresException pg) when (pg.SqlState == "42703")
+    {
+      // Pre-035: no job records deck settings.
+      return false;
+    }
+  }
 
   /// <summary>
   /// 从数据库加载卡组数据

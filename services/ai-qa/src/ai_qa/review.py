@@ -17,6 +17,7 @@ import pydantic
 
 from . import providers
 from .logs import log
+from .openai_mantle_client import MantleConnectionError, MantleError
 from .prompts import SYSTEM_PROMPT
 from .schema import CATEGORY_SEVERITY, ModelReview
 from .settings import ConfigError, Settings
@@ -317,11 +318,8 @@ def client_error_code(exc: Exception) -> str:
     response = getattr(exc, "response", None) or {}
     error = response.get("Error") or {}
     name = error.get("Code")
-    if name == "ValidationException":
-        message = str(error.get("Message") or "").lower()
-        not_allowed = "access" in message and "not allowed" in message
-        if not_allowed or any(marker in message for marker in ACCESS_DENIED_MARKERS):
-            return "PROVIDER_ACCESS_DENIED"
+    if name == "ValidationException" and _names_no_access(str(error.get("Message") or "")):
+        return "PROVIDER_ACCESS_DENIED"
     code = CLIENT_ERROR_CODES.get(name)
     if code is not None:
         return code
@@ -329,8 +327,38 @@ def client_error_code(exc: Exception) -> str:
     return "PROVIDER_ERROR" if isinstance(status, int) and status >= 500 else "CONFIG"
 
 
+def _names_no_access(message: str) -> bool:
+    """A provider message that says the account may not use the model (allowlisting, terms, region)."""
+    text = message.lower()
+    not_allowed = "access" in text and "not allowed" in text
+    return not_allowed or any(marker in text for marker in ACCESS_DENIED_MARKERS)
+
+
+def mantle_error_code(exc: MantleError) -> str:
+    """The §7.5 code for an HTTP error answer from bedrock-mantle (provider openai-mantle)."""
+    status = exc.status_code
+    if exc.code == "InvalidResponse":
+        return "PROVIDER_ERROR"
+    if status == 401:
+        return "PROVIDER_AUTH"
+    if status == 403 or (400 <= status < 500 and _names_no_access(exc.message)):
+        return "PROVIDER_ACCESS_DENIED"
+    code = CLIENT_ERROR_CODES.get(exc.code or "")
+    if code is not None:
+        return code
+    if status == 408:
+        return "PROVIDER_TIMEOUT"
+    if status == 429:
+        return "PROVIDER_RATE_LIMITED"
+    return "PROVIDER_ERROR" if status >= 500 else "CONFIG"
+
+
 def error_code_for(exc: Exception) -> str | None:
     """The bounded §7.5 code for a provider/credential exception, or None to let it propagate."""
+    if isinstance(exc, MantleError):
+        return mantle_error_code(exc)
+    if isinstance(exc, MantleConnectionError):
+        return "PROVIDER_TIMEOUT"
     if isinstance(exc, anthropic.AuthenticationError):
         return "PROVIDER_AUTH"
     if isinstance(exc, anthropic.PermissionDeniedError):

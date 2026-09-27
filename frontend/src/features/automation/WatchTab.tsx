@@ -5,7 +5,12 @@
 // target's row. A super_admin may add a feed, toggle a target and edit its
 // title pattern and interval. The pattern is a PostgreSQL regular expression,
 // so only the server can say whether it compiles (WATCH_PATTERN_INVALID).
-import { useEffect, useState } from 'react';
+//
+// The marked row scrolls into view once the list loads, and a target that is
+// not on the loaded pages says so (C07 frontend-console-19). Edit moves focus
+// into the editor, and Save or Cancel returns it to the row's Edit button
+// (C07 frontend-console-18).
+import { useEffect, useRef, useState } from 'react';
 
 import { addWatchTarget, fetchWatch, updateWatchTarget, type WatchPage } from '../../api/automation';
 import {
@@ -22,8 +27,10 @@ import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 import {
   FEED_FORMATS,
+  FEED_FORMAT_LABELS,
   RECHECK_STATE_LABELS,
   WATCH_EVENT_KIND_LABELS,
+  WATCH_KIND_LABELS,
   WATCH_STATUS_LABELS,
   automationErrorMessage,
   codeLabel,
@@ -91,7 +98,10 @@ export function WatchTab({
 }) {
   const [nonce, setNonce] = useState(0);
   const [watch, setWatch] = useState<WatchState>({ forKey: null, error: null, data: null });
-  const [loadingMore, setLoadingMore] = useState(false);
+  // A Load more failure and busy state belong to the list they were asked for
+  // (the Decisions pattern), so a filter change hides them (C07 frontend-console-20).
+  const [loadingMoreKey, setLoadingMoreKey] = useState<string | null>(null);
+  const [moreError, setMoreError] = useState<{ forKey: string; text: string } | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -102,8 +112,24 @@ export function WatchTab({
   const [intervalText, setIntervalText] = useState(DEFAULT_INTERVAL);
   const [problems, setProblems] = useState<Array<FieldProblem<WatchField>>>([]);
   const [editing, setEditing] = useState<EditState | null>(null);
+  const tableSectionRef = useRef<HTMLElement>(null);
+  const editedRef = useRef<number | null>(null);
+  const scrolledToRef = useRef<number | null>(null);
 
   const key = String(nonce);
+  const editingId = editing?.targetId ?? null;
+
+  useEffect(() => {
+    const closed = editedRef.current;
+    editedRef.current = editingId;
+    const section = tableSectionRef.current;
+    if (!section) return;
+    if (editingId !== null) {
+      section.querySelector<HTMLElement>(`#${PATTERN_ID}-${editingId}`)?.focus();
+    } else if (closed !== null) {
+      section.querySelector<HTMLElement>(`button[aria-label="Edit target ${closed}"]`)?.focus();
+    }
+  }, [editingId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,11 +156,12 @@ export function WatchTab({
     // The cursor belongs to the list on screen; while a refresh loads it may be stale.
     if (!cursor || loading) return;
     const startKey = key;
-    setLoadingMore(true);
+    setLoadingMoreKey(startKey);
+    setMoreError(null);
     const res = await fetchWatch({ limit: PAGE_SIZE, cursor });
-    setLoadingMore(false);
+    setLoadingMoreKey(k => (k === startKey ? null : k));
     if (!res.success || !res.data) {
-      setWriteError(errorText(res.error, 'Failed to load more targets.'));
+      setMoreError({ forKey: startKey, text: errorText(res.error, 'Failed to load more targets.') });
       return;
     }
     const page = res.data;
@@ -225,6 +252,16 @@ export function WatchTab({
 
   const targets = watch.data?.items ?? [];
   const events = watch.data?.recentEvents ?? [];
+  const markedLoaded = targetId !== null && targets.some(t => t.targetId === targetId);
+
+  // Once per linked target: the row the source.changed link names, in view.
+  useEffect(() => {
+    if (targetId === null || !markedLoaded || scrolledToRef.current === targetId) return;
+    scrolledToRef.current = targetId;
+    tableSectionRef.current
+      ?.querySelector(`[data-testid="automation-watch-target-${targetId}"]`)
+      ?.scrollIntoView?.({ block: 'center' });
+  }, [targetId, markedLoaded]);
   const failed = (field: WatchField) => problems.some(p => p.field === field);
 
   return (
@@ -257,7 +294,7 @@ export function WatchTab({
               >
                 {FEED_FORMATS.map(f => (
                   <option key={f} value={f}>
-                    {f}
+                    {codeLabel(FEED_FORMAT_LABELS, f)}
                   </option>
                 ))}
               </select>
@@ -323,7 +360,7 @@ export function WatchTab({
         </Callout>
       ) : null}
 
-      <section className={CARD_CLASS} aria-label="Watched sources">
+      <section ref={tableSectionRef} className={CARD_CLASS} aria-label="Watched sources">
         <div className="flex flex-wrap items-end gap-3">
           <h2 className={H2_CLASS}>Watched sources</h2>
           <Button variant="outline" size="xs" loading={loading} onClick={() => setNonce(n => n + 1)}>
@@ -340,6 +377,13 @@ export function WatchTab({
         ) : null}
         {watch.data && targets.length === 0 ? (
           <p className="text-sm text-slate-600 mt-2">Nothing is watched yet.</p>
+        ) : null}
+        {watch.data && !loading && targetId !== null && !markedLoaded ? (
+          <p className="text-sm text-slate-700 mt-2" role="status" data-testid="automation-watch-target-missing">
+            {watch.data.nextCursor
+              ? `Target ${targetId} is not on the loaded pages. Load more to look further.`
+              : `Target ${targetId} is not in the list.`}
+          </p>
         ) : null}
 
         {targets.length > 0 ? (
@@ -374,16 +418,16 @@ export function WatchTab({
                       data-testid={`automation-watch-target-${t.targetId}`}
                     >
                       <td className={TD_CLASS}>{t.targetId}</td>
-                      <td className={TD_CLASS}>{t.kind}</td>
+                      <td className={TD_CLASS}>{codeLabel(WATCH_KIND_LABELS, t.kind)}</td>
                       <td className={TD_CLASS}>
                         <a href={t.url} target="_blank" rel="noreferrer" className="text-indigo-700 underline">
                           {urlLabel(t.url)}
                         </a>
                         {t.itemTitlePattern ? (
-                          <div className="text-xs text-slate-500 font-mono break-all">{t.itemTitlePattern}</div>
+                          <div className="text-xs text-slate-600 font-mono break-all">{t.itemTitlePattern}</div>
                         ) : null}
                       </td>
-                      <td className={TD_CLASS}>{orDash(t.feedFormat)}</td>
+                      <td className={TD_CLASS}>{t.feedFormat ? codeLabel(FEED_FORMAT_LABELS, t.feedFormat) : '—'}</td>
                       <td className={TD_CLASS}>{orDash(t.deckSlug)}</td>
                       <td className={TD_CLASS}>{t.active ? 'yes' : 'no'}</td>
                       <td className={TD_CLASS}>{t.checkIntervalMinutes}</td>
@@ -484,9 +528,16 @@ export function WatchTab({
           </div>
         ) : null}
 
+        {moreError && moreError.forKey === key ? (
+          <div className="mt-2">
+            <Callout tone="danger" role="alert">
+              {moreError.text}
+            </Callout>
+          </div>
+        ) : null}
         {watch.data?.nextCursor && !loading ? (
           <div className="mt-2">
-            <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
+            <Button variant="outline" size="xs" loading={loadingMoreKey === key} onClick={() => void onLoadMore()}>
               Load more
             </Button>
           </div>

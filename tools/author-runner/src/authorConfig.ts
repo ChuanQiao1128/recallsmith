@@ -16,7 +16,7 @@ export interface AuthorConfig {
   skillSha256: string;
   promptSha256: string;
   claudeArgsSha256: string;
-  mcpServerSha256: string | null;
+  mcpServerSha256: string;
   claudeVersion: string | null;
   runnerVersion: string;
 }
@@ -55,13 +55,8 @@ function skillDirSha256(dir: string): string {
   return hash.digest('hex');
 }
 
-function fileSha256(file: string): string | null {
-  try {
-    return sha256(readFileSync(file));
-  } catch {
-    return null;
-  }
-}
+/** The MCP server bundle every run starts; without it the agent would have no DeveloperCards tools (ai-agent-13). */
+export const MCP_SERVER_BUNDLE = join('tools', 'mcp-server', 'dist', 'index.js');
 
 export interface AuthorConfigInput {
   repoRoot: string;
@@ -71,7 +66,7 @@ export interface AuthorConfigInput {
   runnerVersion: string;
 }
 
-/** Reads the author configuration from the checkout; throws AuthorConfigError when the skill cannot be pinned. */
+/** Reads the author configuration from the checkout; throws AuthorConfigError when the skill or the MCP server bundle cannot be pinned. */
 export function readAuthorConfig(input: AuthorConfigInput): AuthorConfig {
   const skillDir = join(input.repoRoot, SKILL_DIR);
   let skillMd: string;
@@ -82,6 +77,12 @@ export function readAuthorConfig(input: AuthorConfigInput): AuthorConfig {
   }
   const skillVersion = skillVersionFrom(skillMd);
   if (skillVersion === null) throw new AuthorConfigError('SKILL.md has no "Skill version: `author-cards@…`" line');
+  let mcpServer: Buffer;
+  try {
+    mcpServer = readFileSync(join(input.repoRoot, MCP_SERVER_BUNDLE));
+  } catch {
+    throw new AuthorConfigError(`cannot read ${MCP_SERVER_BUNDLE} in the repo root (build tools/mcp-server)`);
+  }
 
   const fields: Omit<AuthorConfig, 'id'> = {
     model: input.model,
@@ -89,7 +90,7 @@ export function readAuthorConfig(input: AuthorConfigInput): AuthorConfig {
     skillSha256: skillDirSha256(skillDir),
     promptSha256: sha256(input.promptTemplate),
     claudeArgsSha256: sha256(claudeArgs('<prompt>', input.model, '<mcp-config>').join('\0')),
-    mcpServerSha256: fileSha256(join(input.repoRoot, 'tools', 'mcp-server', 'dist', 'index.js')),
+    mcpServerSha256: sha256(mcpServer),
     claudeVersion: input.claudeVersion,
     runnerVersion: input.runnerVersion,
   };

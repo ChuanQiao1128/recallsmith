@@ -195,6 +195,11 @@ Alarms (all on the alerts topic; one line each — what fired, first check):
 - `notify-dlq-nonempty` — an email message failed five receives and sits in developercards-notify-dlq.
   Read the notifier's log for the message id; fix the cause (SES, the recipient parameter, core-vpc's
   report route), then redrive the DLQ (`aws sqs start-message-move-task --source-arn <DLQ ARN>`).
+- `notify-queue-oldest-age` — a message has waited on developercards-notify for 30 minutes or more: the
+  email consumer is not draining the queue. Check the notify ESM is Enabled
+  (`aws lambda list-event-source-mappings --function-name developercards-notifier:prod --query 'EventSourceMappings[].[UUID,State]'`;
+  re-enable a mapping left stopped by emergency-stop step 2), then the notifier's throttles. Queued emails
+  expire after 4 days and core does not re-send them (K6).
 - `notifier-errors` — the notifier function raised (tick, digest or an SQS record). Check
   `/aws/lambda/developercards-notifier` for the traceback, then `notifier-secret` and core-vpc health.
 - `source-watcher-errors` — a source-watch run raised. Check `/aws/lambda/developercards-source-watcher`,
@@ -286,6 +291,18 @@ console; nothing here depends on it.
 - `AccessDeniedException` — the send was outside `developercards-notifier-ses-send`: a different
   From address, a configuration set other than `developercards-automation`, or a recipient identity
   that no longer matches the grant (after an `alert_email` change, before the apply).
+
+**Suppression and delivery events (R18C).** The configuration set `developercards-automation` inherits the
+account-level suppression list (BOUNCE, COMPLAINT): the aws provider cannot hold an empty per-set override
+(SES stores it as "no override"), so none is declared. A hard bounce or a "spam" click on an alert would
+therefore put the owner address on the suppression list, after which SES accepts later sends (the notifier
+logs `sent`) but delivers nothing. That is never silent: the event destination
+`developercards-automation-alerts` publishes every `BOUNCE`, `COMPLAINT`, `REJECT` and `DELIVERY_DELAY`
+event to the alerts topic (`developercards-alerts`, Sid `SesEventPublish`, only this configuration set),
+and SNS email delivery does not depend on the SES suppression list. On such an event: fix the mailbox or
+filter first (a complaint means an alert was marked as spam), then check the suppression list
+(`aws sesv2 get-suppressed-destination --email-address <owner address>` in a private terminal); if listed,
+the owner removes it in the SES console (Suppression list → remove), never from a worker.
 
 **Changing `alert_email`.** One apply changes, together, the `notify-recipient` SSM value, the SES
 recipient identity (the old one is destroyed, a new one created, and SES sends a new verification

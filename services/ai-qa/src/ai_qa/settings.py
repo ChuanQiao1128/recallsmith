@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import os
 import time
 from collections.abc import Mapping
@@ -22,13 +23,15 @@ SECRET_TTL_SECONDS = 300.0
 # The optional previous internal secret lives next to the current one: "<name>-previous".
 PREVIOUS_SECRET_SUFFIX = "-previous"
 
-PROVIDERS = ("bedrock", "anthropic", "bedrock-converse")
+PROVIDERS = ("bedrock", "anthropic", "bedrock-converse", "openai-mantle")
 CONVERSE_PROVIDER = "bedrock-converse"
+# OpenAI Chat Completions on bedrock-mantle (openai_mantle_client.py, R18C contract L1).
+OPENAI_MANTLE_PROVIDER = "openai-mantle"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 STRUCTURED_OUTPUT_MODES = ("auto", "on", "off")
 BEDROCK_MODEL_PREFIX = "anthropic."
 
-# bedrock-converse has no default: AI_MODEL (or AI_QA_SECOND_MODEL) must name the model.
+# bedrock-converse and openai-mantle have no default: AI_MODEL (or AI_QA_SECOND_MODEL) must name the model.
 DEFAULT_MODELS = {"bedrock": "anthropic.claude-opus-5", "anthropic": "claude-opus-5"}
 
 # The optional second reviewer (README, "Other models (Bedrock Converse) and the second opinion").
@@ -53,6 +56,11 @@ AUTOMATION_PROVIDER_ENV = "AI_QA_AUTOMATION_PROVIDER"
 AUTOMATION_MODEL_ENV = "AI_QA_AUTOMATION_MODEL"
 AUTOMATION_PRICE_INPUT_ENV = "AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK"
 AUTOMATION_PRICE_OUTPUT_ENV = "AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK"
+# The bedrock-mantle region of provider openai-mantle (for any profile): GPT-5.5 is In-Region only in
+# us-east-1 and us-east-2. The other providers keep AI_BEDROCK_REGION.
+AUTOMATION_REGION_ENV = "AI_QA_AUTOMATION_REGION"
+DEFAULT_AUTOMATION_REGION = "us-east-1"
+_REGION_SHAPE = re.compile(r"^[a-z]{2}(-[a-z]+)+-[0-9]+$")
 
 DEFAULTS: dict[str, str] = {
     "AI_PROVIDER": "bedrock",
@@ -83,7 +91,7 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Settings:
-    provider: Literal["bedrock", "anthropic", "bedrock-converse"]
+    provider: Literal["bedrock", "anthropic", "bedrock-converse", "openai-mantle"]
     model: str
     bedrock_region: str
     effort: str
@@ -107,6 +115,7 @@ class Settings:
     automation_price_input_per_mtok: float | None = None
     automation_price_output_per_mtok: float | None = None
     automation_config_error: str | None = None
+    automation_region: str = DEFAULT_AUTOMATION_REGION
 
 
 def is_truthy(value: str | None) -> bool:
@@ -179,9 +188,19 @@ def _model(key: str, provider: str, raw: str | None) -> str:
         raise ConfigError(f"{key} for bedrock must be a Bedrock model id starting with 'anthropic.'")
     if provider == "anthropic" and model.startswith(BEDROCK_MODEL_PREFIX):
         raise ConfigError(f"{key} for anthropic must be a first-party model id, not a Bedrock id")
-    if provider == CONVERSE_PROVIDER and model.startswith(BEDROCK_MODEL_PREFIX):
-        raise ConfigError(f"{key} for {CONVERSE_PROVIDER} must not be an 'anthropic.' model (Claude uses bedrock)")
+    if provider in (CONVERSE_PROVIDER, OPENAI_MANTLE_PROVIDER) and model.startswith(BEDROCK_MODEL_PREFIX):
+        raise ConfigError(f"{key} for {provider} must not be an 'anthropic.' model (Claude uses bedrock)")
     return model
+
+
+def _automation_region(raw: str | None) -> str:
+    """AI_QA_AUTOMATION_REGION, else us-east-1; raises ConfigError for a value that is not a region."""
+    region = (raw or "").strip().lower()
+    if not region:
+        return DEFAULT_AUTOMATION_REGION
+    if not _REGION_SHAPE.match(region):
+        raise ConfigError(f"{AUTOMATION_REGION_ENV} must be an AWS region such as {DEFAULT_AUTOMATION_REGION}")
+    return region
 
 
 def _optional_price(env: Mapping[str, str], key: str) -> float | None:
@@ -213,25 +232,35 @@ def _second_opinion(env: Mapping[str, str]) -> dict[str, Any]:
 
 
 def _automation(env: Mapping[str, str]) -> dict[str, Any]:
-    """The automation-reviewer fields; empty (unset) unless AI_QA_AUTOMATION_PROVIDER is set.
+    """The automation-reviewer fields; empty (unset) unless AI_QA_AUTOMATION_PROVIDER is set, plus
+    the openai-mantle region (AI_QA_AUTOMATION_REGION).
 
     Never raises: an invalid key yields {"automation_config_error": <reason>} (with the provider when
     it is valid, so the report can name it), which profiles.settings_for raises for that profile only.
     """
+    try:
+        region = {"automation_region": _automation_region(env.get(AUTOMATION_REGION_ENV))}
+    except ConfigError as exc:
+        # The default region stays in place; only the automation profile is refused.
+        return {"automation_config_error": str(exc)}
     provider = (env.get(AUTOMATION_PROVIDER_ENV) or "").strip().lower()
     if not provider:
-        return {}
+        return region
     if provider not in PROVIDERS:
-        return {"automation_config_error": f"{AUTOMATION_PROVIDER_ENV} must be empty or one of {', '.join(PROVIDERS)}"}
+        return {
+            **region,
+            "automation_config_error": f"{AUTOMATION_PROVIDER_ENV} must be empty or one of {', '.join(PROVIDERS)}",
+        }
     try:
         return {
+            **region,
             "automation_provider": provider,
             "automation_model": _model(AUTOMATION_MODEL_ENV, provider, env.get(AUTOMATION_MODEL_ENV)),
             "automation_price_input_per_mtok": _optional_price(env, AUTOMATION_PRICE_INPUT_ENV),
             "automation_price_output_per_mtok": _optional_price(env, AUTOMATION_PRICE_OUTPUT_ENV),
         }
     except ConfigError as exc:
-        return {"automation_provider": provider, "automation_config_error": str(exc)}
+        return {**region, "automation_provider": provider, "automation_config_error": str(exc)}
 
 
 def _max_receives(raw: str | None) -> int:

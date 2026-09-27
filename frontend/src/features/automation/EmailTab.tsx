@@ -7,8 +7,14 @@
 //
 // Show answers only for the email last asked for, marks its button busy while
 // the body loads, and moves focus to the body's heading (B07
-// frontend-console-4, frontend-console-8).
+// frontend-console-4, frontend-console-8). Hide returns focus to the Show
+// button it came from, or to the Email log heading when that row is gone
+// (C07 frontend-console-18).
+//
+// `?tab=email&status=queued` opens the log on that status: the Overview's
+// unconfirmed-email count links there (K6, L5).
 import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import {
   fetchNotification,
@@ -50,16 +56,25 @@ function errorText(error: ApiError | null, fallback: string): string {
 }
 
 export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announce: (text: string) => void }) {
+  const [searchParams] = useSearchParams();
   const [kind, setKind] = useState('');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState(() => {
+    const linked = searchParams.get('status') ?? '';
+    return (NOTIFICATION_STATUSES as readonly string[]).includes(linked) ? linked : '';
+  });
   const [nonce, setNonce] = useState(0);
   const [list, setList] = useState<ListState>({ forKey: null, error: null, items: [], nextCursor: null });
-  const [loadingMore, setLoadingMore] = useState(false);
+  // A Load more failure and busy state belong to the list they were asked for
+  // (the Decisions pattern), so a filter change hides them (C07 frontend-console-20).
+  const [loadingMoreKey, setLoadingMoreKey] = useState<string | null>(null);
+  const [moreError, setMoreError] = useState<{ forKey: string; text: string } | null>(null);
   const [shown, setShown] = useState<AutomationNotificationDetail | null>(null);
   // The email whose body was asked for last; an older answer is dropped.
   const [showing, setShowing] = useState<string | null>(null);
   const requestedRef = useRef<string | null>(null);
   const bodyHeadingRef = useRef<HTMLHeadingElement>(null);
+  const listSectionRef = useRef<HTMLElement>(null);
+  const listHeadingRef = useRef<HTMLHeadingElement>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -97,16 +112,17 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
     // The cursor belongs to the list on screen; while a new filter loads it is foreign.
     if (!list.nextCursor || loading) return;
     const startKey = key;
-    setLoadingMore(true);
+    setLoadingMoreKey(startKey);
+    setMoreError(null);
     const res = await listNotifications({
       kind: kind || undefined,
       status: status || undefined,
       limit: PAGE_SIZE,
       cursor: list.nextCursor,
     });
-    setLoadingMore(false);
+    setLoadingMoreKey(k => (k === startKey ? null : k));
     if (!res.success || !res.data) {
-      setWriteError(errorText(res.error, 'Failed to load more emails.'));
+      setMoreError({ forKey: startKey, text: errorText(res.error, 'Failed to load more emails.') });
       return;
     }
     const page = res.data;
@@ -132,6 +148,15 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
     setShown(res.data);
   }
 
+  function onHide() {
+    if (!shown) return;
+    const origin = listSectionRef.current?.querySelector<HTMLElement>(
+      `button[aria-label="Show email ${shortId(shown.notificationId)}"]`,
+    );
+    setShown(null);
+    (origin ?? listHeadingRef.current)?.focus();
+  }
+
   async function onSendTest() {
     setWriteError(null);
     setBusy(true);
@@ -153,9 +178,11 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
         </Callout>
       ) : null}
 
-      <section className={CARD_CLASS} aria-label="Email log">
+      <section ref={listSectionRef} className={CARD_CLASS} aria-label="Email log">
         <div className="flex flex-wrap items-end gap-3">
-          <h2 className={H2_CLASS}>Email log</h2>
+          <h2 ref={listHeadingRef} tabIndex={-1} className={`${H2_CLASS} focus:outline-none`}>
+            Email log
+          </h2>
           <div>
             <label htmlFor={KIND_ID} className={LABEL_CLASS}>
               Kind
@@ -250,9 +277,16 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
           </div>
         ) : null}
 
+        {moreError && moreError.forKey === key ? (
+          <div className="mt-2">
+            <Callout tone="danger" role="alert">
+              {moreError.text}
+            </Callout>
+          </div>
+        ) : null}
         {list.nextCursor && !loading ? (
           <div className="mt-2">
-            <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
+            <Button variant="outline" size="xs" loading={loadingMoreKey === key} onClick={() => void onLoadMore()}>
               Load more
             </Button>
           </div>
@@ -265,7 +299,7 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
             <h2 ref={bodyHeadingRef} tabIndex={-1} className={`${H2_CLASS} focus:outline-none`}>
               {shown.subject}
             </h2>
-            <Button variant="ghost" size="xs" onClick={() => setShown(null)}>
+            <Button variant="ghost" size="xs" onClick={onHide}>
               Hide
             </Button>
           </div>

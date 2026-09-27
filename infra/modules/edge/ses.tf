@@ -67,8 +67,25 @@ resource "aws_sesv2_configuration_set" "automation" {
     sending_enabled = true
   }
 
-  suppression_options {
-    suppressed_reasons = ["BOUNCE", "COMPLAINT"]
+  # R18C (cloud-security-resilience-10), supervisor amendment: no suppression_options block. The aws provider
+  # cannot hold an empty override — SES stores `suppressed_reasons = []` as "no override", so the set inherits
+  # the account-level list (BOUNCE, COMPLAINT) and the block would show as a change on every plan. The finding's
+  # risk (one bounce or complaint silently stops every automation email) is covered by the event destination
+  # below: every bounce, complaint, reject and delivery delay reaches the alerts topic (SNS email, which the SES
+  # suppression list does not affect), and RUNBOOK §7 has the owner-only removal step.
+}
+
+resource "aws_sesv2_configuration_set_event_destination" "automation_alerts" {
+  configuration_set_name = aws_sesv2_configuration_set.automation.configuration_set_name
+  event_destination_name = "developercards-automation-alerts"
+
+  event_destination {
+    enabled              = true
+    matching_event_types = ["BOUNCE", "COMPLAINT", "REJECT", "DELIVERY_DELAY"]
+
+    sns_destination {
+      topic_arn = var.automation_events_topic_arn
+    }
   }
 }
 
