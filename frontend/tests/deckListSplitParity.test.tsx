@@ -198,28 +198,39 @@ interface Baseline {
 // +438 B (three: ConsoleShell hides Webhooks from an editor). initialLoading
 // and fatalErrorRetry are still the early returns and are unchanged. The
 // values were stable across two separate vitest processes.
+//
+// RE-MEASURED AGAIN, 2026-09-27, Z06 (frontend-console-27). Nine of the eleven
+// moved when ConsoleShell's section links gained the focus-visible ring and
+// were regrouped (authoring, then the ledger, then the super_admin sections).
+// Verified BEFORE the numbers were touched: the markup outside <nav> is
+// identical to the character, and each link's class grew by exactly
+// "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 "
+// (78 B). Every super-admin scenario moved by +468 B (six links); editorLegacy
+// by +312 B (four). The deck list is the Decks section but renders no Decks
+// link, so no aria-current appears here. initialLoading and fatalErrorRetry are
+// unchanged.
 const B1: Record<string, Baseline> = {
   // The three reachable role/mode cells.
-  superAdminPaginated: { hash: 'aaf4e97685f68206bfa7ce9c0b7de722c31493b165ef28c74d91f71d4ddc3e54', bytes: 12072 },
-  superAdminLegacyFallback: { hash: '0bde2b39aa7668fbcafbb48a7ce5d6d59fde5a624b1bd7df68c1f04a4dfeb634', bytes: 12318 },
-  editorLegacy: { hash: '2acd38635f19f51555ed4f591fe1aeb24550dd30bff6d339aa0877e138aab81e', bytes: 9231 },
+  superAdminPaginated: { hash: '8c2e889b967db81a4df15f6276ee19046ca56cf72e4312d98df4a78505a35667', bytes: 12540 },
+  superAdminLegacyFallback: { hash: 'e4e92f3c7ac1752614d5a6b6287c90816182de36afe41ab196e6b4acaf1d42e7', bytes: 12786 },
+  editorLegacy: { hash: '1abdfa4f8c08a763278317a242cdcc2ce8c0b6e7b49541e031483de4f76e60ab', bytes: 9543 },
   // The two early returns, which never reach the main tree at all.
   initialLoading: { hash: 'da5e91db42c7895c31e1fba36b34c6aaeb456d4ef2efde3a425f5b5066a52974', bytes: 147 },
   fatalErrorRetry: { hash: '22809bb57f98a29737e080c405194d891a62ee389911aae33891f12b55c1c396', bytes: 421 },
   // Both halves of the empty-state ternary. These two differ by ONE WORD, and
   // the split turns that ternary into an `emptyMessage` prop — which is exactly
   // the kind of change that keeps one branch and loses the other.
-  emptySearchResult: { hash: '7e20e91258055aecc8e66c511307cb9fcce5b75ab256a70de98f3c58521c4e82', bytes: 6056 },
-  emptyWithNoQuery: { hash: '8fa3826f1eea7b3e8be44fcc1d7215b2fdacae35f129c3d06f2789120339d0cb', bytes: 6046 },
+  emptySearchResult: { hash: 'acb20c57609be96867f84c486febaa18bf1af39231e86e8810a6e3f6c05cd30e', bytes: 6524 },
+  emptyWithNoQuery: { hash: 'd2152c58b3127050a567fb5457d0f4b06ecc522f4c2bae2731d69e755c0045ad', bytes: 6514 },
   // The three banners/panels that only appear in one state each.
-  manifestErrorBanner: { hash: 'ab1d3b608dbf1c7bc774dfc61557457a223e50cbc9c6f4a39bafd3def2ff2c97', bytes: 12570 },
+  manifestErrorBanner: { hash: '2b2c5d9dad22ed551c990ff2e6ff614c0057774ff9a6e1fe8f570e8c496a4637', bytes: 13038 },
   // F24 (2026-09-26): the Publish Jobs table gained an Error column after Status
   // (CFE-09) and a title on the Job ID cell, so this scenario's markup grew by
   // 99 B. No other scenario renders that table, so only this hash moved.
-  publishJobsTab: { hash: '2063222737f6ed11367e8b50f79758ab70823b0e75185c0af2c43c5502ce7241', bytes: 5028 },
-  pollFailureBanner: { hash: '26ed97b82605bcd74e7ccab8b0c8dbc9fb338c134ec8c691b9d2a7a44ed77d59', bytes: 12957 },
+  publishJobsTab: { hash: 'd02aeb2d8c8e18e7fa6562f9298d81d5c868f4dd9bd7577f9f47c70989517a27', bytes: 5496 },
+  pollFailureBanner: { hash: '0e76a7695c56f40bef0f4b8a451845f7e6af465c924dc147989f45df85fee0e0', bytes: 13425 },
   // A row mid-publish, so the pending markup is inside a hash too.
-  publishingRow: { hash: 'b7603d556e0656e3607bdfc48eca29a888f24fd209ba7eabb3cf182a1d3b1a2e', bytes: 12088 },
+  publishingRow: { hash: '9ce0053c3c364982147660c8bfc9b36f8dec3cc1357f80308b2427bb2852da20', bytes: 12556 },
 };
 
 // B2: one Profiler onRender entry per commit of the profiled subtree.

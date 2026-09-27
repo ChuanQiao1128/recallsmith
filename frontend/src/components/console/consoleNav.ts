@@ -33,3 +33,17 @@ export const CONSOLE_NAV: Readonly<Required<ConsoleNavHrefs>> = {
 export function consoleNav(overrides: ConsoleNavHrefs = {}): ConsoleNavHrefs {
   return { ...CONSOLE_NAV, ...overrides };
 }
+
+export type ConsoleSection = 'decks' | 'review' | 'qa' | 'contentIntelligence' | 'ledger' | 'webhooks' | 'adminUsers';
+
+/** The console section a path belongs to; the deck list and its card/deck pages are Decks. */
+export function consoleSectionFor(pathname: string): ConsoleSection | null {
+  if (pathname === '/review') return 'review';
+  if (pathname === '/decks/qa') return 'qa';
+  if (pathname === '/content-intelligence') return 'contentIntelligence';
+  if (pathname === '/ledger') return 'ledger';
+  if (pathname === '/admin/webhooks') return 'webhooks';
+  if (pathname === '/admin/users') return 'adminUsers';
+  if (pathname === '/' || pathname.startsWith('/decks')) return 'decks';
+  return null;
+}

@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 
 import { http } from '../src/api/http';
-import { updateCard, fetchAdminDecksPage } from '../src/api/authoring';
+import { updateCard, fetchAdminDecksPage, publishDeck } from '../src/api/authoring';
 import { listAdminDecks } from '../src/api/admin';
 import { apiResultFromError } from '../src/api/httpFailure';
 
@@ -99,6 +99,28 @@ describe('apiResultFromError through the real http instance', () => {
     expect(result.error?.message).toBe('The request body is too large.');
     expect(result.traceId).toBe('trace-413');
     expect(result.error?.httpStatus).toBe(413);
+  });
+
+  it('keeps the chained run of a 409 AI_QA_REQUIRED from the publish gate (automation-17)', async () => {
+    rejectWithResponse(409, 'Conflict', {
+      success: false,
+      data: null,
+      error: {
+        code: 'AI_QA_REQUIRED',
+        message: 'AI QA required for 1 card(s): s3-01',
+        runId: 'run-77',
+        qaRun: { status: 'queued', runId: 'run-77', code: null, message: null },
+      },
+      traceId: 'trace-409',
+    });
+    const res = await publishDeck(7);
+    expect(res.error).toEqual({
+      code: 'AI_QA_REQUIRED',
+      message: 'AI QA required for 1 card(s): s3-01',
+      httpStatus: 409,
+      runId: 'run-77',
+      qaRun: { status: 'queued', code: null, message: null },
+    });
   });
 
   it('reports a non-envelope HTTP 502 as HTTP_502 with its status', async () => {

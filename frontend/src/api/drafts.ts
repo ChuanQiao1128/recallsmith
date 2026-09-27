@@ -225,7 +225,7 @@ export async function fetchDraft(draftId: number): Promise<ApiResult<Draft>> {
 
 export async function acceptDraft(
   draftId: number,
-  body: { card?: DraftCard; reviewMs?: number },
+  body: { card?: DraftCard; reviewMs?: number; runQa?: boolean },
 ): Promise<ApiResult<DraftAcceptResult>> {
   try {
     const resp = await http.post<ApiResult<unknown>>(`/api/v1/authoring/drafts/${draftId}/accept`, body);
@@ -233,12 +233,22 @@ export async function acceptDraft(
       const raw = asRecord(data);
       const cardId = raw ? toNumber(raw.cardId) : null;
       if (!raw || cardId === null) return null;
-      return {
+      const result: DraftAcceptResult = {
         draftId: toNumber(raw.draftId) ?? draftId,
         cardId,
         stableUid: toText(raw.stableUid),
         action: raw.action === 'edited_accepted' ? 'edited_accepted' : 'accepted',
       };
+      const qa = asRecord(raw.qa);
+      if (qa) {
+        result.qa = {
+          status: toText(qa.status),
+          runId: typeof qa.runId === 'string' && qa.runId !== '' ? qa.runId : null,
+          code: toNullableText(qa.code),
+          message: toNullableText(qa.message),
+        };
+      }
+      return result;
     });
   } catch (err) {
     return apiResultFromError<DraftAcceptResult>(err);

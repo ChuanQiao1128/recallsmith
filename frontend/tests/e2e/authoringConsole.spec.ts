@@ -43,6 +43,7 @@
 // vitest run that swallowed this file would fail on the import alone.
 
 import { createHash } from 'node:crypto';
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 /** Matches frontend/.env.e2e, which is what the bundle under test was built with. */
@@ -477,10 +478,206 @@ test('each HITL route loads its own chunk from the built bundle and renders its 
     const chunk = scripts.filter(s => route.chunk.test(s.url));
     expect(chunk.length, `${route.link}: no chunk fetched`).toBeGreaterThan(0);
     expect(chunk.every(s => s.status === 200), `${route.link}: chunk did not load`).toBe(true);
+
+    // frontend-console-28: an automated WCAG 2 A/AA scan of the rendered page,
+    // so duplicate ids, unnamed controls and contrast regressions fail here
+    // rather than wait for the next manual audit. The loading lines are gone
+    // first, so the scan sees the page's settled content.
+    await expect(page.getByText(/^Loading/)).toHaveCount(0);
+    const scan = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+    expect(
+      scan.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target.join(' ')).join(', ')}`),
+      `${route.link}: axe violations`,
+    ).toEqual([]);
+    // The header marks this page as the current section (frontend-console-27).
+    await expect(
+      page.getByRole('navigation', { name: 'Console sections' }).getByRole('link', { name: route.link, exact: true }),
+    ).toHaveAttribute('aria-current', 'page');
   }
 
   expect(api.seen).toContain('/api/v1/admin/automation/baselines');
   expect(api.seen.some(s => s.startsWith('/api/v1/admin/webhooks/subscriptions'))).toBe(true);
+  expect(api.unexpected).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// Smoke 4 — the HITL pages with real content pass an automated a11y scan
+// ---------------------------------------------------------------------------
+// frontend-console-28. Smoke 3 scans each page as its picker renders it; the
+// ids and names that matter most (the draft's source help and reject problem,
+// a finding's note inputs) only exist once a deck is open, so this visit opens
+// a draft, its edit form and its reject form, and a run with findings.
+
+const DRAFT_CARD = {
+  stableUid: 'e2e-draft-card',
+  difficulty: 1,
+  topic: null,
+  question: 'Which layer does the accessibility scan exercise?',
+  explanation: 'The built bundle, rendered in a real browser.',
+  codeSnippet: null,
+  codeLanguage: null,
+  realWorldUsage: null,
+  mcq: null,
+  source: {
+    url: 'https://example.com/e2e/source',
+    quote: 'The built bundle, rendered in a real browser.',
+    grounding: { chunkId: 'chunk-1', sourceId: 'src-1', matched: true, quoteChars: 45 },
+  },
+};
+
+const DRAFT = {
+  draftId: 41,
+  deckId: DECK.id,
+  batchId: 'batch-e2e',
+  clientDraftKey: 'key-e2e',
+  stableUid: DRAFT_CARD.stableUid,
+  question: DRAFT_CARD.question,
+  topic: null,
+  status: 'pending',
+  likelyDuplicate: false,
+  createdAt: '2026-09-27T09:00:00Z',
+  decidedAt: null,
+  card: DRAFT_CARD,
+  similar: [],
+  agent: { name: 'author-cards', model: 'local', skillVersion: '1.0.0' },
+  submittedBySub: 'e2e-admin-sub',
+  decidedBySub: null,
+  acceptedCardId: null,
+  events: [],
+};
+
+const QA_RUN = {
+  runId: 'run-e2e',
+  deckId: DECK.id,
+  scope: 'changed',
+  status: 'done',
+  effectiveStatus: 'done',
+  provider: 'bedrock',
+  model: 'e2e-model',
+  promptVersion: 'qa-v1',
+  cardCount: 1,
+  chunkCount: 1,
+  cardsDone: 1,
+  errorCount: 0,
+  blockerCount: 1,
+  majorCount: 0,
+  minorCount: 1,
+  inputTokens: 3000,
+  outputTokens: 1200,
+  cacheReadTokens: 0,
+  estimatedCostUsd: 0.05,
+  errorCode: null,
+  createdAt: '2026-09-27T09:00:00Z',
+  updatedAt: '2026-09-27T09:01:00Z',
+  finishedAt: '2026-09-27T09:01:00Z',
+};
+
+function qaFinding(findingId: number, severity: string) {
+  return {
+    findingId,
+    runId: QA_RUN.runId,
+    cardId: CARD.id,
+    severity,
+    category: 'ambiguous_stem',
+    message: 'The question does not say which layer it means.',
+    suggestedFix: 'Name the layer in the question.',
+    resolution: 'open',
+    resolvedAt: null,
+    resolutionNote: null,
+    createdAt: '2026-09-27T09:01:00Z',
+  };
+}
+
+async function stubHitlContentApi(page: Page): Promise<{ unexpected: string[] }> {
+  const unexpected: string[] = [];
+  await page.route('**/api/v1/**', (route: Route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const body = (payload: string) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: payload });
+
+    if (path === '/api/v1/authoring/decks') return body(ok([DECK]));
+    if (path === '/api/v1/authoring/cards/page')
+      return body(ok({ items: [CARD], nextCursor: null, hasMore: false }));
+    if (path === '/api/v1/authoring/cards') return body(ok([CARD]));
+    if (path === '/api/v1/authoring/drafts') return body(ok({ items: [DRAFT], nextCursor: null }));
+    if (path === `/api/v1/authoring/drafts/${DRAFT.draftId}`) return body(ok(DRAFT));
+    if (path === '/api/v1/authoring/qa/status')
+      return body(
+        ok({
+          enabled: true,
+          required: false,
+          changedCards: 1,
+          reviewedCurrent: 1,
+          missing: [],
+          openBlockers: [],
+          wouldBlock: false,
+          limits: { maxCards: 200, dailyUsdCap: 10, spentTodayUsd: 0.05, reservedTodayUsd: 0, estUsdPerCard: 0.05 },
+        }),
+      );
+    if (path === '/api/v1/authoring/qa/runs') return body(ok({ items: [QA_RUN], nextCursor: null }));
+    if (path === `/api/v1/authoring/qa/runs/${QA_RUN.runId}`)
+      return body(
+        ok({
+          run: QA_RUN,
+          items: [{ cardId: CARD.id, stableUid: CARD.stableUid, status: 'done', errorCode: null }],
+          findings: [qaFinding(501, 'blocker'), qaFinding(502, 'minor')],
+        }),
+      );
+
+    unexpected.push(`${path}${url.search}`);
+    return body(ok(null));
+  });
+  return { unexpected };
+}
+
+async function expectNoAxeViolations(page: Page, label: string): Promise<void> {
+  const scan = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(
+    scan.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target.join(' ')).join(', ')}`),
+    `${label}: axe violations`,
+  ).toEqual([]);
+}
+
+test('the review queue and AI QA with a deck open pass a WCAG 2 A/AA scan', async ({ page }) => {
+  const api = await stubHitlContentApi(page);
+  const consoleErrors: string[] = [];
+  page.on('pageerror', error => consoleErrors.push(String(error)));
+  await page.addInitScript(
+    ([key, value]) => {
+      sessionStorage.setItem(key, value);
+    },
+    [TOKEN_KEY, superAdminSession()],
+  );
+
+  await page.goto(`/review?deckId=${DECK.id}`);
+  await expect(page.getByRole('region', { name: 'Draft card' })).toBeVisible();
+  await expect(page.getByTestId('review-grounding')).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: 'Run AI QA on accepted cards' })).toBeVisible();
+  await expectNoAxeViolations(page, 'review queue, draft open');
+
+  await page.getByRole('button', { name: 'Reject' }).click();
+  await expect(page.getByLabel('Reason')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Confirm reject' })).toBeDisabled();
+  await expectNoAxeViolations(page, 'review queue, reject form');
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await expect(page.getByLabel('Source quote')).toBeVisible();
+  await page.getByLabel('Source URL').fill('http://example.com/not-https');
+  await page.getByRole('button', { name: 'Accept with edits' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Source URL must start with https://' })).toBeVisible();
+  await expectNoAxeViolations(page, 'review queue, edit form with a source error');
+
+  await page.goto(`/decks/qa?deckId=${DECK.id}`);
+  await expect(page.getByRole('button', { name: 'Mark finding 501 fixed' })).toBeVisible();
+  await expectNoAxeViolations(page, 'AI QA, run with findings');
+
+  await page.getByRole('radio', { name: 'Selected cards' }).check();
+  await expect(page.getByRole('checkbox', { name: new RegExp(CARD.stableUid) })).toBeVisible();
+  await expectNoAxeViolations(page, 'AI QA, selected cards');
+
   expect(api.unexpected).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });

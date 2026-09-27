@@ -163,6 +163,15 @@ function StayingEditor() {
         save and stay
       </button>
       <Link to="/?step=other">other view</Link>
+      <button
+        type="button"
+        onClick={() => {
+          guard.allowNextNavigation();
+          navigate('/');
+        }}
+      >
+        save in place
+      </button>
     </div>
   );
 }
@@ -193,6 +202,33 @@ describe('the unsaved-changes guard', () => {
     await user.click(screen.getByRole('link', { name: 'other view' }));
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
     expect(router.state.location.search).toBe('?step=saved');
+  });
+
+  it('spends the allowance on a navigation that does not move (frontend-console-19, round 3)', async () => {
+    const user = userEvent.setup();
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/',
+          element: (
+            <ConfirmDialogProvider>
+              <StayingEditor />
+            </ConfirmDialogProvider>
+          ),
+        },
+      ],
+      { initialEntries: ['/'] },
+    );
+    render(<RouterProvider router={router} />);
+
+    // Same pathname and search: nothing moves, and the allowance must not survive it.
+    await user.click(screen.getByRole('button', { name: 'save in place' }));
+    expect(router.state.location.search).toBe('');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+
+    await user.click(screen.getByRole('link', { name: 'other view' }));
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(router.state.location.search).toBe('');
   });
 
   it('lets a clean page navigate without asking', async () => {

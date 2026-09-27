@@ -27,6 +27,7 @@ export const CLEAN_QA_STATUS: QaStatus = {
   dailyUsdCap: null,
   spentTodayUsd: null,
   reservedTodayUsd: null,
+  estUsdPerCard: null,
 };
 
 export async function withCleanQaStatus(

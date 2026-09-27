@@ -19,6 +19,7 @@ import { highlightSnippet, mapToHlLanguage } from '../lib/highlightSnippet';
 // The highlight.js theme stays here so it rides the lazy CardForm chunk; the
 // engine setup and mapToHlLanguage moved to lib/highlightSnippet.ts.
 import 'highlight.js/styles/atom-one-dark.css';
+import './codePreview.css';
 
 export interface CardFormValues {
   question: string;
@@ -96,7 +97,15 @@ interface CardFormProps {
 interface InternalState {
   submitting: boolean;
   error: string | null;
+  /**
+   * Set when `error` came from a Source URL/quote check, so those two inputs
+   * are marked invalid and point at the message (frontend-console-25).
+   */
+  errorField?: 'source';
 }
+
+/** The id of the form's error message, which the invalid inputs reference. */
+const FORM_ERROR_ID = 'card-form-error';
 
 const CODE_LANG_OPTIONS = [
   { value: '', label: 'None' },
@@ -331,21 +340,21 @@ export function CardForm(props: CardFormProps) {
     const trimmedUid = values.stableUid.trim();
 
     if (!hasContent(values.question)) {
-      setState(prev => ({ ...prev, error: 'Question is required.' }));
+      setState(prev => ({ ...prev, error: 'Question is required.', errorField: undefined }));
       return;
     }
     if (!hasContent(values.stableUid)) {
-      setState(prev => ({ ...prev, error: 'StableUid is required.' }));
+      setState(prev => ({ ...prev, error: 'StableUid is required.', errorField: undefined }));
       return;
     }
 
     if (!Number.isFinite(values.orderInDeck) || values.orderInDeck <= 0) {
-      setState(prev => ({ ...prev, error: 'orderInDeck must be a positive number (e.g. 10, 20, 30).' }));
+      setState(prev => ({ ...prev, error: 'orderInDeck must be a positive number (e.g. 10, 20, 30).', errorField: undefined }));
       return;
     }
 
     if (!Number.isFinite(values.revision) || values.revision <= 0) {
-      setState(prev => ({ ...prev, error: 'revision must be a positive number (e.g. 1).' }));
+      setState(prev => ({ ...prev, error: 'revision must be a positive number (e.g. 1).', errorField: undefined }));
       return;
     }
 
@@ -354,22 +363,23 @@ export function CardForm(props: CardFormProps) {
     const trimmedSourceUrl = (values.sourceUrl ?? '').trim();
     const trimmedSourceQuote = (values.sourceQuote ?? '').trim();
     if (isDraft && (trimmedSourceUrl === '' || trimmedSourceQuote === '')) {
-      setState(prev => ({ ...prev, error: 'A draft needs a Source URL and a source quote.' }));
+      setState(prev => ({ ...prev, error: 'A draft needs a Source URL and a source quote.', errorField: 'source' }));
       return;
     }
     if (trimmedSourceUrl !== '' && !isValidSourceUrl(trimmedSourceUrl)) {
       setState(prev => ({
         ...prev,
         error: 'Source URL must start with https:// and contain no spaces (max 2048 characters).',
+        errorField: 'source',
       }));
       return;
     }
     if (trimmedSourceUrl === '' && trimmedSourceQuote !== '') {
-      setState(prev => ({ ...prev, error: 'Add a Source URL for the source quote, or clear the quote.' }));
+      setState(prev => ({ ...prev, error: 'Add a Source URL for the source quote, or clear the quote.', errorField: 'source' }));
       return;
     }
     if (trimmedSourceQuote.length > SOURCE_QUOTE_MAX_LENGTH) {
-      setState(prev => ({ ...prev, error: 'Source quote is too long (max 1000 characters).' }));
+      setState(prev => ({ ...prev, error: 'Source quote is too long (max 1000 characters).', errorField: 'source' }));
       return;
     }
 
@@ -377,7 +387,7 @@ export function CardForm(props: CardFormProps) {
     // refuse against the edited stem/explanation/difficulty, so submitting would
     // fail with a server code; refuse here instead. Advisory issues never block.
     if (mcqCheck && mcqCheck.blocking.length > 0) {
-      setState(prev => ({ ...prev, error: 'Fix the multiple-choice issues listed below before saving.' }));
+      setState(prev => ({ ...prev, error: 'Fix the multiple-choice issues listed below before saving.', errorField: undefined }));
       return;
     }
 
@@ -403,6 +413,9 @@ export function CardForm(props: CardFormProps) {
   }
 
   const hlLanguage = mapToHlLanguage(values.codeLanguage);
+  const sourceInvalid = state.error !== null && state.errorField === 'source';
+  // The help text is linked in both variants; a source error is linked too.
+  const sourceDescribedBy = sourceInvalid ? `source-help ${FORM_ERROR_ID}` : 'source-help';
 
   // The preview reads DEFERRED copies of the snippet and language, so typing
   // stays on the urgent render path and highlighting happens at lower priority
@@ -423,7 +436,9 @@ export function CardForm(props: CardFormProps) {
       className="bg-white border border-slate-200 rounded-lg shadow-sm px-6 py-6 space-y-4"
     >
       {state.error && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
+        // role=alert: every refusal lands here, including the review queue's
+        // lint and STABLE_UID_TAKEN answers, and must be announced (frontend-console-25).
+        <div id={FORM_ERROR_ID} role="alert" className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
           <div>{state.error}</div>
 
           {recoveryLabel ? (
@@ -556,7 +571,8 @@ export function CardForm(props: CardFormProps) {
             inputMode="url"
             autoComplete="off"
             required={isDraft}
-            aria-describedby={isDraft ? 'source-help' : undefined}
+            aria-invalid={sourceInvalid ? true : undefined}
+            aria-describedby={sourceDescribedBy}
             value={values.sourceUrl ?? ''}
             onChange={e => handleChange('sourceUrl', e.target.value)}
           />
@@ -569,7 +585,8 @@ export function CardForm(props: CardFormProps) {
             id="sourceQuote"
             rows={3}
             required={isDraft}
-            aria-describedby={isDraft ? 'source-help' : undefined}
+            aria-invalid={sourceInvalid ? true : undefined}
+            aria-describedby={sourceDescribedBy}
             value={values.sourceQuote ?? ''}
             onChange={e => handleChange('sourceQuote', e.target.value)}
           />
@@ -682,7 +699,7 @@ export function CardForm(props: CardFormProps) {
         <div className="mt-3">
           <div className="flex items-center justify-between mb-1">
             <span className="text-xs font-medium text-slate-600">Preview</span>
-            <span className="text-[10px] text-slate-400">{values.codeLanguage || 'auto'}</span>
+            <span className="text-[10px] text-slate-500">{values.codeLanguage || 'auto'}</span>
           </div>
 
           <div className="border border-slate-200 rounded text-xs overflow-auto">

@@ -148,6 +148,46 @@ describe('the AI QA publish gate on the deck list', () => {
     }
   });
 
+  it('links the refusal to the run the gate chained, and says when it could not start (automation-17)', async () => {
+    api.publishDeck.mockResolvedValue({
+      success: false,
+      data: null,
+      error: {
+        code: 'AI_QA_REQUIRED',
+        message: GATE_MESSAGE,
+        runId: 'run-77',
+        qaRun: { status: 'queued', code: null, message: null },
+      },
+      traceId: 't',
+    });
+    await mountConsole();
+    await publishRow(SLUG);
+    let alert = await waitFor(() => alertContaining(`Publishing deck "${SLUG}" failed`));
+    expect(within(alert).getByRole('link', { name: 'Open AI QA' }).getAttribute('href')).toBe(
+      `/decks/qa?deckId=${DECK_ID}&runId=run-77`,
+    );
+    expect(alert.textContent).not.toContain('could not start');
+    cleanup();
+
+    api.publishDeck.mockResolvedValue({
+      success: false,
+      data: null,
+      error: {
+        code: 'AI_QA_REQUIRED',
+        message: GATE_MESSAGE,
+        qaRun: { status: 'not_started', code: 'AI_QA_DAILY_CAP', message: 'Daily AI QA cap reached' },
+      },
+      traceId: 't',
+    });
+    await mountConsole();
+    await publishRow(SLUG);
+    alert = await waitFor(() => alertContaining(`Publishing deck "${SLUG}" failed`));
+    expect(alert.textContent).toContain('AI QA could not start a review run: Daily AI QA cap reached.');
+    expect(within(alert).getByRole('link', { name: 'Open AI QA' }).getAttribute('href')).toBe(
+      `/decks/qa?deckId=${DECK_ID}`,
+    );
+  });
+
   it('an ordinary publish refusal carries no QA link', async () => {
     api.publishDeck.mockResolvedValue(refused<{ jobId: string }>('BUILD_LOCKED', 'Another build holds the lock.'));
 

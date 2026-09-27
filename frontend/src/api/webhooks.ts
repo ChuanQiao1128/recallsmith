@@ -31,7 +31,15 @@ export type WebhookDelivery = {
   createdAt: string;
   updatedAt: string;
   deliveredAt: string | null;
+  /**
+   * When the row was handed to the queue; null for a row never sent (stranded
+   * after a failed post-commit enqueue). Absent when the server does not list it.
+   */
+  enqueuedAt?: string | null;
 };
+
+/** POST …/deliveries/sweep: rows claimed, re-sent, and those whose re-send failed again. */
+export type WebhookSweepResult = { swept: number; resent: number; enqueueFailures: number; deliveryIds: string[] };
 
 export type WebhookSubscriptionsData = {
   items: WebhookSubscription[];
@@ -134,4 +142,25 @@ export async function redeliverWebhookDelivery(
       {},
     ),
   );
+}
+
+/**
+ * POST /api/v1/admin/webhooks/deliveries/sweep (super_admin, automation-1):
+ * re-sends deliveries stranded 'queued' (never handed to the queue) or
+ * 'enqueue_failed' for at least ten minutes. Idempotent.
+ */
+export async function sweepWebhookDeliveries(): Promise<ApiResult<WebhookSweepResult>> {
+  const res = await run(() => http.post<ApiResult<Partial<WebhookSweepResult>>>(`${DELIVERIES}/sweep`, {}));
+  if (!res.success) return { ...res, data: null };
+  const data = res.data;
+  if (!data || typeof data.swept !== 'number') return badResponse();
+  return {
+    ...res,
+    data: {
+      swept: data.swept,
+      resent: typeof data.resent === 'number' ? data.resent : 0,
+      enqueueFailures: typeof data.enqueueFailures === 'number' ? data.enqueueFailures : 0,
+      deliveryIds: Array.isArray(data.deliveryIds) ? data.deliveryIds : [],
+    },
+  };
 }

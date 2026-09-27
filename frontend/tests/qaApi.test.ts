@@ -87,6 +87,7 @@ describe('src/api/qa', () => {
       dailyUsdCap: null,
       spentTodayUsd: null,
       reservedTodayUsd: null,
+      estUsdPerCard: null,
     });
   });
 
@@ -101,11 +102,18 @@ describe('src/api/qa', () => {
         openBlockers: [],
         wouldBlock: false,
         // frontend-console-12: the cross-wave contract puts them under data.limits.
-        limits: { maxCards: '50', dailyUsdCap: 2.5, spentTodayUsd: 0, reservedTodayUsd: '0.4' },
+        limits: { maxCards: '50', dailyUsdCap: 2.5, spentTodayUsd: 0, reservedTodayUsd: '0.4', estUsdPerCard: '0.06' },
       }),
     });
     const res = await api.fetchQaStatus(7);
-    expect(res.data).toMatchObject({ maxCards: 50, dailyUsdCap: 2.5, spentTodayUsd: 0, reservedTodayUsd: 0.4 });
+    expect(res.data).toMatchObject({
+      maxCards: 50,
+      dailyUsdCap: 2.5,
+      spentTodayUsd: 0,
+      reservedTodayUsd: 0.4,
+      // frontend-console-23: the per-card reservation the server prices a run at.
+      estUsdPerCard: 0.06,
+    });
 
     httpMock.get.mockResolvedValue({
       data: ok({ enabled: true, limits: { maxCards: 0, dailyUsdCap: 'x', spentTodayUsd: -1, reservedTodayUsd: null } }),
@@ -129,6 +137,15 @@ describe('src/api/qa', () => {
     });
     expect(res.success).toBe(true);
     expect(res.data).toMatchObject({ findingId: 9, resolution: 'fixed' });
+  });
+
+  it('sends the measured triage time with a resolution (automation-16)', async () => {
+    httpMock.post.mockResolvedValue({ data: ok({ id: 9, cardId: 101, severity: 'blocker', resolution: 'dismissed' }) });
+    await api.resolveQaFinding(9, { resolution: 'dismissed', reviewMs: 42_000 });
+    expect(httpMock.post).toHaveBeenCalledWith('/api/v1/authoring/qa/findings/9/resolve', {
+      resolution: 'dismissed',
+      reviewMs: 42_000,
+    });
   });
 
   it('accepts id or runId and reports effectiveStatus', async () => {

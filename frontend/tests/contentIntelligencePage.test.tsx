@@ -594,16 +594,21 @@ describe('what the header offers each role', () => {
     const nav = screen.getByRole('navigation', { name: 'Console sections' });
     const names = Array.from(nav.querySelectorAll('a')).map(a => (a.textContent ?? '').trim());
     // X06 (frontend-console-7): every page passes the same section set, so the
-    // header now also offers the HITL sections; ConsoleShell's order.
+    // header now also offers the HITL sections; ConsoleShell's order. Z06
+    // (frontend-console-27) groups it: authoring, the ledger, then super_admin.
     expect(names).toEqual([
       'Decks',
-      'Content Intelligence',
-      'Webhooks',
-      'Automation ledger',
       'Review queue',
       'AI QA',
+      'Content Intelligence',
+      'Automation ledger',
+      'Webhooks',
       'Admin Management',
     ]);
+    // The page on screen is marked as the current section.
+    expect(
+      Array.from(nav.querySelectorAll('a[aria-current="page"]')).map(a => a.textContent),
+    ).toEqual(['Content Intelligence']);
     // Sign out is an action, not a destination, so it stays a button and stays
     // outside the landmark.
     expect(nav.querySelector('button')).toBeNull();
