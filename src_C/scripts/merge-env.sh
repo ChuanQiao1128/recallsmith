@@ -9,7 +9,7 @@ SSM_TO_ENV='{"pg-password":"PGPASSWORD","migrate-secret":"MIGRATE_SECRET","inter
 # The internal-secret rows (R18 Z01, cloud-security-resilience-2/-11): the per-route secrets and the
 # optional -previous leaves that exist only while a rotation or a cut-over is in progress. Appended to the
 # map above (plain string splice, no jq at source time). R18A A10: the source-watch and notifier callback
-# secrets (core-vpc verifies both routes); mapped before A10 creates the leaves, because deploy.sh reads the
+# secrets (core-vpc verifies both routes); mapped before A10 creates the leaves, because the deploy reads the
 # whole path and an unmapped leaf is a hard error.
 SSM_TO_ENV_INTERNAL='{"internal-shared-secret-previous":"INTERNAL_SHARED_SECRET_PREVIOUS","ai-qa-results-secret":"INTERNAL_SECRET_AI_QA_RESULTS","ai-qa-results-secret-previous":"INTERNAL_SECRET_AI_QA_RESULTS_PREVIOUS","webhook-report-secret":"INTERNAL_SECRET_WEBHOOK_REPORT","webhook-report-secret-previous":"INTERNAL_SECRET_WEBHOOK_REPORT_PREVIOUS","source-watch-secret":"INTERNAL_SECRET_SOURCE_WATCH","source-watch-secret-previous":"INTERNAL_SECRET_SOURCE_WATCH_PREVIOUS","notifier-secret":"INTERNAL_SECRET_NOTIFIER","notifier-secret-previous":"INTERNAL_SECRET_NOTIFIER_PREVIOUS"}'
 SSM_TO_ENV="${SSM_TO_ENV%\}},${SSM_TO_ENV_INTERNAL#\{}"
