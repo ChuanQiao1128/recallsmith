@@ -2,7 +2,7 @@
 
 Issue #353, wave r18x-s. Branch `delivery/r18xs/X01-353`. Every path is relative to the repo root.
 All tests are in `src_C/Tests/RecallSmith.Lambda.IntegrationTests/` and run against a real Postgres
-(Testcontainers). `dotnet test src_C/RecallSmith.Lambda.sln`: 1573 passed, 0 failed.
+(Testcontainers). `dotnet test src_C/RecallSmith.Lambda.sln`: 1562 passed, 0 failed.
 
 Migrations 026–031 have not been applied anywhere yet, so migration 028 is edited in place (additive and
 idempotent: `create table if not exists`, `insert … on conflict do nothing`). No migration 032 was added.
