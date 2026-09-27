@@ -296,14 +296,14 @@ export function RunsTab({
                         <>
                           <td className={TD_CLASS} data-testid={`automation-run-counts-${r.runId}`}>
                             {`${r.counts.submitted} submitted`}
-                            <div className="text-xs text-slate-500">{RUN_SPLIT_HIDDEN_TEXT}</div>
+                            <div className="text-xs text-slate-600">{RUN_SPLIT_HIDDEN_TEXT}</div>
                           </td>
                           <td className={TD_CLASS}>—</td>
                         </>
                       )}
                       <td className={TD_CLASS} data-testid={`automation-run-publishes-${r.runId}`}>
                         {!splitShown ? (
-                          <span className="text-xs text-slate-500">{RUN_PUBLISH_HIDDEN_TEXT}</span>
+                          <span className="text-xs text-slate-600">{RUN_PUBLISH_HIDDEN_TEXT}</span>
                         ) : r.publishes.length === 0 ? (
                           '—'
                         ) : (
