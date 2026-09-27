@@ -50,11 +50,17 @@ export function automationBlinded(a: DraftAutomation, draftStatus: string): bool
 }
 
 /**
- * Whether a blinded draft still shows its AI QA findings (D07
- * frontend-console-26). Blinding hides the would_accept verdict; when the
- * automation routed the draft to a person because GPT-5.5 found a blocker or
- * major issue, those findings are the reason a person is involved, so the
- * person deciding sees them.
+ * Whether accepting a blinded draft first shows its AI QA findings (D07
+ * frontend-console-26, G04 frontend-console-38, P4). When the automation routed
+ * the draft to a person because AI QA found a blocker or major issue, those
+ * findings must reach the person before the card lands. They are not shown in
+ * the panel before the decision: a panel with findings would tell every panel
+ * without them apart as "QA did not flag this", which for a would_accept draft
+ * is the verdict itself. So every blinded draft reads the same, and the
+ * findings appear in a confirm step after the person clicks Accept or Accept
+ * with edits and before the request. Showing that step records the verdict as
+ * seen (markVerdictSeen), so the accept, or any later decision, is not counted
+ * as blind. A reject needs no step.
  */
 export function automationQaFindingsShown(a: DraftAutomation, draftStatus: string): boolean {
   if (!automationBlinded(a, draftStatus)) return false;
@@ -65,13 +71,13 @@ export function automationQaFindingsShown(a: DraftAutomation, draftStatus: strin
 /**
  * The `verdictShown` of an accept or reject (automation-4, D01 contract): true
  * when the automatic verdict was visible to the person before the decision, in
- * the review queue (not blinded, or the QA findings of a flagged draft shown)
- * or earlier on the Automation page (`seenElsewhere`).
+ * the review queue (not blinded) or recorded as seen (`seenElsewhere`): on the
+ * Automation page, or by the review queue's own QA findings step (P4).
  */
 export function verdictShownFor(a: DraftAutomation | null | undefined, draftStatus: string, seenElsewhere: boolean): boolean {
   if (!a) return false;
   if (seenElsewhere) return true;
-  return !automationBlinded(a, draftStatus) || automationQaFindingsShown(a, draftStatus);
+  return !automationBlinded(a, draftStatus);
 }
 
 /**

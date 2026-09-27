@@ -168,20 +168,37 @@ describe('every pending dry-run row hides its verdict alike (frontend-console-30
     expect(drawer.textContent).not.toMatch(/Needs you|AI QA found a blocker|AI QA findings|Option C is obviously wrong/);
   });
 
-  it('records the rows of any state-filtered list as seen, the open exceptions too', async () => {
-    api.listAutomationDecisions.mockResolvedValue(ok({ items: [routed], nextCursor: null }));
-    mountAt('/automation?tab=decisions&state=human&open=1');
+  // G04 frontend-console-40 replaced "records the rows of any state-filtered list as seen, the open
+  // exceptions too" and "records the rows of a reason-filtered list as seen": a routed list that shows
+  // its pending dry-run rows tells every pending draft it leaves out apart as not routed, and those were
+  // never recorded. Such a list now withholds its pending dry-run rows; a would_accept list keeps them.
+  it('records the rows of a would_accept-filtered list as seen', async () => {
+    api.listAutomationDecisions.mockResolvedValue(ok({ items: [wouldAccept], nextCursor: null }));
+    mountAt('/automation?tab=decisions&state=would_accept');
     const section = await screen.findByRole('region', { name: 'Decisions' });
-    await within(section).findByRole('button', { name: 'Details of draft 41' });
-    expect(within(section.querySelector('tbody') as HTMLElement).getByText('Needs you')).toBeTruthy();
-    await waitFor(() => expect(wasVerdictSeen(41)).toBe(true));
+    await within(section).findByRole('button', { name: 'Details of draft 51' });
+    await waitFor(() => expect(wasVerdictSeen(51)).toBe(true));
     expect(screen.getByTestId('automation-decisions-verdict-filter')).toBeTruthy();
+    expect(screen.queryByTestId('automation-decisions-pending-withheld')).toBeNull();
   });
 
-  it('records the rows of a reason-filtered list as seen', async () => {
-    api.listAutomationDecisions.mockResolvedValue(ok({ items: [routed], nextCursor: null }));
+  it('withholds the pending dry-run rows of the open exceptions and of a reason-filtered list', async () => {
+    const handled = { ...routed, draftId: 42, humanAction: 'rejected' };
+    api.listAutomationDecisions.mockResolvedValue(ok({ items: [routed, handled], nextCursor: null }));
     mountAt('/automation?tab=decisions&reason=QA_FLAGGED');
-    await waitFor(() => expect(wasVerdictSeen(41)).toBe(true));
+    const section = await screen.findByRole('region', { name: 'Decisions' });
+    await within(section).findByRole('button', { name: 'Details of draft 42' });
+    expect(within(section).queryByRole('button', { name: 'Details of draft 41' })).toBeNull();
+    expect(screen.getByTestId('automation-decisions-pending-withheld')).toBeTruthy();
+    expect(wasVerdictSeen(41)).toBe(false);
+    cleanup();
+
+    api.listAutomationDecisions.mockResolvedValue(ok({ items: [routed], nextCursor: null }));
+    mountAt('/automation?tab=decisions&state=human&open=1');
+    await screen.findByTestId('automation-decisions-pending-withheld');
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Decisions' }).textContent).toContain('No automatic decision matches.'));
+    expect(screen.queryByRole('button', { name: 'Details of draft 41' })).toBeNull();
+    expect(wasVerdictSeen(41)).toBe(false);
   });
 
   it('shows no split of a dry-run run with pending drafts, the would-accept count included', async () => {
