@@ -12,7 +12,7 @@ namespace RecallSmith.Lambda.IntegrationTests;
 
 /// <summary>
 /// Shared fixtures of the R18A A05 test classes (SourceWatchRoutesTests, WatchAdminRoutesTests, SourceRecheckTests), on
-/// top of <see cref="A04Kit"/>: the source-watch secret set to the fake <c>test-secret</c> and restored in
+/// top of <see cref="A04Kit"/>: the source-watch secret set to the fake <see cref="A04Kit.FakeSecret"/> and restored in
 /// <c>finally</c>, a scratch database migrated to the latest version (the targets route syncs every card source URL
 /// of the database and selects due targets globally), signed watcher calls and the literal A00 §10.4–§10.5 bodies.
 /// Card text is plainly synthetic; no page is fetched.
@@ -49,7 +49,7 @@ internal static class A05Kit
       "queueItemIds": [], "mode": "dry_run", "consoleUrl": "https://console.example.com/automation?tab=watch&targetId=1" }
     """;
 
-  /// <summary>The A04 scope plus the source-watch secret (<c>test-secret</c>), restored in <c>finally</c>.</summary>
+  /// <summary>The A04 scope plus the source-watch secret (<see cref="A04Kit.FakeSecret"/>), restored in <c>finally</c>.</summary>
   public static async Task WithScopeAsync(Func<A04Kit.Scope, Task> body, string mode = AutomationMode.DryRun)
   {
     var saved = Environment.GetEnvironmentVariable(SourceWatchSecret);
@@ -57,7 +57,7 @@ internal static class A05Kit
     try
     {
       await using var scope = new A04Kit.Scope(mode);
-      Environment.SetEnvironmentVariable("INTERNAL_SECRET_SOURCE_WATCH", "test-secret");
+      Environment.SetEnvironmentVariable("INTERNAL_SECRET_SOURCE_WATCH", A04Kit.FakeSecret);
       Environment.SetEnvironmentVariable("INTERNAL_SECRET_SOURCE_WATCH_PREVIOUS", null);
       await body(scope);
     }
@@ -176,7 +176,7 @@ internal static class A05Kit
 
 /// <summary>
 /// The source watch routes (R18A A05, contract A00 §10.4–§10.5) through the handlers, signed exactly as the watcher
-/// signs (the fake <c>test-secret</c>), against a scratch database migrated to the latest version. QA, webhook and
+/// signs (the fake <see cref="A04Kit.FakeSecret"/>), against a scratch database migrated to the latest version. QA, webhook and
 /// notifier sends are captured through the test seams; core never fetches a page.
 /// </summary>
 [Collection(PostgresCollection.Name)]

@@ -17,7 +17,7 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// PublishExtractionTests), on top of <see cref="AutomationTestKit"/>: an env scope that also captures notifier and
 /// publish sends and revokes every eval gate it inserted, a small SQL helper that works against the shared or a scratch
 /// database, decks with a live build, auto-accepted cards through the real draft-QA path, and signed internal calls
-/// with the fake <c>test-secret</c>. No recipient address exists anywhere.
+/// with the fake <see cref="FakeSecret"/>. No recipient address exists anywhere.
 /// </summary>
 internal static class A04Kit
 {
@@ -26,7 +26,8 @@ internal static class A04Kit
   public const string FakeContentBucket = "developercards-content-test";
   public const string TickPath = "/api/internal/automation/tick";
   public const string ReportPath = "/api/internal/automation/notifications/report";
-  public const string FakeSecret = "test-secret";
+  // The notifier and source-watch routes use the strict check, which needs at least 32 characters (R18C L2).
+  public const string FakeSecret = "test-secret-automation-routes-000000001";
 
   // A00 §12.5, verbatim: the notifier message every cross-wave shape is asserted against.
   public const string ContractNotifyMessageJson = """

@@ -212,6 +212,59 @@ test_ssm_to_env_unmapped_beside_automation_leaves() {
   grep -Fq 'unmapped SSM parameter: stray-name' <<<"$err" || fail "(p) missing error for stray-name"
 }
 
+# (q) R18C L2: an internal-secret leaf still at its Terraform placeholder, or shorter than 32 characters, is dropped
+#     with a warning that names the key and never the value; a provisioned internal secret and every non-internal key
+#     (whatever its value) pass through. The provisioned fixtures are obviously fake 'fixture-' strings: a PLACEHOLDER-
+#     value is exactly what this filter removes.
+test_drop_placeholder_secrets() {
+  local secrets out err
+  secrets='{
+    "PGPASSWORD":"PLACEHOLDER-1",
+    "INTERNAL_SHARED_SECRET":"PLACEHOLDER-2",
+    "INTERNAL_SECRET_SOURCE_WATCH":"PLACEHOLDER-set-by-supervisor",
+    "INTERNAL_SECRET_SOURCE_WATCH_PREVIOUS":"PLACEHOLDER-previous-value-that-is-long-enough",
+    "INTERNAL_SECRET_NOTIFIER":"fixture-notifier-000000000000000000000001",
+    "INTERNAL_SECRET_NOTIFIER_PREVIOUS":"too-short-fixture",
+    "INTERNAL_SECRET_AI_QA_RESULTS":"fixture-ai-qa-results-00000000000000000001"
+  }'
+  out="$(drop_placeholder_secrets "$secrets" 2>"$TMP_ERR")" || fail "(q) drop_placeholder_secrets failed"
+  err="$(cat "$TMP_ERR")"
+  jq -e '. == {
+    "PGPASSWORD":"PLACEHOLDER-1",
+    "INTERNAL_SHARED_SECRET":"PLACEHOLDER-2",
+    "INTERNAL_SECRET_NOTIFIER":"fixture-notifier-000000000000000000000001",
+    "INTERNAL_SECRET_AI_QA_RESULTS":"fixture-ai-qa-results-00000000000000000001"
+  }' <<<"$out" >/dev/null || fail "(q) the wrong keys were dropped or kept: $out"
+  for key in INTERNAL_SECRET_SOURCE_WATCH INTERNAL_SECRET_SOURCE_WATCH_PREVIOUS INTERNAL_SECRET_NOTIFIER_PREVIOUS; do
+    grep -Eq "warning: $key holds a placeholder" <<<"$err" || fail "(q) no warning for $key"
+  done
+  if grep -Fq 'set-by-supervisor' <<<"$err" || grep -Fq 'too-short-fixture' <<<"$err"; then fail "(q) a dropped value reached the warning"; fi
+  [ "$(grep -c warning <<<"$err")" = 3 ] || fail "(q) expected exactly three warnings: $err"
+
+  out="$(drop_placeholder_secrets 'null' 2>/dev/null)"
+  jq -e '. == {}' <<<"$out" >/dev/null || fail "(q) null secrets broke drop_placeholder_secrets"
+}
+
+# (r) the deploy pipeline (ssm_to_env → drop_placeholder_secrets → drop_absent_optional → merge_env): a placeholder
+#     source-watch/notifier leaf never reaches core-vpc, and a copy already in the live environment is removed.
+test_placeholder_leaf_never_deployed() {
+  local fixture secrets current merged
+  fixture='{"Parameters":[
+    {"Name":"/developercards/prod/pg-password","Value":"PLACEHOLDER-1"},
+    {"Name":"/developercards/prod/source-watch-secret","Value":"PLACEHOLDER-set-by-supervisor"},
+    {"Name":"/developercards/prod/notifier-secret","Value":"PLACEHOLDER-set-by-supervisor"}
+  ]}'
+  secrets="$(drop_placeholder_secrets "$(ssm_to_env "$fixture")" 2>/dev/null)" || fail "(r) the pipeline failed"
+  current='{"INTERNAL_SECRET_SOURCE_WATCH":"PLACEHOLDER-set-by-supervisor","INTERNAL_SECRET_NOTIFIER":"PLACEHOLDER-set-by-supervisor","FOO_KEEP":"x"}'
+  current="$(drop_absent_optional "$current" "$secrets")"
+  merged="$(merge_env "$current" '{}' "$secrets")"
+  jq -e '. == {"FOO_KEEP":"x","PGPASSWORD":"PLACEHOLDER-1"}' <<<"$merged" >/dev/null \
+    || fail "(r) a placeholder internal secret reached the merged environment: $merged"
+}
+
+TMP_ERR="$(mktemp)"
+trap 'rm -f "$TMP_ERR"' EXIT
+
 test_merge_file_over_current
 test_merge_secret_over_file
 test_ssm_to_env_all_six
@@ -228,5 +281,7 @@ test_drop_absent_optional
 test_ssm_to_env_automation_leaves
 test_ssm_to_env_skips_notify_recipient
 test_ssm_to_env_unmapped_beside_automation_leaves
+test_drop_placeholder_secrets
+test_placeholder_leaf_never_deployed
 
 echo "merge-env tests OK"

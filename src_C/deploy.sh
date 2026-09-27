@@ -43,6 +43,9 @@ sha_b64() { openssl dgst -sha256 -binary "$1" | openssl base64 -A; }   # Lambda'
 SECRETS_ALL=""
 if [ "${DRY_RUN:-0}" != 1 ] && [ "$INJECT_ENV" = 1 ]; then
   SECRETS_ALL="$(ssm_to_env "$(aws ssm get-parameters-by-path --region "$REGION" --path "$SSM_PATH" --with-decryption --output json)")"
+  # An internal-secret leaf still at its Terraform placeholder is never deployed (R18C L2): it is dropped with a
+  # warning here, so drop_absent_optional below also removes a stale copy from the live environment.
+  SECRETS_ALL="$(drop_placeholder_secrets "$SECRETS_ALL")"
 fi
 
 # deploy_one <fn> <zip> <file_overlay_json> <secret_keys_json>
