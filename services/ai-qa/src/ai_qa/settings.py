@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -12,6 +13,13 @@ from .logs import log
 
 # Value of an SSM parameter that exists but has not been set yet (infra/modules/identity/ssm.tf).
 PLACEHOLDER_VALUE = "PLACEHOLDER-set-by-supervisor"
+
+# How long a loaded secret is trusted before SSM is read again (the dispatcher's value), so a
+# rotation reaches every warm container within this window instead of only when it recycles.
+SECRET_TTL_SECONDS = 300.0
+
+# The optional previous internal secret lives next to the current one: "<name>-previous".
+PREVIOUS_SECRET_SUFFIX = "-previous"
 
 PROVIDERS = ("bedrock", "anthropic")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -125,33 +133,66 @@ def is_unset_secret(value: Any) -> bool:
     return not isinstance(value, str) or not value.strip() or value.strip() == PLACEHOLDER_VALUE
 
 
-# Per-container caches. Only successfully loaded secrets are cached, so a missing or
-# placeholder value is looked up again on the next invocation.
-_secret_cache: dict[str, str] = {}
+# Per-container caches. A loaded secret is kept for SECRET_TTL_SECONDS. A missing or placeholder
+# value is not cached, so it is looked up again on the next invocation.
+_secret_cache: dict[str, tuple[str, float]] = {}
+# Names of optional secrets found absent, with the time the absence expires (read again after that).
+_absent_cache: dict[str, float] = {}
 _clients: dict[str, Any] = {}
 
+# Seam for tests; production uses the monotonic clock.
+clock = time.monotonic
 
-def load_secret(name: str, ssm_client: Any) -> str | None:
-    """The decrypted value of one SSM parameter, or None when unset or unreadable."""
-    cached = _secret_cache.get(name)
+
+def _cached(name: str) -> str | None:
+    entry = _secret_cache.get(name)
+    if entry is None:
+        return None
+    value, expires = entry
+    if clock() >= expires:
+        del _secret_cache[name]
+        return None
+    return value
+
+
+def load_secret(name: str, ssm_client: Any, *, optional: bool = False) -> str | None:
+    """The decrypted value of one SSM parameter, or None when unset or unreadable.
+
+    optional=True is for a parameter that normally does not exist (the previous internal secret):
+    a failed read is logged at debug level and the absence is remembered for the TTL.
+    """
+    cached = _cached(name)
     if cached is not None:
         return cached
+    if optional and _absent_cache.get(name, 0.0) > clock():
+        return None
     try:
         response = ssm_client.get_parameter(Name=name, WithDecryption=True)
         value = response["Parameter"]["Value"]
     except Exception as exc:
         # The error class only: messages may echo request details.
-        log("warn", "ai-qa", event="ssm_secret_unavailable", parameter=name, errorClass=type(exc).__name__)
+        log(
+            "debug" if optional else "warn",
+            "ai-qa",
+            event="ssm_secret_unavailable",
+            parameter=name,
+            errorClass=type(exc).__name__,
+        )
+        if optional:
+            _absent_cache[name] = clock() + SECRET_TTL_SECONDS
         return None
     if is_unset_secret(value):
+        if optional:
+            _absent_cache[name] = clock() + SECRET_TTL_SECONDS
         return None
-    _secret_cache[name] = value
+    _secret_cache[name] = (value, clock() + SECRET_TTL_SECONDS)
+    _absent_cache.pop(name, None)
     return value
 
 
-def get_secret(name: str) -> str | None:
+def get_secret(name: str, *, optional: bool = False) -> str | None:
     """load_secret with the container's lazily created SSM client."""
-    cached = _secret_cache.get(name)
+    cached = _cached(name)
     if cached is not None:
         return cached
     try:
@@ -159,11 +200,16 @@ def get_secret(name: str) -> str | None:
     except Exception as exc:
         log("warn", "ai-qa", event="ssm_client_unavailable", errorClass=type(exc).__name__)
         return None
-    return load_secret(name, client)
+    return load_secret(name, client, optional=optional)
+
+
+def previous_secret_name(name: str) -> str:
+    return name + PREVIOUS_SECRET_SUFFIX
 
 
 def clear_secret_cache() -> None:
     _secret_cache.clear()
+    _absent_cache.clear()
 
 
 def ssm_client() -> Any:

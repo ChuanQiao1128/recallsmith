@@ -93,10 +93,13 @@ variable "ai_qa_function_name" {
   type = string
 } # prod "developercards-ai-qa"
 
-variable "bedrock_inference_profile_id" {
-  type = string
-} # prod "global.anthropic.claude-opus-5"
-
-variable "bedrock_foundation_model_id" {
-  type = string
+variable "bedrock_mantle_model_id" {
+  type        = string
+  description = "The one model id ai-qa may call through bedrock-mantle:CreateInference (bedrock-mantle:Model condition); must equal the function's AI_MODEL."
 } # prod "anthropic.claude-opus-5"
+
+variable "bedrock_mantle_project_id" {
+  type        = string
+  default     = "default"
+  description = "The Mantle project ai-qa's calls land in. The client sends no OpenAI-Project header, so this is the account's default project."
+}

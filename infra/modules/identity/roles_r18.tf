@@ -78,14 +78,20 @@ resource "aws_iam_role_policy" "worker_webhooks_send" {
   })
 }
 
-# R18 J15 — AI QA role: Bedrock Mantle + profile-scoped InvokeModel, two SSM names, its queue and log group (§10.4, §14 #4/#7).
+# R18 J15 — AI QA role: Bedrock Mantle inference, two SSM names, its queue and log group (§10.4, §14 #4/#7).
+# R18 Y04 (cloud-security-resilience-13): ai-qa calls anthropic.AnthropicBedrockMantle, which SigV4-signs
+# for service `bedrock-mantle` and authorizes only bedrock-mantle:CreateInference. The InvokeModel grants
+# (and their bedrock:InferenceProfileArn condition) were never exercised, so they are gone. Per the Service
+# Authorization Reference for bedrock-mantle (list_bedrock-mantle.html), CreateInference takes one resource
+# type, project (arn:...:bedrock-mantle:<region>:<account>:project/<id>), and the condition keys
+# aws:ResourceTag/*, bedrock-mantle:Model and bedrock-mantle:ServiceTier. The client sends no OpenAI-Project
+# header, so every call lands in the account's `default` project; the grant names that project only and
+# pins bedrock-mantle:Model to the one model ai-qa is configured with (AI_MODEL).
 
 locals {
-  ai_qa_queue_arn         = "arn:aws:sqs:${var.region}:${var.account_id}:${var.ai_qa_queue_name}"
-  ai_qa_log_arn           = "arn:aws:logs:${var.region}:${var.account_id}:log-group:/aws/lambda/${var.ai_qa_function_name}:*"
-  bedrock_profile_arn     = "arn:aws:bedrock:${var.region}:${var.account_id}:inference-profile/${var.bedrock_inference_profile_id}"
-  bedrock_model_arns      = ["arn:aws:bedrock:${var.region}::foundation-model/${var.bedrock_foundation_model_id}", "arn:aws:bedrock:::foundation-model/${var.bedrock_foundation_model_id}"]
-  bedrock_mantle_projects = "arn:aws:bedrock-mantle:${var.region}:${var.account_id}:project/*"
+  ai_qa_queue_arn        = "arn:aws:sqs:${var.region}:${var.account_id}:${var.ai_qa_queue_name}"
+  ai_qa_log_arn          = "arn:aws:logs:${var.region}:${var.account_id}:log-group:/aws/lambda/${var.ai_qa_function_name}:*"
+  bedrock_mantle_project = "arn:aws:bedrock-mantle:${var.region}:${var.account_id}:project/${var.bedrock_mantle_project_id}"
 }
 
 resource "aws_iam_role" "ai_qa" {
@@ -101,7 +107,8 @@ resource "aws_iam_role" "ai_qa" {
   })
 }
 
-# The only Bedrock grant in the account. The foundation models are reachable only through the inference profile.
+# The only Bedrock grant in the account: Mantle inference on one project, for one model id. A different
+# AI_MODEL (or a request routed to another project) is denied by IAM until this policy changes with it.
 resource "aws_iam_role_policy" "ai_qa" {
   name = "developercards-ai-qa-scoped"
   role = aws_iam_role.ai_qa.id
@@ -127,23 +134,11 @@ resource "aws_iam_role_policy" "ai_qa" {
         Resource = ["${local.ssm_param_prefix}/anthropic-api-key", "${local.ssm_param_prefix}/internal-shared-secret"]
       },
       {
-        Sid      = "BedrockMantleInference"
-        Effect   = "Allow"
-        Action   = ["bedrock-mantle:CreateInference"]
-        Resource = [local.bedrock_mantle_projects]
-      },
-      {
-        Sid      = "BedrockInvokeProfile"
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-        Resource = [local.bedrock_profile_arn]
-      },
-      {
-        Sid       = "BedrockInvokeFoundationModel"
+        Sid       = "BedrockMantleInference"
         Effect    = "Allow"
-        Action    = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-        Resource  = local.bedrock_model_arns
-        Condition = { StringEquals = { "bedrock:InferenceProfileArn" = local.bedrock_profile_arn } }
+        Action    = ["bedrock-mantle:CreateInference"]
+        Resource  = [local.bedrock_mantle_project]
+        Condition = { StringEquals = { "bedrock-mantle:Model" = var.bedrock_mantle_model_id } }
       },
     ]
   })
