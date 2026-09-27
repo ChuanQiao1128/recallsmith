@@ -109,6 +109,7 @@ module "api" {
   security_group_ids        = var.core_vpc_security_group_ids
   console_pool_endpoint     = module.identity.console_pool_endpoint
   console_client_id         = module.identity.console_client_id
+  console_extra_audiences   = [module.identity.console_dev_client_id]
   mobile_pool_endpoint      = module.identity.mobile_pool_endpoint
   mobile_client_id          = module.identity.mobile_client_id
   cors_allowed_origins      = concat(var.cors_allowed_origins, ["https://console.${var.domain}"])

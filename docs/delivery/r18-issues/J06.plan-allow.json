@@ -1,0 +1,7 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.api.aws_apigatewayv2_authorizer.console": { "action": "update", "keys": ["jwt_configuration"] },
+    "module.identity.aws_cognito_user_pool_client.console_dev[0]": { "action": "update", "keys": ["callback_urls", "logout_urls"] }
+  }
+}

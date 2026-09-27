@@ -75,10 +75,10 @@ resource "aws_cognito_user_pool_client" "console_dev" {
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_scopes                 = ["email", "openid", "profile"]
   auth_session_validity                = 3
-  callback_urls                        = ["http://localhost:5173/auth/callback"]
+  callback_urls                        = ["http://localhost:5173/auth/callback", "http://localhost:8976/callback"]
   enable_token_revocation              = true
   id_token_validity                    = 1
-  logout_urls                          = ["http://localhost:5173/"]
+  logout_urls                          = ["http://localhost:5173/", "http://localhost:8976/"]
   name                                 = "console-dev"
   prevent_user_existence_errors        = "ENABLED"
   refresh_token_validity               = 30
