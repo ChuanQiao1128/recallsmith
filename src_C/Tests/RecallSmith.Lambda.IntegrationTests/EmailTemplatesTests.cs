@@ -150,6 +150,25 @@ public class EmailTemplatesTests
   }
 
   [Fact]
+  public void BatchSummary_DryRun_NeverListsAWouldAcceptDraft()
+  {
+    // R18C automation-4: the would_accept drafts still wait for a blind human decision; the email only counts them.
+    var dry = EmailTemplates.BatchSummary("dry_run", Batch(), Console).BodyText;
+    foreach (var hidden in new[] { "aws-s3-synthetic-01", "aws-s3-synthetic-02", "Which storage class suits synthetic archives?", "Which synthetic queue buffers bursts?", "would_accept" })
+    {
+      Assert.DoesNotContain(hidden, dry);
+    }
+    Assert.Contains("aws-s3-synthetic-03", dry);
+    Assert.Contains("Drafts with a hidden verdict: 2", dry);
+
+    // Live lists what it accepted, as before.
+    var live = Batch() with { Drafts = [new BatchDraft("aws-s3-synthetic-01", "Which storage class suits synthetic archives?", "auto_accepted", null, null, 12)] };
+    var liveBody = EmailTemplates.BatchSummary("live", live, Console).BodyText;
+    Assert.Contains("- aws-s3-synthetic-01 — Which storage class suits synthetic archives?", liveBody);
+    Assert.DoesNotContain("hidden", liveBody);
+  }
+
+  [Fact]
   public void BatchSummary_GoldenText()
   {
     var email = EmailTemplates.BatchSummary("dry_run", Batch(), Console);
@@ -162,15 +181,13 @@ NEEDS YOU
 - aws-s3-synthetic-03 — AI QA found a blocker or major issue (QA_FLAGGED) — https://console.developercards.app/review?deckId=12
 
 DONE AUTOMATICALLY
-- aws-s3-synthetic-01 — Which storage class suits synthetic archives?
-- aws-s3-synthetic-02 — Which synthetic queue buffers bursts?
+- 2 draft(s) decided by the automation; verdicts hidden until you decide them in the review queue (shadow agreement counts blind decisions only) — https://console.developercards.app/review?deckId=12
 - publish aws-saa-c03 — would_publish
 
 DETAILS
 Source: feed_item https://aws.amazon.com/about-aws/whats-new/2026/09/synthetic-item/ (Synthetic launch)
-Draft aws-s3-synthetic-01: would_accept — Which storage class suits synthetic archives?
-Draft aws-s3-synthetic-02: would_accept — Which synthetic queue buffers bursts?
 Draft aws-s3-synthetic-03: human, AI QA found a blocker or major issue (QA_FLAGGED) — Which synthetic flag is ambiguous? — https://console.developercards.app/review?deckId=12
+Drafts with a hidden verdict: 2
 Draft QA spend: $0.0012
 Publish aws-saa-c03: would_publish
 Runner: owner-mac, duration 184 s, outcome done

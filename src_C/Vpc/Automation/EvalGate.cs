@@ -15,12 +15,24 @@ namespace RecallSmith.Lambda.Vpc.Automation;
 /// The eval gate for auto-decision precision (R18A A06, contract A00 §15.3–§15.4): the only record that lets
 /// <c>AUTOMATION_MODE=live</c> take effect (<see cref="AutomationMode.EffectiveAsync"/> reads the newest row and
 /// counts it only when it is passed and unrevoked, R18B K2). The supervisor posts the <c>dc-evals automation-gate</c> report; core re-computes every metric from
-/// the report's counts and records only a report that passes. A revoke of the newest gate makes <c>live</c> fall back
-/// to <c>dry_run</c> on the next request; an older passed gate never takes over. Nothing here reads or writes <c>AUTOMATION_MODE</c>.
+/// the report's counts and records every well-formed report, a failing one with <c>passed = false</c> (R18C L3), so a
+/// newer failed evaluation blocks <c>live</c> exactly like a revoke. A revoke of the newest gate makes <c>live</c> fall
+/// back to <c>dry_run</c> on the next request; an older passed gate never takes over, and the exact report of a revoked
+/// gate cannot be posted again. Nothing here reads or writes <c>AUTOMATION_MODE</c>.
 /// </summary>
 public static class EvalGate
 {
-  public static readonly IReadOnlyList<string> AutomationGateProviders = ["bedrock-converse"];
+  /// <summary>
+  /// The reviewer transports a gate may measure (R18C L1): the bedrock-mantle Chat Completions adapter, and Converse
+  /// as the fallback. The gate row pins the provider actually used; live accepts only reports of that provider.
+  /// </summary>
+  public static readonly IReadOnlyList<string> AutomationGateProviders = ["openai-mantle", "bedrock-converse"];
+
+  /// <summary>
+  /// The reviewer models a gate may measure (owner decision 4: GPT-5.5, never a same-vendor model): the model id of
+  /// the bedrock-mantle endpoint and the global inference profile Converse uses (R18C backend-design-15).
+  /// </summary>
+  public static readonly IReadOnlyList<string> AutomationGateModels = ["openai.gpt-5.5", "global.openai.gpt-5.5"];
   public const int MinGateReps = 2;
   public const double SeededRecallGate = 0.90;
   public const double SeededRecallCiLowerGate = 0.85;
@@ -102,19 +114,7 @@ public static class EvalGate
       }
 
       var failures = Evaluate(report);
-      if (failures.Count > 0)
-      {
-        var message = $"The eval gate report fails: {string.Join(", ", failures)}";
-        return res.Raw(400, new
-        {
-          success = false,
-          data = (object?)null,
-          error = new { code = "EVAL_GATE_FAILED", message, failures },
-          traceId = res.TraceId,
-          version = "v1",
-        });
-      }
-
+      var passed = failures.Count == 0;
       var sha = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
       var metrics = JsonSerializer.Serialize(new
       {
@@ -132,12 +132,35 @@ public static class EvalGate
       await using var conn = await Pg.OpenConnectionOrNullAsync();
       if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
+      // A revoke is final (R18C L3): the same report bytes never reinstate a revoked gate.
+      var revoked = await DbUtil.ExecuteScalarAsync(conn, null,
+        "select 1 from automation_eval_gates where report_sha256 = $1 and revoked_at is not null limit 1", [sha]);
+      if (revoked is not null)
+      {
+        return Helpers.ErrorEnvelope(res, 409, "EVAL_GATE_REVOKED", "This report belongs to a revoked eval gate; run the evaluation again");
+      }
+
+      // Every well-formed report is recorded (R18C L3): a failing one becomes the newest row with passed = false,
+      // which blocks live (R18B K2) until a newer passing report is recorded.
       var rows = await DbUtil.QueryAsync(conn, null,
         $"""
         insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub)
-        values ($1, $2, $3, true, $4::jsonb, $5, $6::jsonb, $7)
+        values ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8)
         returning {GateColumns}
-        """, [report.Provider, report.Model, report.PromptVersion, metrics, sha, raw, auth.UserSub]);
+        """, [report.Provider, report.Model, report.PromptVersion, passed, metrics, sha, raw, auth.UserSub]);
+      if (!passed)
+      {
+        Log.Event("info", new { tag = "automation", reason = "eval_gate_failed_recorded", gateId = RunnerRoutes.Long(rows[0]["id"]), failures });
+        var message = $"The eval gate report fails: {string.Join(", ", failures)}";
+        return res.Raw(400, new
+        {
+          success = false,
+          data = (object?)null,
+          error = new { code = "EVAL_GATE_FAILED", message, failures },
+          traceId = res.TraceId,
+          version = "v1",
+        });
+      }
       Log.Event("info", new { tag = "automation", reason = "eval_gate_recorded", gateId = RunnerRoutes.Long(rows[0]["id"]) });
       return res.Ok(ToGate(rows[0]));
     }
@@ -208,7 +231,7 @@ public static class EvalGate
     Fail(!r.Passed, "passed");
     Fail(!r.FailuresEmpty, "failures");
     Fail(!AutomationGateProviders.Contains(r.Provider, StringComparer.Ordinal), "reviewer.provider");
-    Fail(string.IsNullOrWhiteSpace(r.Model), "reviewer.model");
+    Fail(!AutomationGateModels.Contains(r.Model, StringComparer.Ordinal), "reviewer.model");
     Fail(r.PromptVersion != QaRuns.AutomationPromptVersion, "reviewer.promptVersion");
     Fail(r.SecondProvider is not null, "reviewer.secondProvider");
     Fail(r.SecondModel is not null, "reviewer.secondModel");

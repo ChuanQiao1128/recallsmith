@@ -271,8 +271,11 @@ public static class EmailTemplates
   // ---------------------------------------------------------------------------------------------
 
   /// <summary>
-  /// The one email per finalised run. <c>&lt;a&gt;</c> counts <c>auto_accepted</c> drafts (<c>would_accept</c> in
-  /// <c>dry_run</c>), <c>&lt;h&gt;</c> the <c>human</c> ones; <c>&lt;publish&gt;</c> sums up the run's publishes.
+  /// The one email per finalised run. <c>&lt;a&gt;</c> counts <c>auto_accepted</c> drafts, <c>&lt;h&gt;</c> the
+  /// <c>human</c> ones (<c>&lt;a&gt;</c> counts <c>would_accept</c> in <c>dry_run</c>); <c>&lt;publish&gt;</c> sums up
+  /// the run's publishes. In <c>dry_run</c> the <c>would_accept</c> drafts are only counted, never listed (R18C
+  /// automation-4): they wait in the review queue for a blind human decision, and the review queue hides their verdict
+  /// too, because the shadow agreement counts blind decisions only.
   /// </summary>
   public static RenderedEmail BatchSummary(string mode, BatchSummaryData data, string consoleBaseUrl)
   {
@@ -291,7 +294,12 @@ public static class EmailTemplates
       $"- {d.StableUid} — {ReasonLabel(d.Reason)} — {consoleBaseUrl.TrimEnd('/')}/review?deckId={d.DeckId.ToString(CultureInfo.InvariantCulture)}").ToList();
     needs.AddRange(data.Publishes.Where(p => p.State == "human").Select(p =>
       $"- publish {p.DeckSlug} — {ReasonLabel(p.Reason)} — {console}"));
-    var done = accepted.Select(d => $"- {d.StableUid} — {Cap(OneLine(d.Question), MaxQuestionLength)}").ToList();
+    var done = dry
+      ? accepted.Count == 0
+        ? []
+        : [$"- {accepted.Count} draft(s) decided by the automation; verdicts hidden until you decide them in the review queue " +
+           $"(shadow agreement counts blind decisions only) — {consoleBaseUrl.TrimEnd('/')}/review?deckId={accepted[0].DeckId.ToString(CultureInfo.InvariantCulture)}"]
+      : accepted.Select(d => $"- {d.StableUid} — {Cap(OneLine(d.Question), MaxQuestionLength)}").ToList();
     done.AddRange(data.Publishes.Where(p => p.State is "published" or "would_publish" or "publishing").Select(p =>
       $"- publish {p.DeckSlug} — {p.State}" + (p.BuildId is null ? string.Empty : $", build {p.BuildId}")));
 
@@ -299,11 +307,12 @@ public static class EmailTemplates
     {
       $"Source: {data.SourceKind} {data.SourceUrl}" + (string.IsNullOrWhiteSpace(data.SourceTitle) ? string.Empty : $" ({OneLine(data.SourceTitle)})"),
     };
-    details.AddRange(data.Drafts.Select(d =>
+    details.AddRange(data.Drafts.Where(d => !(dry && d.State == acceptedState)).Select(d =>
       $"Draft {d.StableUid}: {d.State}" + (d.Reason is null ? string.Empty : $", {ReasonLabel(d.Reason)}") +
       (string.IsNullOrWhiteSpace(d.ReasonDetail) ? string.Empty : $" ({OneLine(d.ReasonDetail)})") +
       $" — {Cap(OneLine(d.Question), MaxQuestionLength)}" +
       (d.State == DraftDecisions.Human ? $" — {consoleBaseUrl.TrimEnd('/')}/review?deckId={d.DeckId.ToString(CultureInfo.InvariantCulture)}" : string.Empty)));
+    if (dry && accepted.Count > 0) details.Add($"Drafts with a hidden verdict: {accepted.Count}");
     if (AgentNotesLine(data.AgentNotes) is { } notes) details.Add(AgentNotesLabel + notes);
     details.Add($"Draft QA spend: {Usd(data.QaSpendUsd)}");
     if (data.Publishes.Count == 0) details.Add("Publish: none");

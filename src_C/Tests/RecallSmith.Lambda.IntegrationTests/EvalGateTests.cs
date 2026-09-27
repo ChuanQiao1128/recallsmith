@@ -53,6 +53,7 @@ public sealed class EvalGateTests
 
   private static readonly SemaphoreSlim ScratchGate = new(1, 1);
   private static string? _scratch;
+  private static int _reportSeq;
 
   private readonly PostgresFixture _db;
   public EvalGateTests(PostgresFixture db) => _db = db;
@@ -186,12 +187,14 @@ public sealed class EvalGateTests
 
   /// <summary>
   /// The §15.4 contract report with passing synthetic numbers: seeded recall 184/200 = 0.92, auto-accept precision
-  /// 294/300 = 0.98, defect escape 4/40 = 0.10, 150 would-accept cards, 2 reps each.
+  /// 294/300 = 0.98, defect escape 4/40 = 0.10, 150 would-accept cards, 2 reps each. Every call has its own
+  /// <c>createdAt</c>, so its bytes (and sha256) differ from every earlier report: the cleanup revokes every gate, and
+  /// the exact bytes of a revoked report are refused (R18C L3).
   /// </summary>
   private static JsonObject PassingReport()
   {
     var r = JsonNode.Parse(ContractReportJson)!.AsObject();
-    r["createdAt"] = "2026-09-28T00:00:00Z";
+    r["createdAt"] = $"2026-09-28T00:00:00.{Interlocked.Increment(ref _reportSeq):000000}Z";
     r["reviewer"]!["promptVersion"] = QaRuns.AutomationPromptVersion;
     var s = r["seeded"]!.AsObject();
     s["n"] = 400;
@@ -339,7 +342,9 @@ public sealed class EvalGateTests
       var failures = Failures(await PostAsync(report.ToJsonString()));
       Assert.Equal(["seeded.recall", "authored.autoAcceptPrecision", "authored.defectEscapeRate"], failures);
       Assert.Equal(failures, Check(report));
-      Assert.Equal(before, await GateCountAsync());
+      // R18C L3: the failing report is recorded as a failed gate (it used to be dropped), and it is not current.
+      Assert.Equal(before + 1, await GateCountAsync());
+      Assert.Equal(false, await ScalarAsync("select passed from automation_eval_gates order by id desc limit 1"));
       Assert.Equal(JsonValueKind.Null, AutomationTestKit.Data(await GetAsync()).GetProperty("current").ValueKind);
     });
   }
@@ -378,7 +383,9 @@ public sealed class EvalGateTests
 
       var before = await GateCountAsync();
       Assert.Equal([check], Failures(await PostAsync(report.ToJsonString())));
-      Assert.Equal(before, await GateCountAsync());
+      // R18C L3: recorded as the newest row, failed.
+      Assert.Equal(before + 1, await GateCountAsync());
+      Assert.Equal(false, await ScalarAsync("select passed from automation_eval_gates order by id desc limit 1"));
     });
   }
 
@@ -395,7 +402,8 @@ public sealed class EvalGateTests
       Assert.Equal(["reviewer.model"], Failures(await PostAsync(Patched("reviewer.model=\"  \"").ToJsonString())));
       Assert.Equal(["reviewer.provider", "reviewer.promptVersion"],
         Failures(await PostAsync(Patched("reviewer.provider=\"openai\";reviewer.promptVersion=\"qa-v5\"").ToJsonString())));
-      Assert.Null(await ScalarAsync("select id from automation_eval_gates where revoked_at is null"));
+      // R18C L3: the failed reports are recorded, but none of them is a passed gate.
+      Assert.Null(await ScalarAsync("select id from automation_eval_gates where passed and revoked_at is null"));
     });
   }
 
@@ -408,7 +416,7 @@ public sealed class EvalGateTests
         Failures(await PostAsync(Patched("reviewer.secondProvider=\"anthropic\";reviewer.secondModel=\"synthetic-second-model\"").ToJsonString())));
       Assert.Equal(["reviewer.secondModel"], Failures(await PostAsync(Patched("reviewer.secondModel=\"synthetic-second-model\"").ToJsonString())));
       Assert.Equal(["reviewer.secondProvider"], Failures(await PostAsync(Patched("reviewer.secondProvider=\"bedrock-converse\"").ToJsonString())));
-      Assert.Null(await ScalarAsync("select id from automation_eval_gates where revoked_at is null"));
+      Assert.Null(await ScalarAsync("select id from automation_eval_gates where passed and revoked_at is null"));
     });
   }
 
@@ -584,6 +592,105 @@ public sealed class EvalGateTests
       {
         AutomationTestKit.AssertError(await RevokeAsync(id), 404, "EVAL_GATE_NOT_FOUND");
       }
+    });
+  }
+
+  // ---------------------------------------------------------------- R18C L3 / L1 (C02)
+
+  [Fact]
+  public async Task PostGate_FailingReport_IsRecordedAndBlocksLive()
+  {
+    await InScratchAsync(async () =>
+    {
+      var passedId = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString())).GetProperty("gateId").GetInt64();
+      Assert.Equal(AutomationMode.Live, (await EffectiveAsync(AutomationMode.Live)).Effective);
+
+      // The owner re-runs the evaluation (same model id, drift) and it fails: posted through the route, not SQL.
+      var failing = Patched("authored.wouldAcceptCorrect=250");
+      var sub = $"it-c02-gate-{Guid.NewGuid():N}";
+      Assert.Equal(["authored.autoAcceptPrecision"], Failures(await PostAsync(failing.ToJsonString(), Ctx(sub: sub))));
+
+      var row = Assert.Single(await QueryAsync(
+        "select id, passed, revoked_at, created_by_sub, reviewer_model, metrics->>'autoAcceptPrecision' as precision " +
+        "from automation_eval_gates order by id desc limit 1"));
+      Assert.True(Long(row["id"]) > passedId);
+      Assert.Equal(false, row["passed"]);
+      Assert.Null(row["revoked_at"]);
+      Assert.Equal(sub, row["created_by_sub"]);
+      Assert.Equal("global.openai.gpt-5.5", row["reviewer_model"]);
+      Assert.Equal(250.0 / 300, double.Parse((string)row["precision"]!, CultureInfo.InvariantCulture));
+
+      // R18B K2 through the API: the newest evaluation failed, so live drops to dry_run; the older pass never counts.
+      var blocked = await EffectiveAsync(AutomationMode.Live);
+      Assert.Equal(AutomationMode.DryRun, blocked.Effective);
+      Assert.Equal(AutomationMode.EvalGateMissing, blocked.LiveBlockedReason);
+      Assert.Null(blocked.GateId);
+      var data = AutomationTestKit.Data(await GetAsync());
+      Assert.Equal(JsonValueKind.Null, data.GetProperty("current").ValueKind);
+      var newest = data.GetProperty("history")[0];
+      Assert.Equal(Long(row["id"]), newest.GetProperty("gateId").GetInt64());
+      Assert.False(newest.GetProperty("passed").GetBoolean());
+
+      // A newer passing evaluation restores live.
+      var again = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString())).GetProperty("gateId").GetInt64();
+      var live = await EffectiveAsync(AutomationMode.Live);
+      Assert.Equal((AutomationMode.Live, (long?)again), (live.Effective, live.GateId));
+    });
+  }
+
+  [Fact]
+  public async Task PostGate_RevokedReportAgain_Returns409()
+  {
+    await InScratchAsync(async () =>
+    {
+      var raw = PassingReport().ToJsonString();
+      var gateId = AutomationTestKit.Data(await PostAsync(raw)).GetProperty("gateId").GetInt64();
+      AutomationTestKit.Data(await RevokeAsync(gateId.ToString(CultureInfo.InvariantCulture)));
+      var before = await GateCountAsync();
+
+      // Pasting the revoked gate's exact report again does not reinstate live.
+      AutomationTestKit.AssertError(await PostAsync(raw), 409, "EVAL_GATE_REVOKED");
+      Assert.Equal(before, await GateCountAsync());
+      Assert.Equal(AutomationMode.DryRun, (await EffectiveAsync(AutomationMode.Live)).Effective);
+
+      // A fresh evaluation (other bytes) is recorded as usual.
+      var fresh = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString())).GetProperty("gateId").GetInt64();
+      Assert.True(fresh > gateId);
+      Assert.Equal(AutomationMode.Live, (await EffectiveAsync(AutomationMode.Live)).Effective);
+    });
+  }
+
+  [Fact]
+  public async Task PostGate_OpenAiMantleProvider_IsAcceptedAndPinned()
+  {
+    await InScratchAsync(async () =>
+    {
+      Assert.Equal(["openai-mantle", "bedrock-converse"], EvalGate.AutomationGateProviders);
+      var report = Patched("reviewer.provider=\"openai-mantle\";reviewer.model=\"openai.gpt-5.5\"");
+      Assert.Empty(Check(report));
+      var gate = AutomationTestKit.Data(await PostAsync(report.ToJsonString()));
+      Assert.Equal("openai-mantle", gate.GetProperty("reviewer").GetProperty("provider").GetString());
+      Assert.Equal("openai.gpt-5.5", gate.GetProperty("reviewer").GetProperty("model").GetString());
+
+      var live = await EffectiveAsync(AutomationMode.Live);
+      Assert.Equal(new GateReviewer("openai-mantle", "openai.gpt-5.5", QaRuns.AutomationPromptVersion), live.Reviewer);
+    });
+  }
+
+  [Fact]
+  public async Task PostGate_ModelOutsideAllowlist_FailsReviewerModel()
+  {
+    await InScratchAsync(async () =>
+    {
+      // Owner decision 4: GPT-5.5 only; a same-vendor or any other model never enables live.
+      foreach (var model in new[] { "global.anthropic.claude-sonnet-synthetic", "anthropic.claude-synthetic", "openai.gpt-4o", "GLOBAL.OPENAI.GPT-5.5", "" })
+      {
+        var report = Patched($"reviewer.model=\"{model}\"");
+        Assert.Equal(["reviewer.model"], Check(report));
+        Assert.Equal(["reviewer.model"], Failures(await PostAsync(report.ToJsonString())));
+      }
+      Assert.Null(await ScalarAsync("select id from automation_eval_gates where passed and revoked_at is null"));
+      Assert.Equal(AutomationMode.DryRun, (await EffectiveAsync(AutomationMode.Live)).Effective);
     });
   }
 }

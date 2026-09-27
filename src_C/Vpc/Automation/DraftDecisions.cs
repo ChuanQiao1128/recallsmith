@@ -253,7 +253,6 @@ public static class DraftDecisions
       var mode = await AutomationMode.EffectiveAsync(conn, ct);
       var jobId = Guid.NewGuid();
       string? routedReason = null;
-      string decisionMode;
       long deckId;
       string stableUid;
       string contentSha256;
@@ -276,7 +275,6 @@ public static class DraftDecisions
         var row = rows[0];
         var state = (string)row["state"]!;
         if (state != QaPending) return state;
-        decisionMode = (string)row["mode"]!;
         deckId = Convert.ToInt64(row["deck_id"], CultureInfo.InvariantCulture);
         stableUid = (string)row["stable_uid"]!;
 
@@ -288,10 +286,11 @@ public static class DraftDecisions
         }
         if (!QaAvailable())
         {
-          await TransitionAsync(conn, tx, draftId, QaPending, Human, "QA_UNAVAILABLE", null, AutomationEventActor, mode.Effective, null, ct);
+          var applied = await TransitionAsync(conn, tx, draftId, QaPending, Human, "QA_UNAVAILABLE", null, AutomationEventActor, mode.Effective, null, ct);
           await tx.CommitAsync(ct);
           routedReason = "QA_UNAVAILABLE";
-          if (decisionMode == AutomationMode.Live) await AutomationLedger.RecordAsync(conn, RouteLedgerEvent(draftId, deckId, routedReason, null), ct);
+          // The ledger follows the mode this transition applied (R18C backend-design-16), not the mode of the submit.
+          if (applied == AutomationMode.Live) await AutomationLedger.RecordAsync(conn, RouteLedgerEvent(draftId, deckId, routedReason, null), ct);
           return Human;
         }
 
@@ -389,7 +388,7 @@ public static class DraftDecisions
       {
         Log.Event("error", new { tag = "automation", outcome = "draft_qa_enqueue_failed", draftId, qaJobId = jobId, error = ex.Message });
         RouteMetrics.EmitGauge(QaEnqueueFailuresMetric, 1);
-        return await EnqueueFailedAsync(conn, draftId, jobId, deckId, decisionMode, ct);
+        return await EnqueueFailedAsync(conn, draftId, jobId, deckId, ct);
       }
     }
     catch (PostgresException pg) when (pg.SqlState is "42P01" or "42703")
@@ -410,11 +409,11 @@ public static class DraftDecisions
   /// <c>ENQUEUE_RETRY</c>, retried by the tick) or, after <see cref="MaxQaEnqueueAttempts"/> attempts, the draft goes to
   /// a human with <c>ENQUEUE_FAILED</c>.
   /// </summary>
-  private static async Task<string> EnqueueFailedAsync(NpgsqlConnection conn, long draftId, Guid jobId, long deckId, string decisionMode,
-    CancellationToken ct)
+  private static async Task<string> EnqueueFailedAsync(NpgsqlConnection conn, long draftId, Guid jobId, long deckId, CancellationToken ct)
   {
     var mode = await AutomationMode.EffectiveAsync(conn, ct);
     string to;
+    string applied;
     await using (var tx = await conn.BeginTransactionAsync(ct))
     {
       var rows = await DbUtil.QueryAsync(conn, tx,
@@ -429,12 +428,12 @@ public static class DraftDecisions
       var reason = to == QaPending ? "ENQUEUE_RETRY" : "ENQUEUE_FAILED";
       await DbUtil.ExecuteAsync(conn, tx,
         "update automation_draft_decisions set qa_enqueued_at = null where draft_id = $1", [draftId]);
-      await TransitionAsync(conn, tx, draftId, QaQueued, to, reason, null, AutomationEventActor, mode.Effective,
+      applied = await TransitionAsync(conn, tx, draftId, QaQueued, to, reason, null, AutomationEventActor, mode.Effective,
         new { qaJobId = jobId, attempts }, ct);
       await tx.CommitAsync(ct);
     }
 
-    if (to == Human && decisionMode == AutomationMode.Live)
+    if (to == Human && applied == AutomationMode.Live)
     {
       await AutomationLedger.RecordAsync(conn, RouteLedgerEvent(draftId, deckId, "ENQUEUE_FAILED", null), ct);
     }
@@ -472,7 +471,9 @@ public static class DraftDecisions
   /// <summary>
   /// Records a human accept/reject on the draft's decision: an unfinished one (<c>qa_pending</c>/<c>qa_queued</c>)
   /// becomes <c>superseded</c> / <c>DECIDED_BY_HUMAN</c>; a finished one keeps its state and gets a
-  /// <c>HUMAN_ACTION</c> event (shadow measurement). No decision ⇒ nothing. Never throws.
+  /// <c>HUMAN_ACTION</c> event (shadow measurement). That event records <c>blinded</c>: whether the verdict was hidden
+  /// from the person when they decided (a dry-run <c>would_accept</c>, which the review queue and the batch email hide),
+  /// so the shadow agreement counts blind decisions only (R18C automation-4). No decision ⇒ nothing. Never throws.
   /// </summary>
   public static async Task OnHumanDecisionAsync(NpgsqlConnection conn, long draftId, string action, string? reason, string actorSub,
     CancellationToken ct = default)
@@ -488,9 +489,10 @@ public static class DraftDecisions
 
       var mode = await AutomationMode.EffectiveAsync(conn, ct);
       await using var tx = await conn.BeginTransactionAsync(ct);
-      var rows = await DbUtil.QueryAsync(conn, tx, "select state from automation_draft_decisions where draft_id = $1 for update", [draftId]);
+      var rows = await DbUtil.QueryAsync(conn, tx, "select state, mode from automation_draft_decisions where draft_id = $1 for update", [draftId]);
       if (rows.Count == 0) return;
       var state = (string)rows[0]["state"]!;
+      var blinded = state == WouldAccept && (string)rows[0]["mode"]! == AutomationMode.DryRun;
 
       await DbUtil.ExecuteAsync(conn, tx,
         """
@@ -508,7 +510,8 @@ public static class DraftDecisions
       }
       else
       {
-        await AppendEventAsync(conn, tx, draftId, state, state, AutomationReasons.HumanAction, actor, mode.Effective, details, ct);
+        await AppendEventAsync(conn, tx, draftId, state, state, AutomationReasons.HumanAction, actor, mode.Effective,
+          new { humanAction = action, humanReason = reason, blinded }, ct);
       }
       await tx.CommitAsync(ct);
     }
@@ -540,21 +543,28 @@ public static class DraftDecisions
     Notifications.RaiseExceptionAsync(conn, subkind, dedupeKey, facts, ct: ct);
 
   /// <summary>
-  /// One state change of a decision plus its event, inside <paramref name="tx"/>. Terminal states set <c>decided_at</c>.
+  /// One state change of a decision plus its event, inside <paramref name="tx"/>. Terminal states set <c>decided_at</c>
+  /// and the decision's <c>mode</c> to <paramref name="mode"/>, the effective mode the deciding transaction applied
+  /// (R18C backend-design-16), so a draft submitted in <c>dry_run</c> and decided under <c>live</c> reads <c>live</c>.
+  /// Effective <c>off</c> is not a decision mode: the mode of the submit stays. Returns the decision's mode afterwards,
+  /// which is the mode its ledger row follows.
   /// </summary>
-  internal static async Task TransitionAsync(NpgsqlConnection conn, NpgsqlTransaction tx, long draftId, string from, string to,
+  internal static async Task<string> TransitionAsync(NpgsqlConnection conn, NpgsqlTransaction tx, long draftId, string from, string to,
     string? reason, string? reasonDetail, string actor, string mode, object? details, CancellationToken ct)
   {
     var detail = reasonDetail is { Length: > MaxReasonDetailLength } ? reasonDetail[..MaxReasonDetailLength] : reasonDetail;
-    await DbUtil.ExecuteAsync(conn, tx,
+    var rows = await DbUtil.QueryAsync(conn, tx,
       """
       update automation_draft_decisions
       set state = $2, reason = $3::text, reason_detail = $4::text, updated_at = now(),
-        decided_at = case when $2 in ('would_accept','auto_accepted','human','superseded') then now() else decided_at end
+        decided_at = case when $2 in ('would_accept','auto_accepted','human','superseded') then now() else decided_at end,
+        mode = case when $2 in ('would_accept','auto_accepted','human','superseded') and $5 in ('dry_run','live') then $5 else mode end
       where draft_id = $1
+      returning mode
       """,
-      [draftId, to, reason, detail]);
+      [draftId, to, reason, detail, mode]);
     await AppendEventAsync(conn, tx, draftId, from, to, reason, actor, mode, details, ct);
+    return rows.Count == 0 ? mode : (string)rows[0]["mode"]!;
   }
 
   /// <summary>Appends one <c>automation_decision_events</c> row inside <paramref name="tx"/>.</summary>

@@ -28,7 +28,8 @@ public sealed class AutomationStatusRoutesTests
   private const string RunsPath = "/api/v1/admin/automation/runs";
   private const string DecisionsPath = "/api/v1/admin/automation/decisions";
 
-  // A00 §16.2, verbatim except that the runner item (whose keys carry no values there) is listed in RunnerKeys.
+  // A00 §16.2, verbatim except that the runner item (whose keys carry no values there) is listed in RunnerKeys, plus
+  // the R18C additions: shadow.blindDecided/blindAccepted (automation-4) and backlog.humanPublishItems (L4).
   private const string StatusContractJson = """
     { "serverTime": "ISO",
       "mode": { "configured": "dry_run", "effective": "dry_run", "liveBlockedReason": null, "autoPublish": true },
@@ -36,12 +37,13 @@ public sealed class AutomationStatusRoutesTests
       "runners": [],
       "queue": { "queued": 0, "due": 0, "claimed": 0, "failed": 0, "doneLast7d": 0 },
       "decisions24h": { "byState": { "<state>": 0 }, "byReason": { "<REASON>": 0 } },
-      "shadow": { "wouldAccept": 0, "humanDecided": 0, "humanAccepted": 0, "humanEditedAccepted": 0, "humanRejected": 0, "agreementRate": null },
+      "shadow": { "wouldAccept": 0, "humanDecided": 0, "humanAccepted": 0, "humanEditedAccepted": 0, "humanRejected": 0, "agreementRate": null,
+                  "blindDecided": 0, "blindAccepted": 0 },
       "publishes7d": { "byState": { "<state>": 0 } },
       "spend": { "todayUsd": 0, "automationTodayUsd": 0, "reservedUsd": 0, "dailyCapUsd": 10 },
       "watch": { "targets": 0, "active": 0, "failing": 0, "lastCheckedAt": null, "changes7d": 0 },
       "notifications": { "sent24h": 0, "failed24h": 0, "queued": 0, "unconfirmed": 0, "lastSentAt": null },
-      "backlog": { "humanPending": 0, "oldestHumanPendingAt": null, "humanPublishes": 0 } }
+      "backlog": { "humanPending": 0, "oldestHumanPendingAt": null, "humanPublishes": 0, "humanPublishItems": [] } }
     """;
 
   private static readonly string[] RunnerKeys =
@@ -469,6 +471,16 @@ public sealed class AutomationStatusRoutesTests
       // Outside the window or not would_accept: not counted.
       await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected", createdAt: "now() - interval '40 days'");
       await db.NewDecisionAsync(deckId, run, "human", "QA_FLAGGED", qa: true, humanAction: "accepted");
+      // R18C automation-4: the agreement counts only decisions made blind; every decision here was.
+      async Task MarkAllBlindAsync() => await db.QueryAsync(
+        """
+        insert into automation_decision_events (draft_id, from_state, to_state, reason, actor, mode, details)
+        select dd.draft_id, dd.state, dd.state, 'HUMAN_ACTION', 'human:it-c02', 'dry_run', '{"blinded":true}'::jsonb
+        from automation_draft_decisions dd
+        where dd.human_action is not null
+          and not exists (select 1 from automation_decision_events e where e.draft_id = dd.draft_id and e.reason = 'HUMAN_ACTION')
+        """);
+      await MarkAllBlindAsync();
 
       var shadow = (await DataAsync(StatusPath)).GetProperty("shadow");
       Assert.Equal(5, shadow.GetProperty("wouldAccept").GetInt64());
@@ -485,10 +497,12 @@ public sealed class AutomationStatusRoutesTests
       await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected");
       await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected");
       await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected");
+      await MarkAllBlindAsync();
       var third = (await DataAsync(StatusPath)).GetProperty("shadow");
       Assert.Equal(10, third.GetProperty("humanDecided").GetInt64());
       Assert.Equal(0.2m, third.GetProperty("agreementRate").GetDecimal());
       await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "accepted");
+      await MarkAllBlindAsync();
       var eleventh = (await DataAsync(StatusPath)).GetProperty("shadow");
       Assert.Equal(0.2727m, eleventh.GetProperty("agreementRate").GetDecimal());
     });
@@ -1067,5 +1081,154 @@ public sealed class AutomationStatusRoutesTests
         }
       }, new Dictionary<string, string?> { [AutomationMode.EnvName] = mode });
     }
+  }
+
+  // ---------------------------------------------------------------- R18C (C02)
+
+  [Fact]
+  public async Task Status_ShadowAgreement_CountsOnlyBlindDecisions()
+  {
+    // R18C automation-4: a person who saw the would_accept verdict before deciding measures nothing.
+    await InFreshAsync("it_c02_status_blind", async db =>
+    {
+      var (deckId, _) = await db.NewDeckAsync("blind");
+      var run = await db.NewRunAsync(deckId);
+      async Task EventAsync(long draftId, string details) => await db.QueryAsync(
+        "insert into automation_decision_events (draft_id, from_state, to_state, reason, actor, mode, details) " +
+        "values ($1, 'would_accept', 'would_accept', 'HUMAN_ACTION', 'human:it-c02', 'dry_run', $2::jsonb)", draftId, details);
+
+      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "accepted"), "{\"blinded\":true}");
+      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected"), "{\"blinded\":true}");
+      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected"), "{\"blinded\":true}");
+      // Decided with the verdict visible, or before blindness was recorded: counted as decided, not in the agreement.
+      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "accepted"), "{\"blinded\":false}");
+      await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "accepted");
+
+      var shadow = (await DataAsync(StatusPath)).GetProperty("shadow");
+      Assert.Equal(5, shadow.GetProperty("humanDecided").GetInt64());
+      Assert.Equal(3, shadow.GetProperty("humanAccepted").GetInt64());
+      Assert.Equal(3, shadow.GetProperty("blindDecided").GetInt64());
+      Assert.Equal(1, shadow.GetProperty("blindAccepted").GetInt64());
+      Assert.Equal(0.3333m, shadow.GetProperty("agreementRate").GetDecimal());
+    });
+  }
+
+  [Fact]
+  public async Task Decisions_OpenTrue_ListsOnlyOpenExceptions_WithTheBacklogPredicate()
+  {
+    // R18C L4 (backend-design-13): handled rows newer than the open ones no longer hide them behind a page.
+    await InFreshAsync("it_c02_decisions_open", async db =>
+    {
+      var (deckId, _) = await db.NewDeckAsync("open");
+      var run = await db.NewRunAsync(deckId);
+      var openOld = await db.NewDecisionAsync(deckId, run, "human", "QA_FLAGGED", createdAt: "now() - interval '3 days'");
+      var openNew = await db.NewDecisionAsync(deckId, run, "human", "UNGROUNDED", createdAt: "now() - interval '2 days'");
+      for (var i = 0; i < 3; i++)
+      {
+        var handled = await db.NewDecisionAsync(deckId, run, "human", "QA_FLAGGED", humanAction: "rejected");
+        await db.QueryAsync("update ai_drafts set status = 'rejected', decided_at = now(), decided_by_sub = 'it-c02' where id = $1", handled);
+      }
+      var gone = await db.NewDecisionAsync(deckId, run, "human", "QA_FLAGGED");
+      await db.QueryAsync("update ai_drafts set status = 'accepted', decided_at = now(), decided_by_sub = 'it-c02' where id = $1", gone);
+      await db.NewDecisionAsync(deckId, run, "would_accept", qa: true);
+
+      static List<long> Ids(JsonElement data) =>
+        data.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("draftId").GetInt64()).ToList();
+
+      // Without the flag the first page of human rows shows no open exception.
+      var firstHuman = await DataAsync(DecisionsPath, new Dictionary<string, string> { ["state"] = "human", ["limit"] = "3" });
+      Assert.DoesNotContain(openNew, Ids(firstHuman));
+
+      var open = await DataAsync(DecisionsPath, new Dictionary<string, string> { ["open"] = "true" });
+      Assert.Equal([openNew, openOld], Ids(open));
+      Assert.Equal(Ids(open), Ids(await DataAsync(DecisionsPath, new Dictionary<string, string> { ["open"] = "1", ["state"] = "human" })));
+      Assert.Equal((await DataAsync(StatusPath)).GetProperty("backlog").GetProperty("humanPending").GetInt64(), Ids(open).Count);
+
+      // The same keyset cursor pages through the open list.
+      var page1 = await DataAsync(DecisionsPath, new Dictionary<string, string> { ["open"] = "true", ["limit"] = "1" });
+      Assert.Equal([openNew], Ids(page1));
+      var page2 = await DataAsync(DecisionsPath, new Dictionary<string, string>
+        { ["open"] = "true", ["limit"] = "1", ["cursor"] = page1.GetProperty("nextCursor").GetString()! });
+      Assert.Equal([openOld], Ids(page2));
+      Assert.Equal(JsonValueKind.Null, page2.GetProperty("nextCursor").ValueKind);
+
+      // open=false (or absent) filters nothing; anything else is a validation error.
+      Assert.Equal(7, Ids(await DataAsync(DecisionsPath, new Dictionary<string, string> { ["open"] = "false" })).Count);
+      AutomationTestKit.AssertError(await CallAsync(DecisionsPath, new Dictionary<string, string> { ["open"] = "yes" }), 400, "VALIDATION_ERROR");
+    });
+  }
+
+  [Fact]
+  public async Task Status_Backlog_ListsHumanPublishItems()
+  {
+    // R18C L4: the publishes counted in humanPublishes, listed (oldest first, at most 20).
+    await InFreshAsync("it_c02_status_publish_items", async db =>
+    {
+      var (deckId, slug) = await db.NewDeckAsync("items");
+      var (resolvedDeck, resolvedSlug) = await db.NewDeckAsync("items-resolved");
+      var run = await db.NewRunAsync(deckId);
+      await db.QueryAsync(
+        """
+        insert into automation_publishes (deck_id, run_id, mode, state, reason, created_at, updated_at) values
+          ($1, $3, 'live', 'human', 'DECK_HAS_HUMAN_CHANGES', now() - interval '5 days', now() - interval '5 days'),
+          ($2, $3, 'live', 'human', 'PUBLISH_FAILED', now() - interval '3 hours', now() - interval '3 hours'),
+          ($1, $3, 'dry_run', 'human', 'AI_QA_REQUIRED', now(), now())
+        """, deckId, resolvedDeck, run);
+      await db.QueryAsync(
+        "insert into deck_publishes (deck_id, deck_slug, build_id, s3_key, status, created_at) values ($1, $2, 'c02-build', 'decks/c02', 'SUCCESS', now() - interval '1 hour')",
+        resolvedDeck, resolvedSlug);
+
+      var backlog = (await DataAsync(StatusPath)).GetProperty("backlog");
+      Assert.Equal(1, backlog.GetProperty("humanPublishes").GetInt64());
+      var item = Assert.Single(backlog.GetProperty("humanPublishItems").EnumerateArray());
+      Assert.Equal(["deckId", "deckSlug", "reason", "since"], Keys(item));
+      Assert.Equal(deckId, item.GetProperty("deckId").GetInt64());
+      Assert.Equal(slug, item.GetProperty("deckSlug").GetString());
+      Assert.Equal("DECK_HAS_HUMAN_CHANGES", item.GetProperty("reason").GetString());
+      var since = DateTimeOffset.Parse(item.GetProperty("since").GetString()!, CultureInfo.InvariantCulture);
+      Assert.InRange(DateTimeOffset.UtcNow - since, TimeSpan.FromDays(4.9), TimeSpan.FromDays(5.1));
+
+      // Capped at 20, oldest first.
+      for (var i = 0; i < 25; i++)
+      {
+        var (d, _) = await db.NewDeckAsync($"items-{i}");
+        await db.QueryAsync(
+          "insert into automation_publishes (deck_id, run_id, mode, state, reason, created_at, updated_at) " +
+          "values ($1, $2, 'live', 'human', 'PUBLISH_FAILED', now() - make_interval(hours => $3), now() - make_interval(hours => $3))", d, run, i + 1);
+      }
+      var full = (await DataAsync(StatusPath)).GetProperty("backlog");
+      Assert.Equal(26, full.GetProperty("humanPublishes").GetInt64());
+      var listed = full.GetProperty("humanPublishItems").EnumerateArray().ToList();
+      Assert.Equal(StatusRoutes.MaxHumanPublishItems, listed.Count);
+      Assert.Equal(deckId, listed[0].GetProperty("deckId").GetInt64());
+      var times = listed.Select(l => DateTimeOffset.Parse(l.GetProperty("since").GetString()!, CultureInfo.InvariantCulture)).ToList();
+      Assert.Equal(times.Order().ToList(), times);
+    });
+  }
+
+  [Fact]
+  public async Task Runs_DeferredCards_MatchThePublishLikeTheBatchSummary()
+  {
+    // R18C backend-design-17: a run whose accepted cards wait on another run's in-flight row shows that row.
+    await InFreshAsync("it_c02_runs_deferred", async db =>
+    {
+      var (deckId, _) = await db.NewDeckAsync("deferred");
+      var first = await db.NewRunAsync(deckId, startedAt: "now() - interval '5 minutes'");
+      var second = await db.NewRunAsync(deckId);
+      var firstCard = await db.NewCardAsync(deckId, Uid("card"));
+      var secondCard = await db.NewCardAsync(deckId, Uid("card"));
+      await db.NewDecisionAsync(deckId, first, "auto_accepted", qa: true, acceptedCardId: firstCard, mode: "live");
+      await db.NewDecisionAsync(deckId, second, "auto_accepted", qa: true, acceptedCardId: secondCard, mode: "live");
+      var inFlight = Long(await db.ScalarAsync(
+        "insert into automation_publishes (deck_id, run_id, mode, state, card_ids, deferred_card_ids, job_id) " +
+        "values ($1, $2, 'live', 'publishing', $3, $4, 'job-c02') returning id",
+        deckId, first, new[] { firstCard }, new[] { secondCard }));
+
+      var items = (await DataAsync(RunsPath, new Dictionary<string, string> { ["deckId"] = deckId.ToString(CultureInfo.InvariantCulture) }))
+        .GetProperty("items").EnumerateArray().ToList();
+      Assert.Equal([second, first], items.Select(i => i.GetProperty("runId").GetGuid()).ToList());
+      Assert.Equal([inFlight], items[0].GetProperty("publishes").EnumerateArray().Select(p => p.GetProperty("publishId").GetInt64()).ToList());
+      Assert.Equal([inFlight], items[1].GetProperty("publishes").EnumerateArray().Select(p => p.GetProperty("publishId").GetInt64()).ToList());
+    });
   }
 }

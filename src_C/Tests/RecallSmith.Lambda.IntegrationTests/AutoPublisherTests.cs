@@ -634,15 +634,17 @@ public class AutoPublisherTests
     Assert.Equal(("auto_publish", 0, "success"), ((string)ledger["automation"]!, Convert.ToInt32(ledger["units"], CultureInfo.InvariantCulture), (string)ledger["outcome"]!));
     Assert.Contains("DECK_HAS_HUMAN_CHANGES", (string)ledger["details"]!);
 
-    // Dry run: the alert (marked) but no ledger row (A00 §14).
+    // Dry run: no ledger row (A00 §14) and, since R18C L6 (automation-15), no alert either: nothing was accepted, so
+    // nobody has to publish; the batch summary's "publish would need you" and the Runs tab carry it.
     scope.Set(AutomationMode.EnvName, AutomationMode.DryRun);
     var dryDeck = await A04Kit.PublishedDeckAsync(_sql, "blocked-dry");
     var dryRun = await A04Kit.RunAsync(_sql, AutomationTestKit.Sub("blocked-dry"), dryDeck.Id, "completed");
     await _sql.QueryAsync("update decks set updated_at = now() where id = $1", dryDeck.Id);
     var dry = await EvaluateAsync(dryDeck.Id, dryRun);
     AssertOutcome(dry, "human", "DECK_HAS_HUMAN_CHANGES");
-    Assert.Equal($"[DeveloperCards] (dry run) Action needed: publish {dryDeck.Slug} (DECK_HAS_HUMAN_CHANGES)",
-      await _sql.ScalarAsync("select subject from automation_notifications where dedupe_key = $1", $"exception:publish_blocked:{dry!.PublishId}"));
+    Assert.Equal("dry_run", (await A04Kit.PublishRowAsync(_sql, dry!.PublishId))["mode"]);
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where dedupe_key = $1", $"exception:publish_blocked:{dry.PublishId}"));
+    Assert.Empty(A04Kit.Messages(scope, dryDeck.Slug));
     Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_events where dedupe_key = $1", $"auto-publish-human:{dry.PublishId}"));
   }
 
