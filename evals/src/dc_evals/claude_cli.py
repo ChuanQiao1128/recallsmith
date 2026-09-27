@@ -11,21 +11,51 @@ Fidelity notes, recorded in every report as provider "claude-cli":
 - `claude -p` takes one prompt, so the repair turn is sent as a single user message that quotes
   the rejected reply; the production client sends it as a real assistant/user turn pair.
 - Claude Code adds a small amount of its own context; token counts are estimates.
+- max_tokens reaches the CLI only as CLAUDE_CODE_MAX_OUTPUT_TOKENS, and `thinking` is not sent
+  (effort is). A cut at max_tokens or a refusal becomes stop_reason "max_tokens" / "refusal" (so
+  ai_qa.review records MAX_TOKENS / REFUSAL) only when the CLI's JSON result carries that
+  stop_reason; a result without one reads as "end_turn". The run file does not say which results
+  carried one, so a proxy run cannot show that no card is truncated or refused: the MAX_TOKENS and
+  REFUSAL rates are checked on the Bedrock gate run (PROXY_UNOBSERVABLE, echoed in the report).
+- A CLI error result raises ClaudeCliError with errorCode CLI_<SUBTYPE> (the runner records it)
+  instead of one generic error.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 import tempfile
 from types import SimpleNamespace
 from typing import Any, Callable
 
 EMPTY_MCP_CONFIG = '{"mcpServers":{}}'
+# The stop reasons ai_qa.review maps to an outcome; any other reads as "end_turn".
+MAPPED_STOP_REASONS = frozenset({"max_tokens", "refusal"})
+# What a claude-cli report cannot show (report.build_report puts it under proxyFidelity).
+PROXY_UNOBSERVABLE = {
+    "outcomes": ["MAX_TOKENS", "REFUSAL"],
+    "note": (
+        "The claude-cli transport records MAX_TOKENS or REFUSAL only when the CLI's JSON result "
+        "carries stop_reason max_tokens or refusal, and the run file does not record whether a result "
+        "carried one; zero MAX_TOKENS or REFUSAL errors in a proxy run is not evidence that no card "
+        "is truncated at max_tokens or refused. Both rates are checked on the Bedrock gate run."
+    ),
+}
+
+_UNSAFE_CODE = re.compile(r"[^A-Z0-9]+")
 
 
 class ClaudeCliError(RuntimeError):
-    """The CLI failed or returned an error result."""
+    """The CLI failed or returned an error result. error_code is what the runner records:
+    CLI_<SUBTYPE> for an error result that names its subtype, CLI_ERROR otherwise."""
+
+    def __init__(self, message: str, *, subtype: str | None = None) -> None:
+        super().__init__(message)
+        code = _UNSAFE_CODE.sub("_", subtype.upper()).strip("_") if isinstance(subtype, str) else ""
+        self.error_code = f"CLI_{code}" if code and code != "SUCCESS" else "CLI_ERROR"
 
 
 def _text_of(content: Any) -> str:
@@ -101,7 +131,24 @@ class ClaudeCliClient:
             cmd += ["--effort", effort]
         return cmd
 
-    def create(self, *, system: Any, messages: list[dict[str, Any]], output_config: dict[str, Any] | None = None, **_: Any) -> SimpleNamespace:
+    @staticmethod
+    def env(max_tokens: int | None) -> dict[str, str]:
+        """The subprocess environment: this process's, plus the request's max_tokens as the CLI's
+        output-token ceiling."""
+        env = dict(os.environ)
+        if max_tokens:
+            env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(int(max_tokens))
+        return env
+
+    def create(
+        self,
+        *,
+        system: Any,
+        messages: list[dict[str, Any]],
+        output_config: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
+        **_: Any,
+    ) -> SimpleNamespace:
         if output_config and output_config.get("format"):
             raise ClaudeCliError("structured outputs are not available through the CLI; run with them off")
         effort = (output_config or {}).get("effort")
@@ -113,6 +160,7 @@ class ClaudeCliClient:
                 text=True,
                 timeout=self.timeout_s,
                 cwd=cwd,
+                env=self.env(max_tokens),
             )
         if proc.returncode != 0:
             raise ClaudeCliError(f"claude exited {proc.returncode}")
@@ -120,14 +168,16 @@ class ClaudeCliClient:
             data = json.loads(proc.stdout)
         except json.JSONDecodeError:
             raise ClaudeCliError("claude printed no JSON result") from None
-        if data.get("is_error") or not isinstance(data.get("result"), str):
-            raise ClaudeCliError("claude returned an error result")
+        stop_reason = data.get("stop_reason") if data.get("stop_reason") in MAPPED_STOP_REASONS else "end_turn"
+        if stop_reason == "end_turn" and (data.get("is_error") or not isinstance(data.get("result"), str)):
+            raise ClaudeCliError("claude returned an error result", subtype=data.get("subtype"))
+        details = data.get("stop_details")
         usage = data.get("usage") or {}
         return SimpleNamespace(
             model=served_model(data, self.model),
-            content=[SimpleNamespace(type="text", text=data["result"])],
-            stop_reason="end_turn",
-            stop_details=None,
+            content=[SimpleNamespace(type="text", text=data.get("result") if isinstance(data.get("result"), str) else "")],
+            stop_reason=stop_reason,
+            stop_details=details if stop_reason == "refusal" and isinstance(details, dict) else None,
             usage=SimpleNamespace(
                 input_tokens=int(usage.get("input_tokens") or 0),
                 output_tokens=int(usage.get("output_tokens") or 0),

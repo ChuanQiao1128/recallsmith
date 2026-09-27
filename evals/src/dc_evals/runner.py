@@ -96,9 +96,11 @@ def _review_row(
     except Exception as exc:
         # One broken card must not throw away a paid run; the class name only, never the message.
         print(f"{row['id']}: review_card raised {type(exc).__name__}", file=sys.stderr)
+        # A transport that names its failure (claude_cli.ClaudeCliError.error_code) keeps that code.
+        code = getattr(exc, "error_code", None)
         item = {
             "status": "error",
-            "errorCode": UNEXPECTED_ERROR,
+            "errorCode": code if isinstance(code, str) and code else UNEXPECTED_ERROR,
             "findings": [],
             "usage": {"inputTokens": 0, "outputTokens": 0, "cacheReadInputTokens": 0},
             "latencyMs": 0,

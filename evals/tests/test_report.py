@@ -64,6 +64,7 @@ def test_report_json_matches_contract_schema() -> None:
         "latencyMs",
         "errors",
         "unitOfAnalysis",  # Z04 (ai-agent-28): what one sample is in every interval
+        "proxyFidelity",  # Z04 (ai-agent-30): what a claude-cli run cannot observe
         "gate",
     }
     assert report["v"] == 2
@@ -236,3 +237,17 @@ def test_tuning_readme_discloses_that_the_holdout_informed_qa_v3() -> None:
     assert "not a clean held-out result" in tuning
     assert "Prompt changes were derived only from dev errors." not in tuning
     assert "--dataset v3 --reps 2" in tuning
+
+
+def test_a_proxy_report_states_what_the_transport_cannot_observe() -> None:
+    """Z04 (ai-agent-30): a claude-cli report says MAX_TOKENS and REFUSAL are observable only when
+    the CLI reports the stop reason, and that the Bedrock gate run checks both rates; a
+    production-provider report carries no such caveat."""
+    proxy = build_report({**HEADER, "provider": "claude-cli", "model": "claude-opus-5"}, RECORDS)
+    assert proxy["proxyFidelity"]["outcomes"] == ["MAX_TOKENS", "REFUSAL"]
+    assert "Bedrock gate run" in proxy["proxyFidelity"]["note"]
+    markdown = render_markdown(proxy, flagged_wrong_category=0)
+    assert "MAX_TOKENS and REFUSAL" in markdown and "Bedrock gate run" in markdown
+    rollout = build_report(HEADER, RECORDS)
+    assert rollout["proxyFidelity"] is None
+    assert "MAX_TOKENS and REFUSAL" not in render_markdown(rollout, flagged_wrong_category=0)

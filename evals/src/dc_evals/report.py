@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .claude_cli import PROXY_UNOBSERVABLE
 from .dataset import DATASETS_BY_NAME, classes_for, dump_line, file_sha256, read_jsonl
 from .score import (
     CONTROL_FPR_CI_UPPER_GATE,
@@ -133,6 +134,7 @@ def build_report(header: dict[str, Any], records: list[dict[str, Any]]) -> dict[
         "latencyMs": metrics["latencyMs"],
         "errors": metrics["errors"],
         "unitOfAnalysis": metrics["unitOfAnalysis"],
+        "proxyFidelity": PROXY_UNOBSERVABLE if header.get("provider") == "claude-cli" else None,
         "gate": {
             "thresholds": GATE_THRESHOLDS,
             "expected": {**expected_run(header.get("dataset")), "shipping": shipping_config()},
@@ -183,6 +185,15 @@ def render_markdown(report: dict[str, Any], *, flagged_wrong_category: int) -> s
                 else ""
             )
         ),
+    ]
+    if report.get("proxyFidelity"):
+        lines.append(
+            "- Proxy fidelity: MAX_TOKENS and REFUSAL are unobservable through this transport unless the CLI "
+            "result reports the stop reason, and the run file does not record whether it did, so their "
+            "counts below are not evidence that no card is truncated or refused; both rates are checked on "
+            "the Bedrock gate run"
+        )
+    lines += [
         (
             f"- Gate (recall >= {RECALL_GATE:.2f} with 95% CI lower bound >= {RECALL_CI_LOWER_GATE:.2f}, precision >= "
             f"{PRECISION_GATE:.2f}, control FP rate <= {CONTROL_FPR_GATE:.2f} with 95% CI upper bound <= "
