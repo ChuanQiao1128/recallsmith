@@ -324,6 +324,7 @@ internal static class DraftQaResults
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "draft_qa_after_commit_failed", draftId = outcome.DraftId, error = ex.Message });
+      AutomationFailures.Record();
     }
   }
 

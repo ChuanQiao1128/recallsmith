@@ -275,7 +275,9 @@ drop trigger if exists trg_automation_decision_events_no_truncate on automation_
 create trigger trg_automation_decision_events_no_truncate before truncate on automation_decision_events
   for each statement execute function automation_decision_events_append_only();
 
--- 7. auto-publish attempts
+-- 7. auto-publish attempts. card_ids are the cards the row's build covers: they are appended only while the row is
+-- 'waiting'. A run that finalises while the deck's row is already 'publishing' records its cards in deferred_card_ids;
+-- the reconcile moves them (and any card the build missed) to a new 'waiting' row once the job ends.
 create table if not exists automation_publishes (
   id bigserial primary key,
   deck_id bigint not null references decks(id) on delete restrict,
@@ -285,6 +287,7 @@ create table if not exists automation_publishes (
   reason text null,
   reason_detail text null,
   card_ids bigint[] not null default '{}',
+  deferred_card_ids bigint[] not null default '{}',
   snapshot_sha256 text null,
   job_id text null,
   build_id text null,
