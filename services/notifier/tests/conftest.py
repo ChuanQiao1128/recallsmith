@@ -125,6 +125,8 @@ class FakeCore:
     def __init__(self, start: Callable[[Responder], LocalServer]) -> None:
         self.secrets: tuple[str, ...] = (SECRET,)
         self.report_status = 200
+        # Statuses for the next report calls, in order, before report_status applies again.
+        self.report_script: list[int] = []
         self.tick_status = 200
         self.tick_data: dict[str, Any] = {
             "mode": "dry_run",
@@ -140,8 +142,9 @@ class FakeCore:
             return 403, headers, error_envelope("FORBIDDEN")
         body = req.json()
         if req.path == "/api/internal/automation/notifications/report":
-            if self.report_status != 200:
-                return self.report_status, headers, error_envelope("SERVER_ERROR")
+            status = self.report_script.pop(0) if self.report_script else self.report_status
+            if status != 200:
+                return status, headers, error_envelope("SERVER_ERROR")
             return 200, headers, envelope({"notificationId": body["notificationId"], "status": body["status"]})
         if req.path == "/api/internal/automation/tick":
             if self.tick_status != 200:

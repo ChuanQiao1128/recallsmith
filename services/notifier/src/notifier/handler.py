@@ -8,6 +8,7 @@ and never logs a subject, a body, the recipient or an SES message.
 from __future__ import annotations
 
 import json
+import random
 import time
 import uuid
 from collections import OrderedDict
@@ -46,7 +47,9 @@ ERROR_TEXTS = {
 SENT_CACHE_SIZE = 1000
 _sent: OrderedDict[str, str | None] = OrderedDict()
 
-REPORT_RETRY_PAUSES = (1.0, 3.0)
+# R18B contract K6: 3 report attempts, each pause drawn from its (low, high) range, so containers that
+# failed together do not retry together. NotifierReportFailures only when every attempt failed.
+REPORT_RETRY_PAUSES = ((0.5, 1.5), (2.0, 4.0))
 # Kept back from the report budget for the function's own return.
 REPORT_RESERVE_S = 2.0
 # One attempt, under the gateway's 30 s integration timeout; the next tick covers a failure.
@@ -54,6 +57,7 @@ TICK_TIMEOUT_S = 28.0
 
 # Seams for tests (monkeypatched).
 sleep: Callable[[float], None] = time.sleep
+jitter: Callable[[float, float], float] = random.uniform
 
 
 def _default_client_factory(
@@ -185,7 +189,8 @@ def _report(
     }
     remaining = _remaining_s(context)
     budget = remaining - REPORT_RESERVE_S if remaining is not None else None
-    result = client.post(REPORT_PATH, payload, budget_s=budget, retry_pauses=REPORT_RETRY_PAUSES)
+    pauses = [jitter(low, high) for low, high in REPORT_RETRY_PAUSES]
+    result = client.post(REPORT_PATH, payload, budget_s=budget, retry_pauses=pauses)
     if not result.ok:
         emf.report_failure(settings.metrics_namespace)
         log(
@@ -332,7 +337,16 @@ def _handle_sqs(settings: Settings, records: list[Any], context: Any) -> dict[st
     return {"batchItemFailures": failures}
 
 
+def _failed_steps(data: Mapping[str, Any]) -> list[str]:
+    """Core's "failedSteps" (R18B contract K4): the names of swallowed automation failures."""
+    raw = data.get("failedSteps")
+    return [step for step in raw if isinstance(step, str)] if isinstance(raw, list) else []
+
+
 def _handle_job(settings: Settings, job: str) -> dict[str, Any]:
+    if job == "tick":
+        # The heartbeat the tick-missing alarm watches: SQS email deliveries never emit it.
+        emf.tick(settings.metrics_namespace)
     secret = get_secret(settings.internal_secret_ssm_name)
     if secret is None:
         emf.tick_failure(settings.metrics_namespace)
@@ -359,6 +373,7 @@ def _handle_job(settings: Settings, job: str) -> dict[str, Any]:
         else {}
     )
     skipped = data.get("skipped") if isinstance(data.get("skipped"), str) else None
+    failed_steps = _failed_steps(data)
 
     def text(value: Any) -> str | None:
         return value if isinstance(value, str) else None
@@ -373,8 +388,12 @@ def _handle_job(settings: Settings, job: str) -> dict[str, Any]:
         effectiveMode=text(data.get("effectiveMode")),
         skipped=skipped,
         actions=actions,
+        failedSteps=failed_steps,
     )
-    return {"tickId": tick_id, "skipped": skipped, "actions": actions}
+    if failed_steps:
+        # Core answered 200 but swallowed these failures; its AutomationStepFailures alarm counts them.
+        log("warn", TAG, event="tick_steps_failed", job=job, tickId=tick_id, failedSteps=failed_steps)
+    return {"tickId": tick_id, "skipped": skipped, "actions": actions, "failedSteps": failed_steps}
 
 
 def lambda_handler(event: Any, context: Any) -> dict[str, Any]:
