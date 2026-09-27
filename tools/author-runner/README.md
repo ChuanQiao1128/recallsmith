@@ -38,7 +38,10 @@ calls exactly three API routes:
 4. Pin the author configuration (see Author configuration). A checkout it cannot pin (no
    `.claude/skills/author-cards/SKILL.md` with a `Skill version:` line, or no built
    `tools/mcp-server/dist/index.js`) logs `author_config_error`,
-   sends an `error` heartbeat and exits 1 without claiming.
+   sends an `error` heartbeat and exits 1 without claiming. While `<log dir>/runner-state.json` holds
+   a `limitedUntil` in the future (a usage limit, see step 6), the run only re-sends kept `complete`s,
+   sends an `error` heartbeat (`RUNNER_UNAVAILABLE: usage limit until …`, event `usage_limited`) and
+   exits 0 without claiming; a past `limitedUntil` is deleted.
 5. `heartbeat` (`running`). A login failure exits 3. Then re-send every kept `complete` in
    `<log dir>/pending-complete/` (see step 6) once, before any claim; one the server applies (or
    answers `replayed: true`) or refuses with a client error (for example 409 `RUN_NOT_RUNNING` after
@@ -54,7 +57,17 @@ calls exactly three API routes:
    `runs/<runId>.stderr.log`), then `complete` with the outcome and write `last-run.json`. Every
    `complete` is tried up to 3 times with a jittered backoff (about 2 s, then 4 s) unless the server
    refuses it with a client error; when all attempts fail, the request with the agent's notes is kept
-   in `<log dir>/pending-complete/<runId>.json` (`complete_pending`) for the next run.
+   in `<log dir>/pending-complete/<runId>.json` (`complete_pending`) and re-sent before the next
+   claim of the same run (automation-16), while its run is still within its lease, and again by the
+   next launch if that fails too.
+   A failure that affects every item (M5: claude cannot be started, it did not run on the
+   subscription login, the developercards MCP server did not start, or a usage or rate limit in the
+   CLI's result text or stderr) completes the run as `failed` with the error
+   `RUNNER_UNAVAILABLE: <one line>` and ends the loop (`runner_unavailable`): nothing more is claimed,
+   so no other item is charged an attempt. A usage limit also writes `<log dir>/runner-state.json`
+   (`{ limitedUntil, reason }`: the reset time the CLI named, else one hour later). Any other failed
+   run carries the CLI's result subtype and the first 300 characters of its result text on one line
+   (stderr when there is no result message), and the loop goes on with the next item.
 7. Final `heartbeat`: `idle`, or `error` with the last error when a run failed, an item was not run
    or `complete` failed.
 
@@ -79,7 +92,10 @@ load, background priority); a sleeping Mac simply misses runs, and an item whose
 back to the queue on the server.
 
 `DRY_RUN=1 tools/author-runner/scripts/install.sh` runs every check and prints the rendered plist,
-and nothing else, on stdout; it writes nothing and loads nothing.
+and nothing else, on stdout; it writes nothing and loads nothing. The plist sets `DC_REPO_ROOT` and
+`DC_TOKEN_FILE` to the values `install.sh` checked (its own checkout and the default token file
+unless they are set when it runs), so a non-default token file checked at install time is the one
+every hourly run uses. Set any other `DC_*` variable in the plist by hand after installing.
 
 ## Uninstall
 
@@ -109,7 +125,7 @@ Every variable is optional.
 | `DC_RUNNER_LEASE_MINUTES` | `90` | claim lease of one item, 15..240; must be at least `DC_RUNNER_ITEM_TIMEOUT_MINUTES` + 1 |
 | `DC_RUNNER_ITEM_TIMEOUT_MINUTES` | `45` | claude time limit per item, 5..120 |
 | `DC_RUNNER_MODEL` | `claude-opus-5-5` | `claude --model`; a full model id (no whitespace, ≤ 100 characters); a floating alias such as `opus`, `sonnet`, `haiku`, `default` or `opusplan` is refused |
-| `DC_RUNNER_SOURCE_HOSTS` | `docs.aws.amazon.com,aws.amazon.com,platform.claude.com,docs.claude.com,docs.anthropic.com,www.anthropic.com` | the documentation hosts `read_source` may fetch in a run, besides the queue item's own host (comma list of host names) |
+| `DC_RUNNER_SOURCE_HOSTS` | `docs.aws.amazon.com,aws.amazon.com,platform.claude.com,docs.claude.com,docs.anthropic.com,www.anthropic.com` | the only hosts `read_source` may fetch in a run (comma list of host names); the queue item's own host gets no implicit pass, so a feed item on a host not listed here ends `AGENT_BLOCKED` |
 | `DC_RUNNER_CLAUDE_BIN` | `claude` | the Claude Code executable (on `PATH` by default) |
 | `DC_RUNNER_LOG_DIR` | `~/Library/Logs/DeveloperCards` | `runs/` and `last-run.json` |
 | `DC_API_BASE` | `https://api.developercards.app` | as in the MCP server (https, or http only for loopback) |
@@ -135,15 +151,20 @@ An invalid value logs `config_error` naming the variable and its range, and exit
   `item_start` (with `authorConfigId`), `item_done` (with `costUsd`, the CLI's `total_cost_usd`
   estimate), `lease_short`, `bad_item`, `author_config_error`, `heartbeat_failed`, `complete_failed`,
   `complete_pending` (a `complete` kept for the next run), `complete_replayed` (a kept `complete`
-  re-sent; `replayed: true` when the server had already applied it), `api_error`, `finish`,
+  re-sent; `replayed: true` when the server had already applied it), `runner_unavailable` (a
+  run-level failure ended the loop), `usage_limited` (a usage limit holds the runner until the time in
+  `error`), `api_error`, `finish`,
   `unexpected_error`. For example `grep '"event":"login_required"'`.
 - `~/Library/Logs/DeveloperCards/runs/<runId>.{mcp.json,prompt.md,meta.json,json,stderr.log}`: the
   MCP config, the prompt, the run record (`{ runId, itemId, startedAt, finishedAt, outcome,
-  authorConfig, usage: { totalCostUsd, models, apiKeySource } }`), claude's stream-json output (one
+  authorConfigId, authorConfig, usage: { totalCostUsd, models, apiKeySource } }`), claude's stream-json output (one
   message per line: `system`/`init`, the conversation, `result`) and its
   stderr for one item. Files older than **30 days** are deleted at the start of every run.
 - `~/Library/Logs/DeveloperCards/pending-complete/<runId>.json`: `{ savedAt, itemId, request }`, a
-  `complete` request (with the notes as `summary`) that could not be sent; re-sent by the next run.
+  `complete` request (with the notes as `summary`) that could not be sent; re-sent before the next
+  claim or by the next run.
+- `~/Library/Logs/DeveloperCards/runner-state.json`: `{ limitedUntil, reason }` after a usage limit;
+  no run claims before `limitedUntil`. Delete it to retry earlier.
 - `~/Library/Logs/DeveloperCards/last-run.json`: `{ runId, itemId, outcome, finishedAt, durationMs }`
   of the last item; `status` shows it and heartbeats report it.
 
@@ -168,7 +189,9 @@ is needed.
 | `lease_short` | the server granted a lease that ends before `DC_RUNNER_ITEM_TIMEOUT_MINUTES` would; the item is released at once (`complete` `failed`, so the server retries it with its backoff) and the run stops; check the server's lease limit |
 | `bad_item` | the server sent an item with an invalid run id, item id, deck slug or non-https URL; it is not run and is released at once (`complete` `failed`) unless its run id itself is invalid |
 | `author_config_error` | `.claude/skills/author-cards/SKILL.md` is missing or has no `Skill version:` line in `DC_REPO_ROOT`, or `tools/mcp-server/dist/index.js` is not built |
-| `item_done` with `failed` | read `runs/<runId>.stderr.log` and `runs/<runId>.json`; `claude could not be started: ENOENT` means `claude` is not on the job's `PATH` (reinstall after moving it) |
+| `item_done` with `failed` | the error names the CLI result subtype and text; read `runs/<runId>.stderr.log` and `runs/<runId>.json` |
+| `RUNNER_UNAVAILABLE: …` / `runner_unavailable` | a cause that affects every item ended the run after one item; the server requeues that item without charging an attempt. `claude could not be started: ENOENT` means `claude` is not on the job's `PATH` (reinstall after moving it) |
+| `usage_limited` | the Claude subscription's usage or rate limit was hit; no run claims before `limitedUntil` in `runner-state.json` (delete the file to retry earlier) |
 | `timeout` | claude ran longer than the item timeout; its process group got SIGTERM, then SIGKILL 30 s later, and the run is settled at most 5 s after that even if a member of the group lingers |
 | `claude did not run on the subscription login` | claude's `system`/`init` message had no `apiKeySource` or one other than `none` (for example `/login managed key`: a Console API key saved by `/login`), or its result named a Bedrock/Vertex model id; sign `claude` in with the Claude subscription (`/login`, claude.ai account) |
 | `AGENT_BLOCKED: …` | the agent could not do the task (a tool was refused or failed, the source could not be read) and said why; the run is `failed`, so the server retries the item; read the reason and `runs/<runId>.json` |
@@ -188,18 +211,23 @@ run starts:
 - `skillSha256` (every file of the skill directory), `promptSha256` (`prompts/queue-item.md`),
   `claudeArgsSha256` (the claude argument list), `mcpServerSha256` (`tools/mcp-server/dist/index.js`;
   a checkout without it runs nothing, `author_config_error`), `claudeVersion` and `runnerVersion`;
-- `id`: the first 16 hex characters of the SHA-256 of all of the above.
+- `id`: the first 16 hex characters of the SHA-256 of all of the above (a local fingerprint);
+- `authorConfigId` (M1): the lowercase hex SHA-256 of the canonical JSON (sorted keys, no spaces) of
+  `{ argsSha256, model, promptSha256, skillSha256, skillVersion }` (`argsSha256` is
+  `claudeArgsSha256`). It leaves out the Claude Code and runner versions, so a routine Claude Code
+  auto-update does not change it.
 
 The job runs in the owner's working tree, so a branch switch, an uncommitted skill edit or a rebuilt
-MCP server changes `id`. The runner passes the model and skill version to the MCP server
-(`DC_AUTOMATION_AUTHOR_MODEL`, `DC_AUTOMATION_SKILL_VERSION`), which sends them in every draft's
-`agent` block instead of what the model claims. The full configuration is in
-`runs/<runId>.meta.json` and `authorConfigId` is on the `item_start` log line. The runner API has no
-field for it, so the server does not store it yet; binding it to the eval gate needs a server-side
-field (see `docs/delivery/r18-issues/B05-fixes.md`).
+MCP server changes `id`. The runner passes the model, skill version and `authorConfigId` to the MCP
+server (`DC_AUTOMATION_AUTHOR_MODEL`, `DC_AUTOMATION_SKILL_VERSION`,
+`DC_AUTOMATION_AUTHOR_CONFIG_ID`), which sends them in every draft's `agent` block instead of what
+the model claims. The full configuration and `authorConfigId` are in `runs/<runId>.meta.json`, and
+the local `id` is on the `item_start` log line. The eval gate copies `authorConfigId` from the run
+records of its new-facts runs, and a live auto-accept requires the draft's `agent.authorConfigId`
+to equal the gate's (else `AUTHOR_NOT_GATED`, M1).
 
-**A change of author configuration (a new `id`: model, skill, prompt, claude arguments, MCP server
-or Claude Code version) should trigger a new eval gate before the automation runs `live` on it.**
+**A change of `authorConfigId` (model, skill, prompt or claude arguments) needs a new eval gate
+before the automation auto-accepts in `live` on it.** A Claude Code update alone does not.
 
 ## Agent notes
 
@@ -241,11 +269,13 @@ success. The server API is unchanged.
   `--dangerously…` flag. The two `Read(...)` entries only pre-approve those paths; they do **not**
   restrict `Read`. Claude Code allows read-only access inside its working directory (the repo root)
   without a prompt, so the agent can read other files of the checkout, including gitignored ones;
-  only the repo's `.claude/settings.json` deny rules (the token directory) stop a read.
+  only the repo's `.claude/settings.json` deny rules stop a read: the token directory and
+  secret-shaped files of the checkout (`.env*`, `*.tfstate*`, `*.tfvars`, `*.pem`, ai-agent-21).
 - **`read_source` host allowlist.** What keeps such a read from leaving the Mac is egress: in a run
-  `read_source` fetches only the queue item's host and `DC_RUNNER_SOURCE_HOSTS` (passed as
-  `DC_AUTOMATION_SOURCE_HOSTS`), redirects included, and refuses every other host
-  (`SOURCE_HOST_NOT_ALLOWED`). The agent has no other network tool.
+  `read_source` fetches only `DC_RUNNER_SOURCE_HOSTS` (passed as `DC_AUTOMATION_SOURCE_HOSTS`),
+  redirects included, and refuses every other host (`SOURCE_HOST_NOT_ALLOWED`). The queue item's
+  own host is not added (ai-agent-21): a feed can link to any host, and that page could both inject
+  and receive. The agent has no other network tool.
 - **`--strict-mcp-config`.** Only the per-run `runs/<runId>.mcp.json` is loaded (the repo's
   `.mcp.json` is ignored); it starts the local MCP server with `DC_AUTOMATION_RUN_ID`,
   `DC_AUTOMATION_QUEUE_ITEM_ID` and `DC_AUTOMATION_DECK_SLUG` so drafts are tied to the run and deck.
