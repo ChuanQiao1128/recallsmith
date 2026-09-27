@@ -55,6 +55,7 @@ const WebhooksPage = lazy(() => import('./pages/WebhooksPage').then(m => ({ defa
 const LedgerPage = lazy(() => import('./pages/LedgerPage').then(m => ({ default: m.LedgerPage })));
 const ReviewQueuePage = lazy(() => import('./pages/ReviewQueuePage').then(m => ({ default: m.ReviewQueuePage })));
 const DeckQaPage = lazy(() => import('./pages/DeckQaPage').then(m => ({ default: m.DeckQaPage })));
+const AutomationPage = lazy(() => import('./pages/AutomationPage').then(m => ({ default: m.AutomationPage })));
 
 if (typeof window !== 'undefined') {
   void loadDeckList();
@@ -134,6 +135,7 @@ function App() {
                 <Route path="/ledger" element={<LedgerPage />} />
                 <Route path="/review" element={<ReviewQueuePage />} />
                 <Route path="/decks/qa" element={<DeckQaPage />} />
+                <Route path="/automation" element={<AutomationPage />} />
               </Route>
 
               <Route path="*" element={<Navigate to="/" replace />} />
