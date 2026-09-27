@@ -263,8 +263,8 @@ auto-accepts or auto-publishes; the full emergency stop is infra/RUNBOOK.md §7.
 2. **Hold publishing only:** `"AUTOMATION_AUTO_PUBLISH":"0"` + deploy; auto-accept continues, every
    publish goes to a person.
 3. **Narrow the scope:** shrink `AUTOMATION_DECK_SLUGS` + deploy.
-4. **Stop the automation:** `"AUTOMATION_MODE":"off"` + deploy (no data change; pending drafts stay in the
-   review queue).
+4. **Stop the automation:** `"AUTOMATION_MODE":"off"` + deploy (nothing is deleted or undone: pending
+   drafts stay in the review queue, and cards live already auto-accepted stay in their decks, see step 6).
 5. **Stop the runner:** `tools/author-runner/scripts/uninstall.sh` on the Mac.
 6. **Check what live already accepted** (after step 1 or 4). A rollback stops new auto-accepts; it does
    not undo old ones. Cards auto-accepted in live and not yet published are ordinary deck cards now, and

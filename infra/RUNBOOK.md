@@ -243,8 +243,8 @@ source-watch loop). Do the steps that apply, in this order; each takes effect on
    anything that auto-accepts or auto-publishes.
 1. Disable the three schedules with the recipe above: `developercards-source-watch`,
    `developercards-automation-tick`, `developercards-automation-digest` (and first disable the actions of
-   the tick-missing and source-watch-missing alarms). This stops the source watch, the tick (reconcile, batch summaries, runner
-   checks) and the digest. It does **not** stop auto-accept or auto-publish: the runner's complete route
+   the tick-missing and source-watch-missing alarms). This stops the source watch, the tick (reconcile,
+   batch summaries, runner checks) and the digest. It does **not** stop auto-accept or auto-publish: the runner's complete route
    (`POST /api/v1/authoring/automation/runner/complete` → run finalisation) and AI QA results for drafts both finalise runs
    and start publishes without any schedule. Use step 0 or 3 for that.
 2. Stop the email consumer: `aws lambda list-event-source-mappings --function-name developercards-notifier:prod --query 'EventSourceMappings[].UUID'`,
