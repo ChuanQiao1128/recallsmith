@@ -1,0 +1,2 @@
+module.identity.aws_cognito_managed_login_branding.console_dev[0]
+module.identity.aws_cognito_managed_login_branding.spa[0]
