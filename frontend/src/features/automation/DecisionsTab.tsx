@@ -16,9 +16,11 @@
 // Decisions heading when that row is not loaded (C07 frontend-console-18).
 //
 // The checkbox says what the server filter is: routed to a person and still
-// pending (D07 frontend-console-27). Filtering by "Would be accepted" shows
-// every row's verdict, so those rows are recorded as seen and a later
-// decision on them is not counted as blind (frontend-console-25).
+// pending (D07 frontend-console-27). A state or reason filter shows every
+// row's verdict (the filter names it), so those rows are recorded as seen and
+// a later decision on them is not counted as blind (frontend-console-25,
+// generalised beyond would_accept by E05 frontend-console-30). The open
+// exceptions view (state=human&open=1) is such a list, and stays as it is.
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
@@ -32,6 +34,7 @@ import {
   DECISION_STATES,
   automationErrorMessage,
   decisionFiltersFrom,
+  decisionListShowsVerdict,
   decisionReasonLabel,
   decisionStateLabel,
   decisionVerdictHidden,
@@ -144,14 +147,15 @@ export function DecisionsTab({
   }
 
   const shown = openOnly ? list.items.filter(isOpenDecision) : list.items;
-  // The state filter itself tells the verdict of every row it lists.
-  const verdictFiltered = state === 'would_accept';
+  // The state or reason filter itself tells the verdict of every row it lists.
+  const verdictFiltered = decisionListShowsVerdict({ state, reason });
 
   useEffect(() => {
-    if (state !== 'would_accept') return;
+    // Only the list loaded for these filters: a list still loading for another key is not on screen as filtered.
+    if (!verdictFiltered || list.forKey !== key) return;
     const ids = list.items.filter(decisionVerdictHidden).map(d => d.draftId);
     if (ids.length > 0) markVerdictSeen(...ids);
-  }, [state, list.items]);
+  }, [verdictFiltered, list.forKey, list.items, key]);
   const closeSearch = `?${withDecisionFilters(new URLSearchParams({ tab: 'decisions' }), filters).toString()}`;
 
   return (
@@ -236,7 +240,8 @@ export function DecisionsTab({
           ) : loading && list.items.length === 0 ? (
             <p className="text-sm text-slate-600">Loading the decisions…</p>
           ) : (
-            <DecisionTable items={shown} onOpenDecision={onOpenDecision} revealAll={verdictFiltered} />
+            // While another filter's list loads, the rows on screen are not the filtered ones: they keep hiding.
+            <DecisionTable items={shown} onOpenDecision={onOpenDecision} revealAll={verdictFiltered && !loading} />
           )}
         </div>
         {verdictFiltered ? (

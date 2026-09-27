@@ -14,8 +14,9 @@
 // (C07 frontend-console-15). The Email card shows the K6 unconfirmed count (L5).
 //
 // The shadow agreement is the blind pair with the server's own rate (M3, D07
-// frontend-console-22), the totals under it and the progress toward the
-// runbook's 100 blind decisions. Live quality (M2) shows the four numbers of
+// frontend-console-22), the totals under it and the runbook's go-live floor
+// with both halves, at least 100 blind decisions and at least 95% blind
+// agreement, and whether it is met (E05 frontend-console-34). Live quality (M2) shows the four numbers of
 // status.live; an older server without the block gets one line instead.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -44,6 +45,7 @@ import {
   runnerStateTone,
   liveOverrideRateText,
   shadowAgreementText,
+  shadowFloorMet,
   shadowThresholdText,
   shadowTotalsText,
 } from '../../lib/automationRules';
@@ -355,9 +357,18 @@ export function OverviewTab({
               {shadowTotalsText(status.shadow)}
             </p>
             {shadowThresholdText(status.shadow) ? (
-              <p className="text-xs text-slate-600 mt-1" data-testid="automation-shadow-threshold">
-                Go-live floor: {shadowThresholdText(status.shadow)}
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <p className="text-xs text-slate-600" data-testid="automation-shadow-threshold">
+                  Go-live floor: {shadowThresholdText(status.shadow)}
+                </p>
+                <span data-testid="automation-shadow-floor-met">
+                  {shadowFloorMet(status.shadow) ? (
+                    <Badge tone="success">Met</Badge>
+                  ) : (
+                    <Badge tone="warning">Not met</Badge>
+                  )}
+                </span>
+              </div>
             ) : null}
           </section>
 

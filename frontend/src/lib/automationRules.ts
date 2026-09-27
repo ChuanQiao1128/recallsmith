@@ -21,7 +21,11 @@ export const DECISION_STATES = [
   'superseded',
 ] as const;
 
-/** A00 §5.9, in contract order. HUMAN_ACTION is event-only: it has a label but is not a decision reason. */
+/**
+ * A00 §5.9, in contract order (AutomationReasons.DecisionReasons; AUTHOR_NOT_GATED
+ * is migration 036's addition, R18D M1). HUMAN_ACTION is event-only: it has a
+ * label but is not a decision reason.
+ */
 export const DECISION_REASONS = [
   'RUN_NOT_RUNNING',
   'DECK_MISMATCH',
@@ -42,6 +46,7 @@ export const DECISION_REASONS = [
   'MODE_OFF',
   'DECK_DELETED',
   'DECIDED_BY_HUMAN',
+  'AUTHOR_NOT_GATED',
 ] as const;
 
 export const PUBLISH_STATES = ['waiting', 'publishing', 'published', 'would_publish', 'human'] as const;
@@ -129,6 +134,7 @@ export const DECISION_REASON_LABELS: Record<string, string> = {
   MODE_OFF: 'Automation was off',
   DECK_DELETED: 'Deck deleted',
   DECIDED_BY_HUMAN: 'A person decided first',
+  AUTHOR_NOT_GATED: 'Author configuration differs from the eval gate',
   HUMAN_ACTION: 'A person decided',
 };
 
@@ -224,18 +230,51 @@ export function decisionAwaitsPerson(d: { state: string; humanAction: string | n
 
 /**
  * Whether the Automation page hides a decision's verdict until the person
- * decides (D07 frontend-console-25): a dry-run draft nobody has decided that is
- * not routed to a person, i.e. a would-accept verdict or one still in AI QA.
- * The dry-run shadow agreement counts a decision as blind only when this
- * verdict was not seen first. A routed (`human`) row stays visible: it is the
- * exception inbox, and its reason is why the person is involved.
+ * decides (D07 frontend-console-25, E05 frontend-console-30, N5): every
+ * dry-run draft still pending that nobody has decided, whatever its state, the
+ * review queue's automationBlinded rule. The dry-run shadow agreement counts a
+ * decision as blind only when this verdict was not seen first. Hiding only the
+ * would-accept rows gave them away by elimination: next to routed rows showing
+ * "Needs you" and a reason, the hidden badge meant would_accept one to one.
+ * A superseded or auto-accepted draft is decided, so it is never hidden.
  */
 export function decisionVerdictHidden(d: { mode: string; state: string; humanAction: string | null }): boolean {
-  return (
-    d.mode === 'dry_run' &&
-    d.humanAction === null &&
-    (d.state === 'would_accept' || d.state === 'qa_pending' || d.state === 'qa_queued')
-  );
+  return d.mode === 'dry_run' && d.humanAction === null && d.state !== 'superseded' && d.state !== 'auto_accepted';
+}
+
+/**
+ * Whether a Decisions list's own filter tells the verdict of every row it
+ * lists (frontend-console-30): a state filter names the state, and a reason
+ * filter names the reason, which only a routed or superseded decision has. The
+ * rows of such a list are shown and recorded as seen, so a later decision on
+ * them is not counted as blind.
+ */
+export function decisionListShowsVerdict(filters: { state: string; reason: string }): boolean {
+  return filters.state !== '' || filters.reason !== '';
+}
+
+/** The run table's cell in place of a run's state split while a draft of it may be pending (N5). */
+export const RUN_SPLIT_HIDDEN_TEXT = 'split hidden until every draft is decided (dry run)';
+
+/**
+ * Whether the Runs table shows a run's split by state (submitted / auto-accepted
+ * / would accept / need you / superseded, and In QA) (frontend-console-30, N5).
+ * The split tells the verdict of a run's drafts by elimination, so while the
+ * effective mode is not live it shows only once none of the run's drafts can be
+ * pending: the counts alone prove it (every draft superseded or auto-accepted),
+ * or the run's decisions are all loaded and none of them is hidden. A
+ * would_accept or human decision keeps its state after a person decides
+ * (A00 §5.3), so the counts alone cannot tell a decided one from a pending one.
+ * An unknown mode (the status not loaded) counts as not live.
+ */
+export function runSplitShown(
+  counts: { qaPending: number; qaQueued: number; wouldAccept: number; human: number },
+  effectiveMode: string | null,
+  loadedDecisions: { items: Array<{ mode: string; state: string; humanAction: string | null }>; complete: boolean } | null,
+): boolean {
+  if (effectiveMode === 'live') return true;
+  if (counts.qaPending + counts.qaQueued + counts.wouldAccept + counts.human === 0) return true;
+  return loadedDecisions !== null && loadedDecisions.complete && !loadedDecisions.items.some(decisionVerdictHidden);
 }
 
 /** The badge of a hidden verdict, the review queue's words. */
@@ -244,7 +283,12 @@ export const HIDDEN_VERDICT_TEXT = 'Verdict hidden until you decide';
 export const REVEAL_VERDICT_WARNING =
   'Dry run: the verdict stays hidden so that your decision in the review queue counts as blind. Revealing it here counts that decision as not blind.';
 
-/** Whether a routed decision can be decided now: the Decide link of the exception inbox (D07 frontend-console-27). */
+/**
+ * Whether a routed decision can be decided now: the Decide link of the exception
+ * inbox (D07 frontend-console-27). A row whose verdict is hidden gets the same
+ * link whatever its state (frontend-console-30), so the link never tells a
+ * routed row from a would-accept one.
+ */
 export function decisionDecidable(d: { state: string; humanAction: string | null }): boolean {
   return d.state === 'human' && d.humanAction === null;
 }
@@ -577,8 +621,10 @@ export function formatAge(iso: string | null, nowMs: number): string {
   return `${Math.floor(hours / 24)} d ago`;
 }
 
-/** The runbook's go-live floor: at least this many would-accept drafts decided blind (30 days). */
+/** The runbook's go-live floor: at least this many would-accept drafts decided blind (30 days)... */
 export const SHADOW_BLIND_DECISIONS_TARGET = 100;
+/** ...and at least this blind agreement rate (blindAccepted / blindDecided, the server's rate). */
+export const SHADOW_AGREEMENT_TARGET = 0.95;
 
 type ShadowCounts = {
   humanDecided: number;
@@ -609,10 +655,25 @@ export function shadowTotalsText(shadow: ShadowCounts): string {
   return `${decidedAll}, ${Math.max(0, shadow.humanDecided - shadow.blindDecided)} of them after seeing the verdict.`;
 }
 
-/** Progress toward the go-live floor of blind decisions; null when the server does not count them. */
+function percent(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`;
+}
+
+/**
+ * The runbook's go-live floor, both halves (frontend-console-34): at least 100
+ * blind decisions and a blind agreement of at least 95%, each with the
+ * server's number; null when the server does not count blind decisions.
+ */
 export function shadowThresholdText(shadow: ShadowCounts, target = SHADOW_BLIND_DECISIONS_TARGET): string | null {
   if (shadow.blindDecided === null) return null;
-  return `${shadow.blindDecided} / ${target} blind decisions`;
+  const rate = shadow.agreementRate === null ? 'no rate yet' : percent(shadow.agreementRate);
+  return `≥ ${target} blind decisions (${shadow.blindDecided}) and ≥ ${percent(SHADOW_AGREEMENT_TARGET)} agreement (${rate})`;
+}
+
+/** Whether both halves of the go-live floor are met; null when the server does not count blind decisions. */
+export function shadowFloorMet(shadow: ShadowCounts, target = SHADOW_BLIND_DECISIONS_TARGET): boolean | null {
+  if (shadow.blindDecided === null) return null;
+  return shadow.blindDecided >= target && shadow.agreementRate !== null && shadow.agreementRate >= SHADOW_AGREEMENT_TARGET;
 }
 
 /** M2: the live override rate as a percentage; '—' when nothing was auto-accepted. */
