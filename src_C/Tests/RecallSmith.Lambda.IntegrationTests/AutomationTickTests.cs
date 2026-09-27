@@ -297,7 +297,8 @@ public class AutomationTickTests
 
   // ---------------------------------------------------------------- step 6
 
-  private static async Task<(long DeckId, string JobId, long PublishId, Guid RunId)> PublishingAsync(A04Kit.Sql sql, string jobStatus, string? error = null)
+  private static async Task<(long DeckId, string JobId, long PublishId, Guid RunId)> PublishingAsync(A04Kit.Sql sql, string jobStatus, string? error = null,
+    int attempts = 0)
   {
     var deck = await A04Kit.PublishedDeckAsync(sql, "recon");
     var runId = await A04Kit.RunAsync(sql, "sub", deck.Id, "completed");
@@ -306,8 +307,8 @@ public class AutomationTickTests
       "insert into deck_publishes (deck_id, deck_slug, build_id, s3_key, job_id, status, error_message, published_by_admin_sub) values ($1, $2, $3, 'content/x', $4, $5, $6, 'automation')",
       deck.Id, deck.Slug, $"b-{Guid.NewGuid():N}"[..20], jobId, jobStatus, error);
     var publishId = A04Kit.Long(await sql.ScalarAsync(
-      "insert into automation_publishes (deck_id, run_id, mode, state, job_id, card_ids) values ($1, $2, 'live', 'publishing', $3, '{}') returning id",
-      deck.Id, runId, jobId));
+      "insert into automation_publishes (deck_id, run_id, mode, state, job_id, card_ids, attempts) values ($1, $2, 'live', 'publishing', $3, '{}', $4) returning id",
+      deck.Id, runId, jobId, attempts));
     return (deck.Id, jobId, publishId, runId);
   }
 
@@ -343,7 +344,8 @@ public class AutomationTickTests
     {
       await scope.GateAsync(sql);
       var error = "AI_QA_STALE: " + new string('x', 400);
-      var p = await PublishingAsync(sql, "FAILED", error);
+      // Stale attempts exhausted: the last one goes to a human (earlier ones re-evaluate, Tick_StaleJob_ReEvaluatesThenPublishes).
+      var p = await PublishingAsync(sql, "FAILED", error, AutoPublisher.MaxStaleAttempts - 1);
 
       var data = await TickDataAsync();
 
@@ -387,6 +389,175 @@ public class AutomationTickTests
       Assert.Equal(("human", "PUBLISH_WAIT_TIMEOUT"), ((string)row["state"]!, (string)row["reason"]!));
       Assert.NotNull(row["finished_at"]);
       Assert.Equal("publish_blocked", (await NotificationAsync(sql, $"exception:publish_blocked:{fresh}"))!["subkind"]);
+    });
+  }
+
+  // ---------------------------------------------------------------- the publish lifecycle across runs (R18B B01)
+
+  /// <summary>A card auto-accepted through the real submit + draft-QA path in the scratch database.</summary>
+  private static async Task<long> AutoAcceptAsync(A04Kit.Sql sql, string sub, long deckId, Guid runId, string question)
+  {
+    var draftId = (await AutomationTestKit.SubmitDraftsAsync(AutomationTestKit.Ctx(sub), deckId, runId,
+      AutomationTestKit.Card(AutomationTestKit.Uid("life"), question)))[0];
+    var job = (await sql.QueryAsync("select state, reason, qa_job_id, qa_content_sha256 from automation_draft_decisions where draft_id = $1", draftId)).Single();
+    Assert.True(job["qa_job_id"] is Guid, $"draft not queued for QA: {job["state"]} {job["reason"]}");
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport((Guid)job["qa_job_id"]!, draftId, (string)job["qa_content_sha256"]!)));
+    var d = (await sql.QueryAsync("select state, accepted_card_id from automation_draft_decisions where draft_id = $1", draftId)).Single();
+    Assert.Equal("auto_accepted", d["state"]);
+    return A04Kit.Long(d["accepted_card_id"]);
+  }
+
+  private static async Task<bool> CompleteAndFinalizeAsync(A04Kit.Sql sql, Guid runId)
+  {
+    await sql.QueryAsync("update automation_runs set status = 'completed', outcome = 'done', completed_at = now() where run_id = $1", runId);
+    await using var conn = await sql.OpenAsync();
+    return await AutomationRuns.TryFinalizeAsync(conn, runId);
+  }
+
+  /// <summary>What the Worker's CompleteJobAsync does on success: the job is SUCCESS and the deck's live build is its build.</summary>
+  private static async Task WorkerSucceedsAsync(A04Kit.Sql sql, string jobId)
+  {
+    await sql.QueryAsync("update deck_publishes set status = 'SUCCESS', updated_at = now() where job_id = $1", jobId);
+    await sql.QueryAsync("update decks d set live_build_id = p.build_id from deck_publishes p where p.job_id = $1 and d.id = p.deck_id", jobId);
+  }
+
+  private static string? Subject(Dictionary<string, object?>? notification) => notification?["subject"] as string;
+
+  [Fact]
+  public async Task Tick_RunFinalisedDuringPublish_GetsItsOwnPublishAndSummary()
+  {
+    await using var scope = new A04Kit.Scope(AutomationMode.Live);
+    await InScratchAsync(scope, async sql =>
+    {
+      await scope.GateAsync(sql);
+      var sub = AutomationTestKit.Sub("inflight");
+      var deck = await A04Kit.PublishedDeckAsync(sql, "inflight");
+      var runA = await A04Kit.RunAsync(sql, sub, deck.Id);
+      var runB = await A04Kit.RunAsync(sql, sub, deck.Id);
+
+      // Run A: accepted, finalised, its publish starts (job PENDING, snapshot bound to A's card).
+      var cardA = await AutoAcceptAsync(sql, sub, deck.Id, runA, "Which synthetic ferry leaves the harbour first?");
+      Assert.True(await CompleteAndFinalizeAsync(sql, runA));
+      var rowA = (await sql.QueryAsync("select id, state, job_id from automation_publishes where run_id = $1", runA)).Single();
+      Assert.Equal("publishing", rowA["state"]);
+      var publishA = A04Kit.Long(rowA["id"]);
+      var jobA = (string)rowA["job_id"]!;
+
+      // Run B: its card lands after A's snapshot; B finalises while A's row is still publishing.
+      var cardB = await AutoAcceptAsync(sql, sub, deck.Id, runB, "What does a synthetic tugboat tow across the estuary?");
+      Assert.True(await CompleteAndFinalizeAsync(sql, runB));
+      var inFlight = await A04Kit.PublishRowAsync(sql, publishA);
+      Assert.Equal("publishing", inFlight["state"]);
+      Assert.Equal(new[] { cardA }, (long[])inFlight["card_ids"]!);
+      Assert.Equal(new[] { cardB }, (long[])inFlight["deferred_card_ids"]!);
+      Assert.Equal(1, await sql.CountAsync("select count(*) from automation_publishes where deck_id = $1", deck.Id));
+
+      // A's job still runs: no summary for either run yet.
+      await TickDataAsync();
+      Assert.Null(await NotificationAsync(sql, $"batch:{runA:D}"));
+      Assert.Null(await NotificationAsync(sql, $"batch:{runB:D}"));
+
+      // A's job succeeds with A's snapshot only. The tick publishes A's row with A's card and opens B's own row.
+      await WorkerSucceedsAsync(sql, jobA);
+      var data = await TickDataAsync();
+
+      Assert.Equal(1, Action(data, "publishesReconciled"));
+      Assert.Equal(1, Action(data, "publishesStarted"));
+      var doneA = await A04Kit.PublishRowAsync(sql, publishA);
+      Assert.Equal("published", doneA["state"]);
+      Assert.Equal(new[] { cardA }, (long[])doneA["card_ids"]!);
+      Assert.Empty((long[])doneA["deferred_card_ids"]!);
+      var rowB = (await sql.QueryAsync("select * from automation_publishes where deck_id = $1 and id <> $2", deck.Id, publishA)).Single();
+      Assert.Equal(("publishing", runB), ((string)rowB["state"]!, (Guid)rowB["run_id"]!));
+      Assert.Equal(new[] { cardB }, (long[])rowB["card_ids"]!);
+      var jobB = (string)rowB["job_id"]!;
+      Assert.NotEqual(jobA, jobB);
+      Assert.Equal(2, scope.PublishSent.Count);
+
+      // A's summary says published; B's waits for its own build instead of claiming A's.
+      Assert.EndsWith(": 1 auto-accepted, 0 need you, published", Subject(await NotificationAsync(sql, $"batch:{runA:D}")));
+      Assert.Null(await NotificationAsync(sql, $"batch:{runB:D}"));
+
+      await WorkerSucceedsAsync(sql, jobB);
+      await TickDataAsync();
+      Assert.Equal("published", (await A04Kit.PublishRowAsync(sql, A04Kit.Long(rowB["id"])))["state"]);
+      Assert.EndsWith(": 1 auto-accepted, 0 need you, published", Subject(await NotificationAsync(sql, $"batch:{runB:D}")));
+      Assert.Equal(0, await sql.CountAsync("select count(*) from automation_notifications where subkind = 'publish_failed'"));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_StaleJob_ReEvaluatesThenPublishes()
+  {
+    await using var scope = new A04Kit.Scope(AutomationMode.Live);
+    await InScratchAsync(scope, async sql =>
+    {
+      await scope.GateAsync(sql);
+      var sub = AutomationTestKit.Sub("stale");
+      var deck = await A04Kit.PublishedDeckAsync(sql, "stale");
+      var runA = await A04Kit.RunAsync(sql, sub, deck.Id);
+      var runB = await A04Kit.RunAsync(sql, sub, deck.Id);
+      var cardA = await AutoAcceptAsync(sql, sub, deck.Id, runA, "Which synthetic lighthouse blinks twice?");
+      Assert.True(await CompleteAndFinalizeAsync(sql, runA));
+      var rowA = (await sql.QueryAsync("select id, job_id from automation_publishes where run_id = $1", runA)).Single();
+      var publishA = A04Kit.Long(rowA["id"]);
+
+      // B's accept lands while A's job is still PENDING: the Worker then refuses A's snapshot as stale.
+      var cardB = await AutoAcceptAsync(sql, sub, deck.Id, runB, "How does a synthetic orchard survive a late frost?");
+      Assert.True(await CompleteAndFinalizeAsync(sql, runB));
+      await sql.QueryAsync("update deck_publishes set status = 'FAILED', error_message = $2, updated_at = now() where job_id = $1",
+        (string)rowA["job_id"]!, "AI_QA_STALE: cards changed after the AI QA publish gate passed; publish again");
+
+      var data = await TickDataAsync();
+
+      // Automation-only changes: no exception, the same row re-evaluates with both runs' cards and publishes again.
+      Assert.Equal(1, Action(data, "publishesStarted"));
+      var row = await A04Kit.PublishRowAsync(sql, publishA);
+      Assert.Equal(("publishing", 1), ((string)row["state"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture)));
+      Assert.Equal(new[] { cardA, cardB }.Order().ToArray(), (long[])row["card_ids"]!);
+      Assert.Empty((long[])row["deferred_card_ids"]!);
+      Assert.NotEqual(rowA["job_id"], row["job_id"]);
+      Assert.Equal(0, await sql.CountAsync("select count(*) from automation_notifications where kind = 'exception'"));
+      Assert.Equal(1, await sql.CountAsync("select count(*) from automation_publishes where deck_id = $1", deck.Id));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_EvaluationLostAfterFinalisation_IsRetried()
+  {
+    await using var scope = new A04Kit.Scope(AutomationMode.Live);
+    await InScratchAsync(scope, async sql =>
+    {
+      await scope.GateAsync(sql);
+      var sub = AutomationTestKit.Sub("lost");
+      var deck = await A04Kit.PublishedDeckAsync(sql, "lost");
+      var runId = await A04Kit.RunAsync(sql, sub, deck.Id);
+      var cardId = await AutoAcceptAsync(sql, sub, deck.Id, runId, "Which synthetic canal lock opens at dawn?");
+
+      // The process dies between the finalisation commit and the evaluation.
+      string stdout;
+      AutomationRuns.TestAfterCommitSeam = _ => throw new TimeoutException("synthetic crash after the finalisation commit");
+      try
+      {
+        stdout = await EmfCapture.StdoutAsync(async () => Assert.False(await CompleteAndFinalizeAsync(sql, runId)));
+      }
+      finally
+      {
+        AutomationRuns.TestAfterCommitSeam = null;
+      }
+      Assert.Equal(1, EmfCapture.GaugeSum(stdout, AutomationFailures.StepFailuresMetric));
+      Assert.NotNull(await sql.ScalarAsync("select finalized_at from automation_runs where run_id = $1", runId));
+      var intent = (await sql.QueryAsync("select id, state, card_ids from automation_publishes where deck_id = $1", deck.Id)).Single();
+      Assert.Equal("waiting", intent["state"]);
+      Assert.Equal(new[] { cardId }, (long[])intent["card_ids"]!);
+      Assert.Empty(scope.PublishSent);
+
+      var data = await TickDataAsync();
+
+      Assert.Equal(1, Action(data, "publishesStarted"));
+      Assert.Equal("publishing", (await A04Kit.PublishRowAsync(sql, A04Kit.Long(intent["id"])))["state"]);
+      Assert.Single(scope.PublishSent);
+      Assert.Null(await NotificationAsync(sql, $"batch:{runId:D}"));
     });
   }
 
@@ -635,6 +806,100 @@ public class AutomationTickTests
       // One email per event.
       await TickDataAsync();
       Assert.Equal(1, await sql.CountAsync("select count(*) from automation_notifications where kind = 'source_changed'"));
+    });
+  }
+
+  // ---------------------------------------------------------------- self-failure metric and budget (R18B K4, B01)
+
+  [Fact]
+  public async Task Tick_SwallowedFailures_EmitMetricAndFailedSteps()
+  {
+    await using var scope = new A04Kit.Scope(AutomationMode.Live);
+    await InScratchAsync(scope, async sql =>
+    {
+      await scope.GateAsync(sql);
+      // A failure the step itself throws (finalize: the stale-run update) and one it swallows inside (reconcile).
+      var deckId = await DeckAsync(sql, "fail");
+      var stale = await A04Kit.RunAsync(sql, "sub", deckId);
+      await sql.QueryAsync("update automation_runs set started_at = now() - interval '7 hours' where run_id = $1", stale);
+      await PublishingAsync(sql, "SUCCESS");
+      await sql.QueryAsync(
+        """
+        create function it_b01_fail() returns trigger language plpgsql as $$ begin raise exception 'synthetic step failure'; end $$;
+        create trigger it_b01_fail_runs before update on automation_runs for each row execute function it_b01_fail();
+        create trigger it_b01_fail_publishes before update on automation_publishes for each row execute function it_b01_fail();
+        """);
+
+      JsonElement data = default;
+      var stdout = await EmfCapture.StdoutAsync(async () => data = await TickDataAsync());
+
+      Assert.Equal(["reconcile", "finalize"], data.GetProperty("failedSteps").EnumerateArray().Select(e => e.GetString()!).Take(2).ToArray());
+      Assert.True(EmfCapture.GaugeSum(stdout, AutomationFailures.StepFailuresMetric) >= 2);
+      using var contract = JsonDocument.Parse(A04Kit.ContractTickResponseJson);
+      Assert.Equal(A04Kit.Keys(contract.RootElement), A04Kit.Keys(data));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_NoFailures_AnswersEmptyFailedSteps()
+  {
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async _ =>
+    {
+      JsonElement data = default;
+      var stdout = await EmfCapture.StdoutAsync(async () => data = await TickDataAsync());
+
+      Assert.Equal(JsonValueKind.Array, data.GetProperty("failedSteps").ValueKind);
+      Assert.Equal(0, data.GetProperty("failedSteps").GetArrayLength());
+      Assert.Equal(0, EmfCapture.GaugeSum(stdout, AutomationFailures.StepFailuresMetric));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_Budget_StopsInsideAStepLoop()
+  {
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var sub = AutomationTestKit.Sub("budget");
+      var deckId = await DeckAsync(sql, "budget");
+      var runId = await A04Kit.RunAsync(sql, sub, deckId);
+      var failing = new AutomationTestKit.Scope();
+      var savedBudget = AutomationTick.Budget;
+      try
+      {
+        failing.FailSends = true;
+        string[] questions = ["Which synthetic glacier moves slowest in winter?", "What keeps a synthetic windmill turning at night?",
+          "How does a synthetic orchard survive frost?"];
+        var cards = questions.Select((q, i) => AutomationTestKit.Card(AutomationTestKit.Uid($"budget{i}"), q)).ToArray();
+        await AutomationTestKit.SubmitDraftsAsync(AutomationTestKit.Ctx(sub), deckId, runId, cards);
+        Assert.Equal(3, await sql.CountAsync("select count(*) from automation_draft_decisions where run_id = $1 and state = 'qa_pending'", runId));
+        failing.FailSends = false;
+
+        // Every QA send takes longer than the whole budget: the first retry runs, the loop stops before the second.
+        var capture = RecallSmith.Lambda.Vpc.Qa.QaRuns.TestSendSeam!;
+        RecallSmith.Lambda.Vpc.Qa.QaRuns.TestSendSeam = async r =>
+        {
+          await Task.Delay(TimeSpan.FromMilliseconds(1500));
+          await capture(r);
+        };
+        AutomationTick.Budget = TimeSpan.FromSeconds(1);
+
+        var data = await TickDataAsync();
+
+        Assert.Equal(1, Action(data, "qaRetried"));
+        Assert.Contains(AutomationTick.BudgetExhausted, data.GetProperty("failedSteps").EnumerateArray().Select(e => e.GetString()));
+        Assert.Equal(2, await sql.CountAsync("select count(*) from automation_draft_decisions where run_id = $1 and state = 'qa_pending'", runId));
+
+        // The next tick picks up the rest.
+        AutomationTick.Budget = savedBudget;
+        Assert.Equal(2, Action(await TickDataAsync(), "qaRetried"));
+      }
+      finally
+      {
+        AutomationTick.Budget = savedBudget;
+        failing.Dispose();
+      }
     });
   }
 
