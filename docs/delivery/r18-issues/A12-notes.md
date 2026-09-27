@@ -39,4 +39,8 @@ Both brandings have no assets, so neither resource carries an `asset` block.
 
 ## Plan (read-only mode (b), `-lock=false`, 2026-09-28)
 
-PLAN_LINE_PLACEHOLDER
+`Plan: 2 to import, 0 to add, 0 to change, 0 to destroy.`
+
+`check-plan.py --allow docs/delivery/r18-issues/A12.plan-allow.json --summary`: `PLAN OK 0`,
+`SUMMARY imports=2 no-op=263 create=0 update=0 delete=0 replace=0 outputs=0`; both imports have action `no-op`.
+A10/A11 were already applied in prod at plan time, so no predecessor entries were pending.
