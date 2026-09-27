@@ -23,6 +23,9 @@ public static class QaGate
   public const string EnabledEnv = "AI_QA_ENABLED";
   public const string RequiredEnv = "AI_QA_REQUIRED";
 
+  /// <summary>EMF gauge emitted once per publish refused by the gate (informational; the code is on the log line).</summary>
+  public const string RefusalsMetric = "QaGateRefusals";
+
   private const int MaxListed = 10;
 
   /// <summary>Live cards of the deck that are new or changed since the live build, in deck order.</summary>
@@ -128,6 +131,7 @@ public static class QaGate
     if (missing.Count > 0)
     {
       Log.Event("info", new { tag = "ai_qa", outcome = "publish_refused", code = "AI_QA_REQUIRED", deckId, cards = missing.Count });
+      RouteMetrics.EmitGauge(RefusalsMetric, 1);
       return Helpers.ErrorEnvelope(res, 409, "AI_QA_REQUIRED",
         $"AI QA required for {missing.Count} card(s): {string.Join(", ", missing.Take(MaxListed).Select(c => c.StableUid))}");
     }
@@ -135,6 +139,7 @@ public static class QaGate
     if (state.OpenBlockers.Count > 0)
     {
       Log.Event("info", new { tag = "ai_qa", outcome = "publish_refused", code = "AI_QA_BLOCKED", deckId, blockers = state.OpenBlockers.Count });
+      RouteMetrics.EmitGauge(RefusalsMetric, 1);
       return Helpers.ErrorEnvelope(res, 409, "AI_QA_BLOCKED",
         $"AI QA blocked by {state.OpenBlockers.Count} open blocker finding(s): {string.Join(", ", state.OpenBlockers.Take(MaxListed).Select(b => $"{b.StableUid}: {b.Category}"))}");
     }

@@ -8,13 +8,18 @@ namespace RecallSmith.Lambda.Db;
 /// Automation Ledger writer (R18 J08, contract §9.2): one <c>automation_events</c> row per automation run,
 /// idempotent on <c>dedupe_key</c>. Minutes are never stored here; the ledger routes derive them at query
 /// time from the current baselines. Best-effort (contract §0.8): <see cref="RecordAsync"/> never throws, and a
-/// database without migration 028 produces one warn line.
+/// database without migration 028 produces one warn line. Every dropped write also emits one
+/// <see cref="WriteFailuresMetric"/> gauge.
 /// </summary>
 public static class AutomationLedger
 {
   public static readonly IReadOnlyList<string> Automations = ["publish_pipeline", "bulk_import", "ai_draft_review", "ai_qa_review", "webhook_notification", "publish_gate"];
 
   public const int MaxRefLength = 200;
+
+  /// <summary>EMF gauge (namespace DeveloperCards, no dimensions) emitted once per dropped write, so the
+  /// ledger's write-loss rate can be alarmed on.</summary>
+  public const string WriteFailuresMetric = "LedgerWriteFailures";
 
   /// <summary>
   /// Inserts one event row in a single statement (<c>on conflict (dedupe_key) do nothing</c>). Never throws.
@@ -42,10 +47,12 @@ public static class AutomationLedger
     catch (PostgresException pg) when (pg.SqlState is "42P01" or "42703")
     {
       Log.Event("warn", new { tag = "ledger", reason = "schema_not_ready", sqlState = pg.SqlState, automation = e.Automation });
+      RouteMetrics.EmitGauge(WriteFailuresMetric, 1);
     }
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "ledger", reason = "record_failed", automation = e.Automation, error = ex.Message });
+      RouteMetrics.EmitGauge(WriteFailuresMetric, 1);
     }
   }
 }

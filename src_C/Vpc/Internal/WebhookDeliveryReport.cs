@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
 using Npgsql;
@@ -10,12 +11,14 @@ namespace RecallSmith.Lambda.Vpc.Internal;
 /// <summary>
 /// POST /api/internal/webhooks/deliveries/report (R18 J03, contract §6.5.3): the webhook dispatcher
 /// reports every delivery attempt here, HMAC-signed (§4.3). One statement updates the delivery row and
-/// answers whether the dispatcher should stop (subscription deleted or inactive). A delivered row never
-/// moves backwards: only its attempt count may grow.
+/// answers whether the dispatcher should stop (subscription deleted or inactive). A terminal row
+/// (delivered, failed, dead) never moves, and a stale report (lower attempt) never overwrites a newer one:
+/// only the attempt count may grow. A retry that is told to stop is recorded as failed.
 /// </summary>
 public static class WebhookDeliveryReport
 {
   public const int MaxErrorLength = 500;
+  public const string SubscriptionInactiveError = "subscription inactive";
 
   private static readonly Dictionary<string, string> OutcomeStatus = new(StringComparer.Ordinal)
   {
@@ -88,34 +91,54 @@ public static class WebhookDeliveryReport
 
     try
     {
-      // One statement. A row already 'delivered' keeps its status, delivered_at, last_status_code and
-      // last_error; only attempts may grow. `returning` also yields d.event for the ledger (§9.3).
+      // One statement, so the transition is decided against the row as it is now:
+      // - A terminal row ('delivered', 'failed', 'dead') keeps its status, delivered_at, last_status_code
+      //   and last_error; only attempts may grow. So does any row when the report is stale (its attempt
+      //   is lower than the one already recorded), since SQS may run a message twice.
+      // - A 'retry' for a deleted or inactive subscription is written as the terminal 'failed', because
+      //   the same statement answers stop=true and the dispatcher then acks without another attempt, so
+      //   no later report would ever resolve a 'retrying' row.
+      // `returning` also yields the event id and subscription for the ledger (§9.3).
       var rows = await DbUtil.QueryAsync(conn, null,
         """
         update webhook_deliveries d set
           attempts = greatest(d.attempts, $2),
-          status = case when d.status = 'delivered' then d.status else $3 end,
-          last_status_code = case when d.status = 'delivered' then d.last_status_code else $4::int end,
-          last_error = case when d.status = 'delivered' then d.last_error else $5::text end,
-          delivered_at = case when d.status <> 'delivered' and $3 = 'delivered' then now() else d.delivered_at end,
+          status = case
+            when d.status in ('delivered','failed','dead') or $2 < d.attempts then d.status
+            when $3 = 'retrying' and (s.deleted_at is not null or not s.is_active) then 'failed'
+            else $3 end,
+          last_status_code = case
+            when d.status in ('delivered','failed','dead') or $2 < d.attempts then d.last_status_code
+            else $4::int end,
+          last_error = case
+            when d.status in ('delivered','failed','dead') or $2 < d.attempts then d.last_error
+            when $3 = 'retrying' and (s.deleted_at is not null or not s.is_active) then $6::text
+            else $5::text end,
+          delivered_at = case
+            when d.status not in ('delivered','failed','dead') and $2 >= d.attempts and $3 = 'delivered' then now()
+            else d.delivered_at end,
           updated_at = now()
         from webhook_subscriptions s
         where d.delivery_id = $1 and s.id = d.subscription_id
         returning d.delivery_id as "deliveryId", d.status as "status", d.event as "event",
+                  d.event_id as "eventId", d.subscription_id as "subscriptionId",
                   (s.deleted_at is not null or not s.is_active) as "stop"
         """,
-        [deliveryId, attempt, status, statusCode, error]);
+        [deliveryId, attempt, status, statusCode, error, SubscriptionInactiveError]);
 
       if (rows.Count == 0) return Helpers.ErrorEnvelope(res, 404, "DELIVERY_NOT_FOUND", $"Delivery {deliveryId} not found");
 
       var row = rows[0];
 
-      // Automation Ledger (R18 J08, contract §9.3): one delivered event = one unit, once per delivery.
-      // Test pings are not notifications. Best-effort: the response never depends on it.
+      // Automation Ledger (R18 J08, contract §9.3): one event notified to one destination = one unit,
+      // however many times it is redelivered (a redelivery is a new delivery_id with the same event_id and
+      // subscription). Test pings are not notifications. Best-effort: the response never depends on it.
       if (status == "delivered" && (string?)row["status"] == "delivered" && (string?)row["event"] != WebhookEvents.TestEvent)
       {
+        var subscriptionId = Convert.ToInt64(row["subscriptionId"], CultureInfo.InvariantCulture);
         await AutomationLedger.RecordAsync(conn, new AutomationEvent("webhook_notification", 1, "success",
-          Ref: deliveryId.ToString("D"), DedupeKey: $"webhook:{deliveryId:D}"));
+          Ref: deliveryId.ToString("D"),
+          DedupeKey: $"webhook:{(Guid)row["eventId"]!:D}:{subscriptionId.ToString(CultureInfo.InvariantCulture)}"));
       }
 
       return res.Ok(new

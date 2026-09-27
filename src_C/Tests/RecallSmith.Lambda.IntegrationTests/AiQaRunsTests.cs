@@ -454,6 +454,22 @@ public class AiQaRunsTests
   }
 
   [Fact]
+  public async Task StartRun_SendFailure_EmitsAiQaEnqueueFailures()
+  {
+    // backend-design-10: a QA run whose SQS send failed is alarmable.
+    using var env = new QaEnv();
+    var deck = await NewDeckAsync("sendfail-metric");
+    for (var i = 1; i <= 2; i++) await NewCardAsync(deck.Id, $"sendfail-metric-{i}", i);
+
+    QaRuns.TestSendSeam = _ => throw new InvalidOperationException("sqs down");
+    APIGatewayProxyResponse? response = null;
+    var stdout = await EmfCapture.StdoutAsync(async () => response = await StartAsync(new { deckId = deck.Id, scope = "all" }));
+    Assert.Equal(500, response!.StatusCode);
+    Assert.Equal("AiQaEnqueueFailures", QaRuns.EnqueueFailuresMetric);
+    Assert.Equal(1, EmfCapture.GaugeSum(stdout, QaRuns.EnqueueFailuresMetric));
+  }
+
+  [Fact]
   public async Task StartRun_SendFailure_MarksRunFailed()
   {
     using var env = new QaEnv();

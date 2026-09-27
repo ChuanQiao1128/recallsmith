@@ -37,13 +37,44 @@ public static class WebhookEvents
   /// client, so no AWS client is ever built. Always null in production.</summary>
   internal static Func<SendMessageRequest, Task>? TestSendSeam;
 
+  /// <summary>
+  /// Upper bound on all the SQS sends of one <see cref="EnqueueAsync"/>, <see cref="RedeliverAsync"/> or
+  /// <see cref="SweepAsync"/> call. These run on the request path after the business transaction has
+  /// committed, and core-vpc has no egress: a misconfigured SQS endpoint must fail fast (rows marked
+  /// enqueue_failed) instead of holding the request past the 30 s API Gateway timeout. Internal so a test
+  /// can shorten it; never changed in production.
+  /// </summary>
+  internal static TimeSpan SendDeadline = TimeSpan.FromSeconds(5);
+
+  /// <summary>Per-request HTTP timeout and retry budget of the side-effect SQS client (SDK defaults are ~100 s and several retries).</summary>
+  public static readonly TimeSpan SqsRequestTimeout = TimeSpan.FromSeconds(3);
+  public const int SqsMaxErrorRetry = 1;
+
+  /// <summary>The bounded client config shared by best-effort SQS senders.</summary>
+  public static AmazonSQSConfig BoundedSqsConfig() => new()
+  {
+    RegionEndpoint = RegionEndpoint.GetBySystemName(Environment.GetEnvironmentVariable("AWS_REGION") ?? "ap-southeast-2"),
+    Timeout = SqsRequestTimeout,
+    MaxErrorRetry = SqsMaxErrorRetry,
+  };
+
   private static AmazonSQSClient? _sqs;
   private static AmazonSQSClient SQS()
   {
     if (_sqs is not null) return _sqs;
-    var region = Environment.GetEnvironmentVariable("AWS_REGION") ?? "ap-southeast-2";
-    _sqs = new AmazonSQSClient(RegionEndpoint.GetBySystemName(region));
+    _sqs = new AmazonSQSClient(BoundedSqsConfig());
     return _sqs;
+  }
+
+  /// <summary>
+  /// A token that fires after <see cref="SendDeadline"/> or when <paramref name="ct"/> fires. Once it has
+  /// fired every remaining send fails at once, so the remaining rows are marked enqueue_failed.
+  /// </summary>
+  private static CancellationTokenSource Deadline(CancellationToken ct)
+  {
+    var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    cts.CancelAfter(SendDeadline);
+    return cts;
   }
 
   /// <summary>UTC, millisecond precision, invariant: <c>2026-10-01T03:04:05.678Z</c>.</summary>
@@ -180,6 +211,7 @@ public static class WebhookEvents
 
       var occurredAtText = FormatTimestamp(occurredAt);
       var body = RenderBody(eventId, eventType, occurredAt, data);
+      using var deadline = Deadline(ct);
 
       foreach (var target in targets)
       {
@@ -192,7 +224,7 @@ public static class WebhookEvents
           [deliveryId, eventId, eventType, subscriptionId, body]);
         deliveries++;
 
-        if (!await TrySendAsync(conn, queueUrl, deliveryId, eventId, eventType, subscriptionId, url, occurredAtText, body, ct))
+        if (!await TrySendAsync(conn, queueUrl, deliveryId, eventId, eventType, subscriptionId, url, occurredAtText, body, deadline.Token))
         {
           failures++;
         }
@@ -250,7 +282,8 @@ public static class WebhookEvents
         "insert into webhook_deliveries (delivery_id, event_id, event, subscription_id, status, attempts, body) values ($1, $2, $3, $4, 'queued', 0, $5)",
         [newId, eventId, eventType, subscriptionId, body]);
 
-      var sent = await TrySendAsync(conn, queueUrl, newId, eventId, eventType, subscriptionId, url, occurredAtText, body, ct);
+      using var deadline = Deadline(ct);
+      var sent = await TrySendAsync(conn, queueUrl, newId, eventId, eventType, subscriptionId, url, occurredAtText, body, deadline.Token);
       if (!sent) RouteMetrics.EmitGauge("WebhookEnqueueFailures", 1);
       Log.Event("info", new { tag = "webhook", op = "redeliver", @event = eventType, eventId, sourceDeliveryId = deliveryId, deliveryId = newId, enqueueFailures = sent ? 0 : 1 });
       return newId;
@@ -260,6 +293,93 @@ public static class WebhookEvents
       LogFailure(ex, null);
       return null;
     }
+  }
+
+  /// <summary>Deliveries untouched for this long in a pre-send state are considered stranded.</summary>
+  public static readonly TimeSpan SweepStuckAfter = TimeSpan.FromMinutes(10);
+  public const int SweepMaxBatch = 100;
+
+  /// <summary>
+  /// The stranded-delivery predicate (automation-1): a row that never reached the dispatcher, i.e.
+  /// <c>enqueue_failed</c>, or <c>queued</c> with no attempt reported, untouched for
+  /// <see cref="SweepStuckAfter"/>, whose subscription is still live. Alias <c>d</c> is webhook_deliveries,
+  /// <c>s</c> its subscription.
+  /// </summary>
+  private static string StrandedPredicate => $"""
+    (d.status = 'enqueue_failed' or (d.status = 'queued' and d.attempts = 0))
+    and d.updated_at < now() - interval '{(int)SweepStuckAfter.TotalMinutes} minutes'
+    and s.deleted_at is null and s.is_active
+    """;
+
+  /// <summary>
+  /// Claims up to <paramref name="limit"/> stranded deliveries (<see cref="StrandedPredicate"/>) inside
+  /// <paramref name="tx"/>: each is set back to <c>queued</c> with a fresh <c>updated_at</c>, so a second
+  /// sweep within <see cref="SweepStuckAfter"/> does not pick it up again and a concurrent one skips the
+  /// locked rows. Call <see cref="ResendClaimedAsync"/> with the result after the transaction commits.
+  /// </summary>
+  public static async Task<List<SweptDelivery>> ClaimStrandedAsync(NpgsqlConnection conn, NpgsqlTransaction tx, int limit)
+  {
+    var rows = await DbUtil.QueryAsync(conn, tx,
+      $"""
+      with stuck as (
+        select d.delivery_id
+        from webhook_deliveries d
+        join webhook_subscriptions s on s.id = d.subscription_id
+        where {StrandedPredicate}
+        order by d.created_at, d.delivery_id
+        limit $1
+        for update of d skip locked
+      )
+      update webhook_deliveries d set status = 'queued', last_error = null, updated_at = now()
+      from stuck, webhook_subscriptions s
+      where d.delivery_id = stuck.delivery_id and s.id = d.subscription_id
+      returning d.delivery_id as "deliveryId", d.event_id as "eventId", d.event as "event",
+                d.subscription_id as "subscriptionId", d.body as "body", s.url as "url"
+      """,
+      [limit]);
+
+    return rows.Select(r => new SweptDelivery(
+      (Guid)r["deliveryId"]!, (Guid)r["eventId"]!, (string)r["event"]!,
+      Convert.ToInt64(r["subscriptionId"], CultureInfo.InvariantCulture), (string)r["body"]!, (string)r["url"]!))
+      .OrderBy(d => d.DeliveryId)
+      .ToList();
+  }
+
+  /// <summary>
+  /// Sends one SQS message per claimed delivery with the SAME delivery_id and event_id (receivers dedupe
+  /// on eventId, and the report route never regresses a terminal row). A failed send marks the row
+  /// enqueue_failed again. Returns the number of failures. Never throws.
+  /// </summary>
+  public static async Task<int> ResendClaimedAsync(NpgsqlConnection conn, IReadOnlyList<SweptDelivery> claimed, CancellationToken ct = default)
+  {
+    var failures = 0;
+    try
+    {
+      var queueUrl = Environment.GetEnvironmentVariable(QueueUrlEnv);
+      if (string.IsNullOrWhiteSpace(queueUrl))
+      {
+        Log.Event("info", new { tag = "webhook", reason = "queue_url_missing", op = "sweep" });
+        return claimed.Count;
+      }
+
+      using var deadline = Deadline(ct);
+      foreach (var d in claimed)
+      {
+        if (!await TrySendAsync(conn, queueUrl, d.DeliveryId, d.EventId, d.Event, d.SubscriptionId, d.Url, ReadOccurredAt(d.Body), d.Body, deadline.Token))
+        {
+          failures++;
+        }
+      }
+    }
+    catch (Exception ex)
+    {
+      LogFailure(ex, null);
+      failures = Math.Max(failures, 1);
+    }
+
+    if (failures > 0) RouteMetrics.EmitGauge("WebhookEnqueueFailures", failures);
+    Log.Event("info", new { tag = "webhook", op = "sweep", resent = claimed.Count - failures, enqueueFailures = failures });
+    return failures;
   }
 
   private static async Task<bool> TrySendAsync(
@@ -280,14 +400,16 @@ public static class WebhookEvents
 
     try
     {
+      // WaitAsync enforces the deadline even on a send that does not observe the token itself.
       var seam = TestSendSeam;
-      if (seam is not null) await seam(request);
-      else await SQS().SendMessageAsync(request, ct);
+      if (seam is not null) await seam(request).WaitAsync(ct);
+      else await SQS().SendMessageAsync(request, ct).WaitAsync(ct);
       return true;
     }
     catch (Exception ex)
     {
-      var error = ex.Message.Length > MaxErrorLength ? ex.Message[..MaxErrorLength] : ex.Message;
+      var reason = ex is OperationCanceledException ? $"enqueue deadline exceeded ({(int)SendDeadline.TotalMilliseconds} ms)" : ex.Message;
+      var error = reason.Length > MaxErrorLength ? reason[..MaxErrorLength] : reason;
       await DbUtil.ExecuteAsync(conn, null,
         "update webhook_deliveries set status = 'enqueue_failed', last_error = $2, updated_at = now() where delivery_id = $1",
         [deliveryId, error]);
@@ -327,3 +449,5 @@ public static class WebhookEvents
 }
 
 public sealed record WebhookEnqueueResult(Guid EventId, int Deliveries, int EnqueueFailures);
+
+public sealed record SweptDelivery(Guid DeliveryId, Guid EventId, string Event, long SubscriptionId, string Body, string Url);

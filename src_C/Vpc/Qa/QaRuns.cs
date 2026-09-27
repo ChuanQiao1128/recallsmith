@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using Amazon;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.SQS;
 using Amazon.SQS.Model;
@@ -30,6 +29,9 @@ public static class QaRuns
   public const string DailyCapEnv = "AI_QA_DAILY_USD_CAP";  // default 10
   public static readonly TimeSpan StaleAfter = TimeSpan.FromHours(2);
 
+  /// <summary>EMF gauge emitted once per QA run whose SQS send failed.</summary>
+  public const string EnqueueFailuresMetric = "AiQaEnqueueFailures";
+
   /// <summary>Test seam (InternalsVisibleTo): when non-null it replaces the SQS send. Always null in production.</summary>
   internal static Func<SendMessageRequest, Task>? TestSendSeam;
 
@@ -47,8 +49,8 @@ public static class QaRuns
   private static AmazonSQSClient SQS()
   {
     if (_sqs is not null) return _sqs;
-    var region = Environment.GetEnvironmentVariable("AWS_REGION") ?? "ap-southeast-2";
-    _sqs = new AmazonSQSClient(RegionEndpoint.GetBySystemName(region));
+    // Bounded timeout and retries (backend-design-4): an unreachable SQS endpoint fails the run fast.
+    _sqs = new AmazonSQSClient(WebhookEvents.BoundedSqsConfig());
     return _sqs;
   }
 
@@ -195,6 +197,7 @@ public static class QaRuns
         catch (Exception ex)
         {
           Log.Event("error", new { tag = "ai_qa", outcome = "enqueue_failed", runId = id, deckId = body.DeckId, chunk = i, error = ex.Message });
+          RouteMetrics.EmitGauge(EnqueueFailuresMetric, 1);
           await DbUtil.ExecuteAsync(conn, null,
             """
             update ai_qa_runs set status = 'failed', error_code = 'ENQUEUE_FAILED', finished_at = now(), updated_at = now()

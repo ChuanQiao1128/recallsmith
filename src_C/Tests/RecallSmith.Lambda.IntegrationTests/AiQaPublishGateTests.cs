@@ -215,6 +215,22 @@ public class AiQaPublishGateTests
   // ---------------------------------------------------------------- refusals
 
   [Fact]
+  public async Task Gate_Refusal_EmitsQaGateRefusals()
+  {
+    // backend-design-10: every refusal emits one informational gauge.
+    var deck = await SeedDeckAsync("refusal-metric", 1);
+    await WithGateAsync("1", "true", async sent =>
+    {
+      APIGatewayProxyResponse? response = null;
+      var stdout = await EmfCapture.StdoutAsync(async () => response = await PublishAsync(deck.DeckId));
+      AssertError(response!, 409, "AI_QA_REQUIRED");
+      Assert.Equal("QaGateRefusals", QaGate.RefusalsMetric);
+      Assert.Equal(1, EmfCapture.GaugeSum(stdout, QaGate.RefusalsMetric));
+      Assert.Empty(sent);
+    });
+  }
+
+  [Fact]
   public async Task Gate_UnreviewedChangedCard_Returns409AiQaRequired()
   {
     var deck = await SeedDeckAsync("unreviewed", 2);

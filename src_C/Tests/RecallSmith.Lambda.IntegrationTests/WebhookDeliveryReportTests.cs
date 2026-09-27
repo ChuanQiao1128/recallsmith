@@ -34,12 +34,12 @@ public class WebhookDeliveryReportTests
     return "v1=" + Convert.ToHexString(hash).ToLowerInvariant();
   }
 
-  private static JsonElement Event(string body, string? signature = null, long? timestampMs = null, string method = "POST")
+  private static JsonElement Event(string body, string? signature = null, long? timestampMs = null, string method = "POST", string path = ReportPath)
   {
     var ts = timestampMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     return JsonSerializer.SerializeToElement(new
     {
-      rawPath = ReportPath,
+      rawPath = path,
       requestContext = new
       {
         requestId = Guid.NewGuid().ToString(),
@@ -151,8 +151,51 @@ public class WebhookDeliveryReportTests
 
     var dead = await ReportAsync(Body(deliveryId, 5, "dead", 500, "HTTP 500"));
     Assert.Equal("dead", Data(dead).GetProperty("status").GetString());
-    var failed = await ReportAsync(Body(deliveryId, 5, "failed", 404, "HTTP 404"));
+    // 'dead' is terminal (backend-design-8), so a failed outcome is checked on a fresh delivery.
+    var (_, otherDelivery) = await SeedAsync();
+    var failed = await ReportAsync(Body(otherDelivery, 5, "failed", 404, "HTTP 404"));
     Assert.Equal("failed", Data(failed).GetProperty("status").GetString());
+  }
+
+  [Fact]
+  public async Task Report_TerminalStates_AreSticky_AndStaleAttemptsIgnored()
+  {
+    // backend-design-8 / automation-9: a stale or duplicate report never regresses a terminal row.
+    var (_, deadDelivery) = await SeedAsync();
+    Assert.Equal(200, (await ReportAsync(Body(deadDelivery, 5, "dead", 500, "HTTP 500"))).StatusCode);
+    var late = await ReportAsync(Body(deadDelivery, 4, "retry", 503, "late retry"));
+    Assert.Equal(200, late.StatusCode);
+    Assert.Equal("dead", Data(late).GetProperty("status").GetString());
+    var dup = await ReportAsync(Body(deadDelivery, 5, "retry", 503, "duplicate"));
+    Assert.Equal("dead", Data(dup).GetProperty("status").GetString());
+    var dead = await RowAsync(deadDelivery);
+    Assert.Equal("dead", (string)dead["status"]!);
+    Assert.Equal(5, Convert.ToInt32(dead["attempts"], CultureInfo.InvariantCulture));
+    Assert.Equal(500, Convert.ToInt32(dead["last_status_code"], CultureInfo.InvariantCulture));
+    Assert.Equal("HTTP 500", (string)dead["last_error"]!);
+
+    var (_, failedDelivery) = await SeedAsync();
+    Assert.Equal(200, (await ReportAsync(Body(failedDelivery, 3, "failed", 404, "HTTP 404"))).StatusCode);
+    foreach (var outcome in new[] { "retry", "dead", "delivered" })
+    {
+      var resp = await ReportAsync(Body(failedDelivery, 2, outcome, 200, "stale"));
+      Assert.Equal("failed", Data(resp).GetProperty("status").GetString());
+    }
+    var failed = await RowAsync(failedDelivery);
+    Assert.Equal("failed", (string)failed["status"]!);
+    Assert.Equal(3, Convert.ToInt32(failed["attempts"], CultureInfo.InvariantCulture));
+    Assert.Equal(404, Convert.ToInt32(failed["last_status_code"], CultureInfo.InvariantCulture));
+    Assert.Equal("HTTP 404", (string)failed["last_error"]!);
+    Assert.Null(failed["delivered_at"]);
+
+    // A stale retry on a non-terminal row keeps the newer attempt's code and error.
+    var (_, retrying) = await SeedAsync();
+    await ReportAsync(Body(retrying, 3, "retry", 503, "attempt 3"));
+    var stale = await ReportAsync(Body(retrying, 2, "retry", 502, "attempt 2"));
+    Assert.Equal("retrying", Data(stale).GetProperty("status").GetString());
+    var row = await RowAsync(retrying);
+    Assert.Equal(503, Convert.ToInt32(row["last_status_code"], CultureInfo.InvariantCulture));
+    Assert.Equal("attempt 3", (string)row["last_error"]!);
   }
 
   [Fact]
@@ -195,6 +238,22 @@ public class WebhookDeliveryReportTests
     await _db.ScalarAsync("update webhook_subscriptions set deleted_at = now(), is_active = false where id = $1", deletedSub);
     var deleted = await ReportAsync(Body(deletedDelivery, 1, "retry", 500, "HTTP 500"));
     Assert.True(Data(deleted).GetProperty("stop").GetBoolean());
+
+    // backend-design-3: the dispatcher acks on stop, so the row must be terminal, not 'retrying'.
+    foreach (var (delivery, reported) in new[] { (inactiveDelivery, resp), (deletedDelivery, deleted) })
+    {
+      Assert.Equal("failed", Data(reported).GetProperty("status").GetString());
+      var row = await RowAsync(delivery);
+      Assert.Equal("failed", (string)row["status"]!);
+      Assert.Equal(WebhookDeliveryReport.SubscriptionInactiveError, (string)row["last_error"]!);
+      Assert.Equal(1, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture));
+    }
+
+    // Other outcomes for an inactive subscription are recorded as reported.
+    var (_, inactiveDead) = await SeedAsync(active: false);
+    var deadResp = await ReportAsync(Body(inactiveDead, 5, "dead", 500, "HTTP 500"));
+    Assert.Equal("dead", Data(deadResp).GetProperty("status").GetString());
+    Assert.Equal("HTTP 500", (string)(await RowAsync(inactiveDead))["last_error"]!);
 
     Assert.NotEqual(inactiveSub, deletedSub);
   }
@@ -289,5 +348,41 @@ public class WebhookDeliveryReportTests
 
     var get = await WithSecretAsync(() => new RecallSmith.Lambda.VpcFunction().Handler(Event(body, method: "GET")));
     Assert.Equal(405, get.StatusCode);
+  }
+
+  [Fact]
+  public async Task InternalRoutes_MatchExactPathsOnly()
+  {
+    // cloud-security-resilience-2: a validly signed request whose path merely ENDS with an internal route
+    // (for example one sent through the unauthenticated /api/internal/webhooks/{proxy+} gateway route)
+    // must not reach that handler.
+    var (_, deliveryId) = await SeedAsync();
+    var body = Body(deliveryId, 1, "delivered", 204, null);
+
+    foreach (var path in new[]
+    {
+      "/api/internal/webhooks/x/api/internal/ai-qa/results",
+      "/api/internal/webhooks/x/api/internal/entitlements/apply",
+      "/api/internal/webhooks/x/api/internal/subscriptions/upsert",
+      "/api/internal/ai-qa/x/api/internal/webhooks/deliveries/report",
+      "/api/internal/webhooks/deliveries/report/extra",
+      "/api/internal/ai-qa/results/x",
+    })
+    {
+      var resp = await WithSecretAsync(() => new RecallSmith.Lambda.VpcFunction().Handler(Event(body, path: path)));
+      Assert.True(resp.StatusCode == 404, $"{path} returned {resp.StatusCode}: {resp.Body}");
+      Assert.Equal(RouteMetrics.UnmatchedRoute, RouteMetrics.RouteFor(path));
+    }
+
+    // Nothing was applied by the rejected paths.
+    Assert.Equal("queued", (string)(await RowAsync(deliveryId))["status"]!);
+
+    // The exact paths still route, and keep their own metric labels.
+    var exact = await WithSecretAsync(() => new RecallSmith.Lambda.VpcFunction().Handler(Event(body)));
+    Assert.True(exact.StatusCode == 200, exact.Body);
+    foreach (var route in new[] { ReportPath, "/api/internal/ai-qa/results", "/api/internal/entitlements/apply", "/api/internal/subscriptions/upsert" })
+    {
+      Assert.Equal(route, RouteMetrics.RouteFor(route));
+    }
   }
 }
