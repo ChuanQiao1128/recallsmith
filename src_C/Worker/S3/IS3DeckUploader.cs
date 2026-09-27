@@ -67,4 +67,7 @@ public class CardExportData
 
   [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
   public JsonElement? Mcq { get; set; }
+
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public JsonElement? Source { get; set; }
 }

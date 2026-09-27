@@ -37,7 +37,8 @@ public static class CardsImport
     long Difficulty,
     int OrderInDeck,
     string? Topic,
-    string? Mcq);
+    string? Mcq,
+    string? Source);
 
   public static async Task<APIGatewayProxyResponse> HandleCardsImport(LambdaRequest req, Res res, AuthContext auth)
   {
@@ -130,7 +131,10 @@ public static class CardsImport
             if (!McqValidation.IsMcqDifficulty(difficulty)) throw new McqValidationError("MCQ_DIFFICULTY_RANGE", "difficulty must be 1..3 for an MCQ card");
           }
 
-          cards.Add(new ImportCard(i, uid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, topic, mcq));
+          // Whole-file import: an absent source is null and clears a stored one.
+          var source = Helpers.ParseOptionalSource(cardEl);
+
+          cards.Add(new ImportCard(i, uid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, topic, mcq, source));
         }
         catch (McqValidationError ex)
         {
@@ -228,9 +232,9 @@ public static class CardsImport
       const string upsertSql = """
         insert into cards (
           deck_id, stable_uid, question, explanation, code_snippet, code_language,
-          real_world_usage, difficulty, order_in_deck, topic, mcq
+          real_world_usage, difficulty, order_in_deck, topic, mcq, source
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb)
         on conflict (deck_id, stable_uid) do update set
           question = excluded.question,
           explanation = excluded.explanation,
@@ -241,13 +245,14 @@ public static class CardsImport
           order_in_deck = excluded.order_in_deck,
           topic = excluded.topic,
           mcq = excluded.mcq,
+          source = excluded.source,
           version = cards.version + 1,
           updated_at = now()
         where (cards.question, cards.explanation, cards.code_snippet, cards.code_language, cards.real_world_usage,
-               cards.difficulty, cards.order_in_deck, cards.topic, cards.mcq)
+               cards.difficulty, cards.order_in_deck, cards.topic, cards.mcq, cards.source)
           is distinct from
               (excluded.question, excluded.explanation, excluded.code_snippet, excluded.code_language, excluded.real_world_usage,
-               excluded.difficulty, excluded.order_in_deck, excluded.topic, excluded.mcq)
+               excluded.difficulty, excluded.order_in_deck, excluded.topic, excluded.mcq, excluded.source)
         returning id, (xmax = 0) as inserted
         """;
 
@@ -256,7 +261,7 @@ public static class CardsImport
         var rows = await DbUtil.QueryAsync(conn, tx, upsertSql, new object?[]
         {
           deckId, c.StableUid, c.Question, c.Explanation, c.CodeSnippet, c.CodeLanguage,
-          c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq,
+          c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source,
         });
 
         if (rows.Count == 0)

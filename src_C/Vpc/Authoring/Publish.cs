@@ -140,7 +140,8 @@ public static class Publish
       real_world_usage as "realWorldUsage",
       revision,
       topic,
-      mcq
+      mcq,
+      source
     from cards
     where deck_id = $1 and is_deleted = 0
     order by order_in_deck asc, id asc
@@ -235,6 +236,7 @@ public static class Publish
         revision = Convert.ToInt32(c.TryGetValue("revision", out var rv) ? (rv ?? 1) : 1, CultureInfo.InvariantCulture),
         topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
         mcq = Helpers.JsonbElement(c, "mcq"),
+        source = Helpers.JsonbElement(c, "source"),
       }).ToList();
 
       var baseDeckJson = new
