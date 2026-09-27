@@ -8,6 +8,7 @@
 //
 // Every label lookup falls back to the raw code: the server may add a code
 // before the console learns its label, and an unknown code must still show.
+import { qaItemErrorLabel } from './qaReview';
 
 export const AUTOMATION_MODES = ['off', 'dry_run', 'live'] as const;
 
@@ -193,6 +194,130 @@ export function decisionStateTone(state: string): BadgeTone {
   return 'neutral';
 }
 
+/** A00 §5.7 human_action, as the console names it (B07 frontend-console-1). */
+export const HUMAN_ACTION_LABELS: Record<string, string> = {
+  accepted: 'Accepted',
+  edited_accepted: 'Edited and accepted',
+  rejected: 'Rejected',
+};
+
+export function humanActionLabel(action: string): string {
+  return own(HUMAN_ACTION_LABELS, action) ?? action;
+}
+
+/**
+ * The state badge of a decision. A `human` decision keeps its state after the
+ * person decides (A00 §5.3, only human_action is set), so a handled one reads
+ * "Handled: …" in a neutral tone and only an open one reads "Needs you" (K7).
+ */
+export function decisionBadge(d: { state: string; humanAction: string | null }): { label: string; tone: BadgeTone } {
+  if (d.state === 'human' && d.humanAction !== null) {
+    return { label: `Handled: ${humanActionLabel(d.humanAction).toLowerCase()}`, tone: 'neutral' };
+  }
+  return { label: decisionStateLabel(d.state), tone: decisionStateTone(d.state) };
+}
+
+/** Whether a person may still decide the draft: routed or would-accept, and nobody has decided it. */
+export function decisionAwaitsPerson(d: { state: string; humanAction: string | null }): boolean {
+  return (d.state === 'human' || d.state === 'would_accept') && d.humanAction === null;
+}
+
+/** The decision's reason detail as a person reads it: a QA_ERROR detail is an AI QA error code. */
+export function decisionReasonDetailText(reason: string | null, detail: string | null): string | null {
+  if (!detail) return null;
+  return reason === 'QA_ERROR' ? qaItemErrorLabel(detail) : detail;
+}
+
+export const MODE_LABELS: Record<string, string> = { off: 'Off', dry_run: 'Dry run', live: 'Live' };
+export const RUN_STATUS_LABELS: Record<string, string> = {
+  running: 'Running',
+  completed: 'Completed',
+  failed: 'Failed',
+  abandoned: 'Abandoned',
+};
+export const RUN_OUTCOME_LABELS: Record<string, string> = {
+  done: 'Done',
+  nothing_new: 'Nothing new',
+  failed: 'Failed',
+};
+export const QUEUE_ITEM_STATUS_LABELS: Record<string, string> = {
+  queued: 'Queued',
+  claimed: 'Claimed',
+  done: 'Done',
+  failed: 'Failed',
+  skipped: 'Skipped',
+};
+export const QUEUE_ITEM_KIND_LABELS: Record<string, string> = {
+  feed_item: 'Feed item',
+  source_changed: 'Source changed',
+  manual: 'Manual',
+};
+export const WATCH_STATUS_LABELS: Record<string, string> = {
+  baseline: 'Baseline',
+  unchanged: 'Unchanged',
+  changed: 'Changed',
+  not_modified: 'Not modified',
+  failed: 'Failed',
+  gone: 'Gone',
+  unsupported: 'Unsupported',
+  robots_disallowed: 'Disallowed by robots.txt',
+};
+export const WATCH_EVENT_KIND_LABELS: Record<string, string> = {
+  baseline: 'Baseline',
+  changed: 'Changed',
+  gone: 'Gone',
+  failing: 'Failing',
+  recovered: 'Recovered',
+  feed_items: 'New feed items',
+  unsupported: 'Unsupported',
+};
+export const RECHECK_STATE_LABELS: Record<string, string> = {
+  not_needed: 'Not needed',
+  waiting: 'Waiting',
+  started: 'Started',
+  done: 'Done',
+  unavailable: 'Unavailable',
+};
+export const NOTIFICATION_KIND_LABELS: Record<string, string> = {
+  exception: 'Exception',
+  batch_summary: 'Batch summary',
+  weekly_digest: 'Weekly digest',
+  source_changed: 'Source changed',
+  test: 'Test',
+};
+export const NOTIFICATION_STATUS_LABELS: Record<string, string> = {
+  queued: 'Queued',
+  sent: 'Sent',
+  failed: 'Failed',
+  enqueue_failed: 'Could not be queued',
+};
+export const RUNNER_STATE_LABELS: Record<string, string> = {
+  idle: 'Idle',
+  running: 'Running',
+  error: 'Error',
+  login_expired: 'Login expired',
+};
+
+/** The label of an enumeration code from one of the maps above; the raw code when unknown. */
+export function codeLabel(map: Record<string, string>, code: string | null | undefined): string {
+  if (code === null || code === undefined || code === '') return '—';
+  return own(map, code) ?? code;
+}
+
+export function runnerStateTone(state: string): BadgeTone {
+  if (state === 'error' || state === 'login_expired') return 'danger';
+  if (state === 'running') return 'info';
+  return 'neutral';
+}
+
+/** The mode badge in the banner's title row, so off, dry run and live never look alike. */
+export function modeBadge(effective: string): { text: string; tone: BadgeTone } {
+  if (effective === 'live') return { text: 'LIVE', tone: 'success' };
+  if (effective === 'dry_run') return { text: 'DRY RUN', tone: 'warning' };
+  if (effective === 'off') return { text: 'OFF', tone: 'neutral' };
+  return { text: effective.toUpperCase() || '—', tone: 'neutral' };
+}
+
 /** The page's one operational sentence: the mode has no switch (A00 §3.1). */
 export const MODE_CHANGE_HINT = 'Change AUTOMATION_MODE in src_C/env/prod.env.json and deploy';
 
@@ -263,6 +388,42 @@ export function resolveAutomationView(params: URLSearchParams): AutomationView {
   return { tab, runId, draftId, targetId };
 }
 
+/** The Decisions tab's filters, kept in the URL so a link can name them (`?tab=decisions&state=human&open=1`). */
+export type DecisionFilters = { deckId: number | null; state: string; reason: string; openOnly: boolean };
+
+export const DECISION_FILTER_KEYS = ['deckId', 'state', 'reason', 'open'] as const;
+
+/** The filters a URL names; an unknown state or reason is ignored rather than sent. */
+export function decisionFiltersFrom(params: URLSearchParams): DecisionFilters {
+  const state = params.get('state') ?? '';
+  const reason = params.get('reason') ?? '';
+  return {
+    deckId: parsePositiveId(params.get('deckId')),
+    state: (DECISION_STATES as readonly string[]).includes(state) ? state : '',
+    reason: (DECISION_REASONS as readonly string[]).includes(reason) ? reason : '',
+    openOnly: params.get('open') === '1',
+  };
+}
+
+/** `params` with the Decisions filters replaced by `filters`; every other key is kept. */
+export function withDecisionFilters(params: URLSearchParams, filters: DecisionFilters): URLSearchParams {
+  const next = new URLSearchParams(params);
+  for (const key of DECISION_FILTER_KEYS) next.delete(key);
+  if (filters.deckId !== null) next.set('deckId', String(filters.deckId));
+  if (filters.state) next.set('state', filters.state);
+  if (filters.reason) next.set('reason', filters.reason);
+  if (filters.openOnly) next.set('open', '1');
+  return next;
+}
+
+/** "Open only" keeps the decisions nobody has acted on yet (client-side over humanAction). */
+export function isOpenDecision(d: { humanAction: string | null }): boolean {
+  return d.humanAction === null;
+}
+
+/** The Decisions tab showing the open exceptions: routed to a person and not yet decided (K7). */
+export const OPEN_EXCEPTIONS_SEARCH = '?tab=decisions&state=human&open=1';
+
 /** The server default of AUTOMATION_LOGIN_WARN_DAYS (A00 §3.3). */
 export const LOGIN_WARN_DAYS = 5;
 
@@ -323,25 +484,64 @@ function isPositiveInteger(value: unknown): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
 
-export function queueItemProblems(input: {
+/** One failed check of a form, with the field it belongs to, so the form can mark that field. */
+export type FieldProblem<F extends string> = { field: F; message: string };
+
+export type QueueField = 'url' | 'deckId' | 'title' | 'note';
+
+export function queueItemFieldProblems(input: {
   url: string;
   deckId: number | null;
   title: string;
   note: string;
-}): string[] {
-  const problems: string[] = [];
+}): Array<FieldProblem<QueueField>> {
+  const problems: Array<FieldProblem<QueueField>> = [];
   const url = urlProblem(input.url);
-  if (url) problems.push(url);
-  if (!isPositiveInteger(input.deckId)) problems.push('Choose a deck.');
-  if (input.title.length > 300) problems.push('The title must be at most 300 characters.');
-  if (input.note.length > 500) problems.push('The note must be at most 500 characters.');
+  if (url) problems.push({ field: 'url', message: url });
+  if (!isPositiveInteger(input.deckId)) problems.push({ field: 'deckId', message: 'Choose a deck.' });
+  if (input.title.length > 300) problems.push({ field: 'title', message: 'The title must be at most 300 characters.' });
+  if (input.note.length > 500) problems.push({ field: 'note', message: 'The note must be at most 500 characters.' });
   return problems;
+}
+
+export function queueItemProblems(input: { url: string; deckId: number | null; title: string; note: string }): string[] {
+  return queueItemFieldProblems(input).map(p => p.message);
 }
 
 /**
  * The feed form's checks. The title pattern is a PostgreSQL ARE (A00 §7 note),
  * so it is only length-checked here: the server answers WATCH_PATTERN_INVALID.
  */
+export type WatchField = 'url' | 'feedFormat' | 'deckId' | 'itemTitlePattern' | 'checkIntervalMinutes';
+
+const PATTERN_TOO_LONG = 'The title pattern must be at most 1000 characters.';
+const INTERVAL_OUT_OF_RANGE = 'The check interval must be a whole number of minutes from 60 to 43200.';
+
+function intervalInRange(interval: number): boolean {
+  return Number.isInteger(interval) && interval >= 60 && interval <= 43200;
+}
+
+export function watchTargetFieldProblems(input: {
+  url: string;
+  feedFormat: string;
+  deckId: number | null;
+  itemTitlePattern: string;
+  checkIntervalMinutes: number;
+}): Array<FieldProblem<WatchField>> {
+  const problems: Array<FieldProblem<WatchField>> = [];
+  const url = urlProblem(input.url);
+  if (url) problems.push({ field: 'url', message: url });
+  if (!(FEED_FORMATS as readonly string[]).includes(input.feedFormat)) {
+    problems.push({ field: 'feedFormat', message: 'Choose a feed format.' });
+  }
+  if (!isPositiveInteger(input.deckId)) problems.push({ field: 'deckId', message: 'Choose a deck.' });
+  if (input.itemTitlePattern.length > 1000) problems.push({ field: 'itemTitlePattern', message: PATTERN_TOO_LONG });
+  if (!intervalInRange(input.checkIntervalMinutes)) {
+    problems.push({ field: 'checkIntervalMinutes', message: INTERVAL_OUT_OF_RANGE });
+  }
+  return problems;
+}
+
 export function watchTargetProblems(input: {
   url: string;
   feedFormat: string;
@@ -349,17 +549,17 @@ export function watchTargetProblems(input: {
   itemTitlePattern: string;
   checkIntervalMinutes: number;
 }): string[] {
-  const problems: string[] = [];
-  const url = urlProblem(input.url);
-  if (url) problems.push(url);
-  if (!(FEED_FORMATS as readonly string[]).includes(input.feedFormat)) problems.push('Choose a feed format.');
-  if (!isPositiveInteger(input.deckId)) problems.push('Choose a deck.');
-  if (input.itemTitlePattern.length > 1000) problems.push('The title pattern must be at most 1000 characters.');
-  const interval = input.checkIntervalMinutes;
-  if (!Number.isInteger(interval) || interval < 60 || interval > 43200) {
-    problems.push('The check interval must be a whole number of minutes from 60 to 43200.');
-  }
-  return problems;
+  return watchTargetFieldProblems(input).map(p => p.message);
+}
+
+/** The checks of a watch target's inline edit (title pattern and interval only). */
+export function watchEditProblem(
+  pattern: string,
+  interval: number,
+): FieldProblem<'itemTitlePattern' | 'checkIntervalMinutes'> | null {
+  if (pattern.length > 1000) return { field: 'itemTitlePattern', message: PATTERN_TOO_LONG };
+  if (!intervalInRange(interval)) return { field: 'checkIntervalMinutes', message: INTERVAL_OUT_OF_RANGE };
+  return null;
 }
 
 /** A first look at a pasted gate report; the server recomputes everything (A00 §15.4 step 4). */

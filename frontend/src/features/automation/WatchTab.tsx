@@ -8,12 +8,12 @@
 import { useEffect, useState } from 'react';
 
 import { addWatchTarget, fetchWatch, updateWatchTarget, type WatchPage } from '../../api/automation';
-import { fetchDecks } from '../../api/authoring';
 import {
   CARD_CLASS,
   FIELD_ERROR_CLASS,
   H2_CLASS,
   INPUT_CLASS,
+  INPUT_INVALID_CLASS,
   LABEL_CLASS,
   TD_CLASS,
   TH_CLASS,
@@ -22,15 +22,22 @@ import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 import {
   FEED_FORMATS,
+  RECHECK_STATE_LABELS,
+  WATCH_EVENT_KIND_LABELS,
+  WATCH_STATUS_LABELS,
   automationErrorMessage,
+  codeLabel,
   formatTimestamp,
   orDash,
   shortId,
   urlLabel,
-  watchTargetProblems,
+  watchEditProblem,
+  watchTargetFieldProblems,
+  type FieldProblem,
+  type WatchField,
 } from '../../lib/automationRules';
 import type { ApiError } from '../../types/api';
-import type { Deck } from '../../types/deck';
+import { DeckSelect } from './DeckSelect';
 
 const PAGE_SIZE = 50;
 const DEFAULT_INTERVAL = '360';
@@ -40,20 +47,37 @@ const DECK_ID = 'automation-watch-deck';
 const PATTERN_ID = 'automation-watch-pattern';
 const INTERVAL_ID = 'automation-watch-interval';
 const PROBLEMS_ID = 'automation-watch-problems';
+const EDIT_PROBLEM_ID = 'automation-watch-edit-problem';
 
 type WatchState = { forKey: string | null; error: string | null; data: WatchPage | null };
-type EditState = { targetId: number; pattern: string; interval: string; problem: string | null };
+type EditState = {
+  targetId: number;
+  pattern: string;
+  interval: string;
+  problem: FieldProblem<'itemTitlePattern' | 'checkIntervalMinutes'> | null;
+};
 
 function errorText(error: ApiError | null, fallback: string): string {
   return automationErrorMessage(error?.code, error?.message ?? fallback);
 }
 
-function editProblem(pattern: string, interval: number): string | null {
-  if (pattern.length > 1000) return 'The title pattern must be at most 1000 characters.';
-  if (!Number.isInteger(interval) || interval < 60 || interval > 43200) {
-    return 'The check interval must be a whole number of minutes from 60 to 43200.';
-  }
-  return null;
+/** DeckSelect's spelling of invalidProps. */
+function deckInvalidProps(invalid: boolean) {
+  return {
+    className: invalid ? INPUT_INVALID_CLASS : INPUT_CLASS,
+    invalid,
+    describedBy: invalid ? PROBLEMS_ID : undefined,
+  };
+}
+
+/** aria-invalid, the invalid look and the message link for a field that failed its check. */
+function invalidProps(invalid: boolean, describedBy: string, extraClass = '') {
+  const base = invalid ? INPUT_INVALID_CLASS : INPUT_CLASS;
+  return {
+    className: extraClass ? `${base} ${extraClass}` : base,
+    'aria-invalid': invalid ? true : undefined,
+    'aria-describedby': invalid ? describedBy : undefined,
+  };
 }
 
 export function WatchTab({
@@ -68,7 +92,6 @@ export function WatchTab({
   const [nonce, setNonce] = useState(0);
   const [watch, setWatch] = useState<WatchState>({ forKey: null, error: null, data: null });
   const [loadingMore, setLoadingMore] = useState(false);
-  const [decks, setDecks] = useState<Deck[]>([]);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -77,24 +100,10 @@ export function WatchTab({
   const [deckId, setDeckId] = useState('');
   const [pattern, setPattern] = useState('');
   const [intervalText, setIntervalText] = useState(DEFAULT_INTERVAL);
-  const [problems, setProblems] = useState<string[]>([]);
+  const [problems, setProblems] = useState<Array<FieldProblem<WatchField>>>([]);
   const [editing, setEditing] = useState<EditState | null>(null);
 
   const key = String(nonce);
-
-  useEffect(() => {
-    if (!superAdmin) return;
-    let cancelled = false;
-    async function run() {
-      const res = await fetchDecks();
-      if (cancelled || !res.success || !res.data) return;
-      setDecks(res.data);
-    }
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [superAdmin]);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,9 +123,13 @@ export function WatchTab({
     };
   }, [nonce]);
 
+  const loading = watch.forKey !== key;
+
   async function onLoadMore() {
     const cursor = watch.data?.nextCursor;
-    if (!cursor) return;
+    // The cursor belongs to the list on screen; while a refresh loads it may be stale.
+    if (!cursor || loading) return;
+    const startKey = key;
     setLoadingMore(true);
     const res = await fetchWatch({ limit: PAGE_SIZE, cursor });
     setLoadingMore(false);
@@ -126,7 +139,7 @@ export function WatchTab({
     }
     const page = res.data;
     setWatch(prev =>
-      prev.data
+      prev.data && prev.forKey === startKey
         ? { ...prev, data: { ...prev.data, items: [...prev.data.items, ...page.items], nextCursor: page.nextCursor } }
         : prev,
     );
@@ -135,7 +148,7 @@ export function WatchTab({
   async function onAdd() {
     const deck = deckId ? Number(deckId) : null;
     const minutes = Number(intervalText);
-    const found = watchTargetProblems({
+    const found = watchTargetFieldProblems({
       url,
       feedFormat,
       deckId: deck,
@@ -155,7 +168,10 @@ export function WatchTab({
     });
     setBusy(false);
     if (!res.success || !res.data) {
-      setWriteError(errorText(res.error, 'The feed could not be added.'));
+      const text = errorText(res.error, 'The feed could not be added.');
+      // Only PostgreSQL can compile the pattern, so its refusal belongs to that field.
+      if (res.error?.code === 'WATCH_PATTERN_INVALID') setProblems([{ field: 'itemTitlePattern', message: text }]);
+      else setWriteError(text);
       return;
     }
     setUrl('');
@@ -181,7 +197,7 @@ export function WatchTab({
   async function onSaveEdit() {
     if (!editing) return;
     const minutes = Number(editing.interval);
-    const problem = editProblem(editing.pattern, minutes);
+    const problem = watchEditProblem(editing.pattern, minutes);
     if (problem) {
       setEditing({ ...editing, problem });
       return;
@@ -194,7 +210,12 @@ export function WatchTab({
     });
     setBusy(false);
     if (!res.success) {
-      setWriteError(errorText(res.error, 'The target could not be changed.'));
+      const text = errorText(res.error, 'The target could not be changed.');
+      if (res.error?.code === 'WATCH_PATTERN_INVALID') {
+        setEditing({ ...editing, problem: { field: 'itemTitlePattern', message: text } });
+      } else {
+        setWriteError(text);
+      }
       return;
     }
     announce(`Target ${editing.targetId} saved.`);
@@ -202,9 +223,9 @@ export function WatchTab({
     setNonce(n => n + 1);
   }
 
-  const loading = watch.forKey !== key;
   const targets = watch.data?.items ?? [];
   const events = watch.data?.recentEvents ?? [];
+  const failed = (field: WatchField) => problems.some(p => p.field === field);
 
   return (
     <div className="space-y-4">
@@ -219,10 +240,9 @@ export function WatchTab({
               <input
                 id={URL_ID}
                 type="url"
-                className={INPUT_CLASS}
+                {...invalidProps(failed('url'), PROBLEMS_ID)}
                 value={url}
                 onChange={e => setUrl(e.target.value)}
-                aria-describedby={problems.length > 0 ? PROBLEMS_ID : undefined}
               />
             </div>
             <div>
@@ -231,7 +251,7 @@ export function WatchTab({
               </label>
               <select
                 id={FORMAT_ID}
-                className={INPUT_CLASS}
+                {...invalidProps(failed('feedFormat'), PROBLEMS_ID)}
                 value={feedFormat}
                 onChange={e => setFeedFormat(e.target.value)}
               >
@@ -246,14 +266,13 @@ export function WatchTab({
               <label htmlFor={DECK_ID} className={LABEL_CLASS}>
                 Deck
               </label>
-              <select id={DECK_ID} className={INPUT_CLASS} value={deckId} onChange={e => setDeckId(e.target.value)}>
-                <option value="">Choose a deck</option>
-                {decks.map(d => (
-                  <option key={d.id} value={String(d.id)}>
-                    {d.slug}
-                  </option>
-                ))}
-              </select>
+              <DeckSelect
+                id={DECK_ID}
+                value={deckId}
+                onChange={setDeckId}
+                emptyLabel="Choose a deck"
+                {...deckInvalidProps(failed('deckId'))}
+              />
             </div>
             <div>
               <label htmlFor={PATTERN_ID} className={LABEL_CLASS}>
@@ -261,7 +280,7 @@ export function WatchTab({
               </label>
               <input
                 id={PATTERN_ID}
-                className={`${INPUT_CLASS} font-mono`}
+                {...invalidProps(failed('itemTitlePattern'), PROBLEMS_ID, 'font-mono')}
                 value={pattern}
                 onChange={e => setPattern(e.target.value)}
               />
@@ -275,7 +294,7 @@ export function WatchTab({
                 type="number"
                 min={60}
                 max={43200}
-                className={INPUT_CLASS}
+                {...invalidProps(failed('checkIntervalMinutes'), PROBLEMS_ID)}
                 value={intervalText}
                 onChange={e => setIntervalText(e.target.value)}
               />
@@ -284,8 +303,8 @@ export function WatchTab({
           {problems.length > 0 ? (
             <div id={PROBLEMS_ID} className="mt-2">
               {problems.map(p => (
-                <p key={p} className={FIELD_ERROR_CLASS} role="alert">
-                  {p}
+                <p key={p.field} className={FIELD_ERROR_CLASS} role="alert">
+                  {p.message}
                 </p>
               ))}
             </div>
@@ -369,7 +388,7 @@ export function WatchTab({
                       <td className={TD_CLASS}>{t.active ? 'yes' : 'no'}</td>
                       <td className={TD_CLASS}>{t.checkIntervalMinutes}</td>
                       <td className={TD_CLASS}>{formatTimestamp(t.lastCheckedAt)}</td>
-                      <td className={TD_CLASS}>{orDash(t.lastStatus)}</td>
+                      <td className={TD_CLASS}>{codeLabel(WATCH_STATUS_LABELS, t.lastStatus)}</td>
                       <td className={TD_CLASS}>{orDash(t.lastHttpStatus)}</td>
                       <td className={TD_CLASS}>{t.consecutiveFailures}</td>
                       <td className={TD_CLASS}>{t.citingCards}</td>
@@ -380,6 +399,7 @@ export function WatchTab({
                               variant="outline"
                               size="xs"
                               disabled={busy}
+                              aria-label={`${t.active ? 'Deactivate' : 'Activate'} target ${t.targetId}`}
                               onClick={() => void onToggle(t.targetId, !t.active)}
                             >
                               {t.active ? 'Deactivate' : 'Activate'}
@@ -388,6 +408,7 @@ export function WatchTab({
                               <Button
                                 variant="outline"
                                 size="xs"
+                                aria-label={`Edit target ${t.targetId}`}
                                 onClick={() =>
                                   setEditing({
                                     targetId: t.targetId,
@@ -409,7 +430,7 @@ export function WatchTab({
                                 </label>
                                 <input
                                   id={`${PATTERN_ID}-${t.targetId}`}
-                                  className={`${INPUT_CLASS} font-mono`}
+                                  {...invalidProps(edit.problem?.field === 'itemTitlePattern', EDIT_PROBLEM_ID, 'font-mono')}
                                   value={edit.pattern}
                                   onChange={e => setEditing({ ...edit, pattern: e.target.value, problem: null })}
                                 />
@@ -423,21 +444,31 @@ export function WatchTab({
                                   type="number"
                                   min={60}
                                   max={43200}
-                                  className={INPUT_CLASS}
+                                  {...invalidProps(edit.problem?.field === 'checkIntervalMinutes', EDIT_PROBLEM_ID)}
                                   value={edit.interval}
                                   onChange={e => setEditing({ ...edit, interval: e.target.value, problem: null })}
                                 />
                               </div>
                               {edit.problem ? (
-                                <p className={FIELD_ERROR_CLASS} role="alert">
-                                  {edit.problem}
+                                <p id={EDIT_PROBLEM_ID} className={FIELD_ERROR_CLASS} role="alert">
+                                  {edit.problem.message}
                                 </p>
                               ) : null}
                               <div className="flex gap-1">
-                                <Button size="xs" disabled={busy} onClick={() => void onSaveEdit()}>
+                                <Button
+                                  size="xs"
+                                  disabled={busy}
+                                  aria-label={`Save target ${t.targetId}`}
+                                  onClick={() => void onSaveEdit()}
+                                >
                                   Save
                                 </Button>
-                                <Button variant="ghost" size="xs" onClick={() => setEditing(null)}>
+                                <Button
+                                  variant="ghost"
+                                  size="xs"
+                                  aria-label={`Cancel editing target ${t.targetId}`}
+                                  onClick={() => setEditing(null)}
+                                >
                                   Cancel
                                 </Button>
                               </div>
@@ -453,7 +484,7 @@ export function WatchTab({
           </div>
         ) : null}
 
-        {watch.data?.nextCursor ? (
+        {watch.data?.nextCursor && !loading ? (
           <div className="mt-2">
             <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
               Load more
@@ -481,9 +512,9 @@ export function WatchTab({
               <tbody>
                 {events.map(e => (
                   <tr key={e.eventId} className="border-t border-slate-100 align-top">
-                    <td className={TD_CLASS}>{e.kind}</td>
+                    <td className={TD_CLASS}>{codeLabel(WATCH_EVENT_KIND_LABELS, e.kind)}</td>
                     <td className={TD_CLASS}>{urlLabel(e.url)}</td>
-                    <td className={TD_CLASS}>{e.recheckState}</td>
+                    <td className={TD_CLASS}>{codeLabel(RECHECK_STATE_LABELS, e.recheckState)}</td>
                     <td className={`${TD_CLASS} font-mono`}>
                       {e.recheckRunIds.length === 0 ? '—' : e.recheckRunIds.map(shortId).join(', ')}
                     </td>

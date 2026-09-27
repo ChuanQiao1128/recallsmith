@@ -21,7 +21,7 @@ import {
 } from '../api/ledger';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
-import { AUTOMATION_HREF, consoleNav } from '../components/console/consoleNav';
+import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
@@ -405,7 +405,6 @@ export function LedgerPage() {
       title={CONSOLE_NAME}
       subtitle="Automation · Ledger"
       {...consoleNav()}
-      automationHref={AUTOMATION_HREF}
     >
       <div>
         <h1 className={H1_CLASS}>Automation ledger</h1>

@@ -61,6 +61,7 @@ export function statusFixture(overrides: Partial<AutomationStatus> = {}): Automa
     spend: { todayUsd: 1.25, automationTodayUsd: 0.5, reservedUsd: 0.1, dailyCapUsd: 10 },
     watch: { targets: 4, active: 3, failing: 1, lastCheckedAt: '2026-09-28T10:00:00Z', changes7d: 2 },
     notifications: { sent24h: 3, failed24h: 0, queued: 0, lastSentAt: '2026-09-28T11:05:00Z' },
+    backlog: { humanPending: 2, oldestHumanPendingAt: '2026-09-26T12:00:00Z', humanPublishes: 1 },
     ...overrides,
   };
 }
@@ -112,6 +113,7 @@ export function runFixture(overrides: Partial<AutomationRun> = {}): AutomationRu
     ],
     summaryNotificationId: NOTIFICATION_ID,
     error: null,
+    summary: null,
     ...overrides,
   };
 }

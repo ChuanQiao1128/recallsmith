@@ -23,7 +23,7 @@ import {
 } from '../api/qa';
 import type { QaFinding, QaRun, QaRunDetail, QaScope, QaStatus } from '../api/qa';
 import { ConsoleShell } from '../components/console/ConsoleShell';
-import { AUTOMATION_HREF, consoleNav } from '../components/console/consoleNav';
+import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
@@ -542,7 +542,6 @@ export function DeckQaPage() {
       title={CONSOLE_NAME}
       subtitle="Authoring · AI QA"
       {...consoleNav({ reviewHref: deckId === null ? '/review' : `/review?deckId=${deckId}`, qaHref })}
-      automationHref={AUTOMATION_HREF}
     >
       <div>
         <h1 className={H1_CLASS}>AI QA</h1>

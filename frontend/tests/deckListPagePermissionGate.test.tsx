@@ -125,9 +125,14 @@ function inventory(): string[] {
 // `a:AI QA`, `a:Automation ledger` and `a:Review queue` for both roles, and
 // `a:Webhooks` for a super_admin only (ConsoleShell's own gate, like Admin
 // Management). Nothing else in either list moved.
+//
+// Re-measured again (B07, 2026-09-28, frontend-console-12): Automation joined
+// the shared section set, so both roles gained `a:Automation`. Nothing else in
+// either list moved.
 const SUPER_ADMIN_CONTROLS = [
   'a:AI QA',
   'a:Admin Management',
+  'a:Automation',
   'a:Automation ledger',
   'a:Content Intelligence',
   'a:Review queue',
@@ -159,6 +164,7 @@ const SUPER_ADMIN_CONTROLS = [
 // Admin Management and Webhooks. Nothing else changes between the roles.
 const EDITOR_CONTROLS = [
   'a:AI QA',
+  'a:Automation',
   'a:Automation ledger',
   'a:Content Intelligence',
   'a:Review queue',

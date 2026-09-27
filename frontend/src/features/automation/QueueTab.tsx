@@ -5,12 +5,12 @@
 import { useEffect, useState } from 'react';
 
 import { addQueueItem, listQueueItems, skipQueueItem, type QueueItem } from '../../api/automation';
-import { fetchDecks } from '../../api/authoring';
 import {
   CARD_CLASS,
   FIELD_ERROR_CLASS,
   H2_CLASS,
   INPUT_CLASS,
+  INPUT_INVALID_CLASS,
   LABEL_CLASS,
   TD_CLASS,
   TH_CLASS,
@@ -19,16 +19,21 @@ import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 import { useConfirm } from '../../components/ui/ConfirmDialogContext';
 import {
+  QUEUE_ITEM_KIND_LABELS,
   QUEUE_ITEM_STATUSES,
+  QUEUE_ITEM_STATUS_LABELS,
   automationErrorMessage,
+  codeLabel,
   formatTimestamp,
   orDash,
-  queueItemProblems,
+  queueItemFieldProblems,
   shortId,
   urlLabel,
+  type FieldProblem,
+  type QueueField,
 } from '../../lib/automationRules';
 import type { ApiError } from '../../types/api';
-import type { Deck } from '../../types/deck';
+import { DeckSelect } from './DeckSelect';
 
 const PAGE_SIZE = 50;
 const STATUS_ID = 'automation-queue-status';
@@ -50,31 +55,16 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
   const [nonce, setNonce] = useState(0);
   const [list, setList] = useState<ListState>({ forKey: null, error: null, items: [], nextCursor: null });
   const [loadingMore, setLoadingMore] = useState(false);
-  const [decks, setDecks] = useState<Deck[]>([]);
 
   const [url, setUrl] = useState('');
   const [deckId, setDeckId] = useState('');
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
-  const [problems, setProblems] = useState<string[]>([]);
+  const [problems, setProblems] = useState<Array<FieldProblem<QueueField>>>([]);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const key = `${status}|${nonce}`;
-
-  useEffect(() => {
-    if (!superAdmin) return;
-    let cancelled = false;
-    async function run() {
-      const res = await fetchDecks();
-      if (cancelled || !res.success || !res.data) return;
-      setDecks(res.data);
-    }
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [superAdmin]);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,8 +84,12 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
     };
   }, [status, nonce]);
 
+  const loading = list.forKey !== key;
+
   async function onLoadMore() {
-    if (!list.nextCursor) return;
+    // The cursor belongs to the list on screen; while a new filter loads it is foreign.
+    if (!list.nextCursor || loading) return;
+    const startKey = key;
     setLoadingMore(true);
     const res = await listQueueItems({ status: status || undefined, limit: PAGE_SIZE, cursor: list.nextCursor });
     setLoadingMore(false);
@@ -104,12 +98,27 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
       return;
     }
     const page = res.data;
-    setList(prev => ({ ...prev, items: [...prev.items, ...page.items], nextCursor: page.nextCursor }));
+    // Appended only to the list it was asked for: a filter changed meanwhile drops it.
+    setList(prev =>
+      prev.forKey === startKey ? { ...prev, items: [...prev.items, ...page.items], nextCursor: page.nextCursor } : prev,
+    );
+  }
+
+  const failed = (field: QueueField) => problems.some(p => p.field === field);
+
+  /** aria-invalid, the invalid look and the problem list for a field that failed its check. */
+  function fieldProps(field: QueueField) {
+    const invalid = failed(field);
+    return {
+      className: invalid ? INPUT_INVALID_CLASS : INPUT_CLASS,
+      'aria-invalid': invalid ? true : undefined,
+      'aria-describedby': invalid ? PROBLEMS_ID : undefined,
+    };
   }
 
   async function onAdd() {
     const deck = deckId ? Number(deckId) : null;
-    const found = queueItemProblems({ url, deckId: deck, title, note });
+    const found = queueItemFieldProblems({ url, deckId: deck, title, note });
     setProblems(found);
     setWriteError(null);
     if (found.length > 0 || deck === null) return;
@@ -142,8 +151,6 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
     setNonce(n => n + 1);
   }
 
-  const loading = list.forKey !== key;
-
   return (
     <div className="space-y-4">
       {superAdmin ? (
@@ -154,46 +161,40 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
               <label htmlFor={URL_ID} className={LABEL_CLASS}>
                 URL
               </label>
-              <input
-                id={URL_ID}
-                type="url"
-                className={INPUT_CLASS}
-                value={url}
-                onChange={e => setUrl(e.target.value)}
-                aria-describedby={problems.length > 0 ? PROBLEMS_ID : undefined}
-              />
+              <input id={URL_ID} type="url" {...fieldProps('url')} value={url} onChange={e => setUrl(e.target.value)} />
             </div>
             <div>
               <label htmlFor={DECK_ID} className={LABEL_CLASS}>
                 Deck
               </label>
-              <select id={DECK_ID} className={INPUT_CLASS} value={deckId} onChange={e => setDeckId(e.target.value)}>
-                <option value="">Choose a deck</option>
-                {decks.map(d => (
-                  <option key={d.id} value={String(d.id)}>
-                    {d.slug}
-                  </option>
-                ))}
-              </select>
+              <DeckSelect
+                id={DECK_ID}
+                value={deckId}
+                onChange={setDeckId}
+                emptyLabel="Choose a deck"
+                className={failed('deckId') ? INPUT_INVALID_CLASS : INPUT_CLASS}
+                invalid={failed('deckId')}
+                describedBy={failed('deckId') ? PROBLEMS_ID : undefined}
+              />
             </div>
             <div>
               <label htmlFor={TITLE_ID} className={LABEL_CLASS}>
                 Title
               </label>
-              <input id={TITLE_ID} className={INPUT_CLASS} value={title} onChange={e => setTitle(e.target.value)} />
+              <input id={TITLE_ID} {...fieldProps('title')} value={title} onChange={e => setTitle(e.target.value)} />
             </div>
             <div>
               <label htmlFor={NOTE_ID} className={LABEL_CLASS}>
                 Note
               </label>
-              <input id={NOTE_ID} className={INPUT_CLASS} value={note} onChange={e => setNote(e.target.value)} />
+              <input id={NOTE_ID} {...fieldProps('note')} value={note} onChange={e => setNote(e.target.value)} />
             </div>
           </div>
           {problems.length > 0 ? (
             <div id={PROBLEMS_ID} className="mt-2">
               {problems.map(p => (
-                <p key={p} className={FIELD_ERROR_CLASS} role="alert">
-                  {p}
+                <p key={p.field} className={FIELD_ERROR_CLASS} role="alert">
+                  {p.message}
                 </p>
               ))}
             </div>
@@ -223,7 +224,7 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
               <option value="">All</option>
               {QUEUE_ITEM_STATUSES.map(s => (
                 <option key={s} value={s}>
-                  {s}
+                  {codeLabel(QUEUE_ITEM_STATUS_LABELS, s)}
                 </option>
               ))}
             </select>
@@ -270,7 +271,7 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
                 {list.items.map(item => (
                   <tr key={item.itemId} className="border-t border-slate-100 align-top">
                     <td className={TD_CLASS}>{item.itemId}</td>
-                    <td className={TD_CLASS}>{item.kind}</td>
+                    <td className={TD_CLASS}>{codeLabel(QUEUE_ITEM_KIND_LABELS, item.kind)}</td>
                     <td className={TD_CLASS}>
                       <a href={item.url} target="_blank" rel="noreferrer" className="text-indigo-700 underline">
                         {urlLabel(item.url)}
@@ -281,7 +282,7 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
                       {item.sectionHint ? <div className="text-xs text-slate-500">{item.sectionHint}</div> : null}
                     </td>
                     <td className={TD_CLASS}>{orDash(item.deckSlug)}</td>
-                    <td className={TD_CLASS}>{item.status}</td>
+                    <td className={TD_CLASS}>{codeLabel(QUEUE_ITEM_STATUS_LABELS, item.status)}</td>
                     <td className={TD_CLASS}>{item.attempts}</td>
                     <td className={TD_CLASS}>{formatTimestamp(item.notBefore)}</td>
                     <td className={TD_CLASS}>{orDash(item.claimedByRunner)}</td>
@@ -314,7 +315,7 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
           </div>
         ) : null}
 
-        {list.nextCursor ? (
+        {list.nextCursor && !loading ? (
           <div className="mt-2">
             <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
               Load more
