@@ -12,10 +12,10 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { fetchDeckById, fetchDecks } from '../api/authoring';
 import { acceptDraft, fetchDraft, listDrafts, rejectDraft } from '../api/drafts';
 import { QueryKeys, useAppQueryClient } from '../api/queryClient';
-import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { CardForm } from '../components/CardForm';
 import type { CardFormValues } from '../components/CardForm';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
@@ -106,8 +106,6 @@ export function ReviewQueuePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const deckId = parseDeckId(searchParams.get('deckId'));
   const draftIdParam = parseDeckId(searchParams.get('draftId'));
-
-  const superAdmin = useMemo(() => isSuperAdmin(readSessionUser()), []);
   const queryClient = useAppQueryClient();
   const confirm = useConfirm();
 
@@ -407,13 +405,7 @@ export function ReviewQueuePage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · Review queue"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      webhooksHref="/admin/webhooks"
-      ledgerHref="/ledger"
-      reviewHref={reviewHref}
-      qaHref={deckId === null ? '/decks/qa' : qaPageHref(deckId)}
-      adminUsersHref={superAdmin ? '/admin/users' : undefined}
+      {...consoleNav({ reviewHref, qaHref: deckId === null ? '/decks/qa' : qaPageHref(deckId) })}
     >
       <div>
         <h1 className={H1_CLASS}>Review queue</h1>

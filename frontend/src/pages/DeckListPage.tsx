@@ -43,6 +43,7 @@ import { useDeckPagination } from '../features/deckList/useDeckPagination';
 import { readSessionUser, isSuperAdmin, type SessionUser } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import { DeckConsoleHeader } from '../features/deckList/components/DeckConsoleHeader';
 import { PublishJobsPanel } from '../features/deckList/components/PublishJobsPanel';
 import { DeckFilterBar } from '../features/deckList/components/DeckFilterBar';
@@ -675,8 +676,7 @@ export function DeckListPage() {
           : '—'
       }
       superAdmin={superAdmin}
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={superAdmin ? '/admin/users' : undefined}
+      {...consoleNav({ decksHref: undefined })}
     >
       <div className="w-full mx-auto space-y-6">
         {/* Header Section */}

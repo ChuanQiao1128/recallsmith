@@ -5,8 +5,8 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useCreateDeck, useUpdateDeck } from '../hooks/useDecks';
 import { buildDeckBody, parseDraftVersion, DRAFT_VERSION_ERROR } from '../lib/authoringBodies';
 import { CONSOLE_NAME, DEFAULT_DECK_AUTHOR } from '../lib/brand';
-import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 
 interface NewDeckForm {
   title: string;
@@ -197,9 +197,7 @@ export function NewDeckPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · New deck"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <div>

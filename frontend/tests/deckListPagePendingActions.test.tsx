@@ -47,6 +47,14 @@ vi.mock('../src/api/authoring', async importOriginal => {
   return { ...actual, ...api };
 });
 
+// Publish now previews the AI QA status first (contract §7.10). This file is
+// not about that preview: a clean status keeps the dialog as it was, and the
+// module is imported here so the page's dynamic import resolves from cache.
+vi.mock('../src/api/qa', async importOriginal =>
+  (await import('./support/qaStatusMock')).withCleanQaStatus(importOriginal),
+);
+await import('../src/api/qa');
+
 const { DeckListPage } = await import('../src/pages/DeckListPage');
 
 // Three rows. The middle one is the target in every case, so a mutation that

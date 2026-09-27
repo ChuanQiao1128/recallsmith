@@ -22,8 +22,8 @@ import {
   startQaRun,
 } from '../api/qa';
 import type { QaFinding, QaRun, QaRunDetail, QaScope, QaStatus } from '../api/qa';
-import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
 import {
@@ -115,7 +115,6 @@ export function DeckQaPage() {
   const deckId = parseDeckId(searchParams.get('deckId'));
   const runIdParam = searchParams.get('runId') || null;
 
-  const superAdmin = useMemo(() => isSuperAdmin(readSessionUser()), []);
 
   const [statusNonce, setStatusNonce] = useState(0);
   const [runsNonce, setRunsNonce] = useState(0);
@@ -407,13 +406,7 @@ export function DeckQaPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · AI QA"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      webhooksHref="/admin/webhooks"
-      ledgerHref="/ledger"
-      reviewHref={deckId === null ? '/review' : `/review?deckId=${deckId}`}
-      qaHref={qaHref}
-      adminUsersHref={superAdmin ? '/admin/users' : undefined}
+      {...consoleNav({ reviewHref: deckId === null ? '/review' : `/review?deckId=${deckId}`, qaHref })}
     >
       <div>
         <h1 className={H1_CLASS}>AI QA</h1>

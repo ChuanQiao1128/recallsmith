@@ -87,7 +87,7 @@ function inventory(): string[] {
   const out: string[] = [];
   // `a[href]` joined the selector when ConsoleShell's navigation controls became
   // <Link>s. Without it those two controls would have dropped out of the census
-  // silently, and "an editor does not get Admin Management" — one of the eight
+  // silently, and "an editor does not get Admin Management" — one of the nine
   // differences this file exists to record — would have become a statement
   // about a control that no longer exists in any role. The tag is part of the
   // recorded identity, so the change shows up as a:Admin Management rather than
@@ -119,9 +119,19 @@ function inventory(): string[] {
 // slug or title...`. The tab-switcher buttons gained role="tab"/aria-selected,
 // but inventory joins textContent+aria-label+placeholder, none of which moved,
 // so those two buttons keep their identity.
+//
+// Re-measured again (X06, 2026-09-27, frontend-console-7): every page now
+// passes the console's full section set, so the deck list's header gained
+// `a:AI QA`, `a:Automation ledger` and `a:Review queue` for both roles, and
+// `a:Webhooks` for a super_admin only (ConsoleShell's own gate, like Admin
+// Management). Nothing else in either list moved.
 const SUPER_ADMIN_CONTROLS = [
+  'a:AI QA',
   'a:Admin Management',
+  'a:Automation ledger',
   'a:Content Intelligence',
+  'a:Review queue',
+  'a:Webhooks',
   'button:4',
   'button:4',
   'button:Cards',
@@ -144,11 +154,14 @@ const SUPER_ADMIN_CONTROLS = [
   'select:All TypesStarterPaid|Filter by type',
 ];
 
-// The difference is exactly eight controls: the two tab-switcher buttons
+// The difference is exactly nine controls: the two tab-switcher buttons
 // (Decks / Publish Jobs), New Deck, two Publish, two Delete, and ConsoleShell's
-// Admin Management. Nothing else changes between the roles.
+// Admin Management and Webhooks. Nothing else changes between the roles.
 const EDITOR_CONTROLS = [
+  'a:AI QA',
+  'a:Automation ledger',
   'a:Content Intelligence',
+  'a:Review queue',
   'button:4',
   'button:4',
   'button:Cards',

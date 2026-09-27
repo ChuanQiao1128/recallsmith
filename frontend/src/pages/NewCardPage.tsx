@@ -8,8 +8,8 @@ import { parseDeckId } from '../lib/parseDeckId';
 import { CardForm, type CardFormValues } from '../components/CardForm';
 import { buildCardBody, buildCardSource } from '../lib/authoringBodies';
 import { CONSOLE_NAME } from '../lib/brand';
-import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 
 /**
  * Where the next card goes in the deck's running order.
@@ -73,9 +73,7 @@ export function NewCardPage() {
       <ConsoleShell
         title={CONSOLE_NAME}
         subtitle="Authoring · New card"
-        decksHref="/"
-        contentIntelligenceHref="/content-intelligence"
-        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+        {...consoleNav()}
       >
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
@@ -109,9 +107,7 @@ export function NewCardPage() {
       <ConsoleShell
         title={CONSOLE_NAME}
         subtitle="Authoring · New card"
-        decksHref="/"
-        contentIntelligenceHref="/content-intelligence"
-        adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+        {...consoleNav()}
       >
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-slate-800">New Card</h1>
@@ -188,9 +184,7 @@ export function NewCardPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · New card"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <div>

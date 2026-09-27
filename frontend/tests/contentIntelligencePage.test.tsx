@@ -593,7 +593,17 @@ describe('what the header offers each role', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Console sections' });
     const names = Array.from(nav.querySelectorAll('a')).map(a => (a.textContent ?? '').trim());
-    expect(names).toEqual(['Decks', 'Admin Management']);
+    // X06 (frontend-console-7): every page passes the same section set, so the
+    // header now also offers the HITL sections; ConsoleShell's order.
+    expect(names).toEqual([
+      'Decks',
+      'Content Intelligence',
+      'Webhooks',
+      'Automation ledger',
+      'Review queue',
+      'AI QA',
+      'Admin Management',
+    ]);
     // Sign out is an action, not a destination, so it stays a button and stays
     // outside the landmark.
     expect(nav.querySelector('button')).toBeNull();

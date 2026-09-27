@@ -20,6 +20,7 @@ import {
 } from '../api/webhooks';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
@@ -215,7 +216,7 @@ export function WebhooksPage() {
 
   if (!superAdmin) {
     return (
-      <ConsoleShell title={CONSOLE_NAME} subtitle="Admin · Webhooks" superAdmin={false} decksHref="/">
+      <ConsoleShell title={CONSOLE_NAME} subtitle="Admin · Webhooks" superAdmin={false} {...consoleNav()}>
         <Callout tone="danger" title="Access denied">
           This page requires super_admin.
         </Callout>
@@ -394,14 +395,8 @@ export function WebhooksPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Admin · Webhooks"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      webhooksHref="/admin/webhooks"
-      ledgerHref="/ledger"
-      reviewHref="/review"
-      qaHref="/decks/qa"
-      adminUsersHref="/admin/users"
       superAdmin
+      {...consoleNav()}
     >
       <h1 className={H1_CLASS}>Webhooks</h1>
 

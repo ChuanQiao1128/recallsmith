@@ -19,6 +19,7 @@ import {
 } from '../api/ledger';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
 import {
@@ -311,13 +312,7 @@ export function LedgerPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Automation · Ledger"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      webhooksHref={superAdmin ? '/admin/webhooks' : undefined}
-      ledgerHref="/ledger"
-      reviewHref="/review"
-      qaHref="/decks/qa"
-      adminUsersHref={superAdmin ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div>
         <h1 className={H1_CLASS}>Automation ledger</h1>
