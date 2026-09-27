@@ -14,7 +14,7 @@
   {"url": "https://platform.claude.com/docs/en/models/fable-5-1/whats-new-fable-5-1", "deckSlug": "claude-ccdv-f", "topicHint": "D5 Model selection & optimization", "title": "What's new in Claude Fable 5.1"},
   {"url": "https://platform.claude.com/docs/en/build-with-claude/cache-diagnostics", "deckSlug": "claude-ccdv-f", "topicHint": "D4 Eval, testing & debugging", "title": "Cache diagnostics out of beta"},
   {"url": "https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand", "deckSlug": "claude-ccdv-f", "topicHint": "D6 Prompt & context engineering", "title": "Compaction on demand (beta)"},
-  {"url": "https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback", "deckSlug": "claude-ccdv-f", "topicHint": "D7 Security & safety", "title": "Billing for refusals in specific categories"},
+  {"url": "https://platform.claude.com/docs/en/manage-claude/compliance-activity-feed", "deckSlug": "claude-ccdv-f", "topicHint": "D7 Security & safety", "title": "Activity Feed no longer returns file names or titles"},
   {"url": "https://platform.claude.com/docs/en/managed-agents/permission-policies", "deckSlug": "claude-ccdv-f", "topicHint": "D1 Agents & workflows", "title": "Claude Managed Agents permission policies add auto mode"},
-  {"url": "https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages", "deckSlug": "claude-ccdv-f", "topicHint": "D8 Tools & MCP", "title": "Define tools in a mid-conversation system message (beta)"}
+  {"url": "https://www.anthropic.com/claude-opus-5-5", "deckSlug": "claude-ccdv-f", "topicHint": "D5 Model selection & optimization", "title": "Introducing Claude Opus 5.5"}
 ]

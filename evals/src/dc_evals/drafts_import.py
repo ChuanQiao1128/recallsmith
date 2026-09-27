@@ -120,13 +120,13 @@ def import_drafts(
     drafts_path: Path,
     decks: dict[int, str],
     output: Path = AUTHORED_V2.path,
-    ingest_fn: IngestFn = ingest,
+    ingest_fn: IngestFn | None = None,
     now: dt.datetime | None = None,
 ) -> int:
     """Writes `output`: its docs rows unchanged, then the new-facts rows. 1 when a draft was left out."""
     drafts = read_jsonl(drafts_path)
     imported_at = (now or dt.datetime.now(dt.UTC)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    rows, dropped = draft_rows(drafts, decks, ingest_fn=ingest_fn, imported_at=imported_at)
+    rows, dropped = draft_rows(drafts, decks, ingest_fn=ingest_fn or ingest, imported_at=imported_at)
     kept = [row for row in read_jsonl(output) if stratum_of(row) != STRATUM_NEW_FACTS] if output.exists() else []
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as fh:
