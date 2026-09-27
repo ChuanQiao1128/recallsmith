@@ -58,12 +58,19 @@ public static class AiQaResults
   /// </summary>
   internal static TimeSpan AfterCommitBudget = TimeSpan.FromSeconds(8);
 
-  private sealed record ReportFinding(string Severity, string Category, string Message, string? SuggestedFix);
+  internal sealed record ReportFinding(string Severity, string Category, string Message, string? SuggestedFix);
 
-  private sealed record ReportItem(long CardId, string ContentSha256, string Status, string? ErrorCode, List<ReportFinding> Findings,
+  internal sealed record ReportItem(long CardId, string ContentSha256, string Status, string? ErrorCode, List<ReportFinding> Findings,
     int InputTokens, int OutputTokens, int CacheReadTokens, int? LatencyMs, string? RequestId, decimal EstimatedCostUsd);
 
-  private sealed record Report(Guid RunId, int Chunk, string? Provider, string? Model, string? PromptVersion, List<ReportItem> Items);
+  /// <summary>
+  /// A parsed report. <see cref="Target"/> is <c>card</c> (an <c>ai_qa_runs</c> chunk, absent in the body) or
+  /// <c>draft</c> (an automation draft-QA job, R18A A00 §5.4, applied by <see cref="Automation.DraftQaResults"/>).
+  /// </summary>
+  internal sealed record Report(Guid RunId, int Chunk, string? Provider, string? Model, string? PromptVersion, List<ReportItem> Items,
+    string Target);
+
+  public const string TargetCard = "card", TargetDraft = "draft";
 
   private sealed class ItemState
   {
@@ -95,6 +102,27 @@ public static class AiQaResults
 
     await using var conn = await Pg.OpenConnectionOrNullAsync();
     if (conn is null) return Authoring.Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+
+    // A draft-QA report (R18A A00 §5.4) names an automation decision's job id, never an ai_qa_runs row: it is
+    // applied before the run lookup, under the same route secret.
+    if (report.Target == TargetDraft)
+    {
+      try
+      {
+        var result = await Automation.DraftQaResults.ApplyAsync(conn, report);
+        return res.Ok(new { runId = report.RunId, runStatus = "done", cardsDone = result.Applied, cardCount = result.Items });
+      }
+      catch (PostgresException pg) when (pg.SqlState == "42P01")
+      {
+        return Authoring.Helpers.ErrorEnvelope(res, 503, "SERVER_NOT_READY_AUTOMATION",
+          "Automation tables are not migrated yet (migration 034)");
+      }
+      catch (Exception ex)
+      {
+        Log.Error("AI QA draft results handler error:", ex);
+        return res.Error500(ex);
+      }
+    }
 
     try
     {
@@ -440,6 +468,17 @@ public static class AiQaResults
       throw new ReportError("chunk must be an integer >= 0");
     }
 
+    var target = TargetCard;
+    if (body.TryGetProperty("target", out var targetEl) && targetEl.ValueKind != JsonValueKind.Null)
+    {
+      target = targetEl.ValueKind == JsonValueKind.String ? targetEl.GetString() switch
+      {
+        TargetCard => TargetCard,
+        TargetDraft => TargetDraft,
+        _ => throw new ReportError("target must be card or draft"),
+      } : throw new ReportError("target must be card or draft");
+    }
+
     var provider = OptionalString(body, "provider", MaxLabelLength, "provider");
     var model = OptionalString(body, "model", MaxLabelLength, "model");
     var promptVersion = OptionalString(body, "promptVersion", MaxLabelLength, "promptVersion");
@@ -457,7 +496,7 @@ public static class AiQaResults
       index++;
     }
 
-    return new Report(runId, chunk, provider, model, promptVersion, items);
+    return new Report(runId, chunk, provider, model, promptVersion, items, target);
   }
 
   private static ReportItem ParseItem(JsonElement el, int index)

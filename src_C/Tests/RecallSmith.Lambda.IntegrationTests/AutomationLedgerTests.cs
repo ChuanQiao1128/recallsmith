@@ -35,6 +35,8 @@ public class AutomationLedgerTests
 
   private static readonly string[] SeededAutomations =
     ["ai_draft_review", "ai_qa_review", "bulk_import", "publish_gate", "publish_pipeline", "webhook_notification"];
+  private static readonly string[] AllAutomations =
+    ["ai_draft_review", "ai_qa_review", "auto_accept", "auto_publish", "bulk_import", "publish_gate", "publish_pipeline", "source_watch", "webhook_notification"];
 
   // ---------------------------------------------------------------- helpers
 
@@ -174,8 +176,8 @@ public class AutomationLedgerTests
 
     // The shared suite database carries the same six names.
     var shared = await _db.QueryAsync("select automation from automation_baselines order by automation collate \"C\"");
-    Assert.Equal(SeededAutomations, shared.Select(r => (string)r["automation"]!).ToArray());
-    Assert.Equal(SeededAutomations.OrderBy(a => a, StringComparer.Ordinal), AutomationLedger.Automations.OrderBy(a => a, StringComparer.Ordinal));
+    Assert.Equal(AllAutomations, shared.Select(r => (string)r["automation"]!).ToArray());
+    Assert.Equal(AllAutomations.OrderBy(a => a, StringComparer.Ordinal), AutomationLedger.Automations.OrderBy(a => a, StringComparer.Ordinal));
   }
 
   [Fact]
@@ -334,7 +336,7 @@ public class AutomationLedgerTests
     Assert.Equal(0, totals.GetProperty("qaFalsePositives").GetInt64());
 
     var automations = data.GetProperty("automations").EnumerateArray().ToList();
-    Assert.Equal(SeededAutomations, automations.Select(a => a.GetProperty("automation").GetString()).ToArray());
+    Assert.Equal(AllAutomations, automations.Select(a => a.GetProperty("automation").GetString()).ToArray());
     Assert.Equal(
       new[] { "automation", "unit", "baselineMinutesPerUnit", "baselineSource", "runs", "units", "failures", "failureRate", "baselineMinutes", "actualMinutes", "minutesSaved", "defectsCaught" },
       automations[0].EnumerateObject().Select(p => p.Name).ToArray());
@@ -724,7 +726,7 @@ public class AutomationLedgerTests
     var resp = await CallAsync("GET", BaselinesPath, groups: ["editor"]);
     Assert.True(resp.StatusCode == 200, resp.Body);
     var items = Data(resp).GetProperty("items").EnumerateArray().ToList();
-    Assert.Equal(SeededAutomations, items.Select(i => i.GetProperty("automation").GetString()).ToArray());
+    Assert.Equal(AllAutomations, items.Select(i => i.GetProperty("automation").GetString()).ToArray());
     Assert.Equal(
       new[] { "automation", "unit", "baselineMinutesPerUnit", "baselineSource", "note", "updatedAt" },
       items[0].EnumerateObject().Select(p => p.Name).ToArray());

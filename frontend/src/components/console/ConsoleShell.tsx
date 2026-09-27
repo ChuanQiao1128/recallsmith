@@ -47,6 +47,9 @@ type Props = {
   reviewHref?: string;
   // Not role-gated: the AI QA routes decide who may act.
   qaHref?: string;
+  // Not role-gated, like ledgerHref: the automation read routes are RequireAdmin.
+  // Part of consoleNav(), so every console page offers it.
+  automationHref?: string;
 
   children: React.ReactNode;
 };
@@ -74,6 +77,7 @@ export function ConsoleShell({
   ledgerHref,
   reviewHref,
   qaHref,
+  automationHref,
   children,
 }: Props) {
   // Sign-out is the shell's own affair now, through AuthContext, so no page has
@@ -122,7 +126,7 @@ export function ConsoleShell({
                 Sign out is where a shell usually puts it. */}
             <nav aria-label="Console sections" className="flex items-center gap-2 flex-wrap">
               {/* Grouped: authoring (Decks, Review queue, AI QA, Content
-                  Intelligence), then the ledger, then the super_admin-only
+                  Intelligence), then the ledger and Automation, then the super_admin-only
                   sections together at the end (frontend-console-27). */}
               {decksHref ? (
                 <Link to={decksHref} {...navProps('decks')}>
@@ -151,6 +155,12 @@ export function ConsoleShell({
               {ledgerHref ? (
                 <Link to={ledgerHref} {...navProps('ledger')}>
                   Automation ledger
+                </Link>
+              ) : null}
+
+              {automationHref ? (
+                <Link to={automationHref} {...navProps('automation')}>
+                  Automation
                 </Link>
               ) : null}
 

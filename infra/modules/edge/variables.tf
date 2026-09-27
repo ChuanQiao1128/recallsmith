@@ -61,3 +61,15 @@ variable "site_bucket_name" {
   default     = ""
   description = "Landing-page bucket (prod: developercards-site-622994489535); required when manage_domain = true."
 }
+
+variable "notify_recipient_email" {
+  type        = string
+  sensitive   = true
+  description = "R18A A11: the automation email recipient (the root alert_email); verified as an SES identity because the account is in the sandbox. Never printed."
+}
+
+variable "ses_configuration_set_name" {
+  type        = string
+  default     = "developercards-automation"
+  description = "R18A A11: the SES configuration set the notifier sends through."
+}

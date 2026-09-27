@@ -50,6 +50,7 @@ import {
   ledgerBarHeight,
   ledgerLabelEvery,
   ledgerRangeProblem,
+  orderedLedgerAutomations,
 } from '../lib/ledgerView';
 import type { ApiError } from '../types/api';
 
@@ -842,7 +843,10 @@ export function LedgerPage() {
             onChange={e => setEventsAutomation(e.target.value)}
           >
             <option value="">All automations</option>
-            {LEDGER_AUTOMATIONS.map(a => (
+            {orderedLedgerAutomations([
+              ...baselines.items.map(b => b.automation),
+              ...(report?.automations ?? []).map(r => r.automation),
+            ]).map(a => (
               <option key={a} value={a}>
                 {labelFor(a)}
               </option>

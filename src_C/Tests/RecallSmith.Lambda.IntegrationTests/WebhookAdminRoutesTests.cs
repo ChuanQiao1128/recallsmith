@@ -200,7 +200,7 @@ public class WebhookAdminRoutesTests
       Assert.Equal("WEBHOOK_EVENT_UNKNOWN", ErrorCode(resp));
     }
 
-    foreach (var events in new object[] { Array.Empty<string>(), new[] { "a", "b", "c", "d", "e" }, "deck.published", new object[] { 1 } })
+    foreach (var events in new object[] { Array.Empty<string>(), new[] { "a", "b", "c", "d", "e", "f", "g", "h", "i" }, "deck.published", new object[] { 1 } })
     {
       var resp = await CallAsync("POST", SubscriptionsPath, new { name = "x", url = HookUrl(), events });
       Assert.Equal(400, resp.StatusCode);
@@ -219,7 +219,7 @@ public class WebhookAdminRoutesTests
     Assert.Equal(200, resp.StatusCode);
     var data = Data(resp);
 
-    Assert.Equal(new[] { "deck.published", "import.failed", "card.flagged", "review.queued" },
+    Assert.Equal(new[] { "deck.published", "import.failed", "card.flagged", "review.queued", "draft.auto_accepted", "automation.batch_completed", "automation.exception", "source.changed" },
       data.GetProperty("events").EnumerateArray().Select(e => e.GetString()).ToArray());
     Assert.Equal("/developercards/prod/webhook-signing-secret", data.GetProperty("signingSecretSsmName").GetString());
 

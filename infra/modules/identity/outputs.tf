@@ -66,3 +66,18 @@ output "ai_qa_role_arn" {
   value      = aws_iam_role.ai_qa.arn
   depends_on = [aws_iam_role_policy.ai_qa] # the ESM create needs the consume grant first
 }
+
+output "notifier_role_arn" {
+  value      = aws_iam_role.notifier.arn
+  depends_on = [aws_iam_role_policy.notifier] # the ESM create needs the consume grant first
+}
+
+output "source_watcher_role_arn" {
+  value      = aws_iam_role.source_watcher.arn
+  depends_on = [aws_iam_role_policy.source_watcher]
+}
+
+output "automation_scheduler_role_arn" {
+  value      = aws_iam_role.automation_scheduler.arn
+  depends_on = [aws_iam_role_policy.automation_scheduler] # a schedule is created only once its role may invoke
+}

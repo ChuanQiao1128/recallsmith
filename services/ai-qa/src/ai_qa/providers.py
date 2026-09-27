@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import anthropic
 
-from .converse_client import ConverseClient
+from .converse_client import PROVIDER_DEFAULT_EFFORT, ConverseClient
 from .settings import CONVERSE_PROVIDER, ConfigError, Settings, is_unset_secret
 
 CLIENT_TIMEOUT_SECONDS = 120.0
@@ -41,6 +41,14 @@ def make_client(
             max_retries=CLIENT_MAX_RETRIES,
         )
     raise ConfigError("unknown provider")
+
+
+def effective_effort(settings: Settings) -> str:
+    """The reasoning effort the reviewer really runs at: AI_EFFORT where the client sends it
+    (output_config.effort), else "provider-default" (bedrock-converse; converse_client.py)."""
+    if settings.provider == CONVERSE_PROVIDER:
+        return PROVIDER_DEFAULT_EFFORT
+    return settings.effort
 
 
 def structured_outputs_on(settings: Settings) -> bool:

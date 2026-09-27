@@ -58,6 +58,17 @@ locals {
     agent_admin_decks   = { route_key = "GET /api/v1/admin/decks", integration = "core_vpc", auth = "agent" }
     agent_cards_similar = { route_key = "POST /api/v1/authoring/cards/similar", integration = "core_vpc", auth = "agent" }
     agent_drafts_submit = { route_key = "POST /api/v1/authoring/drafts", integration = "core_vpc", auth = "agent" }
+
+    # R18A A10: HMAC callbacks from the source-watcher and notifier Lambdas (no JWT, no OPTIONS). Exact keys (X08).
+    internal_source_watch_targets     = { route_key = "POST /api/internal/source-watch/targets", integration = "core_vpc", auth = "none" }
+    internal_source_watch_report      = { route_key = "POST /api/internal/source-watch/report", integration = "core_vpc", auth = "none" }
+    internal_automation_tick          = { route_key = "POST /api/internal/automation/tick", integration = "core_vpc", auth = "none" }
+    internal_automation_notifications = { route_key = "POST /api/internal/automation/notifications/report", integration = "core_vpc", auth = "none" }
+
+    # R18A A10: the author runner's three calls (tools/author-runner/src) with an agent token; exact keys, as the MCP server's above.
+    agent_runner_heartbeat = { route_key = "POST /api/v1/authoring/automation/runner/heartbeat", integration = "core_vpc", auth = "agent" }
+    agent_runner_claim     = { route_key = "POST /api/v1/authoring/automation/runner/claim", integration = "core_vpc", auth = "agent" }
+    agent_runner_complete  = { route_key = "POST /api/v1/authoring/automation/runner/complete", integration = "core_vpc", auth = "agent" }
   }
 
   integration_ids = {
@@ -73,12 +84,19 @@ locals {
 
   # Lower per-route throttles layered over each stage's validated default (Changes 4).
   route_throttles = {
-    "ANY /api/v1/sync/{proxy+}"                     = { burst = 40, rate = 20 }
-    "ANY /api/v1/draw-state/{proxy+}"               = { burst = 40, rate = 20 }
-    "POST /webhooks/revenuecat/production"          = { burst = 20, rate = 10 }
-    "POST /webhooks/revenuecat/development"         = { burst = 10, rate = 5 }
-    "POST /api/internal/webhooks/deliveries/report" = { burst = 20, rate = 10 }
-    "POST /api/internal/ai-qa/results"              = { burst = 20, rate = 10 }
+    "ANY /api/v1/sync/{proxy+}"                          = { burst = 40, rate = 20 }
+    "ANY /api/v1/draw-state/{proxy+}"                    = { burst = 40, rate = 20 }
+    "POST /webhooks/revenuecat/production"               = { burst = 20, rate = 10 }
+    "POST /webhooks/revenuecat/development"              = { burst = 10, rate = 5 }
+    "POST /api/internal/webhooks/deliveries/report"      = { burst = 20, rate = 10 }
+    "POST /api/internal/ai-qa/results"                   = { burst = 20, rate = 10 }
+    "POST /api/internal/source-watch/targets"            = { burst = 20, rate = 10 }
+    "POST /api/internal/source-watch/report"             = { burst = 20, rate = 10 }
+    "POST /api/internal/automation/tick"                 = { burst = 20, rate = 10 }
+    "POST /api/internal/automation/notifications/report" = { burst = 20, rate = 10 }
+    "POST /api/v1/authoring/automation/runner/heartbeat" = { burst = 10, rate = 5 }
+    "POST /api/v1/authoring/automation/runner/claim"     = { burst = 10, rate = 5 }
+    "POST /api/v1/authoring/automation/runner/complete"  = { burst = 10, rate = 5 }
   }
 }
 

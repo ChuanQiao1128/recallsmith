@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Sample SDK release notes</title>
+  <id>urn:uuid:5f0b8a4e-1c2d-4e5f-8a9b-0c1d2e3f4a5b</id>
+  <updated>2026-09-28T06:00:00Z</updated>
+  <link rel="self" href="https://docs.example.com/sdk/releases.atom"/>
+  <link rel="alternate" href="https://docs.example.com/sdk/releases"/>
+  <entry>
+    <title type="text">SDK 4.2.0: streaming retries</title>
+    <id>urn:uuid:0a1b2c3d-0000-4000-8000-000000000420</id>
+    <link rel="edit" href="https://docs.example.com/sdk/api/entries/420"/>
+    <link rel="alternate" type="text/html" href="https://docs.example.com/sdk/releases/4.2.0"/>
+    <updated>2026-09-28T15:30:00+12:00</updated>
+    <summary>Streaming requests now retry once on a dropped connection.</summary>
+  </entry>
+  <entry>
+    <title>SDK 4.1.1: bug fixes</title>
+    <id>urn:uuid:0a1b2c3d-0000-4000-8000-000000000411</id>
+    <link href="releases/4.1.1"/>
+    <published>2026-09-20T08:00:00Z</published>
+    <summary>Fixes a pagination bug.</summary>
+  </entry>
+  <entry>
+    <title>SDK 4.1.0</title>
+    <id>urn:uuid:0a1b2c3d-0000-4000-8000-000000000410</id>
+    <link rel="related" href="https://docs.example.com/sdk/releases/4.1.0"/>
+    <updated>sometime last week</updated>
+  </entry>
+</feed>

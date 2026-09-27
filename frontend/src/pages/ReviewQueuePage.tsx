@@ -30,7 +30,9 @@ import {
   INPUT_INVALID_CLASS,
   LABEL_CLASS,
 } from '../components/console/consoleStyles';
+import { DraftAutomationPanel } from '../features/automation/DraftAutomationPanel';
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
+import { automationBlinded, draftAutomationBadgeText, draftAutomationTone } from '../lib/automationSurfaces';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   DRAFT_NOTE_MAX_LENGTH,
@@ -617,6 +619,11 @@ export function ReviewQueuePage() {
                       <div className="font-mono text-xs text-slate-600">{item.stableUid}</div>
                       <div className="text-slate-900">{firstLine(item.question)}</div>
                       {item.likelyDuplicate ? <Badge tone="warning">Likely duplicate</Badge> : null}
+                      {item.automation ? (
+                        <Badge tone={draftAutomationTone(item.automation, automationBlinded(item.automation, item.status))}>
+                          {draftAutomationBadgeText(item.automation, automationBlinded(item.automation, item.status))}
+                        </Badge>
+                      ) : null}
                     </button>
                   </li>
                 ))}
@@ -701,6 +708,13 @@ export function ReviewQueuePage() {
                     )}
 
                     <div className="space-y-4">
+                      {draft.automation ? (
+                        <DraftAutomationPanel
+                          draftId={draft.draftId}
+                          automation={draft.automation}
+                          blinded={automationBlinded(draft.automation, draft.status)}
+                        />
+                      ) : null}
                       <section className={`${CARD_CLASS} space-y-2`} aria-label="Source">
                         <h2 className={H2_CLASS}>Source</h2>
                         <SourceLink url={draft.card.source.url} />

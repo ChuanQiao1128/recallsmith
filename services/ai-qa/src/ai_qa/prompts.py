@@ -3,6 +3,11 @@
 SYSTEM_PROMPT is static — no dates, no card data — so the cached prefix never changes. The
 review date and the card travel in the user turn. Bump PROMPT_VERSION whenever the text changes:
 the eval report and every stored result carry it.
+
+The automation profile (profiles.py) reviews with SYSTEM_PROMPT_AUTOMATION, version
+PROMPT_VERSION_AUTOMATION (R18B contract K1): SYSTEM_PROMPT plus an addendum for cards that may be
+accepted and published with no human reading them. Bump PROMPT_VERSION_AUTOMATION whenever either
+text changes; the eval gate's reviewer identity carries it.
 """
 
 from __future__ import annotations
@@ -84,3 +89,15 @@ The deck is maintained against current documentation, so it can describe changes
 Reply with only a JSON object of this shape, with no prose before or after it and no code fence:
 {{"findings":[{{"severity":"blocker|major|minor","category":"<one category above>","message":"<text>","suggestedFix":"<text>"|null}}]}}
 """
+
+PROMPT_VERSION_AUTOMATION = "qa-v4-auto"
+
+# Appended to SYSTEM_PROMPT for the automation profile. Under that profile a minor finding lets the
+# card be accepted and published unread, so "cannot confirm" must route to a person (a major).
+AUTOMATION_ADDENDUM = """
+# Automation profile
+
+This card may be accepted and published to learners with no human reading it: only a blocker or major finding sends it to a person. This rule overrides the Currency section's advice to raise other (minor) for a claim you cannot confirm. When a factual claim in the answer text, the options, codeSnippet or realWorldUsage is not supported by source.quote and you cannot confirm it as well-established fact, raise source_unsupported (major) and name the claim. Under this profile that applies when source is null too (nothing supports the claim), overriding the rule that source_unsupported needs a source. Never downgrade an unconfirmable factual claim to minor under this profile. A claim that source.quote supports is supported even when it is newer than your training data. Reply in the Output format above.
+"""
+
+SYSTEM_PROMPT_AUTOMATION = SYSTEM_PROMPT + AUTOMATION_ADDENDUM

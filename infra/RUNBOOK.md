@@ -144,3 +144,151 @@ the undo: services/ai-qa/README.md "Emergency stop", services/webhook-dispatcher
    (`aws lambda get-event-source-mapping --uuid <uuid> --query State`). Both mappings list
    `enabled` in `ignore_changes`, so an apply leaves a stopped consumer stopped; re-enabling is
    always the explicit `update-event-source-mapping --uuid <uuid> --enabled`.
+
+### Automation schedules and emergency stop (R18A A10)
+
+Three EventBridge Scheduler schedules drive the automation: `developercards-source-watch`
+(`rate(1 hour)` → developercards-source-watcher:prod, `{"job":"source-watch"}`, no retry),
+`developercards-automation-tick` (`rate(15 minutes)` → developercards-notifier:prod, `{"job":"tick"}`,
+2 retries) and `developercards-automation-digest` (`cron(0 8 ? * MON *)` Pacific/Auckland →
+developercards-notifier:prod, `{"job":"digest"}`, 2 retries). They invoke the aliases through
+developercards-automation-scheduler-role (no Lambda permission). All three are **created DISABLED** and
+Terraform ignores `state`, so an apply never enables or re-disables one; the supervisor enables them
+only after the code deploy (A00 §19.2 step 6).
+
+The Scheduler invokes asynchronously. Both aliases (`developercards-notifier:prod`,
+`developercards-source-watcher:prod`) carry an event invoke config with `maximum_retry_attempts = 0` and
+`maximum_event_age_in_seconds = 900` (R18B B04), so a run that raises is not re-run by Lambda: the next
+scheduled run covers it. The Scheduler's own retry policy above only retries a delivery the Scheduler could
+not hand to Lambda. The notifier's reserved concurrency is 4 = the email mapping's `maximum_concurrency` 2 +
+one tick + one digest, so a scheduled run never throttles an email delivery (a throttled SQS delivery still
+consumes one of the five receives).
+
+Business operation of the automation (rollout off → dry_run → live, promotion criteria, what to do per
+exception email, reading the Automation page, undoing an auto-published card):
+[docs/runbooks/automation-operations.md](../docs/runbooks/automation-operations.md).
+
+**Enable / disable a schedule.** `update-schedule` replaces the whole definition, so read it first and
+send it back unchanged except for the state:
+
+1. `aws scheduler get-schedule --name <n>` (note `ScheduleExpression`, `ScheduleExpressionTimezone`,
+   `FlexibleTimeWindow` and `Target`).
+2. `aws scheduler update-schedule --name <n> --schedule-expression '<same>' [--schedule-expression-timezone Pacific/Auckland] --flexible-time-window Mode=OFF --target '<same Target JSON>' --state ENABLED`
+   (or `--state DISABLED`).
+3. `aws scheduler get-schedule --name <n> --query State` shows the new state.
+
+**After enabling the tick**, enable the tick-missing alarm's actions (they start disabled because the
+schedules start disabled; Terraform ignores `actions_enabled`):
+`aws cloudwatch enable-alarm-actions --alarm-names developercards-prod-automation-tick-missing`.
+When the tick is disabled on purpose, run `aws cloudwatch disable-alarm-actions --alarm-names developercards-prod-automation-tick-missing`
+first, or it fires two hours later.
+
+**Post-apply secret step** (supervisor, once after the A10 apply; A00 §1.3): the two callback
+secrets are created as `PLACEHOLDER-set-by-supervisor`. Set each to a random 32-byte hex value:
+`aws ssm put-parameter --overwrite --type SecureString --name /developercards/prod/source-watch-secret --value "$(openssl rand -hex 32)"`
+and the same for `/developercards/prod/notifier-secret`. core-vpc picks them up as
+`INTERNAL_SECRET_SOURCE_WATCH` / `INTERNAL_SECRET_NOTIFIER` on its next `src_C/deploy.sh`; the
+Lambdas read them at cold start. Rotate them like the other route secrets (the `-previous` leaves).
+
+Alarms (all on the alerts topic; one line each — what fired, first check):
+
+- `notify-dlq-nonempty` — an email message failed five receives and sits in developercards-notify-dlq.
+  Read the notifier's log for the message id; fix the cause (SES, the recipient parameter, core-vpc's
+  report route), then redrive the DLQ (`aws sqs start-message-move-task --source-arn <DLQ ARN>`).
+- `notifier-errors` — the notifier function raised (tick, digest or an SQS record). Check
+  `/aws/lambda/developercards-notifier` for the traceback, then `notifier-secret` and core-vpc health.
+- `source-watcher-errors` — a source-watch run raised. Check `/aws/lambda/developercards-source-watcher`,
+  `source-watch-secret` and the targets route (`POST /api/internal/source-watch/targets`).
+- `automation-tick-missing` — the notifier emitted no `AutomationTicks` heartbeat (`DeveloperCards`,
+  `Service = notifier`; one per tick invocation, whatever core answers) for two hours (actions enabled
+  only once the schedules are). Email deliveries do not emit it, so they cannot hide a stopped tick. Check
+  `developercards-automation-tick` is ENABLED, the scheduler role's `developercards-automation-scheduler-invoke`
+  policy, and the notifier's throttles (reserved concurrency 4).
+- `notification-failures` — the notifier could not deliver an email (`Service = notifier`). Check SES
+  sending status and the configuration set, and the notifier log for the failure code.
+- `automation-notify-enqueue-failures` — core-vpc failed `SendMessage` to developercards-notify. Check the
+  queue exists, `AUTOMATION_NOTIFY_QUEUE_URL` in core-vpc's environment and the grant
+  developercards-core-vpc-notify-send.
+- `automation-step-failures` — core-vpc swallowed an automation failure (`AutomationStepFailures` ≥ 1 in an
+  hour): a tick step, run finalisation, publish evaluation/reconcile or a draft-QA after-commit hook. The
+  tick still answers 200, so this is the only signal. Search core-vpc's log for `tick_step_failed` and the
+  other `warn` events of that hour (the notifier's `tick_steps_failed` event names the tick's `failedSteps`).
+  A step failing every tick stops batch summaries or publishes; fix the cause and redeploy core-vpc.
+
+**Emergency stop** (runaway automation, a bad auto-accept or auto-publish, a mail incident, a
+source-watch loop). Do the steps that apply, in this order; each takes effect on its own:
+
+0. **Revoke the active eval gate** (instant: effective `live` → `dry_run` on the next request, no deploy).
+   Console → Automation → Overview → eval-gate card → *Revoke gate* (super_admin), or
+   `POST /api/v1/admin/automation/eval-gate/<gateId>/revoke`. Only the newest gate row counts (R18B K2):
+   a revoked or failed newest gate never falls back to an older passed one, so one revoke stops every new
+   auto-accept and auto-publish. Drafting, QA and emails continue as a dry run. This is the first step for
+   anything that auto-accepts or auto-publishes.
+1. Disable the three schedules with the recipe above: `developercards-source-watch`,
+   `developercards-automation-tick`, `developercards-automation-digest` (and disable the tick-missing
+   alarm's actions first). This stops the source watch, the tick (reconcile, batch summaries, runner
+   checks) and the digest. It does **not** stop auto-accept or auto-publish: the runner's complete route
+   (`POST /api/v1/authoring/automation/runner/complete` → run finalisation) and AI QA results for drafts both finalise runs
+   and start publishes without any schedule. Use step 0 or 3 for that.
+2. Stop the email consumer: `aws lambda list-event-source-mappings --function-name developercards-notifier:prod --query 'EventSourceMappings[].UUID'`,
+   then `aws lambda update-event-source-mapping --uuid <uuid> --no-enabled`. Queued emails stay in
+   developercards-notify (4 days) and resume on `--enabled`; the mapping ignores `enabled` in Terraform.
+   Like step 1, this does not stop auto-publish.
+3. Stop the automation in core-vpc: set `AUTOMATION_MODE=off` in `src_C/env/prod.env.json` and deploy
+   core-vpc (`ENV=prod ./src_C/deploy.sh`). The only step that stops every server-side automation path
+   (it needs a deploy, so it is not instant).
+4. Stop the local runner on the owner's Mac: `tools/author-runner/scripts/uninstall.sh` (`DRY_RUN=1` first
+   prints what it would do). No new authoring runs are claimed; reinstall later with
+   `tools/author-runner/scripts/install.sh`.
+
+Undo in reverse order; re-enable the schedules only after core-vpc runs with the intended mode, and restore
+`live` only by recording a new passed eval gate (a revoked gate stays revoked). To undo a card that was
+auto-accepted or auto-published, see "Rollback" in
+[docs/runbooks/automation-operations.md](../docs/runbooks/automation-operations.md).
+
+### SES for automation emails (R18A A11)
+
+The notifier sends from `DeveloperCards Automation <automation@developercards.app>` through the SES
+domain identity `developercards.app` (Easy DKIM, RSA 2048, three `*._domainkey` CNAMEs), the custom
+MAIL FROM `mail.developercards.app` (MX `10 feedback-smtp.ap-southeast-2.amazonses.com` + SPF TXT),
+DMARC `v=DMARC1; p=none; adkim=r; aspf=r` (no `rua`: no mailbox exists) and the configuration set
+`developercards-automation`. The recipient is `var.alert_email` (sensitive, never printed): Terraform
+writes it to the SecureString `/developercards/prod/notify-recipient` and creates it as an SES email
+identity. The notifier's only SES grant is `developercards-notifier-ses-send` (`ses:SendEmail` on the
+domain identity, the recipient identity and the configuration set, `ses:FromAddress` =
+`automation@developercards.app`).
+
+**After the apply** (supervisor + owner, A00 §1.3):
+
+1. SES emails a verification link to the owner alert address; the owner clicks it (the link expires
+   after 24 h — if missed, the supervisor re-sends it from the SES console, never by CLI in a worker).
+2. Wait until both identities are verified (DKIM takes minutes up to 72 h):
+   - `aws sesv2 get-email-identity --email-identity developercards.app --query '{dkim:DkimAttributes.Status,sending:VerifiedForSendingStatus,mailFrom:MailFromAttributes.MailFromDomainStatus}'`
+     must show `dkim` = `SUCCESS`, `sending` = `true` (and `mailFrom` = `SUCCESS`).
+   - `aws sesv2 list-email-identities --query 'EmailIdentities[].[IdentityType,VerificationStatus]'`
+     shows the EMAIL_ADDRESS identity as `SUCCESS` (the listing prints the address: run it only in
+     a private terminal, never in a log or an issue).
+3. Only then send the first test email (the automation tick/digest path, A00 §19.2).
+4. A second `terraform plan` is empty.
+
+**Sandbox.** The account is in the SES sandbox (`aws sesv2 get-account` → `ProductionAccessEnabled`
+`false`): mail goes only to verified identities, at most 200 messages per 24 h and 1 per second.
+That fits the single owner recipient. Production access is an optional owner request in the SES
+console; nothing here depends on it.
+
+**Errors in the notifier's email log** (`/aws/lambda/developercards-notifier`):
+
+- `MessageRejected` — SES refused the message: the recipient identity is not verified yet (sandbox),
+  the domain identity is not verified for sending, or the sending quota is used up. Check step 2.
+- `MailFromDomainNotVerifiedException` — the MAIL FROM MX/SPF records for `mail.developercards.app`
+  are missing or not yet seen by SES; `behavior_on_mx_failure = USE_DEFAULT_VALUE` normally falls back
+  to `amazonses.com`, so this points to a changed record or attribute (re-plan; do not edit the zone by hand).
+- `AccessDeniedException` — the send was outside `developercards-notifier-ses-send`: a different
+  From address, a configuration set other than `developercards-automation`, or a recipient identity
+  that no longer matches the grant (after an `alert_email` change, before the apply).
+
+**Changing `alert_email`.** One apply changes, together, the `notify-recipient` SSM value, the SES
+recipient identity (the old one is destroyed, a new one created, and SES sends a new verification
+link to the new address) and the recipient ARN in `developercards-notifier-ses-send`. Emails fail
+with `MessageRejected` until the owner clicks the new link. The plan shows every changed value as
+`(sensitive value)`; never print the plan JSON.

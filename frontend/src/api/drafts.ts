@@ -9,6 +9,9 @@ import type {
   Draft,
   DraftAcceptResult,
   DraftAgent,
+  DraftAutomation,
+  DraftAutomationFinding,
+  DraftAutomationQa,
   DraftCard,
   DraftRejectReason,
   DraftRejectResult,
@@ -151,7 +154,54 @@ export function normalizeDraftSummary(value: unknown): DraftSummary | null {
         : similarList(raw).some(match => match.likelyDuplicate),
     createdAt: toText(raw.createdAt),
     decidedAt: toNullableText(raw.decidedAt),
+    automation: normalizeDraftAutomation(raw.automation),
   };
+}
+
+function normalizeAutomationFinding(value: unknown): DraftAutomationFinding | null {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.message !== 'string') return null;
+  return {
+    severity: toText(raw.severity),
+    category: toText(raw.category),
+    message: raw.message,
+    suggestedFix: toNullableText(raw.suggestedFix),
+  };
+}
+
+function normalizeAutomationQa(value: unknown): DraftAutomationQa | null {
+  const raw = asRecord(value);
+  if (!raw) return null;
+  return {
+    status: toNullableText(raw.status),
+    errorCode: toNullableText(raw.errorCode),
+    provider: toNullableText(raw.provider),
+    model: toNullableText(raw.model),
+    promptVersion: toNullableText(raw.promptVersion),
+    blocker: toNumber(raw.blocker) ?? 0,
+    major: toNumber(raw.major) ?? 0,
+    minor: toNumber(raw.minor) ?? 0,
+    findings: Array.isArray(raw.findings)
+      ? raw.findings.map(normalizeAutomationFinding).filter((f): f is DraftAutomationFinding => f !== null)
+      : [],
+  };
+}
+
+/**
+ * A00 §5.10: the automation block of GET drafts (state/reason/mode) and of
+ * GET drafts/:draftId (plus the detail keys, copied only when present). A server
+ * before migration 034 sends null or no key; both become null.
+ */
+export function normalizeDraftAutomation(value: unknown): DraftAutomation | null {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.state !== 'string' || raw.state === '') return null;
+  const out: DraftAutomation = { state: raw.state, reason: toNullableText(raw.reason), mode: toText(raw.mode) };
+  if ('runId' in raw) out.runId = toNullableText(raw.runId);
+  if ('reasonDetail' in raw) out.reasonDetail = toNullableText(raw.reasonDetail);
+  if ('qa' in raw) out.qa = normalizeAutomationQa(raw.qa);
+  if ('acceptedCardId' in raw) out.acceptedCardId = toNumber(raw.acceptedCardId);
+  if ('humanAction' in raw) out.humanAction = toNullableText(raw.humanAction);
+  return out;
 }
 
 export function normalizeDraft(value: unknown): Draft | null {

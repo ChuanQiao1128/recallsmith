@@ -33,6 +33,7 @@ import {
   H2_CLASS,
   INPUT_CLASS,
 } from '../components/console/consoleStyles';
+import { automationQaRunLabel } from '../lib/automationSurfaces';
 import { CONSOLE_NAME } from '../lib/brand';
 import { reviewClockMs, setReviewClockVisible, startReviewClock } from '../lib/draftReview';
 import type { ReviewClock } from '../lib/draftReview';
@@ -997,30 +998,43 @@ export function DeckQaPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {runs.map(run => (
-                      <tr key={run.runId} className={run.runId === shownRunId ? 'bg-indigo-50' : undefined}>
-                        <td className="py-1 pr-3">{formatTime(run.createdAt)}</td>
-                        <td className="py-1 pr-3">{run.scope}</td>
-                        <td className="py-1 pr-3">{run.effectiveStatus}</td>
-                        <td className="py-1 pr-3">
-                          {run.cardsDone}/{run.cardCount}
-                        </td>
-                        <td className="py-1 pr-3">
-                          {run.blockerCount}/{run.majorCount}/{run.minorCount}
-                        </td>
-                        <td className="py-1 pr-3">{formatUsd(run.estimatedCostUsd)}</td>
-                        <td className="py-1">
-                          <Button
-                            variant="outline"
-                            size="xs"
-                            aria-label={`View run ${run.runId}`}
-                            onClick={() => showRun(run.runId)}
-                          >
-                            View
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
+                    {runs.map(run => {
+                      const originLabel = automationQaRunLabel(run);
+                      return (
+                        <tr key={run.runId} className={run.runId === shownRunId ? 'bg-indigo-50' : undefined}>
+                          <td className="py-1 pr-3">{formatTime(run.createdAt)}</td>
+                          <td className="py-1 pr-3">
+                            {run.scope}
+                            {originLabel ? (
+                              <>
+                                {' '}
+                                <span data-testid="qa-run-origin">
+                                  <Badge tone="info">{originLabel}</Badge>
+                                </span>
+                              </>
+                            ) : null}
+                          </td>
+                          <td className="py-1 pr-3">{run.effectiveStatus}</td>
+                          <td className="py-1 pr-3">
+                            {run.cardsDone}/{run.cardCount}
+                          </td>
+                          <td className="py-1 pr-3">
+                            {run.blockerCount}/{run.majorCount}/{run.minorCount}
+                          </td>
+                          <td className="py-1 pr-3">{formatUsd(run.estimatedCostUsd)}</td>
+                          <td className="py-1">
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              aria-label={`View run ${run.runId}`}
+                              onClick={() => showRun(run.runId)}
+                            >
+                              View
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

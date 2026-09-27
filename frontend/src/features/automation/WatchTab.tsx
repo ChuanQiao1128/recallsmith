@@ -1,0 +1,532 @@
+// src/features/automation/WatchTab.tsx
+//
+// The Watch tab (A00 §8.6): the watched pages and feeds and their recent
+// events. `?tab=watch&targetId=` (the source.changed webhook's link) marks the
+// target's row. A super_admin may add a feed, toggle a target and edit its
+// title pattern and interval. The pattern is a PostgreSQL regular expression,
+// so only the server can say whether it compiles (WATCH_PATTERN_INVALID).
+import { useEffect, useState } from 'react';
+
+import { addWatchTarget, fetchWatch, updateWatchTarget, type WatchPage } from '../../api/automation';
+import {
+  CARD_CLASS,
+  FIELD_ERROR_CLASS,
+  H2_CLASS,
+  INPUT_CLASS,
+  INPUT_INVALID_CLASS,
+  LABEL_CLASS,
+  TD_CLASS,
+  TH_CLASS,
+} from '../../components/console/consoleStyles';
+import { Button } from '../../components/ui/Button';
+import { Callout } from '../../components/ui/Callout';
+import {
+  FEED_FORMATS,
+  RECHECK_STATE_LABELS,
+  WATCH_EVENT_KIND_LABELS,
+  WATCH_STATUS_LABELS,
+  automationErrorMessage,
+  codeLabel,
+  formatTimestamp,
+  orDash,
+  shortId,
+  urlLabel,
+  watchEditProblem,
+  watchTargetFieldProblems,
+  type FieldProblem,
+  type WatchField,
+} from '../../lib/automationRules';
+import type { ApiError } from '../../types/api';
+import { DeckSelect } from './DeckSelect';
+
+const PAGE_SIZE = 50;
+const DEFAULT_INTERVAL = '360';
+const URL_ID = 'automation-watch-url';
+const FORMAT_ID = 'automation-watch-format';
+const DECK_ID = 'automation-watch-deck';
+const PATTERN_ID = 'automation-watch-pattern';
+const INTERVAL_ID = 'automation-watch-interval';
+const PROBLEMS_ID = 'automation-watch-problems';
+const EDIT_PROBLEM_ID = 'automation-watch-edit-problem';
+
+type WatchState = { forKey: string | null; error: string | null; data: WatchPage | null };
+type EditState = {
+  targetId: number;
+  pattern: string;
+  interval: string;
+  problem: FieldProblem<'itemTitlePattern' | 'checkIntervalMinutes'> | null;
+};
+
+function errorText(error: ApiError | null, fallback: string): string {
+  return automationErrorMessage(error?.code, error?.message ?? fallback);
+}
+
+/** DeckSelect's spelling of invalidProps. */
+function deckInvalidProps(invalid: boolean) {
+  return {
+    className: invalid ? INPUT_INVALID_CLASS : INPUT_CLASS,
+    invalid,
+    describedBy: invalid ? PROBLEMS_ID : undefined,
+  };
+}
+
+/** aria-invalid, the invalid look and the message link for a field that failed its check. */
+function invalidProps(invalid: boolean, describedBy: string, extraClass = '') {
+  const base = invalid ? INPUT_INVALID_CLASS : INPUT_CLASS;
+  return {
+    className: extraClass ? `${base} ${extraClass}` : base,
+    'aria-invalid': invalid ? true : undefined,
+    'aria-describedby': invalid ? describedBy : undefined,
+  };
+}
+
+export function WatchTab({
+  superAdmin,
+  targetId,
+  announce,
+}: {
+  superAdmin: boolean;
+  targetId: number | null;
+  announce: (text: string) => void;
+}) {
+  const [nonce, setNonce] = useState(0);
+  const [watch, setWatch] = useState<WatchState>({ forKey: null, error: null, data: null });
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [url, setUrl] = useState('');
+  const [feedFormat, setFeedFormat] = useState<string>(FEED_FORMATS[0]);
+  const [deckId, setDeckId] = useState('');
+  const [pattern, setPattern] = useState('');
+  const [intervalText, setIntervalText] = useState(DEFAULT_INTERVAL);
+  const [problems, setProblems] = useState<Array<FieldProblem<WatchField>>>([]);
+  const [editing, setEditing] = useState<EditState | null>(null);
+
+  const key = String(nonce);
+
+  useEffect(() => {
+    let cancelled = false;
+    const forKey = String(nonce);
+    async function run() {
+      const res = await fetchWatch({ limit: PAGE_SIZE });
+      if (cancelled) return;
+      if (!res.success || !res.data) {
+        setWatch({ forKey, error: errorText(res.error, 'Failed to load the watched sources.'), data: null });
+        return;
+      }
+      setWatch({ forKey, error: null, data: res.data });
+    }
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [nonce]);
+
+  const loading = watch.forKey !== key;
+
+  async function onLoadMore() {
+    const cursor = watch.data?.nextCursor;
+    // The cursor belongs to the list on screen; while a refresh loads it may be stale.
+    if (!cursor || loading) return;
+    const startKey = key;
+    setLoadingMore(true);
+    const res = await fetchWatch({ limit: PAGE_SIZE, cursor });
+    setLoadingMore(false);
+    if (!res.success || !res.data) {
+      setWriteError(errorText(res.error, 'Failed to load more targets.'));
+      return;
+    }
+    const page = res.data;
+    setWatch(prev =>
+      prev.data && prev.forKey === startKey
+        ? { ...prev, data: { ...prev.data, items: [...prev.data.items, ...page.items], nextCursor: page.nextCursor } }
+        : prev,
+    );
+  }
+
+  async function onAdd() {
+    const deck = deckId ? Number(deckId) : null;
+    const minutes = Number(intervalText);
+    const found = watchTargetFieldProblems({
+      url,
+      feedFormat,
+      deckId: deck,
+      itemTitlePattern: pattern,
+      checkIntervalMinutes: minutes,
+    });
+    setProblems(found);
+    setWriteError(null);
+    if (found.length > 0 || deck === null) return;
+    setBusy(true);
+    const res = await addWatchTarget({
+      url: url.trim(),
+      feedFormat,
+      deckId: deck,
+      itemTitlePattern: pattern === '' ? null : pattern,
+      checkIntervalMinutes: minutes,
+    });
+    setBusy(false);
+    if (!res.success || !res.data) {
+      const text = errorText(res.error, 'The feed could not be added.');
+      // Only PostgreSQL can compile the pattern, so its refusal belongs to that field.
+      if (res.error?.code === 'WATCH_PATTERN_INVALID') setProblems([{ field: 'itemTitlePattern', message: text }]);
+      else setWriteError(text);
+      return;
+    }
+    setUrl('');
+    setPattern('');
+    setIntervalText(DEFAULT_INTERVAL);
+    announce(`Feed ${res.data.targetId} added.`);
+    setNonce(n => n + 1);
+  }
+
+  async function onToggle(id: number, active: boolean) {
+    setWriteError(null);
+    setBusy(true);
+    const res = await updateWatchTarget(id, { active });
+    setBusy(false);
+    if (!res.success) {
+      setWriteError(errorText(res.error, 'The target could not be changed.'));
+      return;
+    }
+    announce(`Target ${id} ${active ? 'activated' : 'deactivated'}.`);
+    setNonce(n => n + 1);
+  }
+
+  async function onSaveEdit() {
+    if (!editing) return;
+    const minutes = Number(editing.interval);
+    const problem = watchEditProblem(editing.pattern, minutes);
+    if (problem) {
+      setEditing({ ...editing, problem });
+      return;
+    }
+    setWriteError(null);
+    setBusy(true);
+    const res = await updateWatchTarget(editing.targetId, {
+      itemTitlePattern: editing.pattern === '' ? null : editing.pattern,
+      checkIntervalMinutes: minutes,
+    });
+    setBusy(false);
+    if (!res.success) {
+      const text = errorText(res.error, 'The target could not be changed.');
+      if (res.error?.code === 'WATCH_PATTERN_INVALID') {
+        setEditing({ ...editing, problem: { field: 'itemTitlePattern', message: text } });
+      } else {
+        setWriteError(text);
+      }
+      return;
+    }
+    announce(`Target ${editing.targetId} saved.`);
+    setEditing(null);
+    setNonce(n => n + 1);
+  }
+
+  const targets = watch.data?.items ?? [];
+  const events = watch.data?.recentEvents ?? [];
+  const failed = (field: WatchField) => problems.some(p => p.field === field);
+
+  return (
+    <div className="space-y-4">
+      {superAdmin ? (
+        <section className={CARD_CLASS} aria-label="Add a feed">
+          <h2 className={H2_CLASS}>Add a feed</h2>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor={URL_ID} className={LABEL_CLASS}>
+                Feed URL
+              </label>
+              <input
+                id={URL_ID}
+                type="url"
+                {...invalidProps(failed('url'), PROBLEMS_ID)}
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor={FORMAT_ID} className={LABEL_CLASS}>
+                Feed format
+              </label>
+              <select
+                id={FORMAT_ID}
+                {...invalidProps(failed('feedFormat'), PROBLEMS_ID)}
+                value={feedFormat}
+                onChange={e => setFeedFormat(e.target.value)}
+              >
+                {FEED_FORMATS.map(f => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor={DECK_ID} className={LABEL_CLASS}>
+                Deck
+              </label>
+              <DeckSelect
+                id={DECK_ID}
+                value={deckId}
+                onChange={setDeckId}
+                emptyLabel="Choose a deck"
+                {...deckInvalidProps(failed('deckId'))}
+              />
+            </div>
+            <div>
+              <label htmlFor={PATTERN_ID} className={LABEL_CLASS}>
+                Title pattern (PostgreSQL regex)
+              </label>
+              <input
+                id={PATTERN_ID}
+                {...invalidProps(failed('itemTitlePattern'), PROBLEMS_ID, 'font-mono')}
+                value={pattern}
+                onChange={e => setPattern(e.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor={INTERVAL_ID} className={LABEL_CLASS}>
+                Check interval (minutes)
+              </label>
+              <input
+                id={INTERVAL_ID}
+                type="number"
+                min={60}
+                max={43200}
+                {...invalidProps(failed('checkIntervalMinutes'), PROBLEMS_ID)}
+                value={intervalText}
+                onChange={e => setIntervalText(e.target.value)}
+              />
+            </div>
+          </div>
+          {problems.length > 0 ? (
+            <div id={PROBLEMS_ID} className="mt-2">
+              {problems.map(p => (
+                <p key={p.field} className={FIELD_ERROR_CLASS} role="alert">
+                  {p.message}
+                </p>
+              ))}
+            </div>
+          ) : null}
+          <div className="mt-2">
+            <Button size="xs" disabled={busy} onClick={() => void onAdd()}>
+              Add feed
+            </Button>
+          </div>
+        </section>
+      ) : null}
+
+      {writeError ? (
+        <Callout tone="danger" role="alert">
+          {writeError}
+        </Callout>
+      ) : null}
+
+      <section className={CARD_CLASS} aria-label="Watched sources">
+        <div className="flex flex-wrap items-end gap-3">
+          <h2 className={H2_CLASS}>Watched sources</h2>
+          <Button variant="outline" size="xs" loading={loading} onClick={() => setNonce(n => n + 1)}>
+            Refresh
+          </Button>
+        </div>
+
+        {watch.error ? (
+          <div className="mt-2">
+            <Callout tone="danger" role="alert">
+              {watch.error}
+            </Callout>
+          </div>
+        ) : null}
+        {watch.data && targets.length === 0 ? (
+          <p className="text-sm text-slate-600 mt-2">Nothing is watched yet.</p>
+        ) : null}
+
+        {targets.length > 0 ? (
+          <div className="mt-2 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className={TH_CLASS}>Target</th>
+                  <th className={TH_CLASS}>Kind</th>
+                  <th className={TH_CLASS}>URL</th>
+                  <th className={TH_CLASS}>Feed format</th>
+                  <th className={TH_CLASS}>Deck</th>
+                  <th className={TH_CLASS}>Active</th>
+                  <th className={TH_CLASS}>Interval (min)</th>
+                  <th className={TH_CLASS}>Last checked</th>
+                  <th className={TH_CLASS}>Last status</th>
+                  <th className={TH_CLASS}>HTTP</th>
+                  <th className={TH_CLASS}>Failures</th>
+                  <th className={TH_CLASS}>Citing cards</th>
+                  {superAdmin ? <th className={TH_CLASS}>Actions</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {targets.map(t => {
+                  const marked = t.targetId === targetId;
+                  const edit = editing && editing.targetId === t.targetId ? editing : null;
+                  return (
+                    <tr
+                      key={t.targetId}
+                      className={`border-t border-slate-100 align-top${marked ? ' bg-indigo-50' : ''}`}
+                      aria-current={marked ? 'true' : undefined}
+                      data-testid={`automation-watch-target-${t.targetId}`}
+                    >
+                      <td className={TD_CLASS}>{t.targetId}</td>
+                      <td className={TD_CLASS}>{t.kind}</td>
+                      <td className={TD_CLASS}>
+                        <a href={t.url} target="_blank" rel="noreferrer" className="text-indigo-700 underline">
+                          {urlLabel(t.url)}
+                        </a>
+                        {t.itemTitlePattern ? (
+                          <div className="text-xs text-slate-500 font-mono break-all">{t.itemTitlePattern}</div>
+                        ) : null}
+                      </td>
+                      <td className={TD_CLASS}>{orDash(t.feedFormat)}</td>
+                      <td className={TD_CLASS}>{orDash(t.deckSlug)}</td>
+                      <td className={TD_CLASS}>{t.active ? 'yes' : 'no'}</td>
+                      <td className={TD_CLASS}>{t.checkIntervalMinutes}</td>
+                      <td className={TD_CLASS}>{formatTimestamp(t.lastCheckedAt)}</td>
+                      <td className={TD_CLASS}>{codeLabel(WATCH_STATUS_LABELS, t.lastStatus)}</td>
+                      <td className={TD_CLASS}>{orDash(t.lastHttpStatus)}</td>
+                      <td className={TD_CLASS}>{t.consecutiveFailures}</td>
+                      <td className={TD_CLASS}>{t.citingCards}</td>
+                      {superAdmin ? (
+                        <td className={TD_CLASS}>
+                          <div className="flex flex-wrap gap-1">
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              disabled={busy}
+                              aria-label={`${t.active ? 'Deactivate' : 'Activate'} target ${t.targetId}`}
+                              onClick={() => void onToggle(t.targetId, !t.active)}
+                            >
+                              {t.active ? 'Deactivate' : 'Activate'}
+                            </Button>
+                            {edit ? null : (
+                              <Button
+                                variant="outline"
+                                size="xs"
+                                aria-label={`Edit target ${t.targetId}`}
+                                onClick={() =>
+                                  setEditing({
+                                    targetId: t.targetId,
+                                    pattern: t.itemTitlePattern ?? '',
+                                    interval: String(t.checkIntervalMinutes),
+                                    problem: null,
+                                  })
+                                }
+                              >
+                                Edit
+                              </Button>
+                            )}
+                          </div>
+                          {edit ? (
+                            <div className="mt-2 space-y-2 min-w-[16rem]">
+                              <div>
+                                <label htmlFor={`${PATTERN_ID}-${t.targetId}`} className={LABEL_CLASS}>
+                                  Title pattern (PostgreSQL regex)
+                                </label>
+                                <input
+                                  id={`${PATTERN_ID}-${t.targetId}`}
+                                  {...invalidProps(edit.problem?.field === 'itemTitlePattern', EDIT_PROBLEM_ID, 'font-mono')}
+                                  value={edit.pattern}
+                                  onChange={e => setEditing({ ...edit, pattern: e.target.value, problem: null })}
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`${INTERVAL_ID}-${t.targetId}`} className={LABEL_CLASS}>
+                                  Check interval (minutes)
+                                </label>
+                                <input
+                                  id={`${INTERVAL_ID}-${t.targetId}`}
+                                  type="number"
+                                  min={60}
+                                  max={43200}
+                                  {...invalidProps(edit.problem?.field === 'checkIntervalMinutes', EDIT_PROBLEM_ID)}
+                                  value={edit.interval}
+                                  onChange={e => setEditing({ ...edit, interval: e.target.value, problem: null })}
+                                />
+                              </div>
+                              {edit.problem ? (
+                                <p id={EDIT_PROBLEM_ID} className={FIELD_ERROR_CLASS} role="alert">
+                                  {edit.problem.message}
+                                </p>
+                              ) : null}
+                              <div className="flex gap-1">
+                                <Button
+                                  size="xs"
+                                  disabled={busy}
+                                  aria-label={`Save target ${t.targetId}`}
+                                  onClick={() => void onSaveEdit()}
+                                >
+                                  Save
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="xs"
+                                  aria-label={`Cancel editing target ${t.targetId}`}
+                                  onClick={() => setEditing(null)}
+                                >
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </td>
+                      ) : null}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+
+        {watch.data?.nextCursor && !loading ? (
+          <div className="mt-2">
+            <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
+              Load more
+            </Button>
+          </div>
+        ) : null}
+      </section>
+
+      <section className={CARD_CLASS} aria-label="Recent watch events">
+        <h2 className={H2_CLASS}>Recent events</h2>
+        {watch.data && events.length === 0 ? <p className="text-sm text-slate-600 mt-2">No event yet.</p> : null}
+        {events.length > 0 ? (
+          <div className="mt-2 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className={TH_CLASS}>Kind</th>
+                  <th className={TH_CLASS}>URL</th>
+                  <th className={TH_CLASS}>Re-check</th>
+                  <th className={TH_CLASS}>Re-check runs</th>
+                  <th className={TH_CLASS}>Queue items</th>
+                  <th className={TH_CLASS}>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map(e => (
+                  <tr key={e.eventId} className="border-t border-slate-100 align-top">
+                    <td className={TD_CLASS}>{codeLabel(WATCH_EVENT_KIND_LABELS, e.kind)}</td>
+                    <td className={TD_CLASS}>{urlLabel(e.url)}</td>
+                    <td className={TD_CLASS}>{codeLabel(RECHECK_STATE_LABELS, e.recheckState)}</td>
+                    <td className={`${TD_CLASS} font-mono`}>
+                      {e.recheckRunIds.length === 0 ? '—' : e.recheckRunIds.map(shortId).join(', ')}
+                    </td>
+                    <td className={TD_CLASS}>{e.queueItemIds.length === 0 ? '—' : e.queueItemIds.join(', ')}</td>
+                    <td className={TD_CLASS}>{formatTimestamp(e.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}

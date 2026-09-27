@@ -193,7 +193,6 @@ public static class Publish
       : "publish";
 
     var queueUrl = TestEnqueueSeam?.QueueUrl ?? PublishJobQueueUrl;
-    var contentBucket = TestEnqueueSeam?.ContentBucket ?? ContentBucket;
 
     if (mode == "publish" && string.IsNullOrEmpty(queueUrl)) return Helpers.ConfigError(res, "Missing env PUBLISH_JOB_QUEUE_URL");
 
@@ -216,46 +215,18 @@ public static class Publish
       var denyDeck = await Helpers.RequireDeckWrite(conn, adminSub, deckIdInt, isSuperAdmin, res);
       if (denyDeck is not null) return denyDeck;
 
-      const string deckSql = """
-        select
-          id,
-          slug,
-          title,
-          author,
-          description,
-          locale,
-          deck_type as "deckType",
-          version,
-          tier,
-          total_cards as "totalCards",
-          preview_cards as "previewCards",
-          is_deleted as "isDeleted",
-          updated_at as "updatedAt"
-        from decks
-        where id = $1
-        limit 1
-        """;
-
-      var deckRows = await DbUtil.QueryAsync(conn, null, deckSql, [deckIdInt]);
-      if (deckRows.Count == 0) return res.NotFound("Deck not found");
-
-      var deck = deckRows[0];
-      if (Convert.ToInt32(deck["isDeleted"], CultureInfo.InvariantCulture) == 1)
+      if (mode == "publish")
       {
-        return res.BadRequest("DECK_DELETED", "Deck is deleted (cannot publish)");
+        // The publish path is shared with the automation (A00 §6.4); the console binds the snapshot only when the
+        // AI QA gate is enforced and resumes a recent active job instead of refusing it.
+        var start = await StartPublishAsync(conn, deckIdInt, adminSub!, note, bindSnapshot: Qa.QaGate.IsEnforced(), expectedSnapshot: null,
+          allowResume: true);
+        return StartResponse(start, res);
       }
 
-      var deckSlug = Validation.RequireSlug(Convert.ToString(deck["slug"], CultureInfo.InvariantCulture), "deckSlug");
-
-      var cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckIdInt]);
-
-      var deckType = Convert.ToInt64(deck["deckType"], CultureInfo.InvariantCulture);
-      var tier = InferTier(deckType, deck.TryGetValue("tier", out var tv) ? tv : null);
-
-      if (tier == "premium" && string.IsNullOrEmpty(PremiumBucket))
-      {
-        return Helpers.ConfigError(res, "Missing env PREMIUM_BUCKET");
-      }
+      var loaded = await LoadDeckAsync(conn, deckIdInt);
+      if (loaded.Refusal is not null) return StartResponse(loaded.Refusal, res);
+      var (deck, deckSlug, cardRows, deckType, tier) = (loaded.Deck!, loaded.DeckSlug!, loaded.CardRows!, loaded.DeckType, loaded.Tier!);
 
       var baseCards = cardRows.Select(c => new
       {
@@ -284,138 +255,14 @@ public static class Publish
         cards = baseCards,
       };
 
-      if (mode == "preview")
-      {
-        return res.Ok(new
-        {
-          mode = "preview",
-          deckId = deckIdInt,
-          deckSlug,
-          tier,
-          cardCount = baseCards.Count,
-          export = baseDeckJson,
-        });
-      }
-
-      // Pre-enqueue gate (publish only — the preview above has already returned). A stored MCQ
-      // blob that no longer satisfies the API rules must not reach the Worker, which serialises
-      // it verbatim into deck.json / chunks / patches.
-      var gate = FirstMcqGateFailure(cardRows);
-      if (gate is not null)
-      {
-        await RecordGateDefectAsync(conn, deckIdInt, gate.Value.StableUid, gate.Value.Code, cardRows);
-        return res.BadRequest("MCQ_PUBLISH_GATE", $"{gate.Value.StableUid}: {gate.Value.Code}");
-      }
-
-      // AI QA gate (contract §7.10): refuses only when AI_QA_ENABLED and AI_QA_REQUIRED are both truthy. A refusal
-      // for unreviewed cards also starts (or reuses) the QA run that would clear it (automation-17).
-      var qaGate = await Qa.QaGate.EvaluatePublishAsync(conn, deckIdInt, res, adminSub);
-      if (qaGate is not null) return qaGate;
-
-      // Bind the build to what the gate passed (backend-design-16): the cards read before the gate must still be
-      // the cards after it, and the Worker refuses to build from anything else (AI_QA_STALE).
-      string? qaSnapshot = null;
-      if (Qa.QaGate.IsEnforced())
-      {
-        var gated = PublishSnapshot.Digest(cardRows.Select(PublishSnapshot.FromRow));
-        var current = PublishSnapshot.Digest((await DbUtil.QueryAsync(conn, null, CardsSql, [deckIdInt])).Select(PublishSnapshot.FromRow));
-        if (!string.Equals(gated, current, StringComparison.Ordinal))
-        {
-          Log.Event("info", new { tag = "publish", outcome = "refused", code = PublishSnapshot.StaleErrorCode, deckId = deckIdInt });
-          RouteMetrics.EmitGauge(PublishSnapshot.StaleMetric, 1);
-          return Helpers.ErrorEnvelope(res, 409, PublishSnapshot.StaleErrorCode,
-            "Cards changed while the publish was being checked; publish again so the AI QA gate sees the current cards");
-        }
-        qaSnapshot = current;
-      }
-
-      // --- ASYNC PUBLISH LOGIC ---
-
-      // 💡 核心防御：防重复并发提交（幂等性）。
-      // 如果用户在 15 分钟内重复点击（或 F5 刷新后再次点击），直接返回正在处理的 jobId，让前端顺滑接管轮询。
-      const string checkDuplicateSql = """
-        select job_id as "jobId"
-        from deck_publishes 
-        where deck_id = $1 
-          and status in ('PENDING', 'PROCESSING') 
-          and updated_at > now() - interval '15 minutes'
-        limit 1
-        """;
-      var existingRows = await DbUtil.QueryAsync(conn, null, checkDuplicateSql, [deckIdInt]);
-      if (existingRows.Count > 0)
-      {
-        var existingJobId = Convert.ToString(existingRows[0]["jobId"], CultureInfo.InvariantCulture);
-        Log.Event("info", new { tag = "publish", outcome = "resumed", jobId = existingJobId, deckId = deckIdInt, deckSlug });
-        return res.Ok(new { mode = "async", jobId = existingJobId, note = "Resumed existing job" });
-      }
-
-      // 1. Generate Job ID
-      var jobId = Guid.NewGuid().ToString();
-      // 💡 修复：为 PENDING 任务预先生成一个 buildId 以满足数据库非空约束
-      var buildId = MakeBuildId();
-
-      // 💡 修复：预先计算出 s3_key 以满足数据库非空约束
-      // 这个路径格式必须和 ManifestRebuild.cs 中的逻辑保持一致
-      string s3Key;
-      if (tier == "premium")
-      {
-        if (string.IsNullOrEmpty(PremiumBucket)) throw new InvalidOperationException("Missing env PREMIUM_BUCKET for premium deck");
-        s3Key = $"{PremiumPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
-      }
-      else
-      {
-        if (string.IsNullOrEmpty(contentBucket)) throw new InvalidOperationException("Missing env CONTENT_BUCKET for free deck");
-        s3Key = $"{ContentPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
-      }
-
-      // 2. Insert PENDING job record into the database
-      const string insertJobSql = """
-        insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note)
-        values ($1, $2, $3, $4, $5, 'PENDING', $6, $7)
-        """;
-      const string insertGatedJobSql = """
-        insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note, qa_snapshot_sha256)
-        values ($1, $2, $3, $4, $5, 'PENDING', $6, $7, $8)
-        """;
-      if (qaSnapshot is null) await DbUtil.ExecuteAsync(conn, null, insertJobSql, [jobId, buildId, s3Key, deckIdInt, deckSlug, adminSub, note]);
-      else await DbUtil.ExecuteAsync(conn, null, insertGatedJobSql, [jobId, buildId, s3Key, deckIdInt, deckSlug, adminSub, note, qaSnapshot]);
-
-      // 3. Create the SQS message payload
-      var messageBody = JsonSerializer.Serialize(new
-      {
-        jobId,
-        deckId = deckIdInt,
-        // 💡 最佳实践：把 Worker 需要的所有信息都放进消息体
-        adminSub,
-        note
-      });
-
-      // 4. Send the message to the SQS queue
-      var sendMessageRequest = new SendMessageRequest
-      {
-        QueueUrl = queueUrl,
-        MessageBody = messageBody
-      };
-
-      try
-      {
-        if (TestEnqueueSeam is not null) await TestEnqueueSeam.Send(sendMessageRequest);
-        else await SQS().SendMessageAsync(sendMessageRequest);
-        Log.Event("info", new { tag = "publish", outcome = "enqueued", jobId, deckId = deckIdInt, deckSlug, buildId });
-      }
-      catch (Exception ex)
-      {
-        // 💡 核心防御：双写失败回退
-        // 如果 SQS 网络抖动发送失败，立刻将数据库任务状态标为 FAILED，防止产生永远等不到 Worker 的孤儿订单
-        Log.Event("error", new { tag = "publish", outcome = "sqs_failed", jobId, deckId = deckIdInt, error = ex.Message });
-        await DbUtil.ExecuteAsync(conn, null, "UPDATE deck_publishes SET status = 'FAILED', updated_at = now() WHERE job_id = $1", [jobId]);
-        throw;
-      }
-
       return res.Ok(new
       {
-        mode = "async",
-        jobId
+        mode = "preview",
+        deckId = deckIdInt,
+        deckSlug,
+        tier,
+        cardCount = baseCards.Count,
+        export = baseDeckJson,
       });
     }
     catch (PostgresException pg) when (pg.SqlState == "23505")
@@ -432,7 +279,253 @@ public static class Publish
       return res.Error500(ex);
     }
   }
-  
+
+  /// <summary>
+  /// What <see cref="StartPublishAsync"/> did: <c>queued</c> (a new job was inserted and sent), <c>resumed</c> (a
+  /// recent active job was returned) or <c>refused</c> (<see cref="HttpStatus"/>/<see cref="Code"/>/<see cref="Message"/>
+  /// as the console answers them). <see cref="ErrorExtras"/> is the chained QA run (<see cref="Qa.QaRuns.ChainedRun"/>)
+  /// of an <c>AI_QA_REQUIRED</c> refusal, which the console answers as <c>error.runId</c>/<c>error.qaRun</c>.
+  /// </summary>
+  public sealed record PublishStart(string Outcome /* queued | resumed | refused */, int HttpStatus, string? Code, string? Message,
+    string? JobId, string? BuildId, string? SnapshotSha256, object? ErrorExtras);
+
+  public const string Queued = "queued", Resumed = "resumed", Refused = "refused";
+
+  private const string PublishInProgressMessage =
+    "A publish for this deck is still PENDING or PROCESSING. Wait for the worker, or run POST /api/v1/admin/publish/reap and retry.";
+
+  private const string StaleMessage = "Cards changed while the publish was being checked; publish again so the AI QA gate sees the current cards";
+
+  private static PublishStart Refuse(int status, string code, string message, object? extras = null) =>
+    new(Refused, status, code, message, null, null, null, extras);
+
+  /// <summary>
+  /// The publish-mode path of <see cref="HandleAuthoringPublish"/> after the auth and deck-permission checks (R18A A04,
+  /// contract A00 §6.4), shared by the console and the automation: deck read, cards, premium config, the MCQ gate (and
+  /// its ledger defect), the AI QA gate evaluated for <paramref name="actorSub"/>, the snapshot, the resume, the
+  /// <c>deck_publishes</c> insert and the SQS send. <paramref name="bindSnapshot"/> stores the gated-vs-current digest
+  /// in <c>qa_snapshot_sha256</c>; a non-null <paramref name="expectedSnapshot"/> that differs from the digest of the
+  /// cards read here is refused <c>AI_QA_STALE</c>; <paramref name="allowResume"/> = false refuses any active job of
+  /// the deck with <c>PUBLISH_IN_PROGRESS</c> instead of returning it. Validation errors, a <c>23505</c> on
+  /// <c>uq_deck_publishes_active</c> and SQS failures (after the job is marked <c>FAILED</c>) propagate as exceptions.
+  /// </summary>
+  internal static async Task<PublishStart> StartPublishAsync(NpgsqlConnection conn, long deckId, string actorSub, string? note,
+    bool bindSnapshot, string? expectedSnapshot, bool allowResume, CancellationToken ct = default)
+  {
+    ct.ThrowIfCancellationRequested();
+    var queueUrl = TestEnqueueSeam?.QueueUrl ?? PublishJobQueueUrl;
+    var contentBucket = TestEnqueueSeam?.ContentBucket ?? ContentBucket;
+    if (string.IsNullOrEmpty(queueUrl)) return Refuse(503, "CONFIG_ERROR", "Missing env PUBLISH_JOB_QUEUE_URL");
+
+    var loaded = await LoadDeckAsync(conn, deckId);
+    if (loaded.Refusal is not null) return loaded.Refusal;
+    var (deckSlug, cardRows, tier) = (loaded.DeckSlug!, loaded.CardRows!, loaded.Tier!);
+
+    // The automation checked exactly these cards; anything else changed since (A00 §6.3).
+    if (expectedSnapshot is not null &&
+        !string.Equals(expectedSnapshot, PublishSnapshot.Digest(cardRows.Select(PublishSnapshot.FromRow)), StringComparison.Ordinal))
+    {
+      return StaleRefusal(deckId);
+    }
+
+    // Pre-enqueue gate (publish only — the preview above has already returned). A stored MCQ
+    // blob that no longer satisfies the API rules must not reach the Worker, which serialises
+    // it verbatim into deck.json / chunks / patches.
+    var gate = FirstMcqGateFailure(cardRows);
+    if (gate is not null)
+    {
+      await RecordGateDefectAsync(conn, deckId, gate.Value.StableUid, gate.Value.Code, cardRows);
+      return Refuse(400, "MCQ_PUBLISH_GATE", $"{gate.Value.StableUid}: {gate.Value.Code}");
+    }
+
+    // AI QA gate (contract §7.10): refuses only when AI_QA_ENABLED and AI_QA_REQUIRED are both truthy. A refusal
+    // for unreviewed cards also starts (or reuses) the QA run that would clear it (automation-17).
+    var qaGate = await Qa.QaGate.EvaluatePublishRefusalAsync(conn, deckId, actorSub, ct);
+    if (qaGate is not null) return Refuse(qaGate.HttpStatus, qaGate.Code, qaGate.Message, qaGate.Chained);
+
+    // Bind the build to what the gate passed (backend-design-16): the cards read before the gate must still be
+    // the cards after it, and the Worker refuses to build from anything else (AI_QA_STALE).
+    string? qaSnapshot = null;
+    if (bindSnapshot)
+    {
+      var gated = PublishSnapshot.Digest(cardRows.Select(PublishSnapshot.FromRow));
+      var current = PublishSnapshot.Digest((await DbUtil.QueryAsync(conn, null, CardsSql, [deckId])).Select(PublishSnapshot.FromRow));
+      if (!string.Equals(gated, current, StringComparison.Ordinal)) return StaleRefusal(deckId);
+      qaSnapshot = current;
+    }
+
+    // --- ASYNC PUBLISH LOGIC ---
+
+    // 💡 核心防御：防重复并发提交（幂等性）。
+    // 如果用户在 15 分钟内重复点击（或 F5 刷新后再次点击），直接返回正在处理的 jobId，让前端顺滑接管轮询。
+    // The automation (allowResume = false) never takes over a job: any active job of the deck refuses it.
+    const string checkDuplicateSql = """
+      select job_id as "jobId"
+      from deck_publishes 
+      where deck_id = $1 
+        and status in ('PENDING', 'PROCESSING') 
+        and updated_at > now() - interval '15 minutes'
+      limit 1
+      """;
+    const string checkActiveSql = """
+      select job_id as "jobId"
+      from deck_publishes
+      where deck_id = $1 and status in ('PENDING', 'PROCESSING')
+      limit 1
+      """;
+    var existingRows = await DbUtil.QueryAsync(conn, null, allowResume ? checkDuplicateSql : checkActiveSql, [deckId]);
+    if (existingRows.Count > 0)
+    {
+      var existingJobId = Convert.ToString(existingRows[0]["jobId"], CultureInfo.InvariantCulture);
+      if (!allowResume)
+      {
+        Log.Event("info", new { tag = "publish", outcome = "refused", code = "PUBLISH_IN_PROGRESS", jobId = existingJobId, deckId, deckSlug });
+        return Refuse(409, "PUBLISH_IN_PROGRESS", PublishInProgressMessage);
+      }
+      Log.Event("info", new { tag = "publish", outcome = "resumed", jobId = existingJobId, deckId, deckSlug });
+      return new PublishStart(Resumed, 200, null, null, existingJobId, null, null, null);
+    }
+
+    // 1. Generate Job ID
+    var jobId = Guid.NewGuid().ToString();
+    // 💡 修复：为 PENDING 任务预先生成一个 buildId 以满足数据库非空约束
+    var buildId = MakeBuildId();
+
+    // 💡 修复：预先计算出 s3_key 以满足数据库非空约束
+    // 这个路径格式必须和 ManifestRebuild.cs 中的逻辑保持一致
+    string s3Key;
+    if (tier == "premium")
+    {
+      if (string.IsNullOrEmpty(PremiumBucket)) throw new InvalidOperationException("Missing env PREMIUM_BUCKET for premium deck");
+      s3Key = $"{PremiumPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
+    }
+    else
+    {
+      if (string.IsNullOrEmpty(contentBucket)) throw new InvalidOperationException("Missing env CONTENT_BUCKET for free deck");
+      s3Key = $"{ContentPrefix}/decks/{deckSlug}/builds/{buildId}/deck.json";
+    }
+
+    // 2. Insert PENDING job record into the database
+    const string insertJobSql = """
+      insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note)
+      values ($1, $2, $3, $4, $5, 'PENDING', $6, $7)
+      """;
+    const string insertGatedJobSql = """
+      insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note, qa_snapshot_sha256)
+      values ($1, $2, $3, $4, $5, 'PENDING', $6, $7, $8)
+      """;
+    if (qaSnapshot is null) await DbUtil.ExecuteAsync(conn, null, insertJobSql, [jobId, buildId, s3Key, deckId, deckSlug, actorSub, note]);
+    else await DbUtil.ExecuteAsync(conn, null, insertGatedJobSql, [jobId, buildId, s3Key, deckId, deckSlug, actorSub, note, qaSnapshot]);
+
+    // 3. Create the SQS message payload
+    var messageBody = JsonSerializer.Serialize(new
+    {
+      jobId,
+      deckId,
+      // 💡 最佳实践：把 Worker 需要的所有信息都放进消息体
+      adminSub = actorSub,
+      note
+    });
+
+    // 4. Send the message to the SQS queue
+    var sendMessageRequest = new SendMessageRequest
+    {
+      QueueUrl = queueUrl,
+      MessageBody = messageBody
+    };
+
+    try
+    {
+      if (TestEnqueueSeam is not null) await TestEnqueueSeam.Send(sendMessageRequest);
+      else await SQS().SendMessageAsync(sendMessageRequest, ct);
+      Log.Event("info", new { tag = "publish", outcome = "enqueued", jobId, deckId, deckSlug, buildId });
+    }
+    catch (Exception ex)
+    {
+      // 💡 核心防御：双写失败回退
+      // 如果 SQS 网络抖动发送失败，立刻将数据库任务状态标为 FAILED，防止产生永远等不到 Worker 的孤儿订单
+      Log.Event("error", new { tag = "publish", outcome = "sqs_failed", jobId, deckId, error = ex.Message });
+      await DbUtil.ExecuteAsync(conn, null, "UPDATE deck_publishes SET status = 'FAILED', updated_at = now() WHERE job_id = $1", [jobId]);
+      throw;
+    }
+
+    return new PublishStart(Queued, 200, null, null, jobId, buildId, qaSnapshot, null);
+  }
+
+  private static PublishStart StaleRefusal(long deckId)
+  {
+    Log.Event("info", new { tag = "publish", outcome = "refused", code = PublishSnapshot.StaleErrorCode, deckId });
+    RouteMetrics.EmitGauge(PublishSnapshot.StaleMetric, 1);
+    return Refuse(409, PublishSnapshot.StaleErrorCode, StaleMessage);
+  }
+
+  /// <summary>The console response of a <see cref="PublishStart"/>: exactly what the handler answered before the extraction.</summary>
+  private static APIGatewayProxyResponse StartResponse(PublishStart start, Res res)
+  {
+    if (start.Outcome == Queued) return res.Ok(new { mode = "async", jobId = start.JobId });
+    if (start.Outcome == Resumed) return res.Ok(new { mode = "async", jobId = start.JobId, note = "Resumed existing job" });
+    if (start.ErrorExtras is Qa.QaRuns.ChainedRun chained)
+    {
+      return Qa.QaGate.RefusalResponse(new Qa.QaGate.PublishRefusal(start.HttpStatus, start.Code!, start.Message!, chained), res);
+    }
+    return start.HttpStatus switch
+    {
+      404 => res.NotFound(start.Message),
+      400 => res.BadRequest(start.Code!, start.Message),
+      _ => Helpers.ErrorEnvelope(res, start.HttpStatus, start.Code!, start.Message!),
+    };
+  }
+
+  private sealed record LoadedDeck(PublishStart? Refusal, Dictionary<string, object?>? Deck, string? DeckSlug,
+    List<Dictionary<string, object?>>? CardRows, long DeckType, string? Tier);
+
+  /// <summary>The deck, its slug, its export rows and tier, or the refusal (404, <c>DECK_DELETED</c>, premium config).</summary>
+  private static async Task<LoadedDeck> LoadDeckAsync(NpgsqlConnection conn, long deckId)
+  {
+    const string deckSql = """
+      select
+        id,
+        slug,
+        title,
+        author,
+        description,
+        locale,
+        deck_type as "deckType",
+        version,
+        tier,
+        total_cards as "totalCards",
+        preview_cards as "previewCards",
+        is_deleted as "isDeleted",
+        updated_at as "updatedAt"
+      from decks
+      where id = $1
+      limit 1
+      """;
+
+    var deckRows = await DbUtil.QueryAsync(conn, null, deckSql, [deckId]);
+    if (deckRows.Count == 0) return new LoadedDeck(Refuse(404, "NOT_FOUND", "Deck not found"), null, null, null, 0, null);
+
+    var deck = deckRows[0];
+    if (Convert.ToInt32(deck["isDeleted"], CultureInfo.InvariantCulture) == 1)
+    {
+      return new LoadedDeck(Refuse(400, "DECK_DELETED", "Deck is deleted (cannot publish)"), null, null, null, 0, null);
+    }
+
+    var deckSlug = Validation.RequireSlug(Convert.ToString(deck["slug"], CultureInfo.InvariantCulture), "deckSlug");
+
+    var cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckId]);
+
+    var deckType = Convert.ToInt64(deck["deckType"], CultureInfo.InvariantCulture);
+    var tier = InferTier(deckType, deck.TryGetValue("tier", out var tv) ? tv : null);
+
+    if (tier == "premium" && string.IsNullOrEmpty(PremiumBucket))
+    {
+      return new LoadedDeck(Refuse(503, "CONFIG_ERROR", "Missing env PREMIUM_BUCKET"), null, null, null, 0, null);
+    }
+
+    return new LoadedDeck(null, deck, deckSlug, cardRows, deckType, tier);
+  }
+
   private static int ToInt(object? v, int fallback)
   {
     if (v is null) return fallback;

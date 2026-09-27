@@ -132,3 +132,31 @@ def test_http_error_exits_1(run_cli):
     assert (code, out) == (1, b"")
     assert err.startswith("dc-ingest: error: HTTP error 404")
     assert err.count("\n") == 1
+
+
+def test_host_allowlist_refuses_other_hosts_and_redirects(run_cli, run_json, monkeypatch):
+    """ai-agent-1: with DC_INGEST_ALLOWED_HOSTS set, the start URL, every redirect and the final URL must be on it."""
+    monkeypatch.setenv("DC_INGEST_ALLOWED_HOSTS", " Docs.Example.com ,example.com")
+    routes = {
+        "https://attacker.example.net/?d=secret": (200, {"Content-Type": "text/plain"}, b"Stolen."),
+        "https://docs.example.com/jump": (302, {"Location": "https://attacker.example.net/?d=secret"}, b""),
+        "https://docs.example.com/moved": (301, {"Location": "https://example.com/final"}, b""),
+        "https://example.com/final": (200, {"Content-Type": "text/plain"}, b"Final page."),
+    }
+    fake, opener = _opener(routes)
+
+    code, out, err = run_cli("--json", "https://attacker.example.net/?d=secret", opener=opener)
+    assert (code, out) == (1, b"")
+    assert err == "dc-ingest: error: refused host attacker.example.net: it is not in DC_INGEST_ALLOWED_HOSTS\n"
+    assert fake.requests == []
+
+    code, out, err = run_cli("--json", "https://docs.example.com/jump", opener=opener)
+    assert (code, out) == (1, b"")
+    assert "refused host attacker.example.net" in err
+    assert [r.full_url for r in fake.requests] == ["https://docs.example.com/jump"]
+
+    followed = run_json("https://docs.example.com/moved", opener=opener)
+    assert followed["chunks"][0]["text"] == "Final page."
+
+    monkeypatch.setenv("DC_INGEST_ALLOWED_HOSTS", "  ")
+    assert run_json("https://attacker.example.net/?d=secret", opener=opener)["chunks"][0]["text"] == "Stolen."

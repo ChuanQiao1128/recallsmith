@@ -15,11 +15,10 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
 
-from . import emf, second_opinion, settings
+from . import emf, profiles, second_opinion, settings
 from .internal_client import RESULTS_PATH, InternalClient
 from .logs import log
-from .prompts import PROMPT_VERSION
-from .providers import make_client
+from .providers import effective_effort, make_client
 from .review import review_card_counted
 from .settings import DEFAULT_MODELS, DEFAULTS, PROVIDERS, ConfigError, Settings
 
@@ -78,7 +77,8 @@ def reset_client_cache() -> None:
 
 
 def _reported_key(msg: Mapping[str, Any], card: Mapping[str, Any]) -> tuple[str, int, int, str, str]:
-    return (msg["runId"], msg["chunk"], card["cardId"], card["contentSha256"], PROMPT_VERSION)
+    profile = msg.get("profile", profiles.DEFAULT_PROFILE)
+    return (msg["runId"], msg["chunk"], card["cardId"], card["contentSha256"], profiles.prompt_version_for(profile))
 
 
 def _remember_reported(msg: Mapping[str, Any], items: list[dict[str, Any]]) -> None:
@@ -190,6 +190,13 @@ def parse_message(raw: Any) -> dict[str, Any] | None:
         return None
     cards = data.get("cards")
     if not isinstance(cards, list) or not cards or not all(_is_card(card) for card in cards):
+        return None
+    # Optional keys (A00 §9.2, §9.6); absent means the human card path with the default reviewer.
+    target = data.get("target", profiles.DEFAULT_TARGET)
+    if not isinstance(target, str) or target not in profiles.TARGETS:
+        return None
+    profile = data.get("profile", profiles.DEFAULT_PROFILE)
+    if not isinstance(profile, str) or profile not in profiles.PROFILES:
         return None
     return data
 
@@ -305,7 +312,7 @@ def _second_opinion(
     return item, calls
 
 
-def _log_item(msg: Mapping[str, Any], item: Mapping[str, Any]) -> None:
+def _log_item(msg: Mapping[str, Any], item: Mapping[str, Any], effort: str | None = None) -> None:
     usage = item.get("usage") or {}
     log(
         "info",
@@ -321,6 +328,7 @@ def _log_item(msg: Mapping[str, Any], item: Mapping[str, Any]) -> None:
         inputTokens=usage.get("inputTokens"),
         outputTokens=usage.get("outputTokens"),
         cacheReadInputTokens=usage.get("cacheReadInputTokens"),
+        effort=effort,
     )
 
 
@@ -333,16 +341,25 @@ def _report(
     secret_name: str,
     core_api_base: str,
     context: Any,
+    *,
+    target: str,
+    profile: str,
 ) -> bool:
-    body = {
+    body: dict[str, Any] = {
         "v": 1,
         "runId": msg["runId"],
         "chunk": msg["chunk"],
         "provider": provider,
         "model": model,
-        "promptVersion": PROMPT_VERSION,
+        # The version this profile's reviewer ran (qa-v4, or qa-v4-auto for automation; contract K1).
+        "promptVersion": profiles.prompt_version_for(profile),
         "items": items,
     }
+    # Only when not the default, so a human run's report stays byte-identical (README).
+    if target == profiles.DRAFT_TARGET:
+        body["target"] = target
+    if profile == profiles.AUTOMATION_PROFILE:
+        body["profile"] = profile
     remaining = _remaining_s(context)
     budget = None if remaining is None else max(0.0, remaining - REPORT_BUDGET_RESERVE_S)
     # Read only if core rejects the signature: present only during a rotation (README, "Route-secret
@@ -376,15 +393,20 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
         log("warn", "ai-qa", event="bad_message", messageId=message_id)
         return True
     cards: list[dict[str, Any]] = msg["cards"]
-    if msg["promptVersion"] != PROMPT_VERSION:
+    profile: str = msg.get("profile", profiles.DEFAULT_PROFILE)
+    target: str = msg.get("target", profiles.DEFAULT_TARGET)
+    # Each profile has its own prompt version (contract K1); the check is against that one.
+    running_version = profiles.prompt_version_for(profile)
+    if msg["promptVersion"] != running_version:
         log(
             "warn",
             "ai-qa",
             event="prompt_version_mismatch",
             runId=msg["runId"],
             chunk=msg["chunk"],
+            profile=profile,
             requested=msg["promptVersion"],
-            running=PROMPT_VERSION,
+            running=running_version,
         )
 
     cfg: Settings | None
@@ -394,7 +416,30 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
         cfg = None
         log("error", "ai-qa", event="config_invalid", runId=msg["runId"], chunk=msg["chunk"], reason=str(exc))
 
-    provider, model = _report_identity(env, cfg)
+    # The reviewer this message asks for; None when its settings cannot produce a model call.
+    cfg_used: Settings | None = None
+    if cfg is not None:
+        try:
+            cfg_used = profiles.settings_for(cfg, profile)
+        except ConfigError as exc:
+            log(
+                "error",
+                "ai-qa",
+                event="profile_config_invalid",
+                runId=msg["runId"],
+                chunk=msg["chunk"],
+                profile=profile,
+                reason=str(exc),
+            )
+
+    if cfg_used is not None:
+        provider, model = cfg_used.provider, cfg_used.model
+    elif profile == profiles.AUTOMATION_PROFILE:
+        # Never the default reviewer's names: that would mislabel the draft decision.
+        provider = (cfg.automation_provider if cfg is not None else None) or "unset"
+        model = (cfg.automation_model if cfg is not None else None) or "unset"
+    else:
+        provider, model = _report_identity(env, cfg)
     namespace = _env_or_default(env, cfg, "METRICS_NAMESPACE", "metrics_namespace")
     core_api_base = _env_or_default(env, cfg, "CORE_API_BASE", "core_api_base")
     secret_name = _env_or_default(env, cfg, "INTERNAL_SECRET_SSM_NAME", "internal_secret_ssm_name")
@@ -409,7 +454,9 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
         """Report the items. On failure keep them for the redelivery and bring it back soon."""
         if not items:
             return True  # every card was already reported by an earlier delivery of this chunk
-        ok = _report(msg, provider, model, items, secret, secret_name, core_api_base, context)
+        ok = _report(
+            msg, provider, model, items, secret, secret_name, core_api_base, context, target=target, profile=profile
+        )
         if ok:
             _remember_reported(msg, items)
         else:
@@ -431,11 +478,29 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
     if not cfg.enabled:
         return finish(fill("DISABLED", status="skipped"))
 
+    if cfg_used is None:
+        return finish(fill("CONFIG"))
+
     try:
-        client = _model_client(cfg)
+        client = _model_client(cfg_used)
     except ConfigError as exc:
         log("error", "ai-qa", event="client_config_invalid", runId=msg["runId"], chunk=msg["chunk"], reason=str(exc))
         return finish(fill("CONFIG"))
+
+    # The effort the reviewer really runs at; never a silent no-op (README, "Other models (Bedrock Converse)").
+    effort = effective_effort(cfg_used)
+    if effort != cfg_used.effort:
+        log(
+            "info",
+            "ai-qa",
+            event="effort_not_sent",
+            runId=msg["runId"],
+            chunk=msg["chunk"],
+            provider=cfg_used.provider,
+            model=cfg_used.model,
+            configuredEffort=cfg_used.effort,
+            effectiveEffort=effort,
+        )
 
     items: list[dict[str, Any]] = []
     for index, card in enumerate(cards):
@@ -454,16 +519,24 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
             log("warn", "ai-qa", event="deadline_guard", runId=msg["runId"], chunk=msg["chunk"], cardId=card["cardId"])
         else:
             item, calls = review_card_counted(
-                card, client=_with_deadline(client, remaining), settings=cfg, review_date=msg["reviewDate"]
+                card,
+                client=_with_deadline(client, remaining),
+                settings=cfg_used,
+                review_date=msg["reviewDate"],
+                system_prompt=profiles.system_prompt_for(profile),
             )
-            if second_opinion.enabled(cfg) and item.get("status") == "done":
-                item, second_calls = _second_opinion(msg, card, item, cfg, namespace, context)
+            if (
+                profile == profiles.DEFAULT_PROFILE
+                and second_opinion.enabled(cfg_used)
+                and item.get("status") == "done"
+            ):
+                item, second_calls = _second_opinion(msg, card, item, cfg_used, namespace, context)
                 calls += second_calls
-        emf.emit_item(namespace, cfg.provider, item, model_called=calls > 0)
-        _log_item(msg, item)
+        emf.emit_item(namespace, cfg_used.provider, item, model_called=calls > 0, effort=effort)
+        _log_item(msg, item, effort)
 
         code = item.get("errorCode")
-        if code in RETRYABLE_CODES and _receive_count(record) >= cfg.max_receives:
+        if code in RETRYABLE_CODES and _receive_count(record) >= cfg_used.max_receives:
             # Last receive: another failure would send the chunk to the DLQ and leave its cards
             # 'queued' until core's stale reap. Report them with this retryable code instead.
             log("warn", "ai-qa", event="final_receive_giving_up", runId=msg["runId"], chunk=msg["chunk"], errorCode=code)
