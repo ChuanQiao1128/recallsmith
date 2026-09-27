@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 
 import { countLearned, pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
-import { buildSweepRoute } from '../../src/features/gacha/planner/sessionBuilder';
+import { buildFocusRoute, buildSweepRoute } from '../../src/features/gacha/planner/sessionBuilder';
 import { buildRatedSessionState, modeLabel } from '../../src/features/gacha/session/sessionReviewHelpers';
 import { scheduleNextReview } from '../../src/review/model';
 import type { ReviewRating } from '../../src/review/model';
@@ -288,5 +288,23 @@ describe('sweep planner', () => {
     expect(modeLabel('review-due')).toBe('Review Due');
     expect(modeLabel('learn-new')).toBe('Learn');
     expect(modeLabel('mixed')).toBe('Mixed');
+  });
+});
+
+describe('buildFocusRoute', () => {
+  it('builds one plain focus-review node per focus card', () => {
+    const route = buildFocusRoute(3);
+    expect(route).toHaveLength(3);
+    expect(route.map((node) => node.id)).toEqual(['focus-0', 'focus-1', 'focus-2']);
+    for (const node of route) {
+      expect(node.role).toBe('normal');
+      expect(node.title).toBe('Focus review');
+    }
+  });
+
+  it('builds no nodes for an empty or invalid length', () => {
+    expect(buildFocusRoute(0)).toEqual([]);
+    expect(buildFocusRoute(-2)).toEqual([]);
+    expect(buildFocusRoute(Number.NaN)).toEqual([]);
   });
 });

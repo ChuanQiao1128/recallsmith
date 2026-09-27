@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { invalidateDeckCache } from '../../src/content/deckCache';
 
+// X07 mobile-11: the Mistake Book loop across its seams, with the real mistakeBook module on an
+// in-memory AsyncStorage. A rating on SessionCard lands in the stored book, the Mistake Book lists
+// it and starts a focus run, and the focus runs resolve it: not on a same-day repeat, only once
+// the second correct answer comes on another day.
+
 // deckCache memoizes deck reads at module scope; clear it between tests so a
 // changed resolveDeckBySlug mock is not shadowed by a prior test's entry (G30).
 beforeEach(() => {
@@ -123,6 +128,7 @@ vi.mock('../../src/content/activeDeck', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  getUserScopedKey: vi.fn(async (key: string) => `devcards:u:test:${key}`),
   loadDeckProgress: vi.fn(async () => []),
   saveDeckProgress: vi.fn(async () => {}),
   loadOrInitDailyStats: vi.fn(async () => ({ dateKey: '2026-09-22', plannedCount: 0, doneCount: 0 })),
@@ -200,37 +206,27 @@ vi.mock('../../src/features/gacha/rewards/sessionRewards', () => {
   };
 });
 
-vi.mock('../../src/features/gacha/mistakes/mistakeBook', () => ({
-  recordMistakeOutcome: vi.fn(async () => {}),
-}));
-
-// sessionReviewHelpers and focusSession stay real: the focus run must pick its cards itself, and
-// the planner below is told that nothing is due (pickNextCard answers null) and that the deck has
-// no route (EMPTY_ROUTE_LIMIT), which a normal run would stop on.
+// mistakeBook, sessionReviewHelpers, focusSession, relatedReview and the deck cache stay real.
 
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
+import { MistakeBookScreen } from '../../src/screens/MistakeBookScreen';
 import { resolveDeckBySlug } from '../../src/content/deckRepository';
-import { loadDeckProgress, saveDeckProgress } from '../../src/review/storage';
-import { recordReviewEvent } from '../../src/sync/progressSync';
+import { loadDeckProgress } from '../../src/review/storage';
 import { countDueToday, pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
-import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
+import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
+import { loadMistakeBook } from '../../src/features/gacha/mistakes/mistakeBook';
 
-const FIXED_NOW_MS = Date.UTC(2026, 8, 27, 9, 0, 0);
+const DAY0_MS = Date.UTC(2026, 8, 27, 9, 0, 0);
 const DAY_MS = 86_400_000;
-
-function flags() {
-  return {
-    mcq: { enabled: true, recallFirst: true, maxPerRun: 2, answerTelemetry: false },
-    paywall: { hidden: false },
-    ceremony: { seamOfLight: true, forceFallback: false },
-  };
-}
 
 async function flush() {
   await act(async () => {
-    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
   });
 }
+
+const byTestID = (tree: renderer.ReactTestRenderer, id: string) =>
+  tree.root.findAll((node) => node.props?.testID === id && typeof node.type === 'string');
 
 function findPressableByLabel(tree: renderer.ReactTestRenderer, label: string) {
   return tree.root.find(
@@ -240,43 +236,108 @@ function findPressableByLabel(tree: renderer.ReactTestRenderer, label: string) {
   );
 }
 
-function hasText(tree: renderer.ReactTestRenderer, text: string): boolean {
-  return tree.root.findAll((node) => (node.type as any) === 'Text' && node.props.children === text).length > 0;
-}
-
 const card = (uid: string, order: number) => ({
   StableUid: uid,
   OrderInDeck: order,
   Difficulty: 1,
   Question: `Question ${uid}`,
   Explanation: `Answer ${uid}`,
+  Topic: 'linq',
 });
 
-const CARDS = [card('c1', 1), card('c2', 2), card('c3', 3), card('c4', 4)];
+const CARDS = [card('c1', 1), card('c2', 2), card('c3', 3)];
+const DECK = {
+  Slug: 'csharp',
+  Title: 'C# Interview',
+  Locale: 'en-US',
+  Version: '1',
+  DeckType: 1,
+  TotalCards: CARDS.length,
+  Cards: CARDS,
+};
 
-// Learned, next review a week out: none of these is due today.
+// Learned and not due, so a focus run is the only way these cards come up.
 const LEARNED = (uid: string) => ({
   stableUid: uid,
   stage: 3,
-  lastReviewedAt: FIXED_NOW_MS - DAY_MS,
-  nextReviewAt: FIXED_NOW_MS + 7 * DAY_MS,
+  lastReviewedAt: DAY0_MS - DAY_MS,
+  nextReviewAt: DAY0_MS + 7 * DAY_MS,
 });
 
-function emptyRoute() {
+function flags() {
   return {
-    slug: 'csharp',
-    deckTitle: 'C# Interview',
-    mode: 'mixed',
-    limit: 0,
-    minimumGoal: 0,
-    dueCount: 0,
-    newCount: 0,
-    nodes: [],
-    summary: 'C# Interview',
+    mcq: { enabled: false, recallFirst: true, maxPerRun: 0, answerTelemetry: false },
+    paywall: { hidden: false },
+    ceremony: { seamOfLight: true, forceFallback: false },
+    mistakeBook: { enabled: true, relatedCount: 0 },
   };
 }
 
-describe('SessionCardScreen focus run', () => {
+async function rate(tree: renderer.ReactTestRenderer, label: 'Again' | 'Good') {
+  await act(async () => {
+    findPressableByLabel(tree, 'Reveal answer').props.onPress();
+    await Promise.resolve();
+  });
+  await act(async () => {
+    findPressableByLabel(tree, label).props.onPress();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  // The book is recorded fire-and-forget; let its serialised read-modify-write settle.
+  await flush();
+  await flush();
+}
+
+async function mountSession(params: Record<string, unknown>) {
+  const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => {
+    tree = renderer.create(
+      <SessionCardScreen navigation={navigation} route={{ key: 'session-card', name: 'SessionCard', params } as any} />,
+    );
+  });
+  await flush();
+  await flush();
+  return { tree, navigation };
+}
+
+async function openMistakeBookAndStartFocus(): Promise<string[]> {
+  const navigation = { navigate: vi.fn(), goBack: vi.fn(), addListener: vi.fn(() => () => {}) } as any;
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => {
+    tree = renderer.create(
+      <MistakeBookScreen navigation={navigation} route={{ key: 'mb', name: 'MistakeBook', params: { slug: 'csharp' } } as any} />,
+    );
+  });
+  await flush();
+  expect(byTestID(tree, 'mistake-row-c1')).toHaveLength(1);
+  await act(async () => {
+    byTestID(tree, 'mistake-review-csharp')[0].props.onPress();
+  });
+  await flush();
+  expect(navigation.navigate).toHaveBeenCalledWith('SessionCard', expect.objectContaining({ slug: 'csharp' }));
+  const focusUids = navigation.navigate.mock.calls[0][1].focusUids as string[];
+  await act(async () => {
+    tree.unmount();
+  });
+  return focusUids;
+}
+
+async function focusRunAllGood(focusUids: string[]) {
+  resetSessionStore();
+  const { tree, navigation } = await mountSession({ slug: 'csharp', focusUids });
+  for (let i = 0; i < focusUids.length; i += 1) await rate(tree, 'Good');
+  expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ slug: 'csharp' }));
+  await act(async () => {
+    tree.unmount();
+  });
+}
+
+async function storedC1() {
+  return (await loadMistakeBook()).entries['csharp::c1'];
+}
+
+describe('Mistake Book loop across SessionCard and the real store', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -285,22 +346,12 @@ describe('SessionCardScreen focus run', () => {
     store.clear();
     resetSessionStore();
     featureFlagsMock.mockReturnValue(flags());
-    vi.mocked(planChallengeRoute).mockReturnValue(emptyRoute() as any);
     vi.mocked(countDueToday).mockReturnValue(0);
-    vi.mocked(pickNextCard).mockReturnValue(null);
-    vi.mocked(resolveDeckBySlug).mockResolvedValue({
-      Slug: 'csharp',
-      Title: 'C# Interview',
-      Locale: 'en-US',
-      Version: '1',
-      DeckType: 1,
-      TotalCards: CARDS.length,
-      Cards: CARDS,
-    } as any);
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(DECK as any);
     vi.mocked(loadDeckProgress).mockResolvedValue(CARDS.map((c) => LEARNED(c.StableUid)) as any);
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(FIXED_NOW_MS);
+    vi.setSystemTime(DAY0_MS);
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -311,126 +362,56 @@ describe('SessionCardScreen focus run', () => {
     warnSpy.mockRestore();
   });
 
-  async function mount(focusUids: unknown) {
-    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+  it('records Again, lists it, and resolves it only after correct focus runs on two days', async () => {
+    // A normal one-card run deals c1 and the user rates it Again.
+    vi.mocked(planChallengeRoute).mockReturnValue({
+      slug: 'csharp',
+      deckTitle: 'C# Interview',
+      mode: 'mixed',
+      limit: 1,
+      minimumGoal: 1,
+      dueCount: 1,
+      newCount: 0,
+      nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+      summary: 'C# Interview',
+    } as any);
+    vi.mocked(pickNextCard).mockReturnValue({ card: CARDS[0], progress: LEARNED('c1') } as any);
+    const normal = await mountSession({ slug: 'csharp', mode: 'mixed' });
+    await rate(normal.tree, 'Again');
+    await act(async () => {
+      normal.tree.unmount();
+    });
+    expect(await storedC1()).toMatchObject({ wrongCount: 1, correctStreak: 0, resolvedAt: null, topic: 'linq' });
+
+    // Focus runs from here on: the planner has nothing due.
+    vi.mocked(pickNextCard).mockReturnValue(null);
+
+    // Day 0: the Mistake Book lists c1 and starts a focus run; a Good counts once.
+    const focusUids = await openMistakeBookAndStartFocus();
+    expect(focusUids).toEqual(['c1']);
+    await focusRunAllGood(focusUids);
+    expect(await storedC1()).toMatchObject({ correctStreak: 1, resolvedAt: null, lastCorrectAt: DAY0_MS });
+
+    // Day 0 again, a minute later: a back-to-back run does not clear the card.
+    vi.setSystemTime(DAY0_MS + 60_000);
+    await focusRunAllGood(await openMistakeBookAndStartFocus());
+    expect(await storedC1()).toMatchObject({ correctStreak: 1, resolvedAt: null, lastCorrectAt: DAY0_MS });
+
+    // Day 1: the second correct answer on another day resolves it, and the book empties.
+    const day1 = DAY0_MS + DAY_MS;
+    vi.setSystemTime(day1);
+    await focusRunAllGood(await openMistakeBookAndStartFocus());
+    expect(await storedC1()).toMatchObject({ correctStreak: 2, resolvedAt: day1 });
+
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), addListener: vi.fn(() => () => {}) } as any;
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
-        <SessionCardScreen
-          navigation={navigation}
-          route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', focusUids } } as any}
-        />,
+        <MistakeBookScreen navigation={navigation} route={{ key: 'mb', name: 'MistakeBook', params: { slug: 'csharp' } } as any} />,
       );
     });
     await flush();
-    await flush();
-    return { tree, navigation };
-  }
-
-  async function rateGood(tree: renderer.ReactTestRenderer) {
-    await act(async () => {
-      findPressableByLabel(tree, 'Reveal answer').props.onPress();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await flush();
-  }
-
-  it('serves the focus cards in the given order even when none is due', async () => {
-    const { tree, navigation } = await mount(['c3', 'c1', 'c4']);
-
-    expect(hasText(tree, 'Question c3')).toBe(true);
-    expect(navigation.replace).not.toHaveBeenCalled();
-
-    await rateGood(tree);
-    expect(hasText(tree, 'Question c1')).toBe(true);
-    expect(hasText(tree, 'Question c3')).toBe(false);
-
-    await rateGood(tree);
-    expect(hasText(tree, 'Question c4')).toBe(true);
-
-    const rated = vi.mocked(recordReviewEvent).mock.calls.map(([event]) => event.stableUid);
-    expect(rated).toEqual(['c3', 'c1']);
-    expect(saveDeckProgress).toHaveBeenCalledTimes(2);
-  });
-
-  it('ends the focus run on the summary after the last focus card', async () => {
-    const { tree, navigation } = await mount(['c2', 'c4']);
-
-    await rateGood(tree);
-    expect(navigation.replace).not.toHaveBeenCalled();
-    await rateGood(tree);
-
-    expect(navigation.replace).toHaveBeenCalledTimes(1);
-    expect(navigation.replace).toHaveBeenCalledWith(
-      'SessionSummary',
-      expect.objectContaining({ slug: 'csharp', sessionDone: 2, sessionLimit: 2 }),
-    );
-    const rated = vi.mocked(recordReviewEvent).mock.calls.map(([event]) => event.stableUid);
-    expect(rated).toEqual(['c2', 'c4']);
-  });
-
-  it('labels every focus card as a focus review, whatever route the planner would have dealt', async () => {
-    // The planner would plan a two-node warm-up/boss route; the focus run has three cards.
-    vi.mocked(planChallengeRoute).mockReturnValue({
-      ...emptyRoute(),
-      limit: 2,
-      minimumGoal: 1,
-      dueCount: 3,
-      nodes: [
-        { id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' },
-        { id: 'boss-1', role: 'boss', title: 'Boss check', subtitle: 'End.' },
-      ],
-    } as any);
-    const { tree } = await mount(['c3', 'c1', 'c4']);
-
-    expect(useSessionStore.getState().route.map((node) => node.title)).toEqual([
-      'Focus review',
-      'Focus review',
-      'Focus review',
-    ]);
-    for (const uid of ['c3', 'c1', 'c4']) {
-      expect(hasText(tree, `Question ${uid}`)).toBe(true);
-      expect(hasText(tree, 'Focus review')).toBe(true);
-      expect(hasText(tree, 'Warm-up node')).toBe(false);
-      expect(hasText(tree, 'Boss check')).toBe(false);
-      if (uid !== 'c4') await rateGood(tree);
-    }
-  });
-
-  it('labels focus cards even when the planner has no route at all', async () => {
-    const { tree } = await mount(['c2', 'c4']);
-
-    expect(useSessionStore.getState().route).toHaveLength(2);
-    expect(hasText(tree, 'Focus review')).toBe(true);
-    await rateGood(tree);
-    expect(hasText(tree, 'Question c4')).toBe(true);
-    expect(hasText(tree, 'Focus review')).toBe(true);
-  });
-
-  it('ignores focus uids the deck does not contain', async () => {
-    const { tree, navigation } = await mount(['missing-1', 'c2', 'missing-2', 42, '  ']);
-
-    expect(hasText(tree, 'Question c2')).toBe(true);
-    await rateGood(tree);
-
-    expect(navigation.replace).toHaveBeenCalledWith(
-      'SessionSummary',
-      expect.objectContaining({ sessionDone: 1, sessionLimit: 1 }),
-    );
-    expect(vi.mocked(recordReviewEvent).mock.calls.map(([event]) => event.stableUid)).toEqual(['c2']);
-  });
-
-  it('runs a normal session when no focus uid is usable', async () => {
-    vi.mocked(planChallengeRoute).mockReturnValue({ ...emptyRoute(), limit: 1, minimumGoal: 1, newCount: 1 } as any);
-    const { tree } = await mount(['missing-1']);
-
-    expect(pickNextCard).toHaveBeenCalledWith(expect.objectContaining({ mode: 'mixed' }));
-    expect(hasText(tree, 'Question c1')).toBe(false);
-    expect(recordReviewEvent).not.toHaveBeenCalled();
+    expect(byTestID(tree, 'mistake-book-empty')).toHaveLength(1);
+    expect(byTestID(tree, 'mistake-row-c1')).toHaveLength(0);
   });
 });

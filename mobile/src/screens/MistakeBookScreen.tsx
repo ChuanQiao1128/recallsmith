@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -17,6 +17,7 @@ import {
 } from '../features/gacha/mistakes/mistakeBook';
 import { pickRelatedCards, RELATED_REVIEW_COUNT } from '../features/gacha/mistakes/relatedReview';
 import { useFeatureFlags } from '../config/featureFlags';
+import { a11y } from '../theme/a11y';
 import { colors } from '../theme/colors';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
 import { spacing } from '../theme/spacing';
@@ -37,6 +38,13 @@ export function formatLastWrong(lastWrongAt: number, now: number): string {
   if (days <= 0) return 'today';
   if (days === 1) return 'yesterday';
   return `${days} days ago`;
+}
+
+/** Spoken row label: explicit, so VoiceOver does not read the visual "Wrong ×2" shorthand. */
+export function mistakeRowLabel(question: string, entry: MistakeEntry, now: number): string {
+  const topic = entry.topic ? ` ${entry.topic}.` : '';
+  const times = entry.wrongCount === 1 ? 'once' : `${entry.wrongCount} times`;
+  return `${question}.${topic} Wrong ${times}, last wrong ${formatLastWrong(entry.lastWrongAt, now)}`;
 }
 
 /** Groups active mistakes per deck, decks ordered by their newest mistake (the input is newest first). */
@@ -130,7 +138,9 @@ export function MistakeBookScreen({ navigation, route }: Props) {
     [navigation, relatedCount, starting],
   );
 
-  const reviewLabel = relatedCount > 0 ? `Review mistakes + ${relatedCount} related` : 'Review mistakes';
+  // "up to": pickRelatedCards can return fewer related cards than the flag asks for, or none
+  // (no learned candidates, or progress unreadable), and the count is only known once a run starts.
+  const reviewLabel = relatedCount > 0 ? `Review mistakes + up to ${relatedCount} related` : 'Review mistakes';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -149,7 +159,7 @@ export function MistakeBookScreen({ navigation, route }: Props) {
           </View>
           <Text style={styles.title} accessibilityRole="header">Mistake Book</Text>
           <Text style={styles.subtitle}>
-            {`Cards you missed in the last ${MISTAKE_WINDOW_DAYS} days. Two correct answers in a row clear a card.`}
+            {`Cards you missed in the last ${MISTAKE_WINDOW_DAYS} days. Two correct answers on different days clear a card.`}
           </Text>
 
           {groups === null ? (
@@ -174,6 +184,8 @@ export function MistakeBookScreen({ navigation, route }: Props) {
                       key={entry.stableUid}
                       testID={`mistake-row-${entry.stableUid}`}
                       accessibilityRole="button"
+                      accessibilityLabel={mistakeRowLabel(card.Question, entry, now)}
+                      accessibilityHint="Opens the card"
                       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
                       onPress={() => navigation.navigate('CardDetail', { cardId: entry.stableUid })}
                     >
@@ -191,12 +203,20 @@ export function MistakeBookScreen({ navigation, route }: Props) {
                 <Pressable
                   testID={`mistake-review-${group.deck.Slug}`}
                   accessibilityRole="button"
-                  accessibilityState={{ disabled: starting !== null }}
+                  disabled={starting !== null}
+                  accessibilityState={{ disabled: starting !== null, busy: starting === group.deck.Slug }}
                   style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}
                   onPress={() => {
                     void startFocus(group);
                   }}
                 >
+                  {starting === group.deck.Slug ? (
+                    <ActivityIndicator
+                      testID={`mistake-review-busy-${group.deck.Slug}`}
+                      color={colors.inkSoft}
+                      style={styles.primaryActionBusy}
+                    />
+                  ) : null}
                   <Text style={styles.primaryActionText}>{reviewLabel}</Text>
                 </Pressable>
               </View>
@@ -225,6 +245,8 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.85 },
   topBar: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
   backChip: {
+    minHeight: a11y.minTouch,
+    justifyContent: 'center',
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
@@ -233,8 +255,10 @@ const styles = StyleSheet.create({
   },
   backChipText: { color: colors.inkSoft, fontWeight: '900', fontSize: typography.bodySmall },
   title: { color: colors.inkSoft, fontSize: typography.title1, fontWeight: '900', marginBottom: spacing.xs },
+  // Text colours on this screen clear WCAG AA 4.5:1: inkSecondary is 8.41:1 on white and at least
+  // 6.61:1 on the cream-to-lavender gradient; inkSoft is 10.13:1 on pokeBlueFaint and 5.77:1 on pokeBlue.
   subtitle: {
-    color: colors.inkMuted,
+    color: colors.inkSecondary,
     fontSize: typography.bodySmall,
     lineHeight: 19,
     fontWeight: '600',
@@ -254,7 +278,7 @@ const styles = StyleSheet.create({
     ...cardShadow,
   },
   emptyTitle: { color: colors.inkSoft, fontSize: typography.title3, fontWeight: '900', marginBottom: spacing.sm },
-  emptyBody: { color: colors.inkMuted, fontSize: typography.body, lineHeight: 22, fontWeight: '600' },
+  emptyBody: { color: colors.inkSecondary, fontSize: typography.body, lineHeight: 22, fontWeight: '600' },
   deckSection: { marginBottom: spacing.lg },
   deckTitle: {
     color: colors.inkSoft,
@@ -272,7 +296,7 @@ const styles = StyleSheet.create({
   rowQuestion: { color: colors.inkSoft, fontSize: typography.body, lineHeight: 21, fontWeight: '800' },
   rowMeta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 6, gap: 8 },
   rowTopic: {
-    color: colors.pokeBlueDeep,
+    color: colors.inkSoft,
     fontSize: typography.caption,
     fontWeight: '900',
     letterSpacing: 0.4,
@@ -282,7 +306,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.pokeBlueFaint,
     overflow: 'hidden',
   },
-  rowMetaText: { color: colors.inkMuted, fontSize: typography.caption, fontWeight: '800' },
+  rowMetaText: { color: colors.inkSecondary, fontSize: typography.caption, fontWeight: '800' },
   primaryAction: {
     minHeight: 52,
     borderRadius: 999,
@@ -296,5 +320,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 6,
   },
-  primaryActionText: { color: '#FFFFFF', fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+  primaryActionBusy: { position: 'absolute', left: spacing.md },
+  primaryActionText: { color: colors.inkSoft, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
 });
