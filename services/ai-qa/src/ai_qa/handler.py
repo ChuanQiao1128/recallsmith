@@ -10,6 +10,7 @@ import datetime
 import json
 import os
 import random
+import time
 from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
@@ -30,12 +31,22 @@ RETRY_WINDOW_SECONDS = 420
 CALL_TIMEOUT_RESERVE_SECONDS = 30
 REPORT_BUDGET_RESERVE_S = 2.0
 
-# After a retryable provider error the message comes back after this many seconds (plus jitter)
-# instead of the queue's 3600 s visibility, so a rate-limit blip does not stall the run for an hour.
+# After a retryable provider error or a failed results report the message comes back after this
+# many seconds (jittered) instead of the queue's 3600 s visibility, so a rate-limit blip does not
+# stall the run for an hour. From the second receive on the wait is longer, so a limit that lasts
+# a few minutes does not burn the remaining receives before the chunk reaches the DLQ.
 RETRY_VISIBILITY_MIN_SECONDS = 60
 RETRY_VISIBILITY_MAX_SECONDS = 120
+RETRY_VISIBILITY_LATER_MIN_SECONDS = 540
+RETRY_VISIBILITY_LATER_MAX_SECONDS = 660
+# Pauses (low, high: jittered) between tries of the results POST: 4 tries, at most ~45 s of pauses,
+# well inside the 600 s function budget (the POST itself is also capped by the time left).
+REPORT_RETRY_PAUSES_S = ((1.0, 3.0), (4.0, 8.0), (15.0, 30.0))
 # Cards already reported by this container, so a redelivered chunk does not pay for them twice.
 REPORTED_CACHE_MAX = 2000
+# Items reviewed by this container whose report failed: a redelivery reports them again without
+# paying for a second model call.
+UNREPORTED_CACHE_MAX = 500
 
 FAIL_FAST_CODES = frozenset({"PROVIDER_AUTH", "PROVIDER_ACCESS_DENIED", "CONFIG"})
 RETRYABLE_CODES = frozenset({"PROVIDER_RATE_LIMITED", "PROVIDER_ERROR", "PROVIDER_TIMEOUT"})
@@ -44,6 +55,7 @@ RETRYABLE_CODES = frozenset({"PROVIDER_RATE_LIMITED", "PROVIDER_ERROR", "PROVIDE
 client_factory = make_client
 internal_client_factory = InternalClient
 jitter = random.uniform
+sleep = time.sleep
 
 # Model clients are cached per container, keyed by what makes them differ.
 _client_cache: dict[tuple[str, str, str | None], Any] = {}
@@ -52,11 +64,14 @@ _client_cache: dict[tuple[str, str, str | None], Any] = {}
 # (runId, chunk, cardId, contentSha256, promptVersion) of items this container has reported with a
 # 200. The results route never downgrades a done item, so re-reviewing one would only cost money.
 _reported: OrderedDict[tuple[str, int, int, str, str], None] = OrderedDict()
+# Same key → the reviewed item whose report has not succeeded yet.
+_unreported: OrderedDict[tuple[str, int, int, str, str], dict[str, Any]] = OrderedDict()
 
 
 def reset_client_cache() -> None:
     _client_cache.clear()
     _reported.clear()
+    _unreported.clear()
 
 
 def _reported_key(msg: Mapping[str, Any], card: Mapping[str, Any]) -> tuple[str, int, int, str, str]:
@@ -65,10 +80,30 @@ def _reported_key(msg: Mapping[str, Any], card: Mapping[str, Any]) -> tuple[str,
 
 def _remember_reported(msg: Mapping[str, Any], items: list[dict[str, Any]]) -> None:
     for item in items:
-        _reported[_reported_key(msg, item)] = None
-        _reported.move_to_end(_reported_key(msg, item))
+        key = _reported_key(msg, item)
+        _reported[key] = None
+        _reported.move_to_end(key)
+        _unreported.pop(key, None)
     while len(_reported) > REPORTED_CACHE_MAX:
         _reported.popitem(last=False)
+
+
+def _remember_unreported(msg: Mapping[str, Any], items: list[dict[str, Any]]) -> None:
+    for item in items:
+        key = _reported_key(msg, item)
+        _unreported[key] = item
+        _unreported.move_to_end(key)
+    while len(_unreported) > UNREPORTED_CACHE_MAX:
+        _unreported.popitem(last=False)
+
+
+def _receive_count(record: Mapping[str, Any]) -> int:
+    attributes = record.get("attributes")
+    raw = attributes.get("ApproximateReceiveCount") if isinstance(attributes, Mapping) else None
+    try:
+        return int(raw) if raw is not None else 1
+    except (TypeError, ValueError):
+        return 1
 
 
 def queue_url_from_arn(arn: str) -> str:
@@ -81,12 +116,16 @@ def queue_url_from_arn(arn: str) -> str:
 
 
 def _retry_soon(record: Mapping[str, Any], msg: Mapping[str, Any]) -> None:
-    """Shorten the failed message's visibility so SQS redelivers it in 60-120 s. Best effort."""
+    """Shorten the failed message's visibility so SQS redelivers it in 60-120 s (first receive) or
+    9-11 min (later receives) instead of 3600 s. Best effort."""
     arn = record.get("eventSourceARN")
     receipt = record.get("receiptHandle")
     if not isinstance(arn, str) or not isinstance(receipt, str):
         return
-    seconds = int(jitter(RETRY_VISIBILITY_MIN_SECONDS, RETRY_VISIBILITY_MAX_SECONDS))
+    if _receive_count(record) <= 1:
+        seconds = int(jitter(RETRY_VISIBILITY_MIN_SECONDS, RETRY_VISIBILITY_MAX_SECONDS))
+    else:
+        seconds = int(jitter(RETRY_VISIBILITY_LATER_MIN_SECONDS, RETRY_VISIBILITY_LATER_MAX_SECONDS))
     try:
         settings.sqs_client().change_message_visibility(
             QueueUrl=queue_url_from_arn(arn), ReceiptHandle=receipt, VisibilityTimeout=seconds
@@ -229,6 +268,7 @@ def _report(
     model: str,
     items: list[dict[str, Any]],
     secret: str,
+    secret_name: str,
     core_api_base: str,
     context: Any,
 ) -> bool:
@@ -243,7 +283,14 @@ def _report(
     }
     remaining = _remaining_s(context)
     budget = None if remaining is None else max(0.0, remaining - REPORT_BUDGET_RESERVE_S)
-    result = internal_client_factory(core_api_base, secret).post(RESULTS_PATH, body, budget_s=budget)
+    # Read only if core rejects the signature: present only during a rotation (README, "Internal
+    # shared secret rotation").
+    def previous_secret() -> str | None:
+        return settings.get_secret(settings.previous_secret_name(secret_name), optional=True)
+
+    client = internal_client_factory(core_api_base, secret, previous_secret=previous_secret, sleep=sleep)
+    pauses = [jitter(low, high) for low, high in REPORT_RETRY_PAUSES_S]
+    result = client.post(RESULTS_PATH, body, budget_s=budget, retry_pauses=pauses)
     if not result.ok:
         log(
             "error",
@@ -296,11 +343,15 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
         return False
 
     def finish(items: list[dict[str, Any]]) -> bool:
+        """Report the items. On failure keep them for the redelivery and bring it back soon."""
         if not items:
             return True  # every card was already reported by an earlier delivery of this chunk
-        ok = _report(msg, provider, model, items, secret, core_api_base, context)
+        ok = _report(msg, provider, model, items, secret, secret_name, core_api_base, context)
         if ok:
             _remember_reported(msg, items)
+        else:
+            _remember_unreported(msg, items)
+            _retry_soon(record, msg)
         return ok
 
     def fill(code: str, status: str = "error", start: int = 0) -> list[dict[str, Any]]:
@@ -328,6 +379,12 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
         if _reported_key(msg, card) in _reported:
             log("info", "ai-qa", event="card_already_reported", runId=msg["runId"], chunk=msg["chunk"], cardId=card["cardId"])
             continue
+        pending = _unreported.get(_reported_key(msg, card))
+        if pending is not None:
+            # Reviewed by an earlier delivery whose report failed: report it again, no second call.
+            log("info", "ai-qa", event="card_report_pending", runId=msg["runId"], chunk=msg["chunk"], cardId=card["cardId"])
+            items.append(pending)
+            continue
         remaining = _remaining_s(context)
         if remaining is not None and remaining < DEADLINE_MARGIN_SECONDS:
             item, calls = _empty_item(card, "error", "PROVIDER_TIMEOUT"), 0
@@ -352,8 +409,9 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
             return finish(items)
         if code in RETRYABLE_CODES:
             # Report what finished (remembered, so the redelivery skips it), then come back soon.
-            finish(items)
-            _retry_soon(record, msg)
+            # A failed report has already scheduled the early redelivery.
+            if finish(items):
+                _retry_soon(record, msg)
             return False
         items.append(item)
 

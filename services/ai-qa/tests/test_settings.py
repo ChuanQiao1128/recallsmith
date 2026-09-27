@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_qa import settings
 from ai_qa.settings import ConfigError, Settings, is_truthy, load_secret, load_settings
 
 PROD_ENV = Path(__file__).resolve().parent.parent / "env" / "prod.env.json"
@@ -133,3 +134,31 @@ def test_load_secret_treats_placeholder_and_errors_as_missing_and_caches_success
     assert load_secret("/p/ok", ssm) == "test-secret"
     assert ssm.calls.count(("/p/placeholder", True)) == 2  # not cached
     assert ssm.calls.count(("/p/ok", True)) == 1  # cached on success
+
+
+def test_loaded_secret_expires_after_the_ttl(monkeypatch) -> None:
+    # cloud-security-resilience-11: a rotated secret reaches a warm container within the TTL.
+    now = {"t": 1000.0}
+    monkeypatch.setattr(settings, "clock", lambda: now["t"])
+    ssm = FakeSsm({"/p/secret": "old"})
+    assert load_secret("/p/secret", ssm) == "old"
+    ssm.values["/p/secret"] = "new"
+    now["t"] += settings.SECRET_TTL_SECONDS - 1
+    assert load_secret("/p/secret", ssm) == "old"
+    now["t"] += 1
+    assert load_secret("/p/secret", ssm) == "new"
+    assert settings.SECRET_TTL_SECONDS == 300
+
+
+def test_optional_secret_absence_is_cached_for_the_ttl(monkeypatch, capsys) -> None:
+    now = {"t": 1000.0}
+    monkeypatch.setattr(settings, "clock", lambda: now["t"])
+    ssm = FakeSsm({"/p/secret-previous": RuntimeError("ParameterNotFound")})
+    assert load_secret("/p/secret-previous", ssm, optional=True) is None
+    assert load_secret("/p/secret-previous", ssm, optional=True) is None
+    assert len(ssm.calls) == 1
+    assert "ssm_secret_unavailable" not in capsys.readouterr().out  # absence is normal: debug only
+    now["t"] += settings.SECRET_TTL_SECONDS
+    ssm.values["/p/secret-previous"] = "old"
+    assert load_secret("/p/secret-previous", ssm, optional=True) == "old"
+    assert settings.previous_secret_name("/p/secret") == "/p/secret-previous"

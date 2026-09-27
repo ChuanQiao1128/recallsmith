@@ -280,7 +280,8 @@ def test_redelivered_chunk_makes_no_model_call_for_cards_already_reported(core, 
 
 
 def test_unreported_cards_are_reviewed_again_on_redelivery(local_server, ssm, llm, enabled, monkeypatch) -> None:
-    # A failed report is not remembered: the redelivery must review and report the card again.
+    # A failed report is not remembered as reported: the redelivery must report the card again.
+    # Its reviewed item is kept, so that costs no second model call (cloud-security-resilience-12).
     answers = iter([400, 200])
 
     def flaky_core(srv, captured):
@@ -295,9 +296,10 @@ def test_unreported_cards_are_reviewed_again_on_redelivery(local_server, ssm, ll
     llm.script = [reply(review_json()), status_error(anthropic.InternalServerError, 500)]
     assert handler.lambda_handler(sqs_record_event(message(), n=1), FakeContext(600))["batchItemFailures"]
     llm.calls.clear()
-    llm.script = [reply(review_json())] * 3
+    llm.script = [reply(review_json())] * 2
     assert handler.lambda_handler(sqs_record_event(message(), n=2), FakeContext(600)) == {"batchItemFailures": []}
-    assert len(llm.calls) == 3
+    assert len(llm.calls) == 2
+    assert [i["cardId"] for i in json.loads(srv.requests[-1].body)["items"]] == [101, 102, 103]
 
 
 def test_remembered_items_are_keyed_by_content_hash(core, ssm, llm, enabled) -> None:
@@ -426,11 +428,13 @@ def test_report_failure_fails_the_message(local_server, ssm, llm, enabled, monke
     llm.script = [reply(review_json())]
     result = handler.lambda_handler(event(message([card(0)])), None)
     assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
-    assert len(down.requests) == 2  # one retry on 5xx
+    # 4 tries with backoff (cloud-security-resilience-12; was one retry).
+    assert len(down.requests) == 1 + len(handler.REPORT_RETRY_PAUSES_S)
 
     rejecting = local_server(lambda s, c: (403, {}, b"{}"))
     monkeypatch.setenv("CORE_API_BASE", rejecting.base_url)
-    llm.script = [reply(review_json()), reply(review_json())]
+    # card 0 was reviewed above and its report failed: the kept item is sent, only card 1 is reviewed.
+    llm.script = [reply(review_json())]
     result = handler.lambda_handler(event(message([card(0)]), message([card(1)])), FakeContext(600))
     assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}, {"itemIdentifier": "m-1"}]}
     assert len(rejecting.requests) == 2  # 403 is not retried
@@ -479,3 +483,93 @@ def test_results_body_matches_contract(core, ssm, llm, enabled, monkeypatch) -> 
     assert set(item["usage"]) == {"inputTokens", "outputTokens", "cacheReadInputTokens"}
     assert isinstance(item["latencyMs"], int) and isinstance(item["estimatedCostUsd"], float)
     assert item["requestId"] == "req_test_1"
+
+
+def test_failed_report_brings_the_chunk_back_soon_with_growing_visibility(local_server, ssm, llm, enabled, monkeypatch) -> None:
+    # cloud-security-resilience-12: a failed report no longer waits the queue's 3600 s visibility.
+    srv = local_server(lambda s, c: (503, {}, b""))
+    monkeypatch.setenv("CORE_API_BASE", srv.base_url)
+    sqs = FakeSqs()
+    settings.set_clients(sqs=sqs)
+    ranges: list[tuple[float, float]] = []
+
+    def low(lo: float, hi: float) -> float:
+        ranges.append((lo, hi))
+        return lo
+
+    monkeypatch.setattr(handler, "jitter", low)
+    llm.script = [reply(review_json())]
+    assert handler.lambda_handler(sqs_record_event(message([card(0)]), n=1), FakeContext(600)) == {
+        "batchItemFailures": [{"itemIdentifier": "m-0"}]
+    }
+    assert sqs.calls == [{"QueueUrl": QUEUE_URL, "ReceiptHandle": "rh-1", "VisibilityTimeout": 60}]
+    # The report's backoff pauses came from the jittered schedule too.
+    assert ranges[: len(handler.REPORT_RETRY_PAUSES_S)] == list(handler.REPORT_RETRY_PAUSES_S)
+
+    # Second receive, report still failing: no second model call, and a longer wait.
+    assert handler.lambda_handler(sqs_record_event(message([card(0)]), n=2), FakeContext(600))["batchItemFailures"]
+    assert len(llm.calls) == 1
+    assert sqs.calls[-1] == {"QueueUrl": QUEUE_URL, "ReceiptHandle": "rh-2", "VisibilityTimeout": 540}
+
+
+def test_fail_fast_outcome_with_failed_report_is_retried_soon(local_server, ssm, llm, enabled, monkeypatch) -> None:
+    srv = local_server(lambda s, c: (429, {}, b""))
+    monkeypatch.setenv("CORE_API_BASE", srv.base_url)
+    sqs = FakeSqs()
+    settings.set_clients(sqs=sqs)
+    llm.script = [status_error(anthropic.AuthenticationError, 401)]
+    assert handler.lambda_handler(sqs_record_event(message(), n=1), FakeContext(600))["batchItemFailures"]
+    assert len(srv.requests) == 1 + len(handler.REPORT_RETRY_PAUSES_S)  # 429 is retried
+    assert len(sqs.calls) == 1 and 60 <= sqs.calls[0]["VisibilityTimeout"] <= 120
+
+
+def test_retryable_provider_error_with_failed_report_schedules_one_visibility_change(local_server, ssm, llm, enabled, monkeypatch) -> None:
+    srv = local_server(lambda s, c: (503, {}, b""))
+    monkeypatch.setenv("CORE_API_BASE", srv.base_url)
+    sqs = FakeSqs()
+    settings.set_clients(sqs=sqs)
+    llm.script = [reply(review_json()), status_error(anthropic.RateLimitError, 429)]
+    assert handler.lambda_handler(sqs_record_event(message(), n=1), FakeContext(600))["batchItemFailures"]
+    assert len(sqs.calls) == 1
+
+
+def test_throttled_report_that_recovers_is_acked(local_server, ssm, llm, enabled, monkeypatch) -> None:
+    answers = iter([429, 429])
+
+    def throttled_core(srv, captured):
+        status = next(answers, 200)
+        if status != 200:
+            return status, {}, b""
+        return fake_core(srv, captured)
+
+    srv = local_server(throttled_core)
+    monkeypatch.setenv("CORE_API_BASE", srv.base_url)
+    llm.script = [reply(review_json())]
+    assert handler.lambda_handler(event(message([card(0)])), FakeContext(600)) == {"batchItemFailures": []}
+    assert len(srv.requests) == 3
+
+
+def test_report_during_secret_rotation_falls_back_to_the_previous_secret(core, llm, enabled, monkeypatch) -> None:
+    # cloud-security-resilience-11: SSM flipped to the new secret, core still verifies the old one
+    # (SECRET); "<name>-previous" holds the old value, so the report still lands.
+    fake_ssm = FakeSsm({INTERNAL_NAME: "the-new-secret", INTERNAL_NAME + "-previous": SECRET})
+    settings.set_clients(ssm=fake_ssm)
+    llm.script = [reply(review_json())]
+    assert handler.lambda_handler(event(message([card(0)])), FakeContext(600)) == {"batchItemFailures": []}
+    assert len(core.requests) == 2
+    assert fake_ssm.calls == [INTERNAL_NAME, INTERNAL_NAME + "-previous"]
+
+
+def test_warm_container_picks_up_a_rotated_secret_after_the_ttl(core, llm, enabled, monkeypatch) -> None:
+    now = {"t": 1000.0}
+    monkeypatch.setattr(settings, "clock", lambda: now["t"])
+    fake_ssm = FakeSsm({INTERNAL_NAME: "stale-secret"})
+    settings.set_clients(ssm=fake_ssm)
+    llm.script = [reply(review_json())]
+    assert handler.lambda_handler(event(message([card(0)])), FakeContext(600))["batchItemFailures"]
+
+    fake_ssm.values[INTERNAL_NAME] = SECRET
+    now["t"] += settings.SECRET_TTL_SECONDS
+    core.requests.clear()
+    assert handler.lambda_handler(event(message([card(0)])), FakeContext(600)) == {"batchItemFailures": []}
+    assert len(core.requests) == 1 and len(llm.calls) == 1  # the kept item was reported, not re-reviewed
