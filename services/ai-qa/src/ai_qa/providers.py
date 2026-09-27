@@ -36,7 +36,12 @@ def make_client(
 
 
 def structured_outputs_on(settings: Settings) -> bool:
-    """on/off as configured; auto = on for the Anthropic API, off for Bedrock (contract §14 #5)."""
+    """on/off as configured; auto = on for the Anthropic API, off for Bedrock (contract §14 #5).
+
+    Re-checked 2026-09-27: the "Claude in Amazon Bedrock" page (the Mantle Messages endpoint this
+    client uses) lists structured outputs under "Features not supported". The Bedrock "Yes" in
+    the claude-api platform table matches the legacy InvokeModel page, not Mantle. See README.
+    """
     if settings.structured_outputs == "off" or _structured_outputs_disabled:
         return False
     if settings.structured_outputs == "on":

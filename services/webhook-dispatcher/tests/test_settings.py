@@ -96,3 +96,11 @@ def test_optional_secret_absence_is_cached_for_the_ttl(monkeypatch, capsys) -> N
     ssm.values[name] = "whsec-old"
     t[0] += settings.SECRET_TTL_SECONDS
     assert settings.load_secret(name, ssm, optional=True) == "whsec-old"
+
+
+def test_presend_claim_flag_is_off_unless_set() -> None:
+    assert settings.load_settings({}).presend_claim is False
+    for value in ("1", "true", " YES "):
+        assert settings.load_settings({"WEBHOOK_PRESEND_CLAIM": value}).presend_claim is True
+    assert settings.load_settings({"WEBHOOK_PRESEND_CLAIM": "0"}).presend_claim is False
+    assert settings.subscription_secret_name("/p/s", 12) == "/p/s-sub-12"

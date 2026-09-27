@@ -75,7 +75,10 @@ Committed in `env/prod.env.json` (overlaid by the deploy script; no secret value
 
 `AI_QA_REQUIRED`, `AI_QA_MAX_CARDS`, `AI_QA_DAILY_USD_CAP` and `AI_QA_QUEUE_URL` belong to core-vpc
 and are not read here. SSM is read by exact name only (never by path); secrets are cached per
-container only once they load successfully.
+container only once they load successfully, and for at most **5 minutes** (`SECRET_TTL_SECONDS =
+300`, the dispatcher's value), so a rotated value reaches every warm container within that window.
+The optional `INTERNAL_SECRET_SSM_NAME` + `-previous` is read only when core answers 401/403 to a
+results report (see "Internal shared secret rotation"); its absence is cached for the same TTL.
 
 ## The model call
 
@@ -91,7 +94,15 @@ tools, no sampling parameters.
 **Structured outputs — why `auto`** (§14 #5). The Anthropic API supports
 `output_config.format = {"type": "json_schema", …}`; the live Bedrock documentation lists
 structured outputs as not supported on the Mantle endpoint. `auto` therefore turns them on for
-`anthropic` and off for `bedrock`. Either way the answer goes through the same
+`anthropic` and off for `bedrock`. Re-checked 2026-09-27 (audit ai-agent-22): the page
+[Claude in Amazon Bedrock](https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock)
+(the `/anthropic/v1/messages` Mantle endpoint that `AnthropicBedrockMantle` calls) lists
+"Structured outputs" under **Features not supported**. The claude-api skill's
+`shared/platform-availability.md` marks it "Yes" for Bedrock, but that matches the *legacy*
+InvokeModel page (`claude-on-amazon-bedrock-legacy`), which lists it as supported; the Mantle page
+is the one that applies here. Flip `auto` for Bedrock only after that page changes, and re-run the
+eval gate when you do. `AI_STRUCTURED_OUTPUTS=on` is available to trial it; the fallback below
+keeps a rejection harmless. Either way the answer goes through the same
 `ModelReview.model_validate_json` and the same single repair turn. `messages.parse()` is not used
 because it validates while building the response, so a `max_tokens` or `refusal` reply would raise
 before `stop_reason` could be read. If the API rejects the format (`BadRequestError` naming
@@ -149,15 +160,25 @@ sum of these estimates.
 | `REFUSAL` | `stop_reason = "refusal"` (status `refused`) | per card |
 | `DISABLED` | `AI_QA_ENABLED` not truthy (status `skipped`) | every card, no call, no key read |
 
-The queue has `maxReceiveCount = 2`: a retried message gets one more attempt, then goes to the DLQ
-(alarm `developercards-prod-ai-qa-dlq-nonempty`). A message with a bad shape is logged and acked. A
-missing internal secret, a failed results report or an unexpected exception returns the message as
-a batch item failure. Any other exception class from the SDK propagates and is treated as
+The queue has `maxReceiveCount = 2` (raising it to 3 is an infra follow-up, see
+docs/delivery/r18-issues/Y03-fixes.md): a retried message gets one more attempt, then goes to the
+DLQ (alarm `developercards-prod-ai-qa-dlq-nonempty`). A message with a bad shape is logged and
+acked. A missing internal secret, a failed results report or an unexpected exception returns the
+message as a batch item failure.
+
+**Results report.** The POST is tried up to 4 times: a connection error, a 5xx or a **429** (the
+route's throttle) is retried after jittered pauses of 1-3 s, 4-8 s and 15-30 s, always within the
+Lambda's remaining time. A 401/403 is resent once, at once, signed with the previous internal
+secret when `-previous` exists. When the report still fails, the reviewed items are kept per
+container (at most 500) and the message's visibility is shortened like a retryable provider error,
+so the redelivery reports them again without a second model call. Any other exception class from the SDK propagates and is treated as
 unexpected.
 
 **Retry scope.** On a retryable exit the handler calls `sqs:ChangeMessageVisibility` (already
-granted) with 60-120 s (random jitter), so the retry comes after about a minute instead of the
-queue's 3600 s visibility. Every item reported with a 200 is remembered per container, keyed by
+granted) with 60-120 s (random jitter) on the first receive and 540-660 s on later receives, so
+the retry comes after about a minute instead of the queue's 3600 s visibility, and a rate limit that
+lasts a few minutes does not use up the remaining receives at once. The same happens after a
+failed results report. Every item reported with a 200 is remembered per container, keyed by
 `(runId, chunk, cardId, contentSha256, promptVersion)` (at most 2000 keys); a redelivered chunk
 skips those cards — no model call, no second report — and reviews only the rest. When every card
 was already reported, the message is acked without a call. This needs no IAM change and no core
@@ -239,3 +260,31 @@ Dependencies: `anthropic[bedrock]>=1.8.0` (1.8.0 resolved 2026-09-27; it pulls `
 and `botocore`) and `pydantic>=2`. Dev group: `pytest>=8` and `boto3==1.43.103` — pinned
 2026-09-27 to the version the lock resolves for `anthropic[bedrock]`, matching the webhook
 dispatcher's pin. The deploy zip is about 21 MB, under the 50 MiB direct-upload limit.
+
+## Internal shared secret rotation
+
+The results report is signed with `/developercards/prod/internal-shared-secret` (`§4.3`). Both
+Python Lambdas (this one and the webhook dispatcher) re-read it at most every 5 minutes and, when
+core answers 401/403, resend once signed with `/developercards/prod/internal-shared-secret-previous`
+if that parameter exists. So the Python side works whichever side switches first.
+
+IAM prerequisite: both roles need `ssm:GetParameter` on `…/internal-shared-secret-previous`
+(infra follow-up). Until then the read is denied, treated as "no previous secret" (debug log
+only), and a 401/403 stands as before.
+
+Runbook (supervisor only; values never in git or chat):
+
+1. Copy the current value to the previous name:
+   `aws ssm put-parameter --name /developercards/prod/internal-shared-secret-previous --type SecureString --value <current>`.
+2. Put the new value in `/developercards/prod/internal-shared-secret`. Within 5 minutes every
+   Python container signs with the new value and falls back to the old one on a 403.
+3. Deploy core-vpc with the new `INTERNAL_SHARED_SECRET` (its deploy overlays the SSM leaf). Once
+   core accepts `INTERNAL_SHARED_SECRET_PREVIOUS` too (core follow-up), put the old value there for
+   the deploy, so callers that have not refreshed yet keep verifying.
+4. Wait 10 minutes (two cache TTLs), then delete the previous parameter:
+   `aws ssm delete-parameter --name /developercards/prod/internal-shared-secret-previous`
+   (and drop `INTERNAL_SHARED_SECRET_PREVIOUS` from core-vpc, if set).
+
+The `-previous` leaf is not a core env key today. Core's `merge-env.sh` fails on an unmapped leaf
+under `/developercards/prod` (SSM_TO_ENV), so step 1 needs a row for it first: map it to
+`INTERNAL_SHARED_SECRET_PREVIOUS` once core reads that key, or list it in `SSM_NOT_ENV` until then.

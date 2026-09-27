@@ -347,6 +347,8 @@ def clean_container_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for key in AI_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("LOG_LEVEL", "info")
+    # The results report backs off between tries; tests never wait for real.
+    monkeypatch.setattr(handler, "sleep", lambda seconds: None)
     settings.clear_secret_cache()
     settings.reset_clients()
     providers.reset_structured_outputs()
