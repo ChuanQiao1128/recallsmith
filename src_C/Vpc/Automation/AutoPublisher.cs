@@ -24,6 +24,9 @@ public static class AutoPublisher
 {
   public const int PublishWaitTimeoutMinutes = 120, MaxStaleAttempts = 3, StuckJobMinutes = 60;
   public const string Actor = "automation";
+
+  /// <summary>The <c>error_message</c> of a job the reconcile fails as stuck: the publish reaper's text.</summary>
+  public const string StuckJobError = "orphaned: no worker pickup";
   public const int MaxListedUids = 10, MaxDetailLength = 300;
 
   public const string Waiting = "waiting", Publishing = "publishing", Published = "published", WouldPublish = "would_publish",
@@ -34,7 +37,8 @@ public static class AutoPublisher
     "DECK_DELETED"];
 
   /// <summary>What checks 1–8 decided; <see cref="StartPublish"/> means every check passed and check 9 runs.</summary>
-  private sealed record Verdict(string State, string? Reason, string? Detail, string? DeckSlug, string? BuildId, string? Snapshot, bool StartPublish);
+  private sealed record Verdict(string State, string? Reason, string? Detail, string? DeckSlug, string? BuildId, string? Snapshot, bool StartPublish,
+    DateTime? DeckUpdatedAt = null);
 
   // ---------------------------------------------------------------------------------------------
   // evaluation (A00 §6.2)
@@ -163,7 +167,7 @@ public static class AutoPublisher
       try
       {
         var start = await Publish.StartPublishAsync(conn, deckId, Actor, $"auto-publish run {runId?.ToString("D") ?? "unknown"}",
-          bindSnapshot: true, expectedSnapshot: verdict.Snapshot, allowResume: false, ct);
+          bindSnapshot: true, expectedSnapshot: verdict.Snapshot, allowResume: false, expectedDeckUpdatedAt: verdict.DeckUpdatedAt, ct: ct);
         if (start.Outcome is Publish.Queued or Publish.Resumed)
         {
           (state, reason, detail, jobId, buildId, snapshot) = (Publishing, null, null, start.JobId, start.BuildId, start.SnapshotSha256);
@@ -236,7 +240,12 @@ public static class AutoPublisher
     return new AutoPublishOutcome(publishId, state, reason, detail);
   }
 
-  /// <summary>Checks 1–8 of A00 §6.2 in order, read in one repeatable-read snapshot.</summary>
+  /// <summary>
+  /// Checks 1–8 of A00 §6.2 in order, read in one repeatable-read snapshot. The pending change set of check 6 is every
+  /// card changed since the live build was created plus every live automation-accepted card that the live build's job
+  /// did not record (<c>deck_publishes.card_ids</c>, R18C backend-design-12): a card whose accept committed after the
+  /// Worker read the deck is not in that build, whatever its <c>updated_at</c> says.
+  /// </summary>
   private static async Task<Verdict> RunChecksAsync(NpgsqlConnection conn, long deckId, string mode, CancellationToken ct)
   {
     await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
@@ -245,7 +254,8 @@ public static class AutoPublisher
       select d.slug, d.is_deleted, d.live_build_id, d.updated_at,
         (select p.created_at from deck_publishes p where p.deck_id = d.id and p.build_id = d.live_build_id order by p.created_at desc limit 1) as t,
         d.updated_at <= coalesce((select p.created_at from deck_publishes p where p.deck_id = d.id and p.build_id = d.live_build_id
-                                  order by p.created_at desc limit 1), '-infinity'::timestamptz) as settings_unchanged
+                                  order by p.created_at desc limit 1), '-infinity'::timestamptz) as settings_unchanged,
+        (select p.card_ids from deck_publishes p where p.deck_id = d.id and p.build_id = d.live_build_id order by p.created_at desc limit 1) as live_card_ids
       from decks d where d.id = $1
       """, [deckId]);
 
@@ -280,9 +290,12 @@ public static class AutoPublisher
       $"""
       select {CardContentHash.CardColumnsSql}, c.is_deleted
       from cards c
-      where c.deck_id = $1 and c.updated_at > $2
+      where c.deck_id = $1
+        and (c.updated_at > $2
+             or ($3::bigint[] is not null and c.is_deleted = 0 and not (c.id = any($3::bigint[]))
+                 and exists (select 1 from automation_draft_decisions dd where dd.accepted_card_id = c.id and dd.state = 'auto_accepted')))
       order by c.order_in_deck, c.id
-      """, [deckId, deck["t"]]);
+      """, [deckId, deck["t"], deck["live_card_ids"]]);
     var pending = changed.Select(r => new PendingCard(
       Convert.ToInt64(r["id"], CultureInfo.InvariantCulture),
       Convert.ToString(r["stableUid"], CultureInfo.InvariantCulture) ?? string.Empty,
@@ -324,8 +337,8 @@ public static class AutoPublisher
     // 8. nothing pending: an earlier build already shipped these cards
     if (pending.Count == 0) return new Verdict(Published, null, null, slug, liveBuildId, null, false);
 
-    // 9. publish
-    return new Verdict(Waiting, null, null, slug, null, snapshot, true);
+    // 9. publish, bound to these cards and to the deck settings check 5 passed (backend-design-11)
+    return new Verdict(Waiting, null, null, slug, null, snapshot, true, (DateTime)deck["updated_at"]!);
   }
 
   /// <summary>
@@ -400,9 +413,12 @@ public static class AutoPublisher
   /// row, which the tick evaluates next. <c>FAILED</c> with <c>AI_QA_STALE</c> (cards changed between the bound snapshot
   /// and the build) ⇒ back to <c>waiting</c> for a fresh evaluation, whose check 6 routes any human change to a human;
   /// after <see cref="MaxStaleAttempts"/> stale attempts, or on any other failure ⇒ <c>human</c> / <c>PUBLISH_FAILED</c>
-  /// with the job's error (+ <c>publish_failed</c> alert, ledger in live). A job still active is left alone (the existing
-  /// reaper handles stuck jobs). Stops early once <paramref name="stop"/> says the tick's budget is spent. Returns the
-  /// rows moved. Never throws.
+  /// with the job's error (+ <c>publish_failed</c> alert, ledger in live). A job still active is left alone until it has
+  /// not moved for <see cref="StuckJobMinutes"/>; nothing else reaps it (the publish reaper is a manual super-admin
+  /// route), so the reconcile then fails that one job with the reaper's error and routes the row like any other failure
+  /// (R18C, backend-design-14/automation-11). A row whose job row is gone goes the same way. Both count as an
+  /// automation failure (<c>AutomationStepFailures</c>). Stops early once <paramref name="stop"/> says the tick's budget
+  /// is spent. Returns the rows moved. Never throws.
   /// </summary>
   internal static async Task<int> ReconcileAsync(NpgsqlConnection conn, int max, CancellationToken ct = default, Func<bool>? stop = null)
   {
@@ -429,7 +445,30 @@ public static class AutoPublisher
         var jobId = row["job_id"] as string;
         var live = (string)row["mode"]! == AutomationMode.Live;
         var status = row["job_status"] as string;
-        if (jobId is null || status is null) continue;
+        if (jobId is null) continue;
+        var error = row["error_message"] as string;
+
+        if (status is null)
+        {
+          // The job row is gone: nothing will ever finish this build.
+          (status, error) = ("FAILED", "the publish job row is missing");
+          Log.Event("warn", new { tag = "automation", reason = "auto_publish_job_missing", publishId, deckId, jobId });
+          AutomationFailures.Record();
+        }
+        else if (status is "PENDING" or "PROCESSING" && row["stuck"] is true)
+        {
+          // The same statement as the publish reaper, for this job only; a job that moved meanwhile is left alone.
+          var reaped = await DbUtil.QueryAsync(conn, null,
+            """
+            update deck_publishes set status = 'FAILED', error_message = $2, updated_at = now()
+            where job_id = $1 and status in ('PENDING', 'PROCESSING') and updated_at < now() - make_interval(mins => $3)
+            returning status
+            """, [jobId, StuckJobError, StuckJobMinutes]);
+          if (reaped.Count == 0) continue;
+          (status, error) = ("FAILED", StuckJobError);
+          Log.Event("warn", new { tag = "automation", reason = "auto_publish_job_stuck", publishId, deckId, jobId, status = row["job_status"] });
+          AutomationFailures.Record();
+        }
 
         if (status == "SUCCESS")
         {
@@ -446,7 +485,7 @@ public static class AutoPublisher
         }
         else if (status == "FAILED")
         {
-          var error = row["error_message"] as string ?? "the publish job failed";
+          error ??= "the publish job failed";
           if (error.StartsWith(PublishSnapshot.StaleErrorCode, StringComparison.Ordinal))
           {
             var retried = await DbUtil.QueryAsync(conn, null,
@@ -489,10 +528,6 @@ public static class AutoPublisher
           }
           Log.Event("info", new { tag = "automation", outcome = "auto_publish_failed", publishId, deckId, jobId });
         }
-        else if (row["stuck"] is true)
-        {
-          Log.Event("warn", new { tag = "automation", reason = "auto_publish_job_stuck", publishId, deckId, jobId, status });
-        }
       }
     }
     catch (Exception ex)
@@ -504,8 +539,9 @@ public static class AutoPublisher
 
   /// <summary>
   /// A <c>publishing</c> row whose job succeeded, in one transaction: the automation-accepted cards of the deck the build
-  /// did not cover are the deferred ids plus every such card changed after the job was created (the Worker builds the
-  /// bound snapshot, so a later change cannot be in it). The row becomes <c>published</c> with only the covered ids, and
+  /// did not cover are the deferred ids plus every live such card the job did not record in <c>card_ids</c> (R18C
+  /// backend-design-12: membership, not timestamps; a job from before migration 035 records nothing, and then every
+  /// such card changed after the job was created counts). The row becomes <c>published</c> with only the covered ids, and
   /// the uncovered ones open the deck's next <c>waiting</c> row (allowed by the open-row index now that this one is
   /// terminal), owned by the newest run among them. Null when the row was no longer <c>publishing</c>.
   /// </summary>
@@ -525,8 +561,10 @@ public static class AutoPublisher
       select distinct dd.accepted_card_id as id
       from automation_draft_decisions dd
       join cards c on c.id = dd.accepted_card_id
+      join deck_publishes p on p.job_id = $2
       where c.deck_id = $1 and dd.state = 'auto_accepted'
-        and c.updated_at > (select p.created_at from deck_publishes p where p.job_id = $2)
+        and case when p.card_ids is null then c.updated_at > p.created_at
+                 else c.is_deleted = 0 and not (c.id = any(p.card_ids)) end
       union
       select unnest($3::bigint[])
       order by 1

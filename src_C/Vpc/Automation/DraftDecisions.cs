@@ -25,6 +25,12 @@ public static class DraftDecisions
     Human = "human", Superseded = "superseded";
 
   internal const string AutomationEventActor = "automation";
+
+  /// <summary>
+  /// A draft of an automation run still without a decision this long after its submit lost its after-commit hook
+  /// (R18C, backend-design-10): the tick's <see cref="SweepMissingAsync"/> creates the decision.
+  /// </summary>
+  public const int MissingDecisionGraceMinutes = 5;
   internal const int MaxReasonDetailLength = 300;
 
   private static AmazonSQSClient? _sqs;
@@ -72,39 +78,7 @@ public static class DraftDecisions
 
       foreach (var draft in drafts)
       {
-        var draftId = Convert.ToInt64(draft["id"], CultureInfo.InvariantCulture);
-        var reason = await PrecheckAsync(conn, auth, run, draft, deckSlug, ct);
-        var state = reason is null ? QaPending : Human;
-
-        bool inserted;
-        await using (var tx = await conn.BeginTransactionAsync(ct))
-        {
-          var rows = await DbUtil.QueryAsync(conn, tx,
-            """
-            insert into automation_draft_decisions (draft_id, run_id, deck_id, mode, state, reason, decided_at)
-            values ($1, $2, $3, $4, $5, $6::text, case when $5 = 'human' then now() end)
-            on conflict (draft_id) do nothing
-            returning draft_id
-            """,
-            [draftId, runId, Convert.ToInt64(draft["deck_id"], CultureInfo.InvariantCulture), mode.Effective, state, reason]);
-          inserted = rows.Count > 0;
-          if (inserted)
-          {
-            await AppendEventAsync(conn, tx, draftId, null, state, reason, AutomationEventActor, mode.Effective, new { runId }, ct);
-          }
-          await tx.CommitAsync(ct);
-        }
-        if (!inserted) continue;
-
-        Log.Event("info", new { tag = "automation", outcome = "decision_created", draftId, runId, state, reason, mode = mode.Effective });
-        if (state == Human)
-        {
-          if (mode.Effective == AutomationMode.Live) await AutomationLedger.RecordAsync(conn, RouteLedgerEvent(draftId, deckId, reason!, null), ct);
-        }
-        else
-        {
-          await EnqueueQaAsync(conn, draftId, ct);
-        }
+        await DecideAsync(conn, auth.UserSub, run, runId, draft, deckSlug, mode.Effective, ct);
       }
     }
     catch (PostgresException pg) when (pg.SqlState is "42P01" or "42703")
@@ -114,17 +88,107 @@ public static class DraftDecisions
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "on_submitted_failed", deckId, error = ex.Message });
+      AutomationFailures.Record();
     }
   }
 
+  /// <summary>
+  /// The decision of one draft of run <paramref name="runId"/> submitted by <paramref name="submitterSub"/>: the
+  /// prechecks, the row and its first event (a draft that already has a decision is left alone), then the ledger row of
+  /// a live human route or the draft-QA enqueue. Returns whether a decision was created.
+  /// </summary>
+  private static async Task<bool> DecideAsync(NpgsqlConnection conn, string? submitterSub, Dictionary<string, object?> run, Guid runId,
+    Dictionary<string, object?> draft, string deckSlug, string mode, CancellationToken ct)
+  {
+    var draftId = Convert.ToInt64(draft["id"], CultureInfo.InvariantCulture);
+    var deckId = Convert.ToInt64(draft["deck_id"], CultureInfo.InvariantCulture);
+    var reason = await PrecheckAsync(conn, submitterSub, run, draft, deckSlug, ct);
+    var state = reason is null ? QaPending : Human;
+
+    bool inserted;
+    await using (var tx = await conn.BeginTransactionAsync(ct))
+    {
+      var rows = await DbUtil.QueryAsync(conn, tx,
+        """
+        insert into automation_draft_decisions (draft_id, run_id, deck_id, mode, state, reason, decided_at)
+        values ($1, $2, $3, $4, $5, $6::text, case when $5 = 'human' then now() end)
+        on conflict (draft_id) do nothing
+        returning draft_id
+        """,
+        [draftId, runId, deckId, mode, state, reason]);
+      inserted = rows.Count > 0;
+      if (inserted)
+      {
+        await AppendEventAsync(conn, tx, draftId, null, state, reason, AutomationEventActor, mode, new { runId }, ct);
+      }
+      await tx.CommitAsync(ct);
+    }
+    if (!inserted) return false;
+
+    Log.Event("info", new { tag = "automation", outcome = "decision_created", draftId, runId, state, reason, mode });
+    if (state == Human)
+    {
+      if (mode == AutomationMode.Live) await AutomationLedger.RecordAsync(conn, RouteLedgerEvent(draftId, deckId, reason!, null), ct);
+    }
+    else
+    {
+      await EnqueueQaAsync(conn, draftId, ct);
+    }
+    return true;
+  }
+
+  /// <summary>
+  /// Tick step (R18C, backend-design-10/automation-18): a pending draft that names an automation run in
+  /// <c>agent.runId</c>, was submitted by that run's owner more than <see cref="MissingDecisionGraceMinutes"/> ago and
+  /// still has no decision lost its <see cref="OnSubmittedAsync"/> hook (a crash or a swallowed error after the submit
+  /// commit). It gets its decision now, through the same prechecks: a run that is no longer <c>running</c> routes it to a
+  /// human with <c>RUN_NOT_RUNNING</c>, so a late decision is never automatic. At most <paramref name="max"/>; returns how
+  /// many decisions were created. Effective <c>off</c> creates nothing. Throws, so the tick counts a failing sweep.
+  /// </summary>
+  internal static async Task<int> SweepMissingAsync(NpgsqlConnection conn, int max, Func<bool>? stop = null, CancellationToken ct = default)
+  {
+    var mode = await AutomationMode.EffectiveAsync(conn, ct);
+    if (mode.Effective is not (AutomationMode.DryRun or AutomationMode.Live)) return 0;
+
+    var drafts = await DbUtil.QueryAsync(conn, null,
+      """
+      select a.id, a.deck_id, a.stable_uid, a.card::text as card, a."similar"::text as similar_json, a.submitted_by_sub,
+             d.slug as deck_slug, r.run_id, r.status, r.owner_sub, r.deck_id as run_deck_id
+      from ai_drafts a
+      join automation_runs r on r.run_id::text = lower(a.agent->>'runId') and r.owner_sub = a.submitted_by_sub
+      join decks d on d.id = a.deck_id
+      where a.status = 'pending'
+        and a.created_at < now() - make_interval(mins => $2)
+        and not exists (select 1 from automation_draft_decisions x where x.draft_id = a.id)
+      order by a.id
+      limit $1
+      """, [max, MissingDecisionGraceMinutes]);
+    var created = 0;
+    foreach (var draft in drafts)
+    {
+      if (stop?.Invoke() == true) break;
+      var run = new Dictionary<string, object?>(StringComparer.Ordinal)
+      {
+        ["status"] = draft["status"],
+        ["owner_sub"] = draft["owner_sub"],
+        ["deck_id"] = draft["run_deck_id"],
+      };
+      var runId = (Guid)draft["run_id"]!;
+      if (!await DecideAsync(conn, draft["submitted_by_sub"] as string, run, runId, draft, (string)draft["deck_slug"]!, mode.Effective, ct)) continue;
+      created++;
+      Log.Event("warn", new { tag = "automation", outcome = "decision_swept", draftId = draft["id"], runId });
+    }
+    return created;
+  }
+
   /// <summary>The first failing precheck of A00 §5.1 in table order, or null when the draft is eligible for draft QA.</summary>
-  private static async Task<string?> PrecheckAsync(NpgsqlConnection conn, AuthContext auth, Dictionary<string, object?> run,
+  private static async Task<string?> PrecheckAsync(NpgsqlConnection conn, string? submitterSub, Dictionary<string, object?> run,
     Dictionary<string, object?> draft, string deckSlug, CancellationToken ct)
   {
     ct.ThrowIfCancellationRequested();
     var draftDeckId = Convert.ToInt64(draft["deck_id"], CultureInfo.InvariantCulture);
 
-    if ((string)run["status"]! != "running" || !string.Equals(run["owner_sub"] as string, auth.UserSub, StringComparison.Ordinal))
+    if ((string)run["status"]! != "running" || !string.Equals(run["owner_sub"] as string, submitterSub, StringComparison.Ordinal))
     {
       return "RUN_NOT_RUNNING";
     }
@@ -336,6 +400,7 @@ public static class DraftDecisions
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "enqueue_qa_failed", draftId, error = ex.Message });
+      AutomationFailures.Record();
       return "unknown";
     }
   }
@@ -454,6 +519,7 @@ public static class DraftDecisions
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "on_human_decision_failed", draftId, error = ex.Message });
+      AutomationFailures.Record();
     }
   }
 
