@@ -15,7 +15,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from ai_qa import handler, providers, settings
+from ai_qa import handler, providers, second_opinion, settings
 
 # --- FakeLlm ---------------------------------------------------------------------------------
 
@@ -339,6 +339,11 @@ AI_ENV_KEYS = (
     "INTERNAL_SECRET_SSM_NAME",
     "CORE_API_BASE",
     "METRICS_NAMESPACE",
+    "AI_QA_SECOND_PROVIDER",
+    "AI_QA_SECOND_MODEL",
+    "AI_QA_SECOND_SCOPE",
+    "AI_QA_SECOND_PRICE_INPUT_PER_MTOK",
+    "AI_QA_SECOND_PRICE_OUTPUT_PER_MTOK",
 )
 
 
@@ -353,6 +358,7 @@ def clean_container_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     settings.reset_clients()
     providers.reset_structured_outputs()
     handler.reset_client_cache()
+    second_opinion.reset_price_note()
     yield
     settings.clear_secret_cache()
     settings.reset_clients()
