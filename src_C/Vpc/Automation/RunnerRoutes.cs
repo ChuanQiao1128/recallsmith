@@ -368,21 +368,53 @@ public static class RunnerRoutes
   }
 
   /// <summary>
-  /// Runs after a complete commits (never on a replay). A02 only logs; A04 replaces the body with the
-  /// <c>runner_run_failed</c> / <c>queue_item_failed</c> exception emails and <c>AutomationRuns.TryFinalizeAsync</c>
+  /// Runs after a complete commits (never on a replay): the <c>runner_run_failed</c> exception email for a failed run,
+  /// <c>queue_item_failed</c> when the item failed for good, then <see cref="AutomationRuns.TryFinalizeAsync"/>
   /// (A00 §6.1, §8.5, §12.4). It never throws: the business commit already happened.
   /// </summary>
-  internal static Task AfterCompleteAsync(NpgsqlConnection conn, Guid runId, long itemId, string outcome, string itemStatus, CancellationToken ct = default)
+  internal static async Task AfterCompleteAsync(NpgsqlConnection conn, Guid runId, long itemId, string outcome, string itemStatus, CancellationToken ct = default)
   {
     try
     {
       Log.Event("info", new { tag = "automation", reason = "run_completed", runId, itemId, outcome, itemStatus });
+      if (outcome == "failed" || itemStatus == "failed")
+      {
+        var rows = await DbUtil.QueryAsync(conn, null,
+          """
+          select q.url, q.last_error, r.error
+          from automation_runs r join authoring_queue_items q on q.id = r.queue_item_id
+          where r.run_id = $1
+          """, [runId]);
+        var url = rows.Count == 0 ? string.Empty : (string)rows[0]["url"]!;
+        var id = itemId.ToString(CultureInfo.InvariantCulture);
+        if (outcome == "failed")
+        {
+          await Notifications.RaiseExceptionAsync(conn, "runner_run_failed", $"exception:runner_run_failed:{runId:D}",
+            new Dictionary<string, string>
+            {
+              ["runId"] = runId.ToString("D"),
+              ["itemId"] = id,
+              ["url"] = url,
+              ["error"] = rows.Count == 0 ? string.Empty : rows[0]["error"] as string ?? string.Empty,
+            }, runId, ct);
+        }
+        if (itemStatus == "failed")
+        {
+          await Notifications.RaiseExceptionAsync(conn, "queue_item_failed", $"exception:queue_item_failed:{id}",
+            new Dictionary<string, string>
+            {
+              ["itemId"] = id,
+              ["url"] = url,
+              ["lastError"] = rows.Count == 0 ? string.Empty : rows[0]["last_error"] as string ?? string.Empty,
+            }, runId, ct);
+        }
+      }
+      await AutomationRuns.TryFinalizeAsync(conn, runId, ct);
     }
-    catch (Exception)
+    catch (Exception ex)
     {
-      // Logging is best-effort here; the run is already committed.
+      Log.Event("warn", new { tag = "automation", reason = "after_complete_failed", runId, error = ex.Message });
     }
-    return Task.CompletedTask;
   }
 
   private static async Task<object> CompleteResponseAsync(NpgsqlConnection conn, Guid runId, string runStatus, string itemStatus, bool replayed)
