@@ -79,7 +79,8 @@ export function createApiClient(config: Config): ApiClient {
       if (res.ok && parsed.success === true) return parsed.data as T;
       const code = typeof parsed.error?.code === 'string' ? parsed.error.code : 'UNKNOWN_ERROR';
       const message = typeof parsed.error?.message === 'string' ? parsed.error.message : res.statusText;
-      throw new ToolFailure(`HTTP ${res.status} ${code}: ${message}`);
+      // An error message that echoes the request must not carry the token into a tool result.
+      throw new ToolFailure(`HTTP ${res.status} ${code}: ${message.split(token).join('[redacted]')}`);
     }
     if (!res.ok) throw new ToolFailure(`HTTP ${res.status}: ${res.statusText}`);
     throw new ToolFailure(`HTTP ${res.status}: ${pathOnly} did not return an API envelope`);
