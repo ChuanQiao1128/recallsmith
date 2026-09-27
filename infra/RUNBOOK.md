@@ -209,3 +209,50 @@ takes effect at once; do all that apply:
    core-vpc (`ENV=prod ./src_C/deploy.sh`).
 
 Undo in reverse order; re-enable the schedules only after core-vpc runs with the intended mode.
+
+### SES for automation emails (R18A A11)
+
+The notifier sends from `DeveloperCards Automation <automation@developercards.app>` through the SES
+domain identity `developercards.app` (Easy DKIM, RSA 2048, three `*._domainkey` CNAMEs), the custom
+MAIL FROM `mail.developercards.app` (MX `10 feedback-smtp.ap-southeast-2.amazonses.com` + SPF TXT),
+DMARC `v=DMARC1; p=none; adkim=r; aspf=r` (no `rua`: no mailbox exists) and the configuration set
+`developercards-automation`. The recipient is `var.alert_email` (sensitive, never printed): Terraform
+writes it to the SecureString `/developercards/prod/notify-recipient` and creates it as an SES email
+identity. The notifier's only SES grant is `developercards-notifier-ses-send` (`ses:SendEmail` on the
+domain identity, the recipient identity and the configuration set, `ses:FromAddress` =
+`automation@developercards.app`).
+
+**After the apply** (supervisor + owner, A00 §1.3):
+
+1. SES emails a verification link to the owner alert address; the owner clicks it (the link expires
+   after 24 h — if missed, the supervisor re-sends it from the SES console, never by CLI in a worker).
+2. Wait until both identities are verified (DKIM takes minutes up to 72 h):
+   - `aws sesv2 get-email-identity --email-identity developercards.app --query '{dkim:DkimAttributes.Status,sending:VerifiedForSendingStatus,mailFrom:MailFromAttributes.MailFromDomainStatus}'`
+     must show `dkim` = `SUCCESS`, `sending` = `true` (and `mailFrom` = `SUCCESS`).
+   - `aws sesv2 list-email-identities --query 'EmailIdentities[].[IdentityType,VerificationStatus]'`
+     shows the EMAIL_ADDRESS identity as `SUCCESS` (the listing prints the address: run it only in
+     a private terminal, never in a log or an issue).
+3. Only then send the first test email (the automation tick/digest path, A00 §19.2).
+4. A second `terraform plan` is empty.
+
+**Sandbox.** The account is in the SES sandbox (`aws sesv2 get-account` → `ProductionAccessEnabled`
+`false`): mail goes only to verified identities, at most 200 messages per 24 h and 1 per second.
+That fits the single owner recipient. Production access is an optional owner request in the SES
+console; nothing here depends on it.
+
+**Errors in the notifier's email log** (`/aws/lambda/developercards-notifier`):
+
+- `MessageRejected` — SES refused the message: the recipient identity is not verified yet (sandbox),
+  the domain identity is not verified for sending, or the sending quota is used up. Check step 2.
+- `MailFromDomainNotVerifiedException` — the MAIL FROM MX/SPF records for `mail.developercards.app`
+  are missing or not yet seen by SES; `behavior_on_mx_failure = USE_DEFAULT_VALUE` normally falls back
+  to `amazonses.com`, so this points to a changed record or attribute (re-plan; do not edit the zone by hand).
+- `AccessDeniedException` — the send was outside `developercards-notifier-ses-send`: a different
+  From address, a configuration set other than `developercards-automation`, or a recipient identity
+  that no longer matches the grant (after an `alert_email` change, before the apply).
+
+**Changing `alert_email`.** One apply changes, together, the `notify-recipient` SSM value, the SES
+recipient identity (the old one is destroyed, a new one created, and SES sends a new verification
+link to the new address) and the recipient ARN in `developercards-notifier-ses-send`. Emails fail
+with `MessageRejected` until the owner clicks the new link. The plan shows every changed value as
+`(sensitive value)`; never print the plan JSON.
