@@ -10,7 +10,16 @@ import sys
 import uuid
 from pathlib import Path
 
-from ai_qa.settings import SECOND_MODEL_ENV, SECOND_PROVIDER_ENV, SECOND_SCOPE_ENV
+from ai_qa.settings import (
+    AUTOMATION_MODEL_ENV,
+    AUTOMATION_PRICE_INPUT_ENV,
+    AUTOMATION_PRICE_OUTPUT_ENV,
+    AUTOMATION_PROVIDER_ENV,
+    AUTOMATION_REGION_ENV,
+    SECOND_MODEL_ENV,
+    SECOND_PROVIDER_ENV,
+    SECOND_SCOPE_ENV,
+)
 
 from .author import DEFAULT_AUTHOR_MODEL
 from .dataset import (
@@ -38,6 +47,11 @@ SECOND_PROVIDERS = ("bedrock-converse", "bedrock", "anthropic")
 # `run --provider`: ai-qa's providers (openai-mantle is R18C contract L1, the automation reviewer's
 # transport) plus the local claude-cli proxy.
 RUN_PROVIDERS = ("bedrock", "anthropic", "bedrock-converse", "openai-mantle", "claude-cli")
+
+# D06 (ai-agent-9): the keys a --profile automation run takes from the production env file.
+AUTOMATION_FROM_PRODUCTION = (
+    "AI_EFFORT", AUTOMATION_PRICE_INPUT_ENV, AUTOMATION_PRICE_OUTPUT_ENV, AUTOMATION_REGION_ENV,
+)
 
 DRY_RUN_INPUT_TOKENS = 3000
 DRY_RUN_OUTPUT_TOKENS = 1500
@@ -109,6 +123,7 @@ def _parser() -> argparse.ArgumentParser:
         default="v3",
         help="dataset version (default v3); authored-v1 / authored-v2 = the jury-labeled authored cards",
     )
+    run.add_argument("--ai-qa-env", type=Path, default=SHIPPING_ENV_PATH, help=argparse.SUPPRESS)
 
     author = sub.add_parser(
         "author", help="write the agent-authored card set with the local Claude CLI (owner's machine only)"
@@ -212,8 +227,8 @@ def _export_sources(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    from ai_qa import second_opinion
-    from ai_qa.providers import make_client, structured_outputs_on
+    from ai_qa import profiles, second_opinion
+    from ai_qa.providers import effective_effort, make_client, structured_outputs_on
     from ai_qa.settings import ConfigError, load_settings
 
     local_cli = args.provider == "claude-cli"
@@ -233,8 +248,16 @@ def _run(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"dc-evals: {exc}", file=sys.stderr)
         return 2
+    if args.profile == AUTOMATION_PROFILE:
+        try:
+            env.update(automation_run_env(args.ai_qa_env, env["AI_PROVIDER"], args.model))
+        except ValueError as exc:
+            print(f"dc-evals: {exc}", file=sys.stderr)
+            return 2
     try:
         settings = load_settings(env)
+        if args.profile == AUTOMATION_PROFILE:
+            settings = profiles.settings_for(settings, profiles.AUTOMATION_PROFILE)
     except ConfigError as exc:
         print(f"dc-evals: {exc}", file=sys.stderr)
         return 2
@@ -325,6 +348,8 @@ def _run(args: argparse.Namespace) -> int:
     if args.profile != DEFAULT_PROFILE:
         # A default-profile header stays exactly as before (no "profile" key means default).
         header["profile"] = args.profile
+        # D06 (ai-agent-9): the effort the review actually sent (max goes out as xhigh on openai-mantle).
+        header["effectiveEffort"] = effective_effort(settings)
     stem = file_stem(started.date().isoformat(), provider_label, settings.model, prompt_version)
     paths = write_run_files(args.out, stem, header, records)
     if len(records) < len(rows) * args.reps:
@@ -335,6 +360,27 @@ def _run(args: argparse.Namespace) -> int:
     for path in paths:
         print(path)
     return 0
+
+
+def automation_run_env(env_path: Path, provider: str, model: str) -> dict[str, str]:
+    """D06 (ai-agent-9): the env overrides of a --profile automation run. The reviewer is the
+    one production's automation profile builds (ai_qa.profiles.settings_for): --provider and
+    --model as AI_QA_AUTOMATION_PROVIDER / _MODEL, and AI_EFFORT, the AI_QA_AUTOMATION_* prices
+    and region from the production env file, never from the shell, so what is measured is what
+    ships. A key production leaves unset is removed (the ai-qa default applies, as in production).
+    Raises ValueError when the env file cannot be read."""
+    try:
+        production = json.loads(env_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ValueError(f"cannot read the production ai-qa env file {env_path}") from None
+    if not isinstance(production, dict):
+        raise ValueError(f"the production ai-qa env file {env_path} is not a JSON object")
+    overrides = {AUTOMATION_PROVIDER_ENV: provider, AUTOMATION_MODEL_ENV: model}
+    for key in AUTOMATION_FROM_PRODUCTION:
+        value = production.get(key)
+        # an empty value makes load_settings fall back to the ai-qa default, as a missing key does
+        overrides[key] = "" if value is None else str(value)
+    return overrides
 
 
 def second_reviewer_env(args: argparse.Namespace) -> dict[str, str]:

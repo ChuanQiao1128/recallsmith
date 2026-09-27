@@ -7,7 +7,12 @@ and per stratum (the new-facts stratum must meet the precision gate on its own),
 jury could not label reported and bounded, against the fixed thresholds below,
 and writes the report the server records (A06, POST /api/v1/admin/automation/eval-gate), where
 core recomputes the checks from the counts. Nothing here calls a model or builds a client; the
-automation keys are read from the env JSON directly, never through ai_qa.settings.
+automation keys are read from the env JSON directly, never through ai_qa.settings.load_settings.
+
+R18D (D06): the gated reviewer identity includes the reasoning effort the review sent
+(`effectiveEffort`, ai_qa.providers.effective_effort) and the served model ids; the new-facts
+stratum is also gated on its interval clustered by source page; and the report carries the one
+gated `authorConfigId` of the new-facts author (contract M1).
 """
 
 from __future__ import annotations
@@ -16,9 +21,14 @@ import datetime as dt
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from ai_qa import prompts
+from ai_qa.providers import effective_effort
+from ai_qa.settings import DEFAULTS as AI_QA_DEFAULTS
+from ai_qa.settings import EFFORTS
 
 from .compare import vendor_of
 from .dataset import (
@@ -35,7 +45,7 @@ from .dataset import (
     spec_sha256,
     stratum_of,
 )
-from .drafts_import import RUNNER_AUTHOR_PATH, author_config_problem
+from .drafts_import import AUTHOR_CONFIG_ID_KEY, RUNNER_AUTHOR_PATH, author_config_id_problem, author_config_problem
 from .jury import EXCLUDED_ALL_UNSURE, EXCLUDED_TIE, summary_path
 from .labels import labels_for
 from .report import _UNSAFE, read_run, unique_stem
@@ -46,6 +56,7 @@ from .score import (
     card_key,
     clustered_wilson_ci,
     clusters,
+    effective_n,
     is_flagged,
     is_scored,
     ratio,
@@ -86,6 +97,13 @@ AUTHORED_UNSCORED_RATE_GATE = 0.05
 NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE = AUTO_ACCEPT_PRECISION_GATE
 NEW_FACTS_AUTO_ACCEPT_PRECISION_CI_LOWER_GATE = AUTO_ACCEPT_PRECISION_CI_LOWER_GATE
 MIN_NEW_FACTS_WOULD_ACCEPT_CARDS = 51
+# R18D (D06 ai-agent-20). Errors on post-cutoff input cluster by page: one misread announcement
+# gives several wrong cards. So the new-facts bound is also computed with the source page as the
+# unit of analysis (the would-accept items of one page, over every card and repetition, are one
+# cluster; score.effective_n gives the design-effect-adjusted sample size), and the gate needs both
+# lower bounds. With every item correct the effective size is the number of pages, so the smallest
+# stratum that can pass has 51 distinct pages: the same Wilson arithmetic as the card minimum.
+MIN_NEW_FACTS_WOULD_ACCEPT_PAGES = 51
 # Rows the jury could not label (a tie, or no decisive vote) are not in the run, so precision says
 # nothing about them. Their share of the labelled rows, overall and in every stratum, is bounded.
 JURY_EXCLUDED_RATE_GATE = 0.10
@@ -103,9 +121,16 @@ AUTOMATION_ENV_KEYS = (
     AUTOMATION_PRICE_OUTPUT_ENV,
 )
 AUTOMATION_PRICE_KEYS = (AUTOMATION_PRICE_INPUT_ENV, AUTOMATION_PRICE_OUTPUT_ENV)
+# The reasoning effort production reviews with; ai-qa has one AI_EFFORT for both profiles, so the
+# automation reviewer runs at it (ai_qa.profiles.settings_for keeps it), with the ai-qa default.
+EFFORT_ENV = "AI_EFFORT"
 
 REPO_ROOT = EVALS_ROOT.parent
-REVIEWER_KEYS = ("provider", "model", "promptVersion", "secondProvider", "secondModel", "profile")
+# D06 (ai-agent-9): effort = the configured AI_EFFORT of the run, effectiveEffort = the value the
+# review actually sent (ai_qa.providers.effective_effort: max goes out as xhigh on openai-mantle).
+REVIEWER_KEYS = (
+    "provider", "model", "promptVersion", "secondProvider", "secondModel", "profile", "effort", "effectiveEffort",
+)
 THRESHOLDS = {
     "seededRecall": SEEDED_RECALL_GATE,
     "seededRecallCiLower": SEEDED_RECALL_CI_LOWER_GATE,
@@ -122,6 +147,7 @@ THRESHOLDS = {
     "minNewFactsWouldAcceptCards": MIN_NEW_FACTS_WOULD_ACCEPT_CARDS,
     "juryExcludedRate": JURY_EXCLUDED_RATE_GATE,
     "newFactsAutoAcceptPrecisionCiLower": NEW_FACTS_AUTO_ACCEPT_PRECISION_CI_LOWER_GATE,
+    "minNewFactsWouldAcceptPages": MIN_NEW_FACTS_WOULD_ACCEPT_PAGES,
 }
 JURY_LABEL_NOTE = (
     "The authored-v2 labels are model-jury labels: a jury of models from vendors not under test labelled "
@@ -133,6 +159,12 @@ STRATUM_NOTE = (
     "(no tools, no verifier, not the production path); new-facts = drafts the production path wrote (the "
     "author-runner's queue-item prompt and CLAUDE args with the author-cards skill, its tools and verifier) "
     "from announcement and release-notes pages, imported with `dc-evals import-drafts`."
+)
+UNIT_NOTE = (
+    "Units of analysis: the card interval clusters the repetitions of each card; the page interval clusters "
+    "every would-accept item of one source page (the row's sourceUrl), because errors on a misread page "
+    "correlate. n_eff is the design-effect-adjusted sample size of each; with every item correct it is the "
+    "number of clusters. The new-facts stratum is gated on both lower bounds."
 )
 # The optional owner sample (R18B, B06): data/adjudications-authored-v2.json next to the dataset, in
 # the adjudication file format of labels.py. For authored-v2 a verdict is about the card itself:
@@ -156,6 +188,35 @@ def is_would_accept(record: dict[str, Any]) -> bool:
 
 def is_correct(record: dict[str, Any]) -> bool:
     return record.get("defect") is None
+
+
+def page_key(row: dict[str, Any]) -> str:
+    """The source page of an authored row: its sourceUrl with the scheme and host lowercased, the
+    fragment and a trailing slash dropped; a row without one is its own page."""
+    url = row.get("sourceUrl")
+    if not isinstance(url, str) or not url.strip():
+        return f"row:{row.get('id')}"
+    parts = urlsplit(url.strip())
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, ""))
+
+
+def page_metrics(would_accept: list[dict[str, Any]], page_by_id: dict[Any, str]) -> dict[str, Any]:
+    """Auto-accept precision with the source page as the unit of analysis: (correct, reviewed)
+    would-accept items per page, the pages, their design-effect-adjusted sample size and the
+    page-clustered 95% Wilson interval."""
+    counts: dict[str, list[int]] = {}
+    for index, record in enumerate(would_accept):
+        page = page_by_id.get(record.get("id"), f"row:{card_key(record, index)}")
+        tally = counts.setdefault(page, [0, 0])
+        tally[0] += 1 if is_correct(record) else 0
+        tally[1] += 1
+    page_counts = [(y, m) for y, m in counts.values()]
+    return {
+        "unit": "source page",
+        "wouldAcceptPages": len(page_counts),
+        "effectiveN": round(effective_n(page_counts), 2),
+        "autoAcceptPrecisionCi95": clustered_wilson_ci(page_counts),
+    }
 
 
 def authored_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -218,14 +279,18 @@ def strata_metrics(
 ) -> dict[str, dict[str, Any]]:
     """authored_metrics, the jury exclusions and the conservative precision of every stratum."""
     stratum_by_id = {row["id"]: stratum_of(row) for row in rows}
+    page_by_id = {row["id"]: page_key(row) for row in rows}
     out: dict[str, dict[str, Any]] = {}
     for stratum in STRATA:
         mine = [r for r in records if stratum_by_id.get(r.get("id"), STRATA[0]) == stratum]
         excluded = exclusion_metrics([row for row in labels if stratum_by_id.get(row.get("id"), STRATA[0]) == stratum])
         metrics = authored_metrics(mine)
+        would_accept = [r for r in mine if is_would_accept(r)]
         out[stratum] = {
             "rows": sum(1 for row in rows if stratum_of(row) == stratum),
             **metrics,
+            "autoAcceptPrecisionEffectiveN": round(effective_n(clusters(would_accept, is_correct)), 2),
+            "byPage": page_metrics(would_accept, page_by_id),
             "juryExcluded": excluded,
             "conservativeAutoAcceptPrecision": conservative_precision(
                 metrics["wouldAcceptCorrect"], metrics["wouldAccept"], excluded["excludedRows"], reps
@@ -365,8 +430,13 @@ def _configuration_failures(runs: dict[str, dict[str, Any]], env: dict[str, Any]
             failures.append(f"{key} in {env_shown} is not a positive number")
     want_provider = present.get(AUTOMATION_PROVIDER_ENV)
     want_model = present.get(AUTOMATION_MODEL_ENV)
+    want_effort = str(env.get(EFFORT_ENV) or AI_QA_DEFAULTS[EFFORT_ENV]).strip().lower()
+    if want_effort not in EFFORTS:
+        failures.append(f"{EFFORT_ENV} {want_effort!r} in {env_shown} is not one of {', '.join(EFFORTS)}")
     for which, header in runs.items():
         provider, model = header.get("provider"), header.get("model")
+        if want_effort in EFFORTS:
+            failures += _effort_failures(which, header, want_effort, provider in AUTOMATION_GATE_PROVIDERS)
         if want_provider is not None and provider != want_provider:
             failures.append(f"{which} run: provider {provider!r} is not {AUTOMATION_PROVIDER_ENV} {want_provider!r}")
         if want_model is not None and model != want_model:
@@ -394,6 +464,36 @@ def _configuration_failures(runs: dict[str, dict[str, Any]], env: dict[str, Any]
     if any(seeded.get(key) != authored.get(key) for key in REVIEWER_KEYS):
         failures.append("the seeded and authored runs used different reviewers")
     return failures
+
+
+def _effort_failures(which: str, header: dict[str, Any], want_effort: str, compare: bool) -> list[str]:
+    """D06 (ai-agent-9): the run must have reviewed at production's AI_EFFORT, and its header must
+    record the effort the review actually sent; a run without that record fails closed. `compare`
+    is False for a provider the gate refuses anyway (its effort mapping would only add noise)."""
+    sent = header.get("effectiveEffort")
+    if not isinstance(sent, str) or not sent:
+        return [
+            f"{which} run: the header records no effectiveEffort (the reasoning effort the review sent); rerun with "
+            "dc-evals run --profile automation"
+        ]
+    if not compare:
+        return []
+    failures = []
+    if header.get("effort") != want_effort:
+        failures.append(f"{which} run: effort {header.get('effort')!r} is not the production {EFFORT_ENV} {want_effort!r}")
+    expected = effective_effort(SimpleNamespace(provider=header.get("provider"), effort=want_effort))
+    if sent != expected:
+        failures.append(
+            f"{which} run: effective effort {sent!r} is not {expected!r}, the production {EFFORT_ENV} "
+            f"{want_effort!r} as {header.get('provider')} sends it"
+        )
+    return failures
+
+
+def served_models(*record_lists: list[dict[str, Any]]) -> list[str]:
+    """The distinct model ids the responses of the runs said served them (the client's response
+    `model`, recorded per item as servedModel), sorted; empty when no client exposed one."""
+    return sorted({r["servedModel"] for records in record_lists for r in records if isinstance(r.get("servedModel"), str)})
 
 
 def _reps(header: dict[str, Any]) -> int:
@@ -453,6 +553,15 @@ def _new_facts_failures(block: dict[str, Any], rows: list[dict[str, Any]]) -> li
             f"{MIN_NEW_FACTS_WOULD_ACCEPT_CARDS}; too few to measure its precision"
         )
         return failures
+    # A page holds at least one card, so this can only fail once the card minimum holds.
+    pages = block["byPage"]["wouldAcceptPages"]
+    if pages < MIN_NEW_FACTS_WOULD_ACCEPT_PAGES:
+        failures.append(
+            f"new-facts stratum: would-accept cards from {pages} distinct source pages, fewer than "
+            f"{MIN_NEW_FACTS_WOULD_ACCEPT_PAGES}; too few to measure its precision (add pages to "
+            "data/authored-sources-v2-new-facts.json)"
+        )
+        return failures
     if block["autoAcceptPrecision"] < NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE:
         failures.append(
             f"new-facts stratum auto-accept precision {block['autoAcceptPrecision']:.4f} < "
@@ -464,6 +573,14 @@ def _new_facts_failures(block: dict[str, Any], rows: list[dict[str, Any]]) -> li
             f"new-facts stratum auto-accept precision 95% CI lower bound {lower:.4f} < "
             f"{NEW_FACTS_AUTO_ACCEPT_PRECISION_CI_LOWER_GATE:.2f}"
         )
+    by_page = block["byPage"]
+    page_lower = by_page["autoAcceptPrecisionCi95"][0]
+    if page_lower < NEW_FACTS_AUTO_ACCEPT_PRECISION_CI_LOWER_GATE:
+        failures.append(
+            f"new-facts stratum auto-accept precision page-clustered 95% CI lower bound {page_lower:.4f} < "
+            f"{NEW_FACTS_AUTO_ACCEPT_PRECISION_CI_LOWER_GATE:.2f} ({by_page['wouldAcceptPages']} pages, "
+            f"n_eff {by_page['effectiveN']})"
+        )
     return failures
 
 
@@ -473,22 +590,30 @@ def author_binding(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str
     bound to exactly these: a change of the model, the skill, the queue-item prompt, the claude
     arguments, the MCP server bundle or the CLI/runner version gives a new id and needs a new gate.
     Every new-facts row must carry a complete configuration, and all of them one model and one
-    skill version."""
+    skill version. R18D contract M1: `authorConfigId` is the one gated author identity core compares
+    at a live auto-accept; every new-facts row must carry it (checked against its configuration) and
+    all of them the same one, else it is null and the gate fails closed."""
     new_facts = [row for row in rows if stratum_of(row) == STRATUM_NEW_FACTS]
     configs: dict[str, dict[str, Any]] = {}
-    unbound = 0
+    unbound = ungated = 0
+    gated: set[str] = set()
     for row in new_facts:
         config = row.get("authorConfig")
         if author_config_problem(config) is not None:
             unbound += 1
+            continue
+        configs.setdefault(config["id"], config)
+        if author_config_id_problem(config) is not None:
+            ungated += 1
         else:
-            configs.setdefault(config["id"], config)
+            gated.add(config[AUTHOR_CONFIG_ID_KEY])
     ordered = [configs[key] for key in sorted(configs)]
     models = sorted({config["model"] for config in ordered})
     skills = sorted({config["skillVersion"] for config in ordered})
     block = {
         "model": models[0] if len(models) == 1 else None,
         "skillVersion": skills[0] if len(skills) == 1 else None,
+        "authorConfigId": next(iter(gated)) if len(gated) == 1 and not unbound and not ungated else None,
         "authorConfigIds": [config["id"] for config in ordered],
         "configs": ordered,
     }
@@ -503,6 +628,16 @@ def author_binding(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str
     if len(skills) > 1:
         failures.append(
             f"the new-facts rows come from {len(skills)} skill versions ({', '.join(skills)}); the gate measures one"
+        )
+    if ungated:
+        failures.append(
+            f"{ungated} new-facts row(s) carry no authorConfigId matching their authorConfig (import them with run "
+            "records of an author-runner that records the gated authorConfigId, contract M1)"
+        )
+    if len(gated) > 1:
+        failures.append(
+            f"the new-facts rows come from {len(gated)} gated author configurations ({', '.join(sorted(gated))}); "
+            "the gate binds one authorConfigId"
         )
     return block, failures
 
@@ -630,7 +765,10 @@ def evaluate_gate(
         "createdAt": created.isoformat().replace("+00:00", "Z"),
         "passed": not failures,
         "failures": failures,
-        "reviewer": {key: seeded_header.get(key) for key in REVIEWER_KEYS},
+        "reviewer": {
+            **{key: seeded_header.get(key) for key in REVIEWER_KEYS},
+            "servedModels": served_models(seeded_records, authored_records),
+        },
         "thresholds": dict(THRESHOLDS),
         "seeded": {
             "report": _shown(seeded_run),
@@ -674,22 +812,27 @@ def _strata_lines(authored: dict[str, Any], thresholds: dict[str, Any]) -> list[
     lines = [
         "### Per stratum",
         "",
-        "| Stratum | Rows | Would accept (correct) | Distinct cards | Precision | 95% CI | Conservative | Gate |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
+        "| Stratum | Rows | Would accept (correct) | Distinct cards (n_eff) | Distinct pages (n_eff) | Precision | "
+        "95% CI by card | 95% CI by page | Conservative | Gate |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for stratum, block in authored["strata"].items():
         gate = (
-            f">= {thresholds['newFactsAutoAcceptPrecision']:.2f}, CI lower >= "
-            f"{thresholds['newFactsAutoAcceptPrecisionCiLower']:.2f}, on >= {thresholds['minNewFactsWouldAcceptCards']} cards"
+            f">= {thresholds['newFactsAutoAcceptPrecision']:.2f}, both CI lower >= "
+            f"{thresholds['newFactsAutoAcceptPrecisionCiLower']:.2f}, on >= {thresholds['minNewFactsWouldAcceptCards']} "
+            f"cards from >= {thresholds['minNewFactsWouldAcceptPages']} pages"
             if stratum == STRATUM_NEW_FACTS
             else "overall only"
         )
+        by_page = block["byPage"]
         lines.append(
             f"| {stratum} | {block['rows']} | {block['wouldAccept']} ({block['wouldAcceptCorrect']}) | "
-            f"{block['wouldAcceptCards']} | {block['autoAcceptPrecision']:.4f} | {_ci(block['autoAcceptPrecisionCi95'])} | "
+            f"{block['wouldAcceptCards']} ({block['autoAcceptPrecisionEffectiveN']}) | "
+            f"{by_page['wouldAcceptPages']} ({by_page['effectiveN']}) | {block['autoAcceptPrecision']:.4f} | "
+            f"{_ci(block['autoAcceptPrecisionCi95'])} | {_ci(by_page['autoAcceptPrecisionCi95'])} | "
             f"{block['conservativeAutoAcceptPrecision']:.4f} | {gate} |"
         )
-    return [*lines, "", STRATUM_NOTE, ""]
+    return [*lines, "", STRATUM_NOTE, "", UNIT_NOTE, ""]
 
 
 def _excluded_lines(authored: dict[str, Any], thresholds: dict[str, Any]) -> list[str]:
@@ -736,9 +879,11 @@ def _author_line(authored: dict[str, Any]) -> str:
     ids = author.get("authorConfigIds") or []
     if not ids:
         return "- Author (new-facts stratum): no recorded author configuration"
+    gated = author.get("authorConfigId")
     return (
         f"- Author (new-facts stratum): {author.get('model')}, skill {author.get('skillVersion')}, author "
-        f"configuration {', '.join(f'`{i}`' for i in ids)} (any change of the author configuration needs a new gate)"
+        f"configuration {', '.join(f'`{i}`' for i in ids)}, gated authorConfigId "
+        f"{f'`{gated}`' if gated else 'none (the gate fails closed)'} (any change of the authorConfigId needs a new gate)"
     )
 
 
@@ -753,8 +898,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"- Created: {report['createdAt']}",
         f"- Reviewer: {reviewer['provider']} {reviewer['model']}, prompt {reviewer['promptVersion']} (profile "
-        f"{reviewer.get('profile') or 'default'}), second "
-        f"reviewer {'off' if reviewer['secondProvider'] is None else reviewer['secondProvider']}",
+        f"{reviewer.get('profile') or 'default'}), effort {reviewer.get('effort')} (sent as "
+        f"{reviewer.get('effectiveEffort')}), served by {', '.join(reviewer.get('servedModels') or []) or 'unknown'}, "
+        f"second reviewer {'off' if reviewer['secondProvider'] is None else reviewer['secondProvider']}",
         f"- Seeded run: `{seeded['report']}` (sha256 `{seeded['reportSha256']}`), dataset `{seeded['dataset']}`, "
         f"{seeded['reps']} rep(s)",
         f"- Authored run: `{authored['report']}` (sha256 `{authored['reportSha256']}`), dataset "

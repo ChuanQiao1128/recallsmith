@@ -34,6 +34,7 @@ from dc_evals.drafts_import import (
     RUNNER_AUTHOR_PATH,
     default_runs_dir,
     draft_rows,
+    gated_author_config_id,
     import_drafts,
 )
 from dc_evals.report import read_run
@@ -42,6 +43,11 @@ from dc_evals.score import clustered_wilson_ci
 
 REPO_ROOT = EVALS_ROOT.parent
 MANTLE = "openai-mantle"
+
+
+def _regated(config: dict[str, Any]) -> dict[str, Any]:
+    """D06 (contract M1): a changed configuration with the gated authorConfigId the runner would record."""
+    return {**config, "authorConfigId": gated_author_config_id(config)}
 MANTLE_MODEL = "openai.gpt-5.5"
 
 
@@ -132,9 +138,15 @@ def test_new_facts_stratum_fails_on_its_ci_lower_bound_when_the_point_estimate_p
     assert new["autoAcceptPrecision"] >= gate.NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE
     lower = new["autoAcceptPrecisionCi95"][0]
     assert lower < 0.93
-    assert report["failures"] == [f"new-facts stratum auto-accept precision 95% CI lower bound {lower:.4f} < 0.93"]
+    # D06 (ai-agent-20): the page-clustered bound (61 pages, one card each) fails with it
+    by_page = new["byPage"]
+    assert report["failures"] == [
+        f"new-facts stratum auto-accept precision 95% CI lower bound {lower:.4f} < 0.93",
+        f"new-facts stratum auto-accept precision page-clustered 95% CI lower bound "
+        f"{by_page['autoAcceptPrecisionCi95'][0]:.4f} < 0.93 (61 pages, n_eff {by_page['effectiveN']})",
+    ]
     md = gate.render_markdown(report)
-    assert ">= 0.97, CI lower >= 0.93, on >= 51 cards" in md
+    assert ">= 0.97, both CI lower >= 0.93, on >= 51 cards from >= 51 pages" in md
 
 
 def test_new_facts_stratum_at_the_minimum_passes(tmp_path: Path) -> None:
@@ -152,12 +164,14 @@ def test_gate_report_binds_the_author_configuration(tmp_path: Path) -> None:
     assert report["authored"]["author"] == {
         "model": "claude-opus-5-5",
         "skillVersion": "author-cards@1.2.0",
+        "authorConfigId": AUTHOR_CONFIG["authorConfigId"],  # D06 (contract M1)
         "authorConfigIds": ["0123456789abcdef"],
         "configs": [AUTHOR_CONFIG],
     }
     md = gate.render_markdown(report)
     assert "- Author (new-facts stratum): claude-opus-5-5, skill author-cards@1.2.0, author configuration " \
-           "`0123456789abcdef` (any change of the author configuration needs a new gate)" in md
+           f"`0123456789abcdef`, gated authorConfigId `{AUTHOR_CONFIG['authorConfigId']}` (any change of the " \
+           "authorConfigId needs a new gate)" in md
 
 
 def test_gate_fails_closed_on_new_facts_rows_without_an_author_configuration(tmp_path: Path) -> None:
@@ -174,28 +188,36 @@ def test_gate_fails_closed_on_new_facts_rows_without_an_author_configuration(tmp
 def test_gate_fails_on_new_facts_rows_from_two_author_models_and_lists_every_configuration(tmp_path: Path) -> None:
     spec, rows = authored_spec(tmp_path)
     other = {**AUTHOR_CONFIG, "id": "fedcba9876543210", "model": "claude-fable-5-1", "claudeVersion": "2.2.0"}
+    other["authorConfigId"] = gated_author_config_id(other)
     _rewrite(spec, lambda row: {**row, "authorConfig": other} if row["id"] == "a-0130" else row)
     report = evaluate(tmp_path, spec=spec, authored=authored_run(tmp_path, spec, authored_records(rows)))
+    # D06 (contract M1): another model is also another gated authorConfigId
+    ids = sorted([AUTHOR_CONFIG["authorConfigId"], other["authorConfigId"]])
     assert report["failures"] == [
-        "the new-facts rows come from 2 author models (claude-fable-5-1, claude-opus-5-5); the gate measures one"
+        "the new-facts rows come from 2 author models (claude-fable-5-1, claude-opus-5-5); the gate measures one",
+        f"the new-facts rows come from 2 gated author configurations ({', '.join(ids)}); the gate binds one "
+        "authorConfigId",
     ]
     author = report["authored"]["author"]
     assert author["authorConfigIds"] == ["0123456789abcdef", "fedcba9876543210"] and author["model"] is None
-    # a changed prompt or CLI under the same model and skill: a second id, both bound by the gate
+    assert author["authorConfigId"] is None
+    # a changed CLI version under the same model, skill, prompt and args: a second local id, the same
+    # gated authorConfigId (M1 leaves the CLI and runner versions out), so the gate passes
     spec2_dir = tmp_path / "same-model"
     spec2_dir.mkdir()
     spec2, rows2 = authored_spec(spec2_dir)
-    changed = {**AUTHOR_CONFIG, "id": "1111111111111111", "promptSha256": "e" * 64}
+    changed = {**AUTHOR_CONFIG, "id": "1111111111111111", "claudeVersion": "2.2.0"}
     _rewrite(spec2, lambda row: {**row, "authorConfig": changed} if row["id"] == "a-0130" else row)
     report2 = evaluate(spec2_dir, spec=spec2, authored=authored_run(spec2_dir, spec2, authored_records(rows2)))
     assert report2["passed"] is True
     assert report2["authored"]["author"]["authorConfigIds"] == ["0123456789abcdef", "1111111111111111"]
+    assert report2["authored"]["author"]["authorConfigId"] == AUTHOR_CONFIG["authorConfigId"]
 
 
 def test_import_drafts_records_the_run_author_configuration(tmp_path: Path, capsys) -> None:
     runs_dir = _runs_dir(tmp_path, {
         "run-1": RUN_AUTHOR,
-        "run-model": {**RUN_AUTHOR, "model": "claude-fable-5-1"},
+        "run-model": _regated({**RUN_AUTHOR, "model": "claude-fable-5-1"}),
         "run-partial": {k: v for k, v in RUN_AUTHOR.items() if k != "mcpServerSha256"},
     })
     (runs_dir / "run-bad.meta.json").write_text("{", encoding="utf-8")
@@ -241,8 +263,10 @@ def test_gate_passes_for_an_openai_mantle_reviewer_and_pins_it(tmp_path: Path) -
     spec, rows = authored_spec(tmp_path)
     env = write_env(tmp_path, AI_QA_AUTOMATION_PROVIDER=MANTLE, AI_QA_AUTOMATION_MODEL=MANTLE_MODEL,
                     AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK="5.5", AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK="33")
-    seeded = seeded_run(tmp_path, provider=MANTLE, model=MANTLE_MODEL)
-    authored = authored_run(tmp_path, spec, authored_records(rows), provider=MANTLE, model=MANTLE_MODEL)
+    # D06 (ai-agent-9): openai-mantle sends AI_EFFORT (high) as reasoning_effort high
+    seeded = seeded_run(tmp_path, provider=MANTLE, model=MANTLE_MODEL, effectiveEffort="high")
+    authored = authored_run(tmp_path, spec, authored_records(rows), provider=MANTLE, model=MANTLE_MODEL,
+                            effectiveEffort="high")
     report = evaluate(tmp_path, seeded=seeded, authored=authored, spec=spec, env=env)
     assert report["failures"] == []
     assert (report["reviewer"]["provider"], report["reviewer"]["model"]) == (MANTLE, MANTLE_MODEL)
