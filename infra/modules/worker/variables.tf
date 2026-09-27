@@ -30,3 +30,23 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "webhook_queue_name" {
+  type = string
+}
+
+variable "webhook_dlq_name" {
+  type = string
+}
+
+variable "webhook_dispatcher_function_name" {
+  type = string
+}
+
+variable "webhook_dispatcher_role_arn" {
+  type = string
+}
+
+variable "webhook_dispatcher_environment" {
+  type = map(string)
+}

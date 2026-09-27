@@ -76,3 +76,11 @@ variable "console_hostname" {
   default     = ""
   description = "Console hostname added to the spa client's callback/logout URLs; \"\" adds nothing (staging)."
 }
+
+variable "webhook_queue_name" {
+  type = string
+} # prod "developercards-webhook-events"
+
+variable "webhook_dispatcher_function_name" {
+  type = string
+} # prod "developercards-webhook-dispatcher"
