@@ -526,9 +526,11 @@ public sealed class EvalGateTests
       Assert.All(history, h => Assert.Equal(GateKeys, h.EnumerateObject().Select(p => p.Name).ToArray()));
       Assert.NotEqual(JsonValueKind.Null, history[2].GetProperty("revokedAt").ValueKind);
 
-      // Revoking the latest makes the earlier unrevoked one current.
+      // Revoking the latest leaves no current gate (R18B K2): the earlier unrevoked one never takes over.
       AutomationTestKit.Data(await RevokeAsync(second.ToString(CultureInfo.InvariantCulture)));
-      Assert.Equal(first, AutomationTestKit.Data(await GetAsync()).GetProperty("current").GetProperty("gateId").GetInt64());
+      Assert.Equal(JsonValueKind.Null, AutomationTestKit.Data(await GetAsync()).GetProperty("current").ValueKind);
+      Assert.Equal(AutomationMode.DryRun, (await EffectiveAsync(AutomationMode.Live)).Effective);
+      AutomationTestKit.Data(await RevokeAsync(first.ToString(CultureInfo.InvariantCulture)));
     });
   }
 

@@ -6,7 +6,8 @@ namespace RecallSmith.Lambda.Vpc.Automation;
 /// <summary>
 /// The <c>AUTOMATION_MODE</c> switch (R18A A01, contract A00 §3). Only core-vpc reads it, from its environment, on
 /// every call (never cached). <see cref="EffectiveAsync"/> turns the configured value into the effective one:
-/// <c>live</c> needs a passed, unrevoked eval gate, and a database without migration 034 is always <c>off</c>.
+/// <c>live</c> needs the newest eval gate to be passed and unrevoked, and a database without migration 034 is always
+/// <c>off</c>.
 /// </summary>
 public static class AutomationMode
 {
@@ -48,6 +49,9 @@ public static class AutomationMode
   /// The effective mode (A00 §3.2). Configured <c>off</c> answers without touching the database. Otherwise the gate
   /// table is probed with <c>to_regclass</c> (never by catching 42P01, so this is safe inside an open transaction);
   /// a missing table is <c>off</c> / <see cref="ServerNotReady"/>. Other database errors propagate.
+  /// The gate is the NEWEST row of <c>automation_eval_gates</c> (R18B K2), and it counts only when it is passed and
+  /// unrevoked. Revoking it, or recording a newer failed gate, drops <c>live</c> to <c>dry_run</c> on the next request;
+  /// an older passed gate is never a fallback, so a revoke is a single-click kill switch.
   /// </summary>
   public static async Task<EffectiveMode> EffectiveAsync(NpgsqlConnection conn, CancellationToken ct = default)
   {
@@ -63,8 +67,8 @@ public static class AutomationMode
     long? gateId = null;
     GateReviewer? reviewer = null;
     await using (var cmd = new NpgsqlCommand(
-      "select id, reviewer_provider, reviewer_model, prompt_version from automation_eval_gates " +
-      "where passed and revoked_at is null order by id desc limit 1", conn))
+      $"select id, reviewer_provider, reviewer_model, prompt_version from ({EvalGate.NewestGateSql}) g " +
+      "where passed and revoked_at is null", conn))
     await using (var reader = await cmd.ExecuteReaderAsync(ct))
     {
       if (await reader.ReadAsync(ct))

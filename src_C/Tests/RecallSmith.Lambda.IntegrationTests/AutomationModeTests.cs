@@ -173,18 +173,75 @@ public class AutomationModeTests
       var latest = await InsertGateAsync(passed: true, revoked: false);
       try
       {
-        // The latest passed, unrevoked gate wins; a failed gate never counts.
+        // The newest gate is passed and unrevoked: live.
         var mode = await EffectiveAsync();
         Assert.Equal(new EffectiveMode("live", "live", null, latest, new GateReviewer("test-provider", "test-model", "test-prompt-v1")), mode);
-
-        await RevokeGateAsync(latest);
-        Assert.Equal(older, (await EffectiveAsync()).GateId);
       }
       finally
       {
         await RevokeGateAsync(older);
         await RevokeGateAsync(failed);
         await RevokeGateAsync(latest);
+      }
+    });
+  }
+
+  [Fact]
+  public async Task Effective_Live_RevokingNewestGate_NeverFallsBackToOlderPassedGate()
+  {
+    // R18B K2 (cloud-security-resilience-1): a revoke of the newest gate is a kill switch, whatever older rows say.
+    await WithModeAsync("live", async () =>
+    {
+      var older = await InsertGateAsync(passed: true, revoked: false);
+      var latest = await InsertGateAsync(passed: true, revoked: false);
+      try
+      {
+        Assert.Equal(latest, (await EffectiveAsync()).GateId);
+
+        await RevokeGateAsync(latest);
+        Assert.Equal(new EffectiveMode("live", "dry_run", AutomationMode.EvalGateMissing, null, null), await EffectiveAsync());
+      }
+      finally
+      {
+        await RevokeGateAsync(older);
+        await RevokeGateAsync(latest);
+      }
+    });
+
+    // Dry run reports no gate either: the older passed row is not the current gate.
+    await WithModeAsync("dry_run", async () =>
+    {
+      var older = await InsertGateAsync(passed: true, revoked: false);
+      await InsertGateAsync(passed: true, revoked: true);
+      try
+      {
+        Assert.Equal(new EffectiveMode("dry_run", "dry_run", null, null, null), await EffectiveAsync());
+      }
+      finally
+      {
+        await RevokeGateAsync(older);
+      }
+    });
+  }
+
+  [Fact]
+  public async Task Effective_Live_NewerFailedGate_BlocksLive()
+  {
+    await WithModeAsync("live", async () =>
+    {
+      var passed = await InsertGateAsync(passed: true, revoked: false);
+      var failed = 0L;
+      try
+      {
+        Assert.Equal("live", (await EffectiveAsync()).Effective);
+
+        failed = await InsertGateAsync(passed: false, revoked: false);
+        Assert.Equal(new EffectiveMode("live", "dry_run", AutomationMode.EvalGateMissing, null, null), await EffectiveAsync());
+      }
+      finally
+      {
+        await RevokeGateAsync(passed);
+        if (failed != 0) await RevokeGateAsync(failed);
       }
     });
   }

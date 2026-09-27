@@ -13,10 +13,10 @@ namespace RecallSmith.Lambda.Vpc.Automation;
 
 /// <summary>
 /// The eval gate for auto-decision precision (R18A A06, contract A00 §15.3–§15.4): the only record that lets
-/// <c>AUTOMATION_MODE=live</c> take effect (<see cref="AutomationMode.EffectiveAsync"/> reads the latest passed,
-/// unrevoked row). The supervisor posts the <c>dc-evals automation-gate</c> report; core re-computes every metric from
-/// the report's counts and records only a report that passes. A revoke makes <c>live</c> fall back to <c>dry_run</c>
-/// on the next request. Nothing here reads or writes <c>AUTOMATION_MODE</c>.
+/// <c>AUTOMATION_MODE=live</c> take effect (<see cref="AutomationMode.EffectiveAsync"/> reads the newest row and
+/// counts it only when it is passed and unrevoked, R18B K2). The supervisor posts the <c>dc-evals automation-gate</c> report; core re-computes every metric from
+/// the report's counts and records only a report that passes. A revoke of the newest gate makes <c>live</c> fall back
+/// to <c>dry_run</c> on the next request; an older passed gate never takes over. Nothing here reads or writes <c>AUTOMATION_MODE</c>.
 /// </summary>
 public static class EvalGate
 {
@@ -34,6 +34,9 @@ public static class EvalGate
   public const double AuthoredUnscoredRateGate = 0.05;
 
   public const string ReportKind = "automation-gate";
+
+  /// <summary>The newest gate row, whatever its state (R18B K2): only this row can make <c>live</c> effective.</summary>
+  internal const string NewestGateSql = "select * from automation_eval_gates order by id desc limit 1";
   public const int HistoryLimit = 20;
 
   /// <summary>The check names <see cref="Check"/> returns, in evaluation order (the console and A15 show them).</summary>
@@ -347,11 +350,14 @@ public static class EvalGate
   // shared
   // ---------------------------------------------------------------------------------------------
 
-  /// <summary>The current gate (latest passed, unrevoked id) as the <c>EvalGate</c> shape, or null.</summary>
+  /// <summary>
+  /// The current gate as the <c>EvalGate</c> shape, or null: the newest row when it is passed and unrevoked (R18B K2,
+  /// the same rule as <see cref="AutomationMode.EffectiveAsync"/>).
+  /// </summary>
   internal static async Task<object?> LoadCurrentAsync(NpgsqlConnection conn)
   {
     var rows = await DbUtil.QueryAsync(conn, null,
-      $"select {GateColumns} from automation_eval_gates where passed and revoked_at is null order by id desc limit 1", []);
+      $"select {GateColumns} from ({NewestGateSql}) g where passed and revoked_at is null", []);
     return rows.Count == 0 ? null : ToGate(rows[0]);
   }
 
