@@ -125,3 +125,12 @@ Tests: `C04.verify.sh` step 3 (plan allow-list: `notify_queue_oldest_age` create
 - `ai-qa-daily-cost` gains Provider=openai-mantle. Not named in the finding, but L1 makes openai-mantle the
   automation reviewer and the alarm is documented as the total of every ai-qa provider (B04).
 - No existing test or assertion changed.
+
+## Supervisor amendment (2026-09-28, after the C04 apply)
+
+The C04 apply set `suppressed_reasons = []`, but SES then reported no suppression options for the set (it
+inherits the account-level BOUNCE/COMPLAINT list), and the second plan showed `+ suppression_options` again:
+the aws provider cannot represent an empty per-set override. The block was removed from
+`infra/modules/edge/ses.tf` so the plan is empty; cloud-security-resilience-10 is now **partially fixed**:
+suppression is not disabled, but a bounce or complaint is never silent (event destination → alerts topic,
+which does not depend on SES suppression), and `infra/RUNBOOK.md` §7 describes the owner-only removal step.

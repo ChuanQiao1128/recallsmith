@@ -67,15 +67,12 @@ resource "aws_sesv2_configuration_set" "automation" {
     sending_enabled = true
   }
 
-  # R18C (cloud-security-resilience-10): no suppression for this configuration set. It sends to one verified
-  # owner address only; with BOUNCE/COMPLAINT suppression one hard bounce or one "spam" click would put that
-  # address on the suppression list and SES would then accept every later send (the notifier logs "sent")
-  # while delivering nothing. An empty list overrides the account-level list for sends through this set. The
-  # trade-off (no automatic protection of the sending reputation) is covered by the event destination below:
-  # every bounce, complaint, reject and delivery delay reaches the alerts topic, and the sandbox caps volume.
-  suppression_options {
-    suppressed_reasons = []
-  }
+  # R18C (cloud-security-resilience-10), supervisor amendment: no suppression_options block. The aws provider
+  # cannot hold an empty override — SES stores `suppressed_reasons = []` as "no override", so the set inherits
+  # the account-level list (BOUNCE, COMPLAINT) and the block would show as a change on every plan. The finding's
+  # risk (one bounce or complaint silently stops every automation email) is covered by the event destination
+  # below: every bounce, complaint, reject and delivery delay reaches the alerts topic (SNS email, which the SES
+  # suppression list does not affect), and RUNBOOK §7 has the owner-only removal step.
 }
 
 resource "aws_sesv2_configuration_set_event_destination" "automation_alerts" {

@@ -292,17 +292,16 @@ console; nothing here depends on it.
   From address, a configuration set other than `developercards-automation`, or a recipient identity
   that no longer matches the grant (after an `alert_email` change, before the apply).
 
-**Suppression and delivery events (R18C).** The configuration set `developercards-automation` sets
-`suppression_options.suppressed_reasons = []`: sends through it ignore the account-level suppression list,
-so one hard bounce or one "spam" click on an alert no longer silences every later automation email while
-the notifier logs `sent`. The trade-off is no automatic reputation protection, acceptable for one
-verified sandbox recipient (at most 200 messages a day). Instead the event destination
+**Suppression and delivery events (R18C).** The configuration set `developercards-automation` inherits the
+account-level suppression list (BOUNCE, COMPLAINT): the aws provider cannot hold an empty per-set override
+(SES stores it as "no override"), so none is declared. A hard bounce or a "spam" click on an alert would
+therefore put the owner address on the suppression list, after which SES accepts later sends (the notifier
+logs `sent`) but delivers nothing. That is never silent: the event destination
 `developercards-automation-alerts` publishes every `BOUNCE`, `COMPLAINT`, `REJECT` and `DELIVERY_DELAY`
 event to the alerts topic (`developercards-alerts`, Sid `SesEventPublish`, only this configuration set),
-so a delivery problem arrives as an SNS message next to the alarms. On such an event: fix the mailbox or
-filter first (a complaint means an alert was marked as spam), then check the address is not on the
-account suppression list (other senders in the account still honour it):
-`aws sesv2 get-suppressed-destination --email-address <owner address>` in a private terminal; if listed,
+and SNS email delivery does not depend on the SES suppression list. On such an event: fix the mailbox or
+filter first (a complaint means an alert was marked as spam), then check the suppression list
+(`aws sesv2 get-suppressed-destination --email-address <owner address>` in a private terminal); if listed,
 the owner removes it in the SES console (Suppression list → remove), never from a worker.
 
 **Changing `alert_email`.** One apply changes, together, the `notify-recipient` SSM value, the SES
