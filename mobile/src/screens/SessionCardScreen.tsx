@@ -42,6 +42,12 @@ import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import { settleRatingReward } from '../features/gacha/rewards/sessionRewards';
 import { recordMistakeOutcome } from '../features/gacha/mistakes/mistakeBook';
 import {
+  buildFocusIndex,
+  pickFocusCard,
+  sanitizeFocusUids,
+  type FocusIndex,
+} from '../features/gacha/mistakes/focusSession';
+import {
   buildRatedSessionState,
   buildSessionProgressVM,
   type CurrentCardLike,
@@ -182,6 +188,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const routeLimit = route.params?.limit;
   const previewLimitRaw = Number((route.params as any)?.previewLimit ?? 0);
   const previewLimit = Number.isFinite(previewLimitRaw) ? previewLimitRaw : 0;
+  // K02 focus run: the Mistake Book hands over up to 15 uids to serve in order, due or not.
+  const focusUids = useMemo(() => sanitizeFocusUids(route.params?.focusUids), [route.params?.focusUids]);
+  const focusKey = focusUids.join('\n');
   const [slug, setSlug] = useState<string | null>(slugFromRoute);
   const [deck, setDeck] = useState<DeckExport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -237,6 +246,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const trialRef = useRef<TrialInfo>(EMPTY_TRIAL_INFO);
   const scrollRef = useRef<ScrollView>(null);
   const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport> } | null>(null);
+  // Non-null only in a focus run with at least one usable card; ratedUids holds the cards it served.
+  const focusIndexRef = useRef<FocusIndex | null>(null);
+  const focusRatedUidsRef = useRef<Set<string>>(new Set());
   // stableUid → 1-based position in the deck's OrderInDeck order; the same
   // number the Library tile and DrawResult print, so "#011" means one card.
   const rankMapRef = useRef<Map<string, number>>(new Map());
@@ -476,6 +488,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
           // slug) reads the same collection as the full deck would.
           const nextOwned = await resolveEffectiveOwned(resolved.Slug, nextProgress);
           if (cancelled) return;
+          const focusIndex = focusUids.length > 0 ? buildFocusIndex(deckForStudy, focusUids, nextOwned) : null;
+          focusIndexRef.current = focusIndex;
+          focusRatedUidsRef.current = new Set();
+          if (focusIndex) {
+            cardIndexRef.current = focusIndex;
+          }
           if (isTrial && trialRef.current.previewCount > 0) {
             const learnedCount = nextProgress.filter(isLearned).length;
             const previewDone = learnedCount >= trialRef.current.previewCount;
@@ -502,8 +520,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
           // Sync sessionLimit to the planner's actual route length so
           // the header reads "Run 0/3" when the deck has 3 due cards
           // (was always "Run 0/20" because of the hard-coded default).
-          setPlannedLimit(plannedChallenge.limit);
-          if (plannedChallenge.limit === EMPTY_ROUTE_LIMIT) {
+          setPlannedLimit(focusIndex ? focusIndex.cards.length : plannedChallenge.limit);
+          if (!focusIndex && plannedChallenge.limit === EMPTY_ROUTE_LIMIT) {
             // No card to deal: never start a session (no "Run 0/1", no
             // route-complete card, no summary). The empty state below owns
             // the screen until a pull puts a card in this deck.
@@ -515,16 +533,18 @@ export function SessionCardScreen({ navigation, route }: Props) {
             setLoading(false);
             return;
           }
-          const nextCurrent = pickNextCard({
-            deck: deckForStudy,
-            progress: nextProgress,
-            now,
-            mode,
-            avoidUid: null,
-            index: cardIndexRef.current,
-            ownedSet: nextOwned,
-            kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()),
-          });
+          const nextCurrent = focusIndex
+            ? pickFocusCard({ index: focusIndex, progress: nextProgress, ratedUids: focusRatedUidsRef.current })
+            : pickNextCard({
+                deck: deckForStudy,
+                progress: nextProgress,
+                now,
+                mode,
+                avoidUid: null,
+                index: cardIndexRef.current,
+                ownedSet: nextOwned,
+                kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()),
+              });
           const nextSessionId = `${deckForStudy.Slug}-${now.getTime()}`;
           startSession({
             sessionId: nextSessionId,
@@ -567,7 +587,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       // that flashed continuously. sessionLimit is derived state we
       // SET inside this effect, so it must not gate the effect itself.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isPremiumUser, mode, navigation, previewLimit, slug, reloadToken]),
+    }, [isPremiumUser, mode, navigation, previewLimit, slug, reloadToken, focusKey]),
   );
   const now = new Date();
   const dueTodayCount = countDueToday(progress, now, ownedSet);
@@ -604,6 +624,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
         ownedSet,
         kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()),
       });
+      // Focus run: serve the next focus card in order instead of the planner's pick.
+      const focusIndex = focusIndexRef.current;
+      if (focusIndex) focusRatedUidsRef.current.add(current.card.StableUid);
+      const nextCurrent = focusIndex
+        ? pickFocusCard({ index: focusIndex, progress: nextState.updatedProgress, ratedUids: focusRatedUidsRef.current })
+        : nextState.nextCurrent;
       // Events are facts, progress is a projection; facts must land first. A
       // queued event can rebuild the progress on the next sync, but a saved
       // progress with no event means the server never learns this review
@@ -702,13 +728,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
         }).minimumGoal;
       setSessionDone(nextState.nextDone);
       setProgress(nextState.updatedProgress);
-      applyCurrent(nextState.nextCurrent, useSessionStore.getState().sessionId ?? '');
+      applyCurrent(nextCurrent, useSessionStore.getState().sessionId ?? '');
       setShowAnswer(false);
       void syncDailyReminders({
         remainingDueCount: nextState.remainingDueCount,
         now: new Date(nowAtRating.getTime()),
       });
-      if (!nextState.nextCurrent) {
+      if (!nextCurrent) {
         navigation.replace('SessionSummary', {
           sessionId: useSessionStore.getState().sessionId ?? undefined,
           slug: deck.Slug,
