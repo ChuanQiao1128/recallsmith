@@ -13,6 +13,7 @@ import type {
   DraftRejectReason,
   DraftRejectResult,
   DraftReviewEvent,
+  DraftSource,
   DraftsPage,
   DraftStatus,
   DraftSummary,
@@ -82,8 +83,23 @@ function normalizeCard(value: unknown): DraftCard | null {
     codeLanguage: toNullableText(raw.codeLanguage),
     realWorldUsage: toNullableText(raw.realWorldUsage),
     mcq: asRecord(raw.mcq) ? (raw.mcq as McqBlob) : null,
-    source: { url: toText(source.url), quote: toText(source.quote) },
+    source: normalizeSource(source),
   };
+}
+
+/** `source.grounding` rides along only when the server sent a well-formed one. */
+function normalizeSource(source: Raw): DraftSource {
+  const out: DraftSource = { url: toText(source.url), quote: toText(source.quote) };
+  const grounding = asRecord(source.grounding);
+  if (grounding && typeof grounding.matched === 'boolean') {
+    out.grounding = {
+      chunkId: toText(grounding.chunkId),
+      sourceId: toText(grounding.sourceId),
+      matched: grounding.matched,
+      quoteChars: toNumber(grounding.quoteChars) ?? 0,
+    };
+  }
+  return out;
 }
 
 function normalizeAgent(value: unknown): DraftAgent | null {

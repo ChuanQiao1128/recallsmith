@@ -20,14 +20,17 @@ import { useConfirm } from '../components/ui/ConfirmDialogContext';
  *
  * @param dirty whether the page holds edits that would be lost on navigation.
  * @returns `allowNextNavigation`, a stable callback a page calls immediately
- *   before the navigation that follows a successful save, so that save does not
- *   trip the guard.
+ *   before the navigation that follows a successful save (or a discard the page
+ *   already confirmed itself), so that navigation does not trip the guard. It
+ *   lets exactly one navigation through.
  */
 export function useUnsavedChangesGuard(dirty: boolean): { allowNextNavigation: () => void } {
   const confirm = useConfirm();
 
   // Set true for the one navigation that follows a successful save; read inside
-  // the blocker so that save is not treated as a discard.
+  // the blocker so that save is not treated as a discard. It is one-shot: the
+  // navigation it lets through clears it, so a page that stays mounted after
+  // the save (the review queue) is guarded again for the next edit.
   const allowRef = useRef(false);
 
   // beforeunload only while dirty, so a reload or tab close gets the browser's
@@ -42,13 +45,16 @@ export function useUnsavedChangesGuard(dirty: boolean): { allowNextNavigation: (
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      dirty &&
-      !allowRef.current &&
-      (currentLocation.pathname !== nextLocation.pathname ||
-        currentLocation.search !== nextLocation.search),
-  );
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    const moves =
+      currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search;
+    if (!moves) return false;
+    if (allowRef.current) {
+      allowRef.current = false;
+      return false;
+    }
+    return dirty;
+  });
 
   // When a navigation is blocked, ask through the console's own confirm dialog.
   // Discard -> proceed, keep -> reset. The `active` flag drops a late answer if

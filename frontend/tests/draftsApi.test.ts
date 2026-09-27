@@ -159,4 +159,25 @@ describe('src/api/drafts', () => {
     expect(api.normalizeDraft({ draftId: 41, card: { question: 'q' } })).toBeNull();
     expect(api.normalizeDraftSummary({ question: 'q' })).toBeNull();
   });
+
+  it('keeps source.grounding when the draft carries it (Y06 contract), and adds nothing otherwise', () => {
+    const card = qaDraftCard();
+    const grounded = api.normalizeDraft({
+      draftId: 41,
+      deckId: 7,
+      status: 'pending',
+      card: { ...card, source: { ...card.source, grounding: { chunkId: 'c-1', sourceId: 's-1', matched: true, quoteChars: '47' } } },
+    });
+    expect(grounded?.card.source.grounding).toEqual({ chunkId: 'c-1', sourceId: 's-1', matched: true, quoteChars: 47 });
+
+    const plain = api.normalizeDraft({ draftId: 41, deckId: 7, status: 'pending', card });
+    expect(plain?.card.source).toEqual(card.source);
+    expect(Object.prototype.hasOwnProperty.call(plain?.card.source, 'grounding')).toBe(false);
+
+    const malformed = api.normalizeDraft({
+      draftId: 41,
+      card: { ...card, source: { ...card.source, grounding: { chunkId: 'c-1' } } },
+    });
+    expect(malformed?.card.source.grounding).toBeUndefined();
+  });
 });

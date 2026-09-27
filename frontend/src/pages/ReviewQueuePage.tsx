@@ -29,11 +29,14 @@ import {
   INPUT_INVALID_CLASS,
   LABEL_CLASS,
 } from '../components/console/consoleStyles';
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   DRAFT_NOTE_MAX_LENGTH,
   DRAFT_REJECT_REASONS,
   draftDecisionMessage,
+  draftLintAdvice,
+  draftListEmptyText,
   draftToFormValues,
   formValuesToDraftCard,
   lintDraftCard,
@@ -134,7 +137,11 @@ export function ReviewQueuePage() {
   const decidingRef = useRef(false);
   // Review time counts only while the tab is visible (see ReviewClock).
   const clockRef = useRef<ReviewClock>(startReviewClock(0, false));
+  // Whether the open edit form holds unaccepted edits. The ref is read inside
+  // handlers that run before a re-render; the state drives the page-wide guard
+  // (header links, Back, reload), which covers every way out of the page.
   const editDirtyRef = useRef(false);
+  const [editDirty, setEditDirty] = useState(false);
   const outcomeRef = useRef<HTMLDivElement>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
@@ -236,7 +243,15 @@ export function ReviewQueuePage() {
 
   const onEditDirtyChange = useCallback((dirty: boolean) => {
     editDirtyRef.current = dirty;
+    setEditDirty(dirty);
   }, []);
+
+  function clearEditDirty() {
+    editDirtyRef.current = false;
+    setEditDirty(false);
+  }
+
+  const guard = useUnsavedChangesGuard(editingId !== null && editDirty);
 
   const deck = deckState.forDeckId === deckId ? deckState.deck : null;
   const deckError = deckState.forDeckId === deckId ? deckState.error : null;
@@ -264,15 +279,31 @@ export function ReviewQueuePage() {
       if (!discard) return;
     }
     if (switching) {
-      editDirtyRef.current = false;
+      clearEditDirty();
       setEditingId(null);
     }
     setOutcome(null);
     setDecisionError(null);
+    // Any discard was confirmed above, and reopening the draft being edited
+    // keeps the form: either way the page-wide guard must not ask again.
+    guard.allowNextNavigation();
     setSearchParams({ deckId: String(deckId), draftId: String(id) });
   }
 
-  function onStatusChange(next: StatusFilter) {
+  async function onStatusChange(next: StatusFilter) {
+    // With no draftId in the URL the open draft is the filter's first pending
+    // one, so changing the filter can swap it out from under an edit.
+    if (next !== status && draftIdParam === null && editingId !== null && editDirtyRef.current) {
+      const discard = await confirm({
+        title: 'Discard your edits?',
+        body: 'The draft you are editing has changes that have not been accepted. Changing the filter can close it and discard them.',
+        confirmLabel: 'Discard edits',
+        destructive: true,
+      });
+      if (!discard) return;
+      clearEditDirty();
+      setEditingId(null);
+    }
     setStatus(next);
   }
 
@@ -340,6 +371,7 @@ export function ReviewQueuePage() {
     }
     setOutcome(done);
     editDirtyRef.current = false;
+    setEditDirty(false);
     setEditingId(null);
     setRejectingId(null);
     // Mark it decided locally so the next pending draft opens at once, then
@@ -348,6 +380,8 @@ export function ReviewQueuePage() {
       ...prev,
       items: prev.items.map(item => (item.draftId === id ? { ...item, status: decided } : item)),
     }));
+    // The edit was just accepted, so this navigation discards nothing.
+    guard.allowNextNavigation();
     setSearchParams({ deckId: String(deckId) });
     setListNonce(n => n + 1);
     return null;
@@ -491,7 +525,7 @@ export function ReviewQueuePage() {
                   id="review-status"
                   className={INPUT_CLASS}
                   value={status}
-                  onChange={e => onStatusChange(e.target.value as StatusFilter)}
+                  onChange={e => void onStatusChange(e.target.value as StatusFilter)}
                 >
                   {STATUS_OPTIONS.map(option => (
                     <option key={option.value} value={option.value}>
@@ -508,7 +542,7 @@ export function ReviewQueuePage() {
                 </Callout>
               ) : null}
               {listReady && !list.error && listItems.length === 0 ? (
-                <p className="text-sm text-slate-500">No drafts waiting for review.</p>
+                <p className="text-sm text-slate-500">{draftListEmptyText(status)}</p>
               ) : null}
 
               <ul className="space-y-1">
@@ -562,7 +596,7 @@ export function ReviewQueuePage() {
                         submitLabel="Accept with edits"
                         onSubmit={values => onAcceptEdited(draft, values)}
                         onCancel={() => {
-                          editDirtyRef.current = false;
+                          clearEditDirty();
                           setEditingId(null);
                         }}
                       />
@@ -615,6 +649,20 @@ export function ReviewQueuePage() {
                         <blockquote className="border-l-4 border-amber-300 pl-3 text-sm text-slate-800">
                           <mark data-testid="review-source-quote">{draft.card.source.quote}</mark>
                         </blockquote>
+                        {draft.card.source.grounding ? (
+                          <div className="text-xs text-slate-600 flex flex-wrap items-center gap-2" data-testid="review-grounding">
+                            {draft.card.source.grounding.matched ? (
+                              <Badge tone="success">Quote found in the source</Badge>
+                            ) : (
+                              <Badge tone="warning">Quote not found in the source</Badge>
+                            )}
+                            <span>
+                              Chunk <span className="font-mono">{draft.card.source.grounding.chunkId}</span> of source{' '}
+                              <span className="font-mono">{draft.card.source.grounding.sourceId}</span> ·{' '}
+                              {draft.card.source.grounding.quoteChars} characters quoted
+                            </span>
+                          </div>
+                        ) : null}
                       </section>
 
                       <section className={`${CARD_CLASS} space-y-2`} aria-label="Similar cards">
@@ -699,7 +747,9 @@ export function ReviewQueuePage() {
                           </Button>
                         </div>
                         {!lint.ok ? (
-                          <p className="text-sm text-slate-600">Fix the lint issues with Edit, then Accept with edits.</p>
+                          <p className="text-sm text-slate-600" data-testid="review-lint-advice">
+                            {draftLintAdvice(lint.issues)}
+                          </p>
                         ) : null}
 
                         {rejectingId === draft.draftId ? (
