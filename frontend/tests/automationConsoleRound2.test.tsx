@@ -187,7 +187,10 @@ describe('open exceptions come from the server (automation-19, frontend-console-
 
     mountAt('/automation?tab=decisions&state=human&open=true');
     await screen.findByRole('button', { name: 'Details of draft 41' });
-    expect((screen.getByLabelText('Open only (no person has decided)') as HTMLInputElement).checked).toBe(true);
+    // D07 frontend-console-27: renamed to say what the server filter is.
+    expect(
+      (screen.getByLabelText('Open exceptions only (routed to you, still pending)') as HTMLInputElement).checked,
+    ).toBe(true);
     expect(api.listAutomationDecisions).toHaveBeenLastCalledWith(expect.objectContaining({ open: true }));
   });
 

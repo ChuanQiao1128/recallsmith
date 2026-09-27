@@ -222,6 +222,33 @@ export function decisionAwaitsPerson(d: { state: string; humanAction: string | n
   return (d.state === 'human' || d.state === 'would_accept') && d.humanAction === null;
 }
 
+/**
+ * Whether the Automation page hides a decision's verdict until the person
+ * decides (D07 frontend-console-25): a dry-run draft nobody has decided that is
+ * not routed to a person, i.e. a would-accept verdict or one still in AI QA.
+ * The dry-run shadow agreement counts a decision as blind only when this
+ * verdict was not seen first. A routed (`human`) row stays visible: it is the
+ * exception inbox, and its reason is why the person is involved.
+ */
+export function decisionVerdictHidden(d: { mode: string; state: string; humanAction: string | null }): boolean {
+  return (
+    d.mode === 'dry_run' &&
+    d.humanAction === null &&
+    (d.state === 'would_accept' || d.state === 'qa_pending' || d.state === 'qa_queued')
+  );
+}
+
+/** The badge of a hidden verdict, the review queue's words. */
+export const HIDDEN_VERDICT_TEXT = 'Verdict hidden until you decide';
+
+export const REVEAL_VERDICT_WARNING =
+  'Dry run: the verdict stays hidden so that your decision in the review queue counts as blind. Revealing it here counts that decision as not blind.';
+
+/** Whether a routed decision can be decided now: the Decide link of the exception inbox (D07 frontend-console-27). */
+export function decisionDecidable(d: { state: string; humanAction: string | null }): boolean {
+  return d.state === 'human' && d.humanAction === null;
+}
+
 /** The decision's reason detail as a person reads it: a QA_ERROR detail is an AI QA error code. */
 export function decisionReasonDetailText(reason: string | null, detail: string | null): string | null {
   if (!detail) return null;

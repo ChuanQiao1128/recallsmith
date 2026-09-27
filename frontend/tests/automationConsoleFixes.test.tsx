@@ -193,7 +193,8 @@ describe('handled vs open exceptions (frontend-console-1, automation-10, K7)', (
       }),
     );
 
-    await user.click(screen.getByLabelText('Open only (no person has decided)'));
+    // D07 frontend-console-27: the label says what the server filter is.
+    await user.click(screen.getByLabelText('Open exceptions only (routed to you, still pending)'));
     // The filters are written in one canonical order.
     expect(screen.getByTestId('loc').textContent).toBe(
       '/automation?tab=decisions&deckId=7&state=human&reason=QA_FLAGGED&open=1',

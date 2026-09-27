@@ -182,6 +182,15 @@ export function OverviewTab({
                 </p>
               )
             ) : null}
+            {status.backlog && status.mode.effective === 'dry_run' ? (
+              <p className="mt-2 text-xs text-slate-600" data-testid="automation-backlog-dry-run">
+                Dry run: every pending draft also waits for you in the{' '}
+                <Link to="/review" className="text-indigo-700 underline">
+                  review queue
+                </Link>
+                .
+              </p>
+            ) : null}
             {status.backlog ? null : (
               <p className="text-sm text-slate-600 mt-2">
                 This server does not report the open backlog yet. The review queue lists the drafts still pending.
