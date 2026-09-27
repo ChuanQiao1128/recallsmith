@@ -1,12 +1,14 @@
 // The pinned authoring configuration of a run (ai-agent-3): the model, the skill version
 // parsed from SKILL.md, and SHA-256 hashes of the skill files, the prompt template, the
-// claude argument list and the MCP server bundle, all read from disk when the run starts.
-// Its `id` changes whenever any of them changes (a branch switch, an uncommitted SKILL.md
-// edit, a rebuilt MCP server), so a changed author configuration is visible on every run.
+// claude argument list, the MCP tool surface and the MCP server bundle, all read from disk
+// when the run starts. Its `id` changes whenever any of them changes (a branch switch, an
+// uncommitted SKILL.md edit, a rebuilt MCP server), so a changed author configuration is
+// visible on every run.
 
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
+import { canonicalJson, TOOL_SURFACE_FILE, toolSurfaceSha256, type ToolSurface } from '../../mcp-server/src/toolSurfaceHash';
 import { claudeArgs } from './claude';
 
 export interface AuthorConfig {
@@ -15,14 +17,26 @@ export interface AuthorConfig {
   /**
    * M1: the author identity an eval gate is bound to: lowercase hex SHA-256 of the canonical JSON (sorted keys,
    * no spaces) of { argsSha256, model, promptSha256, skillSha256, skillVersion }. It leaves out the CLI and runner
-   * versions, so a routine Claude Code auto-update does not change it (ai-agent-3).
+   * versions, so a routine Claude Code auto-update does not change it (ai-agent-3). N4: argsSha256 covers the MCP
+   * tool surface too (see claudeArgsSha256).
    */
   authorConfigId: string;
   model: string;
   skillVersion: string;
   skillSha256: string;
   promptSha256: string;
+  /**
+   * SHA-256 of what the agent is started with (N4): the claude argument list and the MCP tool surface it sees
+   * (`<args joined by NUL>` NUL `toolSurfaceSha256`). It is the gated argsSha256, so a changed tool name,
+   * description, input schema, lint/grounding limit or MCP server version is a new authorConfigId.
+   */
   claudeArgsSha256: string;
+  /** N4: SHA-256 of the canonical JSON of tools/mcp-server/dist/tool-surface.json. */
+  toolSurfaceSha256: string;
+  /** N4: the version the MCP server the run starts reports. */
+  mcpServerVersion: string;
+  /** N4: the sorted names of the MCP tools the agent sees. */
+  mcpToolNames: string[];
   mcpServerSha256: string;
   claudeVersion: string | null;
   runnerVersion: string;
@@ -64,6 +78,32 @@ function skillDirSha256(dir: string): string {
 
 /** The MCP server bundle every run starts; without it the agent would have no DeveloperCards tools (ai-agent-13). */
 export const MCP_SERVER_BUNDLE = join('tools', 'mcp-server', 'dist', 'index.js');
+/** N4: the tool surface the MCP server build lists next to its bundle. */
+export const MCP_TOOL_SURFACE = join('tools', 'mcp-server', 'dist', TOOL_SURFACE_FILE);
+
+/** The tool surface file, checked for the shape the MCP server build writes; throws AuthorConfigError otherwise. */
+function readToolSurface(repoRoot: string): ToolSurface {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(repoRoot, MCP_TOOL_SURFACE), 'utf8'));
+  } catch {
+    throw new AuthorConfigError(`cannot read ${MCP_TOOL_SURFACE} in the repo root (build tools/mcp-server)`);
+  }
+  const p = (typeof parsed === 'object' && parsed !== null ? parsed : {}) as Partial<ToolSurface>;
+  const server = p.server as { name?: unknown; version?: unknown } | undefined;
+  const tools = p.tools as Array<{ name?: unknown }> | undefined;
+  const valid =
+    typeof server?.name === 'string' &&
+    typeof server.version === 'string' &&
+    server.version !== '' &&
+    Array.isArray(tools) &&
+    tools.length > 0 &&
+    tools.every((tool) => typeof tool === 'object' && tool !== null && typeof tool.name === 'string' && tool.name !== '') &&
+    typeof p.constants === 'object' &&
+    p.constants !== null;
+  if (!valid) throw new AuthorConfigError(`${MCP_TOOL_SURFACE} is not a tool surface (rebuild tools/mcp-server)`);
+  return p as ToolSurface;
+}
 
 export interface AuthorConfigInput {
   repoRoot: string;
@@ -90,13 +130,18 @@ export function readAuthorConfig(input: AuthorConfigInput): AuthorConfig {
   } catch {
     throw new AuthorConfigError(`cannot read ${MCP_SERVER_BUNDLE} in the repo root (build tools/mcp-server)`);
   }
+  const surface = readToolSurface(input.repoRoot);
+  const surfaceSha256 = toolSurfaceSha256(surface);
 
   const fields: Omit<AuthorConfig, 'id' | 'authorConfigId'> = {
     model: input.model,
     skillVersion,
     skillSha256: skillDirSha256(skillDir),
     promptSha256: sha256(input.promptTemplate),
-    claudeArgsSha256: sha256(claudeArgs('<prompt>', input.model, '<mcp-config>').join('\0')),
+    claudeArgsSha256: sha256(`${claudeArgs('<prompt>', input.model, '<mcp-config>').join('\0')}\0${surfaceSha256}`),
+    toolSurfaceSha256: surfaceSha256,
+    mcpServerVersion: surface.server.version,
+    mcpToolNames: surface.tools.map((tool) => tool.name).sort(),
     mcpServerSha256: sha256(mcpServer),
     claudeVersion: input.claudeVersion,
     runnerVersion: input.runnerVersion,
@@ -113,10 +158,6 @@ export function authorConfigIdOf(config: Pick<AuthorConfig, 'model' | 'skillVers
     skillSha256: config.skillSha256,
     skillVersion: config.skillVersion,
   };
-  // Canonical JSON: keys sorted (as written above), no spaces.
-  const canonical = `{${Object.keys(gated)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${JSON.stringify(gated[key])}`)
-    .join(',')}}`;
-  return sha256(canonical);
+  // Canonical JSON: keys sorted, no spaces.
+  return sha256(canonicalJson(gated));
 }

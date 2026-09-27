@@ -24,13 +24,21 @@ Contract: R18-00 §8.4 (tools, config), §8.1 (DraftCard), §8.2 (similarity), �
 ```bash
 cd tools/mcp-server
 npm ci
-npm run build   # tsc type-check, then esbuild -> dist/deckLib.js + dist/index.js
+npm run build   # tsc type-check, then esbuild -> dist/deckLib.js + dist/index.js + dist/tool-surface.json
 npm test        # vitest; loopback fakes only, no network
 ```
 
 The build bundles `frontend/src/lib/deckImport.ts` and `frontend/src/lib/sourceRules.ts` (through
 `src/deckLib.ts`) into `dist/deckLib.js`, and the server into `dist/index.js`, which loads
 `./deckLib.js` at runtime. `dist/` and `node_modules/` are never committed.
+
+The build then writes `dist/tool-surface.json` (N4): the canonical JSON (keys sorted, no spaces) of the
+tool surface an MCP client lists, `{ constants, server: { name, version }, tools: [{ description,
+inputSchema, name }] }` sorted by tool name, with the lint limits `SOURCE_QUOTE_MIN_CHARS` and
+`SOURCE_QUOTE_MIN_WORDS` (`src/toolSurface.ts`). `tools/author-runner` hashes it into the gated
+`authorConfigId`, so a changed tool name, description, input schema, limit or server version needs a
+new eval gate before `live`. Bump `MCP_SERVER_VERSION` (`src/server.ts`) with any change of what a tool
+does, so that a change of behaviour alone is a new tool surface too.
 
 ## Login
 

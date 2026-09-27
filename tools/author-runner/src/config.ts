@@ -37,7 +37,7 @@ export interface RunnerConfig {
   /** After the SIGKILL, the run settles at the latest this much later, whatever the process group does (ai-agent-6). */
   killSettleMs: number;
   model: string;
-  /** The documentation hosts read_source may fetch in a run, besides the queue item's own host (ai-agent-1). */
+  /** The documentation hosts read_source may fetch in a run; the queue item's own host gets no implicit pass (ai-agent-1, ai-agent-21). */
   sourceHosts: string[];
   claudeBin: string;
   logDir: string;

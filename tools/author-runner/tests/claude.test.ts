@@ -7,6 +7,7 @@ import {
   claudeOutcome,
   claudeUsage,
   claudeVersion,
+  initWatch,
   killGroup,
   readClaudeStream,
   scrubEnv,
@@ -346,5 +347,94 @@ describe('killGroup (ai-agent-18)', () => {
       throw Object.assign(new Error('kill EINVAL'), { code: 'EINVAL' });
     });
     expect(() => killGroup(4242, 0)).toThrow('kill EINVAL');
+  });
+});
+
+describe('the provider check on every outcome and at the init message (N3, ai-agent-23)', () => {
+  const apiKeyInit = initLine({ apiKeySource: '/login managed key' });
+  const errorResult = (init: string | null) =>
+    [init, JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, result: 'rate limit on the source page' })]
+      .filter((line): line is string => line !== null)
+      .join('\n');
+
+  it('holds a timed-out, an error and a failed run whose init message shows another login or a failed MCP server', () => {
+    const apiKey = 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: apiKeySource /login managed key';
+    // A timeout is no longer an ordinary item failure when the stream shows an API key.
+    expect(claudeOutcome({ ...exited(null), timedOut: true }, apiKeyInit, '')).toMatchObject({
+      outcome: 'failed',
+      exitCode: null,
+      error: apiKey,
+      runnerUnavailable: true,
+      holdUntilCleared: true,
+      usageLimit: null,
+    });
+    // is_error: neither an ordinary failure nor a usage limit (the text says "rate limit").
+    expect(claudeOutcome(exited(0), errorResult(apiKeyInit), '')).toMatchObject({ error: apiKey, runnerUnavailable: true, holdUntilCleared: true, usageLimit: null });
+    // A non-zero exit.
+    expect(claudeOutcome(exited(1), errorResult(apiKeyInit), '')).toMatchObject({ error: apiKey, exitCode: 1, holdUntilCleared: true });
+    // A model turn with no init message at all, and a failed MCP server on a timeout.
+    expect(claudeOutcome(exited(0), errorResult(null), '')).toMatchObject({
+      error: 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: no system/init message',
+      holdUntilCleared: true,
+    });
+    const mcpFailed = initLine({ mcp_servers: [{ name: 'developercards', status: 'failed' }] });
+    expect(claudeOutcome({ ...exited(null), timedOut: true }, mcpFailed, '')).toMatchObject({
+      error: 'RUNNER_UNAVAILABLE: the developercards MCP server did not start (failed)',
+      holdUntilCleared: true,
+    });
+    // A success on a cloud provider model and a claude that cannot be started hold too.
+    expect(claudeOutcome(exited(0), streamOf({ modelUsage: { 'us.anthropic.claude-opus-5-5-v1:0': {} } }), '')).toMatchObject({ holdUntilCleared: true });
+    expect(claudeOutcome({ ...exited(null), pid: null, spawnError: 'ENOENT' }, '', '')).toMatchObject({ holdUntilCleared: true });
+    // The verdict taken at the init message wins, and such a run has no exit code of its own.
+    expect(claudeOutcome({ ...exited(143), initAbort: 'the developercards MCP server is not loaded' }, initLine(), '')).toMatchObject({
+      outcome: 'failed',
+      exitCode: null,
+      error: 'RUNNER_UNAVAILABLE: the developercards MCP server is not loaded',
+      holdUntilCleared: true,
+    });
+  });
+
+  it('keeps per-item failures and usage limits off the hold', () => {
+    // A timeout before any output never reached a model turn: an ordinary item failure.
+    expect(claudeOutcome({ ...exited(null), timedOut: true }, '', '')).toEqual({
+      outcome: 'failed',
+      exitCode: null,
+      numTurns: null,
+      error: 'timeout',
+      summary: null,
+      runnerUnavailable: false,
+      usageLimit: null,
+    });
+    expect(claudeOutcome({ ...exited(null), timedOut: true }, initLine(), '')).toMatchObject({ error: 'timeout', runnerUnavailable: false });
+    expect(claudeOutcome(exited(0), errorResult(initLine()), '')).not.toHaveProperty('holdUntilCleared');
+    const limited = claudeOutcome(exited(1), [initLine(), JSON.stringify({ type: 'result', is_error: true, result: 'Claude AI usage limit reached|1790003600' })].join('\n'), '');
+    expect(limited).toMatchObject({ runnerUnavailable: true, usageLimit: { resetAt: new Date(1_790_003_600_000).toISOString() } });
+    expect(limited).not.toHaveProperty('holdUntilCleared');
+    expect(claudeOutcome(exited(2), '', 'boom')).not.toHaveProperty('holdUntilCleared');
+  });
+
+  it('judges the init message as it arrives, across chunk boundaries', () => {
+    const watch = initWatch();
+    const line = `${apiKeyInit}\n`;
+    expect(watch(line.slice(0, 40))).toBeNull();
+    expect(watch(line.slice(40))).toBe('claude did not run on the subscription login: apiKeySource /login managed key');
+    // It answers once.
+    expect(watch(`${JSON.stringify({ type: 'assistant' })}\n`)).toBeNull();
+
+    const ok = initWatch();
+    // Other system messages (hook output) and noise may come first; a good init message ends the watch.
+    expect(ok(`noise\n${JSON.stringify({ type: 'system', subtype: 'hook_response' })}\n`)).toBeNull();
+    expect(ok(`${initLine()}\n`)).toBeNull();
+    expect(ok(`${apiKeyInit}\n`)).toBeNull();
+
+    expect(initWatch()(`${JSON.stringify({ type: 'assistant' })}\n`)).toBe('claude did not run on the subscription login: no system/init message');
+    const { apiKeySource: _dropped, ...noSource } = JSON.parse(initLine()) as Record<string, unknown>;
+    expect(initWatch()(`${JSON.stringify(noSource)}\n`)).toBe('claude did not run on the subscription login: no apiKeySource in the system/init message');
+    expect(initWatch()(`${initLine({ mcp_servers: [{ name: 'developercards', status: 'failed' }] })}\n`)).toBe(
+      'the developercards MCP server did not start (failed)',
+    );
+    expect(initWatch()(`${initLine({ mcp_servers: [] })}\n`)).toBe('the developercards MCP server is not loaded');
+    // A server Claude Code is still connecting is not a failure (ai-agent-13).
+    expect(initWatch()(`${initLine({ mcp_servers: [{ name: 'developercards', status: 'pending' }] })}\n`)).toBeNull();
   });
 });

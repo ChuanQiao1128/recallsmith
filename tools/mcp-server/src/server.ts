@@ -47,6 +47,10 @@ function guarded<A>(guard: CredentialGuard, handler: (args: A) => Promise<CallTo
   };
 }
 
+/** The server identity every client sees; the version is part of the gated tool surface (N4): bump it with any change of a tool's behaviour. */
+export const MCP_SERVER_NAME = 'developercards';
+export const MCP_SERVER_VERSION = '1.8.0';
+
 /** The automation run the local runner (tools/author-runner) started this server for, from its per-run MCP config. */
 export interface AutomationRun {
   runId: string | null;
@@ -129,7 +133,7 @@ export function createServer(deps: {
   const guard = credentialGuard(config.tokenFile);
   const sources = new SourceStore();
   const reads = new ReadCache();
-  const server = new McpServer({ name: 'developercards', version: '1.8.0' });
+  const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
 
   /** The remembered document for a cited url, else one fresh read of an https url through the same ingest path. */
   async function ingestedSource(url: string): Promise<IngestedSource | undefined> {
