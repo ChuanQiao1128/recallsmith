@@ -240,6 +240,17 @@ function findPressableByLabel(tree: renderer.ReactTestRenderer, label: string) {
   );
 }
 
+const byTestID = (tree: renderer.ReactTestRenderer, id: string) =>
+  tree.root.findAll((node) => node.props?.testID === id && typeof node.type === 'string');
+
+function textOf(node: any): string {
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  if (node?.props?.children) return textOf(node.props.children);
+  return '';
+}
+
 function hasText(tree: renderer.ReactTestRenderer, text: string): boolean {
   return tree.root.findAll((node) => (node.type as any) === 'Text' && node.props.children === text).length > 0;
 }
@@ -252,7 +263,22 @@ const card = (uid: string, order: number) => ({
   Explanation: `Answer ${uid}`,
 });
 
-const CARDS = [card('c1', 1), card('c2', 2), card('c3', 3), card('c4', 4)];
+// A single-answer MCQ card; 'b' is the correct option.
+const MCQ_CARD = {
+  ...card('m1', 5),
+  Mcq: {
+    v: 1,
+    options: [
+      { key: 'a', why: 'Not this one.', text: 'Option a', correct: false },
+      { key: 'b', why: null, text: 'Option b', correct: true },
+      { key: 'c', why: 'Not this one.', text: 'Option c', correct: false },
+    ],
+    shuffle: true,
+    qualifier: null,
+  },
+};
+
+const CARDS = [card('c1', 1), card('c2', 2), card('c3', 3), card('c4', 4), MCQ_CARD];
 
 // Learned, next review a week out: none of these is due today.
 const LEARNED = (uid: string) => ({
@@ -432,5 +458,59 @@ describe('SessionCardScreen focus run', () => {
     expect(pickNextCard).toHaveBeenCalledWith(expect.objectContaining({ mode: 'mixed' }));
     expect(hasText(tree, 'Question c1')).toBe(false);
     expect(recordReviewEvent).not.toHaveBeenCalled();
+  });
+
+  async function press(tree: renderer.ReactTestRenderer, id: string) {
+    await act(async () => {
+      byTestID(tree, id)[0].props.onPress();
+      await Promise.resolve();
+    });
+    await flush();
+  }
+
+  async function answerMcqCorrectly(tree: renderer.ReactTestRenderer) {
+    await press(tree, 'mcq-show-options');
+    await press(tree, 'mcq-option-b');
+    await press(tree, 'mcq-submit-sure');
+  }
+
+  it('previews a not-due MCQ card in a focus run with the schedule it actually saves (mobile-16)', async () => {
+    const before = LEARNED('m1');
+    const { tree } = await mount(['m1']);
+
+    await answerMcqCorrectly(tree);
+    const line = textOf(byTestID(tree, 'mcq-schedule-line')[0]);
+    expect(line).toBe('Practice · schedule unchanged · back in 7 days');
+    expect(announceMock).toHaveBeenCalledWith('Correct. Practice · schedule unchanged · back in 7 days.');
+
+    await press(tree, 'mcq-next');
+    const saved = vi.mocked(saveDeckProgress).mock.calls.at(-1)![1] as any[];
+    const savedOne = saved.find((row) => row.stableUid === 'm1');
+    expect(savedOne.stage).toBe(before.stage);
+    expect(savedOne.nextReviewAt).toBe(before.nextReviewAt);
+    // The previewed gap is the gap to the saved nextReviewAt.
+    expect(Math.round((savedOne.nextReviewAt - FIXED_NOW_MS) / DAY_MS)).toBe(7);
+  });
+
+  it('marks a focus-practice rating as focus_practice on the review event, and a due card as a real review (mobile-18)', async () => {
+    vi.mocked(loadDeckProgress).mockResolvedValue([
+      ...CARDS.map((c) => LEARNED(c.StableUid)).filter((row) => row.stableUid !== 'c2'),
+      { ...LEARNED('c2'), nextReviewAt: FIXED_NOW_MS - 1 },
+    ] as any);
+    const { tree } = await mount(['c1', 'c2']);
+
+    await rateGood(tree);
+    await rateGood(tree);
+
+    const events = vi.mocked(recordReviewEvent).mock.calls.map(([event]) => event);
+    expect(events.map((event) => event.stableUid)).toEqual(['c1', 'c2']);
+    // c1 is not due: practice, schedule unchanged.
+    expect(events[0].reviewStage).toBe('focus_practice');
+    expect(events[0].progressAfter.stage).toBe(3);
+    expect(events[0].progressAfter.nextReviewAt).toBe(FIXED_NOW_MS + 7 * DAY_MS);
+    expect(events[0].progressAfter.lastReviewedAt).toBe(FIXED_NOW_MS);
+    // c2 is due: a scheduled review like any other.
+    expect(events[1].reviewStage).toBe('repeat_review');
+    expect(events[1].progressAfter.stage).toBe(4);
   });
 });

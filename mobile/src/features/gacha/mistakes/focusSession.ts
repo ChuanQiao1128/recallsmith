@@ -65,6 +65,15 @@ export function pickFocusCard(params: {
 }
 
 /**
+ * A focus-run rating that is practice, not a scheduled review: a Hard, Good or Easy on a card that
+ * is not due yet. scheduleFocusReview leaves its schedule alone, and the review event says
+ * 'focus_practice' so analytics can tell it from a real review.
+ */
+export function isFocusPractice(p: CardProgress, rating: ReviewRating, now: Date): boolean {
+  return rating !== 'again' && !isDue(p, now);
+}
+
+/**
  * The schedule a focus-run rating leaves behind. A focus run deals cards whether or not they are
  * due, so only a due card, or an Again, goes through the scheduler. A Hard, Good or Easy on a card
  * that is not due yet is practice: stage, nextReviewAt, lapses and hardStreak stay as they were,
@@ -72,6 +81,6 @@ export function pickFocusCard(params: {
  * The Mistake Book still records the rating either way.
  */
 export function scheduleFocusReview(p: CardProgress, rating: ReviewRating, now: Date): CardProgress {
-  if (rating === 'again' || isDue(p, now)) return scheduleNextReview(p, rating, now);
+  if (!isFocusPractice(p, rating, now)) return scheduleNextReview(p, rating, now);
   return { ...p, lastReviewedAt: now.getTime() };
 }
