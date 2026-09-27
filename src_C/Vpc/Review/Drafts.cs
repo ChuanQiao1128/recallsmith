@@ -480,7 +480,7 @@ public static class Drafts
 
       DraftCard? edited = null;
       if (body.TryGetProperty("card", out var cardEl) && cardEl.ValueKind != JsonValueKind.Null) edited = DraftCard.Parse(cardEl);
-      var reviewMs = ParseReviewMs(body);
+      var (reviewMs, rawReviewMs) = ParseReviewMs(body);
 
       var deckId = await DraftDeckIdAsync(conn, id.Value);
       if (deckId is null) return DraftNotFound(res);
@@ -553,7 +553,8 @@ public static class Drafts
       await AutomationLedger.RecordAsync(conn, new AutomationEvent(
         Automation: "ai_draft_review", Units: 1, Outcome: "success",
         ActualMinutes: reviewMs is null ? null : reviewMs.Value / 60000m,
-        DeckId: deckId.Value, Ref: id.Value.ToString(CultureInfo.InvariantCulture), DedupeKey: $"draft-accept:{id.Value}"));
+        DeckId: deckId.Value, Ref: id.Value.ToString(CultureInfo.InvariantCulture), DedupeKey: $"draft-accept:{id.Value}",
+        Details: ReviewTimeDetails(reviewMs, rawReviewMs)));
 
       return res.Ok(new { draftId = id.Value, cardId, stableUid, action });
     }
@@ -597,7 +598,7 @@ public static class Drafts
       }
       var reason = reasonEl.GetString()!;
       var note = ParseNote(body);
-      var reviewMs = ParseReviewMs(body);
+      var (reviewMs, rawReviewMs) = ParseReviewMs(body);
 
       var deckId = await DraftDeckIdAsync(conn, id.Value);
       if (deckId is null) return DraftNotFound(res);
@@ -636,7 +637,7 @@ public static class Drafts
         Automation: "ai_draft_review", Units: 0, Outcome: "success",
         ActualMinutes: reviewMs is null ? null : reviewMs.Value / 60000m,
         DeckId: deckId.Value, Ref: id.Value.ToString(CultureInfo.InvariantCulture), DedupeKey: $"draft-reject:{id.Value}",
-        Details: new { reason, defect = DefectReasons.Contains(reason) }));
+        Details: new { reason, defect = DefectReasons.Contains(reason), reviewTimeMeasured = reviewMs is not null, rawReviewMs = rawReviewMs != reviewMs ? rawReviewMs : null }));
 
       return res.Ok(new { draftId = id.Value, action = "rejected" });
     }
@@ -658,12 +659,28 @@ public static class Drafts
     return Validation.ParseJsonBody(req);
   }
 
-  private static int? ParseReviewMs(JsonElement body)
+  /// <summary>
+  /// The per-draft cap on the human review time the ledger charges (automation-13): the console measures
+  /// at most this much (draftReview.ts REVIEW_MS_CAP) and the ledger page says so, and a caller of the API
+  /// must not be able to erase or inflate ai_draft_review savings with an absurd value.
+  /// </summary>
+  public const int ReviewMsCap = 30 * 60_000;
+
+  /// <summary>
+  /// The optional <c>reviewMs</c>: absent/null → (null, null); an integer in 0..2147483647 → (the value
+  /// clamped to <see cref="ReviewMsCap"/>, the raw value). Anything else is a validation error. Only the
+  /// clamped value is stored in ai_review_events and charged to the ledger.
+  /// </summary>
+  private static (int? Clamped, int? Raw) ParseReviewMs(JsonElement body)
   {
-    if (!body.TryGetProperty("reviewMs", out var el) || el.ValueKind == JsonValueKind.Null) return null;
-    if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var ms) && ms >= 0) return ms;
+    if (!body.TryGetProperty("reviewMs", out var el) || el.ValueKind == JsonValueKind.Null) return (null, null);
+    if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var ms) && ms >= 0) return (Math.Min(ms, ReviewMsCap), ms);
     throw new ValidationError("reviewMs must be an integer in 0..2147483647", "reviewMs");
   }
+
+  /// <summary>Ledger details of an accept: whether review time was measured, and the raw value when it was clamped.</summary>
+  private static object ReviewTimeDetails(int? reviewMs, int? rawReviewMs) =>
+    new { reviewTimeMeasured = reviewMs is not null, rawReviewMs = rawReviewMs != reviewMs ? rawReviewMs : null };
 
   private static string? ParseNote(JsonElement body)
   {

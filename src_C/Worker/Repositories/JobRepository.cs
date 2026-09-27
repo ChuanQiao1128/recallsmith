@@ -69,6 +69,11 @@ public class JobRepository : IJobRepository
 
   /// <summary>
   /// Step 5: 标记任务成功
+  /// In the same transaction as the SUCCESS transition, stages the <c>deck.published</c> delivery rows
+  /// (the outbox, automation-1): a crash after the commit leaves rows that the replay or the sweep sends,
+  /// never a finished publish without its event. The processor sends them after this returns
+  /// (<see cref="WebhookEvents.SendStagedAsync"/>). A job that is not PROCESSING changes nothing and
+  /// stages nothing.
   /// </summary>
   public async Task CompleteJobAsync(string jobId, int? exportedCardCount = null)
   {
@@ -82,32 +87,59 @@ public class JobRepository : IJobRepository
         update deck_publishes
         set status = 'SUCCESS', error_message = null, updated_at = now()
         where job_id = $1 and status = 'PROCESSING'
-        returning deck_id, build_id
+        returning deck_id, deck_slug, build_id
+      ), live as (
+        update decks d
+        set live_build_id = done.build_id,
+            total_cards = coalesce($2::int, d.total_cards)
+        from done
+        where d.id = done.deck_id
       )
-      update decks d
-      set live_build_id = done.build_id,
-          total_cards = coalesce($2::int, d.total_cards)
-      from done
-      where d.id = done.deck_id
+      select deck_id as "deckId", deck_slug as "deckSlug", build_id as "buildId" from done
       """;
 
+    await using var tx = await conn.BeginTransactionAsync();
+    List<Dictionary<string, object?>> done;
+    await tx.SaveAsync("complete");
     try
     {
-      await DbUtil.ExecuteAsync(conn, null, sql, [jobId, exportedCardCount]);
+      done = await DbUtil.QueryAsync(conn, tx, sql, [jobId, exportedCardCount]);
     }
     catch (PostgresException pg) when (pg.SqlState == "42703")
     {
       // Pre-021 window (code shipped, console Migrate not yet clicked): no live_build_id column.
+      await tx.RollbackAsync("complete");
       const string legacySql = """
         UPDATE deck_publishes
         SET status = 'SUCCESS',
             error_message = NULL,
             updated_at = now()
         WHERE job_id = $1 AND status = 'PROCESSING'
+        RETURNING deck_id as "deckId", deck_slug as "deckSlug", build_id as "buildId"
         """;
-      await DbUtil.ExecuteAsync(conn, null, legacySql, [jobId]);
+      done = await DbUtil.QueryAsync(conn, tx, legacySql, [jobId]);
     }
+
+    if (done.Count > 0)
+    {
+      var row = done[0];
+      var now = DateTimeOffset.UtcNow;
+      await WebhookEvents.StageAsync(conn, tx, "deck.published", PublishedEventId(jobId), now, new
+      {
+        deckId = Convert.ToInt64(row["deckId"]),
+        deckSlug = Convert.ToString(row["deckSlug"]) ?? string.Empty,
+        buildId = Convert.ToString(row["buildId"]) ?? string.Empty,
+        jobId,
+        cardCount = exportedCardCount,
+        publishedAt = WebhookEvents.FormatTimestamp(now),
+      });
+    }
+
+    await tx.CommitAsync();
   }
+
+  /// <summary>The <c>deck.published</c> event id of a publish job: one event per job, whoever emits it.</summary>
+  public static Guid PublishedEventId(string jobId) => WebhookEvents.DerivedEventId($"deck.published:{jobId}");
 
   /// <summary>
   /// 路线 A: 标记任务失败

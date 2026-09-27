@@ -451,6 +451,32 @@ public class AutomationLedgerTests
   }
 
   [Fact]
+  public async Task Ledger_SeriesAddsUpToTotals_AcrossPeriods()
+  {
+    // backend-design-17 / automation-14: the totals and the series clamp at the same grain, so the bars
+    // always add up to the headline. 2013-03-04 and 2013-03-11 are Mondays of two weeks in one month.
+    var baseline = Automation(await LedgerAsync("2013-01-01", "2013-12-31"), "ai_draft_review").GetProperty("baselineMinutesPerUnit").GetDecimal();
+    await RecordAsync(new AutomationEvent("ai_draft_review", 1, "success", ActualMinutes: 0m, OccurredAt: At(2013, 3, 5)));
+    await RecordAsync(new AutomationEvent("ai_draft_review", 0, "success", ActualMinutes: baseline + 8m, OccurredAt: At(2013, 3, 12)));
+
+    foreach (var granularity in new[] { "day", "week", "month" })
+    {
+      var data = await LedgerAsync("2013-01-01", "2013-12-31", granularity);
+      var seriesSum = data.GetProperty("series").EnumerateArray().Sum(s => s.GetProperty("minutesSaved").GetDecimal());
+      Assert.Equal(data.GetProperty("totals").GetProperty("minutesSaved").GetDecimal(), seriesSum);
+      Assert.Equal(Automation(data, "ai_draft_review").GetProperty("minutesSaved").GetDecimal(), seriesSum);
+      Assert.Equal(data.GetProperty("totals").GetProperty("bySource").GetProperty("live").GetProperty("minutesSaved").GetDecimal(), seriesSum);
+    }
+
+    // Weekly: week 1 saves the baseline, week 2 nets negative and shows 0 in both the bar and the headline.
+    var weekly = await LedgerAsync("2013-01-01", "2013-12-31", "week");
+    Assert.Equal(baseline, weekly.GetProperty("totals").GetProperty("minutesSaved").GetDecimal());
+    // Monthly: both rows fall in one period, whose net is negative.
+    var monthly = await LedgerAsync("2013-01-01", "2013-12-31", "month");
+    Assert.Equal(0m, monthly.GetProperty("totals").GetProperty("minutesSaved").GetDecimal());
+  }
+
+  [Fact]
   public async Task Ledger_ReportsAgentDraftQuality()
   {
     // automation-4: acceptance rate, edited-accept rate, the agent's defect rate and review time.
@@ -479,7 +505,7 @@ public class AutomationLedgerTests
 
     var agent = (await LedgerAsync("2008-01-01", "2008-12-31")).GetProperty("agentDrafts");
     Assert.Equal(
-      new[] { "decided", "accepted", "editedAccepted", "rejected", "defectRejects", "acceptanceRate", "editedAcceptRate", "defectRate", "avgReviewMinutes" },
+      new[] { "decided", "accepted", "editedAccepted", "rejected", "defectRejects", "acceptanceRate", "editedAcceptRate", "defectRate", "avgReviewMinutes", "reviewNotMeasured" },
       agent.EnumerateObject().Select(p => p.Name).ToArray());
     Assert.Equal(4, agent.GetProperty("decided").GetInt64());
     Assert.Equal(2, agent.GetProperty("accepted").GetInt64());
@@ -490,6 +516,8 @@ public class AutomationLedgerTests
     Assert.Equal(0.5m, agent.GetProperty("editedAcceptRate").GetDecimal());
     Assert.Equal(0.25m, agent.GetProperty("defectRate").GetDecimal());
     Assert.Equal(2m, agent.GetProperty("avgReviewMinutes").GetDecimal());
+    // automation-13: the reject sent without reviewMs is reported as not measured.
+    Assert.Equal(1, agent.GetProperty("reviewNotMeasured").GetInt64());
 
     // An empty period answers zeros and a null average.
     var empty = (await LedgerAsync("1990-01-01", "1990-12-31")).GetProperty("agentDrafts");
