@@ -61,3 +61,8 @@ output "webhook_dispatcher_role_arn" {
   value      = aws_iam_role.webhook_dispatcher.arn
   depends_on = [aws_iam_role_policy.webhook_dispatcher] # the ESM create needs the consume grant first (Context "ESM ordering")
 }
+
+output "ai_qa_role_arn" {
+  value      = aws_iam_role.ai_qa.arn
+  depends_on = [aws_iam_role_policy.ai_qa] # the ESM create needs the consume grant first
+}

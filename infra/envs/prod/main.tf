@@ -56,7 +56,12 @@ module "identity" {
   webhook_queue_name               = "developercards-webhook-events"
   webhook_dispatcher_function_name = "developercards-webhook-dispatcher"
 
-  secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development", "webhook-signing-secret"]
+  ai_qa_queue_name             = "developercards-ai-qa-jobs"
+  ai_qa_function_name          = "developercards-ai-qa"
+  bedrock_inference_profile_id = "global.anthropic.claude-opus-5"
+  bedrock_foundation_model_id  = "anthropic.claude-opus-5"
+
+  secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development", "webhook-signing-secret", "anthropic-api-key"]
 
   console_hostname = "console.${var.domain}"
 }
@@ -145,6 +150,27 @@ module "worker" {
     WEBHOOK_HTTP_TIMEOUT_SECONDS = "10"
     LOG_LEVEL                    = "info"
   }
+
+  ai_qa_queue_name    = "developercards-ai-qa-jobs"
+  ai_qa_dlq_name      = "developercards-ai-qa-jobs-dlq"
+  ai_qa_function_name = "developercards-ai-qa"
+  ai_qa_role_arn      = module.identity.ai_qa_role_arn
+  # Create-time only; equals services/ai-qa/env/prod.env.json (R18-00 §7.5). Kill switch off; the deploy script owns it afterwards.
+  ai_qa_environment = {
+    AI_PROVIDER                = "bedrock"
+    AI_MODEL                   = "anthropic.claude-opus-5"
+    AI_BEDROCK_REGION          = "ap-southeast-2"
+    AI_EFFORT                  = "high"
+    AI_STRUCTURED_OUTPUTS      = "auto"
+    AI_QA_ENABLED              = "0"
+    ANTHROPIC_API_KEY_SSM_NAME = "/developercards/prod/anthropic-api-key"
+    INTERNAL_SECRET_SSM_NAME   = "/developercards/prod/internal-shared-secret"
+    CORE_API_BASE              = "https://api.developercards.app"
+    METRICS_NAMESPACE          = "DeveloperCards"
+    AI_PRICE_INPUT_PER_MTOK    = "5"
+    AI_PRICE_OUTPUT_PER_MTOK   = "25"
+    LOG_LEVEL                  = "info"
+  }
 }
 
 module "observability" {
@@ -168,4 +194,7 @@ module "observability" {
 
   webhook_dlq_name                 = module.worker.webhook_dlq_name
   webhook_dispatcher_function_name = module.worker.webhook_dispatcher_function_name
+
+  ai_qa_dlq_name      = module.worker.ai_qa_dlq_name
+  ai_qa_function_name = module.worker.ai_qa_function_name
 }

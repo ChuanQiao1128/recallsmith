@@ -84,3 +84,19 @@ variable "webhook_queue_name" {
 variable "webhook_dispatcher_function_name" {
   type = string
 } # prod "developercards-webhook-dispatcher"
+
+variable "ai_qa_queue_name" {
+  type = string
+} # prod "developercards-ai-qa-jobs"
+
+variable "ai_qa_function_name" {
+  type = string
+} # prod "developercards-ai-qa"
+
+variable "bedrock_inference_profile_id" {
+  type = string
+} # prod "global.anthropic.claude-opus-5"
+
+variable "bedrock_foundation_model_id" {
+  type = string
+} # prod "anthropic.claude-opus-5"

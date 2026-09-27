@@ -50,3 +50,23 @@ variable "webhook_dispatcher_role_arn" {
 variable "webhook_dispatcher_environment" {
   type = map(string)
 }
+
+variable "ai_qa_queue_name" {
+  type = string
+}
+
+variable "ai_qa_dlq_name" {
+  type = string
+}
+
+variable "ai_qa_function_name" {
+  type = string
+}
+
+variable "ai_qa_role_arn" {
+  type = string
+}
+
+variable "ai_qa_environment" {
+  type = map(string)
+}

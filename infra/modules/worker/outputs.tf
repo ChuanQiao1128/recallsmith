@@ -41,3 +41,19 @@ output "webhook_dlq_name" {
 output "webhook_dispatcher_function_name" {
   value = aws_lambda_function.webhook_dispatcher.function_name
 }
+
+output "ai_qa_queue_arn" {
+  value = aws_sqs_queue.ai_qa_jobs.arn
+}
+
+output "ai_qa_queue_url" {
+  value = aws_sqs_queue.ai_qa_jobs.url
+}
+
+output "ai_qa_dlq_name" {
+  value = aws_sqs_queue.ai_qa_jobs_dlq.name
+}
+
+output "ai_qa_function_name" {
+  value = aws_lambda_function.ai_qa.function_name
+}

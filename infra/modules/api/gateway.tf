@@ -41,6 +41,8 @@ locals {
     options_billing       = { route_key = "OPTIONS /api/v1/billing/{proxy+}", integration = "core_vpc", auth = "none" }
     # R18 J05: server-to-server HMAC route (no JWT, no OPTIONS); the narrow key wins over proxy.
     internal_webhooks = { route_key = "POST /api/internal/webhooks/{proxy+}", integration = "core_vpc", auth = "none" }
+    # R18 J15: HMAC callback from the ai-qa Lambda (no JWT, no OPTIONS).
+    internal_ai_qa = { route_key = "POST /api/internal/ai-qa/{proxy+}", integration = "core_vpc", auth = "none" }
   }
 
   integration_ids = {
@@ -60,6 +62,7 @@ locals {
     "POST /webhooks/revenuecat/production"  = { burst = 20, rate = 10 }
     "POST /webhooks/revenuecat/development" = { burst = 10, rate = 5 }
     "POST /api/internal/webhooks/{proxy+}"  = { burst = 20, rate = 10 }
+    "POST /api/internal/ai-qa/{proxy+}"     = { burst = 20, rate = 10 }
   }
 }
 

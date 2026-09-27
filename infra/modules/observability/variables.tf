@@ -55,3 +55,7 @@ variable "metrics_namespace" {
 variable "webhook_dlq_name" { type = string }
 
 variable "webhook_dispatcher_function_name" { type = string }
+
+variable "ai_qa_dlq_name" { type = string }
+
+variable "ai_qa_function_name" { type = string }
