@@ -13,6 +13,7 @@ import {
   isValidStableUid,
 } from '../lib/cardRules';
 import { checkMcqForm } from '../lib/mcqFormCheck';
+import { isValidSourceUrl, SOURCE_QUOTE_MAX_LENGTH } from '../lib/sourceRules';
 import { highlightSnippet, mapToHlLanguage } from '../lib/highlightSnippet';
 
 // The highlight.js theme stays here so it rides the lazy CardForm chunk; the
@@ -30,6 +31,9 @@ export interface CardFormValues {
   orderInDeck: number;
   revision: number;
   topic: string;
+  /** Optional so callers that predate the source fields still type-check; blank means no source. */
+  sourceUrl?: string;
+  sourceQuote?: string;
 }
 
 interface CardFormProps {
@@ -333,6 +337,26 @@ export function CardForm(props: CardFormProps) {
       return;
     }
 
+    // The source checks mirror lib/sourceRules.ts, the same rules the importer
+    // and the server apply, so a refused source never reaches the network.
+    const trimmedSourceUrl = (values.sourceUrl ?? '').trim();
+    const trimmedSourceQuote = (values.sourceQuote ?? '').trim();
+    if (trimmedSourceUrl !== '' && !isValidSourceUrl(trimmedSourceUrl)) {
+      setState(prev => ({
+        ...prev,
+        error: 'Source URL must start with https:// and contain no spaces (max 2048 characters).',
+      }));
+      return;
+    }
+    if (trimmedSourceUrl === '' && trimmedSourceQuote !== '') {
+      setState(prev => ({ ...prev, error: 'Add a Source URL for the source quote, or clear the quote.' }));
+      return;
+    }
+    if (trimmedSourceQuote.length > SOURCE_QUOTE_MAX_LENGTH) {
+      setState(prev => ({ ...prev, error: 'Source quote is too long (max 1000 characters).' }));
+      return;
+    }
+
     // The MCQ blocking gate. A blocking issue is one the server's PUT would
     // refuse against the edited stem/explanation/difficulty, so submitting would
     // fail with a server code; refuse here instead. Advisory issues never block.
@@ -501,6 +525,37 @@ export function CardForm(props: CardFormProps) {
         />
         <p className="mt-1 text-xs text-slate-500">
           Optional. Groups cards in the app; up to 80 characters. Clear it to remove the topic.
+        </p>
+      </div>
+
+      {/* Source */}
+      <div className="space-y-3">
+        <div>
+          <label htmlFor="sourceUrl" className="block text-sm font-medium text-slate-700 mb-1">Source URL</label>
+          <input
+            type="text"
+            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            id="sourceUrl"
+            inputMode="url"
+            autoComplete="off"
+            value={values.sourceUrl ?? ''}
+            onChange={e => handleChange('sourceUrl', e.target.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="sourceQuote" className="block text-sm font-medium text-slate-700 mb-1">Source quote</label>
+          <textarea
+            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            id="sourceQuote"
+            rows={3}
+            value={values.sourceQuote ?? ''}
+            onChange={e => handleChange('sourceQuote', e.target.value)}
+          />
+        </div>
+        <p className="text-xs text-slate-500">
+          Optional. The https page that supports the answer and the passage copied from it word for word (up to 1000 characters). Clear both to remove the source.
         </p>
       </div>
 
