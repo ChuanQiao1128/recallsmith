@@ -32,25 +32,42 @@ export const WEBHOOK_SIGNATURE_TEST_VECTOR = {
   signature: 'c36d984357900ab4a8e0a6e211f9a7deb1cc72361f27cf4075e9d6f666c661ef',
 } as const;
 
-/** A receiver-side check an integrator can paste. The secret comes from the environment. */
+/**
+ * Sent next to X-DeveloperCards-Signature while the signing secret is being
+ * rotated: the same HMAC under the previous secret. A receiver must accept a
+ * match on either header, or it rejects deliveries during rotation (automation-6).
+ */
+export const WEBHOOK_PREVIOUS_SIGNATURE_HEADER = 'X-DeveloperCards-Signature-Previous';
+
+/**
+ * A receiver-side check an integrator can paste. The secret comes from the
+ * environment. It accepts the primary or the rotation header (automation-6),
+ * checks each is 64 lowercase hex characters, and compares the decoded 32-byte
+ * digests in constant time.
+ */
 export const WEBHOOK_VERIFY_SNIPPET = `import { createHmac, timingSafeEqual } from 'node:crypto';
+
+const HEX_SHA256 = /^[0-9a-f]{64}$/;
 
 // rawBody: the exact request body string, before any JSON parsing.
 // headers: the incoming request headers (lowercased names).
 export function verifyDeveloperCardsWebhook(rawBody, headers) {
   const secret = process.env.DC_WEBHOOK_SECRET;
   const timestamp = headers['x-developercards-timestamp'];
-  const signature = headers['x-developercards-signature'];
-  if (!secret || !timestamp || !signature) return false;
+  // During a secret rotation the previous secret's signature arrives here too;
+  // accept a match on either header.
+  const signatures = [headers['x-developercards-signature'], headers['x-developercards-signature-previous']];
+  if (!secret || !timestamp) return false;
 
   // Timestamps are in seconds; reject anything older or newer than 300 s.
   const now = Math.floor(Date.now() / 1000);
   if (!Number.isFinite(Number(timestamp)) || Math.abs(now - Number(timestamp)) > 300) return false;
 
-  const expected = createHmac('sha256', secret).update(\`\${timestamp}.\${rawBody}\`).digest('hex');
-  const a = Buffer.from(expected, 'utf8');
-  const b = Buffer.from(String(signature), 'utf8');
-  return a.length === b.length && timingSafeEqual(a, b);
+  const expected = createHmac('sha256', secret).update(\`\${timestamp}.\${rawBody}\`).digest();
+  return signatures.some(signature => {
+    if (typeof signature !== 'string' || !HEX_SHA256.test(signature)) return false;
+    return timingSafeEqual(expected, Buffer.from(signature, 'hex'));
+  });
 }
 
 // A delivery can arrive more than once: deduplicate on the body's eventId.
@@ -137,7 +154,24 @@ export function webhookFormProblems(input: { name: string; url: string; events: 
   return problems;
 }
 
-/** A delivery still in the queue cannot be redelivered; a settled one can. */
-export function isRedeliverable(status: string): boolean {
+/** How long a never-sent 'queued' row must sit before the console calls it stranded (the server's SweepStuckAfter). */
+export const WEBHOOK_STRANDED_AFTER_MS = 10 * 60_000;
+
+/**
+ * A delivery still in the queue cannot be redelivered; a settled one can. A
+ * 'queued' row that was never handed to the queue (the list reports
+ * `enqueuedAt: null`) and has sat for WEBHOOK_STRANDED_AFTER_MS is stranded,
+ * not in flight, so it can be redelivered too (automation-1). A row whose
+ * `enqueuedAt` the server did not report is treated as in flight.
+ */
+export function isRedeliverable(
+  status: string,
+  row?: { enqueuedAt?: string | null; updatedAt?: string },
+  now: number = Date.now(),
+): boolean {
+  if (status === 'queued' && row && row.enqueuedAt === null && row.updatedAt) {
+    const since = Date.parse(row.updatedAt);
+    return Number.isFinite(since) && now - since >= WEBHOOK_STRANDED_AFTER_MS;
+  }
   return status !== 'queued' && status !== 'retrying';
 }

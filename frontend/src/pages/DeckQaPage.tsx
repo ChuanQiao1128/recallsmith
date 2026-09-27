@@ -34,6 +34,8 @@ import {
   INPUT_CLASS,
 } from '../components/console/consoleStyles';
 import { CONSOLE_NAME } from '../lib/brand';
+import { reviewClockMs, setReviewClockVisible, startReviewClock } from '../lib/draftReview';
+import type { ReviewClock } from '../lib/draftReview';
 import { parseDeckId } from '../lib/parseDeckId';
 import { qaPageHref } from '../lib/qaGate';
 import {
@@ -77,6 +79,13 @@ type RunsState = {
 };
 type DetailState = { forRunId: string | null; error: LoadError | null; detail: QaRunDetail | null };
 type PollState = { forKey: string | null; stopped: boolean };
+/**
+ * The run scope and the "Selected cards" ids belong to the deck they were
+ * chosen on (frontend-console-24): the page stays mounted when only ?deckId
+ * changes, and deck A's ids must never be priced or sent for deck B.
+ */
+type ScopeState = { forDeckId: number | null; scope: QaScope; ids: ReadonlySet<number> };
+const NO_CARDS: ReadonlySet<number> = new Set();
 /** A visible note under Findings; results are also written to the page's live region. */
 type ResolveMessage = { tone: 'info' | 'alert'; text: string };
 
@@ -133,6 +142,20 @@ function runFinishedAnnouncement(run: QaRun): string {
   return `Run ended with status ${run.effectiveStatus}.`;
 }
 
+function pageIsVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden';
+}
+
+/** A triage clock started now (automation-16). */
+function freshTriageClock(): ReviewClock {
+  return startReviewClock(Date.now(), pageIsVisible());
+}
+
+/** The visible triage time on `clock` so far, capped at REVIEW_MS_CAP. */
+function triageMsSoFar(clock: ReviewClock): number {
+  return reviewClockMs(clock, Date.now());
+}
+
 function cardEditHref(deckId: number, cardId: number): string {
   return `/decks/cards/edit?deckId=${deckId}&cardId=${cardId}`;
 }
@@ -161,9 +184,14 @@ export function DeckQaPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [detailState, setDetailState] = useState<DetailState>({ forRunId: null, error: null, detail: null });
   const [poll, setPoll] = useState<PollState>({ forKey: null, stopped: false });
+  // The watched run that just finished with no blocker (automation-17): the page
+  // says the deck can be published again, so the author need not keep polling.
+  const [finishedClean, setFinishedClean] = useState<string | null>(null);
 
-  const [scope, setScope] = useState<QaScope>('changed');
-  const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set());
+  const [scopeState, setScopeState] = useState<ScopeState>({ forDeckId: null, scope: 'changed', ids: NO_CARDS });
+  const scopeForDeck = scopeState.forDeckId === deckId;
+  const scope: QaScope = scopeForDeck ? scopeState.scope : 'changed';
+  const selected = scopeForDeck ? scopeState.ids : NO_CARDS;
   const [starting, setStarting] = useState(false);
   const startingRef = useRef(false);
   const [startError, setStartError] = useState<LoadError | null>(null);
@@ -175,6 +203,10 @@ export function DeckQaPage() {
   // The page's one persistent live region: a region mounted together with its
   // text is not announced, so results are written into this one.
   const [announcement, setAnnouncement] = useState('');
+  // Triage time for the next resolution (automation-16): visible time since the
+  // shown run's findings appeared or since the previous resolution, so time spent
+  // on a run is split across its findings rather than counted once per finding.
+  const triageClockRef = useRef<ReviewClock>(startReviewClock(0, false));
 
   // No deck: the picker's list.
   useEffect(() => {
@@ -306,6 +338,7 @@ export function DeckQaPage() {
       if (sawActive) {
         // The run just turned terminal: say so, and refresh the gate and the list once.
         setAnnouncement(runFinishedAnnouncement(detail.run));
+        if (detail.run.effectiveStatus === 'done' && detail.run.blockerCount === 0) setFinishedClean(runId);
         setStatusNonce(n => n + 1);
         setRunsNonce(n => n + 1);
       }
@@ -317,6 +350,18 @@ export function DeckQaPage() {
       if (timer !== null) clearTimeout(timer);
     };
   }, [shownRunId, pollKey]);
+
+  useEffect(() => {
+    triageClockRef.current = freshTriageClock();
+  }, [shownRunId]);
+
+  useEffect(() => {
+    function onVisibilityChange() {
+      triageClockRef.current = setReviewClockVisible(triageClockRef.current, pageIsVisible(), Date.now());
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
 
   const deck = deckState.forDeckId === deckId ? deckState.deck : null;
   const deckError = deckState.forDeckId === deckId ? deckState.error : null;
@@ -331,6 +376,9 @@ export function DeckQaPage() {
   const detailError = detailState.forRunId === shownRunId ? detailState.error : null;
   const shownRun = detail?.run ?? null;
   const shownRunActive = shownRun ? isQaRunActive(shownRun) : false;
+  // Shown once the refreshed gate agrees nothing blocks the publish.
+  const showFinishedClean =
+    finishedClean !== null && finishedClean === shownRunId && status !== null && !status.wouldBlock;
   const pollStopped = poll.forKey !== null && poll.forKey === pollKey && poll.stopped;
 
   const groups = useMemo(
@@ -347,8 +395,8 @@ export function DeckQaPage() {
 
   const cardCount =
     scope === 'changed' ? (status ? qaCardsToReview(status) : 0) : scope === 'all' ? cards.length : selected.size;
-  const estimate = estimateQaCostUsd(cardCount);
   const limits = qaLimits(status);
+  const estimate = estimateQaCostUsd(cardCount, limits.estUsdPerCard);
   const capRemaining = qaCapRemainingUsd(limits);
   const startDisabled =
     !status?.enabled || cardCount === 0 || cardCount > limits.maxCards || starting || shownRunActive;
@@ -359,12 +407,18 @@ export function DeckQaPage() {
     setSearchParams({ deckId: String(deckId), runId });
   }
 
+  function chooseScope(next: QaScope) {
+    setScopeState(prev =>
+      prev.forDeckId === deckId ? { ...prev, scope: next } : { forDeckId: deckId, scope: next, ids: NO_CARDS },
+    );
+  }
+
   function toggleCard(cardId: number) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(cardId)) next.delete(cardId);
-      else next.add(cardId);
-      return next;
+    setScopeState(prev => {
+      const ids = new Set(prev.forDeckId === deckId ? prev.ids : NO_CARDS);
+      if (ids.has(cardId)) ids.delete(cardId);
+      else ids.add(cardId);
+      return { forDeckId: deckId, scope: prev.forDeckId === deckId ? prev.scope : 'cards', ids };
     });
   }
 
@@ -384,6 +438,9 @@ export function DeckQaPage() {
     } else {
       const error = toLoadError(res.error, 'Failed to start AI QA.');
       setStartError(error);
+      // The refusal is computed from spend the page may not have seen yet:
+      // reload the limits so the cap line and the warning catch up.
+      if (error.code === 'AI_QA_DAILY_CAP') setStatusNonce(n => n + 1);
       if (error.code === 'AI_QA_RUN_IN_PROGRESS') {
         const list = await listQaRuns({ deckId, limit: RUNS_PAGE_SIZE });
         if (list.success && list.data) {
@@ -449,10 +506,12 @@ export function DeckQaPage() {
     setResolving(new Set(resolvingRef.current));
     setResolveMessage(null);
     const note = (notes[id] ?? '').trim();
-    const res = await resolveQaFinding(id, note ? { resolution, note } : { resolution });
+    const reviewMs = triageMsSoFar(triageClockRef.current);
+    const res = await resolveQaFinding(id, note ? { resolution, note, reviewMs } : { resolution, reviewMs });
     resolvingRef.current.delete(id);
     setResolving(new Set(resolvingRef.current));
     if (res.success) {
+      triageClockRef.current = freshTriageClock();
       setNotes(prev => {
         const next = { ...prev };
         delete next[id];
@@ -486,9 +545,9 @@ export function DeckQaPage() {
       <div>
         <h1 className={H1_CLASS}>AI QA</h1>
         {deck ? (
-          <div className="text-xs text-slate-500 mt-0.5">
+          <div className="text-xs text-slate-600 mt-0.5">
             {deck.title} · <span className="font-mono">{deck.slug}</span> ·{' '}
-            <Link to={`/decks/cards?deckId=${deck.id}`} className="text-indigo-600 hover:underline">
+            <Link to={`/decks/cards?deckId=${deck.id}`} className="text-indigo-600 underline">
               Cards
             </Link>
           </div>
@@ -633,7 +692,7 @@ export function DeckQaPage() {
                     name="qa-scope"
                     value={option.value}
                     checked={scope === option.value}
-                    onChange={() => setScope(option.value)}
+                    onChange={() => chooseScope(option.value)}
                   />
                   {option.label}
                 </label>
@@ -734,6 +793,16 @@ export function DeckQaPage() {
                   <Button variant="outline" size="xs" onClick={() => setDetailNonce(n => n + 1)}>
                     Refresh progress
                   </Button>
+                </Callout>
+              </div>
+            ) : null}
+            {showFinishedClean ? (
+              <div className="mt-2" data-testid="qa-run-finished-clean">
+                <Callout tone="success" title="The review finished with no blockers">
+                  AI QA no longer blocks publishing this deck.{' '}
+                  <Link to="/" className="underline">
+                    Publish now from the deck list
+                  </Link>
                 </Callout>
               </div>
             ) : null}

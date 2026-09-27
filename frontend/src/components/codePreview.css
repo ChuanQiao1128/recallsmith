@@ -1,0 +1,13 @@
+/* src/components/codePreview.css
+ *
+ * The card form's code preview uses highlight.js's atom-one-dark theme, whose
+ * comment colour (#5c6370 on #282c34, about 2.4:1) fails WCAG 1.4.3. The empty
+ * preview is a comment ("// No code snippet."), so every card and draft form
+ * showed it. Raised to #9ca3af (about 5.5:1); the scoped selector outranks the
+ * theme's single-class rule whatever order the two stylesheets load in.
+ * Found by the automated axe scan (frontend-console-28).
+ */
+.hljs .hljs-comment,
+.hljs .hljs-quote {
+  color: #9ca3af;
+}

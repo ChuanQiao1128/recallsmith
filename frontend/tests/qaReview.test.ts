@@ -8,6 +8,7 @@ import {
   QA_CATEGORY_LABELS,
   QA_ITEM_ERROR_LABELS,
   QA_START_ERROR_MESSAGES,
+  QA_EST_USD_PER_CARD_DEFAULT,
   QA_DAILY_USD_CAP,
   QA_MAX_CARDS,
   cardPasses,
@@ -26,10 +27,18 @@ import { QA_PUBLISH_GATE_CODES, isQaPublishGateCode, qaPageHref } from '../src/l
 import { qaCards, qaFinding, qaItem } from './support/qaFixtures';
 
 describe('qaReview', () => {
-  it('estimates cost from the per-card token budget and the list prices', () => {
-    expect(estimateQaCostUsd(1)).toBeCloseTo(0.045, 10);
-    expect(estimateQaCostUsd(10)).toBeCloseTo(0.45, 10);
+  it("estimates cost at the server's per-card reservation, the reported rate first (frontend-console-23)", () => {
+    // The server reserves AI_QA_EST_USD_PER_CARD (default $0.05) per card against
+    // the daily cap; this used to price $0.045 and so under-warned near the cap.
+    expect(QA_EST_USD_PER_CARD_DEFAULT).toBe(0.05);
+    expect(estimateQaCostUsd(1)).toBeCloseTo(0.05, 10);
+    expect(estimateQaCostUsd(10)).toBeCloseTo(0.5, 10);
     expect(estimateQaCostUsd(0)).toBe(0);
+    expect(estimateQaCostUsd(10, 0.08)).toBeCloseTo(0.8, 10);
+    expect(estimateQaCostUsd(10, null)).toBeCloseTo(0.5, 10);
+    // The finding's example: cap $10, $2 spent, 170 cards: $8.50 is over the $8 left.
+    const limits = qaLimits({ maxCards: 200, dailyUsdCap: 10, spentTodayUsd: 2 });
+    expect(estimateQaCostUsd(170, limits.estUsdPerCard)).toBeGreaterThan(qaCapRemainingUsd(limits));
     expect(formatUsd(0)).toBe('$0.00');
     expect(formatUsd(0.004)).toBe('<$0.01');
     expect(formatUsd(0.045)).toBe('$0.04');
@@ -98,10 +107,19 @@ describe('qaReview', () => {
       dailyUsdCap: QA_DAILY_USD_CAP,
       spentTodayUsd: null,
       reservedTodayUsd: null,
+      estUsdPerCard: null,
       fromServer: false,
     });
     const limits = qaLimits({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 1.5 });
-    expect(limits).toEqual({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 1.5, reservedTodayUsd: null, fromServer: true });
+    expect(limits).toEqual({
+      maxCards: 50,
+      dailyUsdCap: 2,
+      spentTodayUsd: 1.5,
+      reservedTodayUsd: null,
+      estUsdPerCard: null,
+      fromServer: true,
+    });
+    expect(qaLimits({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 0, estUsdPerCard: 0.07 }).estUsdPerCard).toBe(0.07);
     expect(qaCapRemainingUsd(limits)).toBeCloseTo(0.5, 10);
     expect(qaCapRemainingUsd(qaLimits({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 9 }))).toBe(0);
     expect(qaStartErrorMessage('AI_QA_TOO_MANY_CARDS', 'x', limits)).toBe(
@@ -115,7 +133,20 @@ describe('qaReview', () => {
     expect(qaStartErrorMessage('AI_QA_TOO_MANY_CARDS', '', qaLimits(null))).toBe(
       QA_START_ERROR_MESSAGES.AI_QA_TOO_MANY_CARDS,
     );
-    expect(qaStartErrorMessage('AI_QA_DAILY_CAP', 'x', limits)).toBe(QA_START_ERROR_MESSAGES.AI_QA_DAILY_CAP);
+    // frontend-console-23: the server's cap refusal names spent, reserved and the
+    // estimate; it is kept (this used to be replaced by "try again after
+    // midnight"), with the narrower-scope way out added.
+    expect(
+      qaStartErrorMessage(
+        'AI_QA_DAILY_CAP',
+        'Daily AI QA cap $10.00 would be exceeded: spent $2.00, reserved $0.00, this run $8.50.',
+        limits,
+      ),
+    ).toBe(
+      'Daily AI QA cap $10.00 would be exceeded: spent $2.00, reserved $0.00, this run $8.50. Narrow the scope, or try again after midnight UTC.',
+    );
+    expect(qaStartErrorMessage('AI_QA_DAILY_CAP', '', limits)).toBe(QA_START_ERROR_MESSAGES.AI_QA_DAILY_CAP);
+    expect(QA_START_ERROR_MESSAGES.AI_QA_DAILY_CAP).toContain('Narrow the scope');
     expect(qaStartErrorMessage('SOMETHING_NEW', 'Server text.', limits)).toBe('Server text.');
   });
 

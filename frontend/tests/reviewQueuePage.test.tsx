@@ -14,6 +14,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { deferred, ok, refused } from './support/apiResult';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { draft, draftSummary, mcqDraftCard, qaDraftCard } from './support/draftFixtures';
+import { qaStatus } from './support/qaFixtures';
 import { locationText, renderAt } from './support/routerProbe';
 import { ConsoleShell } from '../src/components/console/ConsoleShell';
 import { QueryKeys } from '../src/api/queryClient';
@@ -34,6 +35,13 @@ const authoring = vi.hoisted(() => ({
   fetchDeckById: vi.fn(),
 }));
 
+const qaApi = vi.hoisted(() => ({ fetchQaStatus: vi.fn() }));
+
+vi.mock('../src/api/qa', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/api/qa')>();
+  return { ...actual, ...qaApi };
+});
+
 vi.mock('../src/api/drafts', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/api/drafts')>();
   return { ...actual, ...api };
@@ -45,6 +53,7 @@ vi.mock('../src/api/authoring', async importOriginal => {
 });
 
 const { ReviewQueuePage } = await import('../src/pages/ReviewQueuePage');
+const { normalizeDraft } = await import('../src/api/drafts');
 
 const DECK: Deck = {
   id: 7,
@@ -79,12 +88,13 @@ beforeEach(() => {
   authoring.fetchDeckById.mockResolvedValue(ok(DECK));
   api.listDrafts.mockResolvedValue(ok({ items: [draftSummary()], nextCursor: null }));
   api.fetchDraft.mockResolvedValue(ok(draft(qaDraftCard())));
+  qaApi.fetchQaStatus.mockResolvedValue(ok(qaStatus({ enabled: false })));
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  for (const fn of [...Object.values(api), ...Object.values(authoring)]) fn.mockReset();
+  for (const fn of [...Object.values(api), ...Object.values(authoring), ...Object.values(qaApi)]) fn.mockReset();
   signOut();
 });
 
@@ -488,6 +498,90 @@ describe('ReviewQueuePage', () => {
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
+  it('guards edits on the draft that auto-opens after an accept (frontend-console-19, round 3)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const second = qaDraftCard({ stableUid: 'sample-qa-topic-03' });
+    const secondSummary = draftSummary({ draftId: 42, stableUid: second.stableUid });
+    api.listDrafts
+      .mockResolvedValueOnce(ok({ items: [draftSummary(), secondSummary], nextCursor: null }))
+      .mockResolvedValue(ok({ items: [draftSummary({ status: 'accepted' }), secondSummary], nextCursor: null }));
+    api.fetchDraft.mockImplementation(async (id: number) =>
+      ok(id === 42 ? draft(second, { draftId: 42, stableUid: second.stableUid }) : draft(qaDraftCard())),
+    );
+    api.acceptDraft.mockResolvedValue(
+      ok({ draftId: 41, cardId: 901, stableUid: 'sample-qa-topic-02', action: 'accepted' }),
+    );
+    // Landing on /review?deckId=7: the open draft comes from the list, not from a draftId.
+    await openReview();
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    expect(await screen.findByText(/Accepted as card #901/)).toBeTruthy();
+    await waitFor(() => expect(api.fetchDraft).toHaveBeenLastCalledWith(42));
+    await waitFor(() =>
+      expect(within(screen.getByRole('region', { name: 'Draft card' })).getByText('sample-qa-topic-03')).toBeTruthy(),
+    );
+    expect(locationText()).toBe('/review?deckId=7');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText(/question/i), { target: { value: 'An edited second question?' } });
+    await userEvent.click(screen.getByRole('link', { name: 'AI QA' }));
+
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
+    expect(locationText()).toBe('/review?deckId=7');
+    expect((screen.getByLabelText(/question/i) as HTMLTextAreaElement).value).toBe('An edited second question?');
+  });
+
+  it('offers to chain an AI QA run on accept when AI QA is on, and says what became of it (automation-17)', async () => {
+    // Off on the server: nothing is offered and the accept carries no runQa.
+    api.acceptDraft.mockResolvedValue(
+      ok({ draftId: 41, cardId: 901, stableUid: 'sample-qa-topic-02', action: 'accepted' }),
+    );
+    await openReview();
+    await waitFor(() => expect(qaApi.fetchQaStatus).toHaveBeenCalledWith(7));
+    expect(screen.queryByRole('checkbox', { name: 'Run AI QA on accepted cards' })).toBeNull();
+    cleanup();
+
+    qaApi.fetchQaStatus.mockResolvedValue(ok(qaStatus({ enabled: true })));
+    api.acceptDraft.mockResolvedValue(
+      ok({
+        draftId: 41,
+        cardId: 901,
+        stableUid: 'sample-qa-topic-02',
+        action: 'accepted',
+        qa: { status: 'queued', runId: 'run-5', code: null, message: null },
+      }),
+    );
+    await openReview();
+    const box = (await screen.findByRole('checkbox', { name: 'Run AI QA on accepted cards' })) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    await userEvent.click(box);
+    now = 11_000;
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(api.acceptDraft).toHaveBeenCalledWith(41, { reviewMs: 10_000, runQa: true }));
+    const qaLine = await screen.findByTestId('review-outcome-qa');
+    expect(qaLine.textContent).toContain('AI QA review queued.');
+    expect(within(qaLine).getByRole('link', { name: 'Open AI QA run' }).getAttribute('href')).toBe(
+      '/decks/qa?deckId=7&runId=run-5',
+    );
+    cleanup();
+
+    // A chained run that could not start is surfaced, not dropped.
+    api.acceptDraft.mockResolvedValue(
+      ok({
+        draftId: 41,
+        cardId: 901,
+        stableUid: 'sample-qa-topic-02',
+        action: 'accepted',
+        qa: { status: 'not_started', runId: null, code: 'AI_QA_DAILY_CAP', message: 'Daily AI QA cap reached' },
+      }),
+    );
+    await openReview();
+    await userEvent.click(await screen.findByRole('checkbox', { name: 'Run AI QA on accepted cards' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    const failed = await screen.findByTestId('review-outcome-qa');
+    expect(failed.textContent).toContain('AI QA did not start: Daily AI QA cap reached.');
+    expect(within(failed).queryByRole('link')).toBeNull();
+  });
+
   it('says what the empty list means for each status filter (frontend-console-20)', async () => {
     api.listDrafts.mockResolvedValue(ok({ items: [], nextCursor: null }));
     renderAt(<ReviewQueuePage />, ['/review?deckId=7']);
@@ -559,5 +653,45 @@ describe('ReviewQueuePage', () => {
     api.fetchDraft.mockResolvedValue(ok(draft(qaDraftCard())));
     await openReview();
     expect(screen.queryByTestId('review-grounding')).toBeNull();
+    // ai-agent-24: an ungrounded draft says so rather than looking like a checked one.
+    expect(screen.getByTestId('review-grounding-missing').textContent).toBe(
+      'Not groundedSubmitted outside the MCP server: check the quote against the source yourself.',
+    );
+  });
+
+  it('shows the contract grounding from GET drafts and drops it from an edited accept (ai-agent-24)', async () => {
+    // The exact r18z-c contract shape, as core-vpc returns it inside card.source.
+    const wire = {
+      ...draft(qaDraftCard()),
+      card: {
+        ...qaDraftCard(),
+        source: {
+          url: qaDraftCard().source.url,
+          quote: qaDraftCard().source.quote,
+          grounding: { chunkId: 'chunk-4', sourceId: 'src-9', matched: true, quoteChars: 48 },
+        },
+      },
+    };
+    const normalized = normalizeDraft(wire);
+    expect(normalized?.card.source.grounding).toEqual({ chunkId: 'chunk-4', sourceId: 'src-9', matched: true, quoteChars: 48 });
+    api.fetchDraft.mockResolvedValue(ok(normalized));
+    api.acceptDraft.mockResolvedValue(
+      ok({ draftId: 41, cardId: 903, stableUid: 'sample-qa-topic-02', action: 'edited_accepted' }),
+    );
+    await openReview();
+    expect(screen.getByTestId('review-grounding').textContent).toContain(
+      'Chunk chunk-4 of source src-9 · 48 characters quoted',
+    );
+    expect(screen.queryByTestId('review-grounding-missing')).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText(/question/i), { target: { value: `${qaDraftCard().question} Edited.` } });
+    await userEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
+    await waitFor(() => expect(api.acceptDraft).toHaveBeenCalledTimes(1));
+    // The grounding describes the submitted quote; it is not part of the card.
+    expect(api.acceptDraft.mock.calls[0][1].card.source).toEqual({
+      url: qaDraftCard().source.url,
+      quote: qaDraftCard().source.quote,
+    });
   });
 });

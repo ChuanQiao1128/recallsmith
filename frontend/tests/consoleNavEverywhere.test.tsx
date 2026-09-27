@@ -20,7 +20,8 @@ import type { AdminDecksPage, PublishJob } from '../src/api/authoring';
 import { ok } from './support/apiResult';
 import { signInAsEditor, signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
-import { CONSOLE_NAV, consoleNav } from '../src/components/console/consoleNav';
+import { CONSOLE_NAV, consoleNav, consoleSectionFor } from '../src/components/console/consoleNav';
+import { ConsoleShell } from '../src/components/console/ConsoleShell';
 
 const api = vi.hoisted(() => ({
   fetchPublishJobs: vi.fn(),
@@ -98,6 +99,60 @@ describe('the console sections on the landing page', () => {
       'Review queue': '/review',
       'AI QA': '/decks/qa',
     });
+  });
+});
+
+describe('the current section in the header (frontend-console-27)', () => {
+  function shellAt(path: string) {
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <ConsoleShell title="t" {...consoleNav()}>
+          <p>body</p>
+        </ConsoleShell>
+      </MemoryRouter>,
+    );
+  }
+
+  it('marks the link of the page on screen with aria-current and an active look, and no other', () => {
+    signInAsSuperAdmin();
+    for (const [path, name] of [
+      ['/review?deckId=7', 'Review queue'],
+      ['/decks/qa', 'AI QA'],
+      ['/ledger', 'Automation ledger'],
+      ['/admin/webhooks', 'Webhooks'],
+      ['/admin/users', 'Admin Management'],
+      ['/content-intelligence', 'Content Intelligence'],
+      ['/decks/cards?deckId=7', 'Decks'],
+      ['/', 'Decks'],
+    ] as const) {
+      shellAt(path);
+      const nav = screen.getByRole('navigation', { name: 'Console sections' });
+      const current = within(nav)
+        .getAllByRole('link')
+        .filter(a => a.getAttribute('aria-current') === 'page');
+      expect(current.map(a => a.textContent), path).toEqual([name]);
+      expect(current[0].className).toContain('bg-indigo-50');
+      for (const link of within(nav).getAllByRole('link')) {
+        expect(link.className, `${path} ${link.textContent}`).toContain('focus-visible:ring-2');
+      }
+      cleanup();
+    }
+    expect(consoleSectionFor('/login')).toBeNull();
+  });
+
+  it('orders the links authoring first, then the ledger, then the super_admin sections', () => {
+    signInAsSuperAdmin();
+    shellAt('/ledger');
+    const nav = screen.getByRole('navigation', { name: 'Console sections' });
+    expect(within(nav).getAllByRole('link').map(a => a.textContent)).toEqual([
+      'Decks',
+      'Review queue',
+      'AI QA',
+      'Content Intelligence',
+      'Automation ledger',
+      'Webhooks',
+      'Admin Management',
+    ]);
   });
 });
 

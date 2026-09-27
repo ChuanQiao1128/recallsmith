@@ -11,6 +11,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 
 import { fetchDeckById, fetchDecks } from '../api/authoring';
 import { acceptDraft, fetchDraft, listDrafts, rejectDraft } from '../api/drafts';
+import { fetchQaStatus } from '../api/qa';
 import { QueryKeys, useAppQueryClient } from '../api/queryClient';
 import { CardForm } from '../components/CardForm';
 import type { CardFormValues } from '../components/CardForm';
@@ -50,7 +51,7 @@ import { parseDeckId } from '../lib/parseDeckId';
 import { qaPageHref } from '../lib/qaGate';
 import type { ApiError, ApiResult } from '../types/api';
 import type { Deck } from '../types/deck';
-import type { Draft, DraftRejectReason, DraftStatus, DraftSummary } from '../types/draft';
+import type { Draft, DraftAcceptQa, DraftRejectReason, DraftStatus, DraftSummary } from '../types/draft';
 
 type LoadError = { code: string; message: string };
 type StatusFilter = DraftStatus | 'all';
@@ -66,7 +67,9 @@ type ListState = {
   nextCursor: string | null;
 };
 type DetailState = { forDraftId: number | null; error: LoadError | null; draft: Draft | null };
-type Outcome = { kind: 'accepted'; cardId: number; deckId: number } | { kind: 'rejected' };
+type Outcome = { kind: 'accepted'; cardId: number; deckId: number; qa: DraftAcceptQa | null } | { kind: 'rejected' };
+/** Whether AI QA is enabled for the deck, so the accept can offer to chain a run (automation-17). */
+type QaEnabledState = { forDeckId: number | null; enabled: boolean };
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: 'pending', label: 'Pending' },
@@ -98,6 +101,23 @@ function firstLine(text: string): string {
 
 function cardHref(deckId: number, cardId: number): string {
   return `/decks/cards/edit?deckId=${deckId}&cardId=${cardId}`;
+}
+
+/**
+ * What the outcome says about the AI QA run an accept chained (automation-17).
+ * A run that did not start says why, so the reviewer is not left waiting for it.
+ */
+function chainedQaText(qa: DraftAcceptQa): string {
+  switch (qa.status) {
+    case 'queued':
+      return 'AI QA review queued.';
+    case 'in_progress':
+      return 'AI QA is already reviewing this deck; the new card joins the next run.';
+    case 'nothing_to_review':
+      return 'AI QA had nothing new to review.';
+    default:
+      return `AI QA did not start: ${qa.message ?? qa.code ?? 'unknown reason'}.`;
+  }
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -145,6 +165,10 @@ export function ReviewQueuePage() {
   const outcomeRef = useRef<HTMLDivElement>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [qaEnabled, setQaEnabled] = useState<QaEnabledState>({ forDeckId: null, enabled: false });
+  // The reviewer's choice to chain an AI QA run on each accept; off by default,
+  // because a run spends model budget.
+  const [runQa, setRunQa] = useState(false);
 
   const listKey = deckId === null ? null : `${deckId}|${status}`;
 
@@ -178,6 +202,20 @@ export function ReviewQueuePage() {
         return;
       }
       setDeckState({ forDeckId: deckId, error: null, deck: res.data });
+    }
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [deckId]);
+
+  useEffect(() => {
+    if (deckId === null) return;
+    let cancelled = false;
+    async function run() {
+      const res = await fetchQaStatus(deckId as number);
+      if (cancelled) return;
+      setQaEnabled({ forDeckId: deckId, enabled: !!(res.success && res.data?.enabled) });
     }
     void run();
     return () => {
@@ -257,6 +295,9 @@ export function ReviewQueuePage() {
   const deckError = deckState.forDeckId === deckId ? deckState.error : null;
   const draft = detail.forDraftId === selectedId ? detail.draft : null;
   const detailError = detail.forDraftId === selectedId ? detail.error : null;
+
+  const offerRunQa = qaEnabled.forDeckId === deckId && qaEnabled.enabled;
+  const chainQa = offerRunQa && runQa;
 
   const lint = useMemo(() => (deck && draft ? lintDraftCard(deck.slug, draft.card) : null), [deck, draft]);
 
@@ -380,8 +421,10 @@ export function ReviewQueuePage() {
       ...prev,
       items: prev.items.map(item => (item.draftId === id ? { ...item, status: decided } : item)),
     }));
-    // The edit was just accepted, so this navigation discards nothing.
-    guard.allowNextNavigation();
+    // The edit was just accepted, so this navigation discards nothing. Only arm
+    // the allowance when the URL carries a draftId, i.e. when the navigation
+    // actually moves; on the auto-selected draft it stays put (frontend-console-19).
+    if (draftIdParam !== null) guard.allowNextNavigation();
     setSearchParams({ deckId: String(deckId) });
     setListNonce(n => n + 1);
     return null;
@@ -390,8 +433,8 @@ export function ReviewQueuePage() {
   function onAccept(current: Draft) {
     void decide(
       current.draftId,
-      reviewMs => acceptDraft(current.draftId, { reviewMs }),
-      data => ({ kind: 'accepted', cardId: data.cardId, deckId: current.deckId || (deckId ?? 0) }),
+      reviewMs => acceptDraft(current.draftId, chainQa ? { reviewMs, runQa: true } : { reviewMs }),
+      data => ({ kind: 'accepted', cardId: data.cardId, deckId: current.deckId || (deckId ?? 0), qa: data.qa ?? null }),
       'accepted',
     );
   }
@@ -403,8 +446,9 @@ export function ReviewQueuePage() {
     if (!editedLint.ok) return { ok: false, error: editedLint.issues[0]?.message ?? 'The card has lint issues.' };
     const problem = await decide(
       current.draftId,
-      reviewMs => acceptDraft(current.draftId, { card: edited, reviewMs }),
-      data => ({ kind: 'accepted', cardId: data.cardId, deckId: current.deckId || (deckId ?? 0) }),
+      reviewMs =>
+        acceptDraft(current.draftId, chainQa ? { card: edited, reviewMs, runQa: true } : { card: edited, reviewMs }),
+      data => ({ kind: 'accepted', cardId: data.cardId, deckId: current.deckId || (deckId ?? 0), qa: data.qa ?? null }),
       'accepted',
     );
     return problem === null ? { ok: true } : { ok: false, error: problem };
@@ -448,9 +492,9 @@ export function ReviewQueuePage() {
       <div>
         <h1 className={H1_CLASS}>Review queue</h1>
         {deck ? (
-          <div className="text-xs text-slate-500 mt-0.5">
+          <div className="text-xs text-slate-600 mt-0.5">
             {deck.title} · <span className="font-mono">{deck.slug}</span> ·{' '}
-            <Link to={`/decks/cards?deckId=${deck.id}`} className="text-indigo-600 hover:underline">
+            <Link to={`/decks/cards?deckId=${deck.id}`} className="text-indigo-600 underline">
               Cards
             </Link>
           </div>
@@ -501,6 +545,20 @@ export function ReviewQueuePage() {
                     <Link to={cardHref(outcome.deckId, outcome.cardId)} className="underline">
                       Open card
                     </Link>
+                    {outcome.qa ? (
+                      <span data-testid="review-outcome-qa">
+                        {' · '}
+                        {chainedQaText(outcome.qa)}
+                        {outcome.qa.runId ? (
+                          <>
+                            {' '}
+                            <Link to={qaPageHref(outcome.deckId, outcome.qa.runId)} className="underline">
+                              Open AI QA run
+                            </Link>
+                          </>
+                        ) : null}
+                      </span>
+                    ) : null}
                   </>
                 ) : (
                   'Rejected'
@@ -662,7 +720,15 @@ export function ReviewQueuePage() {
                               {draft.card.source.grounding.quoteChars} characters quoted
                             </span>
                           </div>
-                        ) : null}
+                        ) : (
+                          // No grounding: the draft did not come through the MCP
+                          // server's quote check (ai-agent-24), so the reviewer
+                          // must check the quote against the source themselves.
+                          <div className="text-xs text-slate-600 flex flex-wrap items-center gap-2" data-testid="review-grounding-missing">
+                            <Badge tone="warning">Not grounded</Badge>
+                            <span>Submitted outside the MCP server: check the quote against the source yourself.</span>
+                          </div>
+                        )}
                       </section>
 
                       <section className={`${CARD_CLASS} space-y-2`} aria-label="Similar cards">
@@ -716,6 +782,20 @@ export function ReviewQueuePage() {
                       </ul>
                     ) : null}
                   </section>
+
+                  {draft.status === 'pending' && offerRunQa ? (
+                    <div className={CARD_CLASS}>
+                      <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={runQa}
+                          onChange={e => setRunQa(e.target.checked)}
+                          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                        />
+                        Run AI QA on accepted cards
+                      </label>
+                    </div>
+                  ) : null}
 
                   {draft.status === 'pending' ? (
                     editingId === draft.draftId ? null : (

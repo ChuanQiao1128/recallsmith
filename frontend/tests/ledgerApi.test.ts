@@ -184,6 +184,7 @@ describe('src/api/ledger', () => {
             editedAcceptRate: 0.25,
             defectRate: 0.1,
             avgReviewMinutes: null,
+            reviewNotMeasured: '3',
           },
         }),
       ),
@@ -204,6 +205,7 @@ describe('src/api/ledger', () => {
       editedAcceptRate: 0.25,
       defectRate: 0.1,
       avgReviewMinutes: null,
+      reviewNotMeasured: 3,
     });
   });
 

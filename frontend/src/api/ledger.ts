@@ -9,7 +9,10 @@ import { apiResultFromError, failResult } from './httpFailure';
 
 export type LedgerGranularity = 'day' | 'week' | 'month';
 
-/** One source's share of the headline: `live` is measured, `backfill` is inferred from history. */
+/**
+ * One source's share of the headline. `live` (recorded as it happened) and
+ * `backfill` (inferred from history) are disjoint parts of the total.
+ */
 export type LedgerSourceTotals = {
   runs: number;
   units: number;
@@ -48,6 +51,11 @@ export type LedgerAgentDrafts = {
   defectRate: number;
   /** Null when no draft in the period recorded a review time. */
   avgReviewMinutes: number | null;
+  /**
+   * Decisions sent without a review time: left out of the average and charged
+   * no human cost in the savings (automation-16). Null when the server does not send it.
+   */
+  reviewNotMeasured: number | null;
 };
 
 export type LedgerAutomationRow = {
@@ -202,6 +210,7 @@ function normalizeAgentDrafts(value: unknown): LedgerAgentDrafts | null {
     editedAcceptRate: toNumber(value.editedAcceptRate),
     defectRate: toNumber(value.defectRate),
     avgReviewMinutes: toNumber(value.avgReviewMinutes, true),
+    reviewNotMeasured: toNumber(value.reviewNotMeasured, true),
   };
 }
 

@@ -88,6 +88,8 @@ export type QaStatus = {
   dailyUsdCap: number | null;
   spentTodayUsd: number | null;
   reservedTodayUsd: number | null;
+  /** What the server reserves per card against the daily cap (data.limits.estUsdPerCard); null when not sent. */
+  estUsdPerCard: number | null;
 };
 
 export type QaStartResult = { runId: string; status: string; cardCount: number; chunkCount: number };
@@ -263,6 +265,7 @@ function normalizeStatus(data: unknown): QaStatus | null {
     dailyUsdCap: toPositiveOrNull(limits.dailyUsdCap),
     spentTodayUsd: toNonNegativeOrNull(limits.spentTodayUsd),
     reservedTodayUsd: toNonNegativeOrNull(limits.reservedTodayUsd),
+    estUsdPerCard: toPositiveOrNull(limits.estUsdPerCard),
   };
 }
 
@@ -349,9 +352,14 @@ export async function fetchQaStatus(deckId: number): Promise<ApiResult<QaStatus>
   }
 }
 
+/**
+ * `reviewMs` is the person's triage time for this finding (automation-16):
+ * visible time only, capped at REVIEW_MS_CAP like a draft decision; the server
+ * charges it to the ai_qa_review ledger row. Omitted, the row reads "not measured".
+ */
 export async function resolveQaFinding(
   findingId: number,
-  body: { resolution: 'fixed' | 'dismissed'; note?: string },
+  body: { resolution: 'fixed' | 'dismissed'; note?: string; reviewMs?: number },
 ): Promise<ApiResult<QaFinding | null>> {
   try {
     const resp = await http.post<ApiResult<unknown>>(`/api/v1/authoring/qa/findings/${findingId}/resolve`, body);
