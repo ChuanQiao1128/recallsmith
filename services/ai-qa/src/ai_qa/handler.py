@@ -15,7 +15,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
 
-from . import emf, settings
+from . import emf, second_opinion, settings
 from .internal_client import RESULTS_PATH, InternalClient
 from .logs import log
 from .prompts import PROMPT_VERSION
@@ -222,7 +222,7 @@ def _report_identity(env: Mapping[str, str], cfg: Settings | None) -> tuple[str,
     provider = (env.get("AI_PROVIDER") or "").strip().lower()
     if provider not in PROVIDERS:
         provider = DEFAULTS["AI_PROVIDER"]
-    model = (env.get("AI_MODEL") or "").strip() or DEFAULT_MODELS[provider]
+    model = (env.get("AI_MODEL") or "").strip() or DEFAULT_MODELS.get(provider, "unset")
     return provider, model
 
 
@@ -244,6 +244,65 @@ def _model_client(cfg: Settings) -> Any:
         client = client_factory(cfg, api_key=api_key)
         _client_cache[key] = client
     return client
+
+
+def _with_deadline(client: Any, remaining: float | None) -> Any:
+    """The client with a call timeout and retry count that fit the time left (None: unchanged)."""
+    if remaining is None:
+        return client
+    return client.with_options(
+        timeout=min(float(CALL_TIMEOUT_SECONDS), remaining - CALL_TIMEOUT_RESERVE_SECONDS),
+        max_retries=2 if remaining >= RETRY_WINDOW_SECONDS else 0,
+    )
+
+
+def _second_opinion(
+    msg: Mapping[str, Any], card: dict[str, Any], primary: dict[str, Any], cfg: Settings, namespace: str, context: Any
+) -> tuple[dict[str, Any], int]:
+    """The primary item merged with the second reviewer's (second_opinion.py) and the second's call
+    count. Any failure leaves the primary item unchanged; only the error code is logged."""
+    second: dict[str, Any] | None = None
+    calls = 0
+    code: str | None = None
+    remaining = _remaining_s(context)
+    if remaining is not None and remaining < DEADLINE_MARGIN_SECONDS:
+        code = "PROVIDER_TIMEOUT"
+    else:
+        try:
+            second_cfg = second_opinion.second_settings(cfg)
+            client = _with_deadline(_model_client(second_cfg), remaining)
+            second, calls = review_card_counted(card, client=client, settings=second_cfg, review_date=msg["reviewDate"])
+        except ConfigError:
+            code = "CONFIG"
+        except Exception:
+            code = "PROVIDER_ERROR"
+    if code is None:
+        item, added, code = second_opinion.apply(primary, second, cfg)
+    else:
+        item, added = primary, None
+    if code is not None:
+        log(
+            "warn",
+            "ai-qa",
+            event="second_opinion_failed",
+            runId=msg["runId"],
+            chunk=msg["chunk"],
+            cardId=card["cardId"],
+            errorCode=code,
+        )
+        emf.emit_second_opinion(namespace, error_code=code)
+        return primary, calls
+    log(
+        "info",
+        "ai-qa",
+        event="second_opinion",
+        runId=msg["runId"],
+        chunk=msg["chunk"],
+        cardId=card["cardId"],
+        added=added,
+    )
+    emf.emit_second_opinion(namespace, added=added)
+    return item, calls
 
 
 def _log_item(msg: Mapping[str, Any], item: Mapping[str, Any]) -> None:
@@ -394,15 +453,12 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
             item, calls = _empty_item(card, "error", "PROVIDER_TIMEOUT"), 0
             log("warn", "ai-qa", event="deadline_guard", runId=msg["runId"], chunk=msg["chunk"], cardId=card["cardId"])
         else:
-            call_client = client
-            if remaining is not None:
-                call_client = client.with_options(
-                    timeout=min(float(CALL_TIMEOUT_SECONDS), remaining - CALL_TIMEOUT_RESERVE_SECONDS),
-                    max_retries=2 if remaining >= RETRY_WINDOW_SECONDS else 0,
-                )
             item, calls = review_card_counted(
-                card, client=call_client, settings=cfg, review_date=msg["reviewDate"]
+                card, client=_with_deadline(client, remaining), settings=cfg, review_date=msg["reviewDate"]
             )
+            if second_opinion.enabled(cfg) and item.get("status") == "done":
+                item, second_calls = _second_opinion(msg, card, item, cfg, namespace, context)
+                calls += second_calls
         emf.emit_item(namespace, cfg.provider, item, model_called=calls > 0)
         _log_item(msg, item)
 
