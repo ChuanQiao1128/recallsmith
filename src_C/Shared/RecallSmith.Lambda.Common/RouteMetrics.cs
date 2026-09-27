@@ -198,6 +198,7 @@ public static class RouteMetrics
     "/api/v1/authoring/drafts/:draftId/reject",
     "/api/v1/authoring/drafts/:draftId",
     "/api/v1/authoring/qa/runs/:runId",
+    "/api/v1/authoring/qa/runs/:runId/items/:cardId/waive",
     "/api/v1/authoring/qa/findings/:findingId/resolve",
 
     // Internal machine-caller routes: the dispatcher matches these exactly (no suffix match, see

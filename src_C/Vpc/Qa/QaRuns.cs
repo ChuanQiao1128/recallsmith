@@ -27,6 +27,7 @@ public static class QaRuns
   public const string QueueUrlEnv = "AI_QA_QUEUE_URL";
   public const string MaxCardsEnv = "AI_QA_MAX_CARDS";      // default 200
   public const string DailyCapEnv = "AI_QA_DAILY_USD_CAP";  // default 10
+  public const string EstUsdPerCardEnv = "AI_QA_EST_USD_PER_CARD"; // default 0.05
   public static readonly TimeSpan StaleAfter = TimeSpan.FromHours(2);
 
   /// <summary>EMF gauge emitted once per QA run whose SQS send failed.</summary>
@@ -37,6 +38,10 @@ public static class QaRuns
 
   public const int DefaultMaxCards = 200;
   public const decimal DefaultDailyCapUsd = 10m;
+  /// <summary>Per-card spend reserved at admission (evals/README.md: about $0.05 per card at the default model).</summary>
+  public const decimal DefaultEstUsdPerCard = 0.05m;
+  /// <summary>Transaction-scoped advisory lock key that serializes the daily-cap check with the run insert.</summary>
+  internal const long DailyCapLockKey = 0x41495F51415F4341; // "AI_QA_CA"
   public const int DefaultListLimit = 50;
   public const int MaxListLimit = 100;
   public const int MaxNoteLength = 500;
@@ -139,14 +144,7 @@ public static class QaRuns
       }
 
       var cap = DecimalEnv(DailyCapEnv, DefaultDailyCapUsd);
-      var spent = Convert.ToDecimal(await DbUtil.ExecuteScalarAsync(conn, null,
-        "select coalesce(sum(estimated_cost_usd), 0) from ai_qa_runs where created_at >= date_trunc('day', now(), 'UTC')", []),
-        CultureInfo.InvariantCulture);
-      if (spent >= cap)
-      {
-        return Helpers.ErrorEnvelope(res, 429, "AI_QA_DAILY_CAP",
-          $"Today's AI QA spend {spent.ToString(CultureInfo.InvariantCulture)} USD has reached the daily cap of {cap.ToString(CultureInfo.InvariantCulture)} USD");
-      }
+      var perCard = DecimalEnv(EstUsdPerCardEnv, DefaultEstUsdPerCard);
 
       var cards = rows.Select(QaCard.FromRow).ToList();
       var chunks = Chunk(cards);
@@ -154,6 +152,22 @@ public static class QaRuns
       var id = Guid.NewGuid();
       await using (var tx = await conn.BeginTransactionAsync())
       {
+        // The cap is a reservation, not an admission check on reported spend alone (backend-design-6,
+        // cloud-security-resilience-3, ai-agent-8): today's reported spend, plus the estimate for the unfinished
+        // cards of every open run, plus this run's estimate must fit. The lock makes concurrent starts on
+        // different decks see each other's reservations.
+        await DbUtil.ExecuteAsync(conn, tx, "select pg_advisory_xact_lock($1)", [DailyCapLockKey]);
+        var (spent, openCards) = await SpendTodayAsync(conn, tx);
+        var reserved = openCards * perCard;
+        var estimate = cards.Count * perCard;
+        if (spent >= cap || spent + reserved + estimate > cap)
+        {
+          await tx.RollbackAsync();
+          return Helpers.ErrorEnvelope(res, 429, "AI_QA_DAILY_CAP",
+            $"Today's AI QA spend {Usd(spent)} USD plus {Usd(reserved)} USD reserved for open runs and {Usd(estimate)} USD " +
+            $"estimated for this run ({cards.Count} cards at {Usd(perCard)} USD) exceeds the daily cap of {Usd(cap)} USD");
+        }
+
         await DbUtil.ExecuteAsync(conn, tx,
           """
           insert into ai_qa_runs (id, deck_id, scope, status, prompt_version, requested_by_sub, card_count, chunk_count)
@@ -349,6 +363,27 @@ public static class QaRuns
     return chunks;
   }
 
+  /// <summary>
+  /// Today's (UTC) reported spend across all runs, and the cards still unfinished in open runs (queued or running
+  /// and not stale), whatever day they started: their spend has not been reported yet but will be.
+  /// </summary>
+  internal static async Task<(decimal Spent, long OpenCards)> SpendTodayAsync(NpgsqlConnection conn, NpgsqlTransaction? tx)
+  {
+    var rows = await DbUtil.QueryAsync(conn, tx,
+      $"""
+      select
+        coalesce(sum(estimated_cost_usd) filter (where created_at >= date_trunc('day', now(), 'UTC')), 0) as spent,
+        coalesce(sum(greatest(card_count - cards_done, 0))
+          filter (where status in ('queued','running') and updated_at >= now() - {StaleInterval}), 0) as open_cards
+      from ai_qa_runs
+      where created_at >= date_trunc('day', now(), 'UTC') or status in ('queued','running')
+      """,
+      []);
+    return (Convert.ToDecimal(rows[0]["spent"], CultureInfo.InvariantCulture), Convert.ToInt64(rows[0]["open_cards"], CultureInfo.InvariantCulture));
+  }
+
+  private static string Usd(decimal value) => value.ToString(CultureInfo.InvariantCulture);
+
   private static int IntEnv(string name, int fallback)
   {
     var raw = Environment.GetEnvironmentVariable(name);
@@ -482,7 +517,7 @@ public static class QaRuns
       var itemRows = await DbUtil.QueryAsync(conn, null,
         """
         select i.card_id, i.stable_uid, i.content_sha256, i.status, i.error_code, i.latency_ms, i.input_tokens, i.output_tokens,
-          i.cache_read_tokens, i.estimated_cost_usd, i.request_id, i.updated_at
+          i.cache_read_tokens, i.estimated_cost_usd, i.request_id, i.updated_at, i.waived_by_sub, i.waived_at, i.waive_note
         from ai_qa_items i
         join cards c on c.id = i.card_id
         where i.run_id = $1
@@ -519,6 +554,9 @@ public static class QaRuns
           estimatedCostUsd = i["estimated_cost_usd"],
           requestId = i["request_id"],
           updatedAt = i["updated_at"],
+          waivedBySub = i["waived_by_sub"],
+          waivedAt = i["waived_at"],
+          waiveNote = i["waive_note"],
         }).ToList(),
         findings = findingRows.Select(FindingDto).ToList(),
       });
@@ -650,6 +688,106 @@ public static class QaRuns
     }
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // POST /api/v1/authoring/qa/runs/:runId/items/:cardId/waive
+  // ---------------------------------------------------------------------------------------------
+
+  /// <summary>
+  /// Owner-only waiver for an item the model refused or failed on (ai-agent-16): with AI_QA_REQUIRED=1 a card the
+  /// model consistently refuses would otherwise block publishing until the gate is switched off globally. The
+  /// waiver is recorded on the item (who, when, a required note) and in the ledger; the publish gate then counts
+  /// the card as reviewed at that item's content hash only, so any later edit needs a fresh review.
+  /// </summary>
+  public static async Task<APIGatewayProxyResponse> HandleWaiveItem(LambdaRequest req, Res res, AuthContext auth, string runId, string cardId)
+  {
+    var deny = Auth.RequireSuperAdmin(auth, res);
+    if (deny is not null) return deny;
+    if (!req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)) return res.MethodNotAllowed("Method not allowed");
+    if (string.IsNullOrEmpty(auth.UserSub)) return res.Forbidden("Requires authenticated admin user");
+
+    if (!Guid.TryParse(runId, out var run) ||
+        !long.TryParse(cardId, NumberStyles.None, CultureInfo.InvariantCulture, out var card) || card <= 0)
+    {
+      return ItemNotFound(res);
+    }
+
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+
+    try
+    {
+      string note;
+      using (var doc = Validation.ParseJsonBody(req))
+      {
+        if (doc is null) return res.BadRequest("BAD_REQUEST", "Invalid JSON body");
+        note = ParseWaiveBody(doc.RootElement);
+      }
+
+      var found = await DbUtil.QueryAsync(conn, null,
+        "select r.deck_id, i.status, i.waived_at from ai_qa_items i join ai_qa_runs r on r.id = i.run_id where i.run_id = $1 and i.card_id = $2",
+        [run, card]);
+      if (found.Count == 0) return ItemNotFound(res);
+      var deckId = Convert.ToInt64(found[0]["deck_id"], CultureInfo.InvariantCulture);
+
+      if (!await IsLiveDeckAsync(conn, deckId)) return DeckNotFound(res);
+      var denyDeck = await Helpers.RequireDeckWrite(conn, auth.UserSub, deckId, auth.IsSuperAdmin, res);
+      if (denyDeck is not null) return denyDeck;
+
+      var updated = await DbUtil.QueryAsync(conn, null,
+        """
+        update ai_qa_items
+        set waived_by_sub = $3, waived_at = now(), waive_note = $4
+        where run_id = $1 and card_id = $2 and status in ('error','refused') and waived_at is null
+        returning card_id, stable_uid, content_sha256, status, error_code, waived_by_sub, waived_at, waive_note
+        """,
+        [run, card, auth.UserSub, note]);
+      if (updated.Count == 0)
+      {
+        var status = Convert.ToString(found[0]["status"], CultureInfo.InvariantCulture);
+        return found[0]["waived_at"] is not null && status is "error" or "refused"
+          ? Helpers.ErrorEnvelope(res, 409, "AI_QA_ITEM_ALREADY_WAIVED", "This AI QA item has already been waived")
+          : Helpers.ErrorEnvelope(res, 409, "AI_QA_ITEM_NOT_WAIVABLE", $"Only error or refused items can be waived (status is {status})");
+      }
+      var row = updated[0];
+
+      await AutomationLedger.RecordAsync(conn, new AutomationEvent(
+        Automation: "ai_qa_review", Units: 0, Outcome: "failure", DeckId: deckId, Ref: run.ToString(),
+        DedupeKey: $"qa-waive:{run}:{card.ToString(CultureInfo.InvariantCulture)}",
+        Details: new { action = "waive", cardId = card, status = row["status"], errorCode = row["error_code"], note }));
+
+      Log.Event("info", new { tag = "ai_qa", outcome = "item_waived", runId = run, deckId, cardId = card, status = row["status"] });
+      return res.Ok(new
+      {
+        runId = run,
+        cardId = card,
+        stableUid = row["stable_uid"],
+        contentSha256 = row["content_sha256"],
+        status = row["status"],
+        errorCode = row["error_code"],
+        waivedBySub = row["waived_by_sub"],
+        waivedAt = row["waived_at"],
+        waiveNote = row["waive_note"],
+      });
+    }
+    catch (Exception ex)
+    {
+      return HandleError(ex, res);
+    }
+  }
+
+  private static string ParseWaiveBody(JsonElement body)
+  {
+    if (body.ValueKind != JsonValueKind.Object) throw new ValidationError("Body must be a JSON object", "body");
+    if (!body.TryGetProperty("note", out var noteEl) || noteEl.ValueKind != JsonValueKind.String)
+    {
+      throw new ValidationError("note must be a non-blank string", "note");
+    }
+    var note = (noteEl.GetString() ?? string.Empty).Trim();
+    if (note.Length == 0) throw new ValidationError("note must be a non-blank string", "note");
+    if (note.Length > MaxNoteLength) throw new ValidationError($"note too long (max {MaxNoteLength})", "note");
+    return note;
+  }
+
   private static (string Resolution, string? Note) ParseResolveBody(JsonElement body)
   {
     if (body.ValueKind != JsonValueKind.Object) throw new ValidationError("Body must be a JSON object", "body");
@@ -727,6 +865,8 @@ public static class QaRuns
   private static APIGatewayProxyResponse DeckNotFound(Res res) => Helpers.ErrorEnvelope(res, 404, "DECK_NOT_FOUND", "Deck not found");
 
   private static APIGatewayProxyResponse RunNotFound(Res res) => Helpers.ErrorEnvelope(res, 404, "RUN_NOT_FOUND", "AI QA run not found");
+
+  private static APIGatewayProxyResponse ItemNotFound(Res res) => Helpers.ErrorEnvelope(res, 404, "ITEM_NOT_FOUND", "AI QA item not found");
 
   private static APIGatewayProxyResponse FindingNotFound(Res res) => Helpers.ErrorEnvelope(res, 404, "FINDING_NOT_FOUND", "AI QA finding not found");
 

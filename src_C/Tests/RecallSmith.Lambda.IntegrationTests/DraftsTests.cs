@@ -536,6 +536,46 @@ public class DraftsTests
     Assert.Equal(2L, Convert.ToInt64(cards, CultureInfo.InvariantCulture));
   }
 
+  // ---------------------------------------------------------------- concurrency (X02, backend-design-9)
+
+  [Fact]
+  public async Task Accept_Concurrently_ExactlyOneWins()
+  {
+    // Two reviewers accept the same draft at once: the row lock on ai_drafts lets exactly one insert a card.
+    var deck = await NewDeckAsync("race-accept");
+    var ids = await SubmitCardsAsync(deck.Id, Card("race-accept-a"));
+
+    var responses = await Task.WhenAll(AcceptAsync(ids[0]), AcceptAsync(ids[0]));
+
+    Assert.Single(responses, r => r.StatusCode == 200);
+    AssertError(Assert.Single(responses, r => r.StatusCode != 200), 409, "DRAFT_NOT_PENDING");
+    Assert.Equal("accepted", await StatusAsync(ids[0]));
+    Assert.Equal(1L, Convert.ToInt64(await _db.ScalarAsync("select count(*) from cards where deck_id = $1", deck.Id), CultureInfo.InvariantCulture));
+    Assert.Equal(1L, Convert.ToInt64(await _db.ScalarAsync(
+      "select count(*) from ai_review_events where draft_id = $1 and action in ('accepted','edited_accepted')", ids[0]), CultureInfo.InvariantCulture));
+  }
+
+  [Fact]
+  public async Task Submit_SameClientDraftKeyConcurrently_CreatesOneDraft()
+  {
+    // Two submits of the same clientDraftKey at once: on conflict (deck_id, client_draft_key) do nothing, then the
+    // re-select, turns the loser into a duplicate that names the winner's draft.
+    var deck = await NewDeckAsync("race-submit");
+    var key = Key();
+    var body = new { deckId = deck.Id, drafts = new[] { Entry(key, Card("race-submit-card")) } };
+
+    var responses = await Task.WhenAll(SubmitAsync(body), SubmitAsync(body));
+    var data = responses.Select(Data).ToList();
+
+    var created = Assert.Single(data.SelectMany(d => d.GetProperty("created").EnumerateArray()));
+    var duplicate = Assert.Single(data.SelectMany(d => d.GetProperty("duplicates").EnumerateArray()));
+    var draftId = created.GetProperty("draftId").GetInt64();
+    Assert.Equal(key, duplicate.GetProperty("clientDraftKey").GetString());
+    Assert.Equal(draftId, duplicate.GetProperty("draftId").GetInt64());
+    Assert.Equal(1L, Convert.ToInt64(await _db.ScalarAsync("select count(*) from ai_drafts where deck_id = $1", deck.Id), CultureInfo.InvariantCulture));
+    Assert.Equal(1L, await EventCountAsync(draftId));
+  }
+
   [Fact]
   public async Task Accept_StableUidTaken_Returns409()
   {

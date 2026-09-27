@@ -103,6 +103,9 @@ public sealed class VpcFunction
       // 💡 彻底清除路径匹配的干扰因素：去掉尾部斜杠
       var p = req.Path.TrimEnd('/');
 
+      var agentDeny = Vpc.AgentClientPolicy.Deny(auth, req, p, res);
+      if (agentDeny is not null) return agentDeny;
+
       if (p.EndsWith("/health", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase)) return res.Ok(new { ok = true });
 
       // RevenueCat webhooks
@@ -301,6 +304,8 @@ public sealed class VpcFunction
       {
         var qaRun = RouteMatcher.Match("/api/v1/authoring/qa/runs/:runId", p);
         if (qaRun is not null) return await Vpc.Qa.QaRuns.HandleRun(req, res, auth, qaRun["runId"]);
+        var qaWaive = RouteMatcher.Match("/api/v1/authoring/qa/runs/:runId/items/:cardId/waive", p);
+        if (qaWaive is not null) return await Vpc.Qa.QaRuns.HandleWaiveItem(req, res, auth, qaWaive["runId"], qaWaive["cardId"]);
         var qaResolve = RouteMatcher.Match("/api/v1/authoring/qa/findings/:findingId/resolve", p);
         if (qaResolve is not null) return await Vpc.Qa.QaRuns.HandleResolveFinding(req, res, auth, qaResolve["findingId"]);
       }

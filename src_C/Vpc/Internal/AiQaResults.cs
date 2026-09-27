@@ -51,6 +51,7 @@ public static class AiQaResults
     public required string ContentSha256 { get; init; }
     public required string StableUid { get; init; }
     public int ResolvedFindings { get; init; }
+    public string? RequestId { get; set; }
   }
 
   private sealed class ReportError(string message) : Exception(message);
@@ -100,7 +101,7 @@ public static class AiQaResults
 
         var itemRows = await DbUtil.QueryAsync(conn, tx,
           """
-          select i.card_id, i.status, i.content_sha256, i.stable_uid,
+          select i.card_id, i.status, i.content_sha256, i.stable_uid, i.request_id,
             (select count(*) from ai_qa_findings f where f.run_id = i.run_id and f.card_id = i.card_id and f.resolution <> 'open') as resolved
           from ai_qa_items i
           where i.run_id = $1
@@ -116,6 +117,7 @@ public static class AiQaResults
             ContentSha256 = (string)r["content_sha256"]!,
             StableUid = (string)r["stable_uid"]!,
             ResolvedFindings = Convert.ToInt32(r["resolved"], CultureInfo.InvariantCulture),
+            RequestId = r["request_id"] as string,
           });
 
         foreach (var item in report.Items)
@@ -127,15 +129,22 @@ public static class AiQaResults
           }
 
           var previous = state.Status;
-          if (previous == "done" && item.Status != "done")
+          var keep = previous == "done" && (item.Status != "done" || state.ResolvedFindings > 0);
+          if (keep)
           {
             kept++;
-            continue;
-          }
-          if (previous == "done" && state.ResolvedFindings > 0)
-          {
-            kept++;
-            Log.Event("warn", new { tag = "ai_qa", reason = "resolved_findings_kept", runId = report.RunId, chunk = report.Chunk, cardId = item.CardId });
+            if (item.Status == "done")
+            {
+              Log.Event("warn", new { tag = "ai_qa", reason = "resolved_findings_kept", runId = report.RunId, chunk = report.Chunk, cardId = item.CardId });
+            }
+            // The outcome is kept, but a retried chunk re-reviewed (and re-billed) this card: its usage still
+            // counts toward the daily cap (backend-design-6, cloud-security-resilience-3).
+            if (IsNewAttempt(state, item))
+            {
+              await DbUtil.ExecuteAsync(conn, tx,
+                $"update ai_qa_items set {AccumulateUsageSql} where run_id = $1 and card_id = $2",
+                [report.RunId, item.CardId, item.InputTokens, item.OutputTokens, item.CacheReadTokens, item.EstimatedCostUsd]);
+            }
             continue;
           }
 
@@ -144,15 +153,22 @@ public static class AiQaResults
             Log.Event("warn", new { tag = "ai_qa", reason = "hash_echo_mismatch", runId = report.RunId, chunk = report.Chunk, cardId = item.CardId });
           }
 
+          // Usage accumulates across attempts (a retried chunk re-bills the card); an exact replay of the same
+          // model call (same request id, e.g. the Lambda's POST retry) replaces rather than adds.
+          var usageSql = IsNewAttempt(state, item)
+            ? "input_tokens = coalesce(input_tokens, 0) + $6, output_tokens = coalesce(output_tokens, 0) + $7, " +
+              "cache_read_tokens = coalesce(cache_read_tokens, 0) + $8, estimated_cost_usd = coalesce(estimated_cost_usd, 0) + $9"
+            : "input_tokens = greatest(coalesce(input_tokens, 0), $6), output_tokens = greatest(coalesce(output_tokens, 0), $7), " +
+              "cache_read_tokens = greatest(coalesce(cache_read_tokens, 0), $8), estimated_cost_usd = greatest(coalesce(estimated_cost_usd, 0), $9)";
           await DbUtil.ExecuteAsync(conn, tx,
-            """
+            $"""
             update ai_qa_items
-            set status = $3, error_code = $4::text, latency_ms = $5::int, input_tokens = $6, output_tokens = $7,
-              cache_read_tokens = $8, estimated_cost_usd = $9, request_id = $10::text, updated_at = now()
+            set status = $3, error_code = $4::text, latency_ms = $5::int, {usageSql}, request_id = $10::text, updated_at = now()
             where run_id = $1 and card_id = $2
             """,
             [report.RunId, item.CardId, item.Status, item.ErrorCode, item.LatencyMs, item.InputTokens, item.OutputTokens,
              item.CacheReadTokens, item.EstimatedCostUsd, item.RequestId]);
+          state.RequestId = item.RequestId;
 
           if (item.Status == "done")
           {
@@ -197,15 +213,20 @@ public static class AiQaResults
             provider = coalesce(r.provider, $2::text),
             model = coalesce(r.model, $3::text),
             prompt_version = coalesce(r.prompt_version, $4::text),
-            status = case when a.queued = 0 then 'done' when r.status = 'failed' then 'failed' else 'running' end,
-            error_code = case when a.queued = 0 then null else r.error_code end,
-            finished_at = case when a.queued = 0 then (case when r.status = 'done' then r.finished_at else now() end) else r.finished_at end,
+            status = case when a.queued = 0 and a.reviewed = 0 then 'failed' when a.queued = 0 then 'done'
+              when r.status = 'failed' then 'failed' else 'running' end,
+            error_code = case when a.queued = 0 and a.reviewed = 0 then 'ALL_ITEMS_FAILED' when a.queued = 0 then null else r.error_code end,
+            finished_at = case
+              when a.queued = 0 and a.reviewed = 0 then (case when r.status = 'failed' and r.error_code = 'ALL_ITEMS_FAILED' then r.finished_at else now() end)
+              when a.queued = 0 then (case when r.status = 'done' then r.finished_at else now() end)
+              else r.finished_at end,
             updated_at = now()
           from (
             select
               count(*) filter (where status in ('done','error','refused','skipped')) as cards_done,
               count(*) filter (where status in ('error','refused')) as error_count,
               count(*) filter (where status = 'queued') as queued,
+              count(*) filter (where status = 'done') as reviewed,
               coalesce(sum(input_tokens), 0) as input_tokens,
               coalesce(sum(output_tokens), 0) as output_tokens,
               coalesce(sum(cache_read_tokens), 0) as cache_read_tokens,
@@ -244,6 +265,21 @@ public static class AiQaResults
       return res.Error500(ex);
     }
   }
+
+  /// <summary>
+  /// <c>$3..$6</c> = input, output and cache-read tokens and estimated cost of one more attempt at an item, added
+  /// to what earlier attempts already recorded.
+  /// </summary>
+  private const string AccumulateUsageSql =
+    "input_tokens = coalesce(input_tokens, 0) + $3, output_tokens = coalesce(output_tokens, 0) + $4, " +
+    "cache_read_tokens = coalesce(cache_read_tokens, 0) + $5, estimated_cost_usd = coalesce(estimated_cost_usd, 0) + $6, updated_at = now()";
+
+  /// <summary>
+  /// True when the reported item is a model call not yet billed on this item: its request id differs from the one
+  /// stored. A repeat of the same request id (or two reports without one) is a replay of the same call.
+  /// </summary>
+  private static bool IsNewAttempt(ItemState state, ReportItem item) =>
+    !string.Equals(state.RequestId, item.RequestId, StringComparison.Ordinal);
 
   /// <summary>Best-effort side effects of a committed report (contract §0.8); never throws.</summary>
   private static async Task AfterCommitAsync(NpgsqlConnection conn, Report report, long deckId,
