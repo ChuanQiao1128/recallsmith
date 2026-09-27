@@ -497,7 +497,10 @@ export function CardDetailScreen({ navigation, route }: Props) {
                     <Pressable
                       testID="card-detail-source"
                       accessibilityRole="link"
-                      accessibilityLabel={`Open source on ${source.host}`}
+                      // The label replaces the children's text for VoiceOver, so it carries the quote
+                      // (the evidence) as well as the host; the action lives in the hint.
+                      accessibilityLabel={`Source, ${source.host}${source.quote !== null ? `: ${source.quote}` : ''}`}
+                      accessibilityHint="Opens the source in your browser"
                       style={({ pressed }) => [styles.sourceRow, pressed && styles.pressed]}
                       onPress={() => openSourceUrl(source.url)}
                     >
@@ -844,7 +847,8 @@ const styles = StyleSheet.create({
     letterSpacing: 1.0,
     marginBottom: 4,
   },
-  sourceHost: { fontSize: typography.bodySmall, color: colors.pokeBlueDeep, fontWeight: '800' },
+  // inkSecondary on white is 8.41:1 (pokeBlueDeep was 3.17:1, under WCAG AA 4.5:1).
+  sourceHost: { fontSize: typography.bodySmall, color: colors.inkSecondary, fontWeight: '800' },
   sourceQuote: {
     marginTop: 4,
     fontSize: typography.bodySmall,
