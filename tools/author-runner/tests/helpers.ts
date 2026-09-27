@@ -1,7 +1,7 @@
 // Test helpers: a loopback fake API, a temp HOME, a copied fake claude and a token file.
 // Nothing here touches the network beyond 127.0.0.1 or runs the real claude.
 
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -99,6 +99,10 @@ export function makeHome(): TestHome {
   const repo = join(dir, 'repo');
   const bin = join(dir, 'bin');
   for (const d of [home, repo, bin]) mkdirSync(d, { recursive: true });
+  // The runner pins the skill version from SKILL.md before it claims anything.
+  const skillDir = join(repo, '.claude', 'skills', 'author-cards');
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, 'SKILL.md'), '# Author cards (test)\n\nSkill version: `author-cards@1.8.1`.\n');
   const claudeBin = join(bin, 'claude');
   copyFileSync(FAKE_CLAUDE_SOURCE, claudeBin);
   chmodSync(claudeBin, 0o755);

