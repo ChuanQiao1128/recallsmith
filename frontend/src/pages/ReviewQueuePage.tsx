@@ -380,8 +380,10 @@ export function ReviewQueuePage() {
       ...prev,
       items: prev.items.map(item => (item.draftId === id ? { ...item, status: decided } : item)),
     }));
-    // The edit was just accepted, so this navigation discards nothing.
-    guard.allowNextNavigation();
+    // The edit was just accepted, so this navigation discards nothing. Only arm
+    // the allowance when the URL carries a draftId, i.e. when the navigation
+    // actually moves; on the auto-selected draft it stays put (frontend-console-19).
+    if (draftIdParam !== null) guard.allowNextNavigation();
     setSearchParams({ deckId: String(deckId) });
     setListNonce(n => n + 1);
     return null;

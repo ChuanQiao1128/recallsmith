@@ -29,7 +29,7 @@ export function useUnsavedChangesGuard(dirty: boolean): { allowNextNavigation: (
 
   // Set true for the one navigation that follows a successful save; read inside
   // the blocker so that save is not treated as a discard. It is one-shot: the
-  // navigation it lets through clears it, so a page that stays mounted after
+  // next navigation attempt clears it, moving or not, so a page that stays mounted after
   // the save (the review queue) is guarded again for the next edit.
   const allowRef = useRef(false);
 
@@ -48,11 +48,12 @@ export function useUnsavedChangesGuard(dirty: boolean): { allowNextNavigation: (
   const blocker = useBlocker(({ currentLocation, nextLocation }) => {
     const moves =
       currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search;
-    if (!moves) return false;
-    if (allowRef.current) {
-      allowRef.current = false;
-      return false;
-    }
+    // The allowance is spent by the very next navigation attempt, whether or
+    // not it moves: a setSearchParams that lands on the same URL must not
+    // leave it armed for a later, unrelated navigation (frontend-console-19).
+    const allow = allowRef.current;
+    allowRef.current = false;
+    if (!moves || allow) return false;
     return dirty;
   });
 

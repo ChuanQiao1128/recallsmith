@@ -488,6 +488,38 @@ describe('ReviewQueuePage', () => {
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
+  it('guards edits on the draft that auto-opens after an accept (frontend-console-19, round 3)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const second = qaDraftCard({ stableUid: 'sample-qa-topic-03' });
+    const secondSummary = draftSummary({ draftId: 42, stableUid: second.stableUid });
+    api.listDrafts
+      .mockResolvedValueOnce(ok({ items: [draftSummary(), secondSummary], nextCursor: null }))
+      .mockResolvedValue(ok({ items: [draftSummary({ status: 'accepted' }), secondSummary], nextCursor: null }));
+    api.fetchDraft.mockImplementation(async (id: number) =>
+      ok(id === 42 ? draft(second, { draftId: 42, stableUid: second.stableUid }) : draft(qaDraftCard())),
+    );
+    api.acceptDraft.mockResolvedValue(
+      ok({ draftId: 41, cardId: 901, stableUid: 'sample-qa-topic-02', action: 'accepted' }),
+    );
+    // Landing on /review?deckId=7: the open draft comes from the list, not from a draftId.
+    await openReview();
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    expect(await screen.findByText(/Accepted as card #901/)).toBeTruthy();
+    await waitFor(() => expect(api.fetchDraft).toHaveBeenLastCalledWith(42));
+    await waitFor(() =>
+      expect(within(screen.getByRole('region', { name: 'Draft card' })).getByText('sample-qa-topic-03')).toBeTruthy(),
+    );
+    expect(locationText()).toBe('/review?deckId=7');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText(/question/i), { target: { value: 'An edited second question?' } });
+    await userEvent.click(screen.getByRole('link', { name: 'AI QA' }));
+
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
+    expect(locationText()).toBe('/review?deckId=7');
+    expect((screen.getByLabelText(/question/i) as HTMLTextAreaElement).value).toBe('An edited second question?');
+  });
+
   it('says what the empty list means for each status filter (frontend-console-20)', async () => {
     api.listDrafts.mockResolvedValue(ok({ items: [], nextCursor: null }));
     renderAt(<ReviewQueuePage />, ['/review?deckId=7']);
