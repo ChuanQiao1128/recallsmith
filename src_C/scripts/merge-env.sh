@@ -8,23 +8,27 @@
 SSM_TO_ENV='{"pg-password":"PGPASSWORD","migrate-secret":"MIGRATE_SECRET","internal-shared-secret":"INTERNAL_SHARED_SECRET","rc-webhook-auth-production":"RC_WEBHOOK_AUTH_PRODUCTION","rc-webhook-auth-development":"RC_WEBHOOK_AUTH_DEVELOPMENT","analytics-salt":"ANALYTICS_USER_SALT"}'
 # The internal-secret rows (R18 Z01, cloud-security-resilience-2/-11): the per-route secrets and the
 # optional -previous leaves that exist only while a rotation or a cut-over is in progress. Appended to the
-# map above (plain string splice, no jq at source time).
-SSM_TO_ENV_INTERNAL='{"internal-shared-secret-previous":"INTERNAL_SHARED_SECRET_PREVIOUS","ai-qa-results-secret":"INTERNAL_SECRET_AI_QA_RESULTS","ai-qa-results-secret-previous":"INTERNAL_SECRET_AI_QA_RESULTS_PREVIOUS","webhook-report-secret":"INTERNAL_SECRET_WEBHOOK_REPORT","webhook-report-secret-previous":"INTERNAL_SECRET_WEBHOOK_REPORT_PREVIOUS"}'
+# map above (plain string splice, no jq at source time). R18A A10: the source-watch and notifier callback
+# secrets (core-vpc verifies both routes); mapped before A10 creates the leaves, because deploy.sh reads the
+# whole path and an unmapped leaf is a hard error.
+SSM_TO_ENV_INTERNAL='{"internal-shared-secret-previous":"INTERNAL_SHARED_SECRET_PREVIOUS","ai-qa-results-secret":"INTERNAL_SECRET_AI_QA_RESULTS","ai-qa-results-secret-previous":"INTERNAL_SECRET_AI_QA_RESULTS_PREVIOUS","webhook-report-secret":"INTERNAL_SECRET_WEBHOOK_REPORT","webhook-report-secret-previous":"INTERNAL_SECRET_WEBHOOK_REPORT_PREVIOUS","source-watch-secret":"INTERNAL_SECRET_SOURCE_WATCH","source-watch-secret-previous":"INTERNAL_SECRET_SOURCE_WATCH_PREVIOUS","notifier-secret":"INTERNAL_SECRET_NOTIFIER","notifier-secret-previous":"INTERNAL_SECRET_NOTIFIER_PREVIOUS"}'
 SSM_TO_ENV="${SSM_TO_ENV%\}},${SSM_TO_ENV_INTERNAL#\{}"
 # Env keys whose SSM leaf may be absent. merge_env keeps every key of the live environment, so without this
 # a key would outlive its deleted leaf (a rotation that has ended would keep accepting the old secret).
 # deploy.sh drops each of these from the live environment when the path no longer holds its leaf.
-SSM_OPTIONAL_ENV='["INTERNAL_SHARED_SECRET_PREVIOUS","INTERNAL_SECRET_AI_QA_RESULTS","INTERNAL_SECRET_AI_QA_RESULTS_PREVIOUS","INTERNAL_SECRET_WEBHOOK_REPORT","INTERNAL_SECRET_WEBHOOK_REPORT_PREVIOUS"]'
+SSM_OPTIONAL_ENV='["INTERNAL_SHARED_SECRET_PREVIOUS","INTERNAL_SECRET_AI_QA_RESULTS","INTERNAL_SECRET_AI_QA_RESULTS_PREVIOUS","INTERNAL_SECRET_WEBHOOK_REPORT","INTERNAL_SECRET_WEBHOOK_REPORT_PREVIOUS","INTERNAL_SECRET_SOURCE_WATCH","INTERNAL_SECRET_SOURCE_WATCH_PREVIOUS","INTERNAL_SECRET_NOTIFIER","INTERNAL_SECRET_NOTIFIER_PREVIOUS"]'
 # Leaves read by a Python Lambda at cold start; they never become a core-vpc/worker env var (R18-00 §14 #8).
 # webhook-signing-secret-previous exists only while a signing-secret rotation is in progress (dispatcher
 # README runbook); deploy.sh reads the whole path, so it must be skipped here or every deploy in that
-# window fails (Y01 cloud-security-resilience-10).
-SSM_NOT_ENV='["webhook-signing-secret","webhook-signing-secret-previous","anthropic-api-key"]'
+# window fails (Y01 cloud-security-resilience-10). R18A: notify-recipient (created by A11) is read by the
+# notifier only and must never become a core env var.
+SSM_NOT_ENV='["webhook-signing-secret","webhook-signing-secret-previous","anthropic-api-key","notify-recipient"]'
 # Leaf patterns skipped as well (Z01 cloud-security-resilience-15), so a runbook that creates a rotation or
 # per-subscription leaf does not need a new row here first: any unmapped *-previous leaf, and the dispatcher's
 # per-subscription signing secrets webhook-signing-secret-sub-<id>[-previous]. A mapped leaf wins over a
 # pattern; any other unmapped leaf is still a hard error.
 SSM_NOT_ENV_PATTERN='^(.+-previous|webhook-signing-secret-sub-[0-9]+(-previous)?)$'
+# R18A A10: AUTOMATION_NOTIFY_QUEUE_URL stays core-vpc only (only core-vpc enqueues emails), so it is not here.
 WORKER_FILE_KEYS='["PGUSER","PGSSLMODE","PG_MAX","LOG_LEVEL","WEBHOOK_EVENTS_QUEUE_URL"]'
 WORKER_SECRET_KEYS='["PGPASSWORD"]'
 
