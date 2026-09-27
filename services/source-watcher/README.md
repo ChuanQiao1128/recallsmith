@@ -40,6 +40,8 @@ the Lambda runtime and is imported lazily for the one SSM read.
    parse the feed (rss, atom).
 6. `POST /api/internal/source-watch/report` `{"v": 1, "watchRunId", "observations"}` in batches of
    at most `REPORT_BATCH_SIZE = 100`, each with the remaining Lambda time minus 5 s as its budget.
+   A batch is posted **as soon as it is full** (during the loop), the rest after the loop, so a run
+   killed later (timeout, OOM) has already reported every full batch (C03).
    A failed batch ⇒ `SourceWatchReportFailures` and a `report_failed` log; after all batches the
    invocation raises if any batch failed.
 7. Returns `{"watchRunId", "checked", "changed", "failed"}` (`changed` = the sum of the report
@@ -140,13 +142,24 @@ normaliser as a new baseline, not a change).
 
 - **Decoding (HTML/XML):** charset from the `Content-Type` parameter, else a `<meta charset=…>` or
   `<meta http-equiv="Content-Type" content="…charset=…">` in the first 4096 bytes, else UTF-8;
-  decoded with `errors="replace"`; an unknown codec name means UTF-8. `text/plain` uses the
+  decoded with `errors="replace"`; an unknown codec name, or one whose Python codec is not a WHATWG
+  text encoding (`normalize.ALLOWED_CODECS`: UTF-8/16, ASCII, ISO-8859-x, windows-125x, windows-874,
+  KOI8-R/U, IBM866, macintosh, Shift_JIS, EUC-JP, ISO-2022-JP, EUC-KR, GB2312/GBK/GB18030, Big5),
+  means UTF-8. So a page cannot pick `punycode`, `idna`, `utf-7` and the like (quadratic or raising
+  decoders; C03). `text/plain` uses the
   `Content-Type` charset, else UTF-8 (no `<meta>` sniffing).
 - **HTML tree:** stdlib `html.parser.HTMLParser` (`convert_charrefs=True`) builds a minimal
   element tree. The void elements `area, base, br, col, embed, hr, img, input, link, meta, source,
   track, wbr` never open a scope; an end tag closes the nearest open element with that name (and
   everything opened inside it); an unmatched end tag is ignored. For a repeated attribute the first
   value wins.
+- **Bounded work (C03).** The end-tag search looks at the `END_TAG_SEARCH_DEPTH = 64` innermost
+  open elements only (an opener further up counts as unmatched); beyond `MAX_OPEN_DEPTH = 512` open
+  elements a start tag is appended to the innermost one without opening a scope. Both only change
+  the tree of pages no real site serves, so the version stays `v1`, and parsing is linear in the
+  page size. A page with more than `MAX_ELEMENTS = 200 000` elements, or whose parse takes more
+  than `PARSE_TIME_BUDGET_SECONDS = 20`, raises `ParseLimitExceeded`: the observation is `failed` /
+  `PARSE` (log `parse_limit` with `targetId`, `host`, `limit`) and the run continues.
 - **Dropped subtrees:** `script, style, noscript, template, svg, nav, header, footer, aside, form,
   iframe, button` (removed before the content root is chosen).
 - **Content root:** the first `main`, else the first `article`, else the first element whose
@@ -192,6 +205,8 @@ normaliser as a new baseline, not a change).
 ## Logs and metrics
 
 JSON lines on stdout (`logs.log`, tag `source-watcher`, filtered by `LOG_LEVEL`). One `info` line
+`observe_start` (`targetId`, `host`, `kind`) before any robots/fetch/parse work on a target, so a
+target that stops a run is always named in the log. One `info` line
 per observation with `watchRunId`, `targetId`, `host`, `status`, `httpStatus`, `errorCode`,
 `bytes`, `latencyMs`. Logs never carry page text, quotes, query strings, bodies, secrets or
 signatures.
@@ -231,3 +246,10 @@ placeholder code; at release (A00 §19.2 step 5) the supervisor deploys the code
 key names without calling `aws`), sets the SSM secret, and then enables the schedule
 `developercards-source-watch` (A00 §19.2 step 6). The first hour records a `baseline` for the
 seeded feeds.
+
+**First deploy (C03).** Terraform creates the `prod` alias on `$LATEST`. The deploy
+(`services/lambda-release.sh`) therefore first publishes the live `$LATEST` (the placeholder) and
+moves the alias to that version, so the code and environment updates that follow do not go live
+at once. It then publishes the new code, checks that the version is `Active` / `Successful` with
+the local `CodeSha256` (no invoke), and only then moves the alias. The printed `ROLLBACK:` names the
+frozen placeholder version, never `$LATEST`. The same applies to `notifier`.
