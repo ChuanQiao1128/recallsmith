@@ -23,7 +23,7 @@ namespace RecallSmith.Lambda.Db;
 /// </remarks>
 public static class WebhookEvents
 {
-  public static readonly IReadOnlyList<string> SubscribableEvents = ["deck.published", "import.failed", "card.flagged", "review.queued"];
+  public static readonly IReadOnlyList<string> SubscribableEvents = ["deck.published", "import.failed", "card.flagged", "review.queued", "draft.auto_accepted", "automation.batch_completed", "automation.exception", "source.changed"];
   public const string TestEvent = "webhook.test";
   public const string QueueUrlEnv = "WEBHOOK_EVENTS_QUEUE_URL";
 

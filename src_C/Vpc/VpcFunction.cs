@@ -309,6 +309,75 @@ public sealed class VpcFunction
         var qaResolve = RouteMatcher.Match("/api/v1/authoring/qa/findings/:findingId/resolve", p);
         if (qaResolve is not null) return await Vpc.Qa.QaRuns.HandleResolveFinding(req, res, auth, qaResolve["findingId"]);
       }
+      // R18A — automation
+      if (p.EndsWith("/api/v1/authoring/automation/runner/heartbeat", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.RunnerRoutes.HandleHeartbeat(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/authoring/automation/runner/claim", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.RunnerRoutes.HandleClaim(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/authoring/automation/runner/complete", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.RunnerRoutes.HandleComplete(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/queue", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.QueueRoutes.HandleQueue(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/queue/:itemId/skip", p) is { } queueSkip)
+      {
+        return await Vpc.Automation.QueueRoutes.HandleSkip(req, res, auth, queueSkip["itemId"]);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/notifications/test", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.Notifications.HandleTest(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/notifications", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.Notifications.HandleList(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/notifications/:notificationId", p) is { } notification)
+      {
+        return await Vpc.Automation.Notifications.HandleGet(req, res, auth, notification["notificationId"]);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/watch", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.WatchAdminRoutes.HandleWatch(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/watch/targets", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.WatchAdminRoutes.HandleTargets(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/watch/targets/:targetId", p) is { } watchTarget)
+      {
+        return await Vpc.Automation.WatchAdminRoutes.HandleTarget(req, res, auth, watchTarget["targetId"]);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/status", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.StatusRoutes.HandleStatus(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/runs", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.StatusRoutes.HandleRuns(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/decisions", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.StatusRoutes.HandleDecisions(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/decisions/:draftId", p) is { } automationDecision)
+      {
+        return await Vpc.Automation.StatusRoutes.HandleDecision(req, res, auth, automationDecision["draftId"]);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/eval-gate", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.EvalGate.HandleGate(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/eval-gate/:gateId/revoke", p) is { } gateRevoke)
+      {
+        return await Vpc.Automation.EvalGate.HandleRevoke(req, res, auth, gateRevoke["gateId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
@@ -413,6 +482,22 @@ public sealed class VpcFunction
       if (RouteMatcher.Match("/api/internal/ai-qa/results", p) is not null)
       {
         return await Vpc.Internal.AiQaResults.HandleAiQaResults(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/automation/tick", p) is not null)
+      {
+        return await Vpc.Automation.AutomationTick.HandleTick(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/automation/notifications/report", p) is not null)
+      {
+        return await Vpc.Automation.Notifications.HandleReport(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/source-watch/targets", p) is not null)
+      {
+        return await Vpc.Automation.SourceWatchRoutes.HandleTargets(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/source-watch/report", p) is not null)
+      {
+        return await Vpc.Automation.SourceWatchRoutes.HandleReport(req, res);
       }
 
       return res.NotFound("Route not found");

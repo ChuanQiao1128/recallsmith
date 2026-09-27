@@ -13,7 +13,7 @@ namespace RecallSmith.Lambda.Db;
 /// </summary>
 public static class AutomationLedger
 {
-  public static readonly IReadOnlyList<string> Automations = ["publish_pipeline", "bulk_import", "ai_draft_review", "ai_qa_review", "webhook_notification", "publish_gate"];
+  public static readonly IReadOnlyList<string> Automations = ["publish_pipeline", "bulk_import", "ai_draft_review", "ai_qa_review", "webhook_notification", "publish_gate", "auto_accept", "auto_publish", "source_watch"];
 
   public const int MaxRefLength = 200;
 
