@@ -1,0 +1,24 @@
+{
+  "name": "@developercards/mcp-server",
+  "private": true,
+  "version": "1.8.0",
+  "description": "Local stdio MCP server that lets the DeveloperCards authoring agent read sources, lint cards and submit drafts for human review.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json && node scripts/build.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.10"
+  }
+}
