@@ -29,6 +29,20 @@ public static class RunnerRoutes
   public const int MaxLeaseMinutes = 240;
   public const int RetryBackoffMinutes = 60;
 
+  /// <summary>
+  /// The error prefix of a run the runner could not do at all (R18D M5): claude could not start, ran off the
+  /// subscription, the MCP server did not start, or a usage limit. The item goes back to <c>queued</c> without using an
+  /// attempt, and one <c>runner_unavailable</c> email per UTC day tells the owner.
+  /// </summary>
+  public const string RunnerUnavailablePrefix = "RUNNER_UNAVAILABLE:";
+
+  /// <summary>
+  /// The error prefix of a run whose agent said it could not do the task (R18C L6, written by the runner as
+  /// <c>AGENT_BLOCKED: &lt;reason&gt;</c>). Retrying repeats the block, so the item fails on the first such run and a
+  /// person resolves it (R18D M5, automation-27): one <c>queue_item_failed</c> email carries the reason.
+  /// </summary>
+  public const string AgentBlockedPrefix = "AGENT_BLOCKED";
+
   private static readonly string[] RunnerStates = ["idle", "running", "error", "login_expired"];
   private static readonly string[] Outcomes = ["done", "nothing_new", "failed"];
 
@@ -316,6 +330,8 @@ public static class RunnerRoutes
         if (itemStatus == "claimed" && item["last_run_id"] is Guid holder && holder == runId)
         {
           var attempts = Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture);
+          var runnerUnavailable = outcome == "failed" && IsRunnerUnavailable(error);
+          var agentBlocked = outcome == "failed" && !runnerUnavailable && IsAgentBlocked(error);
           if (outcome != "failed")
           {
             itemStatus = "done";
@@ -326,7 +342,20 @@ public static class RunnerRoutes
               where id = $1
               """, [itemId]);
           }
-          else if (attempts < MaxItemAttempts)
+          else if (runnerUnavailable)
+          {
+            // Not the item's failure: the claim's attempt is given back and the item is due again at once; the runner
+            // stopped its loop, so the next claim comes from its next start (R18D M5).
+            itemStatus = "queued";
+            await DbUtil.ExecuteAsync(conn, tx,
+              """
+              update authoring_queue_items
+              set status = 'queued', lease_expires_at = null, attempts = greatest(attempts - 1, 0), not_before = now(), last_error = $2,
+                  updated_at = now()
+              where id = $1
+              """, [itemId, error]);
+          }
+          else if (!agentBlocked && attempts < MaxItemAttempts)
           {
             itemStatus = "queued";
             await DbUtil.ExecuteAsync(conn, tx,
@@ -375,23 +404,31 @@ public static class RunnerRoutes
   public static readonly IReadOnlyList<string> ActionableRunErrorPrefixes =
     ["AGENT_BLOCKED", "claude could not be started", "claude did not run on the subscription login"];
 
+  internal static bool IsRunnerUnavailable(string? error) => error?.StartsWith(RunnerUnavailablePrefix, StringComparison.Ordinal) == true;
+
+  internal static bool IsAgentBlocked(string? error) => error?.StartsWith(AgentBlockedPrefix, StringComparison.Ordinal) == true;
+
   /// <summary>From this many attempts on one queue item a failed run is a repeated failure a person should look at.</summary>
   public const int RepeatedFailureAttempts = 2;
 
   /// <summary>
   /// Whether a failed run needs the <c>runner_run_failed</c> email (R18C L6, automation-15): not when the item failed
-  /// for good (<c>queue_item_failed</c> carries that), otherwise for an actionable error or a repeated failure of the
+  /// for good (<c>queue_item_failed</c> carries that, also for <c>AGENT_BLOCKED</c>, which fails the item at once), not
+  /// for <c>RUNNER_UNAVAILABLE</c> (<c>runner_unavailable</c>), otherwise for an actionable error or a repeated failure of the
   /// item. A first transient failure (a timeout, a lease release) is retried on its own and shows on the Runs tab.
   /// </summary>
   internal static bool RunFailureNeedsHuman(string? error, int itemAttempts, string itemStatus)
   {
     if (itemStatus == "failed") return false;
+    // A runner that cannot work at all has its own daily email (runner_unavailable, R18D M5).
+    if (IsRunnerUnavailable(error)) return false;
     if (error is { } e && ActionableRunErrorPrefixes.Any(p => e.StartsWith(p, StringComparison.Ordinal))) return true;
     return itemAttempts >= RepeatedFailureAttempts;
   }
 
   /// <summary>
-  /// Runs after a complete commits (never on a replay): the <c>runner_run_failed</c> exception email for a failed run a
+  /// Runs after a complete commits (never on a replay): <c>runner_unavailable</c> (once per UTC day) for a runner that
+  /// could not work, the <c>runner_run_failed</c> exception email for a failed run a
   /// person can act on (<see cref="RunFailureNeedsHuman"/>), <c>queue_item_failed</c> when the item failed for good,
   /// then <see cref="AutomationRuns.TryFinalizeAsync"/> (A00 §6.1, §8.5, §12.4). It never throws: the business commit
   /// already happened.
@@ -405,7 +442,7 @@ public static class RunnerRoutes
       {
         var rows = await DbUtil.QueryAsync(conn, null,
           """
-          select q.url, q.last_error, q.attempts, r.error
+          select q.url, q.last_error, q.attempts, r.error, r.runner_id
           from automation_runs r join authoring_queue_items q on q.id = r.queue_item_id
           where r.run_id = $1
           """, [runId]);
@@ -413,6 +450,18 @@ public static class RunnerRoutes
         var id = itemId.ToString(CultureInfo.InvariantCulture);
         var runError = rows.Count == 0 ? null : rows[0]["error"] as string;
         var attempts = rows.Count == 0 ? 0 : Convert.ToInt32(rows[0]["attempts"], CultureInfo.InvariantCulture);
+        if (outcome == "failed" && IsRunnerUnavailable(runError))
+        {
+          var utcDate = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+          await Notifications.RaiseExceptionAsync(conn, "runner_unavailable", $"exception:runner_unavailable:{utcDate}",
+            new Dictionary<string, string>
+            {
+              ["runnerId"] = rows.Count == 0 ? string.Empty : rows[0]["runner_id"] as string ?? string.Empty,
+              ["runId"] = runId.ToString("D"),
+              ["itemId"] = id,
+              ["error"] = runError ?? string.Empty,
+            }, runId, ct);
+        }
         if (outcome == "failed" && RunFailureNeedsHuman(runError, attempts, itemStatus))
         {
           await Notifications.RaiseExceptionAsync(conn, "runner_run_failed", $"exception:runner_run_failed:{runId:D}",

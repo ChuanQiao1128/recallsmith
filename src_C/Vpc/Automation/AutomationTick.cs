@@ -177,6 +177,7 @@ public static class AutomationTick
     await Step("source_events", () => SourceEventsAsync(conn, mode.Effective, a, Spent));
     await Step("runner_health", () => RunnerHealthAsync(conn, a, Spent));
     await Step("eval_gate", () => EvalGateAsync(conn, mode, a));
+    await Step("live_quality", () => LiveQualityAsync(conn, a));
     await Step("resend", async () => a.NotificationsResent = await Notifications.ResendAsync(conn, StepBatch));
   }
 
@@ -710,6 +711,27 @@ public static class AutomationTick
     if (raised?.Created == true) a.Alerts++;
   }
 
+  /// <summary>
+  /// The live quality alarm (R18D M2, automation-22): <c>live_override_high</c>, once per ISO week, when people deleted
+  /// or edited more than 5 % of the cards auto-accepted in the last 30 days, over at least 20 auto-accepts.
+  /// </summary>
+  private static async Task LiveQualityAsync(NpgsqlConnection conn, Actions a)
+  {
+    var q = await StatusRoutes.LoadLiveQualityAsync(conn);
+    if (!q.OverrideHigh) return;
+    var now = DateTime.UtcNow;
+    var week = $"{ISOWeek.GetYear(now).ToString(CultureInfo.InvariantCulture)}-W{ISOWeek.GetWeekOfYear(now).ToString("00", CultureInfo.InvariantCulture)}";
+    var raised = await Notifications.RaiseExceptionAsync(conn, "live_override_high", $"exception:live_override_high:{week}",
+      new Dictionary<string, string>
+      {
+        ["autoAccepted30d"] = q.AutoAccepted30d.ToString(CultureInfo.InvariantCulture),
+        ["deletedByPerson"] = q.DeletedByPerson.ToString(CultureInfo.InvariantCulture),
+        ["editedByPerson"] = q.EditedByPerson.ToString(CultureInfo.InvariantCulture),
+        ["overrideRate"] = q.OverrideRate!.Value.ToString("0.0000", CultureInfo.InvariantCulture),
+      });
+    if (raised?.Created == true) a.Alerts++;
+  }
+
   // ---------------------------------------------------------------------------------------------
   // step 1 — the weekly digest
   // ---------------------------------------------------------------------------------------------
@@ -743,16 +765,20 @@ public static class AutomationTick
       var publishesByState = await CountsAsync(
         "select state as k, count(*) as n from automation_publishes where created_at >= $1 and created_at < $2 group by state");
 
+      // The status's blind definition (R18D M3): the digest's agreement is accepted unedited over decided blind.
       var shadow = (await DbUtil.QueryAsync(conn, null,
-        """
+        $"""
         select count(*) as would_accept,
-          count(*) filter (where human_action is not null) as decided,
-          count(*) filter (where human_action = 'accepted') as accepted,
-          count(*) filter (where human_action = 'edited_accepted') as edited,
-          count(*) filter (where human_action = 'rejected') as rejected
-        from automation_draft_decisions
-        where state = 'would_accept' and created_at >= $1 and created_at < $2
+          count(*) filter (where dd.human_action is not null) as decided,
+          count(*) filter (where dd.human_action = 'accepted') as accepted,
+          count(*) filter (where dd.human_action = 'edited_accepted') as edited,
+          count(*) filter (where dd.human_action = 'rejected') as rejected,
+          count(*) filter (where dd.human_action is not null and {StatusRoutes.BlindDecidedSql}) as blind_decided,
+          count(*) filter (where dd.human_action = 'accepted' and {StatusRoutes.BlindDecidedSql}) as blind_accepted
+        from automation_draft_decisions dd
+        where dd.state = 'would_accept' and dd.created_at >= $1 and dd.created_at < $2
         """, [start, end]))[0];
+      var liveQuality = await StatusRoutes.LoadLiveQualityAsync(conn);
       var watch = (await DbUtil.QueryAsync(conn, null,
         """
         select count(*) filter (where kind in ('changed', 'gone')) as changes, count(*) filter (where kind = 'failing') as failures
@@ -791,7 +817,8 @@ public static class AutomationTick
         runners.Select(r => new DigestRunner((string)r["runner_id"]!, Ts(r["last_heartbeat_at"]),
           r["login_expires_at"] is null ? null : Ts(r["login_expires_at"]))).ToList(),
         Convert.ToDecimal(spend["human"], CultureInfo.InvariantCulture), Convert.ToDecimal(spend["automation"], CultureInfo.InvariantCulture),
-        backlog.HumanPending, backlog.HumanPublishes);
+        backlog.HumanPending, backlog.HumanPublishes, Long(shadow["blind_decided"]), Long(shadow["blind_accepted"]),
+        new DigestLive(liveQuality.AutoAccepted30d, liveQuality.DeletedByPerson, liveQuality.EditedByPerson, liveQuality.OverrideRate));
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.WeeklyDigest(mode, data, baseUrl);
