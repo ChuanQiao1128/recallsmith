@@ -90,3 +90,39 @@ test('accepts a Buffer raw body with non-ASCII bytes', () => {
     reason: 'bad_signature',
   });
 });
+
+test('accepts either signature header during a secret rotation', () => {
+  // The sender signs with the new secret (primary header) and the old one (previous header).
+  const NEW_SECRET = 'whsec-test-next';
+  const fromNew = sign(NEW_SECRET, TIMESTAMP, BODY);
+  // A receiver still on the old secret: the primary header fails, the previous one is the contract vector.
+  assert.deepEqual(verifyDeveloperCardsSignature(vector({ signature: fromNew, previousSignature: SIGNATURE })), { ok: true });
+  assert.deepEqual(verifyDeveloperCardsSignature(vector({ signature: fromNew, previousSignature: ` ${SIGNATURE.toUpperCase()} ` })), {
+    ok: true,
+  });
+  // A receiver already on the new secret: the primary header matches whatever the previous one says.
+  assert.deepEqual(verifyDeveloperCardsSignature(vector({ secret: NEW_SECRET, signature: fromNew, previousSignature: SIGNATURE })), { ok: true });
+  assert.deepEqual(verifyDeveloperCardsSignature(vector({ secret: NEW_SECRET, signature: fromNew, previousSignature: 'garbage' })), { ok: true });
+  // Neither header matches this receiver's secret.
+  assert.deepEqual(verifyDeveloperCardsSignature(vector({ secret: 'whsec-other', signature: fromNew, previousSignature: SIGNATURE })), {
+    ok: false,
+    reason: 'bad_signature',
+  });
+  // The previous header does not lift the other checks: body, timestamp and primary header format.
+  assert.deepEqual(verifyDeveloperCardsSignature(vector({ signature: fromNew, previousSignature: SIGNATURE, rawBody: BODY + ' ' })), {
+    ok: false,
+    reason: 'bad_signature',
+  });
+  assert.deepEqual(
+    verifyDeveloperCardsSignature(vector({ signature: fromNew, previousSignature: SIGNATURE, nowSeconds: Number(TIMESTAMP) + 301 })),
+    { ok: false, reason: 'stale_timestamp' },
+  );
+  assert.deepEqual(verifyDeveloperCardsSignature(vector({ signature: undefined, previousSignature: SIGNATURE })), {
+    ok: false,
+    reason: 'missing_header',
+  });
+  // A malformed or non-string previous header adds nothing and never throws.
+  for (const previousSignature of ['sha256=' + SIGNATURE, SIGNATURE.slice(0, 63), '', null, [SIGNATURE], 42]) {
+    assert.deepEqual(verifyDeveloperCardsSignature(vector({ signature: fromNew, previousSignature })), { ok: false, reason: 'bad_signature' });
+  }
+});

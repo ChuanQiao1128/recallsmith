@@ -69,9 +69,37 @@ describe('lint_card', () => {
   });
 
   it('matches the quote against the chunk after normalising whitespace', async () => {
-    const card = { ...sampleCard(), source: { url: 'https://example.com/s3/retrieval-options', quote: ' twice a year.  Its standard\tretrieval ' } };
+    // The quote spans the chunk's line break; it is long enough for SOURCE_QUOTE_TOO_SHORT (ai-agent-24).
+    const card = { ...sampleCard(), source: { url: 'https://example.com/s3/retrieval-options', quote: ' read once or twice a year.  Its standard\tretrieval finishes ' } };
     const result = await lint({ deckSlug: 'aws-saa-c03', card, sourceChunkText: SAMPLE_CHUNK });
     expect(result.ok).toBe(true);
+  });
+
+  it('reports SOURCE_QUOTE_TOO_SHORT for a quote under 40 characters or 6 words (ai-agent-24)', async () => {
+    const withQuote = (quote: string) => ({ ...sampleCard(), source: { url: 'https://example.com/s3/retrieval-options', quote } });
+    // A two-word quote occurs on almost any page; it is refused even when it is in the chunk.
+    const twoWords = await lint({ deckSlug: 'aws-saa-c03', card: withQuote('S3 Glacier'), sourceChunkText: SAMPLE_CHUNK });
+    expect(twoWords.ok).toBe(false);
+    expect(codes(twoWords.issues)).toEqual(['SOURCE_QUOTE_TOO_SHORT']);
+    expect(twoWords.issues[0]?.message).toContain('10 characters and 2 words');
+
+    // Long enough in characters but too few words (a single long identifier).
+    const fewWords = await lint({ deckSlug: 'aws-saa-c03', card: withQuote('arn:aws:s3:::example-bucket-for-archived-dumps/nightly') });
+    expect(codes(fewWords.issues)).toEqual(['SOURCE_QUOTE_TOO_SHORT']);
+
+    // Six words but under 40 characters once whitespace is collapsed.
+    const fewChars = await lint({ deckSlug: 'aws-saa-c03', card: withQuote('It   is priced for  archives   read') });
+    expect(codes(fewChars.issues)).toEqual(['SOURCE_QUOTE_TOO_SHORT']);
+
+    // 39 characters is one short; exactly 40 characters and 6 words passes.
+    const oneShort = await lint({ deckSlug: 'aws-saa-c03', card: withQuote('Its standard retrieval finishes in 3 to'), sourceChunkText: SAMPLE_CHUNK });
+    expect(codes(oneShort.issues)).toEqual(['SOURCE_QUOTE_TOO_SHORT']);
+    const atLimit = await lint({ deckSlug: 'aws-saa-c03', card: withQuote('year. Its standard retrieval finishes in'), sourceChunkText: SAMPLE_CHUNK });
+    expect(atLimit).toEqual({ ok: true, issues: [], warnings: [] });
+
+    // The check runs without sourceChunkText too.
+    const unchecked = await lint({ deckSlug: 'aws-saa-c03', card: withQuote('Its standard retrieval') });
+    expect(codes(unchecked.issues)).toEqual(['SOURCE_QUOTE_TOO_SHORT']);
   });
 
   it('warns TOPIC_NOT_IN_VOCABULARY for a topic outside the deck vocabulary', async () => {
