@@ -721,11 +721,8 @@ public static class AutomationTick
           coalesce((select sum(estimated_cost_usd) from ai_qa_runs where created_at >= $1 and created_at < $2 and requested_by_sub = 'automation'), 0)
           + coalesce((select sum(estimated_cost_usd) from automation_qa_spend where spent_at >= $1 and spent_at < $2), 0) as automation
         """, [start, end]))[0];
-      var pendingHuman = Long(await DbUtil.ExecuteScalarAsync(conn, null,
-        """
-        select count(*) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
-        where dd.state = 'human' and a.status = 'pending'
-        """, []));
+      // The open backlog, whenever it was raised (R18B K7): not the week's rows in state human.
+      var backlog = await StatusRoutes.LoadBacklogAsync(conn);
       var watchChecks = automations.FirstOrDefault(x => x.Automation == "source_watch")?.Units ?? 0;
 
       static DateTimeOffset Ts(object? v) => v is DateTimeOffset dto ? dto : new(DateTime.SpecifyKind((DateTime)v!, DateTimeKind.Utc));
@@ -737,7 +734,7 @@ public static class AutomationTick
         runners.Select(r => new DigestRunner((string)r["runner_id"]!, Ts(r["last_heartbeat_at"]),
           r["login_expires_at"] is null ? null : Ts(r["login_expires_at"]))).ToList(),
         Convert.ToDecimal(spend["human"], CultureInfo.InvariantCulture), Convert.ToDecimal(spend["automation"], CultureInfo.InvariantCulture),
-        pendingHuman, publishesByState.TryGetValue(AutoPublisher.Human, out var hp) ? hp : 0);
+        backlog.HumanPending, backlog.HumanPublishes);
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.WeeklyDigest(mode, data, baseUrl);

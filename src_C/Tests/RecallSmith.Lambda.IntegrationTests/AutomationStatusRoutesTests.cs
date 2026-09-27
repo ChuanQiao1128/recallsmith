@@ -40,7 +40,8 @@ public sealed class AutomationStatusRoutesTests
       "publishes7d": { "byState": { "<state>": 0 } },
       "spend": { "todayUsd": 0, "automationTodayUsd": 0, "reservedUsd": 0, "dailyCapUsd": 10 },
       "watch": { "targets": 0, "active": 0, "failing": 0, "lastCheckedAt": null, "changes7d": 0 },
-      "notifications": { "sent24h": 0, "failed24h": 0, "queued": 0, "unconfirmed": 0, "lastSentAt": null } }
+      "notifications": { "sent24h": 0, "failed24h": 0, "queued": 0, "unconfirmed": 0, "lastSentAt": null },
+      "backlog": { "humanPending": 0, "oldestHumanPendingAt": null, "humanPublishes": 0 } }
     """;
 
   private static readonly string[] RunnerKeys =
@@ -356,7 +357,7 @@ public sealed class AutomationStatusRoutesTests
       using var contract = JsonDocument.Parse(StatusContractJson);
       var c = contract.RootElement;
       Assert.Equal(Keys(c), Keys(data));
-      foreach (var key in new[] { "mode", "queue", "shadow", "spend", "watch", "notifications" })
+      foreach (var key in new[] { "mode", "queue", "shadow", "spend", "watch", "notifications", "backlog" })
       {
         Assert.Equal(Keys(c.GetProperty(key)), Keys(data.GetProperty(key)));
       }
@@ -425,6 +426,12 @@ public sealed class AutomationStatusRoutesTests
       Assert.Equal(1, notifications.GetProperty("unconfirmed").GetInt64());
       Assert.EndsWith("Z", notifications.GetProperty("lastSentAt").GetString());
       Assert.DoesNotContain("@", data.GetProperty("notifications").GetRawText());
+
+      // R18B K7: both human drafts are still pending; the only human publish is a dry run's.
+      var backlog = data.GetProperty("backlog");
+      Assert.Equal(2, backlog.GetProperty("humanPending").GetInt64());
+      Assert.EndsWith("Z", backlog.GetProperty("oldestHumanPendingAt").GetString());
+      Assert.Equal(0, backlog.GetProperty("humanPublishes").GetInt64());
 
       // The cap and per-card estimate follow the env, read per call; AUTOMATION_AUTO_PUBLISH=0 is reported.
       Environment.SetEnvironmentVariable(QaRuns.DailyCapEnv, "25");
@@ -557,6 +564,55 @@ public sealed class AutomationStatusRoutesTests
       Assert.Equal(JsonValueKind.Null, revoked.GetProperty("evalGate").ValueKind);
       Assert.True(gateId > 0);
     }, new Dictionary<string, string?> { [AutomationMode.EnvName] = AutomationMode.Live });
+  }
+
+  [Fact]
+  public async Task Status_Backlog_CountsOnlyOpenExceptions_WhenEverRaised()
+  {
+    // R18B K7 (automation-10): the open-exception backlog, not the last 24 h.
+    await InFreshAsync("it_b02_status_backlog", async db =>
+    {
+      var (deckId, slug) = await db.NewDeckAsync("backlog");
+      var (otherDeck, otherSlug) = await db.NewDeckAsync("backlog-other");
+      var run = await db.NewRunAsync(deckId);
+
+      var empty = (await DataAsync(StatusPath)).GetProperty("backlog");
+      Assert.Equal((0L, JsonValueKind.Null, 0L), (empty.GetProperty("humanPending").GetInt64(), empty.GetProperty("oldestHumanPendingAt").ValueKind,
+        empty.GetProperty("humanPublishes").GetInt64()));
+
+      // Open: routed 20 days ago and still pending; routed today.
+      await db.NewDecisionAsync(deckId, run, "human", "QA_FLAGGED", createdAt: "now() - interval '20 days'");
+      await db.NewDecisionAsync(deckId, run, "human", "UNGROUNDED");
+      // Handled by a person (the draft left 'pending' with it), or a draft decided outside the decision: not open.
+      var handled = await db.NewDecisionAsync(deckId, run, "human", "QA_FLAGGED", humanAction: "rejected");
+      await db.QueryAsync("update ai_drafts set status = 'rejected', decided_at = now(), decided_by_sub = 'it-b02' where id = $1", handled);
+      var gone = await db.NewDecisionAsync(deckId, run, "human", "QA_FLAGGED");
+      await db.QueryAsync("update ai_drafts set status = 'rejected', decided_at = now(), decided_by_sub = 'it-b02' where id = $1", gone);
+      await db.NewDecisionAsync(deckId, run, "would_accept", qa: true);
+
+      // Publishes: an unresolved live human row; a live human row the person resolved by publishing the deck later;
+      // a dry-run human row (nothing was accepted).
+      await db.QueryAsync(
+        """
+        insert into automation_publishes (deck_id, run_id, mode, state, reason, created_at, updated_at) values
+          ($1, $3, 'live', 'human', 'DECK_HAS_HUMAN_CHANGES', now() - interval '12 days', now() - interval '12 days'),
+          ($2, $3, 'live', 'human', 'DECK_HAS_HUMAN_CHANGES', now() - interval '3 hours', now() - interval '3 hours'),
+          ($1, $3, 'dry_run', 'human', 'DECK_HAS_HUMAN_CHANGES', now(), now())
+        """, deckId, otherDeck, run);
+      await db.QueryAsync(
+        "insert into deck_publishes (deck_id, deck_slug, build_id, s3_key, status, created_at) values ($1, $2, 'b02-build', 'decks/b02', 'SUCCESS', now() - interval '1 hour')",
+        otherDeck, otherSlug);
+      // A successful publish of the first deck from before its row went human does not resolve it.
+      await db.QueryAsync(
+        "insert into deck_publishes (deck_id, deck_slug, build_id, s3_key, status, created_at) values ($1, $2, 'b02-old', 'decks/b02-old', 'SUCCESS', now() - interval '13 days')",
+        deckId, slug);
+
+      var backlog = (await DataAsync(StatusPath)).GetProperty("backlog");
+      Assert.Equal(2, backlog.GetProperty("humanPending").GetInt64());
+      var oldest = DateTimeOffset.Parse(backlog.GetProperty("oldestHumanPendingAt").GetString()!, CultureInfo.InvariantCulture);
+      Assert.InRange(DateTimeOffset.UtcNow - oldest, TimeSpan.FromDays(19.9), TimeSpan.FromDays(20.1));
+      Assert.Equal(1, backlog.GetProperty("humanPublishes").GetInt64());
+    });
   }
 
   // ---------------------------------------------------------------- runs

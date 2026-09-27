@@ -212,6 +212,13 @@ public static class StatusRoutes
       };
 
       var evalGate = await EvalGate.LoadCurrentAsync(conn);
+      var open = await LoadBacklogAsync(conn);
+      var backlog = new
+      {
+        humanPending = open.HumanPending,
+        oldestHumanPendingAt = RunnerRoutes.Timestamp(open.OldestHumanPendingAt),
+        humanPublishes = open.HumanPublishes,
+      };
 
       return res.Ok(new
       {
@@ -232,12 +239,42 @@ public static class StatusRoutes
         spend,
         watch,
         notifications,
+        backlog,
       });
     }
     catch (Exception ex)
     {
       return RunnerRoutes.HandleError(ex, res);
     }
+  }
+
+  /// <summary>The open exceptions a person still has to handle, whenever they were raised (R18B K7).</summary>
+  internal sealed record Backlog(long HumanPending, object? OldestHumanPendingAt, long HumanPublishes);
+
+  /// <summary>
+  /// The open-exception backlog (R18B K7). <c>humanPending</c>: decisions in state <c>human</c> with no
+  /// <c>human_action</c> whose draft is still <c>pending</c>; <c>oldestHumanPendingAt</c>: the earliest time one of them
+  /// was routed (<c>decided_at</c>, else <c>created_at</c>). <c>humanPublishes</c>: live <c>automation_publishes</c> rows
+  /// in state <c>human</c> that no later successful deck publish resolved. The row never leaves <c>human</c> (the
+  /// person publishes from the console, not through the row), so a <c>deck_publishes</c> row of the same deck with
+  /// status <c>SUCCESS</c> created after the row's last change resolves it; a newer automation publish of the deck
+  /// that reached <c>published</c> implies one. A dry-run <c>human</c> row accepted nothing and is not counted.
+  /// </summary>
+  internal static async Task<Backlog> LoadBacklogAsync(NpgsqlConnection conn)
+  {
+    var row = (await DbUtil.QueryAsync(conn, null,
+      """
+      select
+        (select count(*) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
+         where dd.state = 'human' and dd.human_action is null and a.status = 'pending') as human_pending,
+        (select min(coalesce(dd.decided_at, dd.created_at)) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
+         where dd.state = 'human' and dd.human_action is null and a.status = 'pending') as oldest_human_pending_at,
+        (select count(*) from automation_publishes p
+         where p.state = 'human' and p.mode = 'live'
+           and not exists (select 1 from deck_publishes dp
+                           where dp.deck_id = p.deck_id and dp.status = 'SUCCESS' and dp.created_at > p.updated_at)) as human_publishes
+      """, []))[0];
+    return new Backlog(RunnerRoutes.Long(row["human_pending"]), row["oldest_human_pending_at"], RunnerRoutes.Long(row["human_publishes"]));
   }
 
   // ---------------------------------------------------------------------------------------------

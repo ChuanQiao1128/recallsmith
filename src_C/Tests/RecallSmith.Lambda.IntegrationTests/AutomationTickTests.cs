@@ -759,6 +759,47 @@ public class AutomationTickTests
   }
 
   [Fact]
+  public async Task Tick_Digest_ReportsTheOpenBacklog_NotTheWeeksHumanRows()
+  {
+    // R18B K7 (automation-10): a human publish the owner already made by hand is not "needs you"; an older open
+    // exception still is.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "backlog");
+      var otherDeck = await DeckAsync(sql, "backlog-other");
+      var runId = await A04Kit.RunAsync(sql, "sub", deckId);
+      await sql.QueryAsync(
+        """
+        insert into automation_publishes (deck_id, run_id, mode, state, reason, created_at, updated_at) values
+          ($1, $3, 'live', 'human', 'DECK_HAS_HUMAN_CHANGES', now() - interval '3 days', now() - interval '3 days'),
+          ($1, $3, 'live', 'human', 'AI_QA_REQUIRED', now() - interval '2 days', now() - interval '2 days'),
+          ($2, $3, 'live', 'human', 'DECK_HAS_HUMAN_CHANGES', now() - interval '20 days', now() - interval '20 days')
+        """, deckId, otherDeck, runId);
+      await sql.QueryAsync(
+        "insert into deck_publishes (deck_id, deck_slug, build_id, s3_key, status, created_at) select id, slug, 'b02-hand', 'decks/b02', 'SUCCESS', now() - interval '1 day' from decks where id = $1",
+        deckId);
+      var draftId = A04Kit.Long(await sql.ScalarAsync(
+        """
+        insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, card, "similar", agent, submitted_by_sub)
+        values ($1, gen_random_uuid(), $2, $3, '{}'::jsonb, '[]'::jsonb, null, 'it-b02')
+        returning id
+        """, deckId, Guid.NewGuid().ToString("N"), AutomationTestKit.Uid("backlog")));
+      await sql.QueryAsync(
+        """
+        insert into automation_draft_decisions (draft_id, run_id, deck_id, mode, state, reason, created_at, decided_at)
+        values ($1, $2, $3, 'dry_run', 'human', 'QA_FLAGGED', now() - interval '20 days', now() - interval '20 days')
+        """, draftId, runId, deckId);
+
+      AutomationTestKit.Data(await A04Kit.TickAsync("digest", Guid.NewGuid()));
+
+      var body = (string)(await NotificationAsync(sql, $"digest:{Today()}"))!["body_text"]!;
+      Assert.Contains("- 1 publish(es) need you — ", body);
+      Assert.Contains("- 1 draft(s) routed to you are still pending — ", body);
+    });
+  }
+
+  [Fact]
   public async Task Tick_ResendsEnqueueFailedNotifications()
   {
     await using var scope = new A04Kit.Scope();
