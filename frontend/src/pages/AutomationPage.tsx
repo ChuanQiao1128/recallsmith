@@ -82,6 +82,8 @@ export function AutomationPage() {
     };
   }, [statusNonce]);
 
+  // The tabs wait for the first status answer: a server without migration 034
+  // gets one request, not one per tab.
   const notReady = !!status.error && status.error.code.startsWith('SERVER_NOT_READY_');
   const statusLoading = status.forNonce !== statusNonce;
 
@@ -105,7 +107,9 @@ export function AutomationPage() {
         {announcement}
       </div>
 
-      {notReady ? (
+      {status.forNonce === null ? (
+        <p className="text-sm text-slate-600">Loading the automation status…</p>
+      ) : notReady ? (
         <div data-testid="automation-not-ready">
           <Callout tone="warning" title="Automation is not available yet">
             {AUTOMATION_ERROR_MESSAGES.SERVER_NOT_READY_AUTOMATION}
@@ -119,9 +123,7 @@ export function AutomationPage() {
             <Callout tone="danger" role="alert">
               {automationErrorMessage(status.error.code, status.error.message)}
             </Callout>
-          ) : (
-            <p className="text-sm text-slate-600">Loading the automation status…</p>
-          )}
+          ) : null}
 
           <nav aria-label="Automation tabs" className="flex flex-wrap gap-2">
             {AUTOMATION_TABS.map(tab =>
