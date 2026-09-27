@@ -6,7 +6,7 @@ import { useDeck } from '../hooks/useDecks';
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
 import { CardForm, type CardFormValues } from '../components/CardForm';
-import { buildCardBody } from '../lib/authoringBodies';
+import { buildCardBody, buildCardSource } from '../lib/authoringBodies';
 import { CONSOLE_NAME } from '../lib/brand';
 import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
@@ -147,6 +147,8 @@ export function NewCardPage() {
     orderInDeck: nextOrder,
     revision: 1,
     topic: '',
+    sourceUrl: '',
+    sourceQuote: '',
   };
 
   async function handleSubmit(
@@ -156,11 +158,14 @@ export function NewCardPage() {
     // never reaches validation and a cleared optional text field is sent as ''.
     // topic goes beside the builder (F20 pins that the builder never carries it)
     // and only when non-empty: on create there is nothing to clear, so the key
-    // stays absent otherwise. mcq is never sent from the form.
+    // stays absent otherwise. source follows the same rule: sent only when a
+    // URL was entered. mcq is never sent from the form.
     const trimmedTopic = values.topic.trim();
+    const source = buildCardSource(values);
     const { result } = await createCardMutation.mutateAsync({
       ...buildCardBody(values),
       ...(trimmedTopic ? { topic: trimmedTopic } : {}),
+      ...(source ? { source } : {}),
       deckId: Number(deck.id),
       stableUid: values.stableUid,
     });
