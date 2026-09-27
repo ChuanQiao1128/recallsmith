@@ -2,8 +2,8 @@
 // every document read_source returned in this process, keyed by its citable url, and
 // submit_draft accepts a draft only when its source.url is such a document and its
 // source.quote occurs (whitespace-normalised) in one of that document's chunks.
-// The result travels with each submitted draft as `grounding` (ai-agent-24), so the
-// human reviewer sees where the quote was found and whether it came from a local file.
+// The result travels inside each submitted card as `source.grounding` (ai-agent-24, the
+// R18 Z-wave cross-wave contract), so the human reviewer sees where the quote was found.
 
 import { normaliseWhitespace } from './lint';
 
@@ -23,7 +23,7 @@ export interface IngestedSource {
   chunks: IngestedChunk[];
 }
 
-/** Where a grounded quote was found; returned with the submit result for the reviewer. */
+/** Where a grounded quote was found; returned to the agent in the submit_draft result. */
 export interface GroundingLocation {
   stableUid: string;
   clientDraftKey: string;
@@ -32,36 +32,29 @@ export interface GroundingLocation {
   chunkId: string;
   chunkCharStart: number;
   chunkCharEnd: number;
+  /** 'local': the url is the canonicalUrl the agent gave for a local file, so nothing checked the page itself. */
+  kind: 'url' | 'local';
 }
 
 /**
- * The grounding record sent with each draft to POST /api/v1/authoring/drafts, next to
- * `card` in the draft entry (not inside card.source, whose keys the API validates strictly).
+ * The grounding record sent inside each draft as `card.source.grounding` to
+ * POST /api/v1/authoring/drafts. The shape is fixed by the cross-wave contract: exactly
+ * these four keys, which core-vpc stores with the draft and strips when a draft is accepted.
  * `quoteChars` is the length of the whitespace-normalised quote that matched.
  */
-export interface DraftGrounding {
-  sourceId: string;
+export interface SourceGrounding {
   chunkId: string;
+  sourceId: string;
   matched: true;
   quoteChars: number;
-  kind: 'url' | 'local';
-  url: string;
-  fetchedAt: string | null;
-  chunkCharStart: number;
-  chunkCharEnd: number;
 }
 
-export function draftGrounding(source: IngestedSource, chunk: IngestedChunk, quote: string): DraftGrounding {
+export function sourceGrounding(source: IngestedSource, chunk: IngestedChunk, quote: string): SourceGrounding {
   return {
-    sourceId: source.sourceId,
     chunkId: chunk.id,
+    sourceId: source.sourceId,
     matched: true,
     quoteChars: normaliseWhitespace(quote).length,
-    kind: source.kind,
-    url: source.url,
-    fetchedAt: source.fetchedAt,
-    chunkCharStart: chunk.charStart,
-    chunkCharEnd: chunk.charEnd,
   };
 }
 

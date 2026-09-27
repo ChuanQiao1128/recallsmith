@@ -10,10 +10,13 @@ import { z } from 'zod';
 import { createApiClient, ToolFailure } from './api';
 import type { Config } from './config';
 import { clientDraftKey, draftCardSchema, type DraftCard } from './draftCard';
-import { draftGrounding, groundQuote, SourceStore, type DraftGrounding, type GroundingLocation, type IngestedSource } from './grounding';
+import { groundQuote, SourceStore, sourceGrounding, type GroundingLocation, type IngestedSource, type SourceGrounding } from './grounding';
 import { defaultRunProcess, IngestError, readSource, type RunProcess } from './ingest';
 import { lintDraftCard, loadTopicVocabulary, SOURCE_QUOTE_MIN_CHARS, SOURCE_QUOTE_MIN_WORDS } from './lint';
 import { CHUNK_IDS_MAX, CHUNK_TEXT_BUDGET, chunksById, OUTLINE_PAGE_MAX, outlinePage, PREVIEW_CHARS, ReadCache } from './paging';
+
+/** The card as posted to the API: the agent's DraftCard with the server-computed grounding in its source. */
+type GroundedDraftCard = Omit<DraftCard, 'source'> & { source: { url: string; quote: string; grounding: SourceGrounding } };
 
 function ok(value: unknown): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(value) }] };
@@ -149,8 +152,8 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
     'submit_draft',
     {
       description: [
-        'Submits 1..20 DraftCards for deck `deckSlug` to the human review queue and returns { batchId, created: [{ draftId, clientDraftKey, stableUid }], duplicates: [{ clientDraftKey, draftId }], rejected: [{ clientDraftKey, code, message }], grounding: [{ stableUid, clientDraftKey, sourceId, url, chunkId, chunkCharStart, chunkCharEnd }] }; nothing is published until a reviewer accepts a draft.',
-        'Each submitted draft carries grounding { sourceId, chunkId, matched, quoteChars, kind, url, fetchedAt, chunkCharStart, chunkCharEnd } for the reviewer, where kind local means the url is the canonicalUrl given for a local file.',
+        'Submits 1..20 DraftCards for deck `deckSlug` to the human review queue and returns { batchId, created: [{ draftId, clientDraftKey, stableUid }], duplicates: [{ clientDraftKey, draftId }], rejected: [{ clientDraftKey, code, message }], grounding: [{ stableUid, clientDraftKey, sourceId, url, chunkId, chunkCharStart, chunkCharEnd, kind }] }; nothing is published until a reviewer accepts a draft.',
+        'The server adds source.grounding { chunkId, sourceId, matched, quoteChars } to each card it submits, which the review queue shows; never put grounding in a card yourself (it is refused). kind local in the result means the url is the canonicalUrl given for a local file: tell the user so the reviewer opens that url.',
         'Before any API call it lints every card and checks every citation: source.url must be a url read_source returned in this session (an https url not yet read is read once now) or the card fails with SOURCE_NOT_INGESTED, and source.quote must occur whitespace-normalised in one chunk of that source or it fails with SOURCE_QUOTE_NOT_IN_CHUNK; any failure refuses the whole batch as a tool error.',
         'Submitting the same card again is idempotent (it comes back under duplicates, keyed by the SHA-256 clientDraftKey of the card), and a card the server refuses comes back under rejected while the rest proceed.',
         'agent is { model, skillVersion }; the tool does not verify that the answer is correct, only that the quote is really in the cited source.',
@@ -174,7 +177,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
 
         // Citation grounding at the trust boundary: the quote must be in the cited source.
         const grounding: GroundingLocation[] = [];
-        const reviewerGrounding: DraftGrounding[] = [];
+        const reviewerGrounding: SourceGrounding[] = [];
         for (const card of drafts) {
           const { url, quote } = card.source ?? { url: '', quote: '' };
           const doc = await ingestedSource(url);
@@ -195,8 +198,9 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
             chunkId: check.chunk.id,
             chunkCharStart: check.chunk.charStart,
             chunkCharEnd: check.chunk.charEnd,
+            kind: doc.kind,
           });
-          reviewerGrounding.push(draftGrounding(doc, check.chunk, quote));
+          reviewerGrounding.push(sourceGrounding(doc, check.chunk, quote));
         }
         if (failures.length > 0) return fail(`grounding failed: ${failures.join('; ')}`);
 
@@ -204,10 +208,15 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
         const body: {
           deckId: number;
           agent?: { name: string; model: string; skillVersion: string };
-          drafts: Array<{ clientDraftKey: string; card: DraftCard; grounding: DraftGrounding }>;
+          drafts: Array<{ clientDraftKey: string; card: GroundedDraftCard }>;
         } = {
           deckId,
-          drafts: drafts.map((card, i) => ({ clientDraftKey: clientDraftKey(card), card, grounding: reviewerGrounding[i] as DraftGrounding })),
+          // The key hashes the card as the agent wrote it, so a resubmit stays idempotent; the
+          // grounding travels inside card.source (cross-wave contract), which core-vpc persists.
+          drafts: drafts.map((card, i) => ({
+            clientDraftKey: clientDraftKey(card),
+            card: { ...card, source: { url: card.source?.url ?? '', quote: card.source?.quote ?? '', grounding: reviewerGrounding[i] as SourceGrounding } },
+          })),
         };
         if (agent !== undefined) {
           body.agent = { name: 'developercards-mcp', model: agent.model, skillVersion: agent.skillVersion };
