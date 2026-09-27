@@ -125,6 +125,20 @@ public static class QaGate
   public static async Task<APIGatewayProxyResponse?> EvaluatePublishAsync(NpgsqlConnection conn, long deckId, Res res,
     string? requestedBySub = null, CancellationToken ct = default)
   {
+    var refusal = await EvaluatePublishRefusalAsync(conn, deckId, requestedBySub, ct);
+    return refusal is null ? null : RefusalResponse(refusal, res);
+  }
+
+  /// <summary>A refusal of <see cref="EvaluatePublishRefusalAsync"/>; <see cref="Chained"/> is the run an <c>AI_QA_REQUIRED</c> refusal started.</summary>
+  internal sealed record PublishRefusal(int HttpStatus, string Code, string Message, QaRuns.ChainedRun? Chained);
+
+  /// <summary>
+  /// <see cref="EvaluatePublishAsync"/> with the refusal as data (R18A A04, for <c>Publish.StartPublishAsync</c>):
+  /// the same checks, log lines, gauges and chained run; <see cref="RefusalResponse"/> turns it into the same response.
+  /// </summary>
+  internal static async Task<PublishRefusal?> EvaluatePublishRefusalAsync(NpgsqlConnection conn, long deckId,
+    string? requestedBySub = null, CancellationToken ct = default)
+  {
     if (!IsEnforced()) return null;
 
     QaGateState state;
@@ -134,7 +148,7 @@ public static class QaGate
     }
     catch (PostgresException pg) when (pg.SqlState == "42P01")
     {
-      return NotReady(res);
+      return new PublishRefusal(503, NotReadyCode, NotReadyMessage, null);
     }
 
     var missing = state.Changed.Where(c => !c.ReviewedAtCurrentHash).ToList();
@@ -144,35 +158,45 @@ public static class QaGate
       RouteMetrics.EmitGauge(RefusalsMetric, 1);
       var message = $"AI QA required for {missing.Count} card(s): {string.Join(", ", missing.Take(MaxListed).Select(c => c.StableUid))}";
       var chained = requestedBySub is null ? null : await QaRuns.StartChangedRunAsync(conn, deckId, requestedBySub, "publish_gate");
-      if (chained is null) return Helpers.ErrorEnvelope(res, 409, "AI_QA_REQUIRED", message);
-      return res.Raw(409, new
-      {
-        success = false,
-        data = (object?)null,
-        error = new
-        {
-          code = "AI_QA_REQUIRED",
-          message,
-          runId = chained.RunId,
-          qaRun = new { status = chained.Status, runId = chained.RunId, code = chained.Code, message = chained.Message },
-        },
-        traceId = res.TraceId,
-        version = "v1",
-      });
+      return new PublishRefusal(409, "AI_QA_REQUIRED", message, chained);
     }
 
     if (state.OpenBlockers.Count > 0)
     {
       Log.Event("info", new { tag = "ai_qa", outcome = "publish_refused", code = "AI_QA_BLOCKED", deckId, blockers = state.OpenBlockers.Count });
       RouteMetrics.EmitGauge(RefusalsMetric, 1);
-      return Helpers.ErrorEnvelope(res, 409, "AI_QA_BLOCKED",
-        $"AI QA blocked by {state.OpenBlockers.Count} open blocker finding(s): {string.Join(", ", state.OpenBlockers.Take(MaxListed).Select(b => $"{b.StableUid}: {b.Category}"))}");
+      return new PublishRefusal(409, "AI_QA_BLOCKED",
+        $"AI QA blocked by {state.OpenBlockers.Count} open blocker finding(s): {string.Join(", ", state.OpenBlockers.Take(MaxListed).Select(b => $"{b.StableUid}: {b.Category}"))}",
+        null);
     }
 
     return null;
   }
 
+  /// <summary>The response <see cref="EvaluatePublishAsync"/> answers for <paramref name="refusal"/>.</summary>
+  internal static APIGatewayProxyResponse RefusalResponse(PublishRefusal refusal, Res res)
+  {
+    if (refusal.Chained is not { } chained) return Helpers.ErrorEnvelope(res, refusal.HttpStatus, refusal.Code, refusal.Message);
+    return res.Raw(refusal.HttpStatus, new
+    {
+      success = false,
+      data = (object?)null,
+      error = new
+      {
+        code = refusal.Code,
+        message = refusal.Message,
+        runId = chained.RunId,
+        qaRun = new { status = chained.Status, runId = chained.RunId, code = chained.Code, message = chained.Message },
+      },
+      traceId = res.TraceId,
+      version = "v1",
+    });
+  }
+
+  private const string NotReadyCode = "SERVER_NOT_READY_AI_QA";
+  private const string NotReadyMessage = "AI QA tables are missing; run the database migration";
+
   /// <summary>503 SERVER_NOT_READY_AI_QA: migration 031 has not run.</summary>
   internal static APIGatewayProxyResponse NotReady(Res res) =>
-    Helpers.ErrorEnvelope(res, 503, "SERVER_NOT_READY_AI_QA", "AI QA tables are missing; run the database migration");
+    Helpers.ErrorEnvelope(res, 503, NotReadyCode, NotReadyMessage);
 }

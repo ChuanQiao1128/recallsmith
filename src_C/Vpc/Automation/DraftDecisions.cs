@@ -467,21 +467,11 @@ public static class DraftDecisions
       DedupeKey: $"auto-route:{draftId.ToString(CultureInfo.InvariantCulture)}", Details: new { reason, reasonDetail });
 
   /// <summary>
-  /// The exception hook (A00 §12.4). A03 only logs it; A04 replaces the body with the email enqueue. Never throws.
+  /// The exception hook (A00 §12.4): the alert email through <see cref="Notifications.RaiseExceptionAsync"/>. Never throws.
   /// </summary>
   internal static Task RaiseExceptionAsync(NpgsqlConnection conn, string subkind, string dedupeKey,
-    IReadOnlyDictionary<string, string> facts, CancellationToken ct = default)
-  {
-    try
-    {
-      Log.Event("warn", new { tag = "automation", reason = "exception", subkind, dedupeKey, facts });
-    }
-    catch (Exception)
-    {
-      // Logging is the whole hook in A03; nothing else can fail here.
-    }
-    return Task.CompletedTask;
-  }
+    IReadOnlyDictionary<string, string> facts, CancellationToken ct = default) =>
+    Notifications.RaiseExceptionAsync(conn, subkind, dedupeKey, facts, ct: ct);
 
   /// <summary>
   /// One state change of a decision plus its event, inside <paramref name="tx"/>. Terminal states set <c>decided_at</c>.

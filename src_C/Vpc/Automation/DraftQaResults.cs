@@ -30,14 +30,17 @@ internal static class DraftQaResults
   internal static async Task<DraftQaApplyResult> ApplyAsync(NpgsqlConnection conn, AiQaResults.Report report, CancellationToken ct = default)
   {
     var applied = 0;
+    var runIds = new List<Guid>();
     foreach (var item in report.Items)
     {
       var outcome = await ApplyItemAsync(conn, report, item, ct);
       if (outcome is null) continue;
       applied++;
+      if (!runIds.Contains(outcome.RunId)) runIds.Add(outcome.RunId);
       await AfterCommitAsync(conn, report, item, outcome, ct);
     }
-    // A04 adds AutomationRuns.TryFinalizeAsync for the runs this report touched here.
+    // Run finalisation (A00 §6.1) for every run this report touched; best-effort, never throws.
+    foreach (var runId in runIds) await AutomationRuns.TryFinalizeAsync(conn, runId, ct);
     return new DraftQaApplyResult(applied, report.Items.Count);
   }
 

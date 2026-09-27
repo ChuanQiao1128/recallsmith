@@ -79,10 +79,28 @@ public static class LedgerRoutes
     if (from > to) return Invalid(res, "from must not be after to");
     if (to.DayNumber - from.DayNumber + 1 > MaxRangeDays) return Invalid(res, $"The range must not exceed {MaxRangeDays} days");
 
+    try
+    {
+      return res.Ok(await ComputeAsync(conn, from, to, granularity));
+    }
+    catch (Exception ex)
+    {
+      return MapError(ex, res);
+    }
+  }
+
+  /// <summary>
+  /// The <c>GET /ledger</c> summary for the inclusive UTC day range [<paramref name="from"/>, <paramref name="to"/>]:
+  /// exactly the object <see cref="HandleLedger"/> answers (R18A A04 extraction, also read by the weekly digest).
+  /// The caller validates the range and granularity; database errors propagate.
+  /// </summary>
+  internal static async Task<object> ComputeAsync(NpgsqlConnection conn, DateOnly from, DateOnly to, string granularity,
+    CancellationToken ct = default)
+  {
+    ct.ThrowIfCancellationRequested();
     var start = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
     var end = to.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddDays(1);
 
-    try
     {
       // The headline is clamped once per (automation, source) over the whole [from, to) range, never per row
       // and never per period (automation-18): a row that carries only human cost (a rejected draft's review
@@ -229,7 +247,7 @@ public static class LedgerRoutes
         defectsCaught = ToLong(r["defectsCaught"]),
       }).ToArray();
 
-      return res.Ok(new
+      return new
       {
         from = FormatDay(from),
         to = FormatDay(to),
@@ -238,11 +256,7 @@ public static class LedgerRoutes
         automations,
         series,
         agentDrafts,
-      });
-    }
-    catch (Exception ex)
-    {
-      return MapError(ex, res);
+      };
     }
   }
 

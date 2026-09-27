@@ -330,6 +330,18 @@ public sealed class VpcFunction
       {
         return await Vpc.Automation.QueueRoutes.HandleSkip(req, res, auth, queueSkip["itemId"]);
       }
+      if (p.EndsWith("/api/v1/admin/automation/notifications/test", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.Notifications.HandleTest(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/notifications", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.Notifications.HandleList(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/notifications/:notificationId", p) is { } notification)
+      {
+        return await Vpc.Automation.Notifications.HandleGet(req, res, auth, notification["notificationId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
@@ -434,6 +446,14 @@ public sealed class VpcFunction
       if (RouteMatcher.Match("/api/internal/ai-qa/results", p) is not null)
       {
         return await Vpc.Internal.AiQaResults.HandleAiQaResults(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/automation/tick", p) is not null)
+      {
+        return await Vpc.Automation.AutomationTick.HandleTick(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/automation/notifications/report", p) is not null)
+      {
+        return await Vpc.Automation.Notifications.HandleReport(req, res);
       }
 
       return res.NotFound("Route not found");
