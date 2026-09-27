@@ -27,7 +27,7 @@ integration timeout. No Bedrock VPC endpoint is needed.
 |---|---|
 | `settings.py` | `Settings` (frozen dataclass), `load_settings(env)`, `ConfigError`, SSM `load_secret` |
 | `providers.py` | `make_client(settings, *, api_key=None)`, `structured_outputs_on(settings)` |
-| `prompts.py` | `PROMPT_VERSION = "qa-v1"`, the static `SYSTEM_PROMPT` (rubric of §7.6) |
+| `prompts.py` | `PROMPT_VERSION` (currently `"qa-v4"`; history and evidence in `evals/reports/tuning-2026-09-27/README.md`), the static `SYSTEM_PROMPT` (rubric of §7.6) |
 | `schema.py` | `ModelFinding`, `ModelReview` (pydantic v2, `extra="forbid"`) |
 | `review.py` | `review_card(card, *, client, settings, review_date)` → one §7.7 item |
 | `handler.py` | SQS entry point: message validation, kill switch, deadline guard, chunk policy, report |

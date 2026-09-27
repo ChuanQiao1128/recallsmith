@@ -27,7 +27,7 @@ public static class QaRuns
   /// <c>prompt_version</c> is null until a chunk reports, and then records the version the Lambda actually ran
   /// (backend-design-12).
   /// </summary>
-  public const string PromptVersion = "qa-v3";
+  public const string PromptVersion = "qa-v4";
   public const int ChunkSize = 5;
   public const int MaxChunkBytes = 200_000;
   public const int MaxCardIds = 200;

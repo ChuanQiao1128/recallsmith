@@ -15,7 +15,7 @@ RUBRIC = {
 
 
 def test_system_prompt_states_rubric_and_treats_card_as_data() -> None:
-    assert PROMPT_VERSION == "qa-v3"
+    assert PROMPT_VERSION == "qa-v4"
     for category in CATEGORIES:
         assert category in SYSTEM_PROMPT, category
         assert f"- {category} ({RUBRIC[category]}):" in SYSTEM_PROMPT, category
@@ -43,3 +43,11 @@ def test_system_prompt_v3_rules_from_the_eval() -> None:
     for phrase in ("does not separate them", "missing its qualifier", "newer than your training data",
                    "is not evidence that it is false", "raise other (minor)"):
         assert phrase in SYSTEM_PROMPT, phrase
+
+
+def test_system_prompt_v4_resolves_the_code_rules() -> None:
+    """qa-v4 (audit pass 3, ai-agent-25/26): answer-side code never makes an answer_leak, and a
+    false fact inside codeSnippet / realWorldUsage is incorrect_answer, as in the authoring skill."""
+    assert "the code, snippet or stem literally contains" not in SYSTEM_PROMPT
+    assert "never make an answer_leak" in SYSTEM_PROMPT
+    assert "a factual element of codeSnippet or realWorldUsage" in SYSTEM_PROMPT
