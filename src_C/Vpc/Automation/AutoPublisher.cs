@@ -38,7 +38,7 @@ public static class AutoPublisher
 
   /// <summary>What checks 1–8 decided; <see cref="StartPublish"/> means every check passed and check 9 runs.</summary>
   private sealed record Verdict(string State, string? Reason, string? Detail, string? DeckSlug, string? BuildId, string? Snapshot, bool StartPublish,
-    DateTime? DeckUpdatedAt = null);
+    DateTime? DeckUpdatedAt = null, bool LiveAcceptedPending = false);
 
   // ---------------------------------------------------------------------------------------------
   // evaluation (A00 §6.2)
@@ -206,7 +206,10 @@ public static class AutoPublisher
     }
 
     var rows = await DbUtil.QueryAsync(conn, null,
-      "select attempts, created_at < now() - make_interval(mins => $2) as wait_expired from automation_publishes where id = $1",
+      """
+      select attempts, created_at < now() - make_interval(mins => $2) as wait_expired, cardinality(card_ids) > 0 as holds_cards
+      from automation_publishes where id = $1
+      """,
       [publishId, PublishWaitTimeoutMinutes]);
     var attempts = Convert.ToInt32(rows[0]["attempts"], CultureInfo.InvariantCulture);
     if (staleRefusal)
@@ -219,6 +222,13 @@ public static class AutoPublisher
       (state, reason, detail) = (Human, "PUBLISH_WAIT_TIMEOUT", Detail($"another publish of the deck was still active after {PublishWaitTimeoutMinutes} minutes"));
     }
 
+    // The row's label (R18C automation-12, backend-design-16): after a rollback (live → dry_run) a row that still holds
+    // cards accepted in live, and routes to a human, stays a live row. Those cards ship with the next human publish
+    // (A00 §20.1), so the row keeps its alert and its place in the backlog (humanPublishes counts live rows only).
+    var rowMode = mode == AutomationMode.DryRun && state == Human && (verdict.LiveAcceptedPending || rows[0]["holds_cards"] is true)
+      ? AutomationMode.Live
+      : mode;
+
     var updated = await DbUtil.QueryAsync(conn, null,
       """
       update automation_publishes
@@ -227,7 +237,7 @@ public static class AutoPublisher
           finished_at = case when $3 in ('published', 'would_publish', 'human') then now() else null end, updated_at = now()
       where id = $1 and state = 'waiting'
       returning id
-      """, [publishId, mode, state, reason, detail, jobId, buildId, snapshot, attempts]);
+      """, [publishId, rowMode, state, reason, detail, jobId, buildId, snapshot, attempts]);
     if (updated.Count == 0)
     {
       // Someone else moved the row meanwhile; report what it is now.
@@ -235,8 +245,8 @@ public static class AutoPublisher
       return new AutoPublishOutcome(publishId, (string)now[0]["state"]!, now[0]["reason"] as string, now[0]["reason_detail"] as string);
     }
 
-    Log.Event("info", new { tag = "automation", outcome = "auto_publish_evaluated", publishId, deckId, runId, mode, state, reason, jobId });
-    if (state == Human) await RouteHumanAsync(conn, publishId, deckId, verdict.DeckSlug, runId, mode, reason!, detail, ct);
+    Log.Event("info", new { tag = "automation", outcome = "auto_publish_evaluated", publishId, deckId, runId, mode, rowMode, state, reason, jobId });
+    if (state == Human) await RouteHumanAsync(conn, publishId, deckId, verdict.DeckSlug, runId, rowMode, reason!, detail, ct);
     return new AutoPublishOutcome(publishId, state, reason, detail);
   }
 
@@ -301,8 +311,10 @@ public static class AutoPublisher
       Convert.ToString(r["stableUid"], CultureInfo.InvariantCulture) ?? string.Empty,
       Convert.ToInt32(r["is_deleted"], CultureInfo.InvariantCulture) != 0,
       CardContentHash.Compute(r))).ToList();
+    // The automation-owned hashes load in every mode (R18C automation-12): after a rollback to dry_run, cards accepted
+    // in live are told apart from human changes.
     var owned = new Dictionary<long, string>();
-    if (mode == AutomationMode.Live && pending.Count > 0)
+    if (pending.Count > 0)
     {
       var ownedRows = await DbUtil.QueryAsync(conn, tx,
         """
@@ -314,9 +326,19 @@ public static class AutoPublisher
     var (ok, humanUids) = CheckPendingChangeSet(pending, owned, mode);
     if (!ok)
     {
-      var listed = string.Join(", ", humanUids.Take(MaxListedUids));
-      var more = humanUids.Count > MaxListedUids ? $" (+{humanUids.Count - MaxListedUids} more)" : string.Empty;
-      return new Verdict(Human, "DECK_HAS_HUMAN_CHANGES", Detail($"cards changed by a human: {listed}{more}"), slug, null, null, false);
+      // Not live (a revoke, a newer failed gate): unchanged cards accepted in live are not human changes, but live
+      // is not effective, so a person publishes them (R18C automation-12, backend-design-16).
+      IReadOnlyList<string> rolledBack = mode == AutomationMode.Live ? [] : AcceptedBeforeRollback(pending, owned);
+      var human = humanUids.Except(rolledBack, StringComparer.Ordinal).ToList();
+      var rolledBackText = rolledBack.Count == 0 ? string.Empty : $"auto-accepted before rollback: {UidList(rolledBack)}";
+      if (human.Count == 0)
+      {
+        return new Verdict(Human, "AUTO_PUBLISH_DISABLED", Detail($"live is not effective (gate revoked or missing); {rolledBackText}"), slug,
+          null, null, false, LiveAcceptedPending: true);
+      }
+      var humanText = $"cards changed by a human: {UidList(human)}";
+      return new Verdict(Human, "DECK_HAS_HUMAN_CHANGES", Detail(rolledBack.Count == 0 ? humanText : $"{humanText}; {rolledBackText}"), slug,
+        null, null, false, LiveAcceptedPending: rolledBack.Count > 0);
     }
 
     // The export rows the publish will be bound to (A00 §6.2 check 9, §6.3).
@@ -379,10 +401,32 @@ public static class AutoPublisher
     return (human.Count == 0, human);
   }
 
-  /// <summary>The <c>publish_blocked</c> alert and, in live, the ledger row of a human outcome (after the row update).</summary>
+  /// <summary>
+  /// The stable uids of <paramref name="pending"/> that are live, automation-accepted cards still at their accepted
+  /// hash (pure): what check 6 would ship in live, in the given order.
+  /// </summary>
+  internal static IReadOnlyList<string> AcceptedBeforeRollback(IReadOnlyList<PendingCard> pending, IReadOnlyDictionary<long, string> automationOwnedHashes) =>
+    pending
+      .Where(p => !p.IsDeleted && automationOwnedHashes.TryGetValue(p.CardId, out var owned) &&
+                  string.Equals(owned, p.ContentSha256, StringComparison.Ordinal))
+      .Select(p => p.StableUid)
+      .ToList();
+
+  private static string UidList(IReadOnlyList<string> uids)
+  {
+    var more = uids.Count > MaxListedUids ? $" (+{uids.Count - MaxListedUids} more)" : string.Empty;
+    return string.Join(", ", uids.Take(MaxListedUids)) + more;
+  }
+
+  /// <summary>
+  /// A live human outcome (after the row update): the <c>publish_blocked</c> alert and the ledger row. A dry-run row
+  /// accepted nothing, so no person has anything to publish: no alert (R18C automation-15, L6); the batch summary's
+  /// "publish would need you" and the Runs tab carry it.
+  /// </summary>
   private static async Task RouteHumanAsync(NpgsqlConnection conn, long publishId, long deckId, string? deckSlug, Guid? runId, string mode,
     string reason, string? detail, CancellationToken ct)
   {
+    if (mode != AutomationMode.Live) return;
     var id = publishId.ToString(CultureInfo.InvariantCulture);
     var facts = new Dictionary<string, string>
     {
@@ -393,13 +437,9 @@ public static class AutoPublisher
       ["reasonDetail"] = detail ?? string.Empty,
     };
     if (runId is { } r) facts["runId"] = r.ToString("D");
-    await Notifications.RaiseExceptionAsync(conn, "publish_blocked", $"exception:publish_blocked:{id}", facts, runId, ct);
-
-    if (mode == AutomationMode.Live)
-    {
-      await AutomationLedger.RecordAsync(conn, new AutomationEvent("auto_publish", 0, "success", DeckId: deckId, Ref: id,
-        DedupeKey: $"auto-publish-human:{id}", Details: new { reason }), ct);
-    }
+    await Notifications.RaiseExceptionAsync(conn, "publish_blocked", $"exception:publish_blocked:{id}", facts, runId, ct, labelMode: mode);
+    await AutomationLedger.RecordAsync(conn, new AutomationEvent("auto_publish", 0, "success", DeckId: deckId, Ref: id,
+      DedupeKey: $"auto-publish-human:{id}", Details: new { reason }), ct);
   }
 
   // ---------------------------------------------------------------------------------------------

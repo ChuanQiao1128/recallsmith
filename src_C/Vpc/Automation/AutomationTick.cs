@@ -284,9 +284,9 @@ public static class AutomationTick
           for update
           """, [draftId, AutomationEnv.QaTimeoutMinutes()]);
         if (locked.Count == 0) continue;
-        decisionMode = (string)locked[0]["mode"]!;
         deckId = Long(locked[0]["deck_id"]);
-        await DraftDecisions.TransitionAsync(conn, tx, draftId, DraftDecisions.QaQueued, DraftDecisions.Human, "QA_TIMEOUT", null,
+        // The ledger follows the mode this transition applied (R18C backend-design-16).
+        decisionMode = await DraftDecisions.TransitionAsync(conn, tx, draftId, DraftDecisions.QaQueued, DraftDecisions.Human, "QA_TIMEOUT", null,
           DraftDecisions.AutomationEventActor, mode.Effective, new { timeoutMinutes = AutomationEnv.QaTimeoutMinutes() }, CancellationToken.None);
         await tx.CommitAsync();
       }
@@ -325,9 +325,8 @@ public static class AutomationTick
           for update
           """, [draftId, pendingMinutes]);
         if (locked.Count == 0) continue;
-        decisionMode = (string)locked[0]["mode"]!;
         deckId = Long(locked[0]["deck_id"]);
-        await DraftDecisions.TransitionAsync(conn, tx, draftId, DraftDecisions.QaPending, DraftDecisions.Human, "ENQUEUE_FAILED",
+        decisionMode = await DraftDecisions.TransitionAsync(conn, tx, draftId, DraftDecisions.QaPending, DraftDecisions.Human, "ENQUEUE_FAILED",
           $"draft QA could not be enqueued for {pendingMinutes} minutes", DraftDecisions.AutomationEventActor, mode.Effective,
           new { pendingMinutes }, CancellationToken.None);
         await tx.CommitAsync();

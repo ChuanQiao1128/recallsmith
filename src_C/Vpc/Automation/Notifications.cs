@@ -133,17 +133,20 @@ public static class Notifications
 
   /// <summary>
   /// The exception alert of <paramref name="subkind"/> under the effective mode, rendered by
-  /// <see cref="EmailTemplates.Exception"/> and enqueued with <paramref name="dedupeKey"/>. Never throws.
+  /// <see cref="EmailTemplates.Exception"/> and enqueued with <paramref name="dedupeKey"/>. <paramref name="labelMode"/>
+  /// labels an alert about something done in another mode than the effective one (R18C automation-12: cards accepted in
+  /// live, blocked after a rollback to dry_run, are a live alert). Never throws.
   /// </summary>
   public static async Task<NotificationResult?> RaiseExceptionAsync(NpgsqlConnection conn, string subkind, string dedupeKey,
-    IReadOnlyDictionary<string, string> facts, Guid? runId = null, CancellationToken ct = default)
+    IReadOnlyDictionary<string, string> facts, Guid? runId = null, CancellationToken ct = default, string? labelMode = null)
   {
     try
     {
-      var mode = await AutomationMode.EffectiveAsync(conn, ct);
-      if (mode.Effective == AutomationMode.Off) return null;
+      var effective = await AutomationMode.EffectiveAsync(conn, ct);
+      if (effective.Effective == AutomationMode.Off) return null;
+      var mode = labelMode ?? effective.Effective;
       var baseUrl = ConsoleBaseUrl();
-      var email = EmailTemplates.Exception(mode.Effective, subkind, facts, baseUrl);
+      var email = EmailTemplates.Exception(mode, subkind, facts, baseUrl);
 
       if (runId is null && facts.TryGetValue("runId", out var rawRun) && Guid.TryParse(rawRun, out var parsed)) runId = parsed;
       var refs = new Dictionary<string, object?>(StringComparer.Ordinal);
@@ -157,7 +160,7 @@ public static class Notifications
         : refs.TryGetValue("draftId", out var draft) ? EmailTemplates.AutomationUrl(baseUrl, $"draftId={Convert.ToString(draft, CultureInfo.InvariantCulture)}")
         : EmailTemplates.AutomationUrl(baseUrl);
 
-      return await EnqueueAsync(conn, new NotificationRequest("exception", subkind, dedupeKey, mode.Effective, email, runId, refs, consoleUrl), ct);
+      return await EnqueueAsync(conn, new NotificationRequest("exception", subkind, dedupeKey, mode, email, runId, refs, consoleUrl), ct);
     }
     catch (Exception ex)
     {

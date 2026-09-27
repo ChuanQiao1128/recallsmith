@@ -579,7 +579,9 @@ public class DraftQaResultsTests
         var review = (await _db.QueryAsync("select automation, units, outcome, actual_minutes, details::text as details from automation_events where dedupe_key = $1",
           $"draft-accept:{e.DraftId}")).Single();
         Assert.Equal(("ai_draft_review", 1, "success"), ((string)review["automation"]!, Convert.ToInt32(review["units"], CultureInfo.InvariantCulture), (string)review["outcome"]!));
-        Assert.Null(review["actual_minutes"]);
+        // R18C automation-14: nets the auto_accept baseline (the avoided review), like a human accept nets its review time.
+        Assert.Equal(await _db.ScalarAsync("select baseline_minutes_per_unit from automation_baselines where automation = 'auto_accept'"),
+          review["actual_minutes"]);
         Assert.Contains("\"automated\": true", (string)review["details"]!);
 
         var qa = (await _db.QueryAsync("select automation, units, outcome, details::text as details from automation_events where dedupe_key = $1",
