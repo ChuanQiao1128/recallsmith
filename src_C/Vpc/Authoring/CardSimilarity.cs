@@ -41,13 +41,18 @@ public static class CardSimilarity
 
   internal static void ResetEngineCache() => Volatile.Write(ref _engineCache, null);
 
-  public static async Task<SimilarityResult> FindAsync(NpgsqlConnection conn, SimilarityQuery query, CancellationToken ct = default)
+  /// <summary>
+  /// With <paramref name="tx"/> every command runs on that open transaction (the automation accept re-check, R18A
+  /// A03) and the pg_trgm threshold setting lasts until the caller's transaction ends; without it nothing changes.
+  /// </summary>
+  public static async Task<SimilarityResult> FindAsync(NpgsqlConnection conn, SimilarityQuery query, CancellationToken ct = default,
+    NpgsqlTransaction? tx = null)
   {
     var text = (query.Text ?? string.Empty).Trim();
     var limit = Math.Clamp(query.Limit, 1, MaxLimit);
     var threshold = query.Threshold;
 
-    var engine = await ResolveEngineAsync(conn, ct);
+    var engine = await ResolveEngineAsync(conn, tx, ct);
 
     // An empty deck list is "no decks": nothing to search, no card query.
     if (query.DeckIds is { Count: 0 }) return new SimilarityResult(engine, threshold, []);
@@ -56,7 +61,7 @@ public static class CardSimilarity
     {
       try
       {
-        var rows = await PgTrgmRowsAsync(conn, text, query, limit, threshold, ct);
+        var rows = await PgTrgmRowsAsync(conn, tx, text, query, limit, threshold, ct);
         return new SimilarityResult(EnginePgTrgm, threshold, rows);
       }
       catch (PostgresException ex) when (ex.SqlState == "42883")
@@ -67,11 +72,11 @@ public static class CardSimilarity
       }
     }
 
-    var matches = await FallbackRowsAsync(conn, text, query, limit, threshold, ct);
+    var matches = await FallbackRowsAsync(conn, tx, text, query, limit, threshold, ct);
     return new SimilarityResult(EngineFallback, threshold, matches);
   }
 
-  private static async Task<string> ResolveEngineAsync(NpgsqlConnection conn, CancellationToken ct)
+  private static async Task<string> ResolveEngineAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, CancellationToken ct)
   {
     var forced = TestForceEngine;
     if (forced is not null) return forced;
@@ -79,7 +84,7 @@ public static class CardSimilarity
     var cached = Volatile.Read(ref _engineCache);
     if (cached is not null && DateTime.UtcNow - cached.DetectedAtUtc < EngineCacheTtl) return cached.Engine;
 
-    await using var cmd = DbUtil.CreateCommand(conn, null, "select exists(select 1 from pg_extension where extname = 'pg_trgm')", []);
+    await using var cmd = DbUtil.CreateCommand(conn, tx, "select exists(select 1 from pg_extension where extname = 'pg_trgm')", []);
     var installed = await cmd.ExecuteScalarAsync(ct) is true;
     var engine = installed ? EnginePgTrgm : EngineFallback;
 
@@ -139,14 +144,16 @@ public static class CardSimilarity
   internal static string ThresholdSetting(double threshold) => threshold.ToString("R", CultureInfo.InvariantCulture);
 
   private static async Task<List<SimilarityMatch>> PgTrgmRowsAsync(
-    NpgsqlConnection conn, string text, SimilarityQuery query, int limit, double threshold, CancellationToken ct)
+    NpgsqlConnection conn, NpgsqlTransaction? callerTx, string text, SimilarityQuery query, int limit, double threshold, CancellationToken ct)
   {
     var (sql, parameters, usesIndex) = BuildPgTrgmQuery(text, query, limit, threshold);
 
     var matches = new List<SimilarityMatch>();
     // set_config(..., true) lasts until the end of this transaction, so the threshold never leaks into a pooled
-    // connection's next use. Neither caller holds a transaction on the connection.
-    await using var tx = await conn.BeginTransactionAsync(ct);
+    // connection's next use. A caller that passes its own open transaction gets the setting until that transaction
+    // ends; otherwise this method owns a short transaction of its own.
+    await using var ownTx = callerTx is null ? await conn.BeginTransactionAsync(ct) : null;
+    var tx = callerTx ?? ownTx!;
     if (usesIndex)
     {
       await using var set = DbUtil.CreateCommand(conn, tx, "select set_config('pg_trgm.similarity_threshold', $1, true)", [ThresholdSetting(threshold)]);
@@ -162,12 +169,12 @@ public static class CardSimilarity
           reader.GetFloat(5)));
       }
     }
-    await tx.CommitAsync(ct);
+    if (ownTx is not null) await ownTx.CommitAsync(ct);
     return matches;
   }
 
   private static async Task<List<SimilarityMatch>> FallbackRowsAsync(
-    NpgsqlConnection conn, string text, SimilarityQuery query, int limit, double threshold, CancellationToken ct)
+    NpgsqlConnection conn, NpgsqlTransaction? tx, string text, SimilarityQuery query, int limit, double threshold, CancellationToken ct)
   {
     var parameters = new List<object?>();
     var where = ScopeWhere(query, parameters);
@@ -183,7 +190,7 @@ public static class CardSimilarity
       """;
 
     var scored = new List<(long Id, long DeckId, string Slug, string Uid, string Question, float Score)>();
-    await using (var cmd = DbUtil.CreateCommand(conn, null, sql, parameters))
+    await using (var cmd = DbUtil.CreateCommand(conn, tx, sql, parameters))
     await using (var reader = await cmd.ExecuteReaderAsync(ct))
     {
       while (await reader.ReadAsync(ct))

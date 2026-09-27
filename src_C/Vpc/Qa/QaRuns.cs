@@ -469,9 +469,33 @@ public static class QaRuns
 
   /// <summary>
   /// Today's (UTC) reported spend across all runs, and the cards still unfinished in open runs (queued or running
-  /// and not stale), whatever day they started: their spend has not been reported yet but will be.
+  /// and not stale), whatever day they started: their spend has not been reported yet but will be. Draft QA of the
+  /// automation (R18A A00 §9.5) shares the cap: today's decision spend is added, and every <c>qa_queued</c> decision
+  /// sent within <see cref="StaleAfter"/> reserves one card. The decision table is probed with <c>to_regclass</c>
+  /// (this runs inside the cap transaction, where catching 42P01 would abort it); missing ⇒ runs only.
   /// </summary>
   internal static async Task<(decimal Spent, long OpenCards)> SpendTodayAsync(NpgsqlConnection conn, NpgsqlTransaction? tx)
+  {
+    var (spent, openCards) = await RunSpendTodayAsync(conn, tx);
+
+    var hasDecisions = await DbUtil.ExecuteScalarAsync(conn, tx,
+      "select to_regclass('public.automation_draft_decisions') is not null", []);
+    if (hasDecisions is not true) return (spent, openCards);
+
+    var rows = await DbUtil.QueryAsync(conn, tx,
+      $"""
+      select
+        coalesce(sum(estimated_cost_usd) filter (where created_at >= date_trunc('day', now(), 'UTC')), 0) as spent,
+        count(*) filter (where state = 'qa_queued' and qa_enqueued_at >= now() - {StaleInterval}) as open_cards
+      from automation_draft_decisions
+      where created_at >= date_trunc('day', now(), 'UTC') or state = 'qa_queued'
+      """,
+      []);
+    return (spent + Convert.ToDecimal(rows[0]["spent"], CultureInfo.InvariantCulture),
+      openCards + Convert.ToInt64(rows[0]["open_cards"], CultureInfo.InvariantCulture));
+  }
+
+  private static async Task<(decimal Spent, long OpenCards)> RunSpendTodayAsync(NpgsqlConnection conn, NpgsqlTransaction? tx)
   {
     var rows = await DbUtil.QueryAsync(conn, tx,
       $"""
@@ -494,7 +518,7 @@ public static class QaRuns
     return int.TryParse(raw?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) && v > 0 ? v : fallback;
   }
 
-  private static decimal DecimalEnv(string name, decimal fallback)
+  internal static decimal DecimalEnv(string name, decimal fallback)
   {
     var raw = Environment.GetEnvironmentVariable(name);
     return decimal.TryParse(raw?.Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var v) && v >= 0 ? v : fallback;

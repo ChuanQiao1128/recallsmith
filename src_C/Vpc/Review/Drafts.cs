@@ -6,6 +6,7 @@ using Npgsql;
 using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
 using RecallSmith.Lambda.Vpc.Authoring;
+using RecallSmith.Lambda.Vpc.Automation;
 using RecallSmith.Lambda.Vpc.Pagination;
 using RecallSmith.Lambda.Vpc.Qa;
 
@@ -33,7 +34,7 @@ public static class Drafts
   public const int MaxListLimit = 100;
   public const string DefaultConsoleBaseUrl = "https://console.developercards.app";
 
-  private static readonly string[] AgentKeys = ["name", "model", "skillVersion"];
+  private static readonly string[] AgentKeys = ["name", "model", "skillVersion", "runId", "queueItemId"];
   private static readonly string[] ListStatuses = ["pending", "accepted", "rejected", "all"];
 
   private const string DraftColumns = """
@@ -166,6 +167,9 @@ public static class Drafts
         });
       }
 
+      // Drafts of an automation run get a decision (R18A A00 §5.1); never throws, never changes this response.
+      await DraftDecisions.OnSubmittedAsync(conn, auth, deckId, deckSlug, agentJson, created);
+
       return res.Ok(new
       {
         batchId,
@@ -186,11 +190,11 @@ public static class Drafts
 
   private sealed record RejectedOutcome(string ClientDraftKey, string Code, string Message);
 
-  /// <summary>null / absent → null; otherwise canonical JSON of {name?, model?, skillVersion?}.</summary>
+  /// <summary>null / absent → null; otherwise canonical JSON of {name?, model?, skillVersion?, runId?, queueItemId?}.</summary>
   private static string? ParseAgent(JsonElement body)
   {
     if (!body.TryGetProperty("agent", out var el) || el.ValueKind == JsonValueKind.Null) return null;
-    const string message = "agent must be an object with optional string fields name, model, skillVersion (max 200)";
+    const string message = "agent must be an object with optional string fields name, model, skillVersion, runId, queueItemId (max 200)";
     if (el.ValueKind != JsonValueKind.Object) throw new ValidationError(message, "agent");
 
     var agent = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -327,6 +331,7 @@ public static class Drafts
 
       var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
       var page = rows.Take(limit).ToList();
+      var automation = await AutomationRowsAsync(conn, page.Select(r => Long(r["id"])).ToArray());
       var items = page.Select(r => new
       {
         draftId = Long(r["id"]),
@@ -345,6 +350,9 @@ public static class Drafts
         decidedAt = r["decided_at"],
         decidedBySub = r["decided_by_sub"],
         acceptedCardId = r["accepted_card_id"],
+        automation = automation.TryGetValue(Long(r["id"]), out var a)
+          ? new { state = a["state"], reason = a["reason"], mode = a["mode"] }
+          : null,
       }).ToList();
 
       var nextCursor = rows.Count > limit ? EncodeCursor(Long(page[^1]["id"])) : null;
@@ -430,6 +438,8 @@ public static class Drafts
         createdAt = e["created_at"],
       }).ToList();
 
+      var automation = await AutomationDetailAsync(conn, id.Value);
+
       return res.Ok(new
       {
         draftId = id.Value,
@@ -448,6 +458,7 @@ public static class Drafts
         decidedBySub = r["decided_by_sub"],
         acceptedCardId = r["accepted_card_id"],
         events,
+        automation,
       });
     }
     catch (Exception ex)
@@ -496,62 +507,24 @@ public static class Drafts
       string stableUid;
       await using (var tx = await conn.BeginTransactionAsync())
       {
-        var draftRows = await DbUtil.QueryAsync(conn, tx, "select status, card from ai_drafts where id = $1 for update", [id.Value]);
-        if (draftRows.Count == 0) return DraftNotFound(res);
-        if ((string)draftRows[0]["status"]! != "pending") return DraftNotPending(res, id.Value);
-
-        var deckRows = await DbUtil.QueryAsync(conn, tx, "select id from decks where id = $1 and is_deleted = 0 for update", [deckId.Value]);
-        if (deckRows.Count == 0) return DeckNotFound(res);
-
-        DraftCard stored;
-        using (var storedDoc = JsonDocument.Parse((string)draftRows[0]["card"]!))
+        DraftAcceptance.Accepted accepted;
+        try
         {
-          stored = DraftCard.Parse(storedDoc.RootElement);
+          accepted = await DraftAcceptance.AcceptInTransactionAsync(conn, tx, id.Value, deckId.Value, auth.UserSub, edited, reviewMs);
         }
-        // Card content only: source.grounding is review metadata, so an edit that drops it is not an edit and the
-        // published card (final.SourceJson) never carries it.
-        var storedJson = stored.ToJson(includeGrounding: false);
-        var final = edited ?? stored;
-        var finalJson = final.ToJson(includeGrounding: false);
-        action = edited is not null && finalJson != storedJson ? "edited_accepted" : "accepted";
-        stableUid = final.StableUid;
-
-        var taken = await DbUtil.QueryAsync(conn, tx,
-          "select id, is_deleted from cards where deck_id = $1 and stable_uid = $2", [deckId.Value, stableUid]);
-        if (taken.Count > 0)
+        catch (DraftAcceptance.DraftAcceptanceException ex)
         {
-          var deleted = Convert.ToInt32(taken[0]["is_deleted"], CultureInfo.InvariantCulture) == 1;
-          return StableUidTaken(res, stableUid, Long(taken[0]["id"]), deleted);
+          // Each code maps to exactly the response this route gave before the extraction (A03).
+          return ex.Code switch
+          {
+            DraftAcceptance.DraftNotFound => DraftNotFound(res),
+            DraftAcceptance.DeckNotFound => DeckNotFound(res),
+            _ => Helpers.ErrorEnvelope(res, 409, ex.Code, ex.Message),
+          };
         }
-
-        var inserted = await DbUtil.ExecuteScalarAsync(conn, tx,
-          """
-          insert into cards (deck_id, stable_uid, question, explanation, code_snippet, code_language, real_world_usage,
-            difficulty, order_in_deck, revision, topic, mcq, source)
-          values ($1, $2, $3, $4, $5, $6, $7, $8,
-            (select coalesce(max(order_in_deck), 0) + 10 from cards where deck_id = $1),
-            1, $9, $10::jsonb, $11::jsonb)
-          returning id
-          """,
-          [deckId.Value, stableUid, final.Question, final.Explanation, final.CodeSnippet, final.CodeLanguage, final.RealWorldUsage,
-           final.Difficulty, final.Topic, final.McqJson, final.SourceJson]);
-        cardId = Convert.ToInt64(inserted, CultureInfo.InvariantCulture);
-
-        await DbUtil.ExecuteAsync(conn, tx,
-          """
-          update ai_drafts
-          set status = 'accepted', accepted_card_id = $2, decided_at = now(), decided_by_sub = $3, updated_at = now()
-          where id = $1
-          """,
-          [id.Value, cardId, auth.UserSub]);
-
-        var edits = action == "edited_accepted";
-        await DbUtil.ExecuteAsync(conn, tx,
-          """
-          insert into ai_review_events (draft_id, action, actor_sub, review_ms, before_card, after_card)
-          values ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
-          """,
-          [id.Value, action, auth.UserSub, reviewMs, edits ? storedJson : null, edits ? finalJson : null]);
+        cardId = accepted.CardId;
+        action = accepted.Action;
+        stableUid = accepted.StableUid;
 
         await tx.CommitAsync();
       }
@@ -561,6 +534,9 @@ public static class Drafts
         ActualMinutes: reviewMs is null ? null : reviewMs.Value / 60000m,
         DeckId: deckId.Value, Ref: id.Value.ToString(CultureInfo.InvariantCulture), DedupeKey: $"draft-accept:{id.Value}",
         Details: ReviewTimeDetails(reviewMs, rawReviewMs)));
+
+      // A human decision always wins over the automation (A00 §5.7); never throws.
+      await DraftDecisions.OnHumanDecisionAsync(conn, id.Value, action, null, auth.UserSub);
 
       if (!runQa) return res.Ok(new { draftId = id.Value, cardId, stableUid, action });
 
@@ -655,6 +631,8 @@ public static class Drafts
         DeckId: deckId.Value, Ref: id.Value.ToString(CultureInfo.InvariantCulture), DedupeKey: $"draft-reject:{id.Value}",
         Details: new { reason, defect = DefectReasons.Contains(reason), reviewTimeMeasured = reviewMs is not null, rawReviewMs = rawReviewMs != reviewMs ? rawReviewMs : null }));
 
+      await DraftDecisions.OnHumanDecisionAsync(conn, id.Value, "rejected", reason, auth.UserSub);
+
       return res.Ok(new { draftId = id.Value, action = "rejected" });
     }
     catch (Exception ex)
@@ -737,16 +715,94 @@ public static class Drafts
 
   private static long Long(object? v) => Convert.ToInt64(v, CultureInfo.InvariantCulture);
 
+  /// <summary>
+  /// The automation decisions of <paramref name="draftIds"/> by draft id (A00 §5.10), read after the main query so a
+  /// database without migration 034 (42P01/42703) only loses the <c>automation</c> block.
+  /// </summary>
+  private static async Task<Dictionary<long, Dictionary<string, object?>>> AutomationRowsAsync(NpgsqlConnection conn, long[] draftIds)
+  {
+    var result = new Dictionary<long, Dictionary<string, object?>>();
+    if (draftIds.Length == 0) return result;
+    try
+    {
+      var rows = await DbUtil.QueryAsync(conn, null,
+        "select draft_id, state, reason, mode from automation_draft_decisions where draft_id = any($1)", [draftIds]);
+      foreach (var row in rows) result[Long(row["draft_id"])] = row;
+    }
+    catch (PostgresException pg) when (pg.SqlState is "42P01" or "42703")
+    {
+      Log.Event("warn", new { tag = "drafts", reason = "automation_not_ready", sqlState = pg.SqlState });
+      result.Clear();
+    }
+    return result;
+  }
+
+  /// <summary>The detail route's <c>automation</c> block (A00 §5.10), or null (no decision, or no migration 034).</summary>
+  private static async Task<object?> AutomationDetailAsync(NpgsqlConnection conn, long draftId)
+  {
+    try
+    {
+      var rows = await DbUtil.QueryAsync(conn, null,
+        """
+        select draft_id, run_id, state, reason, reason_detail, mode, qa_job_id, qa_status, qa_error_code, qa_provider, qa_model,
+          qa_prompt_version, blocker_count, major_count, minor_count, accepted_card_id, human_action
+        from automation_draft_decisions where draft_id = any($1)
+        """,
+        [new[] { draftId }]);
+      if (rows.Count == 0) return null;
+      var a = rows[0];
+
+      object? qa = null;
+      if (a["qa_status"] is not null)
+      {
+        var findingRows = await DbUtil.QueryAsync(conn, null,
+          "select severity, category, message, suggested_fix from automation_draft_findings where draft_id = $1 order by id",
+          [draftId]);
+        qa = new
+        {
+          status = a["qa_status"],
+          errorCode = a["qa_error_code"],
+          provider = a["qa_provider"],
+          model = a["qa_model"],
+          promptVersion = a["qa_prompt_version"],
+          blocker = a["blocker_count"],
+          major = a["major_count"],
+          minor = a["minor_count"],
+          findings = findingRows.Select(f => new
+          {
+            severity = f["severity"],
+            category = f["category"],
+            message = f["message"],
+            suggestedFix = f["suggested_fix"],
+          }).ToList(),
+        };
+      }
+
+      return new
+      {
+        runId = a["run_id"],
+        state = a["state"],
+        reason = a["reason"],
+        reasonDetail = a["reason_detail"],
+        mode = a["mode"],
+        qa,
+        acceptedCardId = a["accepted_card_id"],
+        humanAction = a["human_action"],
+      };
+    }
+    catch (PostgresException pg) when (pg.SqlState is "42P01" or "42703")
+    {
+      Log.Event("warn", new { tag = "drafts", reason = "automation_not_ready", sqlState = pg.SqlState });
+      return null;
+    }
+  }
+
   private static APIGatewayProxyResponse DraftNotFound(Res res) => Helpers.ErrorEnvelope(res, 404, "DRAFT_NOT_FOUND", "Draft not found");
 
   private static APIGatewayProxyResponse DeckNotFound(Res res) => Helpers.ErrorEnvelope(res, 404, "DECK_NOT_FOUND", "Deck not found");
 
   private static APIGatewayProxyResponse DraftNotPending(Res res, long draftId) =>
     Helpers.ErrorEnvelope(res, 409, "DRAFT_NOT_PENDING", $"Draft {draftId} has already been decided");
-
-  private static APIGatewayProxyResponse StableUidTaken(Res res, string uid, long cardId, bool deleted) =>
-    Helpers.ErrorEnvelope(res, 409, "STABLE_UID_TAKEN",
-      $"stableUid {uid} is already used by card {cardId} in this deck{(deleted ? " (deleted)" : string.Empty)}");
 
   private static APIGatewayProxyResponse NotReady(Res res) =>
     Helpers.ErrorEnvelope(res, 503, "SERVER_NOT_READY_REVIEW", "Review queue tables are missing; run the database migration");
