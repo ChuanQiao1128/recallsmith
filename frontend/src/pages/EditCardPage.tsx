@@ -12,8 +12,8 @@ import type { Card } from '../types/card';
 import { CardForm, type CardFormValues } from '../components/CardForm';
 import { buildCardBody, buildCardSource } from '../lib/authoringBodies';
 import { CONSOLE_NAME } from '../lib/brand';
-import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 
 /**
  * The label on the recovery button, and the sentence that explains it.
@@ -44,9 +44,7 @@ function EditCardErrorScreen({ message }: { message: string }) {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · Edit card"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-slate-800">Edit Card</h1>
@@ -258,9 +256,7 @@ export function EditCardPage() {
     <ConsoleShell
       title={CONSOLE_NAME}
       subtitle="Authoring · Edit card"
-      decksHref="/"
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={isSuperAdmin(readSessionUser()) ? '/admin/users' : undefined}
+      {...consoleNav()}
     >
       <div className="flex items-center justify-between">
         <div>

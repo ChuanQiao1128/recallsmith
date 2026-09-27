@@ -33,8 +33,37 @@ export const QA_CATEGORY_LABELS: Record<string, string> = {
   other: 'Other',
 };
 
+// Fallbacks only. The server reads the real limits from AI_QA_MAX_CARDS and
+// AI_QA_DAILY_USD_CAP (contract §7.2, defaults 200 and 10); the page uses the
+// values GET …/qa/status returns and falls back to these defaults when the
+// response does not carry them.
 export const QA_MAX_CARDS = 200;
 export const QA_DAILY_USD_CAP = 10;
+
+export interface QaLimits {
+  maxCards: number;
+  dailyUsdCap: number;
+  /** Today's spend, when the server reports it. */
+  spentTodayUsd: number | null;
+  /** True when both limits came from the server rather than the defaults. */
+  fromServer: boolean;
+}
+
+export function qaLimits(
+  status: { maxCards: number | null; dailyUsdCap: number | null; spentTodayUsd: number | null } | null,
+): QaLimits {
+  return {
+    maxCards: status?.maxCards ?? QA_MAX_CARDS,
+    dailyUsdCap: status?.dailyUsdCap ?? QA_DAILY_USD_CAP,
+    spentTodayUsd: status?.spentTodayUsd ?? null,
+    fromServer: status?.maxCards != null && status?.dailyUsdCap != null,
+  };
+}
+
+/** What is left of today's cap; the whole cap when today's spend is unknown. */
+export function qaCapRemainingUsd(limits: QaLimits): number {
+  return Math.max(0, limits.dailyUsdCap - (limits.spentTodayUsd ?? 0));
+}
 
 // The plan's per-card budget priced at the §7.5 default list prices. An
 // estimate only: the provider bills separately.
@@ -78,12 +107,35 @@ function severityRank(severity: string): number {
   return i === -1 ? QA_SEVERITIES.length : i;
 }
 
+/**
+ * What the page can honestly say about one card of a run:
+ * - flagged: a blocker or major finding, whatever the item status;
+ * - passed: the card was reviewed (item done, or findings exist without an
+ *   item row) and nothing above minor came back;
+ * - pending: the item is still queued, so it has not been reviewed yet;
+ * - not_reviewed: the item ended error, refused or skipped.
+ */
+export type QaCardVerdict = 'passed' | 'flagged' | 'pending' | 'not_reviewed';
+
+export function cardVerdict(
+  itemStatus: string | null,
+  findings: ReadonlyArray<{ severity: string }>,
+): QaCardVerdict {
+  if (!cardPasses(findings)) return 'flagged';
+  if (itemStatus === 'done') return 'passed';
+  if (itemStatus === null) return findings.length > 0 ? 'passed' : 'pending';
+  if (itemStatus === 'queued') return 'pending';
+  return 'not_reviewed';
+}
+
 export interface QaCardGroup {
   cardId: number;
   stableUid: string;
   question: string | null;
   itemStatus: string | null;
   itemErrorCode: string | null;
+  verdict: QaCardVerdict;
+  /** True only when verdict is 'passed'. */
   passes: boolean;
   findings: QaFinding[];
 }
@@ -112,7 +164,8 @@ export function groupFindingsByCard(
         question: card?.question ?? null,
         itemStatus: null,
         itemErrorCode: null,
-        passes: true,
+        verdict: 'pending',
+        passes: false,
         findings: [],
       };
       groups.set(cardId, group);
@@ -132,7 +185,8 @@ export function groupFindingsByCard(
   const result = [...groups.values()];
   for (const group of result) {
     group.findings.sort((a, b) => severityRank(a.severity) - severityRank(b.severity) || a.findingId - b.findingId);
-    group.passes = cardPasses(group.findings);
+    group.verdict = cardVerdict(group.itemStatus, group.findings);
+    group.passes = group.verdict === 'passed';
   }
 
   const tier = (group: QaCardGroup): number =>
@@ -146,10 +200,18 @@ export const QA_START_ERROR_MESSAGES: Record<string, string> = {
   CONFIG_ERROR: 'The AI QA queue is not configured on the server yet.',
   AI_QA_RUN_IN_PROGRESS: 'A run is already in progress for this deck; its progress is shown below.',
   AI_QA_NOTHING_TO_REVIEW: 'Nothing to review: every changed card already has a review of its current content.',
-  AI_QA_TOO_MANY_CARDS: 'Too many cards for one run (the limit is 200). Narrow the scope.',
+  AI_QA_TOO_MANY_CARDS: 'Too many cards for one run. Narrow the scope.',
   AI_QA_DAILY_CAP: "Today's AI QA spend has reached the daily cap. Try again after midnight UTC.",
   DECK_NOT_FOUND: 'This deck no longer exists.',
 };
+
+/** The start refusal text, with the run size limit filled in where it applies. */
+export function qaStartErrorMessage(code: string, fallback: string, limits: QaLimits): string {
+  if (code === 'AI_QA_TOO_MANY_CARDS') {
+    return `Too many cards for one run (the limit is ${limits.maxCards}). Narrow the scope.`;
+  }
+  return QA_START_ERROR_MESSAGES[code] ?? fallback;
+}
 
 export const QA_ITEM_ERROR_LABELS: Record<string, string> = {
   PROVIDER_ACCESS_DENIED: 'The model provider refused access (check Bedrock model access or the provider setting).',

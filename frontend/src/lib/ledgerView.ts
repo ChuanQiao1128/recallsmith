@@ -131,7 +131,8 @@ export const LEDGER_DEFINITIONS: ReadonlyArray<{ term: string; definition: strin
   },
   {
     term: 'Actual minutes',
-    definition: 'Measured human time, such as review time. It counts as 0 when it was not recorded.',
+    definition:
+      'Measured human time, such as review time. It counts as 0 when it was not recorded. Draft review time counts only while the review tab is visible and is capped at 30 minutes per draft.',
   },
   {
     term: 'Minutes saved',

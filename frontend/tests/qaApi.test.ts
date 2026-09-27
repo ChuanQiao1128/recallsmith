@@ -81,7 +81,37 @@ describe('src/api/qa', () => {
         { findingId: 9, cardId: 101, stableUid: 'aws-s3-storage-classes', category: 'incorrect_answer', message: 'm' },
       ],
       wouldBlock: true,
+      // Today's server does not send its run limits; the page then uses the
+      // documented defaults.
+      maxCards: null,
+      dailyUsdCap: null,
+      spentTodayUsd: null,
     });
+  });
+
+  it('reads the run limits and today\'s spend from the status response when present', async () => {
+    httpMock.get.mockResolvedValue({
+      data: ok({
+        enabled: true,
+        required: false,
+        changedCards: 0,
+        reviewedCurrent: 0,
+        missing: [],
+        openBlockers: [],
+        wouldBlock: false,
+        maxCards: '50',
+        dailyUsdCap: 2.5,
+        spentTodayUsd: 0,
+      }),
+    });
+    const res = await api.fetchQaStatus(7);
+    expect(res.data).toMatchObject({ maxCards: 50, dailyUsdCap: 2.5, spentTodayUsd: 0 });
+
+    httpMock.get.mockResolvedValue({
+      data: ok({ enabled: true, maxCards: 0, dailyUsdCap: 'x', spentTodayUsd: -1 }),
+    });
+    const bad = await api.fetchQaStatus(7);
+    expect(bad.data).toMatchObject({ maxCards: null, dailyUsdCap: null, spentTodayUsd: null });
   });
 
   it('resolves a finding through POST /api/v1/authoring/qa/findings/:findingId/resolve', async () => {

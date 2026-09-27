@@ -24,6 +24,11 @@ export interface ConfirmOptions {
    * data; see AdminUsersPage for the argument against spending it more widely.
    */
   confirmPhrase?: string;
+  /**
+   * A link shown under the body, for a dialog that has somewhere to send the
+   * user instead of confirming (the publish dialog's "Open AI QA").
+   */
+  link?: { href: string; label: string };
 }
 
 export type ConfirmFn = (options: ConfirmOptions) => Promise<boolean>;
@@ -56,7 +61,11 @@ export const ConfirmContext = createContext<ConfirmFn | null>(null);
  */
 export const windowConfirmFallback: ConfirmFn = options =>
   Promise.resolve(
-    window.confirm([options.title, options.body].filter(Boolean).join('\n\n')),
+    window.confirm(
+      [options.title, options.body, options.link ? `${options.link.label}: ${options.link.href}` : null]
+        .filter(Boolean)
+        .join('\n\n'),
+    ),
   );
 
 /**

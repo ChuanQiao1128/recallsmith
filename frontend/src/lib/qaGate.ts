@@ -16,3 +16,24 @@ export function qaPageHref(deckId: number, runId?: string | null): string {
   const base = `/decks/qa?deckId=${deckId}`;
   return runId ? `${base}&runId=${encodeURIComponent(runId)}` : base;
 }
+
+/**
+ * The line the publish confirm dialog adds from GET …/qa/status (contract
+ * §7.10), or null when there is nothing to warn about. `openBlockers` is the
+ * list the server returns (capped server-side); the unreviewed count comes from
+ * the counters, which are not capped.
+ */
+export function qaPublishPreviewLine(status: {
+  changedCards: number;
+  reviewedCurrent: number;
+  openBlockers: readonly unknown[];
+  wouldBlock: boolean;
+}): string | null {
+  const blockers = status.openBlockers.length;
+  const notReviewed = Math.max(0, status.changedCards - status.reviewedCurrent);
+  if (blockers === 0 && notReviewed === 0) return null;
+  const counts = `AI QA: ${blockers} open blocker(s), ${notReviewed} card(s) not reviewed.`;
+  return status.wouldBlock
+    ? `${counts} The server will refuse this publish until they are resolved.`
+    : `${counts} AI QA is advisory, so publishing is not blocked.`;
+}

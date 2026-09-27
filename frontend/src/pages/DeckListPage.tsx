@@ -25,7 +25,7 @@ import {
   reportThrownFailure,
 } from '../lib/errorFeed';
 import type { ErrorNotice, PollFailure } from '../lib/errorFeed';
-import { isQaPublishGateCode, qaPageHref } from '../lib/qaGate';
+import { isQaPublishGateCode, qaPageHref, qaPublishPreviewLine } from '../lib/qaGate';
 import { ErrorBanner, ErrorBannerList } from '../components/ui/ErrorBanner';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
 import { removeDeckBySlug } from '../features/deckList/deckListPagination';
@@ -43,6 +43,7 @@ import { useDeckPagination } from '../features/deckList/useDeckPagination';
 import { readSessionUser, isSuperAdmin, type SessionUser } from '../auth/sessionUser';
 
 import { ConsoleShell } from '../components/console/ConsoleShell';
+import { consoleNav } from '../components/console/consoleNav';
 import { DeckConsoleHeader } from '../features/deckList/components/DeckConsoleHeader';
 import { PublishJobsPanel } from '../features/deckList/components/PublishJobsPanel';
 import { DeckFilterBar } from '../features/deckList/components/DeckFilterBar';
@@ -55,6 +56,35 @@ import { DeckPaginationFooter } from '../features/deckList/components/DeckPagina
 const ERR_RESOLVE_ID = 'deck.resolveId';
 const ERR_DELETE_DECK = 'deck.delete';
 const ERR_PUBLISH_DECK = 'deck.publish';
+
+const PUBLISH_BODY = 'Publish will:\n1) Upload deck.json to S3\n2) Rebuild manifest.json';
+// How long the publish dialog waits for the AI QA preview before it opens
+// without it.
+const QA_PREVIEW_TIMEOUT_MS = 3000;
+
+/**
+ * The AI QA preview for the publish dialog (contract §7.10): GET …/qa/status,
+ * summarised in one line. The QA API module is loaded with a dynamic import
+ * after the Publish click, so the deck list's first load does not grow; any
+ * failure or a slow answer returns null and the dialog opens as before.
+ */
+async function loadQaPublishPreview(deckId: number): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<null>(resolve => {
+      timer = setTimeout(() => resolve(null), QA_PREVIEW_TIMEOUT_MS);
+    });
+    const load = import('../api/qa').then(async ({ fetchQaStatus }) => {
+      const res = await fetchQaStatus(deckId);
+      return res.success && res.data ? qaPublishPreviewLine(res.data) : null;
+    });
+    return await Promise.race([load, timeout]);
+  } catch {
+    return null;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 // The five-minute localStorage cache this page reads on its legacy path now
 // lives in src/lib/sessionCache.ts, keyed by the signed-in user. It moved out
@@ -425,10 +455,16 @@ export function DeckListPage() {
     // manifest. It can be run again, and running it again is the fix for having
     // run it too early. So this one is role="dialog", not "alertdialog", and it
     // opens with focus on Publish rather than on Cancel.
+    //
+    // The AI QA preview needs a deck id; a legacy row without one (and not yet
+    // looked up) opens the dialog without it rather than adding a lookup here.
+    const knownId = row.id !== null && Number.isFinite(row.id) ? row.id : resolvedIdsRef.current.get(row.slug);
+    const qaLine = knownId === undefined ? null : await loadQaPublishPreview(knownId);
     const ok = await confirm({
       title: `Publish deck "${row.slug}"?`,
-      body: 'Publish will:\n1) Upload deck.json to S3\n2) Rebuild manifest.json',
+      body: qaLine ? `${PUBLISH_BODY}\n\n${qaLine}` : PUBLISH_BODY,
       confirmLabel: 'Publish',
+      ...(qaLine && knownId !== undefined ? { link: { href: qaPageHref(knownId), label: 'Open AI QA' } } : {}),
     });
     if (!ok) return;
 
@@ -640,8 +676,7 @@ export function DeckListPage() {
           : '—'
       }
       superAdmin={superAdmin}
-      contentIntelligenceHref="/content-intelligence"
-      adminUsersHref={superAdmin ? '/admin/users' : undefined}
+      {...consoleNav({ decksHref: undefined })}
     >
       <div className="w-full mx-auto space-y-6">
         {/* Header Section */}

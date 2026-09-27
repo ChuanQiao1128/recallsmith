@@ -123,6 +123,9 @@ export function qaStatus(overrides: Partial<QaStatus> = {}): QaStatus {
     missing: [],
     openBlockers: [],
     wouldBlock: false,
+    maxCards: null,
+    dailyUsdCap: null,
+    spentTodayUsd: null,
     ...overrides,
   };
 }

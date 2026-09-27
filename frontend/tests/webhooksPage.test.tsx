@@ -230,6 +230,79 @@ describe('WebhooksPage', () => {
     expect(screen.queryByRole('button', { name: 'Redeliver del-dead' })).toBeNull();
   });
 
+  it('announces test and redeliver results through one persistent live region', async () => {
+    const user = userEvent.setup();
+    api.listWebhookDeliveries.mockResolvedValue(
+      deliveriesPage([delivery({ deliveryId: 'del-dead', status: 'dead', deliveredAt: null })]),
+    );
+    api.sendWebhookTest.mockResolvedValue(ok({ eventId: 'evt-9', deliveryId: 'del-9' }));
+    api.redeliverWebhookDelivery.mockResolvedValue(refused('SUBSCRIPTION_INACTIVE', 'inactive'));
+    await mountLoaded();
+
+    // Present and empty before anything happens, so later text is announced.
+    const live = screen.getByTestId('webhooks-live');
+    expect(live.getAttribute('role')).toBe('status');
+    expect(live.getAttribute('aria-live')).toBe('polite');
+    expect(live.textContent).toBe('');
+
+    await user.click(screen.getByRole('button', { name: 'Send test to n8n' }));
+    await waitFor(() => expect(live.textContent).toBe('Test event queued: delivery del-9'));
+    expect(screen.getByTestId('webhooks-live')).toBe(live);
+
+    await user.click(screen.getByRole('button', { name: 'Redeliver del-dead' }));
+    await waitFor(() => expect(live.textContent).toBe('Enable the subscription before redelivering.'));
+  });
+
+  it('marks invalid form fields and announces the problem list as an alert', async () => {
+    const user = userEvent.setup();
+    await mountLoaded();
+    await user.type(screen.getByLabelText('Name'), 'internal');
+    await user.type(screen.getByLabelText('Endpoint URL'), 'http://hooks.example.com/dc');
+    await user.click(screen.getByRole('button', { name: 'Add subscription' }));
+
+    const problems = await screen.findByRole('alert');
+    expect(problems.textContent).toContain('The endpoint URL must use https.');
+    expect(problems.textContent).toContain('Choose at least one event.');
+    const url = screen.getByLabelText('Endpoint URL');
+    expect(url.getAttribute('aria-invalid')).toBe('true');
+    expect(url.getAttribute('aria-describedby')).toBe(problems.id);
+    expect(screen.getByRole('group', { name: 'Events' }).getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByLabelText('Name').getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('drops a Load more page whose filter changed while it was in flight, and shows the refetch', async () => {
+    const user = userEvent.setup();
+    const stale = deferred<ApiResult<WebhookDeliveriesPage>>();
+    const filtered = deferred<ApiResult<WebhookDeliveriesPage>>();
+    api.listWebhookDeliveries.mockImplementation(async (params: { status?: string; cursor?: string }) => {
+      if (params.cursor) return stale.promise;
+      if (params.status === 'dead') return filtered.promise;
+      return deliveriesPage([delivery({ deliveryId: 'del-first' })], 'cursor-1');
+    });
+    await mountLoaded();
+    const table = screen.getByTestId('webhooks-deliveries-table');
+    expect(within(table).getByRole('button', { name: 'Redeliver del-first' })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Load more' }));
+    await user.selectOptions(screen.getByLabelText('Status'), 'dead');
+
+    // The old rows stay, dimmed and marked busy, until the new filter's page lands.
+    expect(await screen.findByTestId('webhooks-deliveries-refetching')).toBeTruthy();
+    expect(screen.getByTestId('webhooks-deliveries-table').getAttribute('aria-busy')).toBe('true');
+
+    await act(async () => filtered.resolve(deliveriesPage([delivery({ deliveryId: 'del-dead', status: 'dead', deliveredAt: null })])));
+    await waitFor(() => expect(screen.queryByTestId('webhooks-deliveries-refetching')).toBeNull());
+    await act(async () =>
+      stale.resolve(deliveriesPage([delivery({ deliveryId: 'del-stale', status: 'delivered' })], 'cursor-2')),
+    );
+
+    const rows = within(screen.getByTestId('webhooks-deliveries-table'));
+    expect(rows.getByRole('button', { name: 'Redeliver del-dead' })).toBeTruthy();
+    expect(rows.queryByRole('button', { name: 'Redeliver del-stale' })).toBeNull();
+    expect(rows.getAllByText('dead')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
   it('shows no Redeliver button for a queued delivery', async () => {
     api.listWebhookDeliveries.mockResolvedValue(
       deliveriesPage(

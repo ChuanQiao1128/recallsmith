@@ -232,6 +232,38 @@ describe('LedgerPage', () => {
     expect(svg.textContent).toContain('2026-09-21');
   });
 
+  it('draws a long daily range at natural size and offers the values as a table', async () => {
+    const days = Array.from({ length: 90 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 5, 30 + i));
+      return series(d.toISOString().slice(0, 10), 'publish_pipeline', 10 + i, i % 3);
+    });
+    api.fetchAutomationLedger.mockResolvedValue(ok(report({ granularity: 'day', series: days })));
+    await mountLoaded();
+
+    const svg = screen.getByRole('img', { name: 'Minutes saved per period' });
+    // 90 bars × 40 px: drawn at that width inside the scrolling wrapper, not
+    // squeezed into the card (which shrank labels to ~2 px).
+    expect(svg.getAttribute('width')).toBe('3600');
+    expect(svg.getAttribute('height')).toBe('180');
+    expect(svg.getAttribute('class') ?? '').not.toContain('w-full');
+    expect((svg as unknown as HTMLElement).style.maxHeight).toBe('');
+    expect(svg.querySelector('text')?.getAttribute('font-size')).toBe('10');
+    expect(screen.getByTestId('ledger-chart-scroll').className).toContain('overflow-x-auto');
+
+    const table = screen.getByTestId('ledger-chart-table');
+    expect(svg.getAttribute('aria-describedby')).toBe(table.id);
+    const rows = within(table).getAllByRole('row');
+    expect(rows).toHaveLength(91);
+    expect(within(rows[1]).getByRole('rowheader').textContent).toBe('2026-06-30');
+    expect(rows[1].textContent).toContain('10');
+    expect(within(table).getAllByRole('columnheader').map(h => h.textContent)).toEqual([
+      'Period start',
+      'Time saved',
+      'Minutes saved',
+      'Defects caught',
+    ]);
+  });
+
   it('says so when there are no runs in the range', async () => {
     api.fetchAutomationLedger.mockResolvedValue(ok(report({ series: [], automations: [] })));
     await mountLoaded();
@@ -344,6 +376,90 @@ describe('LedgerPage', () => {
     await waitFor(() =>
       expect(api.fetchAutomationEvents).toHaveBeenLastCalledWith({ automation: 'bulk_import', limit: 50 }),
     );
+  });
+
+  it('announces range and baseline problems as alerts tied to their inputs', async () => {
+    const user = userEvent.setup();
+    await mountLoaded();
+    await user.type(screen.getByLabelText('From'), '2026-09-27');
+    await user.type(screen.getByLabelText('To'), '2026-09-01');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    const problem = screen.getByTestId('ledger-range-problem');
+    expect(problem.getAttribute('role')).toBe('alert');
+    for (const label of ['From', 'To']) {
+      const input = screen.getByLabelText(label);
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      expect(input.getAttribute('aria-describedby')).toBe(problem.id);
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Edit baseline AI QA review' }));
+    const minutes = screen.getByLabelText('Minutes per unit');
+    await user.clear(minutes);
+    await user.type(minutes, '1000000');
+    await user.click(screen.getByRole('button', { name: 'Save baseline' }));
+    const baselineProblem = screen.getByTestId('ledger-baseline-problem');
+    expect(baselineProblem.getAttribute('role')).toBe('alert');
+    expect(minutes.getAttribute('aria-invalid')).toBe('true');
+    expect(minutes.getAttribute('aria-describedby')).toBe(baselineProblem.id);
+  });
+
+  it('announces a saved baseline through the persistent live region', async () => {
+    const user = userEvent.setup();
+    api.updateAutomationBaseline.mockResolvedValue(ok({ ...BASELINES[0], baselineMinutesPerUnit: 3 }));
+    await mountLoaded();
+    const live = screen.getByTestId('ledger-live');
+    expect(live.getAttribute('aria-live')).toBe('polite');
+    expect(live.textContent).toBe('');
+
+    await user.click(screen.getByRole('button', { name: 'Edit baseline Publish pipeline' }));
+    await user.clear(screen.getByLabelText('Minutes per unit'));
+    await user.type(screen.getByLabelText('Minutes per unit'), '3');
+    await user.click(screen.getByRole('button', { name: 'Save baseline' }));
+    await waitFor(() => expect(live.textContent).toBe('Baseline saved for Publish pipeline.'));
+  });
+
+  it('drops a Load more page whose automation filter changed while it was in flight', async () => {
+    const user = userEvent.setup();
+    const stale = deferred<ApiResult<AutomationEventsPage>>();
+    const filtered = deferred<ApiResult<AutomationEventsPage>>();
+    api.fetchAutomationEvents.mockImplementation(async (params: { automation?: string; cursor?: string }) => {
+      if (params.cursor) return stale.promise;
+      if (params.automation === 'bulk_import') return filtered.promise;
+      return eventsPage('cursor-2');
+    });
+    await mountLoaded();
+
+    await user.click(screen.getByRole('button', { name: 'Load more' }));
+    await user.selectOptions(screen.getByLabelText('Automation'), 'bulk_import');
+    expect(await screen.findByTestId('ledger-events-refetching')).toBeTruthy();
+    expect(screen.getByTestId('ledger-events-table').getAttribute('aria-busy')).toBe('true');
+
+    const bulkRow = {
+      id: 92,
+      automation: 'bulk_import',
+      occurredAt: '2026-09-26T10:00:00Z',
+      units: 12,
+      outcome: 'success',
+      actualMinutes: null,
+      defectsCaught: 0,
+      deckId: 8,
+      ref: 'import-8',
+      source: 'live',
+      dedupeKey: 'import:8',
+      details: null,
+    };
+    await act(async () => filtered.resolve(ok({ items: [bulkRow], nextCursor: null })));
+    await waitFor(() => expect(screen.queryByTestId('ledger-events-refetching')).toBeNull());
+    await act(async () =>
+      stale.resolve(ok({ items: [{ ...bulkRow, id: 93, automation: 'publish_pipeline', ref: 'stale-ref' }], nextCursor: 'cursor-3' })),
+    );
+
+    const table = within(screen.getByTestId('ledger-events-table'));
+    expect(table.getByText('import-8')).toBeTruthy();
+    expect(table.queryByText('stale-ref')).toBeNull();
+    expect(table.queryByText('publish-7')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
 
   it('explains a server that has not run the ledger migration', async () => {

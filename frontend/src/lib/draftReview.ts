@@ -66,7 +66,8 @@ export function draftToFormValues(card: DraftCard): CardFormValues {
     codeSnippet: card.codeSnippet ?? '',
     codeLanguage: card.codeLanguage ?? '',
     difficulty: card.difficulty,
-    // The server assigns both on accept; these only satisfy the form's checks.
+    // The server assigns both on accept. CardForm's draft variant hides the two
+    // fields; these values only satisfy its positive-number checks.
     orderInDeck: 10,
     revision: 1,
     topic: card.topic ?? '',
@@ -98,6 +99,36 @@ export function formValuesToDraftCard(values: CardFormValues, base: DraftCard): 
 
 export function reviewDurationMs(openedAt: number, now: number): number {
   return Math.max(0, Math.round(now - openedAt));
+}
+
+/**
+ * The most review time one decision reports (feeds the ledger's actual minutes,
+ * contract §9.3). Anything longer is a draft left open, not time spent on it.
+ */
+export const REVIEW_MS_CAP = 30 * 60_000;
+
+/**
+ * Review time that counts only while the page is visible: a draft left open in
+ * a background tab over lunch must not zero out that accept's minutes saved.
+ * `visibleSince` is when the current visible stretch began, or null while the
+ * page is hidden.
+ */
+export type ReviewClock = { visibleMs: number; visibleSince: number | null };
+
+export function startReviewClock(now: number, visible: boolean): ReviewClock {
+  return { visibleMs: 0, visibleSince: visible ? now : null };
+}
+
+export function setReviewClockVisible(clock: ReviewClock, visible: boolean, now: number): ReviewClock {
+  if (visible) return clock.visibleSince === null ? { ...clock, visibleSince: now } : clock;
+  if (clock.visibleSince === null) return clock;
+  return { visibleMs: clock.visibleMs + reviewDurationMs(clock.visibleSince, now), visibleSince: null };
+}
+
+/** Visible time so far, capped at REVIEW_MS_CAP. */
+export function reviewClockMs(clock: ReviewClock, now: number): number {
+  const running = clock.visibleSince === null ? 0 : reviewDurationMs(clock.visibleSince, now);
+  return Math.min(REVIEW_MS_CAP, clock.visibleMs + running);
 }
 
 export function sourceHostLabel(url: string): string | null {
