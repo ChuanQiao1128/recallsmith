@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RunProcess } from '../src/ingest';
 import { callTool, connect, makeTestEnv, type TestEnv } from './helpers';
@@ -104,6 +105,53 @@ describe('read_source', () => {
       expect(result.text).toMatch(/https/);
     }
     expect(fake.calls).toEqual([]);
+    await client.close();
+  });
+
+  it('refuses the token file, credential directories and non-document files without spawning', async () => {
+    env = makeTestEnv();
+    const fake = recorder({ code: 0, stdout: JSON.stringify(INGEST_OUTPUT), stderr: '' });
+    const client = await connect(env.config, fake.run);
+    const tokenFile = env.config.tokenFile;
+    mkdirSync(dirname(tokenFile), { recursive: true });
+    writeFileSync(tokenFile, JSON.stringify({ accessToken: 'FAKE-abc', refreshToken: 'FAKE-def' }));
+    const home = process.env.HOME ?? '';
+
+    const refused: Array<[string, RegExp]> = [
+      [tokenFile, /only \.pdf, \.html, \.htm, \.md, \.markdown, \.txt files are read/],
+      [join(dirname(tokenFile), 'notes.md'), /credential locations are never read/],
+      [join(home, '.aws', 'credentials.txt'), /credential locations are never read/],
+      [join(home, '.ssh', 'id_ed25519.md'), /credential locations are never read/],
+      [join(home, '.config', 'developercards', 'mcp-tokens.txt'), /credential locations are never read/],
+      [join(env.dir, 'project', '.env'), /only \.pdf/],
+      ['notes/config.json', /only \.pdf/],
+    ];
+    for (const [source, message] of refused) {
+      const result = await callTool(client, 'read_source', { source, canonicalUrl: 'https://example.com/x' });
+      expect(result.isError, source).toBe(true);
+      expect(result.text).toMatch(/^refused local file /);
+      expect(result.text).toMatch(message);
+      expect(result.text).not.toContain('FAKE-');
+    }
+
+    // A symlink with a document suffix that points at the token file.
+    const link = join(env.dir, 'innocent.md');
+    symlinkSync(tokenFile, link);
+    const viaLink = await callTool(client, 'read_source', { source: link });
+    expect(viaLink.isError).toBe(true);
+    expect(viaLink.text).toMatch(/refused local file/);
+    expect(fake.calls).toEqual([]);
+    await client.close();
+  });
+
+  it('passes the repo root and token file to dc-ingest so it applies the same roots', async () => {
+    env = makeTestEnv();
+    const fake = recorder({ code: 0, stdout: JSON.stringify(INGEST_OUTPUT), stderr: '' });
+    const client = await connect(env.config, fake.run);
+    const result = await callTool(client, 'read_source', { source: 'https://example.com/s3/retrieval-options' });
+    expect(result.isError).toBe(false);
+    expect(fake.calls[0]?.env.DC_REPO_ROOT).toBe(env.config.repoRoot);
+    expect(fake.calls[0]?.env.DC_TOKEN_FILE).toBe(env.config.tokenFile);
     await client.close();
   });
 });
