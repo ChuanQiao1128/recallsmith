@@ -319,9 +319,9 @@ public static class EmailTemplates
   /// the run's publishes. In <c>dry_run</c> no draft is listed at all (R18D M3, automation-4): every draft waits for a
   /// person there, and listing the human-routed ones by uid would reveal the others' verdict by elimination. While any
   /// draft of the run is still undecided, the dry-run email is state-free as well (R18E N6): the subject and summary give
-  /// only the number of drafts waiting, and neither the per-state or per-reason counts nor the publish outcome (a run
-  /// has a publish row only when a draft would be accepted) appear, because on a one-draft or single-verdict run they
-  /// state each verdict. They appear once every draft of the run is decided.
+  /// only the number of drafts waiting, and neither the per-state or per-reason counts, the publish outcome (a run
+  /// has a publish row only when a draft would be accepted) nor the run's draft-QA spend (R18F F01) appear, because on a
+  /// one-draft or single-verdict run they state each verdict. They appear once every draft of the run is decided.
   /// </summary>
   public static RenderedEmail BatchSummary(string mode, BatchSummaryData data, string consoleBaseUrl)
   {
@@ -385,7 +385,9 @@ public static class EmailTemplates
       $"- publish {p.DeckSlug} — {p.State}" + (p.BuildId is null ? string.Empty : $", build {p.BuildId}")));
 
     if (AgentNotesLine(data.AgentNotes) is { } notes) details.Add(AgentNotesLabel + notes);
-    details.Add($"Draft QA spend: {Usd(data.QaSpendUsd)}");
+    // The run's draft-QA spend is a verdict too while blind (R18F F01, automation-34): a $0 spend says a draft was routed
+    // to a person before QA, the reason the console hides a hidden row's reviewer and cost.
+    details.Add(blind ? "Draft QA spend: hidden until every draft of this run is decided" : $"Draft QA spend: {Usd(data.QaSpendUsd)}");
     if (blind) details.Add("Publish: hidden until every draft of this run is decided");
     else if (publishes.Count == 0) details.Add("Publish: none");
     details.AddRange(publishes.Select(p =>

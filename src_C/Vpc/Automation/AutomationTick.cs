@@ -786,8 +786,13 @@ public static class AutomationTick
           count(distinct dd.run_id) filter (where {StatusRoutes.UndecidedDraftSql("dd")}) as runs
         from automation_draft_decisions dd
         """, []))[0];
+      // The same blind rule for the publishes (R18F F01, backend-design-23): a dry-run publish row exists only when a
+      // draft of its run would be accepted, so a run with a draft still waiting keeps its publishes out of the counts too.
+      var publishDecided = dry
+        ? $"and (p.run_id is null or not exists (select 1 from automation_draft_decisions pd where pd.run_id = p.run_id and {StatusRoutes.UndecidedDraftSql("pd")}))"
+        : string.Empty;
       var publishesByState = await CountsAsync(
-        "select state as k, count(*) as n from automation_publishes where created_at >= $1 and created_at < $2 group by state");
+        $"select p.state as k, count(*) as n from automation_publishes p where p.created_at >= $1 and p.created_at < $2 {publishDecided} group by p.state");
 
       // The status's blind definition (R18D M3): the digest's agreement is accepted unedited over decided blind.
       var shadow = (await DbUtil.QueryAsync(conn, null,

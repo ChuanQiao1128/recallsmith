@@ -639,6 +639,63 @@ public class AutomationNotificationsTests
     Assert.InRange((await ItemAsync(itemId)).WaitMinutes, 14.5, 15.5);
   }
 
+  // ---------------------------------------------------------------- R18F F01 (ai-agent-23)
+
+  /// <summary>A pending draft whose <c>agent.runId</c> names <paramref name="runId"/>, submitted by <paramref name="sub"/>.</summary>
+  private async Task SubmittedDraftAsync(Guid runId, string sub)
+  {
+    var deckId = A04Kit.Long(await _sql.ScalarAsync("select deck_id from automation_runs where run_id = $1", runId));
+    var uid = AutomationTestKit.Uid("f01-partial");
+    await _sql.QueryAsync(
+      """
+      insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, card, agent, submitted_by_sub)
+      values ($1, gen_random_uuid(), $2, $3, $4::jsonb, jsonb_build_object('runId', $5::text), $6)
+      """, deckId, Guid.NewGuid().ToString("N"), uid, JsonSerializer.Serialize(AutomationTestKit.Card(uid)), runId.ToString("D"), sub);
+  }
+
+  [Fact]
+  public async Task RunnerComplete_RunnerUnavailableAfterDraftsWereSubmitted_FinishesTheItem_WithoutARequeue()
+  {
+    // ai-agent-23: a usage limit reached after submit_draft. A requeue would author the page again next to the pending
+    // drafts find_similar_cards cannot see; the item is done instead, the attempt kept, and the run finalised.
+    await using var scope = new A04Kit.Scope();
+    const string error = "RUNNER_UNAVAILABLE: claude reported a usage limit";
+    var (runId, itemId) = await ClaimedRunAsync(attempts: 1);
+    await SubmittedDraftAsync(runId, _runOwner[runId]);
+
+    var data = AutomationTestKit.Data(await CompleteFailedAsync(runId, error));
+    Assert.Equal(("failed", "done"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
+    var item = await ItemAsync(itemId);
+    Assert.Equal(("done", 1), (item.Status, item.Attempts));
+    Assert.StartsWith(RunnerRoutes.RunnerUnavailableAfterDrafts + ": ", item.LastError);
+    Assert.EndsWith(error, item.LastError);
+    Assert.NotNull(await _sql.ScalarAsync("select finished_at from authoring_queue_items where id = $1", itemId));
+    Assert.Null(await _sql.ScalarAsync("select lease_expires_at from authoring_queue_items where id = $1", itemId));
+    Assert.NotNull(await _sql.ScalarAsync("select finalized_at from automation_runs where run_id = $1", runId));
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where dedupe_key in ($1, $2)",
+      $"exception:runner_run_failed:{runId:D}", $"exception:queue_item_failed:{itemId}"));
+  }
+
+  [Fact]
+  public async Task RunnerComplete_RunnerUnavailableWithoutDrafts_StillBacksOffAndRequeues()
+  {
+    // The other path of ai-agent-23: nothing submitted, so the N3 backoff applies. A draft naming the run but submitted
+    // by someone else is not the run's draft.
+    await using var scope = new A04Kit.Scope();
+    var (runId, itemId) = await ClaimedRunAsync(attempts: 1);
+    await SubmittedDraftAsync(runId, AutomationTestKit.Sub("f01-other"));
+
+    Assert.Equal("queued", AutomationTestKit.Data(await CompleteFailedAsync(runId, "RUNNER_UNAVAILABLE: claude reported a usage limit"))
+      .GetProperty("itemStatus").GetString());
+    var item = await ItemAsync(itemId);
+    Assert.Equal(("queued", 0), (item.Status, item.Attempts));
+    Assert.InRange(item.WaitMinutes, 14.5, 15.5);
+  }
+
+  [Fact]
+  public void RunnerUnavailableAfterDraftsError_IsCappedAt500() =>
+    Assert.Equal(500, RunnerRoutes.RunnerUnavailableAfterDraftsError(new string('x', 600)).Length);
+
   // ---------------------------------------------------------------- R18E automation-16
 
   [Fact]

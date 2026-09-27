@@ -196,7 +196,9 @@ public class EmailTemplatesTests
   public void BatchSummary_GoldenText()
   {
     // R18E N6 (automation-4): a dry run with an undecided draft is state-free (updated from the R18D golden text, which
-    // gave the per-state counts and the publish outcome in the subject, summary and DETAILS).
+    // gave the per-state counts and the publish outcome in the subject, summary and DETAILS). R18F F01 (automation-34):
+    // the run's draft-QA spend is hidden too (updated from "Draft QA spend: $0.0012"): a $0 spend marks a draft routed
+    // to a person before QA.
     var email = EmailTemplates.BatchSummary("dry_run", Batch(), Console);
     Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 3 draft(s) wait for you", email.Subject);
     Assert.Equal("""
@@ -211,7 +213,7 @@ DONE AUTOMATICALLY
 
 DETAILS
 Source: feed_item https://aws.amazon.com/about-aws/whats-new/2026/09/synthetic-item/ (Synthetic launch)
-Draft QA spend: $0.0012
+Draft QA spend: hidden until every draft of this run is decided
 Publish: hidden until every draft of this run is decided
 Runner: owner-mac, duration 184 s, outcome done
 
@@ -255,8 +257,12 @@ Mode: dry_run. Sent by developercards-notifier to the owner alert address; repli
         {
           Assert.DoesNotContain(leak, text);
         }
+        // R18F F01 (automation-34): no spend either, however small; a $0 spend says a draft was routed before QA.
+        Assert.DoesNotContain("$", text);
       }
+      Assert.Contains("\nDraft QA spend: hidden until every draft of this run is decided\n", email.BodyText);
     }
+    Assert.DoesNotContain("$", EmailTemplates.BatchSummary("dry_run", one with { QaSpendUsd = 0m }, Console).BodyText);
     Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 1 draft(s) wait for you", EmailTemplates.BatchSummary("dry_run", one, Console).Subject);
     Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 1 draft(s) wait for you",
       EmailTemplates.BatchSummary("dry_run", partly, Console).Subject);
@@ -272,6 +278,7 @@ Mode: dry_run. Sent by developercards-notifier to the owner alert address; repli
     Assert.Contains("\nDrafts by state: human 1, would_accept 2\n", email.BodyText);
     Assert.Contains("\nRouted to you by reason: QA_FLAGGED 1\n", email.BodyText);
     Assert.Contains("\nPublish aws-saa-c03: would_publish\n", email.BodyText);
+    Assert.Contains("\nDraft QA spend: $0.0012\n", email.BodyText);
     Assert.Contains("\nNEEDS YOU\n- nothing\n", email.BodyText);
   }
 
