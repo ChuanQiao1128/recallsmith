@@ -67,8 +67,28 @@ resource "aws_sesv2_configuration_set" "automation" {
     sending_enabled = true
   }
 
+  # R18C (cloud-security-resilience-10): no suppression for this configuration set. It sends to one verified
+  # owner address only; with BOUNCE/COMPLAINT suppression one hard bounce or one "spam" click would put that
+  # address on the suppression list and SES would then accept every later send (the notifier logs "sent")
+  # while delivering nothing. An empty list overrides the account-level list for sends through this set. The
+  # trade-off (no automatic protection of the sending reputation) is covered by the event destination below:
+  # every bounce, complaint, reject and delivery delay reaches the alerts topic, and the sandbox caps volume.
   suppression_options {
-    suppressed_reasons = ["BOUNCE", "COMPLAINT"]
+    suppressed_reasons = []
+  }
+}
+
+resource "aws_sesv2_configuration_set_event_destination" "automation_alerts" {
+  configuration_set_name = aws_sesv2_configuration_set.automation.configuration_set_name
+  event_destination_name = "developercards-automation-alerts"
+
+  event_destination {
+    enabled              = true
+    matching_event_types = ["BOUNCE", "COMPLAINT", "REJECT", "DELIVERY_DELAY"]
+
+    sns_destination {
+      topic_arn = var.automation_events_topic_arn
+    }
   }
 }
 

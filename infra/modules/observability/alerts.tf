@@ -36,6 +36,21 @@ resource "aws_sns_topic_policy" "alerts" {
         Resource  = aws_sns_topic.alerts.arn
         Condition = { StringEquals = { "aws:SourceAccount" = var.account_id } }
       },
+      {
+        # R18C (cloud-security-resilience-10): the automation configuration set's event destination
+        # publishes BOUNCE/COMPLAINT/REJECT/DELIVERY_DELAY here; only that configuration set may.
+        Sid       = "SesEventPublish"
+        Effect    = "Allow"
+        Principal = { Service = "ses.amazonaws.com" }
+        Action    = "SNS:Publish"
+        Resource  = aws_sns_topic.alerts.arn
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = var.account_id
+            "aws:SourceArn"     = "arn:aws:ses:${var.region}:${var.account_id}:configuration-set/${var.ses_configuration_set_name}"
+          }
+        }
+      },
     ]
   })
 }

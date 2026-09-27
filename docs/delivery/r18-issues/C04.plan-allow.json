@@ -1,0 +1,11 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.edge.aws_sesv2_configuration_set.automation": { "action": "update", "keys": ["suppression_options"] },
+    "module.edge.aws_sesv2_configuration_set_event_destination.automation_alerts": "create",
+    "module.identity.aws_iam_role_policy.ai_qa": { "action": "update", "keys": ["policy"] },
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_daily_cost": { "action": "update", "keys": ["metric_query"] },
+    "module.observability.aws_cloudwatch_metric_alarm.notify_queue_oldest_age": "create",
+    "module.observability.aws_sns_topic_policy.alerts": { "action": "update", "keys": ["policy"] }
+  }
+}
