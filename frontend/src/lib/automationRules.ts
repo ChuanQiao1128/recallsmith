@@ -402,3 +402,34 @@ export function automationErrorMessage(code: string | undefined, serverMessage: 
   if (code === 'EVAL_GATE_FAILED' || code === 'EVAL_GATE_INVALID') return `${mapped} ${serverMessage}`;
   return mapped;
 }
+
+// Display helpers the tabs share. Pure, so a component module never has to
+// export anything but its component (react-refresh/only-export-components).
+
+/** An ISO timestamp as `YYYY-MM-DD HH:MM UTC`; '—' for null or unparsable. */
+export function formatTimestamp(iso: string | null): string {
+  if (iso === null) return '—';
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return '—';
+  return `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+}
+
+/** The first 8 characters of a uuid, the way runs and emails are named on screen. */
+export function shortId(id: string | null): string {
+  return id ? id.slice(0, 8) : '—';
+}
+
+/** Host and path of a URL, without the scheme or query; the raw text when it does not parse. */
+export function urlLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.host}${parsed.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+/** Text for a nullable cell. */
+export function orDash(value: string | number | null | undefined): string {
+  return value === null || value === undefined || value === '' ? '—' : String(value);
+}
