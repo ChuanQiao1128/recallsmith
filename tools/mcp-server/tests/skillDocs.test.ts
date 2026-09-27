@@ -60,4 +60,16 @@ describe('author-cards skill', () => {
     expect(rules).toMatch(/Minimum: 40 characters and 6 words/);
     expect(rules).toMatch(/`kind: "local"`/);
   });
+
+  it('says what wins in an automation run and where the notes go, without contradicting auto-accept (ai-agent-7, K3)', () => {
+    const skill = skillFile('SKILL.md');
+    expect(skill).not.toMatch(/`submit_draft` followed by a human decision in the console/);
+    expect(skill).toMatch(/The only way a card reaches a deck is `submit_draft`; the server decides what happens next/);
+    expect(skill).toMatch(/where that prompt and this skill differ, the prompt wins/);
+    expect(skill).toMatch(/the owner reads every run's notes on the console Runs tab and in the automation email/);
+    const step8 = skill.split('\n').find((line) => line.startsWith('8. **Submit.**')) ?? '';
+    expect(step8).toMatch(/In an automation run, end instead with the runner prompt's final JSON line\./);
+    const step1 = skill.split('\n').find((line) => line.startsWith('1. **Read.**')) ?? '';
+    expect(step1).toMatch(/in an automation run, where nobody answers/);
+  });
 });
