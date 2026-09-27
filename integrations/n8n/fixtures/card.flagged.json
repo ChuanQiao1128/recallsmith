@@ -1,0 +1,36 @@
+{
+  "data": {
+    "deckId": 3,
+    "deckSlug": "aws-saa-c03",
+    "cardId": 1042,
+    "stableUid": "aws-sqs-visibility-timeout-dlq",
+    "runId": "c4e8a1b2-6d3f-4a7e-9b05-8f1e2d3c4b04",
+    "counts": {
+      "blocker": 0,
+      "major": 2,
+      "minor": 1
+    },
+    "findings": [
+      {
+        "severity": "minor",
+        "category": "clarity",
+        "message": "The second sentence repeats the first; trim it."
+      },
+      {
+        "severity": "major",
+        "category": "accuracy",
+        "message": "The stated maximum visibility timeout does not match the current service limit."
+      },
+      {
+        "severity": "major",
+        "category": "completeness",
+        "message": "The answer never says when a message moves to the dead-letter queue."
+      }
+    ],
+    "consoleUrl": "https://console.developercards.app/decks/qa?deckId=3&runId=c4e8a1b2-6d3f-4a7e-9b05-8f1e2d3c4b04"
+  },
+  "environment": "prod",
+  "event": "card.flagged",
+  "eventId": "7b0c3e2f-9a14-4c6d-8e5b-0d1f2a3b4c03",
+  "occurredAt": "2026-10-01T05:20:30.123Z"
+}

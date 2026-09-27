@@ -1,0 +1,530 @@
+{
+  "name": "DeveloperCards: card flagged to Slack and Sheet",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "developercards",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "a1f0c2d4-0001-4c1e-9d0a-000000000001",
+      "name": "DeveloperCards webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "a1f0c2d4-1001-4c1e-9d0a-000000000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-verify-signature\nconst DC_SIGNATURE_TOLERANCE_SECONDS = 300;\n\nfunction verifyDeveloperCardsSignature({ secret, timestamp, signature, rawBody, nowSeconds, toleranceSeconds = DC_SIGNATURE_TOLERANCE_SECONDS }) {\n  try {\n    if (typeof secret !== 'string' || secret.length === 0) return { ok: false, reason: 'missing_secret' };\n    if (typeof timestamp !== 'string' || typeof signature !== 'string' || timestamp.length === 0 || signature.length === 0) {\n      return { ok: false, reason: 'missing_header' };\n    }\n    const ts = timestamp.trim();\n    if (!/^\\d{1,12}$/.test(ts)) return { ok: false, reason: 'bad_timestamp' };\n    if (typeof nowSeconds !== 'number' || !Number.isFinite(nowSeconds)) return { ok: false, reason: 'bad_timestamp' };\n    if (Math.abs(nowSeconds - Number(ts)) > toleranceSeconds) return { ok: false, reason: 'stale_timestamp' };\n    const sig = signature.trim().toLowerCase();\n    if (!/^[0-9a-f]{64}$/.test(sig)) return { ok: false, reason: 'bad_signature' };\n    let bodyBuffer;\n    if (Buffer.isBuffer(rawBody)) bodyBuffer = rawBody;\n    else if (typeof rawBody === 'string') bodyBuffer = Buffer.from(rawBody, 'utf8');\n    else return { ok: false, reason: 'bad_signature' };\n    const expected = crypto\n      .createHmac('sha256', secret)\n      .update(Buffer.concat([Buffer.from(ts + '.', 'utf8'), bodyBuffer]))\n      .digest();\n    const given = Buffer.from(sig, 'hex');\n    if (given.length !== 32 || expected.length !== 32) return { ok: false, reason: 'bad_signature' };\n    return crypto.timingSafeEqual(expected, given) ? { ok: true } : { ok: false, reason: 'bad_signature' };\n  } catch (err) {\n    return { ok: false, reason: 'bad_signature' };\n  }\n}\n// END developercards-verify-signature\n\n// Glue: raw request bytes + DeveloperCards headers -> { ok, reason, body }.\nconst item = $input.first();\nconst headers = (item && item.json && item.json.headers) || {};\nconst header = (name) => {\n  const value = headers[name];\n  return Array.isArray(value) ? value[0] : value;\n};\nlet rawBody;\ntry {\n  rawBody = await this.helpers.getBinaryDataBuffer(0, 'data');\n} catch (err) {\n  rawBody = undefined;\n}\nlet secret;\ntry {\n  secret = $env.DC_WEBHOOK_SECRET;\n} catch (err) {\n  secret = undefined;\n}\nconst result = verifyDeveloperCardsSignature({\n  secret,\n  timestamp: header('x-developercards-timestamp'),\n  signature: header('x-developercards-signature'),\n  rawBody,\n  nowSeconds: Math.floor(Date.now() / 1000),\n});\nconst event = header('x-developercards-event') || null;\nif (!result.ok) {\n  return [{ json: { ok: false, reason: result.reason, event, body: null } }];\n}\nlet body;\ntry {\n  body = JSON.parse(rawBody.toString('utf8'));\n} catch (err) {\n  return [{ json: { ok: false, reason: 'bad_body', event, body: null } }];\n}\nreturn [{ json: { ok: true, reason: null, event, body } }];\n"
+      },
+      "id": "a1f0c2d4-0002-4c1e-9d0a-000000000002",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c0a8f1e2-0001-4b7a-8e61-000000000001",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1f0c2d4-0003-4c1e-9d0a-000000000003",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, reason: $json.reason }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "a1f0c2d4-0004-4c1e-9d0a-000000000004",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        660,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1f0c2d4-0005-4c1e-9d0a-000000000005",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n// END developercards-recipe-logic\n\n// Glue: one Events-tab row per verified delivery.\nreturn $input.all().map((item) => ({ json: summarizeDeveloperCardsEvent(item.json.body) }));\n"
+      },
+      "id": "a1f0c2d4-0006-4c1e-9d0a-000000000006",
+      "name": "Event row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Events",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "eventId": "={{ $json.eventId }}",
+            "occurredAt": "={{ $json.occurredAt }}",
+            "event": "={{ $json.event }}",
+            "deckSlug": "={{ $json.deckSlug }}",
+            "summary": "={{ $json.summary }}"
+          },
+          "matchingColumns": [
+            "eventId"
+          ],
+          "schema": [
+            {
+              "id": "eventId",
+              "displayName": "eventId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "occurredAt",
+              "displayName": "occurredAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event",
+              "displayName": "event",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "deckSlug",
+              "displayName": "deckSlug",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "a1f0c2d4-0007-4c1e-9d0a-000000000007",
+      "name": "Events sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1100,
+        100
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "DeveloperCards Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "c0a8f1e2-0002-4b7a-8e61-000000000002",
+                    "leftValue": "={{ $json.body.event }}",
+                    "rightValue": "card.flagged",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "card.flagged"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1f0c2d4-0008-4c1e-9d0a-000000000008",
+      "name": "Route by event",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generated from integrations/n8n/lib/*.mjs; edit the library and re-embed the region verbatim.\n\n// BEGIN developercards-recipe-logic\nconst DC_SEVERITIES = ['blocker', 'major', 'minor'];\nconst DC_DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;\nconst DC_DIGEST_SECTION_LIMIT = 10;\nconst DC_DIGEST_SECTIONS = [\n  { key: 'published', event: 'deck.published', title: 'Decks published' },\n  { key: 'flagged', event: 'card.flagged', title: 'Cards flagged by AI QA' },\n  { key: 'draftBatches', event: 'review.queued', title: 'Draft batches queued for review' },\n  { key: 'importFailures', event: 'import.failed', title: 'Import failures' },\n];\n\nfunction dcText(value, fallback) {\n  if (value === null || value === undefined || value === '') return fallback;\n  return String(value);\n}\n\nfunction dcCount(value) {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction dcDeckLabel(data) {\n  if (data.deckSlug) return String(data.deckSlug);\n  if (data.deckId !== null && data.deckId !== undefined) return 'deck #' + data.deckId;\n  return 'unknown deck';\n}\n\nfunction dcCounts(data) {\n  const counts = data.counts && typeof data.counts === 'object' ? data.counts : {};\n  return { blocker: dcCount(counts.blocker), major: dcCount(counts.major), minor: dcCount(counts.minor) };\n}\n\nfunction dcTopFinding(data) {\n  const findings = Array.isArray(data.findings) ? data.findings.filter((f) => f && typeof f === 'object') : [];\n  for (const severity of DC_SEVERITIES) {\n    const found = findings.find((f) => f.severity === severity);\n    if (found) return severity + ' · ' + dcText(found.category, 'uncategorised') + ': ' + dcText(found.message, '');\n  }\n  return '';\n}\n\nfunction summarizeDeveloperCardsEvent(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const event = dcText(b.event, 'unknown');\n  let summary;\n  switch (event) {\n    case 'deck.published':\n      summary = 'Published ' + dcDeckLabel(data) + ': ' + dcCount(data.cardCount) + ' cards (build ' + dcText(data.buildId, '?') + ')';\n      break;\n    case 'import.failed':\n      summary = 'Import into ' + dcDeckLabel(data) + ' failed: ' + dcText(data.errorCode, 'UNKNOWN') +\n        (data.message ? ' - ' + String(data.message) : '') + ' (' + dcCount(data.cardCount) + ' cards)';\n      break;\n    case 'card.flagged': {\n      const c = dcCounts(data);\n      summary = 'Flagged ' + dcText(data.stableUid, 'card #' + dcText(data.cardId, '?')) + ' in ' + dcDeckLabel(data) + ': ' +\n        c.blocker + ' blocker, ' + c.major + ' major, ' + c.minor + ' minor';\n      break;\n    }\n    case 'review.queued':\n      summary = dcCount(data.draftCount) + ' drafts queued for review in ' + dcDeckLabel(data) + ' (batch ' + dcText(data.batchId, '?') + ')';\n      break;\n    case 'webhook.test':\n      summary = 'Test event for subscription ' + dcText(data.subscriptionId, '?') + (data.message ? ': ' + String(data.message) : '');\n      break;\n    default:\n      summary = 'DeveloperCards event ' + event + (data.deckSlug ? ' for ' + String(data.deckSlug) : '');\n  }\n  return {\n    eventId: dcText(b.eventId, ''),\n    occurredAt: dcText(b.occurredAt, ''),\n    event,\n    deckSlug: event === 'webhook.test' ? null : (data.deckSlug ? String(data.deckSlug) : null),\n    summary,\n  };\n}\n\nfunction flaggedCardMessage(body) {\n  const b = body && typeof body === 'object' ? body : {};\n  const data = b.data && typeof b.data === 'object' ? b.data : {};\n  const c = dcCounts(data);\n  const deckSlug = dcDeckLabel(data);\n  const stableUid = dcText(data.stableUid, 'card #' + dcText(data.cardId, '?'));\n  const topFinding = dcTopFinding(data);\n  const consoleUrl = dcText(data.consoleUrl, '');\n  const lines = [\n    'AI QA flagged a card in ' + deckSlug + ': ' + stableUid,\n    'Findings: ' + c.blocker + ' blocker / ' + c.major + ' major / ' + c.minor + ' minor',\n  ];\n  if (topFinding) lines.push('Top finding: ' + topFinding);\n  if (consoleUrl) lines.push('Review: ' + consoleUrl);\n  return {\n    text: lines.join('\\n'),\n    row: {\n      eventId: dcText(b.eventId, ''),\n      occurredAt: dcText(b.occurredAt, ''),\n      deckSlug,\n      stableUid,\n      blocker: c.blocker,\n      major: c.major,\n      minor: c.minor,\n      topFinding,\n      consoleUrl,\n    },\n  };\n}\n\nfunction dcEscapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction buildWeeklyDigest(rows, nowMs) {\n  const since = nowMs - DC_DIGEST_WINDOW_MS;\n  const recent = [];\n  for (const row of Array.isArray(rows) ? rows : []) {\n    if (!row || typeof row !== 'object') continue;\n    const t = Date.parse(String(row.occurredAt));\n    if (!Number.isFinite(t) || t <= since || t > nowMs) continue;\n    recent.push({ t, event: String(row.event), summary: dcText(row.summary, String(row.event)) });\n  }\n  recent.sort((a, b) => b.t - a.t);\n  const counts = {};\n  const sections = DC_DIGEST_SECTIONS.map((s) => {\n    const items = recent.filter((r) => r.event === s.event);\n    counts[s.key] = items.length;\n    return { title: s.title, total: items.length, items: items.slice(0, DC_DIGEST_SECTION_LIMIT) };\n  });\n  const range = new Date(since).toISOString().slice(0, 10) + ' to ' + new Date(nowMs).toISOString().slice(0, 10);\n  const total = sections.reduce((n, s) => n + s.total, 0);\n  const subject = total === 0\n    ? 'DeveloperCards weekly digest: a quiet week'\n    : 'DeveloperCards weekly digest: ' + counts.published + ' published, ' + counts.flagged + ' flagged, ' +\n      counts.draftBatches + ' draft batches, ' + counts.importFailures + ' import failures';\n  const text = ['DeveloperCards weekly digest (' + range + ')', ''];\n  const html = ['<h2>DeveloperCards weekly digest</h2>', '<p>' + dcEscapeHtml(range) + '</p>'];\n  if (total === 0) {\n    text.push('No DeveloperCards events in the last 7 days.', '');\n    html.push('<p>No DeveloperCards events in the last 7 days.</p>');\n  }\n  for (const s of sections) {\n    const more = s.total > s.items.length ? ' (latest ' + s.items.length + ' shown)' : '';\n    text.push(s.title + ': ' + s.total + more);\n    for (const item of s.items) text.push('- ' + new Date(item.t).toISOString() + ' ' + item.summary);\n    text.push('');\n    html.push('<h3>' + dcEscapeHtml(s.title) + ': ' + s.total + dcEscapeHtml(more) + '</h3>');\n    if (s.items.length > 0) {\n      html.push('<ul>' + s.items.map((item) =>\n        '<li>' + dcEscapeHtml(new Date(item.t).toISOString()) + ' ' + dcEscapeHtml(item.summary) + '</li>').join('') + '</ul>');\n    }\n  }\n  return { subject, text: text.join('\\n').trimEnd() + '\\n', html: html.join('\\n'), counts };\n}\n// END developercards-recipe-logic\n\n// Glue: Slack text + Flagged-tab row per card.flagged delivery.\nreturn $input.all().map((item) => ({ json: flaggedCardMessage(item.json.body) }));\n"
+      },
+      "id": "a1f0c2d4-0009-4c1e-9d0a-000000000009",
+      "name": "Flagged message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#developercards",
+          "mode": "name"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {}
+      },
+      "id": "a1f0c2d4-0010-4c1e-9d0a-000000000010",
+      "name": "Slack message",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1320,
+        220
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_SLACK_CREDENTIAL_ID",
+          "name": "DeveloperCards Slack"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Flagged",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "eventId": "={{ $json.row.eventId }}",
+            "occurredAt": "={{ $json.row.occurredAt }}",
+            "deckSlug": "={{ $json.row.deckSlug }}",
+            "stableUid": "={{ $json.row.stableUid }}",
+            "blocker": "={{ $json.row.blocker }}",
+            "major": "={{ $json.row.major }}",
+            "minor": "={{ $json.row.minor }}",
+            "topFinding": "={{ $json.row.topFinding }}",
+            "consoleUrl": "={{ $json.row.consoleUrl }}"
+          },
+          "matchingColumns": [
+            "eventId"
+          ],
+          "schema": [
+            {
+              "id": "eventId",
+              "displayName": "eventId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "occurredAt",
+              "displayName": "occurredAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "deckSlug",
+              "displayName": "deckSlug",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "stableUid",
+              "displayName": "stableUid",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "blocker",
+              "displayName": "blocker",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "major",
+              "displayName": "major",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "minor",
+              "displayName": "minor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "topFinding",
+              "displayName": "topFinding",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "consoleUrl",
+              "displayName": "consoleUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "a1f0c2d4-0011-4c1e-9d0a-000000000011",
+      "name": "Flagged sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1320,
+        400
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "DeveloperCards Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "DeveloperCards webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 200": {
+      "main": [
+        [
+          {
+            "node": "Event row",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route by event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event row": {
+      "main": [
+        [
+          {
+            "node": "Events sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by event": {
+      "main": [
+        [
+          {
+            "node": "Flagged message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flagged message": {
+      "main": [
+        [
+          {
+            "node": "Slack message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Flagged sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Pacific/Auckland"
+  },
+  "active": false,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
