@@ -74,6 +74,10 @@ output "notify_queue_url" {
   value = aws_sqs_queue.notify.url
 }
 
+output "notify_queue_name" {
+  value = aws_sqs_queue.notify.name
+}
+
 output "notify_dlq_name" {
   value = aws_sqs_queue.notify_dlq.name
 }

@@ -21,6 +21,7 @@ from .internal_client import REPORT_PATH, TARGETS_PATH, InternalClient
 from .logs import log
 from .normalize import (
     NORMALIZER,
+    ParseLimitExceeded,
     decode_html,
     decode_text,
     normalize_html,
@@ -177,6 +178,8 @@ def _observe(target: dict[str, Any], run: _Run, robots: RobotsCache) -> tuple[di
     """(observation, whether a request was sent), or None when the budget ran out before the fetch."""
     settings = run.settings
     url = target["url"]
+    # Logged before any network or parse work, so a target that stops the run is always named.
+    log("info", TAG, event="observe_start", targetId=target["targetId"], host=_host(url), kind=target["kind"])
     if not robots.allowed(url):
         return _observation(target, ROBOTS_DISALLOWED, None, _fetched_at(utcnow())), False
     run.pace(_host(url))
@@ -194,7 +197,12 @@ def _observe(target: dict[str, Any], run: _Run, robots: RobotsCache) -> tuple[di
     )
     if result.outcome != OK:
         return _observation(target, result.outcome, result, _fetched_at(sent_at)), result.requested
-    return _ok_observation(target, result, _fetched_at(sent_at)), result.requested
+    try:
+        return _ok_observation(target, result, _fetched_at(sent_at)), result.requested
+    except ParseLimitExceeded as exc:
+        # A page too costly to parse is a failed check of this target, never a lost run.
+        log("warn", TAG, event="parse_limit", targetId=target["targetId"], host=_host(url), limit=str(exc))
+        return _observation(target, FAILED, result, _fetched_at(sent_at), error_code=PARSE), result.requested
 
 
 def _normalized_page(result: FetchResult) -> str:
@@ -332,55 +340,78 @@ def lambda_handler(event: Any, context: Any) -> dict[str, Any]:
 
     run = _Run(settings, context, started)
     robots = RobotsCache(user_agent=settings.watch_user_agent, guard=guard, fetch_fn=fetch_fn, pace=run.pace)
-    observations: list[dict[str, Any]] = []
+    reporter = _Reporter(client, run_id, settings, context)
     for target in round_robin(targets):
         if not run.can_start():
-            log("info", TAG, event="budget_reached", watchRunId=run_id, visited=len(observations), due=len(targets))
+            log("info", TAG, event="budget_reached", watchRunId=run_id, visited=reporter.checked, due=len(targets))
             break
         visit = _observe(target, run, robots)
         if visit is None:
-            log("info", TAG, event="budget_reached", watchRunId=run_id, visited=len(observations), due=len(targets))
+            log("info", TAG, event="budget_reached", watchRunId=run_id, visited=reporter.checked, due=len(targets))
             break
         observation, requested = visit
-        observations.append(observation)
         _record(observation, requested, run_id, settings.metrics_namespace)
+        reporter.add(observation)
 
-    return _report(client, run_id, observations, settings, context)
+    return reporter.finish()
 
 
-def _report(
-    client: Any, run_id: str, observations: list[dict[str, Any]], settings: Settings, context: Any
-) -> dict[str, Any]:
-    changed = 0
-    failed_batches = 0
-    for start in range(0, len(observations), REPORT_BATCH_SIZE):
-        batch = observations[start : start + REPORT_BATCH_SIZE]
-        answer = client.post(
+class _Reporter:
+    """Posts observations in batches of REPORT_BATCH_SIZE as soon as a batch is full, so a run that
+    dies later (timeout, OOM) has already reported what it finished; finish() posts the rest."""
+
+    def __init__(self, client: Any, run_id: str, settings: Settings, context: Any) -> None:
+        self._client = client
+        self._run_id = run_id
+        self._settings = settings
+        self._context = context
+        self._pending: list[dict[str, Any]] = []
+        self.checked = 0
+        self._changed = 0
+        self._failed = 0
+        self._failed_batches = 0
+
+    def add(self, observation: dict[str, Any]) -> None:
+        self.checked += 1
+        if observation["status"] == FAILED:
+            self._failed += 1
+        self._pending.append(observation)
+        if len(self._pending) >= REPORT_BATCH_SIZE:
+            self._flush()
+
+    def _flush(self) -> None:
+        batch, self._pending = self._pending, []
+        if not batch:
+            return
+        answer = self._client.post(
             REPORT_PATH,
-            {"v": 1, "watchRunId": run_id, "observations": batch},
-            budget_s=_budget_s(context),
+            {"v": 1, "watchRunId": self._run_id, "observations": batch},
+            budget_s=_budget_s(self._context),
         )
         if not answer.ok:
-            failed_batches += 1
-            emf.report_failure(settings.metrics_namespace)
+            self._failed_batches += 1
+            emf.report_failure(self._settings.metrics_namespace)
             log(
                 "error",
                 TAG,
                 event="report_failed",
-                watchRunId=run_id,
+                watchRunId=self._run_id,
                 status=answer.status,
                 error=answer.error,
                 observations=len(batch),
             )
-            continue
+            return
         value = (answer.data or {}).get("changed")
         if _is_int(value):
-            changed += value
-    if failed_batches:
-        raise RuntimeError(f"{failed_batches} report batch(es) failed")
-    return {
-        "watchRunId": run_id,
-        "checked": len(observations),
-        "changed": changed,
-        "failed": sum(1 for o in observations if o["status"] == FAILED),
-    }
+            self._changed += value
+
+    def finish(self) -> dict[str, Any]:
+        self._flush()
+        if self._failed_batches:
+            raise RuntimeError(f"{self._failed_batches} report batch(es) failed")
+        return {
+            "watchRunId": self._run_id,
+            "checked": self.checked,
+            "changed": self._changed,
+            "failed": self._failed,
+        }

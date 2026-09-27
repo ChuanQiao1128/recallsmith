@@ -71,7 +71,14 @@ variable "ai_qa_daily_cost_cap_micro_usd" {
 }
 
 variable "notify_dlq_name" { type = string }
+variable "notify_queue_name" { type = string }
 
 variable "notifier_function_name" { type = string }
 
 variable "source_watcher_function_name" { type = string }
+
+variable "ses_configuration_set_name" {
+  type        = string
+  default     = "developercards-automation"
+  description = "R18C: the SES configuration set whose event destination publishes delivery problems to the alerts topic (aws:SourceArn of the SES publish grant)."
+}

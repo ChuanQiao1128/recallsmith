@@ -53,17 +53,43 @@ before the next.
    Check: status `effective = "dry_run"`; the watcher's first hour records `baseline` for both feeds (no
    queue flood); batch summaries arrive marked "(dry run)"; the digest arrives Monday 08:00 NZ. While
    `AI_QA_ENABLED="0"` every eligible draft is `human` / `QA_UNAVAILABLE`, which is expected.
-4. **AI QA on (owner-gated).** After Bedrock access to the automation reviewer (GPT-5.5 through
-   `bedrock-converse`) and `AI_QA_AUTOMATION_PRICE_*` are in `services/ai-qa/env/prod.env.json`: set
+4. **AI QA on (owner-gated).** GPT-5.5 is served only by the bedrock-mantle OpenAI endpoint
+   (`https://bedrock-mantle.{region}.api.aws/openai/v1`, model `openai.gpt-5.5`, In-Region us-east-1 /
+   us-east-2; AWS model card model-card-openai-gpt-55.html, read 2026-09-28), so the committed automation
+   reviewer is provider `openai-mantle` in `us-east-1` (R18C L1); `bedrock-converse` /
+   `global.openai.gpt-5.5` in ap-southeast-2 stays as the fallback. Card text sent to the reviewer then
+   leaves ap-southeast-2 for us-east-1 (public study content only). The ai-qa role's grant is
+   `BedrockMantleOpenAiInference` = `bedrock-mantle:CreateInference` on
+   `arn:aws:bedrock-mantle:us-east-1:<account>:project/default` with `bedrock-mantle:Model = openai.gpt-5.5`
+   (infra identity `ai_qa_openai_mantle_*`). After Bedrock allowlisting and the apply of that grant, and
+   before any paid eval run, the owner runs **one probe per path** (each is one tiny paid request; owner
+   only, from a private shell with an admin profile):
+
+   ```bash
+   # openai-mantle (the committed reviewer): expect HTTP 200 and a chat.completion body.
+   uvx --from awscurl awscurl --service bedrock-mantle --region us-east-1 -X POST \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"openai.gpt-5.5","messages":[{"role":"user","content":"Reply with OK."}],"max_completion_tokens":64,"reasoning_effort":"low"}' \
+     https://bedrock-mantle.us-east-1.api.aws/openai/v1/chat/completions
+
+   # bedrock-converse fallback: expect a converse reply, or a ValidationException naming the model.
+   aws bedrock-runtime converse --region ap-southeast-2 --model-id global.openai.gpt-5.5 \
+     --messages '[{"role":"user","content":[{"text":"Reply with OK."}]}]' --inference-config maxTokens=64
+   ```
+
+   A 403 or an allowlisting message is the account (grant, Marketplace terms, allowlisting), not the code.
+   Only a 200 on the first probe makes the eval runs in step 5 meaningful. Then, with
+   `AI_QA_AUTOMATION_PRICE_*` in `services/ai-qa/env/prod.env.json`: set
    `AI_QA_ENABLED="1"` in both env files, `services/deploy-python-lambda.sh ai-qa` (after `DRY_RUN=1`) and
    `ENV=prod ./src_C/deploy.sh`. Dry run now QA-checks drafts within the shared USD cap.
    Check: new decisions reach `would_accept` or `human` with a QA reason; the `ai-qa-daily-cost` alarm
-   (which sums bedrock, anthropic and bedrock-converse) stays `OK`.
+   (which sums bedrock, anthropic, bedrock-converse and openai-mantle) stays `OK`.
 5. **Eval gate (owner runs, supervisor records).** A00 §15.4: the two `dc-evals run` reports (seeded-v3 and
-   authored-v2, `--reps 2`), `dc-evals automation-gate`, commit the reports, then paste the gate report into
-   Automation → Overview → eval-gate card (or `POST /api/v1/admin/automation/eval-gate`).
+   authored-v2, `--reps 2`, provider `openai-mantle`), `dc-evals automation-gate`, commit the reports, then
+   paste the gate report into Automation → Overview → eval-gate card (or `POST /api/v1/admin/automation/eval-gate`).
    Check: the card shows a current, passed gate whose reviewer is
-   `bedrock-converse` / `global.openai.gpt-5.5` / `qa-v4-auto`.
+   `openai-mantle` / `openai.gpt-5.5` / `qa-v4-auto` (or `bedrock-converse` / `global.openai.gpt-5.5` /
+   `qa-v4-auto` if the fallback was the provider actually used).
 6. **Review the dry run** for at least two weeks against the promotion checklist below.
 7. **live, publish held.** Set `"AUTOMATION_AUTO_PUBLISH":"0"` and `"AUTOMATION_MODE":"live"`, deploy.
    Check: status `effective = "live"`; watch the first live batch end to end (auto-accepted card, its

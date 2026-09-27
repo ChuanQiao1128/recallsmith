@@ -11,6 +11,12 @@ locals {
   # R18 Q02: inference profiles the owner approved for ai-qa's Converse provider (identity grants
   # bedrock:InvokeModel on each profile and, through it only, on its foundation model). One line per model.
   ai_qa_converse_profile_ids = ["global.openai.gpt-5.5"]
+
+  # R18C L1: the automation reviewer's transport (services/ai-qa provider openai-mantle). Must equal
+  # AI_QA_AUTOMATION_MODEL / AI_QA_AUTOMATION_REGION in services/ai-qa/env/prod.env.json; the Converse grant
+  # above stays as the bedrock-converse fallback.
+  ai_qa_openai_mantle_model_id = "openai.gpt-5.5"
+  ai_qa_openai_mantle_region   = "us-east-1"
 }
 
 # E03's DLQ exists in the account but is not in imports.tf (E00 §6 #20). module.worker's
@@ -70,6 +76,9 @@ module "identity" {
 
   ai_qa_converse_profile_ids = local.ai_qa_converse_profile_ids
 
+  ai_qa_openai_mantle_model_id = local.ai_qa_openai_mantle_model_id
+  ai_qa_openai_mantle_region   = local.ai_qa_openai_mantle_region
+
   notify_queue_name            = "developercards-notify"
   notifier_function_name       = "developercards-notifier"
   source_watcher_function_name = "developercards-source-watcher"
@@ -117,6 +126,9 @@ module "edge" {
 
   # R18A A11: the SES recipient identity (sensitive; never printed).
   notify_recipient_email = local.alert_email
+
+  # R18C: delivery problems of the automation emails go to the alerts topic.
+  automation_events_topic_arn = module.observability.ses_events_topic_arn
 }
 
 module "api" {
@@ -251,6 +263,7 @@ module "observability" {
   ai_qa_dlq_name      = module.worker.ai_qa_dlq_name
   ai_qa_function_name = module.worker.ai_qa_function_name
 
+  notify_queue_name            = module.worker.notify_queue_name
   notify_dlq_name              = module.worker.notify_dlq_name
   notifier_function_name       = module.worker.notifier_function_name
   source_watcher_function_name = module.worker.source_watcher_function_name

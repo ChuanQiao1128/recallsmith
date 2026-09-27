@@ -126,6 +126,22 @@ locals {
       Condition = { StringEquals = { "bedrock:InferenceProfileArn" = local.ai_qa_converse_profile_arns } }
     },
   ] : st if length(var.ai_qa_converse_profile_ids) > 0]
+
+  # R18C L1: the automation reviewer GPT-5.5 is served only by the bedrock-mantle OpenAI endpoint
+  # (/openai/v1, Chat Completions), In-Region in us-east-1/us-east-2, model id openai.gpt-5.5 (AWS model card
+  # model-card-openai-gpt-55.html, read 2026-09-28). The openai-mantle client SigV4-signs for bedrock-mantle,
+  # so the grant is the same action and resource type as BedrockMantleInference (Service Authorization
+  # Reference list_bedrock-mantle.html: CreateInference, resource type project, condition key
+  # bedrock-mantle:Model), in that region's default project (no OpenAI-Project header) and for that one model.
+  ai_qa_openai_mantle_statements = [for st in [
+    {
+      Sid       = "BedrockMantleOpenAiInference"
+      Effect    = "Allow"
+      Action    = ["bedrock-mantle:CreateInference"]
+      Resource  = ["arn:aws:bedrock-mantle:${var.ai_qa_openai_mantle_region}:${var.account_id}:project/${var.bedrock_mantle_project_id}"]
+      Condition = { StringEquals = { "bedrock-mantle:Model" = var.ai_qa_openai_mantle_model_id } }
+    },
+  ] : st if var.ai_qa_openai_mantle_region != "" && var.ai_qa_openai_mantle_model_id != ""]
 }
 
 resource "aws_iam_role" "ai_qa" {
@@ -144,6 +160,7 @@ resource "aws_iam_role" "ai_qa" {
 # Mantle inference on one project, for one model id. A different AI_MODEL (or a request routed to another
 # project) is denied by IAM until this policy changes with it. Q02 adds the Converse statements above, only
 # when ai_qa_converse_profile_ids is non-empty; no aws-marketplace:* here (a first-use subscription is an owner action).
+# R18C L1 adds BedrockMantleOpenAiInference (above) only when the openai-mantle region and model are both set.
 resource "aws_iam_role_policy" "ai_qa" {
   name = "developercards-ai-qa-scoped"
   role = aws_iam_role.ai_qa.id
@@ -175,7 +192,7 @@ resource "aws_iam_role_policy" "ai_qa" {
         Resource  = [local.bedrock_mantle_project]
         Condition = { StringEquals = { "bedrock-mantle:Model" = var.bedrock_mantle_model_id } }
       },
-    ], local.ai_qa_converse_statements)
+    ], local.ai_qa_converse_statements, local.ai_qa_openai_mantle_statements)
   })
 }
 
