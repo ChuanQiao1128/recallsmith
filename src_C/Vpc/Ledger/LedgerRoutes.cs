@@ -84,42 +84,72 @@ public static class LedgerRoutes
 
     try
     {
+      // Minutes saved are clamped per (automation, source) group, never per row: a row that carries only
+      // human cost (a rejected draft's review time, units 0) must reduce the savings it offsets instead of
+      // counting as 0. Backfill rows carry no actual minutes, so history is not offset by live review cost.
       var perAutomation = await DbUtil.QueryAsync(conn, null,
         """
-        select b.automation as "automation", b.unit as "unit",
-               b.baseline_minutes_per_unit as "baselineMinutesPerUnit", b.baseline_source as "baselineSource",
-               count(e.id) filter (where e.units > 0 or e.outcome = 'failure') as "runs",
-               coalesce(sum(e.units), 0) as "units",
-               count(e.id) filter (where e.outcome = 'failure') as "failures",
-               coalesce(sum(e.units * b.baseline_minutes_per_unit), 0) as "baselineMinutes",
-               coalesce(sum(coalesce(e.actual_minutes, 0)), 0) as "actualMinutes",
-               coalesce(sum(case when e.outcome in ('success','partial')
-                                 then greatest(0, e.units * b.baseline_minutes_per_unit - coalesce(e.actual_minutes, 0))
-                                 else 0 end), 0) as "minutesSaved",
-               coalesce(sum(e.defects_caught), 0) as "defectsCaught"
-        from automation_baselines b
-        left join automation_events e
-          on e.automation = b.automation and e.occurred_at >= $1 and e.occurred_at < $2
-        group by b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source
-        order by b.automation collate "C"
+        with g as (
+          select b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source,
+                 count(e.id) filter (where e.units > 0 or e.outcome = 'failure') as runs,
+                 coalesce(sum(e.units), 0) as units,
+                 count(e.id) filter (where e.outcome = 'failure') as failures,
+                 coalesce(sum(e.units * b.baseline_minutes_per_unit), 0) as baseline_minutes,
+                 coalesce(sum(coalesce(e.actual_minutes, 0)), 0) as actual_minutes,
+                 greatest(0, coalesce(sum(case when e.outcome in ('success','partial')
+                                               then e.units * b.baseline_minutes_per_unit - coalesce(e.actual_minutes, 0)
+                                               else 0 end), 0)) as saved,
+                 coalesce(sum(e.defects_caught), 0) as defects
+          from automation_baselines b
+          left join automation_events e
+            on e.automation = b.automation and e.occurred_at >= $1 and e.occurred_at < $2
+          group by b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source
+        )
+        select automation as "automation", unit as "unit",
+               baseline_minutes_per_unit as "baselineMinutesPerUnit", baseline_source as "baselineSource",
+               sum(runs) as "runs",
+               sum(units) as "units",
+               sum(failures) as "failures",
+               sum(baseline_minutes) as "baselineMinutes",
+               sum(actual_minutes) as "actualMinutes",
+               sum(saved) as "minutesSaved",
+               sum(defects) as "defectsCaught",
+               coalesce(sum(runs) filter (where source = 'live'), 0) as "runsLive",
+               coalesce(sum(units) filter (where source = 'live'), 0) as "unitsLive",
+               coalesce(sum(saved) filter (where source = 'live'), 0) as "minutesSavedLive",
+               coalesce(sum(runs) filter (where source = 'backfill'), 0) as "runsBackfill",
+               coalesce(sum(units) filter (where source = 'backfill'), 0) as "unitsBackfill",
+               coalesce(sum(saved) filter (where source = 'backfill'), 0) as "minutesSavedBackfill"
+        from g
+        group by automation, unit, baseline_minutes_per_unit, baseline_source
+        order by automation collate "C"
         """,
         [start, end]);
 
       var seriesRows = await DbUtil.QueryAsync(conn, null,
         """
-        select to_char(date_trunc($3::text, e.occurred_at at time zone 'UTC'), 'YYYY-MM-DD') as "periodStart",
-               e.automation as "automation",
-               count(*) filter (where e.units > 0 or e.outcome = 'failure') as "runs",
-               coalesce(sum(e.units), 0) as "units",
-               coalesce(sum(case when e.outcome in ('success','partial')
-                                 then greatest(0, e.units * b.baseline_minutes_per_unit - coalesce(e.actual_minutes, 0))
-                                 else 0 end), 0) as "minutesSaved",
-               coalesce(sum(e.defects_caught), 0) as "defectsCaught"
-        from automation_events e
-        join automation_baselines b on b.automation = e.automation
-        where e.occurred_at >= $1 and e.occurred_at < $2
-        group by 1, e.automation
-        order by 1, e.automation collate "C"
+        with g as (
+          select date_trunc($3::text, e.occurred_at at time zone 'UTC') as period, e.automation, e.source,
+                 count(*) filter (where e.units > 0 or e.outcome = 'failure') as runs,
+                 coalesce(sum(e.units), 0) as units,
+                 greatest(0, coalesce(sum(case when e.outcome in ('success','partial')
+                                               then e.units * b.baseline_minutes_per_unit - coalesce(e.actual_minutes, 0)
+                                               else 0 end), 0)) as saved,
+                 coalesce(sum(e.defects_caught), 0) as defects
+          from automation_events e
+          join automation_baselines b on b.automation = e.automation
+          where e.occurred_at >= $1 and e.occurred_at < $2
+          group by 1, e.automation, e.source
+        )
+        select to_char(period, 'YYYY-MM-DD') as "periodStart",
+               automation as "automation",
+               sum(runs) as "runs",
+               sum(units) as "units",
+               sum(saved) as "minutesSaved",
+               sum(defects) as "defectsCaught"
+        from g
+        group by period, automation
+        order by period, automation collate "C"
         """,
         [start, end, granularity]);
 
@@ -132,6 +162,8 @@ public static class LedgerRoutes
           [start, end]);
         qaFalsePositives = Convert.ToInt64(n, CultureInfo.InvariantCulture);
       }
+
+      var agentDrafts = await AgentDraftQualityAsync(conn, start, end);
 
       var automations = perAutomation.Select(r =>
       {
@@ -165,6 +197,16 @@ public static class LedgerRoutes
         hoursSaved = Round2(totalSaved / 60m),
         defectsCaught = automations.Sum(a => a.defectsCaught),
         qaFalsePositives,
+        // How much of the headline is measured live and how much is inferred history (automation-11).
+        bySource = new
+        {
+          live = SourceTotals(perAutomation, "Live"),
+          backfill = SourceTotals(perAutomation, "Backfill"),
+        },
+        // How much of the headline rests on measured baselines and how much on seeded defaults.
+        byBaselineSource = BaselineSources.ToDictionary(
+          b => b,
+          b => new { minutesSaved = Round2(perAutomation.Where(r => (string)r["baselineSource"]! == b).Sum(r => ToDecimal(r["minutesSaved"]))) }),
       };
 
       var series = seriesRows.Select(r => new
@@ -185,6 +227,7 @@ public static class LedgerRoutes
         totals,
         automations,
         series,
+        agentDrafts,
       });
     }
     catch (Exception ex)
@@ -192,6 +235,70 @@ public static class LedgerRoutes
       return MapError(ex, res);
     }
   }
+
+  private static object SourceTotals(List<Dictionary<string, object?>> perAutomation, string suffix)
+  {
+    var saved = perAutomation.Sum(r => ToDecimal(r["minutesSaved" + suffix]));
+    return new
+    {
+      runs = perAutomation.Sum(r => ToLong(r["runs" + suffix])),
+      units = perAutomation.Sum(r => ToLong(r["units" + suffix])),
+      minutesSaved = Round2(saved),
+      hoursSaved = Round2(saved / 60m),
+    };
+  }
+
+  /// <summary>
+  /// The AI drafting agent's own quality over the period, from ai_review_events (automation-4): how many
+  /// drafts were decided, the acceptance and edited-accept rates, the share rejected for a defect reason
+  /// (the agent's defect rate, which is not a defect caught before publish) and the average review time.
+  /// Zeros on a database without migration 030.
+  /// </summary>
+  private static async Task<object> AgentDraftQualityAsync(NpgsqlConnection conn, DateTime start, DateTime end)
+  {
+    long decided = 0, accepted = 0, edited = 0, rejected = 0, defects = 0;
+    decimal? avgReviewMs = null;
+
+    var hasEvents = await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.ai_review_events') is not null", []);
+    if (hasEvents is true)
+    {
+      var rows = await DbUtil.QueryAsync(conn, null,
+        """
+        select count(*) as "decided",
+               count(*) filter (where action in ('accepted','edited_accepted')) as "accepted",
+               count(*) filter (where action = 'edited_accepted') as "edited",
+               count(*) filter (where action = 'rejected') as "rejected",
+               count(*) filter (where action = 'rejected' and reason = any($3)) as "defects",
+               avg(review_ms) as "avgReviewMs"
+        from ai_review_events
+        where action in ('accepted','edited_accepted','rejected') and created_at >= $1 and created_at < $2
+        """,
+        [start, end, Vpc.Review.Drafts.DefectReasons.ToArray()]);
+      var r = rows[0];
+      decided = ToLong(r["decided"]);
+      accepted = ToLong(r["accepted"]);
+      edited = ToLong(r["edited"]);
+      rejected = ToLong(r["rejected"]);
+      defects = ToLong(r["defects"]);
+      avgReviewMs = r["avgReviewMs"] is null ? null : ToDecimal(r["avgReviewMs"]);
+    }
+
+    return new
+    {
+      decided,
+      accepted,
+      editedAccepted = edited,
+      rejected,
+      defectRejects = defects,
+      acceptanceRate = Rate(accepted, decided),
+      editedAcceptRate = Rate(edited, accepted),
+      defectRate = Rate(defects, decided),
+      avgReviewMinutes = avgReviewMs is { } ms ? Round2(ms / 60000m) : (decimal?)null,
+    };
+  }
+
+  private static decimal Rate(long part, long whole) =>
+    whole == 0 ? 0m : Math.Round((decimal)part / whole, 4, MidpointRounding.AwayFromZero);
 
   // ------------------------------------------------------------------ GET /events
 
@@ -419,15 +526,28 @@ public static class LedgerRoutes
     or (c.job_id is not null and exists (select 1 from automation_events e where e.dedupe_key = 'publish:' || c.job_id))
     """;
 
-  private const string ImportCandidates = """
+  // Only history the live ledger cannot see: cards created before live recording began (the `live_since`
+  // instant migration 028 records; without it, the first live event), and never a card that is an accepted
+  // AI draft (those are ai_draft_review rows). Without this bound every live import of 5+ cards, and every
+  // burst of 5+ draft accepts into one deck, would be counted a second time as a backfilled bulk_import.
+  private static string ImportCandidates(bool hasDrafts) => $"""
     select 'backfill:cards:' || g.deck_id || ':' || (extract(epoch from g.minute) / 60)::bigint as dedupe_key,
            g.minute as occurred_at, g.deck_id as deck_id, g.units as units
     from (
       select cd.deck_id as deck_id, date_trunc('minute', cd.created_at) as minute, count(*)::int as units
       from cards cd
+      where cd.created_at < {LiveSince}
+      {(hasDrafts ? "and not exists (select 1 from ai_drafts ad where ad.accepted_card_id = cd.id)" : string.Empty)}
       group by cd.deck_id, date_trunc('minute', cd.created_at)
       having count(*) >= 5
     ) g
+    """;
+
+  private const string LiveSince = """
+    coalesce(
+      (select m.value_ts from automation_ledger_meta m where m.key = 'live_since'),
+      (select min(e.occurred_at) from automation_events e where e.source = 'live'),
+      'infinity'::timestamptz)
     """;
 
   private const string ImportPresent = "exists (select 1 from automation_events e where e.dedupe_key = c.dedupe_key)";
@@ -459,11 +579,14 @@ public static class LedgerRoutes
     try
     {
       long publishInserted, publishSkipped, importInserted, importSkipped;
+      // ai_drafts arrives with migration 030; the ledger itself needs only 028.
+      var hasDrafts = await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.ai_drafts') is not null", []) is true;
+      var importCandidates = ImportCandidates(hasDrafts);
 
       if (dryRun)
       {
         (publishInserted, publishSkipped) = await CountCandidatesAsync(conn, null, PublishCandidates, PublishPresent);
-        (importInserted, importSkipped) = await CountCandidatesAsync(conn, null, ImportCandidates, ImportPresent);
+        (importInserted, importSkipped) = await CountCandidatesAsync(conn, null, importCandidates, ImportPresent);
         return res.Ok(Counts(true, publishInserted, publishSkipped, importInserted, importSkipped));
       }
 
@@ -473,7 +596,7 @@ public static class LedgerRoutes
       await using (var tx = await conn.BeginTransactionAsync())
       {
         var (publishNew, publishPresent) = await CountCandidatesAsync(conn, tx, PublishCandidates, PublishPresent);
-        var (importNew, importPresent) = await CountCandidatesAsync(conn, tx, ImportCandidates, ImportPresent);
+        var (importNew, importPresent) = await CountCandidatesAsync(conn, tx, importCandidates, ImportPresent);
 
         publishInserted = await DbUtil.ExecuteAsync(conn, tx,
           $"""
@@ -489,7 +612,7 @@ public static class LedgerRoutes
           $"""
           insert into automation_events (automation, occurred_at, units, outcome, deck_id, source, dedupe_key, details)
           select 'bulk_import', c.occurred_at, c.units, 'success', c.deck_id, 'backfill', c.dedupe_key, $1::jsonb
-          from ({ImportCandidates}) c
+          from ({importCandidates}) c
           on conflict (dedupe_key) do nothing
           """,
           [JsonSerializer.Serialize(new { heuristic = BackfillHeuristic })]);

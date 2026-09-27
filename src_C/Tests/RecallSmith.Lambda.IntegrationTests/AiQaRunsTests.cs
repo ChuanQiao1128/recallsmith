@@ -35,7 +35,7 @@ public class AiQaRunsTests
   private sealed class QaEnv : IDisposable
   {
     private static readonly string[] Names =
-      [QaGate.EnabledEnv, QaGate.RequiredEnv, QaRuns.QueueUrlEnv, QaRuns.MaxCardsEnv, QaRuns.DailyCapEnv, "INTERNAL_SHARED_SECRET"];
+      [QaGate.EnabledEnv, QaGate.RequiredEnv, QaRuns.QueueUrlEnv, QaRuns.MaxCardsEnv, QaRuns.DailyCapEnv, QaRuns.EstUsdPerCardEnv, "INTERNAL_SHARED_SECRET"];
 
     private readonly Dictionary<string, string?> _saved = Names.ToDictionary(n => n, Environment.GetEnvironmentVariable);
     private readonly Func<SendMessageRequest, Task>? _savedSeam = QaRuns.TestSendSeam;
@@ -439,6 +439,8 @@ public class AiQaRunsTests
         "select coalesce(sum(estimated_cost_usd), 0) from ai_qa_runs where created_at >= date_trunc('day', now(), 'UTC')"),
         CultureInfo.InvariantCulture);
       spendRun = await SeedRunAsync(deck.Id, "done", [(a, "cap-a", "error")], cost: 1.5m);
+      // Reported spend alone (no per-card reservation); the reservation boundary is StartRun_DailyCap_ReservesThisRunAndOpenRuns.
+      env.Set(QaRuns.EstUsdPerCardEnv, "0");
       env.Set(QaRuns.DailyCapEnv, (today + 1.5m).ToString(CultureInfo.InvariantCulture));
 
       AssertError(await StartAsync(new { deckId = deck.Id, scope = "all" }), 429, "AI_QA_DAILY_CAP");
@@ -451,6 +453,128 @@ public class AiQaRunsTests
     {
       if (spendRun is not null) await _db.QueryAsync("delete from ai_qa_runs where id = $1", spendRun.Value);
     }
+  }
+
+  /// <summary>Today's reported spend plus the reservation of every open run, as the start check computes it.</summary>
+  private async Task<decimal> ProjectedBaselineAsync(decimal perCard)
+  {
+    await using var conn = await _db.OpenAsync();
+    var (spent, openCards) = await QaRuns.SpendTodayAsync(conn, null);
+    return spent + openCards * perCard;
+  }
+
+  private static string Usd(decimal value) => value.ToString(CultureInfo.InvariantCulture);
+
+  private async Task DeleteRunsAsync(params long[] deckIds) =>
+    await _db.QueryAsync("delete from ai_qa_runs where deck_id = any($1)", deckIds);
+
+  [Fact]
+  public async Task StartRun_DailyCap_ReservesThisRunAndOpenRuns()
+  {
+    // backend-design-6 / cloud-security-resilience-3 / ai-agent-8: admission reserves the estimate of the run being
+    // started (cards x AI_QA_EST_USD_PER_CARD) plus the unfinished cards of open runs, against the daily cap.
+    using var env = new QaEnv();
+    const decimal perCard = 0.25m;
+    env.Set(QaRuns.EstUsdPerCardEnv, Usd(perCard));
+    var deckA = await NewDeckAsync("reserve-a");
+    var deckB = await NewDeckAsync("reserve-b");
+    for (var i = 1; i <= 2; i++) await NewCardAsync(deckA.Id, $"reserve-a-{i}", i);
+    for (var i = 1; i <= 3; i++) await NewCardAsync(deckB.Id, $"reserve-b-{i}", i);
+    try
+    {
+      var baseline = await ProjectedBaselineAsync(perCard);
+
+      // This run's own estimate (2 x 0.25) does not fit a cap just below it, although nothing more is spent yet.
+      env.Set(QaRuns.DailyCapEnv, Usd(baseline + 0.5m - 0.000001m));
+      AssertError(await StartAsync(new { deckId = deckA.Id, scope = "all" }), 429, "AI_QA_DAILY_CAP");
+      Assert.Empty(env.Sent);
+
+      // Exactly at the cap is allowed.
+      env.Set(QaRuns.DailyCapEnv, Usd(baseline + 0.5m));
+      Data(await StartAsync(new { deckId = deckA.Id, scope = "all" }));
+
+      // Deck A's queued run still reserves its 2 cards: deck B (3 x 0.25) must fit on top of them.
+      env.Set(QaRuns.DailyCapEnv, Usd(baseline + 0.5m + 0.75m - 0.000001m));
+      AssertError(await StartAsync(new { deckId = deckB.Id, scope = "all" }), 429, "AI_QA_DAILY_CAP");
+      env.Set(QaRuns.DailyCapEnv, Usd(baseline + 0.5m + 0.75m));
+      Data(await StartAsync(new { deckId = deckB.Id, scope = "all" }));
+    }
+    finally
+    {
+      await DeleteRunsAsync(deckA.Id, deckB.Id);
+    }
+  }
+
+  [Fact]
+  public async Task StartRun_ConcurrentStartsOnTwoDecks_SeeEachOthersReservation()
+  {
+    // The reservation holds under concurrency: two decks started at once with room for only one run.
+    using var env = new QaEnv();
+    const decimal perCard = 0.25m;
+    env.Set(QaRuns.EstUsdPerCardEnv, Usd(perCard));
+    var deckA = await NewDeckAsync("race-cap-a");
+    var deckB = await NewDeckAsync("race-cap-b");
+    for (var i = 1; i <= 2; i++)
+    {
+      await NewCardAsync(deckA.Id, $"race-cap-a-{i}", i);
+      await NewCardAsync(deckB.Id, $"race-cap-b-{i}", i);
+    }
+    try
+    {
+      env.Set(QaRuns.DailyCapEnv, Usd(await ProjectedBaselineAsync(perCard) + 0.5m + 0.5m - 0.000001m));
+
+      var responses = await Task.WhenAll(
+        StartAsync(new { deckId = deckA.Id, scope = "all" }),
+        StartAsync(new { deckId = deckB.Id, scope = "all" }));
+
+      Assert.Single(responses, r => r.StatusCode == 200);
+      AssertError(Assert.Single(responses, r => r.StatusCode != 200), 429, "AI_QA_DAILY_CAP");
+      Assert.Equal(1L, Convert.ToInt64(await _db.ScalarAsync(
+        "select count(*) from ai_qa_runs where deck_id = any($1)", new[] { deckA.Id, deckB.Id }), CultureInfo.InvariantCulture));
+    }
+    finally
+    {
+      await DeleteRunsAsync(deckA.Id, deckB.Id);
+    }
+  }
+
+  [Fact]
+  public async Task StartRun_ConcurrentStartsOnOneDeck_OneRunAndOneInProgress()
+  {
+    // backend-design-9: the per-deck active-run guarantee (uq_ai_qa_runs_active) exercised concurrently.
+    using var env = new QaEnv();
+    var deck = await NewDeckAsync("race-deck");
+    for (var i = 1; i <= 3; i++) await NewCardAsync(deck.Id, $"race-deck-{i}", i);
+    try
+    {
+      var responses = await Task.WhenAll(
+        StartAsync(new { deckId = deck.Id, scope = "all" }),
+        StartAsync(new { deckId = deck.Id, scope = "all" }));
+
+      Assert.Single(responses, r => r.StatusCode == 200);
+      AssertError(Assert.Single(responses, r => r.StatusCode != 200), 409, "AI_QA_RUN_IN_PROGRESS");
+      Assert.Equal(1L, Convert.ToInt64(await _db.ScalarAsync("select count(*) from ai_qa_runs where deck_id = $1", deck.Id), CultureInfo.InvariantCulture));
+    }
+    finally
+    {
+      await DeleteRunsAsync(deck.Id);
+    }
+  }
+
+  [Fact]
+  public async Task StartRun_SendFailure_EmitsAiQaEnqueueFailures()
+  {
+    // backend-design-10: a QA run whose SQS send failed is alarmable.
+    using var env = new QaEnv();
+    var deck = await NewDeckAsync("sendfail-metric");
+    for (var i = 1; i <= 2; i++) await NewCardAsync(deck.Id, $"sendfail-metric-{i}", i);
+
+    QaRuns.TestSendSeam = _ => throw new InvalidOperationException("sqs down");
+    APIGatewayProxyResponse? response = null;
+    var stdout = await EmfCapture.StdoutAsync(async () => response = await StartAsync(new { deckId = deck.Id, scope = "all" }));
+    Assert.Equal(500, response!.StatusCode);
+    Assert.Equal("AiQaEnqueueFailures", QaRuns.EnqueueFailuresMetric);
+    Assert.Equal(1, EmfCapture.GaugeSum(stdout, QaRuns.EnqueueFailuresMetric));
   }
 
   [Fact]
@@ -637,6 +761,59 @@ public class AiQaRunsTests
 
     Data(await ResolveAsync(minor.ToString(CultureInfo.InvariantCulture), new { resolution = "fixed" }));
     Assert.Equal(0L, Convert.ToInt64(await _db.ScalarAsync("select count(*) from automation_events where dedupe_key = $1", $"qa-fix:{minor}"), CultureInfo.InvariantCulture));
+  }
+
+  // ---------------------------------------------------------------- waive (ai-agent-16)
+
+  private static Task<APIGatewayProxyResponse> WaiveAsync(Guid runId, long cardId, object body, string? sub = null, string[]? groups = null) =>
+    CallAsync((q, r, a) => QaRuns.HandleWaiveItem(q, r, a, runId.ToString(), cardId.ToString(CultureInfo.InvariantCulture)),
+      "POST", $"{RunsPath}/{runId}/items/{cardId}/waive", body, sub: sub, groups: groups);
+
+  [Fact]
+  public async Task WaiveItem_RefusedCard_CountsAsReviewedAtItsHashOnly()
+  {
+    using var env = new QaEnv();
+    env.Set(QaGate.RequiredEnv, "1");
+    var deck = await NewDeckAsync("waive");
+    var refused = await NewCardAsync(deck.Id, "waive-refused", 1);
+    var reviewed = await NewCardAsync(deck.Id, "waive-done", 2);
+    var runId = await SeedRunAsync(deck.Id, "done", [(refused, "waive-refused", "refused"), (reviewed, "waive-done", "done")]);
+
+    var before = Data(await StatusAsync(deck.Id));
+    Assert.Equal(refused, Assert.Single(before.GetProperty("missing").EnumerateArray().ToList()).GetProperty("cardId").GetInt64());
+    Assert.True(before.GetProperty("wouldBlock").GetBoolean());
+
+    // Owner only: an editor is refused; a note is required; only error/refused items can be waived.
+    AssertError(await WaiveAsync(runId, refused, new { note = "Refused by the classifier." }, groups: ["editor"]), 403, "FORBIDDEN");
+    AssertError(await WaiveAsync(runId, refused, new { note = "   " }), 400, "VALIDATION_ERROR");
+    AssertError(await WaiveAsync(runId, reviewed, new { note = "Not refused." }), 409, "AI_QA_ITEM_NOT_WAIVABLE");
+    AssertError(await WaiveAsync(Guid.NewGuid(), refused, new { note = "No such run." }), 404, "ITEM_NOT_FOUND");
+
+    var sub = SuperSub();
+    var waived = Data(await WaiveAsync(runId, refused, new { note = "  Security card the model refuses; checked by hand.  " }, sub: sub));
+    Assert.Equal("refused", waived.GetProperty("status").GetString());
+    Assert.Equal(sub, waived.GetProperty("waivedBySub").GetString());
+    Assert.Equal("Security card the model refuses; checked by hand.", waived.GetProperty("waiveNote").GetString());
+    AssertError(await WaiveAsync(runId, refused, new { note = "Again." }), 409, "AI_QA_ITEM_ALREADY_WAIVED");
+
+    var ledger = Assert.Single(await _db.QueryAsync(
+      "select automation, units, outcome, deck_id from automation_events where dedupe_key = $1", $"qa-waive:{runId}:{refused}"));
+    Assert.Equal("ai_qa_review", ledger["automation"]);
+    Assert.Equal("failure", ledger["outcome"]);
+    Assert.Equal(0, Convert.ToInt32(ledger["units"], CultureInfo.InvariantCulture));
+
+    var after = Data(await StatusAsync(deck.Id));
+    Assert.Empty(after.GetProperty("missing").EnumerateArray());
+    Assert.False(after.GetProperty("wouldBlock").GetBoolean());
+
+    var detail = Data(await GetRunAsync(runId.ToString()));
+    var item = detail.GetProperty("items").EnumerateArray().Single(i => i.GetProperty("cardId").GetInt64() == refused);
+    Assert.Equal(sub, item.GetProperty("waivedBySub").GetString());
+
+    // The waiver is bound to the content hash it was given for: an edit needs a fresh review.
+    await _db.QueryAsync("update cards set question = 'Synthetic question, edited after the waiver?' where id = $1", refused);
+    var edited = Data(await StatusAsync(deck.Id));
+    Assert.Equal(refused, Assert.Single(edited.GetProperty("missing").EnumerateArray().ToList()).GetProperty("cardId").GetInt64());
   }
 
   [Fact]

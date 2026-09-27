@@ -402,6 +402,8 @@ public static class Drafts
         $"""select {DraftColumns}, d.card, d."similar" as similar_json from ai_drafts d where d.id = $1""", [id.Value]);
       if (rows.Count == 0) return DraftNotFound(res);
       var r = rows[0];
+      // The agent client may read only the drafts its own subject submitted (AgentClientPolicy, ai-agent-6).
+      if (auth.IsAgentClient && !string.Equals(r["submitted_by_sub"] as string, auth.UserSub, StringComparison.Ordinal)) return DraftNotFound(res);
       var deckId = Long(r["deck_id"]);
 
       if (await LiveDeckAsync(conn, null, deckId) is null) return DeckNotFound(res);
@@ -626,12 +628,15 @@ public static class Drafts
         await tx.CommitAsync();
       }
 
-      if (DefectReasons.Contains(reason))
-      {
-        await AutomationLedger.RecordAsync(conn, new AutomationEvent(
-          Automation: "ai_draft_review", Units: 0, Outcome: "success", DefectsCaught: 1,
-          DeckId: deckId.Value, Ref: id.Value.ToString(CultureInfo.InvariantCulture), DedupeKey: $"draft-reject:{id.Value}"));
-      }
+      // Every reject charges its review time to the automation (units 0), so the ledger's savings carry the
+      // human cost of the drafts the agent got wrong. A reject is the agent's own mistake, not a defect
+      // caught before publish, so it records no defect; the agent's defect rate is reported separately from
+      // ai_review_events (LedgerRoutes agentDrafts).
+      await AutomationLedger.RecordAsync(conn, new AutomationEvent(
+        Automation: "ai_draft_review", Units: 0, Outcome: "success",
+        ActualMinutes: reviewMs is null ? null : reviewMs.Value / 60000m,
+        DeckId: deckId.Value, Ref: id.Value.ToString(CultureInfo.InvariantCulture), DedupeKey: $"draft-reject:{id.Value}",
+        Details: new { reason, defect = DefectReasons.Contains(reason) }));
 
       return res.Ok(new { draftId = id.Value, action = "rejected" });
     }
