@@ -93,6 +93,20 @@ export function buildChallengeRoute(params: {
 }
 
 /**
+ * Route of a Mistake Book focus run: one plain node per focus card, so the per-card role label
+ * matches the run instead of borrowing the normal planner's warm-up/elite/boss roles and length.
+ */
+export function buildFocusRoute(length: number): RoutePreviewNode[] {
+  const count = Number.isFinite(length) ? Math.max(0, Math.floor(length)) : 0;
+  return Array.from({ length: count }).map((_, index) => ({
+    id: `focus-${index}`,
+    role: 'normal',
+    title: 'Focus review',
+    subtitle: 'A card from your Mistake Book, or one related to it.',
+  }));
+}
+
+/**
  * Exam sweep (economy-v2 R8): every owned learned card, longest-unseen first,
  * spread over SWEEP_SPREAD_DAYS days at the normal run cap. No elite/boss
  * nodes — the run is a pass over known material, not a pressure check.

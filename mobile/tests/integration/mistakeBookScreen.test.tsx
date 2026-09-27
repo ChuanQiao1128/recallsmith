@@ -8,6 +8,7 @@ vi.mock('react-native', () => {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
+    ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
     Pressable: ({ children, onPress, style, ...props }: any) =>
       React.createElement(
         'Pressable',
@@ -65,6 +66,20 @@ import type { RemoteConfig } from '../../src/config/remoteConfig';
 // RemoteFeatures (remoteConfig.ts) types only mcq and paywall; newer flags are read untyped.
 const asRemoteConfig = (value: unknown) => value as RemoteConfig;
 import type { CardExport, DeckExport } from '../../src/types/deckExport';
+import { a11y } from '../../src/theme/a11y';
+
+// WCAG 2.x contrast ratio of two #RRGGBB colours.
+function contrast(fg: string, bg: string): number {
+  const luminance = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const [hi, lo] = [luminance(fg), luminance(bg)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
 
 const NOW = Date.UTC(2026, 8, 27, 9, 0, 0);
 const DAY_MS = 86_400_000;
@@ -214,7 +229,73 @@ describe('MistakeBookScreen', () => {
 
     const review = byTestID(tree, 'mistake-review-aws')[0];
     expect(review.props.accessibilityRole).toBe('button');
-    expect(texts(review)).toEqual(['Review mistakes + 3 related']);
+    // X07 mobile-8(a): the flag's count is a ceiling, not a promise (was 'Review mistakes + 3 related').
+    expect(texts(review)).toEqual(['Review mistakes + up to 3 related']);
+    expect(review.props.disabled).toBe(false);
+    expect(byTestID(tree, 'mistake-review-busy-aws')).toHaveLength(0);
+  });
+
+  it('gives each row an explicit spoken label and hint', async () => {
+    seedBook([
+      entry('aws', 's3-1', 's3', NOW - 2 * DAY_MS, 2),
+      entry('aws', 'ec2-1', null, NOW - 1000),
+    ]);
+    const { tree } = await mount();
+
+    const s3Row = byTestID(tree, 'mistake-row-s3-1')[0];
+    expect(s3Row.props.accessibilityLabel).toBe('Question s3-1. s3. Wrong 2 times, last wrong 2 days ago');
+    expect(s3Row.props.accessibilityHint).toBe('Opens the card');
+    const ec2Row = byTestID(tree, 'mistake-row-ec2-1')[0];
+    expect(ec2Row.props.accessibilityLabel).toBe('Question ec2-1. Wrong once, last wrong today');
+    expect(ec2Row.props.accessibilityLabel).not.toContain('×');
+  });
+
+  it('disables the review button and shows a busy indicator while the run is prepared', async () => {
+    seedBook([entry('aws', 's3-1', 's3', NOW - 1000)]);
+    let releaseProgress!: (value: never[]) => void;
+    vi.mocked(loadDeckProgress).mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releaseProgress = resolve;
+      }),
+    );
+    const { tree, navigation } = await mount();
+
+    await act(async () => {
+      byTestID(tree, 'mistake-review-aws')[0].props.onPress();
+    });
+    await flush();
+    const busy = byTestID(tree, 'mistake-review-aws')[0];
+    expect(busy.props.disabled).toBe(true);
+    expect(busy.props.accessibilityState).toEqual({ disabled: true, busy: true });
+    expect(byTestID(tree, 'mistake-review-busy-aws')).toHaveLength(1);
+    expect(navigation.navigate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseProgress([]);
+    });
+    await flush();
+    expect(navigation.navigate).toHaveBeenCalledTimes(1);
+    const idle = byTestID(tree, 'mistake-review-aws')[0];
+    expect(idle.props.disabled).toBe(false);
+    expect(byTestID(tree, 'mistake-review-busy-aws')).toHaveLength(0);
+  });
+
+  it('meets the minimum touch size and WCAG AA text contrast on its new surfaces', async () => {
+    seedBook([entry('aws', 's3-1', 's3', NOW - 1000)]);
+    const { tree } = await mount();
+
+    const style = (node: renderer.ReactTestInstance) => Object.assign({}, ...[node.props.style].flat(Infinity).filter(Boolean));
+    expect(style(byTestID(tree, 'mistake-book-back')[0]).minHeight).toBeGreaterThanOrEqual(a11y.minTouch);
+
+    const review = byTestID(tree, 'mistake-review-aws')[0];
+    const reviewFill = style(review).backgroundColor;
+    const reviewText = review.findAll((n) => (n.type as any) === 'Text')[0];
+    expect(contrast(style(reviewText).color, reviewFill)).toBeGreaterThanOrEqual(4.5);
+
+    const row = byTestID(tree, 'mistake-row-s3-1')[0];
+    const [, topic, ...meta] = row.findAll((n) => (n.type as any) === 'Text');
+    expect(contrast(style(topic).color, style(topic).backgroundColor)).toBeGreaterThanOrEqual(4.5);
+    for (const text of meta) expect(contrast(style(text).color, '#FFFFFF')).toBeGreaterThanOrEqual(4.5);
   });
 
   it('opens CardDetail when a mistake is tapped', async () => {

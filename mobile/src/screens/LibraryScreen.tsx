@@ -79,8 +79,11 @@ export function LibraryScreen({ navigation, route }: Props) {
   // wallet=0 → banner sends user to SessionCard (earn pulls first);
   // wallet>0 → banner sends user to Draw (open the pack now).
   const [walletPulls, setWalletPulls] = useState<number>(0);
-  // Active Mistake Book entries of the selected deck (K02 pill); 0 until read, and on any failure.
-  const [mistakeCount, setMistakeCount] = useState<number>(0);
+  // Active Mistake Book entries (K02 pill), stored with the deck they were counted for. A count read
+  // for another deck reads as 0 until the selected deck's read lands; a plain re-focus keeps the
+  // last count on screen while it re-reads, so the pill (and the measured header) does not blink.
+  const [mistakeTally, setMistakeTally] = useState<{ slug: string; count: number } | null>(null);
+  const mistakeCount = mistakeTally !== null && mistakeTally.slug === selectedSlug ? mistakeTally.count : 0;
   // Measured header height. Feeds getItemLayout's head offset so a row's offset
   // includes the real header instead of a guess. Starts at 0 until onLayout.
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -130,15 +133,15 @@ export function LibraryScreen({ navigation, route }: Props) {
     useCallback(() => {
       if (!selectedSlug) return;
       let cancelled = false;
-      setMistakeCount(0);
       const slug = selectedSlug;
       (async () => {
+        let count = 0;
         try {
-          const count = activeMistakes(await loadMistakeBook(), { deckSlug: slug, now: Date.now() }).length;
-          if (!cancelled) setMistakeCount(count);
+          count = activeMistakes(await loadMistakeBook(), { deckSlug: slug, now: Date.now() }).length;
         } catch {
           /* 0 hides the pill */
         }
+        if (!cancelled) setMistakeTally({ slug, count });
       })();
       return () => {
         cancelled = true;

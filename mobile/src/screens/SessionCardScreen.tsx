@@ -35,7 +35,7 @@ import {
   scheduleProgressSync,
 } from '../sync/progressSync';
 import { countDueToday, pickNextCard, planChallengeRoute } from '../features/gacha/planner/sessionPlanner';
-import { EMPTY_ROUTE_LIMIT } from '../features/gacha/planner/sessionBuilder';
+import { buildFocusRoute, EMPTY_ROUTE_LIMIT } from '../features/gacha/planner/sessionBuilder';
 import { rankCardsByOrder } from '../features/gacha/library/cardRank';
 import { computeTomorrowLoad, forecastLine } from '../features/gacha/planner/loadForecast';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
@@ -549,7 +549,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
           startSession({
             sessionId: nextSessionId,
             slug: deckForStudy.Slug,
-            route: plannedChallenge.nodes,
+            // A focus run deals its own cards, so its route follows them, not the planner's.
+            route: focusIndex ? buildFocusRoute(focusIndex.cards.length) : plannedChallenge.nodes,
             startedAt: now.getTime(),
           });
           setProgress(nextProgress);

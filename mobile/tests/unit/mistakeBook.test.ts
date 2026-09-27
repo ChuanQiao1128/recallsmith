@@ -123,6 +123,47 @@ describe('mistakeBook', () => {
     expect(applyOutcome(s2, outcome({ rating: 'good', at: T0 + 3 * DAY_MS }))).toBe(s2);
   });
 
+  it('two corrects in the same session do not resolve', () => {
+    const s0 = bookWith(entry());
+    const s1 = applyOutcome(s0, outcome({ rating: 'good', at: T0 + 60_000 }));
+    expect(s1.entries['csharp::c1']).toMatchObject({ correctStreak: 1, resolvedAt: null, lastCorrectAt: T0 + 60_000 });
+
+    // A second focus run a minute later: same local day, so it does not count and nothing changes.
+    expect(applyOutcome(s1, outcome({ rating: 'good', at: T0 + 120_000 }))).toBe(s1);
+    expect(applyOutcome(s1, outcome({ rating: 'easy', at: T0 + 180_000 }))).toBe(s1);
+
+    // The next local day it counts and resolves.
+    const s2 = applyOutcome(s1, outcome({ rating: 'good', at: T0 + DAY_MS }));
+    expect(s2.entries['csharp::c1']).toMatchObject({ correctStreak: 2, resolvedAt: T0 + DAY_MS, lastCorrectAt: T0 + DAY_MS });
+  });
+
+  it('spaces correct answers by local calendar day, not by elapsed hours', () => {
+    // Local wall-clock times, so the check holds in any time zone the suite runs in.
+    const lateEvening = new Date(2026, 8, 27, 23, 0).getTime();
+    const nextMorning = new Date(2026, 8, 28, 1, 0).getTime();
+    const earlyMorning = new Date(2026, 8, 27, 0, 30).getTime();
+    const wrongAt = new Date(2026, 8, 26, 12, 0).getTime();
+    const base = bookWith(entry({ firstWrongAt: wrongAt, lastWrongAt: wrongAt }));
+
+    // Two hours apart across midnight: different days, so the entry resolves.
+    const crossed = applyOutcome(applyOutcome(base, outcome({ rating: 'good', at: lateEvening })), outcome({ rating: 'good', at: nextMorning }));
+    expect(crossed.entries['csharp::c1']).toMatchObject({ correctStreak: 2, resolvedAt: nextMorning });
+
+    // 22.5 hours apart on the same day: the second does not count.
+    const first = applyOutcome(base, outcome({ rating: 'good', at: earlyMorning }));
+    expect(applyOutcome(first, outcome({ rating: 'good', at: lateEvening }))).toBe(first);
+  });
+
+  it('a new mistake clears the last correct answer', () => {
+    const s1 = applyOutcome(bookWith(entry()), outcome({ rating: 'good', at: T0 + 60_000 }));
+    const s2 = applyOutcome(s1, outcome({ rating: 'again', at: T0 + 120_000 }));
+    expect(s2.entries['csharp::c1'].lastCorrectAt).toBeUndefined();
+    expect(s2.entries['csharp::c1']).toMatchObject({ correctStreak: 0, wrongCount: 2 });
+    // So a correct answer right after the new mistake counts again, even on the same day.
+    const s3 = applyOutcome(s2, outcome({ rating: 'good', at: T0 + 180_000 }));
+    expect(s3.entries['csharp::c1']).toMatchObject({ correctStreak: 1, lastCorrectAt: T0 + 180_000, resolvedAt: null });
+  });
+
   it('keeps the correct streak unchanged on a hard rating', () => {
     const s1 = bookWith(entry({ correctStreak: 1 }));
     const s2 = applyOutcome(s1, outcome({ rating: 'hard', at: T0 + DAY_MS }));
@@ -257,6 +298,25 @@ describe('mistakeBook', () => {
       }),
     );
     expect(await loadMistakeBook()).toEqual({ v: 1, entries: { 'csharp::c1': good } });
+
+    // lastCorrectAt is optional and read leniently: kept when valid, dropped alone when malformed.
+    store.set(
+      ANON_KEY,
+      JSON.stringify({
+        v: 1,
+        entries: {
+          'csharp::c1': entry({ correctStreak: 1, lastCorrectAt: T0 + 5 }),
+          'csharp::c2': { ...entry({ stableUid: 'c2', correctStreak: 1 }), lastCorrectAt: 'soon' },
+        },
+      }),
+    );
+    expect(await loadMistakeBook()).toEqual({
+      v: 1,
+      entries: {
+        'csharp::c1': entry({ correctStreak: 1, lastCorrectAt: T0 + 5 }),
+        'csharp::c2': entry({ stableUid: 'c2', correctStreak: 1 }),
+      },
+    });
 
     throwOnGet = true;
     expect(await loadMistakeBook()).toEqual(EMPTY);

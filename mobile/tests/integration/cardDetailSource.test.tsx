@@ -145,7 +145,12 @@ describe('CardDetailScreen — source row', () => {
     const row = answer[0].findAll((n) => typeof n.type === 'string' && n.props?.testID === 'card-detail-source');
     expect(row).toHaveLength(1);
     expect(row[0].props.accessibilityRole).toBe('link');
-    expect(row[0].props.accessibilityLabel).toBe('Open source on learn.microsoft.com');
+    // An explicit label replaces the children's text for VoiceOver, so it must carry the quote too
+    // (X07 mobile-1: the old 'Open source on <host>' label dropped the quote).
+    expect(row[0].props.accessibilityLabel).toBe(
+      `Source, learn.microsoft.com: ${SOURCES['cs-sourced'].quote}`,
+    );
+    expect(row[0].props.accessibilityHint).toBe('Opens the source in your browser');
     expect(textOf(byTestId(tree, 'card-detail-source-host')[0])).toBe('learn.microsoft.com');
     const quote = byTestId(tree, 'card-detail-source-quote');
     expect(quote).toHaveLength(1);
@@ -156,6 +161,19 @@ describe('CardDetailScreen — source row', () => {
     // Hiding the answer hides the row with it.
     await press(tree, 'card-detail-show-answer');
     expect(byTestId(tree, 'card-detail-source')).toHaveLength(0);
+  });
+
+  it('labels a Source row without a quote with the host alone', async () => {
+    ownedFixture = new Set(['cs-sourced']);
+    vi.mocked(getCardSource).mockResolvedValueOnce({ url: SOURCE_URL, quote: null });
+    const tree = await renderScreen('cs-sourced');
+    await press(tree, 'card-detail-show-answer');
+
+    const row = byTestId(tree, 'card-detail-source');
+    expect(row).toHaveLength(1);
+    expect(row[0].props.accessibilityLabel).toBe('Source, learn.microsoft.com');
+    expect(row[0].props.accessibilityHint).toBe('Opens the source in your browser');
+    expect(byTestId(tree, 'card-detail-source-quote')).toHaveLength(0);
   });
 
   it('opens the https source URL when the Source row is tapped', async () => {
