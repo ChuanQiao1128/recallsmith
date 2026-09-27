@@ -113,10 +113,40 @@ describe('the dry-run shadow review is blind (B07 automation-4)', () => {
     expect(within(panel).queryByRole('link', { name: 'Open in Automation' })).toBeNull();
   });
 
-  it('keeps the reason of a human-routed draft visible', async () => {
+  it('blinds a pending human-routed dry-run draft exactly like a would-accept one (C07 frontend-console-14)', async () => {
     const routed: DraftAutomation = { ...WOULD_ACCEPT, state: 'human', reason: 'QA_FLAGGED' };
     api.listDrafts.mockResolvedValue(
-      ok({ items: [draftSummary({ automation: { state: 'human', reason: 'QA_FLAGGED', mode: 'dry_run' } })], nextCursor: null }),
+      ok({
+        items: [
+          draftSummary({ draftId: 41, automation: { state: 'would_accept', reason: null, mode: 'dry_run' } }),
+          draftSummary({ draftId: 42, automation: { state: 'human', reason: 'QA_FLAGGED', mode: 'dry_run' } }),
+        ],
+        nextCursor: null,
+      }),
+    );
+    api.fetchDraft.mockResolvedValue(ok(draft(qaDraftCard(), { automation: routed })));
+    await openReview();
+
+    const drafts = screen.getByRole('region', { name: 'Drafts' });
+    const badges = within(drafts).getAllByText(/^Automation:/);
+    expect(badges).toHaveLength(2);
+    expect(badges.map(b => b.textContent)).toEqual([BLINDED_AUTOMATION_TEXT, BLINDED_AUTOMATION_TEXT]);
+    expect(badges[0].className).toBe(badges[1].className);
+    expect(drafts.textContent).not.toMatch(/Needs you|AI QA found|Would be accepted/);
+
+    const panel = await screen.findByTestId('review-automation');
+    expect(within(panel).getByText(BLINDED_AUTOMATION_TEXT)).toBeTruthy();
+    expect(panel.textContent).not.toMatch(/Needs you|AI QA found|Findings:|Reviewer:|Wordy stem/);
+    expect(within(panel).queryByRole('link', { name: 'Open in Automation' })).toBeNull();
+  });
+
+  // C07 frontend-console-14 replaced "keeps the reason of a human-routed draft
+  // visible" for dry run: a visible reason on routed drafts made the blinded
+  // badge mean would_accept. A live routed draft keeps its reason.
+  it('keeps the reason of a live human-routed draft visible', async () => {
+    const routed: DraftAutomation = { ...WOULD_ACCEPT, state: 'human', reason: 'QA_FLAGGED', mode: 'live' };
+    api.listDrafts.mockResolvedValue(
+      ok({ items: [draftSummary({ automation: { state: 'human', reason: 'QA_FLAGGED', mode: 'live' } })], nextCursor: null }),
     );
     api.fetchDraft.mockResolvedValue(ok(draft(qaDraftCard(), { automation: routed })));
     await openReview();
@@ -132,9 +162,11 @@ describe('the dry-run shadow review is blind (B07 automation-4)', () => {
     expect(automationBlinded(WOULD_ACCEPT, 'accepted')).toBe(false);
     expect(automationBlinded(WOULD_ACCEPT, 'rejected')).toBe(false);
     expect(automationBlinded({ ...WOULD_ACCEPT, humanAction: 'accepted' }, 'pending')).toBe(false);
-    // Live has no would_accept, and a person-routed draft needs its reason.
+    // Live never blinds; in dry run every pending undecided draft is blind, whatever its state (C07).
     expect(automationBlinded({ ...WOULD_ACCEPT, mode: 'live' }, 'pending')).toBe(false);
-    expect(automationBlinded({ ...WOULD_ACCEPT, state: 'human' }, 'pending')).toBe(false);
-    expect(automationBlinded({ ...WOULD_ACCEPT, state: 'qa_queued' }, 'pending')).toBe(false);
+    expect(automationBlinded({ ...WOULD_ACCEPT, state: 'human', mode: 'live' }, 'pending')).toBe(false);
+    expect(automationBlinded({ ...WOULD_ACCEPT, state: 'human' }, 'pending')).toBe(true);
+    expect(automationBlinded({ ...WOULD_ACCEPT, state: 'qa_queued' }, 'pending')).toBe(true);
+    expect(automationBlinded({ ...WOULD_ACCEPT, state: 'human', humanAction: 'rejected' }, 'pending')).toBe(false);
   });
 });

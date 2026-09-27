@@ -21,6 +21,7 @@ import { CARD_CLASS, H2_CLASS, INPUT_CLASS, LABEL_CLASS, TD_CLASS, TH_CLASS } fr
 import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 import {
+  QUEUE_ITEM_KIND_LABELS,
   RUN_OUTCOME_LABELS,
   RUN_STATUSES,
   RUN_STATUS_LABELS,
@@ -65,7 +66,8 @@ export function RunsTab({
     items: [],
     nextCursor: null,
   });
-  const [loadingMore, setLoadingMore] = useState(false);
+  // The list key a Load more is running for; another key's Load more is not busy.
+  const [loadingMoreKey, setLoadingMoreKey] = useState<string | null>(null);
   const [moreError, setMoreError] = useState<{ forKey: string; text: string } | null>(null);
   const decisionsHeadingRef = useRef<HTMLHeadingElement>(null);
 
@@ -128,10 +130,10 @@ export function RunsTab({
     // The cursor belongs to the list on screen; while a new filter loads it is foreign.
     if (!runs.nextCursor || loading) return;
     const startKey = runsKey;
-    setLoadingMore(true);
+    setLoadingMoreKey(startKey);
     setMoreError(null);
     const res = await listAutomationRuns({ status: status || undefined, limit: PAGE_SIZE, cursor: runs.nextCursor });
-    setLoadingMore(false);
+    setLoadingMoreKey(k => (k === startKey ? null : k));
     if (!res.success || !res.data) {
       setMoreError({ forKey: startKey, text: errorText(res.error, 'Failed to load more runs.') });
       return;
@@ -208,7 +210,7 @@ export function RunsTab({
                     aria-current={r.runId === runId ? 'true' : undefined}
                   >
                     <td className={`${TD_CLASS} font-mono`}>{shortId(r.runId)}</td>
-                    <td className={TD_CLASS}>{r.kind}</td>
+                    <td className={TD_CLASS}>{codeLabel(QUEUE_ITEM_KIND_LABELS, r.kind)}</td>
                     <td className={TD_CLASS}>
                       <a href={r.url} target="_blank" rel="noreferrer" className="text-indigo-700 underline">
                         {urlLabel(r.url)}
@@ -276,7 +278,7 @@ export function RunsTab({
         ) : null}
         {runs.nextCursor && !loading ? (
           <div className="mt-2">
-            <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
+            <Button variant="outline" size="xs" loading={loadingMoreKey === runsKey} onClick={() => void onLoadMore()}>
               Load more
             </Button>
           </div>

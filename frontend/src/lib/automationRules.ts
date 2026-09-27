@@ -297,6 +297,31 @@ export const RUNNER_STATE_LABELS: Record<string, string> = {
   error: 'Error',
   login_expired: 'Login expired',
 };
+/** automation_watch_targets.kind (A00 §7): a feed the owner added, or a page cited by cards. */
+export const WATCH_KIND_LABELS: Record<string, string> = { feed: 'Feed', page: 'Cited page' };
+export const FEED_FORMAT_LABELS: Record<string, string> = {
+  rss: 'RSS',
+  atom: 'Atom',
+  'html-headings': 'HTML headings',
+};
+/** The metrics EvalGate.cs stores with a gate (A00 §15.4); an unknown key still shows raw. */
+export const EVAL_METRIC_LABELS: Record<string, string> = {
+  seededRecall: 'Seeded recall',
+  seededRecallCiLower: 'Seeded recall, 95% CI lower bound',
+  autoAcceptPrecision: 'Auto-accept precision',
+  autoAcceptPrecisionCiLower: 'Auto-accept precision, 95% CI lower bound',
+  wouldAcceptCards: 'Would-accept cards',
+  defectEscapeRate: 'Defect escape rate',
+  controlFalsePositiveRate: 'Control false-positive rate',
+  seededReps: 'Seeded repetitions',
+  authoredReps: 'Authored repetitions',
+};
+export const FINDING_SEVERITY_LABELS: Record<string, string> = { blocker: 'Blocker', major: 'Major', minor: 'Minor' };
+
+/** A QA finding's severity badge, the same tones the review queue uses. */
+export function findingSeverityTone(severity: string): BadgeTone {
+  return severity === 'minor' ? 'warning' : 'danger';
+}
 
 /** The label of an enumeration code from one of the maps above; the raw code when unknown. */
 export function codeLabel(map: Record<string, string>, code: string | null | undefined): string {
@@ -401,7 +426,8 @@ export function decisionFiltersFrom(params: URLSearchParams): DecisionFilters {
     deckId: parsePositiveId(params.get('deckId')),
     state: (DECISION_STATES as readonly string[]).includes(state) ? state : '',
     reason: (DECISION_REASONS as readonly string[]).includes(reason) ? reason : '',
-    openOnly: params.get('open') === '1',
+    // The console writes open=1; open=true (the API's spelling, L4) reads the same.
+    openOnly: params.get('open') === '1' || params.get('open') === 'true',
   };
 }
 
@@ -416,13 +442,89 @@ export function withDecisionFilters(params: URLSearchParams, filters: DecisionFi
   return next;
 }
 
-/** "Open only" keeps the decisions nobody has acted on yet (client-side over humanAction). */
+/**
+ * "Open only" keeps the decisions nobody has acted on yet. The server filters
+ * with `open=true` (L4: state human, no human action, draft still pending); this
+ * check stays as the guard for an older server that ignores the parameter.
+ */
 export function isOpenDecision(d: { humanAction: string | null }): boolean {
   return d.humanAction === null;
 }
 
+/** The note under the list when an older server sent decisions a person already handled. */
+export function hiddenDecidedText(count: number): string {
+  return `${count} decided by a person ${count === 1 ? 'is' : 'are'} hidden on the loaded pages.`;
+}
+
 /** The Decisions tab showing the open exceptions: routed to a person and not yet decided (K7). */
 export const OPEN_EXCEPTIONS_SEARCH = '?tab=decisions&state=human&open=1';
+
+/** The Email log filtered to the rows still queued, where an unconfirmed email is (K6, L5). */
+export const QUEUED_EMAIL_SEARCH = '?tab=email&status=queued';
+
+/** The accessible name of the backlog's link: a bare digit means nothing in a links list. */
+export function backlogLinkLabel(count: number): string {
+  return `${count} ${count === 1 ? 'draft' : 'drafts'} waiting for you: show open exceptions`;
+}
+
+/**
+ * The eval gate as K2 and L3 define it: only the newest evaluation counts, and
+ * revoking it stops live at once. `current` is the newest row when it passed
+ * and is not revoked; otherwise live runs as a dry run, whatever an older row says.
+ */
+export type EvalGateSummary =
+  | { kind: 'none' }
+  | { kind: 'effective'; gateId: number }
+  | { kind: 'revoked'; gateId: number }
+  | { kind: 'failed'; gateId: number };
+
+export function evalGateSummary(state: {
+  current: { gateId: number } | null;
+  history: Array<{ gateId: number; passed: boolean; revokedAt: string | null }>;
+}): EvalGateSummary {
+  const newest = newestGate(state.history);
+  if (state.current && (!newest || state.current.gateId >= newest.gateId)) {
+    return { kind: 'effective', gateId: state.current.gateId };
+  }
+  if (!newest) return { kind: 'none' };
+  if (newest.revokedAt !== null) return { kind: 'revoked', gateId: newest.gateId };
+  if (!newest.passed) return { kind: 'failed', gateId: newest.gateId };
+  // The server sent no current gate although its newest row passed: trust the server.
+  return { kind: 'revoked', gateId: newest.gateId };
+}
+
+function newestGate<G extends { gateId: number }>(history: G[]): G | null {
+  let newest: G | null = null;
+  for (const g of history) if (!newest || g.gateId > newest.gateId) newest = g;
+  return newest;
+}
+
+export function evalGateSummaryText(summary: EvalGateSummary): string {
+  switch (summary.kind) {
+    case 'none':
+      return 'No eval gate is recorded, so live mode runs as a dry run.';
+    case 'effective':
+      return `Gate #${summary.gateId} is the newest evaluation and it passed, so live mode may run.`;
+    case 'revoked':
+      return `The newest eval gate (#${summary.gateId}) is revoked. Only the newest evaluation counts, so live mode runs as a dry run. Record a new report to go live.`;
+    case 'failed':
+      return `The newest evaluation (#${summary.gateId}) failed, and it blocks live mode: only the newest evaluation counts, so live mode runs as a dry run. Record a new passing report to go live.`;
+  }
+}
+
+/** One history row's standing under K2: effective, blocking, revoked, or superseded by a newer row. */
+export function evalGateRowStatus(
+  gate: { gateId: number; passed: boolean; revokedAt: string | null },
+  history: Array<{ gateId: number }>,
+  currentId: number | null,
+): { label: string; tone: BadgeTone } {
+  const newest = newestGate(history);
+  if (currentId !== null && gate.gateId === currentId) return { label: 'Effective', tone: 'success' };
+  if (newest && gate.gateId < newest.gateId) return { label: 'Superseded', tone: 'neutral' };
+  if (gate.revokedAt !== null) return { label: `Revoked ${formatTimestamp(gate.revokedAt)}`, tone: 'neutral' };
+  if (!gate.passed) return { label: 'Failed: blocks live', tone: 'danger' };
+  return { label: 'Not effective', tone: 'neutral' };
+}
 
 /** The server default of AUTOMATION_LOGIN_WARN_DAYS (A00 §3.3). */
 export const LOGIN_WARN_DAYS = 5;
