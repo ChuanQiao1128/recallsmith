@@ -994,27 +994,35 @@ public class AutomationLedgerTests
     }
   }
 
-  private async Task<Guid> SeedDeliveryAsync(string eventType)
+  private async Task<(Guid DeliveryId, string Key)> SeedDeliveryAsync(string eventType)
   {
     var rows = await _db.QueryAsync(
       "insert into webhook_subscriptions (name, url, events, is_active) values ($1, $2, $3, true) returning id",
       "it-j08-report", $"https://hooks.example.com/j08/{Guid.NewGuid():N}", new[] { "deck.published" });
     var subscriptionId = Convert.ToInt64(rows[0]["id"], CultureInfo.InvariantCulture);
+    var eventId = Guid.NewGuid();
+    var deliveryId = await SeedRedeliveryAsync(eventId, subscriptionId, eventType);
+    return (deliveryId, $"webhook:{eventId:D}:{subscriptionId.ToString(CultureInfo.InvariantCulture)}");
+  }
+
+  /// <summary>A delivery row for an existing event and subscription, as RedeliverAsync inserts one.</summary>
+  private async Task<Guid> SeedRedeliveryAsync(Guid eventId, long subscriptionId, string eventType)
+  {
     var deliveryId = Guid.NewGuid();
     await _db.ScalarAsync(
       "insert into webhook_deliveries (delivery_id, event_id, event, subscription_id, status, body) values ($1, $2, $3, $4, 'queued', $5)",
-      deliveryId, Guid.NewGuid(), eventType, subscriptionId, "{\"event\":\"x\"}");
+      deliveryId, eventId, eventType, subscriptionId, "{\"event\":\"x\"}");
     return deliveryId;
   }
 
   [Fact]
   public async Task WebhookDelivered_RecordsNotificationOnce()
   {
-    var deliveryId = await SeedDeliveryAsync("deck.published");
+    var (deliveryId, key) = await SeedDeliveryAsync("deck.published");
 
     var retry = await ReportAsync(deliveryId, 1, "retry");
     Assert.Equal(200, retry.StatusCode);
-    Assert.Empty(await EventsByKeyAsync($"webhook:{deliveryId:D}"));
+    Assert.Empty(await EventsByKeyAsync(key));
 
     var first = await ReportAsync(deliveryId, 2, "delivered");
     Assert.True(first.StatusCode == 200, first.Body);
@@ -1023,15 +1031,37 @@ public class AutomationLedgerTests
     // The response shape is J03's, unchanged.
     Assert.Equal(new[] { "deliveryId", "status", "stop" }, Data(second).EnumerateObject().Select(p => p.Name).ToArray());
 
-    var row = (await EventsByKeyAsync($"webhook:{deliveryId:D}")).Single();
+    var row = (await EventsByKeyAsync(key)).Single();
     Assert.Equal("webhook_notification", (string)row["automation"]!);
     Assert.Equal(1, Convert.ToInt32(row["units"], CultureInfo.InvariantCulture));
     Assert.Equal("success", (string)row["outcome"]!);
     Assert.Equal(deliveryId.ToString("D"), (string)row["ref"]!);
 
-    var testDelivery = await SeedDeliveryAsync("webhook.test");
+    var (testDelivery, testKey) = await SeedDeliveryAsync("webhook.test");
     var test = await ReportAsync(testDelivery, 1, "delivered");
     Assert.Equal(200, test.StatusCode);
-    Assert.Empty(await EventsByKeyAsync($"webhook:{testDelivery:D}"));
+    Assert.Empty(await EventsByKeyAsync(testKey));
+  }
+
+  [Fact]
+  public async Task WebhookRedelivered_CountsOneNotificationPerEventAndSubscription()
+  {
+    // automation-10: a manual redelivery of an already delivered event is a new delivery_id with the same
+    // event_id and subscription. It must not add another saved unit.
+    var (deliveryId, key) = await SeedDeliveryAsync("deck.published");
+    var source = (await _db.QueryAsync("select event_id, subscription_id from webhook_deliveries where delivery_id = $1", deliveryId)).Single();
+    var eventId = (Guid)source["event_id"]!;
+    var subscriptionId = Convert.ToInt64(source["subscription_id"], CultureInfo.InvariantCulture);
+
+    Assert.Equal(200, (await ReportAsync(deliveryId, 1, "delivered")).StatusCode);
+    var redelivery = await SeedRedeliveryAsync(eventId, subscriptionId, "deck.published");
+    Assert.Equal(200, (await ReportAsync(redelivery, 1, "delivered")).StatusCode);
+
+    var rows = await EventsByKeyAsync(key);
+    Assert.Single(rows);
+    var total = await _db.ScalarAsync(
+      "select count(*) from automation_events where automation = 'webhook_notification' and ref in ($1, $2)",
+      deliveryId.ToString("D"), redelivery.ToString("D"));
+    Assert.Equal(1L, Convert.ToInt64(total, CultureInfo.InvariantCulture));
   }
 }

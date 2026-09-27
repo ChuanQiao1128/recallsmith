@@ -246,6 +246,10 @@ public sealed class VpcFunction
       {
         return await Vpc.Integrations.WebhookDeliveries.HandleDeliveries(req, res, auth);
       }
+      if (p.EndsWith("/api/v1/admin/webhooks/deliveries/sweep", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Integrations.WebhookDeliveries.HandleSweep(req, res, auth);
+      }
       if (RouteMatcher.Match("/api/v1/admin/webhooks/deliveries/:deliveryId/redeliver", p) is { } webhookRedeliver)
       {
         return await Vpc.Integrations.WebhookDeliveries.HandleRedeliver(req, res, auth, webhookRedeliver["deliveryId"]);
@@ -386,20 +390,22 @@ public sealed class VpcFunction
         }
       }
 
-      // Internal routes
-      if (p.EndsWith("/api/internal/entitlements/apply", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+      // Internal routes. These are HMAC-signed machine-caller routes (two of them sit behind a gateway
+      // route with no JWT authorizer), so they match their exact path, never a suffix: a suffix match
+      // would let /api/internal/webhooks/<anything>/api/internal/<route> reach any of them.
+      if (RouteMatcher.Match("/api/internal/entitlements/apply", p) is not null && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Internal.EntitlementsApply.HandleInternalEntitlementsApply(req, res);
       }
-      if (p.EndsWith("/api/internal/subscriptions/upsert", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+      if (RouteMatcher.Match("/api/internal/subscriptions/upsert", p) is not null && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Internal.SubscriptionsUpsert.HandleInternalSubscriptionsUpsert(req, res);
       }
-      if (p.EndsWith("/api/internal/webhooks/deliveries/report", StringComparison.OrdinalIgnoreCase))
+      if (RouteMatcher.Match("/api/internal/webhooks/deliveries/report", p) is not null)
       {
         return await Vpc.Internal.WebhookDeliveryReport.HandleReport(req, res);
       }
-      if (p.EndsWith("/api/internal/ai-qa/results", StringComparison.OrdinalIgnoreCase))
+      if (RouteMatcher.Match("/api/internal/ai-qa/results", p) is not null)
       {
         return await Vpc.Internal.AiQaResults.HandleAiQaResults(req, res);
       }

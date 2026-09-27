@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
 using Npgsql;
@@ -81,6 +83,7 @@ public static class AiQaResults
       int cardsDone;
       int cardCount;
       int becameDone = 0, errored = 0, kept = 0, ignored = 0, statusChanged = 0;
+      var transitions = new List<(long CardId, string Status)>();
       var flagged = new List<(long CardId, string StableUid, List<ReportFinding> Findings)>();
 
       await using (var tx = await conn.BeginTransactionAsync())
@@ -165,7 +168,11 @@ public static class AiQaResults
             }
           }
 
-          if (previous != item.Status) statusChanged++;
+          if (previous != item.Status)
+          {
+            statusChanged++;
+            transitions.Add((item.CardId, item.Status));
+          }
           if (item.Status is "error" or "refused") errored++;
           if (previous != "done" && item.Status == "done")
           {
@@ -222,7 +229,7 @@ public static class AiQaResults
         await tx.CommitAsync();
       }
 
-      await AfterCommitAsync(conn, report, deckId, flagged, becameDone, errored, kept, ignored, statusChanged);
+      await AfterCommitAsync(conn, report, deckId, flagged, becameDone, errored, kept, ignored, transitions);
 
       Log.Event("info", new { tag = "ai_qa", outcome = "reported", runId = report.RunId, chunk = report.Chunk, runStatus, cardsDone, cardCount, becameDone, kept, ignored });
       return res.Ok(new { runId = report.RunId, runStatus, cardsDone, cardCount });
@@ -241,7 +248,7 @@ public static class AiQaResults
   /// <summary>Best-effort side effects of a committed report (contract §0.8); never throws.</summary>
   private static async Task AfterCommitAsync(NpgsqlConnection conn, Report report, long deckId,
     List<(long CardId, string StableUid, List<ReportFinding> Findings)> flagged,
-    int becameDone, int errored, int kept, int ignored, int statusChanged)
+    int becameDone, int errored, int kept, int ignored, List<(long CardId, string Status)> transitions)
   {
     try
     {
@@ -280,12 +287,16 @@ public static class AiQaResults
       Log.Event("warn", new { tag = "ai_qa", reason = "card_flagged_failed", runId = report.RunId, error = ex.Message });
     }
 
-    if (statusChanged > 0)
+    if (transitions.Count > 0)
     {
+      // Keyed by the transitions this report applied, not by the chunk alone: a chunk retried after a
+      // retryable provider error reports its remaining cards as newly done and must get its own row, while
+      // an exact replay changes nothing and so records nothing. A card becomes done at most once per run
+      // (done is never downgraded), so no unit can be counted twice.
       var outcome = errored > 0 ? (becameDone > 0 ? "partial" : "failure") : "success";
       await AutomationLedger.RecordAsync(conn, new AutomationEvent(
         Automation: "ai_qa_review", Units: becameDone, Outcome: outcome, DeckId: deckId, Ref: report.RunId.ToString(),
-        DedupeKey: $"qa:{report.RunId}:{report.Chunk.ToString(CultureInfo.InvariantCulture)}",
+        DedupeKey: LedgerDedupeKey(report.RunId, report.Chunk, transitions),
         Details: new { chunk = report.Chunk, reported = report.Items.Count, becameDone, errored, kept, ignored }));
     }
 
@@ -293,6 +304,20 @@ public static class AiQaResults
     {
       Log.Event("warn", new { tag = "ai_qa", reason = "unknown_card", runId = report.RunId, chunk = report.Chunk, ignored });
     }
+  }
+
+  /// <summary>
+  /// <c>qa:&lt;runId&gt;:&lt;chunk&gt;:&lt;hash&gt;</c>, the hash being the first 16 hex digits of SHA-256 over the
+  /// sorted <c>cardId:newStatus</c> pairs the report changed.
+  /// </summary>
+  internal static string LedgerDedupeKey(Guid runId, int chunk, IEnumerable<(long CardId, string Status)> transitions)
+  {
+    var canonical = string.Join(",", transitions
+      .OrderBy(t => t.CardId)
+      .ThenBy(t => t.Status, StringComparer.Ordinal)
+      .Select(t => $"{t.CardId.ToString(CultureInfo.InvariantCulture)}:{t.Status}"));
+    var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..16].ToLowerInvariant();
+    return $"qa:{runId}:{chunk.ToString(CultureInfo.InvariantCulture)}:{hash}";
   }
 
   private static int SeverityRank(string severity) => severity switch { "blocker" => 0, "major" => 1, _ => 2 };

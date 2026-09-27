@@ -11,8 +11,8 @@ namespace RecallSmith.Lambda.Vpc.Integrations;
 
 /// <summary>
 /// super_admin delivery log and redelivery for outbound webhooks (R18 J03, contract §6.6):
-/// GET /api/v1/admin/webhooks/deliveries and POST …/deliveries/:deliveryId/redeliver. The delivered
-/// body is never returned.
+/// GET /api/v1/admin/webhooks/deliveries, POST …/deliveries/:deliveryId/redeliver and POST …/deliveries/sweep.
+/// The delivered body is never returned.
 /// </summary>
 public static class WebhookDeliveries
 {
@@ -159,6 +159,80 @@ public static class WebhookDeliveries
       if (newId is null) return res.Error500(null);
 
       return res.Ok(new { deliveryId = newId.Value, eventId = (Guid)rows[0]["eventId"]! });
+    }
+    catch (Exception ex)
+    {
+      return WebhookSubscriptions.MapError(ex, res);
+    }
+  }
+
+  // ------------------------------------------------------------------ POST /deliveries/sweep
+
+  /// <summary>
+  /// POST /api/v1/admin/webhooks/deliveries/sweep (super_admin, automation-1): re-sends deliveries that
+  /// never reached the dispatcher (enqueue_failed, or queued with no attempt) and have been untouched for
+  /// <see cref="WebhookEvents.SweepStuckAfter"/>, up to <c>limit</c> (default and max
+  /// <see cref="WebhookEvents.SweepMaxBatch"/>) per call. Each keeps its delivery_id and event_id, so a
+  /// receiver sees the same eventId. Idempotent: a swept row is fresh again and is not picked up by the
+  /// next sweep until it has been stranded for the full interval. The claim and its audit row commit
+  /// together; the sends run after commit.
+  /// </summary>
+  public static async Task<APIGatewayProxyResponse> HandleSweep(LambdaRequest req, Res res, AuthContext auth)
+  {
+    var deny = Auth.RequireSuperAdmin(auth, res);
+    if (deny is not null) return deny;
+
+    if (!req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)) return res.MethodNotAllowed("Method not allowed");
+
+    var limit = WebhookEvents.SweepMaxBatch;
+    if (!string.IsNullOrWhiteSpace(req.RawBody))
+    {
+      using var doc = Validation.ParseJsonBody(req);
+      if (doc is null) return res.BadRequest("BAD_REQUEST", "Invalid JSON body");
+      var body = doc.RootElement;
+      if (body.ValueKind != JsonValueKind.Object) return res.BadRequest("VALIDATION_ERROR", "Body must be a JSON object");
+      if (body.TryGetProperty("limit", out var limitEl))
+      {
+        if (limitEl.ValueKind != JsonValueKind.Number || !limitEl.TryGetInt32(out limit) || limit < 1 || limit > WebhookEvents.SweepMaxBatch)
+        {
+          return res.BadRequest("VALIDATION_ERROR", $"limit must be an integer in 1..{WebhookEvents.SweepMaxBatch}");
+        }
+      }
+    }
+
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+
+    if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(WebhookEvents.QueueUrlEnv)))
+    {
+      return Helpers.ErrorEnvelope(res, 503, "WEBHOOKS_NOT_CONFIGURED", "The webhook events queue is not configured");
+    }
+
+    try
+    {
+      List<SweptDelivery> claimed;
+      AdminAuditEntry entry;
+      bool persisted;
+
+      await using (var tx = await conn.BeginTransactionAsync())
+      {
+        claimed = await WebhookEvents.ClaimStrandedAsync(conn, tx, limit);
+        entry = AdminAudit.Entry(auth, res, "webhook.deliveries.sweep", "webhook_deliveries", null,
+          new { limit, swept = claimed.Count, deliveryIds = claimed.Select(d => d.DeliveryId).ToArray() });
+        persisted = await AdminAudit.RecordAsync(conn, tx, entry);
+        await tx.CommitAsync();
+      }
+
+      AdminAudit.Emit(entry, persisted);
+
+      var failures = claimed.Count == 0 ? 0 : await WebhookEvents.ResendClaimedAsync(conn, claimed);
+      return res.Ok(new
+      {
+        swept = claimed.Count,
+        resent = claimed.Count - failures,
+        enqueueFailures = failures,
+        deliveryIds = claimed.Select(d => d.DeliveryId).ToArray(),
+      });
     }
     catch (Exception ex)
     {

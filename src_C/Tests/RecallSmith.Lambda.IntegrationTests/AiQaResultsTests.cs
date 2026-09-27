@@ -381,7 +381,7 @@ public class AiQaResultsTests
     Assert.Equal(0L, Convert.ToInt64(await _db.ScalarAsync("select count(*) from ai_qa_findings where run_id = $1", seeded.RunId), CultureInfo.InvariantCulture));
     Assert.Equal(2L, Convert.ToInt64(await _db.ScalarAsync("select count(*) from ai_qa_items where run_id = $1", seeded.RunId), CultureInfo.InvariantCulture));
 
-    var ledger = await _db.QueryAsync("select details from automation_events where dedupe_key = $1", $"qa:{seeded.RunId}:0");
+    var ledger = await _db.QueryAsync("select details from automation_events where dedupe_key like $1", $"qa:{seeded.RunId}:0:%");
     using var details = JsonDocument.Parse((string)Assert.Single(ledger)["details"]!);
     Assert.Equal(1, details.RootElement.GetProperty("ignored").GetInt32());
     Assert.Equal(1, details.RootElement.GetProperty("becameDone").GetInt32());
@@ -456,7 +456,7 @@ public class AiQaResultsTests
 
     Data(await ReportAsync(body));
     var rows = await _db.QueryAsync(
-      "select automation, units, outcome, deck_id, ref from automation_events where dedupe_key = $1", $"qa:{seeded.RunId}:0");
+      "select automation, units, outcome, deck_id, ref from automation_events where dedupe_key like $1", $"qa:{seeded.RunId}:0:%");
     var row = Assert.Single(rows);
     Assert.Equal("ai_qa_review", row["automation"]);
     Assert.Equal(2, Int(row["units"]));
@@ -466,7 +466,35 @@ public class AiQaResultsTests
 
     Data(await ReportAsync(body));
     Assert.Equal(1L, Convert.ToInt64(await _db.ScalarAsync(
-      "select count(*) from automation_events where dedupe_key = $1", $"qa:{seeded.RunId}:0"), CultureInfo.InvariantCulture));
+      "select count(*) from automation_events where dedupe_key like $1", $"qa:{seeded.RunId}:0:%"), CultureInfo.InvariantCulture));
+  }
+
+  [Fact]
+  public async Task Results_RetriedChunk_RecordsNewlyDoneUnits()
+  {
+    // backend-design-1: on a retryable provider error the Lambda reports the finished cards and fails the
+    // message; the SQS retry then reports the rest as newly done. Both reports must reach the ledger.
+    var partial = await SeedAsync("ledger-retry", 3);
+    Data(await ReportAsync(Body(partial.RunId, 0,
+      Item(partial.Cards[0], "done"), Item(partial.Cards[1], "done"), Item(partial.Cards[2], "error", errorCode: "PROVIDER_RATE_LIMITED"))));
+    var retry = Body(partial.RunId, 0, Item(partial.Cards[0], "done"), Item(partial.Cards[1], "done"), Item(partial.Cards[2], "done"));
+    Data(await ReportAsync(retry));
+    // An exact replay of the retry changes nothing and records nothing.
+    Data(await ReportAsync(retry));
+
+    var rows = await _db.QueryAsync(
+      "select units, outcome from automation_events where automation = 'ai_qa_review' and dedupe_key like $1 order by id", $"qa:{partial.RunId}:0:%");
+    Assert.Equal(2, rows.Count);
+    Assert.Equal(3, rows.Sum(r => Int(r["units"])));
+    Assert.Equal(new[] { "partial", "success" }, rows.Select(r => (string)r["outcome"]!));
+
+    // The same with the unfinished card left queued (reported only on the retry).
+    var queued = await SeedAsync("ledger-retry-queued", 3);
+    Data(await ReportAsync(Body(queued.RunId, 0, Item(queued.Cards[0], "done"), Item(queued.Cards[1], "done"))));
+    Data(await ReportAsync(Body(queued.RunId, 0, Item(queued.Cards[0], "done"), Item(queued.Cards[1], "done"), Item(queued.Cards[2], "done"))));
+    var total = await _db.ScalarAsync(
+      "select sum(units) from automation_events where automation = 'ai_qa_review' and dedupe_key like $1", $"qa:{queued.RunId}:0:%");
+    Assert.Equal(3L, Convert.ToInt64(total, CultureInfo.InvariantCulture));
   }
 
   [Fact]
