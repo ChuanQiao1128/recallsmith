@@ -72,6 +72,7 @@ import type { RemoteConfig } from '../../src/config/remoteConfig';
 const asRemoteConfig = (value: unknown) => value as RemoteConfig;
 import type { CardExport, DeckExport } from '../../src/types/deckExport';
 import { a11y } from '../../src/theme/a11y';
+import { colors } from '../../src/theme/colors';
 
 // WCAG 2.x contrast ratio of two #RRGGBB colours.
 function contrast(fg: string, bg: string): number {
@@ -474,5 +475,43 @@ describe('MistakeBookScreen', () => {
     // It stays listed: the book is unresolved, only today's run is done.
     expect(byTestID(tree, 'mistake-row-linq-1')).toHaveLength(1);
     expect(byTestID(tree, 'mistake-review-csharp')[0].props.disabled).toBe(false);
+  });
+
+  // Z07 mobile-20: the done state and each card's progress show on load, not after a tap.
+  it('shows done for today on load with a secondary button, and a row one correct answer from clearing', async () => {
+    seedBook([
+      { ...entry('aws', 's3-1', 's3', NOW - 3 * DAY_MS), correctStreak: 1, lastCorrectAt: NOW - DAY_MS },
+      entry('aws', 'ec2-1', null, NOW - 1000),
+      { ...entry('csharp', 'linq-1', 'linq', NOW - DAY_MS), correctStreak: 1, lastCorrectAt: NOW - 1000 },
+    ]);
+    const { tree, navigation } = await mount();
+    const style = (node: renderer.ReactTestInstance) => Object.assign({}, ...[node.props.style].flat(Infinity).filter(Boolean));
+
+    // No tap: csharp's only mistake got today's correct answer, aws still has open ones.
+    const done = byTestID(tree, 'mistake-done-today-csharp');
+    expect(done).toHaveLength(1);
+    expect(texts(done[0])).toEqual([DONE_FOR_TODAY_TEXT]);
+    expect(byTestID(tree, 'mistake-done-today-aws')).toHaveLength(0);
+    expect(navigation.navigate).not.toHaveBeenCalled();
+
+    // The done deck's button steps back from primary; the open deck's stays primary.
+    const primary = byTestID(tree, 'mistake-review-aws')[0];
+    const secondary = byTestID(tree, 'mistake-review-csharp')[0];
+    expect(style(primary).backgroundColor).toBe(colors.pokeBlue);
+    expect(style(secondary).backgroundColor).not.toBe(colors.pokeBlue);
+    const secondaryText = secondary.findAll((n) => (n.type as any) === 'Text')[0];
+    expect(contrast(style(secondaryText).color, style(secondary).backgroundColor)).toBeGreaterThanOrEqual(4.5);
+
+    // Rows one correct answer away from clearing say so, visually and to VoiceOver.
+    expect(texts(byTestID(tree, 'mistake-row-linq-1')[0])).toContain('1 of 2 correct · next tomorrow');
+    expect(texts(byTestID(tree, 'mistake-row-s3-1')[0])).toContain('1 of 2 correct · 1 more clears it');
+    expect(texts(byTestID(tree, 'mistake-row-ec2-1')[0]).some((t) => t.startsWith('1 of 2'))).toBe(false);
+    expect(byTestID(tree, 'mistake-row-linq-1')[0].props.accessibilityLabel).toBe(
+      'Question linq-1. linq. Wrong once, last wrong yesterday. 1 of 2 correct answers, the next one counts tomorrow',
+    );
+    expect(byTestID(tree, 'mistake-row-s3-1')[0].props.accessibilityLabel).toBe(
+      'Question s3-1. s3. Wrong once, last wrong 3 days ago. 1 of 2 correct answers, one more clears it',
+    );
+    expect(mistakeRowLabel('Q', entry('aws', 'ec2-1', null, NOW - 1000), NOW)).toBe('Q. Wrong once, last wrong today');
   });
 });

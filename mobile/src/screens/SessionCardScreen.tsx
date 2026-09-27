@@ -43,7 +43,9 @@ import { settleRatingReward } from '../features/gacha/rewards/sessionRewards';
 import { recordMistakeOutcome } from '../features/gacha/mistakes/mistakeBook';
 import {
   buildFocusIndex,
+  isFocusPractice,
   pickFocusCard,
+  scheduleFocusReview,
   sanitizeFocusUids,
   type FocusIndex,
 } from '../features/gacha/mistakes/focusSession';
@@ -647,7 +649,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
           sessionId,
           cardRevision: typeof current.card.Revision === 'number' ? current.card.Revision : 1,
           statedDifficulty: typeof current.card.Difficulty === 'number' ? current.card.Difficulty : null,
-          reviewStage: isLearned(current.progress) ? 'repeat_review' : 'first_review',
+          // A focus-run rating that left the schedule alone is practice, not a review (mobile-18).
+          reviewStage:
+            focusIndex && isFocusPractice(current.progress, rating, nowAtRating)
+              ? 'focus_practice'
+              : isLearned(current.progress)
+                ? 'repeat_review'
+                : 'first_review',
           dwellTimeMs: Math.max(0, nowMs - cardShownAtRef.current),
           progressAfter: nextState.updatedOne,
           lastSeenRevision: nextState.updatedOne.lastSeenRevision,
@@ -804,7 +812,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
       hardStreak: current.progress.hardStreak ?? 0,
       redeal: mcqState.attemptIndex >= 1,   // same-run redeal after a lapse never reaches easy (plan §5.4)
     });
-    const scheduleLine = describeScheduledRating(current.progress, mappedRating, new Date()).line;
+    // Preview with the scheduler that saves the rating: a focus run leaves a not-due card alone (mobile-16).
+    const scheduleLine = describeScheduledRating(
+      current.progress,
+      mappedRating,
+      new Date(),
+      focusIndexRef.current ? scheduleFocusReview : undefined,
+    ).line;
     setMcqState((prev) => ({ ...prev, stage: 'verdict', picks, confidence, changedPick, verdict, mappedRating, scheduleLine }));
     setShowAnswer(true);
     submittedAtRef.current = Date.now();

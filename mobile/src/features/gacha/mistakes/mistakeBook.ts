@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { ReviewRating } from '../../../review/model';
 import { getUserScopedKey } from '../../../review/storage';
+import { ANON_USER_SCOPE_PREFIX } from '../draw/drawStateStore';
 import type { CardExport, DeckExport } from '../../../types/deckExport';
 import type { McqVerdict } from '../mcq/mcqVerdict';
 
@@ -15,7 +16,7 @@ export const MISTAKE_WINDOW_DAYS = 30;
 
 const DAY_MS = 86_400_000;
 /** Consecutive good/easy ratings, each on a different local calendar day, that resolve an entry. */
-const RESOLVE_STREAK = 2;
+export const RESOLVE_STREAK = 2;
 
 export type MistakeOutcome = {
   deckSlug: string;
@@ -87,6 +88,14 @@ function compareForEviction(a: [string, MistakeEntry], b: [string, MistakeEntry]
   return a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0;
 }
 
+// Past the cap, the entries with the oldest lastWrongAt go.
+function capEntries(entries: Record<string, MistakeEntry>): Record<string, MistakeEntry> {
+  const all = Object.entries(entries);
+  if (all.length <= MISTAKE_BOOK_MAX_ENTRIES) return entries;
+  all.sort(compareForEviction);
+  return Object.fromEntries(all.slice(all.length - MISTAKE_BOOK_MAX_ENTRIES));
+}
+
 /**
  * Pure reducer: folds one rating into the book. Returns the same object when nothing changes,
  * and never mutates its input.
@@ -109,15 +118,8 @@ export function applyOutcome(s: MistakeBookState, o: MistakeOutcome): MistakeBoo
       correctStreak: 0,
       resolvedAt: null,
     };
-    let entries: Record<string, MistakeEntry> = { ...s.entries, [key]: next };
-    if (!prev) {
-      const all = Object.entries(entries);
-      if (all.length > MISTAKE_BOOK_MAX_ENTRIES) {
-        all.sort(compareForEviction);
-        entries = Object.fromEntries(all.slice(all.length - MISTAKE_BOOK_MAX_ENTRIES));
-      }
-    }
-    return { v: 1, entries };
+    const entries: Record<string, MistakeEntry> = { ...s.entries, [key]: next };
+    return { v: 1, entries: prev ? entries : capEntries(entries) };
   }
 
   if (!prev || prev.resolvedAt !== null) return s;
@@ -134,6 +136,20 @@ export function applyOutcome(s: MistakeBookState, o: MistakeOutcome): MistakeBoo
     lastCorrectAt: o.at,
   };
   return { v: 1, entries: { ...s.entries, [key]: next } };
+}
+
+/**
+ * Pure merge of the signed-out book into the account's book. Where both hold a card, the entry
+ * with the newer lastWrongAt wins (the account's on a tie), then the LRU cap applies. Never
+ * mutates its inputs.
+ */
+export function mergeMistakeBooks(user: MistakeBookState, anon: MistakeBookState): MistakeBookState {
+  const entries: Record<string, MistakeEntry> = { ...user.entries };
+  for (const [key, entry] of Object.entries(anon.entries)) {
+    const mine = getEntry(user, key);
+    if (!mine || entry.lastWrongAt > mine.lastWrongAt) entries[key] = entry;
+  }
+  return { v: 1, entries: capEntries(entries) };
 }
 
 /** Unresolved entries inside the window, newest lastWrongAt first (ties by key ascending). */
@@ -251,9 +267,52 @@ async function recordNow(o: MistakeOutcome): Promise<void> {
 // never read the same snapshot and drop each other's update.
 let recordChain: Promise<void> = Promise.resolve();
 
+/** Runs fn after every earlier book write has settled, and before any later one starts. */
+export function withMistakeBookLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = recordChain.then(fn);
+  recordChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 /** Folds one rating into the stored book. Serialised, and never throws or rejects. */
 export async function recordMistakeOutcome(o: MistakeOutcome): Promise<void> {
-  const run = recordChain.then(() => recordNow(o)).catch(() => undefined);
-  recordChain = run;
-  await run;
+  await withMistakeBookLock(() => recordNow(o)).catch(() => undefined);
+}
+
+export type AnonMistakeBookAdoption = { mistakesAdopted: number };
+
+async function adoptNow(): Promise<AnonMistakeBookAdoption> {
+  const result: AnonMistakeBookAdoption = { mistakesAdopted: 0 };
+  try {
+    const userKey = await getUserScopedKey(MISTAKE_BOOK_KEY);
+    // Signed out: the current partition IS the anon partition, nothing to adopt into.
+    if (userKey.startsWith(ANON_USER_SCOPE_PREFIX)) return result;
+    const anonKey = `${ANON_USER_SCOPE_PREFIX}${MISTAKE_BOOK_KEY}`;
+    const anonRaw = await AsyncStorage.getItem(anonKey);
+    if (anonRaw == null) return result;
+    const anon = parseBook(anonRaw);
+    // A read error throws out of here on purpose, before the anon key goes: merging into a book
+    // rebuilt from an empty read would wipe the account's entries.
+    const user = parseBook(await AsyncStorage.getItem(userKey));
+    const adopted = Object.keys(anon.entries).length;
+    // Copy, then clear: a kill between the two writes replays the merge next time, which is idempotent.
+    if (adopted > 0) await AsyncStorage.setItem(userKey, JSON.stringify(mergeMistakeBooks(user, anon)));
+    await AsyncStorage.removeItem(anonKey);
+    result.mistakesAdopted = adopted;
+  } catch {
+    // Best-effort like every book write; the anon book stays for the next sign-in.
+  }
+  return result;
+}
+
+/**
+ * Adopts the book kept while signed out into the account that just signed in, then removes the
+ * anon key, so it neither vanishes at sign-in nor comes back after a later sign-out. Runs on the
+ * same chain as recordMistakeOutcome. Idempotent, and never throws.
+ */
+export function adoptAnonMistakeBook(): Promise<AnonMistakeBookAdoption> {
+  return withMistakeBookLock(adoptNow);
 }

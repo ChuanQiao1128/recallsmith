@@ -16,6 +16,7 @@ import {
   loadMistakeBook,
   localDaysBetween,
   MISTAKE_WINDOW_DAYS,
+  RESOLVE_STREAK,
   resolveActiveMistakeRows,
   type MistakeEntry,
   type MistakeRow,
@@ -35,7 +36,8 @@ const FOCUS_MISTAKE_LIMIT = 10;
 /** Shown instead of a focus run once every mistake of the deck got today's correct answer. */
 export const DONE_FOR_TODAY_TEXT = 'Done for today, come back tomorrow.';
 
-type DeckGroup = { deck: DeckExport; rows: MistakeRow[] };
+/** openToday: the deck's mistakes that can still earn a correct answer today. */
+type DeckGroup = { deck: DeckExport; rows: MistakeRow[]; openToday: number };
 
 // Vitest supplies react-native without AccessibilityInfo — guarded lookup so tests don't crash (HomeScreen.tsx pattern).
 function readRN<T = any>(key: string, fallback: T): T {
@@ -59,11 +61,30 @@ export function formatLastWrong(lastWrongAt: number, now: number): string {
   return `${days} days ago`;
 }
 
+/** A mistake that already got today's correct answer waits for tomorrow: another one today would not count. */
+function isOpenToday(entry: MistakeEntry, now: number): boolean {
+  return entry.lastCorrectAt === undefined || !isSameLocalDay(entry.lastCorrectAt, now);
+}
+
+/**
+ * Progress toward clearing a card that is one correct answer away, visual and spoken; null for
+ * any other card. The next answer counts tomorrow when today's already landed.
+ */
+export function clearProgress(entry: MistakeEntry, now: number): { text: string; spoken: string } | null {
+  if (entry.correctStreak !== RESOLVE_STREAK - 1) return null;
+  const counted = `${entry.correctStreak} of ${RESOLVE_STREAK}`;
+  return isOpenToday(entry, now)
+    ? { text: `${counted} correct · 1 more clears it`, spoken: `${counted} correct answers, one more clears it` }
+    : { text: `${counted} correct · next tomorrow`, spoken: `${counted} correct answers, the next one counts tomorrow` };
+}
+
 /** Spoken row label: explicit, so VoiceOver does not read the visual "Wrong ×2" shorthand. */
 export function mistakeRowLabel(question: string, entry: MistakeEntry, now: number): string {
   const topic = entry.topic ? ` ${entry.topic}.` : '';
   const times = entry.wrongCount === 1 ? 'once' : `${entry.wrongCount} times`;
-  return `${question}.${topic} Wrong ${times}, last wrong ${formatLastWrong(entry.lastWrongAt, now)}`;
+  const progress = clearProgress(entry, now);
+  const cleared = progress ? `. ${progress.spoken}` : '';
+  return `${question}.${topic} Wrong ${times}, last wrong ${formatLastWrong(entry.lastWrongAt, now)}${cleared}`;
 }
 
 /** Groups active mistakes per deck, decks ordered by their newest mistake (the input is newest first). */
@@ -82,7 +103,8 @@ async function loadGroups(slug: string | undefined): Promise<DeckGroup[]> {
     if (!deck) continue;
     // The same helper the Library pill counts with, so the pill and this list agree.
     const rows = resolveActiveMistakeRows(book, deck, now);
-    if (rows.length > 0) groups.push({ deck, rows });
+    const openToday = rows.filter((row) => isOpenToday(row.entry, now)).length;
+    if (rows.length > 0) groups.push({ deck, rows, openToday });
   }
   return groups;
 }
@@ -129,9 +151,7 @@ export function MistakeBookScreen({ navigation, route }: Props) {
       // A mistake that already got today's correct answer waits for tomorrow: another one today
       // would not count toward resolving it, and dealing it again would only cram its schedule.
       const nowMs = Date.now();
-      const openToday = deckMistakes.filter(
-        (entry) => entry.lastCorrectAt === undefined || !isSameLocalDay(entry.lastCorrectAt, nowMs),
-      );
+      const openToday = deckMistakes.filter((entry) => isOpenToday(entry, nowMs));
       if (openToday.length === 0) {
         setDoneToday((prev) => new Set(prev).add(deck.Slug));
         AI?.announceForAccessibility?.(DONE_FOR_TODAY_TEXT);
@@ -203,63 +223,71 @@ export function MistakeBookScreen({ navigation, route }: Props) {
               </Text>
             </View>
           ) : (
-            groups.map((group) => (
-              <View key={group.deck.Slug} testID={`mistake-deck-${group.deck.Slug}`} style={styles.deckSection}>
-                <Text style={styles.deckTitle} accessibilityRole="header">
-                  {group.deck.Title}
-                </Text>
-                <View style={styles.card}>
-                  {group.rows.map(({ entry, card }) => (
-                    <Pressable
-                      key={entry.stableUid}
-                      testID={`mistake-row-${entry.stableUid}`}
-                      accessibilityRole="button"
-                      accessibilityLabel={mistakeRowLabel(card.Question, entry, now)}
-                      accessibilityHint="Opens the card"
-                      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-                      onPress={() => navigation.navigate('CardDetail', { cardId: entry.stableUid })}
-                    >
-                      <Text style={styles.rowQuestion} numberOfLines={2}>
-                        {card.Question}
-                      </Text>
-                      <View style={styles.rowMeta}>
-                        {entry.topic ? <Text style={styles.rowTopic}>{entry.topic}</Text> : null}
-                        <Text style={styles.rowMetaText}>{`Wrong ×${entry.wrongCount}`}</Text>
-                        <Text style={styles.rowMetaText}>{`Last wrong ${formatLastWrong(entry.lastWrongAt, now)}`}</Text>
-                      </View>
-                    </Pressable>
-                  ))}
-                </View>
-                <Pressable
-                  testID={`mistake-review-${group.deck.Slug}`}
-                  accessibilityRole="button"
-                  disabled={starting !== null}
-                  accessibilityState={{ disabled: starting !== null, busy: starting === group.deck.Slug }}
-                  style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}
-                  onPress={() => {
-                    void startFocus(group);
-                  }}
-                >
-                  {starting === group.deck.Slug ? (
-                    <ActivityIndicator
-                      testID={`mistake-review-busy-${group.deck.Slug}`}
-                      color={colors.inkSoft}
-                      style={styles.primaryActionBusy}
-                    />
-                  ) : null}
-                  <Text style={styles.primaryActionText}>{reviewLabel}</Text>
-                </Pressable>
-                {doneToday.has(group.deck.Slug) ? (
-                  <Text
-                    testID={`mistake-done-today-${group.deck.Slug}`}
-                    style={styles.doneToday}
-                    accessibilityLiveRegion="polite"
-                  >
-                    {DONE_FOR_TODAY_TEXT}
+            groups.map((group) => {
+              // Known at load: every mistake of the deck already got today's correct answer.
+              const done = group.openToday === 0 || doneToday.has(group.deck.Slug);
+              return (
+                <View key={group.deck.Slug} testID={`mistake-deck-${group.deck.Slug}`} style={styles.deckSection}>
+                  <Text style={styles.deckTitle} accessibilityRole="header">
+                    {group.deck.Title}
                   </Text>
-                ) : null}
-              </View>
-            ))
+                  <View style={styles.card}>
+                    {group.rows.map(({ entry, card }) => {
+                      const progress = clearProgress(entry, now);
+                      return (
+                        <Pressable
+                          key={entry.stableUid}
+                          testID={`mistake-row-${entry.stableUid}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={mistakeRowLabel(card.Question, entry, now)}
+                          accessibilityHint="Opens the card"
+                          style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                          onPress={() => navigation.navigate('CardDetail', { cardId: entry.stableUid })}
+                        >
+                          <Text style={styles.rowQuestion} numberOfLines={2}>
+                            {card.Question}
+                          </Text>
+                          <View style={styles.rowMeta}>
+                            {entry.topic ? <Text style={styles.rowTopic}>{entry.topic}</Text> : null}
+                            <Text style={styles.rowMetaText}>{`Wrong ×${entry.wrongCount}`}</Text>
+                            <Text style={styles.rowMetaText}>{`Last wrong ${formatLastWrong(entry.lastWrongAt, now)}`}</Text>
+                            {progress ? <Text style={styles.rowMetaText}>{progress.text}</Text> : null}
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <Pressable
+                    testID={`mistake-review-${group.deck.Slug}`}
+                    accessibilityRole="button"
+                    disabled={starting !== null}
+                    accessibilityState={{ disabled: starting !== null, busy: starting === group.deck.Slug }}
+                    style={({ pressed }) => [done ? styles.secondaryAction : styles.primaryAction, pressed && styles.pressed]}
+                    onPress={() => {
+                      void startFocus(group);
+                    }}
+                  >
+                    {starting === group.deck.Slug ? (
+                      <ActivityIndicator
+                        testID={`mistake-review-busy-${group.deck.Slug}`}
+                        color={colors.inkSoft}
+                        style={styles.primaryActionBusy}
+                      />
+                    ) : null}
+                    <Text style={styles.primaryActionText}>{reviewLabel}</Text>
+                  </Pressable>
+                  {done ? (
+                    <Text
+                      testID={`mistake-done-today-${group.deck.Slug}`}
+                      style={styles.doneToday}
+                      accessibilityLiveRegion="polite"
+                    >
+                      {DONE_FOR_TODAY_TEXT}
+                    </Text>
+                  ) : null}
+                </View>
+              );
+            })
           )}
         </ScrollView>
       </LinearGradient>
@@ -358,6 +386,17 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
     elevation: 6,
+  },
+  // The done-for-today button: white fill, inkSoft text (13.46:1 on white).
+  secondaryAction: {
+    minHeight: 52,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
   },
   primaryActionBusy: { position: 'absolute', left: spacing.md },
   doneToday: {

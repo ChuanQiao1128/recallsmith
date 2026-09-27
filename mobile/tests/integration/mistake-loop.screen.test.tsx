@@ -212,6 +212,7 @@ import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { MistakeBookScreen } from '../../src/screens/MistakeBookScreen';
 import { resolveDeckBySlug } from '../../src/content/deckRepository';
 import { loadDeckProgress, saveDeckProgress } from '../../src/review/storage';
+import { recordReviewEvent } from '../../src/sync/progressSync';
 import { countDueToday, pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
 import { loadMistakeBook } from '../../src/features/gacha/mistakes/mistakeBook';
@@ -483,6 +484,17 @@ describe('Mistake Book loop across SessionCard and the real store', () => {
     expect(scheduleOf('c3')).toEqual({ stage: 1, nextReviewAt: DAY0_MS + DAY_MS });
     expect(saved.get('c2').lastReviewedAt).toBe(DAY0_MS);
     expect(await storedC1()).toMatchObject({ correctStreak: 1, lastCorrectAt: DAY0_MS });
+    // Z07 mobile-18: the review events tell the practice ratings from the real review, and carry
+    // the unchanged schedule the practice ratings saved.
+    const firstEvents = vi.mocked(recordReviewEvent).mock.calls.map(([event]) => event);
+    expect(firstEvents.map((event) => [event.stableUid, event.reviewStage])).toEqual([
+      ['c1', 'repeat_review'],
+      ['c2', 'focus_practice'],
+      ['c3', 'focus_practice'],
+    ]);
+    for (const event of firstEvents.slice(1)) {
+      expect(event.progressAfter).toMatchObject({ stage: 1, nextReviewAt: DAY0_MS + DAY_MS, lastReviewedAt: DAY0_MS });
+    }
     const afterFirst = { c1: scheduleOf('c1'), c2: scheduleOf('c2'), c3: scheduleOf('c3') };
 
     // Second tap a minute later: nothing is dealt again, and no schedule moves.

@@ -41,6 +41,7 @@ import {
   saveRewardWalletState,
 } from '../../src/features/gacha/rewards/rewardWallet';
 import { adoptAnonGachaState, syncDrawStateNow } from '../../src/sync/drawStateSync';
+import { loadMistakeBook, recordMistakeOutcome } from '../../src/features/gacha/mistakes/mistakeBook';
 
 const SLUG = 'csharp';
 const ANON_STATE_KEY = `${ANON_USER_SCOPE_PREFIX}devcards:draw-state:${SLUG}`;
@@ -148,6 +149,19 @@ describe('anon gacha state adoption', () => {
     await Promise.all([adoptAnonGachaState(), adoptAnonGachaState()]);
 
     expect(await loadRewardWalletState()).toEqual({ availablePulls: 3, reservePulls: 0 });
+  });
+
+  it('carries the signed-out Mistake Book into the account at sign-in (Z07 mobile-17)', async () => {
+    setActiveUserSubForStorage(null);
+    await recordMistakeOutcome({ deckSlug: SLUG, stableUid: 'c1', topic: null, rating: 'again', mcqVerdict: null, at: 1_000 });
+    setActiveUserSubForStorage('user-a');
+
+    await adoptAnonGachaState();
+
+    expect(Object.keys((await loadMistakeBook()).entries)).toEqual([`${SLUG}::c1`]);
+    expect(store.has(`${ANON_USER_SCOPE_PREFIX}devcards:mistakes:v1`)).toBe(false);
+    setActiveUserSubForStorage(null);
+    expect((await loadMistakeBook()).entries).toEqual({});
   });
 
   it('does nothing while signed out', async () => {

@@ -1,7 +1,8 @@
 // mobile/src/features/gacha/mcq/mcqVerdict.ts
 // Pure verdict → rating mapping (plan §5.3) and a read-only ladder preview.
-// The scheduler is consumed, never re-implemented: describeScheduledRating formats
-// scheduleNextReview's output and nothing else (D00 §0, no ladder copy).
+// The scheduler is consumed, never re-implemented: describeScheduledRating formats the output of the
+// scheduler that saves the rating (scheduleNextReview, or scheduleFocusReview in a focus run) and nothing
+// else (D00 §0, no ladder copy).
 import type { ReviewRating, CardProgress } from '../../../review/model';
 import { scheduleNextReview } from '../../../review/model';
 import type { McqExport } from '../../../types/deckExport';
@@ -74,11 +75,38 @@ export function mapMcqVerdictToRating(input: McqVerdictInput): ReviewRating {
 
 export const RATING_LABEL: Readonly<Record<ReviewRating, 'Again' | 'Hard' | 'Good' | 'Easy'>> = Object.freeze({ again: 'Again', hard: 'Hard', good: 'Good', easy: 'Easy' });
 
-/** Pure preview of the ladder: after = scheduleNextReview(before, rating, now) (read-only import). The line
- *  formats after.nextReviewAt's delta from now; before is never mutated (the scheduler spreads). */
-export function describeScheduledRating(before: CardProgress, rating: ReviewRating, now: Date): { after: CardProgress; line: string } {
-  const after = scheduleNextReview(before, rating, now);
+/** The scheduler a preview runs: scheduleNextReview, or scheduleFocusReview in a focus run. */
+export type RatingScheduler = (p: CardProgress, rating: ReviewRating, now: Date) => CardProgress;
+
+function formatPracticeGap(delta: number): string {
+  if (delta < 3_600_000) {
+    const minutes = Math.max(1, Math.round(delta / 60_000));
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+  if (delta < 86_400_000) {
+    const hours = Math.round(delta / 3_600_000);
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  const days = Math.round(delta / 86_400_000);
+  return `${days} day${days === 1 ? '' : 's'}`;
+}
+
+/** Pure preview of a rating: after = schedule(before, rating, now) (read-only import), where schedule is the
+ *  function that will save the rating (scheduleNextReview by default, scheduleFocusReview in a focus run).
+ *  The line formats after.nextReviewAt's delta from now; before is never mutated (the scheduler spreads).
+ *  When a non-Again rating leaves stage and nextReviewAt as they were (focus practice), the line says so and
+ *  names the gap to the unchanged nextReviewAt instead of a ladder step that is never applied. */
+export function describeScheduledRating(
+  before: CardProgress,
+  rating: ReviewRating,
+  now: Date,
+  schedule: RatingScheduler = scheduleNextReview,
+): { after: CardProgress; line: string } {
+  const after = schedule(before, rating, now);
   const delta = after.nextReviewAt - now.getTime();
+  if (rating !== 'again' && after.stage === before.stage && after.nextReviewAt === before.nextReviewAt) {
+    return { after, line: `Practice · schedule unchanged · back in ${formatPracticeGap(delta)}` };
+  }
   const days = Math.round(delta / 86_400_000);
   const gap = delta < 3_600_000 ? '10 minutes' : `${days} day${days === 1 ? '' : 's'}`;
   const stays = rating === 'hard' && after.stage === before.stage ? ' · the card stays where it is' : '';

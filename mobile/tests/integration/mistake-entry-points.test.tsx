@@ -117,7 +117,7 @@ describe('Mistake Book entry points', () => {
     const pills = byTestID(withMistakes, 'library-mistakes-pill');
     expect(pills).toHaveLength(1);
     expect(pills[0].props.accessibilityRole).toBe('button');
-    expect(pills[0].props.accessibilityLabel).toBe('Open Mistake Book, 3 to review');
+    expect(pills[0].props.accessibilityLabel).toBe('Open Mistake Book, 3 mistakes');
     const texts = pills[0].findAll((node) => (node.type as any) === 'Text').map((node) => node.props.children);
     expect(texts).toEqual(['Mistakes · 3']);
     act(() => {
