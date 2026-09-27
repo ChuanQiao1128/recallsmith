@@ -407,7 +407,7 @@ export function LedgerPage() {
       <div>
         <h1 className={H1_CLASS}>Automation ledger</h1>
         {report ? (
-          <p className="text-xs text-slate-500 mt-0.5" data-testid="ledger-range">
+          <p className="text-xs text-slate-600 mt-0.5" data-testid="ledger-range">
             {report.from} – {report.to}, by {report.granularity}
           </p>
         ) : null}

@@ -19,6 +19,7 @@ import { highlightSnippet, mapToHlLanguage } from '../lib/highlightSnippet';
 // The highlight.js theme stays here so it rides the lazy CardForm chunk; the
 // engine setup and mapToHlLanguage moved to lib/highlightSnippet.ts.
 import 'highlight.js/styles/atom-one-dark.css';
+import './codePreview.css';
 
 export interface CardFormValues {
   question: string;
@@ -698,7 +699,7 @@ export function CardForm(props: CardFormProps) {
         <div className="mt-3">
           <div className="flex items-center justify-between mb-1">
             <span className="text-xs font-medium text-slate-600">Preview</span>
-            <span className="text-[10px] text-slate-400">{values.codeLanguage || 'auto'}</span>
+            <span className="text-[10px] text-slate-500">{values.codeLanguage || 'auto'}</span>
           </div>
 
           <div className="border border-slate-200 rounded text-xs overflow-auto">

@@ -492,9 +492,9 @@ export function ReviewQueuePage() {
       <div>
         <h1 className={H1_CLASS}>Review queue</h1>
         {deck ? (
-          <div className="text-xs text-slate-500 mt-0.5">
+          <div className="text-xs text-slate-600 mt-0.5">
             {deck.title} · <span className="font-mono">{deck.slug}</span> ·{' '}
-            <Link to={`/decks/cards?deckId=${deck.id}`} className="text-indigo-600 hover:underline">
+            <Link to={`/decks/cards?deckId=${deck.id}`} className="text-indigo-600 underline">
               Cards
             </Link>
           </div>
