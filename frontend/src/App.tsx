@@ -52,6 +52,7 @@ const ContentIntelligencePage = lazy(() =>
   import('./pages/ContentIntelligencePage').then(m => ({ default: m.ContentIntelligencePage })),
 );
 const WebhooksPage = lazy(() => import('./pages/WebhooksPage').then(m => ({ default: m.WebhooksPage })));
+const LedgerPage = lazy(() => import('./pages/LedgerPage').then(m => ({ default: m.LedgerPage })));
 
 if (typeof window !== 'undefined') {
   void loadDeckList();
@@ -128,6 +129,7 @@ function App() {
                 <Route path="/content-intelligence" element={<ContentIntelligencePage />} />
                 <Route path="/decks/edit" element={<DeckEditPage />} />
                 <Route path="/admin/webhooks" element={<WebhooksPage />} />
+                <Route path="/ledger" element={<LedgerPage />} />
               </Route>
 
               <Route path="*" element={<Navigate to="/" replace />} />

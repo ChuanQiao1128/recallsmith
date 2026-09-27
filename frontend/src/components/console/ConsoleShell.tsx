@@ -38,6 +38,9 @@ type Props = {
   adminUsersHref?: string;
   // super_admin only, like adminUsersHref: rendered only for a super_admin session.
   webhooksHref?: string;
+  // Not role-gated: the ledger's read routes are RequireAdmin, so the pages
+  // that pass this decide who sees it.
+  ledgerHref?: string;
 
   children: React.ReactNode;
 };
@@ -55,6 +58,7 @@ export function ConsoleShell({
   contentIntelligenceHref,
   adminUsersHref,
   webhooksHref,
+  ledgerHref,
   children,
 }: Props) {
   // Sign-out is the shell's own affair now, through AuthContext, so no page has
@@ -110,6 +114,12 @@ export function ConsoleShell({
               {resolvedSuperAdmin && webhooksHref ? (
                 <Link to={webhooksHref} className={NAV_LINK_CLASS}>
                   Webhooks
+                </Link>
+              ) : null}
+
+              {ledgerHref ? (
+                <Link to={ledgerHref} className={NAV_LINK_CLASS}>
+                  Automation ledger
                 </Link>
               ) : null}
 
