@@ -42,7 +42,7 @@ import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
 import { ensureDeckBootstrap, loadDeckWallet } from '../features/gacha/rewards/deckWallet';
-import { activeMistakes, loadMistakeBook } from '../features/gacha/mistakes/mistakeBook';
+import { loadMistakeBook, resolveActiveMistakeRows } from '../features/gacha/mistakes/mistakeBook';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Library'>;
 
@@ -137,7 +137,10 @@ export function LibraryScreen({ navigation, route }: Props) {
       (async () => {
         let count = 0;
         try {
-          count = activeMistakes(await loadMistakeBook(), { deckSlug: slug, now: Date.now() }).length;
+          // Counted like the Mistake Book lists them: an entry whose card is gone from the deck,
+          // or whose deck is not installed, can never be served, so it never shows in the count.
+          const deck = await getCachedDeck(slug);
+          count = deck ? resolveActiveMistakeRows(await loadMistakeBook(), deck, Date.now()).length : 0;
         } catch {
           /* 0 hides the pill */
         }

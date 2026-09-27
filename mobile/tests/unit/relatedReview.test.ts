@@ -7,6 +7,10 @@ import type { CardExport, DeckExport } from '../../src/types/deckExport';
 
 const NOW = new Date(Date.UTC(2026, 8, 27, 9, 0, 0));
 const T = NOW.getTime();
+const DAY_MS = 86_400_000;
+// Learned cards were last reviewed on an earlier local day: a card reviewed today is never dealt
+// again as a related card (Y08 mobile-12), which the tests at the end cover.
+const PREV_DAY = T - DAY_MS;
 
 function card(uid: string, order: number, topic: string | null = null): CardExport {
   return { StableUid: uid, OrderInDeck: order, Difficulty: 1, Question: `Q ${uid}`, Topic: topic };
@@ -26,7 +30,7 @@ function deckOf(cards: CardExport[]): DeckExport {
   };
 }
 
-function learned(uid: string, stage = 2, lastReviewedAt = T - 1000): CardProgress {
+function learned(uid: string, stage = 2, lastReviewedAt = PREV_DAY - 1000): CardProgress {
   return { stableUid: uid, stage, lastReviewedAt, nextReviewAt: T + 86_400_000 };
 }
 
@@ -85,11 +89,11 @@ describe('pickRelatedCards', () => {
     ]);
     const progress = [
       learned('m'),
-      learned('a', 4, T - 100),
-      learned('b', 1, T - 100),
-      learned('c', 2, T - 900),
-      learned('d', 2, T - 100),
-      learned('e', 2, T - 900),
+      learned('a', 4, PREV_DAY - 100),
+      learned('b', 1, PREV_DAY - 100),
+      learned('c', 2, PREV_DAY - 900),
+      learned('d', 2, PREV_DAY - 100),
+      learned('e', 2, PREV_DAY - 900),
     ];
     const result = pickRelatedCards({
       deck,
@@ -162,7 +166,7 @@ describe('pickRelatedCards', () => {
   it('returns at most count uids and is deterministic', () => {
     const cards = Array.from({ length: 12 }, (_, i) => card(`c${String(i).padStart(2, '0')}`, i + 1, 'lambda'));
     const deck = deckOf(cards);
-    const progress = cards.map((c) => learned(c.StableUid, 1, T - 500));
+    const progress = cards.map((c) => learned(c.StableUid, 1, PREV_DAY - 500));
     const mistakes = [mistake('c00', 'lambda', T)];
     const deckSnapshot = JSON.stringify(deck);
     const progressSnapshot = JSON.stringify(progress);
@@ -180,5 +184,42 @@ describe('pickRelatedCards', () => {
     expect(JSON.stringify(deck)).toBe(deckSnapshot);
     expect(JSON.stringify(progress)).toBe(progressSnapshot);
     expect(JSON.stringify(mistakes)).toBe(mistakesSnapshot);
+  });
+
+  it('leaves out a card already reviewed on the local day of now, by calendar day not elapsed hours', () => {
+    // Local times: the rule is the device's calendar day, like the Mistake Book's.
+    const now = new Date(2026, 8, 27, 8, 0, 0);
+    const deck = deckOf([card('m', 1, 'sqs'), card('today-early', 2, 'sqs'), card('late-yesterday', 3, 'sqs'), card('older', 4, 'sqs')]);
+    const progress = [
+      learned('today-early', 1, new Date(2026, 8, 27, 0, 5, 0).getTime()),
+      learned('late-yesterday', 1, new Date(2026, 8, 26, 23, 55, 0).getTime()),
+      learned('older', 1, new Date(2026, 8, 20, 9, 0, 0).getTime()),
+    ];
+    const result = pickRelatedCards({
+      deck,
+      progress,
+      ownedSet: null,
+      mistakes: [mistake('m', 'sqs', now.getTime())],
+      now,
+      count: 5,
+    });
+    expect(result).toEqual(['older', 'late-yesterday']);
+  });
+
+  it('does not deal the same related cards again after they were rated earlier the same day', () => {
+    const cards = [card('m', 1, 'ec2'), card('r1', 2, 'ec2'), card('r2', 3, 'ec2'), card('r3', 4, 'ec2')];
+    const deck = deckOf(cards);
+    const noon = new Date(2026, 8, 27, 12, 0, 0).getTime();
+    const lastWeek = noon - 7 * DAY_MS;
+    const before = [learned('r1', 1, lastWeek), learned('r2', 1, lastWeek), learned('r3', 1, lastWeek)];
+    const input = { deck, ownedSet: null, mistakes: [mistake('m', 'ec2', noon - 1000)], count: 2 };
+
+    const first = pickRelatedCards({ ...input, progress: before, now: new Date(noon) });
+    expect(first).toEqual(['r1', 'r2']);
+    // The first run rated r1 and r2 at noon; a second run a minute later only has r3 left.
+    const after = before.map((row) => (first.includes(row.stableUid) ? { ...row, lastReviewedAt: noon } : row));
+    expect(pickRelatedCards({ ...input, progress: after, now: new Date(noon + 60_000) })).toEqual(['r3']);
+    // The next day they are eligible again.
+    expect(pickRelatedCards({ ...input, progress: after, now: new Date(noon + DAY_MS) })).toEqual(['r3', 'r1']);
   });
 });

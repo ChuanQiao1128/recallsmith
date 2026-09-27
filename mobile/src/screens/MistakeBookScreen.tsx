@@ -1,19 +1,24 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import * as RN from 'react-native';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
-import type { CardExport, DeckExport } from '../types/deckExport';
+import type { DeckExport } from '../types/deckExport';
 import { getCachedDeck } from '../content/deckCache';
 import { loadDeckProgress } from '../review/storage';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import {
   activeMistakes,
+  isSameLocalDay,
   loadMistakeBook,
+  localDaysBetween,
   MISTAKE_WINDOW_DAYS,
+  resolveActiveMistakeRows,
   type MistakeEntry,
+  type MistakeRow,
 } from '../features/gacha/mistakes/mistakeBook';
 import { pickRelatedCards, RELATED_REVIEW_COUNT } from '../features/gacha/mistakes/relatedReview';
 import { useFeatureFlags } from '../config/featureFlags';
@@ -27,14 +32,28 @@ type Props = NativeStackScreenProps<RootStackParamList, 'MistakeBook'>;
 
 /** Mistakes handed to a focus run, newest first; related cards come after them. */
 const FOCUS_MISTAKE_LIMIT = 10;
-const DAY_MS = 86_400_000;
+/** Shown instead of a focus run once every mistake of the deck got today's correct answer. */
+export const DONE_FOR_TODAY_TEXT = 'Done for today, come back tomorrow.';
 
-type MistakeRow = { entry: MistakeEntry; card: CardExport };
 type DeckGroup = { deck: DeckExport; rows: MistakeRow[] };
 
-/** Relative "last wrong" label. Every entry has a real timestamp, so it never reads as a dash. */
+// Vitest supplies react-native without AccessibilityInfo — guarded lookup so tests don't crash (HomeScreen.tsx pattern).
+function readRN<T = any>(key: string, fallback: T): T {
+  try {
+    const value = (RN as any)[key];
+    return (value ?? fallback) as T;
+  } catch {
+    return fallback;
+  }
+}
+const AI: any = readRN('AccessibilityInfo', null);
+
+/**
+ * Relative "last wrong" label in local calendar days, the same days that resolution and the
+ * subtitle's "different days" rule count. Every entry has a real timestamp, so it never reads as a dash.
+ */
 export function formatLastWrong(lastWrongAt: number, now: number): string {
-  const days = Math.floor(Math.max(0, now - lastWrongAt) / DAY_MS);
+  const days = localDaysBetween(lastWrongAt, now);
   if (days <= 0) return 'today';
   if (days === 1) return 'yesterday';
   return `${days} days ago`;
@@ -50,15 +69,10 @@ export function mistakeRowLabel(question: string, entry: MistakeEntry, now: numb
 /** Groups active mistakes per deck, decks ordered by their newest mistake (the input is newest first). */
 async function loadGroups(slug: string | undefined): Promise<DeckGroup[]> {
   const book = await loadMistakeBook();
-  const mistakes = activeMistakes(book, { deckSlug: slug, now: Date.now() });
-  const bySlug = new Map<string, MistakeEntry[]>();
-  for (const entry of mistakes) {
-    const list = bySlug.get(entry.deckSlug);
-    if (list) list.push(entry);
-    else bySlug.set(entry.deckSlug, [entry]);
-  }
+  const now = Date.now();
+  const deckSlugs = new Set(activeMistakes(book, { deckSlug: slug, now }).map((entry) => entry.deckSlug));
   const groups: DeckGroup[] = [];
-  for (const [deckSlug, entries] of bySlug) {
+  for (const deckSlug of deckSlugs) {
     let deck: DeckExport | null = null;
     try {
       deck = await getCachedDeck(deckSlug);
@@ -66,12 +80,8 @@ async function loadGroups(slug: string | undefined): Promise<DeckGroup[]> {
       deck = null;
     }
     if (!deck) continue;
-    const cardMap = new Map((deck.Cards ?? []).map((card) => [card.StableUid, card]));
-    const rows: MistakeRow[] = [];
-    for (const entry of entries) {
-      const card = cardMap.get(entry.stableUid);
-      if (card) rows.push({ entry, card });
-    }
+    // The same helper the Library pill counts with, so the pill and this list agree.
+    const rows = resolveActiveMistakeRows(book, deck, now);
     if (rows.length > 0) groups.push({ deck, rows });
   }
   return groups;
@@ -84,6 +94,7 @@ export function MistakeBookScreen({ navigation, route }: Props) {
   const [groups, setGroups] = useState<DeckGroup[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [starting, setStarting] = useState<string | null>(null);
+  const [doneToday, setDoneToday] = useState<ReadonlySet<string>>(() => new Set());
 
   // Load at mount and again on every focus: a focus run that clears mistakes returns here.
   useEffect(() => {
@@ -97,6 +108,7 @@ export function MistakeBookScreen({ navigation, route }: Props) {
       }
       if (cancelled) return;
       setNow(Date.now());
+      setDoneToday(new Set());
       setGroups(next);
     };
     void load();
@@ -112,10 +124,21 @@ export function MistakeBookScreen({ navigation, route }: Props) {
   const startFocus = useCallback(
     async (group: DeckGroup) => {
       if (starting) return;
-      setStarting(group.deck.Slug);
       const deck = group.deck;
       const deckMistakes = group.rows.map((row) => row.entry);
-      const mistakeUids = deckMistakes.map((entry) => entry.stableUid).slice(0, FOCUS_MISTAKE_LIMIT);
+      // A mistake that already got today's correct answer waits for tomorrow: another one today
+      // would not count toward resolving it, and dealing it again would only cram its schedule.
+      const nowMs = Date.now();
+      const openToday = deckMistakes.filter(
+        (entry) => entry.lastCorrectAt === undefined || !isSameLocalDay(entry.lastCorrectAt, nowMs),
+      );
+      if (openToday.length === 0) {
+        setDoneToday((prev) => new Set(prev).add(deck.Slug));
+        AI?.announceForAccessibility?.(DONE_FOR_TODAY_TEXT);
+        return;
+      }
+      setStarting(deck.Slug);
+      const mistakeUids = openToday.map((entry) => entry.stableUid).slice(0, FOCUS_MISTAKE_LIMIT);
       let related: string[] = [];
       try {
         const progress = await loadDeckProgress(deck);
@@ -125,7 +148,7 @@ export function MistakeBookScreen({ navigation, route }: Props) {
           progress,
           ownedSet,
           mistakes: deckMistakes,
-          now: new Date(),
+          now: new Date(nowMs),
           count: relatedCount,
         });
       } catch {
@@ -163,7 +186,12 @@ export function MistakeBookScreen({ navigation, route }: Props) {
           </Text>
 
           {groups === null ? (
-            <View testID="mistake-book-loading">
+            <View
+              testID="mistake-book-loading"
+              accessible
+              accessibilityLabel="Loading mistakes"
+              accessibilityState={{ busy: true }}
+            >
               <View style={styles.skeletonRow} />
               <View style={styles.skeletonRow} />
             </View>
@@ -177,7 +205,9 @@ export function MistakeBookScreen({ navigation, route }: Props) {
           ) : (
             groups.map((group) => (
               <View key={group.deck.Slug} testID={`mistake-deck-${group.deck.Slug}`} style={styles.deckSection}>
-                <Text style={styles.deckTitle}>{group.deck.Title}</Text>
+                <Text style={styles.deckTitle} accessibilityRole="header">
+                  {group.deck.Title}
+                </Text>
                 <View style={styles.card}>
                   {group.rows.map(({ entry, card }) => (
                     <Pressable
@@ -219,6 +249,15 @@ export function MistakeBookScreen({ navigation, route }: Props) {
                   ) : null}
                   <Text style={styles.primaryActionText}>{reviewLabel}</Text>
                 </Pressable>
+                {doneToday.has(group.deck.Slug) ? (
+                  <Text
+                    testID={`mistake-done-today-${group.deck.Slug}`}
+                    style={styles.doneToday}
+                    accessibilityLiveRegion="polite"
+                  >
+                    {DONE_FOR_TODAY_TEXT}
+                  </Text>
+                ) : null}
               </View>
             ))
           )}
@@ -321,5 +360,12 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
   primaryActionBusy: { position: 'absolute', left: spacing.md },
+  doneToday: {
+    color: colors.inkSecondary,
+    fontSize: typography.bodySmall,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: spacing.sm,
+  },
   primaryActionText: { color: colors.inkSoft, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
 });
