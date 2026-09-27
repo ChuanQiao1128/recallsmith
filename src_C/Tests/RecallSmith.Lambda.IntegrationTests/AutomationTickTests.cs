@@ -787,6 +787,139 @@ public class AutomationTickTests
     });
   }
 
+  // ---------------------------------------------------------------- R18D M2 / M3 (automation-22, automation-21)
+
+  /// <summary><paramref name="count"/> cards live auto-accepted an hour ago, each with its decision; returns the card ids.</summary>
+  private static async Task<List<long>> AutoAcceptedCardsAsync(A04Kit.Sql sql, long deckId, Guid runId, int count)
+  {
+    var ids = new List<long>();
+    for (var i = 0; i < count; i++)
+    {
+      var uid = A04Kit.Tag($"live{i}");
+      var cardId = A04Kit.Long(await sql.ScalarAsync(
+        """
+        insert into cards (deck_id, stable_uid, question, explanation, difficulty, order_in_deck, updated_at)
+        values ($1, $2, $3, 'Synthetic explanation.', 2, (select coalesce(max(order_in_deck), 0) + 1 from cards where deck_id = $1), now() - interval '1 hour')
+        returning id
+        """, deckId, uid, $"Which synthetic live card number {i} is this?"));
+      var draftId = A04Kit.Long(await sql.ScalarAsync(
+        """
+        insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, card, submitted_by_sub, status, decided_at, decided_by_sub, accepted_card_id)
+        values ($1, $2, $3, $4, $5::jsonb, 'it-d01-agent', 'accepted', now(), 'automation', $6)
+        returning id
+        """, deckId, Guid.NewGuid(), Guid.NewGuid().ToString("N"), uid, JsonSerializer.Serialize(AutomationTestKit.Card(uid)), cardId));
+      var row = (await sql.QueryAsync($"select {RecallSmith.Lambda.Vpc.Qa.CardContentHash.CardColumnsSql} from cards c where c.id = $1", cardId)).Single();
+      await sql.QueryAsync(
+        """
+        insert into automation_draft_decisions (draft_id, run_id, deck_id, mode, state, accepted_card_id, accepted_content_sha256, decided_at)
+        values ($1, $2, $3, 'live', 'auto_accepted', $4, $5, now() - interval '1 hour')
+        """, draftId, runId, deckId, cardId, RecallSmith.Lambda.Vpc.Qa.CardContentHash.Compute(row));
+      ids.Add(cardId);
+    }
+    return ids;
+  }
+
+  private static string IsoWeek()
+  {
+    var now = DateTime.UtcNow;
+    return $"{ISOWeek.GetYear(now).ToString(CultureInfo.InvariantCulture)}-W{ISOWeek.GetWeekOfYear(now).ToString("00", CultureInfo.InvariantCulture)}";
+  }
+
+  [Fact]
+  public async Task Tick_LiveOverrideAboveFivePercent_RaisesLiveOverrideHighOncePerWeek()
+  {
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "override");
+      var runId = await A04Kit.RunAsync(sql, "sub", deckId, "completed");
+      var cards = await AutoAcceptedCardsAsync(sql, deckId, runId, 20);
+      var key = $"exception:live_override_high:{IsoWeek()}";
+
+      // One of 20 overridden is exactly 5 %: no alarm.
+      await sql.QueryAsync("update cards set is_deleted = 1, updated_at = now() where id = $1", cards[0]);
+      await TickDataAsync();
+      Assert.Null(await NotificationAsync(sql, key));
+
+      // A second one (a person's edit) is 10 %: the alarm, once per ISO week.
+      await sql.QueryAsync("update cards set question = 'Which corrected synthetic question is this?', updated_at = now() where id = $1", cards[1]);
+      await TickDataAsync();
+      var n = (await NotificationAsync(sql, key))!;
+      Assert.Equal(("exception", "live_override_high"), ((string)n["kind"]!, (string)n["subkind"]!));
+      Assert.Equal("[DeveloperCards] (dry run) Action needed: people overrode 0.1000 of auto-accepted cards", n["subject"]);
+      Assert.Contains("people deleted 1 and edited 1", (string)n["body_text"]!);
+      await TickDataAsync();
+      Assert.Single(A04Kit.Messages(scope, "people overrode"));
+
+      // The digest shows the same numbers, and the blind agreement (none decided blind here).
+      var digest = await TickDataAsync("digest");
+      Assert.True(digest.GetProperty("actions").GetProperty("digest").GetBoolean());
+      var body = (string)(await NotificationAsync(sql, $"digest:{Today()}"))!["body_text"]!;
+      Assert.Contains("Live quality (30 days): 20 auto-accepted, 1 deleted by a person, 1 edited by a person, override rate 0.1000", body);
+      Assert.Contains("- people overrode 0.1000 of 20 auto-accepted card(s) in 30 days", body);
+    });
+  }
+
+  [Fact]
+  public async Task Tick_LiveOverride_BelowTwentyAutoAccepts_RaisesNothing()
+  {
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "override-few");
+      var runId = await A04Kit.RunAsync(sql, "sub", deckId, "completed");
+      var cards = await AutoAcceptedCardsAsync(sql, deckId, runId, 19);
+      foreach (var id in cards.Take(5)) await sql.QueryAsync("update cards set is_deleted = 1, updated_at = now() where id = $1", id);
+      await TickDataAsync();
+      Assert.Null(await NotificationAsync(sql, $"exception:live_override_high:{IsoWeek()}"));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_Digest_AgreementIsTheBlindRate()
+  {
+    // automation-21 / M3: the digest's agreement uses the status's blind definition, not every human decision.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "blind-digest");
+      var runId = await A04Kit.RunAsync(sql, "sub", deckId, "completed");
+      async Task DecidedAsync(string action, string? details)
+      {
+        var uid = A04Kit.Tag("blind");
+        var draftId = A04Kit.Long(await sql.ScalarAsync(
+          """
+          insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, card, submitted_by_sub)
+          values ($1, $2, $3, $4, $5::jsonb, 'it-d01-agent') returning id
+          """, deckId, Guid.NewGuid(), Guid.NewGuid().ToString("N"), uid, JsonSerializer.Serialize(AutomationTestKit.Card(uid))));
+        await sql.QueryAsync(
+          """
+          insert into automation_draft_decisions (draft_id, run_id, deck_id, mode, state, decided_at, human_action, human_decided_at, created_at)
+          values ($1, $2, $3, 'dry_run', 'would_accept', now() - interval '2 days', $4, now() - interval '1 day', now() - interval '2 days')
+          """, draftId, runId, deckId, action);
+        if (details is not null)
+        {
+          await sql.QueryAsync(
+            "insert into automation_decision_events (draft_id, from_state, to_state, reason, actor, mode, details) " +
+            "values ($1, 'would_accept', 'would_accept', 'HUMAN_ACTION', 'human:it-d01', 'dry_run', $2::jsonb)", draftId, details);
+        }
+      }
+
+      const string blind = "{\"verdictShown\":false,\"blinded\":true}";
+      await DecidedAsync("accepted", blind);
+      await DecidedAsync("rejected", blind);
+      await DecidedAsync("accepted", "{\"verdictShown\":true,\"blinded\":false}");
+      await DecidedAsync("accepted", "{\"blinded\":true}");
+      await DecidedAsync("accepted", null);
+
+      await TickDataAsync("digest");
+      var body = (string)(await NotificationAsync(sql, $"digest:{Today()}"))!["body_text"]!;
+      Assert.Contains("Dry-run agreement: 5 would-accept, 5 decided by a human (4 accepted, 0 edited, 1 rejected); " +
+        "decided blind 2, accepted unedited 1, agreement 0.5000", body);
+      Assert.Contains("Live quality (30 days): 0 auto-accepted, 0 deleted by a person, 0 edited by a person, override rate n/a", body);
+    });
+  }
+
   [Fact]
   public async Task Tick_Digest_ReportsTheOpenBacklog_NotTheWeeksHumanRows()
   {

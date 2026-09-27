@@ -205,9 +205,9 @@ internal static class AutomationTestKit
     CallAsync((q, r, a) => Drafts.HandleAccept(q, r, a, draftId.ToString(CultureInfo.InvariantCulture)), "POST",
       $"{DraftsPath}/{draftId}/accept", body ?? new { }, auth);
 
-  public static Task<APIGatewayProxyResponse> RejectAsync(long draftId, AuthContext auth, string reason = "incorrect") =>
+  public static Task<APIGatewayProxyResponse> RejectAsync(long draftId, AuthContext auth, string reason = "incorrect", object? body = null) =>
     CallAsync((q, r, a) => Drafts.HandleReject(q, r, a, draftId.ToString(CultureInfo.InvariantCulture)), "POST",
-      $"{DraftsPath}/{draftId}/reject", new { reason }, auth);
+      $"{DraftsPath}/{draftId}/reject", body ?? new { reason }, auth);
 
   public static JsonElement Data(APIGatewayProxyResponse response)
   {

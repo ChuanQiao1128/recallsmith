@@ -472,11 +472,11 @@ public class AutomationNotificationsTests
   [Fact]
   public async Task RunnerComplete_ActionableOrRepeatedFailure_RaisesRunnerRunFailed()
   {
-    // R18C L6: the agent could not do the task, the runner's Claude is misconfigured, or the same item failed again.
+    // R18C L6: the runner's Claude is misconfigured, or the same item failed again. (An AGENT_BLOCKED run no longer
+    // requeues: R18D M5 fails its item at once with one queue_item_failed email, see RunnerComplete_AgentBlocked_*.)
     await using var scope = new A04Kit.Scope();
     var cases = new[]
     {
-      (Attempts: 1, Error: "AGENT_BLOCKED: the page needs a login"),
       (Attempts: 1, Error: "claude did not run on the subscription login: apiKeySource ANTHROPIC_API_KEY"),
       (Attempts: 1, Error: "claude could not be started: spawn claude ENOENT"),
       (Attempts: 2, Error: "timeout"),
@@ -495,7 +495,70 @@ public class AutomationNotificationsTests
     Assert.Equal(cases.Length, A04Kit.Messages(scope).Count);
   }
 
+  // ---------------------------------------------------------------- R18D M5 (automation-27)
+
+  [Fact]
+  public async Task RunnerComplete_AgentBlocked_FailsTheItemAtOnce_WithExactlyOneException()
+  {
+    // automation-27: a blocked agent is not retried as if the failure were transient; one email carries the reason.
+    await using var scope = new A04Kit.Scope();
+    var (runId, itemId) = await ClaimedRunAsync(attempts: 1);
+
+    var data = AutomationTestKit.Data(await CompleteFailedAsync(runId, "AGENT_BLOCKED: the page needs a login"));
+    Assert.Equal(("failed", "failed"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
+
+    var item = (await _sql.QueryAsync("select status, attempts, last_error, finished_at from authoring_queue_items where id = $1", itemId)).Single();
+    Assert.Equal("failed", item["status"]);
+    Assert.Equal(1, Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture));
+    Assert.Equal("AGENT_BLOCKED: the page needs a login", item["last_error"]);
+    Assert.NotNull(item["finished_at"]);
+
+    var rows = await _sql.QueryAsync("select subkind, subject, body_text from automation_notifications where run_id = $1 and kind = 'exception'", runId);
+    var only = Assert.Single(rows);
+    Assert.Equal("queue_item_failed", only["subkind"]);
+    Assert.Equal($"[DeveloperCards] (dry run) Action needed: agent blocked on queue item {itemId}", only["subject"]);
+    Assert.Contains("the page needs a login", (string)only["body_text"]!);
+    Assert.Single(A04Kit.Messages(scope));
+  }
+
+  [Fact]
+  public async Task RunnerComplete_RunnerUnavailable_RequeuesWithoutAnAttempt_AndAlertsOncePerDay()
+  {
+    // M5: a runner that cannot work at all is not the item's failure: no attempt is charged, no per-run email.
+    await using var scope = new A04Kit.Scope();
+    var key = $"exception:runner_unavailable:{DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}";
+    // Earlier classes may have raised today's alert already; this test owns the key while it runs.
+    await _sql.QueryAsync("delete from automation_notifications where dedupe_key = $1", key);
+
+    var (first, firstItem) = await ClaimedRunAsync(attempts: 2);
+    var data = AutomationTestKit.Data(await CompleteFailedAsync(first, "RUNNER_UNAVAILABLE: claude reported a usage limit"));
+    Assert.Equal(("failed", "queued"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
+    var item = (await _sql.QueryAsync("select status, attempts, not_before <= now() as due, lease_expires_at, last_error from authoring_queue_items where id = $1",
+      firstItem)).Single();
+    Assert.Equal(("queued", 1, true), ((string)item["status"]!, Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture), (bool)item["due"]!));
+    Assert.Null(item["lease_expires_at"]);
+    Assert.Equal("RUNNER_UNAVAILABLE: claude reported a usage limit", item["last_error"]);
+
+    // The runner releases its other claim the same way: same day, same alert.
+    var (second, secondItem) = await ClaimedRunAsync(attempts: 3);
+    Assert.Equal("queued", AutomationTestKit.Data(await CompleteFailedAsync(second, "RUNNER_UNAVAILABLE: claude reported a usage limit"))
+      .GetProperty("itemStatus").GetString());
+    Assert.Equal(2, Convert.ToInt32(await _sql.ScalarAsync("select attempts from authoring_queue_items where id = $1", secondItem), CultureInfo.InvariantCulture));
+
+    var alert = (await _sql.QueryAsync("select subkind, subject, body_text from automation_notifications where dedupe_key = $1", key)).Single();
+    Assert.Equal("runner_unavailable", alert["subkind"]);
+    Assert.Equal("[DeveloperCards] (dry run) Action needed: authoring runner it-a04-runner cannot run", alert["subject"]);
+    Assert.Contains("usage limit", (string)alert["body_text"]!);
+    foreach (var runId in new[] { first, second })
+    {
+      Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where dedupe_key in ($1, $2)",
+        $"exception:runner_run_failed:{runId:D}", $"exception:queue_item_failed:{(runId == first ? firstItem : secondItem)}"));
+    }
+    Assert.Single(A04Kit.Messages(scope));
+  }
+
   [Theory]
+  [InlineData("RUNNER_UNAVAILABLE: claude could not be started", 2, "queued", false)]
   [InlineData("AGENT_BLOCKED: x", 1, "queued", true)]
   [InlineData("AGENT_BLOCKED: x", 3, "failed", false)]
   [InlineData("timeout", 1, "queued", false)]
