@@ -123,7 +123,7 @@ Ratios use the WCAG 2.x relative-luminance formula, computed locally and asserte
 
 Status: fixed
 
-- `mobile/src/screens/MistakeBookScreen.tsx:189-194`: the loading container is `accessible`, with
+- `mobile/src/screens/MistakeBookScreen.tsx:188-193`: the loading container is `accessible`, with
   `accessibilityLabel="Loading mistakes"` and `accessibilityState={{ busy: true }}`.
 - `mobile/src/screens/MistakeBookScreen.tsx:208`: each per-deck title has
   `accessibilityRole="header"`, like the page title, so rotor navigation can jump between decks
