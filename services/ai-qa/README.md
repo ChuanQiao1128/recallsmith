@@ -31,6 +31,7 @@ integration timeout. No Bedrock VPC endpoint is needed.
 | `schema.py` | `ModelFinding`, `ModelReview` (pydantic v2, `extra="forbid"`) |
 | `review.py` | `review_card(card, *, client, settings, review_date)` → one §7.7 item |
 | `converse_client.py` | `ConverseClient`: Bedrock Converse for non-Anthropic models (provider `bedrock-converse`), Anthropic-shaped responses |
+| `openai_mantle_client.py` | `OpenAiMantleClient`: OpenAI Chat Completions on Bedrock Mantle (provider `openai-mantle`, the GPT-5.5 automation reviewer), Anthropic-shaped responses |
 | `second_opinion.py` | the optional second reviewer: its settings, the merge policy |
 | `handler.py` | SQS entry point: message validation, kill switch, deadline guard, chunk policy, report |
 | `internal_client.py` | signed `POST` to core-vpc (§4.3; same design as the webhook dispatcher's) |
@@ -71,7 +72,7 @@ Committed in `env/prod.env.json` (overlaid by the deploy script; no secret value
 
 | Var | Default | Meaning |
 |---|---|---|
-| `AI_PROVIDER` | `bedrock` | `bedrock` \| `anthropic` \| `bedrock-converse` (see "Other models (Bedrock Converse) and the second opinion") |
+| `AI_PROVIDER` | `bedrock` | `bedrock` \| `anthropic` \| `bedrock-converse` \| `openai-mantle` (see "Other models (Bedrock Converse) and the second opinion" and "Provider `openai-mantle`") |
 | `AI_MODEL` | `anthropic.claude-opus-5` / `claude-opus-5` | model id; blank = provider default |
 | `AI_BEDROCK_REGION` | `ap-southeast-2` | Mantle region |
 | `AI_EFFORT` | `high` | `output_config.effort`: `low` \| `medium` \| `high` \| `xhigh` \| `max` |
@@ -83,9 +84,10 @@ Committed in `env/prod.env.json` (overlaid by the deploy script; no secret value
 | `METRICS_NAMESPACE` | `DeveloperCards` | EMF namespace |
 | `AI_PRICE_INPUT_PER_MTOK` / `AI_PRICE_OUTPUT_PER_MTOK` | `5` / `25` | USD per million tokens for the cost estimate |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
-| `AI_QA_AUTOMATION_PROVIDER` | empty = unset | the automation reviewer's provider (see "Automation profile (R18A)"); committed as `bedrock-converse` |
-| `AI_QA_AUTOMATION_MODEL` | provider default; required for `bedrock-converse` | the automation reviewer's model id (same rules as `AI_MODEL`); committed as `global.openai.gpt-5.5` |
-| `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK` / `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` | unset | USD per million tokens for the automation reviewer's estimate; not committed yet (prices pending), so the automation profile answers `CONFIG` |
+| `AI_QA_AUTOMATION_PROVIDER` | empty = unset | the automation reviewer's provider (see "Automation profile (R18A)"); committed as `openai-mantle` |
+| `AI_QA_AUTOMATION_MODEL` | provider default; required for `bedrock-converse` and `openai-mantle` | the automation reviewer's model id (same rules as `AI_MODEL`); committed as `openai.gpt-5.5` |
+| `AI_QA_AUTOMATION_REGION` | `us-east-1` | the bedrock-mantle region of provider `openai-mantle` (any profile); committed as `us-east-1`. The other providers keep `AI_BEDROCK_REGION` |
+| `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK` / `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` | unset | USD per million tokens for the automation reviewer's estimate; committed as `5.5` / `33` (GPT-5.5 In-Region, "Pricing" below) |
 | `AI_QA_MAX_RECEIVES` | `2` | optional, not in `env/prod.env.json`: the ai-qa queue's `maxReceiveCount`; the receive on which a retryable error ends the chunk (below). Invalid or < 1 = default |
 
 `AI_QA_REQUIRED`, `AI_QA_MAX_CARDS`, `AI_QA_DAILY_USD_CAP` and `AI_QA_QUEUE_URL` belong to core-vpc
@@ -350,6 +352,85 @@ not finish.
 
 The Anthropic SDK mappings above are unchanged.
 
+## Provider `openai-mantle` (GPT-5.5, R18C L1)
+
+The AWS GPT-5.5 model card
+(https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html, read 2026-09-28)
+lists `bedrock-runtime` as **not supported** for every API (Converse included) and only the
+`bedrock-mantle` endpoint with Responses and Chat Completions under `/openai/v1`, model id
+`openai.gpt-5.5`, "Geo inference ID: Not supported", "Global inference ID: Not supported", and
+In-Region availability in `us-east-1` and `us-east-2` only. `bedrock-converse` /
+`global.openai.gpt-5.5` stays a fallback provider (Q02 saw that profile `ACTIVE` in ap-southeast-2),
+but the committed automation reviewer is this provider.
+
+**Client** (`src/ai_qa/openai_mantle_client.py`). `OpenAiMantleClient` offers the same
+`messages.create(...)` / `with_options(...)` as the other clients. One call is one `POST` to
+`https://bedrock-mantle.<AI_QA_AUTOMATION_REGION>.api.aws/openai/v1/chat/completions` (stdlib
+`urllib`), SigV4-signed with botocore for service `bedrock-mantle` with the Lambda role's
+credentials (the same signing as the Claude Mantle client; no new dependency, no API key). Request:
+the system blocks joined into one `system` message, user/assistant turns as text (blank → `(empty
+reply)`), `max_completion_tokens = 16000`, and `AI_EFFORT` sent as **`reasoning_effort`**
+(`low`/`medium`/`high`/`xhigh` as-is, `max` → `xhigh`, the highest Chat Completions level).
+`providers.effective_effort` answers the value actually sent, so logs, EMF and the run header
+record the real effort (no `effort_not_sent` line unless `max` was mapped). Structured outputs are
+off (prompt-forced JSON with the validation and repair turn); a request with `output_config.format`
+is `CONFIG`. Reply mapping: `choices[0].message.content`; `finish_reason` `stop` → `end_turn`,
+`length` → `max_tokens` (`MAX_TOKENS`), `content_filter` → `refusal` (`REFUSAL`), a non-empty
+`message.refusal` with no content → `refusal`; `usage.prompt_tokens` minus
+`prompt_tokens_details.cached_tokens` → input, the cached tokens → cache read (0.1 × the input price,
+matching the card's $0.55 cached input), `completion_tokens` → output; request id from
+`x-amzn-RequestId` (else the body `id`). Timeout 120 s, `max_retries=2` (429 and 500/502/503/504 and
+no-response errors are retried with 0.5 s, 1 s, … backoff, capped at 4 s); `with_options` narrows
+both per card like the other clients.
+
+**Errors** (HTTP answers; the provider text is kept on the exception, capped at 500 characters, never
+logged):
+
+| Code | Source |
+|---|---|
+| `PROVIDER_AUTH` | 401 |
+| `PROVIDER_ACCESS_DENIED` | 403; a 4xx whose message says access is not allowed, "verify you are a corporate customer", "unsupported countries" or "don't have access" (the Bedrock allowlisting answers); error code `AccessDeniedException` |
+| `CONFIG` | 400, 404 and any other 4xx; missing AWS credentials |
+| `PROVIDER_RATE_LIMITED` | 429 (after retries) |
+| `PROVIDER_TIMEOUT` | 408; no HTTP response (connect/read timeout, DNS, TLS) |
+| `PROVIDER_ERROR` | 5xx (after retries); a 2xx body that is not a JSON object |
+
+**Pricing** (model card above, read 2026-09-28, Standard tier, Commercial Regions, short context
+≤ 272K input tokens, In-Region): input **$5.50**, cached input $0.55, output **$33.00** per million
+tokens (long context: $11.00 / $1.10 / $49.50; a card review is far below 272K). Committed as
+`AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK=5.5` and `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK=33`.
+
+**Data location.** With this provider, the card text of automation drafts (public study content
+only: question, options, answer, explanation and the cited source quote; no user data, no secrets)
+leaves ap-southeast-2 and is processed In-Region in `us-east-1`. Human card QA stays on Claude in
+ap-southeast-2.
+
+**IAM (infra side, not in this service).** The action is the one the Claude Mantle client already
+uses: `bedrock-mantle:CreateInference` on the resource type `project`, here
+`arn:aws:bedrock-mantle:us-east-1:<account>:project/default` (the client sends no `OpenAI-Project`
+header), with `StringEquals bedrock-mantle:Model = openai.gpt-5.5` (AWS Service Authorization
+Reference, list_bedrock-mantle.html). Until that grant is applied every automation call answers
+403 → `PROVIDER_ACCESS_DENIED` (fail fast, acked; core routes the draft to a human).
+
+**Owner probe (one call, after Bedrock allowlisting and the IAM grant, before any paid eval run).**
+Each probe is one tiny paid request; run it only as the owner, from a shell with the ai-qa role or an
+equivalent admin profile:
+
+```bash
+# openai-mantle (the committed reviewer): expect HTTP 200 and a chat.completion body.
+uvx --from awscurl awscurl --service bedrock-mantle --region us-east-1 -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"openai.gpt-5.5","messages":[{"role":"user","content":"Reply with OK."}],"max_completion_tokens":64,"reasoning_effort":"low"}' \
+  https://bedrock-mantle.us-east-1.api.aws/openai/v1/chat/completions
+
+# bedrock-converse fallback: expect a converse reply, or a ValidationException naming the model.
+aws bedrock-runtime converse --region ap-southeast-2 --model-id global.openai.gpt-5.5 \
+  --messages '[{"role":"user","content":[{"text":"Reply with OK."}]}]' --inference-config maxTokens=64
+```
+
+A 403 or an allowlisting message is the account (grant, Marketplace terms, allowlisting), not this
+code. Only a 200 on the first probe makes `dc-evals run --provider openai-mantle` meaningful.
+
 **Before turning either switch on (owner-approved only):**
 
 - **Marketplace terms.** Third-party models on Bedrock are sold through AWS Marketplace: the first
@@ -389,8 +470,9 @@ the reviewer actually used.
 
 | Var | Default | Meaning |
 |---|---|---|
-| `AI_QA_AUTOMATION_PROVIDER` | empty = unset | `bedrock-converse` \| `bedrock` \| `anthropic`; anything else is `CONFIG` for automation-profile messages only |
-| `AI_QA_AUTOMATION_MODEL` | provider default; required for `bedrock-converse` | same prefix rules as `AI_MODEL` (no `anthropic.` id for `bedrock-converse`) |
+| `AI_QA_AUTOMATION_PROVIDER` | empty = unset | `openai-mantle` \| `bedrock-converse` \| `bedrock` \| `anthropic`; anything else is `CONFIG` for automation-profile messages only |
+| `AI_QA_AUTOMATION_MODEL` | provider default; required for `bedrock-converse` and `openai-mantle` | same prefix rules as `AI_MODEL` (no `anthropic.` id for `bedrock-converse` / `openai-mantle`) |
+| `AI_QA_AUTOMATION_REGION` | `us-east-1` | region of `openai-mantle`; a value that is not an AWS region is `CONFIG` for automation-profile messages only (the default region is kept) |
 | `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK` | unset | USD per million input tokens for the automation estimate |
 | `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` | unset | USD per million output tokens for the automation estimate |
 
@@ -435,20 +517,20 @@ the handler runs it only for `default`. A default message on the same Lambda sti
 `AI_QA_SECOND_*` is set.
 
 **Why GPT-5.5.** The drafts are authored by Claude; a reviewer from another vendor does not share
-its blind spots (owner decision 4), so the committed reviewer is `bedrock-converse` /
-`global.openai.gpt-5.5` with no second opinion. Its findings route a draft to a human; core decides
+its blind spots (owner decision 4), so the committed reviewer is GPT-5.5 with no second opinion,
+on the transport its model card lists: `openai-mantle` / `openai.gpt-5.5` in `us-east-1` (C03, R18C
+L1; `bedrock-converse` / `global.openai.gpt-5.5` remains the fallback). Its findings route a draft to a human; core decides
 (A00 §5.4).
 
-**Pricing: pending.** `global.openai.gpt-5.5` has no entry in the AWS Price List for Amazon
-Bedrock (read-only check on 2026-09-27: the `AmazonBedrock` service lists only `gpt-oss-*` OpenAI
-models; GPT-5.5 is sold through AWS Marketplace), so no published on-demand `ap-southeast-2` price
-could be confirmed and both `AI_QA_AUTOMATION_PRICE_*` keys are left out of `env/prod.env.json`.
-The supervisor adds both keys before draft QA is enabled (A00 §19.3 step 11). Until then every
-automation-profile message answers `CONFIG`, and core routes the draft `human` / `QA_ERROR`.
+**Pricing.** Committed from the GPT-5.5 model card (read 2026-09-28): $5.50 input / $33.00 output
+per million tokens In-Region (see "Provider `openai-mantle`"). This replaces the earlier "pricing
+pending" note (the AWS Price List still has no GPT-5.5 entry; the model card publishes the price).
+With both keys set, the automation profile no longer answers `CONFIG` for missing prices.
 
-**IAM.** Nothing new: the ai-qa role already holds the Converse grant for `global.openai.gpt-5.5`
-(Q02, `infra/modules/identity/roles_r18.tf`). No new SSM parameter, dependency or metric; EMF item
-metrics carry the provider actually used.
+**IAM.** `openai-mantle` needs `bedrock-mantle:CreateInference` on the us-east-1 `project/default`
+with `bedrock-mantle:Model = openai.gpt-5.5` (infra wave, see "Provider `openai-mantle`"); the Q02
+Converse grant for `global.openai.gpt-5.5` stays for the fallback. No new SSM parameter, dependency
+or metric; EMF item metrics carry the provider actually used.
 
 ## Local development
 
