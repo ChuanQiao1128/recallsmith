@@ -209,6 +209,78 @@ public class CardSimilarityTests
     }
   }
 
+  [Fact]
+  public async Task PgTrgmQuery_FiltersThroughTheTrigramIndex()
+  {
+    // backend-design-7: a similarity(...) >= $n predicate cannot be an index condition of idx_cards_question_trgm
+    // (at best the partial index is read whole); the % operator under pg_trgm.similarity_threshold can. Whether the
+    // planner prefers the index depends on table size, so the competing paths are removed inside a rolled-back
+    // transaction (sequential scans, plain index scans and nested loops off, the is_deleted btree dropped) and the plan must show the
+    // trigram index doing the filtering.
+    var text = "glacier restore tier alpha";
+    var (sql, parameters, usesIndex) = CardSimilarity.BuildPgTrgmQuery(text, new SimilarityQuery(text, null), 5, 0.3);
+    Assert.True(usesIndex);
+
+    await using var conn = await _db.OpenAsync();
+    await using var tx = await conn.BeginTransactionAsync();
+    var deckId = Convert.ToInt64(await DbUtil.ExecuteScalarAsync(conn, tx,
+      "insert into decks (slug, title, author) values ($1, 'deck j10 plan', 'tests') returning id", [$"it-j10-plan-{Guid.NewGuid():N}"]),
+      CultureInfo.InvariantCulture);
+    await DbUtil.ExecuteAsync(conn, tx,
+      """
+      insert into cards (deck_id, stable_uid, question, explanation, difficulty, order_in_deck)
+      select $1, 'plan-' || g, 'synthetic filler ' || md5(g::text) || ' question ' || g, 'synthetic explanation', 2, g
+      from generate_series(1, 2000) g
+      """,
+      [deckId]);
+    await DbUtil.ExecuteAsync(conn, tx, "analyze cards", []);
+    await DbUtil.ExecuteAsync(conn, tx, "drop index idx_cards_is_deleted", []);
+    await DbUtil.ExecuteAsync(conn, tx, "set local enable_seqscan = off", []);
+    await DbUtil.ExecuteAsync(conn, tx, "set local enable_indexscan = off", []);
+    await DbUtil.ExecuteAsync(conn, tx, "set local enable_nestloop = off", []);
+    await DbUtil.ExecuteAsync(conn, tx, "select set_config('pg_trgm.similarity_threshold', $1, true)", [CardSimilarity.ThresholdSetting(0.3)]);
+    var plan = string.Join("\n", (await DbUtil.QueryAsync(conn, tx, "explain " + sql, parameters)).Select(r => r["QUERY PLAN"] as string));
+    await tx.RollbackAsync();
+
+    Assert.True(plan.Contains("Bitmap Index Scan on idx_cards_question_trgm", StringComparison.Ordinal), plan);
+    Assert.True(plan.Contains("Index Cond: (question % ", StringComparison.Ordinal), plan);
+
+    // A threshold of 0 matches cards that share no trigram (absent from the index), so it keeps the plain predicate.
+    Assert.False(CardSimilarity.BuildPgTrgmQuery(text, new SimilarityQuery(text, null), 5, 0).UsesIndex);
+  }
+
+  [Fact]
+  public async Task Similar_ThresholdEqualToAScore_MatchesInBothEngines()
+  {
+    // The indexed filter keeps exact parity at the boundary: a card whose float4 score equals the threshold is
+    // returned by pg_trgm exactly when the in-process fallback returns it.
+    var (deck, _) = await SyntheticDeckAsync("boundary");
+    const string text = "glacier restore tier alpha";
+    var scores = (await _db.QueryAsync(
+      "select similarity(question, $1)::float8 as s from cards where deck_id = $2 and similarity(question, $1) > 0 order by 1", text, deck.Id))
+      .Select(r => Convert.ToDouble(r["s"], CultureInfo.InvariantCulture)).ToList();
+    Assert.NotEmpty(scores);
+
+    try
+    {
+      foreach (var threshold in scores)
+      {
+        CardSimilarity.TestForceEngine = CardSimilarity.EnginePgTrgm;
+        var pg = Data(await CallAsync(new { text, deckSlug = deck.Slug, threshold, limit = 20 }));
+        CardSimilarity.TestForceEngine = CardSimilarity.EngineFallback;
+        var fb = Data(await CallAsync(new { text, deckSlug = deck.Slug, threshold, limit = 20 }));
+
+        Assert.Equal(Tuples(fb), Tuples(pg));
+        Assert.Equal(scores.Count(s => s >= threshold), Tuples(pg).Count);
+      }
+    }
+    finally
+    {
+      CardSimilarity.TestForceEngine = null;
+      CardSimilarity.ResetEngineCache();
+    }
+  }
+
   // ---------------------------------------------------------------- scope and flags
 
   [Fact]
