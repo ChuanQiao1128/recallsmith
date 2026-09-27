@@ -228,6 +228,8 @@ describe('handled vs open exceptions (frontend-console-1, automation-10, K7)', (
   });
 
   it('shows the open backlog on the Overview and links it to the open exceptions', async () => {
+    // F04 frontend-console-35: in live mode; a dry run keeps these counts blind (automationConsoleRound5.test.tsx).
+    api.fetchAutomationStatus.mockResolvedValue(ok(statusFixture({ mode: { configured: 'live', effective: 'live', liveBlockedReason: null, autoPublish: true } })));
     mountAt('/automation');
     const backlog = await screen.findByRole('region', { name: 'Open exceptions' });
     const pending = within(backlog).getByTestId('automation-backlog-human-pending');

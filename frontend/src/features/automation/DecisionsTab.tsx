@@ -20,7 +20,9 @@
 // row's verdict (the filter names it), so those rows are recorded as seen and
 // a later decision on them is not counted as blind (frontend-console-25,
 // generalised beyond would_accept by E05 frontend-console-30). The open
-// exceptions view (state=human&open=1) is such a list, and stays as it is.
+// exceptions view (state=human&open=1) is such a list, and stays as it is. So
+// is the checkbox alone (`open=1`): it lists routed rows only (F04
+// frontend-console-36).
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
@@ -147,15 +149,17 @@ export function DecisionsTab({
   }
 
   const shown = openOnly ? list.items.filter(isOpenDecision) : list.items;
-  // The state or reason filter itself tells the verdict of every row it lists.
-  const verdictFiltered = decisionListShowsVerdict({ state, reason });
+  // The state, reason or open-only filter itself tells the verdict of every row it lists.
+  const verdictFiltered = decisionListShowsVerdict({ state, reason, openOnly });
 
   useEffect(() => {
     // Only the list loaded for these filters: a list still loading for another key is not on screen as filtered.
     if (!verdictFiltered || list.forKey !== key) return;
-    const ids = list.items.filter(decisionVerdictHidden).map(d => d.draftId);
+    // Only the rows on screen: the open-only list drops any row that is not open.
+    const onScreen = openOnly ? list.items.filter(isOpenDecision) : list.items;
+    const ids = onScreen.filter(decisionVerdictHidden).map(d => d.draftId);
     if (ids.length > 0) markVerdictSeen(...ids);
-  }, [verdictFiltered, list.forKey, list.items, key]);
+  }, [verdictFiltered, openOnly, list.forKey, list.items, key]);
   const closeSearch = `?${withDecisionFilters(new URLSearchParams({ tab: 'decisions' }), filters).toString()}`;
 
   return (
