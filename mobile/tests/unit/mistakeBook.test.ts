@@ -29,10 +29,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setActiveUserSubForStorage } from '../../src/review/storage';
 import {
   activeMistakes,
+  adoptAnonMistakeBook,
   applyOutcome,
   isMistake,
   loadMistakeBook,
   localDaysBetween,
+  mergeMistakeBooks,
   MISTAKE_BOOK_KEY,
   MISTAKE_BOOK_MAX_ENTRIES,
   MISTAKE_WINDOW_DAYS,
@@ -411,5 +413,110 @@ describe('mistakeBook', () => {
     } finally {
       setActiveUserSubForStorage(null);
     }
+  });
+
+  describe('anonymous book adoption (Z07 mobile-17)', () => {
+    const USER_KEY = 'devcards:u:user-a:devcards:mistakes:v1';
+    const userStored = (): MistakeBookState | null => {
+      const raw = store.get(USER_KEY);
+      return raw ? (JSON.parse(raw) as MistakeBookState) : null;
+    };
+
+    it('merges two books keeping the entry with the newer lastWrongAt, then applies the LRU cap', () => {
+      const user = bookWith(
+        entry({ stableUid: 'both-user-newer', lastWrongAt: T0 + 5, wrongCount: 3 }),
+        entry({ stableUid: 'both-anon-newer', lastWrongAt: T0 + 1, wrongCount: 1 }),
+        entry({ stableUid: 'tie', lastWrongAt: T0, wrongCount: 7 }),
+        entry({ stableUid: 'user-only' }),
+      );
+      const anon = bookWith(
+        entry({ stableUid: 'both-user-newer', lastWrongAt: T0 + 2, wrongCount: 1 }),
+        entry({ stableUid: 'both-anon-newer', lastWrongAt: T0 + 9, wrongCount: 2, correctStreak: 1, lastCorrectAt: T0 + 3 }),
+        entry({ stableUid: 'tie', lastWrongAt: T0, wrongCount: 1 }),
+        entry({ stableUid: 'anon-only', lastWrongAt: T0 + 4 }),
+      );
+      const userSnapshot = structuredClone(user);
+      const anonSnapshot = structuredClone(anon);
+
+      const merged = mergeMistakeBooks(user, anon);
+
+      expect(Object.keys(merged.entries).sort()).toEqual(
+        ['csharp::anon-only', 'csharp::both-anon-newer', 'csharp::both-user-newer', 'csharp::tie', 'csharp::user-only'],
+      );
+      expect(merged.entries['csharp::both-user-newer'].wrongCount).toBe(3);
+      expect(merged.entries['csharp::both-anon-newer']).toEqual(anon.entries['csharp::both-anon-newer']);
+      expect(merged.entries['csharp::tie'].wrongCount).toBe(7);
+      expect(merged.entries['csharp::anon-only']).toEqual(anon.entries['csharp::anon-only']);
+      expect(user).toEqual(userSnapshot);
+      expect(anon).toEqual(anonSnapshot);
+
+      // Cap: 400 user + 200 anon entries keep the 500 with the newest lastWrongAt.
+      const big = (prefix: string, n: number, start: number) =>
+        bookWith(...Array.from({ length: n }, (_, i) => entry({ stableUid: `${prefix}${i}`, lastWrongAt: start + i })));
+      const capped = mergeMistakeBooks(big('u', 400, T0), big('a', 200, T0 + 1000));
+      expect(Object.keys(capped.entries)).toHaveLength(MISTAKE_BOOK_MAX_ENTRIES);
+      expect(capped.entries['csharp::a0']).toBeDefined();
+      expect(capped.entries['csharp::u99']).toBeUndefined();
+      expect(capped.entries['csharp::u100']).toBeDefined();
+    });
+
+    it('adopts the signed-out book into the account at sign-in and removes the anon key', async () => {
+      await recordMistakeOutcome(outcome({ stableUid: 'anon1', at: T0 }));
+      await recordMistakeOutcome(outcome({ stableUid: 'shared', at: T0 + 10 }));
+      setActiveUserSubForStorage('user-a');
+      try {
+        store.set(USER_KEY, JSON.stringify(bookWith(entry({ stableUid: 'mine' }), entry({ stableUid: 'shared', lastWrongAt: T0 }))));
+
+        expect(await adoptAnonMistakeBook()).toEqual({ mistakesAdopted: 2 });
+
+        expect(store.has(ANON_KEY)).toBe(false);
+        const book = userStored();
+        expect(Object.keys(book?.entries ?? {}).sort()).toEqual(['csharp::anon1', 'csharp::mine', 'csharp::shared']);
+        expect(book?.entries['csharp::shared'].lastWrongAt).toBe(T0 + 10);
+        // Idempotent: a second run finds nothing.
+        expect(await adoptAnonMistakeBook()).toEqual({ mistakesAdopted: 0 });
+        expect(userStored()).toEqual(book);
+      } finally {
+        setActiveUserSubForStorage(null);
+      }
+      // A later sign-out does not bring the stale anonymous book back.
+      expect(await loadMistakeBook()).toEqual(EMPTY);
+    });
+
+    it('does nothing while signed out', async () => {
+      await recordMistakeOutcome(outcome());
+      expect(await adoptAnonMistakeBook()).toEqual({ mistakesAdopted: 0 });
+      expect(stored()?.entries['csharp::c1']).toBeDefined();
+    });
+
+    it('keeps the anon book when the account book cannot be read, and never throws', async () => {
+      await recordMistakeOutcome(outcome());
+      setActiveUserSubForStorage('user-a');
+      try {
+        throwOnGet = true;
+        expect(await adoptAnonMistakeBook()).toEqual({ mistakesAdopted: 0 });
+        throwOnGet = false;
+        expect(store.has(ANON_KEY)).toBe(true);
+        expect(await adoptAnonMistakeBook()).toEqual({ mistakesAdopted: 1 });
+      } finally {
+        throwOnGet = false;
+        setActiveUserSubForStorage(null);
+      }
+    });
+
+    it('runs on the same chain as recordMistakeOutcome, so a rating racing sign-in is not lost', async () => {
+      await recordMistakeOutcome(outcome({ stableUid: 'anon1', at: T0 }));
+      setActiveUserSubForStorage('user-a');
+      try {
+        await Promise.all([
+          recordMistakeOutcome(outcome({ stableUid: 'user1', at: T0 + 1 })),
+          adoptAnonMistakeBook(),
+          recordMistakeOutcome(outcome({ stableUid: 'user2', at: T0 + 2 })),
+        ]);
+        expect(Object.keys(userStored()?.entries ?? {}).sort()).toEqual(['csharp::anon1', 'csharp::user1', 'csharp::user2']);
+      } finally {
+        setActiveUserSubForStorage(null);
+      }
+    });
   });
 });
