@@ -9,6 +9,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { createApiClient, ToolFailure } from './api';
 import type { Config } from './config';
+import { credentialGuard, type CredentialGuard } from './credentialGuard';
 import { clientDraftKey, draftCardSchema, type DraftCard } from './draftCard';
 import { groundQuote, SourceStore, sourceGrounding, type GroundingLocation, type IngestedSource, type SourceGrounding } from './grounding';
 import { defaultRunProcess, IngestError, readSource, type RunProcess } from './ingest';
@@ -32,11 +33,26 @@ function failFrom(err: unknown): CallToolResult {
   return fail(`unexpected error: ${err instanceof Error ? err.message : String(err)}`);
 }
 
+/**
+ * Wraps a tool handler so that no result names the login token directory (ai-agent-29):
+ * a successful result that does becomes a tool error, and a failure message loses the path.
+ */
+function guarded<A>(guard: CredentialGuard, handler: (args: A) => Promise<CallToolResult>): (args: A) => Promise<CallToolResult> {
+  return async (args) => {
+    const result = await handler(args);
+    const texts = result.content.map((item) => (item.type === 'text' ? item.text : ''));
+    if (!texts.some((text) => guard.names(text))) return result;
+    if (result.isError === true) return fail(texts.map((text) => guard.redact(text)).join(' '));
+    return fail('refused: the result names a path in the login token directory, which is never returned');
+  };
+}
+
 export function createServer(deps: { config: Config; runProcess?: RunProcess }): McpServer {
   const { config } = deps;
   const runProcess = deps.runProcess ?? defaultRunProcess;
   const api = createApiClient(config);
   const ingestContext = { repoRoot: config.repoRoot, tokenFile: config.tokenFile };
+  const guard = credentialGuard(config.tokenFile);
   const sources = new SourceStore();
   const reads = new ReadCache();
   const server = new McpServer({ name: 'developercards', version: '1.8.0' });
@@ -73,7 +89,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       },
       annotations: { title: 'Read a source', readOnlyHint: true, openWorldHint: true },
     },
-    async ({ source, canonicalUrl, maxChunkChars, offset, limit, chunkIds }) => {
+    guarded(guard, async ({ source, canonicalUrl, maxChunkChars, offset, limit, chunkIds }) => {
       try {
         if (chunkIds !== undefined && (offset !== undefined || limit !== undefined)) {
           return fail('pass either chunkIds or offset/limit, not both');
@@ -92,7 +108,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       } catch (err) {
         return failFrom(err);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -111,7 +127,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       },
       annotations: { title: 'Find similar cards', readOnlyHint: true, openWorldHint: false },
     },
-    async ({ text, deckSlug, limit }) => {
+    guarded(guard, async ({ text, deckSlug, limit }) => {
       try {
         const body: { text: string; deckSlug?: string; limit?: number } = { text };
         if (deckSlug !== undefined) body.deckSlug = deckSlug;
@@ -120,7 +136,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       } catch (err) {
         return failFrom(err);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -139,13 +155,13 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       },
       annotations: { title: 'Lint a draft card', readOnlyHint: true, openWorldHint: false },
     },
-    async ({ deckSlug, card, sourceChunkText }) => {
+    guarded(guard, async ({ deckSlug, card, sourceChunkText }) => {
       try {
         return ok(lintDraftCard({ deckSlug, card, sourceChunkText }, loadTopicVocabulary(config.repoRoot)));
       } catch (err) {
         return failFrom(err);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -165,7 +181,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       },
       annotations: { title: 'Submit drafts for review', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ deckSlug, drafts, agent }) => {
+    guarded(guard, async ({ deckSlug, drafts, agent }) => {
       try {
         const vocabulary = loadTopicVocabulary(config.repoRoot);
         const failures: string[] = [];
@@ -227,7 +243,7 @@ export function createServer(deps: { config: Config; runProcess?: RunProcess }):
       } catch (err) {
         return failFrom(err);
       }
-    },
+    }),
   );
 
   return server;

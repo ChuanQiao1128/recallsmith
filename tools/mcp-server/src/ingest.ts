@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, resolve, sep } from 'node:path';
+import { credentialGuard } from './credentialGuard';
 
 export type RunProcess = (
   command: string,
@@ -180,6 +181,11 @@ export async function readSource(context: IngestContext, input: ReadSourceInput,
     !Array.isArray((parsed as { chunks?: unknown }).chunks)
   ) {
     throw new IngestError('dc-ingest returned unexpected output');
+  }
+  // Never hand the agent a file from the login token directory, whatever dc-ingest read (ai-agent-29).
+  const path = (parsed as { path?: unknown }).path;
+  if (typeof path === 'string' && path !== '' && credentialGuard(context.tokenFile).contains(path)) {
+    throw new IngestError('refused: dc-ingest returned a file in the login token directory, which is never read');
   }
   return parsed;
 }
