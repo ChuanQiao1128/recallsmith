@@ -109,6 +109,15 @@ public static class WebhookDeliveryReport
       if (rows.Count == 0) return Helpers.ErrorEnvelope(res, 404, "DELIVERY_NOT_FOUND", $"Delivery {deliveryId} not found");
 
       var row = rows[0];
+
+      // Automation Ledger (R18 J08, contract §9.3): one delivered event = one unit, once per delivery.
+      // Test pings are not notifications. Best-effort: the response never depends on it.
+      if (status == "delivered" && (string?)row["status"] == "delivered" && (string?)row["event"] != WebhookEvents.TestEvent)
+      {
+        await AutomationLedger.RecordAsync(conn, new AutomationEvent("webhook_notification", 1, "success",
+          Ref: deliveryId.ToString("D"), DedupeKey: $"webhook:{deliveryId:D}"));
+      }
+
       return res.Ok(new
       {
         deliveryId = (Guid)row["deliveryId"]!,

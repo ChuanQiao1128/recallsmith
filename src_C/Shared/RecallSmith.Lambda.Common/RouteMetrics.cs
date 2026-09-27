@@ -161,6 +161,10 @@ public static class RouteMetrics
     "/api/v1/admin/webhooks/subscriptions",
     "/api/v1/admin/webhooks/deliveries",
     "/api/internal/webhooks/deliveries/report",
+    "/api/v1/admin/automation/ledger",
+    "/api/v1/admin/automation/events",
+    "/api/v1/admin/automation/baselines",
+    "/api/v1/admin/automation/backfill",
 
     // edge-public
     "/api/v1/billing/verify",
@@ -187,6 +191,7 @@ public static class RouteMetrics
     "/api/v1/admin/webhooks/subscriptions/:subscriptionId",
     "/api/v1/admin/webhooks/subscriptions/:subscriptionId/test",
     "/api/v1/admin/webhooks/deliveries/:deliveryId/redeliver",
+    "/api/v1/admin/automation/baselines/:automation",
   ];
 
   // Longest first, so the table stays order-independent: appending an entry to the arrays

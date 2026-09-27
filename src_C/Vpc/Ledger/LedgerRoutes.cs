@@ -1,0 +1,609 @@
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
+using Amazon.Lambda.APIGatewayEvents;
+using Npgsql;
+using RecallSmith.Lambda.Common;
+using RecallSmith.Lambda.Db;
+using RecallSmith.Lambda.Vpc.Authoring;
+using RecallSmith.Lambda.Vpc.Pagination;
+
+namespace RecallSmith.Lambda.Vpc.Ledger;
+
+/// <summary>
+/// Automation Ledger admin API (R18 J08, contract §9.4–§9.5): the period summary, the raw event list,
+/// the baselines, the super_admin baseline editor and the super_admin backfill from history.
+/// Minutes are computed here at query time from the current baselines (§9.1), never stored, so editing a
+/// baseline recomputes history. A database without migration 028 answers 503 SERVER_NOT_READY_LEDGER.
+/// </summary>
+public static class LedgerRoutes
+{
+  public const int DefaultRangeDays = 90;
+  public const int MaxRangeDays = 366;
+  public const int DefaultLimit = 50;
+  public const int MaxLimit = 100;
+  public const decimal MaxBaselineMinutes = 999999.99m;
+  public const int MaxNoteLength = 500;
+
+  public static readonly IReadOnlyList<string> Granularities = ["day", "week", "month"];
+  public static readonly IReadOnlyList<string> BaselineSources = ["measured", "default"];
+
+  private const string MissingPg = "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)";
+  private const string BackfillHeuristic = "cards created in the same minute >= 5";
+
+  // ------------------------------------------------------------------ GET /ledger
+
+  public static async Task<APIGatewayProxyResponse> HandleLedger(LambdaRequest req, Res res, AuthContext auth)
+  {
+    var deny = Auth.RequireAdmin(auth, res);
+    if (deny is not null) return deny;
+
+    if (!req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase)) return res.MethodNotAllowed("Method not allowed");
+
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) return Helpers.ConfigError(res, MissingPg);
+
+    DateOnly? fromParam = null;
+    DateOnly? toParam = null;
+    if (Param(req, "from") is { } fromRaw)
+    {
+      if (!TryParseDay(fromRaw, out var d)) return Invalid(res, "from must be a date yyyy-MM-dd");
+      fromParam = d;
+    }
+    if (Param(req, "to") is { } toRaw)
+    {
+      if (!TryParseDay(toRaw, out var d)) return Invalid(res, "to must be a date yyyy-MM-dd");
+      toParam = d;
+    }
+
+    var granularity = Param(req, "granularity") ?? "week";
+    if (!Granularities.Contains(granularity, StringComparer.Ordinal)) return Invalid(res, "granularity must be one of day, week, month");
+
+    DateOnly from;
+    DateOnly to;
+    try
+    {
+      (from, to) = (fromParam, toParam) switch
+      {
+        ({ } f, { } t) => (f, t),
+        ({ } f, null) => (f, f.AddDays(DefaultRangeDays - 1)),
+        (null, { } t) => (t.AddDays(-(DefaultRangeDays - 1)), t),
+        _ => (DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-(DefaultRangeDays - 1)), DateOnly.FromDateTime(DateTime.UtcNow)),
+      };
+    }
+    catch (ArgumentOutOfRangeException)
+    {
+      return Invalid(res, "from/to are out of range");
+    }
+
+    if (from > to) return Invalid(res, "from must not be after to");
+    if (to.DayNumber - from.DayNumber + 1 > MaxRangeDays) return Invalid(res, $"The range must not exceed {MaxRangeDays} days");
+
+    var start = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+    var end = to.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddDays(1);
+
+    try
+    {
+      var perAutomation = await DbUtil.QueryAsync(conn, null,
+        """
+        select b.automation as "automation", b.unit as "unit",
+               b.baseline_minutes_per_unit as "baselineMinutesPerUnit", b.baseline_source as "baselineSource",
+               count(e.id) filter (where e.units > 0 or e.outcome = 'failure') as "runs",
+               coalesce(sum(e.units), 0) as "units",
+               count(e.id) filter (where e.outcome = 'failure') as "failures",
+               coalesce(sum(e.units * b.baseline_minutes_per_unit), 0) as "baselineMinutes",
+               coalesce(sum(coalesce(e.actual_minutes, 0)), 0) as "actualMinutes",
+               coalesce(sum(case when e.outcome in ('success','partial')
+                                 then greatest(0, e.units * b.baseline_minutes_per_unit - coalesce(e.actual_minutes, 0))
+                                 else 0 end), 0) as "minutesSaved",
+               coalesce(sum(e.defects_caught), 0) as "defectsCaught"
+        from automation_baselines b
+        left join automation_events e
+          on e.automation = b.automation and e.occurred_at >= $1 and e.occurred_at < $2
+        group by b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source
+        order by b.automation collate "C"
+        """,
+        [start, end]);
+
+      var seriesRows = await DbUtil.QueryAsync(conn, null,
+        """
+        select to_char(date_trunc($3::text, e.occurred_at at time zone 'UTC'), 'YYYY-MM-DD') as "periodStart",
+               e.automation as "automation",
+               count(*) filter (where e.units > 0 or e.outcome = 'failure') as "runs",
+               coalesce(sum(e.units), 0) as "units",
+               coalesce(sum(case when e.outcome in ('success','partial')
+                                 then greatest(0, e.units * b.baseline_minutes_per_unit - coalesce(e.actual_minutes, 0))
+                                 else 0 end), 0) as "minutesSaved",
+               coalesce(sum(e.defects_caught), 0) as "defectsCaught"
+        from automation_events e
+        join automation_baselines b on b.automation = e.automation
+        where e.occurred_at >= $1 and e.occurred_at < $2
+        group by 1, e.automation
+        order by 1, e.automation collate "C"
+        """,
+        [start, end, granularity]);
+
+      long qaFalsePositives = 0;
+      var hasFindings = await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.ai_qa_findings') is not null", []);
+      if (hasFindings is true)
+      {
+        var n = await DbUtil.ExecuteScalarAsync(conn, null,
+          "select count(*) from ai_qa_findings where resolution = 'dismissed' and resolved_at >= $1 and resolved_at < $2",
+          [start, end]);
+        qaFalsePositives = Convert.ToInt64(n, CultureInfo.InvariantCulture);
+      }
+
+      var automations = perAutomation.Select(r =>
+      {
+        var runs = ToLong(r["runs"]);
+        var failures = ToLong(r["failures"]);
+        return new
+        {
+          automation = (string)r["automation"]!,
+          unit = (string)r["unit"]!,
+          baselineMinutesPerUnit = ToDecimal(r["baselineMinutesPerUnit"]),
+          baselineSource = (string)r["baselineSource"]!,
+          runs,
+          units = ToLong(r["units"]),
+          failures,
+          failureRate = runs == 0 ? 0m : Math.Round((decimal)failures / runs, 4, MidpointRounding.AwayFromZero),
+          baselineMinutes = Round2(ToDecimal(r["baselineMinutes"])),
+          actualMinutes = Round2(ToDecimal(r["actualMinutes"])),
+          minutesSaved = Round2(ToDecimal(r["minutesSaved"])),
+          defectsCaught = ToLong(r["defectsCaught"]),
+        };
+      }).ToArray();
+
+      var totalSaved = perAutomation.Sum(r => ToDecimal(r["minutesSaved"]));
+      var totals = new
+      {
+        runs = automations.Sum(a => a.runs),
+        units = automations.Sum(a => a.units),
+        baselineMinutes = Round2(perAutomation.Sum(r => ToDecimal(r["baselineMinutes"]))),
+        actualMinutes = Round2(perAutomation.Sum(r => ToDecimal(r["actualMinutes"]))),
+        minutesSaved = Round2(totalSaved),
+        hoursSaved = Round2(totalSaved / 60m),
+        defectsCaught = automations.Sum(a => a.defectsCaught),
+        qaFalsePositives,
+      };
+
+      var series = seriesRows.Select(r => new
+      {
+        periodStart = (string)r["periodStart"]!,
+        automation = (string)r["automation"]!,
+        runs = ToLong(r["runs"]),
+        units = ToLong(r["units"]),
+        minutesSaved = Round2(ToDecimal(r["minutesSaved"])),
+        defectsCaught = ToLong(r["defectsCaught"]),
+      }).ToArray();
+
+      return res.Ok(new
+      {
+        from = FormatDay(from),
+        to = FormatDay(to),
+        granularity,
+        totals,
+        automations,
+        series,
+      });
+    }
+    catch (Exception ex)
+    {
+      return MapError(ex, res);
+    }
+  }
+
+  // ------------------------------------------------------------------ GET /events
+
+  public static async Task<APIGatewayProxyResponse> HandleEvents(LambdaRequest req, Res res, AuthContext auth)
+  {
+    var deny = Auth.RequireAdmin(auth, res);
+    if (deny is not null) return deny;
+
+    if (!req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase)) return res.MethodNotAllowed("Method not allowed");
+
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) return Helpers.ConfigError(res, MissingPg);
+
+    var where = new List<string>();
+    var parameters = new List<object?>();
+
+    if (Param(req, "automation") is { } automation)
+    {
+      if (!AutomationLedger.Automations.Contains(automation, StringComparer.Ordinal))
+      {
+        return Invalid(res, $"automation must be one of {string.Join(", ", AutomationLedger.Automations)}");
+      }
+      parameters.Add(automation);
+      where.Add($"automation = ${parameters.Count}");
+    }
+
+    var limit = DefaultLimit;
+    if (Param(req, "limit") is { } limitRaw)
+    {
+      if (!int.TryParse(limitRaw, NumberStyles.None, CultureInfo.InvariantCulture, out limit) || limit is < 1 or > MaxLimit)
+      {
+        return Invalid(res, "limit must be an integer in 1..100");
+      }
+    }
+
+    if (Param(req, "cursor") is { } cursorRaw)
+    {
+      if (!TryDecodeCursor(cursorRaw, out var lastId)) return Invalid(res, "Invalid cursor");
+      parameters.Add(lastId);
+      where.Add($"id < ${parameters.Count}");
+    }
+
+    parameters.Add(limit);
+    var sql = $"""
+      select id as "id", automation as "automation", occurred_at as "occurredAt", units as "units", outcome as "outcome",
+             actual_minutes as "actualMinutes", defects_caught as "defectsCaught", deck_id as "deckId", ref as "ref",
+             source as "source", dedupe_key as "dedupeKey", details as "details"
+      from automation_events
+      {(where.Count > 0 ? "where " + string.Join(" and ", where) : string.Empty)}
+      order by id desc
+      limit ${parameters.Count}
+      """;
+
+    try
+    {
+      var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
+      foreach (var r in rows) Helpers.JsonbCell(r, "details");
+
+      var items = rows.Select(r => new
+      {
+        id = ToLong(r["id"]),
+        automation = (string)r["automation"]!,
+        occurredAt = r["occurredAt"],
+        units = Convert.ToInt32(r["units"], CultureInfo.InvariantCulture),
+        outcome = (string)r["outcome"]!,
+        actualMinutes = r["actualMinutes"] is null ? (decimal?)null : ToDecimal(r["actualMinutes"]),
+        defectsCaught = Convert.ToInt32(r["defectsCaught"], CultureInfo.InvariantCulture),
+        deckId = r["deckId"] is null ? (long?)null : ToLong(r["deckId"]),
+        @ref = (string?)r["ref"],
+        source = (string)r["source"]!,
+        dedupeKey = (string?)r["dedupeKey"],
+        details = r["details"],
+      }).ToArray();
+
+      var nextCursor = rows.Count == limit ? EncodeCursor(items[^1].id) : null;
+      return res.Ok(new { items, nextCursor });
+    }
+    catch (Exception ex)
+    {
+      return MapError(ex, res);
+    }
+  }
+
+  // ------------------------------------------------------------------ GET /baselines
+
+  public static async Task<APIGatewayProxyResponse> HandleBaselines(LambdaRequest req, Res res, AuthContext auth)
+  {
+    var deny = Auth.RequireAdmin(auth, res);
+    if (deny is not null) return deny;
+
+    if (!req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase)) return res.MethodNotAllowed("Method not allowed");
+
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) return Helpers.ConfigError(res, MissingPg);
+
+    try
+    {
+      var rows = await DbUtil.QueryAsync(conn, null, BaselineSelect + " order by automation collate \"C\"", []);
+      return res.Ok(new { items = rows.Select(BaselineItem).ToArray() });
+    }
+    catch (Exception ex)
+    {
+      return MapError(ex, res);
+    }
+  }
+
+  // ------------------------------------------------------------------ PUT /baselines/:automation
+
+  public static async Task<APIGatewayProxyResponse> HandleBaseline(LambdaRequest req, Res res, AuthContext auth, string automation)
+  {
+    var deny = Auth.RequireSuperAdmin(auth, res);
+    if (deny is not null) return deny;
+
+    if (!req.Method.Equals("PUT", StringComparison.OrdinalIgnoreCase)) return res.MethodNotAllowed("Method not allowed");
+
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) return Helpers.ConfigError(res, MissingPg);
+
+    decimal minutes;
+    string source;
+    var noteGiven = false;
+    string? note = null;
+
+    using (var doc = Validation.ParseJsonBody(req))
+    {
+      if (doc is null) return res.BadRequest("BAD_REQUEST", "Invalid JSON body");
+      var body = doc.RootElement;
+      if (body.ValueKind != JsonValueKind.Object) return Invalid(res, "Body must be a JSON object");
+
+      if (!body.TryGetProperty("baselineMinutesPerUnit", out var minutesEl) || minutesEl.ValueKind != JsonValueKind.Number
+          || !minutesEl.TryGetDecimal(out minutes) || minutes < 0 || minutes > MaxBaselineMinutes)
+      {
+        return Invalid(res, "baselineMinutesPerUnit must be a number in 0..999999.99");
+      }
+      minutes = Round2(minutes);
+
+      if (!body.TryGetProperty("baselineSource", out var sourceEl) || sourceEl.ValueKind != JsonValueKind.String
+          || !BaselineSources.Contains(sourceEl.GetString()!, StringComparer.Ordinal))
+      {
+        return Invalid(res, "baselineSource must be one of measured, default");
+      }
+      source = sourceEl.GetString()!;
+
+      if (body.TryGetProperty("note", out var noteEl))
+      {
+        noteGiven = true;
+        if (noteEl.ValueKind == JsonValueKind.String)
+        {
+          var text = noteEl.GetString()!.Trim();
+          if (text.Length > MaxNoteLength) return Invalid(res, $"note must be at most {MaxNoteLength} characters");
+          note = text.Length == 0 ? null : text;
+        }
+        else if (noteEl.ValueKind != JsonValueKind.Null)
+        {
+          return Invalid(res, "note must be a string or null");
+        }
+      }
+    }
+
+    try
+    {
+      AdminAuditEntry entry;
+      bool persisted;
+      Dictionary<string, object?> updated;
+
+      await using (var tx = await conn.BeginTransactionAsync())
+      {
+        var current = await DbUtil.QueryAsync(conn, tx, BaselineSelect + " where automation = $1 for update", [automation]);
+        if (current.Count == 0)
+        {
+          return Helpers.ErrorEnvelope(res, 404, "AUTOMATION_NOT_FOUND", $"Automation {automation} not found");
+        }
+
+        var rows = await DbUtil.QueryAsync(conn, tx,
+          $"""
+          update automation_baselines set
+            baseline_minutes_per_unit = $2,
+            baseline_source = $3,
+            {(noteGiven ? "note = $5," : string.Empty)}
+            updated_by_sub = $4,
+            updated_at = now()
+          where automation = $1
+          returning automation as "automation", unit as "unit", baseline_minutes_per_unit as "baselineMinutesPerUnit",
+                    baseline_source as "baselineSource", note as "note", updated_at as "updatedAt"
+          """,
+          noteGiven
+            ? [automation, minutes, source, auth.UserSub, note]
+            : [automation, minutes, source, auth.UserSub]);
+        updated = rows[0];
+
+        entry = AdminAudit.Entry(auth, res, "automation.baseline.update", $"automation:{automation}",
+          AuditState(current[0]), AuditState(updated));
+        persisted = await AdminAudit.RecordAsync(conn, tx, entry);
+
+        await tx.CommitAsync();
+      }
+
+      AdminAudit.Emit(entry, persisted);
+      return res.Ok(BaselineItem(updated));
+    }
+    catch (Exception ex)
+    {
+      return MapError(ex, res);
+    }
+  }
+
+  // ------------------------------------------------------------------ POST /backfill
+
+  // Candidate sets of §9.5, keyed by their dedupe key (distinct on it, so a key shared by two source rows
+  // counts once). A historical publish whose live `publish:<job_id>` event already exists is skipped as
+  // well: the same publish must not be counted twice.
+  private const string PublishCandidates = """
+    select distinct on (k.dedupe_key) k.*
+    from (
+      select 'backfill:deck_publishes:' || dp.build_id as dedupe_key, dp.created_at as occurred_at,
+             dp.deck_id as deck_id, dp.build_id as ref, dp.job_id as job_id
+      from deck_publishes dp
+      where dp.status = 'SUCCESS'
+    ) k
+    order by k.dedupe_key, k.occurred_at
+    """;
+
+  private const string PublishPresent = """
+    exists (select 1 from automation_events e where e.dedupe_key = c.dedupe_key)
+    or (c.job_id is not null and exists (select 1 from automation_events e where e.dedupe_key = 'publish:' || c.job_id))
+    """;
+
+  private const string ImportCandidates = """
+    select 'backfill:cards:' || g.deck_id || ':' || (extract(epoch from g.minute) / 60)::bigint as dedupe_key,
+           g.minute as occurred_at, g.deck_id as deck_id, g.units as units
+    from (
+      select cd.deck_id as deck_id, date_trunc('minute', cd.created_at) as minute, count(*)::int as units
+      from cards cd
+      group by cd.deck_id, date_trunc('minute', cd.created_at)
+      having count(*) >= 5
+    ) g
+    """;
+
+  private const string ImportPresent = "exists (select 1 from automation_events e where e.dedupe_key = c.dedupe_key)";
+
+  public static async Task<APIGatewayProxyResponse> HandleBackfill(LambdaRequest req, Res res, AuthContext auth)
+  {
+    var deny = Auth.RequireSuperAdmin(auth, res);
+    if (deny is not null) return deny;
+
+    if (!req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)) return res.MethodNotAllowed("Method not allowed");
+
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) return Helpers.ConfigError(res, MissingPg);
+
+    var dryRun = true;
+    if (!string.IsNullOrWhiteSpace(req.RawBody))
+    {
+      using var doc = Validation.ParseJsonBody(req);
+      if (doc is null) return res.BadRequest("BAD_REQUEST", "Invalid JSON body");
+      var body = doc.RootElement;
+      if (body.ValueKind != JsonValueKind.Object) return Invalid(res, "Body must be a JSON object");
+      if (body.TryGetProperty("dryRun", out var dryEl))
+      {
+        if (dryEl.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return Invalid(res, "dryRun must be a boolean");
+        dryRun = dryEl.GetBoolean();
+      }
+    }
+
+    try
+    {
+      long publishInserted, publishSkipped, importInserted, importSkipped;
+
+      if (dryRun)
+      {
+        (publishInserted, publishSkipped) = await CountCandidatesAsync(conn, null, PublishCandidates, PublishPresent);
+        (importInserted, importSkipped) = await CountCandidatesAsync(conn, null, ImportCandidates, ImportPresent);
+        return res.Ok(Counts(true, publishInserted, publishSkipped, importInserted, importSkipped));
+      }
+
+      AdminAuditEntry entry;
+      bool persisted;
+
+      await using (var tx = await conn.BeginTransactionAsync())
+      {
+        var (publishNew, publishPresent) = await CountCandidatesAsync(conn, tx, PublishCandidates, PublishPresent);
+        var (importNew, importPresent) = await CountCandidatesAsync(conn, tx, ImportCandidates, ImportPresent);
+
+        publishInserted = await DbUtil.ExecuteAsync(conn, tx,
+          $"""
+          insert into automation_events (automation, occurred_at, units, outcome, deck_id, ref, source, dedupe_key)
+          select 'publish_pipeline', c.occurred_at, 1, 'success', c.deck_id, c.ref, 'backfill', c.dedupe_key
+          from ({PublishCandidates}) c
+          where not ({PublishPresent})
+          on conflict (dedupe_key) do nothing
+          """,
+          []);
+
+        importInserted = await DbUtil.ExecuteAsync(conn, tx,
+          $"""
+          insert into automation_events (automation, occurred_at, units, outcome, deck_id, source, dedupe_key, details)
+          select 'bulk_import', c.occurred_at, c.units, 'success', c.deck_id, 'backfill', c.dedupe_key, $1::jsonb
+          from ({ImportCandidates}) c
+          on conflict (dedupe_key) do nothing
+          """,
+          [JsonSerializer.Serialize(new { heuristic = BackfillHeuristic })]);
+
+        publishSkipped = publishNew + publishPresent - publishInserted;
+        importSkipped = importNew + importPresent - importInserted;
+
+        var counts = Counts(false, publishInserted, publishSkipped, importInserted, importSkipped);
+        entry = AdminAudit.Entry(auth, res, "automation.backfill", "automation_events", null, counts);
+        persisted = await AdminAudit.RecordAsync(conn, tx, entry);
+
+        await tx.CommitAsync();
+      }
+
+      AdminAudit.Emit(entry, persisted);
+      return res.Ok(Counts(false, publishInserted, publishSkipped, importInserted, importSkipped));
+    }
+    catch (Exception ex)
+    {
+      return MapError(ex, res);
+    }
+  }
+
+  private static async Task<(long Absent, long Present)> CountCandidatesAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, string candidates, string present)
+  {
+    var rows = await DbUtil.QueryAsync(conn, tx,
+      $"""
+      select count(*) filter (where not ({present})) as "absent",
+             count(*) filter (where {present}) as "present"
+      from ({candidates}) c
+      """,
+      []);
+    return (ToLong(rows[0]["absent"]), ToLong(rows[0]["present"]));
+  }
+
+  private static object Counts(bool dryRun, long publishInserted, long publishSkipped, long importInserted, long importSkipped) => new
+  {
+    dryRun,
+    inserted = new Dictionary<string, long> { ["publish_pipeline"] = publishInserted, ["bulk_import"] = importInserted },
+    skipped = new Dictionary<string, long> { ["publish_pipeline"] = publishSkipped, ["bulk_import"] = importSkipped },
+  };
+
+  // ------------------------------------------------------------------ helpers
+
+  private const string BaselineSelect = """
+    select automation as "automation", unit as "unit", baseline_minutes_per_unit as "baselineMinutesPerUnit",
+           baseline_source as "baselineSource", note as "note", updated_at as "updatedAt"
+    from automation_baselines
+    """;
+
+  private static object BaselineItem(Dictionary<string, object?> r) => new
+  {
+    automation = (string)r["automation"]!,
+    unit = (string)r["unit"]!,
+    baselineMinutesPerUnit = ToDecimal(r["baselineMinutesPerUnit"]),
+    baselineSource = (string)r["baselineSource"]!,
+    note = (string?)r["note"],
+    updatedAt = r["updatedAt"],
+  };
+
+  private static object AuditState(Dictionary<string, object?> r) => new
+  {
+    baselineMinutesPerUnit = ToDecimal(r["baselineMinutesPerUnit"]),
+    baselineSource = (string)r["baselineSource"]!,
+    note = (string?)r["note"],
+  };
+
+  private static APIGatewayProxyResponse MapError(Exception ex, Res res)
+  {
+    if (ex is PostgresException { SqlState: "42P01" or "42703" })
+    {
+      return Helpers.ErrorEnvelope(res, 503, "SERVER_NOT_READY_LEDGER", "Run migration 028 first");
+    }
+    return Helpers.HandlePgError(ex, res) ?? res.Error500(ex);
+  }
+
+  private static APIGatewayProxyResponse Invalid(Res res, string message) => res.BadRequest("VALIDATION_ERROR", message);
+
+  private static string? Param(LambdaRequest req, string name) =>
+    req.Query.TryGetValue(name, out var v) && !string.IsNullOrEmpty(v) ? v : null;
+
+  private static bool TryParseDay(string raw, out DateOnly day) =>
+    DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out day);
+
+  private static string FormatDay(DateOnly day) => day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+  private static long ToLong(object? v) => Convert.ToInt64(v, CultureInfo.InvariantCulture);
+
+  private static decimal ToDecimal(object? v) => Convert.ToDecimal(v, CultureInfo.InvariantCulture);
+
+  private static decimal Round2(decimal v) => Math.Round(v, 2, MidpointRounding.AwayFromZero);
+
+  /// <summary>base64url of UTF-8 <c>{"v":1,"id":&lt;last id&gt;}</c>.</summary>
+  internal static string EncodeCursor(long id) =>
+    CursorCodec.ToBase64Url(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { v = 1, id })));
+
+  internal static bool TryDecodeCursor(string raw, out long id)
+  {
+    id = 0;
+
+    var bytes = CursorCodec.FromBase64Url(raw);
+    if (bytes is null) return false;
+
+    try
+    {
+      using var doc = JsonDocument.Parse(bytes);
+      var root = doc.RootElement;
+      if (root.ValueKind != JsonValueKind.Object) return false;
+      if (!CursorCodec.TryReadVersion(root)) return false;
+      return root.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number && idEl.TryGetInt64(out id) && id > 0;
+    }
+    catch (JsonException)
+    {
+      return false;
+    }
+  }
+}
