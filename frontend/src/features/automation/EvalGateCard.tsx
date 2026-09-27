@@ -4,6 +4,11 @@
 // history and, for a super_admin, recording a pasted gate report and revoking
 // the current gate. The report is sent as pasted; the server hashes the raw
 // bytes and recomputes every number.
+//
+// K2 and L3: only the newest evaluation counts. A newest row that failed or was
+// revoked blocks live, whatever an older row says, so the card names that row,
+// and each history row says whether it is effective, blocking, revoked or
+// superseded (C07 frontend-console-17). Metric keys read as words (-11).
 import { useEffect, useState } from 'react';
 
 import { fetchEvalGate, recordEvalGate, revokeEvalGate, type EvalGate, type EvalGateState } from '../../api/automation';
@@ -21,7 +26,17 @@ import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 import { useConfirm } from '../../components/ui/ConfirmDialogContext';
 import type { ApiError } from '../../types/api';
-import { automationErrorMessage, evalGateReportProblem, formatTimestamp, orDash } from '../../lib/automationRules';
+import {
+  EVAL_METRIC_LABELS,
+  automationErrorMessage,
+  codeLabel,
+  evalGateReportProblem,
+  evalGateRowStatus,
+  evalGateSummary,
+  evalGateSummaryText,
+  formatTimestamp,
+  orDash,
+} from '../../lib/automationRules';
 
 type GateLoad = { forKey: string | null; error: string | null; data: EvalGateState | null };
 
@@ -128,10 +143,15 @@ export function EvalGateCard({
   const current = gate.data?.current ?? null;
   const history = (gate.data?.history ?? []).slice(0, 20);
   const loading = gate.forKey !== key;
+  const summary = gate.data ? evalGateSummary(gate.data) : null;
 
   return (
     <section className={CARD_CLASS} aria-label="Eval gate">
       <h2 className={H2_CLASS}>Eval gate</h2>
+      <p className="text-xs text-slate-600 mt-1">
+        Only the newest evaluation counts: if it failed or is revoked, live mode runs as a dry run, and revoking the
+        effective gate stops live at once.
+      </p>
       {gate.error ? (
         <Callout tone="danger" role="alert">
           {gate.error}
@@ -139,8 +159,14 @@ export function EvalGateCard({
       ) : null}
       {loading && !gate.data ? <p className="text-sm text-slate-600">Loading the eval gate…</p> : null}
 
-      {gate.data && !current ? (
-        <p className="text-sm text-slate-700 mt-2">No passed eval gate is recorded, so live mode runs as a dry run.</p>
+      {summary && summary.kind === 'failed' ? (
+        <div className="mt-2" data-testid="automation-gate-summary">
+          <Callout tone="warning">{evalGateSummaryText(summary)}</Callout>
+        </div>
+      ) : summary && summary.kind !== 'effective' ? (
+        <p className="text-sm text-slate-700 mt-2" data-testid="automation-gate-summary">
+          {evalGateSummaryText(summary)}
+        </p>
       ) : null}
 
       {current ? (
@@ -164,7 +190,7 @@ export function EvalGateCard({
               const text = metricText(value);
               return text === null ? null : (
                 <div key={name}>
-                  <dt className="text-xs text-slate-500">{name}</dt>
+                  <dt className="text-xs text-slate-500">{codeLabel(EVAL_METRIC_LABELS, name)}</dt>
                   <dd>{text}</dd>
                 </div>
               );
@@ -190,21 +216,28 @@ export function EvalGateCard({
                 <th className={TH_CLASS}>Report</th>
                 <th className={TH_CLASS}>Recorded</th>
                 <th className={TH_CLASS}>Revoked</th>
+                <th className={TH_CLASS}>Status</th>
               </tr>
             </thead>
             <tbody>
-              {history.map(g => (
-                <tr key={g.gateId} className="border-t border-slate-100">
-                  <td className={TD_CLASS}>{g.gateId}</td>
-                  <td className={TD_CLASS}>{reviewerText(g)}</td>
-                  <td className={TD_CLASS}>{g.passed ? 'yes' : 'no'}</td>
-                  <td className={`${TD_CLASS} font-mono`}>{g.reportSha256.slice(0, 12)}</td>
-                  <td className={TD_CLASS}>{formatTimestamp(g.createdAt)}</td>
-                  <td className={TD_CLASS}>
-                    {g.revokedAt ? <Badge tone="neutral">{formatTimestamp(g.revokedAt)}</Badge> : '—'}
-                  </td>
-                </tr>
-              ))}
+              {history.map(g => {
+                const standing = evalGateRowStatus(g, gate.data?.history ?? [], current?.gateId ?? null);
+                return (
+                  <tr key={g.gateId} className="border-t border-slate-100">
+                    <td className={TD_CLASS}>{g.gateId}</td>
+                    <td className={TD_CLASS}>{reviewerText(g)}</td>
+                    <td className={TD_CLASS}>{g.passed ? 'yes' : 'no'}</td>
+                    <td className={`${TD_CLASS} font-mono`}>{g.reportSha256.slice(0, 12)}</td>
+                    <td className={TD_CLASS}>{formatTimestamp(g.createdAt)}</td>
+                    <td className={TD_CLASS}>
+                      {g.revokedAt ? <Badge tone="neutral">{formatTimestamp(g.revokedAt)}</Badge> : '—'}
+                    </td>
+                    <td className={TD_CLASS}>
+                      <Badge tone={standing.tone}>{standing.label}</Badge>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

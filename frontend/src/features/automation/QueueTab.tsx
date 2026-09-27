@@ -54,7 +54,10 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
   const [status, setStatus] = useState('');
   const [nonce, setNonce] = useState(0);
   const [list, setList] = useState<ListState>({ forKey: null, error: null, items: [], nextCursor: null });
-  const [loadingMore, setLoadingMore] = useState(false);
+  // A Load more failure and busy state belong to the list they were asked for
+  // (the Decisions pattern), so a filter change hides them (C07 frontend-console-20).
+  const [loadingMoreKey, setLoadingMoreKey] = useState<string | null>(null);
+  const [moreError, setMoreError] = useState<{ forKey: string; text: string } | null>(null);
 
   const [url, setUrl] = useState('');
   const [deckId, setDeckId] = useState('');
@@ -90,11 +93,12 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
     // The cursor belongs to the list on screen; while a new filter loads it is foreign.
     if (!list.nextCursor || loading) return;
     const startKey = key;
-    setLoadingMore(true);
+    setLoadingMoreKey(startKey);
+    setMoreError(null);
     const res = await listQueueItems({ status: status || undefined, limit: PAGE_SIZE, cursor: list.nextCursor });
-    setLoadingMore(false);
+    setLoadingMoreKey(k => (k === startKey ? null : k));
     if (!res.success || !res.data) {
-      setWriteError(errorText(res.error, 'Failed to load more queue items.'));
+      setMoreError({ forKey: startKey, text: errorText(res.error, 'Failed to load more queue items.') });
       return;
     }
     const page = res.data;
@@ -315,9 +319,16 @@ export function QueueTab({ superAdmin, announce }: { superAdmin: boolean; announ
           </div>
         ) : null}
 
+        {moreError && moreError.forKey === key ? (
+          <div className="mt-2">
+            <Callout tone="danger" role="alert">
+              {moreError.text}
+            </Callout>
+          </div>
+        ) : null}
         {list.nextCursor && !loading ? (
           <div className="mt-2">
-            <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
+            <Button variant="outline" size="xs" loading={loadingMoreKey === key} onClick={() => void onLoadMore()}>
               Load more
             </Button>
           </div>

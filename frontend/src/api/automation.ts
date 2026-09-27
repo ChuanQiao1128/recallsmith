@@ -70,7 +70,14 @@ export type AutomationStatus = {
   publishes7d: { byState: Record<string, number> };
   spend: { todayUsd: number; automationTodayUsd: number; reservedUsd: number; dailyCapUsd: number };
   watch: { targets: number; active: number; failing: number; lastCheckedAt: string | null; changes7d: number };
-  notifications: { sent24h: number; failed24h: number; queued: number; lastSentAt: string | null };
+  notifications: {
+    sent24h: number;
+    failed24h: number;
+    queued: number;
+    /** K6/L5: rows still queued an hour after a successful SQS send, with no notifier report. */
+    unconfirmed: number;
+    lastSentAt: string | null;
+  };
   /** K7: the open exceptions. Null when the server predates the field. */
   backlog: AutomationBacklog | null;
 };
@@ -82,7 +89,12 @@ export type AutomationBacklog = {
   oldestHumanPendingAt: string | null;
   /** Automation publishes routed to a person and not yet resolved. */
   humanPublishes: number;
+  /** L4: at most 20 of the publishes counted in humanPublishes; null when the server predates the field. */
+  humanPublishItems: HumanPublishItem[] | null;
 };
+
+/** L4: one automation publish waiting for a person. */
+export type HumanPublishItem = { deckId: number; deckSlug: string | null; reason: string | null; since: string | null };
 
 export type AutomationPublish = {
   publishId: number;
@@ -409,6 +421,7 @@ function normalizeStatus(data: unknown): AutomationStatus | null {
       sent24h: toNumber(notifications.sent24h),
       failed24h: toNumber(notifications.failed24h),
       queued: toNumber(notifications.queued),
+      unconfirmed: toNumber(notifications.unconfirmed),
       lastSentAt: toNullableText(notifications.lastSentAt),
     },
     backlog: normalizeBacklog(data.backlog),
@@ -421,6 +434,24 @@ function normalizeBacklog(value: unknown): AutomationBacklog | null {
     humanPending: toNumber(value.humanPending),
     oldestHumanPendingAt: toNullableText(value.oldestHumanPendingAt),
     humanPublishes: toNumber(value.humanPublishes),
+    humanPublishItems: Array.isArray(value.humanPublishItems)
+      ? value.humanPublishItems.map(normalizeHumanPublishItem).filter((p): p is HumanPublishItem => p !== null)
+      : null,
+  };
+}
+
+/** L4 caps the list at 20; the console never shows more, whatever arrives. */
+export const HUMAN_PUBLISH_ITEMS_MAX = 20;
+
+function normalizeHumanPublishItem(value: unknown): HumanPublishItem | null {
+  if (!isRecord(value)) return null;
+  const deckId = idOf(value.deckId);
+  if (deckId === null) return null;
+  return {
+    deckId,
+    deckSlug: toNullableText(value.deckSlug),
+    reason: toNullableText(value.reason),
+    since: toNullableText(value.since),
   };
 }
 
@@ -712,6 +743,8 @@ export async function listAutomationDecisions(
     deckId?: number;
     state?: string;
     reason?: string;
+    /** L4: only the open exceptions (state human, no human action, draft still pending), in the same order. */
+    open?: boolean;
     limit?: number;
     cursor?: string | null;
   } = {},

@@ -62,12 +62,14 @@ const DECK: Deck = {
   updatedAt: '2026-09-01T00:00:00Z',
 };
 
-const LIST_AUTOMATION: DraftAutomation = { state: 'human', reason: 'QA_FLAGGED', mode: 'dry_run' };
+// Live: a pending dry-run draft is blind until the person decides (C07
+// frontend-console-14, reviewBlindShadow.test.tsx), so the visible verdict is a live one.
+const LIST_AUTOMATION: DraftAutomation = { state: 'human', reason: 'QA_FLAGGED', mode: 'live' };
 
 const DETAIL_AUTOMATION: DraftAutomation = {
   state: 'human',
   reason: 'QA_FLAGGED',
-  mode: 'dry_run',
+  mode: 'live',
   runId: '0f6c2d9e-4b1a-4c55-9a53-5f2d8f7e1a10',
   reasonDetail: null,
   qa: {
@@ -119,7 +121,10 @@ describe('review queue automation', () => {
     await openReview();
 
     const text = draftAutomationBadgeText(LIST_AUTOMATION);
-    expect(text).toBe('Automation: Needs you · AI QA found a blocker or major issue (dry run)');
+    expect(text).toBe('Automation: Needs you · AI QA found a blocker or major issue');
+    expect(draftAutomationBadgeText({ ...LIST_AUTOMATION, mode: 'dry_run' })).toBe(
+      'Automation: Needs you · AI QA found a blocker or major issue (dry run)',
+    );
     const drafts = screen.getByRole('region', { name: 'Drafts' });
     expect(within(drafts).getByText(text)).toBeTruthy();
   });

@@ -193,17 +193,26 @@ describe('handled vs open exceptions (frontend-console-1, automation-10, K7)', (
       }),
     );
 
-    const calls = api.listAutomationDecisions.mock.calls.length;
     await user.click(screen.getByLabelText('Open only (no person has decided)'));
     // The filters are written in one canonical order.
     expect(screen.getByTestId('loc').textContent).toBe(
       '/automation?tab=decisions&deckId=7&state=human&reason=QA_FLAGGED&open=1',
     );
+    // C07 (L4, frontend-console-13): "Open only" is a server filter now, so it
+    // asks again with open=true. This mock answers like an older server that
+    // ignores the parameter, so the client guard still hides the handled one.
+    await waitFor(() =>
+      expect(api.listAutomationDecisions).toHaveBeenLastCalledWith({
+        deckId: 7,
+        state: 'human',
+        reason: 'QA_FLAGGED',
+        open: true,
+        limit: 50,
+      }),
+    );
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Details of draft 42' })).toBeNull());
     expect(screen.getByRole('button', { name: 'Details of draft 41' })).toBeTruthy();
-    expect(screen.getByText('1 decided by a person are hidden on the loaded pages.')).toBeTruthy();
-    // Client-side: no new request.
-    expect(api.listAutomationDecisions.mock.calls.length).toBe(calls);
+    expect(screen.getByText('1 decided by a person is hidden on the loaded pages.')).toBeTruthy();
 
     // Opening a detail keeps the filters, and Close returns to them.
     await user.click(screen.getByRole('button', { name: 'Details of draft 41' }));
