@@ -51,7 +51,7 @@ public class SourceRecheckTests
     var message = Message(sent);
     Assert.Equal(["v", "runId", "chunk", "chunkCount", "promptVersion", "profile", "deck", "reviewDate", "cards"], A05Kit.Keys(message));
     Assert.Equal("automation", message.GetProperty("profile").GetString());
-    Assert.Contains("\"promptVersion\":\"qa-v4\",\"profile\":\"automation\",", sent.MessageBody);
+    Assert.Contains("\"promptVersion\":\"qa-v4-auto\",\"profile\":\"automation\",", sent.MessageBody);
     Assert.Equal(cardIds[..2], message.GetProperty("cards").EnumerateArray().Select(c => c.GetProperty("cardId").GetInt64()).ToArray());
 
     // A card not live in the deck is refused without a run; the call never throws.

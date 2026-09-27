@@ -28,6 +28,19 @@ public static class QaRuns
   /// (backend-design-12).
   /// </summary>
   public const string PromptVersion = "qa-v4";
+
+  /// <summary>
+  /// The prompt version of the <c>automation</c> profile (R18B K1; services/ai-qa <c>PROMPT_VERSION_AUTOMATION</c>).
+  /// Every profile=automation message (draft QA and the source watch's re-checks) carries it, the Lambda echoes it in
+  /// its report, and the report's value is what the decision and the run record. The live eval gate's reviewer triple
+  /// uses it; human-run QA keeps <see cref="PromptVersion"/>.
+  /// </summary>
+  public const string AutomationPromptVersion = "qa-v4-auto";
+  public const string AutomationProfile = "automation";
+
+  /// <summary>The prompt version a message of <paramref name="profile"/> carries (null is the human, default profile).</summary>
+  public static string PromptVersionFor(string? profile) =>
+    string.Equals(profile, AutomationProfile, StringComparison.Ordinal) ? AutomationPromptVersion : PromptVersion;
   public const int ChunkSize = 5;
   public const int MaxChunkBytes = 200_000;
   public const int MaxCardIds = 200;
@@ -251,7 +264,7 @@ public static class QaRuns
           runId = id,
           chunk = i,
           chunkCount = chunks.Count,
-          promptVersion = PromptVersion,
+          promptVersion = PromptVersionFor(profile),
           profile,
           deck = new { id = body.DeckId, slug = deckSlug, title = deckTitle },
           reviewDate,

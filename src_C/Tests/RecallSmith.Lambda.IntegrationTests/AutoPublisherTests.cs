@@ -130,7 +130,7 @@ internal static class A04Kit
       var id = Long(await db.ScalarAsync(
         "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub) " +
         "values ($1, $2, $3, true, '{}'::jsonb, $4, '{}'::jsonb, 'it-a04') returning id",
-        AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, RecallSmith.Lambda.Vpc.Qa.QaRuns.PromptVersion, new string('c', 64)));
+        AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, RecallSmith.Lambda.Vpc.Qa.QaRuns.AutomationPromptVersion, new string('c', 64)));
       _gates.Add((db, id));
       return id;
     }

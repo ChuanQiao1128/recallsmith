@@ -352,12 +352,12 @@ public class DraftQaResultsTests
       Assert.Equal((1, 1, 1), (Convert.ToInt32(run["card_count"], CultureInfo.InvariantCulture), Convert.ToInt32(run["cards_done"], CultureInfo.InvariantCulture),
         Convert.ToInt32(run["minor_count"], CultureInfo.InvariantCulture)));
       Assert.Equal(0m, Convert.ToDecimal(run["estimated_cost_usd"], CultureInfo.InvariantCulture));
-      Assert.Equal((AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, QaRuns.PromptVersion),
+      Assert.Equal((AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, QaRuns.AutomationPromptVersion),
         ((string)run["provider"]!, (string)run["model"]!, (string)run["prompt_version"]!));
       Assert.NotNull(run["finished_at"]);
 
       var item = (await _db.QueryAsync("select status, content_sha256, request_id, prompt_version from ai_qa_items where run_id = $1 and card_id = $2", mirrorId, cardId)).Single();
-      Assert.Equal(("done", hash, "req-mirror", QaRuns.PromptVersion),
+      Assert.Equal(("done", hash, "req-mirror", QaRuns.AutomationPromptVersion),
         ((string)item["status"]!, (string)item["content_sha256"]!, (string)item["request_id"]!, (string)item["prompt_version"]!));
       var finding = (await _db.QueryAsync("select severity, category, resolution, content_sha256 from ai_qa_findings where run_id = $1", mirrorId)).Single();
       Assert.Equal(("minor", "weak_distractor", "open", hash),

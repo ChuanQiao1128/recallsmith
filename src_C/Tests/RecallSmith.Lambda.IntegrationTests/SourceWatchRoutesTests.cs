@@ -563,7 +563,7 @@ public class SourceWatchRoutesTests
         Assert.Equal(2, scope.QaSent.Count);
         foreach (var sent in scope.QaSent)
         {
-          Assert.Contains($"\"promptVersion\":\"{RecallSmith.Lambda.Vpc.Qa.QaRuns.PromptVersion}\",\"profile\":\"automation\",\"deck\"", sent.MessageBody);
+          Assert.Contains($"\"promptVersion\":\"{RecallSmith.Lambda.Vpc.Qa.QaRuns.AutomationPromptVersion}\",\"profile\":\"automation\",\"deck\"", sent.MessageBody);
         }
         var runs = await sql.QueryAsync("select id, deck_id, scope, requested_by_sub, card_count from ai_qa_runs order by deck_id");
         Assert.Equal([(page.DeckA, "cards", "automation", 2), (page.DeckB, "cards", "automation", 1)],

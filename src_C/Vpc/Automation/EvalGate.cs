@@ -209,7 +209,7 @@ public static class EvalGate
     Fail(!r.FailuresEmpty, "failures");
     Fail(!AutomationGateProviders.Contains(r.Provider, StringComparer.Ordinal), "reviewer.provider");
     Fail(string.IsNullOrWhiteSpace(r.Model), "reviewer.model");
-    Fail(r.PromptVersion != QaRuns.PromptVersion, "reviewer.promptVersion");
+    Fail(r.PromptVersion != QaRuns.AutomationPromptVersion, "reviewer.promptVersion");
     Fail(r.SecondProvider is not null, "reviewer.secondProvider");
     Fail(r.SecondModel is not null, "reviewer.secondModel");
     Fail(r.SeededReps < MinGateReps, "seeded.reps");
