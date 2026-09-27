@@ -40,7 +40,7 @@ export function apiResultFromError<T>(err: unknown): ApiResult<T> {
       // type: they arrived over the wire, so message/traceId/details may be
       // absent even though the interface marks them required.
       const env = data as {
-        error: { code: string; message?: string; details?: string | null };
+        error: { code: string; message?: string; details?: string | null; runId?: unknown; qaRun?: unknown };
         traceId?: string;
       };
       const message = env.error.message ?? `Request failed (HTTP ${status})`;
@@ -48,6 +48,19 @@ export function apiResultFromError<T>(err: unknown): ApiResult<T> {
       const error: ApiError = { code: env.error.code, message, httpStatus: status };
       if (typeof env.error.details === 'string') {
         error.details = env.error.details;
+      }
+      // The publish gate's AI_QA_REQUIRED names the run it chained (automation-17).
+      if (typeof env.error.runId === 'string' && env.error.runId !== '') {
+        error.runId = env.error.runId;
+      }
+      const qaRun = env.error.qaRun;
+      if (qaRun && typeof qaRun === 'object') {
+        const r = qaRun as { status?: unknown; code?: unknown; message?: unknown };
+        error.qaRun = {
+          status: typeof r.status === 'string' ? r.status : '',
+          code: typeof r.code === 'string' ? r.code : null,
+          message: typeof r.message === 'string' ? r.message : null,
+        };
       }
       return { success: false, data: null, error, traceId };
     }

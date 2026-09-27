@@ -497,13 +497,23 @@ export function DeckListPage() {
 
       const pub = await publishDeckMutation.mutateAsync({ id: deckId });
       if (!pub.success) {
+        // AI_QA_REQUIRED names the run the gate chained (automation-17): link to
+        // it, and say so when that run could not start rather than let the
+        // author wait for a run that does not exist.
+        const chained = pub.error?.qaRun;
+        const chainProblem =
+          chained && chained.status === 'not_started'
+            ? ` AI QA could not start a review run: ${chained.message ?? chained.code ?? 'unknown reason'}.`
+            : '';
         setErrors(prev =>
           reportBusinessFailure(
             prev,
             ERR_PUBLISH_DECK,
             `Publishing deck "${row.slug}" failed`,
-            pub.error?.message,
-            isQaPublishGateCode(pub.error?.code) ? { href: qaPageHref(deckId), label: 'Open AI QA' } : undefined,
+            pub.error?.message === undefined ? undefined : `${pub.error.message}${chainProblem}`,
+            isQaPublishGateCode(pub.error?.code)
+              ? { href: qaPageHref(deckId, pub.error?.runId), label: 'Open AI QA' }
+              : undefined,
           ),
         );
         return;

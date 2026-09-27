@@ -47,6 +47,12 @@ export interface QaLimits {
   spentTodayUsd: number | null;
   /** Today's spend reserved by runs still in flight, when the server reports it. */
   reservedTodayUsd: number | null;
+  /**
+   * The amount the server reserves per card against the daily cap
+   * (AI_QA_EST_USD_PER_CARD), when it reports it; else the page prices cards
+   * at the server's documented default (QA_EST_USD_PER_CARD_DEFAULT).
+   */
+  estUsdPerCard: number | null;
   /** True when both limits came from the server rather than the defaults. */
   fromServer: boolean;
 }
@@ -57,6 +63,7 @@ export function qaLimits(
     dailyUsdCap: number | null;
     spentTodayUsd: number | null;
     reservedTodayUsd?: number | null;
+    estUsdPerCard?: number | null;
   } | null,
 ): QaLimits {
   return {
@@ -64,6 +71,7 @@ export function qaLimits(
     dailyUsdCap: status?.dailyUsdCap ?? QA_DAILY_USD_CAP,
     spentTodayUsd: status?.spentTodayUsd ?? null,
     reservedTodayUsd: status?.reservedTodayUsd ?? null,
+    estUsdPerCard: status?.estUsdPerCard ?? null,
     fromServer: status?.maxCards != null && status?.dailyUsdCap != null,
   };
 }
@@ -76,19 +84,16 @@ export function qaCapRemainingUsd(limits: QaLimits): number {
   return Math.max(0, limits.dailyUsdCap - (limits.spentTodayUsd ?? 0) - (limits.reservedTodayUsd ?? 0));
 }
 
-// The plan's per-card budget priced at the §7.5 default list prices. An
-// estimate only: the provider bills separately.
-export const QA_EST_INPUT_TOKENS_PER_CARD = 3000;
-export const QA_EST_OUTPUT_TOKENS_PER_CARD = 1200;
-export const QA_PRICE_INPUT_PER_MTOK = 5;
-export const QA_PRICE_OUTPUT_PER_MTOK = 25;
+// What the server reserves per card against the daily cap when a run starts
+// (AI_QA_EST_USD_PER_CARD, default 0.05 in QaRuns.DefaultEstUsdPerCard). The
+// page's estimate uses the same figure, so its cap warning agrees with the
+// server's refusal (frontend-console-23); the rate the status reports in
+// data.limits.estUsdPerCard wins over this default. An estimate only: the
+// provider bills separately.
+export const QA_EST_USD_PER_CARD_DEFAULT = 0.05;
 
-export function estimateQaCostUsd(cardCount: number): number {
-  const perCard =
-    (QA_EST_INPUT_TOKENS_PER_CARD * QA_PRICE_INPUT_PER_MTOK +
-      QA_EST_OUTPUT_TOKENS_PER_CARD * QA_PRICE_OUTPUT_PER_MTOK) /
-    1_000_000;
-  return cardCount * perCard;
+export function estimateQaCostUsd(cardCount: number, perCardUsd: number | null = null): number {
+  return cardCount * (perCardUsd ?? QA_EST_USD_PER_CARD_DEFAULT);
 }
 
 export function formatUsd(amount: number): string {
@@ -212,7 +217,8 @@ export const QA_START_ERROR_MESSAGES: Record<string, string> = {
   AI_QA_RUN_IN_PROGRESS: 'A run is already in progress for this deck; its progress is shown below.',
   AI_QA_NOTHING_TO_REVIEW: 'Nothing to review: every changed card already has a review of its current content.',
   AI_QA_TOO_MANY_CARDS: 'Too many cards for one run. Narrow the scope.',
-  AI_QA_DAILY_CAP: "Today's AI QA spend has reached the daily cap. Try again after midnight UTC.",
+  AI_QA_DAILY_CAP:
+    "This run's estimate is more than what is left of today's AI QA cap. Narrow the scope, or try again after midnight UTC.",
   DECK_NOT_FOUND: 'This deck no longer exists.',
 };
 
@@ -226,6 +232,16 @@ export function qaStartErrorMessage(code: string, fallback: string, limits: QaLi
   if (code === 'AI_QA_TOO_MANY_CARDS') {
     if (!limits.fromServer) return fallback.trim() !== '' ? fallback : QA_START_ERROR_MESSAGES.AI_QA_TOO_MANY_CARDS;
     return `Too many cards for one run (the limit is ${limits.maxCards}). Narrow the scope.`;
+  }
+  if (code === 'AI_QA_DAILY_CAP') {
+    // The server's text names today's spend, the reserved spend and this run's
+    // estimate, which is exactly what the author needs; it is kept, with what to
+    // do about it (frontend-console-23). Waiting is not the only way out: a
+    // narrower scope may fit what is left.
+    const server = fallback.trim().replace(/\.$/, '');
+    return server === ''
+      ? QA_START_ERROR_MESSAGES.AI_QA_DAILY_CAP
+      : `${server}. Narrow the scope, or try again after midnight UTC.`;
   }
   return QA_START_ERROR_MESSAGES[code] ?? fallback;
 }

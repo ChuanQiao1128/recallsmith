@@ -6,11 +6,12 @@
 // the poll loop; shouldAdvanceTime keeps findBy*/waitFor settling.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, RouterProvider, createMemoryRouter } from 'react-router-dom';
 
 import { deferred, ok, refused } from './support/apiResult';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
+import { REVIEW_MS_CAP } from '../src/lib/draftReview';
 import { QA_DECK_ID, qaCards, qaDeck, qaFinding, qaItem, qaRun, qaStatus } from './support/qaFixtures';
 import { renderAt } from './support/routerProbe';
 import { ConsoleShell } from '../src/components/console/ConsoleShell';
@@ -349,13 +350,22 @@ describe('DeckQaPage', () => {
   });
 
   it('maps a run already in progress and the daily cap to plain messages', async () => {
-    qa.startQaRun.mockResolvedValueOnce(refused('AI_QA_DAILY_CAP', 'cap reached'));
+    qa.startQaRun.mockResolvedValueOnce(
+      refused('AI_QA_DAILY_CAP', 'Daily AI QA cap $10.00 would be exceeded: spent $2.00, reserved $0.00, this run $8.50'),
+    );
     await openPage();
+    const statusCalls = qa.fetchQaStatus.mock.calls.length;
 
     fireEvent.click(startButton());
-    expect(await screen.findByText("Today's AI QA spend has reached the daily cap. Try again after midnight UTC."))
-      .toBeTruthy();
-    expect(screen.getByRole('alert').textContent).not.toContain('cap reached');
+    // frontend-console-23: the server's figures are kept (this used to assert
+    // they were dropped for a fixed "try again after midnight" line).
+    expect(
+      await screen.findByText(
+        'Daily AI QA cap $10.00 would be exceeded: spent $2.00, reserved $0.00, this run $8.50. Narrow the scope, or try again after midnight UTC.',
+      ),
+    ).toBeTruthy();
+    // The limits are reloaded, so the cap line catches up with the refusal.
+    await waitFor(() => expect(qa.fetchQaStatus.mock.calls.length).toBe(statusCalls + 1));
 
     const active = qaRun({ runId: 'run-9', status: 'running', effectiveStatus: 'running' });
     qa.startQaRun.mockResolvedValueOnce(refused('AI_QA_RUN_IN_PROGRESS', 'busy'));
@@ -425,7 +435,12 @@ describe('DeckQaPage', () => {
     fireEvent.click(fix);
     await waitFor(() => expect(fix.disabled).toBe(true));
     expect(qa.resolveQaFinding).toHaveBeenCalledTimes(1);
-    expect(qa.resolveQaFinding).toHaveBeenCalledWith(501, { resolution: 'fixed', note: 'Rewrote the answer.' });
+    expect(qa.resolveQaFinding).toHaveBeenCalledWith(501, {
+      resolution: 'fixed',
+      note: 'Rewrote the answer.',
+      // automation-16: the triage time now rides along.
+      reviewMs: expect.any(Number),
+    });
 
     pending.resolve(ok(null));
     await waitFor(() => expect(qa.fetchQaRun.mock.calls.length).toBe(runCalls + 1));
@@ -443,7 +458,7 @@ describe('DeckQaPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Dismiss finding 501' }));
     expect(await screen.findByText('This finding was already resolved elsewhere.')).toBeTruthy();
-    expect(qa.resolveQaFinding).toHaveBeenCalledWith(501, { resolution: 'dismissed' });
+    expect(qa.resolveQaFinding).toHaveBeenCalledWith(501, { resolution: 'dismissed', reviewMs: expect.any(Number) });
     await waitFor(() => expect(qa.fetchQaRun).toHaveBeenCalledTimes(2));
 
     qa.resolveQaFinding.mockResolvedValue(refused('FINDING_NOT_FOUND', 'No such finding.'));
@@ -616,5 +631,113 @@ describe('DeckQaPage', () => {
     expect(
       screen.getByText("This estimate is above what is left of today's AI QA cap: $0.05 of $1.00."),
     ).toBeTruthy();
+  });
+
+  it("prices the run at the server's per-card reservation and warns before the server refuses (frontend-console-23)", async () => {
+    // The finding's example: cap $10, $2 spent, 170 cards. At $0.045 a card the
+    // page said $7.65 and stayed silent; the server reserves $0.05 and refuses.
+    qa.fetchQaStatus.mockResolvedValue(
+      ok(qaStatus({ changedCards: 170, reviewedCurrent: 0, maxCards: 200, dailyUsdCap: 10, spentTodayUsd: 2 })),
+    );
+    await openPage();
+    expect(screen.getByTestId('qa-cost-estimate').textContent).toContain('$8.50');
+    expect(screen.getByText("This estimate is above what is left of today's AI QA cap: $8.00 of $10.00.")).toBeTruthy();
+    cleanup();
+
+    // A rate the server reports wins over the default.
+    qa.fetchQaStatus.mockResolvedValue(
+      ok(qaStatus({ changedCards: 170, reviewedCurrent: 0, maxCards: 200, dailyUsdCap: 10, spentTodayUsd: 2, estUsdPerCard: 0.04 })),
+    );
+    await openPage();
+    expect(screen.getByTestId('qa-cost-estimate').textContent).toContain('$6.80');
+    expect(screen.queryByText(/above what is left of today's AI QA cap/)).toBeNull();
+  });
+
+  it('drops the selected cards when the deck changes under the mounted page (frontend-console-24)', async () => {
+    const router = createMemoryRouter([{ path: '*', element: <DeckQaPage /> }], { initialEntries: [PAGE] });
+    render(<RouterProvider router={router} />);
+    await screen.findByRole('heading', { level: 1, name: 'AI QA' });
+    await waitFor(() => expect(screen.queryByText('Loading the publish gate…')).toBeNull());
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Selected cards' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /aws-iam-roles-vs-users/ }));
+    await waitFor(() => expect(screen.getByTestId('qa-card-count').textContent).toBe('1 card(s) will be reviewed.'));
+
+    // Deck 8 through Back/Forward or the picker: the route element stays mounted.
+    const otherDeck = { ...qaDeck, id: 8, slug: 'other-deck', title: 'Other deck' };
+    authoring.fetchDeckById.mockResolvedValue(ok(otherDeck));
+    authoring.fetchCardsByDeck.mockResolvedValue(
+      ok(qaCards.map((c, i) => ({ ...c, id: 201 + i, deckId: 8, stableUid: `other-${c.stableUid}` }))),
+    );
+    await act(() => router.navigate('/decks/qa?deckId=8'));
+    await screen.findByText(/Other deck/);
+    await waitFor(() => expect(screen.queryByText('Loading the publish gate…')).toBeNull());
+
+    expect((screen.getByRole('radio', { name: 'Changed cards' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: 'Selected cards' }));
+    await screen.findByRole('checkbox', { name: /other-aws-iam-roles-vs-users/ });
+    expect(screen.getByTestId('qa-card-count').textContent).toBe('0 card(s) will be reviewed.');
+    expect(startButton().disabled).toBe(true);
+    for (const box of screen.getAllByRole('checkbox')) expect((box as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /other-aws-s3-storage-classes/ }));
+    await waitFor(() => expect(screen.getByTestId('qa-card-count').textContent).toBe('1 card(s) will be reviewed.'));
+    fireEvent.click(startButton());
+    await waitFor(() => expect(qa.startQaRun).toHaveBeenCalledWith({ deckId: 8, scope: 'cards', cardIds: [201] }));
+  });
+
+  it('sends the visible triage time with each resolution (automation-16)', async () => {
+    const run = qaRun({ blockerCount: 2 });
+    qa.listQaRuns.mockResolvedValue(runsPage([run]));
+    qa.fetchQaRun.mockResolvedValue(
+      detail({
+        run,
+        items: [qaItem(101, 'aws-s3-storage-classes')],
+        findings: [qaFinding({ findingId: 501 }), qaFinding({ findingId: 502 })],
+      }),
+    );
+    await openPage();
+    await screen.findByRole('button', { name: 'Mark finding 501 fixed' });
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    fireEvent.click(screen.getByRole('button', { name: 'Mark finding 501 fixed' }));
+    await waitFor(() => expect(qa.resolveQaFinding).toHaveBeenCalledTimes(1));
+    const first = qa.resolveQaFinding.mock.calls[0][1] as { resolution: string; reviewMs: number };
+    expect(first.resolution).toBe('fixed');
+    expect(first.reviewMs).toBeGreaterThanOrEqual(12_000);
+    expect(first.reviewMs).toBeLessThan(20_000);
+
+    // The clock restarts after a resolution and is capped like a draft review.
+    await vi.advanceTimersByTimeAsync(REVIEW_MS_CAP + 60_000);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss finding 502' }));
+    await waitFor(() => expect(qa.resolveQaFinding).toHaveBeenCalledTimes(2));
+    expect(qa.resolveQaFinding.mock.calls[1][1]).toEqual({ resolution: 'dismissed', reviewMs: REVIEW_MS_CAP });
+  });
+
+  it('says the deck can be published once a watched run finishes with no blocker (automation-17)', async () => {
+    const running = qaRun({ status: 'running', effectiveStatus: 'running', cardsDone: 1 });
+    qa.listQaRuns.mockResolvedValue(runsPage([running]));
+    qa.fetchQaRun
+      .mockResolvedValueOnce(detail({ run: running }))
+      .mockResolvedValue(detail({ run: qaRun({ status: 'done', effectiveStatus: 'done', minorCount: 1 }) }));
+    await openPage();
+    await waitFor(() => expect(qa.fetchQaRun).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('qa-run-finished-clean')).toBeNull();
+    await vi.advanceTimersByTimeAsync(QA_POLL_INTERVAL_MS);
+    const notice = await screen.findByTestId('qa-run-finished-clean');
+    expect(notice.textContent).toContain('The review finished with no blockers');
+    expect(within(notice).getByRole('link', { name: 'Publish now from the deck list' }).getAttribute('href')).toBe('/');
+    cleanup();
+
+    // A run that ends with a blocker says nothing of the kind.
+    qa.fetchQaRun
+      .mockReset()
+      .mockResolvedValueOnce(detail({ run: running }))
+      .mockResolvedValue(detail({ run: qaRun({ status: 'done', effectiveStatus: 'done', blockerCount: 1 }) }));
+    await openPage();
+    await waitFor(() => expect(qa.fetchQaRun).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(QA_POLL_INTERVAL_MS);
+    await waitFor(() => expect(qa.fetchQaRun).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('qa-run-finished-clean')).toBeNull();
   });
 });
