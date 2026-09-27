@@ -16,7 +16,7 @@ import { QueryKeys, useAppQueryClient } from '../api/queryClient';
 import { CardForm } from '../components/CardForm';
 import type { CardFormValues } from '../components/CardForm';
 import { ConsoleShell } from '../components/console/ConsoleShell';
-import { consoleNav } from '../components/console/consoleNav';
+import { AUTOMATION_HREF, consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
@@ -30,7 +30,9 @@ import {
   INPUT_INVALID_CLASS,
   LABEL_CLASS,
 } from '../components/console/consoleStyles';
+import { DraftAutomationPanel } from '../features/automation/DraftAutomationPanel';
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
+import { draftAutomationBadgeText, draftAutomationTone } from '../lib/automationSurfaces';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   DRAFT_NOTE_MAX_LENGTH,
@@ -488,6 +490,7 @@ export function ReviewQueuePage() {
       title={CONSOLE_NAME}
       subtitle="Authoring · Review queue"
       {...consoleNav({ reviewHref, qaHref: deckId === null ? '/decks/qa' : qaPageHref(deckId) })}
+      automationHref={AUTOMATION_HREF}
     >
       <div>
         <h1 className={H1_CLASS}>Review queue</h1>
@@ -617,6 +620,9 @@ export function ReviewQueuePage() {
                       <div className="font-mono text-xs text-slate-600">{item.stableUid}</div>
                       <div className="text-slate-900">{firstLine(item.question)}</div>
                       {item.likelyDuplicate ? <Badge tone="warning">Likely duplicate</Badge> : null}
+                      {item.automation ? (
+                        <Badge tone={draftAutomationTone(item.automation)}>{draftAutomationBadgeText(item.automation)}</Badge>
+                      ) : null}
                     </button>
                   </li>
                 ))}
@@ -701,6 +707,9 @@ export function ReviewQueuePage() {
                     )}
 
                     <div className="space-y-4">
+                      {draft.automation ? (
+                        <DraftAutomationPanel draftId={draft.draftId} automation={draft.automation} />
+                      ) : null}
                       <section className={`${CARD_CLASS} space-y-2`} aria-label="Source">
                         <h2 className={H2_CLASS}>Source</h2>
                         <SourceLink url={draft.card.source.url} />

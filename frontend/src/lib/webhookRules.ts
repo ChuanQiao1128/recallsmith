@@ -6,8 +6,21 @@
 // check. Pure: no imports, no I/O. The server stays the authority on every rule
 // here; the console runs them first only to save a round trip.
 
-/** Subscribable events (§6.1). `webhook.test` is sent by the test button only. */
-export const WEBHOOK_EVENTS = ['deck.published', 'import.failed', 'card.flagged', 'review.queued'] as const;
+/**
+ * Subscribable events (§6.1), plus the four automation events of A00 §13; the
+ * server accepts 1..8 events per webhook. `webhook.test` is sent by the test
+ * button only.
+ */
+export const WEBHOOK_EVENTS = [
+  'deck.published',
+  'import.failed',
+  'card.flagged',
+  'review.queued',
+  'draft.auto_accepted',
+  'automation.batch_completed',
+  'automation.exception',
+  'source.changed',
+] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 
 export const WEBHOOK_URL_MAX_LENGTH = 2048;

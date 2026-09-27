@@ -24,6 +24,8 @@ export type QaRun = {
   provider: string | null;
   model: string | null;
   promptVersion: string | null;
+  /** Who started the run; `automation` for the runs the automation starts (A00 §5.6, §9.6). */
+  requestedBySub?: string | null;
   cardCount: number;
   chunkCount: number;
   cardsDone: number;
@@ -149,6 +151,7 @@ export function normalizeQaRun(raw: unknown): QaRun | null {
     provider: toNullableText(r.provider),
     model: toNullableText(r.model),
     promptVersion: toNullableText(r.promptVersion),
+    requestedBySub: toNullableText(r.requestedBySub),
     cardCount: toCount(r.cardCount),
     chunkCount: toCount(r.chunkCount),
     cardsDone: toCount(r.cardsDone),
