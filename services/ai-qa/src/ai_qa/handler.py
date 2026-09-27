@@ -286,8 +286,8 @@ def _report(
     }
     remaining = _remaining_s(context)
     budget = None if remaining is None else max(0.0, remaining - REPORT_BUDGET_RESERVE_S)
-    # Read only if core rejects the signature: present only during a rotation (README, "Internal
-    # shared secret rotation").
+    # Read only if core rejects the signature: present only during a rotation (README, "Route-secret
+    # rotation").
     def previous_secret() -> str | None:
         return settings.get_secret(settings.previous_secret_name(secret_name), optional=True)
 

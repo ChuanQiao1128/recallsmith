@@ -115,6 +115,7 @@ describe('src/api/ledger', () => {
           ],
           series: [
             { periodStart: '2026-09-21', automation: 'publish_pipeline', runs: '2', units: '40', minutesSaved: '100.00', defectsCaught: '0' },
+            { periodStart: '2026-09-28', automation: 'ai_draft_review', runs: '0', units: '0', minutesSaved: '0', netMinutes: '-8.50', defectsCaught: '0' },
           ],
         }),
       ),
@@ -137,14 +138,18 @@ describe('src/api/ledger', () => {
     });
     expect(res.data?.agentDrafts).toBeNull();
     expect(res.data?.automations[0]).toMatchObject({ baselineMinutesPerUnit: 2.5, failures: 1, failureRate: 0.5, minutesSaved: 100 });
+    // A point without netMinutes (a server before automation-18) reads its minutesSaved as the net.
     expect(res.data?.series[0]).toEqual({
       periodStart: '2026-09-21',
       automation: 'publish_pipeline',
       runs: 2,
       units: 40,
       minutesSaved: 100,
+      netMinutes: 100,
       defectsCaught: 0,
     });
+    // backend-design-24: minutesSaved is clamped by the server; netMinutes is signed and coerced.
+    expect(res.data?.series[1]).toMatchObject({ minutesSaved: 0, netMinutes: -8.5 });
 
     httpMock.get.mockResolvedValueOnce({
       data: ok({

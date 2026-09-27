@@ -88,7 +88,7 @@ and are not read here. SSM is read by exact name only (never by path); secrets a
 container only once they load successfully, and for at most **5 minutes** (`SECRET_TTL_SECONDS =
 300`, the dispatcher's value), so a rotated value reaches every warm container within that window.
 The optional `INTERNAL_SECRET_SSM_NAME` + `-previous` is read only when core answers 401/403 to a
-results report (see "Internal shared secret rotation"). Only `ParameterNotFound` counts as
+results report (see "Route-secret rotation"). Only `ParameterNotFound` counts as
 absent and is cached for the same TTL; any other read error (throttling, a network error,
 AccessDenied) is logged `ssm_secret_unavailable` at warn level and not cached, so the next 401/403
 reads SSM again.
@@ -288,33 +288,55 @@ and `botocore`) and `pydantic>=2`. Dev group: `pytest>=8` and `boto3==1.43.103` 
 2026-09-27 to the version the lock resolves for `anthropic[bedrock]`, matching the webhook
 dispatcher's pin. The deploy zip is about 21 MB, under the 50 MiB direct-upload limit.
 
-## Results-route secret rotation
+## Route-secret rotation
 
-Since 2026-09-27 (Z08) each machine caller has its own route secret: this Lambda signs the results
-report with `/developercards/prod/ai-qa-results-secret` (`§4.3`, core env
-`INTERNAL_SECRET_AI_QA_RESULTS`), the webhook dispatcher uses `/developercards/prod/webhook-report-secret`,
-and neither role can read the global `internal-shared-secret`. The Lambda re-reads its secret at
-most every 5 minutes and, when core answers 401/403, resends once signed with
-`/developercards/prod/ai-qa-results-secret-previous` if that parameter exists; core accepts the
-current and the `-previous` value. So either side can switch first.
+Since 2026-09-27 (Z08) each Python caller signs its core-vpc route (§4.3) with its own secret, and
+core-vpc accepts only that secret on that route:
 
-IAM: the role can read exactly `ai-qa-results-secret` and `ai-qa-results-secret-previous` (plus the
-Anthropic key); granted in Z08 (`infra/modules/identity/roles_r18.tf`). A denied or throttled read is
-logged `ssm_secret_unavailable` (warn, error class only), never cached as "no previous secret".
+| Leaf under `/developercards/prod/` | Route it signs | Caller | core-vpc env var |
+|---|---|---|---|
+| `ai-qa-results-secret` | `POST /api/internal/ai-qa/results` | this Lambda | `INTERNAL_SECRET_AI_QA_RESULTS` |
+| `webhook-report-secret` | `POST /api/internal/webhooks/deliveries/report` | webhook dispatcher | `INTERNAL_SECRET_WEBHOOK_REPORT` |
 
-Runbook (supervisor only; values never in git or chat):
+Neither role can read the global `internal-shared-secret`; only edge-public and core-vpc still use
+it (docs/runbooks/secrets-rotation.md). The procedure below is the same for both leaves.
+
+- **Caller side, no deploy.** The Lambda reads `<leaf>` by exact name and keeps it for at most
+  5 minutes. When core answers 401/403 it resends once, signed with `<leaf>-previous` if that
+  parameter exists. IAM (`infra/modules/identity/roles_r18.tf`): this role reads exactly
+  `ai-qa-results-secret` and `ai-qa-results-secret-previous` (plus the Anthropic key); the dispatcher
+  role reads `webhook-report-secret` and `webhook-report-secret-previous` (plus its signing secrets).
+  A denied or throttled read is logged `ssm_secret_unavailable` (warn, error class only), never
+  cached as "no previous secret".
+- **core-vpc side, deploy only.** `src_C/deploy.sh` copies `<leaf>` into the env var above and
+  `<leaf>-previous` into the same name + `_PREVIOUS` (`src_C/scripts/merge-env.sh`,
+  `SSM_TO_ENV_INTERNAL`); core accepts both while `_PREVIOUS` is set (`VerifyInternalSignature` in
+  `src_C/Shared/RecallSmith.Lambda.Common/Auth.cs`). core-vpc reads no SSM at runtime, so a put *and*
+  a delete reach it only with the next deploy: both env vars are in `SSM_OPTIONAL_ENV`, and
+  `drop_absent_optional` removes the one whose leaf is gone.
+
+Runbook (supervisor only; values never in git or chat). `<leaf>` is `ai-qa-results-secret` or
+`webhook-report-secret`. Every deploy is `ENV=prod src_C/deploy.sh` with the default `INJECT_ENV=1`;
+it also publishes the checked-out core-vpc and worker code, so run it from the commit that is live.
 
 1. Copy the current value to the previous name:
-   `aws ssm put-parameter --name /developercards/prod/ai-qa-results-secret-previous --type SecureString --value <current>`.
-2. Put the new value in `/developercards/prod/ai-qa-results-secret`. Within 5 minutes every
-   Python container signs with the new value and falls back to the old one on a 403.
-3. Deploy core-vpc with the new `INTERNAL_SHARED_SECRET` (its deploy overlays the SSM leaf). Once
-   core accepts `INTERNAL_SHARED_SECRET_PREVIOUS` too (core follow-up), put the old value there for
-   the deploy, so callers that have not refreshed yet keep verifying.
-4. Wait 10 minutes (two cache TTLs), then delete the previous parameter:
-   `aws ssm delete-parameter --name /developercards/prod/ai-qa-results-secret-previous`
-   (and drop `INTERNAL_SHARED_SECRET_PREVIOUS` from core-vpc, if set).
+   `aws ssm put-parameter --name /developercards/prod/<leaf>-previous --type SecureString --overwrite --value <current>`.
+2. `ENV=prod src_C/deploy.sh`. Core accepts the current value (also as `_PREVIOUS`).
+3. Put a new random value (32 bytes, hex):
+   `aws ssm put-parameter --name /developercards/prod/<leaf> --type SecureString --overwrite --value <new>`.
+   Within 5 minutes every caller container signs with it; until step 4 has finished core rejects it,
+   and the caller resends signed with `<leaf>-previous`, which core still accepts.
+4. `ENV=prod src_C/deploy.sh`. Core accepts the new value, and the old one as `_PREVIOUS`.
+5. Wait 10 minutes (two 5-minute TTLs), so no warm container still signs with the old value.
+6. Delete the previous parameter:
+   `aws ssm delete-parameter --name /developercards/prod/<leaf>-previous`.
+7. **Revocation:** `ENV=prod src_C/deploy.sh`. This deploy removes the `_PREVIOUS` env var from
+   core-vpc; until it has finished, core still accepts the old value, so after a leak the rotation is
+   not done without it. Check that
+   `aws lambda get-function-configuration --function-name core-vpc:prod --query 'keys(Environment.Variables)'`
+   (key names only) no longer lists `INTERNAL_SECRET_AI_QA_RESULTS_PREVIOUS` or
+   `INTERNAL_SECRET_WEBHOOK_REPORT_PREVIOUS`.
 
-The `-previous` leaf is not a core env key today. Core's `merge-env.sh` fails on an unmapped leaf
-under `/developercards/prod` (SSM_TO_ENV), so step 1 needs a row for it first: map it to
-`INTERNAL_SHARED_SECRET_PREVIOUS` once core reads that key, or list it in `SSM_NOT_ENV` until then.
+Do not delete `<leaf>` itself: the next deploy would drop the route's env var, core would fall back
+to `INTERNAL_SHARED_SECRET` on that route, and the caller cannot read that secret, so every report
+would fail.

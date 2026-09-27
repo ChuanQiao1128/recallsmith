@@ -78,13 +78,23 @@ export type LedgerBar = {
   periodStart: string;
   runs: number;
   units: number;
+  /** Never negative: each series point is clamped per (period, automation, source) by the server. */
   minutesSaved: number;
+  /** Signed: negative when the period's review cost exceeds its savings. */
+  netMinutes: number;
   defectsCaught: number;
 };
 
 /** Sums every automation into one bar per period, oldest period first. */
 export function buildLedgerBars(
-  series: ReadonlyArray<{ periodStart: string; runs: number; units: number; minutesSaved: number; defectsCaught: number }>,
+  series: ReadonlyArray<{
+    periodStart: string;
+    runs: number;
+    units: number;
+    minutesSaved: number;
+    netMinutes: number;
+    defectsCaught: number;
+  }>,
 ): LedgerBar[] {
   const byPeriod = new Map<string, LedgerBar>();
   for (const point of series) {
@@ -93,17 +103,29 @@ export function buildLedgerBars(
       runs: 0,
       units: 0,
       minutesSaved: 0,
+      netMinutes: 0,
       defectsCaught: 0,
     };
     bar.runs += point.runs;
     bar.units += point.units;
     bar.minutesSaved += point.minutesSaved;
+    bar.netMinutes += point.netMinutes;
     bar.defectsCaught += point.defectsCaught;
     byPeriod.set(point.periodStart, bar);
   }
   return [...byPeriod.values()].sort((a, b) =>
     a.periodStart < b.periodStart ? -1 : a.periodStart > b.periodStart ? 1 : 0,
   );
+}
+
+/**
+ * A bar's SVG height in px: its minutes saved as a share of the tallest bar,
+ * within [0, plotHeight]. Never negative (SVG drops a rect with a negative
+ * height), even if a server sends a negative minutesSaved.
+ */
+export function ledgerBarHeight(minutesSaved: number, maxSaved: number, plotHeight: number): number {
+  if (!(maxSaved > 0) || !(minutesSaved > 0)) return 0;
+  return Math.min(plotHeight, (minutesSaved / maxSaved) * plotHeight);
 }
 
 export function formatHours(minutes: number): string {
@@ -135,9 +157,11 @@ export function ledgerLabelEvery(slot: number, labelChars: number, fontSize: num
 /**
  * How the Automation Ledger computes its numbers, restated for the page. It
  * follows what GET /api/v1/admin/automation/ledger computes
- * (src_C/Vpc/Ledger/LedgerRoutes.cs, after the X01 fixes), not the first draft
- * of contract §9.1: savings are clamped per automation and source, and a
- * rejected AI draft is a review cost, never a defect caught.
+ * (src_C/Vpc/Ledger/LedgerRoutes.cs, after the X01 and Z01 fixes), not the
+ * first draft of contract §9.1: the headline is clamped once per automation
+ * and source over the whole range, each chart bar per automation and source
+ * within its period, and a rejected AI draft is a review cost, never a defect
+ * caught.
  */
 export const LEDGER_DEFINITIONS: ReadonlyArray<{ term: string; definition: string }> = [
   {
@@ -161,7 +185,7 @@ export const LEDGER_DEFINITIONS: ReadonlyArray<{ term: string; definition: strin
   {
     term: 'Minutes saved',
     definition:
-      'Per automation and source (live or inferred from history): max(0, Σ units × baseline − Σ actual minutes) over successful and partial events, where actual minutes include review time on rejected drafts. Failures save nothing. The total is the sum of those groups; the chart applies the same rule per period. Hours are minutes ÷ 60.',
+      "Per automation and source (live or inferred from history): max(0, Σ units × baseline − Σ actual minutes) over successful and partial events, where actual minutes include review time on rejected drafts. Failures save nothing. The total and the per-automation table apply this once over the whole selected range, whatever the granularity, and add up the groups. Each chart bar applies it within its period and adds up that period's groups, so a bar is never negative and the bars can add up to more than the total. A period's net minutes are the same sums without the max(0, …), so they are negative when actual minutes exceeded baseline minutes in that period. Hours are minutes ÷ 60.",
   },
   {
     term: 'Live and inferred from history',

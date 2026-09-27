@@ -15,12 +15,17 @@ import {
   formatHours,
   formatPercent,
   ledgerAxisLabel,
+  ledgerBarHeight,
   ledgerLabelEvery,
   ledgerRangeProblem,
 } from '../src/lib/ledgerView';
 
-function point(periodStart: string, minutesSaved: number, extra: Partial<{ runs: number; units: number; defectsCaught: number }> = {}) {
-  return { periodStart, runs: 1, units: 2, minutesSaved, defectsCaught: 0, ...extra };
+function point(
+  periodStart: string,
+  minutesSaved: number,
+  extra: Partial<{ runs: number; units: number; netMinutes: number; defectsCaught: number }> = {},
+) {
+  return { periodStart, runs: 1, units: 2, minutesSaved, netMinutes: minutesSaved, defectsCaught: 0, ...extra };
 }
 
 describe('ledgerView', () => {
@@ -31,10 +36,36 @@ describe('ledgerView', () => {
       point('2026-09-14', 15, { runs: 1, units: 3, defectsCaught: 2 }),
     ]);
     expect(bars).toEqual([
-      { periodStart: '2026-09-07', runs: 1, units: 2, minutesSaved: 10, defectsCaught: 0 },
-      { periodStart: '2026-09-14', runs: 3, units: 8, minutesSaved: 45, defectsCaught: 3 },
+      { periodStart: '2026-09-07', runs: 1, units: 2, minutesSaved: 10, netMinutes: 10, defectsCaught: 0 },
+      { periodStart: '2026-09-14', runs: 3, units: 8, minutesSaved: 45, netMinutes: 45, defectsCaught: 3 },
     ]);
     expect(buildLedgerBars([])).toEqual([]);
+  });
+
+  it('never draws a negative bar, even for a net-negative period (backend-design-24)', () => {
+    // A period whose review time exceeds its savings: the server sends minutesSaved 0 and a negative netMinutes.
+    const bars = buildLedgerBars([
+      point('2026-09-07', 12),
+      point('2026-09-14', 0, { netMinutes: -20 }),
+      point('2026-09-14', 0, { netMinutes: -5 }),
+    ]);
+    expect(bars.map(b => [b.minutesSaved, b.netMinutes])).toEqual([
+      [12, 12],
+      [0, -25],
+    ]);
+    const maxSaved = bars.reduce((max, bar) => Math.max(max, bar.minutesSaved), 0);
+    const heights = bars.map(b => ledgerBarHeight(b.minutesSaved, maxSaved, 160));
+    expect(heights).toEqual([160, 0]);
+    // A server that still sent the signed net as minutesSaved (Z01) cannot produce a negative height either.
+    expect(ledgerBarHeight(-25, 12, 160)).toBe(0);
+    expect(ledgerBarHeight(-25, 0, 160)).toBe(0);
+    expect(ledgerBarHeight(5, 0, 160)).toBe(0);
+    expect(ledgerBarHeight(Number.NaN, 12, 160)).toBe(0);
+    expect(ledgerBarHeight(6, 12, 160)).toBe(80);
+    for (const minutes of [-1e9, -1, 0, 1, 6, 12, 1e9]) {
+      expect(ledgerBarHeight(minutes, 12, 160)).toBeGreaterThanOrEqual(0);
+      expect(ledgerBarHeight(minutes, 12, 160)).toBeLessThanOrEqual(160);
+    }
   });
 
   it('formats minutes as hours with one decimal', () => {
@@ -106,6 +137,12 @@ describe('ledgerView', () => {
     );
     expect(byTerm['Minutes saved']).toContain('actual minutes include review time on rejected drafts');
     expect(byTerm['Minutes saved']).not.toContain('over successful and partial runs of max(0, units');
+    // Z01 + backend-design-24: the headline is clamped once over the range, each bar within its period.
+    expect(byTerm['Minutes saved']).toContain('once over the whole selected range, whatever the granularity');
+    expect(byTerm['Minutes saved']).toContain('Each chart bar applies it within its period');
+    expect(byTerm['Minutes saved']).toContain('a bar is never negative');
+    expect(byTerm['Minutes saved']).toContain("A period's net minutes are the same sums without the max(0, …)");
+    expect(byTerm['Minutes saved']).not.toContain('the chart applies the same rule per period');
     // Drafts.cs records every reject with defects_caught 0.
     expect(byTerm['Defects caught before publish']).toContain('Exactly one of two things');
     expect(byTerm['Defects caught before publish']).toContain('AI QA blocker or major finding resolved as fixed');

@@ -128,9 +128,11 @@ public static class LedgerRoutes
         """,
         [start, end]);
 
-      // The series shows net minutes per (period, automation), unclamped, so a period whose review cost exceeds
-      // its savings shows a negative bar. Per automation and source the series adds up to the unclamped net, and
-      // it equals the headline whenever that net is not negative (automation-18).
+      // Each series point carries two values (backend-design-24, additive on automation-18):
+      // minutesSaved keeps its original meaning, Σ max(0, net) clamped per (period, automation, source), so it is
+      // never negative; netMinutes is the signed Σ net per (period, automation) and may be negative. Per
+      // automation and source, netMinutes adds up to the unclamped net over the range. Σ minutesSaved can exceed
+      // the headline, which is clamped once over the whole range.
       var seriesRows = await DbUtil.QueryAsync(conn, null,
         """
         with g as (
@@ -150,6 +152,7 @@ public static class LedgerRoutes
                automation as "automation",
                sum(runs) as "runs",
                sum(units) as "units",
+               sum(greatest(0, net)) as "minutesSaved",
                sum(net) as "netMinutes",
                sum(defects) as "defectsCaught"
         from g
@@ -220,8 +223,8 @@ public static class LedgerRoutes
         automation = (string)r["automation"]!,
         runs = ToLong(r["runs"]),
         units = ToLong(r["units"]),
-        // Net minutes for the period (may be negative); minutesSaved is kept as the same value for existing readers.
-        minutesSaved = Round2(ToDecimal(r["netMinutes"])),
+        // Clamped per (period, automation, source), never negative; netMinutes is the signed net for the period.
+        minutesSaved = Round2(ToDecimal(r["minutesSaved"])),
         netMinutes = Round2(ToDecimal(r["netMinutes"])),
         defectsCaught = ToLong(r["defectsCaught"]),
       }).ToArray();

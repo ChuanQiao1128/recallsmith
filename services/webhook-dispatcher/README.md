@@ -52,10 +52,12 @@ Every attempt with a valid message is reported to core-vpc with
 answers `"stop": true` (subscription disabled or deleted) a `retry` is acked instead. A failed
 report never changes the decision; it counts in `WebhookReportFailures`. The report is retried
 once after 1 s on a connection error, a 5xx or a 429 (the route's throttle); a 401/403 is resent
-once signed with `/developercards/prod/webhook-report-secret-previous` when that exists (rotation:
-services/ai-qa/README.md, "Internal shared secret rotation"). The dispatcher role cannot read that
-parameter yet (infra follow-up), so today the read is denied, logged `ssm_secret_unavailable`
-(warn), not cached, and the 401/403 stands. The report's `error` is at
+once signed with `/developercards/prod/webhook-report-secret-previous` when that exists. The
+dispatcher role may read that parameter (Z08, `infra/modules/identity/roles_r18.tf`): a missing one
+(`ParameterNotFound`) means "no rotation"; any other read error is logged `ssm_secret_unavailable`
+(warn), not cached, and the 401/403 stands. To rotate `webhook-report-secret`, follow
+services/ai-qa/README.md, "Route-secret rotation" (one procedure for both route secrets; its last
+core-vpc deploy is the revocation). The report's `error` is at
 most 500 characters and never contains the URL path/query or the response body.
 
 **Disabling, deleting or re-pointing a subscription does not recall messages already queued**
@@ -172,11 +174,11 @@ subscription per container per TTL). Any other read error fails the attempt clos
 (`SIGNING_SECRET_MISSING`, retried, not cached): signing with the environment-wide secret would
 make that receiver answer 401, which is a permanent failure.
 
-Prerequisites (supervisor), all before setting the flag: the dispatcher role needs
-`ssm:GetParameter` on `…/webhook-signing-secret-sub-*` (without it every read is AccessDenied, so
-with the flag on every delivery fails closed and ends `dead`), and core-vpc's
-`src_C/scripts/merge-env.sh` must skip those leaves (`SSM_NOT_ENV`), or its deploy fails with
-"unmapped SSM parameter".
+Prerequisites (both in place since 2026-09-27): the dispatcher role can `ssm:GetParameter` on
+`…/webhook-signing-secret-sub-*` (Z03, `infra/modules/identity/roles_r18.tf`, Sid
+`SsmReadSubscriptionSecrets`), and core-vpc's `src_C/scripts/merge-env.sh` skips those leaves by
+pattern (`SSM_NOT_ENV_PATTERN`), so creating one never breaks `src_C/deploy.sh`. Only the flag
+itself is left to set.
 
 To give subscription 12 its own secret: generate 32 random bytes (hex), `put-parameter` it as
 `…/webhook-signing-secret-sub-12` (SecureString), hand it to that receiver once, wait 5 minutes.
@@ -295,8 +297,8 @@ Both recoveries below work with the deployed core-vpc (R18 Y01, automation-12): 
 lets a `delivered` report win over a `dead` row at any attempt and then records the
 webhook_notification ledger unit, so a redriven message that succeeds shows `delivered`. For each
 message pick **one** of the two, never both, or the receiver gets the event twice (it still dedupes
-on `eventId`). infra/RUNBOOK.md §7 still describes the older "Redeliver, never redrive" rule; this
-section supersedes it until that file is updated (infra follow-up, docs/delivery/r18-issues/Z02-fixes.md).
+on `eventId`). infra/RUNBOOK.md §7 (`webhook-delivery-dead`) gives the same two recoveries and
+points here.
 
 - **`dead` deliveries** (five retryable failures; the message is in
   `developercards-webhook-events-dlq`). Fix the receiver first, then either:

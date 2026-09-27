@@ -78,7 +78,10 @@ export type LedgerSeriesPoint = {
   automation: string;
   runs: number;
   units: number;
+  /** Σ max(0, net) clamped per (period, automation, source): never negative. */
   minutesSaved: number;
+  /** The signed net minutes for the period; negative when review cost exceeds savings. */
+  netMinutes: number;
   defectsCaught: number;
 };
 
@@ -246,6 +249,8 @@ function normalizeSeriesPoint(value: unknown): LedgerSeriesPoint {
     runs: toNumber(raw.runs),
     units: toNumber(raw.units),
     minutesSaved: toNumber(raw.minutesSaved),
+    // A server before automation-18 sends no netMinutes; its minutesSaved is then the only value there is.
+    netMinutes: toNumber(raw.netMinutes ?? raw.minutesSaved),
     defectsCaught: toNumber(raw.defectsCaught),
   };
 }

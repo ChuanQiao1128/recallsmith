@@ -77,14 +77,28 @@ per alarm: what fired, first thing to check.
   the receiver's copy of the signing secret is stale (rotate or re-share it), 404/410 a dead URL
   (disable the subscription).
 - `webhook-delivery-dead` — a delivery used all five attempts on retryable errors; the message goes
-  to the webhook DLQ. Recovery (R18 Y04, the one procedure): fix the receiver, press **Redeliver** on
-  each `dead` row in the console (a new delivery id, so the receiver processes it once), then purge
-  the DLQ (`aws sqs purge-queue --queue-url <developercards-webhook-events-dlq URL>`) so nobody later
-  redrives those messages and delivers the same events twice. Do not redrive the webhook DLQ back to
-  the source queue: until the automation-12 core-vpc fix is deployed, a redriven success leaves the
-  row `dead` (services/webhook-dispatcher/README.md, "Dead deliveries and the DLQ").
+  to developercards-webhook-events-dlq. Recovery (R18 Y01, automation-12, deployed; detail in
+  services/webhook-dispatcher/README.md, "Dead deliveries and the DLQ"): fix the receiver, then pick
+  **one** of the two for each message, never both, or the receiver gets the event twice (it still
+  dedupes on `eventId`):
+  - **Redrive** the DLQ back to developercards-webhook-events
+    (`aws sqs start-message-move-task --source-arn <DLQ ARN>`): each message is retried with the same
+    delivery id (up to five more attempts); the row stays `dead` until one succeeds, then shows
+    `delivered`.
+  - Press **Redeliver** on each `dead` row in the console (a new delivery id), then purge the DLQ
+    (`aws sqs purge-queue --queue-url <developercards-webhook-events-dlq URL>`).
+  - **Before any purge**, check that the DLQ holds no unsupported-version messages: search the
+    dispatcher's log for `webhook_unsupported_version` over the DLQ's 14-day retention
+    (`aws logs filter-log-events --log-group-name /aws/lambda/developercards-webhook-dispatcher --filter-pattern '"webhook_unsupported_version"' --start-time <epoch ms, 14 days ago> --query 'events[].message'`).
+    If there are any, never purge: those rows stay `queued` and are never `dead`, so no Redeliver
+    or sweep resends them; deploy a dispatcher that speaks that version, then redrive the DLQ as a
+    whole (the redrive is correct for the `dead` messages too).
 - `webhook-report-failures` — the dispatcher could not post its attempt report to core-vpc, so the
-  delivery row is stale. Check core-vpc health and the internal-shared-secret SSM parameter.
+  delivery row is stale. Check core-vpc health and the `/developercards/prod/webhook-report-secret`
+  SSM parameter: the dispatcher signs with it, and core-vpc verifies with the copy the last
+  `src_C/deploy.sh` put in `INTERNAL_SECRET_WEBHOOK_REPORT`, so a value changed without a core-vpc
+  deploy is rejected (403) unless `webhook-report-secret-previous` still holds the old one. Rotate it
+  only with services/ai-qa/README.md, "Route-secret rotation".
 - `webhook-enqueue-failures` — core-vpc or the worker failed `SendMessage` to
   developercards-webhook-events; the delivery row is kept as `enqueue_failed`, not lost. Fix the queue
   or the send grants (developercards-core-vpc / worker SQS policy), wait 10 minutes, then call

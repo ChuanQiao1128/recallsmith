@@ -37,8 +37,14 @@ vi.mock('../src/api/ledger', async importOriginal => {
 
 const { LedgerPage } = await import('../src/pages/LedgerPage');
 
-function series(periodStart: string, automation: string, minutesSaved: number, defectsCaught = 0): LedgerSeriesPoint {
-  return { periodStart, automation, runs: 1, units: 10, minutesSaved, defectsCaught };
+function series(
+  periodStart: string,
+  automation: string,
+  minutesSaved: number,
+  defectsCaught = 0,
+  netMinutes = minutesSaved,
+): LedgerSeriesPoint {
+  return { periodStart, automation, runs: 1, units: 10, minutesSaved, netMinutes, defectsCaught };
 }
 
 function report(overrides: Partial<LedgerReport> = {}): LedgerReport {
@@ -278,8 +284,44 @@ describe('LedgerPage', () => {
       'Period start',
       'Time saved',
       'Minutes saved',
+      'Net minutes',
       'Defects caught',
     ]);
+  });
+
+  it('never draws a negative bar for a net-negative period (backend-design-24)', async () => {
+    // 2026-09-14 lost time: the server clamps minutesSaved to 0 and sends the signed net separately.
+    // 2026-09-28 comes from a server that still sent the signed net as minutesSaved.
+    api.fetchAutomationLedger.mockResolvedValue(
+      ok(
+        report({
+          series: [
+            series('2026-09-07', 'publish_pipeline', 120),
+            series('2026-09-14', 'ai_draft_review', 0, 0, -30),
+            series('2026-09-21', 'publish_pipeline', 60),
+            series('2026-09-21', 'ai_draft_review', 0, 0, -6),
+            series('2026-09-28', 'ai_draft_review', -12),
+          ],
+        }),
+      ),
+    );
+    await mountLoaded();
+
+    const bars = screen.getAllByTestId('ledger-bar');
+    expect(bars).toHaveLength(4);
+    const heights = bars.map(b => Number(b.getAttribute('height')));
+    for (const h of heights) expect(h).toBeGreaterThanOrEqual(0);
+    expect(heights).toEqual([160, 0, 80, 0]);
+    for (const b of bars) expect(Number(b.getAttribute('y'))).toBeLessThanOrEqual(160);
+    expect(bars.slice(0, 3).map(b => b.querySelector('title')?.textContent)).toEqual([
+      '2026-09-07: 2.0 h saved, 0 defects',
+      '2026-09-14: 0.0 h saved (net -0.5 h), 0 defects',
+      '2026-09-21: 1.0 h saved (net 0.9 h), 0 defects',
+    ]);
+
+    const table = screen.getByTestId('ledger-chart-table');
+    const rows = within(table).getAllByRole('row');
+    expect(within(rows[2]).getAllByRole('cell').map(c => c.textContent)).toEqual(['0.0 h', '0', '-30', '0']);
   });
 
   it('says so when there are no runs in the range', async () => {

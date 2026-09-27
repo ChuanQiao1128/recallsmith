@@ -47,6 +47,7 @@ import {
   formatHours,
   formatPercent,
   ledgerAxisLabel,
+  ledgerBarHeight,
   ledgerLabelEvery,
   ledgerRangeProblem,
 } from '../lib/ledgerView';
@@ -589,7 +590,8 @@ export function LedgerPage() {
               >
                 <line x1={0} y1={PLOT_HEIGHT} x2={chartWidth} y2={PLOT_HEIGHT} stroke="currentColor" strokeWidth={1} />
                 {bars.map((bar, i) => {
-                  const height = maxSaved > 0 ? (bar.minutesSaved / maxSaved) * PLOT_HEIGHT : 0;
+                  const height = ledgerBarHeight(bar.minutesSaved, maxSaved, PLOT_HEIGHT);
+                  const net = bar.netMinutes === bar.minutesSaved ? '' : ` (net ${formatHours(bar.netMinutes)})`;
                   const x = i * BAR_SLOT + (BAR_SLOT - BAR_WIDTH) / 2;
                   return (
                     <g key={bar.periodStart}>
@@ -602,7 +604,7 @@ export function LedgerPage() {
                         className="text-indigo-600"
                         fill="currentColor"
                       >
-                        <title>{`${bar.periodStart}: ${formatHours(bar.minutesSaved)} saved, ${bar.defectsCaught} defects`}</title>
+                        <title>{`${bar.periodStart}: ${formatHours(bar.minutesSaved)} saved${net}, ${bar.defectsCaught} defects`}</title>
                       </rect>
                       {i % labelEvery === 0 ? (
                         <text
@@ -625,12 +627,13 @@ export function LedgerPage() {
             <details className="mt-2 text-sm">
               <summary className="cursor-pointer text-slate-600">Show the chart data as a table</summary>
               <table id={CHART_TABLE_ID} className="mt-2 min-w-full text-sm" data-testid="ledger-chart-table">
-                <caption className="sr-only">Minutes saved and defects caught per period</caption>
+                <caption className="sr-only">Minutes saved, net minutes and defects caught per period</caption>
                 <thead className="bg-slate-50">
                   <tr>
                     <th scope="col" className={TH_CLASS}>Period start</th>
                     <th scope="col" className={TH_CLASS}>Time saved</th>
                     <th scope="col" className={TH_CLASS}>Minutes saved</th>
+                    <th scope="col" className={TH_CLASS}>Net minutes</th>
                     <th scope="col" className={TH_CLASS}>Defects caught</th>
                   </tr>
                 </thead>
@@ -640,6 +643,7 @@ export function LedgerPage() {
                       <th scope="row" className={`${TD_CLASS} text-left font-normal`}>{bar.periodStart}</th>
                       <td className={TD_CLASS}>{formatHours(bar.minutesSaved)}</td>
                       <td className={TD_CLASS}>{formatNumber(bar.minutesSaved)}</td>
+                      <td className={TD_CLASS}>{formatNumber(bar.netMinutes)}</td>
                       <td className={TD_CLASS}>{formatNumber(bar.defectsCaught)}</td>
                     </tr>
                   ))}

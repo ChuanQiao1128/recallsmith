@@ -455,7 +455,7 @@ public class AutomationLedgerTests
   {
     // automation-18 (replaces Ledger_SeriesAddsUpToTotals_AcrossPeriods, which pinned a headline that changed with
     // the granularity): the headline is clamped once per automation and source over the range, so the same rows
-    // give the same "Hours saved" for day, week and month; the series shows unclamped net minutes per period.
+    // give the same "Hours saved" for day, week and month; the series' netMinutes is the unclamped net per period.
     // 2013-03-04 and 2013-03-11 are Mondays of two weeks in one month.
     var baseline = Automation(await LedgerAsync("2013-01-01", "2013-12-31"), "ai_draft_review").GetProperty("baselineMinutesPerUnit").GetDecimal();
     await RecordAsync(new AutomationEvent("ai_draft_review", 1, "success", ActualMinutes: 0m, OccurredAt: At(2013, 3, 5)));
@@ -478,14 +478,24 @@ public class AutomationLedgerTests
       var importPoints = series.Where(s => s.GetProperty("automation").GetString() == "bulk_import").ToList();
       var importBaseline = Automation(data, "bulk_import").GetProperty("baselineMinutesPerUnit").GetDecimal();
       Assert.Equal(6 * importBaseline, importPoints.Sum(s => s.GetProperty("netMinutes").GetDecimal()));
-      Assert.All(series, s => Assert.Equal(s.GetProperty("netMinutes").GetDecimal(), s.GetProperty("minutesSaved").GetDecimal()));
+      // backend-design-24: series minutesSaved keeps its meaning (clamped per period, automation and source), so
+      // it is never negative and never below the signed net.
+      Assert.All(series, s => Assert.True(s.GetProperty("minutesSaved").GetDecimal() >= 0m, s.ToString()));
+      Assert.All(series, s => Assert.True(s.GetProperty("minutesSaved").GetDecimal() >= s.GetProperty("netMinutes").GetDecimal(), s.ToString()));
     }
     Assert.Single(headlines.Distinct());
 
-    // At week grain the second week's bar is negative instead of floored to 0.
+    // At week grain the second week's net is negative instead of floored to 0; its minutesSaved is 0.
     var weekly = await LedgerAsync("2013-01-01", "2013-12-31", "week");
     var weeks = weekly.GetProperty("series").EnumerateArray().Where(s => s.GetProperty("automation").GetString() == "ai_draft_review").ToList();
     Assert.Equal(new[] { baseline, -(baseline + 8m) }, weeks.Select(s => s.GetProperty("netMinutes").GetDecimal()).ToArray());
+    Assert.Equal(new[] { baseline, 0m }, weeks.Select(s => s.GetProperty("minutesSaved").GetDecimal()).ToArray());
+
+    // At month grain the draft automation's only period is net-negative: netMinutes −8, minutesSaved 0.
+    var monthly = await LedgerAsync("2013-01-01", "2013-12-31", "month");
+    var month = Assert.Single(monthly.GetProperty("series").EnumerateArray(), s => s.GetProperty("automation").GetString() == "ai_draft_review");
+    Assert.Equal(-8m, month.GetProperty("netMinutes").GetDecimal());
+    Assert.Equal(0m, month.GetProperty("minutesSaved").GetDecimal());
   }
 
   [Fact]

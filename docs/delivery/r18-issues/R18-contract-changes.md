@@ -67,13 +67,15 @@ adding `AI_QA_STALE` there is the console wave's change (outside `src_C`).
 | §9.3 webhook_notification dedupe | `webhook:<deliveryId>` | `webhook:<eventId>:<subscriptionId>` | `src_C/Vpc/Internal/WebhookDeliveryReport.cs:152` | X01 automation-10 |
 | §9.3 draft reject row | only the 4 defect reasons | every reject, `units 0`, `actual_minutes = reviewMs/60000` (capped at 30 min), `details {reason, defect, reviewTimeMeasured, rawReviewMs?}` | `src_C/Vpc/Review/Drafts.cs` | X01 automation-4, Y01 automation-13 |
 | §9.4 `GET /ledger` headline | per-row clamp (R18), then per (period, automation, source) (Y01) | `max(0, Σ net)` once per (automation, source) over `[from, to)`, independent of `granularity`; additive `totals.bySource`, `totals.byBaselineSource`, `agentDrafts` | `src_C/Vpc/Ledger/LedgerRoutes.cs:108` | X01 automation-4/-11, Z01 automation-18 |
-| §9.4 `GET /ledger` series | clamped per period | unclamped net minutes per (period, automation): `minutesSaved` and the additive `netMinutes` carry the same value, which may be negative | `src_C/Vpc/Ledger/LedgerRoutes.cs:153`, `:225` | Z01 automation-18 |
+| §9.4 `GET /ledger` series | clamped per period | `minutesSaved` keeps its meaning and is never negative: `Σ max(0, net)` clamped per (period, automation, source), summed per (period, automation). The additive `netMinutes` is the signed `Σ net` per (period, automation) and may be negative. Σ `netMinutes` per automation over the range is the unclamped net; Σ `minutesSaved` can exceed the headline, which is clamped once over the range | `src_C/Vpc/Ledger/LedgerRoutes.cs:155-156`, `:227-228` | Z01 automation-18 (Z01 briefly sent the signed net as `minutesSaved`); backend-design-24 restored it |
 | §9.4 agentDrafts | — | additive `reviewNotMeasured`; `avgReviewMinutes` over values capped at 30 min | `src_C/Vpc/Ledger/LedgerRoutes.cs` | Y01 automation-13 |
 | §9.5 backfill heuristic | every deck-minute with ≥ 5 cards | only cards created before `live_since`, never an accepted AI draft | `src_C/Vpc/Ledger/LedgerRoutes.cs` (backfill import) | X01 backend-design-2 |
 
-The console's printed definition (`frontend/src/lib/ledgerView.ts:164`) still describes a per-period clamp for
-the chart; its new wording ("clamped once per automation and source over the selected range; bars show net
-minutes per period and may be negative") is the console wave's change.
+The console (backend-design-24) draws each bar from `minutesSaved`, so a bar is never negative
+(`frontend/src/lib/ledgerView.ts` `ledgerBarHeight` also floors a negative value at 0), shows `netMinutes` in the
+bar's title when it differs, and lists it in the chart's data table. The printed "Minutes saved" definition
+(`frontend/src/lib/ledgerView.ts:188`) states both grains: the headline once per automation and source over the
+selected range, each bar within its period, and net minutes as the same sums without the `max(0, …)`.
 
 ## Drafts (§8) and grounding
 
