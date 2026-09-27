@@ -1,0 +1,17 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.edge.aws_sesv2_email_identity.domain": "create",
+    "module.edge.aws_route53_record.ses_dkim[0]": "create",
+    "module.edge.aws_route53_record.ses_dkim[1]": "create",
+    "module.edge.aws_route53_record.ses_dkim[2]": "create",
+    "module.edge.aws_sesv2_email_identity_mail_from_attributes.domain": "create",
+    "module.edge.aws_route53_record.ses_mail_from_mx": "create",
+    "module.edge.aws_route53_record.ses_mail_from_spf": "create",
+    "module.edge.aws_route53_record.dmarc": "create",
+    "module.edge.aws_sesv2_configuration_set.automation": "create",
+    "module.edge.aws_sesv2_email_identity.notify_recipient": "create",
+    "module.identity.aws_ssm_parameter.notify_recipient": "create",
+    "module.identity.aws_iam_role_policy.notifier_ses_send": "create"
+  }
+}

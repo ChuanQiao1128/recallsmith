@@ -132,3 +132,24 @@ resource "aws_iam_role_policy" "core_vpc_notify_send" {
     }]
   })
 }
+
+# R18A A11 (A00 §12.7): SendEmail only, from automation@<ses_domain> only, through the domain identity, the
+# sandbox recipient identity and the automation configuration set. The recipient makes the document sensitive.
+resource "aws_iam_role_policy" "notifier_ses_send" {
+  name = "developercards-notifier-ses-send"
+  role = aws_iam_role.notifier.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "SesSend"
+      Effect = "Allow"
+      Action = ["ses:SendEmail"]
+      Resource = [
+        "arn:aws:ses:${var.region}:${var.account_id}:identity/${var.ses_domain}",
+        "arn:aws:ses:${var.region}:${var.account_id}:identity/${var.notify_recipient_email}",
+        "arn:aws:ses:${var.region}:${var.account_id}:configuration-set/${var.ses_configuration_set_name}",
+      ]
+      Condition = { StringEquals = { "ses:FromAddress" = "automation@${var.ses_domain}" } }
+    }]
+  })
+}

@@ -16,3 +16,13 @@ resource "aws_ssm_parameter" "secret" {
     ignore_changes = [value]
   }
 }
+
+# R18A A11: the notifier's recipient (A00 §12.1). Not a placeholder: Terraform owns the value and keeps it equal
+# to the sensitive root alert_email, so there is no ignore_changes. merge-env.sh skips this leaf (SSM_NOT_ENV).
+resource "aws_ssm_parameter" "notify_recipient" {
+  name        = "/developercards/${var.env}/notify-recipient"
+  description = "developercards ${var.env} automation email recipient (managed by Terraform from alert_email)"
+  type        = "SecureString"
+  tier        = "Standard"
+  value       = var.notify_recipient_email
+}

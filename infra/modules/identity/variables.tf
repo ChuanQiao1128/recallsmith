@@ -125,3 +125,21 @@ variable "notifier_function_name" {
 variable "source_watcher_function_name" {
   type = string
 } # prod "developercards-source-watcher"
+
+variable "notify_recipient_email" {
+  type        = string
+  sensitive   = true
+  description = "R18A A11: the automation email recipient (the root alert_email); stored in the notify-recipient SSM parameter and named in the notifier's SES grant. Never printed."
+}
+
+variable "ses_domain" {
+  type        = string
+  default     = "developercards.app"
+  description = "R18A A11: the SES domain identity the notifier sends from (automation@<ses_domain>)."
+}
+
+variable "ses_configuration_set_name" {
+  type        = string
+  default     = "developercards-automation"
+  description = "R18A A11: the SES configuration set the notifier sends through."
+}
