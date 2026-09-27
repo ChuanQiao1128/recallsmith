@@ -213,7 +213,7 @@ import { resolveDeckBySlug } from '../../src/content/deckRepository';
 import { loadDeckProgress, saveDeckProgress } from '../../src/review/storage';
 import { recordReviewEvent } from '../../src/sync/progressSync';
 import { countDueToday, pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
-import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
+import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
 
 const FIXED_NOW_MS = Date.UTC(2026, 8, 27, 9, 0, 0);
 const DAY_MS = 86_400_000;
@@ -372,6 +372,44 @@ describe('SessionCardScreen focus run', () => {
     );
     const rated = vi.mocked(recordReviewEvent).mock.calls.map(([event]) => event.stableUid);
     expect(rated).toEqual(['c2', 'c4']);
+  });
+
+  it('labels every focus card as a focus review, whatever route the planner would have dealt', async () => {
+    // The planner would plan a two-node warm-up/boss route; the focus run has three cards.
+    vi.mocked(planChallengeRoute).mockReturnValue({
+      ...emptyRoute(),
+      limit: 2,
+      minimumGoal: 1,
+      dueCount: 3,
+      nodes: [
+        { id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' },
+        { id: 'boss-1', role: 'boss', title: 'Boss check', subtitle: 'End.' },
+      ],
+    } as any);
+    const { tree } = await mount(['c3', 'c1', 'c4']);
+
+    expect(useSessionStore.getState().route.map((node) => node.title)).toEqual([
+      'Focus review',
+      'Focus review',
+      'Focus review',
+    ]);
+    for (const uid of ['c3', 'c1', 'c4']) {
+      expect(hasText(tree, `Question ${uid}`)).toBe(true);
+      expect(hasText(tree, 'Focus review')).toBe(true);
+      expect(hasText(tree, 'Warm-up node')).toBe(false);
+      expect(hasText(tree, 'Boss check')).toBe(false);
+      if (uid !== 'c4') await rateGood(tree);
+    }
+  });
+
+  it('labels focus cards even when the planner has no route at all', async () => {
+    const { tree } = await mount(['c2', 'c4']);
+
+    expect(useSessionStore.getState().route).toHaveLength(2);
+    expect(hasText(tree, 'Focus review')).toBe(true);
+    await rateGood(tree);
+    expect(hasText(tree, 'Question c4')).toBe(true);
+    expect(hasText(tree, 'Focus review')).toBe(true);
   });
 
   it('ignores focus uids the deck does not contain', async () => {
