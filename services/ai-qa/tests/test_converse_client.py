@@ -288,3 +288,8 @@ def test_stubbed_client_error_reaches_the_item() -> None:
     stubber.add_client_error("converse", service_error_code="AccessDeniedException", http_status_code=403)
     item = review_card(card(0), client=client, settings=CONVERSE, review_date=REVIEW_DATE)
     assert item["errorCode"] == "PROVIDER_ACCESS_DENIED"
+
+
+def test_converse_reply_names_no_served_model() -> None:
+    # D03, ai-agent-19: Converse carries no model id, so the response says None rather than guessing.
+    assert converse_client.to_response(converse_reply("x")).model is None
