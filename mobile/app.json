@@ -30,7 +30,7 @@
         "ITSAppUsesNonExemptEncryption": false,
         "NSPhotoLibraryAddUsageDescription": "DeveloperCards saves a pull card image to your photo library when you choose Save Image in the share sheet."
       },
-      "buildNumber": "20"
+      "buildNumber": "21"
     },
     "android": {
       "adaptiveIcon": {
