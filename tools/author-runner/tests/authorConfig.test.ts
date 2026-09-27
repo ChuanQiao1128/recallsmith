@@ -88,7 +88,7 @@ describe('author configuration (ai-agent-3)', () => {
       const surfaceFile = join(t.repo, 'tools', 'mcp-server', 'dist', 'tool-surface.json');
       const writeSurface = (surface: object) => writeTestToolSurface(t.repo, surface);
       const base = readAuthorConfig(input);
-      expect(base.mcpServerVersion).toBe('1.8.0');
+      expect(base.mcpServerVersion).toBe('1.8.1');
       expect(base.mcpToolNames).toEqual(['find_similar_cards', 'lint_card', 'read_source', 'submit_draft']);
       expect(base.toolSurfaceSha256).toMatch(/^[0-9a-f]{64}$/);
       // argsSha256 is the claude argument list together with the tool surface.

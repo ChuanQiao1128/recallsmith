@@ -71,5 +71,7 @@ describe('author-cards skill', () => {
     expect(step8).toMatch(/In an automation run, end instead with the runner prompt's final JSON line\./);
     const step1 = skill.split('\n').find((line) => line.startsWith('1. **Read.**')) ?? '';
     expect(step1).toMatch(/in an automation run, where nobody answers/);
+    // P3 (ai-agent-30): the unattended run reads only https pages.
+    expect(step1).toMatch(/read only https pages: the server refuses every local file there \(`SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION`\)/);
   });
 });

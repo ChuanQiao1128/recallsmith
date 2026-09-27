@@ -17,5 +17,7 @@ describe('what an unattended run may read (ai-agent-21)', () => {
     const prompt = readPromptTemplate();
     expect(prompt).not.toContain("reads only the queue item's host");
     expect(prompt).toContain("the queue item's own host included when it is not one of them");
+    // P3 (ai-agent-30): the unattended run reads only https pages; the MCP server refuses a local file.
+    expect(prompt).toContain('Read only https pages: a local file is refused (`SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION`).');
   });
 });
