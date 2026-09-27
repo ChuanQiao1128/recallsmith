@@ -77,7 +77,7 @@ public static class Drafts
       {
         throw new ValidationError("deckId must be an integer", "deckId");
       }
-      var agentJson = ParseAgent(body);
+      var agentJson = ParseAgent(body, auth.IsAgentClient);
       var entries = ParseEntries(body);
 
       var deck = await LiveDeckAsync(conn, null, deckId);
@@ -196,8 +196,10 @@ public static class Drafts
   /// <summary>
   /// null / absent → null; otherwise canonical JSON of {name?, model?, skillVersion?, runId?, queueItemId?, authorConfigId?}.
   /// <c>authorConfigId</c> (R18D M1) is the runner's author configuration, which a live auto-accept compares with the gate's.
+  /// <c>runId</c> is kept only for the agent client (R18D backend-design-18): a stored run id always means an agent
+  /// submit, so the automation's decision sweep never adopts a draft a person posted through the console.
   /// </summary>
-  private static string? ParseAgent(JsonElement body)
+  private static string? ParseAgent(JsonElement body, bool isAgentClient)
   {
     if (!body.TryGetProperty("agent", out var el) || el.ValueKind == JsonValueKind.Null) return null;
     const string message = "agent must be an object with optional string fields name, model, skillVersion, runId, queueItemId (max 200) " +
@@ -212,6 +214,7 @@ public static class Drafts
       if (value.Length > (prop.Name == "authorConfigId" ? MaxAuthorConfigIdLength : MaxAgentFieldLength)) throw new ValidationError(message, "agent");
       agent[prop.Name] = value;
     }
+    if (!isAgentClient) agent.Remove("runId");
     return JsonSerializer.Serialize(agent);
   }
 
