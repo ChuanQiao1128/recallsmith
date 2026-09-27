@@ -274,6 +274,18 @@ public sealed class VpcFunction
       {
         return await Vpc.Authoring.CardSimilarity.HandleSimilar(req, res, auth);
       }
+      if (p.EndsWith("/api/v1/authoring/drafts", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Review.Drafts.HandleDrafts(req, res, auth);
+      }
+      {
+        var draftAccept = RouteMatcher.Match("/api/v1/authoring/drafts/:draftId/accept", p);
+        if (draftAccept is not null) return await Vpc.Review.Drafts.HandleAccept(req, res, auth, draftAccept["draftId"]);
+        var draftReject = RouteMatcher.Match("/api/v1/authoring/drafts/:draftId/reject", p);
+        if (draftReject is not null) return await Vpc.Review.Drafts.HandleReject(req, res, auth, draftReject["draftId"]);
+        var draftOne = RouteMatcher.Match("/api/v1/authoring/drafts/:draftId", p);
+        if (draftOne is not null) return await Vpc.Review.Drafts.HandleGetDraft(req, res, auth, draftOne["draftId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {

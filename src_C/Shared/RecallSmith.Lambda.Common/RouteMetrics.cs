@@ -166,6 +166,7 @@ public static class RouteMetrics
     "/api/v1/admin/automation/baselines",
     "/api/v1/admin/automation/backfill",
     "/api/v1/authoring/cards/similar",
+    "/api/v1/authoring/drafts",
 
     // edge-public
     "/api/v1/billing/verify",
@@ -193,6 +194,9 @@ public static class RouteMetrics
     "/api/v1/admin/webhooks/subscriptions/:subscriptionId/test",
     "/api/v1/admin/webhooks/deliveries/:deliveryId/redeliver",
     "/api/v1/admin/automation/baselines/:automation",
+    "/api/v1/authoring/drafts/:draftId/accept",
+    "/api/v1/authoring/drafts/:draftId/reject",
+    "/api/v1/authoring/drafts/:draftId",
   ];
 
   // Longest first, so the table stays order-independent: appending an entry to the arrays
