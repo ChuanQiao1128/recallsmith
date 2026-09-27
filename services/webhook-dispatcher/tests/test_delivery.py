@@ -1,6 +1,8 @@
 import hashlib
 import hmac
 import socket
+import threading
+import time
 
 from webhook_dispatcher.delivery import HttpResult, classify, post_json
 from webhook_dispatcher.signing import sign_webhook
@@ -114,6 +116,62 @@ def test_timeout_is_reported_as_retryable(local_server) -> None:
     assert result.status is None
     assert classify(result) == "retryable"
     assert result.duration_ms >= 150
+
+
+def drip_server(first: bytes, drip: bytes, every_s: float, stop: threading.Event) -> int:
+    """A raw receiver that reads the request, sends `first`, then one `drip` every `every_s` until stopped."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(5)
+
+    def serve() -> None:
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            return
+        with conn, listener:
+            conn.settimeout(0.5)
+            try:
+                conn.recv(65536)
+                conn.sendall(first)
+                while not stop.wait(every_s):
+                    conn.sendall(drip)
+            except OSError:
+                return
+
+    threading.Thread(target=serve, daemon=True).start()
+    return listener.getsockname()[1]
+
+
+def test_drip_fed_headers_are_cut_off_at_the_whole_request_deadline() -> None:
+    # One header line every 0.2 s: each recv succeeds well inside the per-operation timeout, so only
+    # a wall-clock deadline ends the attempt.
+    stop = threading.Event()
+    port = drip_server(b"HTTP/1.1 200 OK\r\n", b"X-Drip: 1\r\n", 0.2, stop)
+    try:
+        started = time.monotonic()
+        result = post_json(f"http://hooks.example.test:{port}/in", b"{}", {}, 1.0, connect_address="127.0.0.1")
+        wall_ms = (time.monotonic() - started) * 1000
+    finally:
+        stop.set()
+    assert result.timed_out is True and result.status is None
+    assert classify(result) == "retryable"
+    assert result.duration_ms <= 1000 + 300
+    assert wall_ms <= 1000 + 300
+
+
+def test_drip_fed_body_keeps_the_status_and_ends_at_the_deadline() -> None:
+    stop = threading.Event()
+    head = b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n"
+    port = drip_server(head, b"x", 0.2, stop)
+    try:
+        result = post_json(f"http://hooks.example.test:{port}/in", b"{}", {}, 1.0, connect_address="127.0.0.1")
+    finally:
+        stop.set()
+    assert result.status == 200 and not result.timed_out
+    assert classify(result) == "delivered"
+    assert result.duration_ms <= 1000 + 300
 
 
 def test_connection_error_is_retryable() -> None:
