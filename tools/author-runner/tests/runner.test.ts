@@ -249,6 +249,7 @@ describe('runOnce', () => {
 
     // ai-agent-3: the pinned author configuration and the CLI's reported usage are recorded per run.
     const meta = JSON.parse(readFileSync(join(runsDir, `${String(claimed.runId)}.meta.json`), 'utf8')) as {
+      authorConfigId: string;
       authorConfig: Record<string, unknown>;
     };
     expect(meta).toMatchObject({ runId: claimed.runId, itemId: 42, outcome: 'done', usage: { totalCostUsd: 1.25, models: ['claude-opus-5-5'] } });
@@ -262,7 +263,10 @@ describe('runOnce', () => {
     for (const key of ['skillSha256', 'promptSha256', 'claudeArgsSha256']) expect(meta.authorConfig[key]).toMatch(/^[0-9a-f]{64}$/);
     expect(meta.authorConfig.id).toMatch(/^[0-9a-f]{16}$/);
     const itemStart = s.lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.event === 'item_start');
-    expect(itemStart?.authorConfigId).toBe(meta.authorConfig.id);
+    // automation-35: the log carries the gated id the gate card shows, and the local fingerprint apart.
+    expect(itemStart?.authorConfigId).toBe(meta.authorConfigId);
+    expect(itemStart?.authorConfigId).toMatch(/^[0-9a-f]{64}$/);
+    expect(itemStart?.configId).toBe(meta.authorConfig.id);
 
     expect(JSON.parse(readFileSync(join(s.config.logDir, 'last-run.json'), 'utf8'))).toMatchObject({
       runId: claimed.runId,
@@ -495,9 +499,10 @@ describe('runOnce', () => {
   it('fails a run whose system/init message shows an API key or is missing (ai-agent-14)', async () => {
     const a = await setup({ items: [item()] });
     await runOnce(a.config, { env: a.env('api_key'), log: a.log });
+    // N3 (ai-agent-23): the run is ended at its init message, so it has no exit code of its own.
     expect(completeBody(a.api)).toMatchObject({
       outcome: 'failed',
-      exitCode: 0,
+      exitCode: null,
       error: 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: apiKeySource /login managed key',
     });
     const b = await setup({ items: [item()] });
@@ -662,7 +667,7 @@ describe('runOnce', () => {
     // The reset time the CLI named (two hours ahead) is kept.
     const state = readRunnerState(s.config);
     expect(state).not.toBeNull();
-    const until = Date.parse(state!.limitedUntil);
+    const until = Date.parse((state as { limitedUntil: string }).limitedUntil);
     expect(until).toBeGreaterThan(started + 2 * 60 * 60 * 1000 - 5_000);
     expect(until).toBeLessThanOrEqual(Date.now() + 2 * 60 * 60 * 1000 + 1_000);
 
@@ -693,13 +698,14 @@ describe('runOnce', () => {
     expect(limitedUntil('2026-10-28T09:00:00.000Z', now)).toBe('2026-09-28T11:00:00.000Z');
   });
 
-  it('stops the loop when claude cannot be started, without a usage-limit hold (M5, ai-agent-17)', async () => {
+  it('stops the loop when claude cannot be started and holds the runner (M5, ai-agent-17, N3)', async () => {
     const s = await setup({ items: [item({ itemId: 1 }), item({ itemId: 2 })] }, { maxItems: 3 });
     const config = { ...s.config, claudeBin: join(s.t.dir, 'no-such-claude') };
     expect(await runOnce(config, { env: s.env('done'), log: s.log })).toBe(EXIT_OK);
     expect(routes(s.api)).toEqual(['heartbeat(running)', 'claim', 'complete', 'heartbeat(error)']);
     expect(completeBody(s.api)).toMatchObject({ outcome: 'failed', error: 'RUNNER_UNAVAILABLE: claude could not be started: ENOENT' });
-    expect(existsSync(runnerStateFile(s.config))).toBe(false);
+    // N3 (ai-agent-23): a missing claude does not go away by itself, so it is a hold, not a usage limit.
+    expect(readRunnerState(s.config)).toMatchObject({ holdUntilCleared: true, reason: 'RUNNER_UNAVAILABLE: claude could not be started: ENOENT', claudeVersion: null });
 
     // A per-item failure (an agent that is blocked) does not stop the loop.
     const b = await setup({ items: [item({ itemId: 1 }), item({ itemId: 2 })] }, { maxItems: 3 });
@@ -795,5 +801,129 @@ describe('runOnce', () => {
       mcpServers: { developercards: { env: Record<string, string> } };
     };
     expect(mcp.mcpServers.developercards.env.DC_AUTOMATION_AUTHOR_CONFIG_ID).toBe(meta.authorConfigId);
+  });
+});
+
+describe('run-level hold (N3, ai-agent-23)', () => {
+  const STALL = { DC_TEST_FAKE_CLAUDE_STALL_MS: '20000' };
+
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code !== 'ESRCH';
+    }
+  }
+
+  /** The kinds of the stream-json messages kept in a run's stdout file. */
+  function streamKinds(config: RunnerConfig, runId: unknown): string[] {
+    return readFileSync(join(config.logDir, 'runs', `${String(runId)}.json`), 'utf8')
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => {
+        const m = JSON.parse(line) as { type: string; subtype?: string };
+        return m.subtype === undefined ? m.type : `${m.type}/${m.subtype}`;
+      });
+  }
+
+  it('ends an API-key run at its init message, before the first model turn, and claims nothing until the hold is cleared', async () => {
+    const first = item({ itemId: 1 });
+    const second = item({ itemId: 2 });
+    const queue = [first, second];
+    const s = await setup({ items: queue }, { maxItems: 3 });
+    const started = Date.now();
+    expect(await runOnce(s.config, { env: s.env('api_key', STALL), log: s.log })).toBe(EXIT_OK);
+    // Killed at once: long before the fake would have written its model turn and result.
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(streamKinds(s.config, first.runId)).toEqual(['system/init']);
+    expect(isAlive(record(s.t).pid)).toBe(false);
+    expect(routes(s.api)).toEqual(['heartbeat(running)', 'claim', 'complete', 'heartbeat(error)']);
+    expect(completeBody(s.api)).toMatchObject({
+      runId: first.runId,
+      outcome: 'failed',
+      exitCode: null,
+      numTurns: null,
+      error: 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: apiKeySource /login managed key',
+    });
+    expect(s.events()).toEqual(expect.arrayContaining(['runner_held', 'runner_unavailable']));
+    expect(readRunnerState(s.config)).toMatchObject({
+      holdUntilCleared: true,
+      reason: 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: apiKeySource /login managed key',
+      claudeVersion: '2.1.283 (Claude Code, test fake)',
+    });
+
+    // The next hourly runs claim nothing: an error heartbeat that names the hold, and the second item stays queued.
+    for (let run = 0; run < 2; run += 1) {
+      s.api.requests.length = 0;
+      s.lines.length = 0;
+      rmSync(s.t.recordFile, { force: true });
+      expect(await runOnce(s.config, { env: s.env('done'), log: s.log })).toBe(EXIT_OK);
+      expect(routes(s.api)).toEqual(['heartbeat(error)']);
+      expect(String(s.api.requests[0]!.body.lastError)).toMatch(/^RUNNER_UNAVAILABLE: held since \S+ until the owner clears .*runner-state\.json: RUNNER_UNAVAILABLE: claude did not run/);
+      expect(s.events()).toContain('runner_held');
+      expect(existsSync(s.t.recordFile)).toBe(false);
+      expect(queue).toEqual([second]);
+    }
+
+    // The owner fixes the login and deletes the file: the runner claims again.
+    rmSync(runnerStateFile(s.config));
+    s.api.requests.length = 0;
+    expect(await runOnce(s.config, { env: s.env('done'), log: s.log })).toBe(EXIT_OK);
+    expect(completeBody(s.api)).toMatchObject({ runId: second.runId, outcome: 'done' });
+  }, 30_000);
+
+  it('ends a run whose MCP server failed, or whose model turn comes before any init message, and holds', async () => {
+    for (const [mode, error] of [
+      ['mcp_failed', 'RUNNER_UNAVAILABLE: the developercards MCP server did not start (failed)'],
+      ['no_init', 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: no system/init message'],
+    ] as const) {
+      const claimed = item();
+      const s = await setup({ items: [claimed, item({ itemId: 2 })] }, { maxItems: 3 });
+      const started = Date.now();
+      expect(await runOnce(s.config, { env: s.env(mode, STALL), log: s.log })).toBe(EXIT_OK);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(streamKinds(s.config, claimed.runId)).toEqual([mode === 'no_init' ? 'assistant' : 'system/init']);
+      expect(streamKinds(s.config, claimed.runId)).not.toContain('result');
+      expect(isAlive(record(s.t).pid)).toBe(false);
+      expect(routes(s.api)).toEqual(['heartbeat(running)', 'claim', 'complete', 'heartbeat(error)']);
+      expect(completeBody(s.api)).toMatchObject({ outcome: 'failed', exitCode: null, error });
+      expect(readRunnerState(s.config)).toMatchObject({ holdUntilCleared: true, reason: error });
+      s.api.requests.length = 0;
+      await runOnce(s.config, { env: s.env('done'), log: s.log });
+      expect(routes(s.api)).toEqual(['heartbeat(error)']);
+    }
+  }, 40_000);
+
+  it('clears the hold by itself only when the CLI or the author configuration changes', async () => {
+    const s = await setup({ items: [item({ itemId: 1 }), item({ itemId: 2 }), item({ itemId: 3 })] }, { maxItems: 1 });
+    await runOnce(s.config, { env: s.env('api_key'), log: s.log });
+    expect(readRunnerState(s.config)).toMatchObject({ holdUntilCleared: true });
+
+    // A Claude Code update: another --version line, so the hold is dropped and the next item is claimed.
+    s.api.requests.length = 0;
+    s.lines.length = 0;
+    expect(await runOnce(s.config, { env: s.env('api_key', { DC_TEST_FAKE_CLAUDE_VERSION: '2.2.0 (Claude Code, test fake)' }), log: s.log })).toBe(EXIT_OK);
+    expect(s.events()).toContain('hold_cleared');
+    expect(routes(s.api)).toEqual(['heartbeat(running)', 'claim', 'complete', 'heartbeat(error)']);
+    // Still an API key: held again, now under the new CLI version.
+    expect(readRunnerState(s.config)).toMatchObject({ holdUntilCleared: true, claudeVersion: '2.2.0 (Claude Code, test fake)' });
+
+    // A changed author configuration (an edited skill) clears it too.
+    writeFileSync(join(s.t.repo, '.claude', 'skills', 'author-cards', 'checklist.md'), 'new rule\n');
+    s.api.requests.length = 0;
+    expect(await runOnce(s.config, { env: s.env('done', { DC_TEST_FAKE_CLAUDE_VERSION: '2.2.0 (Claude Code, test fake)' }), log: s.log })).toBe(EXIT_OK);
+    expect(completeBody(s.api)).toMatchObject({ outcome: 'done' });
+    expect(existsSync(runnerStateFile(s.config))).toBe(false);
+  }, 30_000);
+
+  it('keeps a per-item failure and a usage limit off the hold', async () => {
+    const a = await setup({ items: [item()] });
+    await runOnce(a.config, { env: a.env('is_error'), log: a.log });
+    expect(existsSync(runnerStateFile(a.config))).toBe(false);
+    const b = await setup({ items: [item()] });
+    await runOnce(b.config, { env: b.env('usage_limit'), log: b.log });
+    expect(readRunnerState(b.config)).toMatchObject({ limitedUntil: expect.any(String) });
+    expect(readRunnerState(b.config)).not.toHaveProperty('holdUntilCleared');
   });
 });

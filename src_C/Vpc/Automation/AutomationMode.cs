@@ -75,14 +75,15 @@ public static class AutomationMode
     GateReviewer? reviewer = null;
     string? gateAuthor = null;
     await using (var cmd = new NpgsqlCommand(
-      $"select id, reviewer_provider, reviewer_model, prompt_version, {GateAuthorSql(authorColumn)} as author_config_id " +
+      $"select id, reviewer_provider, reviewer_model, prompt_version, {GateAuthorSql(authorColumn)} as author_config_id, " +
+      $"{GateEffortSql} as effective_effort " +
       $"from ({EvalGate.NewestGateSql}) g where passed and revoked_at is null", conn))
     await using (var reader = await cmd.ExecuteReaderAsync(ct))
     {
       if (await reader.ReadAsync(ct))
       {
         gateId = reader.GetInt64(0);
-        reviewer = new GateReviewer(reader.GetString(1), reader.GetString(2), reader.GetString(3));
+        reviewer = new GateReviewer(reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.IsDBNull(5) ? null : reader.GetString(5));
         gateAuthor = reader.IsDBNull(4) ? null : reader.GetString(4);
       }
     }
@@ -101,6 +102,13 @@ public static class AutomationMode
   internal static string GateAuthorSql(bool authorColumn) => authorColumn
     ? "coalesce(g.author_config_id, g.report #>> '{authored,author,authorConfigId}')"
     : "(g.report #>> '{authored,author,authorConfigId}')";
+
+  /// <summary>
+  /// The reviewer's reasoning effort the gate measured over <c>g</c> (R18E N2): the stored report's
+  /// <c>reviewer.effectiveEffort</c> (the value the review really sent, ai-qa <c>providers.effective_effort</c>), null
+  /// when the report did not record it.
+  /// </summary>
+  internal const string GateEffortSql = "(g.report #>> '{reviewer,effectiveEffort}')";
 }
 
 /// <summary>
@@ -110,4 +118,8 @@ public static class AutomationMode
 public sealed record EffectiveMode(string Configured, string Effective, string? LiveBlockedReason, long? GateId, GateReviewer? Reviewer,
   string? GateAuthorConfigId = null);
 
-public sealed record GateReviewer(string Provider, string Model, string PromptVersion);
+/// <summary>
+/// The reviewer the current gate measured. <see cref="Effort"/> is its effective reasoning effort (R18E N2), null when the
+/// gate report did not record one; when set, a live auto-accept requires the QA report's <c>effectiveEffort</c> to equal it.
+/// </summary>
+public sealed record GateReviewer(string Provider, string Model, string PromptVersion, string? Effort = null);

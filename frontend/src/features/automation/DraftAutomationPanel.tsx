@@ -10,10 +10,11 @@
 // dry-run shadow agreement measures an unanchored decision (B07 automation-4,
 // C07 frontend-console-14). The mode and severities read as words (-11).
 //
-// One exception (D07 frontend-console-26): a draft the automation routed to a
-// person because AI QA found a blocker or major issue shows those findings
-// while blinded, since they are the reason a person is involved. The link to
-// the decision stays hidden.
+// Every blinded draft reads the same (G04 frontend-console-38, P4): a draft the
+// automation routed to a person because AI QA found a blocker or major issue
+// shows those findings in a confirm step after the person clicks Accept
+// (QaFindingsStep), not here, because a panel with findings would tell every
+// panel without them apart as "QA did not flag this".
 import { Link } from 'react-router-dom';
 
 import { CARD_CLASS, H2_CLASS } from '../../components/console/consoleStyles';
@@ -31,7 +32,7 @@ import { automationDraftHref, draftAutomationBadgeText, draftAutomationTone } fr
 import { QA_CATEGORY_LABELS } from '../../lib/qaReview';
 import type { DraftAutomation } from '../../types/draft';
 
-function FindingList({ findings }: { findings: NonNullable<DraftAutomation['qa']>['findings'] }) {
+export function FindingList({ findings }: { findings: NonNullable<DraftAutomation['qa']>['findings'] }) {
   return (
     <ul className="space-y-2">
       {findings.map((f, i) => (
@@ -52,35 +53,11 @@ export function DraftAutomationPanel({
   draftId,
   automation,
   blinded = false,
-  qaFindingsShown = false,
 }: {
   draftId: number;
   automation: DraftAutomation;
   blinded?: boolean;
-  /** Blinded, but routed to a person for AI QA blocker or major findings: those findings show. */
-  qaFindingsShown?: boolean;
 }) {
-  const flaggedQa = blinded && qaFindingsShown ? (automation.qa ?? null) : null;
-  if (flaggedQa) {
-    return (
-      <section className={`${CARD_CLASS} space-y-2`} aria-label="Automation" data-testid="review-automation">
-        <h2 className={H2_CLASS}>Automation</h2>
-        <div>
-          <Badge tone="warning">Automation: routed to you · {decisionReasonLabel('QA_FLAGGED')} (dry run)</Badge>
-        </div>
-        <div className="space-y-1 text-sm text-slate-700" data-testid="review-automation-qa-flagged">
-          <p className="text-xs text-slate-600">
-            Reviewer: {[flaggedQa.provider, flaggedQa.model, flaggedQa.promptVersion].map(v => v ?? '—').join(' · ')}
-          </p>
-          <p className="text-xs text-slate-600">
-            Findings: {flaggedQa.blocker} blocker, {flaggedQa.major} major, {flaggedQa.minor} minor
-          </p>
-          {flaggedQa.findings.length > 0 ? <FindingList findings={flaggedQa.findings} /> : null}
-        </div>
-      </section>
-    );
-  }
-
   if (blinded) {
     return (
       <section className={`${CARD_CLASS} space-y-2`} aria-label="Automation" data-testid="review-automation">
@@ -90,7 +67,8 @@ export function DraftAutomationPanel({
         </div>
         <p className="text-xs text-slate-600">
           Dry run: decide this draft on its own merits. The automation&apos;s verdict, its reason and its AI QA
-          findings are hidden for every dry-run draft until you accept or reject it.
+          findings stay hidden until you accept or reject it. Blocker or major QA issues, if there are any, are
+          shown when you accept, before the card is created.
         </p>
       </section>
     );

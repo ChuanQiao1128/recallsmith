@@ -37,6 +37,39 @@ public static class RunnerRoutes
   public const string RunnerUnavailablePrefix = "RUNNER_UNAVAILABLE:";
 
   /// <summary>
+  /// The error of an item whose runs the runner could not do <see cref="MaxRunnerUnavailableCompletes"/> times in a row
+  /// (R18E N3, automation-31): the item is not requeued again but failed for a person, so one misclassified item never
+  /// loops at the head of the queue.
+  /// </summary>
+  public const string RunnerUnavailableRepeated = "RUNNER_UNAVAILABLE_REPEATED";
+
+  /// <summary>
+  /// The <c>last_error</c> prefix of an item whose run stopped with <c>RUNNER_UNAVAILABLE</c> after it had submitted drafts
+  /// (R18F F01, ai-agent-23): the item is finished as <c>done</c> with its attempt kept, not refunded and requeued, because
+  /// the next run would author the same page again next to the pending drafts it cannot see.
+  /// </summary>
+  public const string RunnerUnavailableAfterDrafts = "RUNNER_UNAVAILABLE_AFTER_DRAFTS";
+
+  /// <summary>
+  /// The <c>last_error</c> prefix of an item whose run failed in another way (a timeout, an exit, a lease expiry) after it
+  /// had submitted drafts (R18G, backend-design-25): the same rule as <see cref="RunnerUnavailableAfterDrafts"/>, the item
+  /// is finished as <c>done</c> with its attempt kept instead of requeued for re-authoring.
+  /// </summary>
+  public const string RunFailedAfterDrafts = "RUN_FAILED_AFTER_DRAFTS";
+
+  /// <summary>Whether <paramref name="lastError"/> is that of an item finished after its run submitted drafts (R18G P2).</summary>
+  internal static bool IsFinishedAfterDrafts(string? lastError) =>
+    lastError is not null && (lastError.StartsWith(RunnerUnavailableAfterDrafts, StringComparison.Ordinal) ||
+                              lastError.StartsWith(RunFailedAfterDrafts, StringComparison.Ordinal));
+
+  /// <summary>From this many consecutive <c>RUNNER_UNAVAILABLE</c> completes of one item on, the item fails (N3).</summary>
+  public const int MaxRunnerUnavailableCompletes = 3;
+
+  /// <summary>The first <c>RUNNER_UNAVAILABLE</c> backoff; it doubles with every consecutive one, up to a day (N3).</summary>
+  public const int RunnerUnavailableBackoffMinutes = 15;
+  public const int MaxRunnerUnavailableBackoffMinutes = 24 * 60;
+
+  /// <summary>
   /// The error prefix of a run whose agent said it could not do the task (R18C L6, written by the runner as
   /// <c>AGENT_BLOCKED: &lt;reason&gt;</c>). Retrying repeats the block, so the item fails on the first such run and a
   /// person resolves it (R18D M5, automation-27): one <c>queue_item_failed</c> email carries the reason.
@@ -303,6 +336,20 @@ public static class RunnerRoutes
 
         if ((string)run["status"]! != "running")
         {
+          // A kept complete replayed after the tick abandoned the run on lease expiry (automation-16): the runner's
+          // notes and error are still worth keeping. Only they are stored; the run, its item and the item's attempts
+          // stay as the lease expiry left them, and the tick's agent_note step mails notes of a run without drafts.
+          if ((string)run["status"]! == "abandoned" && run["outcome"] is null)
+          {
+            await DbUtil.ExecuteAsync(conn, tx,
+              "update automation_runs set error = coalesce($2, error), summary = coalesce($3, summary), updated_at = now() where run_id = $1",
+              [runId, error, summary]);
+            var abandonedItem = await DbUtil.ExecuteScalarAsync(conn, tx, "select status from authoring_queue_items where id = $1", [itemId]);
+            await tx.CommitAsync();
+            Log.Event("info", new { tag = "automation", reason = "abandoned_run_complete_kept", runId, itemId, outcome });
+            await AutomationRuns.TryFinalizeAsync(conn, runId);
+            return res.Ok(await CompleteResponseAsync(conn, runId, "abandoned", (string)abandonedItem!, replayed: true));
+          }
           if (!string.Equals(run["outcome"] as string, outcome, StringComparison.Ordinal))
           {
             await tx.RollbackAsync();
@@ -342,18 +389,60 @@ public static class RunnerRoutes
               where id = $1
               """, [itemId]);
           }
-          else if (runnerUnavailable)
+          else if (runnerUnavailable && await RunSubmittedDraftsAsync(conn, tx, runId))
           {
-            // Not the item's failure: the claim's attempt is given back and the item is due again at once; the runner
-            // stopped its loop, so the next claim comes from its next start (R18D M5).
-            itemStatus = "queued";
+            // The run got as far as submit_draft before it stopped (a usage limit mid-run, R18F F01 ai-agent-23): its
+            // drafts are finalised with the run and reviewed, and the item is done with the attempt kept. A requeue would
+            // author the page again, and find_similar_cards sees only live cards, not these pending drafts.
+            itemStatus = "done";
             await DbUtil.ExecuteAsync(conn, tx,
               """
               update authoring_queue_items
-              set status = 'queued', lease_expires_at = null, attempts = greatest(attempts - 1, 0), not_before = now(), last_error = $2,
-                  updated_at = now()
+              set status = 'done', lease_expires_at = null, finished_at = now(), last_error = $2, updated_at = now()
               where id = $1
-              """, [itemId, error]);
+              """, [itemId, RunnerUnavailableAfterDraftsError(error)]);
+          }
+          else if (runnerUnavailable)
+          {
+            // Not the item's failure: the claim's attempt is given back (R18D M5). The item waits 15 min × 2^(n-1), at
+            // most a day, n = the item's consecutive RUNNER_UNAVAILABLE completes including this one, so the items
+            // behind it run; at n >= 3 it fails for a person instead (R18E N3, automation-31). Only a run that submitted
+            // no draft gets here (R18F F01).
+            var n = await ConsecutiveRunnerUnavailableAsync(conn, tx, itemId);
+            if (n >= MaxRunnerUnavailableCompletes)
+            {
+              itemStatus = "failed";
+              await DbUtil.ExecuteAsync(conn, tx,
+                """
+                update authoring_queue_items
+                set status = 'failed', lease_expires_at = null, attempts = greatest(attempts - 1, 0), finished_at = now(), last_error = $2,
+                    updated_at = now()
+                where id = $1
+                """, [itemId, RunnerUnavailableRepeatedError(n, error)]);
+            }
+            else
+            {
+              itemStatus = "queued";
+              await DbUtil.ExecuteAsync(conn, tx,
+                """
+                update authoring_queue_items
+                set status = 'queued', lease_expires_at = null, attempts = greatest(attempts - 1, 0),
+                    not_before = now() + make_interval(mins => $3), last_error = $2, updated_at = now()
+                where id = $1
+                """, [itemId, error, RunnerUnavailableBackoff(n)]);
+            }
+          }
+          else if (!agentBlocked && attempts < MaxItemAttempts && await RunSubmittedDraftsAsync(conn, tx, runId))
+          {
+            // A retryable failure (a timeout) after submit_draft (R18G backend-design-25): the same rule as above, a
+            // retry would author the page again next to the pending drafts it cannot see.
+            itemStatus = "done";
+            await DbUtil.ExecuteAsync(conn, tx,
+              """
+              update authoring_queue_items
+              set status = 'done', lease_expires_at = null, finished_at = now(), last_error = $2, updated_at = now()
+              where id = $1
+              """, [itemId, RunFailedAfterDraftsError(error)]);
           }
           else if (!agentBlocked && attempts < MaxItemAttempts)
           {
@@ -403,6 +492,60 @@ public static class RunnerRoutes
   /// </summary>
   public static readonly IReadOnlyList<string> ActionableRunErrorPrefixes =
     ["AGENT_BLOCKED", "claude could not be started", "claude did not run on the subscription login"];
+
+  /// <summary>The N3 backoff in minutes after the <paramref name="n"/>-th consecutive RUNNER_UNAVAILABLE complete (n &gt;= 1).</summary>
+  internal static int RunnerUnavailableBackoff(int n) =>
+    (int)Math.Min((long)RunnerUnavailableBackoffMinutes << Math.Clamp(n - 1, 0, 20), MaxRunnerUnavailableBackoffMinutes);
+
+  /// <summary>The <c>last_error</c> of an item failed by N3: the repeated reason first, then the last run's error, capped at 500.</summary>
+  internal static string RunnerUnavailableRepeatedError(int n, string? error)
+  {
+    var text = $"{RunnerUnavailableRepeated}: {n.ToString(CultureInfo.InvariantCulture)} runs in a row could not run; last: {error}";
+    return text.Length <= 500 ? text : text[..500];
+  }
+
+  /// <summary>The <c>last_error</c> of an item finished after its run submitted drafts (F01): the reason first, capped at 500.</summary>
+  internal static string RunnerUnavailableAfterDraftsError(string? error)
+  {
+    var text = $"{RunnerUnavailableAfterDrafts}: the run submitted draft(s) before it stopped, so the item is not authored again; last: {error}";
+    return text.Length <= 500 ? text : text[..500];
+  }
+
+  /// <summary>The <c>last_error</c> of an item finished after its failed run submitted drafts (R18G): the reason first, capped at 500.</summary>
+  internal static string RunFailedAfterDraftsError(string? error)
+  {
+    var text = $"{RunFailedAfterDrafts}: the run submitted draft(s) before it failed, so the item is not authored again; last: {error}";
+    return text.Length <= 500 ? text : text[..500];
+  }
+
+  /// <summary>
+  /// Whether the run submitted at least one draft: an <c>ai_drafts</c> row whose <c>agent.runId</c> names it, submitted by
+  /// the run's owner (the join <see cref="DraftDecisions"/> uses for a run's drafts).
+  /// </summary>
+  internal static async Task<bool> RunSubmittedDraftsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid runId) =>
+    await DbUtil.ExecuteScalarAsync(conn, tx,
+      """
+      select 1 from ai_drafts a
+      join automation_runs r on r.run_id::text = lower(a.agent->>'runId') and r.owner_sub = a.submitted_by_sub
+      where r.run_id = $1
+      limit 1
+      """, [runId]) is not null;
+
+  /// <summary>
+  /// How many of the item's newest terminal runs, newest first and up to <see cref="MaxRunnerUnavailableCompletes"/>, are
+  /// RUNNER_UNAVAILABLE completes without a break (N3). Called after the current run's row was updated, so it counts it.
+  /// </summary>
+  private static async Task<int> ConsecutiveRunnerUnavailableAsync(NpgsqlConnection conn, NpgsqlTransaction tx, long itemId)
+  {
+    var runs = await DbUtil.QueryAsync(conn, tx,
+      """
+      select outcome, error from automation_runs
+      where queue_item_id = $1 and status <> 'running'
+      order by started_at desc, run_id desc
+      limit $2
+      """, [itemId, MaxRunnerUnavailableCompletes]);
+    return runs.TakeWhile(r => r["outcome"] as string == "failed" && IsRunnerUnavailable(r["error"] as string)).Count();
+  }
 
   internal static bool IsRunnerUnavailable(string? error) => error?.StartsWith(RunnerUnavailablePrefix, StringComparison.Ordinal) == true;
 
@@ -459,6 +602,8 @@ public static class RunnerRoutes
               ["runnerId"] = rows.Count == 0 ? string.Empty : rows[0]["runner_id"] as string ?? string.Empty,
               ["runId"] = runId.ToString("D"),
               ["itemId"] = id,
+              // The email says the item was put back only when it was (R18G P2): a finished item was not.
+              ["itemStatus"] = itemStatus,
               ["error"] = runError ?? string.Empty,
             }, runId, ct);
         }
@@ -472,6 +617,11 @@ public static class RunnerRoutes
               ["url"] = url,
               ["error"] = runError ?? string.Empty,
             }, runId, ct);
+        }
+        var lastError = rows.Count == 0 ? null : rows[0]["last_error"] as string;
+        if (outcome == "failed" && itemStatus == "done" && IsFinishedAfterDrafts(lastError))
+        {
+          await RaiseItemPartialAsync(conn, id, url, lastError!, runId, ct);
         }
         if (itemStatus == "failed")
         {
@@ -492,6 +642,15 @@ public static class RunnerRoutes
       AutomationFailures.Record();
     }
   }
+
+  /// <summary>
+  /// The per-item exception of an item finished after its run submitted drafts (R18G P2): the <c>queue_item_failed</c>
+  /// subkind's partial variant, deduped per item, telling the owner the page is not authored again and how to re-add it.
+  /// </summary>
+  internal static Task<NotificationResult?> RaiseItemPartialAsync(NpgsqlConnection conn, string itemId, string url, string lastError,
+    Guid? runId, CancellationToken ct = default) =>
+    Notifications.RaiseExceptionAsync(conn, "queue_item_failed", $"exception:queue_item_partial:{itemId}",
+      new Dictionary<string, string> { ["itemId"] = itemId, ["url"] = url, ["lastError"] = lastError }, runId, ct);
 
   private static async Task<object> CompleteResponseAsync(NpgsqlConnection conn, Guid runId, string runStatus, string itemStatus, bool replayed)
   {

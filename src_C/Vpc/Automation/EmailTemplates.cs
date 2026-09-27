@@ -6,8 +6,12 @@ namespace RecallSmith.Lambda.Vpc.Automation;
 /// <summary>One rendered email. <see cref="Summary"/> is the subject without prefix or dry-run marker, at most 300 characters.</summary>
 public sealed record RenderedEmail(string Subject, string BodyText, string Summary);
 
-/// <summary>One draft of a run as the batch summary lists it.</summary>
-public sealed record BatchDraft(string StableUid, string Question, string State, string? Reason, string? ReasonDetail, long DeckId);
+/// <summary>
+/// One draft of a run as the batch summary lists it. <see cref="Decided"/>: no longer pending a human decision (a person
+/// accepted or rejected it, or no person has to: auto-accepted, superseded); unknown counts as pending (R18E N6).
+/// </summary>
+public sealed record BatchDraft(string StableUid, string Question, string State, string? Reason, string? ReasonDetail, long DeckId,
+  bool Decided = false);
 
 /// <summary>One auto-publish attempt a run touched.</summary>
 public sealed record BatchPublish(long DeckId, string DeckSlug, string State, string? Reason, string? ReasonDetail, string? JobId, string? BuildId);
@@ -23,8 +27,9 @@ public sealed record BatchSummaryData(Guid RunId, long? DeckId, string DeckSlug,
 /// <summary>One per-automation row of the digest, from the ledger computation.</summary>
 public sealed record DigestAutomation(string Automation, long Runs, long Units, long Failures, decimal MinutesSaved);
 
-/// <summary>A runner as the digest reports it.</summary>
-public sealed record DigestRunner(string RunnerId, DateTimeOffset LastHeartbeatAt, DateTimeOffset? LoginExpiresAt);
+/// <summary>A runner as the digest reports it, with its state and last error (R18G P1: an alive runner in <c>error</c> is not healthy).</summary>
+public sealed record DigestRunner(string RunnerId, DateTimeOffset LastHeartbeatAt, DateTimeOffset? LoginExpiresAt, string State = "idle",
+  string? LastError = null);
 
 /// <summary>What the weekly digest shows (A00 §12.5); <see cref="From"/>..<see cref="To"/> are inclusive UTC days.</summary>
 public sealed record WeeklyDigestData(DateOnly From, DateOnly To, decimal HoursSaved, decimal MinutesSaved, long LedgerRuns, long LedgerUnits,
@@ -33,13 +38,15 @@ public sealed record WeeklyDigestData(DateOnly From, DateOnly To, decimal HoursS
   long ShadowWouldAccept, long ShadowHumanDecided, long ShadowHumanAccepted, long ShadowHumanEditedAccepted, long ShadowHumanRejected,
   IReadOnlyDictionary<string, long> PublishesByState, long WatchChecks, long WatchChanges, long WatchFailures,
   long EmailsSent, long EmailsFailed, IReadOnlyList<DigestRunner> Runners, decimal HumanQaSpendUsd, decimal AutomationQaSpendUsd,
-  long HumanDraftsPending, long HumanPublishes, long ShadowBlindDecided = 0, long ShadowBlindAccepted = 0, DigestLive? Live = null);
+  long HumanDraftsPending, long HumanPublishes, long ShadowBlindDecided = 0, long ShadowBlindAccepted = 0, DigestLive? Live = null,
+  long BlindPendingDrafts = 0, long BlindPendingRuns = 0);
 
 /// <summary>
 /// The live quality measurement the digest shows (R18D M2): the auto-accepts of the last 30 days and how many a person
 /// deleted or edited since; <see cref="OverrideRate"/> is null when nothing was auto-accepted.
 /// </summary>
-public sealed record DigestLive(long AutoAccepted30d, long DeletedByPerson, long EditedByPerson, decimal? OverrideRate);
+public sealed record DigestLive(long AutoAccepted30d, long DeletedByPerson, long EditedByPerson, decimal? OverrideRate,
+  long EditedAfterSourceChange = 0);
 
 /// <summary>A card a source re-check flagged with an open blocker/major finding.</summary>
 public sealed record SourceFlaggedCard(long CardId, string StableUid, string Severity);
@@ -189,6 +196,15 @@ public static class EmailTemplates
 
     switch (subkind)
     {
+      case "runner_stalled" when facts.GetValueOrDefault("state") == "error":
+        // R18G P1: the runner heartbeats but cannot work (an author_config_error claims nothing).
+        subject = $"Action needed: authoring runner {F("runnerId")} is running but cannot work";
+        summary = $"The local authoring runner {F("runnerId")} is running but cannot work: {F("lastError")}. " +
+          $"It started no run in {AutomationTick.ErrorRunnerIdleHours} h while {F("queued")} due queue item(s) are waiting.";
+        needs.Add($"- runner {F("runnerId")} — {F("lastError")} — for an author config error, rebuild tools/mcp-server and " +
+          $"tools/author-runner, then run: node tools/author-runner/dist/index.js status — {console}");
+        factKeys = ["runnerId", "state", "lastError", "since", "loginExpiresAt", "lastRunId", "lastRunAt", "queued"];
+        break;
       case "runner_stalled":
         subject = $"Action needed: authoring runner {F("runnerId")} silent since {F("since")}";
         summary = $"The local authoring runner {F("runnerId")} has not sent a heartbeat since {F("since")}; {F("queued")} queue item(s) are waiting.";
@@ -212,6 +228,24 @@ public static class EmailTemplates
         subject = $"Action needed: agent blocked on queue item {F("itemId")}";
         summary = $"The agent could not do queue item {F("itemId")}; it will not be retried until you add it again.";
         needs.Add($"- {F("url")} — {F("lastError")} — {AutomationUrl(consoleBaseUrl, "tab=queue")}");
+        factKeys = ["itemId", "url", "lastError"];
+        break;
+      case "queue_item_failed" when facts.GetValueOrDefault("lastError") is { } repeated &&
+                                     repeated.StartsWith(RunnerRoutes.RunnerUnavailableRepeated, StringComparison.Ordinal):
+        // R18E N3: the runner could not run the item several times in a row; the item is not requeued again.
+        subject = $"Action needed: queue item {F("itemId")} could not run {RunnerRoutes.MaxRunnerUnavailableCompletes} times in a row";
+        summary = $"The runner could not run queue item {F("itemId")} {RunnerRoutes.MaxRunnerUnavailableCompletes} times in a row; " +
+          "it will not be retried until you add it again. Check the runner and the item.";
+        needs.Add($"- {F("url")} — {F("lastError")} — {AutomationUrl(consoleBaseUrl, "tab=queue")}");
+        factKeys = ["itemId", "url", "lastError"];
+        break;
+      case "queue_item_failed" when RunnerRoutes.IsFinishedAfterDrafts(facts.GetValueOrDefault("lastError")):
+        // R18G P2: the run stopped after it submitted drafts, so the item is done and never authored again on its own.
+        subject = $"Action needed: queue item {F("itemId")} stopped after submitting drafts";
+        summary = $"The run of queue item {F("itemId")} stopped after it had submitted drafts, so the item is finished and will not be " +
+          "authored again. Its drafts are in the review queue; any part of the page it had not drafted yet was not authored.";
+        needs.Add($"- {F("url")} — {F("lastError")} — review its drafts, then re-add the URL in the Queue tab to author the remaining " +
+          $"facts — {AutomationUrl(consoleBaseUrl, "tab=queue")}");
         factKeys = ["itemId", "url", "lastError"];
         break;
       case "queue_item_failed":
@@ -265,9 +299,15 @@ public static class EmailTemplates
         break;
       case "runner_unavailable":
         subject = $"Action needed: authoring runner {F("runnerId")} cannot run";
-        summary = $"The authoring runner {F("runnerId")} stopped: it could not work on any queue item. Queue item {F("itemId")} was put back without using an attempt.";
+        // R18G P2: only a requeued item was put back (a missing itemStatus is a caller from before it was passed).
+        summary = $"The authoring runner {F("runnerId")} stopped: it could not work on any queue item. " + facts.GetValueOrDefault("itemStatus") switch
+        {
+          "done" => $"Queue item {F("itemId")} had submitted drafts before it stopped: its drafts are in the review queue and the item is not authored again.",
+          "failed" => $"Queue item {F("itemId")} was not put back: it failed for a person to look at.",
+          _ => $"Queue item {F("itemId")} was put back without using an attempt.",
+        };
         needs.Add($"- runner {F("runnerId")} — {F("error")} — check the Mac's claude login, subscription and MCP server — {console}");
-        factKeys = ["runnerId", "runId", "itemId", "error"];
+        factKeys = ["runnerId", "runId", "itemId", "itemStatus", "error"];
         break;
       case "live_override_high":
         subject = $"Action needed: people overrode {F("overrideRate")} of auto-accepted cards";
@@ -301,9 +341,12 @@ public static class EmailTemplates
   /// <summary>
   /// The one email per finalised run. <c>&lt;a&gt;</c> counts <c>auto_accepted</c> drafts, <c>&lt;h&gt;</c> the
   /// <c>human</c> ones (<c>&lt;a&gt;</c> counts <c>would_accept</c> in <c>dry_run</c>); <c>&lt;publish&gt;</c> sums up
-  /// the run's publishes. In <c>dry_run</c> no draft is listed at all, only counted (R18D M3, automation-4): every draft
-  /// waits for a person there, and listing the human-routed ones by uid would reveal the others' verdict by
-  /// elimination, so a decision the console reports as blind stays blind whatever the person read in this email.
+  /// the run's publishes. In <c>dry_run</c> no draft is listed at all (R18D M3, automation-4): every draft waits for a
+  /// person there, and listing the human-routed ones by uid would reveal the others' verdict by elimination. While any
+  /// draft of the run is still undecided, the dry-run email is state-free as well (R18E N6): the subject and summary give
+  /// only the number of drafts waiting, and neither the per-state or per-reason counts, the publish outcome (a run
+  /// has a publish row only when a draft would be accepted) nor the run's draft-QA spend (R18F F01) appear, because on a
+  /// one-draft or single-verdict run they state each verdict. They appear once every draft of the run is decided.
   /// </summary>
   public static RenderedEmail BatchSummary(string mode, BatchSummaryData data, string consoleBaseUrl)
   {
@@ -311,11 +354,18 @@ public static class EmailTemplates
     var acceptedState = dry ? DraftDecisions.WouldAccept : DraftDecisions.AutoAccepted;
     var accepted = data.Drafts.Where(d => d.State == acceptedState).ToList();
     var human = data.Drafts.Where(d => d.State == DraftDecisions.Human).ToList();
+    var undecided = data.Drafts.Where(d => !d.Decided).ToList();
+    var blind = dry && undecided.Count > 0;
     var publish = PublishLabel(data.Publishes, dry);
     var runShort = data.RunId.ToString("D")[..8];
-    var subject = $"Batch {runShort} {data.DeckSlug}: {accepted.Count} auto-accepted, {human.Count} need you, {publish}";
-    var summary = $"Run {runShort} on {data.DeckSlug} submitted {data.Drafts.Count} draft(s): {accepted.Count} auto-accepted, " +
-      $"{human.Count} need you; publish: {publish}.";
+    var subject = blind
+      ? $"Batch {runShort} {data.DeckSlug}: {undecided.Count} draft(s) wait for you"
+      : $"Batch {runShort} {data.DeckSlug}: {accepted.Count} auto-accepted, {human.Count} need you, {publish}";
+    var summary = blind
+      ? $"Run {runShort} on {data.DeckSlug} submitted {data.Drafts.Count} draft(s); {undecided.Count} wait for your decision, and their " +
+        "verdicts and the publish outcome stay hidden until you decide."
+      : $"Run {runShort} on {data.DeckSlug} submitted {data.Drafts.Count} draft(s): {accepted.Count} auto-accepted, " +
+        $"{human.Count} need you; publish: {publish}.";
 
     var console = AutomationUrl(consoleBaseUrl, $"runId={data.RunId:D}");
     string ReviewUrl(long deckId) => $"{consoleBaseUrl.TrimEnd('/')}/review?deckId={deckId.ToString(CultureInfo.InvariantCulture)}";
@@ -327,18 +377,17 @@ public static class EmailTemplates
     };
     if (dry)
     {
-      var waiting = accepted.Concat(human).ToList();
-      needs = waiting.Count == 0
+      needs = undecided.Count == 0
         ? []
-        : [$"- {waiting.Count} draft(s) of this run wait for your decision in the review queue; verdicts stay hidden until you decide " +
-           $"(the shadow agreement counts blind decisions only) — {ReviewUrl(waiting[0].DeckId)}"];
+        : [$"- {undecided.Count} draft(s) of this run wait for your decision in the review queue; verdicts stay hidden until you decide " +
+           $"(the shadow agreement counts blind decisions only) — {ReviewUrl(undecided[0].DeckId)}"];
       done = [];
-      if (data.Drafts.Count > 0)
+      if (!blind && data.Drafts.Count > 0)
       {
         details.Add("Drafts by state: " + string.Join(", ", data.Drafts.GroupBy(d => d.State, StringComparer.Ordinal)
           .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key} {g.Count().ToString(CultureInfo.InvariantCulture)}")));
       }
-      if (human.Count > 0)
+      if (!blind && human.Count > 0)
       {
         details.Add("Routed to you by reason: " + string.Join(", ", human.GroupBy(d => d.Reason ?? "none", StringComparer.Ordinal)
           .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key} {g.Count().ToString(CultureInfo.InvariantCulture)}")));
@@ -354,15 +403,19 @@ public static class EmailTemplates
         $" — {Cap(OneLine(d.Question), MaxQuestionLength)}" +
         (d.State == DraftDecisions.Human ? $" — {ReviewUrl(d.DeckId)}" : string.Empty)));
     }
-    needs.AddRange(data.Publishes.Where(p => p.State == "human").Select(p =>
+    IReadOnlyList<BatchPublish> publishes = blind ? [] : data.Publishes;
+    needs.AddRange(publishes.Where(p => p.State == "human").Select(p =>
       $"- publish {p.DeckSlug} — {ReasonLabel(p.Reason)} — {console}"));
-    done.AddRange(data.Publishes.Where(p => p.State is "published" or "would_publish" or "publishing").Select(p =>
+    done.AddRange(publishes.Where(p => p.State is "published" or "would_publish" or "publishing").Select(p =>
       $"- publish {p.DeckSlug} — {p.State}" + (p.BuildId is null ? string.Empty : $", build {p.BuildId}")));
 
     if (AgentNotesLine(data.AgentNotes) is { } notes) details.Add(AgentNotesLabel + notes);
-    details.Add($"Draft QA spend: {Usd(data.QaSpendUsd)}");
-    if (data.Publishes.Count == 0) details.Add("Publish: none");
-    details.AddRange(data.Publishes.Select(p =>
+    // The run's draft-QA spend is a verdict too while blind (R18F F01, automation-34): a $0 spend says a draft was routed
+    // to a person before QA, the reason the console hides a hidden row's reviewer and cost.
+    details.Add(blind ? "Draft QA spend: hidden until every draft of this run is decided" : $"Draft QA spend: {Usd(data.QaSpendUsd)}");
+    if (blind) details.Add("Publish: hidden until every draft of this run is decided");
+    else if (publishes.Count == 0) details.Add("Publish: none");
+    details.AddRange(publishes.Select(p =>
       $"Publish {p.DeckSlug}: {p.State}" + (p.Reason is null ? string.Empty : $", {ReasonLabel(p.Reason)}") +
       (string.IsNullOrWhiteSpace(p.ReasonDetail) ? string.Empty : $" ({OneLine(p.ReasonDetail)})") +
       (p.BuildId is null ? string.Empty : $", build {p.BuildId}")));
@@ -394,7 +447,14 @@ public static class EmailTemplates
     var console = AutomationUrl(consoleBaseUrl);
 
     var needs = new List<string>();
-    if (data.HumanDraftsPending > 0)
+    var dry = mode == AutomationMode.DryRun;
+    if (dry && data.BlindPendingDrafts > 0)
+    {
+      // In dry_run every undecided draft waits for a person, whatever its verdict (R18E N6): the number routed to a
+      // person would reveal the rest by elimination.
+      needs.Add($"- {data.BlindPendingDrafts} draft(s) wait for your decision — {consoleBaseUrl.TrimEnd('/')}/review");
+    }
+    else if (!dry && data.HumanDraftsPending > 0)
     {
       needs.Add($"- {data.HumanDraftsPending} draft(s) routed to you are still pending — {consoleBaseUrl.TrimEnd('/')}/review");
     }
@@ -422,6 +482,10 @@ public static class EmailTemplates
       $"Ledger {a.Automation}: {a.Runs} run(s), {a.Units} unit(s), {a.Failures} failure(s), {a.MinutesSaved.ToString("0.##", CultureInfo.InvariantCulture)} min saved"));
     details.Add("Decisions by state: " + Pairs(data.DecisionsByState));
     details.Add("Decisions by reason: " + Pairs(data.DecisionsByReason));
+    if (dry && data.BlindPendingRuns > 0)
+    {
+      details.Add($"Not counted above: {data.BlindPendingRuns} run(s) with a draft still waiting for your decision (shown once all are decided)");
+    }
     // One definition of the agreement on every surface (R18D M3): accepted unedited over decided blind, as the status.
     var agreement = data.ShadowBlindDecided == 0
       ? null
@@ -430,13 +494,16 @@ public static class EmailTemplates
       $"({data.ShadowHumanAccepted} accepted, {data.ShadowHumanEditedAccepted} edited, {data.ShadowHumanRejected} rejected); " +
       $"decided blind {data.ShadowBlindDecided}, accepted unedited {data.ShadowBlindAccepted}, agreement {Rate(agreement)}");
     details.Add($"Live quality (30 days): {live.AutoAccepted30d} auto-accepted, {live.DeletedByPerson} deleted by a person, " +
-      $"{live.EditedByPerson} edited by a person, override rate {Rate(live.OverrideRate)}");
+      $"{live.EditedByPerson} edited by a person, override rate {Rate(live.OverrideRate)}; " +
+      $"{live.EditedAfterSourceChange} updated after a source change (not counted)");
     details.Add("Publishes by state: " + Pairs(data.PublishesByState));
     details.Add($"Source watch: {data.WatchChecks} check(s), {data.WatchChanges} change(s), {data.WatchFailures} failure(s)");
     details.Add($"Emails: {data.EmailsSent} sent, {data.EmailsFailed} failed");
     if (data.Runners.Count == 0) details.Add("Runners: none registered");
     details.AddRange(data.Runners.Select(r =>
-      $"Runner {r.RunnerId}: last heartbeat {Timestamp(r.LastHeartbeatAt)}, login expires {(r.LoginExpiresAt is { } l ? Timestamp(l) : "unknown")}"));
+      $"Runner {r.RunnerId}: state {OneLine(r.State)}, last heartbeat {Timestamp(r.LastHeartbeatAt)}, " +
+      $"login expires {(r.LoginExpiresAt is { } l ? Timestamp(l) : "unknown")}" +
+      (string.IsNullOrWhiteSpace(r.LastError) ? string.Empty : $", last error: {OneLine(r.LastError)}")));
     details.Add($"AI QA spend: {Usd(data.HumanQaSpendUsd)} human runs, {Usd(data.AutomationQaSpendUsd)} automation");
     return Render(mode, subject, summary, needs, done, details, console);
   }

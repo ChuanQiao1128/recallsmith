@@ -39,7 +39,7 @@ public class AutomationNotificationsTests
 
   private static NotificationRequest Request(string mode, string? dedupeKey = null, string kind = "batch_summary") =>
     new(kind, null, dedupeKey ?? $"it-a04:{Guid.NewGuid():N}", mode,
-      EmailTemplates.BatchSummary(mode, EmailTemplatesTests.Batch(), "https://console.example.com"));
+      EmailTemplates.BatchSummary(mode, EmailTemplatesTests.DecidedBatch(), "https://console.example.com"));
 
   private async Task<NotificationResult?> EnqueueAsync(NotificationRequest request)
   {
@@ -535,7 +535,8 @@ public class AutomationNotificationsTests
     Assert.Equal(("failed", "queued"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
     var item = (await _sql.QueryAsync("select status, attempts, not_before <= now() as due, lease_expires_at, last_error from authoring_queue_items where id = $1",
       firstItem)).Single();
-    Assert.Equal(("queued", 1, true), ((string)item["status"]!, Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture), (bool)item["due"]!));
+    // R18E N3 (automation-31): no longer due at once; the first RUNNER_UNAVAILABLE backs the item off for 15 min.
+    Assert.Equal(("queued", 1, false), ((string)item["status"]!, Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture), (bool)item["due"]!));
     Assert.Null(item["lease_expires_at"]);
     Assert.Equal("RUNNER_UNAVAILABLE: claude reported a usage limit", item["last_error"]);
 
@@ -556,6 +557,241 @@ public class AutomationNotificationsTests
     }
     Assert.Single(A04Kit.Messages(scope));
   }
+
+  // ---------------------------------------------------------------- R18E N3 (automation-31)
+
+  /// <summary>A new claim of <paramref name="itemId"/> by the runner of <paramref name="previousRunId"/>: a running run holds it.</summary>
+  private async Task<Guid> ReclaimAsync(long itemId, Guid previousRunId)
+  {
+    var runId = Guid.NewGuid();
+    var sub = _runOwner[previousRunId];
+    await _sql.QueryAsync(
+      """
+      update authoring_queue_items set status = 'claimed', attempts = attempts + 1, claimed_by_runner = 'it-a04-runner', claimed_at = now(),
+        lease_expires_at = now() + interval '1 hour', last_run_id = $2, not_before = now(), updated_at = now()
+      where id = $1
+      """, itemId, runId);
+    await _sql.QueryAsync(
+      "insert into automation_runs (run_id, queue_item_id, runner_id, owner_sub, deck_id, status, started_at) " +
+      "select $1, $2, 'it-a04-runner', $3, deck_id, 'running', clock_timestamp() from authoring_queue_items where id = $2",
+      runId, itemId, sub);
+    _runOwner[runId] = sub;
+    return runId;
+  }
+
+  private async Task<(string Status, int Attempts, double WaitMinutes, string? LastError)> ItemAsync(long itemId)
+  {
+    var row = (await _sql.QueryAsync(
+      "select status, attempts, extract(epoch from not_before - now()) / 60 as wait, last_error from authoring_queue_items where id = $1", itemId)).Single();
+    return ((string)row["status"]!, Convert.ToInt32(row["attempts"], CultureInfo.InvariantCulture),
+      Convert.ToDouble(row["wait"], CultureInfo.InvariantCulture), row["last_error"] as string);
+  }
+
+  [Fact]
+  public async Task RunnerComplete_RunnerUnavailable_BacksOffExponentially_AndFailsTheItemOnTheThirdInARow()
+  {
+    // N3: a misclassified item no longer loops at the head of the queue: 15 min, 30 min, then failed for a person.
+    await using var scope = new A04Kit.Scope();
+    const string error = "RUNNER_UNAVAILABLE: Connection reset by peer";
+    var (first, itemId) = await ClaimedRunAsync(attempts: 1);
+
+    Assert.Equal("queued", AutomationTestKit.Data(await CompleteFailedAsync(first, error)).GetProperty("itemStatus").GetString());
+    var one = await ItemAsync(itemId);
+    Assert.Equal(("queued", 0, error), (one.Status, one.Attempts, one.LastError));
+    Assert.InRange(one.WaitMinutes, 14.5, 15.5);
+
+    var second = await ReclaimAsync(itemId, first);
+    Assert.Equal("queued", AutomationTestKit.Data(await CompleteFailedAsync(second, error)).GetProperty("itemStatus").GetString());
+    var two = await ItemAsync(itemId);
+    Assert.Equal(("queued", 0), (two.Status, two.Attempts));
+    Assert.InRange(two.WaitMinutes, 29.5, 30.5);
+
+    var third = await ReclaimAsync(itemId, second);
+    var data = AutomationTestKit.Data(await CompleteFailedAsync(third, error));
+    Assert.Equal(("failed", "failed"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
+    var three = await ItemAsync(itemId);
+    Assert.Equal("failed", three.Status);
+    Assert.StartsWith(RunnerRoutes.RunnerUnavailableRepeated + ": 3 runs in a row", three.LastError);
+    Assert.EndsWith(error, three.LastError);
+    Assert.NotNull(await _sql.ScalarAsync("select finished_at from authoring_queue_items where id = $1", itemId));
+
+    // One deduped exception names the item and the repeated cause; no per-run email.
+    var failed = (await _sql.QueryAsync("select subject, body_text from automation_notifications where dedupe_key = $1",
+      $"exception:queue_item_failed:{itemId}")).Single();
+    Assert.Equal($"[DeveloperCards] (dry run) Action needed: queue item {itemId} could not run 3 times in a row", failed["subject"]);
+    Assert.Contains(RunnerRoutes.RunnerUnavailableRepeated, (string)failed["body_text"]!);
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where dedupe_key = any($1)",
+      (object)new[] { first, second, third }.Select(r => $"exception:runner_run_failed:{r:D}").ToArray()));
+  }
+
+  [Fact]
+  public async Task RunnerComplete_RunnerUnavailable_CountsOnlyConsecutiveCompletes()
+  {
+    // A run that failed for another reason breaks the streak: the next RUNNER_UNAVAILABLE is the first again.
+    await using var scope = new A04Kit.Scope();
+    const string error = "RUNNER_UNAVAILABLE: claude reported a usage limit";
+    var (first, itemId) = await ClaimedRunAsync(attempts: 1);
+    AutomationTestKit.Data(await CompleteFailedAsync(first, error));
+    var second = await ReclaimAsync(itemId, first);
+    Assert.Equal("queued", AutomationTestKit.Data(await CompleteFailedAsync(second, "timeout")).GetProperty("itemStatus").GetString());
+    var third = await ReclaimAsync(itemId, second);
+    Assert.Equal("queued", AutomationTestKit.Data(await CompleteFailedAsync(third, error)).GetProperty("itemStatus").GetString());
+    Assert.InRange((await ItemAsync(itemId)).WaitMinutes, 14.5, 15.5);
+  }
+
+  // ---------------------------------------------------------------- R18F F01 (ai-agent-23)
+
+  /// <summary>A pending draft whose <c>agent.runId</c> names <paramref name="runId"/>, submitted by <paramref name="sub"/>.</summary>
+  private async Task SubmittedDraftAsync(Guid runId, string sub)
+  {
+    var deckId = A04Kit.Long(await _sql.ScalarAsync("select deck_id from automation_runs where run_id = $1", runId));
+    var uid = AutomationTestKit.Uid("f01-partial");
+    await _sql.QueryAsync(
+      """
+      insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, card, agent, submitted_by_sub)
+      values ($1, gen_random_uuid(), $2, $3, $4::jsonb, jsonb_build_object('runId', $5::text), $6)
+      """, deckId, Guid.NewGuid().ToString("N"), uid, JsonSerializer.Serialize(AutomationTestKit.Card(uid)), runId.ToString("D"), sub);
+  }
+
+  [Fact]
+  public async Task RunnerComplete_RunnerUnavailableAfterDraftsWereSubmitted_FinishesTheItem_WithoutARequeue()
+  {
+    // ai-agent-23: a usage limit reached after submit_draft. A requeue would author the page again next to the pending
+    // drafts find_similar_cards cannot see; the item is done instead, the attempt kept, and the run finalised.
+    await using var scope = new A04Kit.Scope();
+    const string error = "RUNNER_UNAVAILABLE: claude reported a usage limit";
+    var unavailableKey = $"exception:runner_unavailable:{DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}";
+    // Earlier tests may have raised today's alert already; this test owns the key while it runs.
+    await _sql.QueryAsync("delete from automation_notifications where dedupe_key = $1", unavailableKey);
+    var (runId, itemId) = await ClaimedRunAsync(attempts: 1);
+    await SubmittedDraftAsync(runId, _runOwner[runId]);
+
+    var data = AutomationTestKit.Data(await CompleteFailedAsync(runId, error));
+    Assert.Equal(("failed", "done"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
+    var item = await ItemAsync(itemId);
+    Assert.Equal(("done", 1), (item.Status, item.Attempts));
+    Assert.StartsWith(RunnerRoutes.RunnerUnavailableAfterDrafts + ": ", item.LastError);
+    Assert.EndsWith(error, item.LastError);
+    Assert.NotNull(await _sql.ScalarAsync("select finished_at from authoring_queue_items where id = $1", itemId));
+    Assert.Null(await _sql.ScalarAsync("select lease_expires_at from authoring_queue_items where id = $1", itemId));
+    Assert.NotNull(await _sql.ScalarAsync("select finalized_at from automation_runs where run_id = $1", runId));
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where dedupe_key in ($1, $2)",
+      $"exception:runner_run_failed:{runId:D}", $"exception:queue_item_failed:{itemId}"));
+
+    // R18G P2 (automation-36, cloud-security-resilience-1): one per-item email says the rest of the page is not authored,
+    // and the runner_unavailable email no longer says the item was put back.
+    var partial = (await _sql.QueryAsync("select subkind, subject, body_text from automation_notifications where dedupe_key = $1",
+      $"exception:queue_item_partial:{itemId}")).Single();
+    Assert.Equal("queue_item_failed", partial["subkind"]);
+    Assert.Equal($"[DeveloperCards] (dry run) Action needed: queue item {itemId} stopped after submitting drafts", partial["subject"]);
+    Assert.Contains("any part of the page it had not drafted yet was not authored", (string)partial["body_text"]!);
+    Assert.Contains("re-add the URL in the Queue tab to author the remaining facts", (string)partial["body_text"]!);
+    Assert.Contains("/automation?tab=queue", (string)partial["body_text"]!);
+    var unavailable = (await _sql.QueryAsync("select body_text from automation_notifications where dedupe_key = $1", unavailableKey)).Single();
+    Assert.Contains($"Queue item {itemId} had submitted drafts before it stopped", (string)unavailable["body_text"]!);
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where run_id = $1 and body_text like '%put back%'", runId));
+    Assert.Equal(2, A04Kit.Messages(scope).Count);
+  }
+
+  [Fact]
+  public async Task RunnerComplete_TimeoutAfterDraftsWereSubmitted_FinishesTheItem_WithoutARequeue()
+  {
+    // R18G backend-design-25: the ai-agent-23 rule for every retryable failure. A timed-out run that submitted drafts
+    // is not requeued, so a retry does not author near-duplicate twins of its pending drafts.
+    await using var scope = new A04Kit.Scope();
+    var (runId, itemId) = await ClaimedRunAsync(attempts: 1);
+    await SubmittedDraftAsync(runId, _runOwner[runId]);
+
+    var data = AutomationTestKit.Data(await CompleteFailedAsync(runId, "timeout"));
+    Assert.Equal(("failed", "done"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
+    var item = await ItemAsync(itemId);
+    Assert.Equal(("done", 1), (item.Status, item.Attempts));
+    Assert.StartsWith(RunnerRoutes.RunFailedAfterDrafts + ": ", item.LastError);
+    Assert.EndsWith("timeout", item.LastError);
+    Assert.Null(await _sql.ScalarAsync("select lease_expires_at from authoring_queue_items where id = $1", itemId));
+    Assert.NotNull(await _sql.ScalarAsync("select finalized_at from automation_runs where run_id = $1", runId));
+
+    // A first timeout needs no runner_run_failed (RunFailureNeedsHuman); the per-item email tells the owner.
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where dedupe_key in ($1, $2)",
+      $"exception:runner_run_failed:{runId:D}", $"exception:queue_item_failed:{itemId}"));
+    var partial = (await _sql.QueryAsync("select subject from automation_notifications where dedupe_key = $1",
+      $"exception:queue_item_partial:{itemId}")).Single();
+    Assert.Equal($"[DeveloperCards] (dry run) Action needed: queue item {itemId} stopped after submitting drafts", partial["subject"]);
+
+    // A timeout without drafts still requeues (RunnerComplete_TransientFirstFailure_RaisesNoEmail).
+    var (other, otherItem) = await ClaimedRunAsync(attempts: 1);
+    Assert.Equal("queued", AutomationTestKit.Data(await CompleteFailedAsync(other, "timeout")).GetProperty("itemStatus").GetString());
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from automation_notifications where dedupe_key = $1", $"exception:queue_item_partial:{otherItem}"));
+  }
+
+  [Fact]
+  public void RunFailedAfterDraftsError_IsCappedAt500() =>
+    Assert.Equal(500, RunnerRoutes.RunFailedAfterDraftsError(new string('x', 600)).Length);
+
+  [Fact]
+  public async Task RunnerComplete_RunnerUnavailableWithoutDrafts_StillBacksOffAndRequeues()
+  {
+    // The other path of ai-agent-23: nothing submitted, so the N3 backoff applies. A draft naming the run but submitted
+    // by someone else is not the run's draft.
+    await using var scope = new A04Kit.Scope();
+    var (runId, itemId) = await ClaimedRunAsync(attempts: 1);
+    await SubmittedDraftAsync(runId, AutomationTestKit.Sub("f01-other"));
+
+    Assert.Equal("queued", AutomationTestKit.Data(await CompleteFailedAsync(runId, "RUNNER_UNAVAILABLE: claude reported a usage limit"))
+      .GetProperty("itemStatus").GetString());
+    var item = await ItemAsync(itemId);
+    Assert.Equal(("queued", 0), (item.Status, item.Attempts));
+    Assert.InRange(item.WaitMinutes, 14.5, 15.5);
+  }
+
+  [Fact]
+  public void RunnerUnavailableAfterDraftsError_IsCappedAt500() =>
+    Assert.Equal(500, RunnerRoutes.RunnerUnavailableAfterDraftsError(new string('x', 600)).Length);
+
+  // ---------------------------------------------------------------- R18E automation-16
+
+  [Fact]
+  public async Task RunnerComplete_KeptCompleteOfAnAbandonedRun_StoresTheNotes_AndAnswers200()
+  {
+    // The runner replays a kept complete of the last item of a run at its next launch, after the tick abandoned the run
+    // on lease expiry: the notes are stored, the run and its item stay as the lease expiry left them.
+    await using var scope = new A04Kit.Scope();
+    var (runId, itemId) = await ClaimedRunAsync(attempts: 1);
+    // What the tick's lease expiry does (AutomationTick.ExpireLeasesAsync).
+    await _sql.QueryAsync(
+      "update authoring_queue_items set status = 'queued', lease_expires_at = null, not_before = now() + interval '30 minutes' where id = $1", itemId);
+    await _sql.QueryAsync("update automation_runs set status = 'abandoned', completed_at = now() where run_id = $1", runId);
+
+    async Task<APIGatewayProxyResponse> ReplayAsync() =>
+      await AutomationTestKit.CallAsync(RunnerRoutes.HandleComplete, "POST", "/api/v1/authoring/automation/runner/complete",
+        new { runnerId = "it-a04-runner", runId, outcome = "failed", exitCode = 1, durationMs = 2_700_000, error = "timeout after 45 min",
+          summary = "Card synthetic-07 cites an outdated limit." },
+        AutomationTestKit.Ctx(_runOwner[runId]));
+
+    var data = AutomationTestKit.Data(await ReplayAsync());
+    Assert.True(data.GetProperty("replayed").GetBoolean());
+    Assert.Equal(("abandoned", "queued"), (data.GetProperty("runStatus").GetString(), data.GetProperty("itemStatus").GetString()));
+    var run = (await _sql.QueryAsync("select status, outcome, error, summary from automation_runs where run_id = $1", runId)).Single();
+    Assert.Equal(("abandoned", null, "timeout after 45 min", "Card synthetic-07 cites an outdated limit."),
+      ((string)run["status"]!, run["outcome"] as string, run["error"] as string, run["summary"] as string));
+    var item = (await _sql.QueryAsync("select status, attempts from authoring_queue_items where id = $1", itemId)).Single();
+    Assert.Equal(("queued", 1), ((string)item["status"]!, Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture)));
+    // Finalised (no drafts), so the tick's agent_note step can mail the notes.
+    Assert.NotNull(await _sql.ScalarAsync("select finalized_at from automation_runs where run_id = $1", runId));
+
+    // A second replay of the same kept complete is still accepted.
+    Assert.True(AutomationTestKit.Data(await ReplayAsync()).GetProperty("replayed").GetBoolean());
+  }
+
+  [Theory]
+  [InlineData(1, 15)]
+  [InlineData(2, 30)]
+  [InlineData(3, 60)]
+  [InlineData(7, 960)]
+  [InlineData(8, 1440)]
+  [InlineData(40, 1440)]
+  public void RunnerUnavailableBackoff_Doubles_UpToADay(int n, int minutes) =>
+    Assert.Equal(minutes, RunnerRoutes.RunnerUnavailableBackoff(n));
 
   [Theory]
   [InlineData("RUNNER_UNAVAILABLE: claude could not be started", 2, "queued", false)]

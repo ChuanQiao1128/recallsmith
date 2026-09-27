@@ -6,9 +6,9 @@ import { spawn } from 'node:child_process';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { runLogin } from './auth/login';
 import { loadConfig } from './config';
-import { createServer } from './server';
+import { createServer, MCP_SERVER_VERSION } from './server';
 
-const USAGE = `developercards MCP server 1.8.0
+const USAGE = `developercards MCP server ${MCP_SERVER_VERSION}
 
 usage:
   node tools/mcp-server/dist/index.js          start the stdio MCP server (for Claude Code)

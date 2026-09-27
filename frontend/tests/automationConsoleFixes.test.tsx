@@ -25,6 +25,7 @@ import {
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { renderAt } from './support/routerProbe';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
+import { markVerdictSeen } from '../src/lib/automationVerdictSeen';
 import type { ApiResult } from '../src/types/api';
 import type { Deck } from '../src/types/deck';
 
@@ -133,7 +134,8 @@ describe('handled vs open exceptions (frontend-console-1, automation-10, K7)', (
     api.listAutomationDecisions.mockResolvedValue(
       ok({
         items: [
-          decisionFixture({ draftId: 41 }),
+          // Live: an open dry-run row hides its state until decided (E05 frontend-console-30).
+          decisionFixture({ draftId: 41, mode: 'live' }),
           decisionFixture({ draftId: 42, humanAction: 'rejected', humanReason: 'Duplicate of s3-01' }),
         ],
         nextCursor: null,
@@ -153,9 +155,13 @@ describe('handled vs open exceptions (frontend-console-1, automation-10, K7)', (
 
   it('reads its filters from the URL, writes them back, and filters to open items', async () => {
     const user = userEvent.setup();
+    // G04 frontend-console-40: a pending dry-run row is withheld from a filtered list, so this filter/paging test uses live rows.
     api.listAutomationDecisions.mockResolvedValue(
       ok({
-        items: [decisionFixture({ draftId: 41 }), decisionFixture({ draftId: 42, humanAction: 'accepted' })],
+        items: [
+          decisionFixture({ draftId: 41, mode: 'live' }),
+          decisionFixture({ draftId: 42, mode: 'live', humanAction: 'accepted' }),
+        ],
         nextCursor: null,
       }),
     );
@@ -227,6 +233,8 @@ describe('handled vs open exceptions (frontend-console-1, automation-10, K7)', (
   });
 
   it('shows the open backlog on the Overview and links it to the open exceptions', async () => {
+    // F04 frontend-console-35: in live mode; a dry run keeps these counts blind (automationConsoleRound5.test.tsx).
+    api.fetchAutomationStatus.mockResolvedValue(ok(statusFixture({ mode: { configured: 'live', effective: 'live', liveBlockedReason: null, autoPublish: true } })));
     mountAt('/automation');
     const backlog = await screen.findByRole('region', { name: 'Open exceptions' });
     const pending = within(backlog).getByTestId('automation-backlog-human-pending');
@@ -268,7 +276,8 @@ describe('Load more never mixes two lists (frontend-console-2)', () => {
     await user.selectOptions(screen.getByLabelText('State'), 'human');
     // Load more is not offered while the new list loads: its cursor would be foreign.
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
-    await act(async () => fresh.resolve(ok({ items: [decisionFixture({ draftId: 50 })], nextCursor: 'h1' })));
+    // G04 frontend-console-40: a pending dry-run row is withheld from a filtered list, so this filter/paging test uses live rows.
+    await act(async () => fresh.resolve(ok({ items: [decisionFixture({ draftId: 50, mode: 'live' })], nextCursor: 'h1' })));
     await screen.findByRole('button', { name: 'Details of draft 50' });
     await act(async () => more.resolve(ok({ items: [decisionFixture({ draftId: 99 })], nextCursor: 'c2' })));
     await settle();
@@ -288,10 +297,11 @@ describe('Load more never mixes two lists (frontend-console-2)', () => {
     api.listAutomationDecisions.mockImplementation((params: { cursor?: string }) =>
       Promise.resolve(
         params.cursor
-          ? ok({ items: [decisionFixture({ draftId: 42 })], nextCursor: null })
-          : ok({ items: [decisionFixture({ draftId: 41 })], nextCursor: 'c1' }),
+          ? ok({ items: [decisionFixture({ draftId: 42, mode: 'live' })], nextCursor: null })
+          : ok({ items: [decisionFixture({ draftId: 41, mode: 'live' })], nextCursor: 'c1' }),
       ),
     );
+    // G04 frontend-console-40: a pending dry-run row is withheld from a filtered list, so this filter/paging test uses live rows.
     mountAt('/automation?tab=decisions&reason=QA_FLAGGED');
     await user.click(await screen.findByRole('button', { name: 'Load more' }));
     await screen.findByRole('button', { name: 'Details of draft 42' });
@@ -594,6 +604,9 @@ describe('machine codes read as words (frontend-console-11)', () => {
     api.listAutomationDecisions.mockResolvedValue(
       ok({ items: [decisionFixture({ reason: 'QA_ERROR', reasonDetail: 'PROVIDER_ACCESS_DENIED' })], nextCursor: null }),
     );
+    // The verdict is revealed, so the reason shows (a filtered list used to record it as seen for this
+    // test; G04 frontend-console-40 withholds pending dry-run rows from filtered lists).
+    markVerdictSeen(41);
     mountAt('/automation?tab=decisions');
     const table = await screen.findByRole('table');
     await within(table).findByText('AI QA returned an error');

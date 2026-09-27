@@ -10,7 +10,14 @@
 // normalizer neither keeps nor lists in IGNORED below. So a server addition
 // like shadow.blindDecided (C02) breaks a console test, not the go-live
 // review. The reverse check keeps the console from reading a key the server
-// never pins, except the few newer optional keys listed in TOLERATED.
+// never pins; TOLERATED is empty (F04 frontend-console-37), so a key the
+// server drops from its pins fails here too.
+//
+// E05 frontend-console-31: key shapes alone let an enumeration drift through
+// (the server's AUTHOR_NOT_GATED reason, R18D M1, never reached the console).
+// So the decision and publish reasons and states are read from the server's
+// source (AutomationReasons.cs, StatusRoutes.cs) and compared with the
+// console's lists, in contract order.
 //
 // Hand-written fixtures stay for the page tests; they cannot drift silently any
 // more, because the fixture builders are typed with the normalizer's output.
@@ -31,6 +38,7 @@ import {
   listNotifications,
   listQueueItems,
 } from '../src/api/automation';
+import { DECISION_REASONS, DECISION_STATES, PUBLISH_REASONS, PUBLISH_STATES } from '../src/lib/automationRules';
 import { ok } from './support/apiResult';
 
 // A path, not a URL: under jsdom the global URL is jsdom's, which node's fileURLToPath refuses.
@@ -41,6 +49,19 @@ const SERVER_TESTS = resolve(
 
 function serverTest(name: string): string {
   return readFileSync(resolve(SERVER_TESTS, name), 'utf8');
+}
+
+const SERVER_AUTOMATION = resolve(dirname(fileURLToPath(import.meta.url)), '../../src_C/Vpc/Automation');
+
+function serverSource(name: string): string {
+  return readFileSync(resolve(SERVER_AUTOMATION, name), 'utf8');
+}
+
+/** The strings of `public static readonly IReadOnlyList<string> <name> = [ … ];` in a C# source file. */
+function serverList(source: string, name: string): string[] {
+  const match = new RegExp(`IReadOnlyList<string>\\s+${name}\\s*=\\s*\\[([\\s\\S]*?)\\];`).exec(source);
+  if (!match) throw new Error(`the server no longer declares ${name}`);
+  return [...match[1].matchAll(/"([^"]+)"/g)].map(m => m[1]);
 }
 
 /** The strings of `private static readonly string[] <name> = [ … ];` (or `{ … };`) in a C# test file. */
@@ -76,13 +97,11 @@ const NOTIFICATION_KEYS = pinnedKeys(serverTest('AutomationNotificationsTests.cs
 const IGNORED: Record<string, string[]> = {};
 
 /**
- * Keys the console reads that the server pins do not list yet: optional
- * R18D keys the console tolerates the absence of (M1 authorConfigId, M2 live).
+ * Keys the console reads that the server pins do not list, with the reason.
+ * None today (F04 frontend-console-37): the server pins status.live and
+ * evalGate.authorConfigId, so a future optional key needs its own reasoned entry.
  */
-const TOLERATED: Record<string, string[]> = {
-  status: ['live'],
-  evalGate: ['authorConfigId'],
-};
+const TOLERATED: Record<string, string[]> = {};
 
 /** A raw object with every pinned key; '1' reads as text, as a number and as an id. */
 function rawOf(keys: string[], nested: Record<string, unknown> = {}): Record<string, unknown> {
@@ -159,7 +178,7 @@ describe('the console normalizers keep every key the server pins (frontend-conso
     for (const section of ['mode', 'queue', 'decisions24h', 'shadow', 'spend', 'watch', 'notifications', 'backlog']) {
       expectSameKeys(section, raw[section as keyof typeof raw], status[section]);
     }
-    if ('live' in STATUS) expectSameKeys('live', STATUS.live, status.live);
+    expectSameKeys('live', STATUS.live, status.live);
     expectSameKeys('runner', raw.runners[0], (status.runners as unknown[])[0]);
     expectSameKeys('evalGate', raw.evalGate, status.evalGate);
   });
@@ -238,5 +257,66 @@ describe('the blind shadow and live keys on the wire (frontend-console-22, M2)',
   it('keeps a null override rate null', async () => {
     answer(ok({ ...base, live: { autoAccepted30d: 0, deletedByPerson: 0, editedByPerson: 0, overrideRate: null } }));
     expect((await fetchAutomationStatus()).data?.live?.overrideRate).toBeNull();
+  });
+});
+
+describe('the console knows every reason and state the server does (frontend-console-31)', () => {
+  const reasons = serverSource('AutomationReasons.cs');
+  const statusRoutes = serverSource('StatusRoutes.cs');
+
+  it('reads the lists from the server source', () => {
+    // A broken extraction would make every check below vacuous.
+    expect(serverList(reasons, 'DecisionReasons')).toContain('QA_FLAGGED');
+    expect(serverList(statusRoutes, 'DecisionStates')).toContain('would_accept');
+  });
+
+  it('DECISION_REASONS equals AutomationReasons.DecisionReasons, AUTHOR_NOT_GATED included', () => {
+    expect([...DECISION_REASONS]).toEqual(serverList(reasons, 'DecisionReasons'));
+    expect(DECISION_REASONS).toContain('AUTHOR_NOT_GATED');
+  });
+
+  it('PUBLISH_REASONS equals AutomationReasons.PublishReasons', () => {
+    expect([...PUBLISH_REASONS]).toEqual(serverList(reasons, 'PublishReasons'));
+  });
+
+  it("DECISION_STATES and PUBLISH_STATES equal StatusRoutes' state lists", () => {
+    expect([...DECISION_STATES]).toEqual(serverList(statusRoutes, 'DecisionStates'));
+    expect([...PUBLISH_STATES]).toEqual(serverList(statusRoutes, 'PublishStates'));
+  });
+
+  it('keeps the gate author id on the wire (N1)', async () => {
+    answer(ok({ current: { ...GATE_RAW, authorConfigId: 'a'.repeat(64) }, history: [{ ...GATE_RAW, authorConfigId: null }] }));
+    const res = await fetchEvalGate();
+    expect(res.data?.current?.authorConfigId).toBe('a'.repeat(64));
+    expect(res.data?.history[0].authorConfigId).toBeNull();
+  });
+});
+
+/** `raw` without `key`, as a server that stopped sending it would answer. */
+function without(raw: Record<string, unknown>, key: string): Record<string, unknown> {
+  expect(raw, key).toHaveProperty(key);
+  return Object.fromEntries(Object.entries(raw).filter(([k]) => k !== key));
+}
+
+describe('no key the console reads hides behind a toleration (frontend-console-37)', () => {
+  it('tolerates nothing', () => {
+    expect(TOLERATED).toEqual({});
+  });
+
+  it('fails when the server stops pinning status.live', async () => {
+    const raw = without({ ...STATUS, runners: [rawOf(RUNNER_KEYS)], evalGate: GATE_RAW }, 'live');
+    answer(ok(raw));
+    const res = await fetchAutomationStatus();
+    expect(Object.keys(res.data as object)).toContain('live');
+    expect(() => expectSameKeys('status', raw, res.data)).toThrow(/keys the console reads that the server does not pin/);
+  });
+
+  it('fails when the server stops pinning evalGate.authorConfigId', async () => {
+    const gate = without(GATE_RAW, 'authorConfigId');
+    answer(ok({ current: gate, history: [] }));
+    const res = await fetchEvalGate();
+    expect(() => expectSameKeys('evalGate', gate, res.data?.current)).toThrow(
+      /keys the console reads that the server does not pin/,
+    );
   });
 });

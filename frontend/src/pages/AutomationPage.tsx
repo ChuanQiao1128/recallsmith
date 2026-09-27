@@ -162,7 +162,13 @@ export function AutomationPage() {
             />
           ) : null}
           {view.tab === 'runs' ? (
-            <RunsTab runId={view.runId} focusOnOpen={focusOnOpen} onOpenRun={openRun} onOpenDecision={openDecision} />
+            <RunsTab
+              runId={view.runId}
+              effectiveMode={status.data?.mode.effective ?? null}
+              focusOnOpen={focusOnOpen}
+              onOpenRun={openRun}
+              onOpenDecision={openDecision}
+            />
           ) : null}
           {view.tab === 'decisions' ? (
             <DecisionsTab draftId={view.draftId} focusOnOpen={focusOnOpen} onOpenDecision={openDecision} />

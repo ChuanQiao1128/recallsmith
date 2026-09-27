@@ -470,6 +470,17 @@ Core treats an absent `target` as the card path, so this is wire-compatible. A s
 chunk (`profile` only) reports `"profile": "automation"` and no `target`. `provider` / `model` are
 the reviewer actually used.
 
+**Effort key (contract O1).** Every automation-profile report (draft QA and source re-checks) also
+carries a top-level `"effectiveEffort"`: `providers.effective_effort` of the automation reviewer's
+settings, the value the review actually sent (`provider-default` for `bedrock-converse`, `xhigh` for
+`AI_EFFORT=max` on `openai-mantle`, `AI_EFFORT` otherwise). It is the same value the eval gate records
+as `reviewer.effectiveEffort`, and core requires the two to match at a live auto-accept (otherwise
+`REVIEWER_NOT_GATED`; a missing key fails closed). It is absent only when the automation reviewer has
+no valid settings (every item is `CONFIG` then). Default-profile reports never carry it. Deploy this
+Lambda before switching `AUTOMATION_MODE` to live; after a gate is recorded, a new dry-run decision's
+details should show `reviewerMatchesGate: true` (pinned by `tests/test_profiles.py`,
+`TestEffortInReport`).
+
 | Var | Default | Meaning |
 |---|---|---|
 | `AI_QA_AUTOMATION_PROVIDER` | empty = unset | `openai-mantle` \| `bedrock-converse` \| `bedrock` \| `anthropic`; anything else is `CONFIG` for automation-profile messages only |

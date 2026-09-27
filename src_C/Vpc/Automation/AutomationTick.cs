@@ -35,6 +35,9 @@ public static class AutomationTick
   public const int SummaryAfterMinutes = 120;
   public const int NoRunnerQueueHours = 24;
 
+  /// <summary>A runner in <c>error</c> that started no run for this long while items are due is stalled (R18G P1).</summary>
+  public const int ErrorRunnerIdleHours = 2;
+
   /// <summary>
   /// A <c>qa_pending</c> decision untouched for this many draft-QA timeouts (other than one waiting for the daily cap)
   /// keeps failing before its enqueue can even start; it goes to a human with <c>ENQUEUE_FAILED</c> (R18C,
@@ -201,11 +204,12 @@ public static class AutomationTick
   private static async Task ExpireLeasesAsync(NpgsqlConnection conn, Actions a, Func<bool> spent)
   {
     var failed = new List<(long ItemId, string Url, string LastError)>();
+    var partial = new List<(long ItemId, string Url, string LastError, Guid RunId)>();
     await using (var tx = await conn.BeginTransactionAsync())
     {
       var items = await DbUtil.QueryAsync(conn, tx,
         """
-        select id, url, attempts, last_error from authoring_queue_items
+        select id, url, attempts, last_error, last_run_id from authoring_queue_items
         where status = 'claimed' and lease_expires_at < now()
         order by id
         limit $1
@@ -215,7 +219,21 @@ public static class AutomationTick
       {
         if (spent()) break;
         var itemId = Long(item["id"]);
-        if (Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture) < MaxLeaseAttempts)
+        var leaseRetry = Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture) < MaxLeaseAttempts;
+        if (leaseRetry && item["last_run_id"] is Guid lastRun && await RunnerRoutes.RunSubmittedDraftsAsync(conn, tx, lastRun))
+        {
+          // The expired run got as far as submit_draft (R18G backend-design-25): the item is done with its attempt kept,
+          // not requeued, because a new run would author the page again next to the pending drafts it cannot see.
+          var lastError = RunnerRoutes.RunFailedAfterDraftsError("LEASE_EXPIRED");
+          await DbUtil.ExecuteAsync(conn, tx,
+            """
+            update authoring_queue_items
+            set status = 'done', lease_expires_at = null, finished_at = now(), last_error = $2, updated_at = now()
+            where id = $1
+            """, [itemId, lastError]);
+          partial.Add((itemId, (string)item["url"]!, lastError, lastRun));
+        }
+        else if (leaseRetry)
         {
           await DbUtil.ExecuteAsync(conn, tx,
             """
@@ -242,6 +260,11 @@ public static class AutomationTick
       await tx.CommitAsync();
     }
 
+    foreach (var (itemId, url, lastError, runId) in partial)
+    {
+      var raised = await RunnerRoutes.RaiseItemPartialAsync(conn, itemId.ToString(CultureInfo.InvariantCulture), url, lastError, runId);
+      if (raised?.Created == true) a.Alerts++;
+    }
     foreach (var (itemId, url, lastError) in failed)
     {
       var id = itemId.ToString(CultureInfo.InvariantCulture);
@@ -463,8 +486,9 @@ public static class AutomationTick
       var run = runRows[0];
 
       var decisions = await DbUtil.QueryAsync(conn, null,
-        """
-        select dd.deck_id, dd.state, dd.reason, dd.reason_detail, dd.estimated_cost_usd, a.stable_uid, a.card->>'question' as question
+        $"""
+        select dd.deck_id, dd.state, dd.reason, dd.reason_detail, dd.estimated_cost_usd, a.stable_uid, a.card->>'question' as question,
+          not {StatusRoutes.UndecidedDraftSql("dd")} as decided
         from automation_draft_decisions dd
         join ai_drafts a on a.id = dd.draft_id
         where dd.run_id = $1
@@ -484,7 +508,7 @@ public static class AutomationTick
       var data = new BatchSummaryData(runId, run["deck_id"] is null ? null : Long(run["deck_id"]), deckSlug, (string)run["kind"]!,
         (string)run["url"]!, run["title"] as string,
         decisions.Select(d => new BatchDraft((string)d["stable_uid"]!, d["question"] as string ?? string.Empty, (string)d["state"]!,
-          d["reason"] as string, d["reason_detail"] as string, Long(d["deck_id"]))).ToList(),
+          d["reason"] as string, d["reason_detail"] as string, Long(d["deck_id"]), d["decided"] is true)).ToList(),
         decisions.Sum(d => Convert.ToDecimal(d["estimated_cost_usd"], CultureInfo.InvariantCulture)),
         publishes.Select(p => new BatchPublish(Long(p["deck_id"]), p["deck_slug"] as string ?? "(deleted deck)", (string)p["state"]!,
           p["reason"] as string, p["reason_detail"] as string, p["job_id"] as string, p["build_id"] as string)).ToList(),
@@ -648,13 +672,16 @@ public static class AutomationTick
     var queued = Long(await DbUtil.ExecuteScalarAsync(conn, null, "select count(*) from authoring_queue_items where status = 'queued'", []));
     var runners = await DbUtil.QueryAsync(conn, null,
       """
-      select runner_id, last_heartbeat_at, login_expires_at, last_run_id, last_run_at,
+      select runner_id, last_heartbeat_at, login_expires_at, last_run_id, last_run_at, state, last_error,
         last_heartbeat_at < now() - make_interval(mins => $1) as stale,
         login_expires_at is not null and login_expires_at - now() <= make_interval(days => $2) as login_expiring,
-        greatest(0, floor(extract(epoch from (login_expires_at - now())) / 86400))::int as login_days
+        greatest(0, floor(extract(epoch from (login_expires_at - now())) / 86400))::int as login_days,
+        (select count(*) from authoring_queue_items q where q.status = 'queued' and q.not_before <= now()) as due,
+        exists (select 1 from automation_runs r
+                where r.runner_id = automation_runners.runner_id and r.started_at > now() - make_interval(hours => $3)) as ran_recently
       from automation_runners
       order by runner_id
-      """, [AutomationEnv.RunnerStaleMinutes(), AutomationEnv.LoginWarnDays()]);
+      """, [AutomationEnv.RunnerStaleMinutes(), AutomationEnv.LoginWarnDays(), ErrorRunnerIdleHours]);
 
     async Task Raise(string subkind, string dedupeKey, Dictionary<string, string> facts)
     {
@@ -698,6 +725,22 @@ public static class AutomationTick
           ["queued"] = queued.ToString(CultureInfo.InvariantCulture),
         });
       }
+      else if (IsStalledInError(r["state"] as string, r["last_error"] as string, Long(r["due"]), r["ran_recently"] is true))
+      {
+        // Alive but unable to work (R18G P1, automation-37): the runner heartbeats 'error' every hour, e.g. on an
+        // author_config_error, and claims nothing, so no run, complete or batch summary can raise anything else.
+        await Raise("runner_stalled", $"exception:runner_stalled:{runnerId}:error:{date}", new Dictionary<string, string>
+        {
+          ["runnerId"] = runnerId,
+          ["state"] = "error",
+          ["lastError"] = r["last_error"] as string ?? string.Empty,
+          ["since"] = RunnerRoutes.Timestamp(r["last_heartbeat_at"]) ?? "unknown",
+          ["loginExpiresAt"] = RunnerRoutes.Timestamp(r["login_expires_at"]) ?? "unknown",
+          ["lastRunId"] = r["last_run_id"] is Guid lr ? lr.ToString("D") : "none",
+          ["lastRunAt"] = RunnerRoutes.Timestamp(r["last_run_at"]) ?? "never",
+          ["queued"] = Long(r["due"]).ToString(CultureInfo.InvariantCulture),
+        });
+      }
       if (r["login_expiring"] is true)
       {
         await Raise("runner_login_expiring", $"exception:runner_login_expiring:{runnerId}:{date}", new Dictionary<string, string>
@@ -709,6 +752,14 @@ public static class AutomationTick
       }
     }
   }
+
+  /// <summary>
+  /// Whether a runner with a fresh heartbeat is stalled in <c>error</c> (R18G P1): its state is <c>error</c> for another
+  /// reason than <c>RUNNER_UNAVAILABLE</c> (a usage limit or hold, which its complete already reported as
+  /// <c>runner_unavailable</c>), queue items are due, and it started no run in the last <see cref="ErrorRunnerIdleHours"/>.
+  /// </summary>
+  internal static bool IsStalledInError(string? state, string? lastError, long dueItems, bool ranRecently) =>
+    state == "error" && lastError?.StartsWith("RUNNER_UNAVAILABLE", StringComparison.Ordinal) != true && dueItems > 0 && !ranRecently;
 
   private static async Task EvalGateAsync(NpgsqlConnection conn, EffectiveMode mode, Actions a)
   {
@@ -765,17 +816,38 @@ public static class AutomationTick
         return rows.ToDictionary(r => (string)r["k"]!, r => Long(r["n"]), StringComparer.Ordinal);
       }
 
+      // In dry_run the decisions of a run with a draft still waiting for a person are left out of every per-state and
+      // per-reason count and only counted as waiting (R18E N6): on a small run the counts would state each verdict.
+      var dry = mode == AutomationMode.DryRun;
+      var decided = dry
+        ? $"and not exists (select 1 from automation_draft_decisions pd where pd.run_id = dd.run_id and {StatusRoutes.UndecidedDraftSql("pd")})"
+        : string.Empty;
       var byState = await CountsAsync(
-        "select state as k, count(*) as n from automation_draft_decisions where created_at >= $1 and created_at < $2 group by state");
+        $"select dd.state as k, count(*) as n from automation_draft_decisions dd where dd.created_at >= $1 and dd.created_at < $2 {decided} group by dd.state");
       var byReason = await CountsAsync(
-        "select reason as k, count(*) as n from automation_draft_decisions where created_at >= $1 and created_at < $2 and reason is not null group by reason");
+        $"""
+        select dd.reason as k, count(*) as n from automation_draft_decisions dd
+        where dd.created_at >= $1 and dd.created_at < $2 and dd.reason is not null {decided}
+        group by dd.reason
+        """);
+      var blindPending = (await DbUtil.QueryAsync(conn, null,
+        $"""
+        select count(*) filter (where {StatusRoutes.UndecidedDraftSql("dd")}) as drafts,
+          count(distinct dd.run_id) filter (where {StatusRoutes.UndecidedDraftSql("dd")}) as runs
+        from automation_draft_decisions dd
+        """, []))[0];
+      // The same blind rule for the publishes (R18F F01, backend-design-23): a dry-run publish row exists only when a
+      // draft of its run would be accepted, so a run with a draft still waiting keeps its publishes out of the counts too.
+      var publishDecided = dry
+        ? $"and (p.run_id is null or not exists (select 1 from automation_draft_decisions pd where pd.run_id = p.run_id and {StatusRoutes.UndecidedDraftSql("pd")}))"
+        : string.Empty;
       var publishesByState = await CountsAsync(
-        "select state as k, count(*) as n from automation_publishes where created_at >= $1 and created_at < $2 group by state");
+        $"select p.state as k, count(*) as n from automation_publishes p where p.created_at >= $1 and p.created_at < $2 {publishDecided} group by p.state");
 
       // The status's blind definition (R18D M3): the digest's agreement is accepted unedited over decided blind.
       var shadow = (await DbUtil.QueryAsync(conn, null,
         $"""
-        select count(*) as would_accept,
+        select count(*) filter (where true {decided}) as would_accept,
           count(*) filter (where dd.human_action is not null) as decided,
           count(*) filter (where dd.human_action = 'accepted') as accepted,
           count(*) filter (where dd.human_action = 'edited_accepted') as edited,
@@ -797,7 +869,7 @@ public static class AutomationTick
         from automation_notifications where created_at >= $1 and created_at < $2
         """, [start, end]))[0];
       var runners = await DbUtil.QueryAsync(conn, null,
-        "select runner_id, last_heartbeat_at, login_expires_at from automation_runners order by runner_id", []);
+        "select runner_id, last_heartbeat_at, login_expires_at, state, last_error from automation_runners order by runner_id", []);
       var spend = (await DbUtil.QueryAsync(conn, null,
         """
         select
@@ -822,10 +894,12 @@ public static class AutomationTick
         Long(shadow["rejected"]), publishesByState, watchChecks, Long(watch["changes"]), Long(watch["failures"]), Long(emails["sent"]),
         Long(emails["failed"]),
         runners.Select(r => new DigestRunner((string)r["runner_id"]!, Ts(r["last_heartbeat_at"]),
-          r["login_expires_at"] is null ? null : Ts(r["login_expires_at"]))).ToList(),
+          r["login_expires_at"] is null ? null : Ts(r["login_expires_at"]), (string)r["state"]!, r["last_error"] as string)).ToList(),
         Convert.ToDecimal(spend["human"], CultureInfo.InvariantCulture), Convert.ToDecimal(spend["automation"], CultureInfo.InvariantCulture),
         backlog.HumanPending, backlog.HumanPublishes, Long(shadow["blind_decided"]), Long(shadow["blind_accepted"]),
-        new DigestLive(liveQuality.AutoAccepted30d, liveQuality.DeletedByPerson, liveQuality.EditedByPerson, liveQuality.OverrideRate));
+        new DigestLive(liveQuality.AutoAccepted30d, liveQuality.DeletedByPerson, liveQuality.EditedByPerson, liveQuality.OverrideRate,
+          liveQuality.EditedAfterSourceChange),
+        Long(blindPending["drafts"]), Long(blindPending["runs"]));
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.WeeklyDigest(mode, data, baseUrl);

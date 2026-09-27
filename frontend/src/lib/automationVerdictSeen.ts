@@ -8,61 +8,113 @@
 // drawer is recorded here, so a later decision in the review queue sends
 // `verdictShown: true` instead of being counted as blind.
 //
-// Kept in memory and mirrored to sessionStorage (the tab's session), so a
-// reveal survives the navigation to the review queue and a reload. Storage can
-// be missing or throw (private windows, blocked site data): the in-memory set
-// still works, and every access is guarded.
+// Kept in memory and mirrored to localStorage, which every tab of the origin
+// shares (E05 frontend-console-32, N5): a reveal in one tab is known to a
+// review queue opened in another tab, or after the tab was closed. Every read
+// looks at the stored entry again, so a reveal another tab wrote after this
+// module loaded counts too. Storage can be missing or throw (private windows,
+// blocked site data): the in-memory set still drives the page, and
+// `verdictSeenElsewhere` then answers "shown", because another tab may have
+// shown the verdict and D01's rule is to never claim a blind decision when
+// unsure.
 
 const STORAGE_KEY = 'dc.automation.verdictSeen.v1';
 /** A bound on what is kept, so the entry cannot grow without end. */
 const MAX_IDS = 500;
 
-let seen: Set<number> | null = null;
+const memory = new Set<number>();
+/** The stored text last merged into `memory`, so an unchanged entry is not parsed again. */
+let lastRaw: string | null = null;
+/** Whether round 3's per-tab sessionStorage entry was carried over. */
+let legacyMerged = false;
+/** Set when storage threw on a read or a write: this browser cannot share reveals. */
+let storageFailed = false;
 
-function load(): Set<number> {
-  if (seen) return seen;
-  seen = new Set<number>();
+function mergeIds(raw: string | null): void {
+  if (!raw) return;
+  let parsed: unknown;
   try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    if (Array.isArray(parsed)) {
-      for (const id of parsed) if (typeof id === 'number' && Number.isInteger(id) && id > 0) seen.add(id);
-    }
+    parsed = JSON.parse(raw);
   } catch {
-    // No storage: the in-memory set is all there is.
+    return; // A damaged entry records nothing; the next write replaces it.
   }
-  return seen;
+  if (Array.isArray(parsed)) {
+    for (const id of parsed) if (typeof id === 'number' && Number.isInteger(id) && id > 0) memory.add(id);
+  }
 }
 
-function save(ids: Set<number>): void {
+/** Merges the stored entry (every tab's reveals) into memory. */
+function refresh(): void {
   try {
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify([...ids].slice(-MAX_IDS)));
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw !== lastRaw) {
+      lastRaw = raw;
+      mergeIds(raw);
+    }
   } catch {
-    // No storage: the in-memory set is all there is.
+    storageFailed = true;
+  }
+  if (!legacyMerged) {
+    legacyMerged = true;
+    // Round 3 kept the record in this tab's sessionStorage; its reveals still count, and are shared from now on.
+    const before = memory.size;
+    try {
+      mergeIds(window.sessionStorage.getItem(STORAGE_KEY));
+      window.sessionStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // No session storage: nothing to carry over.
+    }
+    if (memory.size > before) save();
+  }
+}
+
+function save(): void {
+  try {
+    const raw = JSON.stringify([...memory].slice(-MAX_IDS));
+    window.localStorage.setItem(STORAGE_KEY, raw);
+    lastRaw = raw;
+  } catch {
+    storageFailed = true;
   }
 }
 
 /** Records that the person saw the automatic verdict of these drafts. */
 export function markVerdictSeen(...draftIds: number[]): void {
-  const ids = load();
+  refresh();
   let changed = false;
   for (const id of draftIds) {
-    if (!ids.has(id)) {
-      ids.add(id);
+    if (!memory.has(id)) {
+      memory.add(id);
       changed = true;
     }
   }
-  if (changed) save(ids);
+  if (changed) save();
 }
 
+/** Whether a reveal of this draft is recorded, in this tab or another one. The Automation page hides by this. */
 export function wasVerdictSeen(draftId: number): boolean {
-  return load().has(draftId);
+  refresh();
+  return memory.has(draftId);
 }
 
-/** Test seam: forgets every recorded reveal, in memory and in storage. */
+/**
+ * Whether a decision on this draft must say the verdict was shown before it:
+ * a reveal is recorded, or storage is unavailable, so a reveal in another tab
+ * cannot be ruled out (N5: fall back to "shown").
+ */
+export function verdictSeenElsewhere(draftId: number): boolean {
+  refresh();
+  return storageFailed || memory.has(draftId);
+}
+
+/** Test seam: forgets every recorded reveal, in memory and in storage, and the storage failure flag. */
 export function clearVerdictSeen(): void {
-  seen = new Set<number>();
+  memory.clear();
+  lastRaw = null;
+  storageFailed = false;
+  legacyMerged = false;
   try {
+    window.localStorage.removeItem(STORAGE_KEY);
     window.sessionStorage.removeItem(STORAGE_KEY);
   } catch {
     // No storage.

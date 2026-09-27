@@ -3,13 +3,14 @@
 // D07 (R18A fix round 3): the review queue's side of the blind shadow
 // agreement. Each accept or reject of a draft with an automatic decision sends
 // verdictShown (automation-4, D01 contract); a draft routed to a person for AI
-// QA blocker or major findings shows those findings before the decision
-// (frontend-console-26); and after a blinded decision the outcome tells the
-// verdict that was hidden. Mocks as in reviewBlindShadow.test.tsx, so nothing
+// QA blocker or major findings shows those findings before the card lands
+// (frontend-console-26), since G04 frontend-console-38 (P4) in a confirm step
+// after Accept rather than in the panel; and after a blinded decision the
+// outcome tells the verdict that was hidden. Mocks as in reviewBlindShadow.test.tsx, so nothing
 // leaves the process.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { ok } from './support/apiResult';
@@ -23,7 +24,7 @@ import {
   revealedVerdict,
   verdictShownFor,
 } from '../src/lib/automationSurfaces';
-import { clearVerdictSeen, markVerdictSeen } from '../src/lib/automationVerdictSeen';
+import { clearVerdictSeen, markVerdictSeen, verdictSeenElsewhere } from '../src/lib/automationVerdictSeen';
 import type { Deck } from '../src/types/deck';
 import type { DraftAutomation } from '../src/types/draft';
 
@@ -152,6 +153,15 @@ describe('verdictShown on accept and reject (automation-4)', () => {
     expect(api.rejectDraft.mock.calls[0][1]).toMatchObject({ reason: 'incorrect', verdictShown: true });
   });
 
+  it('sends true when another tab of the browser revealed the verdict (E05 frontend-console-32)', async () => {
+    // Written by the Automation page in another tab: the shared localStorage entry.
+    window.localStorage.setItem('dc.automation.verdictSeen.v1', JSON.stringify([41]));
+    await openReviewWith(WOULD_ACCEPT);
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(api.acceptDraft).toHaveBeenCalledTimes(1));
+    expect(api.acceptDraft.mock.calls[0][1]).toMatchObject({ verdictShown: true });
+  });
+
   it('sends true in live mode, where the verdict always shows', async () => {
     await openReviewWith({ ...WOULD_ACCEPT, state: 'human', reason: 'EXISTING_CARD', mode: 'live' });
     await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
@@ -164,23 +174,116 @@ describe('verdictShown on accept and reject (automation-4)', () => {
     expect(verdictShownFor(WOULD_ACCEPT, 'pending', false)).toBe(false);
     expect(verdictShownFor(WOULD_ACCEPT, 'pending', true)).toBe(true);
     expect(verdictShownFor({ ...WOULD_ACCEPT, mode: 'live' }, 'pending', false)).toBe(true);
-    expect(verdictShownFor(QA_FLAGGED, 'pending', false)).toBe(true);
+    // G04 frontend-console-38: the flagged panel no longer shows findings before the decision, so a
+    // flagged draft is as blind as any other until its findings step records the verdict as seen.
+    expect(verdictShownFor(QA_FLAGGED, 'pending', false)).toBe(false);
+    expect(verdictShownFor(QA_FLAGGED, 'pending', true)).toBe(true);
     expect(verdictShownFor({ ...WOULD_ACCEPT, state: 'human', reason: 'EXISTING_CARD' }, 'pending', false)).toBe(false);
   });
 });
 
-describe('a QA-flagged draft shows its findings to the person deciding (frontend-console-26)', () => {
-  it('shows the blocker and major findings before the decision, without the decision link', async () => {
+/** The automation panel's text and markup, without React's per-render ids. */
+function panelMarkup(): string {
+  return screen.getByTestId('review-automation').outerHTML.replace(/ id="[^"]*"/g, '');
+}
+
+describe('a QA-flagged draft shows its findings to the person deciding (frontend-console-26, G04 frontend-console-38)', () => {
+  it('renders a flagged draft and a would-accept draft with the identical neutral panel before the decision', async () => {
     await openReviewWith(QA_FLAGGED);
+    const flagged = panelMarkup();
+    cleanup();
+    await openReviewWith(WOULD_ACCEPT);
+    const wouldAccept = panelMarkup();
+
+    expect(flagged).toBe(wouldAccept);
     const panel = screen.getByTestId('review-automation');
-    expect(within(panel).getByTestId('review-automation-qa-flagged').textContent).toContain(
-      'Findings: 1 blocker, 1 major, 0 minor',
-    );
-    expect(within(panel).getByText('Glacier Instant Retrieval is not the cheapest.')).toBeTruthy();
-    expect(within(panel).getByText('Two options fit.')).toBeTruthy();
-    expect(within(panel).getByText(/routed to you · AI QA found a blocker or major issue/)).toBeTruthy();
-    expect(within(panel).queryByText(BLINDED_AUTOMATION_TEXT)).toBeNull();
+    expect(within(panel).getByText(BLINDED_AUTOMATION_TEXT)).toBeTruthy();
+    expect(panel.textContent).not.toContain('hidden for every dry-run draft');
     expect(within(panel).queryByRole('link', { name: 'Open in Automation' })).toBeNull();
+  });
+
+  it('keeps the flagged findings out of the page until Accept is clicked', async () => {
+    await openReviewWith(QA_FLAGGED);
+    expect(screen.queryByText('Glacier Instant Retrieval is not the cheapest.')).toBeNull();
+    expect(screen.queryByText(/routed to you/)).toBeNull();
+    expect(screen.queryByTestId('review-qa-findings-step')).toBeNull();
+  });
+
+  it('shows the blocker and major findings in a step after Accept, before the request', async () => {
+    await openReviewWith(QA_FLAGGED);
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+
+    const step = await screen.findByRole('dialog', { name: 'AI QA found a blocker or major issue' });
+    expect(within(step).getByText('Glacier Instant Retrieval is not the cheapest.')).toBeTruthy();
+    expect(within(step).getByText('Two options fit.')).toBeTruthy();
+    expect(document.activeElement).toBe(within(step).getByRole('button', { name: 'Back' }));
+    expect(api.acceptDraft).not.toHaveBeenCalled();
+
+    await userEvent.click(within(step).getByRole('button', { name: 'Accept anyway' }));
+    await waitFor(() => expect(api.acceptDraft).toHaveBeenCalledTimes(1));
+    expect(api.acceptDraft.mock.calls[0][1]).toMatchObject({ verdictShown: true });
+    expect(screen.queryByTestId('review-qa-findings-step')).toBeNull();
+  });
+
+  it('records the verdict as seen when the person backs out, so a later reject is not blind', async () => {
+    await openReviewWith(QA_FLAGGED);
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    const step = await screen.findByRole('dialog', { name: 'AI QA found a blocker or major issue' });
+    await userEvent.click(within(step).getByRole('button', { name: 'Back' }));
+
+    expect(screen.queryByTestId('review-qa-findings-step')).toBeNull();
+    expect(api.acceptDraft).not.toHaveBeenCalled();
+    expect(verdictSeenElsewhere(41)).toBe(true);
+
+    await reject();
+    await waitFor(() => expect(api.rejectDraft).toHaveBeenCalledTimes(1));
+    expect(api.rejectDraft.mock.calls[0][1]).toMatchObject({ verdictShown: true });
+  });
+
+  it('goes back on Escape', async () => {
+    await openReviewWith(QA_FLAGGED);
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await screen.findByTestId('review-qa-findings-step');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('review-qa-findings-step')).toBeNull());
+    expect(api.acceptDraft).not.toHaveBeenCalled();
+  });
+
+  it('shows the step for Accept with edits too, and backing out keeps the form open', async () => {
+    await openReviewWith(QA_FLAGGED);
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Accept with edits' }));
+
+    const step = await screen.findByRole('dialog', { name: 'AI QA found a blocker or major issue' });
+    await userEvent.click(within(step).getByRole('button', { name: 'Back' }));
+    expect(api.acceptDraft).not.toHaveBeenCalled();
+    expect(await screen.findByText(/went back to the draft after reading the AI QA findings/)).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog', { name: 'AI QA found a blocker or major issue' })).getByRole('button', {
+        name: 'Accept anyway',
+      }),
+    );
+    await waitFor(() => expect(api.acceptDraft).toHaveBeenCalledTimes(1));
+    expect(api.acceptDraft.mock.calls[0][1]).toMatchObject({ verdictShown: true });
+  });
+
+  it('never shows the step for a would-accept draft, whose accept stays blind', async () => {
+    await openReviewWith(WOULD_ACCEPT);
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(api.acceptDraft).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('review-qa-findings-step')).toBeNull();
+    expect(api.acceptDraft.mock.calls[0][1]).toMatchObject({ verdictShown: false });
+    expect(verdictSeenElsewhere(41)).toBe(false);
+  });
+
+  it('rejects a flagged draft without a step, blind', async () => {
+    await openReviewWith(QA_FLAGGED);
+    await reject();
+    await waitFor(() => expect(api.rejectDraft).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('review-qa-findings-step')).toBeNull();
+    expect(api.rejectDraft.mock.calls[0][1]).toMatchObject({ verdictShown: false });
   });
 
   it('keeps a would-accept draft and a flagged draft without serious findings blinded', () => {
@@ -194,6 +297,7 @@ describe('a QA-flagged draft shows its findings to the person deciding (frontend
   it('warns after accepting a blinded QA-flagged draft and names what the automation found', async () => {
     await openReviewWith(QA_FLAGGED);
     await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Accept anyway' }));
 
     const verdict = await screen.findByTestId('review-outcome-verdict');
     expect(verdict.textContent).toContain(

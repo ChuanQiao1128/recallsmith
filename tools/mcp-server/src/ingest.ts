@@ -81,11 +81,14 @@ export interface ReadSourceInput {
 /**
  * Where read_source runs and which credential file it must never read. `allowedHosts`, set
  * inside an automation run, is the only set of https hosts it may fetch (redirects included).
+ * `automationRun` (P3, ai-agent-30) refuses every local file: only a quote checked against the
+ * live allowlisted page may reach the automation decision.
  */
 export interface IngestContext {
   repoRoot: string;
   tokenFile: string;
   allowedHosts?: readonly string[];
+  automationRun?: boolean;
 }
 
 /** Refuses an https URL whose host is not in the automation run's allowlist (ai-agent-1). */
@@ -149,9 +152,16 @@ export function buildIngestArgs(context: IngestContext, input: ReadSourceInput, 
     }
     checkSourceHost(source, context.allowedHosts);
   } else {
+    if (context.automationRun === true) {
+      throw new IngestError(
+        'SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION: an automation run reads only https sources on its allowed hosts, never a local file',
+      );
+    }
     source = resolve(cwd, source);
     checkLocalSource(source, context.tokenFile);
   }
+  // dc-ingest cites canonicalUrl instead of the fetched url, so it is held to the same hosts (ai-agent-30).
+  if (input.canonicalUrl !== undefined) checkSourceHost(input.canonicalUrl, context.allowedHosts);
   return [
     'run',
     '--project',

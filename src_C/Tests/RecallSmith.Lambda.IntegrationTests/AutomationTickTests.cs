@@ -210,6 +210,61 @@ public class AutomationTickTests
   }
 
   [Fact]
+  public async Task Tick_ExpiredLease_AfterASubmittedDraft_FinishesTheItem_WithoutARequeue()
+  {
+    // R18G backend-design-25: a run whose lease expired after submit_draft is not re-authored next to its pending drafts.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "g01-lease");
+      const string sub = "it-g01-owner";
+      async Task<(long ItemId, Guid RunId)> ClaimedAsync(string tag)
+      {
+        var runId = Guid.NewGuid();
+        var itemId = A04Kit.Long(await sql.ScalarAsync(
+          """
+          insert into authoring_queue_items (kind, url, deck_id, dedupe_key, created_by, status, attempts, claimed_by_runner, claimed_at, lease_expires_at, last_run_id)
+          values ('manual', $1, $2, $3, 'owner:it-g01', 'claimed', 1, 'it-g01-runner', now() - interval '3 hours', now() - interval '1 minute', $4)
+          returning id
+          """, $"https://docs.example.com/g01-lease/{tag}", deckId, $"it-g01:lease:{tag}", runId));
+        await sql.QueryAsync(
+          "insert into automation_runs (run_id, queue_item_id, runner_id, owner_sub, deck_id, status) values ($1, $2, 'it-g01-runner', $3, $4, 'running')",
+          runId, itemId, sub, deckId);
+        return (itemId, runId);
+      }
+      var drafted = await ClaimedAsync("drafted");
+      var empty = await ClaimedAsync("empty");
+      var uid = AutomationTestKit.Uid("g01-lease");
+      await sql.QueryAsync(
+        """
+        insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, card, agent, submitted_by_sub)
+        values ($1, gen_random_uuid(), $2, $3, $4::jsonb, jsonb_build_object('runId', $5::text), $6)
+        """, deckId, Guid.NewGuid().ToString("N"), uid, JsonSerializer.Serialize(AutomationTestKit.Card(uid)), drafted.RunId.ToString("D"), sub);
+
+      var data = await TickDataAsync();
+
+      Assert.Equal(2, Action(data, "leasesExpired"));
+      var item = (await sql.QueryAsync("select status, attempts, lease_expires_at, finished_at, last_error from authoring_queue_items where id = $1", drafted.ItemId)).Single();
+      Assert.Equal(("done", 1), ((string)item["status"]!, Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture)));
+      Assert.Null(item["lease_expires_at"]);
+      Assert.NotNull(item["finished_at"]);
+      Assert.StartsWith(RunnerRoutes.RunFailedAfterDrafts + ": ", (string)item["last_error"]!);
+      Assert.EndsWith("LEASE_EXPIRED", (string)item["last_error"]!);
+      Assert.Equal("abandoned", await sql.ScalarAsync("select status from automation_runs where run_id = $1", drafted.RunId));
+      // The run without drafts is still requeued.
+      Assert.Equal("queued", await sql.ScalarAsync("select status from authoring_queue_items where id = $1", empty.ItemId));
+
+      // R18G P2: the owner is told the item is finished and how to author the rest.
+      var alert = (await NotificationAsync(sql, $"exception:queue_item_partial:{drafted.ItemId}"))!;
+      Assert.Equal(("exception", "queue_item_failed"), ((string)alert["kind"]!, (string)alert["subkind"]!));
+      Assert.Equal($"[DeveloperCards] (dry run) Action needed: queue item {drafted.ItemId} stopped after submitting drafts", alert["subject"]);
+      Assert.Contains("re-add the URL in the Queue tab", (string)alert["body_text"]!);
+      Assert.Null(await NotificationAsync(sql, $"exception:queue_item_partial:{empty.ItemId}"));
+      Assert.Null(await NotificationAsync(sql, $"exception:queue_item_failed:{drafted.ItemId}"));
+    });
+  }
+
+  [Fact]
   public async Task Tick_QaPending_IsRetried()
   {
     await using var scope = new A04Kit.Scope();
@@ -625,10 +680,13 @@ public class AutomationTickTests
       Assert.Equal("would_publish", publish["state"]);
       var n = (await NotificationAsync(sql, $"batch:{runId:D}"))!;
       Assert.Equal(("batch_summary", "dry_run", runId), ((string)n["kind"]!, (string)n["mode"]!, (Guid)n["run_id"]!));
-      Assert.Equal($"[DeveloperCards] (dry run) Batch {runId.ToString("D")[..8]} {deck.Slug}: 1 auto-accepted, 1 need you, would publish", n["subject"]);
+      // R18E N6: both drafts still wait for a person, so the dry-run summary gives no per-state count or reason
+      // (updated from the R18D assertions of "1 auto-accepted, 1 need you, would publish" and "QA_FLAGGED").
+      Assert.Equal($"[DeveloperCards] (dry run) Batch {runId.ToString("D")[..8]} {deck.Slug}: 2 draft(s) wait for you", n["subject"]);
       var body = (string)n["body_text"]!;
       Assert.Contains($"https://console.example.com/review?deckId={deck.Id}", body);
-      Assert.Contains("QA_FLAGGED", body);
+      Assert.DoesNotContain("QA_FLAGGED", body);
+      Assert.DoesNotContain("would_accept", body);
       Assert.Equal(n["notification_id"], await sql.ScalarAsync("select summary_notification_id from automation_runs where run_id = $1", runId));
 
       var delivery = (await sql.QueryAsync("select body from webhook_deliveries where subscription_id = $1", subscriptionId)).Single();
@@ -708,6 +766,82 @@ public class AutomationTickTests
       Assert.Null(await NotificationAsync(sql, $"exception:runner_stalled:it-a04-fresh:{Today()}"));
       // Once per runner per UTC day.
       Assert.Equal(0, Action(await TickDataAsync(), "alerts"));
+    });
+  }
+
+  private static async Task<long> QueuedItemAsync(A04Kit.Sql sql, long deckId, string tag, string notBefore = "now() - interval '1 minute'") =>
+    A04Kit.Long(await sql.ScalarAsync(
+      $"""
+      insert into authoring_queue_items (kind, url, deck_id, dedupe_key, created_by, status, not_before)
+      values ('manual', $1, $2, $3, 'owner:it-g01', 'queued', {notBefore})
+      returning id
+      """, $"https://docs.example.com/{tag}", deckId, $"it-g01:{tag}"));
+
+  [Fact]
+  public async Task Tick_RunnerAliveInError_WithDueQueuedItems_AlertsOncePerDay()
+  {
+    // R18G P1 (automation-37): a runner that heartbeats 'error' every hour (author_config_error) is never stale.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "g01-p1");
+      await QueuedItemAsync(sql, deckId, "g01-p1");
+      const string configError = "author config: tool-surface.json bundleSha256 does not match tools/mcp-server/dist/index.js";
+      await sql.QueryAsync(
+        "insert into automation_runners (runner_id, owner_sub, state, last_heartbeat_at, last_error) values ('it-g01-cfg', 'sub', 'error', now() - interval '1 minute', $1)",
+        configError);
+      // A usage limit or hold: its complete already raised runner_unavailable.
+      await sql.QueryAsync(
+        "insert into automation_runners (runner_id, owner_sub, state, last_heartbeat_at, last_error) values ('it-g01-usage', 'sub', 'error', now() - interval '1 minute', 'RUNNER_UNAVAILABLE: usage limit reached')");
+      await sql.QueryAsync("insert into automation_runners (runner_id, owner_sub, state, last_heartbeat_at) values ('it-g01-idle', 'sub', 'idle', now())");
+
+      var data = await TickDataAsync();
+
+      Assert.Equal(1, Action(data, "alerts"));
+      var n = (await NotificationAsync(sql, $"exception:runner_stalled:it-g01-cfg:error:{Today()}"))!;
+      Assert.Equal("exception", n["kind"]);
+      Assert.Equal("runner_stalled", n["subkind"]);
+      Assert.Equal("[DeveloperCards] (dry run) Action needed: authoring runner it-g01-cfg is running but cannot work", n["subject"]);
+      var body = (string)n["body_text"]!;
+      Assert.Contains(configError, body);
+      Assert.Contains("1 due queue item(s)", body);
+      Assert.Contains("rebuild tools/mcp-server", body);
+      Assert.DoesNotContain("silent since", body);
+      Assert.Null(await NotificationAsync(sql, $"exception:runner_stalled:it-g01-cfg:{Today()}"));
+      Assert.Null(await NotificationAsync(sql, $"exception:runner_stalled:it-g01-usage:error:{Today()}"));
+      Assert.Null(await NotificationAsync(sql, $"exception:runner_stalled:it-g01-idle:error:{Today()}"));
+      Assert.Single(A04Kit.Messages(scope, "is running but cannot work"));
+
+      // Once per runner per UTC day.
+      Assert.Equal(0, Action(await TickDataAsync(), "alerts"));
+    });
+  }
+
+  [Fact]
+  public async Task Tick_RunnerInError_DoesNotAlert_WhenNothingIsDue_OrItStartedARunRecently()
+  {
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "g01-p1b");
+      // Only a queued item that is not due yet: nothing waits on the runner.
+      await QueuedItemAsync(sql, deckId, "g01-p1b-later", "now() + interval '3 hours'");
+      await sql.QueryAsync(
+        "insert into automation_runners (runner_id, owner_sub, state, last_heartbeat_at, last_error) values ('it-g01-err', 'sub', 'error', now() - interval '1 minute', 'author config: no tool-surface.json')");
+
+      Assert.Equal(0, Action(await TickDataAsync(), "alerts"));
+
+      // Due work, but the runner started a run 30 minutes ago: it is working, one run just failed.
+      var due = await QueuedItemAsync(sql, deckId, "g01-p1b-due");
+      await sql.QueryAsync(
+        "insert into automation_runs (run_id, queue_item_id, runner_id, owner_sub, deck_id, status, outcome, started_at) values ($1, $2, 'it-g01-err', 'sub', $3, 'failed', 'failed', now() - interval '30 minutes')",
+        Guid.NewGuid(), due, deckId);
+      Assert.Equal(0, Action(await TickDataAsync(), "alerts"));
+
+      // Its last run is older than 2 h: it stalled.
+      await sql.QueryAsync("update automation_runs set started_at = now() - interval '3 hours' where runner_id = 'it-g01-err'");
+      Assert.Equal(1, Action(await TickDataAsync(), "alerts"));
+      Assert.NotNull(await NotificationAsync(sql, $"exception:runner_stalled:it-g01-err:error:{Today()}"));
     });
   }
 
@@ -957,7 +1091,58 @@ public class AutomationTickTests
 
       var body = (string)(await NotificationAsync(sql, $"digest:{Today()}"))!["body_text"]!;
       Assert.Contains("- 1 publish(es) need you — ", body);
-      Assert.Contains("- 1 draft(s) routed to you are still pending — ", body);
+      // R18E N6: in dry_run the digest counts every draft waiting for a person, not the ones routed to one (updated
+      // from "- 1 draft(s) routed to you are still pending", which reveals the rest's verdict by elimination).
+      Assert.Contains("- 1 draft(s) wait for your decision — ", body);
+      Assert.DoesNotContain("routed to you", body);
+      Assert.Contains("Not counted above: 1 run(s) with a draft still waiting for your decision", body);
+    });
+  }
+
+  [Fact]
+  public async Task Tick_Digest_DryRun_LeavesOutThePublishesOfARunWithAnUndecidedDraft()
+  {
+    // R18F F01 (backend-design-23, automation-34): a dry-run publish row exists only when a draft of its run would be
+    // accepted, so the week's publish counts apply the N6 blind rule too. The blind run's would_publish and human rows
+    // are left out; the decided run's would_publish row and a row without a run are counted.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "blind-publish");
+      var blindRun = await A04Kit.RunAsync(sql, "sub", deckId, "completed");
+      var decidedRun = await A04Kit.RunAsync(sql, "sub", deckId, "completed");
+      async Task DraftAsync(Guid runId, string? humanAction)
+      {
+        var uid = A04Kit.Tag("blind-publish");
+        var draftId = A04Kit.Long(await sql.ScalarAsync(
+          """
+          insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, card, submitted_by_sub)
+          values ($1, $2, $3, $4, $5::jsonb, 'it-f01-agent') returning id
+          """, deckId, Guid.NewGuid(), Guid.NewGuid().ToString("N"), uid, JsonSerializer.Serialize(AutomationTestKit.Card(uid))));
+        await sql.QueryAsync(
+          """
+          insert into automation_draft_decisions (draft_id, run_id, deck_id, mode, state, decided_at, human_action, human_decided_at, created_at)
+          values ($1, $2, $3, 'dry_run', 'would_accept', now() - interval '2 days', $4::text,
+                  case when $4::text is null then null else now() - interval '1 day' end, now() - interval '2 days')
+          """, draftId, runId, deckId, humanAction);
+      }
+      await DraftAsync(blindRun, null);
+      await DraftAsync(decidedRun, "accepted");
+      await sql.QueryAsync(
+        """
+        insert into automation_publishes (deck_id, run_id, mode, state, reason, created_at, updated_at) values
+          ($1, $2, 'dry_run', 'would_publish', null, now() - interval '2 days', now() - interval '2 days'),
+          ($1, $2, 'dry_run', 'human', 'DECK_HAS_HUMAN_CHANGES', now() - interval '2 days', now() - interval '2 days'),
+          ($1, $3, 'dry_run', 'would_publish', null, now() - interval '2 days', now() - interval '2 days'),
+          ($1, null, 'dry_run', 'would_publish', null, now() - interval '2 days', now() - interval '2 days')
+        """, deckId, blindRun, decidedRun);
+
+      await TickDataAsync("digest");
+      var body = (string)(await NotificationAsync(sql, $"digest:{Today()}"))!["body_text"]!;
+      Assert.Contains("- 0 build(s) auto-published, 2 would be published\n", body);
+      Assert.Contains("\nPublishes by state: would_publish 2\n", body);
+      Assert.DoesNotContain("human 1", body);
+      Assert.Contains("Not counted above: 1 run(s) with a draft still waiting for your decision", body);
     });
   }
 

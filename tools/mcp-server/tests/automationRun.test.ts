@@ -346,6 +346,102 @@ describe('the pinned author configuration (ai-agent-3)', () => {
   });
 });
 
+describe('local sources in an automation run (P3, ai-agent-30)', () => {
+  let env: TestEnv;
+  let api: FakeServer;
+  afterEach(async () => {
+    await api?.close();
+    env.cleanup();
+  });
+
+  async function setup(automationEnv: Record<string, string | undefined>, runProcess: RunProcess): Promise<Client> {
+    api = await startFakeServer(happy);
+    env = makeTestEnv({ apiBase: api.base });
+    writeValidTokens(env.config);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({ config: env.config, runProcess, env: automationEnv, warn: () => undefined });
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'dc-mcp-test', version: '0.0.0' });
+    await client.connect(clientTransport);
+    return client;
+  }
+
+  /** dc-ingest's answer for a local file: `path` set, `url` the canonicalUrl the agent passed. */
+  function localIngest(): { run: RunProcess; calls: string[][] } {
+    const calls: string[][] = [];
+    const run: RunProcess = async (_command, args) => {
+      calls.push(args);
+      const i = args.indexOf('--canonical-url');
+      const url = i >= 0 ? (args[i + 1] ?? '') : (args[args.length - 1] ?? '');
+      const doc = SAMPLE_SOURCES[url];
+      if (doc === undefined) return { code: 1, stdout: '', stderr: 'dc-ingest: error: not found\n' };
+      return { code: 0, stdout: `${JSON.stringify({ ...ingestDoc(url, doc), path: '/repo/sources/retrieval.md' })}\n`, stderr: '' };
+    };
+    return { run, calls };
+  }
+
+  it('refuses a local path in read_source with SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION before dc-ingest runs', async () => {
+    const ingest = localIngest();
+    const client = await setup(AUTOMATION_ENV, ingest.run);
+    const result = await callTool(client, 'read_source', {
+      source: 'sources/retrieval.md',
+      canonicalUrl: 'https://example.com/s3/retrieval-options',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/^SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION: /);
+    expect(ingest.calls).toEqual([]);
+    await client.close();
+  });
+
+  it('still reads a local path outside an automation run', async () => {
+    const ingest = localIngest();
+    const client = await setup({}, ingest.run);
+    const result = await callTool(client, 'read_source', {
+      source: 'sources/retrieval.md',
+      canonicalUrl: 'https://example.com/s3/retrieval-options',
+    });
+    expect(result.isError).toBe(false);
+    expect(ingest.calls).toHaveLength(1);
+    await client.close();
+  });
+
+  it('refuses a canonicalUrl whose host is not allowed in an automation run', async () => {
+    const ingest = localIngest();
+    const client = await setup(AUTOMATION_ENV, ingest.run);
+    const result = await callTool(client, 'read_source', {
+      source: 'https://example.com/s3/retrieval-options',
+      canonicalUrl: 'https://docs.example.org/s3/retrieval-options',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/^SOURCE_HOST_NOT_ALLOWED: docs\.example\.org /);
+    expect(ingest.calls).toEqual([]);
+    await client.close();
+  });
+
+  it('refuses in submit_draft a remembered document that dc-ingest read from disk, with no API call', async () => {
+    // Defence in depth: however a local document got into the store, an automation run never cites it.
+    const ingest = localIngest();
+    const client = await setup(AUTOMATION_ENV, ingest.run);
+    const read = await callTool(client, 'read_source', { source: 'https://example.com/s3/retrieval-options' });
+    expect(read.isError).toBe(false);
+    const result = await callTool(client, 'submit_draft', { deckSlug: 'aws-saa-c03', drafts: [sampleCard()] });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/sample-qa-topic-02: SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION/);
+    expect(api.requests.filter((req) => req.method === 'POST')).toEqual([]);
+    await client.close();
+  });
+
+  it('keeps submitting a remembered local document outside an automation run', async () => {
+    const ingest = localIngest();
+    const client = await setup({}, ingest.run);
+    await callTool(client, 'read_source', { source: 'sources/retrieval.md', canonicalUrl: 'https://example.com/s3/retrieval-options' });
+    const result = await callTool(client, 'submit_draft', { deckSlug: 'aws-saa-c03', drafts: [sampleCard()] });
+    expect(result.isError).toBe(false);
+    expect((JSON.parse(result.text) as { grounding: Array<{ kind: string }> }).grounding[0]?.kind).toBe('local');
+    await client.close();
+  });
+});
+
 describe('the API surface', () => {
   it('adds no API call literal under src', () => {
     // The regex of AgentClientPolicyTests, which pins the agent client's API surface.

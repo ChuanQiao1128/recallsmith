@@ -14,9 +14,21 @@
 // (C07 frontend-console-15). The Email card shows the K6 unconfirmed count (L5).
 //
 // The shadow agreement is the blind pair with the server's own rate (M3, D07
-// frontend-console-22), the totals under it and the progress toward the
-// runbook's 100 blind decisions. Live quality (M2) shows the four numbers of
+// frontend-console-22), the totals under it and the runbook's go-live floor
+// with both halves, at least 100 blind decisions and at least 95% blind
+// agreement, and whether it is met (E05 frontend-console-34). Live quality (M2) shows the four numbers of
 // status.live; an older server without the block gets one line instead.
+//
+// Outside live (F04 frontend-console-35, the weekly digest's dry-run treatment,
+// R18E N6) the counts that tell a pending draft's verdict by elimination stay
+// blind: no routed-draft count or oldest routed date (the review-queue line
+// takes their place), one 24-hour row for the states a pending draft can be
+// in, no split by reason, and one hidden line for the 7-day would-publish and
+// needs-you publishes (G04 frontend-console-39: a dry-run publish row exists
+// only when a run had a would_accept draft). The publishes waiting for a person
+// stay listed by deck in every mode: the server lists live rows only, whose
+// drafts were auto-accepted, so they tell no dry-run verdict (G04
+// frontend-console-41). The notes name the mode the page is in.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -31,7 +43,11 @@ import {
   QUEUED_EMAIL_SEARCH,
   RUNNER_STATE_LABELS,
   RUN_OUTCOME_LABELS,
+  BLIND_PUBLISH_STATES,
+  RUN_PUBLISH_HIDDEN_TEXT,
+  automationCountsBlind,
   backlogLinkLabel,
+  blindNotePrefix,
   codeLabel,
   decisionReasonLabel,
   decisionStateBars,
@@ -44,6 +60,7 @@ import {
   runnerStateTone,
   liveOverrideRateText,
   shadowAgreementText,
+  shadowFloorMet,
   shadowThresholdText,
   shadowTotalsText,
 } from '../../lib/automationRules';
@@ -70,6 +87,9 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 /** The 24-hour row of state `human` counts handled and open decisions alike. */
 const ROUTED_TO_PERSON = 'Routed to a person';
+
+/** In place of the 24-hour split by reason while the counts are blind: only a routed decision has a reason. */
+const BLIND_REASONS_TEXT = 'hidden while drafts may wait for you, because only a routed draft has a reason.';
 
 function barLabel(state: string, label: string): string {
   return state === 'human' ? ROUTED_TO_PERSON : label;
@@ -106,7 +126,9 @@ export function OverviewTab({
 
   const serverNow = status ? Date.parse(status.serverTime) : NaN;
   const age = (iso: string | null) => (Number.isFinite(serverNow) ? formatAge(iso, serverNow) : formatTimestamp(iso));
-  const bars = status ? decisionStateBars(status.decisions24h.byState, BAR_MAX) : [];
+  const blind = automationCountsBlind(status ? status.mode.effective : null);
+  const blindPrefix = blindNotePrefix(status ? status.mode.effective : null);
+  const bars = status ? decisionStateBars(status.decisions24h.byState, BAR_MAX, blind) : [];
   const reasons = status ? reasonRows(status.decisions24h.byReason) : [];
 
   return (
@@ -128,20 +150,24 @@ export function OverviewTab({
             <h2 className={H2_CLASS}>Open exceptions</h2>
             {status.backlog ? (
               <dl className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <dt className="text-xs text-slate-500">Drafts waiting for you</dt>
-                  <dd className="text-sm font-medium text-slate-900">
-                    <Link
-                      to={{ search: OPEN_EXCEPTIONS_SEARCH }}
-                      className="text-indigo-700 underline"
-                      aria-label={backlogLinkLabel(status.backlog.humanPending)}
-                      data-testid="automation-backlog-human-pending"
-                    >
-                      {status.backlog.humanPending}
-                    </Link>
-                  </dd>
-                </div>
-                <Stat label="Oldest waiting since" value={age(status.backlog.oldestHumanPendingAt)} />
+                {blind ? null : (
+                  <>
+                    <div>
+                      <dt className="text-xs text-slate-500">Drafts waiting for you</dt>
+                      <dd className="text-sm font-medium text-slate-900">
+                        <Link
+                          to={{ search: OPEN_EXCEPTIONS_SEARCH }}
+                          className="text-indigo-700 underline"
+                          aria-label={backlogLinkLabel(status.backlog.humanPending)}
+                          data-testid="automation-backlog-human-pending"
+                        >
+                          {status.backlog.humanPending}
+                        </Link>
+                      </dd>
+                    </div>
+                    <Stat label="Oldest waiting since" value={age(status.backlog.oldestHumanPendingAt)} />
+                  </>
+                )}
                 <div>
                   <dt className="text-xs text-slate-500">Publishes waiting for you</dt>
                   <dd className="text-sm font-medium text-slate-900">
@@ -182,9 +208,9 @@ export function OverviewTab({
                 </p>
               )
             ) : null}
-            {status.backlog && status.mode.effective === 'dry_run' ? (
+            {status.backlog && blind ? (
               <p className="mt-2 text-xs text-slate-600" data-testid="automation-backlog-dry-run">
-                Dry run: every pending draft also waits for you in the{' '}
+                {blindPrefix}: every pending draft also waits for you in the{' '}
                 <Link to="/review" className="text-indigo-700 underline">
                   review queue
                 </Link>
@@ -327,7 +353,13 @@ export function OverviewTab({
                   </tr>
                 </thead>
                 <tbody>
-                  {reasons.length === 0 ? (
+                  {blind ? (
+                    <tr className="border-t border-slate-100">
+                      <td className={TD_CLASS} colSpan={2} data-testid="automation-reasons-blind">
+                        {`${blindPrefix}: ${BLIND_REASONS_TEXT}`}
+                      </td>
+                    </tr>
+                  ) : reasons.length === 0 ? (
                     <tr className="border-t border-slate-100">
                       <td className={TD_CLASS} colSpan={2}>
                         No decision with a reason in the last 24 hours.
@@ -355,9 +387,18 @@ export function OverviewTab({
               {shadowTotalsText(status.shadow)}
             </p>
             {shadowThresholdText(status.shadow) ? (
-              <p className="text-xs text-slate-600 mt-1" data-testid="automation-shadow-threshold">
-                Go-live floor: {shadowThresholdText(status.shadow)}
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <p className="text-xs text-slate-600" data-testid="automation-shadow-threshold">
+                  Go-live floor: {shadowThresholdText(status.shadow)}
+                </p>
+                <span data-testid="automation-shadow-floor-met">
+                  {shadowFloorMet(status.shadow) ? (
+                    <Badge tone="success">Met</Badge>
+                  ) : (
+                    <Badge tone="warning">Not met</Badge>
+                  )}
+                </span>
+              </div>
             ) : null}
           </section>
 
@@ -415,13 +456,19 @@ export function OverviewTab({
             <section className={CARD_CLASS} aria-label="Publishes in the last 7 days">
               <h2 className={H2_CLASS}>Publishes (7 days)</h2>
               <dl className="mt-2 grid grid-cols-2 gap-3">
-                {PUBLISH_STATES.map(state => (
+                {PUBLISH_STATES.filter(state => !blind || !BLIND_PUBLISH_STATES.includes(state)).map(state => (
                   <Stat
                     key={state}
                     label={publishStateLabel(state)}
                     value={String(status.publishes7d.byState[state] ?? 0)}
                   />
                 ))}
+                {blind ? (
+                  <div data-testid="automation-publishes-blind">
+                    <dt className="text-xs text-slate-500">Dry-run outcome</dt>
+                    <dd className="text-sm text-slate-700">{RUN_PUBLISH_HIDDEN_TEXT}</dd>
+                  </div>
+                ) : null}
               </dl>
             </section>
           </div>

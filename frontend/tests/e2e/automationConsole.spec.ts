@@ -13,6 +13,12 @@
 // with its publishes, unconfirmed email, a decision with findings and events,
 // a watched feed with a title pattern) and the dense pages are scanned too:
 // the Overview, ?draftId=41, and ?tab=watch&targetId=3 with the editor open.
+// The dense Overview is scanned in live mode as well (F04 frontend-console-35):
+// a dry run keeps the backlog's routed count blind, so only the live page shows
+// it. The publish decks waiting for a person are live rows and show in both
+// (G04 frontend-console-41). The Runs tab is scanned with ?runId= too, the
+// dry-run batch email's link, whose highlighted row carries the hidden-split
+// notes (G04 frontend-console-42).
 //
 // Nothing here leaves the machine: every /api/v1/ call is answered from memory
 // and anything unrecognised is recorded and fails the test.
@@ -231,14 +237,14 @@ const DENSE_DETAIL = {
 
 const DENSE_WATCH_TARGET = { ...WATCH_TARGET, itemTitlePattern: '\\m(S3|EC2)\\M' };
 
-async function stubAutomationApi(page: Page, dense = false): Promise<{ unexpected: string[] }> {
+async function stubAutomationApi(page: Page, dense = false, status?: unknown): Promise<{ unexpected: string[] }> {
   const unexpected: string[] = [];
   await page.route('**/api/v1/**', (route: Route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
     const body = (payload: string) => route.fulfill({ status: 200, contentType: 'application/json', body: payload });
 
-    if (path === '/api/v1/admin/automation/status') return body(ok(dense ? DENSE_STATUS : STATUS));
+    if (path === '/api/v1/admin/automation/status') return body(ok(status ?? (dense ? DENSE_STATUS : STATUS)));
     if (path === '/api/v1/admin/automation/eval-gate') {
       return body(
         ok(
@@ -334,9 +340,49 @@ test('the dense Overview (gate metrics, failing runner, backlog, unconfirmed ema
   await expect(page.getByTestId('automation-gate-current')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Revoke gate' })).toBeVisible();
   await expect(page.getByRole('list', { name: 'Publishes waiting for you' }).getByRole('listitem')).toHaveCount(2);
+  await expect(page.getByTestId('automation-publishes-blind')).toBeVisible();
   await expect(page.getByTestId('automation-email-unconfirmed')).toContainText('2');
   await expect(page.getByText(/^Loading/)).toHaveCount(0);
   await expectNoAxeViolation(page, 'dense overview');
+  expect(api.unexpected).toEqual([]);
+});
+
+test('the dry-run run the batch email links, highlighted with its hidden-split notes, has no axe violation', async ({
+  page,
+}) => {
+  const api = await stubAutomationApi(page);
+  // A run with drafts that may still be pending (a later route wins over the stub's): its split is hidden
+  // while the draft listed for it (DECISION, pending in dry run) is undecided.
+  await page.route(url => url.pathname === '/api/v1/admin/automation/runs', route =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: ok({ items: [{ ...RUN, counts: { submitted: 2, wouldAccept: 1, human: 1 } }], nextCursor: null }),
+    }),
+  );
+  await signIn(page);
+
+  await page.goto(`/automation?tab=runs&runId=${RUN_ID}`);
+  const counts = page.getByTestId(`automation-run-counts-${RUN_ID}`);
+  await expect(counts).toContainText('split hidden until every draft is decided');
+  await expect(page.getByTestId(`automation-run-publishes-${RUN_ID}`)).toHaveText('hidden until every draft is decided');
+  await expect(page.getByText(/^Loading/)).toHaveCount(0);
+  await expectNoAxeViolation(page, 'highlighted dry-run run');
+  expect(api.unexpected).toEqual([]);
+});
+
+test('the dense live Overview (routed count, publish decks, split by reason) has no axe violation', async ({ page }) => {
+  const api = await stubAutomationApi(page, true, {
+    ...DENSE_STATUS,
+    mode: { configured: 'live', effective: 'live', liveBlockedReason: null, autoPublish: true },
+  });
+  await signIn(page);
+
+  await page.goto('/automation');
+  await expect(page.getByTestId('automation-backlog-human-pending')).toHaveText('3');
+  await expect(page.getByRole('list', { name: 'Publishes waiting for you' }).getByRole('listitem')).toHaveCount(2);
+  await expect(page.getByText(/^Loading/)).toHaveCount(0);
+  await expectNoAxeViolation(page, 'dense live overview');
   expect(api.unexpected).toEqual([]);
 });
 
@@ -346,6 +392,11 @@ test('a decision with findings and events has no axe violation', async ({ page }
 
   await page.goto('/automation?draftId=41');
   const detail = page.getByRole('region', { name: 'Decision detail' });
+  // A pending dry-run draft keeps its verdict blind (N5): findings and events appear only after
+  // the person chooses to reveal them, which marks the decision as not blind.
+  await expect(detail.getByRole('table', { name: 'AI QA findings' })).toHaveCount(0);
+  await expectNoAxeViolation(page, 'blind decision detail');
+  await detail.getByRole('button', { name: 'Reveal verdict' }).click();
   await expect(detail.getByRole('table', { name: 'AI QA findings' }).getByRole('row')).toHaveCount(3);
   await expect(detail.getByRole('table', { name: 'Events' }).getByRole('row')).toHaveCount(4);
   await expectNoAxeViolation(page, 'dense decision detail');

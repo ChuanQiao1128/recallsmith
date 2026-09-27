@@ -69,9 +69,14 @@ public static class EvalGate
     "authored.defectEscapeRate", "authored.unscoredRate",
   ];
 
-  private const string GateColumns = """
-    id, reviewer_provider, reviewer_model, prompt_version, passed, metrics::text as metrics, report_sha256, created_by_sub, created_at,
-    revoked_at, revoked_by_sub
+  /// <summary>
+  /// The columns of the <c>EvalGate</c> shape over <c>g</c> = an automation_eval_gates row. <c>author_config_id</c> is the
+  /// author the gate measured (R18E N1), with the same fallback the mode resolver uses (<see cref="AutomationMode.GateAuthorSql"/>),
+  /// so the gate card shows exactly the author a live auto-accept compares with.
+  /// </summary>
+  private static string GateColumns(bool authorColumn) => $"""
+    g.id, g.reviewer_provider, g.reviewer_model, g.prompt_version, g.passed, g.metrics::text as metrics, g.report_sha256, g.created_by_sub,
+    g.created_at, g.revoked_at, g.revoked_by_sub, {AutomationMode.GateAuthorSql(authorColumn)} as author_config_id
     """;
 
   // ---------------------------------------------------------------------------------------------
@@ -92,8 +97,9 @@ public static class EvalGate
       if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
       var current = await LoadCurrentAsync(conn);
+      var authorColumn = await AuthorColumnAsync(conn, null);
       var history = (await DbUtil.QueryAsync(conn, null,
-        $"select {GateColumns} from automation_eval_gates order by id desc limit {HistoryLimit}", []))
+        $"select {GateColumns(authorColumn)} from automation_eval_gates g order by g.id desc limit {HistoryLimit}", []))
         .Select(ToGate).ToList();
       return res.Ok(new { current, history });
     }
@@ -184,15 +190,16 @@ public static class EvalGate
       var rows = await DbUtil.QueryAsync(conn, tx,
         authorColumn
           ? $"""
-            insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub,
-              author_config_id)
+            insert into automation_eval_gates as g (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report,
+              created_by_sub, author_config_id)
             values ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8, $9::text)
-            returning {GateColumns}
+            returning {GateColumns(authorColumn)}
             """
           : $"""
-            insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub)
+            insert into automation_eval_gates as g (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report,
+              created_by_sub)
             values ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8)
-            returning {GateColumns}
+            returning {GateColumns(authorColumn)}
             """,
         authorColumn
           ? [report.Provider, report.Model, report.PromptVersion, passed, metrics, sha, raw, auth.UserSub, report.AuthorConfigId]
@@ -238,11 +245,12 @@ public static class EvalGate
       await using var conn = await Pg.OpenConnectionOrNullAsync();
       if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
+      var authorColumn = await AuthorColumnAsync(conn, null);
       var rows = await DbUtil.QueryAsync(conn, null,
         $"""
-        update automation_eval_gates set revoked_at = now(), revoked_by_sub = $2
-        where id = $1 and revoked_at is null
-        returning {GateColumns}
+        update automation_eval_gates g set revoked_at = now(), revoked_by_sub = $2
+        where g.id = $1 and g.revoked_at is null
+        returning {GateColumns(authorColumn)}
         """, [id, auth.UserSub]);
       if (rows.Count == 0)
       {
@@ -308,7 +316,7 @@ public static class EvalGate
     bool Passed, bool FailuresEmpty, string Provider, string Model, string PromptVersion, string? SecondProvider, string? SecondModel,
     long SeededReps, long AuthoredReps, double? SeededRecall, double SeededRecallCiLower, IReadOnlyList<double> PerClassRecall,
     double ControlFalsePositiveRate, double ControlUnscoredRate, double? AutoAcceptPrecision, double AutoAcceptPrecisionCiLower,
-    long WouldAcceptCards, double? DefectEscapeRate, double AuthoredUnscoredRate, string? AuthorConfigId)
+    long WouldAcceptCards, double? DefectEscapeRate, double AuthoredUnscoredRate, string? AuthorConfigId, string? EffectiveEffort)
   {
     public static GateReport Read(JsonElement root)
     {
@@ -340,11 +348,13 @@ public static class EvalGate
       var defectEscaped = Count(authored, "authored", "defectEscaped");
       if (defectEscaped > defectiveLabeled) throw new InvalidReport("authored.defectEscaped exceeds authored.defectiveLabeled");
       var authorConfigId = AuthorConfigIdOf(authored);
+      var provider = Text(reviewer, "reviewer", "provider");
+      var effectiveEffort = EffectiveEffortOf(reviewer, provider);
 
       return new GateReport(
         passed,
         failuresEmpty,
-        Text(reviewer, "reviewer", "provider"),
+        provider,
         Text(reviewer, "reviewer", "model"),
         Text(reviewer, "reviewer", "promptVersion"),
         NullableText(reviewer, "reviewer", "secondProvider"),
@@ -361,7 +371,35 @@ public static class EvalGate
         Count(authored, "authored", "wouldAcceptCards"),
         defectiveLabeled == 0 ? null : (double)defectEscaped / defectiveLabeled,
         Number(authored, "authored", "unscoredRate"),
-        authorConfigId);
+        authorConfigId,
+        effectiveEffort);
+    }
+
+    /// <summary>
+    /// <c>reviewer.effectiveEffort</c> (R18E N2, R18G backend-design-26): the reasoning effort the gate's review really
+    /// sent, a string of 1..<see cref="Internal.AiQaResults.MaxLabelLength"/> characters (the most a QA report's
+    /// <c>effectiveEffort</c> can carry, so a longer one could never match). Required when the reviewer is an automation
+    /// provider: a gate without it would bind no effort, and AI_EFFORT, shared with the human reviewer, could then change
+    /// the gated reviewer unnoticed. For another provider it is optional (the gate fails on <c>reviewer.provider</c>).
+    /// </summary>
+    private static string? EffectiveEffortOf(JsonElement reviewer, string provider)
+    {
+      var max = Internal.AiQaResults.MaxLabelLength;
+      var message = $"reviewer.effectiveEffort must be a string of 1..{max} characters";
+      string? effort = null;
+      if (reviewer.TryGetProperty("effectiveEffort", out var el) && el.ValueKind != JsonValueKind.Null)
+      {
+        if (el.ValueKind != JsonValueKind.String || el.GetString() is not { Length: >= 1 } value || value.Length > max)
+        {
+          throw new InvalidReport(message);
+        }
+        effort = value;
+      }
+      if (effort is null && AutomationGateProviders.Contains(provider, StringComparer.Ordinal))
+      {
+        throw new InvalidReport($"{message}: the reviewer is the automation provider {provider}");
+      }
+      return effort;
     }
 
     /// <summary>
@@ -459,8 +497,9 @@ public static class EvalGate
   /// </summary>
   internal static async Task<object?> LoadCurrentAsync(NpgsqlConnection conn)
   {
+    var authorColumn = await AuthorColumnAsync(conn, null);
     var rows = await DbUtil.QueryAsync(conn, null,
-      $"select {GateColumns} from ({NewestGateSql}) g where passed and revoked_at is null", []);
+      $"select {GateColumns(authorColumn)} from ({NewestGateSql}) g where g.passed and g.revoked_at is null", []);
     return rows.Count == 0 ? null : ToGate(rows[0]);
   }
 
@@ -489,7 +528,7 @@ public static class EvalGate
   private static string Iso(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFF'Z'", CultureInfo.InvariantCulture);
 
   /// <summary>Whether migration 036's <c>author_config_id</c> column exists (the code runs before and after it, R18D M1).</summary>
-  private static async Task<bool> AuthorColumnAsync(NpgsqlConnection conn, NpgsqlTransaction tx) =>
+  private static async Task<bool> AuthorColumnAsync(NpgsqlConnection conn, NpgsqlTransaction? tx) =>
     await DbUtil.ExecuteScalarAsync(conn, tx,
       "select exists (select 1 from pg_attribute where attrelid = 'public.automation_eval_gates'::regclass and attname = 'author_config_id' and not attisdropped)",
       []) is true;
@@ -516,6 +555,8 @@ public static class EvalGate
       createdAt = RunnerRoutes.Timestamp(r["created_at"]),
       revokedAt = RunnerRoutes.Timestamp(r["revoked_at"]),
       revokedBySub = r["revoked_by_sub"],
+      // The author configuration the gate measured (R18E N1); null when the gate binds none.
+      authorConfigId = r["author_config_id"] as string,
     };
   }
 }

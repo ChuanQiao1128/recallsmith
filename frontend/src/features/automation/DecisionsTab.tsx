@@ -16,9 +16,15 @@
 // Decisions heading when that row is not loaded (C07 frontend-console-18).
 //
 // The checkbox says what the server filter is: routed to a person and still
-// pending (D07 frontend-console-27). Filtering by "Would be accepted" shows
-// every row's verdict, so those rows are recorded as seen and a later
-// decision on them is not counted as blind (frontend-console-25).
+// pending (D07 frontend-console-27). A state or reason filter shows every
+// row's verdict (the filter names it), so those rows are recorded as seen and
+// a later decision on them is not counted as blind (frontend-console-25,
+// generalised beyond would_accept by E05 frontend-console-30). The open
+// exceptions view (state=human&open=1) is such a list, and stays as it is. So
+// is the checkbox alone (`open=1`): it lists routed rows only (F04
+// frontend-console-36). Such a list leaves out the pending dry-run rows, unless
+// the filter is state=would_accept (G04 frontend-console-40): listing the
+// routed ones would tell every pending draft left out apart as not routed.
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
@@ -32,11 +38,14 @@ import {
   DECISION_STATES,
   automationErrorMessage,
   decisionFiltersFrom,
+  decisionListShowsVerdict,
+  decisionListWithholdsPending,
   decisionReasonLabel,
   decisionStateLabel,
   decisionVerdictHidden,
   hiddenDecidedText,
   isOpenDecision,
+  PENDING_WITHHELD_TEXT,
   withDecisionFilters,
   type DecisionFilters,
 } from '../../lib/automationRules';
@@ -143,15 +152,23 @@ export function DecisionsTab({
     );
   }
 
-  const shown = openOnly ? list.items.filter(isOpenDecision) : list.items;
-  // The state filter itself tells the verdict of every row it lists.
-  const verdictFiltered = state === 'would_accept';
+  const openShown = openOnly ? list.items.filter(isOpenDecision) : list.items;
+  // The state, reason or open-only filter itself tells the verdict of every row it lists.
+  const verdictFiltered = decisionListShowsVerdict({ state, reason, openOnly });
+  const withholdsPending = decisionListWithholdsPending({ state, reason, openOnly });
+  const shown = withholdsPending ? openShown.filter(d => !decisionVerdictHidden(d)) : openShown;
 
   useEffect(() => {
-    if (state !== 'would_accept') return;
-    const ids = list.items.filter(decisionVerdictHidden).map(d => d.draftId);
+    // Only the list loaded for these filters: a list still loading for another key is not on screen as filtered.
+    if (!verdictFiltered || list.forKey !== key) return;
+    // Only the rows on screen: the open-only list drops any row that is not open, and a list that
+    // withholds pending rows shows none of them.
+    const onScreen = (openOnly ? list.items.filter(isOpenDecision) : list.items).filter(
+      d => !withholdsPending || !decisionVerdictHidden(d),
+    );
+    const ids = onScreen.filter(decisionVerdictHidden).map(d => d.draftId);
     if (ids.length > 0) markVerdictSeen(...ids);
-  }, [state, list.items]);
+  }, [verdictFiltered, withholdsPending, openOnly, list.forKey, list.items, key]);
   const closeSearch = `?${withDecisionFilters(new URLSearchParams({ tab: 'decisions' }), filters).toString()}`;
 
   return (
@@ -236,7 +253,8 @@ export function DecisionsTab({
           ) : loading && list.items.length === 0 ? (
             <p className="text-sm text-slate-600">Loading the decisions…</p>
           ) : (
-            <DecisionTable items={shown} onOpenDecision={onOpenDecision} revealAll={verdictFiltered} />
+            // While another filter's list loads, the rows on screen are not the filtered ones: they keep hiding.
+            <DecisionTable items={shown} onOpenDecision={onOpenDecision} revealAll={verdictFiltered && !loading} />
           )}
         </div>
         {verdictFiltered ? (
@@ -244,8 +262,13 @@ export function DecisionsTab({
             This filter shows the verdict: a later decision on these drafts counts as not blind.
           </p>
         ) : null}
-        {openOnly && !list.error && list.items.length > shown.length ? (
-          <p className="mt-1 text-xs text-slate-600">{hiddenDecidedText(list.items.length - shown.length)}</p>
+        {withholdsPending ? (
+          <p className="mt-1 text-xs text-slate-600" data-testid="automation-decisions-pending-withheld">
+            {PENDING_WITHHELD_TEXT}
+          </p>
+        ) : null}
+        {openOnly && !list.error && list.items.length > openShown.length ? (
+          <p className="mt-1 text-xs text-slate-600">{hiddenDecidedText(list.items.length - openShown.length)}</p>
         ) : null}
 
         {moreError && moreError.forKey === key ? (

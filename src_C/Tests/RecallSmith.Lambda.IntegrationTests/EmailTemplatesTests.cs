@@ -23,6 +23,9 @@ public class EmailTemplatesTests
     ],
     0.0012m, [new BatchPublish(12, "aws-saa-c03", "would_publish", null, null, null, null)], "owner-mac", 184000, "done");
 
+  /// <summary><see cref="Batch"/> with every draft decided (R18E N6): a dry-run summary then states its counts.</summary>
+  internal static BatchSummaryData DecidedBatch() => Batch() with { Drafts = [.. Batch().Drafts.Select(d => d with { Decided = true })] };
+
   internal static WeeklyDigestData Digest() => new(new DateOnly(2026, 9, 21), new DateOnly(2026, 9, 27), 3.5m, 210m, 14, 42, 2,
     [new DigestAutomation("auto_accept", 6, 6, 0, 18m), new DigestAutomation("source_watch", 8, 36, 1, 18m)],
     new Dictionary<string, long> { ["would_accept"] = 6, ["human"] = 2 }, new Dictionary<string, long> { ["QA_FLAGGED"] = 2 },
@@ -65,6 +68,78 @@ public class EmailTemplatesTests
       "Action needed: agent blocked on queue item 8"];
     yield return ["agent_note", new Dictionary<string, string> { ["runId"] = "3f2a9c1e-0000-4000-8000-000000000001", ["itemId"] = "7", ["url"] = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html", ["notes"] = "Card aws-s3-synthetic-07 looks outdated." },
       "Action needed: agent note on docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html"];
+    // R18G P1: alive, but its state is error.
+    yield return ["runner_stalled", new Dictionary<string, string> { ["runnerId"] = "owner-mac", ["state"] = "error", ["lastError"] = "author config: no tool-surface.json", ["since"] = "2026-09-27T21:59:00.000Z", ["loginExpiresAt"] = "2026-10-20T00:00:00.000Z", ["lastRunId"] = "none", ["lastRunAt"] = "never", ["queued"] = "2" },
+      "Action needed: authoring runner owner-mac is running but cannot work"];
+    // R18G P2: finished after its run submitted drafts.
+    yield return ["queue_item_failed", new Dictionary<string, string> { ["itemId"] = "9", ["url"] = "https://docs.example.com/partial", ["lastError"] = "RUNNER_UNAVAILABLE_AFTER_DRAFTS: the run submitted draft(s) before it stopped, so the item is not authored again; last: RUNNER_UNAVAILABLE: usage limit" },
+      "Action needed: queue item 9 stopped after submitting drafts"];
+  }
+
+  [Fact]
+  public void Exception_RunnerStalledInError_NamesTheLastErrorAndTheFix()
+  {
+    // R18G P1 (automation-37): the email of a runner that heartbeats 'error' names its last_error, not a silence.
+    var facts = new Dictionary<string, string>
+    {
+      ["runnerId"] = "owner-mac", ["state"] = "error", ["queued"] = "3", ["since"] = "2026-09-27T21:59:00.000Z",
+      ["lastError"] = "author config: tool-surface.json bundleSha256 does not match dist/index.js",
+    };
+    var email = EmailTemplates.Exception("live", "runner_stalled", facts, Console);
+    Assert.Equal("[DeveloperCards] Action needed: authoring runner owner-mac is running but cannot work", email.Subject);
+    Assert.StartsWith("The local authoring runner owner-mac is running but cannot work: author config: tool-surface.json bundleSha256 does not match " +
+      "dist/index.js. It started no run in 2 h while 3 due queue item(s) are waiting.\n", email.BodyText);
+    Assert.Contains("rebuild tools/mcp-server and tools/author-runner", email.BodyText);
+    Assert.Contains("\nstate: error\n", email.BodyText);
+    Assert.DoesNotContain("silent since", email.BodyText);
+  }
+
+  [Fact]
+  public void Exception_RunnerUnavailable_SaysPutBackOnlyForARequeuedItem()
+  {
+    // R18G P2 (automation-36, cloud-security-resilience-1): a finished item was not put back.
+    Dictionary<string, string> Facts(string? status)
+    {
+      var f = new Dictionary<string, string> { ["runnerId"] = "owner-mac", ["itemId"] = "7", ["error"] = "RUNNER_UNAVAILABLE: usage limit" };
+      if (status is not null) f["itemStatus"] = status;
+      return f;
+    }
+    string Body(string? status) => EmailTemplates.Exception("live", "runner_unavailable", Facts(status), Console).BodyText;
+
+    Assert.Contains("could not work on any queue item. Queue item 7 was put back without using an attempt.\n", Body("queued"));
+    Assert.Contains("could not work on any queue item. Queue item 7 was put back without using an attempt.\n", Body(null));
+    Assert.Contains("Queue item 7 had submitted drafts before it stopped: its drafts are in the review queue and the item is not authored again.\n",
+      Body("done"));
+    Assert.DoesNotContain("put back", Body("done"));
+    Assert.Contains("Queue item 7 was not put back: it failed for a person to look at.\n", Body("failed"));
+    Assert.DoesNotContain("put back without", Body("failed"));
+  }
+
+  [Fact]
+  public void Exception_QueueItemPartial_TellsHowToAuthorTheRest()
+  {
+    foreach (var lastError in new[]
+    {
+      RunnerRoutes.RunnerUnavailableAfterDraftsError("RUNNER_UNAVAILABLE: usage limit"),
+      RunnerRoutes.RunFailedAfterDraftsError("timeout"),
+    })
+    {
+      var email = EmailTemplates.Exception("live", "queue_item_failed",
+        new Dictionary<string, string> { ["itemId"] = "9", ["url"] = "https://docs.example.com/partial", ["lastError"] = lastError }, Console);
+      Assert.Equal("[DeveloperCards] Action needed: queue item 9 stopped after submitting drafts", email.Subject);
+      Assert.Contains("Its drafts are in the review queue; any part of the page it had not drafted yet was not authored.\n", email.BodyText);
+      Assert.Contains("re-add the URL in the Queue tab to author the remaining facts — https://console.developercards.app/automation?tab=queue", email.BodyText);
+      Assert.DoesNotContain("failed 3 times", email.BodyText);
+    }
+  }
+
+  [Fact]
+  public void WeeklyDigest_RunnerLine_ShowsStateAndLastError()
+  {
+    // R18G P1: an alive runner in error no longer reads as healthy in the digest.
+    var runner = new DigestRunner("owner-mac", new DateTimeOffset(2026, 9, 27, 22, 5, 0, TimeSpan.Zero), null, "error", "author config:\nno tool-surface.json");
+    var body = EmailTemplates.WeeklyDigest("live", Digest() with { Runners = [runner] }, Console).BodyText;
+    Assert.Contains("\nRunner owner-mac: state error, last heartbeat 2026-09-27T22:05Z, login expires unknown, last error: author config: no tool-surface.json\n", body);
   }
 
   [Fact]
@@ -170,7 +245,9 @@ public class EmailTemplatesTests
       Assert.DoesNotContain(hidden, dry);
     }
     Assert.Contains("- 3 draft(s) of this run wait for your decision in the review queue", dry);
-    Assert.Contains("Drafts by state: human 1, would_accept 2", dry);
+    // R18E N6: nor are the per-state counts shown while a draft is undecided (updated from the R18D assertion that
+    // pinned them: on a one-draft or single-verdict run they state each verdict).
+    Assert.DoesNotContain("Drafts by state", dry);
 
     // Live lists what it accepted and what needs a person, as before.
     var live = Batch() with
@@ -190,24 +267,26 @@ public class EmailTemplatesTests
   [Fact]
   public void BatchSummary_GoldenText()
   {
+    // R18E N6 (automation-4): a dry run with an undecided draft is state-free (updated from the R18D golden text, which
+    // gave the per-state counts and the publish outcome in the subject, summary and DETAILS). R18F F01 (automation-34):
+    // the run's draft-QA spend is hidden too (updated from "Draft QA spend: $0.0012"): a $0 spend marks a draft routed
+    // to a person before QA.
     var email = EmailTemplates.BatchSummary("dry_run", Batch(), Console);
-    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 2 auto-accepted, 1 need you, would publish", email.Subject);
+    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 3 draft(s) wait for you", email.Subject);
     Assert.Equal("""
 DRY RUN — AUTOMATION_MODE=dry_run: nothing was accepted or published. "Auto-accepted" below reads "would be accepted".
-Run 3f2a9c1e on aws-saa-c03 submitted 3 draft(s): 2 auto-accepted, 1 need you; publish: would publish.
+Run 3f2a9c1e on aws-saa-c03 submitted 3 draft(s); 3 wait for your decision, and their verdicts and the publish outcome stay hidden until you decide.
 
 NEEDS YOU
 - 3 draft(s) of this run wait for your decision in the review queue; verdicts stay hidden until you decide (the shadow agreement counts blind decisions only) — https://console.developercards.app/review?deckId=12
 
 DONE AUTOMATICALLY
-- publish aws-saa-c03 — would_publish
+- nothing
 
 DETAILS
 Source: feed_item https://aws.amazon.com/about-aws/whats-new/2026/09/synthetic-item/ (Synthetic launch)
-Drafts by state: human 1, would_accept 2
-Routed to you by reason: QA_FLAGGED 1
-Draft QA spend: $0.0012
-Publish aws-saa-c03: would_publish
+Draft QA spend: hidden until every draft of this run is decided
+Publish: hidden until every draft of this run is decided
 Runner: owner-mac, duration 184 s, outcome done
 
 Console: https://console.developercards.app/automation?runId=3f2a9c1e-0000-4000-8000-000000000001
@@ -221,8 +300,70 @@ Mode: dry_run. Sent by developercards-notifier to the owner alert address; repli
     };
     Assert.Equal("[DeveloperCards] Batch 3f2a9c1e aws-saa-c03: 1 auto-accepted, 0 need you, publish needs you",
       EmailTemplates.BatchSummary("live", live, Console).Subject);
+    // R18E N6: a dry run states counts and the publish outcome only once every draft is decided.
     Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 0 auto-accepted, 0 need you, publish would need you",
-      EmailTemplates.BatchSummary("dry_run", live, Console).Subject);
+      EmailTemplates.BatchSummary("dry_run", live with { Drafts = [.. live.Drafts.Select(d => d with { Decided = true })] }, Console).Subject);
+  }
+
+  [Fact]
+  public void BatchSummary_DryRun_NoVerdictLeaksWhileADraftIsUndecided()
+  {
+    // N6: neither the subject nor the body of a dry run with an undecided draft names a verdict, a state count, a
+    // reason or the publish outcome, for a one-draft run and for a single-verdict run alike.
+    var one = Batch() with { Drafts = [new BatchDraft("aws-s3-synthetic-01", "Q?", "would_accept", null, null, 12)] };
+    var allHuman = Batch() with
+    {
+      Drafts = [new BatchDraft("a-1", "Q1?", "human", "QA_FLAGGED", null, 12), new BatchDraft("a-2", "Q2?", "human", "QA_FLAGGED", null, 12)],
+      Publishes = [],
+    };
+    var partly = Batch() with
+    {
+      Drafts = [.. Batch().Drafts.Select((d, i) => d with { Decided = i > 0 })],
+    };
+    foreach (var data in new[] { Batch(), one, allHuman, partly })
+    {
+      var email = EmailTemplates.BatchSummary("dry_run", data, Console);
+      foreach (var text in new[] { email.Subject, email.BodyText })
+      {
+        foreach (var leak in new[] { "would_accept", "auto-accepted", "need you", "would publish", "would_publish", "QA_FLAGGED", "human 1", "human 2" })
+        {
+          Assert.DoesNotContain(leak, text);
+        }
+        // R18F F01 (automation-34): no spend either, however small; a $0 spend says a draft was routed before QA.
+        Assert.DoesNotContain("$", text);
+      }
+      Assert.Contains("\nDraft QA spend: hidden until every draft of this run is decided\n", email.BodyText);
+    }
+    Assert.DoesNotContain("$", EmailTemplates.BatchSummary("dry_run", one with { QaSpendUsd = 0m }, Console).BodyText);
+    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 1 draft(s) wait for you", EmailTemplates.BatchSummary("dry_run", one, Console).Subject);
+    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 1 draft(s) wait for you",
+      EmailTemplates.BatchSummary("dry_run", partly, Console).Subject);
+  }
+
+  [Fact]
+  public void BatchSummary_DryRun_AllDecided_ShowsTheCounts()
+  {
+    // N6: once every draft of the run is decided the verdicts are no longer blind, and the counts come back.
+    var decided = Batch() with { Drafts = [.. Batch().Drafts.Select(d => d with { Decided = true })] };
+    var email = EmailTemplates.BatchSummary("dry_run", decided, Console);
+    Assert.Equal("[DeveloperCards] (dry run) Batch 3f2a9c1e aws-saa-c03: 2 auto-accepted, 1 need you, would publish", email.Subject);
+    Assert.Contains("\nDrafts by state: human 1, would_accept 2\n", email.BodyText);
+    Assert.Contains("\nRouted to you by reason: QA_FLAGGED 1\n", email.BodyText);
+    Assert.Contains("\nPublish aws-saa-c03: would_publish\n", email.BodyText);
+    Assert.Contains("\nDraft QA spend: $0.0012\n", email.BodyText);
+    Assert.Contains("\nNEEDS YOU\n- nothing\n", email.BodyText);
+  }
+
+  [Fact]
+  public void WeeklyDigest_DryRun_CountsOnlyTheWaitingDrafts()
+  {
+    // N6: in dry_run the digest names how many drafts wait, not how many of them a person was routed.
+    var data = Digest() with { BlindPendingDrafts = 5, BlindPendingRuns = 2 };
+    var body = EmailTemplates.WeeklyDigest("dry_run", data, Console).BodyText;
+    Assert.Contains("- 5 draft(s) wait for your decision — https://console.developercards.app/review\n", body);
+    Assert.DoesNotContain("routed to you", body);
+    Assert.Contains("Not counted above: 2 run(s) with a draft still waiting for your decision (shown once all are decided)", body);
+    Assert.Contains("- 2 draft(s) routed to you are still pending", EmailTemplates.WeeklyDigest("live", data, Console).BodyText);
   }
 
   [Fact]
@@ -249,11 +390,11 @@ Ledger source_watch: 8 run(s), 36 unit(s), 1 failure(s), 18 min saved
 Decisions by state: human 2, would_accept 6
 Decisions by reason: QA_FLAGGED 2
 Dry-run agreement: 6 would-accept, 4 decided by a human (3 accepted, 1 edited, 0 rejected); decided blind 3, accepted unedited 2, agreement 0.6667
-Live quality (30 days): 25 auto-accepted, 1 deleted by a person, 1 edited by a person, override rate 0.0800
+Live quality (30 days): 25 auto-accepted, 1 deleted by a person, 1 edited by a person, override rate 0.0800; 0 updated after a source change (not counted)
 Publishes by state: would_publish 2
 Source watch: 36 check(s), 2 change(s), 1 failure(s)
 Emails: 9 sent, 0 failed
-Runner owner-mac: last heartbeat 2026-09-27T22:05Z, login expires 2026-10-20T00:00Z
+Runner owner-mac: state idle, last heartbeat 2026-09-27T22:05Z, login expires 2026-10-20T00:00Z
 AI QA spend: $1.2500 human runs, $0.4000 automation
 
 Console: https://console.developercards.app/automation

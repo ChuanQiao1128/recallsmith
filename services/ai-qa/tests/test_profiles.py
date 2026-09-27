@@ -3,6 +3,7 @@
 import dataclasses
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import FakeLlm, FakeUsage, card, finding, reply, review_json
@@ -18,11 +19,14 @@ from test_handler import (
     verify_internal_signature,
 )
 
-from ai_qa import handler, profiles, settings
+from ai_qa import handler, profiles, providers, settings
 from ai_qa.prompts import PROMPT_VERSION, PROMPT_VERSION_AUTOMATION, SYSTEM_PROMPT, SYSTEM_PROMPT_AUTOMATION
 from ai_qa.settings import ConfigError, load_settings
 
 PROD_ENV = Path(__file__).resolve().parent.parent / "env" / "prod.env.json"
+# G02 (backend-design-27): the automation report shape shared with core's contract test
+# (src_C AutomationRound5Tests reads the same file), so either suite fails on drift from the other.
+AUTOMATION_REPORT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "automation_report.json"
 AUTOMATION_MODEL = "global.openai.gpt-5.5"
 DRAFT_ID = 4711
 AUTOMATION_ENV = {
@@ -38,6 +42,8 @@ SECOND_ENV = {
     "AI_QA_SECOND_PRICE_OUTPUT_PER_MTOK": "4",
 }
 REPORT_KEYS = {"v", "runId", "chunk", "provider", "model", "promptVersion", "items"}
+# F02 (O1): an automation-profile report also carries the reviewer's effectiveEffort.
+AUTOMATION_REPORT_KEYS = REPORT_KEYS | {"profile", "effectiveEffort"}
 
 # The A00 §9.2 message, with real strings for the elided values.
 CONTRACT_DRAFT_MESSAGE = {
@@ -70,6 +76,15 @@ CONTRACT_DRAFT_MESSAGE = {
         }
     ],
 }
+
+
+def json_shape(value: Any) -> Any:
+    """The keys and JSON value types of a parsed document, with the values themselves dropped."""
+    if isinstance(value, dict):
+        return {key: json_shape(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_shape(item) for item in value]
+    return type(value).__name__
 
 
 def set_env(monkeypatch, env) -> None:
@@ -249,8 +264,9 @@ class TestHandler:
         assert verify_internal_signature(captured.headers, captured.body)
         body = json.loads(captured.body)
         assert captured.body == json.dumps(body, separators=(",", ":"), ensure_ascii=True, sort_keys=True).encode()
-        assert set(body) == REPORT_KEYS | {"target", "profile"}
+        assert set(body) == AUTOMATION_REPORT_KEYS | {"target"}
         assert body["target"] == "draft" and body["profile"] == "automation"
+        assert body["effectiveEffort"] == "provider-default"
         assert (body["provider"], body["model"]) == ("bedrock-converse", AUTOMATION_MODEL)
         assert body["runId"] == RUN_ID
         (item,) = body["items"]
@@ -273,7 +289,7 @@ class TestHandler:
         handler.lambda_handler(event(message([card(2)])), None)
         assert model_calls(clients) == 4
         assert clients["bedrock-converse"].calls[-1]["model"] == SECOND_ENV["AI_QA_SECOND_MODEL"]
-        assert [set(body) for body in reports(core)] == [REPORT_KEYS | {"target", "profile"}, REPORT_KEYS]
+        assert [set(body) for body in reports(core)] == [AUTOMATION_REPORT_KEYS | {"target"}, REPORT_KEYS]
 
     def test_automation_profile_missing_price_reports_config_for_every_card(self, harness, monkeypatch, capsys) -> None:
         core, clients, made = harness
@@ -288,6 +304,7 @@ class TestHandler:
         assert (body["provider"], body["model"]) == ("bedrock-converse", AUTOMATION_MODEL)
         assert body["target"] == "draft" and body["profile"] == "automation"
         assert [(i["status"], i["errorCode"]) for i in body["items"]] == [("error", "CONFIG")] * 2
+        assert "effectiveEffort" not in body  # no reviewer settings, so no effort to claim; core fails closed
         logged = [
             json.loads(line) for line in capsys.readouterr().out.splitlines() if '"profile_config_invalid"' in line
         ]
@@ -311,8 +328,9 @@ class TestHandler:
         clients["bedrock-converse"].script = [reply(review_json())]
         handler.lambda_handler(event(message([card(0)], profile="automation")), None)
         (body,) = reports(core)
-        assert set(body) == REPORT_KEYS | {"profile"}
+        assert set(body) == AUTOMATION_REPORT_KEYS
         assert body["profile"] == "automation" and "target" not in body
+        assert body["effectiveEffort"] == "provider-default"
         assert (body["provider"], body["model"]) == ("bedrock-converse", AUTOMATION_MODEL)
 
     def test_disabled_lambda_skips_automation_messages_too(self, harness, monkeypatch) -> None:
@@ -469,3 +487,109 @@ class TestAutomationPromptAndIsolation:
         assert usage["bedrock"]["Effort"] == "high"
         # A plain property, never a dimension: the metric series are unchanged.
         assert usage["bedrock"]["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [["Service", "Provider"]]
+
+
+class TestEffortInReport:
+    """F02 (O1, completes N2): an automation-profile report carries the effort the reviewer ran at,
+    the same providers.effective_effort value evals records as the gate's reviewer.effectiveEffort,
+    so core can match it at a live auto-accept. A default-profile report stays byte-identical."""
+
+    @pytest.fixture(autouse=True)
+    def no_automation_env(self, monkeypatch):
+        for key in (*AUTOMATION_ENV, "AI_QA_AUTOMATION_REGION"):
+            monkeypatch.delenv(key, raising=False)
+
+    @pytest.fixture
+    def harness(self, local_server, monkeypatch):
+        srv = local_server(fake_core)
+        monkeypatch.setenv("CORE_API_BASE", srv.base_url)
+        settings.set_clients(ssm=FakeSsm({INTERNAL_NAME: SECRET}))
+        clients = {"bedrock": FakeLlm(), "bedrock-converse": FakeLlm(), "openai-mantle": FakeLlm()}
+        made = []
+
+        def factory(cfg, *, api_key=None):
+            made.append(cfg)
+            return clients[cfg.provider]
+
+        monkeypatch.setattr(handler, "client_factory", factory)
+        return srv, clients, made
+
+    @pytest.mark.parametrize(
+        "env,expected",
+        [
+            (AUTOMATION_ENV, "provider-default"),  # Converse sends no effort field
+            (
+                {**AUTOMATION_ENV, "AI_QA_AUTOMATION_PROVIDER": "openai-mantle", "AI_QA_AUTOMATION_MODEL": "openai.gpt-5.5"},
+                "xhigh",  # reasoning_effort has no max: max is sent as xhigh
+            ),
+        ],
+    )
+    def test_draft_report_carries_the_reviewers_effective_effort(self, harness, monkeypatch, env, expected) -> None:
+        core, clients, made = harness
+        set_env(monkeypatch, {**env, "AI_QA_ENABLED": "1", "AI_EFFORT": "max"})
+        provider = env["AI_QA_AUTOMATION_PROVIDER"]
+        clients[provider].script = [reply(review_json())]
+        result = handler.lambda_handler(event(message([draft_card()], target="draft", profile="automation")), None)
+        assert result == {"batchItemFailures": []}
+        (cfg_used,) = made
+        assert cfg_used.provider == provider
+        (captured,) = core.requests
+        assert verify_internal_signature(captured.headers, captured.body)
+        body = json.loads(captured.body)
+        assert set(body) == AUTOMATION_REPORT_KEYS | {"target"}
+        # The contract: exactly the value evals records as reviewer.effectiveEffort for these settings.
+        assert body["effectiveEffort"] == providers.effective_effort(cfg_used) == expected
+        expected_settings = profiles.settings_for(load_settings({**env, "AI_EFFORT": "max"}), "automation")
+        assert body["effectiveEffort"] == providers.effective_effort(expected_settings)
+
+    def test_draft_report_matches_the_shared_automation_report_fixture(self, harness, monkeypatch) -> None:
+        """The production automation reviewer's draft report has exactly the keys and value types of
+        tests/fixtures/automation_report.json, the file core's contract test posts (backend-design-27)."""
+        core, clients, _ = harness
+        env = {**AUTOMATION_ENV, "AI_QA_AUTOMATION_PROVIDER": "openai-mantle", "AI_QA_AUTOMATION_MODEL": "openai.gpt-5.5"}
+        set_env(monkeypatch, {**env, "AI_QA_ENABLED": "1", "AI_EFFORT": "high"})
+        clients["openai-mantle"].script = [reply(review_json(), usage=FakeUsage(1000, 100), request_id="d")]
+        handler.lambda_handler(event(message([draft_card()], target="draft", profile="automation")), None)
+        (body,) = reports(core)
+        fixture = json.loads(AUTOMATION_REPORT_FIXTURE.read_text(encoding="utf-8"))
+        assert json_shape(body) == json_shape(fixture)
+        assert set(fixture) == AUTOMATION_REPORT_KEYS | {"target"}
+        # The constant values the fixture pins; placeholders stand for the rest.
+        assert (body["v"], body["target"], body["profile"]) == (fixture["v"], fixture["target"], fixture["profile"])
+        assert body["effectiveEffort"] == "high"  # the production AI_EFFORT, as the gate records it
+        # Byte-level form too: the fixture is written as handler._report serializes (sorted, compact).
+        raw = AUTOMATION_REPORT_FIXTURE.read_text(encoding="utf-8").strip()
+        assert raw == json.dumps(fixture, separators=(",", ":"), ensure_ascii=True, sort_keys=True)
+
+    def test_anthropic_automation_reviewer_reports_the_configured_effort(self, harness, monkeypatch) -> None:
+        core, clients, _ = harness
+        env = {**AUTOMATION_ENV, "AI_QA_AUTOMATION_PROVIDER": "bedrock", "AI_QA_AUTOMATION_MODEL": "anthropic.claude-opus-5"}
+        set_env(monkeypatch, {**env, "AI_QA_ENABLED": "1", "AI_EFFORT": "max"})
+        clients["bedrock"].script = [reply(review_json())]
+        handler.lambda_handler(event(message([card(0)], profile="automation")), None)
+        (body,) = reports(core)
+        assert set(body) == AUTOMATION_REPORT_KEYS
+        assert body["effectiveEffort"] == "max"
+
+    def test_default_profile_report_is_byte_identical_without_effort(self, harness, monkeypatch) -> None:
+        core, clients, _ = harness
+        set_env(monkeypatch, {**AUTOMATION_ENV, "AI_QA_ENABLED": "1", "AI_EFFORT": "max"})
+        clients["bedrock"].script = [reply(review_json())]
+        clients["bedrock-converse"].script = [reply(review_json())]
+        handler.lambda_handler(event(message([card(0)])), None)
+        handler.lambda_handler(event(message([card(1)], target="draft", profile="automation")), None)
+        human, automation = reports(core)
+        assert set(human) == REPORT_KEYS and "effectiveEffort" not in human
+        # The human body is exactly the pre-O1 body: the automation keys are the only difference.
+        stripped = {k: v for k, v in automation.items() if k not in {"target", "profile", "effectiveEffort"}}
+        assert set(stripped) == set(human)
+        assert automation["effectiveEffort"] == "provider-default"
+
+    def test_disabled_lambda_still_names_the_automation_effort(self, harness, monkeypatch) -> None:
+        core, clients, made = harness
+        set_env(monkeypatch, AUTOMATION_ENV)  # AI_QA_ENABLED unset
+        handler.lambda_handler(event(message([draft_card()], target="draft", profile="automation")), None)
+        assert made == [] and model_calls(clients) == 0
+        (body,) = reports(core)
+        assert [(i["status"], i["errorCode"]) for i in body["items"]] == [("skipped", "DISABLED")]
+        assert body["effectiveEffort"] == "provider-default"

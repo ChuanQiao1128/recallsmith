@@ -53,6 +53,16 @@ public static class StatusRoutes
   internal const string OpenDecisionSql = "dd.state = 'human' and dd.human_action is null and a.status = 'pending'";
 
   /// <summary>
+  /// A draft still pending a human decision (R18E N6) over <paramref name="dd"/> = automation_draft_decisions: no human
+  /// action, a state a person still has to decide (in <c>dry_run</c> every draft that is not superseded), and its
+  /// ai_drafts row still <c>pending</c>. While a run has one, dry-run emails show no per-state counts for the run.
+  /// </summary>
+  internal static string UndecidedDraftSql(string dd) => $"""
+    ({dd}.human_action is null and {dd}.state in ('qa_pending', 'qa_queued', 'would_accept', 'human')
+     and exists (select 1 from ai_drafts ua where ua.id = {dd}.draft_id and ua.status = 'pending'))
+    """;
+
+  /// <summary>
   /// An open publish exception (R18B K7) over <c>p</c> = automation_publishes: a live row in state <c>human</c> that no
   /// successful deck publish created after the row's last change resolved.
   /// </summary>
@@ -312,7 +322,8 @@ public static class StatusRoutes
   }
 
   /// <summary>The live quality measurement (R18D M2); <see cref="OverrideRate"/> is null when nothing was auto-accepted.</summary>
-  internal sealed record LiveQuality(long AutoAccepted30d, long DeletedByPerson, long EditedByPerson, decimal? OverrideRate)
+  internal sealed record LiveQuality(long AutoAccepted30d, long DeletedByPerson, long EditedByPerson, decimal? OverrideRate,
+    long EditedAfterSourceChange = 0)
   {
     /// <summary>Whether <c>live_override_high</c> applies: more than 5 % overridden over at least 20 auto-accepts.</summary>
     public bool OverrideHigh => AutoAccepted30d >= LiveOverrideMinAccepted && OverrideRate > LiveOverrideRateAlarm;
@@ -322,15 +333,20 @@ public static class StatusRoutes
   /// How often a person overrode what live auto-accepted (R18D M2, automation-22): over the <c>auto_accepted</c>
   /// decisions of the last <see cref="LiveQualityDays"/> days, a card counts as deleted by a person when it is deleted
   /// (or gone), and as edited when it was changed after the accept and its current <see cref="CardContentHash"/> differs
-  /// from the <c>accepted_content_sha256</c> the automation recorded. Nothing but a person edits an accepted card's
-  /// content, so a change of other columns (order, revision, a re-save of the same content) is not an override.
+  /// from the <c>accepted_content_sha256</c> the automation recorded. A change of other columns (order, revision, a
+  /// re-save of the same content) is not an override. Nor is a person's edit or delete that follows a change of the
+  /// card's cited page (R18E, automation-29): the source watch found the page <c>changed</c> or <c>gone</c> after the
+  /// accept and before the card's last change, so the person updated a correct card to a new source, not an automation
+  /// error. Those cards count in neither number and are reported as <c>EditedAfterSourceChange</c>.
   /// <c>overrideRate</c> = (deleted + edited) / auto-accepted, four decimals, null when nothing was auto-accepted.
   /// </summary>
   internal static async Task<LiveQuality> LoadLiveQualityAsync(NpgsqlConnection conn, CancellationToken ct = default)
   {
     var counts = (await DbUtil.QueryAsync(conn, null,
-      """
-      select count(*) as auto_accepted, count(*) filter (where c.id is null or c.is_deleted <> 0) as deleted
+      $"""
+      select count(*) as auto_accepted,
+        count(*) filter (where c.id is null or (c.is_deleted <> 0 and not {SourceChangedBeforeUpdateSql})) as deleted,
+        count(*) filter (where c.is_deleted <> 0 and {SourceChangedBeforeUpdateSql}) as deleted_after_source_change
       from automation_draft_decisions dd
       left join cards c on c.id = dd.accepted_card_id
       where dd.state = 'auto_accepted' and dd.decided_at >= now() - make_interval(days => $1)
@@ -338,18 +354,31 @@ public static class StatusRoutes
     ct.ThrowIfCancellationRequested();
     var changed = await DbUtil.QueryAsync(conn, null,
       $"""
-      select {CardContentHash.CardColumnsSql}, dd.accepted_content_sha256
+      select {CardContentHash.CardColumnsSql}, dd.accepted_content_sha256, {SourceChangedBeforeUpdateSql} as after_source_change
       from automation_draft_decisions dd
       join cards c on c.id = dd.accepted_card_id
       where dd.state = 'auto_accepted' and dd.decided_at >= now() - make_interval(days => $1)
         and c.is_deleted = 0 and c.updated_at > dd.decided_at
       """, [LiveQualityDays]);
-    var edited = changed.LongCount(r => !string.Equals(CardContentHash.Compute(r), r["accepted_content_sha256"] as string, StringComparison.Ordinal));
+    var contentChanged = changed
+      .Where(r => !string.Equals(CardContentHash.Compute(r), r["accepted_content_sha256"] as string, StringComparison.Ordinal)).ToList();
+    var edited = contentChanged.LongCount(r => r["after_source_change"] is not true);
     var accepted = RunnerRoutes.Long(counts["auto_accepted"]);
     var deleted = RunnerRoutes.Long(counts["deleted"]);
+    var afterSourceChange = contentChanged.LongCount(r => r["after_source_change"] is true) + RunnerRoutes.Long(counts["deleted_after_source_change"]);
     return new LiveQuality(accepted, deleted, edited,
-      accepted == 0 ? null : Math.Round((decimal)(deleted + edited) / accepted, 4, MidpointRounding.AwayFromZero));
+      accepted == 0 ? null : Math.Round((decimal)(deleted + edited) / accepted, 4, MidpointRounding.AwayFromZero), afterSourceChange);
   }
+
+  /// <summary>
+  /// Over <c>dd</c> (an auto-accept) and <c>c</c> (its card): the source watch recorded the card's cited page as
+  /// <c>changed</c> or <c>gone</c> after the accept and no later than the card's last change (automation-29).
+  /// </summary>
+  private const string SourceChangedBeforeUpdateSql = """
+    exists (select 1 from source_watch_events se join source_watch_targets st on st.id = se.target_id
+            where st.url = c.source->>'url' and se.kind in ('changed', 'gone')
+              and se.created_at > dd.decided_at and se.created_at <= c.updated_at)
+    """;
 
   /// <summary>The open exceptions a person still has to handle, whenever they were raised (R18B K7).</summary>
   internal sealed record Backlog(long HumanPending, object? OldestHumanPendingAt, long HumanPublishes,

@@ -47,7 +47,9 @@ public class AutomationRound3Tests
 
       var d = await DecisionAsync(e.DraftId);
       Assert.Equal(("human", "AUTHOR_NOT_GATED"), ((string)d["state"]!, (string)d["reason"]!));
-      Assert.Equal($"draft author {AutomationTestKit.AuthorConfigId}", d["reason_detail"]);
+      // R18E N1: the detail names the gate's author too (updated from the R18D draft-only detail).
+      Assert.Equal($"draft author {AutomationTestKit.AuthorConfigId}, gate author d01b0000000000000000000000000000000000000000000000000000000000b2",
+        d["reason_detail"]);
       Assert.Equal(0, await CardCountAsync(e.DeckId));
       Assert.Equal("pending", await _db.ScalarAsync("select status from ai_drafts where id = $1", e.DraftId));
       var route = (await _db.QueryAsync("select outcome from automation_events where dedupe_key = $1", $"auto-route:{e.DraftId}")).Single();
@@ -64,6 +66,7 @@ public class AutomationRound3Tests
       var e = await AutomationTestKit.EligibleDraftAsync(_db, "d01-unbound");
       AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash)));
       Assert.Equal(("human", "AUTHOR_NOT_GATED"), ((string)(await DecisionAsync(e.DraftId))["state"]!, (string)(await DecisionAsync(e.DraftId))["reason"]!));
+      Assert.Equal($"draft author {AutomationTestKit.AuthorConfigId}, gate names no author", (await DecisionAsync(e.DraftId))["reason_detail"]);
       Assert.Equal(0, await CardCountAsync(e.DeckId));
     });
   }
@@ -78,7 +81,8 @@ public class AutomationRound3Tests
       AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash)));
 
       var d = await DecisionAsync(e.DraftId);
-      Assert.Equal(("human", "AUTHOR_NOT_GATED", "draft has no authorConfigId"), ((string)d["state"]!, (string)d["reason"]!, (string)d["reason_detail"]!));
+      Assert.Equal(("human", "AUTHOR_NOT_GATED", $"draft has no authorConfigId, gate author {AutomationTestKit.AuthorConfigId}"),
+        ((string)d["state"]!, (string)d["reason"]!, (string)d["reason_detail"]!));
     });
   }
 

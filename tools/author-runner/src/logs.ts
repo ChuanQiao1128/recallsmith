@@ -20,6 +20,8 @@ export type LogEvent =
   | 'complete_replayed'
   | 'runner_unavailable'
   | 'usage_limited'
+  | 'runner_held'
+  | 'hold_cleared'
   | 'api_error'
   | 'finish'
   | 'unexpected_error';
@@ -29,7 +31,10 @@ export interface LogFields {
   itemId?: number;
   outcome?: string;
   durationMs?: number;
+  /** item_start: the gated author identity (M1), the id the eval gate card shows. */
   authorConfigId?: string;
+  /** item_start: the 16-character local fingerprint of the author configuration (AuthorConfig.id). */
+  configId?: string;
   costUsd?: number;
   /** complete_replayed: the server had already applied the kept complete. */
   replayed?: boolean;

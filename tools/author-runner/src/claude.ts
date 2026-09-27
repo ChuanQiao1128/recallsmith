@@ -4,9 +4,12 @@
 // the final result message). The run uses the owner's Claude subscription login, never an
 // API key or a cloud credential (an init message that does not show the subscription, or a
 // result that shows a cloud provider, is failed), and has no Bash/WebFetch/Edit/Write tool.
+// N3: stdout streams through the runner into the run file, and the system/init message is
+// checked as it arrives; a wrong login or a failed MCP server ends the process group before
+// the first model turn.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, openSync } from 'node:fs';
+import { closeSync, openSync, writeSync } from 'node:fs';
 import type { RunOutcome } from './api';
 import type { RunnerConfig } from './config';
 
@@ -80,6 +83,8 @@ export interface ClaudeRun {
   signal: string | null;
   timedOut: boolean;
   spawnError: string | null;
+  /** N3: why the run was ended at its system/init message, before the first model turn; null or absent otherwise. */
+  initAbort?: string | null;
 }
 
 export type SignalGroup = (pid: number, signal: NodeJS.Signals | 0) => boolean;
@@ -114,7 +119,10 @@ export function killGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
 /**
  * Spawns claude in its own process group; on timeout SIGTERM the group, then SIGKILL after the grace
  * period, and settle at most killSettleMs after that even if the child never exits or a member of the
- * group (an unreaped MCP server, uv or python process) lingers (ai-agent-6).
+ * group (an unreaped MCP server, uv or python process) lingers (ai-agent-6). N3: stdout is piped through
+ * the runner (and written to the run file as it arrives); its system/init message is checked at once, and
+ * one that shows another login or a failed MCP server, or a model turn before any init message, ends the
+ * group the same way before the model runs (`initAbort`).
  */
 export function runClaude(opts: RunClaudeOptions): Promise<ClaudeRun> {
   const { config } = opts;
@@ -133,20 +141,32 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeRun> {
   return new Promise<ClaudeRun>((resolve) => {
     let settled = false;
     let timedOut = false;
+    let initAbort: string | null = null;
+    let terminating = false;
     let exited: { code: number | null; signal: string | null } | null = null;
     let timeoutTimer: NodeJS.Timeout | undefined;
     let graceTimer: NodeJS.Timeout | undefined;
     let settleTimer: NodeJS.Timeout | undefined;
+    let drainTimer: NodeJS.Timeout | undefined;
+    let outOpen = true;
+    let stdoutEnded = false;
+    let onStdoutEnd: (() => void) | null = null;
+    const watch = initWatch();
 
     const child = spawn(config.claudeBin, claudeArgs(opts.prompt, config.model, opts.mcpConfigPath), {
       cwd: config.api.repoRoot,
       env: scrubEnv(opts.baseEnv),
       detached: true,
-      stdio: ['ignore', out, err],
+      stdio: ['ignore', 'pipe', err],
     });
-    closeSync(out);
     closeSync(err);
     const pid = child.pid ?? null;
+
+    const closeOut = (): void => {
+      if (!outOpen) return;
+      outOpen = false;
+      closeSync(out);
+    };
 
     const finish = (run: ClaudeRun): void => {
       if (settled) return;
@@ -154,8 +174,57 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeRun> {
       if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
       if (graceTimer !== undefined) clearTimeout(graceTimer);
       if (settleTimer !== undefined) clearTimeout(settleTimer);
-      resolve(run);
+      const done = (): void => {
+        if (drainTimer !== undefined) clearTimeout(drainTimer);
+        // A lingering group member may still hold the pipe open; what it writes later is not part of the run.
+        child.stdout?.destroy();
+        closeOut();
+        resolve({ ...run, initAbort });
+      };
+      // The last stdout bytes can arrive after 'exit': wait for the end of the pipe, at most killSettleMs.
+      if (stdoutEnded || child.stdout === null) {
+        done();
+        return;
+      }
+      onStdoutEnd = done;
+      drainTimer = setTimeout(done, config.killSettleMs);
     };
+
+    /** SIGTERM the group, SIGKILL after the grace period, then settle at the latest killSettleMs later. */
+    const terminate = (): void => {
+      if (terminating || pid === null) return;
+      terminating = true;
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+      signalGroup(pid, 'SIGTERM');
+      graceTimer = setTimeout(() => {
+        if (signalGroup(pid, 0)) signalGroup(pid, 'SIGKILL');
+        if (exited !== null) {
+          finish({ pid, exitCode: exited.code, signal: exited.signal, timedOut, spawnError: null });
+          return;
+        }
+        // The hard ceiling: settle whatever the child and its group do from here on.
+        settleTimer = setTimeout(() => {
+          finish({ pid, exitCode: exited?.code ?? null, signal: exited?.signal ?? 'SIGKILL', timedOut, spawnError: null });
+        }, config.killSettleMs);
+      }, config.killGraceMs);
+    };
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (outOpen) writeSync(out, chunk);
+      if (initAbort !== null || settled) return;
+      const problem = watch(chunk);
+      if (problem !== null) {
+        initAbort = problem;
+        terminate();
+      }
+    });
+    const ended = (): void => {
+      stdoutEnded = true;
+      onStdoutEnd?.();
+    };
+    child.stdout?.on('end', ended);
+    child.stdout?.on('close', ended);
+    child.stdout?.on('error', ended);
 
     child.on('error', (e: NodeJS.ErrnoException) => {
       if (pid === null) {
@@ -165,29 +234,57 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeRun> {
 
     child.on('exit', (code, signal) => {
       exited = { code, signal };
-      // After a timeout, wait for the grace timer unless the whole group is already gone.
-      if (timedOut && pid !== null && signalGroup(pid, 0)) return;
+      // After a timeout or an init abort, wait for the grace timer unless the whole group is already gone.
+      if (terminating && pid !== null && signalGroup(pid, 0)) return;
       finish({ pid, exitCode: code, signal, timedOut, spawnError: null });
     });
 
     if (pid !== null) {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
-        signalGroup(pid, 'SIGTERM');
-        graceTimer = setTimeout(() => {
-          if (signalGroup(pid, 0)) signalGroup(pid, 'SIGKILL');
-          if (exited !== null) {
-            finish({ pid, exitCode: exited.code, signal: exited.signal, timedOut, spawnError: null });
-            return;
-          }
-          // The hard ceiling: settle whatever the child and its group do from here on.
-          settleTimer = setTimeout(() => {
-            finish({ pid, exitCode: exited?.code ?? null, signal: exited?.signal ?? 'SIGKILL', timedOut: true, spawnError: null });
-          }, config.killSettleMs);
-        }, config.killGraceMs);
+        terminate();
       }, config.itemTimeoutMs);
     }
   });
+}
+
+/**
+ * N3: reads stdout chunks as they arrive and answers, once, why the run must end before its first model
+ * turn: the system/init message shows another login than the subscription or a developercards MCP server
+ * that failed or is missing, or a model message comes before any init message. Null while there is nothing
+ * to object to (other `system` messages, such as hook output, may come before init).
+ */
+export function initWatch(): (chunk: Buffer | string) => string | null {
+  let buffer = '';
+  let decided = false;
+  return (chunk) => {
+    if (decided) return null;
+    buffer += chunk.toString();
+    let newline = buffer.indexOf('\n');
+    while (newline !== -1) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf('\n');
+      if (line === '') continue;
+      let message: unknown;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (typeof message !== 'object' || message === null || Array.isArray(message)) continue;
+      const m = message as Record<string, unknown>;
+      if (m.type === 'system' && m.subtype === 'init') {
+        decided = true;
+        return initProblem(m);
+      }
+      if (m.type !== 'system') {
+        decided = true;
+        return `${NOT_ON_SUBSCRIPTION}: no system/init message`;
+      }
+    }
+    return null;
+  };
 }
 
 export interface ClaudeOutcome {
@@ -203,6 +300,11 @@ export interface ClaudeOutcome {
   runnerUnavailable: boolean;
   /** Set when the CLI reported a usage or rate limit: the reset time it named, or null when it named none. */
   usageLimit: { resetAt: string | null } | null;
+  /**
+   * N3: a run-level cause that does not go away by itself (claude cannot be started, not on the subscription,
+   * the MCP server failed or is missing); the runner keeps a local hold that the owner clears. Absent otherwise.
+   */
+  holdUntilCleared?: true;
 }
 
 function oneLine(text: string, max: number): string {
@@ -281,6 +383,19 @@ export function claudeUsage(stdout: string): ClaudeUsage {
 
 export const MCP_SERVER_NAME = 'developercards';
 
+/** The error text of a run that did not demonstrably use the subscription login. */
+export const NOT_ON_SUBSCRIPTION = 'claude did not run on the subscription login';
+
+/**
+ * N3: why a system/init message shows that the run must not go on: its `apiKeySource` is missing or not the
+ * subscription's, or the developercards MCP server is missing or did not start; null when neither.
+ */
+export function initProblem(init: Record<string, unknown>): string | null {
+  if (typeof init.apiKeySource !== 'string') return `${NOT_ON_SUBSCRIPTION}: no apiKeySource in the system/init message`;
+  if (init.apiKeySource !== SUBSCRIPTION_API_KEY_SOURCE) return `${NOT_ON_SUBSCRIPTION}: apiKeySource ${init.apiKeySource.slice(0, 50)}`;
+  return mcpServerProblem(init);
+}
+
 /**
  * Why the init message shows that the developercards MCP server is missing or did not start (`failed`, `needs-auth`,
  * `disabled`, …); null when it is `connected` or still `pending`, or when the message has no server list at all.
@@ -353,10 +468,25 @@ export function claudeOutcome(run: ClaudeRun, stdout: string, stderr: string): C
     return unavailable(`usage limit: ${oneLine(hit, RESULT_TEXT_MAX).trim()}`, exitCode, { resetAt });
   };
 
-  if (run.spawnError !== null) return unavailable(`claude could not be started: ${run.spawnError}`, null);
+  // N3: a cause the next run would hit again; the runner holds until the owner clears it.
+  const held = (why: string, exitCode: number | null): ClaudeOutcome => ({ ...unavailable(why, exitCode), holdUntilCleared: true });
+
+  if (run.spawnError !== null) return held(`claude could not be started: ${run.spawnError}`, null);
+  const stream = readClaudeStream(stdout);
+  // N3: the login and the MCP server are checked on every outcome (a timeout, an error result, a success),
+  // first the verdict taken when the init message arrived, then the whole stream. A run that printed no
+  // JSON at all never reached a model turn, so there is nothing to judge; it fails on its own terms below.
+  // A run ended at its init message has no exit code of its own: the runner stopped it.
+  if (run.initAbort !== undefined && run.initAbort !== null) return held(run.initAbort, null);
+  if (stream.anyJson) {
+    const { providerSignal } = claudeUsage(stdout);
+    const exitCode = run.timedOut ? null : run.exitCode;
+    if (providerSignal !== null) return held(`${NOT_ON_SUBSCRIPTION}: ${providerSignal}`, exitCode);
+    const mcpProblem = stream.init === null ? null : mcpServerProblem(stream.init);
+    if (mcpProblem !== null) return held(mcpProblem, exitCode);
+  }
   if (run.timedOut) return failed('timeout', null);
 
-  const stream = readClaudeStream(stdout);
   const r = stream.result;
   if (run.exitCode !== 0) {
     // With stream-json the CLI's own error text is in the result message; stderr is the fallback.
@@ -374,10 +504,6 @@ export function claudeOutcome(run: ClaudeRun, stdout: string, stderr: string): C
     const detail = resultDetail(r);
     return limitFailure(detail, 0) ?? failed(`claude result is_error: ${detail}`, 0);
   }
-  const { providerSignal } = claudeUsage(stdout);
-  if (providerSignal !== null) return unavailable(`claude did not run on the subscription login: ${providerSignal}`, 0);
-  const mcpProblem = stream.init === null ? null : mcpServerProblem(stream.init);
-  if (mcpProblem !== null) return unavailable(mcpProblem, 0);
 
   const numTurns = typeof r.num_turns === 'number' && Number.isInteger(r.num_turns) ? r.num_turns : null;
   const lines = typeof r.result === 'string' ? r.result.split(/\r?\n/).filter((line) => line.trim() !== '') : [];
