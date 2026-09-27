@@ -3,8 +3,13 @@
 // The Runs tab (A00 §16.1): one row per claimed queue item, with its decision
 // counts and publish outcomes. A run's Decisions opens `?tab=runs&runId=`, the
 // deep link of the batch-summary email and webhook, and lists that run's
-// decisions below the table.
-import { useEffect, useState } from 'react';
+// decisions below the table; opened from the table, that section's heading
+// takes focus and scrolls into view (B07 frontend-console-4).
+//
+// Each run shows the agent's notes (K3 `summary`): the runner's final-message
+// notes, the channel the agent uses to report an existing card that looks
+// wrong. They render as plain text, never as markup.
+import { useEffect, useRef, useState } from 'react';
 
 import {
   listAutomationDecisions,
@@ -16,8 +21,11 @@ import { CARD_CLASS, H2_CLASS, INPUT_CLASS, LABEL_CLASS, TD_CLASS, TH_CLASS } fr
 import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 import {
+  RUN_OUTCOME_LABELS,
   RUN_STATUSES,
+  RUN_STATUS_LABELS,
   automationErrorMessage,
+  codeLabel,
   formatTimestamp,
   orDash,
   publishReasonLabel,
@@ -39,10 +47,12 @@ function errorText(error: ApiError | null, fallback: string): string {
 
 export function RunsTab({
   runId,
+  focusOnOpen,
   onOpenRun,
   onOpenDecision,
 }: {
   runId: string | null;
+  focusOnOpen: boolean;
   onOpenRun: (runId: string) => void;
   onOpenDecision: (draftId: number) => void;
 }) {
@@ -56,7 +66,8 @@ export function RunsTab({
     nextCursor: null,
   });
   const [loadingMore, setLoadingMore] = useState(false);
-  const [moreError, setMoreError] = useState<string | null>(null);
+  const [moreError, setMoreError] = useState<{ forKey: string; text: string } | null>(null);
+  const decisionsHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const runsKey = `${status}|${nonce}`;
   const decisionsKey = `${runId ?? ''}|${nonce}`;
@@ -103,21 +114,35 @@ export function RunsTab({
     };
   }, [runId, nonce]);
 
+  useEffect(() => {
+    if (!runId || !focusOnOpen) return;
+    const heading = decisionsHeadingRef.current;
+    if (!heading) return;
+    heading.focus();
+    heading.scrollIntoView?.({ block: 'start' });
+  }, [runId, focusOnOpen]);
+
+  const loading = runs.forKey !== runsKey;
+
   async function onLoadMore() {
-    if (!runs.nextCursor) return;
+    // The cursor belongs to the list on screen; while a new filter loads it is foreign.
+    if (!runs.nextCursor || loading) return;
+    const startKey = runsKey;
     setLoadingMore(true);
     setMoreError(null);
     const res = await listAutomationRuns({ status: status || undefined, limit: PAGE_SIZE, cursor: runs.nextCursor });
     setLoadingMore(false);
     if (!res.success || !res.data) {
-      setMoreError(errorText(res.error, 'Failed to load more runs.'));
+      setMoreError({ forKey: startKey, text: errorText(res.error, 'Failed to load more runs.') });
       return;
     }
     const page = res.data;
-    setRuns(prev => ({ ...prev, items: [...prev.items, ...page.items], nextCursor: page.nextCursor }));
+    // Appended only to the list it was asked for: a filter changed meanwhile drops it.
+    setRuns(prev =>
+      prev.forKey === startKey ? { ...prev, items: [...prev.items, ...page.items], nextCursor: page.nextCursor } : prev,
+    );
   }
 
-  const loading = runs.forKey !== runsKey;
   const decisionsLoading = decisions.forKey !== decisionsKey;
 
   return (
@@ -133,7 +158,7 @@ export function RunsTab({
               <option value="">All</option>
               {RUN_STATUSES.map(s => (
                 <option key={s} value={s}>
-                  {s}
+                  {codeLabel(RUN_STATUS_LABELS, s)}
                 </option>
               ))}
             </select>
@@ -171,6 +196,7 @@ export function RunsTab({
                   <th className={TH_CLASS}>Submitted / auto-accepted / would accept / need you / superseded</th>
                   <th className={TH_CLASS}>In QA</th>
                   <th className={TH_CLASS}>Publishes</th>
+                  <th className={TH_CLASS}>Agent notes</th>
                   <th className={TH_CLASS}>Actions</th>
                 </tr>
               </thead>
@@ -190,8 +216,8 @@ export function RunsTab({
                     </td>
                     <td className={TD_CLASS}>{orDash(r.deckSlug)}</td>
                     <td className={TD_CLASS}>{r.runnerId}</td>
-                    <td className={TD_CLASS}>{r.status}</td>
-                    <td className={TD_CLASS}>{orDash(r.outcome)}</td>
+                    <td className={TD_CLASS}>{codeLabel(RUN_STATUS_LABELS, r.status)}</td>
+                    <td className={TD_CLASS}>{codeLabel(RUN_OUTCOME_LABELS, r.outcome)}</td>
                     <td className={TD_CLASS}>{formatTimestamp(r.startedAt)}</td>
                     <td className={TD_CLASS}>
                       {`${r.counts.submitted} / ${r.counts.autoAccepted} / ${r.counts.wouldAccept} / ${r.counts.human} / ${r.counts.superseded}`}
@@ -213,6 +239,18 @@ export function RunsTab({
                       )}
                     </td>
                     <td className={TD_CLASS}>
+                      {r.summary ? (
+                        <p
+                          className="max-w-md whitespace-pre-wrap break-words text-xs text-slate-800"
+                          data-testid={`automation-run-notes-${r.runId}`}
+                        >
+                          {r.summary}
+                        </p>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td className={TD_CLASS}>
                       <Button
                         variant="outline"
                         size="xs"
@@ -229,14 +267,14 @@ export function RunsTab({
           </div>
         ) : null}
 
-        {moreError ? (
+        {moreError && moreError.forKey === runsKey ? (
           <div className="mt-2">
             <Callout tone="danger" role="alert">
-              {moreError}
+              {moreError.text}
             </Callout>
           </div>
         ) : null}
-        {runs.nextCursor ? (
+        {runs.nextCursor && !loading ? (
           <div className="mt-2">
             <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
               Load more
@@ -247,7 +285,7 @@ export function RunsTab({
 
       {runId ? (
         <section className={CARD_CLASS} aria-label="Run decisions">
-          <h2 className={H2_CLASS}>
+          <h2 ref={decisionsHeadingRef} tabIndex={-1} className={`${H2_CLASS} focus:outline-none`}>
             Decisions of run <span className="font-mono">{shortId(runId)}</span>
           </h2>
           <div className="mt-2">

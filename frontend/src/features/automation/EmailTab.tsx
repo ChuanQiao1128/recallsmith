@@ -4,7 +4,11 @@
 // its plain-text body on demand. The log has no recipient column: the owner
 // alert address is known only to the notifier. A super_admin may send a test
 // email, which works in every mode.
-import { useEffect, useState } from 'react';
+//
+// Show answers only for the email last asked for, marks its button busy while
+// the body loads, and moves focus to the body's heading (B07
+// frontend-console-4, frontend-console-8).
+import { useEffect, useRef, useState } from 'react';
 
 import {
   fetchNotification,
@@ -17,9 +21,13 @@ import { CARD_CLASS, H2_CLASS, INPUT_CLASS, LABEL_CLASS, TD_CLASS, TH_CLASS } fr
 import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 import {
+  MODE_LABELS,
   NOTIFICATION_KINDS,
+  NOTIFICATION_KIND_LABELS,
   NOTIFICATION_STATUSES,
+  NOTIFICATION_STATUS_LABELS,
   automationErrorMessage,
+  codeLabel,
   formatTimestamp,
   orDash,
   shortId,
@@ -48,6 +56,10 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
   const [list, setList] = useState<ListState>({ forKey: null, error: null, items: [], nextCursor: null });
   const [loadingMore, setLoadingMore] = useState(false);
   const [shown, setShown] = useState<AutomationNotificationDetail | null>(null);
+  // The email whose body was asked for last; an older answer is dropped.
+  const [showing, setShowing] = useState<string | null>(null);
+  const requestedRef = useRef<string | null>(null);
+  const bodyHeadingRef = useRef<HTMLHeadingElement>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -71,8 +83,20 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
     };
   }, [kind, status, nonce]);
 
+  const loading = list.forKey !== key;
+
+  useEffect(() => {
+    if (!shown) return;
+    const heading = bodyHeadingRef.current;
+    if (!heading) return;
+    heading.focus();
+    heading.scrollIntoView?.({ block: 'start' });
+  }, [shown]);
+
   async function onLoadMore() {
-    if (!list.nextCursor) return;
+    // The cursor belongs to the list on screen; while a new filter loads it is foreign.
+    if (!list.nextCursor || loading) return;
+    const startKey = key;
     setLoadingMore(true);
     const res = await listNotifications({
       kind: kind || undefined,
@@ -86,12 +110,20 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
       return;
     }
     const page = res.data;
-    setList(prev => ({ ...prev, items: [...prev.items, ...page.items], nextCursor: page.nextCursor }));
+    // Appended only to the list it was asked for: a filter changed meanwhile drops it.
+    setList(prev =>
+      prev.forKey === startKey ? { ...prev, items: [...prev.items, ...page.items], nextCursor: page.nextCursor } : prev,
+    );
   }
 
   async function onShow(notificationId: string) {
     setWriteError(null);
+    requestedRef.current = notificationId;
+    setShowing(notificationId);
     const res = await fetchNotification(notificationId);
+    if (requestedRef.current !== notificationId) return;
+    requestedRef.current = null;
+    setShowing(null);
     if (!res.success || !res.data) {
       setShown(null);
       setWriteError(errorText(res.error, 'The email could not be loaded.'));
@@ -113,8 +145,6 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
     setNonce(n => n + 1);
   }
 
-  const loading = list.forKey !== key;
-
   return (
     <div className="space-y-4">
       {writeError ? (
@@ -134,7 +164,7 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
               <option value="">All kinds</option>
               {NOTIFICATION_KINDS.map(k => (
                 <option key={k} value={k}>
-                  {k}
+                  {codeLabel(NOTIFICATION_KIND_LABELS, k)}
                 </option>
               ))}
             </select>
@@ -147,7 +177,7 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
               <option value="">All statuses</option>
               {NOTIFICATION_STATUSES.map(s => (
                 <option key={s} value={s}>
-                  {s}
+                  {codeLabel(NOTIFICATION_STATUS_LABELS, s)}
                 </option>
               ))}
             </select>
@@ -194,11 +224,11 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
                 {list.items.map(n => (
                   <tr key={n.notificationId} className="border-t border-slate-100 align-top">
                     <td className={TD_CLASS}>{formatTimestamp(n.createdAt)}</td>
-                    <td className={TD_CLASS}>{n.kind}</td>
+                    <td className={TD_CLASS}>{codeLabel(NOTIFICATION_KIND_LABELS, n.kind)}</td>
                     <td className={TD_CLASS}>{orDash(n.subkind)}</td>
                     <td className={TD_CLASS}>{n.subject}</td>
-                    <td className={TD_CLASS}>{n.mode}</td>
-                    <td className={TD_CLASS}>{n.status}</td>
+                    <td className={TD_CLASS}>{codeLabel(MODE_LABELS, n.mode)}</td>
+                    <td className={TD_CLASS}>{codeLabel(NOTIFICATION_STATUS_LABELS, n.status)}</td>
                     <td className={TD_CLASS}>{n.attempts}</td>
                     <td className={TD_CLASS}>{formatTimestamp(n.sentAt)}</td>
                     <td className={TD_CLASS}>{orDash(n.errorCode)}</td>
@@ -207,6 +237,7 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
                         variant="outline"
                         size="xs"
                         aria-label={`Show email ${shortId(n.notificationId)}`}
+                        loading={showing === n.notificationId}
                         onClick={() => void onShow(n.notificationId)}
                       >
                         Show
@@ -219,7 +250,7 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
           </div>
         ) : null}
 
-        {list.nextCursor ? (
+        {list.nextCursor && !loading ? (
           <div className="mt-2">
             <Button variant="outline" size="xs" loading={loadingMore} onClick={() => void onLoadMore()}>
               Load more
@@ -231,7 +262,9 @@ export function EmailTab({ superAdmin, announce }: { superAdmin: boolean; announ
       {shown ? (
         <section className={CARD_CLASS} aria-label="Email body">
           <div className="flex items-center justify-between gap-3">
-            <h2 className={H2_CLASS}>{shown.subject}</h2>
+            <h2 ref={bodyHeadingRef} tabIndex={-1} className={`${H2_CLASS} focus:outline-none`}>
+              {shown.subject}
+            </h2>
             <Button variant="ghost" size="xs" onClick={() => setShown(null)}>
               Hide
             </Button>

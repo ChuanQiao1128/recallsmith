@@ -98,6 +98,8 @@ describe('AI QA runs started by the automation', () => {
           cardsDone: 1,
           status: 'done',
           effectiveStatus: 'done',
+          // The mirror run is inserted with cost 0 (A00 §5.6); B07 frontend-console-7 relies on it.
+          estimatedCostUsd: 0,
         }),
         qaRun({ runId: 'run-r', requestedBySub: 'automation', scope: 'cards', cardCount: 3 }),
       ]),

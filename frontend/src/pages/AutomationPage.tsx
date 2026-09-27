@@ -9,16 +9,15 @@
 // There is no mode switch. AUTOMATION_MODE changes only by committing
 // src_C/env/prod.env.json and deploying (A00 §3.1), and the banner says so.
 //
-// automationHref is passed explicitly, after {...consoleNav()}, because adding
-// it to CONSOLE_NAV would break the byte-identical tests that pin the console's
-// seven nav links; the pages of the automation area pass it themselves.
+// The Automation link comes from consoleNav() like every other section, so the
+// header offers it on every console page (B07 frontend-console-12).
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import { fetchAutomationStatus, type AutomationStatus } from '../api/automation';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
-import { AUTOMATION_HREF, consoleNav } from '../components/console/consoleNav';
+import { consoleNav } from '../components/console/consoleNav';
 import { H1_CLASS } from '../components/console/consoleStyles';
 import { Callout } from '../components/ui/Callout';
 import { DecisionsTab } from '../features/automation/DecisionsTab';
@@ -31,6 +30,7 @@ import { WatchTab } from '../features/automation/WatchTab';
 import {
   AUTOMATION_ERROR_MESSAGES,
   AUTOMATION_TABS,
+  DECISION_FILTER_KEYS,
   automationErrorMessage,
   resolveAutomationView,
 } from '../lib/automationRules';
@@ -56,6 +56,8 @@ export function AutomationPage() {
   const [status, setStatus] = useState<StatusState>({ forNonce: null, error: null, data: null });
   // The page's one persistent live region (a region mounted with its text is not announced).
   const [announcement, setAnnouncement] = useState('');
+  // Set once the owner opens a detail from the page itself; a deep link leaves focus alone.
+  const [focusOnOpen, setFocusOnOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,10 +90,21 @@ export function AutomationPage() {
   const statusLoading = status.forNonce !== statusNonce;
 
   function openDecision(draftId: number) {
-    setSearchParams({ tab: 'decisions', draftId: String(draftId) });
+    // The Decisions filters stay, so Close returns to the same list.
+    const next = new URLSearchParams({ tab: 'decisions' });
+    if (view.tab === 'decisions') {
+      for (const key of DECISION_FILTER_KEYS) {
+        const value = searchParams.get(key);
+        if (value !== null) next.set(key, value);
+      }
+    }
+    next.set('draftId', String(draftId));
+    setFocusOnOpen(true);
+    setSearchParams(next);
   }
 
   function openRun(runId: string) {
+    setFocusOnOpen(true);
     setSearchParams({ tab: 'runs', runId });
   }
 
@@ -100,7 +113,7 @@ export function AutomationPage() {
   }
 
   return (
-    <ConsoleShell title={CONSOLE_NAME} subtitle="Automation" {...consoleNav()} automationHref={AUTOMATION_HREF}>
+    <ConsoleShell title={CONSOLE_NAME} subtitle="Automation" {...consoleNav()}>
       <h1 className={H1_CLASS}>Automation</h1>
 
       <div role="status" aria-live="polite" className="sr-only" data-testid="automation-live">
@@ -149,9 +162,11 @@ export function AutomationPage() {
             />
           ) : null}
           {view.tab === 'runs' ? (
-            <RunsTab runId={view.runId} onOpenRun={openRun} onOpenDecision={openDecision} />
+            <RunsTab runId={view.runId} focusOnOpen={focusOnOpen} onOpenRun={openRun} onOpenDecision={openDecision} />
           ) : null}
-          {view.tab === 'decisions' ? <DecisionsTab draftId={view.draftId} onOpenDecision={openDecision} /> : null}
+          {view.tab === 'decisions' ? (
+            <DecisionsTab draftId={view.draftId} focusOnOpen={focusOnOpen} onOpenDecision={openDecision} />
+          ) : null}
           {view.tab === 'queue' ? <QueueTab superAdmin={superAdmin} announce={setAnnouncement} /> : null}
           {view.tab === 'watch' ? (
             <WatchTab superAdmin={superAdmin} targetId={view.targetId} announce={setAnnouncement} />

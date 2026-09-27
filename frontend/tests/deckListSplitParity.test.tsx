@@ -209,28 +209,38 @@ interface Baseline {
 // by +312 B (four). The deck list is the Decks section but renders no Decks
 // link, so no aria-current appears here. initialLoading and fatalErrorRetry are
 // unchanged.
+//
+// RE-MEASURED AGAIN, 2026-09-28, B07 (frontend-console-12). Nine of the eleven
+// moved when the Automation link joined the shared section set (CONSOLE_NAV),
+// so the deck list's header now links /automation after the ledger. Verified
+// BEFORE the numbers were touched, by word-diffing the recorded
+// superAdminPaginated snapshot: the ONLY added token is that one <a> inside the
+// existing <nav>, with nothing removed. Every scenario that renders the shell
+// moved by +226 B, editorLegacy included (the link is not role-gated, like the
+// ledger's). initialLoading and fatalErrorRetry are unchanged to the character.
+// The values were stable across two separate vitest processes.
 const B1: Record<string, Baseline> = {
   // The three reachable role/mode cells.
-  superAdminPaginated: { hash: '8c2e889b967db81a4df15f6276ee19046ca56cf72e4312d98df4a78505a35667', bytes: 12540 },
-  superAdminLegacyFallback: { hash: 'e4e92f3c7ac1752614d5a6b6287c90816182de36afe41ab196e6b4acaf1d42e7', bytes: 12786 },
-  editorLegacy: { hash: '1abdfa4f8c08a763278317a242cdcc2ce8c0b6e7b49541e031483de4f76e60ab', bytes: 9543 },
+  superAdminPaginated: { hash: 'f87c365953880556a23b3af43f54959073d2ffabf9dc4287235ca9e625b245ca', bytes: 12766 },
+  superAdminLegacyFallback: { hash: 'df3b1e8f3fca726f20fdf271280e02c2e76aab4aec4b6bc06e003e9820a0e698', bytes: 13012 },
+  editorLegacy: { hash: '56caf9e3af9f70b0226d4d24246fa98c8c492d16c3f6d5688ac479127840c937', bytes: 9769 },
   // The two early returns, which never reach the main tree at all.
   initialLoading: { hash: 'da5e91db42c7895c31e1fba36b34c6aaeb456d4ef2efde3a425f5b5066a52974', bytes: 147 },
   fatalErrorRetry: { hash: '22809bb57f98a29737e080c405194d891a62ee389911aae33891f12b55c1c396', bytes: 421 },
   // Both halves of the empty-state ternary. These two differ by ONE WORD, and
   // the split turns that ternary into an `emptyMessage` prop — which is exactly
   // the kind of change that keeps one branch and loses the other.
-  emptySearchResult: { hash: 'acb20c57609be96867f84c486febaa18bf1af39231e86e8810a6e3f6c05cd30e', bytes: 6524 },
-  emptyWithNoQuery: { hash: 'd2152c58b3127050a567fb5457d0f4b06ecc522f4c2bae2731d69e755c0045ad', bytes: 6514 },
+  emptySearchResult: { hash: 'afb01f62250bf47e50fb45bd119e232f478c4fe03c87117ac660c1efed68b9a7', bytes: 6750 },
+  emptyWithNoQuery: { hash: '97e0706ac0b69b5a897cc8eac777a622cee3fe6c04d4feecbeca72a16c765a21', bytes: 6740 },
   // The three banners/panels that only appear in one state each.
-  manifestErrorBanner: { hash: '2b2c5d9dad22ed551c990ff2e6ff614c0057774ff9a6e1fe8f570e8c496a4637', bytes: 13038 },
+  manifestErrorBanner: { hash: '159d8f1482ac5da9936e134f82a92170a4f21ef982248ed26e4b9b7b008930bc', bytes: 13264 },
   // F24 (2026-09-26): the Publish Jobs table gained an Error column after Status
   // (CFE-09) and a title on the Job ID cell, so this scenario's markup grew by
   // 99 B. No other scenario renders that table, so only this hash moved.
-  publishJobsTab: { hash: 'd02aeb2d8c8e18e7fa6562f9298d81d5c868f4dd9bd7577f9f47c70989517a27', bytes: 5496 },
-  pollFailureBanner: { hash: '0e76a7695c56f40bef0f4b8a451845f7e6af465c924dc147989f45df85fee0e0', bytes: 13425 },
+  publishJobsTab: { hash: '9b1723b82d276bffe47e466fb72e439e62bb50da7cfb6b8c5153702f1440de9d', bytes: 5722 },
+  pollFailureBanner: { hash: 'adf6685b3abfd60e2cf96c2d41c84b49526044b1d1a1a28a604a7de3d9d1ccf3', bytes: 13651 },
   // A row mid-publish, so the pending markup is inside a hash too.
-  publishingRow: { hash: '9ce0053c3c364982147660c8bfc9b36f8dec3cc1357f80308b2427bb2852da20', bytes: 12556 },
+  publishingRow: { hash: '0bf66263eae57f1d011986e025df4b7f5012b3f31c7d1aaa35adc855c26c260e', bytes: 12782 },
 };
 
 // B2: one Profiler onRender entry per commit of the profiled subtree.

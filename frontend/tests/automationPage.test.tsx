@@ -85,6 +85,10 @@ const MUTATING = [
   'Deactivate',
   'Activate',
   'Send test email',
+  // B07 frontend-console-9: the row buttons name their target.
+  /^Deactivate target /,
+  /^Activate target /,
+  /^Edit target /,
 ];
 
 function mountAt(entry: string) {
@@ -202,17 +206,21 @@ describe('AutomationPage', () => {
     expect(within(detail).getAllByText('AI QA found a blocker or major issue').length).toBeGreaterThan(0);
     expect(within(detail).getAllByText('In AI QA').length).toBeGreaterThan(0);
 
-    const review = within(detail).getByRole('link', { name: 'Open in review queue' });
+    // B07 frontend-console-6: renamed, and offered whenever a person may still decide.
+    const review = within(detail).getByRole('link', { name: 'Decide in review queue' });
     expect(review.getAttribute('href')).toBe('/review?deckId=7&draftId=41');
     expect(within(detail).getByRole('link', { name: 'Close' }).getAttribute('href')).toBe('/automation?tab=decisions');
 
-    // A decision that did not route to a person has no review link.
+    // A decision a person already decided has no review link (B07 frontend-console-6:
+    // an undecided dry-run would_accept draft now has one; see automationConsoleFixes.test.tsx).
     cleanup();
-    api.fetchAutomationDecision.mockResolvedValue(ok(decisionDetailFixture({ state: 'would_accept', reason: null })));
+    api.fetchAutomationDecision.mockResolvedValue(
+      ok(decisionDetailFixture({ state: 'would_accept', reason: null, humanAction: 'accepted' })),
+    );
     mountAt('/automation?draftId=41');
     const other = await screen.findByRole('region', { name: 'Decision detail' });
     await within(other).findByText('Option C is obviously wrong.');
-    expect(within(other).queryByRole('link', { name: 'Open in review queue' })).toBeNull();
+    expect(within(other).queryByRole('link', { name: 'Decide in review queue' })).toBeNull();
 
     // A draft without a decision says so.
     cleanup();
@@ -376,7 +384,8 @@ describe('AutomationPage', () => {
     );
 
     const row = screen.getByTestId('automation-watch-target-3');
-    await user.click(within(row).getByRole('button', { name: 'Deactivate' }));
+    // B07 frontend-console-9: the row's buttons carry the target id in their name.
+    await user.click(within(row).getByRole('button', { name: 'Deactivate target 3' }));
     await waitFor(() => expect(api.updateWatchTarget).toHaveBeenCalledWith(3, { active: false }));
   });
 

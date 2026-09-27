@@ -77,13 +77,16 @@ afterEach(() => {
 });
 
 describe('the console sections on the landing page', () => {
-  it('links a super_admin to Review queue, AI QA, Automation ledger and Webhooks', async () => {
+  // B07 (frontend-console-12): the Automation console is in the shared set, so
+  // the landing page links it too; before, only the four automation-area pages did.
+  it('links a super_admin to Review queue, AI QA, Automation ledger, Automation and Webhooks', async () => {
     signInAsSuperAdmin();
     await mountHome();
     expect(navLinks()).toEqual({
       'Content Intelligence': '/content-intelligence',
       Webhooks: '/admin/webhooks',
       'Automation ledger': '/ledger',
+      Automation: '/automation',
       'Review queue': '/review',
       'AI QA': '/decks/qa',
       'Admin Management': '/admin/users',
@@ -96,6 +99,7 @@ describe('the console sections on the landing page', () => {
     expect(navLinks()).toEqual({
       'Content Intelligence': '/content-intelligence',
       'Automation ledger': '/ledger',
+      Automation: '/automation',
       'Review queue': '/review',
       'AI QA': '/decks/qa',
     });
@@ -119,6 +123,7 @@ describe('the current section in the header (frontend-console-27)', () => {
       ['/review?deckId=7', 'Review queue'],
       ['/decks/qa', 'AI QA'],
       ['/ledger', 'Automation ledger'],
+      ['/automation', 'Automation'],
       ['/admin/webhooks', 'Webhooks'],
       ['/admin/users', 'Admin Management'],
       ['/content-intelligence', 'Content Intelligence'],
@@ -140,7 +145,7 @@ describe('the current section in the header (frontend-console-27)', () => {
     expect(consoleSectionFor('/login')).toBeNull();
   });
 
-  it('orders the links authoring first, then the ledger, then the super_admin sections', () => {
+  it('orders the links authoring first, then the ledger and Automation, then the super_admin sections', () => {
     signInAsSuperAdmin();
     shellAt('/ledger');
     const nav = screen.getByRole('navigation', { name: 'Console sections' });
@@ -150,6 +155,7 @@ describe('the current section in the header (frontend-console-27)', () => {
       'AI QA',
       'Content Intelligence',
       'Automation ledger',
+      'Automation',
       'Webhooks',
       'Admin Management',
     ]);
@@ -160,7 +166,16 @@ describe('consoleNav', () => {
   it('lists every section and lets a page override or drop one', () => {
     expect(consoleNav()).toEqual(CONSOLE_NAV);
     expect(Object.keys(CONSOLE_NAV).sort()).toEqual(
-      ['adminUsersHref', 'contentIntelligenceHref', 'decksHref', 'ledgerHref', 'qaHref', 'reviewHref', 'webhooksHref'],
+      [
+        'adminUsersHref',
+        'automationHref',
+        'contentIntelligenceHref',
+        'decksHref',
+        'ledgerHref',
+        'qaHref',
+        'reviewHref',
+        'webhooksHref',
+      ],
     );
     const scoped = consoleNav({ reviewHref: '/review?deckId=7', decksHref: undefined });
     expect(scoped.reviewHref).toBe('/review?deckId=7');
@@ -178,7 +193,7 @@ describe('consoleNav', () => {
         shells += 1;
         expect(tag, `${file}: a ConsoleShell without consoleNav()`).toContain('{...consoleNav(');
         expect(tag, `${file}: a hard-coded destination next to consoleNav()`).not.toMatch(
-          /\s(decksHref|contentIntelligenceHref|reviewHref|qaHref|ledgerHref|webhooksHref|adminUsersHref)=/,
+          /\s(decksHref|contentIntelligenceHref|reviewHref|qaHref|ledgerHref|automationHref|webhooksHref|adminUsersHref)=/,
         );
       }
     }
