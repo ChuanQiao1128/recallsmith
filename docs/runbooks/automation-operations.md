@@ -123,9 +123,18 @@ before the next.
       - `409 EVAL_GATE_REVOKED` — not recorded: the same report bytes belong to a revoked gate. A revoke
         is final; run the evaluation again.
    Check: the card shows a current, passed gate whose reviewer is
-   `openai-mantle` / `openai.gpt-5.5` / `qa-v4-auto` (or `bedrock-converse` / `global.openai.gpt-5.5` /
-   `qa-v4-auto` if the fallback was the provider actually used), and the author configuration id the
-   runner uses now (the runner's run meta, `authorConfigId`).
+   `openai-mantle` / `openai.gpt-5.5` / `qa-v4-auto` / effective effort `high` (or `bedrock-converse` /
+   `global.openai.gpt-5.5` / `qa-v4-auto` / `provider-default` if the fallback was the provider actually
+   used), and the author configuration id the runner uses now (the runner's run meta, `authorConfigId`).
+   The reviewer's effective effort (`reviewer.effectiveEffort`) must equal what production ai-qa sends
+   for `AI_EFFORT` in `services/ai-qa/env/prod.env.json` (`high` → `high` on `openai-mantle`; `max` is
+   sent as `xhigh`; `bedrock-converse` sends none, `provider-default`): core compares it with every QA
+   report's `effectiveEffort` (contract O1). Then, with ai-qa deployed at or after R18F (F02, which added
+   `effectiveEffort` to the report; step 4 or "Upgrading to R18E–R18G"), open a dry-run decision made
+   **after** the gate was recorded (Decisions tab, the decision's event details): it shows
+   `reviewerMatchesGate: true` and `authorMatchesGate: true`. `false` there means a live auto-accept on
+   the same draft would route to a person (`REVIEWER_NOT_GATED` / `AUTHOR_NOT_GATED`): fix the mismatch
+   before step 7.
 6. **Review the dry run** for at least two weeks against the promotion checklist below.
 7. **live, publish held.** Set `"AUTOMATION_AUTO_PUBLISH":"0"` and `"AUTOMATION_MODE":"live"`, deploy.
    Check: status `effective = "live"`; watch the first live batch end to end (auto-accepted card, its
@@ -148,7 +157,17 @@ before the next.
     newest gate's; any other draft routes to a person with `AUTHOR_NOT_GATED`. So after changing any of
     them (a new `DC_RUNNER_MODEL` or runner default model, an edited author-cards skill or prompt, new
     runner arguments), produce a new new-facts stratum with the new configuration (step 5.1, QA off around the window), run and
-    record a new gate (5.2–5.3) before expecting auto-accepts again.
+    record a new gate (5.2–5.3) before expecting auto-accepts again. The claude arguments include the
+    MCP tool surface (tool names, descriptions and input schemas, lint limits and the MCP server
+    version, R18E N4), so an MCP server release that changes it (R18G P3 bumped `MCP_SERVER_VERSION`)
+    is an author change too.
+    **Changed reviewer → new gate** (contracts N2, O1). The same holds on the reviewer side: a change of
+    the automation reviewer's provider, model, prompt version or **effective effort** needs a new gate
+    (5.2–5.3; the new-facts stratum stays valid while the author is unchanged). ai-qa has one
+    `AI_EFFORT` for both reviewer profiles (`services/ai-qa/env/prod.env.json`), so changing it for
+    human QA also changes the automation reviewer's effort: after that deploy every live draft routes to
+    a person with `REVIEWER_NOT_GATED` until a gate measured at the new effort is recorded. Change
+    `AI_EFFORT` only together with a new gate, or not at all while live.
 
 ## Upgrading a running system (R18D, 2026-09-28)
 
@@ -173,19 +192,57 @@ missing data counts as breaching.
 
 The same step is in infra/RUNBOOK.md §7, next to the tick alarm step.
 
+## Upgrading to R18E–R18G (2026-09-28)
+
+Rounds E–G changed the author identity, the QA report and the Mac tools. After deploying them to a
+running system, in this order (the automation stays in `dry_run` throughout; switch to live only via
+the promotion checklist):
+
+- [ ] Core first: `DRY_RUN=1 ENV=prod ./src_C/deploy.sh`, then `ENV=prod ./src_C/deploy.sh` (the
+      round's core and core-vpc code: the gate intake, the `effectiveEffort` match, P1 and P2).
+- [ ] Then ai-qa (contract O1, R18F F02: every automation-profile report carries `effectiveEffort`):
+      `DRY_RUN=1 services/deploy-python-lambda.sh ai-qa`, then the same without `DRY_RUN=1`. Deploy it
+      **before** `AUTOMATION_MODE` is ever set to `live`: core fails closed on a report without the key,
+      so every live draft would route to a person with `REVIEWER_NOT_GATED`.
+- [ ] On the Mac, after `git pull`, rebuild both tools the hourly job runs, then check:
+      `(cd tools/mcp-server && npm ci && npm run build)`,
+      `(cd tools/author-runner && npm ci && npm run build)`,
+      `node tools/author-runner/dist/index.js status`. Without a `tools/mcp-server/dist/tool-surface.json`
+      that describes the built `dist/index.js` (R18E N4, R18F bundle hash) the runner claims nothing
+      and logs `author_config_error` (tools/author-runner/README.md, "Upgrading").
+- [ ] Re-produce any new-facts stratum captured before the upgrade (rollout step 5.1, QA off around the
+      window). R18E put the MCP tool surface into `authorConfigId`, and R18G P3 bumped the MCP server
+      version, so a stratum captured with an older runner measured an author no live draft carries;
+      then run and record a new gate (5.2–5.3).
+- [ ] After the gate is recorded, open a dry-run decision made after it (Decisions tab, the decision's
+      event details): `reviewerMatchesGate: true` and `authorMatchesGate: true` (rollout step 5,
+      Check). `reviewerMatchesGate: false` means the reviewer, its prompt version or its effective
+      effort differs from the gate's (for example ai-qa not yet deployed, or `AI_EFFORT` changed);
+      `authorMatchesGate: false` means the runner's `authorConfigId` differs (rebuild or re-gate).
+- [ ] Queue only `http(s)` URLs (R18G P3): in an automation run the MCP server refuses a local file
+      source (`SOURCE_LOCAL_NOT_ALLOWED_IN_AUTOMATION`), so such an item fails like any other run error.
+
 ## Promotion checklist (dry_run → live)
 
 All must hold on the day of step 7; record the numbers in the release notes.
 
 - **Eval gate** (enforced by core; A00 §15.3): the newest gate is passed and unrevoked, for the exact
-  reviewer triple above. Its thresholds: seeded recall ≥ 0.90 (95 % CI lower bound ≥ 0.85), every class
-  ≥ 0.75, control false-positive rate ≤ 0.20; auto-accept precision ≥ 0.97 (CI lower bound ≥ 0.93) on
-  ≥ 120 distinct would-accept cards; defect escape rate ≤ 0.20; two reps each; a new-facts stratum of
+  reviewer above: provider, model, prompt version **and effective effort** (rollout step 5, Check).
+  Its thresholds: seeded recall ≥ 0.90 (95 % CI lower bound ≥ 0.85), every class ≥ 0.75,
+  control false-positive rate ≤ 0.20; auto-accept precision ≥ 0.97 (CI lower bound ≥ 0.93) on ≥ 120
+  distinct would-accept cards; defect escape rate ≤ 0.20; two reps each; a new-facts stratum of
   ≥ 51 distinct would-accept cards with precision ≥ 0.97 (CI lower bound ≥ 0.93).
 - **Author = the gated author** (R18D M1): the gate's author configuration id equals the `authorConfigId`
   in the runner's current run meta. If the runner's model, skill, prompt or arguments changed since the
   gate, it does not: produce a new stratum and gate first (rollout step 10), or every live draft routes
   to a person with `AUTHOR_NOT_GATED`.
+- **Reviewer effort = the gated effort** (contract O1): the gate's `reviewer.effectiveEffort` equals the
+  effort production ai-qa sends for its current `AI_EFFORT` (`services/ai-qa/env/prod.env.json`). If
+  `AI_EFFORT` changed since the gate (it is shared with human QA), it does not: run and record a new
+  gate first (rollout step 10), or every live draft routes to a person with `REVIEWER_NOT_GATED`.
+- **ai-qa deployed with O1, matches shown:** ai-qa is deployed at or after R18F (F02), and a dry-run
+  decision made after the gate was recorded shows `reviewerMatchesGate: true` and
+  `authorMatchesGate: true` in its event details (Decisions tab).
 - **Jury spot-check.** The authored-v2 precision labels come from a model jury only; no person labelled a
   card. The owner hand-checks about 50 jury-labelled authored-v2 cards (mixed correct and defective) and
   agrees with the jury on ≥ 0.95 of them. Below that, the gate's precision is not trusted: fix the labels
@@ -216,6 +273,12 @@ One line each: what it means → what to do.
 - `runner_stalled` — the Mac runner sent no heartbeat within `AUTOMATION_RUNNER_STALE_MINUTES` → wake the
   Mac, `node tools/author-runner/dist/index.js status`, reinstall with `tools/author-runner/scripts/install.sh`
   if the launchd job is gone.
+- `runner_stalled` (runner in error; R18G P1) — the runner's heartbeat is fresh but its state is `error`
+  (a `last_error` that is not `RUNNER_UNAVAILABLE`), due queued items wait, and it started no run in the
+  last 2 h: it wakes up but refuses to claim (for example `author_config_error` after a pull without a
+  rebuild). One email per runner and UTC day; it names `last_error` → on the Mac, read the error
+  (`node tools/author-runner/dist/index.js status`, the runner log), fix it (usually rebuild both tools,
+  "Upgrading to R18E–R18G"), and check that the next hourly run claims.
 - `runner_login_expiring` — the runner's agent login expires soon → on the Mac,
   `node tools/mcp-server/dist/index.js login`.
 - `runner_run_failed` — one authoring run failed → read the error in the Runs tab (`?tab=runs&runId=`);
@@ -224,6 +287,13 @@ One line each: what it means → what to do.
 - `queue_item_failed` (subject "queue item N failed 3 times") — a queue item failed three times and is
   dropped → open the URL; if the source is unusable, leave it; otherwise re-add it in the Queue tab after
   fixing the cause.
+- `queue_item_failed` (partial item; R18G P2) — the runner became unavailable (`RUNNER_UNAVAILABLE`)
+  after the run had already submitted drafts for the item, so the item was finished `done` with only
+  part of its page authored and is **not** put back in the queue (re-authoring would draft its cards
+  twice). One email per item → review the submitted drafts as usual; fix the runner (see
+  `runner_unavailable`), then re-add the same URL in the Queue tab so the rest of the page is authored
+  (the author-cards skill checks duplicates, so the new run should not redraft the submitted cards;
+  reject any duplicate it still drafts).
 - `queue_item_failed` (agent blocked; subject "agent blocked on queue item N", `lastError` starting with
   `AGENT_BLOCKED`) — the agent said it could not do the item; the item failed on this first attempt and
   is **not** retried → read the reason in `lastError`, then fix the source (a better URL, a different
@@ -254,10 +324,13 @@ One line each: what it means → what to do.
   back to `queued` without using an attempt, but not at once: it is due again after 15 min, then 30 min
   (15 min × 2^(n−1), at most 24 h, n = its consecutive `RUNNER_UNAVAILABLE` completes). At the third
   consecutive one the item is not requeued: it stops for a person with `RUNNER_UNAVAILABLE_REPEATED`
-  and one exception email says so (deduped). For a cause a retry cannot fix (wrong provider, the MCP
+  and one exception email says so (deduped). If the run had already submitted drafts, the item is not
+  put back either: it finishes `done` and the partial-item `queue_item_failed` email above says how to
+  author the rest (R18G P2). For a cause a retry cannot fix (wrong provider, the MCP
   server failing, claude missing) the runner also holds itself on the Mac, like after a usage limit
-  (`<log dir>/runner-state.json`, tools/author-runner/README.md), and the hold clears only when the
-  author configuration or the Claude CLI changes → read the `RUNNER_UNAVAILABLE:` error in the Runs
+  (`<log dir>/runner-state.json`, tools/author-runner/README.md), and the hold clears when the
+  author configuration or the Claude CLI changes, or when you delete `<log dir>/runner-state.json`
+  after fixing the cause → read the `RUNNER_UNAVAILABLE:` error in the Runs
   tab, fix it on the Mac (log in, wait for the limit, `status`); the next scheduled run resumes the
   requeued items, and a `RUNNER_UNAVAILABLE_REPEATED` item must be re-added in the Queue tab.
 - `agent_note` (R18B K3) — a run finished with notes from the agent and no decisions (it drafted nothing)
