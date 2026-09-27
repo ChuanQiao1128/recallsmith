@@ -113,12 +113,19 @@ public static class QaGate
     return rows.Select(r => Convert.ToInt64(r["card_id"], CultureInfo.InvariantCulture)).ToHashSet();
   }
 
+  /// <summary>True when the gate can refuse a publish: both <see cref="EnabledEnv"/> and <see cref="RequiredEnv"/> are truthy.</summary>
+  public static bool IsEnforced() => Env.Flag(EnabledEnv) && Env.Flag(RequiredEnv);
+
   /// <summary>
-  /// null = the publish may proceed. Unless both flags are truthy this returns null without any query.
+  /// null = the publish may proceed. Unless both flags are truthy this returns null without any query. When it
+  /// refuses with <c>AI_QA_REQUIRED</c> and <paramref name="requestedBySub"/> is known, it also starts (or reuses) a
+  /// <c>scope=changed</c> run for the unreviewed cards and returns its id in the error (automation-17), so the
+  /// author only waits for the run and publishes again.
   /// </summary>
-  public static async Task<APIGatewayProxyResponse?> EvaluatePublishAsync(NpgsqlConnection conn, long deckId, Res res, CancellationToken ct = default)
+  public static async Task<APIGatewayProxyResponse?> EvaluatePublishAsync(NpgsqlConnection conn, long deckId, Res res,
+    string? requestedBySub = null, CancellationToken ct = default)
   {
-    if (!(Env.Flag(EnabledEnv) && Env.Flag(RequiredEnv))) return null;
+    if (!IsEnforced()) return null;
 
     QaGateState state;
     try
@@ -135,8 +142,23 @@ public static class QaGate
     {
       Log.Event("info", new { tag = "ai_qa", outcome = "publish_refused", code = "AI_QA_REQUIRED", deckId, cards = missing.Count });
       RouteMetrics.EmitGauge(RefusalsMetric, 1);
-      return Helpers.ErrorEnvelope(res, 409, "AI_QA_REQUIRED",
-        $"AI QA required for {missing.Count} card(s): {string.Join(", ", missing.Take(MaxListed).Select(c => c.StableUid))}");
+      var message = $"AI QA required for {missing.Count} card(s): {string.Join(", ", missing.Take(MaxListed).Select(c => c.StableUid))}";
+      var chained = requestedBySub is null ? null : await QaRuns.StartChangedRunAsync(conn, deckId, requestedBySub, "publish_gate");
+      if (chained is null) return Helpers.ErrorEnvelope(res, 409, "AI_QA_REQUIRED", message);
+      return res.Raw(409, new
+      {
+        success = false,
+        data = (object?)null,
+        error = new
+        {
+          code = "AI_QA_REQUIRED",
+          message,
+          runId = chained.RunId,
+          qaRun = new { status = chained.Status, runId = chained.RunId, code = chained.Code, message = chained.Message },
+        },
+        traceId = res.TraceId,
+        version = "v1",
+      });
     }
 
     if (state.OpenBlockers.Count > 0)

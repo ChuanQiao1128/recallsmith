@@ -307,9 +307,26 @@ public static class Publish
         return res.BadRequest("MCQ_PUBLISH_GATE", $"{gate.Value.StableUid}: {gate.Value.Code}");
       }
 
-      // AI QA gate (contract §7.10): refuses only when AI_QA_ENABLED and AI_QA_REQUIRED are both truthy.
-      var qaGate = await Qa.QaGate.EvaluatePublishAsync(conn, deckIdInt, res);
+      // AI QA gate (contract §7.10): refuses only when AI_QA_ENABLED and AI_QA_REQUIRED are both truthy. A refusal
+      // for unreviewed cards also starts (or reuses) the QA run that would clear it (automation-17).
+      var qaGate = await Qa.QaGate.EvaluatePublishAsync(conn, deckIdInt, res, adminSub);
       if (qaGate is not null) return qaGate;
+
+      // Bind the build to what the gate passed (backend-design-16): the cards read before the gate must still be
+      // the cards after it, and the Worker refuses to build from anything else (AI_QA_STALE).
+      string? qaSnapshot = null;
+      if (Qa.QaGate.IsEnforced())
+      {
+        var gated = PublishSnapshot.Digest(cardRows.Select(PublishSnapshot.FromRow));
+        var current = PublishSnapshot.Digest((await DbUtil.QueryAsync(conn, null, CardsSql, [deckIdInt])).Select(PublishSnapshot.FromRow));
+        if (!string.Equals(gated, current, StringComparison.Ordinal))
+        {
+          Log.Event("info", new { tag = "publish", outcome = "refused", code = PublishSnapshot.StaleErrorCode, deckId = deckIdInt });
+          return Helpers.ErrorEnvelope(res, 409, PublishSnapshot.StaleErrorCode,
+            "Cards changed while the publish was being checked; publish again so the AI QA gate sees the current cards");
+        }
+        qaSnapshot = current;
+      }
 
       // --- ASYNC PUBLISH LOGIC ---
 
@@ -355,7 +372,12 @@ public static class Publish
         insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note)
         values ($1, $2, $3, $4, $5, 'PENDING', $6, $7)
         """;
-      await DbUtil.ExecuteAsync(conn, null, insertJobSql, [jobId, buildId, s3Key, deckIdInt, deckSlug, adminSub, note]);
+      const string insertGatedJobSql = """
+        insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note, qa_snapshot_sha256)
+        values ($1, $2, $3, $4, $5, 'PENDING', $6, $7, $8)
+        """;
+      if (qaSnapshot is null) await DbUtil.ExecuteAsync(conn, null, insertJobSql, [jobId, buildId, s3Key, deckIdInt, deckSlug, adminSub, note]);
+      else await DbUtil.ExecuteAsync(conn, null, insertGatedJobSql, [jobId, buildId, s3Key, deckIdInt, deckSlug, adminSub, note, qaSnapshot]);
 
       // 3. Create the SQS message payload
       var messageBody = JsonSerializer.Serialize(new

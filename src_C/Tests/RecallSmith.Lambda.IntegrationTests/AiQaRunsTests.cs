@@ -279,7 +279,8 @@ public class AiQaRunsTests
       Assert.Equal(runId, m.GetProperty("runId").GetString());
       Assert.Equal(chunk, m.GetProperty("chunk").GetInt32());
       Assert.Equal(2, m.GetProperty("chunkCount").GetInt32());
-      Assert.Equal("qa-v1", m.GetProperty("promptVersion").GetString());
+      // Y02 (backend-design-12): the message carries the version the Lambda runs (qa-v3), no longer the stale qa-v1.
+      Assert.Equal(QaRuns.PromptVersion, m.GetProperty("promptVersion").GetString());
       Assert.Equal(deck.Id, m.GetProperty("deck").GetProperty("id").GetInt64());
       Assert.Equal(deck.Slug, m.GetProperty("deck").GetProperty("slug").GetString());
       Assert.Equal("deck j13 chunks", m.GetProperty("deck").GetProperty("title").GetString());
@@ -324,6 +325,23 @@ public class AiQaRunsTests
     Assert.Equal("changed", run[0]["scope"]);
     Assert.Equal(7, Convert.ToInt32(run[0]["card_count"], CultureInfo.InvariantCulture));
     Assert.Equal(2, Convert.ToInt32(run[0]["chunk_count"], CultureInfo.InvariantCulture));
+    // backend-design-12: core does not pin a version on the run; the Lambda's report records it.
+    Assert.Null(run[0]["prompt_version"]);
+  }
+
+  [Fact]
+  public void PromptVersion_MatchesTheAiQaLambda()
+  {
+    // backend-design-12, cross-service contract: the version core-vpc sends is the one the ai-qa Lambda runs, so the
+    // Lambda never logs prompt_version_mismatch for a healthy deploy and a real mismatch stands out.
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "services", "ai-qa", "src", "ai_qa", "prompts.py"))) dir = dir.Parent;
+    Assert.NotNull(dir);
+    var prompts = File.ReadAllText(Path.Combine(dir!.FullName, "services", "ai-qa", "src", "ai_qa", "prompts.py"));
+    var match = System.Text.RegularExpressions.Regex.Match(prompts, "^PROMPT_VERSION\\s*=\\s*\"([^\"]+)\"\\s*$",
+      System.Text.RegularExpressions.RegexOptions.Multiline);
+    Assert.True(match.Success, "PROMPT_VERSION literal not found in services/ai-qa/src/ai_qa/prompts.py");
+    Assert.Equal(match.Groups[1].Value, QaRuns.PromptVersion);
   }
 
   [Fact]
@@ -727,7 +745,87 @@ public class AiQaRunsTests
     Assert.False(disabled.GetProperty("wouldBlock").GetBoolean());
   }
 
+  [Fact]
+  public async Task Status_ReportsTheLimitsAStartIsCheckedAgainst()
+  {
+    // Cross-wave contract (Y02/Y07): data.limits carries the per-run card cap, the daily cap, today's spend and
+    // the reservation of open runs, so the console never shows its own copies of the defaults.
+    using var env = new QaEnv();
+    env.Set(QaRuns.MaxCardsEnv, "150");
+    env.Set(QaRuns.DailyCapEnv, "42.5");
+    env.Set(QaRuns.EstUsdPerCardEnv, "0.25");
+    var deck = await NewDeckAsync("limits");
+    var a = await NewCardAsync(deck.Id, "limits-a", 1);
+    var b = await NewCardAsync(deck.Id, "limits-b", 2);
+    await SeedRunAsync(deck.Id, "running", [(a, "limits-a", "queued"), (b, "limits-b", "queued")], cost: 0.125m);
+
+    var limits = Data(await StatusAsync(deck.Id)).GetProperty("limits");
+
+    await using var conn = new NpgsqlConnection(_db.ConnectionString);
+    await conn.OpenAsync();
+    var (spent, openCards) = await QaRuns.SpendTodayAsync(conn, null);
+    Assert.True(openCards >= 2);
+    Assert.Equal(150, limits.GetProperty("maxCards").GetInt32());
+    Assert.Equal(42.5m, limits.GetProperty("dailyUsdCap").GetDecimal());
+    Assert.Equal(spent, limits.GetProperty("spentTodayUsd").GetDecimal());
+    Assert.Equal(openCards * 0.25m, limits.GetProperty("reservedTodayUsd").GetDecimal());
+    Assert.True(limits.GetProperty("spentTodayUsd").GetDecimal() >= 0.125m);
+  }
+
   // ---------------------------------------------------------------- resolve
+
+  [Fact]
+  public async Task ResolveFinding_ChargesReviewTime_ForFixedAndDismissed()
+  {
+    // automation-16: every resolution charges the editor's triage time to ai_qa_review (units 0), a dismissed
+    // false positive included; the time is capped at 30 minutes like a draft decision's, and a resolution without
+    // it is recorded as not measured.
+    using var env = new QaEnv();
+    var deck = await NewDeckAsync("resolvems");
+    var a = await NewCardAsync(deck.Id, "resolvems-a", 1);
+    var runId = await SeedRunAsync(deck.Id, "done", [(a, "resolvems-a", "done")]);
+    var dismissed = await SeedFindingAsync(runId, a, "major", "ambiguous_stem");
+    var fixedMinor = await SeedFindingAsync(runId, a, "minor", "weak_distractor");
+    var unmeasured = await SeedFindingAsync(runId, a, "minor", "other");
+    var invalid = await SeedFindingAsync(runId, a, "minor", "other");
+
+    Data(await ResolveAsync(dismissed.ToString(CultureInfo.InvariantCulture), new { resolution = "dismissed", reviewMs = 90_000 }));
+    Data(await ResolveAsync(fixedMinor.ToString(CultureInfo.InvariantCulture), new { resolution = "fixed", reviewMs = 3 * 60 * 60_000 }));
+    Data(await ResolveAsync(unmeasured.ToString(CultureInfo.InvariantCulture), new { resolution = "dismissed" }));
+    AssertError(await ResolveAsync(invalid.ToString(CultureInfo.InvariantCulture), new { resolution = "fixed", reviewMs = -1 }), 400, "VALIDATION_ERROR");
+    Assert.Equal("open", await _db.ScalarAsync("select resolution from ai_qa_findings where id = $1", invalid));
+
+    async Task<Dictionary<string, object?>> Row(long findingId) => Assert.Single(await _db.QueryAsync(
+      "select automation, units, outcome, actual_minutes, defects_caught, deck_id, details from automation_events where dedupe_key = $1",
+      $"qa-resolve:{findingId}"));
+
+    var d = await Row(dismissed);
+    Assert.Equal("ai_qa_review", d["automation"]);
+    Assert.Equal(0, Convert.ToInt32(d["units"], CultureInfo.InvariantCulture));
+    Assert.Equal("success", d["outcome"]);
+    Assert.Equal(1.5m, Convert.ToDecimal(d["actual_minutes"], CultureInfo.InvariantCulture));
+    Assert.Equal(0, Convert.ToInt32(d["defects_caught"], CultureInfo.InvariantCulture));
+    Assert.Equal(deck.Id, Convert.ToInt64(d["deck_id"], CultureInfo.InvariantCulture));
+    using (var details = JsonDocument.Parse((string)d["details"]!))
+    {
+      Assert.Equal("dismissed", details.RootElement.GetProperty("resolution").GetString());
+      Assert.True(details.RootElement.GetProperty("reviewTimeMeasured").GetBoolean());
+    }
+
+    var f = await Row(fixedMinor);
+    Assert.Equal(30m, Convert.ToDecimal(f["actual_minutes"], CultureInfo.InvariantCulture));
+    using (var details = JsonDocument.Parse((string)f["details"]!))
+    {
+      Assert.Equal(3 * 60 * 60_000, details.RootElement.GetProperty("rawReviewMs").GetInt32());
+    }
+
+    var u = await Row(unmeasured);
+    Assert.Null(u["actual_minutes"]);
+    using (var details = JsonDocument.Parse((string)u["details"]!))
+    {
+      Assert.False(details.RootElement.GetProperty("reviewTimeMeasured").GetBoolean());
+    }
+  }
 
   [Fact]
   public async Task ResolveFinding_FixedBlocker_RecordsLedgerDefect()

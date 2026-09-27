@@ -7,29 +7,22 @@ namespace RecallSmith.Lambda.Vpc;
 /// Least authority for the local authoring agent's token (R18 X02, ai-agent-6). A token minted for an agent app
 /// client (<see cref="AuthContext.IsAgentClient"/>, the <c>console-dev</c> client the MCP server signs in with)
 /// carries the owner's groups, and it sits on disk where the agent's own tools can read it. core-vpc therefore
-/// lets it reach only what the MCP tools need: deck list and read, card similarity, draft submit and the status of
-/// a draft it submitted. Accept/reject, publish, QA runs and finding resolution, webhooks, ledger writes, admin/db
-/// and every other route answer 403 <c>AGENT_CLIENT_FORBIDDEN</c>. The console's own client is unaffected.
+/// lets it reach exactly the endpoints tools/mcp-server/src calls: the deck list, card similarity and draft submit.
+/// These are also the only route keys the gateway's agent JWT authorizer is attached to (cross-wave contract, R18
+/// Y02); every other route, draft decisions, publish, QA, webhooks, the ledger and admin/db included, answers 403
+/// <c>AGENT_CLIENT_FORBIDDEN</c> here as defence in depth. The console's own client is unaffected.
 /// </summary>
 public static class AgentClientPolicy
 {
   public const string ErrorCode = "AGENT_CLIENT_FORBIDDEN";
 
-  // Suffix-matched exactly as VpcFunction matches these routes, so the policy and the router agree on stage-prefixed paths.
+  // Suffix-matched exactly as VpcFunction matches these routes, so the policy and the router agree on stage-prefixed
+  // paths. Keep in step with the MCP server's calls (api.ts listDecks, server.ts find_similar_cards and submit_draft).
   private static readonly (string Method, string Suffix)[] AllowedSuffixes =
   [
-    ("GET", "/health"),
     ("GET", "/api/v1/admin/decks"),
-    ("GET", "/api/v1/authoring/decks"),
     ("POST", "/api/v1/authoring/cards/similar"),
     ("POST", "/api/v1/authoring/drafts"),
-  ];
-
-  // Template routes, matched with RouteMatcher as the router does. Drafts.HandleGetDraft further limits an agent
-  // client to drafts submitted by its own subject.
-  private static readonly (string Method, string Template)[] AllowedTemplates =
-  [
-    ("GET", "/api/v1/authoring/drafts/:draftId"),
   ];
 
   /// <summary>True when an agent-client token may call <paramref name="method"/> on <paramref name="path"/> (trailing slash trimmed).</summary>
@@ -38,10 +31,6 @@ public static class AgentClientPolicy
     foreach (var (m, suffix) in AllowedSuffixes)
     {
       if (method.Equals(m, StringComparison.OrdinalIgnoreCase) && path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return true;
-    }
-    foreach (var (m, template) in AllowedTemplates)
-    {
-      if (method.Equals(m, StringComparison.OrdinalIgnoreCase) && RouteMatcher.Match(template, path) is not null) return true;
     }
     return false;
   }
@@ -56,6 +45,6 @@ public static class AgentClientPolicy
 
     Log.Event("warn", new { tag = "auth", reason = "agent_client_forbidden", traceId = req.TraceId, method = req.Method, path = req.Path });
     return Authoring.Helpers.ErrorEnvelope(res, 403, ErrorCode,
-      "The local authoring agent's token may only list and read decks, find similar cards, submit drafts and read its own drafts");
+      "The local authoring agent's token may only list decks, find similar cards and submit drafts");
   }
 }

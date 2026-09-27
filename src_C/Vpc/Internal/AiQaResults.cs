@@ -38,6 +38,20 @@ public static class AiQaResults
   public const decimal MaxCostUsd = 999_999m;
   public const string DefaultConsoleBaseUrl = "https://console.developercards.app";
 
+  /// <summary>
+  /// The route's own HMAC secret (cloud-security-resilience-2): when set, only a report signed with it is
+  /// accepted here, so the webhook dispatcher's credential cannot write AI QA results.
+  /// </summary>
+  public const string CallerSecretEnv = "INTERNAL_SECRET_AI_QA_RESULTS";
+
+  /// <summary>
+  /// One budget for every post-commit SQS send of a report (backend-design-15). A report carries up to
+  /// <see cref="MaxItems"/> flagged cards; the per-call enqueue deadline alone would let a hung SQS endpoint hold
+  /// the request far past the 30 s gateway timeout, which the ai-qa Lambda would treat as a failed report and
+  /// retry (re-billing the chunk). Internal so a test can shorten it; never changed in production.
+  /// </summary>
+  internal static TimeSpan AfterCommitBudget = TimeSpan.FromSeconds(8);
+
   private sealed record ReportFinding(string Severity, string Category, string Message, string? SuggestedFix);
 
   private sealed record ReportItem(long CardId, string ContentSha256, string Status, string? ErrorCode, List<ReportFinding> Findings,
@@ -60,7 +74,7 @@ public static class AiQaResults
   {
     if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
 
-    var v = Auth.VerifyInternalSignature(req);
+    var v = Auth.VerifyInternalSignature(req, CallerSecretEnv);
     if (!v.Ok) return res.Forbidden($"Internal auth failed: {v.Reason}");
 
     Report report;
@@ -84,15 +98,17 @@ public static class AiQaResults
       int cardsDone;
       int cardCount;
       int becameDone = 0, errored = 0, kept = 0, ignored = 0, statusChanged = 0;
+      string? storedPromptVersion;
       var transitions = new List<(long CardId, string Status)>();
       var flagged = new List<(long CardId, string StableUid, List<ReportFinding> Findings)>();
 
       await using (var tx = await conn.BeginTransactionAsync())
       {
         var runRows = await DbUtil.QueryAsync(conn, tx,
-          "select id, deck_id, status, chunk_count from ai_qa_runs where id = $1 for update", [report.RunId]);
+          "select id, deck_id, status, chunk_count, prompt_version from ai_qa_runs where id = $1 for update", [report.RunId]);
         if (runRows.Count == 0) return Authoring.Helpers.ErrorEnvelope(res, 404, "RUN_NOT_FOUND", "AI QA run not found");
         deckId = Convert.ToInt64(runRows[0]["deck_id"], CultureInfo.InvariantCulture);
+        storedPromptVersion = runRows[0]["prompt_version"] as string;
         var chunkCount = Convert.ToInt32(runRows[0]["chunk_count"], CultureInfo.InvariantCulture);
         if (report.Chunk >= chunkCount)
         {
@@ -128,6 +144,16 @@ public static class AiQaResults
             continue;
           }
 
+          // The Lambda echoes the hash core-vpc sent for the item; a report for any other content is not a review
+          // of this item and is not applied (cloud-security-resilience-2: a forged report must know the unpublished
+          // card's content hash, not just the run id a card.flagged webhook carries).
+          if (!string.Equals(item.ContentSha256, state.ContentSha256, StringComparison.Ordinal))
+          {
+            Log.Event("warn", new { tag = "ai_qa", reason = "hash_echo_mismatch", runId = report.RunId, chunk = report.Chunk, cardId = item.CardId });
+            ignored++;
+            continue;
+          }
+
           var previous = state.Status;
           var keep = previous == "done" && (item.Status != "done" || state.ResolvedFindings > 0);
           if (keep)
@@ -138,19 +164,16 @@ public static class AiQaResults
               Log.Event("warn", new { tag = "ai_qa", reason = "resolved_findings_kept", runId = report.RunId, chunk = report.Chunk, cardId = item.CardId });
             }
             // The outcome is kept, but a retried chunk re-reviewed (and re-billed) this card: its usage still
-            // counts toward the daily cap (backend-design-6, cloud-security-resilience-3).
+            // counts toward the daily cap (backend-design-6, cloud-security-resilience-3). The attempt's request id
+            // is stored with it, so an exact replay of this report (the Lambda's POST retry) is not billed twice.
             if (IsNewAttempt(state, item))
             {
               await DbUtil.ExecuteAsync(conn, tx,
-                $"update ai_qa_items set {AccumulateUsageSql} where run_id = $1 and card_id = $2",
-                [report.RunId, item.CardId, item.InputTokens, item.OutputTokens, item.CacheReadTokens, item.EstimatedCostUsd]);
+                $"update ai_qa_items set {AccumulateUsageSql}, request_id = $7::text where run_id = $1 and card_id = $2",
+                [report.RunId, item.CardId, item.InputTokens, item.OutputTokens, item.CacheReadTokens, item.EstimatedCostUsd, item.RequestId]);
+              state.RequestId = item.RequestId;
             }
             continue;
-          }
-
-          if (!string.Equals(item.ContentSha256, state.ContentSha256, StringComparison.Ordinal))
-          {
-            Log.Event("warn", new { tag = "ai_qa", reason = "hash_echo_mismatch", runId = report.RunId, chunk = report.Chunk, cardId = item.CardId });
           }
 
           // Usage accumulates across attempts (a retried chunk re-bills the card); an exact replay of the same
@@ -163,11 +186,12 @@ public static class AiQaResults
           await DbUtil.ExecuteAsync(conn, tx,
             $"""
             update ai_qa_items
-            set status = $3, error_code = $4::text, latency_ms = $5::int, {usageSql}, request_id = $10::text, updated_at = now()
+            set status = $3, error_code = $4::text, latency_ms = $5::int, {usageSql}, request_id = $10::text,
+              prompt_version = coalesce($11::text, prompt_version), updated_at = now()
             where run_id = $1 and card_id = $2
             """,
             [report.RunId, item.CardId, item.Status, item.ErrorCode, item.LatencyMs, item.InputTokens, item.OutputTokens,
-             item.CacheReadTokens, item.EstimatedCostUsd, item.RequestId]);
+             item.CacheReadTokens, item.EstimatedCostUsd, item.RequestId, report.PromptVersion]);
           state.RequestId = item.RequestId;
 
           if (item.Status == "done")
@@ -212,7 +236,7 @@ public static class AiQaResults
             estimated_cost_usd = a.cost,
             provider = coalesce(r.provider, $2::text),
             model = coalesce(r.model, $3::text),
-            prompt_version = coalesce(r.prompt_version, $4::text),
+            prompt_version = coalesce($4::text, r.prompt_version),
             status = case when a.queued = 0 and a.reviewed = 0 then 'failed' when a.queued = 0 then 'done'
               when r.status = 'failed' then 'failed' else 'running' end,
             error_code = case when a.queued = 0 and a.reviewed = 0 then 'ALL_ITEMS_FAILED' when a.queued = 0 then null else r.error_code end,
@@ -248,6 +272,15 @@ public static class AiQaResults
         cardCount = Convert.ToInt32(recomputed[0]["card_count"], CultureInfo.InvariantCulture);
 
         await tx.CommitAsync();
+      }
+
+      // core-vpc does not pin a prompt version (backend-design-12): the run records what the Lambda reports. A
+      // run whose chunks report different versions (a deploy in the middle of a run) is worth a warning.
+      if (storedPromptVersion is not null && report.PromptVersion is not null &&
+          !string.Equals(storedPromptVersion, report.PromptVersion, StringComparison.Ordinal))
+      {
+        Log.Event("warn", new { tag = "ai_qa", reason = "prompt_version_changed", runId = report.RunId, chunk = report.Chunk,
+          previous = storedPromptVersion, reported = report.PromptVersion });
       }
 
       await AfterCommitAsync(conn, report, deckId, flagged, becameDone, errored, kept, ignored, transitions);
@@ -286,6 +319,7 @@ public static class AiQaResults
     List<(long CardId, string StableUid, List<ReportFinding> Findings)> flagged,
     int becameDone, int errored, int kept, int ignored, List<(long CardId, string Status)> transitions)
   {
+    using var budget = new CancellationTokenSource(AfterCommitBudget);
     try
     {
       if (flagged.Count > 0)
@@ -293,6 +327,8 @@ public static class AiQaResults
         var deckSlug = Convert.ToString(
           await DbUtil.ExecuteScalarAsync(conn, null, "select slug from decks where id = $1", [deckId]), CultureInfo.InvariantCulture);
         var consoleUrl = $"{ConsoleBaseUrl()}/decks/qa?deckId={deckId.ToString(CultureInfo.InvariantCulture)}&runId={report.RunId}";
+        // Every send shares one request-scoped budget. Once it has run out, each remaining card still gets its
+        // delivery rows (marked enqueue_failed at once, without waiting on SQS), which the sweep re-sends.
         foreach (var (cardId, stableUid, findings) in flagged)
         {
           await WebhookEvents.EnqueueAsync(conn, "card.flagged", new
@@ -314,7 +350,7 @@ public static class AiQaResults
               .Select(f => new { severity = f.Severity, category = f.Category, message = f.Message })
               .ToList(),
             consoleUrl,
-          });
+          }, ct: budget.Token);
         }
       }
     }

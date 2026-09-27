@@ -41,4 +41,10 @@ public class JobInfo
   public int DeckId { get; set; }
   public string DeckSlug { get; set; } = string.Empty;
   public string Status { get; set; } = string.Empty;
+
+  /// <summary>
+  /// Digest of the cards the AI QA publish gate passed (deck_publishes.qa_snapshot_sha256, migration 033), or null
+  /// when the gate was off. The processor refuses to build other cards (backend-design-16).
+  /// </summary>
+  public string? QaSnapshotSha256 { get; set; }
 }

@@ -7,6 +7,7 @@ using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
 using RecallSmith.Lambda.Vpc.Authoring;
 using RecallSmith.Lambda.Vpc.Pagination;
+using RecallSmith.Lambda.Vpc.Qa;
 
 namespace RecallSmith.Lambda.Vpc.Review;
 
@@ -464,6 +465,8 @@ public static class Drafts
     var deny = Auth.RequireAdmin(auth, res);
     if (deny is not null) return deny;
     if (!req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)) return res.MethodNotAllowed("Method not allowed");
+    // A decided draft always records who decided it (ck_ai_drafts_decided, migration 033).
+    if (string.IsNullOrEmpty(auth.UserSub)) return res.Forbidden("Requires authenticated admin user");
 
     var id = ParseDraftId(draftId);
     if (id is null) return DraftNotFound(res);
@@ -481,6 +484,7 @@ public static class Drafts
       DraftCard? edited = null;
       if (body.TryGetProperty("card", out var cardEl) && cardEl.ValueKind != JsonValueKind.Null) edited = DraftCard.Parse(cardEl);
       var (reviewMs, rawReviewMs) = ParseReviewMs(body);
+      var runQa = ParseRunQa(body);
 
       var deckId = await DraftDeckIdAsync(conn, id.Value);
       if (deckId is null) return DraftNotFound(res);
@@ -556,7 +560,15 @@ public static class Drafts
         DeckId: deckId.Value, Ref: id.Value.ToString(CultureInfo.InvariantCulture), DedupeKey: $"draft-accept:{id.Value}",
         Details: ReviewTimeDetails(reviewMs, rawReviewMs)));
 
-      return res.Ok(new { draftId = id.Value, cardId, stableUid, action });
+      if (!runQa) return res.Ok(new { draftId = id.Value, cardId, stableUid, action });
+
+      // accept → QA chain (automation-17): queue a scope=changed run for the deck (the new card and any other
+      // unreviewed change), or reuse the deck's open run. The accept has committed either way.
+      var chained = await QaRuns.StartChangedRunAsync(conn, deckId.Value, auth.UserSub, "draft_accept");
+      var qa = chained is null
+        ? new { status = "disabled", runId = (Guid?)null, code = (string?)"AI_QA_DISABLED", message = (string?)"AI QA is disabled (AI_QA_ENABLED is off)" }
+        : new { status = chained.Status, runId = chained.RunId, code = chained.Code, message = chained.Message };
+      return res.Ok(new { draftId = id.Value, cardId, stableUid, action, qa });
     }
     catch (PostgresException pg) when (pg is { SqlState: "23505", ConstraintName: "uq_cards_deck_uid" })
     {
@@ -577,6 +589,8 @@ public static class Drafts
     var deny = Auth.RequireAdmin(auth, res);
     if (deny is not null) return deny;
     if (!req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)) return res.MethodNotAllowed("Method not allowed");
+    // A decided draft always records who decided it (ck_ai_drafts_decided, migration 033).
+    if (string.IsNullOrEmpty(auth.UserSub)) return res.Forbidden("Requires authenticated admin user");
 
     var id = ParseDraftId(draftId);
     if (id is null) return DraftNotFound(res);
@@ -676,6 +690,18 @@ public static class Drafts
     if (!body.TryGetProperty("reviewMs", out var el) || el.ValueKind == JsonValueKind.Null) return (null, null);
     if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var ms) && ms >= 0) return (Math.Min(ms, ReviewMsCap), ms);
     throw new ValidationError("reviewMs must be an integer in 0..2147483647", "reviewMs");
+  }
+
+  /// <summary>The optional <c>runQa</c> flag of an accept: absent/null → false; anything but a boolean is a validation error.</summary>
+  private static bool ParseRunQa(JsonElement body)
+  {
+    if (!body.TryGetProperty("runQa", out var el) || el.ValueKind == JsonValueKind.Null) return false;
+    return el.ValueKind switch
+    {
+      JsonValueKind.True => true,
+      JsonValueKind.False => false,
+      _ => throw new ValidationError("runQa must be a boolean", "runQa"),
+    };
   }
 
   /// <summary>Ledger details of an accept: whether review time was measured, and the raw value when it was clamped.</summary>
