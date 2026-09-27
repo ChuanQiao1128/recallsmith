@@ -3,7 +3,7 @@
 Issue #374, release 1.8.0 fix wave round 2 (r18y-t). One section per audit finding. Paths are
 relative to the repo root; line numbers are those on branch `delivery/r18yt/Y06-374`.
 
-Gates run: `cd tools/mcp-server && npm run build && npx vitest run` (54 tests) and
+Gates run: `cd tools/mcp-server && npm run build && npx vitest run` (56 tests) and
 `cd integrations/n8n && node --test lib/` (24 tests).
 
 ### ai-agent-23
