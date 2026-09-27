@@ -205,6 +205,8 @@ describe('the publishes waiting for a person (frontend-console-15, L4)', () => {
     api.fetchAutomationStatus.mockResolvedValue(
       ok(
         statusFixture({
+          // F04 frontend-console-35: the decks are listed in live mode; a dry run keeps them blind.
+          mode: { configured: 'live', effective: 'live', liveBlockedReason: null, autoPublish: true },
           backlog: {
             humanPending: 0,
             oldestHumanPendingAt: null,
@@ -240,6 +242,7 @@ describe('the publishes waiting for a person (frontend-console-15, L4)', () => {
     api.fetchAutomationStatus.mockResolvedValue(
       ok(
         statusFixture({
+          mode: { configured: 'live', effective: 'live', liveBlockedReason: null, autoPublish: true },
           backlog: { humanPending: 0, oldestHumanPendingAt: null, humanPublishes: 1, humanPublishItems: null },
         }),
       ),
@@ -251,6 +254,8 @@ describe('the publishes waiting for a person (frontend-console-15, L4)', () => {
   });
 
   it('names the drafts link by what it opens, not by its digit (frontend-console-19)', async () => {
+    // F04 frontend-console-35: the routed-draft count shows in live mode only.
+    api.fetchAutomationStatus.mockResolvedValue(ok(statusFixture({ mode: { configured: 'live', effective: 'live', liveBlockedReason: null, autoPublish: true } })));
     mountAt('/automation');
     const backlog = await screen.findByRole('region', { name: 'Open exceptions' });
     const link = within(backlog).getByRole('link', { name: '2 drafts waiting for you: show open exceptions' });

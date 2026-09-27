@@ -10,7 +10,8 @@
 // normalizer neither keeps nor lists in IGNORED below. So a server addition
 // like shadow.blindDecided (C02) breaks a console test, not the go-live
 // review. The reverse check keeps the console from reading a key the server
-// never pins, except the few newer optional keys listed in TOLERATED.
+// never pins; TOLERATED is empty (F04 frontend-console-37), so a key the
+// server drops from its pins fails here too.
 //
 // E05 frontend-console-31: key shapes alone let an enumeration drift through
 // (the server's AUTHOR_NOT_GATED reason, R18D M1, never reached the console).
@@ -96,16 +97,11 @@ const NOTIFICATION_KEYS = pinnedKeys(serverTest('AutomationNotificationsTests.cs
 const IGNORED: Record<string, string[]> = {};
 
 /**
- * Keys the console reads that the server pins do not list yet: optional
- * R18D keys the console tolerates the absence of (M2 live). N1 (R18E) makes
- * the server pin evalGate.authorConfigId in GateKeys (src_C's side of
- * frontend-console-31); once it does, the tolerance ends by itself and the
- * check is exact, so the key can never again hide behind this list.
+ * Keys the console reads that the server pins do not list, with the reason.
+ * None today (F04 frontend-console-37): the server pins status.live and
+ * evalGate.authorConfigId, so a future optional key needs its own reasoned entry.
  */
-const TOLERATED: Record<string, string[]> = {
-  status: ['live'],
-  evalGate: GATE_KEYS.includes('authorConfigId') ? [] : ['authorConfigId'],
-};
+const TOLERATED: Record<string, string[]> = {};
 
 /** A raw object with every pinned key; '1' reads as text, as a number and as an id. */
 function rawOf(keys: string[], nested: Record<string, unknown> = {}): Record<string, unknown> {
@@ -182,7 +178,7 @@ describe('the console normalizers keep every key the server pins (frontend-conso
     for (const section of ['mode', 'queue', 'decisions24h', 'shadow', 'spend', 'watch', 'notifications', 'backlog']) {
       expectSameKeys(section, raw[section as keyof typeof raw], status[section]);
     }
-    if ('live' in STATUS) expectSameKeys('live', STATUS.live, status.live);
+    expectSameKeys('live', STATUS.live, status.live);
     expectSameKeys('runner', raw.runners[0], (status.runners as unknown[])[0]);
     expectSameKeys('evalGate', raw.evalGate, status.evalGate);
   });
@@ -293,5 +289,34 @@ describe('the console knows every reason and state the server does (frontend-con
     const res = await fetchEvalGate();
     expect(res.data?.current?.authorConfigId).toBe('a'.repeat(64));
     expect(res.data?.history[0].authorConfigId).toBeNull();
+  });
+});
+
+/** `raw` without `key`, as a server that stopped sending it would answer. */
+function without(raw: Record<string, unknown>, key: string): Record<string, unknown> {
+  expect(raw, key).toHaveProperty(key);
+  return Object.fromEntries(Object.entries(raw).filter(([k]) => k !== key));
+}
+
+describe('no key the console reads hides behind a toleration (frontend-console-37)', () => {
+  it('tolerates nothing', () => {
+    expect(TOLERATED).toEqual({});
+  });
+
+  it('fails when the server stops pinning status.live', async () => {
+    const raw = without({ ...STATUS, runners: [rawOf(RUNNER_KEYS)], evalGate: GATE_RAW }, 'live');
+    answer(ok(raw));
+    const res = await fetchAutomationStatus();
+    expect(Object.keys(res.data as object)).toContain('live');
+    expect(() => expectSameKeys('status', raw, res.data)).toThrow(/keys the console reads that the server does not pin/);
+  });
+
+  it('fails when the server stops pinning evalGate.authorConfigId', async () => {
+    const gate = without(GATE_RAW, 'authorConfigId');
+    answer(ok({ current: gate, history: [] }));
+    const res = await fetchEvalGate();
+    expect(() => expectSameKeys('evalGate', gate, res.data?.current)).toThrow(
+      /keys the console reads that the server does not pin/,
+    );
   });
 });

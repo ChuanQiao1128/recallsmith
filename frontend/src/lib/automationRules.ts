@@ -246,15 +246,34 @@ export function decisionVerdictHidden(d: { mode: string; state: string; humanAct
  * Whether a Decisions list's own filter tells the verdict of every row it
  * lists (frontend-console-30): a state filter names the state, and a reason
  * filter names the reason, which only a routed or superseded decision has. The
+ * open-exceptions filter lists routed rows only, like the server's open=true
+ * (state human, no human action, run pending; F04 frontend-console-36). The
  * rows of such a list are shown and recorded as seen, so a later decision on
  * them is not counted as blind.
  */
-export function decisionListShowsVerdict(filters: { state: string; reason: string }): boolean {
-  return filters.state !== '' || filters.reason !== '';
+export function decisionListShowsVerdict(filters: { state: string; reason: string; openOnly: boolean }): boolean {
+  return filters.state !== '' || filters.reason !== '' || filters.openOnly;
 }
 
 /** The run table's cell in place of a run's state split while a draft of it may be pending (N5). */
 export const RUN_SPLIT_HIDDEN_TEXT = 'split hidden until every draft is decided (dry run)';
+
+/**
+ * The run table's Publishes cell under the same guard as the split (O2, F04
+ * frontend-console-35), in the batch email's words: a run has a publish row
+ * only when a draft would be accepted, so the outcome, or its absence, tells a
+ * verdict too.
+ */
+export const RUN_PUBLISH_HIDDEN_TEXT = 'hidden until every draft is decided';
+
+/**
+ * Whether the Automation page keeps its aggregate counts blind (F04
+ * frontend-console-35): any effective mode but live, an unknown one included,
+ * as runSplitShown. The weekly digest's dry-run treatment (R18E N6).
+ */
+export function automationCountsBlind(effectiveMode: string | null): boolean {
+  return effectiveMode !== 'live';
+}
 
 /**
  * Whether the Runs table shows a run's split by state (submitted / auto-accepted
@@ -516,10 +535,12 @@ export function withDecisionFilters(params: URLSearchParams, filters: DecisionFi
 /**
  * "Open only" keeps the decisions nobody has acted on yet. The server filters
  * with `open=true` (L4: state human, no human action, draft still pending); this
- * check stays as the guard for an older server that ignores the parameter.
+ * check stays as the guard for an older server that ignores the parameter. It
+ * checks the state too (F04 frontend-console-36): the open-only list shows the
+ * verdict of every row, so a pending would-accept row must never reach it.
  */
-export function isOpenDecision(d: { humanAction: string | null }): boolean {
-  return d.humanAction === null;
+export function isOpenDecision(d: { state: string; humanAction: string | null }): boolean {
+  return d.state === 'human' && d.humanAction === null;
 }
 
 /** The note under the list when an older server sent decisions a person already handled. */
@@ -683,15 +704,35 @@ export function liveOverrideRateText(rate: number | null): string {
 
 export type DecisionStateBar = { state: string; label: string; count: number; width: number };
 
-export function decisionStateBars(byState: Record<string, number>, width: number): DecisionStateBar[] {
-  const counts = DECISION_STATES.map(state => byState[state] ?? 0);
-  const max = Math.max(0, ...counts);
-  return DECISION_STATES.map((state, i) => ({
-    state,
-    label: decisionStateLabel(state),
-    count: counts[i],
-    width: max === 0 ? 0 : (counts[i] / max) * width,
-  }));
+/**
+ * The states whose 24-hour counts the Overview adds into one row while the
+ * counts are blind (F04 frontend-console-35): a pending dry-run draft can be in
+ * any of them, and a would_accept or human decision keeps its state once a
+ * person decides (A00 §5.3), so apart they tell the verdicts by elimination.
+ */
+export const BLIND_DECISION_STATES: readonly string[] = ['qa_pending', 'qa_queued', 'would_accept', 'human'];
+
+/** The state key and label of that one row. */
+const BLIND_DECISIONS_STATE = 'blind';
+export const BLIND_DECISIONS_LABEL = 'Waiting for you or decided';
+
+export function decisionStateBars(byState: Record<string, number>, width: number, blind = false): DecisionStateBar[] {
+  const rows: Array<{ state: string; label: string; count: number }> = blind
+    ? [
+        {
+          state: BLIND_DECISIONS_STATE,
+          label: BLIND_DECISIONS_LABEL,
+          count: BLIND_DECISION_STATES.reduce((sum, state) => sum + (byState[state] ?? 0), 0),
+        },
+        ...DECISION_STATES.filter(state => !BLIND_DECISION_STATES.includes(state)).map(state => ({
+          state,
+          label: decisionStateLabel(state),
+          count: byState[state] ?? 0,
+        })),
+      ]
+    : DECISION_STATES.map(state => ({ state, label: decisionStateLabel(state), count: byState[state] ?? 0 }));
+  const max = Math.max(0, ...rows.map(r => r.count));
+  return rows.map(r => ({ ...r, width: max === 0 ? 0 : (r.count / max) * width }));
 }
 
 function urlProblem(url: string): string | null {

@@ -13,6 +13,9 @@
 // with its publishes, unconfirmed email, a decision with findings and events,
 // a watched feed with a title pattern) and the dense pages are scanned too:
 // the Overview, ?draftId=41, and ?tab=watch&targetId=3 with the editor open.
+// The dense Overview is scanned in live mode as well (F04 frontend-console-35):
+// a dry run keeps the backlog's routed count and publish decks blind, so only
+// the live page lists them.
 //
 // Nothing here leaves the machine: every /api/v1/ call is answered from memory
 // and anything unrecognised is recorded and fails the test.
@@ -231,14 +234,14 @@ const DENSE_DETAIL = {
 
 const DENSE_WATCH_TARGET = { ...WATCH_TARGET, itemTitlePattern: '\\m(S3|EC2)\\M' };
 
-async function stubAutomationApi(page: Page, dense = false): Promise<{ unexpected: string[] }> {
+async function stubAutomationApi(page: Page, dense = false, status?: unknown): Promise<{ unexpected: string[] }> {
   const unexpected: string[] = [];
   await page.route('**/api/v1/**', (route: Route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
     const body = (payload: string) => route.fulfill({ status: 200, contentType: 'application/json', body: payload });
 
-    if (path === '/api/v1/admin/automation/status') return body(ok(dense ? DENSE_STATUS : STATUS));
+    if (path === '/api/v1/admin/automation/status') return body(ok(status ?? (dense ? DENSE_STATUS : STATUS)));
     if (path === '/api/v1/admin/automation/eval-gate') {
       return body(
         ok(
@@ -333,10 +336,25 @@ test('the dense Overview (gate metrics, failing runner, backlog, unconfirmed ema
   await page.goto('/automation');
   await expect(page.getByTestId('automation-gate-current')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Revoke gate' })).toBeVisible();
-  await expect(page.getByRole('list', { name: 'Publishes waiting for you' }).getByRole('listitem')).toHaveCount(2);
+  await expect(page.getByTestId('automation-backlog-publishes-blind')).toBeVisible();
   await expect(page.getByTestId('automation-email-unconfirmed')).toContainText('2');
   await expect(page.getByText(/^Loading/)).toHaveCount(0);
   await expectNoAxeViolation(page, 'dense overview');
+  expect(api.unexpected).toEqual([]);
+});
+
+test('the dense live Overview (routed count, publish decks, split by reason) has no axe violation', async ({ page }) => {
+  const api = await stubAutomationApi(page, true, {
+    ...DENSE_STATUS,
+    mode: { configured: 'live', effective: 'live', liveBlockedReason: null, autoPublish: true },
+  });
+  await signIn(page);
+
+  await page.goto('/automation');
+  await expect(page.getByTestId('automation-backlog-human-pending')).toHaveText('3');
+  await expect(page.getByRole('list', { name: 'Publishes waiting for you' }).getByRole('listitem')).toHaveCount(2);
+  await expect(page.getByText(/^Loading/)).toHaveCount(0);
+  await expectNoAxeViolation(page, 'dense live overview');
   expect(api.unexpected).toEqual([]);
 });
 
