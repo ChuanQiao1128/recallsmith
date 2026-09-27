@@ -28,7 +28,7 @@ public class EmailTemplatesTests
     new Dictionary<string, long> { ["would_accept"] = 6, ["human"] = 2 }, new Dictionary<string, long> { ["QA_FLAGGED"] = 2 },
     6, 4, 3, 1, 0, new Dictionary<string, long> { ["would_publish"] = 2 }, 36, 2, 1, 9, 0,
     [new DigestRunner("owner-mac", new DateTimeOffset(2026, 9, 27, 22, 5, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 20, 0, 0, 0, TimeSpan.Zero))],
-    1.25m, 0.40m, 2, 0);
+    1.25m, 0.40m, 2, 0, ShadowBlindDecided: 3, ShadowBlindAccepted: 2, Live: new DigestLive(25, 1, 1, 0.08m));
 
   internal static SourceChangedData Source() => new(77, 5, "https://docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html", "changed", "done",
     [new SourceDeck(12, "aws-saa-c03", [Guid.Parse("aaaaaaaa-0000-4000-8000-000000000002")], 3, [new SourceFlaggedCard(901, "aws-s3-synthetic-07", "major")])],
@@ -57,6 +57,12 @@ public class EmailTemplatesTests
       "Source watch failing: https://docs.example.com/feed"];
     yield return ["source_gone", new Dictionary<string, string> { ["targetId"] = "5", ["eventId"] = "78", ["url"] = "https://docs.example.com/gone", ["citingCards"] = "2" },
       "Cited source gone: https://docs.example.com/gone"];
+    yield return ["runner_unavailable", new Dictionary<string, string> { ["runnerId"] = "owner-mac", ["runId"] = "3f2a9c1e-0000-4000-8000-000000000001", ["itemId"] = "7", ["error"] = "RUNNER_UNAVAILABLE: claude reported a usage limit" },
+      "Action needed: authoring runner owner-mac cannot run"];
+    yield return ["live_override_high", new Dictionary<string, string> { ["autoAccepted30d"] = "40", ["deletedByPerson"] = "2", ["editedByPerson"] = "1", ["overrideRate"] = "0.0750" },
+      "Action needed: people overrode 0.0750 of auto-accepted cards"];
+    yield return ["queue_item_failed", new Dictionary<string, string> { ["itemId"] = "8", ["url"] = "https://docs.example.com/login", ["lastError"] = "AGENT_BLOCKED: the page needs a login" },
+      "Action needed: agent blocked on queue item 8"];
     yield return ["agent_note", new Dictionary<string, string> { ["runId"] = "3f2a9c1e-0000-4000-8000-000000000001", ["itemId"] = "7", ["url"] = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html", ["notes"] = "Card aws-s3-synthetic-07 looks outdated." },
       "Action needed: agent note on docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html"];
   }
@@ -150,21 +156,34 @@ public class EmailTemplatesTests
   }
 
   [Fact]
-  public void BatchSummary_DryRun_NeverListsAWouldAcceptDraft()
+  public void BatchSummary_DryRun_ListsNoDraftOfTheRun()
   {
-    // R18C automation-4: the would_accept drafts still wait for a blind human decision; the email only counts them.
+    // R18C automation-4 hid the would_accept drafts; R18D (automation-4 again) hides every draft of a dry run: listing
+    // the human-routed ones by uid gave the would_accept ones away by elimination. Every draft waits for a person anyway.
     var dry = EmailTemplates.BatchSummary("dry_run", Batch(), Console).BodyText;
-    foreach (var hidden in new[] { "aws-s3-synthetic-01", "aws-s3-synthetic-02", "Which storage class suits synthetic archives?", "Which synthetic queue buffers bursts?", "would_accept" })
+    foreach (var hidden in new[]
+    {
+      "aws-s3-synthetic-01", "aws-s3-synthetic-02", "aws-s3-synthetic-03", "Which storage class suits synthetic archives?",
+      "Which synthetic queue buffers bursts?", "Which synthetic flag is ambiguous?",
+    })
     {
       Assert.DoesNotContain(hidden, dry);
     }
-    Assert.Contains("aws-s3-synthetic-03", dry);
-    Assert.Contains("Drafts with a hidden verdict: 2", dry);
+    Assert.Contains("- 3 draft(s) of this run wait for your decision in the review queue", dry);
+    Assert.Contains("Drafts by state: human 1, would_accept 2", dry);
 
-    // Live lists what it accepted, as before.
-    var live = Batch() with { Drafts = [new BatchDraft("aws-s3-synthetic-01", "Which storage class suits synthetic archives?", "auto_accepted", null, null, 12)] };
+    // Live lists what it accepted and what needs a person, as before.
+    var live = Batch() with
+    {
+      Drafts =
+      [
+        new BatchDraft("aws-s3-synthetic-01", "Which storage class suits synthetic archives?", "auto_accepted", null, null, 12),
+        new BatchDraft("aws-s3-synthetic-03", "Which synthetic flag is ambiguous?", "human", "QA_FLAGGED", null, 12),
+      ],
+    };
     var liveBody = EmailTemplates.BatchSummary("live", live, Console).BodyText;
     Assert.Contains("- aws-s3-synthetic-01 — Which storage class suits synthetic archives?", liveBody);
+    Assert.Contains("- aws-s3-synthetic-03 — AI QA found a blocker or major issue (QA_FLAGGED)", liveBody);
     Assert.DoesNotContain("hidden", liveBody);
   }
 
@@ -178,16 +197,15 @@ DRY RUN — AUTOMATION_MODE=dry_run: nothing was accepted or published. "Auto-ac
 Run 3f2a9c1e on aws-saa-c03 submitted 3 draft(s): 2 auto-accepted, 1 need you; publish: would publish.
 
 NEEDS YOU
-- aws-s3-synthetic-03 — AI QA found a blocker or major issue (QA_FLAGGED) — https://console.developercards.app/review?deckId=12
+- 3 draft(s) of this run wait for your decision in the review queue; verdicts stay hidden until you decide (the shadow agreement counts blind decisions only) — https://console.developercards.app/review?deckId=12
 
 DONE AUTOMATICALLY
-- 2 draft(s) decided by the automation; verdicts hidden until you decide them in the review queue (shadow agreement counts blind decisions only) — https://console.developercards.app/review?deckId=12
 - publish aws-saa-c03 — would_publish
 
 DETAILS
 Source: feed_item https://aws.amazon.com/about-aws/whats-new/2026/09/synthetic-item/ (Synthetic launch)
-Draft aws-s3-synthetic-03: human, AI QA found a blocker or major issue (QA_FLAGGED) — Which synthetic flag is ambiguous? — https://console.developercards.app/review?deckId=12
-Drafts with a hidden verdict: 2
+Drafts by state: human 1, would_accept 2
+Routed to you by reason: QA_FLAGGED 1
 Draft QA spend: $0.0012
 Publish aws-saa-c03: would_publish
 Runner: owner-mac, duration 184 s, outcome done
@@ -217,6 +235,7 @@ From 2026-09-21 to 2026-09-27 the automations saved 3.5 h over 42 unit(s) of wor
 
 NEEDS YOU
 - 2 draft(s) routed to you are still pending — https://console.developercards.app/review
+- people overrode 0.0800 of 25 auto-accepted card(s) in 30 days — https://console.developercards.app/automation?tab=decisions
 
 DONE AUTOMATICALLY
 - 0 card(s) auto-accepted, 6 would be accepted
@@ -229,7 +248,8 @@ Ledger auto_accept: 6 run(s), 6 unit(s), 0 failure(s), 18 min saved
 Ledger source_watch: 8 run(s), 36 unit(s), 1 failure(s), 18 min saved
 Decisions by state: human 2, would_accept 6
 Decisions by reason: QA_FLAGGED 2
-Dry-run agreement: 6 would-accept, 4 decided by a human (3 accepted, 1 edited, 0 rejected), agreement 0.75
+Dry-run agreement: 6 would-accept, 4 decided by a human (3 accepted, 1 edited, 0 rejected); decided blind 3, accepted unedited 2, agreement 0.6667
+Live quality (30 days): 25 auto-accepted, 1 deleted by a person, 1 edited by a person, override rate 0.0800
 Publishes by state: would_publish 2
 Source watch: 36 check(s), 2 change(s), 1 failure(s)
 Emails: 9 sent, 0 failed

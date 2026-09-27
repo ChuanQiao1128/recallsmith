@@ -33,7 +33,13 @@ public sealed record WeeklyDigestData(DateOnly From, DateOnly To, decimal HoursS
   long ShadowWouldAccept, long ShadowHumanDecided, long ShadowHumanAccepted, long ShadowHumanEditedAccepted, long ShadowHumanRejected,
   IReadOnlyDictionary<string, long> PublishesByState, long WatchChecks, long WatchChanges, long WatchFailures,
   long EmailsSent, long EmailsFailed, IReadOnlyList<DigestRunner> Runners, decimal HumanQaSpendUsd, decimal AutomationQaSpendUsd,
-  long HumanDraftsPending, long HumanPublishes);
+  long HumanDraftsPending, long HumanPublishes, long ShadowBlindDecided = 0, long ShadowBlindAccepted = 0, DigestLive? Live = null);
+
+/// <summary>
+/// The live quality measurement the digest shows (R18D M2): the auto-accepts of the last 30 days and how many a person
+/// deleted or edited since; <see cref="OverrideRate"/> is null when nothing was auto-accepted.
+/// </summary>
+public sealed record DigestLive(long AutoAccepted30d, long DeletedByPerson, long EditedByPerson, decimal? OverrideRate);
 
 /// <summary>A card a source re-check flagged with an open blocker/major finding.</summary>
 public sealed record SourceFlaggedCard(long CardId, string StableUid, string Severity);
@@ -73,12 +79,14 @@ public static class EmailTemplates
 
   /// <summary>
   /// The eleven exception subkinds of A00 §12.4, in table order, then <c>agent_note</c> (R18B K3: a finalised run with
-  /// agent notes and no decisions).
+  /// agent notes and no decisions), <c>runner_unavailable</c> (R18D M5: the runner could not work at all) and
+  /// <c>live_override_high</c> (R18D M2: people override too many auto-accepted cards).
   /// </summary>
   public static readonly IReadOnlyList<string> ExceptionSubkinds =
   [
     "runner_stalled", "runner_login_expiring", "runner_run_failed", "queue_item_failed", "qa_provider_error", "ai_qa_daily_cap",
     "publish_blocked", "publish_failed", "eval_gate_missing", "watch_failing", "source_gone", "agent_note",
+    "runner_unavailable", "live_override_high",
   ];
 
   /// <summary>The agent's notes as one capped line (whitespace runs collapsed), or null when there are none.</summary>
@@ -139,6 +147,7 @@ public static class EmailTemplates
     ["QA_HASH_MISMATCH"] = "reviewed content differs from the draft",
     ["QA_FLAGGED"] = "AI QA found a blocker or major issue",
     ["REVIEWER_NOT_GATED"] = "reviewer differs from the eval gate",
+    ["AUTHOR_NOT_GATED"] = "author configuration differs from the eval gate",
     ["MODE_OFF"] = "automation was switched off",
     ["DECK_DELETED"] = "deck is deleted",
     ["DECIDED_BY_HUMAN"] = "a human decided first",
@@ -198,6 +207,13 @@ public static class EmailTemplates
         needs.Add($"- {F("url")} — {F("error")} — {console}");
         factKeys = ["runId", "itemId", "url", "error"];
         break;
+      case "queue_item_failed" when facts.GetValueOrDefault("lastError") is { } blocked &&
+                                     blocked.StartsWith(RunnerRoutes.AgentBlockedPrefix, StringComparison.Ordinal):
+        subject = $"Action needed: agent blocked on queue item {F("itemId")}";
+        summary = $"The agent could not do queue item {F("itemId")}; it will not be retried until you add it again.";
+        needs.Add($"- {F("url")} — {F("lastError")} — {AutomationUrl(consoleBaseUrl, "tab=queue")}");
+        factKeys = ["itemId", "url", "lastError"];
+        break;
       case "queue_item_failed":
         subject = $"Action needed: queue item {F("itemId")} failed 3 times";
         summary = $"Queue item {F("itemId")} failed 3 times and will not be retried.";
@@ -247,6 +263,18 @@ public static class EmailTemplates
         needs.Add($"- {AgentNotesLine(facts.GetValueOrDefault("notes")) ?? "unknown"} — {console}");
         factKeys = ["runId", "itemId", "url"];
         break;
+      case "runner_unavailable":
+        subject = $"Action needed: authoring runner {F("runnerId")} cannot run";
+        summary = $"The authoring runner {F("runnerId")} stopped: it could not work on any queue item. Queue item {F("itemId")} was put back without using an attempt.";
+        needs.Add($"- runner {F("runnerId")} — {F("error")} — check the Mac's claude login, subscription and MCP server — {console}");
+        factKeys = ["runnerId", "runId", "itemId", "error"];
+        break;
+      case "live_override_high":
+        subject = $"Action needed: people overrode {F("overrideRate")} of auto-accepted cards";
+        summary = $"Of {F("autoAccepted30d")} card(s) auto-accepted in 30 days, people deleted {F("deletedByPerson")} and edited {F("editedByPerson")} (override rate {F("overrideRate")}).";
+        needs.Add($"- check the auto-accepted cards, and revoke the eval gate if the automation's precision dropped — {AutomationUrl(consoleBaseUrl, "tab=decisions")}");
+        factKeys = ["autoAccepted30d", "deletedByPerson", "editedByPerson", "overrideRate"];
+        break;
       case "source_gone":
         subject = $"Cited source gone: {F("url")}";
         summary = $"The cited source {F("url")} is gone; {F("citingCards")} card(s) cite it.";
@@ -273,9 +301,9 @@ public static class EmailTemplates
   /// <summary>
   /// The one email per finalised run. <c>&lt;a&gt;</c> counts <c>auto_accepted</c> drafts, <c>&lt;h&gt;</c> the
   /// <c>human</c> ones (<c>&lt;a&gt;</c> counts <c>would_accept</c> in <c>dry_run</c>); <c>&lt;publish&gt;</c> sums up
-  /// the run's publishes. In <c>dry_run</c> the <c>would_accept</c> drafts are only counted, never listed (R18C
-  /// automation-4): they wait in the review queue for a blind human decision, and the review queue hides their verdict
-  /// too, because the shadow agreement counts blind decisions only.
+  /// the run's publishes. In <c>dry_run</c> no draft is listed at all, only counted (R18D M3, automation-4): every draft
+  /// waits for a person there, and listing the human-routed ones by uid would reveal the others' verdict by
+  /// elimination, so a decision the console reports as blind stays blind whatever the person read in this email.
   /// </summary>
   public static RenderedEmail BatchSummary(string mode, BatchSummaryData data, string consoleBaseUrl)
   {
@@ -290,29 +318,47 @@ public static class EmailTemplates
       $"{human.Count} need you; publish: {publish}.";
 
     var console = AutomationUrl(consoleBaseUrl, $"runId={data.RunId:D}");
-    var needs = human.Select(d =>
-      $"- {d.StableUid} — {ReasonLabel(d.Reason)} — {consoleBaseUrl.TrimEnd('/')}/review?deckId={d.DeckId.ToString(CultureInfo.InvariantCulture)}").ToList();
-    needs.AddRange(data.Publishes.Where(p => p.State == "human").Select(p =>
-      $"- publish {p.DeckSlug} — {ReasonLabel(p.Reason)} — {console}"));
-    var done = dry
-      ? accepted.Count == 0
-        ? []
-        : [$"- {accepted.Count} draft(s) decided by the automation; verdicts hidden until you decide them in the review queue " +
-           $"(shadow agreement counts blind decisions only) — {consoleBaseUrl.TrimEnd('/')}/review?deckId={accepted[0].DeckId.ToString(CultureInfo.InvariantCulture)}"]
-      : accepted.Select(d => $"- {d.StableUid} — {Cap(OneLine(d.Question), MaxQuestionLength)}").ToList();
-    done.AddRange(data.Publishes.Where(p => p.State is "published" or "would_publish" or "publishing").Select(p =>
-      $"- publish {p.DeckSlug} — {p.State}" + (p.BuildId is null ? string.Empty : $", build {p.BuildId}")));
-
+    string ReviewUrl(long deckId) => $"{consoleBaseUrl.TrimEnd('/')}/review?deckId={deckId.ToString(CultureInfo.InvariantCulture)}";
+    List<string> needs;
+    List<string> done;
     var details = new List<string>
     {
       $"Source: {data.SourceKind} {data.SourceUrl}" + (string.IsNullOrWhiteSpace(data.SourceTitle) ? string.Empty : $" ({OneLine(data.SourceTitle)})"),
     };
-    details.AddRange(data.Drafts.Where(d => !(dry && d.State == acceptedState)).Select(d =>
-      $"Draft {d.StableUid}: {d.State}" + (d.Reason is null ? string.Empty : $", {ReasonLabel(d.Reason)}") +
-      (string.IsNullOrWhiteSpace(d.ReasonDetail) ? string.Empty : $" ({OneLine(d.ReasonDetail)})") +
-      $" — {Cap(OneLine(d.Question), MaxQuestionLength)}" +
-      (d.State == DraftDecisions.Human ? $" — {consoleBaseUrl.TrimEnd('/')}/review?deckId={d.DeckId.ToString(CultureInfo.InvariantCulture)}" : string.Empty)));
-    if (dry && accepted.Count > 0) details.Add($"Drafts with a hidden verdict: {accepted.Count}");
+    if (dry)
+    {
+      var waiting = accepted.Concat(human).ToList();
+      needs = waiting.Count == 0
+        ? []
+        : [$"- {waiting.Count} draft(s) of this run wait for your decision in the review queue; verdicts stay hidden until you decide " +
+           $"(the shadow agreement counts blind decisions only) — {ReviewUrl(waiting[0].DeckId)}"];
+      done = [];
+      if (data.Drafts.Count > 0)
+      {
+        details.Add("Drafts by state: " + string.Join(", ", data.Drafts.GroupBy(d => d.State, StringComparer.Ordinal)
+          .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key} {g.Count().ToString(CultureInfo.InvariantCulture)}")));
+      }
+      if (human.Count > 0)
+      {
+        details.Add("Routed to you by reason: " + string.Join(", ", human.GroupBy(d => d.Reason ?? "none", StringComparer.Ordinal)
+          .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key} {g.Count().ToString(CultureInfo.InvariantCulture)}")));
+      }
+    }
+    else
+    {
+      needs = human.Select(d => $"- {d.StableUid} — {ReasonLabel(d.Reason)} — {ReviewUrl(d.DeckId)}").ToList();
+      done = accepted.Select(d => $"- {d.StableUid} — {Cap(OneLine(d.Question), MaxQuestionLength)}").ToList();
+      details.AddRange(data.Drafts.Select(d =>
+        $"Draft {d.StableUid}: {d.State}" + (d.Reason is null ? string.Empty : $", {ReasonLabel(d.Reason)}") +
+        (string.IsNullOrWhiteSpace(d.ReasonDetail) ? string.Empty : $" ({OneLine(d.ReasonDetail)})") +
+        $" — {Cap(OneLine(d.Question), MaxQuestionLength)}" +
+        (d.State == DraftDecisions.Human ? $" — {ReviewUrl(d.DeckId)}" : string.Empty)));
+    }
+    needs.AddRange(data.Publishes.Where(p => p.State == "human").Select(p =>
+      $"- publish {p.DeckSlug} — {ReasonLabel(p.Reason)} — {console}"));
+    done.AddRange(data.Publishes.Where(p => p.State is "published" or "would_publish" or "publishing").Select(p =>
+      $"- publish {p.DeckSlug} — {p.State}" + (p.BuildId is null ? string.Empty : $", build {p.BuildId}")));
+
     if (AgentNotesLine(data.AgentNotes) is { } notes) details.Add(AgentNotesLabel + notes);
     details.Add($"Draft QA spend: {Usd(data.QaSpendUsd)}");
     if (data.Publishes.Count == 0) details.Add("Publish: none");
@@ -354,6 +400,12 @@ public static class EmailTemplates
     }
     if (data.HumanPublishes > 0) needs.Add($"- {data.HumanPublishes} publish(es) need you — {AutomationUrl(consoleBaseUrl, "tab=runs")}");
     if (data.EmailsFailed > 0) needs.Add($"- {data.EmailsFailed} email(s) failed — {AutomationUrl(consoleBaseUrl, "tab=email")}");
+    var live = data.Live ?? new DigestLive(0, 0, 0, null);
+    if (live.AutoAccepted30d >= StatusRoutes.LiveOverrideMinAccepted && live.OverrideRate > StatusRoutes.LiveOverrideRateAlarm)
+    {
+      needs.Add($"- people overrode {Rate(live.OverrideRate)} of {live.AutoAccepted30d} auto-accepted card(s) in 30 days — " +
+        AutomationUrl(consoleBaseUrl, "tab=decisions"));
+    }
 
     var done = new List<string>
     {
@@ -370,11 +422,15 @@ public static class EmailTemplates
       $"Ledger {a.Automation}: {a.Runs} run(s), {a.Units} unit(s), {a.Failures} failure(s), {a.MinutesSaved.ToString("0.##", CultureInfo.InvariantCulture)} min saved"));
     details.Add("Decisions by state: " + Pairs(data.DecisionsByState));
     details.Add("Decisions by reason: " + Pairs(data.DecisionsByReason));
-    var agreement = data.ShadowHumanDecided == 0
-      ? "n/a"
-      : ((decimal)data.ShadowHumanAccepted / data.ShadowHumanDecided).ToString("0.00", CultureInfo.InvariantCulture);
+    // One definition of the agreement on every surface (R18D M3): accepted unedited over decided blind, as the status.
+    var agreement = data.ShadowBlindDecided == 0
+      ? null
+      : (decimal?)Math.Round((decimal)data.ShadowBlindAccepted / data.ShadowBlindDecided, 4, MidpointRounding.AwayFromZero);
     details.Add($"Dry-run agreement: {data.ShadowWouldAccept} would-accept, {data.ShadowHumanDecided} decided by a human " +
-      $"({data.ShadowHumanAccepted} accepted, {data.ShadowHumanEditedAccepted} edited, {data.ShadowHumanRejected} rejected), agreement {agreement}");
+      $"({data.ShadowHumanAccepted} accepted, {data.ShadowHumanEditedAccepted} edited, {data.ShadowHumanRejected} rejected); " +
+      $"decided blind {data.ShadowBlindDecided}, accepted unedited {data.ShadowBlindAccepted}, agreement {Rate(agreement)}");
+    details.Add($"Live quality (30 days): {live.AutoAccepted30d} auto-accepted, {live.DeletedByPerson} deleted by a person, " +
+      $"{live.EditedByPerson} edited by a person, override rate {Rate(live.OverrideRate)}");
     details.Add("Publishes by state: " + Pairs(data.PublishesByState));
     details.Add($"Source watch: {data.WatchChecks} check(s), {data.WatchChanges} change(s), {data.WatchFailures} failure(s)");
     details.Add($"Emails: {data.EmailsSent} sent, {data.EmailsFailed} failed");
@@ -498,6 +554,9 @@ public static class EmailTemplates
   private static string Pairs(IReadOnlyDictionary<string, long> counts) => counts.Count == 0
     ? "none"
     : string.Join(", ", counts.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key} {kv.Value.ToString(CultureInfo.InvariantCulture)}"));
+
+  /// <summary>A rate as four decimals, as the status API returns it; <c>n/a</c> when there is none.</summary>
+  private static string Rate(decimal? rate) => rate is { } r ? r.ToString("0.0000", CultureInfo.InvariantCulture) : "n/a";
 
   private static string Usd(decimal usd) => "$" + usd.ToString("0.0000", CultureInfo.InvariantCulture);
 

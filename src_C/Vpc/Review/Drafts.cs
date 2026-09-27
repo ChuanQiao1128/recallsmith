@@ -34,7 +34,10 @@ public static class Drafts
   public const int MaxListLimit = 100;
   public const string DefaultConsoleBaseUrl = "https://console.developercards.app";
 
-  private static readonly string[] AgentKeys = ["name", "model", "skillVersion", "runId", "queueItemId"];
+  /// <summary>The runner's author configuration id in <c>agent.authorConfigId</c> (R18D M1) is at most this long.</summary>
+  public const int MaxAuthorConfigIdLength = 128;
+
+  private static readonly string[] AgentKeys = ["name", "model", "skillVersion", "runId", "queueItemId", "authorConfigId"];
   private static readonly string[] ListStatuses = ["pending", "accepted", "rejected", "all"];
 
   private const string DraftColumns = """
@@ -190,11 +193,15 @@ public static class Drafts
 
   private sealed record RejectedOutcome(string ClientDraftKey, string Code, string Message);
 
-  /// <summary>null / absent → null; otherwise canonical JSON of {name?, model?, skillVersion?, runId?, queueItemId?}.</summary>
+  /// <summary>
+  /// null / absent → null; otherwise canonical JSON of {name?, model?, skillVersion?, runId?, queueItemId?, authorConfigId?}.
+  /// <c>authorConfigId</c> (R18D M1) is the runner's author configuration, which a live auto-accept compares with the gate's.
+  /// </summary>
   private static string? ParseAgent(JsonElement body)
   {
     if (!body.TryGetProperty("agent", out var el) || el.ValueKind == JsonValueKind.Null) return null;
-    const string message = "agent must be an object with optional string fields name, model, skillVersion, runId, queueItemId (max 200)";
+    const string message = "agent must be an object with optional string fields name, model, skillVersion, runId, queueItemId (max 200) " +
+      "and authorConfigId (max 128)";
     if (el.ValueKind != JsonValueKind.Object) throw new ValidationError(message, "agent");
 
     var agent = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -202,7 +209,7 @@ public static class Drafts
     {
       if (!AgentKeys.Contains(prop.Name) || prop.Value.ValueKind != JsonValueKind.String) throw new ValidationError(message, "agent");
       var value = prop.Value.GetString() ?? string.Empty;
-      if (value.Length > MaxAgentFieldLength) throw new ValidationError(message, "agent");
+      if (value.Length > (prop.Name == "authorConfigId" ? MaxAuthorConfigIdLength : MaxAgentFieldLength)) throw new ValidationError(message, "agent");
       agent[prop.Name] = value;
     }
     return JsonSerializer.Serialize(agent);
@@ -496,6 +503,7 @@ public static class Drafts
       if (body.TryGetProperty("card", out var cardEl) && cardEl.ValueKind != JsonValueKind.Null) edited = DraftCard.Parse(cardEl);
       var (reviewMs, rawReviewMs) = ParseReviewMs(body);
       var runQa = ParseRunQa(body);
+      var verdictShown = ParseVerdictShown(body);
 
       var deckId = await DraftDeckIdAsync(conn, id.Value);
       if (deckId is null) return DraftNotFound(res);
@@ -536,7 +544,7 @@ public static class Drafts
         Details: ReviewTimeDetails(reviewMs, rawReviewMs)));
 
       // A human decision always wins over the automation (A00 §5.7); never throws.
-      await DraftDecisions.OnHumanDecisionAsync(conn, id.Value, action, null, auth.UserSub);
+      await DraftDecisions.OnHumanDecisionAsync(conn, id.Value, action, null, auth.UserSub, verdictShown);
 
       if (!runQa) return res.Ok(new { draftId = id.Value, cardId, stableUid, action });
 
@@ -591,6 +599,7 @@ public static class Drafts
       var reason = reasonEl.GetString()!;
       var note = ParseNote(body);
       var (reviewMs, rawReviewMs) = ParseReviewMs(body);
+      var verdictShown = ParseVerdictShown(body);
 
       var deckId = await DraftDeckIdAsync(conn, id.Value);
       if (deckId is null) return DraftNotFound(res);
@@ -631,7 +640,7 @@ public static class Drafts
         DeckId: deckId.Value, Ref: id.Value.ToString(CultureInfo.InvariantCulture), DedupeKey: $"draft-reject:{id.Value}",
         Details: new { reason, defect = DefectReasons.Contains(reason), reviewTimeMeasured = reviewMs is not null, rawReviewMs = rawReviewMs != reviewMs ? rawReviewMs : null }));
 
-      await DraftDecisions.OnHumanDecisionAsync(conn, id.Value, "rejected", reason, auth.UserSub);
+      await DraftDecisions.OnHumanDecisionAsync(conn, id.Value, "rejected", reason, auth.UserSub, verdictShown);
 
       return res.Ok(new { draftId = id.Value, action = "rejected" });
     }
@@ -681,6 +690,22 @@ public static class Drafts
       JsonValueKind.True => true,
       JsonValueKind.False => false,
       _ => throw new ValidationError("runQa must be a boolean", "runQa"),
+    };
+  }
+
+  /// <summary>
+  /// Optional <c>verdictShown</c> (R18D M3, automation-4): whether the console showed the automation's verdict (state,
+  /// reason, findings) before the person decided. Absent or null is unknown, which the shadow agreement treats as not
+  /// blind; anything else than a boolean is a 400.
+  /// </summary>
+  private static bool? ParseVerdictShown(JsonElement body)
+  {
+    if (!body.TryGetProperty("verdictShown", out var el) || el.ValueKind == JsonValueKind.Null) return null;
+    return el.ValueKind switch
+    {
+      JsonValueKind.True => true,
+      JsonValueKind.False => false,
+      _ => throw new ValidationError("verdictShown must be a boolean", "verdictShown"),
     };
   }
 

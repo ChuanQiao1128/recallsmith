@@ -2,14 +2,15 @@ namespace RecallSmith.Lambda.Vpc.Automation;
 
 /// <summary>
 /// The automation's reason codes (R18A A03, contract A00 §5.9 and §6.6). <see cref="DecisionReasons"/> equals the
-/// <c>ck_automation_decisions_reason</c> list of migration 034 and <see cref="PublishReasons"/> the
+/// <c>ck_automation_decisions_reason</c> list of migration 036 (034's list plus <c>AUTHOR_NOT_GATED</c>, R18D M1) and <see cref="PublishReasons"/> the
 /// <c>ck_automation_publishes_reason</c> list (a test compares them with the constraint text).
 /// </summary>
 public static class AutomationReasons
 {
   public static readonly IReadOnlyList<string> DecisionReasons = ["RUN_NOT_RUNNING", "DECK_MISMATCH", "DECK_NOT_ALLOWED", "EXISTING_CARD",
     "LIKELY_DUPLICATE", "UNGROUNDED", "SOURCE_HOST_NOT_ALLOWED", "QA_UNAVAILABLE", "AI_QA_DAILY_CAP", "ENQUEUE_RETRY", "ENQUEUE_FAILED",
-    "QA_TIMEOUT", "QA_ERROR", "QA_HASH_MISMATCH", "QA_FLAGGED", "REVIEWER_NOT_GATED", "MODE_OFF", "DECK_DELETED", "DECIDED_BY_HUMAN"];
+    "QA_TIMEOUT", "QA_ERROR", "QA_HASH_MISMATCH", "QA_FLAGGED", "REVIEWER_NOT_GATED", "MODE_OFF", "DECK_DELETED", "DECIDED_BY_HUMAN",
+    "AUTHOR_NOT_GATED"];
 
   /// <summary>Event-only reason: a human acted on a decision automation had already finished (A00 §5.7).</summary>
   public const string HumanAction = "HUMAN_ACTION";

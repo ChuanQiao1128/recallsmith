@@ -471,12 +471,13 @@ public static class DraftDecisions
   /// <summary>
   /// Records a human accept/reject on the draft's decision: an unfinished one (<c>qa_pending</c>/<c>qa_queued</c>)
   /// becomes <c>superseded</c> / <c>DECIDED_BY_HUMAN</c>; a finished one keeps its state and gets a
-  /// <c>HUMAN_ACTION</c> event (shadow measurement). That event records <c>blinded</c>: whether the verdict was hidden
-  /// from the person when they decided (a dry-run <c>would_accept</c>, which the review queue and the batch email hide),
-  /// so the shadow agreement counts blind decisions only (R18C automation-4). No decision ⇒ nothing. Never throws.
+  /// <c>HUMAN_ACTION</c> event (shadow measurement). That event records <c>verdictShown</c> as the console reported it
+  /// (true, false, or null = unknown) and <c>blinded</c> = (<c>verdictShown</c> is false): blindness is a fact the
+  /// decision's client states, never inferred from the decision's state (R18D M3, automation-4), so the shadow agreement
+  /// counts only decisions made without seeing the verdict. No decision ⇒ nothing. Never throws.
   /// </summary>
   public static async Task OnHumanDecisionAsync(NpgsqlConnection conn, long draftId, string action, string? reason, string actorSub,
-    CancellationToken ct = default)
+    bool? verdictShown = null, CancellationToken ct = default)
   {
     try
     {
@@ -489,10 +490,10 @@ public static class DraftDecisions
 
       var mode = await AutomationMode.EffectiveAsync(conn, ct);
       await using var tx = await conn.BeginTransactionAsync(ct);
-      var rows = await DbUtil.QueryAsync(conn, tx, "select state, mode from automation_draft_decisions where draft_id = $1 for update", [draftId]);
+      var rows = await DbUtil.QueryAsync(conn, tx, "select state from automation_draft_decisions where draft_id = $1 for update", [draftId]);
       if (rows.Count == 0) return;
       var state = (string)rows[0]["state"]!;
-      var blinded = state == WouldAccept && (string)rows[0]["mode"]! == AutomationMode.DryRun;
+      var blinded = verdictShown == false;
 
       await DbUtil.ExecuteAsync(conn, tx,
         """
@@ -511,7 +512,7 @@ public static class DraftDecisions
       else
       {
         await AppendEventAsync(conn, tx, draftId, state, state, AutomationReasons.HumanAction, actor, mode.Effective,
-          new { humanAction = action, humanReason = reason, blinded }, ct);
+          new { humanAction = action, humanReason = reason, verdictShown, blinded }, ct);
       }
       await tx.CommitAsync(ct);
     }

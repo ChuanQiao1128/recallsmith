@@ -129,9 +129,10 @@ internal static class A04Kit
     public async Task<long> GateAsync(Sql db)
     {
       var id = Long(await db.ScalarAsync(
-        "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub) " +
-        "values ($1, $2, $3, true, '{}'::jsonb, $4, '{}'::jsonb, 'it-a04') returning id",
-        AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, RecallSmith.Lambda.Vpc.Qa.QaRuns.AutomationPromptVersion, new string('c', 64)));
+        "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub, author_config_id) " +
+        "values ($1, $2, $3, true, '{}'::jsonb, $4, '{}'::jsonb, 'it-a04', $5) returning id",
+        AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, RecallSmith.Lambda.Vpc.Qa.QaRuns.AutomationPromptVersion, new string('c', 64),
+        AutomationTestKit.AuthorConfigId));
       _gates.Add((db, id));
       return id;
     }
