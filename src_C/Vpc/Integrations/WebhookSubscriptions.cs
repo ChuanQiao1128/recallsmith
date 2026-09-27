@@ -227,10 +227,10 @@ public static class WebhookSubscriptions
     if (body.TryGetProperty("events", out var eventsEl))
     {
       if (eventsEl.ValueKind != JsonValueKind.Array
-          || eventsEl.GetArrayLength() is < 1 or > 4
+          || eventsEl.GetArrayLength() < 1 || eventsEl.GetArrayLength() > WebhookEvents.SubscribableEvents.Count
           || eventsEl.EnumerateArray().Any(e => e.ValueKind != JsonValueKind.String))
       {
-        return (null, res.BadRequest("VALIDATION_ERROR", "events must be an array of 1..4 event names"));
+        return (null, res.BadRequest("VALIDATION_ERROR", $"events must be an array of 1..{WebhookEvents.SubscribableEvents.Count} event names"));
       }
 
       var list = new List<string>();
