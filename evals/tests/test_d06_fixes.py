@@ -49,8 +49,8 @@ def test_gate_fails_closed_on_runs_that_do_not_record_the_effort_sent(tmp_path: 
     authored = authored_run(tmp_path, spec, authored_records(rows), effectiveEffort=None)
     report = evaluate(tmp_path, seeded=seeded, authored=authored, spec=spec)
     assert report["failures"] == [
-        f"{which} run: the header records no effectiveEffort (the reasoning effort the review sent); rerun with "
-        "dc-evals run --profile automation"
+        f"{which} run: the header records no effectiveEffort (the reasoning effort the review sent); rerun it with "
+        "the run command's --profile automation"
         for which in ("seeded", "authored")
     ]
 

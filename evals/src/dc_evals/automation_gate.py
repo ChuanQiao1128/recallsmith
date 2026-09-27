@@ -473,8 +473,8 @@ def _effort_failures(which: str, header: dict[str, Any], want_effort: str, compa
     sent = header.get("effectiveEffort")
     if not isinstance(sent, str) or not sent:
         return [
-            f"{which} run: the header records no effectiveEffort (the reasoning effort the review sent); rerun with "
-            "dc-evals run --profile automation"
+            f"{which} run: the header records no effectiveEffort (the reasoning effort the review sent); rerun it with "
+            "the run command's --profile automation"
         ]
     if not compare:
         return []
