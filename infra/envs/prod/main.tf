@@ -192,9 +192,11 @@ module "observability" {
   publish_dlq_name       = module.worker.publish_dlq_name
   db_identifier          = "developercards"
 
+  webhook_queue_name               = module.worker.webhook_queue_name
   webhook_dlq_name                 = module.worker.webhook_dlq_name
   webhook_dispatcher_function_name = module.worker.webhook_dispatcher_function_name
 
+  ai_qa_queue_name    = module.worker.ai_qa_queue_name
   ai_qa_dlq_name      = module.worker.ai_qa_dlq_name
   ai_qa_function_name = module.worker.ai_qa_function_name
 }

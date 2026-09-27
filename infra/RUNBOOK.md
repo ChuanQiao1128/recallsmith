@@ -64,3 +64,32 @@ next issue's worker may reach its verify.
   (`developercards-api-role-l4jacdsb`); it stays dangling in E01 (nulling it is E08).
 - `imports.tf` stays until the wave ends; blocks are removed only by the issue that destroys an
   adopted resource (E05, E08), never added to.
+
+## 7. Silent-failure alarms (R18 X08)
+
+All on the alerts topic, namespace `DeveloperCards`, `treat_missing_data = notBreaching`. One line
+per alarm: what fired, first thing to check.
+
+- `webhook-delivery-failed` — a receiver answered a permanent status (non-2xx other than 408, 429
+  and 5xx) or the URL guard rejected the target; the event was acked and is not retried. Open the deliveries list in the console; a 401 usually means
+  the receiver's copy of the signing secret is stale (rotate or re-share it), 404/410 a dead URL
+  (disable the subscription).
+- `webhook-delivery-dead` — a delivery used all five attempts on retryable errors; the message goes
+  to the webhook DLQ. Check the receiver's availability, then redeliver from the console.
+- `webhook-report-failures` — the dispatcher could not post its attempt report to core-vpc, so the
+  delivery row is stale. Check core-vpc health and the internal-shared-secret SSM parameter.
+- `webhook-enqueue-failures` — core-vpc or the worker failed `SendMessage` to
+  developercards-webhook-events; those events are lost. Check the queue exists and the send grants.
+- `ledger-write-failures` — a best-effort automation ledger write was dropped. Check core-vpc / worker
+  logs for the ledger error; the business write itself succeeded.
+- `ai-qa-enqueue-failures` — a QA run's chunks could not be sent to developercards-ai-qa-jobs; the
+  run stays queued until the 2 h reap. Check the queue and developercards-core-vpc-ai-qa-send.
+- `ai-qa-error-provider-auth` / `-provider-access-denied` / `-config` — every chunk fails until the
+  owner acts: provider key or Bedrock model access (§7.9), or the ai-qa environment. Set
+  `AI_QA_ENABLED=0` if it cannot be fixed at once.
+- `ai-qa-refusals` — three or more refusals in an hour. Read the refused cards in the run; a spike
+  after a prompt or model change means that change should be rolled back.
+- `ai-qa-daily-cost` — estimated spend across both providers passed the daily cap in one day. Set
+  `AI_QA_ENABLED=0` and look for a run that started just under the cap.
+- `webhook-queue-oldest-age` / `ai-qa-queue-oldest-age` — a backlog: the consumer Lambda is not
+  draining its queue. Check the event source mapping is enabled and the function's errors/throttles.
