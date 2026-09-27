@@ -133,7 +133,8 @@ describe('handled vs open exceptions (frontend-console-1, automation-10, K7)', (
     api.listAutomationDecisions.mockResolvedValue(
       ok({
         items: [
-          decisionFixture({ draftId: 41 }),
+          // Live: an open dry-run row hides its state until decided (E05 frontend-console-30).
+          decisionFixture({ draftId: 41, mode: 'live' }),
           decisionFixture({ draftId: 42, humanAction: 'rejected', humanReason: 'Duplicate of s3-01' }),
         ],
         nextCursor: null,

@@ -14,6 +14,12 @@
 // clipped in the table and in full in the run's Decisions section, where the
 // runner_run_failed email's `?runId=` deep link lands. A run's decisions page
 // with Load more like the Decisions tab (frontend-console-28).
+//
+// A run's split by state tells its drafts' verdicts by elimination, so while
+// the effective mode is not live the table shows only the submitted total
+// until none of the run's drafts can be pending (E05 frontend-console-30, N5;
+// runSplitShown). The run's decision rows hide their verdicts like the
+// Decisions tab.
 import { useEffect, useRef, useState } from 'react';
 
 import {
@@ -28,6 +34,7 @@ import { Callout } from '../../components/ui/Callout';
 import {
   QUEUE_ITEM_KIND_LABELS,
   RUN_OUTCOME_LABELS,
+  RUN_SPLIT_HIDDEN_TEXT,
   RUN_STATUSES,
   RUN_STATUS_LABELS,
   automationErrorMessage,
@@ -36,6 +43,7 @@ import {
   orDash,
   publishReasonLabel,
   publishStateLabel,
+  runSplitShown,
   shortId,
   urlLabel,
 } from '../../lib/automationRules';
@@ -59,11 +67,14 @@ function errorText(error: ApiError | null, fallback: string): string {
 
 export function RunsTab({
   runId,
+  effectiveMode,
   focusOnOpen,
   onOpenRun,
   onOpenDecision,
 }: {
   runId: string | null;
+  /** The status's effective mode; null while the status is not loaded, which counts as not live. */
+  effectiveMode: string | null;
   focusOnOpen: boolean;
   onOpenRun: (runId: string) => void;
   onOpenDecision: (draftId: number) => void;
@@ -179,6 +190,11 @@ export function RunsTab({
   }
 
   const openRun = runId ? (runs.items.find(r => r.runId === runId) ?? null) : null;
+  // The open run's decisions, when every one of them is loaded, settle whether its split may show.
+  const openRunDecisions =
+    runId && !decisionsLoading && !decisions.error
+      ? { items: decisions.items, complete: decisions.nextCursor === null }
+      : null;
 
   return (
     <div className="space-y-4">
@@ -264,10 +280,22 @@ export function RunsTab({
                       ) : null}
                     </td>
                     <td className={TD_CLASS}>{formatTimestamp(r.startedAt)}</td>
-                    <td className={TD_CLASS}>
-                      {`${r.counts.submitted} / ${r.counts.autoAccepted} / ${r.counts.wouldAccept} / ${r.counts.human} / ${r.counts.superseded}`}
-                    </td>
-                    <td className={TD_CLASS}>{r.counts.qaPending + r.counts.qaQueued}</td>
+                    {runSplitShown(r.counts, effectiveMode, r.runId === runId ? openRunDecisions : null) ? (
+                      <>
+                        <td className={TD_CLASS} data-testid={`automation-run-counts-${r.runId}`}>
+                          {`${r.counts.submitted} / ${r.counts.autoAccepted} / ${r.counts.wouldAccept} / ${r.counts.human} / ${r.counts.superseded}`}
+                        </td>
+                        <td className={TD_CLASS}>{r.counts.qaPending + r.counts.qaQueued}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className={TD_CLASS} data-testid={`automation-run-counts-${r.runId}`}>
+                          {`${r.counts.submitted} submitted`}
+                          <div className="text-xs text-slate-500">{RUN_SPLIT_HIDDEN_TEXT}</div>
+                        </td>
+                        <td className={TD_CLASS}>—</td>
+                      </>
+                    )}
                     <td className={TD_CLASS}>
                       {r.publishes.length === 0 ? (
                         '—'

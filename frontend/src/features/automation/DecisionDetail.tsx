@@ -13,6 +13,9 @@
 // the state, reason, findings and events show only after "Reveal verdict",
 // and a reveal is recorded so the decision in the review queue then sends
 // verdictShown: true and is not counted as blind (D07 frontend-console-25).
+// Every pending undecided dry-run draft is hidden this way, whatever its state
+// (E05 frontend-console-30, N5). "Reveal verdict" removes itself, so focus
+// moves to the revealed verdict (frontend-console-33, WCAG 2.4.3).
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -57,6 +60,11 @@ export function DecisionDetail({
   const headingRef = useRef<HTMLHeadingElement>(null);
   // The draft whose verdict was revealed here; earlier reveals come from the verdict-seen record.
   const [revealedFor, setRevealedFor] = useState<number | null>(null);
+  const verdictRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (revealedFor !== null) verdictRef.current?.focus();
+  }, [revealedFor]);
 
   useEffect(() => {
     if (!focusOnOpen) return;
@@ -138,7 +146,12 @@ export function DecisionDetail({
               </Button>
             </div>
           ) : (
-            <div className="flex flex-wrap items-center gap-2">
+            <div
+              ref={verdictRef}
+              tabIndex={-1}
+              className="flex flex-wrap items-center gap-2 focus:outline-none"
+              data-testid="automation-decision-verdict"
+            >
               {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
               {d.mode === 'dry_run' ? <span className="text-xs text-slate-500">(dry run)</span> : null}
               {d.reason ? <span>{decisionReasonLabel(d.reason)}</span> : null}

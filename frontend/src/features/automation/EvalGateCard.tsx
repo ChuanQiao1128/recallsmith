@@ -14,6 +14,10 @@
 // confirm that says it blocks live. The server stores it even when it answers
 // 400 EVAL_GATE_FAILED, so that answer reloads the gate and the status exactly
 // like a success and names the gate it became.
+//
+// N1 (E05 frontend-console-31): the current gate always shows its author
+// configuration id in full, the one the runbook's go-live check compares with
+// the id the runner uses now, or says that none is recorded.
 import { useEffect, useState } from 'react';
 
 import { fetchEvalGate, recordEvalGate, revokeEvalGate, type EvalGate, type EvalGateState } from '../../api/automation';
@@ -219,12 +223,13 @@ export function EvalGateCard({
               <dt className="text-xs text-slate-500">Report SHA-256</dt>
               <dd className="font-mono">{current.reportSha256.slice(0, 12)}</dd>
             </div>
-            {current.authorConfigId ? (
-              <div>
-                <dt className="text-xs text-slate-500">Author configuration</dt>
-                <dd className="font-mono">{current.authorConfigId.slice(0, 12)}</dd>
-              </div>
-            ) : null}
+            {/* N1: always shown, so a gate without a recorded author reads as such instead of the row missing. */}
+            <div className="sm:col-span-2">
+              <dt className="text-xs text-slate-500">Author configuration</dt>
+              <dd className="font-mono break-all" data-testid="automation-gate-author">
+                {current.authorConfigId ?? 'Not recorded (a gate recorded before migration 036, or an older server)'}
+              </dd>
+            </div>
             <div>
               <dt className="text-xs text-slate-500">Recorded</dt>
               <dd>

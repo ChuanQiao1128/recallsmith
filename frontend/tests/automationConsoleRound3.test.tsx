@@ -134,8 +134,9 @@ describe('the Overview reads the blind shadow agreement (frontend-console-22, au
       '10 decided in all, 6 of them after seeing the verdict.',
     );
     expect(within(card).getByTestId('automation-shadow-threshold').textContent).toBe(
-      'Go-live floor: 4 / 100 blind decisions',
+      'Go-live floor: ≥ 100 blind decisions (4) and ≥ 95.0% agreement (25.0%)',
     );
+    expect(within(card).getByTestId('automation-shadow-floor-met').textContent).toBe('Not met');
     // The all-decisions pair never appears next to the blind rate.
     expect(card.textContent).not.toContain('8 of 10');
   });
@@ -153,7 +154,9 @@ describe('the Overview reads the blind shadow agreement (frontend-console-22, au
 
     const card = await screen.findByRole('region', { name: 'Dry-run shadow agreement' });
     expect(within(card).getByTestId('automation-shadow-blind').textContent).toBe('No blind decision yet.');
-    expect(card.textContent).not.toMatch(/%/);
+    // The floor names the 95% bar (E05 frontend-console-34), but no rate is shown.
+    expect(within(card).getByTestId('automation-shadow-blind').textContent).not.toMatch(/%/);
+    expect(within(card).getByTestId('automation-shadow-threshold').textContent).toContain('(no rate yet)');
   });
 
   it('renders an older server without the blind counts and without live', async () => {
@@ -419,11 +422,13 @@ describe('the exception inbox (frontend-console-27)', () => {
     expect(screen.queryByRole('link', { name: 'Decide draft 42 in the review queue' })).toBeNull();
   });
 
-  it('never offers Decide on a would-accept row', async () => {
+  it('never offers Decide on a would-accept row whose verdict shows', async () => {
+    // E05 frontend-console-30: a hidden row gets Decide whatever its state, so the
+    // link tells nothing; a list that shows the would-accept verdict offers none.
     api.listAutomationDecisions.mockResolvedValue(
       ok({ items: [decisionFixture({ draftId: 51, state: 'would_accept', reason: null })], nextCursor: null }),
     );
-    mountAt('/automation?tab=decisions');
+    mountAt('/automation?tab=decisions&state=would_accept');
     await screen.findByRole('button', { name: 'Details of draft 51' });
     expect(screen.queryByRole('link', { name: 'Decide draft 51 in the review queue' })).toBeNull();
   });

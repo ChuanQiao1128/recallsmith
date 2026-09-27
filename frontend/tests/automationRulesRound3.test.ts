@@ -26,7 +26,8 @@ describe('the shadow agreement is the blind pair with the server rate (frontend-
     const shadow = { humanDecided: 50, agreementRate: 1, blindDecided: 10, blindAccepted: 10 };
     expect(shadowAgreementText(shadow)).toBe('10 of 10 would-accept drafts decided blind were accepted unedited (100.0%).');
     expect(shadowTotalsText(shadow)).toBe('50 decided in all, 40 of them after seeing the verdict.');
-    expect(shadowThresholdText(shadow)).toBe('10 / 100 blind decisions');
+    // E05 frontend-console-34: the floor names both halves of the runbook criterion.
+    expect(shadowThresholdText(shadow)).toBe('≥ 100 blind decisions (10) and ≥ 95.0% agreement (100.0%)');
   });
 
   it("uses the server's rate as sent, never a ratio of its own", () => {
@@ -43,7 +44,7 @@ describe('the shadow agreement is the blind pair with the server rate (frontend-
     const shadow = { humanDecided: 12, agreementRate: null, blindDecided: 0, blindAccepted: 0 };
     expect(shadowAgreementText(shadow)).toBe('No blind decision yet.');
     expect(shadowTotalsText(shadow)).toBe('12 decided in all, 12 of them after seeing the verdict.');
-    expect(shadowThresholdText(shadow)).toBe('0 / 100 blind decisions');
+    expect(shadowThresholdText(shadow)).toBe('≥ 100 blind decisions (0) and ≥ 95.0% agreement (no rate yet)');
   });
 
   it('tolerates an older server without the blind counts', () => {
@@ -103,12 +104,15 @@ describe('the eval-gate card records failed reports (frontend-console-23, M4)', 
 });
 
 describe('the hidden dry-run verdict and the Decide link (frontend-console-25, -27)', () => {
-  it('hides a pending dry-run verdict that is not routed to a person', () => {
+  it('hides every pending undecided dry-run verdict, a routed one too (E05 frontend-console-30)', () => {
     const d = { mode: 'dry_run', state: 'would_accept', humanAction: null };
     expect(decisionVerdictHidden(d)).toBe(true);
     expect(decisionVerdictHidden({ ...d, state: 'qa_pending' })).toBe(true);
     expect(decisionVerdictHidden({ ...d, state: 'qa_queued' })).toBe(true);
-    expect(decisionVerdictHidden({ ...d, state: 'human' })).toBe(false);
+    // Round 3 kept a routed row visible, which told a hidden row was a would-accept by elimination.
+    expect(decisionVerdictHidden({ ...d, state: 'human' })).toBe(true);
+    expect(decisionVerdictHidden({ ...d, state: 'human', humanAction: 'rejected' })).toBe(false);
+    expect(decisionVerdictHidden({ ...d, state: 'auto_accepted' })).toBe(false);
     expect(decisionVerdictHidden({ ...d, humanAction: 'accepted' })).toBe(false);
     expect(decisionVerdictHidden({ ...d, mode: 'live' })).toBe(false);
     expect(decisionVerdictHidden({ ...d, state: 'superseded' })).toBe(false);

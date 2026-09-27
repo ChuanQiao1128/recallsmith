@@ -10,7 +10,13 @@
 // frontend-console-25), and a reveal is recorded so that the later decision in
 // the review queue sends verdictShown: true. An open routed row links straight
 // to the review queue with Decide (frontend-console-27).
-import { useState } from 'react';
+//
+// Every pending undecided dry-run row is hidden alike, whatever its state
+// (E05 frontend-console-30, N5): state, reason, AI QA reviewer, B/M/m and cost
+// are withheld, and each such row gets the same Decide link, so no cell tells
+// a routed row from a would-accept one. The Reveal button removes itself, so
+// focus moves to the revealed state (frontend-console-33, WCAG 2.4.3).
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import type { AutomationDecision } from '../../api/automation';
@@ -51,11 +57,20 @@ export function DecisionTable({
 }) {
   // Reveals made on this table; earlier ones come from the verdict-seen record.
   const [revealed, setRevealed] = useState<ReadonlySet<number>>(() => new Set());
+  // The row just revealed, whose state cell takes the focus the Reveal button had.
+  const [lastRevealed, setLastRevealed] = useState<number | null>(null);
+  const revealedStateRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (lastRevealed !== null) revealedStateRef.current?.focus();
+  }, [lastRevealed]);
+
   if (items.length === 0) return <p className="text-sm text-slate-600">No automatic decision matches.</p>;
 
   function reveal(draftId: number) {
     markVerdictSeen(draftId);
     setRevealed(prev => new Set(prev).add(draftId));
+    setLastRevealed(draftId);
   }
   return (
     <div className="overflow-x-auto">
@@ -106,10 +121,15 @@ export function DecisionTable({
                       </div>
                     </>
                   ) : (
-                    <>
+                    <div
+                      ref={d.draftId === lastRevealed ? revealedStateRef : undefined}
+                      tabIndex={d.draftId === lastRevealed ? -1 : undefined}
+                      className="focus:outline-none"
+                      data-testid={`automation-decision-state-${d.draftId}`}
+                    >
                       <Badge tone={badge.tone}>{badge.label}</Badge>
                       {d.mode === 'dry_run' ? <span className="text-xs text-slate-500"> (dry run)</span> : null}
-                    </>
+                    </div>
                   )}
                 </td>
                 <td className={TD_CLASS}>
@@ -120,11 +140,12 @@ export function DecisionTable({
                   {d.humanAction ? humanActionLabel(d.humanAction) : '—'}
                   {d.humanReason ? <div className="text-xs text-slate-500">{d.humanReason}</div> : null}
                 </td>
+                {/* Whether AI QA ran at all tells a routed-before-QA row from the others, so a hidden row shows none of it. */}
                 <td className={TD_CLASS}>
-                  {d.qa ? `${orDash(d.qa.provider)} · ${orDash(d.qa.model)} · ${orDash(d.qa.promptVersion)}` : '—'}
+                  {d.qa && !hidden ? `${orDash(d.qa.provider)} · ${orDash(d.qa.model)} · ${orDash(d.qa.promptVersion)}` : '—'}
                 </td>
                 <td className={TD_CLASS}>{d.qa && !hidden ? `${d.qa.blocker}/${d.qa.major}/${d.qa.minor}` : '—'}</td>
-                <td className={TD_CLASS}>{d.qa ? formatUsd(d.qa.estimatedCostUsd) : '—'}</td>
+                <td className={TD_CLASS}>{d.qa && !hidden ? formatUsd(d.qa.estimatedCostUsd) : '—'}</td>
                 <td className={TD_CLASS}>{formatTimestamp(d.createdAt)}</td>
                 <td className={TD_CLASS}>
                   <Button
@@ -135,7 +156,7 @@ export function DecisionTable({
                   >
                     Details
                   </Button>
-                  {decisionDecidable(d) ? (
+                  {hidden || decisionDecidable(d) ? (
                     <Link
                       to={`/review?deckId=${d.deckId}&draftId=${d.draftId}`}
                       className="ml-2 text-sm text-indigo-700 underline"

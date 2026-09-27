@@ -197,6 +197,8 @@ describe('AutomationPage', () => {
   });
 
   it('shows the decision detail with findings, events and a review link', async () => {
+    // Live: an open dry-run decision hides its verdict until revealed (E05 frontend-console-30).
+    api.fetchAutomationDecision.mockResolvedValue(ok(decisionDetailFixture({ mode: 'live' })));
     mountAt('/automation?draftId=41');
     await waitFor(() => expect(api.fetchAutomationDecision).toHaveBeenCalledWith(41));
     const detail = await screen.findByRole('region', { name: 'Decision detail' });
