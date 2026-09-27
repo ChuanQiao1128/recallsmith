@@ -41,6 +41,10 @@ public class PublishJobProcessor : IPublishJobProcessor
       if (row is null || row.Status is "SUCCESS" or "FAILED")
       {
         Console.WriteLine($"[JobId={jobId}] Job already finished ({row?.Status ?? "absent"}); acknowledging replay");
+        // A crash between CompleteJobAsync and the side effects leaves the message on the queue, and this
+        // replay is its only second chance (automation-1): both side effects are idempotent (the outbox
+        // rows staged with the SUCCESS commit are sent once, the ledger row is keyed on the job).
+        if (row is { Status: "SUCCESS" }) await AfterPublishSucceededAsync(row);
         return;
       }
       throw new JobNotAcquiredException(jobId);
@@ -65,6 +69,14 @@ public class PublishJobProcessor : IPublishJobProcessor
 
     Console.WriteLine($"[JobId={jobId}] Loaded {deckData.Cards.Count} cards");
 
+    // The AI QA publish gate passed a specific set of cards (backend-design-16): never build anything else. A card
+    // edited since then may be at a hash nobody reviewed; the author publishes again and the gate re-checks.
+    if (!string.IsNullOrEmpty(job.QaSnapshotSha256) &&
+        !string.Equals(SnapshotDigest(deckData.Cards), job.QaSnapshotSha256, StringComparison.Ordinal))
+    {
+      throw new BusinessException($"{PublishSnapshot.StaleErrorCode}: cards changed after the AI QA publish gate passed; publish again");
+    }
+
     // 💡 契约修复：deck.json 的 version 必须等于本次构建的 buildId（字符串），
     // 与 manifest entry 的 version 保持一致 —— 客户端全量安装校验 deck.json.version === manifest version。
     if (!string.IsNullOrEmpty(job.BuildId))
@@ -83,33 +95,26 @@ public class PublishJobProcessor : IPublishJobProcessor
 
     // Step 5: 最终一致性提交
     await _jobRepository.CompleteJobAsync(jobId, deckData.Cards.Count);
-    await AfterPublishSucceededAsync(job, deckData.Cards.Count);
+    await AfterPublishSucceededAsync(job);
 
     Console.WriteLine($"[JobId={jobId}] Job completed successfully");
   }
 
   /// <summary>
-  /// Side effects of a completed publish: the <c>deck.published</c> webhook (R18 J03, contract §6.1) and
-  /// the <c>publish_pipeline</c> ledger event (R18 J08, contract §9.3).
+  /// Side effects of a completed publish: sending the <c>deck.published</c> webhook deliveries (R18 J03,
+  /// contract §6.1) that CompleteJobAsync staged in the SUCCESS transaction (the outbox), and the
+  /// <c>publish_pipeline</c> ledger event (R18 J08, contract §9.3).
   /// Best-effort on its own connection, after the job row is already SUCCESS: nothing here may fail or
-  /// retry a completed job.
+  /// retry a completed job. Idempotent, so a replay of the job's message may run it again.
   /// </summary>
-  private static async Task AfterPublishSucceededAsync(JobInfo job, int cardCount)
+  private static async Task AfterPublishSucceededAsync(JobInfo job)
   {
     try
     {
       await using var conn = await Pg.OpenConnectionOrNullAsync();
       if (conn is null) return;
 
-      await WebhookEvents.EnqueueAsync(conn, "deck.published", new
-      {
-        deckId = job.DeckId,
-        deckSlug = job.DeckSlug,
-        buildId = job.BuildId,
-        jobId = job.JobId,
-        cardCount,
-        publishedAt = WebhookEvents.FormatTimestamp(DateTimeOffset.UtcNow),
-      });
+      await WebhookEvents.SendStagedAsync(conn, JobRepository.PublishedEventId(job.JobId));
 
       // Automation Ledger (R18 J08, contract §9.3): one successful publish = one unit.
       await AutomationLedger.RecordAsync(conn, new AutomationEvent("publish_pipeline", 1, "success",
@@ -151,6 +156,11 @@ public class PublishJobProcessor : IPublishJobProcessor
     await AutomationLedger.RecordAsync(conn, new AutomationEvent("publish_pipeline", 0, "failure",
       DeckId: deckId, Ref: jobId, DedupeKey: $"publish-fail:{jobId}", Details: new { error }));
   }
+
+  /// <summary>The <see cref="PublishSnapshot"/> digest of the cards this job is about to build.</summary>
+  public static string SnapshotDigest(IEnumerable<CardExportData> cards) =>
+    PublishSnapshot.Digest(cards.Select(c => new PublishSnapshotCard(c.StableUid, c.OrderInDeck, c.Difficulty, c.Question, c.Explanation,
+      c.CodeLanguage, c.CodeSnippet, c.RealWorldUsage, c.Revision, c.Topic, c.Mcq?.GetRawText(), c.Source?.GetRawText())));
 
   public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
 

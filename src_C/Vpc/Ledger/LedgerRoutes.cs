@@ -84,13 +84,18 @@ public static class LedgerRoutes
 
     try
     {
-      // Minutes saved are clamped per (automation, source) group, never per row: a row that carries only
-      // human cost (a rejected draft's review time, units 0) must reduce the savings it offsets instead of
-      // counting as 0. Backfill rows carry no actual minutes, so history is not offset by live review cost.
+      // Minutes saved are clamped per (period, automation, source) group, never per row: a row that carries
+      // only human cost (a rejected draft's review time, units 0) must reduce the savings it offsets in the
+      // same period instead of counting as 0. Backfill rows carry no actual minutes, so history is not
+      // offset by live review cost. The totals and the series clamp at the same grain (the requested
+      // granularity), so the series always adds up to totals.minutesSaved (backend-design-17,
+      // automation-14); a net-negative period shows 0 in both, and the headline can therefore differ
+      // between granularities.
       var perAutomation = await DbUtil.QueryAsync(conn, null,
         """
         with g as (
           select b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source,
+                 date_trunc($3::text, e.occurred_at at time zone 'UTC') as period,
                  count(e.id) filter (where e.units > 0 or e.outcome = 'failure') as runs,
                  coalesce(sum(e.units), 0) as units,
                  count(e.id) filter (where e.outcome = 'failure') as failures,
@@ -103,7 +108,7 @@ public static class LedgerRoutes
           from automation_baselines b
           left join automation_events e
             on e.automation = b.automation and e.occurred_at >= $1 and e.occurred_at < $2
-          group by b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source
+          group by b.automation, b.unit, b.baseline_minutes_per_unit, b.baseline_source, e.source, 6
         )
         select automation as "automation", unit as "unit",
                baseline_minutes_per_unit as "baselineMinutesPerUnit", baseline_source as "baselineSource",
@@ -124,7 +129,7 @@ public static class LedgerRoutes
         group by automation, unit, baseline_minutes_per_unit, baseline_source
         order by automation collate "C"
         """,
-        [start, end]);
+        [start, end, granularity]);
 
       var seriesRows = await DbUtil.QueryAsync(conn, null,
         """
@@ -251,12 +256,13 @@ public static class LedgerRoutes
   /// <summary>
   /// The AI drafting agent's own quality over the period, from ai_review_events (automation-4): how many
   /// drafts were decided, the acceptance and edited-accept rates, the share rejected for a defect reason
-  /// (the agent's defect rate, which is not a defect caught before publish) and the average review time.
+  /// (the agent's defect rate, which is not a defect caught before publish), the average review time (each
+  /// value capped server-side at Drafts.ReviewMsCap) and how many decisions carried no review time.
   /// Zeros on a database without migration 030.
   /// </summary>
   private static async Task<object> AgentDraftQualityAsync(NpgsqlConnection conn, DateTime start, DateTime end)
   {
-    long decided = 0, accepted = 0, edited = 0, rejected = 0, defects = 0;
+    long decided = 0, accepted = 0, edited = 0, rejected = 0, defects = 0, notMeasured = 0;
     decimal? avgReviewMs = null;
 
     var hasEvents = await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.ai_review_events') is not null", []);
@@ -269,11 +275,12 @@ public static class LedgerRoutes
                count(*) filter (where action = 'edited_accepted') as "edited",
                count(*) filter (where action = 'rejected') as "rejected",
                count(*) filter (where action = 'rejected' and reason = any($3)) as "defects",
-               avg(review_ms) as "avgReviewMs"
+               avg(case when review_ms is not null then least(review_ms, $4) end) as "avgReviewMs",
+               count(*) filter (where review_ms is null) as "reviewNotMeasured"
         from ai_review_events
         where action in ('accepted','edited_accepted','rejected') and created_at >= $1 and created_at < $2
         """,
-        [start, end, Vpc.Review.Drafts.DefectReasons.ToArray()]);
+        [start, end, Vpc.Review.Drafts.DefectReasons.ToArray(), Vpc.Review.Drafts.ReviewMsCap]);
       var r = rows[0];
       decided = ToLong(r["decided"]);
       accepted = ToLong(r["accepted"]);
@@ -281,6 +288,7 @@ public static class LedgerRoutes
       rejected = ToLong(r["rejected"]);
       defects = ToLong(r["defects"]);
       avgReviewMs = r["avgReviewMs"] is null ? null : ToDecimal(r["avgReviewMs"]);
+      notMeasured = ToLong(r["reviewNotMeasured"]);
     }
 
     return new
@@ -294,6 +302,9 @@ public static class LedgerRoutes
       editedAcceptRate = Rate(edited, accepted),
       defectRate = Rate(defects, decided),
       avgReviewMinutes = avgReviewMs is { } ms ? Round2(ms / 60000m) : (decimal?)null,
+      // Decisions sent without reviewMs (automation-13): excluded from the average, and charged no human
+      // cost in the savings, so the reader can see how much of the figure rests on unmeasured reviews.
+      reviewNotMeasured = notMeasured,
     };
   }
 

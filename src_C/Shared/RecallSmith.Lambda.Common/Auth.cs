@@ -487,10 +487,22 @@ public static class Auth
     return null;
   }
 
-  public static InternalSignatureVerifyResult VerifyInternalSignature(LambdaRequest req)
+  public const string InternalSharedSecretEnv = "INTERNAL_SHARED_SECRET";
+
+  public static InternalSignatureVerifyResult VerifyInternalSignature(LambdaRequest req) => VerifyInternalSignature(req, null);
+
+  /// <summary>
+  /// The §4.3 HMAC check. <paramref name="callerSecretEnv"/> names the route's own secret (least privilege,
+  /// cloud-security-resilience-2): when that variable is set, it is the only secret this route accepts, so a caller
+  /// holding the shared secret (or another route's secret) cannot sign for it. When it is unset the route falls back
+  /// to <c>INTERNAL_SHARED_SECRET</c>, the pre-split behaviour, until the per-caller secret is provisioned.
+  /// </summary>
+  public static InternalSignatureVerifyResult VerifyInternalSignature(LambdaRequest req, string? callerSecretEnv)
   {
-    var secret = Environment.GetEnvironmentVariable("INTERNAL_SHARED_SECRET");
-    if (string.IsNullOrEmpty(secret)) return new InternalSignatureVerifyResult(false, "Missing INTERNAL_SHARED_SECRET");
+    var callerSecret = callerSecretEnv is null ? null : Environment.GetEnvironmentVariable(callerSecretEnv);
+    var secretName = string.IsNullOrEmpty(callerSecret) ? InternalSharedSecretEnv : callerSecretEnv!;
+    var secret = string.IsNullOrEmpty(callerSecret) ? Environment.GetEnvironmentVariable(InternalSharedSecretEnv) : callerSecret;
+    if (string.IsNullOrEmpty(secret)) return new InternalSignatureVerifyResult(false, $"Missing {secretName}");
 
     var tsRaw = Validation.GetHeader(req, "x-internal-timestamp");
     var sigRaw = Validation.GetHeader(req, "x-internal-signature");

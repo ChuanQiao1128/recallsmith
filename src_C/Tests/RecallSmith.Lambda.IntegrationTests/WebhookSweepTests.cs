@@ -167,6 +167,100 @@ public class WebhookSweepTests
   }
 
   [Fact]
+  public async Task Sweep_SkipsARowSentButNeverReported()
+  {
+    // backend-design-13: SQS accepted the message (enqueued_at is set) but the dispatcher's report never
+    // arrived, or the message still waits in a backed-up queue. The receiver may already have it, so the
+    // sweep must not send it again, however old the row is.
+    await _db.ScalarAsync("update webhook_subscriptions set is_active = false where deleted_at is null");
+    var live = await NewSubscriptionAsync();
+    var result = await WithQueueAsync(_ => Task.CompletedTask, async () =>
+    {
+      await using var conn = await _db.OpenAsync();
+      return await WebhookEvents.EnqueueAsync(conn, "deck.published", new { deckId = 1 });
+    });
+    Assert.Equal(1, result.Deliveries);
+    Assert.Equal(0, result.EnqueueFailures);
+    var sentRow = (Guid)(await _db.ScalarAsync("select delivery_id from webhook_deliveries where event_id = $1", result.EventId))!;
+    Assert.NotNull(await _db.ScalarAsync("select enqueued_at from webhook_deliveries where delivery_id = $1", sentRow));
+    await _db.ScalarAsync("update webhook_deliveries set updated_at = now() - interval '2 hours' where delivery_id = $1", sentRow);
+
+    // Next to it, a row that never reached SQS is still swept.
+    var neverSent = await SeedDeliveryAsync(live, "queued", 0, 30);
+
+    var sent = new List<SendMessageRequest>();
+    var data = await WithQueueAsync(r => { lock (sent) sent.Add(r); return Task.CompletedTask; }, async () => Data(await SweepAsync()));
+    Assert.Equal(new[] { neverSent.DeliveryId }, data.GetProperty("deliveryIds").EnumerateArray().Select(e => e.GetGuid()).ToArray());
+    Assert.DoesNotContain(sent, r => JsonDocument.Parse(r.MessageBody).RootElement.GetProperty("deliveryId").GetGuid() == sentRow);
+    Assert.Equal("queued", await StatusAsync(sentRow));
+    // The swept row now carries its hand-off marker too.
+    Assert.NotNull(await _db.ScalarAsync("select enqueued_at from webhook_deliveries where delivery_id = $1", neverSent.DeliveryId));
+
+    await _db.ScalarAsync("update webhook_subscriptions set is_active = false where id = $1", live);
+  }
+
+  [Fact]
+  public async Task FailedSend_NeverRegressesAReportedRow()
+  {
+    // backend-design-14: the send fails (a late deadline, or a sweep re-send racing the original message)
+    // after the dispatcher already delivered and reported the row: it must stay delivered.
+    await _db.ScalarAsync("update webhook_subscriptions set is_active = false where deleted_at is null");
+    var live = await NewSubscriptionAsync();
+
+    var savedSecret = Environment.GetEnvironmentVariable("INTERNAL_SHARED_SECRET");
+    Environment.SetEnvironmentVariable("INTERNAL_SHARED_SECRET", "test-secret");
+    try
+    {
+      var result = await WithQueueAsync(async r =>
+      {
+        var deliveryId = JsonDocument.Parse(r.MessageBody).RootElement.GetProperty("deliveryId").GetGuid();
+        var report = await ReportDeliveredAsync(deliveryId);
+        Assert.Equal(200, report.StatusCode);
+        throw new InvalidOperationException("send timed out after SQS accepted it");
+      }, async () =>
+      {
+        await using var conn = await _db.OpenAsync();
+        return await WebhookEvents.EnqueueAsync(conn, "deck.published", new { deckId = 1 });
+      });
+
+      Assert.Equal(1, result.EnqueueFailures);
+      var row = (await _db.QueryAsync("select status, last_error, delivered_at from webhook_deliveries where event_id = $1", result.EventId)).Single();
+      Assert.Equal("delivered", (string)row["status"]!);
+      Assert.Null(row["last_error"]);
+      Assert.NotNull(row["delivered_at"]);
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable("INTERNAL_SHARED_SECRET", savedSecret);
+      await _db.ScalarAsync("update webhook_subscriptions set is_active = false where id = $1", live);
+    }
+  }
+
+  /// <summary>A signed §6.5.3 'delivered' report at attempt 1, through the report route.</summary>
+  private static Task<APIGatewayProxyResponse> ReportDeliveredAsync(Guid deliveryId)
+  {
+    var body = JsonSerializer.Serialize(new { attempt = 1, deliveryId, durationMs = 10, error = (string?)null, outcome = "delivered", statusCode = 200 });
+    var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+    using var mac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes("test-secret"));
+    var signature = "v1=" + Convert.ToHexString(mac.ComputeHash(System.Text.Encoding.UTF8.GetBytes($"{ts}.{body}"))).ToLowerInvariant();
+    var req = new LambdaRequest(JsonSerializer.SerializeToElement(new
+    {
+      rawPath = "/api/internal/webhooks/deliveries/report",
+      requestContext = new { requestId = Guid.NewGuid().ToString(), http = new { method = "POST" } },
+      headers = new Dictionary<string, string>
+      {
+        ["content-type"] = "application/json",
+        ["x-internal-timestamp"] = ts,
+        ["x-internal-signature"] = signature,
+      },
+      queryStringParameters = new Dictionary<string, string>(),
+      body,
+      isBase64Encoded = false,
+    }));
+    return RecallSmith.Lambda.Vpc.Internal.WebhookDeliveryReport.HandleReport(req, new Res(req.TraceId));
+  }
+
+  [Fact]
   public async Task Sweep_IsBoundedAndMarksFailedSendsAgain()
   {
     var live = await NewSubscriptionAsync();

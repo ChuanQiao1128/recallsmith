@@ -82,8 +82,16 @@ public static class WebhookEvents
     value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
 
   /// <summary>
+  /// Version of the §6.3 body (automation-7). New keys are added without a bump; a breaking change to the
+  /// shape of <c>data</c> or of the envelope increments it, so a receiver can tell payload generations
+  /// apart from the body alone. It is part of the signed body; the signature scheme does not change.
+  /// </summary>
+  public const int BodySchemaVersion = 1;
+
+  /// <summary>
   /// The §6.3 body: ASCII-only JSON (default encoder) with the top-level keys data, environment, event,
-  /// eventId, occurredAt, in that order. Identical for every subscription and every retry of one event.
+  /// eventId, occurredAt, schemaVersion, in that order (schemaVersion is last, so receivers that read the
+  /// first five keys are unaffected). Identical for every subscription and every retry of one event.
   /// </summary>
   public static string RenderBody(Guid eventId, string eventType, DateTimeOffset occurredAt, object data) =>
     JsonSerializer.Serialize(new
@@ -93,6 +101,7 @@ public static class WebhookEvents
       @event = eventType,
       eventId = eventId.ToString("D"),
       occurredAt = FormatTimestamp(occurredAt),
+      schemaVersion = BodySchemaVersion,
     });
 
   /// <summary>
@@ -243,6 +252,139 @@ public static class WebhookEvents
   }
 
   /// <summary>
+  /// A deterministic event id for an event that one source record causes exactly once (for example
+  /// <c>deck.published:&lt;jobId&gt;</c>), so a replayed or recovered emission finds the delivery rows of the
+  /// first one instead of creating a second event. RFC 9562 version 8 (name-based, SHA-256): the first
+  /// 128 bits of SHA-256("developercards-webhook-event:" + name) with the version and variant bits set.
+  /// </summary>
+  public static Guid DerivedEventId(string name)
+  {
+    var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("developercards-webhook-event:" + name))[..16];
+    bytes[6] = (byte)((bytes[6] & 0x0F) | 0x80);
+    bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80);
+    // The 32-hex-digit text form is read in network (big-endian) order, so the version nibble lands in place.
+    return Guid.ParseExact(Convert.ToHexString(bytes), "N");
+  }
+
+  /// <summary>
+  /// Outbox, write half (automation-1): inside the caller's transaction <paramref name="tx"/>, records one
+  /// <c>queued</c> delivery row of event <paramref name="eventId"/> per live subscription to
+  /// <paramref name="eventType"/> that has none yet, and sends nothing. The rows commit or roll back with
+  /// the business change that caused the event, so a crash after the commit leaves rows that
+  /// <see cref="SendStagedAsync"/> (on replay) or the sweep sends later. Idempotent per (event, subscription).
+  /// Never throws and never aborts <paramref name="tx"/>: it runs under a savepoint, and a database without
+  /// migration 027 produces one warn line. Returns the number of rows staged.
+  /// </summary>
+  public static async Task<int> StageAsync(
+    NpgsqlConnection conn,
+    NpgsqlTransaction tx,
+    string eventType,
+    Guid eventId,
+    DateTimeOffset occurredAt,
+    object data)
+  {
+    if (!SubscribableEvents.Contains(eventType, StringComparer.Ordinal))
+    {
+      Log.Event("warn", new { tag = "webhook", reason = "unknown_event", @event = eventType });
+      return 0;
+    }
+
+    // Without a queue nothing could ever send the rows (EnqueueAsync records none either).
+    if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(QueueUrlEnv)))
+    {
+      Log.Event("info", new { tag = "webhook", reason = "queue_url_missing", @event = eventType, op = "stage" });
+      return 0;
+    }
+
+    const string savepoint = "webhook_outbox";
+    await tx.SaveAsync(savepoint);
+    try
+    {
+      var targets = await DbUtil.QueryAsync(conn, tx,
+        """
+        select s.id from webhook_subscriptions s
+        where s.deleted_at is null and s.is_active and $1 = any(s.events)
+          and not exists (select 1 from webhook_deliveries d where d.event_id = $2 and d.subscription_id = s.id)
+        order by s.id
+        """,
+        [eventType, eventId]);
+
+      var body = RenderBody(eventId, eventType, occurredAt, data);
+      foreach (var target in targets)
+      {
+        await DbUtil.ExecuteAsync(conn, tx,
+          "insert into webhook_deliveries (delivery_id, event_id, event, subscription_id, status, body) values ($1, $2, $3, $4, 'queued', $5)",
+          [Guid.NewGuid(), eventId, eventType, Convert.ToInt64(target["id"], CultureInfo.InvariantCulture), body]);
+      }
+
+      await tx.ReleaseAsync(savepoint);
+      return targets.Count;
+    }
+    catch (Exception ex)
+    {
+      await tx.RollbackAsync(savepoint);
+      LogFailure(ex, eventType);
+      return 0;
+    }
+  }
+
+  /// <summary>
+  /// Outbox, send half (automation-1): after the staging transaction has committed, sends one SQS message
+  /// per delivery row of <paramref name="eventId"/> that has not been handed off yet (<c>queued</c>, no
+  /// attempt, no <c>enqueued_at</c>) on a live subscription, with its own delivery_id. A failed send marks
+  /// the row enqueue_failed. Safe to repeat: a sent row has <c>enqueued_at</c> and is skipped. Returns the
+  /// number of failures. Never throws.
+  /// </summary>
+  public static async Task<int> SendStagedAsync(NpgsqlConnection conn, Guid eventId, CancellationToken ct = default)
+  {
+    var failures = 0;
+    string? eventType = null;
+    try
+    {
+      var queueUrl = Environment.GetEnvironmentVariable(QueueUrlEnv);
+      if (string.IsNullOrWhiteSpace(queueUrl))
+      {
+        Log.Event("info", new { tag = "webhook", reason = "queue_url_missing", op = "send_staged" });
+        return 0;
+      }
+
+      var rows = await DbUtil.QueryAsync(conn, null,
+        """
+        select d.delivery_id as "deliveryId", d.event as "event", d.subscription_id as "subscriptionId", d.body as "body", s.url as "url"
+        from webhook_deliveries d
+        join webhook_subscriptions s on s.id = d.subscription_id
+        where d.event_id = $1 and d.status = 'queued' and d.attempts = 0 and d.enqueued_at is null
+          and s.deleted_at is null and s.is_active
+        order by d.subscription_id, d.delivery_id
+        """,
+        [eventId]);
+      if (rows.Count == 0) return 0;
+
+      using var deadline = Deadline(ct);
+      foreach (var row in rows)
+      {
+        var body = (string)row["body"]!;
+        eventType = (string)row["event"]!;
+        if (!await TrySendAsync(conn, queueUrl, (Guid)row["deliveryId"]!, eventId, eventType,
+              Convert.ToInt64(row["subscriptionId"], CultureInfo.InvariantCulture), (string)row["url"]!, ReadOccurredAt(body), body, deadline.Token))
+        {
+          failures++;
+        }
+      }
+
+      if (failures > 0) RouteMetrics.EmitGauge("WebhookEnqueueFailures", failures);
+      Log.Event("info", new { tag = "webhook", op = "send_staged", @event = eventType, eventId, deliveries = rows.Count, enqueueFailures = failures });
+      return failures;
+    }
+    catch (Exception ex)
+    {
+      LogFailure(ex, eventType);
+      if (failures > 0) RouteMetrics.EmitGauge("WebhookEnqueueFailures", failures);
+      return failures;
+    }
+  }
+
+  /// <summary>
   /// Copies delivery <paramref name="deliveryId"/> into a new row (new delivery_id; same event_id, event,
   /// subscription and body; status queued, attempts 0) and sends its message. Returns the new id, or
   /// null when the source row does not exist (or the copy could not be recorded). Never throws; a send
@@ -300,13 +442,15 @@ public static class WebhookEvents
   public const int SweepMaxBatch = 100;
 
   /// <summary>
-  /// The stranded-delivery predicate (automation-1): a row that never reached the dispatcher, i.e.
-  /// <c>enqueue_failed</c>, or <c>queued</c> with no attempt reported, untouched for
-  /// <see cref="SweepStuckAfter"/>, whose subscription is still live. Alias <c>d</c> is webhook_deliveries,
-  /// <c>s</c> its subscription.
+  /// The stranded-delivery predicate (automation-1, backend-design-13): a row that never reached SQS, i.e.
+  /// <c>enqueue_failed</c>, or <c>queued</c> with no attempt reported and no recorded hand-off
+  /// (<c>enqueued_at is null</c>, migration 032), untouched for <see cref="SweepStuckAfter"/>, whose
+  /// subscription is still live. A row that SQS accepted but whose report never arrived (dispatcher report
+  /// call failed, or the message is still waiting in a backed-up queue) has <c>enqueued_at</c> set and is
+  /// never re-sent. Alias <c>d</c> is webhook_deliveries, <c>s</c> its subscription.
   /// </summary>
   private static string StrandedPredicate => $"""
-    (d.status = 'enqueue_failed' or (d.status = 'queued' and d.attempts = 0))
+    (d.status = 'enqueue_failed' or (d.status = 'queued' and d.attempts = 0 and d.enqueued_at is null))
     and d.updated_at < now() - interval '{(int)SweepStuckAfter.TotalMinutes} minutes'
     and s.deleted_at is null and s.is_active
     """;
@@ -404,18 +548,34 @@ public static class WebhookEvents
       var seam = TestSendSeam;
       if (seam is not null) await seam(request).WaitAsync(ct);
       else await SQS().SendMessageAsync(request, ct).WaitAsync(ct);
-      return true;
     }
     catch (Exception ex)
     {
       var reason = ex is OperationCanceledException ? $"enqueue deadline exceeded ({(int)SendDeadline.TotalMilliseconds} ms)" : ex.Message;
       var error = reason.Length > MaxErrorLength ? reason[..MaxErrorLength] : reason;
+      // Only a row still waiting for its hand-off may become enqueue_failed (backend-design-14): a send
+      // that timed out after SQS accepted it, or a sweep re-send that raced the original message, must
+      // never regress a row the dispatcher has already reported (retrying, delivered, failed, dead).
       await DbUtil.ExecuteAsync(conn, null,
-        "update webhook_deliveries set status = 'enqueue_failed', last_error = $2, updated_at = now() where delivery_id = $1",
+        "update webhook_deliveries set status = 'enqueue_failed', last_error = $2, updated_at = now() where delivery_id = $1 and status = 'queued'",
         [deliveryId, error]);
       Log.Event("warn", new { tag = "webhook", reason = "enqueue_failed", @event = eventType, deliveryId, subscriptionId, error });
       return false;
     }
+
+    // The durable hand-off marker the sweep keys on (backend-design-13). Best-effort: the message is
+    // already on the queue, so a failure here is logged and the send still counts as done.
+    try
+    {
+      await DbUtil.ExecuteAsync(conn, null,
+        "update webhook_deliveries set enqueued_at = now() where delivery_id = $1",
+        [deliveryId]);
+    }
+    catch (Exception ex)
+    {
+      Log.Event("warn", new { tag = "webhook", reason = "enqueued_marker_failed", @event = eventType, deliveryId, error = ex.Message });
+    }
+    return true;
   }
 
   private static string ReadOccurredAt(string body)

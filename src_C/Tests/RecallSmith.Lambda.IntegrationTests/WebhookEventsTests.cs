@@ -426,7 +426,9 @@ public class WebhookEventsTests
 
     using var doc = JsonDocument.Parse(body);
     var root = doc.RootElement;
-    Assert.Equal(new[] { "data", "environment", "event", "eventId", "occurredAt" }, root.EnumerateObject().Select(p => p.Name).ToArray());
+    // automation-7: schemaVersion is appended last, so the first five keys keep their contract order.
+    Assert.Equal(new[] { "data", "environment", "event", "eventId", "occurredAt", "schemaVersion" }, root.EnumerateObject().Select(p => p.Name).ToArray());
+    Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
     Assert.Equal("prod", root.GetProperty("environment").GetString());
     Assert.Equal("import.failed", root.GetProperty("event").GetString());
     Assert.Equal(eventId.ToString("D"), root.GetProperty("eventId").GetString());
@@ -493,6 +495,92 @@ public class WebhookEventsTests
     Assert.Equal(jobId, data.GetProperty("jobId").GetString());
     Assert.Equal(2, data.GetProperty("cardCount").GetInt32());
     Assert.Matches(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$", data.GetProperty("publishedAt").GetString()!);
+  }
+
+  private async Task<(long DeckId, string JobId)> SeedProcessingJobAsync()
+  {
+    var (deckId, slug) = await NewDeckAsync();
+    await _db.ScalarAsync(
+      "insert into cards (deck_id, stable_uid, question, order_in_deck, is_deleted) values ($1,$2,$3,$4,0)",
+      deckId, "uid-1", "q1", 5);
+    var build = $"b-y01-{Guid.NewGuid():N}"[..20];
+    var jobId = Guid.NewGuid().ToString();
+    await _db.ScalarAsync(
+      "insert into deck_publishes (deck_id, deck_slug, build_id, s3_key, job_id, status) values ($1,$2,$3,$4,$5,'PROCESSING')",
+      deckId, slug, build, $"content/{build}/deck.json", jobId);
+    return (deckId, jobId);
+  }
+
+  [Fact]
+  public async Task Publish_CrashAfterCompletion_ReplaySendsTheStagedEventOnce()
+  {
+    // automation-1: the deck.published rows are staged in the SUCCESS transaction (an outbox), so a worker
+    // crash between CompleteJobAsync and the side effects no longer loses the event or the ledger row.
+    await DeactivateAllAsync();
+    var sub = await NewSubscriptionAsync(["deck.published"]);
+    var (deckId, jobId) = await SeedProcessingJobAsync();
+    var eventId = JobRepository.PublishedEventId(jobId);
+
+    var capture = new Capture();
+    // The crash: the job completes, then the process dies before AfterPublishSucceededAsync.
+    await WithQueueAsync(capture.Send, () => new JobRepository().CompleteJobAsync(jobId, 1));
+    Assert.Empty(capture.Sent);
+    var staged = Assert.Single(await _db.QueryAsync(
+      "select delivery_id, status, attempts, enqueued_at, body from webhook_deliveries where event_id = $1", eventId));
+    Assert.Equal("queued", (string)staged["status"]!);
+    Assert.Null(staged["enqueued_at"]);
+    Assert.Empty(await _db.QueryAsync("select 1 from automation_events where dedupe_key = $1", $"publish:{jobId}"));
+
+    // SQS redelivers the unacknowledged job message: the replay branch runs the side effects.
+    var processor = new PublishJobProcessor(new JobRepository(), new NullUploader(), new NoopArtifacts());
+    await WithQueueAsync(capture.Send, () => processor.ProcessAsync(jobId, 2));
+    var message = Assert.Single(capture.MessagesFor(sub));
+    Assert.Equal((Guid)staged["delivery_id"]!, message.GetProperty("deliveryId").GetGuid());
+    Assert.Equal(eventId, message.GetProperty("eventId").GetGuid());
+    using (var body = JsonDocument.Parse(message.GetProperty("body").GetString()!))
+    {
+      var data = body.RootElement.GetProperty("data");
+      Assert.Equal(new[] { "deckId", "deckSlug", "buildId", "jobId", "cardCount", "publishedAt" }, data.EnumerateObject().Select(p => p.Name).ToArray());
+      Assert.Equal(deckId, data.GetProperty("deckId").GetInt64());
+      Assert.Equal(jobId, data.GetProperty("jobId").GetString());
+      Assert.Equal(1, data.GetProperty("cardCount").GetInt32());
+    }
+    Assert.NotNull(await _db.ScalarAsync("select enqueued_at from webhook_deliveries where event_id = $1", eventId));
+    Assert.Single(await _db.QueryAsync("select 1 from automation_events where dedupe_key = $1", $"publish:{jobId}"));
+
+    // A second replay sends nothing more and stages nothing more.
+    await WithQueueAsync(capture.Send, () => processor.ProcessAsync(jobId, 3));
+    Assert.Single(capture.Sent);
+    Assert.Single(await _db.QueryAsync("select 1 from webhook_deliveries where event_id = $1", eventId));
+  }
+
+  [Fact]
+  public async Task Publish_CompletionOfAFinishedJob_StagesNothing()
+  {
+    // Only the PROCESSING → SUCCESS transition stages the event; completing it again is a no-op.
+    await DeactivateAllAsync();
+    await NewSubscriptionAsync(["deck.published"]);
+    var (_, jobId) = await SeedProcessingJobAsync();
+
+    var capture = new Capture();
+    await WithQueueAsync(capture.Send, async () =>
+    {
+      await new JobRepository().CompleteJobAsync(jobId, 1);
+      await new JobRepository().CompleteJobAsync(jobId, 1);
+    });
+    Assert.Single(await _db.QueryAsync("select 1 from webhook_deliveries where event_id = $1", JobRepository.PublishedEventId(jobId)));
+    Assert.Empty(capture.Sent);
+  }
+
+  [Fact]
+  public void DerivedEventId_IsStableAndVersion8()
+  {
+    var a = WebhookEvents.DerivedEventId("deck.published:job-1");
+    Assert.Equal(a, WebhookEvents.DerivedEventId("deck.published:job-1"));
+    Assert.NotEqual(a, WebhookEvents.DerivedEventId("deck.published:job-2"));
+    var text = a.ToString("D");
+    Assert.Equal('8', text[14]);
+    Assert.Contains(text[19], "89ab");
   }
 
   [Fact]

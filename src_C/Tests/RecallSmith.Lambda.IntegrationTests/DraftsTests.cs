@@ -618,6 +618,53 @@ public class DraftsTests
     Assert.Equal(ids[0].ToString(CultureInfo.InvariantCulture), row["ref"]);
   }
 
+  [Fact]
+  public async Task Decision_ReviewMsAboveCap_IsClampedTo30Minutes()
+  {
+    // automation-13: the 30-minute per-draft cap the ledger page promises holds on the server too.
+    var deck = await NewDeckAsync("ledger-cap");
+    var ids = await SubmitCardsAsync(deck.Id, Card("cap-accept"), Card("cap-reject"), Card("cap-unmeasured"));
+    const int tenHours = 10 * 60 * 60_000;
+
+    Data(await AcceptAsync(ids[0], new { reviewMs = tenHours }));
+    Data(await RejectAsync(ids[1], new { reason = "low_value", reviewMs = int.MaxValue }));
+    Data(await AcceptAsync(ids[2], new { }));
+
+    var accept = Assert.Single(await _db.QueryAsync(
+      "select actual_minutes, details::text as details from automation_events where dedupe_key = $1", $"draft-accept:{ids[0]}"));
+    Assert.Equal(30m, Convert.ToDecimal(accept["actual_minutes"], CultureInfo.InvariantCulture));
+    using (var details = JsonDocument.Parse((string)accept["details"]!))
+    {
+      Assert.Equal(tenHours, details.RootElement.GetProperty("rawReviewMs").GetInt32());
+      Assert.True(details.RootElement.GetProperty("reviewTimeMeasured").GetBoolean());
+    }
+
+    var reject = Assert.Single(await _db.QueryAsync(
+      "select actual_minutes, details::text as details from automation_events where dedupe_key = $1", $"draft-reject:{ids[1]}"));
+    Assert.Equal(30m, Convert.ToDecimal(reject["actual_minutes"], CultureInfo.InvariantCulture));
+    using (var details = JsonDocument.Parse((string)reject["details"]!))
+    {
+      Assert.Equal(int.MaxValue, details.RootElement.GetProperty("rawReviewMs").GetInt32());
+    }
+
+    foreach (var id in ids.Take(2))
+    {
+      var ms = await _db.ScalarAsync("select review_ms from ai_review_events where draft_id = $1 and action in ('accepted','edited_accepted','rejected')", id);
+      Assert.Equal(Drafts.ReviewMsCap, Convert.ToInt32(ms, CultureInfo.InvariantCulture));
+    }
+
+    // No reviewMs: nothing is charged, and the row says the review time was not measured.
+    var unmeasured = Assert.Single(await _db.QueryAsync(
+      "select actual_minutes, details::text as details from automation_events where dedupe_key = $1", $"draft-accept:{ids[2]}"));
+    Assert.Null(unmeasured["actual_minutes"]);
+    using (var details = JsonDocument.Parse((string)unmeasured["details"]!))
+    {
+      Assert.False(details.RootElement.GetProperty("reviewTimeMeasured").GetBoolean());
+      Assert.Equal(JsonValueKind.Null, details.RootElement.GetProperty("rawReviewMs").ValueKind);
+    }
+
+  }
+
   // ---------------------------------------------------------------- reject
 
   [Fact]

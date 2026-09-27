@@ -37,14 +37,17 @@ public class AiQaResultsTests
     return "v1=" + Convert.ToHexString(hash).ToLowerInvariant();
   }
 
-  private static async Task<APIGatewayProxyResponse> ReportAsync(object body, string? signature = null, string method = "POST")
+  private static async Task<APIGatewayProxyResponse> ReportAsync(object body, string? signature = null, string method = "POST",
+    string? callerSecret = null, long? timestampMs = null)
   {
     var raw = body as string ?? JsonSerializer.Serialize(body);
-    var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    var ts = timestampMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     var saved = Environment.GetEnvironmentVariable("INTERNAL_SHARED_SECRET");
+    var savedCaller = Environment.GetEnvironmentVariable(AiQaResults.CallerSecretEnv);
     try
     {
       Environment.SetEnvironmentVariable("INTERNAL_SHARED_SECRET", "test-secret");
+      Environment.SetEnvironmentVariable(AiQaResults.CallerSecretEnv, callerSecret);
       var req = new LambdaRequest(JsonSerializer.SerializeToElement(new
       {
         rawPath = ResultsPath,
@@ -64,6 +67,7 @@ public class AiQaResultsTests
     finally
     {
       Environment.SetEnvironmentVariable("INTERNAL_SHARED_SECRET", saved);
+      Environment.SetEnvironmentVariable(AiQaResults.CallerSecretEnv, savedCaller);
     }
   }
 
@@ -576,6 +580,129 @@ public class AiQaResultsTests
     Assert.Null(run["error_code"]);
     Assert.NotNull(run["finished_at"]);
     Assert.Equal(2, Int(run["cards_done"]));
+  }
+
+  // ---------------------------------------------------------------- R18 Y02
+
+  [Fact]
+  public async Task Results_PromptVersion_IsTheOneTheLambdaReported()
+  {
+    // backend-design-12: a run recorded with a stale version (what core used to pin) takes the version the Lambda
+    // reports, run and item alike; a report without one keeps what was recorded.
+    var seeded = await SeedAsync("promptver", 2, chunkCount: 2);
+    await _db.QueryAsync("update ai_qa_runs set prompt_version = 'qa-v1' where id = $1", seeded.RunId);
+
+    Data(await ReportAsync(new { v = 1, runId = seeded.RunId, chunk = 0, provider = "bedrock", model = "m", promptVersion = "qa-v3",
+      items = new[] { Item(seeded.Cards[0], "done") } }));
+    Assert.Equal("qa-v3", (await RunAsync(seeded.RunId))["prompt_version"]);
+    Assert.Equal("qa-v3", await _db.ScalarAsync(
+      "select prompt_version from ai_qa_items where run_id = $1 and card_id = $2", seeded.RunId, seeded.Cards[0].CardId));
+
+    Data(await ReportAsync(new { v = 1, runId = seeded.RunId, chunk = 1, items = new[] { Item(seeded.Cards[1], "done") } }));
+    Assert.Equal("qa-v3", (await RunAsync(seeded.RunId))["prompt_version"]);
+    Assert.Null(await _db.ScalarAsync(
+      "select prompt_version from ai_qa_items where run_id = $1 and card_id = $2", seeded.RunId, seeded.Cards[1].CardId));
+  }
+
+  [Fact]
+  public async Task Results_KeptItem_ExactReplay_IsBilledOnce()
+  {
+    // backend-design-6: done, then a retried chunk's error (kept, but billed), then the Lambda's POST retry of that
+    // same error report. The retry is the same model call and adds nothing.
+    var seeded = await SeedAsync("keptreplay", 1);
+    var card = seeded.Cards[0];
+
+    Data(await ReportAsync(Body(seeded.RunId, 0, Item(card, "done", cost: 0.01m, inputTokens: 100))));
+    var retry = JsonSerializer.Serialize(Body(seeded.RunId, 0, Item(card, "error", errorCode: "PROVIDER_TIMEOUT", cost: 0.5m, inputTokens: 1000)));
+    Data(await ReportAsync(retry));
+    Data(await ReportAsync(retry));
+
+    var run = await RunAsync(seeded.RunId);
+    Assert.Equal(0.51m, Convert.ToDecimal(run["estimated_cost_usd"], CultureInfo.InvariantCulture));
+    Assert.Equal(1100L, Convert.ToInt64(run["input_tokens"], CultureInfo.InvariantCulture));
+    var item = await ItemAsync(seeded.RunId, card.CardId);
+    Assert.Equal("done", item["status"]);
+
+    // A third, genuinely new attempt is still billed.
+    Data(await ReportAsync(Body(seeded.RunId, 0, Item(card, "error", errorCode: "PROVIDER_TIMEOUT", cost: 0.25m))));
+    Assert.Equal(0.76m, Convert.ToDecimal((await RunAsync(seeded.RunId))["estimated_cost_usd"], CultureInfo.InvariantCulture));
+  }
+
+  [Fact]
+  public async Task Results_HashMismatch_IsNotApplied()
+  {
+    // cloud-security-resilience-2: a report for content other than the item's (a forged or misrouted report) is
+    // ignored, so it can neither mark the card reviewed nor bill the run.
+    var seeded = await SeedAsync("hashecho", 1);
+    var card = seeded.Cards[0];
+    var forged = (card.CardId, card.Uid, Hash: new string('a', 64));
+
+    var data = Data(await ReportAsync(Body(seeded.RunId, 0, Item(forged, "done", cost: 0.2m))));
+    Assert.Equal(0, data.GetProperty("cardsDone").GetInt32());
+    Assert.Equal("queued", (await ItemAsync(seeded.RunId, card.CardId))["status"]);
+    Assert.Equal(0m, Convert.ToDecimal((await RunAsync(seeded.RunId))["estimated_cost_usd"], CultureInfo.InvariantCulture));
+
+    // The item's own hash is still accepted.
+    Assert.Equal(1, Data(await ReportAsync(Body(seeded.RunId, 0, Item(card, "done")))).GetProperty("cardsDone").GetInt32());
+  }
+
+  [Fact]
+  public async Task Results_CallerSecret_IsTheOnlySecretAccepted()
+  {
+    // cloud-security-resilience-2: once the route has its own secret, the shared secret (which the webhook
+    // dispatcher holds) no longer signs for it.
+    var seeded = await SeedAsync("callersecret", 1);
+    var body = JsonSerializer.Serialize(Body(seeded.RunId, 0, Item(seeded.Cards[0], "done")));
+    var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    Assert.Equal(403, (await ReportAsync(body, Sign(FakeSecret, ts, body), callerSecret: "ai-qa-only-test-secret", timestampMs: ts)).StatusCode);
+    Assert.Equal("queued", (await ItemAsync(seeded.RunId, seeded.Cards[0].CardId))["status"]);
+
+    Assert.Equal(200, (await ReportAsync(body, Sign("ai-qa-only-test-secret", ts, body), callerSecret: "ai-qa-only-test-secret", timestampMs: ts)).StatusCode);
+    Assert.Equal("done", (await ItemAsync(seeded.RunId, seeded.Cards[0].CardId))["status"]);
+  }
+
+  [Fact]
+  public async Task Results_HungWebhookQueue_StaysWithinOneRequestBudget()
+  {
+    // backend-design-15: 10 flagged cards and an SQS endpoint that never answers. Every card.flagged send shares one
+    // budget, so the report returns in about that budget (not 10 × the per-call deadline) and the remaining
+    // deliveries are left enqueue_failed for the sweep.
+    var seeded = await SeedAsync("hung", 10);
+    var subscriptionId = Convert.ToInt64(await _db.ScalarAsync(
+      "insert into webhook_subscriptions (name, url, events, is_active) values ($1, $2, $3, true) returning id",
+      $"it-y02-{Guid.NewGuid():N}"[..20], $"https://hooks.example.com/it-y02/{Guid.NewGuid():N}", new[] { "card.flagged" }), CultureInfo.InvariantCulture);
+
+    var savedSeam = WebhookEvents.TestSendSeam;
+    var savedUrl = Environment.GetEnvironmentVariable(WebhookEvents.QueueUrlEnv);
+    var savedBudget = AiQaResults.AfterCommitBudget;
+    var hang = new TaskCompletionSource();
+    try
+    {
+      WebhookEvents.TestSendSeam = _ => hang.Task;
+      Environment.SetEnvironmentVariable(WebhookEvents.QueueUrlEnv, FakeWebhookQueueUrl);
+      AiQaResults.AfterCommitBudget = TimeSpan.FromSeconds(1);
+
+      var items = seeded.Cards.Select(c => Item(c, "done", findings: [Finding("blocker", "incorrect_answer", "Synthetic blocker.")])).ToArray();
+      var watch = System.Diagnostics.Stopwatch.StartNew();
+      var data = Data(await ReportAsync(Body(seeded.RunId, 0, items)));
+      watch.Stop();
+
+      Assert.Equal("done", data.GetProperty("runStatus").GetString());
+      Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), $"report took {watch.Elapsed}");
+      var statuses = await _db.QueryAsync(
+        "select status from webhook_deliveries where subscription_id = $1 and event = 'card.flagged'", subscriptionId);
+      Assert.Equal(10, statuses.Count);
+      Assert.All(statuses, r => Assert.Equal("enqueue_failed", r["status"]));
+    }
+    finally
+    {
+      hang.TrySetResult();
+      AiQaResults.AfterCommitBudget = savedBudget;
+      Environment.SetEnvironmentVariable(WebhookEvents.QueueUrlEnv, savedUrl);
+      WebhookEvents.TestSendSeam = savedSeam;
+      await _db.QueryAsync("update webhook_subscriptions set is_active = false where id = $1", subscriptionId);
+    }
   }
 
   [Fact]

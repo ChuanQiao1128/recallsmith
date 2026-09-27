@@ -101,6 +101,20 @@ test_worker_file_keys_webhook_queue() {
   jq -e '. == {"PGUSER":"a","WEBHOOK_EVENTS_QUEUE_URL":"u"}' <<<"$out" >/dev/null || fail "(i) worker projection lacks WEBHOOK_EVENTS_QUEUE_URL"
 }
 
+# (j) during a signing-secret rotation the path also holds webhook-signing-secret-previous: the three
+#     Python-only leaves produce no env key and no error beside the mapped ones.
+test_ssm_to_env_rotation_leaf() {
+  local fixture out
+  fixture='{"Parameters":[
+    {"Name":"/developercards/prod/internal-shared-secret","Value":"PLACEHOLDER-1"},
+    {"Name":"/developercards/prod/webhook-signing-secret","Value":"PLACEHOLDER-2"},
+    {"Name":"/developercards/prod/webhook-signing-secret-previous","Value":"PLACEHOLDER-3"},
+    {"Name":"/developercards/prod/anthropic-api-key","Value":"PLACEHOLDER-4"}
+  ]}'
+  out="$(ssm_to_env "$fixture")" || fail "(j) ssm_to_env failed on the rotation leaf"
+  jq -e '. == {"INTERNAL_SHARED_SECRET":"PLACEHOLDER-1"}' <<<"$out" >/dev/null || fail "(j) a Python-only leaf leaked into the env"
+}
+
 test_merge_file_over_current
 test_merge_secret_over_file
 test_ssm_to_env_all_six
@@ -110,5 +124,6 @@ test_merge_null_current
 test_ssm_to_env_skips_not_env_leaves
 test_ssm_to_env_unmapped_beside_skipped
 test_worker_file_keys_webhook_queue
+test_ssm_to_env_rotation_leaf
 
 echo "merge-env tests OK"

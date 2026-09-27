@@ -12,13 +12,21 @@ namespace RecallSmith.Lambda.Vpc.Internal;
 /// POST /api/internal/webhooks/deliveries/report (R18 J03, contract §6.5.3): the webhook dispatcher
 /// reports every delivery attempt here, HMAC-signed (§4.3). One statement updates the delivery row and
 /// answers whether the dispatcher should stop (subscription deleted or inactive). A terminal row
-/// (delivered, failed, dead) never moves, and a stale report (lower attempt) never overwrites a newer one:
-/// only the attempt count may grow. A retry that is told to stop is recorded as failed.
+/// (delivered, failed) never moves, and a stale report (lower attempt) never overwrites a newer one:
+/// only the attempt count may grow. A dead row is terminal against every report except a success: a
+/// message redriven from the DLQ restarts its attempt count, and its delivery must still be recorded
+/// (automation-12). A retry that is told to stop is recorded as failed.
 /// </summary>
 public static class WebhookDeliveryReport
 {
   public const int MaxErrorLength = 500;
   public const string SubscriptionInactiveError = "subscription inactive";
+
+  /// <summary>
+  /// The route's own HMAC secret (cloud-security-resilience-2): when set, only the webhook dispatcher's secret is
+  /// accepted here, and the dispatcher no longer needs a credential that other internal routes accept.
+  /// </summary>
+  public const string CallerSecretEnv = "INTERNAL_SECRET_WEBHOOK_REPORT";
 
   private static readonly Dictionary<string, string> OutcomeStatus = new(StringComparer.Ordinal)
   {
@@ -32,7 +40,7 @@ public static class WebhookDeliveryReport
   {
     if (req.Method != "POST") return res.MethodNotAllowed("Method not allowed");
 
-    var v = Auth.VerifyInternalSignature(req);
+    var v = Auth.VerifyInternalSignature(req, CallerSecretEnv);
     if (!v.Ok) return res.Forbidden($"Internal auth failed: {v.Reason}");
 
     Guid deliveryId;
@@ -92,30 +100,33 @@ public static class WebhookDeliveryReport
     try
     {
       // One statement, so the transition is decided against the row as it is now:
-      // - A terminal row ('delivered', 'failed', 'dead') keeps its status, delivered_at, last_status_code
-      //   and last_error; only attempts may grow. So does any row when the report is stale (its attempt
-      //   is lower than the one already recorded), since SQS may run a message twice.
+      // - A terminal row ('delivered', 'failed') keeps its status, delivered_at, last_status_code and
+      //   last_error; only attempts may grow. So does any row when the report is stale (its attempt is
+      //   lower than the one already recorded), since SQS may run a message twice.
+      // - A 'dead' row is kept the same way against retry, failed and dead reports, but a 'delivered'
+      //   report wins at any attempt: the documented DLQ redrive sends the message back to the source
+      //   queue, where its attempt count starts again, and the receiver has then really got the event.
       // - A 'retry' for a deleted or inactive subscription is written as the terminal 'failed', because
       //   the same statement answers stop=true and the dispatcher then acks without another attempt, so
       //   no later report would ever resolve a 'retrying' row.
       // `returning` also yields the event id and subscription for the ledger (§9.3).
       var rows = await DbUtil.QueryAsync(conn, null,
-        """
+        $"""
         update webhook_deliveries d set
           attempts = greatest(d.attempts, $2),
           status = case
-            when d.status in ('delivered','failed','dead') or $2 < d.attempts then d.status
+            when {Keep} then d.status
             when $3 = 'retrying' and (s.deleted_at is not null or not s.is_active) then 'failed'
             else $3 end,
           last_status_code = case
-            when d.status in ('delivered','failed','dead') or $2 < d.attempts then d.last_status_code
+            when {Keep} then d.last_status_code
             else $4::int end,
           last_error = case
-            when d.status in ('delivered','failed','dead') or $2 < d.attempts then d.last_error
+            when {Keep} then d.last_error
             when $3 = 'retrying' and (s.deleted_at is not null or not s.is_active) then $6::text
             else $5::text end,
           delivered_at = case
-            when d.status not in ('delivered','failed','dead') and $2 >= d.attempts and $3 = 'delivered' then now()
+            when not ({Keep}) and $3 = 'delivered' then now()
             else d.delivered_at end,
           updated_at = now()
         from webhook_subscriptions s
@@ -153,6 +164,17 @@ public static class WebhookDeliveryReport
       return Helpers.ErrorEnvelope(res, 503, "SERVER_NOT_READY_WEBHOOKS", "Run migration 027 first");
     }
   }
+
+  /// <summary>
+  /// SQL condition that is true when the row keeps its status, last_status_code, last_error and
+  /// delivered_at ($2 = attempt, $3 = reported status): delivered and failed always; dead unless the report
+  /// is a success (DLQ redrive); any other row when the report is stale.
+  /// </summary>
+  private const string Keep = """
+    (d.status in ('delivered','failed')
+     or (d.status = 'dead' and $3 <> 'delivered')
+     or ($2 < d.attempts and not (d.status = 'dead' and $3 = 'delivered')))
+    """;
 
   private static APIGatewayProxyResponse Invalid(Res res, string message) => res.BadRequest("VALIDATION_ERROR", message);
 }
