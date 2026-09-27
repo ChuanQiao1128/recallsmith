@@ -21,6 +21,7 @@ import type {
   WebhookDeliveriesPage,
   WebhookSubscription,
   WebhookSubscriptionsData,
+  WebhookSweepResult,
 } from '../src/api/webhooks';
 
 const api = vi.hoisted(() => ({
@@ -31,6 +32,7 @@ const api = vi.hoisted(() => ({
   sendWebhookTest: vi.fn(),
   listWebhookDeliveries: vi.fn(),
   redeliverWebhookDelivery: vi.fn(),
+  sweepWebhookDeliveries: vi.fn(),
 }));
 
 vi.mock('../src/api/webhooks', async importOriginal => {
@@ -326,6 +328,70 @@ describe('WebhooksPage', () => {
     expect(api.listWebhookDeliveries).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'cursor-2' }));
     expect(screen.getByRole('button', { name: 'Redeliver del-ok' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
+  it('offers Redeliver for a queued delivery that was never sent and has sat 10 minutes (automation-1)', async () => {
+    const old = new Date(Date.now() - 11 * 60_000).toISOString();
+    const fresh = new Date(Date.now() - 60_000).toISOString();
+    api.listWebhookDeliveries.mockResolvedValue(
+      deliveriesPage([
+        delivery({ deliveryId: 'del-stranded', status: 'queued', deliveredAt: null, enqueuedAt: null, updatedAt: old }),
+        delivery({ deliveryId: 'del-young', status: 'queued', deliveredAt: null, enqueuedAt: null, updatedAt: fresh }),
+        delivery({ deliveryId: 'del-sent', status: 'queued', deliveredAt: null, enqueuedAt: old, updatedAt: old }),
+      ]),
+    );
+    await mountLoaded();
+    expect(screen.getByRole('button', { name: 'Redeliver del-stranded' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Redeliver del-young' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Redeliver del-sent' })).toBeNull();
+  });
+
+  it('re-sends stranded deliveries from the page and announces the result (automation-1)', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<ApiResult<WebhookSweepResult>>();
+    api.sweepWebhookDeliveries.mockReturnValueOnce(pending.promise);
+    await mountLoaded();
+    const live = screen.getByTestId('webhooks-live');
+    const deliveryCalls = api.listWebhookDeliveries.mock.calls.length;
+
+    const sweep = screen.getByRole('button', { name: 'Re-send stranded deliveries' });
+    await user.dblClick(sweep);
+    expect((sweep as HTMLButtonElement).disabled).toBe(true);
+    pending.resolve(ok({ swept: 3, resent: 2, enqueueFailures: 1, deliveryIds: ['a', 'b', 'c'] }));
+    await waitFor(() =>
+      expect(live.textContent).toBe('Re-sent 2 of 3 stranded deliveries; 1 failed to enqueue again.'),
+    );
+    expect(api.sweepWebhookDeliveries).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('webhooks-sweep-result').textContent).toBe(live.textContent);
+    await waitFor(() => expect(api.listWebhookDeliveries.mock.calls.length).toBe(deliveryCalls + 1));
+
+    api.sweepWebhookDeliveries.mockResolvedValue(ok({ swept: 0, resent: 0, enqueueFailures: 0, deliveryIds: [] }));
+    await user.click(sweep);
+    await waitFor(() => expect(live.textContent).toBe('No stranded deliveries to re-send.'));
+
+    api.sweepWebhookDeliveries.mockResolvedValue(refused('WEBHOOKS_NOT_CONFIGURED', 'queue missing'));
+    await user.click(sweep);
+    await waitFor(() => expect(live.textContent).toBe('The webhook queue is not configured on the server yet.'));
+  });
+
+  it('announces a save, a disable and a delete, not only the table change (frontend-console-25)', async () => {
+    const user = userEvent.setup();
+    api.updateWebhookSubscription.mockResolvedValue(ok({ ...n8n, isActive: false }));
+    api.deleteWebhookSubscription.mockResolvedValue(ok({ id: 7, deleted: true }));
+    await mountLoaded();
+    const live = screen.getByTestId('webhooks-live');
+
+    await user.click(screen.getByRole('button', { name: 'Edit n8n' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(live.textContent).toBe('Subscription n8n saved.'));
+
+    await user.click(screen.getByRole('button', { name: 'Disable n8n' }));
+    await waitFor(() => expect(live.textContent).toBe('Subscription n8n disabled.'));
+
+    await user.click(screen.getByRole('button', { name: 'Delete n8n' }));
+    const dialog = await screen.findByRole('alertdialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete subscription' }));
+    await waitFor(() => expect(live.textContent).toBe('Subscription n8n deleted.'));
   });
 
   it('explains a server that has not run the webhooks migration', async () => {

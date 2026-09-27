@@ -13,6 +13,7 @@ import {
   listWebhookSubscriptions,
   redeliverWebhookDelivery,
   sendWebhookTest,
+  sweepWebhookDeliveries,
   updateWebhookSubscription,
   type WebhookDelivery,
   type WebhookSubscription,
@@ -41,6 +42,7 @@ import {
   WEBHOOK_EVENTS,
   WEBHOOK_HEADERS,
   WEBHOOK_NAME_MAX_LENGTH,
+  WEBHOOK_PREVIOUS_SIGNATURE_HEADER,
   WEBHOOK_SIGNATURE_TEST_VECTOR,
   WEBHOOK_TOLERANCE_SECONDS,
   WEBHOOK_VERIFY_SNIPPET,
@@ -146,6 +148,9 @@ export function WebhooksPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [redeliverMessage, setRedeliverMessage] = useState<string | null>(null);
+  const [sweeping, setSweeping] = useState(false);
+  const sweepingRef = useRef(false);
+  const [sweepMessage, setSweepMessage] = useState<string | null>(null);
   // Written into the page's one persistent live region, so a screen reader
   // hears each action result (a region mounted with its text is not announced).
   const [announcement, setAnnouncement] = useState('');
@@ -288,6 +293,8 @@ export function WebhooksPage() {
       return;
     }
     resetForm();
+    // The table change alone is silent to a screen reader (frontend-console-25).
+    setAnnouncement(`Subscription ${input.name} saved.`);
     setRefreshNonce(n => n + 1);
   }
 
@@ -301,6 +308,7 @@ export function WebhooksPage() {
       setActionError(res.error?.message ?? 'The subscription could not be updated.');
       return;
     }
+    setAnnouncement(`Subscription ${s.name} ${s.isActive ? 'disabled' : 'enabled'}.`);
     setRefreshNonce(n => n + 1);
   }
 
@@ -323,6 +331,7 @@ export function WebhooksPage() {
       return;
     }
     if (editingId === s.id) resetForm();
+    setAnnouncement(`Subscription ${s.name} deleted.`);
     setRefreshNonce(n => n + 1);
   }
 
@@ -362,6 +371,37 @@ export function WebhooksPage() {
     setRedeliverMessage(message);
     setAnnouncement(message);
     setDeliveriesNonce(n => n + 1);
+  }
+
+  /**
+   * Re-sends deliveries stranded 'queued' or 'enqueue_failed' (automation-1):
+   * the operator's path for the post-commit enqueue gap, which used to need
+   * curl and a super_admin token.
+   */
+  async function sweepStranded() {
+    if (sweepingRef.current) return;
+    sweepingRef.current = true;
+    setSweeping(true);
+    setSweepMessage(null);
+    const res = await sweepWebhookDeliveries();
+    sweepingRef.current = false;
+    setSweeping(false);
+    let message: string;
+    if (!res.success || !res.data) {
+      message =
+        res.error?.code === 'WEBHOOKS_NOT_CONFIGURED'
+          ? 'The webhook queue is not configured on the server yet.'
+          : (res.error?.message ?? 'The stranded deliveries could not be re-sent.');
+    } else if (res.data.swept === 0) {
+      message = 'No stranded deliveries to re-send.';
+    } else {
+      message =
+        `Re-sent ${res.data.resent} of ${res.data.swept} stranded deliveries` +
+        (res.data.enqueueFailures > 0 ? `; ${res.data.enqueueFailures} failed to enqueue again.` : '.');
+      setDeliveriesNonce(n => n + 1);
+    }
+    setSweepMessage(message);
+    setAnnouncement(message);
   }
 
   async function loadMore() {
@@ -613,6 +653,19 @@ export function WebhooksPage() {
 
       <section className={CARD_CLASS}>
         <h2 className={H2_CLASS}>Recent deliveries</h2>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="xs" disabled={sweeping} onClick={() => void sweepStranded()}>
+            Re-send stranded deliveries
+          </Button>
+          <span className="text-xs text-slate-500">
+            Re-sends deliveries that never reached the queue (queued or enqueue_failed for 10 minutes or more).
+          </span>
+        </div>
+        {sweepMessage ? (
+          <div className="mt-2 text-sm text-slate-700" data-testid="webhooks-sweep-result">
+            {sweepMessage}
+          </div>
+        ) : null}
 
         <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
@@ -730,7 +783,7 @@ export function WebhooksPage() {
                     <td className={`${TD_CLASS} text-slate-600 text-xs`}>{d.lastError ?? '—'}</td>
                     <td className={`${TD_CLASS} text-slate-600 text-xs`}>{when(d.deliveredAt)}</td>
                     <td className={TD_CLASS}>
-                      {isRedeliverable(d.status) ? (
+                      {isRedeliverable(d.status, d) ? (
                         <Button
                           variant="outline"
                           size="xs"
@@ -792,7 +845,10 @@ export function WebhooksPage() {
         </ul>
         <p className="mt-3 text-slate-600 text-sm">
           The signature is HMAC-SHA256 over <code className="font-mono text-xs text-slate-800">{'"<timestamp>.<body>"'}</code>{' '}
-          with the signing secret, as lowercase hex. The timestamp is in seconds; reject a delivery more than{' '}
+          with the signing secret, as lowercase hex. While the secret is being rotated, the same signature under the
+          previous secret arrives in{' '}
+          <code className="font-mono text-xs text-slate-800">{WEBHOOK_PREVIOUS_SIGNATURE_HEADER}</code>; accept a match
+          on either header. The timestamp is in seconds; reject a delivery more than{' '}
           {WEBHOOK_TOLERANCE_SECONDS} s from your clock. Compare signatures in constant time, and deduplicate on the
           body&apos;s <code className="font-mono text-xs text-slate-800">eventId</code>, since a delivery can arrive more
           than once.

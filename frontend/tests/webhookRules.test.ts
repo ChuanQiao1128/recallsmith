@@ -2,7 +2,7 @@
 // (src/lib/webhookRules.ts, R18 contract §6). Pure functions, node environment.
 
 import { describe, expect, it } from 'vitest';
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import {
   WEBHOOK_EVENTS,
@@ -10,6 +10,8 @@ import {
   WEBHOOK_SIGNATURE_TEST_VECTOR,
   WEBHOOK_URL_MAX_LENGTH,
   WEBHOOK_VERIFY_SNIPPET,
+  WEBHOOK_PREVIOUS_SIGNATURE_HEADER,
+  WEBHOOK_STRANDED_AFTER_MS,
   isRedeliverable,
   webhookFormProblems,
   webhookUrlProblem,
@@ -83,11 +85,51 @@ describe('webhookRules', () => {
     expect(WEBHOOK_VERIFY_SNIPPET).not.toContain('whsec-');
   });
 
+  it('verifies the §6.3 vector sent as the primary or the rotation header (automation-6)', () => {
+    const V = WEBHOOK_SIGNATURE_TEST_VECTOR;
+    // Run the snippet exactly as an integrator would paste it, minus the ESM wrapper.
+    const body = WEBHOOK_VERIFY_SNIPPET.replace(/^import .*$/m, '').replace(/^export function/m, 'function');
+    const make = new Function(
+      'createHmac',
+      'timingSafeEqual',
+      'process',
+      'Buffer',
+      'Date',
+      `${body}\nreturn verifyDeveloperCardsWebhook;`,
+    ) as (...args: unknown[]) => (raw: string, headers: Record<string, string | undefined>) => boolean;
+    const clock = { now: () => Number(V.timestamp) * 1000 };
+    const verify = make(createHmac, timingSafeEqual, { env: { DC_WEBHOOK_SECRET: V.secret } }, Buffer, clock);
+    const base = { 'x-developercards-timestamp': V.timestamp };
+
+    expect(verify(V.body, { ...base, 'x-developercards-signature': V.signature })).toBe(true);
+    // Rotation: the primary is signed with the new secret this receiver does not have yet.
+    expect(
+      verify(V.body, { ...base, 'x-developercards-signature': 'a'.repeat(64), 'x-developercards-signature-previous': V.signature }),
+    ).toBe(true);
+    expect(verify(V.body, { ...base, 'x-developercards-signature-previous': V.signature })).toBe(true);
+    // Malformed or wrong signatures are refused, never thrown on.
+    expect(verify(V.body, { ...base, 'x-developercards-signature': V.signature.toUpperCase() })).toBe(false);
+    expect(verify(V.body, { ...base, 'x-developercards-signature': 'zz' })).toBe(false);
+    expect(verify(V.body, { ...base, 'x-developercards-signature': 'a'.repeat(64) })).toBe(false);
+    expect(verify(`${V.body} `, { ...base, 'x-developercards-signature': V.signature })).toBe(false);
+    expect(verify(V.body, { 'x-developercards-signature': V.signature })).toBe(false);
+    expect(WEBHOOK_VERIFY_SNIPPET).toContain(WEBHOOK_PREVIOUS_SIGNATURE_HEADER.toLowerCase());
+  });
+
   it('offers redelivery only for settled deliveries', () => {
     expect(isRedeliverable('queued')).toBe(false);
     expect(isRedeliverable('retrying')).toBe(false);
     for (const status of ['delivered', 'failed', 'dead', 'enqueue_failed']) {
       expect(isRedeliverable(status), status).toBe(true);
     }
+    // automation-1: a never-sent queued row is stranded once it has sat for the sweep interval.
+    const now = Date.parse('2026-09-27T12:00:00Z');
+    const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    expect(isRedeliverable('queued', { enqueuedAt: null, updatedAt: at(10) }, now)).toBe(true);
+    expect(isRedeliverable('queued', { enqueuedAt: null, updatedAt: at(9) }, now)).toBe(false);
+    expect(isRedeliverable('queued', { enqueuedAt: at(30), updatedAt: at(30) }, now)).toBe(false);
+    // A server that does not list enqueuedAt: the row may be in flight.
+    expect(isRedeliverable('queued', { updatedAt: at(30) }, now)).toBe(false);
+    expect(WEBHOOK_STRANDED_AFTER_MS).toBe(10 * 60_000);
   });
 });

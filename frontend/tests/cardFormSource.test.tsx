@@ -152,6 +152,50 @@ describe('the card form collects a source', () => {
     expect(submitted).toEqual([]);
   });
 
+  it('announces a source refusal and ties it to the source inputs (frontend-console-25)', async () => {
+    const user = userEvent.setup();
+    mount(values());
+    const url = screen.getByLabelText('Source URL');
+    const quote = screen.getByLabelText('Source quote');
+    // The help text is linked in the plain card form too, not only for drafts.
+    expect(url.getAttribute('aria-describedby')).toBe('source-help');
+    expect(quote.getAttribute('aria-describedby')).toBe('source-help');
+    expect(url.getAttribute('aria-invalid')).toBeNull();
+
+    await user.type(url, 'http://example.com/page');
+    await user.click(submitButton());
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Source URL must start with https://');
+    expect(alert.id).toBe('card-form-error');
+    for (const field of [url, quote]) {
+      expect(field.getAttribute('aria-invalid')).toBe('true');
+      expect(field.getAttribute('aria-describedby')).toBe('source-help card-form-error');
+    }
+
+    // A refusal that is not about the source leaves the source inputs alone.
+    await user.clear(url);
+    await user.clear(screen.getByLabelText(/question/i));
+    await user.click(submitButton());
+    expect((await screen.findByRole('alert')).textContent).toContain('Question is required.');
+    expect(url.getAttribute('aria-invalid')).toBeNull();
+    expect(url.getAttribute('aria-describedby')).toBe('source-help');
+  });
+
+  it('announces a refusal that comes back from onSubmit (frontend-console-25)', async () => {
+    const user = userEvent.setup();
+    render(
+      <CardForm
+        mode="create"
+        deck={deck}
+        initialValues={values()}
+        onSubmit={async () => ({ ok: false, error: 'stableUid is already used by another card in this deck' })}
+        onCancel={() => {}}
+      />,
+    );
+    await user.click(submitButton());
+    expect((await screen.findByRole('alert')).textContent).toContain('stableUid is already used');
+  });
+
   it('refuses a source quote without a source URL', async () => {
     const user = userEvent.setup();
     mount(values());

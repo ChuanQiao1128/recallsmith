@@ -105,6 +105,16 @@ describe('src/api/webhooks', () => {
     expect(res.data).toEqual({ deliveryId: 'd/1', eventId: 'e1' });
   });
 
+  it('sweeps stranded deliveries through POST /api/v1/admin/webhooks/deliveries/sweep (automation-1)', async () => {
+    httpMock.post.mockResolvedValue({ data: ok({ swept: 2, resent: 2, enqueueFailures: 0, deliveryIds: ['a', 'b'] }) });
+    const res = await api.sweepWebhookDeliveries();
+    expect(httpMock.post).toHaveBeenCalledWith('/api/v1/admin/webhooks/deliveries/sweep', {});
+    expect(res.data).toEqual({ swept: 2, resent: 2, enqueueFailures: 0, deliveryIds: ['a', 'b'] });
+
+    httpMock.post.mockResolvedValue({ data: ok({ nothing: true }) });
+    expect((await api.sweepWebhookDeliveries()).error?.code).toBe('BAD_RESPONSE');
+  });
+
   it('keeps the server error code when a request fails', async () => {
     const envelope = {
       success: false,
