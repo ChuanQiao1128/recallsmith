@@ -30,6 +30,8 @@ integration timeout. No Bedrock VPC endpoint is needed.
 | `prompts.py` | `PROMPT_VERSION` (currently `"qa-v4"`; history and evidence in `evals/reports/tuning-2026-09-27/README.md`), the static `SYSTEM_PROMPT` (rubric of §7.6) |
 | `schema.py` | `ModelFinding`, `ModelReview` (pydantic v2, `extra="forbid"`) |
 | `review.py` | `review_card(card, *, client, settings, review_date)` → one §7.7 item |
+| `converse_client.py` | `ConverseClient`: Bedrock Converse for non-Anthropic models (provider `bedrock-converse`), Anthropic-shaped responses |
+| `second_opinion.py` | the optional second reviewer: its settings, the merge policy |
 | `handler.py` | SQS entry point: message validation, kill switch, deadline guard, chunk policy, report |
 | `internal_client.py` | signed `POST` to core-vpc (§4.3; same design as the webhook dispatcher's) |
 | `emf.py` | CloudWatch EMF lines (§7.8) |
@@ -69,7 +71,7 @@ Committed in `env/prod.env.json` (overlaid by the deploy script; no secret value
 
 | Var | Default | Meaning |
 |---|---|---|
-| `AI_PROVIDER` | `bedrock` | `bedrock` \| `anthropic` |
+| `AI_PROVIDER` | `bedrock` | `bedrock` \| `anthropic` \| `bedrock-converse` (see "Other models (Bedrock Converse) and the second opinion") |
 | `AI_MODEL` | `anthropic.claude-opus-5` / `claude-opus-5` | model id; blank = provider default |
 | `AI_BEDROCK_REGION` | `ap-southeast-2` | Mantle region |
 | `AI_EFFORT` | `high` | `output_config.effort`: `low` \| `medium` \| `high` \| `xhigh` \| `max` |
@@ -267,6 +269,90 @@ A run whose chunks were stopped stays `running` until they are processed or it i
 core-vpc; purge the queue (`aws sqs purge-queue`) only if those runs are to be abandoned. The
 webhook dispatcher has the same procedure (`services/webhook-dispatcher/README.md`, "Emergency
 stop").
+
+## Other models (Bedrock Converse) and the second opinion
+
+Cards are authored by Claude, and a Claude reviewer shares its blind spots. Two optional switches
+let a model from another vendor review them. **Both are off**: `env/prod.env.json` is unchanged
+(`AI_PROVIDER=bedrock`, no `AI_QA_SECOND_*` key), so production behaviour is exactly as above.
+
+**Provider `bedrock-converse`** (`src/ai_qa/converse_client.py`). `ConverseClient` offers the same
+`messages.create(...)` / `with_options(...)` as the anthropic clients, and each call is one
+`bedrock-runtime` `Converse` call (boto3, region `AI_BEDROCK_REGION`): the system blocks joined into
+one `system` text, user/assistant turns as text (an assistant turn given as content blocks is
+flattened to its text), `inferenceConfig.maxTokens = 16000`. `thinking` and `output_config.effort`
+are not sent. Structured outputs are always off for this provider (prompt-forced JSON, then the
+usual validation and one repair turn); a request that carries `output_config.format` is rejected
+as `CONFIG`. Reply mapping: the first text block; `stopReason` `end_turn`/`stop_sequence` →
+`end_turn`, `max_tokens` → `MAX_TOKENS`, `content_filtered`/`guardrail_intervened` → `refusal`
+(`REFUSAL`); `usage.inputTokens`/`outputTokens` (cache fields 0); the request id from
+`ResponseMetadata.RequestId`. `with_options(timeout, max_retries)` builds a botocore config with
+that read timeout and `retries={"max_attempts": max_retries + 1, "mode": "standard"}` (default
+120 s, 2 retries, like the other clients). `AI_MODEL` is required (no default) and must not start
+with `anthropic.`: Claude always goes through the Mantle client (`bedrock`).
+
+Example model ids in Bedrock Sydney (ap-southeast-2), all through Converse:
+`global.openai.gpt-5.5`, `global.moonshotai.kimi-k3`, `qwen.qwen3-235b-a22b-2507-v1:0`,
+`deepseek.v3.2`.
+
+**Second opinion.** With `AI_QA_SECOND_PROVIDER` set, every card whose primary review is `done`
+is reviewed a second time by that provider/model with the same `SYSTEM_PROMPT` and user turn.
+Merge policy: all primary findings stay; a second-opinion finding is added only when its category
+is in `AI_QA_SECOND_SCOPE` and no primary finding (nor an earlier added one) has that category, at
+most 10 findings in all; its message is prefixed `[second opinion: <model>] ` (then cut to 1000
+characters) and its severity comes from the category table like any other finding. Both calls'
+usage, latency and estimated cost are summed into the item; `requestId`, `status` and the report's
+`provider`/`model` stay the primary's. When the second review errors, is refused, hits the deadline
+guard or cannot build its client, the primary item is reported unchanged, the log line
+`second_opinion_failed` carries only the error code, and `AiQaSecondOpinionErrors` is emitted. A
+primary card that did not finish (`error`, `refused`) gets no second review.
+
+| Var | Default | Meaning |
+|---|---|---|
+| `AI_PROVIDER` | `bedrock` | also accepts `bedrock-converse` (then `AI_MODEL` is required) |
+| `AI_QA_SECOND_PROVIDER` | empty = off | `bedrock-converse` \| `bedrock` \| `anthropic` |
+| `AI_QA_SECOND_MODEL` | provider default; required for `bedrock-converse` | the second reviewer's model id (same prefix rules as `AI_MODEL`) |
+| `AI_QA_SECOND_SCOPE` | `facts` | `facts` = `incorrect_answer`, `multiple_correct`, `outdated_fact`, `source_unsupported`; `all`; or a comma-separated list of categories |
+| `AI_QA_SECOND_PRICE_INPUT_PER_MTOK` / `AI_QA_SECOND_PRICE_OUTPUT_PER_MTOK` | unset | USD per million tokens for the second reviewer's estimate. No default: unset = the second call is estimated at 0 and `second_opinion_price_unset` is logged once per container. Set them from the model's current Bedrock price page |
+
+The primary estimate keeps using `AI_PRICE_INPUT_PER_MTOK` / `AI_PRICE_OUTPUT_PER_MTOK`; with
+`AI_PROVIDER=bedrock-converse` set those to the chosen model's prices too (their defaults are the
+Claude prices).
+
+**Cost.** The second opinion roughly **doubles the per-card cost** (two reviews per card, plus any
+repair turns). The Lambda adds no cap of its own — core-vpc enforces `AI_QA_DAILY_USD_CAP` from the
+reported estimates — so the owner should raise that cap knowingly before turning it on, and set the
+second-reviewer prices so the estimates are not 0.
+
+**Metrics.** `AiQaSecondOpinionAdded` (Count, `Service`): findings the second reviewer added to a
+card (0 included). `AiQaSecondOpinionErrors` (Count, `Service, ErrorCode`): a second review that did
+not finish.
+
+**Errors from Converse** (botocore `ClientError` codes, and transport errors):
+
+| Code | Source |
+|---|---|
+| `PROVIDER_ACCESS_DENIED` | `AccessDeniedException`; `ValidationException` whose message says access is not allowed, "verify you are a corporate customer" or "unsupported countries" |
+| `CONFIG` | any other `ValidationException`, `ResourceNotFoundException`, another 4xx code |
+| `PROVIDER_RATE_LIMITED` | `ThrottlingException`, `ServiceQuotaExceededException` |
+| `PROVIDER_TIMEOUT` | `ModelTimeoutException`, `ReadTimeoutError`, `ConnectTimeoutError`, `EndpointConnectionError` |
+| `PROVIDER_ERROR` | `ModelErrorException`, `InternalServerException`, `ServiceUnavailableException`, another 5xx code |
+
+The Anthropic SDK mappings above are unchanged.
+
+**Before turning either switch on (owner-approved only):**
+
+- **Marketplace terms.** Third-party models on Bedrock are sold through AWS Marketplace: the first
+  invocation of such a model subscribes the account to it and accepts its terms. Only the owner
+  decides that; no test, eval or deploy here invokes one.
+- **Allowlisting.** The account needs Bedrock access for the chosen model (model access /
+  allowlisting). Until then Bedrock answers with a `ValidationException` such as "verify you are a
+  corporate customer", which maps to `PROVIDER_ACCESS_DENIED` (fail fast, acked) — or, for the
+  second opinion, to `second_opinion_failed` with the primary items unaffected.
+- **IAM.** The Lambda role grants only `bedrock-mantle:CreateInference` (above); Converse needs
+  `bedrock:InvokeModel` on the chosen model / inference profile. That grant is an infra change
+  outside this service; without it the calls fail with `AccessDeniedException` →
+  `PROVIDER_ACCESS_DENIED`.
 
 ## Local development
 

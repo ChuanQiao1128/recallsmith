@@ -37,8 +37,10 @@ class DatasetSpec:
     key: str
     name: str
     path: Path
-    mutations_path: Path
+    mutations_path: Path | None
     classes: tuple[str, ...]
+    # authored-v1 only: the jury labels file joined onto the authored rows (load_rows).
+    labels_path: Path | None = None
 
 
 DATASETS = {
@@ -51,7 +53,20 @@ DATASETS = {
         "v3", "seeded-v3", DATA_DIR / "seeded-v3.jsonl", DATA_DIR / "mutations-v3.json", DEFECT_CLASSES
     ),
 }
-DATASETS_BY_NAME = {spec.name: spec for spec in DATASETS.values()}
+# Q03: agent-authored cards labeled by a model jury (author.py, jury.py). Not seeded, so not in
+# DATASETS (`seed` never builds it); `run` and `score` load it through RUN_DATASETS / load_rows.
+AUTHORED_SOURCES_PATH = DATA_DIR / "authored-sources-v1.json"
+AUTHORED_LABELS_PATH = DATA_DIR / "authored-v1.labels.jsonl"
+AUTHORED = DatasetSpec(
+    "authored-v1",
+    "authored-v1",
+    DATA_DIR / "authored-v1.jsonl",
+    None,
+    DEFECT_CLASSES,
+    labels_path=AUTHORED_LABELS_PATH,
+)
+RUN_DATASETS = {**DATASETS, AUTHORED.key: AUTHORED}
+DATASETS_BY_NAME = {spec.name: spec for spec in RUN_DATASETS.values()}
 
 
 def classes_for(dataset_name: str | None) -> tuple[str, ...]:
@@ -93,6 +108,28 @@ def load_mutations(path: Path = MUTATIONS_PATH) -> dict[str, Any]:
 
 def load_dataset(path: Path = SEEDED_PATH) -> list[dict[str, Any]]:
     return read_jsonl(path)
+
+
+def spec_exists(spec: DatasetSpec) -> bool:
+    return spec.path.exists() and (spec.labels_path is None or spec.labels_path.exists())
+
+
+def load_rows(spec: DatasetSpec) -> list[dict[str, Any]]:
+    """The rows `run` reviews: the dataset file itself, or for authored-v1 the authored rows joined
+    with their jury labels (jury.dataset_rows: excluded and not scorable rows are left out)."""
+    if spec.labels_path is None:
+        return load_dataset(spec.path)
+    from .jury import dataset_rows
+
+    return dataset_rows(read_jsonl(spec.path), read_jsonl(spec.labels_path))
+
+
+def spec_sha256(spec: DatasetSpec) -> str:
+    """sha256 of the dataset file; for authored-v1, of the authored file's bytes followed by the
+    labels file's bytes (a new jury run changes the dataset)."""
+    if spec.labels_path is None:
+        return file_sha256(spec.path)
+    return hashlib.sha256(spec.path.read_bytes() + spec.labels_path.read_bytes()).hexdigest()
 
 
 def card_of(exported: dict[str, Any]) -> dict[str, Any]:

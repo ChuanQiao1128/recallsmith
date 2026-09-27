@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .claude_cli import PROXY_UNOBSERVABLE
-from .dataset import DATASETS_BY_NAME, classes_for, dump_line, file_sha256, read_jsonl
+from .dataset import DATASETS_BY_NAME, classes_for, dump_line, load_rows, read_jsonl, spec_exists, spec_sha256
 from .labels import labels_for
 from .score import (
     CONTROL_FPR_CI_UPPER_GATE,
@@ -48,10 +48,13 @@ def run_header(
     effort: str,
     structured_outputs: str,
     structured_outputs_at_start: bool,
+    second_provider: str | None = None,
+    second_model: str | None = None,
 ) -> dict[str, Any]:
     """Everything that changes a run's results: the dataset (name, sha256 of the file, row count),
     repetitions, the review date (it decides outdated_fact), effort and the structured-output mode
-    (configured, and resolved at start; each item records what it actually used)."""
+    (configured, and resolved at start; each item records what it actually used), and the second
+    reviewer (Q03; null when the second opinion is off)."""
     return {
         "type": "run",
         "runId": run_id,
@@ -68,6 +71,8 @@ def run_header(
         "effort": effort,
         "structuredOutputs": structured_outputs,
         "structuredOutputsAtStart": structured_outputs_at_start,
+        "secondProvider": second_provider,
+        "secondModel": second_model,
     }
 
 
@@ -83,9 +88,9 @@ def read_run(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 def expected_run(dataset_name: str | None) -> dict[str, Any]:
     """What the committed dataset file says a complete run covers: its sha256 and row count."""
     spec = DATASETS_BY_NAME.get(dataset_name or "")
-    if spec is None or not spec.path.exists():
+    if spec is None or not spec_exists(spec):
         return {"datasetSha256": None, "rows": None}
-    return {"datasetSha256": file_sha256(spec.path), "rows": len(read_jsonl(spec.path))}
+    return {"datasetSha256": spec_sha256(spec), "rows": len(load_rows(spec))}
 
 
 GATE_THRESHOLDS = {
@@ -133,6 +138,8 @@ def build_report(
         "effort": header.get("effort"),
         "structuredOutputs": header.get("structuredOutputs"),
         "structuredOutputsAtStart": header.get("structuredOutputsAtStart"),
+        "secondProvider": header.get("secondProvider"),
+        "secondModel": header.get("secondModel"),
         "evidenceClass": evidence_class(header.get("provider")),
         "n": metrics["n"],
         "estimatedCostUsd": metrics["estimatedCostUsd"],
@@ -205,9 +212,13 @@ def render_markdown(report: dict[str, Any], *, flagged_wrong_category: int) -> s
     unscored = report["unscored"]
     gate = "PASS" if gate_passes(report) else "FAIL"
     prevalence = overall["precisionAtPrevalence"]
+    second = (
+        f"{report['secondProvider']} {report['secondModel']}" if report.get("secondProvider") else "off"
+    )
     lines = [
         f"# AI QA eval: {report['provider']} {report['model']} {report['promptVersion']}",
         "",
+        f"- Reviewers: primary {report['provider']} {report['model']}; second opinion {second}",
         (
             f"- Run: `{report['runId']}` started {report['startedAt']}, dataset `{report['dataset']}` "
             f"(sha256 `{report['datasetSha256']}`), {report['n']} items, {report['reps']} rep(s)"

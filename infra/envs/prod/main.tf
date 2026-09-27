@@ -7,6 +7,10 @@ locals {
   # R18 Y04: one model id feeds both the ai-qa IAM condition (bedrock-mantle:Model) and the function's
   # create-time AI_MODEL, so the two cannot drift apart in Terraform.
   ai_qa_model_id = "anthropic.claude-opus-5"
+
+  # R18 Q02: inference profiles the owner approved for ai-qa's Converse provider (identity grants
+  # bedrock:InvokeModel on each profile and, through it only, on its foundation model). One line per model.
+  ai_qa_converse_profile_ids = ["global.openai.gpt-5.5"]
 }
 
 # E03's DLQ exists in the account but is not in imports.tf (E00 §6 #20). module.worker's
@@ -63,6 +67,8 @@ module "identity" {
   ai_qa_queue_name        = "developercards-ai-qa-jobs"
   ai_qa_function_name     = "developercards-ai-qa"
   bedrock_mantle_model_id = local.ai_qa_model_id
+
+  ai_qa_converse_profile_ids = local.ai_qa_converse_profile_ids
 
   secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development", "webhook-signing-secret", "anthropic-api-key", "webhook-report-secret", "ai-qa-results-secret"]
 

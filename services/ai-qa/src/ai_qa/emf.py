@@ -19,6 +19,9 @@ ESTIMATED_COST_MICRO_USD = "AiQaEstimatedCostMicroUsd"
 FINDINGS = "AiQaFindings"
 ERRORS = "AiQaErrors"
 REFUSALS = "AiQaRefusals"
+# The optional second reviewer (second_opinion.py).
+SECOND_OPINION_ADDED = "AiQaSecondOpinionAdded"
+SECOND_OPINION_ERRORS = "AiQaSecondOpinionErrors"
 
 # The bounded ErrorCode dimension (contract §7.5). Anything else is dropped, never emitted.
 ERROR_CODES = frozenset(
@@ -107,3 +110,12 @@ def emit_item(namespace: str, provider: str, item: Mapping[str, Any], *, model_c
             emit(namespace, {REFUSALS: (1, "Count")})
     except Exception:
         return
+
+
+def emit_second_opinion(namespace: str, *, added: int | None = None, error_code: str | None = None) -> None:
+    """AiQaSecondOpinionAdded after a done second review, else AiQaSecondOpinionErrors. Never raises."""
+    if error_code is None:
+        emit(namespace, {SECOND_OPINION_ADDED: (_count(added), "Count")})
+        return
+    dimensions = {"ErrorCode": error_code} if error_code in ERROR_CODES else None
+    emit(namespace, {SECOND_OPINION_ERRORS: (1, "Count")}, dimensions)

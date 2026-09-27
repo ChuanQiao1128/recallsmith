@@ -1,0 +1,6 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.identity.aws_iam_role_policy.ai_qa": { "action": "update", "keys": ["policy"] }
+  }
+}

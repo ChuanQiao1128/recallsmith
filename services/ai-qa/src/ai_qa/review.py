@@ -19,12 +19,18 @@ from . import providers
 from .logs import log
 from .prompts import SYSTEM_PROMPT
 from .schema import CATEGORY_SEVERITY, ModelReview
-from .settings import Settings
+from .settings import ConfigError, Settings
 
 try:
-    from botocore.exceptions import BotoCoreError
+    from botocore.exceptions import (
+        BotoCoreError,
+        ClientError,
+        ConnectTimeoutError,
+        EndpointConnectionError,
+        ReadTimeoutError,
+    )
 except ImportError:  # botocore ships with anthropic[bedrock]; tolerate its absence anyway
-    BotoCoreError = None
+    BotoCoreError = ClientError = ConnectTimeoutError = EndpointConnectionError = ReadTimeoutError = None
 
 MAX_TOKENS = 16000
 MAX_FINDINGS = 10
@@ -275,6 +281,46 @@ def names_output_format(exc: Exception) -> bool:
     return any(marker in text for marker in OUTPUT_FORMAT_MARKERS)
 
 
+# Bedrock Converse (botocore ClientError) error codes → the bounded §7.5 codes.
+CLIENT_ERROR_CODES = {
+    "AccessDeniedException": "PROVIDER_ACCESS_DENIED",
+    "ValidationException": "CONFIG",
+    "ResourceNotFoundException": "CONFIG",
+    "ThrottlingException": "PROVIDER_RATE_LIMITED",
+    "ServiceQuotaExceededException": "PROVIDER_RATE_LIMITED",
+    "ModelTimeoutException": "PROVIDER_TIMEOUT",
+    "ModelErrorException": "PROVIDER_ERROR",
+    "InternalServerException": "PROVIDER_ERROR",
+    "ServiceUnavailableException": "PROVIDER_ERROR",
+}
+# A ValidationException whose message (lower-cased) says access is not allowed or has one of these
+# is an account that may not use the model (Bedrock allowlisting, Marketplace terms, region), not a
+# bad request.
+ACCESS_DENIED_MARKERS = (
+    "verify you are a corporate customer",
+    "unsupported countries",
+    "don't have access",
+    "do not have access",
+)
+
+
+def client_error_code(exc: Exception) -> str:
+    """The §7.5 code for a botocore ClientError from bedrock-runtime."""
+    response = getattr(exc, "response", None) or {}
+    error = response.get("Error") or {}
+    name = error.get("Code")
+    if name == "ValidationException":
+        message = str(error.get("Message") or "").lower()
+        not_allowed = "access" in message and "not allowed" in message
+        if not_allowed or any(marker in message for marker in ACCESS_DENIED_MARKERS):
+            return "PROVIDER_ACCESS_DENIED"
+    code = CLIENT_ERROR_CODES.get(name)
+    if code is not None:
+        return code
+    status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+    return "PROVIDER_ERROR" if isinstance(status, int) and status >= 500 else "CONFIG"
+
+
 def error_code_for(exc: Exception) -> str | None:
     """The bounded §7.5 code for a provider/credential exception, or None to let it propagate."""
     if isinstance(exc, anthropic.AuthenticationError):
@@ -293,7 +339,15 @@ def error_code_for(exc: Exception) -> str | None:
         return "PROVIDER_TIMEOUT"
     if isinstance(exc, anthropic.CredentialsError):
         return "CONFIG"
+    if ClientError is not None and isinstance(exc, ClientError):
+        return client_error_code(exc)
+    if ReadTimeoutError is not None and isinstance(
+        exc, (ReadTimeoutError, ConnectTimeoutError, EndpointConnectionError)
+    ):
+        return "PROVIDER_TIMEOUT"
     if BotoCoreError is not None and isinstance(exc, BotoCoreError):
+        return "CONFIG"
+    if isinstance(exc, ConfigError):
         return "CONFIG"
     if isinstance(exc, RuntimeError) and "credential" in str(exc).lower():
         return "CONFIG"
@@ -341,6 +395,8 @@ def review_card_counted(
                 raise
             if isinstance(exc, anthropic.APIStatusError) and tally.request_id is None:
                 tally.request_id = getattr(exc, "request_id", None)
+            if ClientError is not None and isinstance(exc, ClientError) and tally.request_id is None:
+                tally.request_id = (exc.response.get("ResponseMetadata") or {}).get("RequestId")
             log(
                 "warn",
                 "ai-qa",
