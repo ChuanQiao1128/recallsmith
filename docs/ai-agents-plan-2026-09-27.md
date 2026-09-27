@@ -62,11 +62,29 @@
 - **方案 2（备选）**：在 VPC 外新建一个 `ai-runner` Lambda 调 Anthropic API，密钥放 SSM SecureString；结果经 SQS/S3 回到 VPC 内的 worker 写库。
   - 省掉端点费用，但多一跳，还多一个密钥。
   - 如果需要的 Claude 模型在 Bedrock（含跨区推理配置）上不可用，就用这个方案。
-- **模型分级**（具体型号以 Bedrock 当时可用为准，由配置决定，不写死）：
-  - 起草：Sonnet 级（质量和成本平衡）。
-  - 核查和质检评委：更强的一级，例如 Opus 级（只跑一次，量小）。
-  - 讲解助手：Haiku 级（快、便宜、够用）。
-  - 向量：Amazon Titan Text Embeddings V2（1024 维）。
+- **已核实（2026-09-27，ap-southeast-2，只读查询）**：
+  - Bedrock 上有 Claude Opus 5.5、Opus 5、Sonnet 5、Haiku 4.5，都通过推理配置调用。
+  - 其中有 `au.` 前缀的澳洲推理配置（例如 `au.anthropic.claude-opus-5-5`），数据不出澳洲，对新西兰用户的隐私说明更好写。
+  - 向量模型有 `amazon.titan-embed-text-v2:0`。
+- **Bedrock 上能用和不能用的功能**：
+  - 能用：工具调用、structured outputs（`strict: true`）、adaptive thinking 和 effort、prompt caching、**Citations**。
+  - 不能用：Message Batches、Files API、MCP connector、Managed Agents、服务端 fallbacks。
+  - 由此得出：
+    - agent 循环在我们自己的 Lambda 里跑，用官方 SDK 的 tool runner（C# 是 `BetaToolRunner`，client 用 `AnthropicBedrockMantleClient`）。
+    - 批量出题用 Step Functions 的 Map 并发，不用 Batches。
+    - 拒答回退用 SDK 的客户端 fallback 中间件。
+    - PDF 以 base64 的 document 块直接传入。
+- **Citations 怎么用**：把资料切片作为 `document` 块传入并开启 `citations`，模型回答时会带上原文片段和字符位置。
+  - 适用于讲解助手（"只根据原文回答"可以逐句核对），也适用于核查步骤。
+  - Citations 和 structured outputs 不能同时用，所以**起草**用 strict 工具输出卡片 JSON，**核查和讲解**用 Citations。
+- **模型选择**（配置化，按任务可换）：
+  - 默认全部用 **Claude Opus 5**（`anthropic.claude-opus-5`，通过推理配置调用）。起草和核查用 adaptive thinking、effort `high`；讲解用 effort `low`。
+  - 要不要换成更便宜的型号，是**你的决定**：
+    - 讲解助手可以在评测集上比较"Opus 5 + low effort"和 Haiku 4.5，看质量、延迟、成本。
+    - Opus 5.5 更便宜（一方价 $4/$20 每百万 token，对比 Opus 5 的 $5/$25），而且有 `au.` 配置，但你没点名之前不默认用它。
+  - 先量"最强模型 + 低 effort"，往往就够好，也省去维护多模型级联和多套缓存。
+- **向量**：Titan Text Embeddings V2，1024 维。
+- **价格**：Bedrock 由 AWS 定价，和 Anthropic 一方价不同，以 AWS Bedrock 价目页为准。
 
 ### 2.2 编排
 - **出题流水线用 Step Functions 标准工作流**：
@@ -205,7 +223,7 @@
 
 ### 4.4 成本和额度
 - **结果缓存**：`(card_id, chosen_option, prompt_version)` 相同的讲解，所有用户共用。一张卡最多 3 个错误选项，所以缓存命中率会很高，大多数请求不调模型。
-- 用 Haiku 级模型，限制最多 400 输出 token，超时 10 秒。
+- 模型见 §2.1（默认 Opus 5 + low effort，是否换小模型由你按评测结果决定）；限制最多 400 输出 token，超时 10 秒；用 Citations 返回原文出处。
 - **每人每日额度**：例如免费 10 次，订阅用户 50 次。这也是一个付费点。
 - 追问不走缓存，但会计入额度。
 
@@ -268,9 +286,9 @@
 |---|---|
 | Bedrock VPC 接口端点（单 AZ） | 约 $7–8/月 |
 | Step Functions、SQS、pgvector | 可忽略（免费额度内，或只多一点 RDS 存储） |
-| 出题：每张卡（起草、核查、质检三次调用） | Sonnet 级约 $0.02–0.05；400 张约 $10–20 |
+| 出题：每张卡（起草、核查、质检三次调用） | 按 Opus 5 一方价估算约 $0.04–0.10；400 张约 $20–40（开 prompt caching 后更低） |
 | 向量：资料切片和卡片 | 几美分，一次性 |
-| 讲解：未命中缓存的单次 | Haiku 级约 $0.001–0.003 |
+| 讲解：未命中缓存的单次 | Opus 5 + low effort 约 $0.005–0.01；如果你决定用 Haiku 4.5，约 $0.001–0.003 |
 | 讲解：命中缓存 | 约 $0 |
 
 同时设置：AWS Budgets 只看 Bedrock 服务、月度上限；远程配置开关随时关停。
