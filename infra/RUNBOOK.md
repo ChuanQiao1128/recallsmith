@@ -144,3 +144,68 @@ the undo: services/ai-qa/README.md "Emergency stop", services/webhook-dispatcher
    (`aws lambda get-event-source-mapping --uuid <uuid> --query State`). Both mappings list
    `enabled` in `ignore_changes`, so an apply leaves a stopped consumer stopped; re-enabling is
    always the explicit `update-event-source-mapping --uuid <uuid> --enabled`.
+
+### Automation schedules and emergency stop (R18A A10)
+
+Three EventBridge Scheduler schedules drive the automation: `developercards-source-watch`
+(`rate(1 hour)` → developercards-source-watcher:prod, `{"job":"source-watch"}`, no retry),
+`developercards-automation-tick` (`rate(15 minutes)` → developercards-notifier:prod, `{"job":"tick"}`,
+2 retries) and `developercards-automation-digest` (`cron(0 8 ? * MON *)` Pacific/Auckland →
+developercards-notifier:prod, `{"job":"digest"}`, 2 retries). They invoke the aliases through
+developercards-automation-scheduler-role (no Lambda permission). All three are **created DISABLED** and
+Terraform ignores `state`, so an apply never enables or re-disables one; the supervisor enables them
+only after the code deploy (A00 §19.2 step 6).
+
+**Enable / disable a schedule.** `update-schedule` replaces the whole definition, so read it first and
+send it back unchanged except for the state:
+
+1. `aws scheduler get-schedule --name <n>` (note `ScheduleExpression`, `ScheduleExpressionTimezone`,
+   `FlexibleTimeWindow` and `Target`).
+2. `aws scheduler update-schedule --name <n> --schedule-expression '<same>' [--schedule-expression-timezone Pacific/Auckland] --flexible-time-window Mode=OFF --target '<same Target JSON>' --state ENABLED`
+   (or `--state DISABLED`).
+3. `aws scheduler get-schedule --name <n> --query State` shows the new state.
+
+**After enabling the tick**, enable the tick-missing alarm's actions (they start disabled because the
+schedules start disabled; Terraform ignores `actions_enabled`):
+`aws cloudwatch enable-alarm-actions --alarm-names developercards-prod-automation-tick-missing`.
+When the tick is disabled on purpose, run `aws cloudwatch disable-alarm-actions --alarm-names developercards-prod-automation-tick-missing`
+first, or it fires two hours later.
+
+**Post-apply secret step** (supervisor, once after the A10 apply; A00 §1.3): the two callback
+secrets are created as `PLACEHOLDER-set-by-supervisor`. Set each to a random 32-byte hex value:
+`aws ssm put-parameter --overwrite --type SecureString --name /developercards/prod/source-watch-secret --value "$(openssl rand -hex 32)"`
+and the same for `/developercards/prod/notifier-secret`. core-vpc picks them up as
+`INTERNAL_SECRET_SOURCE_WATCH` / `INTERNAL_SECRET_NOTIFIER` on its next `src_C/deploy.sh`; the
+Lambdas read them at cold start. Rotate them like the other route secrets (the `-previous` leaves).
+
+Alarms (all on the alerts topic; one line each — what fired, first check):
+
+- `notify-dlq-nonempty` — an email message failed five receives and sits in developercards-notify-dlq.
+  Read the notifier's log for the message id; fix the cause (SES, the recipient parameter, core-vpc's
+  report route), then redrive the DLQ (`aws sqs start-message-move-task --source-arn <DLQ ARN>`).
+- `notifier-errors` — the notifier function raised (tick, digest or an SQS record). Check
+  `/aws/lambda/developercards-notifier` for the traceback, then `notifier-secret` and core-vpc health.
+- `source-watcher-errors` — a source-watch run raised. Check `/aws/lambda/developercards-source-watcher`,
+  `source-watch-secret` and the targets route (`POST /api/internal/source-watch/targets`).
+- `automation-tick-missing` — the notifier had no invocation for two hours (actions enabled only once the
+  schedules are). Check `developercards-automation-tick` is ENABLED, the scheduler role's
+  `developercards-automation-scheduler-invoke` policy, and the notifier's throttles (reserved concurrency 2).
+- `notification-failures` — the notifier could not deliver an email (`Service = notifier`). Check SES
+  sending status and the configuration set, and the notifier log for the failure code.
+- `automation-notify-enqueue-failures` — core-vpc failed `SendMessage` to developercards-notify. Check the
+  queue exists, `AUTOMATION_NOTIFY_QUEUE_URL` in core-vpc's environment and the grant
+  developercards-core-vpc-notify-send.
+
+**Emergency stop** (runaway automation, a mail incident, a source-watch loop) — each step on its own
+takes effect at once; do all that apply:
+
+1. Disable the three schedules with the recipe above: `developercards-source-watch`,
+   `developercards-automation-tick`, `developercards-automation-digest` (and disable the tick-missing
+   alarm's actions).
+2. Stop the email consumer: `aws lambda list-event-source-mappings --function-name developercards-notifier:prod --query 'EventSourceMappings[].UUID'`,
+   then `aws lambda update-event-source-mapping --uuid <uuid> --no-enabled`. Queued emails stay in
+   developercards-notify (4 days) and resume on `--enabled`; the mapping ignores `enabled` in Terraform.
+3. Stop the automation in core-vpc: set `AUTOMATION_MODE=off` in `src_C/env/prod.env.json` and deploy
+   core-vpc (`ENV=prod ./src_C/deploy.sh`).
+
+Undo in reverse order; re-enable the schedules only after core-vpc runs with the intended mode.

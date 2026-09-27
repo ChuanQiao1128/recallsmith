@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Check that agent tokens reach exactly the MCP server's endpoints at the API Gateway (R18 Y04, ai-agent-6).
+"""Check that agent tokens reach exactly the agent clients' endpoints at the API Gateway (R18 Y04, ai-agent-6).
 
 Usage: check-agent-routes.py [--repo ROOT]
 
 Reads, without running anything:
   - infra/modules/api/gateway.tf: the routes with auth = "agent", and the console/agent authorizer audiences;
-  - tools/mcp-server/src/*.ts: every api request the MCP server makes ("METHOD", '/api/...');
+  - tools/mcp-server/src/**/*.ts and tools/author-runner/src/**/*.ts (tests excluded): every api request the
+    clients (the MCP server and the author runner) make ("METHOD", '/api/...'); the author runner's sources are
+    optional (R18A A10), the MCP server's are required;
   - src_C/Vpc/AgentClientPolicy.cs: core-vpc's allowlist for agent tokens (defence in depth).
 
 Violations (exit 1):
   - the console authorizer's audience is anything but [var.console_client_id];
   - the agent authorizer does not add var.agent_client_ids;
   - an agent route is not a single exact "METHOD /path" key (no ANY, no {proxy+});
-  - the agent route set differs from the MCP server's request set;
+  - the agent route set differs from the clients' request set;
   - an agent route is not on core-vpc's AgentClientPolicy allowlist.
 An AgentClientPolicy entry with no agent route is reported as a warning only: it is unreachable with an
 agent token through the gateway, and trimming the allowlist is core-vpc's change.
@@ -65,6 +67,9 @@ def main():
     if not mcp_files:
         sys.stderr.write("AGENT ROUTES: no MCP server sources under tools/mcp-server/src\n")
         sys.exit(2)
+    runner_src = root / "tools/author-runner/src"
+    runner_files = sorted(runner_src.rglob("*.ts")) if runner_src.is_dir() else []
+    client_files = mcp_files + runner_files
 
     violations = []
 
@@ -81,20 +86,20 @@ def main():
             violations.append("agent route " + name + " is not an exact key: " + key)
         agent_routes.add(key)
 
-    mcp_calls = set()
-    for path in mcp_files:
+    client_calls = set()
+    for path in client_files:
         if path.name.endswith(".test.ts"):
             continue
         for method, url in MCP_CALL_RE.findall(read(path)):
-            mcp_calls.add(method + " " + url)
+            client_calls.add(method + " " + url)
 
     allowed = {m + " " + normalise(p) for m, p in POLICY_RE.findall(policy)}
     allowed.discard("GET /health")  # unauthenticated route, never behind a JWT authorizer
 
-    for key in sorted(mcp_calls - agent_routes):
-        violations.append("MCP server calls " + key + " but no agent route admits it")
-    for key in sorted(agent_routes - mcp_calls):
-        violations.append("agent route " + key + " is not called by the MCP server")
+    for key in sorted(client_calls - agent_routes):
+        violations.append("client calls " + key + " but no agent route admits it")
+    for key in sorted(agent_routes - client_calls):
+        violations.append("agent route " + key + " is not called by the client")
     for key in sorted(agent_routes - allowed):
         violations.append("agent route " + key + " is not on core-vpc's AgentClientPolicy allowlist")
     for key in sorted(allowed - agent_routes):

@@ -113,3 +113,15 @@ variable "ai_qa_converse_profile_ids" {
     error_message = "Each entry must be an exact inference profile id with a global./au./apac. prefix; no wildcards."
   }
 }
+
+variable "notify_queue_name" {
+  type = string
+} # prod "developercards-notify"
+
+variable "notifier_function_name" {
+  type = string
+} # prod "developercards-notifier"
+
+variable "source_watcher_function_name" {
+  type = string
+} # prod "developercards-source-watcher"

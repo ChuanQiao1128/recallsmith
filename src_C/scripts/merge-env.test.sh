@@ -166,6 +166,52 @@ test_drop_absent_optional() {
   jq -e '. == {}' <<<"$out" >/dev/null || fail "(m) null current broke drop_absent_optional"
 }
 
+# (n) R18A A10: the four automation callback leaves map to the four env names core-vpc verifies with.
+test_ssm_to_env_automation_leaves() {
+  local fixture out
+  fixture='{"Parameters":[
+    {"Name":"/developercards/prod/source-watch-secret","Value":"PLACEHOLDER-1"},
+    {"Name":"/developercards/prod/source-watch-secret-previous","Value":"PLACEHOLDER-2"},
+    {"Name":"/developercards/prod/notifier-secret","Value":"PLACEHOLDER-3"},
+    {"Name":"/developercards/prod/notifier-secret-previous","Value":"PLACEHOLDER-4"}
+  ]}'
+  out="$(ssm_to_env "$fixture")" || fail "(n) ssm_to_env failed on the automation leaves"
+  jq -e '. == {
+    "INTERNAL_SECRET_SOURCE_WATCH":"PLACEHOLDER-1",
+    "INTERNAL_SECRET_SOURCE_WATCH_PREVIOUS":"PLACEHOLDER-2",
+    "INTERNAL_SECRET_NOTIFIER":"PLACEHOLDER-3",
+    "INTERNAL_SECRET_NOTIFIER_PREVIOUS":"PLACEHOLDER-4"
+  }' <<<"$out" >/dev/null || fail "(n) automation leaves did not map: $out"
+}
+
+# (o) notify-recipient is read by the notifier only: its value never reaches the core env, beside mapped leaves.
+test_ssm_to_env_skips_notify_recipient() {
+  local fixture out
+  fixture='{"Parameters":[
+    {"Name":"/developercards/prod/pg-password","Value":"PLACEHOLDER-1"},
+    {"Name":"/developercards/prod/notifier-secret","Value":"PLACEHOLDER-2"},
+    {"Name":"/developercards/prod/notify-recipient","Value":"PLACEHOLDER-recipient"}
+  ]}'
+  out="$(ssm_to_env "$fixture")" || fail "(o) ssm_to_env failed beside notify-recipient"
+  jq -e '. == {"PGPASSWORD":"PLACEHOLDER-1","INTERNAL_SECRET_NOTIFIER":"PLACEHOLDER-2"}' <<<"$out" >/dev/null \
+    || fail "(o) notify-recipient leaked or a mapped leaf was lost: $out"
+  if grep -Fq 'PLACEHOLDER-recipient' <<<"$out"; then fail "(o) the notify-recipient value reached the output"; fi
+}
+
+# (p) a stray leaf is still a hard error beside the automation leaves.
+test_ssm_to_env_unmapped_beside_automation_leaves() {
+  local fixture err
+  fixture='{"Parameters":[
+    {"Name":"/developercards/prod/source-watch-secret","Value":"PLACEHOLDER-1"},
+    {"Name":"/developercards/prod/notify-recipient","Value":"PLACEHOLDER-2"},
+    {"Name":"/developercards/prod/stray-name","Value":"PLACEHOLDER-x"}
+  ]}'
+  if err="$(ssm_to_env "$fixture" 2>&1)"; then
+    fail "(p) ssm_to_env accepted stray-name beside the automation leaves"
+  fi
+  grep -Fq 'unmapped SSM parameter: stray-name' <<<"$err" || fail "(p) missing error for stray-name"
+}
+
 test_merge_file_over_current
 test_merge_secret_over_file
 test_ssm_to_env_all_six
@@ -179,5 +225,8 @@ test_ssm_to_env_rotation_leaf
 test_ssm_to_env_runbook_leaves
 test_ssm_to_env_pattern_is_anchored
 test_drop_absent_optional
+test_ssm_to_env_automation_leaves
+test_ssm_to_env_skips_notify_recipient
+test_ssm_to_env_unmapped_beside_automation_leaves
 
 echo "merge-env tests OK"
