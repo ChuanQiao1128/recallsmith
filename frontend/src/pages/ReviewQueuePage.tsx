@@ -394,18 +394,20 @@ export function ReviewQueuePage() {
           ) : null}
 
           {outcome ? (
-            <Callout tone="success">
-              {outcome.kind === 'accepted' ? (
-                <>
-                  Accepted as card #{outcome.cardId}{' '}
-                  <Link to={cardHref(outcome.deckId, outcome.cardId)} className="underline">
-                    Open card
-                  </Link>
-                </>
-              ) : (
-                'Rejected'
-              )}
-            </Callout>
+            <div role="status">
+              <Callout tone="success">
+                {outcome.kind === 'accepted' ? (
+                  <>
+                    Accepted as card #{outcome.cardId}{' '}
+                    <Link to={cardHref(outcome.deckId, outcome.cardId)} className="underline">
+                      Open card
+                    </Link>
+                  </>
+                ) : (
+                  'Rejected'
+                )}
+              </Callout>
+            </div>
           ) : null}
 
           {decisionError ? (
