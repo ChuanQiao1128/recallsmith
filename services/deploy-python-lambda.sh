@@ -11,13 +11,13 @@
 #   DRY_RUN=1 services/deploy-python-lambda.sh webhook-dispatcher   # build + print, never calls aws
 #   AWS_PROFILE=dev services/deploy-python-lambda.sh webhook-dispatcher   # supervisor only
 #
-# No secret is ever injected: both Python functions read their two SSM parameters at cold start.
+# No secret is ever injected: each Python function reads its SSM parameters at runtime.
 # This script never reads SSM and never prints an environment value (key names only).
 set -euo pipefail
 set +x
 
 usage() {
-  echo "usage: $(basename "$0") <webhook-dispatcher|ai-qa>" >&2
+  echo "usage: $(basename "$0") <webhook-dispatcher|ai-qa|source-watcher>" >&2
   echo "  env: ENV (prod), AWS_REGION (ap-southeast-2), AWS_PROFILE (dev), PUBLISH_ALIAS (prod), UV, DRY_RUN=1" >&2
   exit 2
 }
@@ -27,6 +27,7 @@ SERVICE="$1"
 case "$SERVICE" in
   webhook-dispatcher) FN="developercards-webhook-dispatcher"; PKG="webhook_dispatcher" ;;
   ai-qa)              FN="developercards-ai-qa";              PKG="ai_qa" ;;
+  source-watcher)     FN="developercards-source-watcher";     PKG="source_watcher" ;;
   *) usage ;;
 esac
 

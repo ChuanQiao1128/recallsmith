@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Cloud Platform Announcements (sample)</title>
+    <link>https://updates.example.com/new/</link>
+    <atom:link href="https://updates.example.com/new/feed/" rel="self" type="application/rss+xml"/>
+    <description>Invented announcements for the source watcher tests.</description>
+    <language>en-us</language>
+    <lastBuildDate>Mon, 28 Sep 2026 18:00:00 +0000</lastBuildDate>
+    <item>
+      <guid isPermaLink="false">sample-0003</guid>
+      <title>Object storage adds per-prefix lifecycle previews</title>
+      <description>&lt;p&gt;You can now preview which objects a lifecycle rule would expire before enabling it.&lt;/p&gt;</description>
+      <pubDate>Mon, 28 Sep 2026 17:30:00 GMT</pubDate>
+      <category>general:products/object-storage</category>
+      <link>https://updates.example.com/new/2026/09/object-storage-lifecycle-previews/</link>
+      <author>news@example.com</author>
+    </item>
+    <item>
+      <guid isPermaLink="false">sample-0002</guid>
+      <title>  Managed queues   now support   larger message batches </title>
+      <description>&lt;p&gt;Batches can now carry up to 20 messages per request.&lt;/p&gt;</description>
+      <pubDate>Mon, 28 Sep 2026 09:15:00 -0700</pubDate>
+      <link>https://updates.example.com/new/2026/09/managed-queues-larger-batches/</link>
+    </item>
+    <item>
+      <guid isPermaLink="false">sample-0001</guid>
+      <title>Serverless functions add a new runtime in two more regions</title>
+      <description>&lt;p&gt;The runtime is now available in two additional regions.&lt;/p&gt;</description>
+      <pubDate>not a date</pubDate>
+      <link>/new/2026/09/serverless-runtime-regions/</link>
+    </item>
+    <item>
+      <guid isPermaLink="false">sample-0000</guid>
+      <title>Legacy item served over plain http</title>
+      <pubDate>Sun, 27 Sep 2026 12:00:00 +0000</pubDate>
+      <link>http://updates.example.com/new/2026/09/legacy-plain-http/</link>
+    </item>
+  </channel>
+</rss>
