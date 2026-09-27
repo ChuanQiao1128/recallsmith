@@ -27,8 +27,8 @@ public class AutomationSpendCapTests
   }
 
   /// <summary>
-  /// A decision row inserted directly (no events) for a fresh draft; <paramref name="enqueuedMinutesAgo"/> sets
-  /// <c>qa_enqueued_at</c>, <paramref name="createdDaysAgo"/> backdates <c>created_at</c>.
+  /// A decision row inserted directly (no events) for a fresh draft, with its spend row; <paramref name="enqueuedMinutesAgo"/>
+  /// sets <c>qa_enqueued_at</c>, <paramref name="createdDaysAgo"/> backdates <c>created_at</c> and the spend's <c>spent_at</c>.
   /// </summary>
   private async Task<long> InsertDecisionAsync(string state, decimal costUsd, int? enqueuedMinutesAgo = null, int createdDaysAgo = 0)
   {
@@ -50,6 +50,16 @@ public class AutomationSpendCapTests
         now() - make_interval(days => $8), case when $4 in ('human','would_accept') then now() end)
       """,
       draftId, runId, deck.Id, state, Guid.NewGuid(), enqueuedMinutesAgo, costUsd, createdDaysAgo);
+    // The spend itself, dated like the decision (R18B backend-design-4: the cap sums automation_qa_spend.spent_at).
+    if (costUsd > 0)
+    {
+      await _db.QueryAsync(
+        """
+        insert into automation_qa_spend (qa_job_id, request_key, draft_id, estimated_cost_usd, spent_at)
+        values ($1, '', $2, $3, now() - make_interval(days => $4))
+        """,
+        Guid.NewGuid(), draftId, costUsd, createdDaysAgo);
+    }
     return draftId;
   }
 

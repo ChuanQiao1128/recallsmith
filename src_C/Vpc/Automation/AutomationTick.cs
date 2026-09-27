@@ -14,8 +14,10 @@ namespace RecallSmith.Lambda.Vpc.Automation;
 /// <c>POST /api/internal/automation/tick</c> (R18A A04, contract A00 §12.6): the housekeeping that keeps the automated
 /// flow moving, called by the notifier Lambda every 15 minutes (<c>job: "tick"</c>) and on Monday 08:00 NZ
 /// (<c>job: "digest"</c>). Single-flight through a session advisory lock; effective <c>off</c> does nothing; every
-/// step checks the time budget first and leaves the rest for the next tick. Each step is idempotent, so a crashed or
-/// skipped tick is caught up by the next one.
+/// step, and every item of a step's loop, checks the time budget first and leaves the rest for the next tick (the tick
+/// then lists <see cref="BudgetExhausted"/> in <c>failedSteps</c>). Each step is idempotent, so a crashed or skipped tick
+/// is caught up by the next one. A failing step, or a failure a step swallows, emits <c>AutomationStepFailures</c> and
+/// is named in the response's <c>failedSteps</c> (R18B K4).
 /// </summary>
 public static class AutomationTick
 {
@@ -31,6 +33,9 @@ public static class AutomationTick
   public const int StepBatch = 50;
   public const int SummaryAfterMinutes = 120;
   public const int NoRunnerQueueHours = 24;
+
+  /// <summary>The <c>failedSteps</c> entry of a tick that stopped at its budget with work left for the next tick.</summary>
+  public const string BudgetExhausted = "budget_exhausted";
 
   private sealed class Actions
   {
@@ -84,23 +89,25 @@ public static class AutomationTick
       if (ready is not true) return RunnerRoutes.NotReady(res);
 
       var actions = new Actions();
+      var sink = new AutomationFailures.TickSink();
       var mode = await AutomationMode.EffectiveAsync(conn);
       if (mode.LiveBlockedReason == AutomationMode.ServerNotReady) return RunnerRoutes.NotReady(res);
-      if (mode.Effective == AutomationMode.Off) return Answer(res, tickId, mode, "off", actions);
+      if (mode.Effective == AutomationMode.Off) return Answer(res, tickId, mode, "off", actions, sink);
 
       var locked = await DbUtil.ExecuteScalarAsync(conn, null, "select pg_try_advisory_lock($1)", [LockKey]);
-      if (locked is not true) return Answer(res, tickId, mode, "locked", actions);
+      if (locked is not true) return Answer(res, tickId, mode, "locked", actions, sink);
       try
       {
-        await RunStepsAsync(conn, job, mode, actions);
+        await RunStepsAsync(conn, job, mode, actions, sink);
       }
       finally
       {
         await DbUtil.ExecuteAsync(conn, null, "select pg_advisory_unlock($1)", [LockKey]);
       }
 
-      Log.Event("info", new { tag = "automation", outcome = "tick", tickId, job, mode = mode.Effective, actions = actions.ToJson() });
-      return Answer(res, tickId, mode, null, actions);
+      Log.Event(sink.Failed.Count == 0 ? "info" : "warn", new { tag = "automation", outcome = "tick", tickId, job, mode = mode.Effective,
+        actions = actions.ToJson(), failedSteps = sink.Failed });
+      return Answer(res, tickId, mode, null, actions, sink);
     }
     catch (Exception ex)
     {
@@ -108,17 +115,28 @@ public static class AutomationTick
     }
   }
 
-  private static APIGatewayProxyResponse Answer(Res res, Guid tickId, EffectiveMode mode, string? skipped, Actions actions) =>
-    res.Ok(new { tickId, mode = mode.Configured, effectiveMode = mode.Effective, skipped, actions = actions.ToJson() });
+  private static APIGatewayProxyResponse Answer(Res res, Guid tickId, EffectiveMode mode, string? skipped, Actions actions,
+    AutomationFailures.TickSink sink) =>
+    res.Ok(new { tickId, mode = mode.Configured, effectiveMode = mode.Effective, skipped, actions = actions.ToJson(), failedSteps = sink.Failed });
 
-  private static async Task RunStepsAsync(NpgsqlConnection conn, string job, EffectiveMode mode, Actions a)
+  private static async Task RunStepsAsync(NpgsqlConnection conn, string job, EffectiveMode mode, Actions a, AutomationFailures.TickSink sink)
   {
     var clock = Stopwatch.StartNew();
+    AutomationFailures.Collect(sink);
 
-    // One failing step is logged and does not stop the others; each is retried by the next tick.
+    // Checked before every step and every item of a step's loop: the rest is left for the next tick.
+    bool Spent()
+    {
+      if (clock.Elapsed < Budget) return false;
+      sink.Add(BudgetExhausted);
+      return true;
+    }
+
+    // One failing step is logged and counted and does not stop the others; each is retried by the next tick.
     async Task Step(string name, Func<Task> body)
     {
-      if (clock.Elapsed >= Budget) return;
+      if (Spent()) return;
+      sink.Step = name;
       try
       {
         await body();
@@ -130,18 +148,25 @@ public static class AutomationTick
       catch (Exception ex)
       {
         Log.Event("warn", new { tag = "automation", reason = "tick_step_failed", step = name, error = ex.Message });
+        AutomationFailures.Record();
+      }
+      finally
+      {
+        sink.Step = string.Empty;
       }
     }
 
     if (job == "digest") await Step("digest", async () => a.Digest = await DigestAsync(conn, mode.Effective));
-    await Step("leases", () => ExpireLeasesAsync(conn, a));
-    await Step("qa_retry", () => RetryQaAsync(conn, a));
-    await Step("qa_timeout", () => TimeOutQaAsync(conn, a));
-    await Step("finalize", () => FinalizeRunsAsync(conn, a));
-    await Step("publishes", () => PublishesAsync(conn, a));
-    await Step("summaries", () => SummariesAsync(conn, mode.Effective, a));
-    await Step("source_events", () => SourceEventsAsync(conn, mode.Effective, a));
-    await Step("runner_health", () => RunnerHealthAsync(conn, a));
+    await Step("leases", () => ExpireLeasesAsync(conn, a, Spent));
+    await Step("qa_retry", () => RetryQaAsync(conn, a, Spent));
+    await Step("qa_timeout", () => TimeOutQaAsync(conn, a, Spent));
+    // Reconcile before finalising: a job that already ended frees its deck before the runs finalised now are evaluated.
+    await Step("reconcile", async () => a.PublishesReconciled += await AutoPublisher.ReconcileAsync(conn, StepBatch, stop: Spent));
+    await Step("finalize", () => FinalizeRunsAsync(conn, a, Spent));
+    await Step("publishes", () => PublishesAsync(conn, a, Spent));
+    await Step("summaries", () => SummariesAsync(conn, mode.Effective, a, Spent));
+    await Step("source_events", () => SourceEventsAsync(conn, mode.Effective, a, Spent));
+    await Step("runner_health", () => RunnerHealthAsync(conn, a, Spent));
     await Step("eval_gate", () => EvalGateAsync(conn, mode, a));
     await Step("resend", async () => a.NotificationsResent = await Notifications.ResendAsync(conn, StepBatch));
   }
@@ -156,7 +181,7 @@ public static class AutomationTick
   // step 2 — expired leases
   // ---------------------------------------------------------------------------------------------
 
-  private static async Task ExpireLeasesAsync(NpgsqlConnection conn, Actions a)
+  private static async Task ExpireLeasesAsync(NpgsqlConnection conn, Actions a, Func<bool> spent)
   {
     var failed = new List<(long ItemId, string Url, string LastError)>();
     await using (var tx = await conn.BeginTransactionAsync())
@@ -171,6 +196,7 @@ public static class AutomationTick
         """, [StepBatch]);
       foreach (var item in items)
       {
+        if (spent()) break;
         var itemId = Long(item["id"]);
         if (Convert.ToInt32(item["attempts"], CultureInfo.InvariantCulture) < MaxLeaseAttempts)
         {
@@ -212,18 +238,19 @@ public static class AutomationTick
   // steps 3–4 — draft QA retries and timeouts
   // ---------------------------------------------------------------------------------------------
 
-  private static async Task RetryQaAsync(NpgsqlConnection conn, Actions a)
+  private static async Task RetryQaAsync(NpgsqlConnection conn, Actions a, Func<bool> spent)
   {
     var pending = await DbUtil.QueryAsync(conn, null,
       "select draft_id from automation_draft_decisions where state = 'qa_pending' order by updated_at, draft_id limit $1", [StepBatch]);
     foreach (var row in pending)
     {
+      if (spent()) break;
       await DraftDecisions.EnqueueQaAsync(conn, Long(row["draft_id"]));
       a.QaRetried++;
     }
   }
 
-  private static async Task TimeOutQaAsync(NpgsqlConnection conn, Actions a)
+  private static async Task TimeOutQaAsync(NpgsqlConnection conn, Actions a, Func<bool> spent)
   {
     var stale = await DbUtil.QueryAsync(conn, null,
       """
@@ -234,6 +261,7 @@ public static class AutomationTick
       """, [AutomationEnv.QaTimeoutMinutes(), StepBatch]);
     foreach (var row in stale)
     {
+      if (spent()) break;
       var draftId = Long(row["draft_id"]);
       var mode = await AutomationMode.EffectiveAsync(conn);
       string decisionMode;
@@ -265,7 +293,7 @@ public static class AutomationTick
   // step 5 — stale runs and finalisation
   // ---------------------------------------------------------------------------------------------
 
-  private static async Task FinalizeRunsAsync(NpgsqlConnection conn, Actions a)
+  private static async Task FinalizeRunsAsync(NpgsqlConnection conn, Actions a, Func<bool> spent)
   {
     a.RunsAbandoned += await DbUtil.ExecuteAsync(conn, null,
       """
@@ -282,21 +310,23 @@ public static class AutomationTick
       """, [StepBatch]);
     foreach (var row in open)
     {
+      if (spent()) break;
       if (await AutomationRuns.TryFinalizeAsync(conn, (Guid)row["run_id"]!)) a.RunsFinalized++;
     }
   }
 
   // ---------------------------------------------------------------------------------------------
-  // step 6 — publishes
+  // step 6 — publishes (the reconcile of publishing rows runs before step 5, then again here for what finalisation started)
   // ---------------------------------------------------------------------------------------------
 
-  private static async Task PublishesAsync(NpgsqlConnection conn, Actions a)
+  private static async Task PublishesAsync(NpgsqlConnection conn, Actions a, Func<bool> spent)
   {
-    a.PublishesReconciled += await AutoPublisher.ReconcileAsync(conn, StepBatch);
+    a.PublishesReconciled += await AutoPublisher.ReconcileAsync(conn, StepBatch, stop: spent);
     var waiting = await DbUtil.QueryAsync(conn, null,
       "select id from automation_publishes where state = 'waiting' order by id limit $1", [StepBatch]);
     foreach (var row in waiting)
     {
+      if (spent()) break;
       var outcome = await AutoPublisher.ReevaluateAsync(conn, Long(row["id"]));
       if (outcome?.State == AutoPublisher.Publishing) a.PublishesStarted++;
     }
@@ -306,7 +336,7 @@ public static class AutomationTick
   // step 7 — batch summaries
   // ---------------------------------------------------------------------------------------------
 
-  private static async Task SummariesAsync(NpgsqlConnection conn, string mode, Actions a)
+  private static async Task SummariesAsync(NpgsqlConnection conn, string mode, Actions a, Func<bool> spent)
   {
     var runs = await DbUtil.QueryAsync(conn, null,
       """
@@ -317,7 +347,7 @@ public static class AutomationTick
         and (r.finalized_at < now() - make_interval(mins => $1)
              or not exists (
                select 1 from automation_publishes p
-               where (p.run_id = r.run_id or p.card_ids && coalesce((select array_agg(d.accepted_card_id) from automation_draft_decisions d
+               where (p.run_id = r.run_id or (p.card_ids || p.deferred_card_ids) && coalesce((select array_agg(d.accepted_card_id) from automation_draft_decisions d
                                                                      where d.run_id = r.run_id and d.accepted_card_id is not null), '{}'))
                  and p.state not in ('published', 'would_publish', 'human')))
       order by r.finalized_at, r.run_id
@@ -325,7 +355,36 @@ public static class AutomationTick
       """, [SummaryAfterMinutes, StepBatch]);
     foreach (var row in runs)
     {
+      if (spent()) break;
       if (await SummaryAsync(conn, (Guid)row["run_id"]!, mode)) a.Summaries++;
+    }
+
+    // A finalised run with agent notes and no decisions sends no batch summary, so its notes (the only channel for a
+    // wrong existing card) go out as an agent_note exception, one per run (R18B K3).
+    var noted = await DbUtil.QueryAsync(conn, null,
+      """
+      select r.run_id, r.queue_item_id, r.summary, q.url
+      from automation_runs r
+      join authoring_queue_items q on q.id = r.queue_item_id
+      where r.finalized_at is not null and nullif(btrim(r.summary), '') is not null
+        and not exists (select 1 from automation_draft_decisions d where d.run_id = r.run_id)
+        and not exists (select 1 from automation_notifications n where n.dedupe_key = 'exception:agent_note:' || r.run_id::text)
+      order by r.finalized_at, r.run_id
+      limit $1
+      """, [StepBatch]);
+    foreach (var row in noted)
+    {
+      if (spent()) break;
+      var runId = (Guid)row["run_id"]!;
+      var raised = await Notifications.RaiseExceptionAsync(conn, "agent_note", $"exception:agent_note:{runId:D}",
+        new Dictionary<string, string>
+        {
+          ["runId"] = runId.ToString("D"),
+          ["itemId"] = Long(row["queue_item_id"]).ToString(CultureInfo.InvariantCulture),
+          ["url"] = (string)row["url"]!,
+          ["notes"] = (string)row["summary"]!,
+        }, runId);
+      if (raised?.Created == true) a.Alerts++;
     }
   }
 
@@ -335,7 +394,7 @@ public static class AutomationTick
     {
       var runRows = await DbUtil.QueryAsync(conn, null,
         """
-        select r.queue_item_id, r.runner_id, r.deck_id, r.outcome, r.duration_ms, d.slug as deck_slug, q.kind, q.url, q.title
+        select r.queue_item_id, r.runner_id, r.deck_id, r.outcome, r.duration_ms, r.summary, d.slug as deck_slug, q.kind, q.url, q.title
         from automation_runs r
         join authoring_queue_items q on q.id = r.queue_item_id
         left join decks d on d.id = r.deck_id
@@ -357,7 +416,7 @@ public static class AutomationTick
         select p.deck_id, d.slug as deck_slug, p.state, p.reason, p.reason_detail, p.job_id, p.build_id
         from automation_publishes p
         left join decks d on d.id = p.deck_id
-        where p.run_id = $1 or p.card_ids && coalesce((select array_agg(x.accepted_card_id) from automation_draft_decisions x
+        where p.run_id = $1 or (p.card_ids || p.deferred_card_ids) && coalesce((select array_agg(x.accepted_card_id) from automation_draft_decisions x
                                                        where x.run_id = $1 and x.accepted_card_id is not null), '{}')
         order by p.id
         """, [runId]);
@@ -371,7 +430,7 @@ public static class AutomationTick
         publishes.Select(p => new BatchPublish(Long(p["deck_id"]), p["deck_slug"] as string ?? "(deleted deck)", (string)p["state"]!,
           p["reason"] as string, p["reason_detail"] as string, p["job_id"] as string, p["build_id"] as string)).ToList(),
         (string)run["runner_id"]!, run["duration_ms"] is null ? null : Convert.ToInt32(run["duration_ms"], CultureInfo.InvariantCulture),
-        run["outcome"] as string);
+        run["outcome"] as string, run["summary"] as string);
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var consoleUrl = EmailTemplates.AutomationUrl(baseUrl, $"runId={runId:D}");
@@ -414,6 +473,7 @@ public static class AutomationTick
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "batch_summary_failed", runId, error = ex.Message });
+      AutomationFailures.Record();
       return false;
     }
   }
@@ -427,7 +487,7 @@ public static class AutomationTick
   /// <c>done</c>/<c>unavailable</c> event without a notification gets its <c>source_changed</c> email. A05 extends this
   /// step with the retry of <c>waiting</c> events (<c>rechecksStarted</c>, and <c>unavailable</c> after 24 h).
   /// </summary>
-  private static async Task SourceEventsAsync(NpgsqlConnection conn, string mode, Actions a)
+  private static async Task SourceEventsAsync(NpgsqlConnection conn, string mode, Actions a, Func<bool> spent)
   {
     a.RechecksStarted += await SourceWatchRoutes.RetryWaitingRechecksAsync(conn, 20);
 
@@ -450,6 +510,7 @@ public static class AutomationTick
       """, [StepBatch]);
     foreach (var ev in events)
     {
+      if (spent()) break;
       if (await SourceChangedAsync(conn, ev, mode)) a.Summaries++;
     }
   }
@@ -513,6 +574,7 @@ public static class AutomationTick
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "source_changed_failed", eventId, error = ex.Message });
+      AutomationFailures.Record();
       return false;
     }
   }
@@ -521,7 +583,7 @@ public static class AutomationTick
   // steps 9–10 — runner health and the eval gate
   // ---------------------------------------------------------------------------------------------
 
-  private static async Task RunnerHealthAsync(NpgsqlConnection conn, Actions a)
+  private static async Task RunnerHealthAsync(NpgsqlConnection conn, Actions a, Func<bool> spent)
   {
     var date = UtcDate();
     var queued = Long(await DbUtil.ExecuteScalarAsync(conn, null, "select count(*) from authoring_queue_items where status = 'queued'", []));
@@ -563,6 +625,7 @@ public static class AutomationTick
 
     foreach (var r in runners)
     {
+      if (spent()) break;
       var runnerId = (string)r["runner_id"]!;
       if (r["stale"] is true)
       {
@@ -656,14 +719,17 @@ public static class AutomationTick
         select
           coalesce((select sum(estimated_cost_usd) from ai_qa_runs where created_at >= $1 and created_at < $2 and requested_by_sub <> 'automation'), 0) as human,
           coalesce((select sum(estimated_cost_usd) from ai_qa_runs where created_at >= $1 and created_at < $2 and requested_by_sub = 'automation'), 0)
-          + coalesce((select sum(estimated_cost_usd) from automation_draft_decisions where created_at >= $1 and created_at < $2), 0) as automation
+          + coalesce((select sum(estimated_cost_usd) from automation_qa_spend where spent_at >= $1 and spent_at < $2), 0) as automation
         """, [start, end]))[0];
-      var pendingHuman = Long(await DbUtil.ExecuteScalarAsync(conn, null,
+      // The open backlog, whenever it was raised (R18B K7): not the week's rows in state human.
+      var backlog = await StatusRoutes.LoadBacklogAsync(conn);
+      // The source watch's routine checks earn no ledger units (automation-9); their count is in each row's details.
+      var watchChecks = Long(await DbUtil.ExecuteScalarAsync(conn, null,
         """
-        select count(*) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
-        where dd.state = 'human' and a.status = 'pending'
-        """, []));
-      var watchChecks = automations.FirstOrDefault(x => x.Automation == "source_watch")?.Units ?? 0;
+        select coalesce(sum(case when jsonb_typeof(details -> 'checks') = 'number' then (details ->> 'checks')::bigint else 0 end), 0)
+        from automation_events
+        where automation = 'source_watch' and occurred_at >= $1 and occurred_at < $2
+        """, [start, end]));
 
       static DateTimeOffset Ts(object? v) => v is DateTimeOffset dto ? dto : new(DateTime.SpecifyKind((DateTime)v!, DateTimeKind.Utc));
       var data = new WeeklyDigestData(from, to, totals.GetProperty("hoursSaved").GetDecimal(), totals.GetProperty("minutesSaved").GetDecimal(),
@@ -674,7 +740,7 @@ public static class AutomationTick
         runners.Select(r => new DigestRunner((string)r["runner_id"]!, Ts(r["last_heartbeat_at"]),
           r["login_expires_at"] is null ? null : Ts(r["login_expires_at"]))).ToList(),
         Convert.ToDecimal(spend["human"], CultureInfo.InvariantCulture), Convert.ToDecimal(spend["automation"], CultureInfo.InvariantCulture),
-        pendingHuman, publishesByState.TryGetValue(AutoPublisher.Human, out var hp) ? hp : 0);
+        backlog.HumanPending, backlog.HumanPublishes);
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.WeeklyDigest(mode, data, baseUrl);
@@ -685,6 +751,7 @@ public static class AutomationTick
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "weekly_digest_failed", error = ex.Message });
+      AutomationFailures.Record();
       return false;
     }
   }

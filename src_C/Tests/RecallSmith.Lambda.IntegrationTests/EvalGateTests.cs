@@ -28,7 +28,7 @@ public sealed class EvalGateTests
   // A00 §15.4 report JSON, verbatim.
   private const string ContractReportJson = """
     { "v": 1, "kind": "automation-gate", "createdAt": "…", "passed": true, "failures": [],
-      "reviewer": { "provider": "bedrock-converse", "model": "global.openai.gpt-5.5", "promptVersion": "qa-v4", "secondProvider": null, "secondModel": null },
+      "reviewer": { "provider": "bedrock-converse", "model": "global.openai.gpt-5.5", "promptVersion": "qa-v4-auto", "secondProvider": null, "secondModel": null },
       "thresholds": { "seededRecall": 0.90, "seededRecallCiLower": 0.85, "seededPerClassRecallFloor": 0.75, "seededControlFpr": 0.20,
                       "seededControlUnscoredRate": 0.02, "autoAcceptPrecision": 0.97, "autoAcceptPrecisionCiLower": 0.93,
                       "minWouldAcceptCards": 120, "defectEscapeRate": 0.20, "authoredUnscoredRate": 0.05, "minReps": 2 },
@@ -192,7 +192,7 @@ public sealed class EvalGateTests
   {
     var r = JsonNode.Parse(ContractReportJson)!.AsObject();
     r["createdAt"] = "2026-09-28T00:00:00Z";
-    r["reviewer"]!["promptVersion"] = QaRuns.PromptVersion;
+    r["reviewer"]!["promptVersion"] = QaRuns.AutomationPromptVersion;
     var s = r["seeded"]!.AsObject();
     s["n"] = 400;
     s["tp"] = 184;
@@ -272,7 +272,7 @@ public sealed class EvalGateTests
       var gateId = gate.GetProperty("gateId").GetInt64();
       Assert.Equal("bedrock-converse", gate.GetProperty("reviewer").GetProperty("provider").GetString());
       Assert.Equal("global.openai.gpt-5.5", gate.GetProperty("reviewer").GetProperty("model").GetString());
-      Assert.Equal(QaRuns.PromptVersion, gate.GetProperty("reviewer").GetProperty("promptVersion").GetString());
+      Assert.Equal(QaRuns.AutomationPromptVersion, gate.GetProperty("reviewer").GetProperty("promptVersion").GetString());
       Assert.True(gate.GetProperty("passed").GetBoolean());
       Assert.Equal(sub, gate.GetProperty("createdBySub").GetString());
       Assert.EndsWith("Z", gate.GetProperty("createdAt").GetString());
@@ -300,7 +300,7 @@ public sealed class EvalGateTests
         "from automation_eval_gates where id = $1", gateId, raw));
       Assert.Equal("bedrock-converse", row["reviewer_provider"]);
       Assert.Equal("global.openai.gpt-5.5", row["reviewer_model"]);
-      Assert.Equal(QaRuns.PromptVersion, row["prompt_version"]);
+      Assert.Equal(QaRuns.AutomationPromptVersion, row["prompt_version"]);
       Assert.Equal(true, row["passed"]);
       Assert.Equal(sha, row["report_sha256"]);
       Assert.Equal(sub, row["created_by_sub"]);
@@ -313,7 +313,7 @@ public sealed class EvalGateTests
       Assert.Equal(AutomationMode.Live, live.Effective);
       Assert.Null(live.LiveBlockedReason);
       Assert.Equal(gateId, live.GateId);
-      Assert.Equal(new GateReviewer("bedrock-converse", "global.openai.gpt-5.5", QaRuns.PromptVersion), live.Reviewer);
+      Assert.Equal(new GateReviewer("bedrock-converse", "global.openai.gpt-5.5", QaRuns.AutomationPromptVersion), live.Reviewer);
 
       // Exactly at every threshold still passes (the comparisons are strict the right way round).
       var edge = Patched(
@@ -390,6 +390,8 @@ public sealed class EvalGateTests
       Assert.Equal(["reviewer.provider"], Failures(await PostAsync(Patched("reviewer.provider=\"anthropic\"").ToJsonString())));
       Assert.Equal(["reviewer.provider"], Failures(await PostAsync(Patched("reviewer.provider=\"Bedrock-Converse\"").ToJsonString())));
       Assert.Equal(["reviewer.promptVersion"], Failures(await PostAsync(Patched("reviewer.promptVersion=\"qa-v3\"").ToJsonString())));
+      // R18B K1: the human-run prompt version is not the automation reviewer; the gate measures qa-v4-auto only.
+      Assert.Equal(["reviewer.promptVersion"], Failures(await PostAsync(Patched($"reviewer.promptVersion=\"{QaRuns.PromptVersion}\"").ToJsonString())));
       Assert.Equal(["reviewer.model"], Failures(await PostAsync(Patched("reviewer.model=\"  \"").ToJsonString())));
       Assert.Equal(["reviewer.provider", "reviewer.promptVersion"],
         Failures(await PostAsync(Patched("reviewer.provider=\"openai\";reviewer.promptVersion=\"qa-v5\"").ToJsonString())));
@@ -505,7 +507,7 @@ public sealed class EvalGateTests
         await ScalarAsync(
           "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub, revoked_at, revoked_by_sub) " +
           "values ('bedrock-converse', 'global.openai.gpt-5.5', $1, true, '{}'::jsonb, $2, '{}'::jsonb, 'it-a06', now(), 'it-a06') returning id",
-          QaRuns.PromptVersion, new string('f', 64));
+          QaRuns.AutomationPromptVersion, new string('f', 64));
       }
       var first = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString())).GetProperty("gateId").GetInt64();
       var secondReport = PassingReport();
@@ -526,9 +528,11 @@ public sealed class EvalGateTests
       Assert.All(history, h => Assert.Equal(GateKeys, h.EnumerateObject().Select(p => p.Name).ToArray()));
       Assert.NotEqual(JsonValueKind.Null, history[2].GetProperty("revokedAt").ValueKind);
 
-      // Revoking the latest makes the earlier unrevoked one current.
+      // Revoking the latest leaves no current gate (R18B K2): the earlier unrevoked one never takes over.
       AutomationTestKit.Data(await RevokeAsync(second.ToString(CultureInfo.InvariantCulture)));
-      Assert.Equal(first, AutomationTestKit.Data(await GetAsync()).GetProperty("current").GetProperty("gateId").GetInt64());
+      Assert.Equal(JsonValueKind.Null, AutomationTestKit.Data(await GetAsync()).GetProperty("current").ValueKind);
+      Assert.Equal(AutomationMode.DryRun, (await EffectiveAsync(AutomationMode.Live)).Effective);
+      AutomationTestKit.Data(await RevokeAsync(first.ToString(CultureInfo.InvariantCulture)));
     });
   }
 

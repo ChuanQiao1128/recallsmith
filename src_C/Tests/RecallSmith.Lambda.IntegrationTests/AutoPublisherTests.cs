@@ -40,12 +40,12 @@ internal static class A04Kit
     { "v": 1, "notificationId": "uuid", "status": "sent", "sesMessageId": null, "errorCode": null, "error": null, "attempt": 1 }
     """;
 
-  // A00 §12.6, verbatim: the tick request and its response.
+  // A00 §12.6, verbatim: the tick request and its response (plus "failedSteps", R18B K4).
   public const string ContractTickRequestJson = """{ "v": 1, "tickId": "uuid", "job": "tick" }""";
   public const string ContractTickResponseJson = """
     { "tickId": "uuid", "mode": "dry_run", "effectiveMode": "dry_run", "skipped": null, "actions": { "digest": false, "leasesExpired": 0, "qaRetried": 0,
       "qaTimedOut": 0, "runsAbandoned": 0, "runsFinalized": 0, "publishesReconciled": 0, "publishesStarted": 0, "summaries": 0,
-      "rechecksStarted": 0, "rechecksDone": 0, "alerts": 0, "notificationsResent": 0 } }
+      "rechecksStarted": 0, "rechecksDone": 0, "alerts": 0, "notificationsResent": 0 }, "failedSteps": [] }
     """;
 
   /// <summary>SQL against one database (the shared fixture or a scratch one).</summary>
@@ -130,7 +130,7 @@ internal static class A04Kit
       var id = Long(await db.ScalarAsync(
         "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub) " +
         "values ($1, $2, $3, true, '{}'::jsonb, $4, '{}'::jsonb, 'it-a04') returning id",
-        AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, RecallSmith.Lambda.Vpc.Qa.QaRuns.PromptVersion, new string('c', 64)));
+        AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, RecallSmith.Lambda.Vpc.Qa.QaRuns.AutomationPromptVersion, new string('c', 64)));
       _gates.Add((db, id));
       return id;
     }
@@ -441,6 +441,30 @@ public class AutoPublisherTests
   }
 
   [Fact]
+  public async Task Evaluate_DryRun_GateRefusal_RoutesHumanWithCode()
+  {
+    // automation-6: dry run evaluates check 9's publish gates read-only; a refusal is what live would do.
+    await using var scope = new A04Kit.Scope(AutomationMode.DryRun);
+    var deck = await A04Kit.PublishedDeckAsync(_sql, "drygate");
+    var runId = await A04Kit.RunAsync(_sql, AutomationTestKit.Sub("drygate"), deck.Id, "completed");
+    const string validMcq =
+      """{"v":1,"options":[{"key":"a","why":null,"text":"queue","correct":true},{"key":"b","why":"no buffer","text":"resize","correct":false},{"key":"c","why":"one shard","text":"stream","correct":false}],"shuffle":true,"qualifier":null}""";
+    await _sql.QueryAsync("update cards set mcq = $3::jsonb, difficulty = 4, updated_at = now() - interval '2 hours' where deck_id = $1 and stable_uid = $2",
+      deck.Id, deck.OldUid, validMcq);
+    var defects = await _sql.CountAsync("select count(*) from automation_events");
+
+    var outcome = await EvaluateAsync(deck.Id, runId);
+
+    AssertOutcome(outcome, "human", "MCQ_PUBLISH_GATE");
+    Assert.Equal($"{deck.OldUid}: MCQ_DIFFICULTY_RANGE", outcome!.ReasonDetail);
+    Assert.Equal("dry_run", (await A04Kit.PublishRowAsync(_sql, outcome.PublishId))["mode"]);
+    Assert.Empty(scope.PublishSent);
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from deck_publishes where deck_id = $1 and status = 'PENDING'", deck.Id));
+    // Read-only: no gate defect is recorded for a publish that never started.
+    Assert.Equal(defects, await _sql.CountAsync("select count(*) from automation_events"));
+  }
+
+  [Fact]
   public async Task Evaluate_DryRun_IsWouldPublish()
   {
     await using var scope = new A04Kit.Scope(AutomationMode.DryRun);
@@ -623,6 +647,72 @@ public class AutoPublisherTests
 
   // ---------------------------------------------------------------- check 6 as a property (A00 §18.2)
 
+  /// <summary>What a pending card is, relative to the automation: the dimensions check 6 decides on.</summary>
+  public enum PendingKind
+  {
+    /// <summary>Auto-accepted, live, content unchanged since acceptance.</summary>
+    OwnedUnchanged,
+    /// <summary>Auto-accepted, then edited (its hash differs from the accepted hash).</summary>
+    OwnedEdited,
+    /// <summary>Auto-accepted, then deleted.</summary>
+    OwnedDeleted,
+    /// <summary>Auto-accepted, edited and deleted.</summary>
+    OwnedEditedDeleted,
+    /// <summary>No auto_accepted decision: a human added or changed it.</summary>
+    NotOwned,
+    /// <summary>No auto_accepted decision, deleted.</summary>
+    NotOwnedDeleted,
+  }
+
+  /// <summary>
+  /// The specification of check 6 (A00 §6.2, §0: only brand-new, unchanged automation cards ship without a human),
+  /// written out case by case instead of derived from a predicate, so a wrong rule in the implementation shows up as a
+  /// disagreement: may a pending card of this kind be auto-published in this mode?
+  /// </summary>
+  private static readonly Dictionary<(string Mode, PendingKind Kind), bool> MayAutoPublish = new()
+  {
+    [(AutomationMode.Live, PendingKind.OwnedUnchanged)] = true,
+    [(AutomationMode.Live, PendingKind.OwnedEdited)] = false,
+    [(AutomationMode.Live, PendingKind.OwnedDeleted)] = false,
+    [(AutomationMode.Live, PendingKind.OwnedEditedDeleted)] = false,
+    [(AutomationMode.Live, PendingKind.NotOwned)] = false,
+    [(AutomationMode.Live, PendingKind.NotOwnedDeleted)] = false,
+    [(AutomationMode.DryRun, PendingKind.OwnedUnchanged)] = false,
+    [(AutomationMode.DryRun, PendingKind.OwnedEdited)] = false,
+    [(AutomationMode.DryRun, PendingKind.OwnedDeleted)] = false,
+    [(AutomationMode.DryRun, PendingKind.OwnedEditedDeleted)] = false,
+    [(AutomationMode.DryRun, PendingKind.NotOwned)] = false,
+    [(AutomationMode.DryRun, PendingKind.NotOwnedDeleted)] = false,
+  };
+
+  private static string Sha(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+
+  /// <summary>Adds one pending card of <paramref name="kind"/> (and its accepted hash when owned).</summary>
+  private static void AddPending(PendingKind kind, long cardId, string uid, List<PendingCard> pending, Dictionary<long, string> owned)
+  {
+    var isOwned = kind is PendingKind.OwnedUnchanged or PendingKind.OwnedEdited or PendingKind.OwnedDeleted or PendingKind.OwnedEditedDeleted;
+    var edited = kind is PendingKind.OwnedEdited or PendingKind.OwnedEditedDeleted;
+    var deleted = kind is PendingKind.OwnedDeleted or PendingKind.OwnedEditedDeleted or PendingKind.NotOwnedDeleted;
+    if (isOwned) owned[cardId] = Sha(uid);
+    pending.Add(new PendingCard(cardId, uid, deleted, edited ? Sha(uid + ":edited") : Sha(uid)));
+  }
+
+  public static IEnumerable<object[]> TruthTable() => MayAutoPublish.Select(e => new object[] { e.Key.Mode, e.Key.Kind, e.Value });
+
+  [Theory]
+  [MemberData(nameof(TruthTable))]
+  public void PendingChangeSet_OneCard_FollowsTheTruthTable(string mode, PendingKind kind, bool mayAutoPublish)
+  {
+    var pending = new List<PendingCard>();
+    var owned = new Dictionary<long, string>();
+    AddPending(kind, 7, "card-7", pending, owned);
+
+    var (ok, humanUids) = AutoPublisher.CheckPendingChangeSet(pending, owned, mode);
+
+    Assert.Equal(mayAutoPublish, ok);
+    Assert.Equal(mayAutoPublish ? Array.Empty<string>() : new[] { "card-7" }, humanUids);
+  }
+
   /// <summary>60 generated change sets: seeds 0..29 in both modes.</summary>
   public static IEnumerable<object[]> ChangeSets()
   {
@@ -639,6 +729,7 @@ public class AutoPublisherTests
   {
     var random = new Random(seed * 7919 + 17);
     var count = seed % 9 == 0 ? 0 : random.Next(1, 8);
+    var kinds = Enum.GetValues<PendingKind>();
     var pending = new List<PendingCard>();
     var owned = new Dictionary<long, string>();
     var expectedHuman = new List<string>();
@@ -646,15 +737,10 @@ public class AutoPublisherTests
     {
       var cardId = seed * 100L + i + 1;
       var uid = $"card-{seed}-{i}";
-      var original = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(uid))).ToLowerInvariant();
-      // Mostly owned cards (so whole sets pass often enough), some edited after acceptance, some deleted.
-      var isOwned = random.NextDouble() < 0.75;
-      var edited = isOwned && random.NextDouble() < 0.15;
-      var deleted = random.NextDouble() < 0.1;
-      var current = edited ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(uid + ":edited"))).ToLowerInvariant() : original;
-      if (isOwned) owned[cardId] = original;
-      pending.Add(new PendingCard(cardId, uid, deleted, current));
-      if (mode != AutomationMode.Live || !isOwned || edited || deleted) expectedHuman.Add(uid);
+      // Mostly unchanged automation cards (so whole sets pass often enough), the other kinds uniformly.
+      var kind = random.NextDouble() < 0.7 ? PendingKind.OwnedUnchanged : kinds[random.Next(kinds.Length)];
+      AddPending(kind, cardId, uid, pending, owned);
+      if (!MayAutoPublish[(mode, kind)]) expectedHuman.Add(uid);
     }
     // Owned hashes of cards outside the change set never matter.
     owned[-1] = "0000";
@@ -663,6 +749,61 @@ public class AutoPublisherTests
 
     Assert.Equal(expectedHuman.Count == 0, ok);
     Assert.Equal(expectedHuman, humanUids);
-    if (mode == AutomationMode.DryRun) Assert.Equal(pending.Count == 0, ok);
+  }
+
+  // ---------------------------------------------------------------- races (R18B B01)
+
+  [Fact]
+  public async Task Evaluate_ConcurrentOnOneDeck_StartsOnePublish()
+  {
+    await using var scope = await LiveAsync();
+    var sub = AutomationTestKit.Sub("concurrent");
+    var deck = await A04Kit.PublishedDeckAsync(_sql, "concurrent");
+    var runId = await A04Kit.RunAsync(_sql, sub, deck.Id);
+    var card = await A04Kit.AutoAcceptedCardAsync(_db, sub, deck.Id, runId, "Which synthetic relay races itself to publish?");
+    await _sql.QueryAsync("update automation_runs set status = 'completed', completed_at = now() where run_id = $1", runId);
+
+    var outcomes = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => EvaluateAsync(deck.Id, runId)));
+
+    Assert.All(outcomes, o => Assert.NotNull(o));
+    var row = (await _sql.QueryAsync("select * from automation_publishes where deck_id = $1", deck.Id)).Single();
+    Assert.Equal("publishing", row["state"]);
+    Assert.Equal(new[] { card.CardId }, (long[])row["card_ids"]!);
+    var job = (await _sql.QueryAsync("select job_id from deck_publishes where deck_id = $1 and status = 'PENDING'", deck.Id)).Single();
+    Assert.Equal(row["job_id"], job["job_id"]);
+    Assert.Single(scope.PublishSent);
+  }
+
+  [Fact]
+  public async Task HumanAccept_RacingAutoAccept_YieldsOneCardAndAConsistentDecision()
+  {
+    await using var scope = await LiveAsync();
+    for (var i = 0; i < 4; i++)
+    {
+      var e = await AutomationTestKit.EligibleDraftAsync(_db, $"race{i}", $"Which synthetic sprinter number {"ABCD"[i]} wins the race?");
+      var human = AutomationTestKit.Sub("race-human");
+
+      var responses = await Task.WhenAll(
+        AutomationTestKit.AcceptAsync(e.DraftId, AutomationTestKit.Ctx(human, agent: false)),
+        AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash)));
+
+      Assert.All(responses, r => Assert.True(r.StatusCode < 500, $"{r.StatusCode}: {r.Body}"));
+      var cards = await _sql.QueryAsync("select id from cards where deck_id = $1 and stable_uid = $2 and is_deleted = 0", e.DeckId, e.Uid);
+      var cardId = A04Kit.Long(Assert.Single(cards)["id"]);
+      Assert.Equal("accepted", await _sql.ScalarAsync("select status from ai_drafts where id = $1", e.DraftId));
+      var d = (await AutomationTestKit.DecisionAsync(_db, e.DraftId))!;
+      switch ((string)d["state"]!)
+      {
+        case "auto_accepted":
+          Assert.Equal(cardId, A04Kit.Long(d["accepted_card_id"]));
+          break;
+        case "superseded":
+          Assert.Equal(("DECIDED_BY_HUMAN", "accepted"), ((string)d["reason"]!, (string)d["human_action"]!));
+          break;
+        default:
+          Assert.Fail($"unexpected decision state {d["state"]} after the race");
+          break;
+      }
+    }
   }
 }

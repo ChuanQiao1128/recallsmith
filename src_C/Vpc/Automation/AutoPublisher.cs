@@ -42,8 +42,10 @@ public static class AutoPublisher
 
   /// <summary>
   /// Evaluates <paramref name="deckId"/> for the final run <paramref name="runId"/>: one <c>automation_publishes</c> row
-  /// per evaluation, or the deck's open row (<c>waiting</c>/<c>publishing</c>) with the run's accepted card ids appended.
-  /// Effective <c>off</c> ⇒ null and nothing written. Never throws.
+  /// per evaluation, or the deck's open <c>waiting</c> row with the run's accepted card ids appended. When the deck's row
+  /// is already <c>publishing</c> its build cannot contain this run's cards: they are only recorded as deferred on it,
+  /// and the reconcile opens a new <c>waiting</c> row for them once the job ends. Effective <c>off</c> ⇒ null and
+  /// nothing written. Never throws.
   /// </summary>
   public static async Task<AutoPublishOutcome?> EvaluateAsync(NpgsqlConnection conn, long deckId, Guid runId, CancellationToken ct = default)
   {
@@ -52,18 +54,11 @@ public static class AutoPublisher
       var mode = await AutomationMode.EffectiveAsync(conn, ct);
       if (mode.Effective == AutomationMode.Off) return null;
 
-      var cardRows = await DbUtil.QueryAsync(conn, null,
-        """
-        select accepted_card_id from automation_draft_decisions
-        where run_id = $1 and deck_id = $2 and state = 'auto_accepted' and accepted_card_id is not null
-        order by accepted_card_id
-        """, [runId, deckId]);
-      var cardIds = cardRows.Select(r => Convert.ToInt64(r["accepted_card_id"], CultureInfo.InvariantCulture)).ToArray();
-
-      var (publishId, state) = await OpenRowAsync(conn, deckId, runId, mode.Effective, cardIds, ct);
+      var (publishId, state) = await OpenRunRowAsync(conn, null, deckId, runId, mode.Effective, ct);
       if (state == Publishing)
       {
-        // A build is already in flight for this deck; the tick reconciles it.
+        // A build is already in flight for this deck and cannot contain this run's cards (they are deferred on the row);
+        // the tick's reconcile opens a new waiting row for them when the job ends.
         return new AutoPublishOutcome(publishId, Publishing, null, null);
       }
       return await EvaluateRowAsync(conn, publishId, deckId, runId, mode.Effective, ct);
@@ -94,37 +89,61 @@ public static class AutoPublisher
     }
   }
 
-  /// <summary>The deck's open row with <paramref name="cardIds"/> appended, or a new <c>waiting</c> row (the unique-index race re-selects).</summary>
-  private static async Task<(long Id, string State)> OpenRowAsync(NpgsqlConnection conn, long deckId, Guid runId, string mode, long[] cardIds,
-    CancellationToken ct)
+  /// <summary>
+  /// <see cref="OpenRowAsync"/> with the run's <c>auto_accepted</c> card ids of the deck. Used by the evaluation and,
+  /// inside the finalisation transaction (<paramref name="tx"/>), to record the evaluation intent durably.
+  /// </summary>
+  internal static async Task<(long Id, string State)> OpenRunRowAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, long deckId, Guid runId,
+    string mode, CancellationToken ct)
+  {
+    var cardRows = await DbUtil.QueryAsync(conn, tx,
+      """
+      select accepted_card_id from automation_draft_decisions
+      where run_id = $1 and deck_id = $2 and state = 'auto_accepted' and accepted_card_id is not null
+      order by accepted_card_id
+      """, [runId, deckId]);
+    var cardIds = cardRows.Select(r => Convert.ToInt64(r["accepted_card_id"], CultureInfo.InvariantCulture)).ToArray();
+    return await OpenRowAsync(conn, tx, deckId, runId, mode, cardIds, ct);
+  }
+
+  /// <summary>
+  /// The deck's open row, or a new <c>waiting</c> row. A <c>waiting</c> row gets <paramref name="cardIds"/> appended to
+  /// <c>card_ids</c>; a <c>publishing</c> row never does (its build snapshot is already bound), it records the ids it
+  /// does not already cover in <c>deferred_card_ids</c>. Exception-free on the unique-index race, so it is safe inside a
+  /// transaction: the insert yields to the row another evaluation opened first, and the loop re-selects it.
+  /// </summary>
+  private static async Task<(long Id, string State)> OpenRowAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, long deckId, Guid? runId,
+    string mode, long[] cardIds, CancellationToken ct)
   {
     for (var attempt = 0; ; attempt++)
     {
       ct.ThrowIfCancellationRequested();
-      var open = await DbUtil.QueryAsync(conn, null,
+      var open = await DbUtil.QueryAsync(conn, tx,
         """
         update automation_publishes
-        set card_ids = (select coalesce(array_agg(distinct x order by x), '{}') from unnest(card_ids || $2::bigint[]) as u(x)),
+        set card_ids = case when state = 'waiting'
+              then (select coalesce(array_agg(distinct x order by x), '{}') from unnest(card_ids || $2::bigint[]) as u(x))
+              else card_ids end,
+            deferred_card_ids = case when state = 'publishing'
+              then (select coalesce(array_agg(distinct x order by x), '{}') from unnest(deferred_card_ids || $2::bigint[]) as u(x)
+                    where not x = any(card_ids))
+              else deferred_card_ids end,
             updated_at = now()
         where deck_id = $1 and state in ('waiting', 'publishing')
         returning id, state
         """, [deckId, cardIds]);
       if (open.Count > 0) return (Convert.ToInt64(open[0]["id"], CultureInfo.InvariantCulture), (string)open[0]["state"]!);
 
-      try
-      {
-        var id = await DbUtil.ExecuteScalarAsync(conn, null,
-          """
-          insert into automation_publishes (deck_id, run_id, mode, state, card_ids)
-          values ($1, $2, $3, 'waiting', $4::bigint[])
-          returning id
-          """, [deckId, runId, mode, cardIds]);
-        return (Convert.ToInt64(id, CultureInfo.InvariantCulture), Waiting);
-      }
-      catch (PostgresException pg) when (pg is { SqlState: "23505", ConstraintName: "uq_automation_publishes_open" } && attempt < 3)
-      {
-        // Another evaluation opened the deck's row first: reuse it.
-      }
+      var id = await DbUtil.ExecuteScalarAsync(conn, tx,
+        """
+        insert into automation_publishes (deck_id, run_id, mode, state, card_ids)
+        values ($1, $2, $3, 'waiting', $4::bigint[])
+        on conflict (deck_id) where state in ('waiting', 'publishing') do nothing
+        returning id
+        """, [deckId, runId, mode, cardIds]);
+      if (id is not null and not DBNull) return (Convert.ToInt64(id, CultureInfo.InvariantCulture), Waiting);
+      // Another evaluation opened the deck's row first: reuse it.
+      if (attempt >= 3) throw new InvalidOperationException($"no open automation_publishes row for deck {deckId} after {attempt + 1} attempts");
     }
   }
 
@@ -292,14 +311,42 @@ public static class AutoPublisher
     var snapshot = PublishSnapshot.Digest(export.Select(PublishSnapshot.FromRow));
     await tx.CommitAsync(ct);
 
-    // 7. dry run stops here
-    if (mode != AutomationMode.Live) return new Verdict(WouldPublish, null, null, slug, null, null, false);
+    // 7. dry run stops here, after the publish gates check 9 would meet, evaluated read-only (automation-6): a gate
+    // refusal is the human route live would take, so dry run is not optimistic about it.
+    if (mode != AutomationMode.Live)
+    {
+      var refusal = await DryRunGateRefusalAsync(conn, deckId, export, ct);
+      return refusal is { } r
+        ? new Verdict(Human, r.Code, Detail(r.Message), slug, null, null, false)
+        : new Verdict(WouldPublish, null, null, slug, null, null, false);
+    }
 
     // 8. nothing pending: an earlier build already shipped these cards
     if (pending.Count == 0) return new Verdict(Published, null, null, slug, liveBuildId, null, false);
 
     // 9. publish
     return new Verdict(Waiting, null, null, slug, null, snapshot, true);
+  }
+
+  /// <summary>
+  /// The refusals <see cref="Publish.StartPublishAsync"/> would answer for the deck's current cards, without its side
+  /// effects (no gate defect row, no refusal gauge, no chained QA run): the MCQ publish gate, then the AI QA gate when
+  /// it is enforced. Null when both pass.
+  /// </summary>
+  private static async Task<(string Code, string Message)?> DryRunGateRefusalAsync(NpgsqlConnection conn, long deckId,
+    IReadOnlyList<Dictionary<string, object?>> export, CancellationToken ct)
+  {
+    if (Publish.FirstMcqGateFailure(export) is { } mcq) return ("MCQ_PUBLISH_GATE", $"{mcq.StableUid}: {mcq.Code}");
+    if (!QaGate.IsEnforced()) return null;
+    var state = await QaGate.ComputeAsync(conn, deckId, ct);
+    var missing = state.Changed.Where(c => !c.ReviewedAtCurrentHash).Select(c => c.StableUid).ToList();
+    if (missing.Count > 0) return ("AI_QA_REQUIRED", $"AI QA required for {missing.Count} card(s): {string.Join(", ", missing.Take(MaxListedUids))}");
+    if (state.OpenBlockers.Count > 0)
+    {
+      return ("AI_QA_BLOCKED", $"AI QA blocked by {state.OpenBlockers.Count} open blocker finding(s): " +
+        string.Join(", ", state.OpenBlockers.Take(MaxListedUids).Select(b => $"{b.StableUid}: {b.Category}")));
+    }
+    return null;
   }
 
   /// <summary>
@@ -347,11 +394,17 @@ public static class AutoPublisher
   // ---------------------------------------------------------------------------------------------
 
   /// <summary>
-  /// Tick step 6: each <c>publishing</c> row follows its job: <c>SUCCESS</c> ⇒ <c>published</c> (+ ledger in live),
-  /// <c>FAILED</c> ⇒ <c>human</c> / <c>PUBLISH_FAILED</c> with the job's error (+ <c>publish_failed</c> alert, ledger in
-  /// live); a job still active is left alone (the existing reaper handles stuck jobs). Returns the rows moved. Never throws.
+  /// Tick step 5a (before finalisation): each <c>publishing</c> row follows its job. <c>SUCCESS</c> ⇒ <c>published</c>
+  /// (+ ledger in live) with <c>card_ids</c> cut to the cards the build covered; every automation-accepted card of the
+  /// deck the build missed (changed after the job was created, or deferred on the row) goes to a new <c>waiting</c>
+  /// row, which the tick evaluates next. <c>FAILED</c> with <c>AI_QA_STALE</c> (cards changed between the bound snapshot
+  /// and the build) ⇒ back to <c>waiting</c> for a fresh evaluation, whose check 6 routes any human change to a human;
+  /// after <see cref="MaxStaleAttempts"/> stale attempts, or on any other failure ⇒ <c>human</c> / <c>PUBLISH_FAILED</c>
+  /// with the job's error (+ <c>publish_failed</c> alert, ledger in live). A job still active is left alone (the existing
+  /// reaper handles stuck jobs). Stops early once <paramref name="stop"/> says the tick's budget is spent. Returns the
+  /// rows moved. Never throws.
   /// </summary>
-  internal static async Task<int> ReconcileAsync(NpgsqlConnection conn, int max, CancellationToken ct = default)
+  internal static async Task<int> ReconcileAsync(NpgsqlConnection conn, int max, CancellationToken ct = default, Func<bool>? stop = null)
   {
     var moved = 0;
     try
@@ -370,6 +423,7 @@ public static class AutoPublisher
       foreach (var row in rows)
       {
         ct.ThrowIfCancellationRequested();
+        if (stop?.Invoke() == true) break;
         var publishId = Convert.ToInt64(row["id"], CultureInfo.InvariantCulture);
         var deckId = Convert.ToInt64(row["deck_id"], CultureInfo.InvariantCulture);
         var jobId = row["job_id"] as string;
@@ -379,26 +433,44 @@ public static class AutoPublisher
 
         if (status == "SUCCESS")
         {
-          var done = await DbUtil.QueryAsync(conn, null,
-            """
-            update automation_publishes set state = 'published', reason = null, reason_detail = null, finished_at = now(), updated_at = now()
-            where id = $1 and state = 'publishing' returning id
-            """, [publishId]);
-          if (done.Count == 0) continue;
+          var next = await PublishedAsync(conn, publishId, deckId, jobId, (string)row["mode"]!, ct);
+          if (next is null) continue;
           moved++;
           if (live)
           {
             await AutomationLedger.RecordAsync(conn, new AutomationEvent("auto_publish", 1, "success", DeckId: deckId, Ref: jobId,
               DedupeKey: $"auto-publish:{jobId}"), ct);
           }
-          Log.Event("info", new { tag = "automation", outcome = "auto_publish_published", publishId, deckId, jobId });
+          Log.Event("info", new { tag = "automation", outcome = "auto_publish_published", publishId, deckId, jobId, nextPublishId = next.Value.NextId,
+            uncovered = next.Value.Uncovered });
         }
         else if (status == "FAILED")
         {
           var error = row["error_message"] as string ?? "the publish job failed";
+          if (error.StartsWith(PublishSnapshot.StaleErrorCode, StringComparison.Ordinal))
+          {
+            var retried = await DbUtil.QueryAsync(conn, null,
+              """
+              update automation_publishes
+              set state = 'waiting', reason = $2, reason_detail = null, attempts = attempts + 1,
+                  card_ids = (select coalesce(array_agg(distinct x order by x), '{}') from unnest(card_ids || deferred_card_ids) as u(x)),
+                  deferred_card_ids = '{}', finished_at = null, updated_at = now()
+              where id = $1 and state = 'publishing' and attempts + 1 < $3
+              returning id
+              """, [publishId, PublishSnapshot.StaleErrorCode, MaxStaleAttempts]);
+            if (retried.Count > 0)
+            {
+              moved++;
+              Log.Event("info", new { tag = "automation", outcome = "auto_publish_stale_retry", publishId, deckId, jobId });
+              continue;
+            }
+          }
           var done = await DbUtil.QueryAsync(conn, null,
             """
-            update automation_publishes set state = 'human', reason = 'PUBLISH_FAILED', reason_detail = $2, finished_at = now(), updated_at = now()
+            update automation_publishes
+            set state = 'human', reason = 'PUBLISH_FAILED', reason_detail = $2,
+                card_ids = (select coalesce(array_agg(distinct x order by x), '{}') from unnest(card_ids || deferred_card_ids) as u(x)),
+                deferred_card_ids = '{}', finished_at = now(), updated_at = now()
             where id = $1 and state = 'publishing' returning id
             """, [publishId, Detail(error)]);
           if (done.Count == 0) continue;
@@ -430,6 +502,62 @@ public static class AutoPublisher
     return moved;
   }
 
+  /// <summary>
+  /// A <c>publishing</c> row whose job succeeded, in one transaction: the automation-accepted cards of the deck the build
+  /// did not cover are the deferred ids plus every such card changed after the job was created (the Worker builds the
+  /// bound snapshot, so a later change cannot be in it). The row becomes <c>published</c> with only the covered ids, and
+  /// the uncovered ones open the deck's next <c>waiting</c> row (allowed by the open-row index now that this one is
+  /// terminal), owned by the newest run among them. Null when the row was no longer <c>publishing</c>.
+  /// </summary>
+  private static async Task<(long? NextId, long[] Uncovered)?> PublishedAsync(NpgsqlConnection conn, long publishId, long deckId, string jobId,
+    string mode, CancellationToken ct)
+  {
+    await using var tx = await conn.BeginTransactionAsync(ct);
+    var locked = await DbUtil.QueryAsync(conn, tx,
+      "select deferred_card_ids from automation_publishes where id = $1 and state = 'publishing' for update", [publishId]);
+    if (locked.Count == 0)
+    {
+      await tx.RollbackAsync(ct);
+      return null;
+    }
+    var uncoveredRows = await DbUtil.QueryAsync(conn, tx,
+      """
+      select distinct dd.accepted_card_id as id
+      from automation_draft_decisions dd
+      join cards c on c.id = dd.accepted_card_id
+      where c.deck_id = $1 and dd.state = 'auto_accepted'
+        and c.updated_at > (select p.created_at from deck_publishes p where p.job_id = $2)
+      union
+      select unnest($3::bigint[])
+      order by 1
+      """, [deckId, jobId, (long[])locked[0]["deferred_card_ids"]!]);
+    var uncovered = uncoveredRows.Select(r => Convert.ToInt64(r["id"], CultureInfo.InvariantCulture)).ToArray();
+
+    await DbUtil.ExecuteAsync(conn, tx,
+      """
+      update automation_publishes
+      set state = 'published', reason = null, reason_detail = null, finished_at = now(), updated_at = now(),
+          card_ids = (select coalesce(array_agg(x order by x), '{}') from unnest(card_ids) as u(x) where not x = any($2::bigint[])),
+          deferred_card_ids = '{}'
+      where id = $1
+      """, [publishId, uncovered]);
+
+    long? nextId = null;
+    if (uncovered.Length > 0)
+    {
+      var owner = await DbUtil.ExecuteScalarAsync(conn, tx,
+        """
+        select run_id from automation_draft_decisions
+        where accepted_card_id = any($1) and state = 'auto_accepted' and run_id is not null
+        order by decided_at desc nulls last, created_at desc
+        limit 1
+        """, [uncovered]);
+      (nextId, _) = await OpenRowAsync(conn, tx, deckId, owner as Guid?, mode, uncovered, ct);
+    }
+    await tx.CommitAsync(ct);
+    return (nextId, uncovered);
+  }
+
   private static string? Detail(string? text) =>
     text is null ? null : text.Length <= MaxDetailLength ? text : text[..(MaxDetailLength - 1)] + "…";
 
@@ -438,8 +566,10 @@ public static class AutoPublisher
     if (ex is PostgresException { SqlState: "42P01" or "42703" } pg)
     {
       Log.Event("warn", new { tag = "automation", reason = "schema_not_ready", sqlState = pg.SqlState, where = $"auto_publish_{where}", id });
+      AutomationFailures.Record();
       return;
     }
     Log.Event("warn", new { tag = "automation", reason = $"auto_publish_{where}_failed", id, error = ex.Message });
+    AutomationFailures.Record();
   }
 }

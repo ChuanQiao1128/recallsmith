@@ -288,9 +288,9 @@ public static class DraftDecisions
         runId = jobId,
         chunk = 0,
         chunkCount = 1,
-        promptVersion = QaRuns.PromptVersion,
+        promptVersion = QaRuns.AutomationPromptVersion,
         target = "draft",
-        profile = "automation",
+        profile = QaRuns.AutomationProfile,
         deck = new { id = deckId, slug = deck.Slug, title = deck.Title },
         reviewDate = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         cards = new[]

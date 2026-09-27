@@ -288,6 +288,132 @@ public class DraftQaResultsTests
     });
   }
 
+  [Fact]
+  public async Task Report_DryRun_TwoNearIdenticalDraftsInOneBatch_SecondIsLikelyDuplicate()
+  {
+    // automation-6: live accepts the first draft as a card, then its at-accept check routes the second as a likely
+    // duplicate; dry run must record the same, not two would_accept.
+    using var scope = new AutomationTestKit.Scope();
+    var sub = AutomationTestKit.Sub("drydup");
+    var deck = await AutomationTestKit.NewDeckAsync(_db, "drydup");
+    var runId = await AutomationTestKit.NewRunAsync(_db, sub, deck.Id);
+    var firstUid = AutomationTestKit.Uid("drydup-a");
+    var ids = await AutomationTestKit.SubmitDraftsAsync(AutomationTestKit.Ctx(sub), deck.Id, runId,
+      AutomationTestKit.Card(firstUid, "Which synthetic harbour crane lifts the heaviest containers at night?"),
+      AutomationTestKit.Card(AutomationTestKit.Uid("drydup-b"), "Which synthetic harbour crane lifts the heaviest containers at night time?"));
+    var first = await AutomationTestKit.QueuedJobAsync(_db, ids[0]);
+    var second = await AutomationTestKit.QueuedJobAsync(_db, ids[1]);
+
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(first.JobId, ids[0], first.Hash)));
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(second.JobId, ids[1], second.Hash)));
+
+    Assert.Equal("would_accept", (await DecisionAsync(ids[0]))["state"]);
+    var d = await DecisionAsync(ids[1]);
+    Assert.Equal(("human", "LIKELY_DUPLICATE", $"at accept: {firstUid}"), ((string)d["state"]!, (string)d["reason"]!, (string)d["reason_detail"]!));
+    var ev = (await AutomationTestKit.EventsAsync(_db, ids[1]))[^1];
+    Assert.Equal(("qa_queued", "human", "dry_run"), ((string)ev["from_state"]!, (string)ev["to_state"]!, (string)ev["mode"]!));
+    using (var details = JsonDocument.Parse((string)ev["details"]!))
+    {
+      Assert.Equal("at_accept", details.RootElement.GetProperty("check").GetString());
+    }
+    Assert.Equal(0, await CardCountAsync(deck.Id));
+  }
+
+  [Fact]
+  public async Task Report_DryRun_StableUidTakenSinceSubmit_IsExistingCard()
+  {
+    using var scope = new AutomationTestKit.Scope();
+    var e = await AutomationTestKit.EligibleDraftAsync(_db, "dryexisting");
+    await AutomationTestKit.NewCardAsync(_db, e.DeckId, e.Uid, "A synthetic card a person accepted meanwhile about lighthouses?");
+
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash)));
+
+    var d = await DecisionAsync(e.DraftId);
+    Assert.Equal(("human", "EXISTING_CARD"), ((string)d["state"]!, (string)d["reason"]!));
+  }
+
+  // ---------------------------------------------------------------- spend (R18B backend-design-4)
+
+  private async Task<decimal> SpentTodayAsync()
+  {
+    await using var conn = await _db.OpenAsync();
+    return (await QaRuns.SpendTodayAsync(conn, null)).Spent;
+  }
+
+  [Fact]
+  public async Task Report_AfterQaTimeout_StillReachesTheDailyCap_WithoutATransition()
+  {
+    using var scope = new AutomationTestKit.Scope();
+    var e = await AutomationTestKit.EligibleDraftAsync(_db, "latespend");
+    // The tick timed the decision out (A00 §9.3): its reservation is gone, the Bedrock call is still running.
+    await _db.QueryAsync(
+      "update automation_draft_decisions set state = 'human', reason = 'QA_TIMEOUT', decided_at = now() where draft_id = $1", e.DraftId);
+    var events = (await AutomationTestKit.EventsAsync(_db, e.DraftId)).Count;
+    var before = await SpentTodayAsync();
+    var report = AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash, requestId: "req-late");
+
+    var applied = AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(report));
+    Assert.Equal(0, applied.GetProperty("cardsDone").GetInt32());
+    Assert.Equal(before + 0.0001m, await SpentTodayAsync());
+    var d = await DecisionAsync(e.DraftId);
+    Assert.Equal(("human", "QA_TIMEOUT"), ((string)d["state"]!, (string)d["reason"]!));
+    Assert.Equal(0.0001m, Convert.ToDecimal(d["estimated_cost_usd"], CultureInfo.InvariantCulture));
+    Assert.Equal(1200L, AutomationTestKit.Long(d["input_tokens"]));
+    Assert.Null(d["qa_status"]);
+    Assert.Equal(events, (await AutomationTestKit.EventsAsync(_db, e.DraftId)).Count);
+
+    // A replay of the same attempt adds nothing; another attempt of the same job (a new request id) adds.
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(report));
+    Assert.Equal(before + 0.0001m, await SpentTodayAsync());
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash, requestId: "req-late-2")));
+    Assert.Equal(before + 0.0002m, await SpentTodayAsync());
+    Assert.Equal(0.0002m, Convert.ToDecimal((await DecisionAsync(e.DraftId))["estimated_cost_usd"], CultureInfo.InvariantCulture));
+  }
+
+  [Fact]
+  public async Task Report_OfAReleasedJobReplacedByAFreshOne_StillReachesTheDailyCap()
+  {
+    using var scope = new AutomationTestKit.Scope();
+    var e = await AutomationTestKit.EligibleDraftAsync(_db, "releasedspend");
+    // An ambiguous send released the reservation (qa_queued -> qa_pending, A00 §9.2) and the tick re-sent a fresh job.
+    await _db.QueryAsync(
+      "update automation_draft_decisions set state = 'qa_pending', reason = 'ENQUEUE_RETRY', qa_enqueued_at = null where draft_id = $1", e.DraftId);
+    await using (var conn = await _db.OpenAsync())
+    {
+      Assert.Equal("qa_queued", await DraftDecisions.EnqueueQaAsync(conn, e.DraftId));
+    }
+    var (freshJob, _) = await AutomationTestKit.QueuedJobAsync(_db, e.DraftId);
+    Assert.NotEqual(e.JobId, freshJob);
+    var before = await SpentTodayAsync();
+
+    // The first job's report arrives after all: its spend counts, the fresh job stays in flight.
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash, requestId: "req-old")));
+    Assert.Equal(before + 0.0001m, await SpentTodayAsync());
+    Assert.Equal(("qa_queued", freshJob), ((string)(await DecisionAsync(e.DraftId))["state"]!, (Guid)(await DecisionAsync(e.DraftId))["qa_job_id"]!));
+
+    // The fresh job reports as usual; both attempts are on the decision and in today's spend.
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(freshJob, e.DraftId, e.Hash, requestId: "req-new")));
+    var d = await DecisionAsync(e.DraftId);
+    Assert.Equal("would_accept", d["state"]);
+    Assert.Equal(0.0002m, Convert.ToDecimal(d["estimated_cost_usd"], CultureInfo.InvariantCulture));
+    Assert.Equal(before + 0.0002m, await SpentTodayAsync());
+  }
+
+  [Fact]
+  public async Task Report_SpendIsDatedWhenReported_NotWhenTheDecisionWasCreated()
+  {
+    using var scope = new AutomationTestKit.Scope();
+    var e = await AutomationTestKit.EligibleDraftAsync(_db, "spenddate");
+    // Submitted at 23:59 UTC yesterday, reviewed today: the money was spent today.
+    await _db.QueryAsync("update automation_draft_decisions set created_at = now() - interval '2 days' where draft_id = $1", e.DraftId);
+    var before = await SpentTodayAsync();
+
+    AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(e.JobId, e.DraftId, e.Hash)));
+
+    Assert.Equal("would_accept", (await DecisionAsync(e.DraftId))["state"]);
+    Assert.Equal(before + 0.0001m, await SpentTodayAsync());
+  }
+
   // ---------------------------------------------------------------- live auto-accept (A00 §5.5–§5.6)
 
   [Fact]
@@ -352,12 +478,12 @@ public class DraftQaResultsTests
       Assert.Equal((1, 1, 1), (Convert.ToInt32(run["card_count"], CultureInfo.InvariantCulture), Convert.ToInt32(run["cards_done"], CultureInfo.InvariantCulture),
         Convert.ToInt32(run["minor_count"], CultureInfo.InvariantCulture)));
       Assert.Equal(0m, Convert.ToDecimal(run["estimated_cost_usd"], CultureInfo.InvariantCulture));
-      Assert.Equal((AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, QaRuns.PromptVersion),
+      Assert.Equal((AutomationTestKit.ReviewerProvider, AutomationTestKit.ReviewerModel, QaRuns.AutomationPromptVersion),
         ((string)run["provider"]!, (string)run["model"]!, (string)run["prompt_version"]!));
       Assert.NotNull(run["finished_at"]);
 
       var item = (await _db.QueryAsync("select status, content_sha256, request_id, prompt_version from ai_qa_items where run_id = $1 and card_id = $2", mirrorId, cardId)).Single();
-      Assert.Equal(("done", hash, "req-mirror", QaRuns.PromptVersion),
+      Assert.Equal(("done", hash, "req-mirror", QaRuns.AutomationPromptVersion),
         ((string)item["status"]!, (string)item["content_sha256"]!, (string)item["request_id"]!, (string)item["prompt_version"]!));
       var finding = (await _db.QueryAsync("select severity, category, resolution, content_sha256 from ai_qa_findings where run_id = $1", mirrorId)).Single();
       Assert.Equal(("minor", "weak_distractor", "open", hash),

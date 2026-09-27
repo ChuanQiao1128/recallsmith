@@ -28,6 +28,19 @@ public static class QaRuns
   /// (backend-design-12).
   /// </summary>
   public const string PromptVersion = "qa-v4";
+
+  /// <summary>
+  /// The prompt version of the <c>automation</c> profile (R18B K1; services/ai-qa <c>PROMPT_VERSION_AUTOMATION</c>).
+  /// Every profile=automation message (draft QA and the source watch's re-checks) carries it, the Lambda echoes it in
+  /// its report, and the report's value is what the decision and the run record. The live eval gate's reviewer triple
+  /// uses it; human-run QA keeps <see cref="PromptVersion"/>.
+  /// </summary>
+  public const string AutomationPromptVersion = "qa-v4-auto";
+  public const string AutomationProfile = "automation";
+
+  /// <summary>The prompt version a message of <paramref name="profile"/> carries (null is the human, default profile).</summary>
+  public static string PromptVersionFor(string? profile) =>
+    string.Equals(profile, AutomationProfile, StringComparison.Ordinal) ? AutomationPromptVersion : PromptVersion;
   public const int ChunkSize = 5;
   public const int MaxChunkBytes = 200_000;
   public const int MaxCardIds = 200;
@@ -251,7 +264,7 @@ public static class QaRuns
           runId = id,
           chunk = i,
           chunkCount = chunks.Count,
-          promptVersion = PromptVersion,
+          promptVersion = PromptVersionFor(profile),
           profile,
           deck = new { id = body.DeckId, slug = deckSlug, title = deckTitle },
           reviewDate,
@@ -548,9 +561,11 @@ public static class QaRuns
   /// <summary>
   /// Today's (UTC) reported spend across all runs, and the cards still unfinished in open runs (queued or running
   /// and not stale), whatever day they started: their spend has not been reported yet but will be. Draft QA of the
-  /// automation (R18A A00 §9.5) shares the cap: today's decision spend is added, and every <c>qa_queued</c> decision
-  /// sent within <see cref="StaleAfter"/> reserves one card. The decision table is probed with <c>to_regclass</c>
-  /// (this runs inside the cap transaction, where catching 42P01 would abort it); missing ⇒ runs only.
+  /// automation (R18A A00 §9.5) shares the cap: today's draft-QA spend is added, and every <c>qa_queued</c> decision
+  /// sent within <see cref="StaleAfter"/> reserves one card. Draft-QA spend is dated by when its report arrived
+  /// (<c>automation_qa_spend.spent_at</c>), so a late report after QA_TIMEOUT or a released send still counts, on the
+  /// day it was spent (backend-design-4). The decision table is probed with <c>to_regclass</c> (this runs inside the
+  /// cap transaction, where catching 42P01 would abort it); missing ⇒ runs only.
   /// </summary>
   internal static async Task<(decimal Spent, long OpenCards)> SpendTodayAsync(NpgsqlConnection conn, NpgsqlTransaction? tx)
   {
@@ -563,10 +578,8 @@ public static class QaRuns
     var rows = await DbUtil.QueryAsync(conn, tx,
       $"""
       select
-        coalesce(sum(estimated_cost_usd) filter (where created_at >= date_trunc('day', now(), 'UTC')), 0) as spent,
-        count(*) filter (where state = 'qa_queued' and qa_enqueued_at >= now() - {StaleInterval}) as open_cards
-      from automation_draft_decisions
-      where created_at >= date_trunc('day', now(), 'UTC') or state = 'qa_queued'
+        (select coalesce(sum(estimated_cost_usd), 0) from automation_qa_spend where spent_at >= date_trunc('day', now(), 'UTC')) as spent,
+        (select count(*) from automation_draft_decisions where state = 'qa_queued' and qa_enqueued_at >= now() - {StaleInterval}) as open_cards
       """,
       []);
     return (spent + Convert.ToDecimal(rows[0]["spent"], CultureInfo.InvariantCulture),
