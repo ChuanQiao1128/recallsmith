@@ -106,6 +106,8 @@ def _validate_target(raw: Any) -> dict[str, Any] | None:
         if feed_format is not None:
             return None
         raw_quotes = raw.get("quotes")
+        if raw_quotes is None:
+            raw_quotes = []  # a page no live card quotes from: nothing to check, the hash still counts
         if not isinstance(raw_quotes, list):
             return None
         for entry in raw_quotes:

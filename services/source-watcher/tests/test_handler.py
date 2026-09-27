@@ -220,6 +220,8 @@ class TestHandler:
                 target(8, "https://feeds.example.com/broken", kind="feed", feedFormat="atom"),
                 {"targetId": "nine", "kind": "page", "url": "https://docs.example.com/bad"},
                 target(10, "https://docs.example.com/bad-quotes", quotes=[{"cardId": "x", "quote": 1}]),
+                target(11, "https://docs.example.com/bad-format", feedFormat="rss"),
+                target(12, "https://docs.example.com/feed-no-format", kind="feed"),
             ]
         )
         result = handler.lambda_handler(EVENT, Context())

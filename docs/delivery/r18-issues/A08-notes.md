@@ -40,6 +40,10 @@ the 3xx before a redirect hop the guard rejected), else `null`.
 - **Repeated HTML attribute:** the first value wins (as in browsers), relevant for `id`/`role`.
 - **Empty quote** is "present" (the empty string is a substring of any text); core only sends
   non-null quotes.
+- **Page target with `quotes` null or absent** is treated as `quotes: []` rather than invalid:
+  skipping it would leave the page unwatched for good, while an empty list only means no quote to
+  check. Any other non-list value, or a malformed entry, still makes the target invalid (skipped
+  with a `warn` log).
 - **Page observations that are not `ok`** carry `missingQuoteCardIds: []` (the key is on every page
   observation; quotes can only be checked on fetched text).
 - **`bytes`** is the decoded body length for `ok` and 0 for every other status.
