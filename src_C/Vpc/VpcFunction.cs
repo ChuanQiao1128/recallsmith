@@ -342,6 +342,18 @@ public sealed class VpcFunction
       {
         return await Vpc.Automation.Notifications.HandleGet(req, res, auth, notification["notificationId"]);
       }
+      if (p.EndsWith("/api/v1/admin/automation/watch", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.WatchAdminRoutes.HandleWatch(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/watch/targets", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.WatchAdminRoutes.HandleTargets(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/watch/targets/:targetId", p) is { } watchTarget)
+      {
+        return await Vpc.Automation.WatchAdminRoutes.HandleTarget(req, res, auth, watchTarget["targetId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
@@ -454,6 +466,14 @@ public sealed class VpcFunction
       if (RouteMatcher.Match("/api/internal/automation/notifications/report", p) is not null)
       {
         return await Vpc.Automation.Notifications.HandleReport(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/source-watch/targets", p) is not null)
+      {
+        return await Vpc.Automation.SourceWatchRoutes.HandleTargets(req, res);
+      }
+      if (RouteMatcher.Match("/api/internal/source-watch/report", p) is not null)
+      {
+        return await Vpc.Automation.SourceWatchRoutes.HandleReport(req, res);
       }
 
       return res.NotFound("Route not found");
