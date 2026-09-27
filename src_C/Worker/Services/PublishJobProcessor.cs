@@ -83,8 +83,37 @@ public class PublishJobProcessor : IPublishJobProcessor
 
     // Step 5: 最终一致性提交
     await _jobRepository.CompleteJobAsync(jobId, deckData.Cards.Count);
+    await AfterPublishSucceededAsync(job, deckData.Cards.Count);
 
     Console.WriteLine($"[JobId={jobId}] Job completed successfully");
+  }
+
+  /// <summary>
+  /// Side effects of a completed publish: the <c>deck.published</c> webhook (R18 J03, contract §6.1).
+  /// Best-effort on its own connection, after the job row is already SUCCESS: nothing here may fail or
+  /// retry a completed job.
+  /// </summary>
+  private static async Task AfterPublishSucceededAsync(JobInfo job, int cardCount)
+  {
+    try
+    {
+      await using var conn = await Pg.OpenConnectionOrNullAsync();
+      if (conn is null) return;
+
+      await WebhookEvents.EnqueueAsync(conn, "deck.published", new
+      {
+        deckId = job.DeckId,
+        deckSlug = job.DeckSlug,
+        buildId = job.BuildId,
+        jobId = job.JobId,
+        cardCount,
+        publishedAt = WebhookEvents.FormatTimestamp(DateTimeOffset.UtcNow),
+      });
+    }
+    catch (Exception ex)
+    {
+      Console.WriteLine($"[JobId={job.JobId}] After-publish side effects failed (ignored): {ex.Message}");
+    }
   }
 
   public async Task FailAsync(string jobId, string errorMessage)

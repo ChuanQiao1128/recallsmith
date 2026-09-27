@@ -229,6 +229,27 @@ public sealed class VpcFunction
       {
         return await Vpc.Authoring.PublishReaper.HandlePublishReap(req, res, auth);
       }
+      // R18 — console/admin routes (contract §2: later issues append below)
+      if (p.EndsWith("/api/v1/admin/webhooks/subscriptions", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Integrations.WebhookSubscriptions.HandleSubscriptions(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/webhooks/subscriptions/:subscriptionId/test", p) is { } webhookTest)
+      {
+        return await Vpc.Integrations.WebhookSubscriptions.HandleTest(req, res, auth, webhookTest["subscriptionId"]);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/webhooks/subscriptions/:subscriptionId", p) is { } webhookSubscription)
+      {
+        return await Vpc.Integrations.WebhookSubscriptions.HandleSubscription(req, res, auth, webhookSubscription["subscriptionId"]);
+      }
+      if (p.EndsWith("/api/v1/admin/webhooks/deliveries", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Integrations.WebhookDeliveries.HandleDeliveries(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/webhooks/deliveries/:deliveryId/redeliver", p) is { } webhookRedeliver)
+      {
+        return await Vpc.Integrations.WebhookDeliveries.HandleRedeliver(req, res, auth, webhookRedeliver["deliveryId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
@@ -323,6 +344,10 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/internal/subscriptions/upsert", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Internal.SubscriptionsUpsert.HandleInternalSubscriptionsUpsert(req, res);
+      }
+      if (p.EndsWith("/api/internal/webhooks/deliveries/report", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Internal.WebhookDeliveryReport.HandleReport(req, res);
       }
 
       return res.NotFound("Route not found");

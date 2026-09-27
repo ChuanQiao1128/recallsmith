@@ -40,7 +40,70 @@ public static class CardsImport
     string? Mcq,
     string? Source);
 
+  /// <summary>What the core learned about the import, for the after-response side effects.</summary>
+  private sealed class ImportOutcome
+  {
+    public long? DeckId { get; set; }
+    public int CardCount { get; set; }
+    public int Created { get; set; }
+    public int Updated { get; set; }
+  }
+
   public static async Task<APIGatewayProxyResponse> HandleCardsImport(LambdaRequest req, Res res, AuthContext auth)
+  {
+    var outcome = new ImportOutcome();
+    var response = await HandleCardsImportCoreAsync(req, res, auth, outcome);
+    await AfterImportAsync(response, outcome);
+    return response;
+  }
+
+  /// <summary>
+  /// Side effects of an answered import, run after the core's connection and transaction are gone:
+  /// the <c>import.failed</c> webhook (R18 J03, contract §6.1) on a 400/409/503 once auth and deck
+  /// resolution passed. Best-effort: nothing here changes the response.
+  /// </summary>
+  private static async Task AfterImportAsync(APIGatewayProxyResponse response, ImportOutcome outcome)
+  {
+    try
+    {
+      if (outcome.DeckId is not { } deckId) return;
+      if (response.StatusCode is not (400 or 409 or 503)) return;
+
+      string? errorCode = null;
+      string? message = null;
+      using (var doc = JsonDocument.Parse(response.Body ?? "{}"))
+      {
+        if (doc.RootElement.ValueKind == JsonValueKind.Object
+            && doc.RootElement.TryGetProperty("error", out var err)
+            && err.ValueKind == JsonValueKind.Object)
+        {
+          if (err.TryGetProperty("code", out var codeEl) && codeEl.ValueKind == JsonValueKind.String) errorCode = codeEl.GetString();
+          if (err.TryGetProperty("message", out var msgEl) && msgEl.ValueKind == JsonValueKind.String) message = msgEl.GetString();
+        }
+      }
+      if (message is { Length: > 300 }) message = message[..300];
+
+      await using var conn = await Pg.OpenConnectionOrNullAsync();
+      if (conn is null) return;
+
+      var deckSlug = await DbUtil.ExecuteScalarAsync(conn, null, "select slug from decks where id = $1", [deckId]) as string;
+
+      await WebhookEvents.EnqueueAsync(conn, "import.failed", new
+      {
+        deckId,
+        deckSlug,
+        errorCode,
+        message,
+        cardCount = outcome.CardCount,
+      });
+    }
+    catch (Exception ex)
+    {
+      Log.Event("warn", new { tag = "cards-import", reason = "after_import_failed", deckId = outcome.DeckId, error = ex.Message });
+    }
+  }
+
+  private static async Task<APIGatewayProxyResponse> HandleCardsImportCoreAsync(LambdaRequest req, Res res, AuthContext auth, ImportOutcome outcome)
   {
     var deny = Auth.RequireAdmin(auth, res);
     if (deny is not null) return deny;
@@ -77,6 +140,8 @@ public static class CardsImport
 
       var denyDeck = await Helpers.RequireDeckWrite(conn, auth.UserSub, deckId, auth.IsSuperAdmin, res);
       if (denyDeck is not null) return denyDeck;
+      outcome.DeckId = deckId;
+      outcome.CardCount = count;
 
       cards = new List<ImportCard>(count);
       var i = 0;
@@ -331,6 +396,8 @@ public static class CardsImport
       action = actions[c.StableUid],
     }).ToArray();
 
+    outcome.Created = created;
+    outcome.Updated = updated;
     return res.Ok(new { deckId, created, updated, unchanged, cards = results });
   }
 }
