@@ -29,7 +29,9 @@ calls exactly three API routes:
 ## One run (`once`)
 
 1. Take the lock `~/Library/Application Support/DeveloperCards/author-runner.lock` (a run that
-   finds it held exits 0; a lock whose process is gone or that is older than 3 hours is taken over).
+   finds it held exits 0; a lock whose process is gone is taken over, and a lock of a live process only
+   once it is older than the longest run the configuration allows: `DC_RUNNER_MAX_ITEMS` x
+   (`DC_RUNNER_ITEM_TIMEOUT_MINUTES` + 1.6 min) + 30 min).
 2. Delete files older than 30 days in `<log dir>/runs/`.
 3. Work out `loginExpiresAt` from the stored id token and read `claude --version`.
 4. Pin the author configuration (see Author configuration). A checkout it cannot pin (no
@@ -147,7 +149,7 @@ is needed.
 | Symptom | Check |
 |---|---|
 | `login_required`, exit 3 | `status` shows `tokenFile: "missing"` or an expired `loginExpiresAt`: run `login` |
-| `locked` on every run | another run is still going; a lock older than 3 hours or of a dead process is taken over automatically |
+| `locked` on every run | another run is still going; a lock of a dead process, or one older than the longest configured run, is taken over automatically |
 | `mode_off` / `no_items` | the server's automation mode is `off`, or the queue has nothing due; nothing to do |
 | `lease_short` | the server granted a lease that ends before `DC_RUNNER_ITEM_TIMEOUT_MINUTES` would; the item is released at once (`complete` `failed`, so the server retries it with its backoff) and the run stops; check the server's lease limit |
 | `bad_item` | the server sent an item with an invalid run id, item id, deck slug or non-https URL; it is not run and is released at once (`complete` `failed`) unless its run id itself is invalid |

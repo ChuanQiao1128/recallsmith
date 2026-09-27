@@ -468,8 +468,8 @@ describe('runOnce', () => {
 
   it('logs locked and exits 0 when another run holds the lock', async () => {
     const s = await setup({ items: [item()] });
-    const { acquireLock } = await import('../src/lock');
-    const held = acquireLock(s.config.lockFile);
+    const { acquireLock, lockStaleMs } = await import('../src/lock');
+    const held = acquireLock(s.config.lockFile, lockStaleMs(s.config));
     expect(held).not.toBeNull();
     try {
       expect(await runOnce(s.config, { env: s.env('done'), log: s.log })).toBe(EXIT_OK);

@@ -12,7 +12,7 @@ import { createRunnerApi, type ClaimedItem, type HeartbeatRequest, type RunnerAp
 import { AuthorConfigError, readAuthorConfig, type AuthorConfig } from './authorConfig';
 import { claudeOutcome, claudeUsage, claudeVersion, runClaude, type SignalGroup } from './claude';
 import { RUNNER_VERSION, type RunnerConfig } from './config';
-import { acquireLock } from './lock';
+import { acquireLock, lockStaleMs } from './lock';
 import { loginExpiresAt } from './login';
 import { logLine, stdoutSink, type LogEvent, type LogFields, type LogSink } from './logs';
 import { readPromptTemplate, renderPrompt } from './prompt';
@@ -130,7 +130,7 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
     logLine(sink, now, level, event, config.runnerId, fields);
 
   log('info', 'start');
-  const lock = acquireLock(config.lockFile, now);
+  const lock = acquireLock(config.lockFile, lockStaleMs(config), now);
   if (lock === null) {
     log('info', 'locked');
     return EXIT_OK;
