@@ -122,6 +122,10 @@ type Props = {
    *  given and sweepCount > 0; the button starts a 'sweep' SessionCard run. */
   onStartSweep?: () => void;
   sweepCount?: number;
+  /** "Mistakes · N" pill (K02). Rendered only when both are given and mistakeCount > 0; it opens
+   *  the Mistake Book for the selected deck. */
+  mistakeCount?: number;
+  onOpenMistakes?: () => void;
   /** Called when the brand-new-user banner CTA fires. Only invoked when
    *  ownedCount === 0 (i.e. user hasn't pulled any cards yet). When
    *  undefined, the banner is hidden regardless of state. */
@@ -149,6 +153,8 @@ export function LibraryHeader({
   onSelectTopic,
   onStartSweep,
   sweepCount = 0,
+  mistakeCount = 0,
+  onOpenMistakes,
   onOpenFirstPack,
   openFirstPackHasPulls = false,
 }: Props) {
@@ -226,6 +232,20 @@ export function LibraryHeader({
         >
           <Text style={styles.retryText} numberOfLines={1}>
             {`Review all · ${sweepCount}`}
+          </Text>
+        </Pressable>
+      ) : null}
+
+      {onOpenMistakes && mistakeCount > 0 ? (
+        <Pressable
+          testID="library-mistakes-pill"
+          accessibilityRole="button"
+          accessibilityLabel={`Open Mistake Book, ${mistakeCount} to review`}
+          style={({ pressed }) => [styles.mistakesPill, pressed && styles.pressed]}
+          onPress={onOpenMistakes}
+        >
+          <Text style={styles.mistakesPillText} numberOfLines={1}>
+            {`Mistakes · ${mistakeCount}`}
           </Text>
         </Pressable>
       ) : null}

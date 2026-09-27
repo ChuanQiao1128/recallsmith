@@ -42,6 +42,7 @@ import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
 import { ensureDeckBootstrap, loadDeckWallet } from '../features/gacha/rewards/deckWallet';
+import { activeMistakes, loadMistakeBook } from '../features/gacha/mistakes/mistakeBook';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Library'>;
 
@@ -78,6 +79,8 @@ export function LibraryScreen({ navigation, route }: Props) {
   // wallet=0 → banner sends user to SessionCard (earn pulls first);
   // wallet>0 → banner sends user to Draw (open the pack now).
   const [walletPulls, setWalletPulls] = useState<number>(0);
+  // Active Mistake Book entries of the selected deck (K02 pill); 0 until read, and on any failure.
+  const [mistakeCount, setMistakeCount] = useState<number>(0);
   // Measured header height. Feeds getItemLayout's head offset so a row's offset
   // includes the real header instead of a guess. Starts at 0 until onLayout.
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -120,6 +123,28 @@ export function LibraryScreen({ navigation, route }: Props) {
       cancelled = true;
     };
   }, [selectedSlug]);
+
+  // Re-read on every focus as well as on a deck switch: a session or a focus run changes the book.
+  // Off the grid's load path; the pill simply appears once the count lands.
+  useFocusEffect(
+    useCallback(() => {
+      if (!selectedSlug) return;
+      let cancelled = false;
+      setMistakeCount(0);
+      const slug = selectedSlug;
+      (async () => {
+        try {
+          const count = activeMistakes(await loadMistakeBook(), { deckSlug: slug, now: Date.now() }).length;
+          if (!cancelled) setMistakeCount(count);
+        } catch {
+          /* 0 hides the pill */
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [selectedSlug]),
+  );
 
   const refresh = useCallback(
     async (preferredSlug?: string | null) => {
@@ -490,6 +515,12 @@ export function LibraryScreen({ navigation, route }: Props) {
                 openFirstPackHasPulls={walletPulls > 0}
                 sweepCount={vm.counts.learningCount + vm.counts.masteredCount}
                 onStartSweep={() => navigation.navigate('SessionCard', { slug: vm.selectedDeckSlug, mode: 'sweep' })}
+                {...(getFeatureFlags().mistakeBook?.enabled !== false
+                  ? {
+                      mistakeCount,
+                      onOpenMistakes: () => navigation.navigate('MistakeBook', { slug: vm.selectedDeckSlug }),
+                    }
+                  : {})}
               />
               </View>
             }
