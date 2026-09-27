@@ -18,6 +18,7 @@ import {
   type RewardWalletState,
 } from '../features/gacha/rewards/rewardWallet';
 import { adoptAnonNewCardLedger, type AnonLedgerAdoption } from '../features/gacha/rewards/newCardLedger';
+import { adoptAnonMistakeBook } from '../features/gacha/mistakes/mistakeBook';
 import {
   adoptAnonDeckWallets,
   loadDeckWallet,
@@ -271,8 +272,8 @@ let _adopting: Promise<AnonGachaAdoption> | null = null;
 
 /**
  * Adopts the anonymous-period partition into the account that just signed in:
- * union the anon collection and pity, add the anon wallet under the caps, then
- * clear the anon keys. Idempotent (a second run finds nothing) and never throws.
+ * union the anon collection and pity, add the anon wallet under the caps, merge
+ * the anon Mistake Book, then clear the anon keys. Idempotent (a second run finds nothing) and never throws.
  * Concurrent callers share one in-flight run.
  */
 export function adoptAnonGachaState(): Promise<AnonGachaAdoption> {
@@ -284,6 +285,9 @@ export function adoptAnonGachaState(): Promise<AnonGachaAdoption> {
     // Per-pack pull pools adopt after the ledger, so a card drawn before sign-in
     // and the pack pulls it earned reach the account in the same run.
     const deckWallets = await adoptAnonDeckWallets();
+    // The Mistake Book is local-only, so it adds nothing to the push; it moves with the rest of
+    // the anon partition so a signed-out book is neither lost nor revived later (mobile-17).
+    await adoptAnonMistakeBook();
     return { ...draw, ...wallet, ...ledger, ...deckWallets };
   })().finally(() => {
     _adopting = null;

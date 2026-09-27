@@ -13,6 +13,7 @@ import {
 import { MCQ_FAST_MS } from '../../src/features/gacha/mcq/mcqConstants';
 import { scheduleNextReview, type CardProgress, type ReviewRating } from '../../src/review/model';
 import type { McqExport } from '../../src/types/deckExport';
+import { scheduleFocusReview } from '../../src/features/gacha/mistakes/focusSession';
 
 function mcqOf(correct: readonly string[], keys: readonly string[] = ['a', 'b', 'c', 'd']): McqExport {
   return {
@@ -340,5 +341,33 @@ describe('mcqVerdict', () => {
         },
       ),
     );
+  });
+
+  it('previews a focus-run rating with the scheduler that saves it (mobile-16)', () => {
+    const NOW = new Date(1_700_000_000_000);
+    const DAY = 86_400_000;
+    // Stage 1, due tomorrow: a Good here is practice, and the card stays due tomorrow.
+    const notDue: CardProgress = { stableUid: 'u', stage: 1, nextReviewAt: NOW.getTime() + DAY, lastReviewedAt: NOW.getTime() - DAY };
+    for (const rating of ['hard', 'good', 'easy'] as const) {
+      const { after, line } = describeScheduledRating(notDue, rating, NOW, scheduleFocusReview);
+      expect(after).toEqual(scheduleFocusReview(notDue, rating, NOW));
+      expect(after.nextReviewAt).toBe(notDue.nextReviewAt);
+      expect(line).toBe('Practice · schedule unchanged · back in 1 day');
+    }
+    // A mistake answered Again nine minutes ago: the line names the real gap, not a fresh ladder step.
+    const soon: CardProgress = { stableUid: 'u', stage: 0, nextReviewAt: NOW.getTime() + 9 * 60_000, lastReviewedAt: NOW.getTime() - 60_000 };
+    expect(describeScheduledRating(soon, 'good', NOW, scheduleFocusReview).line).toBe(
+      'Practice · schedule unchanged · back in 9 minutes',
+    );
+    const later: CardProgress = { ...soon, nextReviewAt: NOW.getTime() + 5 * 3_600_000 };
+    expect(describeScheduledRating(later, 'easy', NOW, scheduleFocusReview).line).toBe(
+      'Practice · schedule unchanged · back in 5 hours',
+    );
+    // Again, or a due card, still goes through the ladder and reads as a scheduled rating.
+    expect(describeScheduledRating(notDue, 'again', NOW, scheduleFocusReview).line).toBe('Scheduled as Again · back in 10 minutes');
+    const due: CardProgress = { ...notDue, nextReviewAt: NOW.getTime() - 1 };
+    const dueGood = describeScheduledRating(due, 'good', NOW, scheduleFocusReview);
+    expect(dueGood.after).toEqual(scheduleNextReview(due, 'good', NOW));
+    expect(dueGood.line.startsWith('Scheduled as Good · back in ')).toBe(true);
   });
 });

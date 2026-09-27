@@ -229,7 +229,7 @@ describe('LibraryScreen Mistakes pill', () => {
     const { tree, navigation } = await mount();
 
     expect(pillText(tree)).toBe('Mistakes · 2');
-    expect(pills(tree)[0].props.accessibilityLabel).toBe('Open Mistake Book, 2 to review');
+    expect(pills(tree)[0].props.accessibilityLabel).toBe('Open Mistake Book, 2 mistakes');
     await act(async () => {
       pills(tree)[0].props.onPress();
     });
@@ -242,7 +242,7 @@ describe('LibraryScreen Mistakes pill', () => {
     seedBook([mistake('csharp', '1'), mistake('csharp', 'removed-card'), mistake('csharp', '3')]);
     const { tree } = await mount();
     expect(pillText(tree)).toBe('Mistakes · 2');
-    expect(pills(tree)[0].props.accessibilityLabel).toBe('Open Mistake Book, 2 to review');
+    expect(pills(tree)[0].props.accessibilityLabel).toBe('Open Mistake Book, 2 mistakes');
 
     // Only an orphan left: no pill, just as the book would show its empty state.
     seedBook([mistake('csharp', 'removed-card')]);
