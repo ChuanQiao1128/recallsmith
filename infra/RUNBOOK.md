@@ -177,11 +177,14 @@ send it back unchanged except for the state:
    (or `--state DISABLED`).
 3. `aws scheduler get-schedule --name <n> --query State` shows the new state.
 
-**After enabling the tick**, enable the tick-missing alarm's actions (they start disabled because the
-schedules start disabled; Terraform ignores `actions_enabled`):
-`aws cloudwatch enable-alarm-actions --alarm-names developercards-prod-automation-tick-missing`.
-When the tick is disabled on purpose, run `aws cloudwatch disable-alarm-actions --alarm-names developercards-prod-automation-tick-missing`
-first, or it fires two hours later.
+**After enabling the tick and the source watch**, enable the actions of their heartbeat alarms (they start
+disabled because the schedules start disabled; Terraform ignores `actions_enabled`):
+`aws cloudwatch enable-alarm-actions --alarm-names developercards-prod-automation-tick-missing developercards-prod-source-watch-missing`.
+When a schedule is disabled on purpose, first run `aws cloudwatch disable-alarm-actions --alarm-names <its alarm>`
+(`developercards-automation-tick` → `developercards-prod-automation-tick-missing`, two hours;
+`developercards-source-watch` → `developercards-prod-source-watch-missing`, three hours), or it fires.
+Re-enable the alarm's actions together with its schedule; a schedule left disabled with its alarm's
+actions on is exactly what the alarm reports.
 
 **Post-apply secret step** (supervisor, once after the A10 apply; A00 §1.3): the two callback
 secrets are created as `PLACEHOLDER-set-by-supervisor`. Set each to a random 32-byte hex value:
@@ -203,7 +206,16 @@ Alarms (all on the alerts topic; one line each — what fired, first check):
 - `notifier-errors` — the notifier function raised (tick, digest or an SQS record). Check
   `/aws/lambda/developercards-notifier` for the traceback, then `notifier-secret` and core-vpc health.
 - `source-watcher-errors` — a source-watch run raised. Check `/aws/lambda/developercards-source-watcher`,
-  `source-watch-secret` and the targets route (`POST /api/internal/source-watch/targets`).
+  `source-watch-secret` and the targets route (`POST /api/internal/source-watch/targets`). A run killed
+  mid-target (timeout, out of memory) logs no error line of its own: the last `observe_start` event before
+  the error names the `targetId` it was working on; deactivate or fix that target in the Watch tab.
+- `source-watch-missing` (R18D M6) — the source-watcher emitted no `SourceWatchRuns` heartbeat
+  (`DeveloperCards`, `Service = source-watcher`; one per `{"job":"source-watch"}` invocation, emitted
+  before any other work, also when there is nothing to watch) for three hours (actions enabled only once
+  the schedules are). The hourly watch stopped: cited-source changes are no longer detected. Check
+  `developercards-source-watch` is ENABLED (for example left DISABLED after emergency-stop step 1), the
+  scheduler role's `developercards-automation-scheduler-invoke` policy on the
+  `developercards-source-watcher:prod` alias, and the function's throttles (reserved concurrency 1).
 - `automation-tick-missing` — the notifier emitted no `AutomationTicks` heartbeat (`DeveloperCards`,
   `Service = notifier`; one per tick invocation, whatever core answers) for two hours (actions enabled
   only once the schedules are). Email deliveries do not emit it, so they cannot hide a stopped tick. Check
@@ -230,8 +242,8 @@ source-watch loop). Do the steps that apply, in this order; each takes effect on
    auto-accept and auto-publish. Drafting, QA and emails continue as a dry run. This is the first step for
    anything that auto-accepts or auto-publishes.
 1. Disable the three schedules with the recipe above: `developercards-source-watch`,
-   `developercards-automation-tick`, `developercards-automation-digest` (and disable the tick-missing
-   alarm's actions first). This stops the source watch, the tick (reconcile, batch summaries, runner
+   `developercards-automation-tick`, `developercards-automation-digest` (and first disable the actions of
+   the tick-missing and source-watch-missing alarms). This stops the source watch, the tick (reconcile, batch summaries, runner
    checks) and the digest. It does **not** stop auto-accept or auto-publish: the runner's complete route
    (`POST /api/v1/authoring/automation/runner/complete` → run finalisation) and AI QA results for drafts both finalise runs
    and start publishes without any schedule. Use step 0 or 3 for that.
@@ -246,7 +258,8 @@ source-watch loop). Do the steps that apply, in this order; each takes effect on
    prints what it would do). No new authoring runs are claimed; reinstall later with
    `tools/author-runner/scripts/install.sh`.
 
-Undo in reverse order; re-enable the schedules only after core-vpc runs with the intended mode, and restore
+Undo in reverse order; re-enable the schedules (and the two heartbeat alarms' actions) only after core-vpc
+runs with the intended mode, and restore
 `live` only by recording a new passed eval gate (a revoked gate stays revoked). To undo a card that was
 auto-accepted or auto-published, see "Rollback" in
 [docs/runbooks/automation-operations.md](../docs/runbooks/automation-operations.md).
