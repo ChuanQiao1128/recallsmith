@@ -52,7 +52,7 @@ Every attempt with a valid message is reported to core-vpc with
 answers `"stop": true` (subscription disabled or deleted) a `retry` is acked instead. A failed
 report never changes the decision; it counts in `WebhookReportFailures`. The report is retried
 once after 1 s on a connection error, a 5xx or a 429 (the route's throttle); a 401/403 is resent
-once signed with `/developercards/prod/internal-shared-secret-previous` when that exists (rotation:
+once signed with `/developercards/prod/webhook-report-secret-previous` when that exists (rotation:
 services/ai-qa/README.md, "Internal shared secret rotation"). The dispatcher role cannot read that
 parameter yet (infra follow-up), so today the read is denied, logged `ssm_secret_unavailable`
 (warn), not cached, and the 401/403 stands. The report's `error` is at
@@ -207,7 +207,7 @@ creation):
 | Key | Value |
 |---|---|
 | `SIGNING_SECRET_SSM_NAME` | `/developercards/prod/webhook-signing-secret` |
-| `INTERNAL_SECRET_SSM_NAME` | `/developercards/prod/internal-shared-secret` |
+| `INTERNAL_SECRET_SSM_NAME` | `/developercards/prod/webhook-report-secret` |
 | `CORE_API_BASE` | `https://api.developercards.app` |
 | `METRICS_NAMESPACE` | `DeveloperCards` |
 | `WEBHOOK_HTTP_TIMEOUT_SECONDS` | `10` |

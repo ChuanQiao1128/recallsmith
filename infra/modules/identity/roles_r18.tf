@@ -44,7 +44,7 @@ resource "aws_iam_role_policy" "webhook_dispatcher" {
         Sid      = "SsmRead"
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = ["${local.ssm_param_prefix}/webhook-signing-secret", "${local.ssm_param_prefix}/webhook-signing-secret-previous", "${local.ssm_param_prefix}/internal-shared-secret"]
+        Resource = ["${local.ssm_param_prefix}/webhook-signing-secret", "${local.ssm_param_prefix}/webhook-signing-secret-previous", "${local.ssm_param_prefix}/webhook-report-secret", "${local.ssm_param_prefix}/webhook-report-secret-previous"]
       },
       # Z03: per-subscription signing secrets "-sub-<id>" and their rotation leaves "-sub-<id>-previous",
       # read only with WEBHOOK_SUBSCRIPTION_SECRETS on. The owner creates them by hand; Terraform never manages them.
@@ -139,7 +139,7 @@ resource "aws_iam_role_policy" "ai_qa" {
         Sid      = "SsmRead"
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = ["${local.ssm_param_prefix}/anthropic-api-key", "${local.ssm_param_prefix}/internal-shared-secret"]
+        Resource = ["${local.ssm_param_prefix}/anthropic-api-key", "${local.ssm_param_prefix}/ai-qa-results-secret", "${local.ssm_param_prefix}/ai-qa-results-secret-previous"]
       },
       {
         Sid       = "BedrockMantleInference"

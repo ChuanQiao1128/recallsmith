@@ -26,7 +26,7 @@ SUBSCRIPTION_SECRET_INFIX = "-sub-"
 
 DEFAULTS: dict[str, str] = {
     "SIGNING_SECRET_SSM_NAME": "/developercards/prod/webhook-signing-secret",
-    "INTERNAL_SECRET_SSM_NAME": "/developercards/prod/internal-shared-secret",
+    "INTERNAL_SECRET_SSM_NAME": "/developercards/prod/webhook-report-secret",
     "CORE_API_BASE": "https://api.developercards.app",
     "METRICS_NAMESPACE": "DeveloperCards",
     "WEBHOOK_HTTP_TIMEOUT_SECONDS": "10",

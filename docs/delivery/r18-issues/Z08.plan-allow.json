@@ -1,0 +1,9 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.identity.aws_ssm_parameter.secret[\"webhook-report-secret\"]": "create",
+    "module.identity.aws_ssm_parameter.secret[\"ai-qa-results-secret\"]": "create",
+    "module.identity.aws_iam_role_policy.webhook_dispatcher": { "action": "update", "keys": ["policy"] },
+    "module.identity.aws_iam_role_policy.ai_qa": { "action": "update", "keys": ["policy"] }
+  }
+}

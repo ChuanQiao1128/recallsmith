@@ -64,7 +64,7 @@ module "identity" {
   ai_qa_function_name     = "developercards-ai-qa"
   bedrock_mantle_model_id = local.ai_qa_model_id
 
-  secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development", "webhook-signing-secret", "anthropic-api-key"]
+  secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development", "webhook-signing-secret", "anthropic-api-key", "webhook-report-secret", "ai-qa-results-secret"]
 
   console_hostname = "console.${var.domain}"
 }

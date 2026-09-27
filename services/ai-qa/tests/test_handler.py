@@ -12,7 +12,7 @@ from ai_qa import handler, settings
 from ai_qa.prompts import PROMPT_VERSION
 
 SECRET = "test-secret"
-INTERNAL_NAME = "/developercards/prod/internal-shared-secret"
+INTERNAL_NAME = "/developercards/prod/ai-qa-results-secret"
 KEY_NAME = "/developercards/prod/anthropic-api-key"
 RUN_ID = "5f0c7a52-2b8e-4c1a-9d3e-7a1b2c3d4e5f"
 ITEM_KEYS = {

@@ -23,7 +23,7 @@ def test_defaults_match_contract() -> None:
         price_output_per_mtok=25.0,
     )
     assert s.anthropic_api_key_ssm_name == "/developercards/prod/anthropic-api-key"
-    assert s.internal_secret_ssm_name == "/developercards/prod/internal-shared-secret"
+    assert s.internal_secret_ssm_name == "/developercards/prod/ai-qa-results-secret"
     assert s.core_api_base == "https://api.developercards.app"
     assert s.metrics_namespace == "DeveloperCards"
     # The first eight fields are the public API, in this order.
@@ -93,7 +93,7 @@ def test_prod_env_file_matches_contract() -> None:
         "AI_STRUCTURED_OUTPUTS": "auto",
         "AI_QA_ENABLED": "0",
         "ANTHROPIC_API_KEY_SSM_NAME": "/developercards/prod/anthropic-api-key",
-        "INTERNAL_SECRET_SSM_NAME": "/developercards/prod/internal-shared-secret",
+        "INTERNAL_SECRET_SSM_NAME": "/developercards/prod/ai-qa-results-secret",  # per-route secret (Z08)
         "CORE_API_BASE": "https://api.developercards.app",
         "METRICS_NAMESPACE": "DeveloperCards",
         "AI_PRICE_INPUT_PER_MTOK": "5",

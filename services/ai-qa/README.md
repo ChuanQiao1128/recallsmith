@@ -76,7 +76,7 @@ Committed in `env/prod.env.json` (overlaid by the deploy script; no secret value
 | `AI_STRUCTURED_OUTPUTS` | `auto` | `auto` \| `on` \| `off` (below) |
 | `AI_QA_ENABLED` | `0` | kill switch; truthy = trimmed `1`, `true`, `yes` (RouteMetrics rule) |
 | `ANTHROPIC_API_KEY_SSM_NAME` | `/developercards/prod/anthropic-api-key` | read only when `AI_PROVIDER=anthropic` |
-| `INTERNAL_SECRET_SSM_NAME` | `/developercards/prod/internal-shared-secret` | HMAC secret for the results callback |
+| `INTERNAL_SECRET_SSM_NAME` | `/developercards/prod/ai-qa-results-secret` | HMAC secret for the results callback |
 | `CORE_API_BASE` | `https://api.developercards.app` | callback base URL |
 | `METRICS_NAMESPACE` | `DeveloperCards` | EMF namespace |
 | `AI_PRICE_INPUT_PER_MTOK` / `AI_PRICE_OUTPUT_PER_MTOK` | `5` / `25` | USD per million tokens for the cost estimate |
@@ -288,28 +288,31 @@ and `botocore`) and `pydantic>=2`. Dev group: `pytest>=8` and `boto3==1.43.103` 
 2026-09-27 to the version the lock resolves for `anthropic[bedrock]`, matching the webhook
 dispatcher's pin. The deploy zip is about 21 MB, under the 50 MiB direct-upload limit.
 
-## Internal shared secret rotation
+## Results-route secret rotation
 
-The results report is signed with `/developercards/prod/internal-shared-secret` (`§4.3`). Both
-Python Lambdas (this one and the webhook dispatcher) re-read it at most every 5 minutes and, when
-core answers 401/403, resend once signed with `/developercards/prod/internal-shared-secret-previous`
-if that parameter exists. So the Python side works whichever side switches first.
+Since 2026-09-27 (Z08) each machine caller has its own route secret: this Lambda signs the results
+report with `/developercards/prod/ai-qa-results-secret` (`§4.3`, core env
+`INTERNAL_SECRET_AI_QA_RESULTS`), the webhook dispatcher uses `/developercards/prod/webhook-report-secret`,
+and neither role can read the global `internal-shared-secret`. The Lambda re-reads its secret at
+most every 5 minutes and, when core answers 401/403, resends once signed with
+`/developercards/prod/ai-qa-results-secret-previous` if that parameter exists; core accepts the
+current and the `-previous` value. So either side can switch first.
 
-IAM prerequisite: both roles need `ssm:GetParameter` on `…/internal-shared-secret-previous`
-(infra follow-up). Until then the read is denied: it is logged `ssm_secret_unavailable` (warn,
-error class only) on each 401/403, never cached as "no previous secret", and the 401/403 stands.
+IAM: the role can read exactly `ai-qa-results-secret` and `ai-qa-results-secret-previous` (plus the
+Anthropic key); granted in Z08 (`infra/modules/identity/roles_r18.tf`). A denied or throttled read is
+logged `ssm_secret_unavailable` (warn, error class only), never cached as "no previous secret".
 
 Runbook (supervisor only; values never in git or chat):
 
 1. Copy the current value to the previous name:
-   `aws ssm put-parameter --name /developercards/prod/internal-shared-secret-previous --type SecureString --value <current>`.
-2. Put the new value in `/developercards/prod/internal-shared-secret`. Within 5 minutes every
+   `aws ssm put-parameter --name /developercards/prod/ai-qa-results-secret-previous --type SecureString --value <current>`.
+2. Put the new value in `/developercards/prod/ai-qa-results-secret`. Within 5 minutes every
    Python container signs with the new value and falls back to the old one on a 403.
 3. Deploy core-vpc with the new `INTERNAL_SHARED_SECRET` (its deploy overlays the SSM leaf). Once
    core accepts `INTERNAL_SHARED_SECRET_PREVIOUS` too (core follow-up), put the old value there for
    the deploy, so callers that have not refreshed yet keep verifying.
 4. Wait 10 minutes (two cache TTLs), then delete the previous parameter:
-   `aws ssm delete-parameter --name /developercards/prod/internal-shared-secret-previous`
+   `aws ssm delete-parameter --name /developercards/prod/ai-qa-results-secret-previous`
    (and drop `INTERNAL_SHARED_SECRET_PREVIOUS` from core-vpc, if set).
 
 The `-previous` leaf is not a core env key today. Core's `merge-env.sh` fails on an unmapped leaf

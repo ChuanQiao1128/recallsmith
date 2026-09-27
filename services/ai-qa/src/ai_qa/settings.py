@@ -37,7 +37,7 @@ DEFAULTS: dict[str, str] = {
     "AI_PRICE_INPUT_PER_MTOK": "5",
     "AI_PRICE_OUTPUT_PER_MTOK": "25",
     "ANTHROPIC_API_KEY_SSM_NAME": "/developercards/prod/anthropic-api-key",
-    "INTERNAL_SECRET_SSM_NAME": "/developercards/prod/internal-shared-secret",
+    "INTERNAL_SECRET_SSM_NAME": "/developercards/prod/ai-qa-results-secret",
     "CORE_API_BASE": "https://api.developercards.app",
     "METRICS_NAMESPACE": "DeveloperCards",
     "LOG_LEVEL": "info",

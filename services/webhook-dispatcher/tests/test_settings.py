@@ -10,7 +10,7 @@ ENV_FILE = Path(__file__).resolve().parent.parent / "env" / "prod.env.json"
 
 CONTRACT = {
     "SIGNING_SECRET_SSM_NAME": "/developercards/prod/webhook-signing-secret",
-    "INTERNAL_SECRET_SSM_NAME": "/developercards/prod/internal-shared-secret",
+    "INTERNAL_SECRET_SSM_NAME": "/developercards/prod/webhook-report-secret",  # per-route secret (Z08)
     "CORE_API_BASE": "https://api.developercards.app",
     "METRICS_NAMESPACE": "DeveloperCards",
     "WEBHOOK_HTTP_TIMEOUT_SECONDS": "10",
@@ -42,7 +42,7 @@ def test_prod_env_file_matches_contract() -> None:
     cfg = settings.load_settings(CONTRACT)
     assert cfg == settings.load_settings({})
     assert cfg.signing_secret_ssm_name == "/developercards/prod/webhook-signing-secret"
-    assert cfg.internal_secret_ssm_name == "/developercards/prod/internal-shared-secret"
+    assert cfg.internal_secret_ssm_name == "/developercards/prod/webhook-report-secret"
     assert cfg.core_api_base == "https://api.developercards.app"
     assert cfg.metrics_namespace == "DeveloperCards"
     assert cfg.http_timeout_seconds == 10.0
@@ -65,7 +65,7 @@ def test_placeholder_secret_counts_as_missing() -> None:
 
 
 def test_empty_value_and_ssm_errors_count_as_missing(capsys) -> None:
-    name = "/developercards/prod/internal-shared-secret"
+    name = "/developercards/prod/webhook-report-secret"
     assert settings.load_secret(name, FakeSSM({name: ""})) is None
     assert settings.load_secret(name, FakeSSM(error=RuntimeError("boom test-secret"))) is None
     out = capsys.readouterr().out

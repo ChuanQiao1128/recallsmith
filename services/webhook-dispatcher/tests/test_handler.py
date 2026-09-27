@@ -14,7 +14,7 @@ from webhook_dispatcher.signing import sign_webhook
 from webhook_dispatcher.urlguard import GuardResult
 
 SIGNING_NAME = "/developercards/prod/webhook-signing-secret"
-INTERNAL_NAME = "/developercards/prod/internal-shared-secret"
+INTERNAL_NAME = "/developercards/prod/webhook-report-secret"
 ARN = "arn:aws:sqs:ap-southeast-2:123456789012:developercards-webhook-events"
 QUEUE_URL = "https://sqs.ap-southeast-2.amazonaws.com/123456789012/developercards-webhook-events"
 DELIVERY_ID = "7b0c2a5e-1f0e-4d9c-8a61-2b8f3e4d5c6a"
