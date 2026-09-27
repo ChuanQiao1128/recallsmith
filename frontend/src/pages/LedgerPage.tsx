@@ -21,7 +21,7 @@ import {
 } from '../api/ledger';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
-import { consoleNav } from '../components/console/consoleNav';
+import { AUTOMATION_HREF, consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
@@ -50,6 +50,7 @@ import {
   ledgerBarHeight,
   ledgerLabelEvery,
   ledgerRangeProblem,
+  orderedLedgerAutomations,
 } from '../lib/ledgerView';
 import type { ApiError } from '../types/api';
 
@@ -404,6 +405,7 @@ export function LedgerPage() {
       title={CONSOLE_NAME}
       subtitle="Automation · Ledger"
       {...consoleNav()}
+      automationHref={AUTOMATION_HREF}
     >
       <div>
         <h1 className={H1_CLASS}>Automation ledger</h1>
@@ -842,7 +844,10 @@ export function LedgerPage() {
             onChange={e => setEventsAutomation(e.target.value)}
           >
             <option value="">All automations</option>
-            {LEDGER_AUTOMATIONS.map(a => (
+            {orderedLedgerAutomations([
+              ...baselines.items.map(b => b.automation),
+              ...(report?.automations ?? []).map(r => r.automation),
+            ]).map(a => (
               <option key={a} value={a}>
                 {labelFor(a)}
               </option>

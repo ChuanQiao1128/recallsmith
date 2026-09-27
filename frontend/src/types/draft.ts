@@ -69,6 +69,35 @@ export type DraftReviewEvent = {
   createdAt: string;
 };
 
+/** A00 §5.10: one finding of the automation's draft QA (the reviewer's own words). */
+export type DraftAutomationFinding = { severity: string; category: string; message: string; suggestedFix: string | null };
+export type DraftAutomationQa = {
+  status: string | null;
+  errorCode: string | null;
+  provider: string | null;
+  model: string | null;
+  promptVersion: string | null;
+  blocker: number;
+  major: number;
+  minor: number;
+  findings: DraftAutomationFinding[];
+};
+/**
+ * A00 §5.10: the automatic decision on a draft. GET drafts sends state/reason/mode;
+ * GET drafts/:draftId also sends the optional keys. One type for both, so a Draft
+ * built by spreading a DraftSummary type-checks.
+ */
+export type DraftAutomation = {
+  state: string;
+  reason: string | null;
+  mode: string;
+  runId?: string | null;
+  reasonDetail?: string | null;
+  qa?: DraftAutomationQa | null;
+  acceptedCardId?: number | null;
+  humanAction?: string | null;
+};
+
 export type DraftSummary = {
   draftId: number;
   deckId: number;
@@ -80,6 +109,8 @@ export type DraftSummary = {
   likelyDuplicate: boolean;
   createdAt: string;
   decidedAt: string | null;
+  /** A00 §5.10; absent or null on a server before migration 034. */
+  automation?: DraftAutomation | null;
 };
 
 export type Draft = DraftSummary & {
