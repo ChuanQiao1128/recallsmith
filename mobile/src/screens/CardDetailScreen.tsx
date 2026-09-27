@@ -840,9 +840,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.hairline,
   },
+  // 11pt is not large text, so it needs WCAG AA 4.5:1 on the white answer body: inkSecondary is
+  // 8.41:1 (inkMuted was 4.10:1).
   sourceLabel: {
     fontSize: typography.caption,
-    color: colors.inkMuted,
+    color: colors.inkSecondary,
     fontWeight: '900',
     letterSpacing: 1.0,
     marginBottom: 4,
