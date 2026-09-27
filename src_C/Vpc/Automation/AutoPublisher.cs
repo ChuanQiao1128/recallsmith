@@ -29,8 +29,6 @@ public static class AutoPublisher
   public const string Waiting = "waiting", Publishing = "publishing", Published = "published", WouldPublish = "would_publish",
     Human = "human";
 
-  private static readonly string[] TerminalStates = [Published, WouldPublish, Human];
-
   /// <summary>Publish refusal codes that route to a human with the same reason (A00 §6.2 check 9).</summary>
   private static readonly string[] HumanRefusalCodes = ["MCQ_PUBLISH_GATE", "AI_QA_REQUIRED", "AI_QA_BLOCKED", "CONFIG_ERROR", "SERVER_NOT_READY_AI_QA",
     "DECK_DELETED"];
@@ -444,6 +442,4 @@ public static class AutoPublisher
     }
     Log.Event("warn", new { tag = "automation", reason = $"auto_publish_{where}_failed", id, error = ex.Message });
   }
-
-  internal static bool IsTerminal(string state) => TerminalStates.Contains(state);
 }
