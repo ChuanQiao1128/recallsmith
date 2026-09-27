@@ -29,7 +29,8 @@ public sealed class AutomationStatusRoutesTests
   private const string DecisionsPath = "/api/v1/admin/automation/decisions";
 
   // A00 §16.2, verbatim except that the runner item (whose keys carry no values there) is listed in RunnerKeys, plus
-  // the R18C additions: shadow.blindDecided/blindAccepted (automation-4) and backlog.humanPublishItems (L4).
+  // the R18C additions: shadow.blindDecided/blindAccepted (automation-4) and backlog.humanPublishItems (L4), and the
+  // R18D M2 live block (automation-22).
   private const string StatusContractJson = """
     { "serverTime": "ISO",
       "mode": { "configured": "dry_run", "effective": "dry_run", "liveBlockedReason": null, "autoPublish": true },
@@ -39,6 +40,7 @@ public sealed class AutomationStatusRoutesTests
       "decisions24h": { "byState": { "<state>": 0 }, "byReason": { "<REASON>": 0 } },
       "shadow": { "wouldAccept": 0, "humanDecided": 0, "humanAccepted": 0, "humanEditedAccepted": 0, "humanRejected": 0, "agreementRate": null,
                   "blindDecided": 0, "blindAccepted": 0 },
+      "live": { "autoAccepted30d": 0, "deletedByPerson": 0, "editedByPerson": 0, "overrideRate": null },
       "publishes7d": { "byState": { "<state>": 0 } },
       "spend": { "todayUsd": 0, "automationTodayUsd": 0, "reservedUsd": 0, "dailyCapUsd": 10 },
       "watch": { "targets": 0, "active": 0, "failing": 0, "lastCheckedAt": null, "changes7d": 0 },
@@ -359,7 +361,7 @@ public sealed class AutomationStatusRoutesTests
       using var contract = JsonDocument.Parse(StatusContractJson);
       var c = contract.RootElement;
       Assert.Equal(Keys(c), Keys(data));
-      foreach (var key in new[] { "mode", "queue", "shadow", "spend", "watch", "notifications", "backlog" })
+      foreach (var key in new[] { "mode", "queue", "shadow", "live", "spend", "watch", "notifications", "backlog" })
       {
         Assert.Equal(Keys(c.GetProperty(key)), Keys(data.GetProperty(key)));
       }
@@ -471,11 +473,12 @@ public sealed class AutomationStatusRoutesTests
       // Outside the window or not would_accept: not counted.
       await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected", createdAt: "now() - interval '40 days'");
       await db.NewDecisionAsync(deckId, run, "human", "QA_FLAGGED", qa: true, humanAction: "accepted");
-      // R18C automation-4: the agreement counts only decisions made blind; every decision here was.
+      // The agreement counts only decisions made blind (R18D M3: the console reported verdictShown false); every
+      // decision here was.
       async Task MarkAllBlindAsync() => await db.QueryAsync(
         """
         insert into automation_decision_events (draft_id, from_state, to_state, reason, actor, mode, details)
-        select dd.draft_id, dd.state, dd.state, 'HUMAN_ACTION', 'human:it-c02', 'dry_run', '{"blinded":true}'::jsonb
+        select dd.draft_id, dd.state, dd.state, 'HUMAN_ACTION', 'human:it-c02', 'dry_run', '{"verdictShown":false,"blinded":true}'::jsonb
         from automation_draft_decisions dd
         where dd.human_action is not null
           and not exists (select 1 from automation_decision_events e where e.draft_id = dd.draft_id and e.reason = 'HUMAN_ACTION')
@@ -1088,7 +1091,9 @@ public sealed class AutomationStatusRoutesTests
   [Fact]
   public async Task Status_ShadowAgreement_CountsOnlyBlindDecisions()
   {
-    // R18C automation-4: a person who saw the would_accept verdict before deciding measures nothing.
+    // R18C automation-4: a person who saw the would_accept verdict before deciding measures nothing. R18D M3 changed
+    // the fixture: blind is the console's verdictShown false; a pre-R18D "blinded" flag was inferred from the state and
+    // measures nothing either.
     await InFreshAsync("it_c02_status_blind", async db =>
     {
       var (deckId, _) = await db.NewDeckAsync("blind");
@@ -1097,19 +1102,68 @@ public sealed class AutomationStatusRoutesTests
         "insert into automation_decision_events (draft_id, from_state, to_state, reason, actor, mode, details) " +
         "values ($1, 'would_accept', 'would_accept', 'HUMAN_ACTION', 'human:it-c02', 'dry_run', $2::jsonb)", draftId, details);
 
+      const string blind = "{\"verdictShown\":false,\"blinded\":true}";
+      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "accepted"), blind);
+      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected"), blind);
+      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected"), blind);
+      // Decided with the verdict visible, before blindness was reported, or with no event: decided, not in the agreement.
+      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "accepted"), "{\"verdictShown\":true,\"blinded\":false}");
       await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "accepted"), "{\"blinded\":true}");
-      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected"), "{\"blinded\":true}");
-      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected"), "{\"blinded\":true}");
-      // Decided with the verdict visible, or before blindness was recorded: counted as decided, not in the agreement.
-      await EventAsync(await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "accepted"), "{\"blinded\":false}");
       await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "accepted");
 
       var shadow = (await DataAsync(StatusPath)).GetProperty("shadow");
-      Assert.Equal(5, shadow.GetProperty("humanDecided").GetInt64());
-      Assert.Equal(3, shadow.GetProperty("humanAccepted").GetInt64());
+      Assert.Equal(6, shadow.GetProperty("humanDecided").GetInt64());
+      Assert.Equal(4, shadow.GetProperty("humanAccepted").GetInt64());
       Assert.Equal(3, shadow.GetProperty("blindDecided").GetInt64());
       Assert.Equal(1, shadow.GetProperty("blindAccepted").GetInt64());
       Assert.Equal(0.3333m, shadow.GetProperty("agreementRate").GetDecimal());
+    });
+  }
+
+  // ---------------------------------------------------------------- R18D M2 (automation-22): live quality
+
+  [Fact]
+  public async Task Status_Live_CountsPersonDeletesAndEdits_NotAnAutomationRehash()
+  {
+    await InFreshAsync("it_d01_status_live", async db =>
+    {
+      var empty = (await DataAsync(StatusPath)).GetProperty("live");
+      Assert.Equal(0, empty.GetProperty("autoAccepted30d").GetInt64());
+      Assert.Equal(JsonValueKind.Null, empty.GetProperty("overrideRate").ValueKind);
+
+      var (deckId, _) = await db.NewDeckAsync("live");
+      var run = await db.NewRunAsync(deckId);
+      // An auto-accepted card as live leaves it: the decision records the card's content hash at the accept.
+      async Task<long> AcceptedAsync(string tag, string decidedAt = "now() - interval '1 hour'")
+      {
+        var cardId = await db.NewCardAsync(deckId, Uid(tag));
+        await db.QueryAsync($"update cards set updated_at = {decidedAt} where id = $1", cardId);
+        var draftId = await db.NewDecisionAsync(deckId, run, "auto_accepted", qa: true, acceptedCardId: cardId, createdAt: decidedAt, mode: "live");
+        var row = (await db.QueryAsync($"select {CardContentHash.CardColumnsSql} from cards c where c.id = $1", cardId)).Single();
+        await db.QueryAsync("update automation_draft_decisions set accepted_content_sha256 = $2 where draft_id = $1", draftId, CardContentHash.Compute(row));
+        return cardId;
+      }
+
+      await AcceptedAsync("kept");
+      var deleted = await AcceptedAsync("deleted");
+      var edited = await AcceptedAsync("edited");
+      var rehashed = await AcceptedAsync("rehashed");
+      var old = await AcceptedAsync("old", "now() - interval '40 days'");
+
+      await db.QueryAsync("update cards set is_deleted = 1, updated_at = now() where id = $1", deleted);
+      await db.QueryAsync("update cards set explanation = 'Corrected by a person.', updated_at = now() where id = $1", edited);
+      // Touched without a content change (order, revision, a re-save of the same text): not an override.
+      await db.QueryAsync("update cards set order_in_deck = order_in_deck + 1000, revision = revision + 1, updated_at = now() where id = $1", rehashed);
+      await db.QueryAsync("update cards set is_deleted = 1, updated_at = now() where id = $1", old);
+      // Not auto-accepted: never counted.
+      await db.NewDecisionAsync(deckId, run, "would_accept", qa: true, humanAction: "rejected");
+
+      var live = (await DataAsync(StatusPath)).GetProperty("live");
+      Assert.Equal(["autoAccepted30d", "deletedByPerson", "editedByPerson", "overrideRate"], Keys(live));
+      Assert.Equal(4, live.GetProperty("autoAccepted30d").GetInt64());
+      Assert.Equal(1, live.GetProperty("deletedByPerson").GetInt64());
+      Assert.Equal(1, live.GetProperty("editedByPerson").GetInt64());
+      Assert.Equal(0.5m, live.GetProperty("overrideRate").GetDecimal());
     });
   }
 

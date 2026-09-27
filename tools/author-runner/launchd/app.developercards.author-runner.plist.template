@@ -18,6 +18,10 @@
     <string>__PATH__</string>
     <key>HOME</key>
     <string>__HOME__</string>
+    <key>DC_REPO_ROOT</key>
+    <string>__REPO__</string>
+    <key>DC_TOKEN_FILE</key>
+    <string>__TOKEN_FILE__</string>
   </dict>
   <key>StartInterval</key>
   <integer>3600</integer>

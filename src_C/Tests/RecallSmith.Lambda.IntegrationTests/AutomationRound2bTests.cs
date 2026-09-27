@@ -81,6 +81,8 @@ public class AutomationRound2bTests
   [Fact]
   public async Task HumanDecision_OnHiddenWouldAccept_IsRecordedBlind()
   {
+    // R18D M3 (automation-4) changed the rule this test pins: blindness is what the console reports in verdictShown,
+    // no longer inferred from the state (which made every would_accept decision "blind" whatever the person saw).
     using var scope = new AutomationTestKit.Scope(AutomationMode.DryRun);
     var would = await AutomationTestKit.EligibleDraftAsync(_db, "c02-blind");
     AutomationTestKit.Data(await AutomationTestKit.PostReportAsync(AutomationTestKit.DraftReport(would.JobId, would.DraftId, would.Hash)));
@@ -91,14 +93,18 @@ public class AutomationRound2bTests
     Assert.Equal("human", (await DecisionAsync(flagged.DraftId))["state"]);
 
     var owner = AutomationTestKit.Ctx(AutomationTestKit.Sub("c02-owner"), agent: false);
-    AutomationTestKit.Data(await AutomationTestKit.AcceptAsync(would.DraftId, owner));
-    AutomationTestKit.Data(await AutomationTestKit.RejectAsync(flagged.DraftId, owner));
+    AutomationTestKit.Data(await AutomationTestKit.AcceptAsync(would.DraftId, owner, new { verdictShown = false }));
+    AutomationTestKit.Data(await AutomationTestKit.RejectAsync(flagged.DraftId, owner, body: new { reason = "incorrect", verdictShown = true }));
 
     static string Details(List<Dictionary<string, object?>> events) =>
       (string)events.Single(ev => (string?)ev["reason"] == AutomationReasons.HumanAction)["details"]!;
-    Assert.Contains("\"blinded\": true", Details(await AutomationTestKit.EventsAsync(_db, would.DraftId)));
+    var blind = Details(await AutomationTestKit.EventsAsync(_db, would.DraftId));
+    Assert.Contains("\"blinded\": true", blind);
+    Assert.Contains("\"verdictShown\": false", blind);
     // A human-routed draft shows its reason in the review queue: its decision was not blind.
-    Assert.Contains("\"blinded\": false", Details(await AutomationTestKit.EventsAsync(_db, flagged.DraftId)));
+    var seen = Details(await AutomationTestKit.EventsAsync(_db, flagged.DraftId));
+    Assert.Contains("\"blinded\": false", seen);
+    Assert.Contains("\"verdictShown\": true", seen);
   }
 
   // ---------------------------------------------------------------- automation-14: one credit for the avoided review

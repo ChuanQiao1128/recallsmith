@@ -8,15 +8,23 @@
 // Opened from the page (a Details click), the heading takes focus and scrolls
 // into view, so the owner sees the detail open wherever the row was (B07
 // frontend-console-4); a deep link leaves focus where the browser put it.
+//
+// A pending dry-run verdict (would-accept, or still in AI QA) stays hidden:
+// the state, reason, findings and events show only after "Reveal verdict",
+// and a reveal is recorded so the decision in the review queue then sends
+// verdictShown: true and is not counted as blind (D07 frontend-console-25).
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { fetchAutomationDecision, type AutomationDecisionDetail } from '../../api/automation';
 import { CARD_CLASS, H2_CLASS, TD_CLASS, TH_CLASS } from '../../components/console/consoleStyles';
 import { Badge } from '../../components/ui/Badge';
+import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 import {
   FINDING_SEVERITY_LABELS,
+  HIDDEN_VERDICT_TEXT,
+  REVEAL_VERDICT_WARNING,
   MODE_LABELS,
   automationErrorMessage,
   codeLabel,
@@ -25,11 +33,13 @@ import {
   decisionReasonDetailText,
   decisionReasonLabel,
   decisionStateLabel,
+  decisionVerdictHidden,
   findingSeverityTone,
   formatTimestamp,
   humanActionLabel,
   orDash,
 } from '../../lib/automationRules';
+import { markVerdictSeen, wasVerdictSeen } from '../../lib/automationVerdictSeen';
 import { QA_CATEGORY_LABELS } from '../../lib/qaReview';
 
 type DetailState = { forDraft: number | null; error: string | null; data: AutomationDecisionDetail | null };
@@ -45,6 +55,8 @@ export function DecisionDetail({
 }) {
   const [detail, setDetail] = useState<DetailState>({ forDraft: null, error: null, data: null });
   const headingRef = useRef<HTMLHeadingElement>(null);
+  // The draft whose verdict was revealed here; earlier reveals come from the verdict-seen record.
+  const [revealedFor, setRevealedFor] = useState<number | null>(null);
 
   useEffect(() => {
     if (!focusOnOpen) return;
@@ -79,6 +91,12 @@ export function DecisionDetail({
   const d = loading ? null : detail.data;
   const badge = d ? decisionBadge(d) : null;
   const reasonDetail = d ? decisionReasonDetailText(d.reason, d.reasonDetail) : null;
+  const hidden = d !== null && decisionVerdictHidden(d) && revealedFor !== d.draftId && !wasVerdictSeen(d.draftId);
+
+  function reveal(id: number) {
+    markVerdictSeen(id);
+    setRevealedFor(id);
+  }
 
   return (
     <section className={CARD_CLASS} aria-label="Decision detail">
@@ -102,20 +120,39 @@ export function DecisionDetail({
 
       {d ? (
         <div className="mt-2 space-y-4 text-sm text-slate-700">
-          <div className="flex flex-wrap items-center gap-2">
-            {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
-            {d.mode === 'dry_run' ? <span className="text-xs text-slate-500">(dry run)</span> : null}
-            {d.reason ? <span>{decisionReasonLabel(d.reason)}</span> : null}
-            {reasonDetail ? <span className="text-xs text-slate-500">{reasonDetail}</span> : null}
-            {decisionAwaitsPerson(d) ? (
-              <Link
-                to={`/review?deckId=${d.deckId}&draftId=${d.draftId}`}
-                className="text-sm text-indigo-700 underline"
-              >
-                Decide in review queue
-              </Link>
-            ) : null}
-          </div>
+          {hidden ? (
+            <div className="space-y-2" data-testid="automation-decision-hidden">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge tone="neutral">{HIDDEN_VERDICT_TEXT}</Badge>
+                <span className="text-xs text-slate-500">(dry run)</span>
+                <Link
+                  to={`/review?deckId=${d.deckId}&draftId=${d.draftId}`}
+                  className="text-sm text-indigo-700 underline"
+                >
+                  Decide in review queue
+                </Link>
+              </div>
+              <p className="text-xs text-slate-600">{REVEAL_VERDICT_WARNING}</p>
+              <Button variant="outline" size="xs" onClick={() => reveal(d.draftId)}>
+                Reveal verdict
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
+              {d.mode === 'dry_run' ? <span className="text-xs text-slate-500">(dry run)</span> : null}
+              {d.reason ? <span>{decisionReasonLabel(d.reason)}</span> : null}
+              {reasonDetail ? <span className="text-xs text-slate-500">{reasonDetail}</span> : null}
+              {decisionAwaitsPerson(d) ? (
+                <Link
+                  to={`/review?deckId=${d.deckId}&draftId=${d.draftId}`}
+                  className="text-sm text-indigo-700 underline"
+                >
+                  Decide in review queue
+                </Link>
+              ) : null}
+            </div>
+          )}
           {d.humanAction ? (
             <p>
               <span className="text-xs text-slate-500">Person: </span>
@@ -149,69 +186,73 @@ export function DecisionDetail({
             <p>{d.question}</p>
           )}
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <caption className="text-left text-xs text-slate-500 mb-1">AI QA findings</caption>
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className={TH_CLASS}>Severity</th>
-                  <th className={TH_CLASS}>Category</th>
-                  <th className={TH_CLASS}>Message</th>
-                  <th className={TH_CLASS}>Suggested fix</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d.findings.length === 0 ? (
-                  <tr className="border-t border-slate-100">
-                    <td className={TD_CLASS} colSpan={4}>
-                      No finding.
-                    </td>
-                  </tr>
-                ) : (
-                  d.findings.map((f, i) => (
-                    <tr key={i} className="border-t border-slate-100 align-top">
-                      <td className={TD_CLASS}>
-                        <Badge tone={findingSeverityTone(f.severity)}>
-                          {codeLabel(FINDING_SEVERITY_LABELS, f.severity)}
-                        </Badge>
-                      </td>
-                      <td className={TD_CLASS}>{QA_CATEGORY_LABELS[f.category] ?? f.category}</td>
-                      <td className={TD_CLASS}>{f.message}</td>
-                      <td className={TD_CLASS}>{orDash(f.suggestedFix)}</td>
+          {hidden ? null : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <caption className="text-left text-xs text-slate-500 mb-1">AI QA findings</caption>
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className={TH_CLASS}>Severity</th>
+                      <th className={TH_CLASS}>Category</th>
+                      <th className={TH_CLASS}>Message</th>
+                      <th className={TH_CLASS}>Suggested fix</th>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody>
+                    {d.findings.length === 0 ? (
+                      <tr className="border-t border-slate-100">
+                        <td className={TD_CLASS} colSpan={4}>
+                          No finding.
+                        </td>
+                      </tr>
+                    ) : (
+                      d.findings.map((f, i) => (
+                        <tr key={i} className="border-t border-slate-100 align-top">
+                          <td className={TD_CLASS}>
+                            <Badge tone={findingSeverityTone(f.severity)}>
+                              {codeLabel(FINDING_SEVERITY_LABELS, f.severity)}
+                            </Badge>
+                          </td>
+                          <td className={TD_CLASS}>{QA_CATEGORY_LABELS[f.category] ?? f.category}</td>
+                          <td className={TD_CLASS}>{f.message}</td>
+                          <td className={TD_CLASS}>{orDash(f.suggestedFix)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <caption className="text-left text-xs text-slate-500 mb-1">Events</caption>
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className={TH_CLASS}>From</th>
-                  <th className={TH_CLASS}>To</th>
-                  <th className={TH_CLASS}>Reason</th>
-                  <th className={TH_CLASS}>Actor</th>
-                  <th className={TH_CLASS}>Mode</th>
-                  <th className={TH_CLASS}>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d.events.map((e, i) => (
-                  <tr key={i} className="border-t border-slate-100">
-                    <td className={TD_CLASS}>{e.fromState ? decisionStateLabel(e.fromState) : '—'}</td>
-                    <td className={TD_CLASS}>{decisionStateLabel(e.toState)}</td>
-                    <td className={TD_CLASS}>{e.reason ? decisionReasonLabel(e.reason) : '—'}</td>
-                    <td className={TD_CLASS}>{e.actor}</td>
-                    <td className={TD_CLASS}>{codeLabel(MODE_LABELS, e.mode)}</td>
-                    <td className={TD_CLASS}>{formatTimestamp(e.createdAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <caption className="text-left text-xs text-slate-500 mb-1">Events</caption>
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className={TH_CLASS}>From</th>
+                      <th className={TH_CLASS}>To</th>
+                      <th className={TH_CLASS}>Reason</th>
+                      <th className={TH_CLASS}>Actor</th>
+                      <th className={TH_CLASS}>Mode</th>
+                      <th className={TH_CLASS}>Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.events.map((e, i) => (
+                      <tr key={i} className="border-t border-slate-100">
+                        <td className={TD_CLASS}>{e.fromState ? decisionStateLabel(e.fromState) : '—'}</td>
+                        <td className={TD_CLASS}>{decisionStateLabel(e.toState)}</td>
+                        <td className={TD_CLASS}>{e.reason ? decisionReasonLabel(e.reason) : '—'}</td>
+                        <td className={TD_CLASS}>{e.actor}</td>
+                        <td className={TD_CLASS}>{codeLabel(MODE_LABELS, e.mode)}</td>
+                        <td className={TD_CLASS}>{formatTimestamp(e.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
     </section>

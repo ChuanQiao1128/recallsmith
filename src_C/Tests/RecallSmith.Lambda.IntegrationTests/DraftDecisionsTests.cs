@@ -165,9 +165,12 @@ internal static class AutomationTestKit
 
   public static string Uid(string tag) => $"a03-{tag}-{Guid.NewGuid():N}"[..40];
 
+  /// <summary>The synthetic author configuration id the runner's agent block carries and a test gate measured (R18D M1).</summary>
+  public const string AuthorConfigId = "0000000000000000000000000000000000000000000000000000000000a0c1d1";
+
   public static object Agent(Guid? runId) => runId is null
     ? new { name = "it-agent", model = "synthetic-model", skillVersion = "1" }
-    : new { name = "it-agent", model = "synthetic-model", skillVersion = "1", runId = runId.Value.ToString(), queueItemId = "1" };
+    : new { name = "it-agent", model = "synthetic-model", skillVersion = "1", runId = runId.Value.ToString(), queueItemId = "1", authorConfigId = AuthorConfigId };
 
   public delegate Task<APIGatewayProxyResponse> Handler(LambdaRequest req, Res res, AuthContext auth);
 
@@ -202,9 +205,9 @@ internal static class AutomationTestKit
     CallAsync((q, r, a) => Drafts.HandleAccept(q, r, a, draftId.ToString(CultureInfo.InvariantCulture)), "POST",
       $"{DraftsPath}/{draftId}/accept", body ?? new { }, auth);
 
-  public static Task<APIGatewayProxyResponse> RejectAsync(long draftId, AuthContext auth, string reason = "incorrect") =>
+  public static Task<APIGatewayProxyResponse> RejectAsync(long draftId, AuthContext auth, string reason = "incorrect", object? body = null) =>
     CallAsync((q, r, a) => Drafts.HandleReject(q, r, a, draftId.ToString(CultureInfo.InvariantCulture)), "POST",
-      $"{DraftsPath}/{draftId}/reject", new { reason }, auth);
+      $"{DraftsPath}/{draftId}/reject", body ?? new { reason }, auth);
 
   public static JsonElement Data(APIGatewayProxyResponse response)
   {
@@ -235,11 +238,11 @@ internal static class AutomationTestKit
 
   /// <summary>A passed eval gate for the automation reviewer (the latest wins); revoke it in <c>finally</c>.</summary>
   public static async Task<long> InsertGateAsync(PostgresFixture db, string provider = ReviewerProvider, string model = ReviewerModel,
-    string promptVersion = QaRuns.AutomationPromptVersion) =>
+    string promptVersion = QaRuns.AutomationPromptVersion, string? authorConfigId = AuthorConfigId) =>
     Long(await db.ScalarAsync(
-      "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub) " +
-      "values ($1, $2, $3, true, '{}'::jsonb, $4, '{}'::jsonb, 'it-a03') returning id",
-      provider, model, promptVersion, new string('b', 64)));
+      "insert into automation_eval_gates (reviewer_provider, reviewer_model, prompt_version, passed, metrics, report_sha256, report, created_by_sub, author_config_id) " +
+      "values ($1, $2, $3, true, '{}'::jsonb, $4, '{}'::jsonb, 'it-a03', $5::text) returning id",
+      provider, model, promptVersion, new string('b', 64), authorConfigId));
 
   public static Task RevokeGateAsync(PostgresFixture db, long id) =>
     db.QueryAsync("update automation_eval_gates set revoked_at = now(), revoked_by_sub = 'it-a03' where id = $1 and revoked_at is null", id);
@@ -437,7 +440,8 @@ public class DraftDecisionsTests
       Assert.Equal("42", doc.RootElement.GetProperty("queueItemId").GetString());
     }
 
-    const string message = "agent must be an object with optional string fields name, model, skillVersion, runId, queueItemId (max 200)";
+    const string message = "agent must be an object with optional string fields name, model, skillVersion, runId, queueItemId (max 200) " +
+      "and authorConfigId (max 128)";
     AutomationTestKit.AssertError(await AutomationTestKit.SubmitAsync(auth, deck.Id, new { name = "a", runId, extra = "b" },
       AutomationTestKit.Card(AutomationTestKit.Uid("keys-x"))), 400, "VALIDATION_ERROR", message);
     AutomationTestKit.AssertError(await AutomationTestKit.SubmitAsync(auth, deck.Id, new { runId = new string('r', 201) },

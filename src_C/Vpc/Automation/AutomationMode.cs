@@ -58,33 +58,56 @@ public static class AutomationMode
     var configured = Configured();
     if (configured == Off) return new EffectiveMode(Off, Off, null, null, null);
 
-    await using (var probe = new NpgsqlCommand("select to_regclass('public.automation_eval_gates') is not null", conn))
+    bool tableExists, authorColumn;
+    await using (var probe = new NpgsqlCommand(
+      "select to_regclass('public.automation_eval_gates') is not null, " +
+      "exists (select 1 from pg_attribute where attrelid = to_regclass('public.automation_eval_gates') " +
+      "and attname = 'author_config_id' and not attisdropped)", conn))
+    await using (var probeReader = await probe.ExecuteReaderAsync(ct))
     {
-      var exists = await probe.ExecuteScalarAsync(ct);
-      if (exists is not true) return new EffectiveMode(configured, Off, ServerNotReady, null, null);
+      await probeReader.ReadAsync(ct);
+      tableExists = probeReader.GetBoolean(0);
+      authorColumn = probeReader.GetBoolean(1);
     }
+    if (!tableExists) return new EffectiveMode(configured, Off, ServerNotReady, null, null);
 
     long? gateId = null;
     GateReviewer? reviewer = null;
+    string? gateAuthor = null;
     await using (var cmd = new NpgsqlCommand(
-      $"select id, reviewer_provider, reviewer_model, prompt_version from ({EvalGate.NewestGateSql}) g " +
-      "where passed and revoked_at is null", conn))
+      $"select id, reviewer_provider, reviewer_model, prompt_version, {GateAuthorSql(authorColumn)} as author_config_id " +
+      $"from ({EvalGate.NewestGateSql}) g where passed and revoked_at is null", conn))
     await using (var reader = await cmd.ExecuteReaderAsync(ct))
     {
       if (await reader.ReadAsync(ct))
       {
         gateId = reader.GetInt64(0);
         reviewer = new GateReviewer(reader.GetString(1), reader.GetString(2), reader.GetString(3));
+        gateAuthor = reader.IsDBNull(4) ? null : reader.GetString(4);
       }
     }
 
-    if (configured == DryRun) return new EffectiveMode(DryRun, DryRun, null, gateId, reviewer);
+    if (configured == DryRun) return new EffectiveMode(DryRun, DryRun, null, gateId, reviewer, gateAuthor);
     return gateId is null
       ? new EffectiveMode(Live, DryRun, EvalGateMissing, null, null)
-      : new EffectiveMode(Live, Live, null, gateId, reviewer);
+      : new EffectiveMode(Live, Live, null, gateId, reviewer, gateAuthor);
   }
+
+  /// <summary>
+  /// The gate's author configuration id over <c>g</c> = an automation_eval_gates row (R18D M1): the
+  /// <c>author_config_id</c> column of migration 036, or, before 036 is applied, the same value read from the stored
+  /// report (<c>authored.author.authorConfigId</c>), so the binding holds whichever of code and migration comes first.
+  /// </summary>
+  internal static string GateAuthorSql(bool authorColumn) => authorColumn
+    ? "coalesce(g.author_config_id, g.report #>> '{authored,author,authorConfigId}')"
+    : "(g.report #>> '{authored,author,authorConfigId}')";
 }
 
-public sealed record EffectiveMode(string Configured, string Effective, string? LiveBlockedReason, long? GateId, GateReviewer? Reviewer);
+/// <summary>
+/// The effective mode and the current gate. <see cref="GateAuthorConfigId"/> is the author configuration the gate measured
+/// (R18D M1), null when the gate names none: a live auto-accept then routes every draft to a human (AUTHOR_NOT_GATED).
+/// </summary>
+public sealed record EffectiveMode(string Configured, string Effective, string? LiveBlockedReason, long? GateId, GateReviewer? Reviewer,
+  string? GateAuthorConfigId = null);
 
 public sealed record GateReviewer(string Provider, string Model, string PromptVersion);

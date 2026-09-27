@@ -21,7 +21,10 @@ from dc_evals.score import clustered_wilson_ci
 
 PROVIDER = "bedrock-converse"
 # B06 (contract K1): gate evidence is a run of the automation profile, prompt version qa-v4-auto.
-AUTOMATION = {"promptVersion": AUTOMATION_PROMPT_VERSION, "profile": AUTOMATION_PROFILE}
+# D06 (ai-agent-9): its header records the effort the review sent; bedrock-converse sends none
+# (the provider default), whatever AI_EFFORT (header effort "high", the ai-qa default) says.
+AUTOMATION = {"promptVersion": AUTOMATION_PROMPT_VERSION, "profile": AUTOMATION_PROFILE,
+              "effectiveEffort": "provider-default"}
 MODEL = "global.openai.gpt-5.5"
 NOW = dt.datetime(2026, 9, 28, 12, 0, 0, tzinfo=dt.UTC)
 ENV = {
@@ -31,10 +34,13 @@ ENV = {
     "AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK": "15",
 }
 # C06 (ai-agent-3): the author-runner's pinned AuthorConfig, as import-drafts copies it onto new-facts rows.
+# D06 (contract M1): with the gated authorConfigId the runner records (drafts_import.gated_author_config_id;
+# tests/test_d06_fixes.py pins it to the runner's own algorithm).
 AUTHOR_CONFIG = {
     "id": "0123456789abcdef", "model": "claude-opus-5-5", "skillVersion": "author-cards@1.2.0",
     "skillSha256": "a" * 64, "promptSha256": "b" * 64, "claudeArgsSha256": "c" * 64, "mcpServerSha256": "d" * 64,
     "claudeVersion": "2.1.0", "runnerVersion": "0.3.0",
+    "authorConfigId": "1c0f21219c13236f0d8ead804d90ccd7439244a0caecfbba5f8d3075982c4b6a",
 }
 
 
@@ -64,7 +70,9 @@ def authored_spec(
     cards (at most `correct`) are new-facts rows the author-runner wrote (B06) with its author
     configuration (C06); the others are docs rows. C06 (ai-agent-15) raised the default from 40 to
     60 new-facts cards: 40 all-correct cards no longer pass the stratum's CI bound (51 is the
-    minimum). Returns (spec, run rows)."""
+    minimum). D06 (ai-agent-20): each new-facts card cites its own announcement page, so the
+    page-clustered bound equals the card bound here (tests/test_d06_fixes.py shares pages). Returns
+    (spec, run rows)."""
     authored, labels = [], []
     first_new = correct - min(new_facts, correct) + 1
     for index in range(1, correct + defective + 1):
@@ -75,7 +83,8 @@ def authored_spec(
                "chunkText": "t", "card": card, "authorModel": "m", "generatedAt": "g"}
         if first_new <= index <= correct:
             row = {**row, "stratum": "new-facts", "authorPath": "author-runner", "runId": f"run-{index}",
-                   "authorConfig": AUTHOR_CONFIG}
+                   "authorConfig": AUTHOR_CONFIG,
+                   "sourceUrl": f"https://aws.amazon.com/about-aws/whats-new/2026/09/item-{index}/"}
         authored.append(row)
         labels.append(
             {"id": row_id, "label": "correct" if defect is None else "defective", "category": defect, "excluded": None,
@@ -164,9 +173,11 @@ def test_gate_passes_when_every_threshold_is_met(tmp_path: Path) -> None:
     assert report["failures"] == []
     assert report["passed"] is True
     assert report["createdAt"] == "2026-09-28T12:00:00Z"
+    # D06 (ai-agent-9): the reviewer identity also pins the effort (configured and sent) and the served model ids
     assert report["reviewer"] == {
         "provider": PROVIDER, "model": MODEL, "promptVersion": "qa-v4-auto", "secondProvider": None,
-        "secondModel": None, "profile": "automation",
+        "secondModel": None, "profile": "automation", "effort": "high", "effectiveEffort": "provider-default",
+        "servedModels": ["anthropic.claude-opus-5"],
     }
     seeded = report["seeded"]
     assert (seeded["dataset"], seeded["reps"], seeded["n"], seeded["tp"], seeded["fn"]) == ("seeded-v3", 2, 452, 226, 0)
@@ -424,21 +435,24 @@ def test_report_json_has_the_contract_keys(tmp_path: Path) -> None:
     assert report["v"] == 1 and report["kind"] == "automation-gate"
     # B06 appends: reviewer.profile, the new-facts and jury-exclusion thresholds, and the authored
     # strata / exclusions / owner-sample blocks; every A00 §15.4 key keeps its place.
+    # D06 appends the effort the run was configured with and sent, and the served model ids.
     assert list(report["reviewer"]) == [
-        "provider", "model", "promptVersion", "secondProvider", "secondModel", "profile",
+        "provider", "model", "promptVersion", "secondProvider", "secondModel", "profile", "effort", "effectiveEffort",
+        "servedModels",
     ]
     assert report["thresholds"] == {
         "seededRecall": 0.90, "seededRecallCiLower": 0.85, "seededPerClassRecallFloor": 0.75, "seededControlFpr": 0.20,
         "seededControlUnscoredRate": 0.02, "autoAcceptPrecision": 0.97, "autoAcceptPrecisionCiLower": 0.93,
         "minWouldAcceptCards": 120, "defectEscapeRate": 0.20, "authoredUnscoredRate": 0.05, "minReps": 2,
         "newFactsAutoAcceptPrecision": 0.97, "minNewFactsWouldAcceptCards": 51, "juryExcludedRate": 0.10,
-        "newFactsAutoAcceptPrecisionCiLower": 0.93,
+        "newFactsAutoAcceptPrecisionCiLower": 0.93, "minNewFactsWouldAcceptPages": 51,
     }
     assert list(report["thresholds"]) == [
         "seededRecall", "seededRecallCiLower", "seededPerClassRecallFloor", "seededControlFpr",
         "seededControlUnscoredRate", "autoAcceptPrecision", "autoAcceptPrecisionCiLower", "minWouldAcceptCards",
         "defectEscapeRate", "authoredUnscoredRate", "minReps", "newFactsAutoAcceptPrecision",
         "minNewFactsWouldAcceptCards", "juryExcludedRate", "newFactsAutoAcceptPrecisionCiLower",
+        "minNewFactsWouldAcceptPages",
     ]
     assert list(report["seeded"]) == [
         "report", "reportSha256", "dataset", "datasetSha256", "reps", "n", "tp", "fn", "recall", "recallCi95",

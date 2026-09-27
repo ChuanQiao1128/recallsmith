@@ -9,6 +9,7 @@ from source_watcher.feeds import (
     parse_atom,
     parse_rss,
 )
+from source_watcher import normalize
 from source_watcher.normalize import sha256_hex
 
 RSS_BASE = "https://updates.example.com/new/feed/"
@@ -111,3 +112,11 @@ class TestFeeds:
             '<entry><title>h</title><link href="http://docs.example.com/y"/></entry></feed>'
         ).encode()
         assert [i.url for i in parse_atom(atom, "https://docs.example.com/sdk/feed.atom")] == ["https://docs.example.com/x"]
+
+
+class TestHeadingDeadline:
+    def test_html_headings_parse_honours_the_deadline(self, monkeypatch):
+        ticks = iter(range(10**6))
+        monkeypatch.setattr(normalize, "clock", lambda: float(next(ticks)))
+        with pytest.raises(normalize.ParseLimitExceeded, match="time budget"):
+            html_heading_items("https://feeds.example.com/notes", "<h2>t</h2>" * 5000, deadline=2.0)

@@ -128,7 +128,8 @@ internal static class DraftQaResults
     }
 
     // 3. the draft (second in the lock order)
-    var draftRows = await DbUtil.QueryAsync(conn, tx, "select status, deck_id, stable_uid from ai_drafts where id = $1 for update", [draftId]);
+    var draftRows = await DbUtil.QueryAsync(conn, tx,
+      "select status, deck_id, stable_uid, agent ->> 'authorConfigId' as author_config_id from ai_drafts where id = $1 for update", [draftId]);
     var deckId = draftRows.Count == 0
       ? Convert.ToInt64(decision["deck_id"], CultureInfo.InvariantCulture)
       : Convert.ToInt64(draftRows[0]["deck_id"], CultureInfo.InvariantCulture);
@@ -168,13 +169,27 @@ internal static class DraftQaResults
       string.Equals(reviewer.Model, report.Model, StringComparison.Ordinal) &&
       string.Equals(reviewer.PromptVersion, report.PromptVersion, StringComparison.Ordinal);
 
-    // 8. live needs the reviewer the eval gate measured
+    // The author the eval gate measured (R18D M1, automation-20): a gate without an author id binds no author, and a
+    // draft without one (a runner that does not send it) matches no gate.
+    var draftAuthor = draftRows[0]["author_config_id"] as string;
+    var authorMatchesGate = mode.GateAuthorConfigId is { } gateAuthor && string.Equals(gateAuthor, draftAuthor, StringComparison.Ordinal);
+
+    // 8. live needs the reviewer and the author the eval gate measured
     if (mode.Effective == AutomationMode.Live && !reviewerMatchesGate) return await Finish(DraftDecisions.Human, "REVIEWER_NOT_GATED");
+    if (mode.Effective == AutomationMode.Live && !authorMatchesGate)
+    {
+      return await Finish(DraftDecisions.Human, "AUTHOR_NOT_GATED", draftAuthor is null ? "draft has no authorConfigId" : $"draft author {draftAuthor}");
+    }
 
     // 9. dry run: record what live would do, including live's at-accept checks (automation-6)
     if (mode.Effective == AutomationMode.DryRun)
     {
-      var gateDetails = new Dictionary<string, object> { ["gate"] = mode.GateId is null ? "missing" : "passed", ["reviewerMatchesGate"] = reviewerMatchesGate };
+      var gateDetails = new Dictionary<string, object>
+      {
+        ["gate"] = mode.GateId is null ? "missing" : "passed",
+        ["reviewerMatchesGate"] = reviewerMatchesGate,
+        ["authorMatchesGate"] = authorMatchesGate,
+      };
       if (await DryRunAcceptRouteAsync(conn, tx, draftId, deckId, expectedHash, ct) is { } route)
       {
         gateDetails["check"] = "at_accept";

@@ -13,7 +13,8 @@ namespace RecallSmith.Lambda.Vpc.Automation;
 /// <summary>
 /// <c>POST /api/internal/automation/tick</c> (R18A A04, contract A00 §12.6): the housekeeping that keeps the automated
 /// flow moving, called by the notifier Lambda every 15 minutes (<c>job: "tick"</c>) and on Monday 08:00 NZ
-/// (<c>job: "digest"</c>). Single-flight through a session advisory lock; effective <c>off</c> does nothing; every
+/// (<c>job: "digest"</c>). The tick steps are single-flight through a session advisory lock (the digest, deduped per
+/// day, runs whether or not a tick holds it); effective <c>off</c> does nothing; every
 /// step, and every item of a step's loop, checks the time budget first and leaves the rest for the next tick (the tick
 /// then lists <see cref="BudgetExhausted"/> in <c>failedSteps</c>). Each step is idempotent, so a crashed or skipped tick
 /// is caught up by the next one. A failing step, or a failure a step swallows, emits <c>AutomationStepFailures</c> and
@@ -101,20 +102,23 @@ public static class AutomationTick
       if (mode.LiveBlockedReason == AutomationMode.ServerNotReady) return RunnerRoutes.NotReady(res);
       if (mode.Effective == AutomationMode.Off) return Answer(res, tickId, mode, "off", actions, sink);
 
-      var locked = await DbUtil.ExecuteScalarAsync(conn, null, "select pg_try_advisory_lock($1)", [LockKey]);
-      if (locked is not true) return Answer(res, tickId, mode, "locked", actions, sink);
+      // A digest job whose Monday slot collides with a running tick still sends the digest (R18D
+      // cloud-security-resilience-13): the digest is idempotent on its own dedupe key and needs no single-flight, so
+      // only the tick steps wait for the lock; the answer still says "locked" for them.
+      var locked = await DbUtil.ExecuteScalarAsync(conn, null, "select pg_try_advisory_lock($1)", [LockKey]) is true;
+      if (!locked && job != "digest") return Answer(res, tickId, mode, "locked", actions, sink);
       try
       {
-        await RunStepsAsync(conn, job, mode, actions, sink);
+        await RunStepsAsync(conn, job, mode, actions, sink, tickSteps: locked);
       }
       finally
       {
-        await DbUtil.ExecuteAsync(conn, null, "select pg_advisory_unlock($1)", [LockKey]);
+        if (locked) await DbUtil.ExecuteAsync(conn, null, "select pg_advisory_unlock($1)", [LockKey]);
       }
 
       Log.Event(sink.Failed.Count == 0 ? "info" : "warn", new { tag = "automation", outcome = "tick", tickId, job, mode = mode.Effective,
-        actions = actions.ToJson(), failedSteps = sink.Failed });
-      return Answer(res, tickId, mode, null, actions, sink);
+        skipped = locked ? null : "locked", actions = actions.ToJson(), failedSteps = sink.Failed });
+      return Answer(res, tickId, mode, locked ? null : "locked", actions, sink);
     }
     catch (Exception ex)
     {
@@ -126,7 +130,9 @@ public static class AutomationTick
     AutomationFailures.TickSink sink) =>
     res.Ok(new { tickId, mode = mode.Configured, effectiveMode = mode.Effective, skipped, actions = actions.ToJson(), failedSteps = sink.Failed });
 
-  private static async Task RunStepsAsync(NpgsqlConnection conn, string job, EffectiveMode mode, Actions a, AutomationFailures.TickSink sink)
+  /// <summary>The digest (job <c>digest</c>), then, when <paramref name="tickSteps"/> (this call holds the tick lock), the tick steps.</summary>
+  private static async Task RunStepsAsync(NpgsqlConnection conn, string job, EffectiveMode mode, Actions a, AutomationFailures.TickSink sink,
+    bool tickSteps)
   {
     var clock = Stopwatch.StartNew();
     AutomationFailures.Collect(sink);
@@ -164,6 +170,7 @@ public static class AutomationTick
     }
 
     if (job == "digest") await Step("digest", async () => a.Digest = await DigestAsync(conn, mode.Effective));
+    if (!tickSteps) return;
     await Step("leases", () => ExpireLeasesAsync(conn, a, Spent));
     // Before the QA steps and finalisation: a draft whose submit hook was lost gets its decision first.
     await Step("decision_sweep", () => DraftDecisions.SweepMissingAsync(conn, StepBatch, Spent));
@@ -177,6 +184,7 @@ public static class AutomationTick
     await Step("source_events", () => SourceEventsAsync(conn, mode.Effective, a, Spent));
     await Step("runner_health", () => RunnerHealthAsync(conn, a, Spent));
     await Step("eval_gate", () => EvalGateAsync(conn, mode, a));
+    await Step("live_quality", () => LiveQualityAsync(conn, a));
     await Step("resend", async () => a.NotificationsResent = await Notifications.ResendAsync(conn, StepBatch));
   }
 
@@ -710,6 +718,27 @@ public static class AutomationTick
     if (raised?.Created == true) a.Alerts++;
   }
 
+  /// <summary>
+  /// The live quality alarm (R18D M2, automation-22): <c>live_override_high</c>, once per ISO week, when people deleted
+  /// or edited more than 5 % of the cards auto-accepted in the last 30 days, over at least 20 auto-accepts.
+  /// </summary>
+  private static async Task LiveQualityAsync(NpgsqlConnection conn, Actions a)
+  {
+    var q = await StatusRoutes.LoadLiveQualityAsync(conn);
+    if (!q.OverrideHigh) return;
+    var now = DateTime.UtcNow;
+    var week = $"{ISOWeek.GetYear(now).ToString(CultureInfo.InvariantCulture)}-W{ISOWeek.GetWeekOfYear(now).ToString("00", CultureInfo.InvariantCulture)}";
+    var raised = await Notifications.RaiseExceptionAsync(conn, "live_override_high", $"exception:live_override_high:{week}",
+      new Dictionary<string, string>
+      {
+        ["autoAccepted30d"] = q.AutoAccepted30d.ToString(CultureInfo.InvariantCulture),
+        ["deletedByPerson"] = q.DeletedByPerson.ToString(CultureInfo.InvariantCulture),
+        ["editedByPerson"] = q.EditedByPerson.ToString(CultureInfo.InvariantCulture),
+        ["overrideRate"] = q.OverrideRate!.Value.ToString("0.0000", CultureInfo.InvariantCulture),
+      });
+    if (raised?.Created == true) a.Alerts++;
+  }
+
   // ---------------------------------------------------------------------------------------------
   // step 1 — the weekly digest
   // ---------------------------------------------------------------------------------------------
@@ -743,16 +772,20 @@ public static class AutomationTick
       var publishesByState = await CountsAsync(
         "select state as k, count(*) as n from automation_publishes where created_at >= $1 and created_at < $2 group by state");
 
+      // The status's blind definition (R18D M3): the digest's agreement is accepted unedited over decided blind.
       var shadow = (await DbUtil.QueryAsync(conn, null,
-        """
+        $"""
         select count(*) as would_accept,
-          count(*) filter (where human_action is not null) as decided,
-          count(*) filter (where human_action = 'accepted') as accepted,
-          count(*) filter (where human_action = 'edited_accepted') as edited,
-          count(*) filter (where human_action = 'rejected') as rejected
-        from automation_draft_decisions
-        where state = 'would_accept' and created_at >= $1 and created_at < $2
+          count(*) filter (where dd.human_action is not null) as decided,
+          count(*) filter (where dd.human_action = 'accepted') as accepted,
+          count(*) filter (where dd.human_action = 'edited_accepted') as edited,
+          count(*) filter (where dd.human_action = 'rejected') as rejected,
+          count(*) filter (where dd.human_action is not null and {StatusRoutes.BlindDecidedSql}) as blind_decided,
+          count(*) filter (where dd.human_action = 'accepted' and {StatusRoutes.BlindDecidedSql}) as blind_accepted
+        from automation_draft_decisions dd
+        where dd.state = 'would_accept' and dd.created_at >= $1 and dd.created_at < $2
         """, [start, end]))[0];
+      var liveQuality = await StatusRoutes.LoadLiveQualityAsync(conn);
       var watch = (await DbUtil.QueryAsync(conn, null,
         """
         select count(*) filter (where kind in ('changed', 'gone')) as changes, count(*) filter (where kind = 'failing') as failures
@@ -791,7 +824,8 @@ public static class AutomationTick
         runners.Select(r => new DigestRunner((string)r["runner_id"]!, Ts(r["last_heartbeat_at"]),
           r["login_expires_at"] is null ? null : Ts(r["login_expires_at"]))).ToList(),
         Convert.ToDecimal(spend["human"], CultureInfo.InvariantCulture), Convert.ToDecimal(spend["automation"], CultureInfo.InvariantCulture),
-        backlog.HumanPending, backlog.HumanPublishes);
+        backlog.HumanPending, backlog.HumanPublishes, Long(shadow["blind_decided"]), Long(shadow["blind_accepted"]),
+        new DigestLive(liveQuality.AutoAccepted30d, liveQuality.DeletedByPerson, liveQuality.EditedByPerson, liveQuality.OverrideRate));
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.WeeklyDigest(mode, data, baseUrl);

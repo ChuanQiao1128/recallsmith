@@ -1,5 +1,9 @@
 import hashlib
+import os
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import pytest
 from conftest import fixture_bytes
@@ -171,3 +175,58 @@ class TestBoundedWork:
         assert decode_html("ab".encode("utf-16-le"), "utf-16le") == "ab"
         for codec in normalize.ALLOWED_CODECS:
             assert normalize._known_codec(codec) == codec
+
+
+_PEAK_RSS_SCRIPT = """
+import resource, sys
+from source_watcher.normalize import ParseLimitExceeded, normalize_html
+n = 520_000
+body = "<html><body><div " + " ".join("a%d=v" % i for i in range(n)) + ">x</div></body></html>"
+assert len(body) > 5_000_000, len(body)
+try:
+    normalize_html(body)
+except ParseLimitExceeded:
+    pass
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+print(peak if sys.platform == "darwin" else peak * 1024)
+"""
+
+
+class TestAttributeBounds:
+    """D03, cloud-security-resilience-8 (c): one start tag cannot exhaust the Lambda's memory."""
+
+    def test_only_the_attributes_the_normaliser_reads_are_kept(self):
+        document = parse_document('<div id="a" class="c" role="main" data-x="1" style="s" id="b">x</div>')
+        (div,) = document.children
+        assert div.attrs == {"id": "a", "role": "main"}
+        assert normalize_html('<div role="main" class="c">kept</div><p>out</p>') == "kept"
+
+    def test_attribute_cap_raises_parse_limit(self):
+        at_cap = "<div " + " ".join(f"a{i}=v" for i in range(normalize.MAX_ATTRIBUTES)) + ">ok</div>"
+        assert normalize_html(at_cap) == "ok"
+        over = "<div " + " ".join(f"a{i}" for i in range(normalize.MAX_ATTRIBUTES + 1)) + ">x</div>"
+        with pytest.raises(ParseLimitExceeded, match="attribute cap"):
+            normalize_html(over)
+        slashes = "<br" + "/a" * (normalize.MAX_ATTRIBUTES + 1) + ">"
+        with pytest.raises(ParseLimitExceeded, match="attribute cap"):
+            normalize_html(slashes)
+
+    def test_long_attribute_values_are_not_capped(self):
+        # A large inline data URI or SVG path is one attribute, however long or spaced.
+        image = '<img src="data:image/png;base64,' + "A" * 2_000_000 + '">'
+        path = '<svg><path d="' + "M 1 2 L 3 4 " * 50_000 + '"/></svg>'
+        assert normalize_html("<main>" + image + path + "<p>text</p></main>") == "text"
+
+    def test_single_tag_page_of_5_mb_stays_under_200_mb_peak_rss(self):
+        src = str(Path(normalize.__file__).resolve().parent.parent)
+        env = {**os.environ, "PYTHONPATH": src}
+        out = subprocess.run([sys.executable, "-c", _PEAK_RSS_SCRIPT], capture_output=True, text=True, env=env, check=True)
+        peak_mb = int(out.stdout.strip()) / 1e6
+        assert peak_mb < 200, peak_mb
+
+    def test_deadline_bounds_the_parse(self, monkeypatch):
+        ticks = iter(range(10**6))
+        monkeypatch.setattr(normalize, "clock", lambda: float(next(ticks)))
+        with pytest.raises(ParseLimitExceeded, match="time budget"):
+            parse_document("<i>x</i>" * 5000, deadline=2.0)
+        assert normalize_html("<p>small</p>", deadline=0.0) == "small"  # fewer callbacks than one clock check

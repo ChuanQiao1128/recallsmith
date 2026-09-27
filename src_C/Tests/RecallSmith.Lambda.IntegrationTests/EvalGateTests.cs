@@ -189,12 +189,13 @@ public sealed class EvalGateTests
   /// The §15.4 contract report with passing synthetic numbers: seeded recall 184/200 = 0.92, auto-accept precision
   /// 294/300 = 0.98, defect escape 4/40 = 0.10, 150 would-accept cards, 2 reps each. Every call has its own
   /// <c>createdAt</c>, so its bytes (and sha256) differ from every earlier report: the cleanup revokes every gate, and
-  /// the exact bytes of a revoked report are refused (R18C L3).
+  /// the exact bytes of a revoked report are refused (R18C L3). The times increase with every call, as re-runs of the
+  /// evaluation do, because a report older than the newest recorded one is refused (R18D M4).
   /// </summary>
   private static JsonObject PassingReport()
   {
     var r = JsonNode.Parse(ContractReportJson)!.AsObject();
-    r["createdAt"] = $"2026-09-28T00:00:00.{Interlocked.Increment(ref _reportSeq):000000}Z";
+    r["createdAt"] = NextCreatedAt();
     r["reviewer"]!["promptVersion"] = QaRuns.AutomationPromptVersion;
     var s = r["seeded"]!.AsObject();
     s["n"] = 400;
@@ -221,6 +222,12 @@ public sealed class EvalGateTests
     a["estimatedCostUsd"] = 12.5;
     return r;
   }
+
+  private static readonly DateTimeOffset ReportEpoch = new(2026, 9, 28, 0, 0, 0, TimeSpan.Zero);
+
+  /// <summary>A report time later than every earlier one of this class (one second apart).</summary>
+  private static string NextCreatedAt() =>
+    ReportEpoch.AddSeconds(Interlocked.Increment(ref _reportSeq)).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
   /// <summary><paramref name="patch"/> = <c>path=json;path=json</c> with dotted paths; <c>path=</c> removes the key.</summary>
   private static JsonObject Patched(string patch)
@@ -518,9 +525,7 @@ public sealed class EvalGateTests
           QaRuns.AutomationPromptVersion, new string('f', 64));
       }
       var first = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString())).GetProperty("gateId").GetInt64();
-      var secondReport = PassingReport();
-      secondReport["createdAt"] = "2026-09-28T01:00:00Z";
-      var second = AutomationTestKit.Data(await PostAsync(secondReport.ToJsonString())).GetProperty("gateId").GetInt64();
+      var second = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString())).GetProperty("gateId").GetInt64();
       Assert.True(second > first);
 
       var data = AutomationTestKit.Data(await GetAsync());
@@ -692,5 +697,145 @@ public sealed class EvalGateTests
       Assert.Null(await ScalarAsync("select id from automation_eval_gates where passed and revoked_at is null"));
       Assert.Equal(AutomationMode.DryRun, (await EffectiveAsync(AutomationMode.Live)).Effective);
     });
+  }
+
+  // ---------------------------------------------------------------- R18D M4 (automation-26): stale reports
+
+  [Fact]
+  public async Task PostGate_OlderPassingReportAfterNewerFailure_Returns409Stale()
+  {
+    await InScratchAsync(async () =>
+    {
+      // pass, fail, then the first (passing) report again: it must not make live effective.
+      var first = PassingReport().ToJsonString();
+      AutomationTestKit.Data(await PostAsync(first));
+      Assert.Equal(AutomationMode.Live, (await EffectiveAsync(AutomationMode.Live)).Effective);
+      Assert.Equal(["authored.autoAcceptPrecision"], Failures(await PostAsync(Patched("authored.wouldAcceptCorrect=250").ToJsonString())));
+      var before = await GateCountAsync();
+
+      var stale = await PostAsync(first);
+      AutomationTestKit.AssertError(stale, 409, "EVAL_GATE_STALE");
+      Assert.Equal(before, await GateCountAsync());
+      var mode = await EffectiveAsync(AutomationMode.Live);
+      Assert.Equal((AutomationMode.DryRun, AutomationMode.EvalGateMissing), (mode.Effective, mode.LiveBlockedReason));
+
+      // An older report of other bytes (a mis-pasted file) is refused the same way; generatedAt wins over createdAt.
+      var older = PassingReport();
+      older["generatedAt"] = "2026-01-01T00:00:00Z";
+      AutomationTestKit.AssertError(await PostAsync(older.ToJsonString()), 409, "EVAL_GATE_STALE");
+
+      // A newer evaluation is recorded and restores live.
+      var fresh = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString())).GetProperty("gateId").GetInt64();
+      Assert.Equal((AutomationMode.Live, (long?)fresh), ((await EffectiveAsync(AutomationMode.Live)).Effective, (await EffectiveAsync(AutomationMode.Live)).GateId));
+    });
+  }
+
+  [Theory]
+  [InlineData("createdAt=")]
+  [InlineData("createdAt=\"yesterday\"")]
+  [InlineData("createdAt=\"2026-09-28T00:00:00\"")]
+  [InlineData("createdAt=12")]
+  public async Task PostGate_WithoutAGenerationTime_Returns400Invalid(string patch)
+  {
+    await InScratchAsync(async () =>
+    {
+      var before = await GateCountAsync();
+      AutomationTestKit.AssertError(await PostAsync(Patched(patch).ToJsonString()), 400, "EVAL_GATE_INVALID");
+      Assert.Equal(before, await GateCountAsync());
+    });
+  }
+
+  // ---------------------------------------------------------------- R18D M1 (automation-20): the gated author
+
+  private const string GatedAuthor = "d01a0000000000000000000000000000000000000000000000000000000000a1";
+
+  private static JsonObject WithNewFacts(JsonObject report, string? authorConfigId)
+  {
+    var authored = report["authored"]!.AsObject();
+    authored["strata"] = new JsonObject { ["docs"] = new JsonObject { ["rows"] = 80 }, [EvalGate.NewFactsStratum] = new JsonObject { ["rows"] = 60 } };
+    authored["author"] = authorConfigId is null
+      ? new JsonObject { ["model"] = "synthetic-model", ["skillVersion"] = "1" }
+      : new JsonObject { ["model"] = "synthetic-model", ["skillVersion"] = "1", ["authorConfigId"] = authorConfigId };
+    return report;
+  }
+
+  [Fact]
+  public async Task PostGate_StoresTheAuthorConfigId_AndLiveReadsIt()
+  {
+    await InScratchAsync(async () =>
+    {
+      var gateId = AutomationTestKit.Data(await PostAsync(WithNewFacts(PassingReport(), GatedAuthor).ToJsonString())).GetProperty("gateId").GetInt64();
+      Assert.Equal(GatedAuthor, await ScalarAsync("select author_config_id from automation_eval_gates where id = $1", gateId));
+      var live = await EffectiveAsync(AutomationMode.Live);
+      Assert.Equal((AutomationMode.Live, (long?)gateId, GatedAuthor), (live.Effective, live.GateId, live.GateAuthorConfigId));
+
+      // A report that measured no author binds none: live then routes every draft to a human (AUTHOR_NOT_GATED).
+      var unbound = AutomationTestKit.Data(await PostAsync(PassingReport().ToJsonString())).GetProperty("gateId").GetInt64();
+      Assert.Null(await ScalarAsync("select author_config_id from automation_eval_gates where id = $1", unbound));
+      Assert.Null((await EffectiveAsync(AutomationMode.Live)).GateAuthorConfigId);
+    });
+  }
+
+  [Fact]
+  public async Task PostGate_NewFactsStratumWithoutAuthorConfigId_Returns400Invalid()
+  {
+    await InScratchAsync(async () =>
+    {
+      var before = await GateCountAsync();
+      foreach (var report in new[]
+      {
+        WithNewFacts(PassingReport(), null),
+        WithNewFacts(PassingReport(), ""),
+        WithNewFacts(PassingReport(), new string('a', 129)),
+      })
+      {
+        var response = await PostAsync(report.ToJsonString());
+        AutomationTestKit.AssertError(response, 400, "EVAL_GATE_INVALID");
+        Assert.Contains("authored.author.authorConfigId", response.Body);
+      }
+      Assert.Equal(before, await GateCountAsync());
+    });
+  }
+
+  [Fact]
+  public async Task EffectiveMode_Before036_ReadsTheGatedAuthorFromTheStoredReport()
+  {
+    // Migrate-before-code tolerance: on a database at 035 the column is missing; the report jsonb still binds the author.
+    const string name = "it_d01_gate_035";
+    var cs = await _db.CreateScratchDatabaseAsync(name);
+    await using (var conn = new NpgsqlConnection(cs))
+    {
+      await conn.OpenAsync();
+      await PostgresFixture.ApplyMigrationsAsync(conn, 35);
+    }
+    var savedDb = Environment.GetEnvironmentVariable("PGDATABASE");
+    try
+    {
+      Environment.SetEnvironmentVariable("PGDATABASE", name);
+      RecallSmith.Lambda.Db.Pg.Reset();
+      RecallSmith.Lambda.Vpc.Db.Pg.Reset();
+      var gate = AutomationTestKit.Data(await PostAsync(WithNewFacts(PassingReport(), GatedAuthor).ToJsonString()));
+      Assert.True(gate.GetProperty("passed").GetBoolean());
+
+      var saved = Environment.GetEnvironmentVariable(AutomationMode.EnvName);
+      try
+      {
+        Environment.SetEnvironmentVariable(AutomationMode.EnvName, AutomationMode.Live);
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.OpenAsync();
+        var live = await AutomationMode.EffectiveAsync(conn);
+        Assert.Equal((AutomationMode.Live, GatedAuthor), (live.Effective, live.GateAuthorConfigId));
+      }
+      finally
+      {
+        Environment.SetEnvironmentVariable(AutomationMode.EnvName, saved);
+      }
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable("PGDATABASE", savedDb);
+      RecallSmith.Lambda.Db.Pg.Reset();
+      RecallSmith.Lambda.Vpc.Db.Pg.Reset();
+    }
   }
 }

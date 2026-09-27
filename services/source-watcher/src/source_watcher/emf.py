@@ -11,6 +11,8 @@ SERVICE = "source-watcher"
 CHECKS = "SourceWatchChecks"
 LATENCY = "SourceWatchLatency"
 REPORT_FAILURES = "SourceWatchReportFailures"
+# M6: one per source-watch invocation; the source-watch-missing alarm fires when none arrive.
+RUNS = "SourceWatchRuns"
 
 
 def emit(
@@ -57,3 +59,8 @@ def latency(namespace: str, duration_ms: int) -> None:
 
 def report_failure(namespace: str) -> None:
     emit(namespace, REPORT_FAILURES, 1, "Count")
+
+
+def run(namespace: str) -> None:
+    """The per-invocation heartbeat (M6)."""
+    emit(namespace, RUNS, 1, "Count")

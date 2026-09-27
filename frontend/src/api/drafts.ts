@@ -275,7 +275,8 @@ export async function fetchDraft(draftId: number): Promise<ApiResult<Draft>> {
 
 export async function acceptDraft(
   draftId: number,
-  body: { card?: DraftCard; reviewMs?: number; runQa?: boolean },
+  /** verdictShown (automation-4): whether the automatic verdict was visible before the decision. */
+  body: { card?: DraftCard; reviewMs?: number; runQa?: boolean; verdictShown?: boolean },
 ): Promise<ApiResult<DraftAcceptResult>> {
   try {
     const resp = await http.post<ApiResult<unknown>>(`/api/v1/authoring/drafts/${draftId}/accept`, body);
@@ -307,7 +308,7 @@ export async function acceptDraft(
 
 export async function rejectDraft(
   draftId: number,
-  body: { reason: DraftRejectReason; note?: string; reviewMs?: number },
+  body: { reason: DraftRejectReason; note?: string; reviewMs?: number; verdictShown?: boolean },
 ): Promise<ApiResult<DraftRejectResult>> {
   try {
     const resp = await http.post<ApiResult<unknown>>(`/api/v1/authoring/drafts/${draftId}/reject`, body);

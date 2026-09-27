@@ -35,7 +35,13 @@ from dc_evals.dataset import (
     load_rows,
     read_jsonl,
 )
-from dc_evals.drafts_import import RUNNER_AUTHOR_PATH, draft_rows, import_drafts, parse_deck_map
+from dc_evals.drafts_import import (
+    RUNNER_AUTHOR_PATH,
+    draft_rows,
+    gated_author_config_id,
+    import_drafts,
+    parse_deck_map,
+)
 from dc_evals.jury import dataset_rows
 from dc_evals.report import read_run
 from dc_evals.runner import AUTOMATION_PROMPT_VERSION, SystemPromptClient, profile_prompt, run_eval
@@ -161,7 +167,8 @@ def test_report_has_per_stratum_precision(tmp_path: Path) -> None:
     new = strata[STRATUM_NEW_FACTS]
     assert (new["rows"], new["wouldAccept"], new["wouldAcceptCards"], new["autoAcceptPrecision"]) == (60, 120, 60, 1.0)
     md = gate.render_markdown(report)
-    assert "### Per stratum" in md and "| new-facts | 60 | 120 (120) | 60 | 1.0000 |" in md
+    # D06 (ai-agent-20): the distinct cards and pages with their effective sample sizes, and both intervals
+    assert "### Per stratum" in md and "| new-facts | 60 | 120 (120) | 60 (60.0) | 60 (60.0) | 1.0000 |" in md
     assert "not the production path" in md
 
 
@@ -198,9 +205,14 @@ def test_new_facts_stratum_must_meet_the_precision_gate_on_its_own(tmp_path: Pat
     assert report["authored"]["autoAcceptPrecision"] >= 0.97
     new = report["authored"]["strata"]["new-facts"]
     assert new["autoAcceptPrecision"] == 0.9677
+    # D06 (ai-agent-20): the two escaped cards cite the same page, one cluster of the page interval
+    by_page = new["byPage"]
+    assert by_page["wouldAcceptPages"] == 61
     assert report["failures"] == [
         "new-facts stratum auto-accept precision 0.9677 < 0.97",
         f"new-facts stratum auto-accept precision 95% CI lower bound {new['autoAcceptPrecisionCi95'][0]:.4f} < 0.93",
+        f"new-facts stratum auto-accept precision page-clustered 95% CI lower bound "
+        f"{by_page['autoAcceptPrecisionCi95'][0]:.4f} < 0.93 (61 pages, n_eff {by_page['effectiveN']})",
     ]
 
 
@@ -254,7 +266,9 @@ def _draft(draft_id: int, *, run_id: str | None = "run-1", quote: str = QUOTE, d
 
 
 # C06 (ai-agent-3): the author configuration run-1 pinned (its model and skill version are the drafts').
+# D06 (contract M1): its gated authorConfigId is recomputed for that skill version, as the runner does.
 RUN_AUTHOR = {**AUTHOR_CONFIG, "skillVersion": "abc123"}
+RUN_AUTHOR["authorConfigId"] = gated_author_config_id(RUN_AUTHOR)
 
 
 def _runs_dir(tmp_path: Path, runs: dict[str, dict[str, Any]] | None = None) -> Path:

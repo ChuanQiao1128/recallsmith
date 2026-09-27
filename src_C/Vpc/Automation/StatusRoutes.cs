@@ -62,16 +62,27 @@ public static class StatusRoutes
                       where dp.deck_id = p.deck_id and dp.status = 'SUCCESS' and dp.created_at > p.updated_at)
     """;
 
+  /// <summary>The window of the live quality measurement (R18D M2), in days.</summary>
+  public const int LiveQualityDays = 30;
+
+  /// <summary><c>live_override_high</c> fires above this override rate (R18D M2)...</summary>
+  public const decimal LiveOverrideRateAlarm = 0.05m;
+
+  /// <summary>...once at least this many cards were auto-accepted in the window.</summary>
+  public const int LiveOverrideMinAccepted = 20;
+
   /// <summary>The most <c>humanPublishItems</c> the status backlog lists (R18C L4).</summary>
   public const int MaxHumanPublishItems = 20;
 
   /// <summary>
-  /// A <c>would_accept</c> decision (<c>dd</c>) a person decided while its verdict was hidden from them (R18C
-  /// automation-4): its <c>HUMAN_ACTION</c> event records <c>blinded: true</c>.
+  /// A decision (<c>dd</c>) a person decided without the automation's verdict being shown to them (R18D M3,
+  /// automation-4): its <c>HUMAN_ACTION</c> event records <c>verdictShown: false</c>, as the console reported it. An
+  /// unknown <c>verdictShown</c> (an older client, or an event written before R18D, whose <c>blinded</c> flag was inferred
+  /// from the state) is not blind. The status, the weekly digest and the go-live criterion share this definition.
   /// </summary>
-  private const string BlindDecidedSql = """
+  internal const string BlindDecidedSql = """
     exists (select 1 from automation_decision_events e
-            where e.draft_id = dd.draft_id and e.reason = 'HUMAN_ACTION' and e.details->>'blinded' = 'true')
+            where e.draft_id = dd.draft_id and e.reason = 'HUMAN_ACTION' and e.details->>'verdictShown' = 'false')
     """;
 
   // ---------------------------------------------------------------------------------------------
@@ -184,6 +195,15 @@ public static class StatusRoutes
         blindAccepted,
       };
 
+      var liveQuality = await LoadLiveQualityAsync(conn);
+      var live = new
+      {
+        autoAccepted30d = liveQuality.AutoAccepted30d,
+        deletedByPerson = liveQuality.DeletedByPerson,
+        editedByPerson = liveQuality.EditedByPerson,
+        overrideRate = liveQuality.OverrideRate,
+      };
+
       var publishStates = ZeroFilled(PublishStates);
       foreach (var r in await DbUtil.QueryAsync(conn, null,
         "select state, count(*) as n from automation_publishes where created_at >= now() - interval '7 days' group by state", []))
@@ -277,6 +297,7 @@ public static class StatusRoutes
         queue,
         decisions24h,
         shadow,
+        live,
         publishes7d,
         spend,
         watch,
@@ -290,6 +311,46 @@ public static class StatusRoutes
     }
   }
 
+  /// <summary>The live quality measurement (R18D M2); <see cref="OverrideRate"/> is null when nothing was auto-accepted.</summary>
+  internal sealed record LiveQuality(long AutoAccepted30d, long DeletedByPerson, long EditedByPerson, decimal? OverrideRate)
+  {
+    /// <summary>Whether <c>live_override_high</c> applies: more than 5 % overridden over at least 20 auto-accepts.</summary>
+    public bool OverrideHigh => AutoAccepted30d >= LiveOverrideMinAccepted && OverrideRate > LiveOverrideRateAlarm;
+  }
+
+  /// <summary>
+  /// How often a person overrode what live auto-accepted (R18D M2, automation-22): over the <c>auto_accepted</c>
+  /// decisions of the last <see cref="LiveQualityDays"/> days, a card counts as deleted by a person when it is deleted
+  /// (or gone), and as edited when it was changed after the accept and its current <see cref="CardContentHash"/> differs
+  /// from the <c>accepted_content_sha256</c> the automation recorded. Nothing but a person edits an accepted card's
+  /// content, so a change of other columns (order, revision, a re-save of the same content) is not an override.
+  /// <c>overrideRate</c> = (deleted + edited) / auto-accepted, four decimals, null when nothing was auto-accepted.
+  /// </summary>
+  internal static async Task<LiveQuality> LoadLiveQualityAsync(NpgsqlConnection conn, CancellationToken ct = default)
+  {
+    var counts = (await DbUtil.QueryAsync(conn, null,
+      """
+      select count(*) as auto_accepted, count(*) filter (where c.id is null or c.is_deleted <> 0) as deleted
+      from automation_draft_decisions dd
+      left join cards c on c.id = dd.accepted_card_id
+      where dd.state = 'auto_accepted' and dd.decided_at >= now() - make_interval(days => $1)
+      """, [LiveQualityDays]))[0];
+    ct.ThrowIfCancellationRequested();
+    var changed = await DbUtil.QueryAsync(conn, null,
+      $"""
+      select {CardContentHash.CardColumnsSql}, dd.accepted_content_sha256
+      from automation_draft_decisions dd
+      join cards c on c.id = dd.accepted_card_id
+      where dd.state = 'auto_accepted' and dd.decided_at >= now() - make_interval(days => $1)
+        and c.is_deleted = 0 and c.updated_at > dd.decided_at
+      """, [LiveQualityDays]);
+    var edited = changed.LongCount(r => !string.Equals(CardContentHash.Compute(r), r["accepted_content_sha256"] as string, StringComparison.Ordinal));
+    var accepted = RunnerRoutes.Long(counts["auto_accepted"]);
+    var deleted = RunnerRoutes.Long(counts["deleted"]);
+    return new LiveQuality(accepted, deleted, edited,
+      accepted == 0 ? null : Math.Round((decimal)(deleted + edited) / accepted, 4, MidpointRounding.AwayFromZero));
+  }
+
   /// <summary>The open exceptions a person still has to handle, whenever they were raised (R18B K7).</summary>
   internal sealed record Backlog(long HumanPending, object? OldestHumanPendingAt, long HumanPublishes,
     IReadOnlyList<Dictionary<string, object?>> HumanPublishItems);
@@ -297,13 +358,15 @@ public static class StatusRoutes
   /// <summary>
   /// The open-exception backlog (R18B K7). <c>humanPending</c>: decisions in state <c>human</c> with no
   /// <c>human_action</c> whose draft is still <c>pending</c>; <c>oldestHumanPendingAt</c>: the earliest time one of them
-  /// was routed (<c>decided_at</c>, else <c>created_at</c>). <c>humanPublishes</c>: live <c>automation_publishes</c> rows
-  /// in state <c>human</c> that no later successful deck publish resolved. The row never leaves <c>human</c> (the
+  /// was routed (<c>decided_at</c>, else <c>created_at</c>). <c>humanPublishes</c>: the decks with a live
+  /// <c>automation_publishes</c> row in state <c>human</c> that no later successful deck publish resolved (one deck is
+  /// one publish a person has to do, however many runs hit it: R18D backend-design-19, automation-25). The row never leaves <c>human</c> (the
   /// person publishes from the console, not through the row), so a <c>deck_publishes</c> row of the same deck with
   /// status <c>SUCCESS</c> created after the row's last change resolves it; a newer automation publish of the deck
   /// that reached <c>published</c> implies one. A dry-run <c>human</c> row accepted nothing and is not counted (a row
   /// holding cards accepted in live keeps the <c>live</c> label after a rollback, R18C automation-12).
-  /// <c>humanPublishItems</c> lists the oldest <see cref="MaxHumanPublishItems"/> of the counted rows (R18C L4).
+  /// <c>humanPublishItems</c> lists the oldest <see cref="MaxHumanPublishItems"/> of the counted decks (R18C L4), one item
+  /// per deck: its newest reason, and since its oldest open row.
   /// </summary>
   internal static async Task<Backlog> LoadBacklogAsync(NpgsqlConnection conn)
   {
@@ -314,15 +377,17 @@ public static class StatusRoutes
          where {OpenDecisionSql}) as human_pending,
         (select min(coalesce(dd.decided_at, dd.created_at)) from automation_draft_decisions dd join ai_drafts a on a.id = dd.draft_id
          where {OpenDecisionSql}) as oldest_human_pending_at,
-        (select count(*) from automation_publishes p where {OpenHumanPublishSql}) as human_publishes
+        (select count(distinct p.deck_id) from automation_publishes p where {OpenHumanPublishSql}) as human_publishes
       """, []))[0];
     var items = await DbUtil.QueryAsync(conn, null,
       $"""
-      select p.deck_id, d.slug as deck_slug, p.reason, p.updated_at
+      select p.deck_id, min(d.slug) as deck_slug, (array_agg(p.reason order by p.updated_at desc, p.id desc))[1] as reason,
+             min(p.updated_at) as updated_at
       from automation_publishes p
       left join decks d on d.id = p.deck_id
       where {OpenHumanPublishSql}
-      order by p.updated_at, p.id
+      group by p.deck_id
+      order by min(p.updated_at), p.deck_id
       limit $1
       """, [MaxHumanPublishItems]);
     return new Backlog(RunnerRoutes.Long(row["human_pending"]), row["oldest_human_pending_at"], RunnerRoutes.Long(row["human_publishes"]), items);

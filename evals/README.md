@@ -507,6 +507,17 @@ and refuses to start when ai_qa has no automation prompt of that version; it rec
 is unchanged and has no `profile` key). The automation reviewer runs alone, so `--profile automation`
 refuses `--second-provider`.
 
+R18D (D06, ai-agent-9): `--profile automation` builds the reviewer the way ai-qa's automation profile
+does, through `ai_qa.profiles.settings_for`: `--provider` and `--model` become
+`AI_QA_AUTOMATION_PROVIDER` / `_MODEL`, and `AI_EFFORT`, `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK`,
+`AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` and `AI_QA_AUTOMATION_REGION` come from
+`services/ai-qa/env/prod.env.json`, never from the shell (a key production leaves unset takes the
+ai-qa default, as in production). ai-qa has one `AI_EFFORT` for both reviewer profiles, so tuning the
+human reviewer's effort changes the automation reviewer's too and needs a new gate. The header records
+`effort` (the configured `AI_EFFORT`) and `effectiveEffort`, the value the review actually sent
+(`ai_qa.providers.effective_effort`: `max` goes out as `xhigh` on openai-mantle; bedrock-converse
+sends none, `provider-default`).
+
 Datasets:
 
 - `seeded-v3` — the rollout gate dataset above, for defect recall (scored as `dc-evals score` does,
@@ -535,15 +546,14 @@ Datasets:
     `skillVersion`, `queueItemId` and `draftId`, and the `authorConfig` its run pinned (below).
 
 Owner only (spends money; never CI, a verify or a worker session), each `run` with `--dry-run`
-first, and with `AI_PRICE_INPUT_PER_MTOK` / `AI_PRICE_OUTPUT_PER_MTOK` exported to the automation
-prices (`AI_QA_AUTOMATION_PRICE_*` in `services/ai-qa/env/prod.env.json`) so the recorded cost is
-real. After the Bedrock allowlisting, and before any paid run, probe the reviewer's path with one
+first. The automation prices, effort and region come from `services/ai-qa/env/prod.env.json` (above),
+so the recorded cost is real without exporting anything. After the Bedrock allowlisting, and before any paid run, probe the reviewer's path with one
 call (one card, one repetition; the probe's run file is never gate evidence, so write it outside
 `reports/`); for the fallback path, probe `--provider bedrock-converse` with its model id the same way:
 
 ```
 cd evals
-export AI_QA_AUTOMATION_REGION=us-east-1                        # where openai-mantle sends the card text
+# AI_QA_AUTOMATION_REGION (where openai-mantle sends the card text) comes from prod.env.json: us-east-1
 uv run --python 3.12 dc-evals run --provider openai-mantle --model openai.gpt-5.5 --profile automation \
     --dataset v3 --limit 1 --reps 1 --out /tmp/automation-probe  # expect one "done" item and its servedModel
 uv run --python 3.12 dc-evals author --dataset authored-v2      # docs stratum; local Claude CLI; data/authored-v2.jsonl
@@ -551,7 +561,6 @@ uv run --python 3.12 dc-evals author --dataset authored-v2      # docs stratum; 
 uv run --python 3.12 dc-evals import-drafts --drafts <drafts>.jsonl --deck <deckId>=aws-saa-c03 \
     --deck <deckId>=claude-ccdv-f                                # appends the new-facts rows (runner's Mac)
 uv run --python 3.12 dc-evals jury --dataset authored-v2        # the labels + summary, both strata
-export AI_PRICE_INPUT_PER_MTOK=<automation input price> AI_PRICE_OUTPUT_PER_MTOK=<automation output price>
 for ds in v3 authored-v2; do
   uv run --python 3.12 dc-evals run --provider openai-mantle --model openai.gpt-5.5 \
       --profile automation --dataset $ds --reps 2 --out reports/ --dry-run
@@ -601,21 +610,39 @@ under.
    `agent.runId`, without a complete run record, whose model or skill version is not its run's, with an
    unmapped deck or whose quote is in no chunk, replaces earlier new-facts rows and keeps every docs row.
 5. Reject every exported eval draft in the console review queue
-   (`POST /api/v1/authoring/drafts/:draftId/reject`), so none stays in the queue or can be accepted
-   into a deck; skip any eval queue item still waiting
+   (`POST /api/v1/authoring/drafts/:draftId/reject` `{ "reason": "other", "note": "eval:new-facts" }`),
+   so none stays in the queue or can be accepted into a deck; skip any eval queue item still waiting
    (`POST /api/v1/admin/automation/queue/:itemId/skip`).
    Their decisions are `human` / `QA_UNAVAILABLE`, so the rejection closes them and leaves the shadow
-   agreement untouched.
+   agreement untouched. The reason is `other` (`drafts_import.NEW_FACTS_REJECT_REASON`), never a
+   defect reason (`incorrect`, `ambiguous`, `duplicate`, `unsupported_source`): the rejection is
+   procedural, so it must not count as an agent defect. The note repeats the eval tag on the reject
+   event (`ai_review_events.note`), next to the queue item's own note. Eval drafts must not count in
+   the agent-quality numbers (the ledger's `agentDrafts` acceptance and reject rates); excluding the
+   decisions of drafts whose queue item note, or whose reject note, starts with `eval:` is core's side
+   (R18D D06, `docs/delivery/r18-issues/D06-fixes.md`). Until core does, write down the window and
+   the number of eval drafts rejected next to the gate report, and read that period's `agentDrafts`
+   with them subtracted.
 6. Set `AUTOMATION_MODE` and `AI_QA_ENABLED` back to their values before step 1.
 
 The gate needs this stratum: without new-facts rows, with a new-facts row that is not from the
 runner or has no complete `authorConfig`, with new-facts rows from more than one author model or skill
-version, with fewer than 51 distinct would-accept new-facts cards, or with new-facts precision below
-0.97 or its card-clustered 95% CI lower bound below 0.93, it fails closed. 51 is the smallest stratum
+version or more than one gated `authorConfigId` (or a row without one), with fewer than 51 distinct
+would-accept new-facts cards or fewer than 51 distinct source pages, or with new-facts precision below
+0.97 or either of its 95% CI lower bounds below 0.93, it fails closed. 51 is the smallest stratum
 that can pass: with every card correct in both repetitions the bound is the distinct-card Wilson bound
-51 / (51 + 1.96²) = 0.93; one wrong card needs 77 cards, two need 100. The 18 pages give that only
-with about three accepted cards per page, so add pages to the source file (or rerun with more
-`maxCards`) when the stratum is too small; never lower the minimum.
+51 / (51 + 1.96²) = 0.93; one wrong card needs 77 cards, two need 100.
+
+**Unit of analysis (R18D, D06 ai-agent-20).** Errors on post-cutoff input cluster by page: one
+misread announcement yields several wrong cards, so the cards of one page are not independent. The
+stratum's precision therefore has two intervals: the card interval (the repetitions of a card are one
+cluster) and the page interval (every would-accept item of one source page, the row's `sourceUrl`, is
+one cluster). Each uses the design-effect-adjusted sample size `n_eff` of `score.effective_n`, which
+the report states next to the number of clusters; with every item correct `n_eff` is the number of
+clusters, so 51 cards from 18 pages have the page bound 18 / (18 + 1.96²) = 0.82 and fail. The gate
+needs both bounds, hence at least 51 distinct source pages. The 18 pages of
+`data/authored-sources-v2-new-facts.json` are not enough: add announcement pages to it (at least 51,
+more for headroom) before the owner runs; never lower the minimum.
 
 **Author binding (C06).** The author-runner pins an author configuration at the start of every run
 (`tools/author-runner/src/authorConfig.ts`): the model, the skill version and SHA-256 hashes of the
@@ -624,6 +651,15 @@ Claude CLI and runner versions; its `id` changes when any of them does. The gate
 configurations of the new-facts rows into `authored.author`, so a gate is bound to the author it
 measured, and **any change of the author configuration (a new `authorConfig` id) requires a new
 gate**, just as a change of the reviewer's provider, model or prompt does.
+
+R18D (contract M1) adds the one gated identity core enforces at a live auto-accept:
+`authorConfigId`, the runner's SHA-256 of the canonical JSON of {`model`, `skillVersion`,
+`skillSha256`, `promptSha256`, `argsSha256`} (not the CLI or runner version). `import-drafts` copies it
+from the run record (the top level of `<runId>.meta.json` or its `authorConfig`) after recomputing it
+from those fields, and leaves out a draft whose record carries two different ids, an id that is not
+its configuration's, or whose `agent.authorConfigId` is another. The gate writes it to
+`authored.author.authorConfigId`, and fails closed (null) when a new-facts row has none (a run record
+from before M1) or the rows carry more than one.
 
 `automation-gate` takes the two `.jsonl` **run files** (not their `.json` reports) and writes
 `reports/<date>-automation-gate-<model>.json` and `.md` (`-2`, `-3`, … when taken; nothing is
@@ -646,8 +682,9 @@ or is not a run file (nothing written). `--date` defaults to UTC today, `--out` 
 | distinct would-accept cards | >= 120 |
 | defect escape rate (defective items it would accept) | <= 0.20; no defective item at all fails |
 | authored unscored rate | <= 0.05 |
-| new-facts stratum | present, every row from the author-runner, >= 51 distinct would-accept cards, precision >= 0.97 and its 95% CI lower bound >= 0.93 on its own |
-| author configuration | every new-facts row carries its run's complete `authorConfig`; one author model and one skill version |
+| reviewer effort | each run's header records `effectiveEffort`; its `effort` is production's `AI_EFFORT` (ai-qa default `high`) and its `effectiveEffort` is that value as the run's provider sends it; both runs the same |
+| new-facts stratum | present, every row from the author-runner, >= 51 distinct would-accept cards from >= 51 distinct source pages, precision >= 0.97 and both its card- and page-clustered 95% CI lower bounds >= 0.93 on its own |
+| author configuration | every new-facts row carries its run's complete `authorConfig` with its gated `authorConfigId`; one author model, one skill version and one `authorConfigId` |
 | jury excluded rate (ties + all-unsure rows / labelled rows) | <= 0.10 overall and in every stratum |
 | owner sample (optional) | when `data/adjudications-authored-v2.json` exists it must be valid; its figures are information |
 
@@ -681,6 +718,14 @@ disagree), `authorConfigIds` (sorted), `configs` (the full configurations: `id`,
 `skillVersion`, `skillSha256`, `promptSha256`, `claudeArgsSha256`, `mcpServerSha256`,
 `claudeVersion`, `runnerVersion`)}. The Markdown names the author on an "Author (new-facts stratum)" line.
 
+R18D (D06) appends `reviewer.effort`, `reviewer.effectiveEffort` and `reviewer.servedModels` (the
+distinct model ids the responses of both runs said served them, from each item's `servedModel`); the
+threshold `minNewFactsWouldAcceptPages` (51); in every `strata` block `autoAcceptPrecisionEffectiveN`
+(the card interval's `n_eff`) and `byPage` {`unit` (`source page`), `wouldAcceptPages`, `effectiveN`,
+`autoAcceptPrecisionCi95`}; and `authored.author.authorConfigId` (contract M1; null when the gate
+fails on it). The Markdown shows both intervals with their clusters and `n_eff` in the per-stratum
+table and the effort and served models on the reviewer line.
+
 ### Owner-adjudicated sample (optional)
 
 By default every authored-v2 label is a model-jury label. The owner may adjudicate a sample in
@@ -693,8 +738,8 @@ items of adjudicated cards judged valid / would-accept items of adjudicated card
 `juryOwnerAgreement` (adjudicated cards the jury labelled whose label matches). An invalid file fails
 the gate; a valid one never passes or fails it by itself.
 
-The gate reads the four `AI_QA_AUTOMATION_*` provider, model and price keys from
-`services/ai-qa/env/prod.env.json` directly (never through `ai_qa.settings`); R18C (contract L1)
+The gate reads the four `AI_QA_AUTOMATION_*` provider, model and price keys and `AI_EFFORT` from
+`services/ai-qa/env/prod.env.json` directly (never through `ai_qa.settings.load_settings`); R18C (contract L1)
 commits `openai-mantle`, `openai.gpt-5.5` and `AI_QA_AUTOMATION_REGION` `us-east-1` there. While a key
 is missing or a price is not a positive number, **every gate run fails its configuration check**;
 that is expected.

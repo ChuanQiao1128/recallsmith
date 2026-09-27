@@ -3,8 +3,12 @@
 // each item gets a fresh lease, ai-agent-2), one headless claude run reported with
 // `complete`; an item that is not run is released at once with a failed `complete`
 // (automation-7). Final heartbeat. A `complete` is retried with a jittered backoff; one that
-// still fails is kept in <logDir>/pending-complete/<runId>.json and re-sent by the next run
-// before its first claim, so the run result and the agent's notes are not lost (automation-16).
+// still fails is kept in <logDir>/pending-complete/<runId>.json and re-sent before the next claim
+// (of this run or the next one), so the run result and the agent's notes are not lost (automation-16).
+// A failure that affects every item (M5: claude cannot start, not on the subscription, the MCP
+// server did not start, a usage or rate limit) completes the run with RUNNER_UNAVAILABLE and ends
+// the loop; a usage limit also keeps <logDir>/runner-state.json, and until its reset time a run
+// claims nothing (ai-agent-17).
 
 import { hostname } from 'node:os';
 import { join } from 'node:path';
@@ -20,7 +24,7 @@ import {
   type RunOutcome,
 } from './api';
 import { AuthorConfigError, MCP_SERVER_BUNDLE, readAuthorConfig, type AuthorConfig } from './authorConfig';
-import { claudeOutcome, claudeUsage, claudeVersion, runClaude, type SignalGroup } from './claude';
+import { RUNNER_UNAVAILABLE, claudeOutcome, claudeUsage, claudeVersion, runClaude, type SignalGroup } from './claude';
 import { RUNNER_VERSION, type RunnerConfig } from './config';
 import { acquireLock, lockStaleMs } from './lock';
 import { loginExpiresAt } from './login';
@@ -38,6 +42,11 @@ export const RUNS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const COMPLETE_ATTEMPTS = 3;
 /** The backoff before the second attempt; it doubles per attempt and is jittered to 50–150 %. */
 export const COMPLETE_BACKOFF_MS = 2_000;
+
+/** A usage limit whose reset time the CLI did not name (or named implausibly) holds the runner this long (ai-agent-17). */
+export const USAGE_LIMIT_FALLBACK_MS = 60 * 60 * 1000;
+/** The longest hold a named reset time may set: a weekly cap plus a day. */
+export const USAGE_LIMIT_MAX_MS = 8 * 24 * 60 * 60 * 1000;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DECK_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -82,6 +91,36 @@ export function readLastRun(config: Pick<RunnerConfig, 'logDir'>): LastRun | nul
   } catch {
     return null;
   }
+}
+
+export function runnerStateFile(config: Pick<RunnerConfig, 'logDir'>): string {
+  return join(config.logDir, 'runner-state.json');
+}
+
+/** <logDir>/runner-state.json: until when a usage limit holds the runner (ai-agent-17). */
+export interface RunnerLocalState {
+  limitedUntil: string;
+  reason: string;
+}
+
+/** The kept usage-limit state, or null when it is missing or malformed. */
+export function readRunnerState(config: Pick<RunnerConfig, 'logDir'>): RunnerLocalState | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(runnerStateFile(config), 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const p = parsed as Partial<RunnerLocalState>;
+    if (typeof p.limitedUntil !== 'string' || !Number.isFinite(Date.parse(p.limitedUntil))) return null;
+    return { limitedUntil: p.limitedUntil, reason: typeof p.reason === 'string' ? p.reason : '' };
+  } catch {
+    return null;
+  }
+}
+
+/** Until when a usage limit holds the runner: the CLI's reset time when it is plausible, else now + 1 h. */
+export function limitedUntil(resetAt: string | null, now: Date): string {
+  const at = resetAt === null ? Number.NaN : Date.parse(resetAt);
+  const ok = Number.isFinite(at) && at > now.getTime() && at <= now.getTime() + USAGE_LIMIT_MAX_MS;
+  return new Date(ok ? at : now.getTime() + USAGE_LIMIT_FALLBACK_MS).toISOString();
 }
 
 export function pendingCompleteDir(config: Pick<RunnerConfig, 'logDir'>): string {
@@ -152,16 +191,14 @@ function readText(file: string): string {
   }
 }
 
-/** The read_source hosts of one run: the queue item's own host first, then the configured documentation hosts. */
-export function runSourceHosts(itemUrl: string, configured: readonly string[]): string[] {
-  const hosts: string[] = [];
-  try {
-    hosts.push(new URL(itemUrl).hostname.toLowerCase());
-  } catch {
-    // invalidItem already refused a url that does not parse.
-  }
-  for (const host of configured) if (!hosts.includes(host)) hosts.push(host);
-  return hosts;
+/**
+ * The read_source hosts of one run: the configured documentation hosts only. The queue item's own host gets
+ * no implicit pass (ai-agent-21): a feed link on another host is both the page that could inject and an
+ * egress destination, so it must be in DC_RUNNER_SOURCE_HOSTS like every other host, or the agent reports
+ * `blocked` (and such a draft could never be auto-accepted anyway).
+ */
+export function runSourceHosts(configured: readonly string[]): string[] {
+  return [...new Set(configured.map((host) => host.toLowerCase()))];
 }
 
 /** Why an item cannot be run safely, or null when every field used in a path or prompt is valid. */
@@ -323,6 +360,20 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
       return failure;
     };
 
+    // A usage limit hit by an earlier run holds until its reset: claim nothing, only re-send kept completes.
+    const state = readRunnerState(config);
+    if (state !== null && now().getTime() < Date.parse(state.limitedUntil)) {
+      log('warn', 'usage_limited', { error: `until ${state.limitedUntil}` });
+      const failure = await replayPending();
+      try {
+        await heartbeat('error', { lastError: (failure ?? `${RUNNER_UNAVAILABLE}: usage limit until ${state.limitedUntil}: ${state.reason}`).slice(0, 500) });
+      } catch (err) {
+        return await apiFailure(err);
+      }
+      return EXIT_OK;
+    }
+    if (state !== null) rmSync(runnerStateFile(config), { force: true });
+
     let effectiveMode: string;
     try {
       effectiveMode = (await heartbeat('running')).effectiveMode;
@@ -362,6 +413,12 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
     };
 
     for (let n = 0; n < config.maxItems; n += 1) {
+      // A complete kept earlier in this run is re-sent before the next claim, while its run is still
+      // running on the server, not an hour later when its lease has lapsed (automation-16).
+      if (n > 0) {
+        const replayFailure = await replayPending();
+        if (replayFailure !== null) lastError = replayFailure;
+      }
       // One item per claim, right before its run, so its lease starts when its claude run starts.
       let item: ClaimedItem | undefined;
       try {
@@ -408,9 +465,10 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
               DC_AUTOMATION_RUN_ID: runId,
               DC_AUTOMATION_QUEUE_ITEM_ID: String(itemId),
               DC_AUTOMATION_DECK_SLUG: deckSlug,
-              DC_AUTOMATION_SOURCE_HOSTS: runSourceHosts(item.url, config.sourceHosts).join(','),
+              DC_AUTOMATION_SOURCE_HOSTS: runSourceHosts(config.sourceHosts).join(','),
               DC_AUTOMATION_AUTHOR_MODEL: author.model,
               DC_AUTOMATION_SKILL_VERSION: author.skillVersion,
+              DC_AUTOMATION_AUTHOR_CONFIG_ID: author.authorConfigId,
             },
           },
         },
@@ -419,7 +477,11 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
       const prompt = renderPrompt(template, { ...item, skillVersion: author.skillVersion });
       writeFileSync(join(runsDir, `${runId}.prompt.md`), prompt, { mode: 0o600 });
       const metaFile = join(runsDir, `${runId}.meta.json`);
-      writeFileSync(metaFile, `${JSON.stringify({ runId, itemId, startedAt, authorConfig: author }, null, 2)}\n`, { mode: 0o600 });
+      writeFileSync(
+        metaFile,
+        `${JSON.stringify({ runId, itemId, startedAt, authorConfigId: author.authorConfigId, authorConfig: author }, null, 2)}\n`,
+        { mode: 0o600 },
+      );
 
       let inFlight: Promise<void> = Promise.resolve();
       const ticker = setInterval(() => {
@@ -470,6 +532,7 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
         startedAt,
         finishedAt,
         outcome: result.outcome,
+        authorConfigId: author.authorConfigId,
         authorConfig: author,
         usage: { totalCostUsd: usage.totalCostUsd, models: usage.models, apiKeySource: usage.apiKeySource },
       };
@@ -487,6 +550,18 @@ export async function runOnce(config: RunnerConfig, deps: RunOnceDeps = {}): Pro
         costUsd: usage.totalCostUsd ?? undefined,
         error: result.error ?? undefined,
       });
+
+      if (result.runnerUnavailable) {
+        // M5: the next item would fail the same way; this run is done and nothing more is claimed.
+        if (result.usageLimit !== null) {
+          const until = limitedUntil(result.usageLimit.resetAt, now());
+          const kept: RunnerLocalState = { limitedUntil: until, reason: (result.error ?? '').slice(0, 300) };
+          writeFileSync(runnerStateFile(config), `${JSON.stringify(kept)}\n`, { mode: 0o600 });
+          log('warn', 'usage_limited', { runId, itemId, error: `until ${until}` });
+        }
+        log('warn', 'runner_unavailable', { runId, itemId, error: result.error ?? undefined });
+        break;
+      }
     }
 
     try {

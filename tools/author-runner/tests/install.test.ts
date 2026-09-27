@@ -60,6 +60,9 @@ describe('install.sh', () => {
     const nodeDir = dirname(spawnSync('sh', ['-c', 'command -v node'], { env, encoding: 'utf8' }).stdout.trim());
     const pathValue = [...new Set([nodeDir, bin, bin])].join(':');
     expect(plist).toContain(`<string>${pathValue}:/usr/bin:/bin</string>`);
+    // ai-agent-22: the repo root and the non-default token file install.sh checked reach every hourly run.
+    expect(plist).toContain(`<key>DC_REPO_ROOT</key>\n    <string>${escapedRepo}</string>`);
+    expect(plist).toContain(`<key>DC_TOKEN_FILE</key>\n    <string>${tokenFile}</string>`);
 
     expect(readdirSync(home)).toEqual([]);
     expect(readdirSync(dir).sort()).toEqual(['bin', 'home', 'repo & <co>', 'tokens.json']);

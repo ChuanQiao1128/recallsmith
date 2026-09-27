@@ -276,13 +276,15 @@ public class AutomationRound2Tests
 
       var data = await TickDataAsync();
 
-      // The running run's draft goes through the normal prechecks and is queued for draft QA.
-      var d = (await sql.QueryAsync("select run_id, state, reason from automation_draft_decisions where draft_id = $1", lost)).Single();
-      Assert.Equal((running, "qa_queued"), ((Guid)d["run_id"]!, (string)d["state"]!));
-      Assert.Contains(scope.QaSent, r => r.MessageBody.Contains($"\"cardId\":{lost}", StringComparison.Ordinal));
-      // A run that already ended never decides late automatically.
+      // R18D backend-design-18: the sweep is repair-only. It cannot tell a lost hook from a draft the hook left alone
+      // on purpose (off at submit), so even the running run's draft goes to a human and is never queued for draft QA.
+      var d = (await sql.QueryAsync("select run_id, state, reason, reason_detail from automation_draft_decisions where draft_id = $1", lost)).Single();
+      Assert.Equal((running, "human", "ENQUEUE_FAILED", DraftDecisions.SweptDetail),
+        ((Guid)d["run_id"]!, (string)d["state"]!, (string)d["reason"]!, (string)d["reason_detail"]!));
+      Assert.Empty(scope.QaSent);
+      // A run that already ended never decides late automatically either.
       var late = (await sql.QueryAsync("select state, reason from automation_draft_decisions where draft_id = $1", lostOfEndedRun)).Single();
-      Assert.Equal(("human", "RUN_NOT_RUNNING"), ((string)late["state"]!, (string)late["reason"]!));
+      Assert.Equal(("human", "ENQUEUE_FAILED"), ((string)late["state"]!, (string)late["reason"]!));
       Assert.Equal(1, await sql.CountAsync("select count(*) from automation_decision_events where draft_id = $1 and from_state is null", lostOfEndedRun));
       // Within the grace period, or not submitted by the run's owner: left alone.
       Assert.Equal(0, await sql.CountAsync("select count(*) from automation_draft_decisions where draft_id = any($1)", new[] { recent, otherSubmitter }));

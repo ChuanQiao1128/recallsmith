@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CLAUDE_ALLOWED_TOOLS,
   CLAUDE_TOOLS,
@@ -7,8 +7,10 @@ import {
   claudeOutcome,
   claudeUsage,
   claudeVersion,
+  killGroup,
   readClaudeStream,
   scrubEnv,
+  usageLimitResetAt,
   type ClaudeRun,
 } from '../src/claude';
 import { makeHome } from './helpers';
@@ -146,19 +148,21 @@ describe('claude invocation', () => {
       expect(claudeOutcome(exited(0), stdout, '')).toMatchObject({
         outcome: 'failed',
         exitCode: 0,
-        error: `claude did not run on the subscription login: apiKeySource ${source}`,
+        error: `RUNNER_UNAVAILABLE: claude did not run on the subscription login: apiKeySource ${source}`,
+        runnerUnavailable: true,
       });
     }
     // An apiKeySource on the result message only (the old reading) no longer counts: no init message is a failure.
     const noInit = streamOf({ apiKeySource: 'none' }, null);
     expect(claudeOutcome(exited(0), noInit, '')).toMatchObject({
       outcome: 'failed',
-      error: 'claude did not run on the subscription login: no system/init message',
+      error: 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: no system/init message',
+      runnerUnavailable: true,
     });
     const { apiKeySource: _dropped, ...withoutSource } = JSON.parse(initLine()) as Record<string, unknown>;
     expect(claudeOutcome(exited(0), streamOf({}, JSON.stringify(withoutSource)), '')).toMatchObject({
       outcome: 'failed',
-      error: 'claude did not run on the subscription login: no apiKeySource in the system/init message',
+      error: 'RUNNER_UNAVAILABLE: claude did not run on the subscription login: no apiKeySource in the system/init message',
     });
     // The last result message counts; non-JSON lines in between are ignored.
     const stream = readClaudeStream(`${initLine()}\nnoise\n${JSON.stringify({ type: 'result', num_turns: 1 })}\n${JSON.stringify({ type: 'result', num_turns: 2 })}`);
@@ -170,11 +174,12 @@ describe('claude invocation', () => {
     const ok = JSON.stringify({ outcome: 'nothing_new', submitted: 0, notes: '' });
     expect(claudeOutcome(exited(0), streamOf({ result: ok }, initLine({ mcp_servers: [{ name: 'developercards', status: 'failed' }] })), '')).toMatchObject({
       outcome: 'failed',
-      error: 'the developercards MCP server did not start (failed)',
+      error: 'RUNNER_UNAVAILABLE: the developercards MCP server did not start (failed)',
+      runnerUnavailable: true,
     });
     expect(claudeOutcome(exited(0), streamOf({ result: ok }, initLine({ mcp_servers: [] })), '')).toMatchObject({
       outcome: 'failed',
-      error: 'the developercards MCP server is not loaded',
+      error: 'RUNNER_UNAVAILABLE: the developercards MCP server is not loaded',
     });
     expect(claudeOutcome(exited(0), streamOf({ result: ok }, initLine({ mcp_servers: [{ name: 'developercards', status: 'pending' }] })), '')).toMatchObject({
       outcome: 'nothing_new',
@@ -208,6 +213,8 @@ describe('claude invocation', () => {
       numTurns: 3,
       error: null,
       summary: 'n',
+      runnerUnavailable: false,
+      usageLimit: null,
     });
     expect(claudeOutcome(exited(0), ok(`{"outcome":"done","notes":"${'x'.repeat(2500)}"}`), '').summary).toHaveLength(2000);
     expect(claudeOutcome(exited(1), '', '')).toMatchObject({ outcome: 'failed', exitCode: 1, error: 'exit 1' });
@@ -224,6 +231,8 @@ describe('claude invocation', () => {
       numTurns: 3,
       error: 'AGENT_NO_RESULT: the final message does not end with the outcome JSON line',
       summary: null,
+      runnerUnavailable: false,
+      usageLimit: null,
     });
     expect(claudeOutcome(exited(0), ok(''), '')).toMatchObject({ outcome: 'failed', error: 'AGENT_NO_RESULT: the final message does not end with the outcome JSON line' });
     expect(claudeOutcome(exited(0), ok(null), '')).toMatchObject({ outcome: 'failed', error: 'AGENT_NO_RESULT: the final message does not end with the outcome JSON line' });
@@ -234,6 +243,8 @@ describe('claude invocation', () => {
       numTurns: null,
       error: 'AGENT_NO_RESULT: the outcome JSON line has no known outcome',
       summary: 'hm',
+      runnerUnavailable: false,
+      usageLimit: null,
     });
   });
 
@@ -245,12 +256,16 @@ describe('claude invocation', () => {
       numTurns: 4,
       error: 'AGENT_BLOCKED: read_source refused: SOURCE_HOST_NOT_ALLOWED',
       summary: 'n',
+      runnerUnavailable: false,
+      usageLimit: null,
     });
     // The L6 spelling {"result":"blocked","reason":...} too.
     expect(claudeOutcome(exited(0), ok({ result: 'blocked', reason: 'no developercards tools' }), '')).toMatchObject({
       outcome: 'failed',
       error: 'AGENT_BLOCKED: no developercards tools',
       summary: null,
+      runnerUnavailable: false,
+      usageLimit: null,
     });
     // Without a reason the notes explain it; without either a fixed text does.
     expect(claudeOutcome(exited(0), ok({ outcome: 'blocked', notes: 'uv failed' }), '').error).toBe('AGENT_BLOCKED: uv failed');
@@ -258,5 +273,78 @@ describe('claude invocation', () => {
     const long = claudeOutcome(exited(0), ok({ outcome: 'blocked', reason: 'y'.repeat(1000) }), '').error!;
     expect(long).toBe(`AGENT_BLOCKED: ${'y'.repeat(300)}`);
     expect(long.length).toBeLessThanOrEqual(500);
+  });
+});
+
+describe('run-level failures and the CLI error text (M5, ai-agent-17)', () => {
+  const errorResult = (subtype: string, text: string) =>
+    [initLine(), JSON.stringify({ type: 'result', subtype, is_error: true, num_turns: 1, result: text })].join('\n');
+
+  it('puts the result subtype and the first 300 characters of the result text into a per-item error', () => {
+    const long = `line one\nline two ${'z'.repeat(400)}`;
+    const nonZero = claudeOutcome(exited(1), errorResult('error_during_execution', long), 'stderr text');
+    expect(nonZero).toMatchObject({ outcome: 'failed', exitCode: 1, runnerUnavailable: false, usageLimit: null });
+    expect(nonZero.error).toBe(`error_during_execution: ${`line one line two ${'z'.repeat(400)}`.slice(0, 300)}`);
+    expect(nonZero.error).not.toMatch(/[\r\n]/);
+
+    expect(claudeOutcome(exited(0), errorResult('error_max_turns', 'Reached the maximum number of turns'), '')).toMatchObject({
+      outcome: 'failed',
+      exitCode: 0,
+      error: 'claude result is_error: error_max_turns: Reached the maximum number of turns',
+      runnerUnavailable: false,
+    });
+    // Without a result message a non-zero exit still reports stderr.
+    expect(claudeOutcome(exited(2), '', 'boom\n')).toMatchObject({ error: 'boom ', runnerUnavailable: false });
+  });
+
+  it('treats a usage or rate limit in the result text or stderr as run-level and reads its reset time', () => {
+    const limited = claudeOutcome(exited(1), errorResult('error_during_execution', 'Claude AI usage limit reached|1790003600'), '');
+    expect(limited).toMatchObject({
+      outcome: 'failed',
+      exitCode: 1,
+      runnerUnavailable: true,
+      usageLimit: { resetAt: new Date(1_790_003_600_000).toISOString() },
+    });
+    expect(limited.error).toBe('RUNNER_UNAVAILABLE: usage limit: error_during_execution: Claude AI usage limit reached|1790003600');
+
+    const isError = claudeOutcome(exited(0), errorResult('success', "You've hit your limit · resets 3pm (Europe/Berlin)"), '');
+    expect(isError).toMatchObject({ runnerUnavailable: true, usageLimit: { resetAt: null } });
+    expect(isError.error).toMatch(/^RUNNER_UNAVAILABLE: usage limit: /);
+
+    const stderr = claudeOutcome(exited(1), '', 'API Error: 429 rate_limit_error: rate limit exceeded');
+    expect(stderr).toMatchObject({ runnerUnavailable: true, usageLimit: { resetAt: null } });
+
+    expect(usageLimitResetAt('limit reached, resets at 2026-09-28T15:00:00Z')).toBe('2026-09-28T15:00:00.000Z');
+    expect(usageLimitResetAt('no time here')).toBeNull();
+  });
+
+  it('treats a claude that cannot start, a non-subscription login and a dead MCP server as run-level', () => {
+    const spawn = claudeOutcome({ ...exited(null), pid: null, spawnError: 'ENOENT' }, '', '');
+    expect(spawn).toMatchObject({ error: 'RUNNER_UNAVAILABLE: claude could not be started: ENOENT', runnerUnavailable: true, usageLimit: null });
+    // A timeout and a blocked agent concern one item only.
+    expect(claudeOutcome({ ...exited(null), timedOut: true }, '', '').runnerUnavailable).toBe(false);
+    const blocked = streamOf({ result: JSON.stringify({ outcome: 'blocked', reason: 'page is gone' }) });
+    expect(claudeOutcome(exited(0), blocked, '').runnerUnavailable).toBe(false);
+  });
+});
+
+describe('killGroup (ai-agent-18)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('answers false for a group that is gone (ESRCH) or holds only zombies (EPERM on macOS)', () => {
+    for (const code of ['ESRCH', 'EPERM']) {
+      vi.spyOn(process, 'kill').mockImplementation(() => {
+        throw Object.assign(new Error(`kill ${code}`), { code });
+      });
+      expect(killGroup(4242, 0)).toBe(false);
+      expect(killGroup(4242, 'SIGKILL')).toBe(false);
+      vi.restoreAllMocks();
+    }
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('kill EINVAL'), { code: 'EINVAL' });
+    });
+    expect(() => killGroup(4242, 0)).toThrow('kill EINVAL');
   });
 });

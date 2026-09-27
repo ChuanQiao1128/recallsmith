@@ -266,11 +266,17 @@ describe('AutomationPage', () => {
     mountAt('/automation');
 
     const textarea = await screen.findByLabelText('Gate report JSON');
-    // A report that is not a passed gate never reaches the server.
+    // D07 frontend-console-23 (M4): a failed report asks first; cancelled, it never reaches the server.
     await user.click(textarea);
     await user.paste('{"v":1,"kind":"automation-gate","passed":false}');
     await user.click(screen.getByRole('button', { name: 'Record eval gate' }));
-    expect(await screen.findByText('Only a passed gate report can be recorded.')).toBeTruthy();
+    const failedDialog = await screen.findByRole('alertdialog');
+    expect(
+      within(failedDialog).getByText(
+        'This report failed. Recording it makes it the newest evaluation, which blocks live mode.',
+      ),
+    ).toBeTruthy();
+    await user.click(within(failedDialog).getByRole('button', { name: 'Cancel' }));
     expect(api.recordEvalGate).not.toHaveBeenCalled();
 
     await user.clear(textarea);
@@ -286,17 +292,16 @@ describe('AutomationPage', () => {
     api.recordEvalGate.mockResolvedValue({
       success: false,
       data: null,
-      error: { code: 'EVAL_GATE_FAILED', message: 'failed checks', details: 'seededRecall 0.81 < 0.90' },
+      error: { code: 'EVAL_GATE_INVALID', message: 'bad report', details: 'reviewer missing' },
       traceId: 't',
     });
     await user.click(textarea);
     await user.paste(pasted);
     await user.click(screen.getByRole('button', { name: 'Record eval gate' }));
     expect(
-      await screen.findByText(
-        'The server recomputed the report and it does not pass the gate. failed checks seededRecall 0.81 < 0.90',
-      ),
+      await screen.findByText('The server could not read this gate report. bad report reviewer missing'),
     ).toBeTruthy();
+    await user.clear(textarea);
 
     // Revoking asks first.
     api.revokeEvalGate.mockResolvedValue(ok(evalGateFixture({ revokedAt: '2026-09-28T12:00:00Z' })));

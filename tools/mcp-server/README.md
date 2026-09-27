@@ -66,6 +66,7 @@ Every variable is optional.
 | `DC_AUTOMATION_DECK_SLUG` | (none) | set by `tools/author-runner` per run; not for manual use. The only deck `submit_draft` accepts in that run |
 | `DC_AUTOMATION_SOURCE_HOSTS` | the documentation hosts (below) | set by `tools/author-runner` per run; not for manual use. Comma list of the only https hosts `read_source` may fetch in that run |
 | `DC_AUTOMATION_AUTHOR_MODEL`, `DC_AUTOMATION_SKILL_VERSION` | (none) | set by `tools/author-runner` per run; not for manual use. The pinned author model and skill version sent in the agent block |
+| `DC_AUTOMATION_AUTHOR_CONFIG_ID` | (none) | set by `tools/author-runner` per run; not for manual use. The gated author identity (M1, at most 128 characters) sent as `agent.authorConfigId` |
 
 Trailing slashes are stripped from the two base URLs.
 
@@ -92,11 +93,12 @@ missing token file, an instruction to run `login`.
 
 The local runner (`tools/author-runner`) starts headless Claude Code for one claimed queue item and
 passes `DC_AUTOMATION_RUN_ID`, `DC_AUTOMATION_QUEUE_ITEM_ID` and `DC_AUTOMATION_DECK_SLUG` to this
-server through its per-run MCP config, with `DC_AUTOMATION_SOURCE_HOSTS`, `DC_AUTOMATION_AUTHOR_MODEL`
-and `DC_AUTOMATION_SKILL_VERSION`. `read_source` and `submit_draft` change:
+server through its per-run MCP config, with `DC_AUTOMATION_SOURCE_HOSTS`, `DC_AUTOMATION_AUTHOR_MODEL`,
+`DC_AUTOMATION_SKILL_VERSION` and `DC_AUTOMATION_AUTHOR_CONFIG_ID`. `read_source` and `submit_draft` change:
 
 - `read_source` fetches only https hosts in `DC_AUTOMATION_SOURCE_HOSTS` (exact host,
-  case-insensitive; the runner passes the queue item's host plus its documentation hosts). When the
+  case-insensitive; the runner passes its documentation hosts, `DC_RUNNER_SOURCE_HOSTS`, and never
+  adds the queue item's own host). When the
   variable is unset or blank the list is `docs.aws.amazon.com`, `aws.amazon.com`,
   `platform.claude.com`, `docs.claude.com`, `docs.anthropic.com` and `www.anthropic.com` (the
   server's `AUTOMATION_SOURCE_HOSTS` default). Any other host is refused before dc-ingest runs, as
@@ -107,10 +109,12 @@ and `DC_AUTOMATION_SKILL_VERSION`. `read_source` and `submit_draft` change:
   files are unchanged (they are not a network request).
 
 - When `DC_AUTOMATION_RUN_ID` is a uuid, every submit sends
-  `agent: { name: "developercards-mcp", model, skillVersion, runId, queueItemId }`, even when the
-  tool call has no `agent`. `model` and `skillVersion` are `DC_AUTOMATION_AUTHOR_MODEL` and
+  `agent: { name: "developercards-mcp", model, skillVersion, authorConfigId, runId, queueItemId }`, even
+  when the tool call has no `agent`. `model` and `skillVersion` are `DC_AUTOMATION_AUTHOR_MODEL` and
   `DC_AUTOMATION_SKILL_VERSION` when the runner sets them (whatever the model claims), else the
-  tool call's values, else `"unknown"`. `runId` is the
+  tool call's values, else `"unknown"`. `authorConfigId` (M1) is `DC_AUTOMATION_AUTHOR_CONFIG_ID`
+  and is sent only when the runner sets it (one printable token of at most 128 characters); the tool
+  call cannot supply it, and core-vpc auto-accepts in `live` only when it equals the eval gate's. `runId` is the
   lowercased uuid; `queueItemId` is sent only when `DC_AUTOMATION_QUEUE_ITEM_ID` is a positive
   integer. core-vpc treats a draft as part of the automation run only through `agent.runId`; it may
   then accept and publish a new draft that passes its checks and AI QA, and every other draft goes to
