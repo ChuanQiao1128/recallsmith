@@ -51,16 +51,18 @@ resource "aws_cloudwatch_metric_alarm" "source_watcher_errors" {
   ok_actions          = [aws_sns_topic.alerts.arn]
 }
 
-# The tick runs in every automation mode, so two silent hours mean the scheduler or its role broke. Created with
-# actions disabled because the schedules start DISABLED; the supervisor enables its actions together with the
+# The tick runs in every automation mode, so two silent hours mean the scheduler or its role broke. R18B K5: it
+# watches the notifier's own heartbeat AutomationTicks (one per tick invocation, whatever core answers; emitted
+# with Service = notifier only), not the function's Invocations, which SQS email deliveries also count. Created
+# with actions disabled because the schedules start DISABLED; the supervisor enables its actions together with the
 # schedules (infra/RUNBOOK.md §7), and Terraform ignores actions_enabled from then on.
 resource "aws_cloudwatch_metric_alarm" "automation_tick_missing" {
   alarm_name          = "developercards-${var.env}-automation-tick-missing"
-  alarm_description   = "The notifier was not invoked for two consecutive hours (the 15-minute automation tick stopped)."
-  namespace           = "AWS/Lambda"
-  metric_name         = "Invocations"
+  alarm_description   = "The notifier emitted no AutomationTicks heartbeat for two consecutive hours (the 15-minute automation tick stopped)."
+  namespace           = var.metrics_namespace
+  metric_name         = "AutomationTicks"
   statistic           = "Sum"
-  dimensions          = { FunctionName = var.notifier_function_name }
+  dimensions          = { Service = "notifier" }
   comparison_operator = "LessThanThreshold"
   threshold           = 1
   period              = 3600
@@ -101,6 +103,25 @@ resource "aws_cloudwatch_metric_alarm" "automation_notify_enqueue_failures" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
   period              = 300
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+}
+
+# R18B K4: core-vpc emits the dimensionless gauge AutomationStepFailures (same convention as
+# AutomationNotifyEnqueueFailures) from every swallowed automation failure: tick steps, run finalisation, publish
+# evaluation/reconcile and draft-QA after-commit hooks. The tick still answers 200, so this is the only signal.
+resource "aws_cloudwatch_metric_alarm" "automation_step_failures" {
+  alarm_name          = "developercards-${var.env}-automation-step-failures"
+  alarm_description   = "core-vpc swallowed at least one automation step failure (tick step, finalisation, publish evaluation/reconcile or draft-QA hook) in an hour."
+  namespace           = var.metrics_namespace
+  metric_name         = "AutomationStepFailures"
+  statistic           = "Sum"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  period              = 3600
   evaluation_periods  = 1
   datapoints_to_alarm = 1
   treat_missing_data  = "notBreaching"

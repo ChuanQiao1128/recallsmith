@@ -37,13 +37,16 @@ resource "aws_cloudwatch_log_group" "notifier" {
 }
 
 # Outside the VPC on purpose: it reaches SES and api.developercards.app.
+# R18B B04: reserved concurrency 4 = the SQS mapping's maximum_concurrency 2 + one tick + one digest (the Monday
+# digest can coincide with a tick), so a scheduled invocation never takes a slot the email mapping needs; a
+# throttled SQS delivery still burns a receive and could skip the fifth-receive failure report.
 resource "aws_lambda_function" "notifier" {
   architectures                  = ["arm64"]
   filename                       = "${path.module}/../../bootstrap/placeholder.zip"
   function_name                  = var.notifier_function_name
   handler                        = "notifier.handler.lambda_handler"
   memory_size                    = 256
-  reserved_concurrent_executions = 2
+  reserved_concurrent_executions = 4
   role                           = var.notifier_role_arn
   runtime                        = "python3.12"
   timeout                        = 60
@@ -66,6 +69,16 @@ resource "aws_lambda_alias" "notifier_prod" {
   lifecycle {
     ignore_changes = [function_version, description]
   }
+}
+
+# R18B B04: EventBridge Scheduler invokes asynchronously, so Lambda's default two async retries would re-run a
+# failed tick, digest or source watch after the Scheduler's own retry policy. No retry: the next scheduled run
+# covers a failure (A00 §10.2). This applies only to async invocations; the SQS mapping invokes synchronously.
+resource "aws_lambda_function_event_invoke_config" "notifier_prod" {
+  function_name                = aws_lambda_function.notifier.function_name
+  qualifier                    = aws_lambda_alias.notifier_prod.name
+  maximum_retry_attempts       = 0
+  maximum_event_age_in_seconds = 900
 }
 
 resource "aws_lambda_event_source_mapping" "notifier_sqs" {
@@ -119,6 +132,14 @@ resource "aws_lambda_alias" "source_watcher_prod" {
   lifecycle {
     ignore_changes = [function_version, description]
   }
+}
+
+# R18B B04: see notifier_prod above; a failed hourly watch is covered by the next hour.
+resource "aws_lambda_function_event_invoke_config" "source_watcher_prod" {
+  function_name                = aws_lambda_function.source_watcher.function_name
+  qualifier                    = aws_lambda_alias.source_watcher_prod.name
+  maximum_retry_attempts       = 0
+  maximum_event_age_in_seconds = 900
 }
 
 resource "aws_scheduler_schedule" "source_watch" {

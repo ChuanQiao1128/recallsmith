@@ -156,6 +156,18 @@ developercards-automation-scheduler-role (no Lambda permission). All three are *
 Terraform ignores `state`, so an apply never enables or re-disables one; the supervisor enables them
 only after the code deploy (A00 §19.2 step 6).
 
+The Scheduler invokes asynchronously. Both aliases (`developercards-notifier:prod`,
+`developercards-source-watcher:prod`) carry an event invoke config with `maximum_retry_attempts = 0` and
+`maximum_event_age_in_seconds = 900` (R18B B04), so a run that raises is not re-run by Lambda: the next
+scheduled run covers it. The Scheduler's own retry policy above only retries a delivery the Scheduler could
+not hand to Lambda. The notifier's reserved concurrency is 4 = the email mapping's `maximum_concurrency` 2 +
+one tick + one digest, so a scheduled run never throttles an email delivery (a throttled SQS delivery still
+consumes one of the five receives).
+
+Business operation of the automation (rollout off → dry_run → live, promotion criteria, what to do per
+exception email, reading the Automation page, undoing an auto-published card):
+[docs/runbooks/automation-operations.md](../docs/runbooks/automation-operations.md).
+
 **Enable / disable a schedule.** `update-schedule` replaces the whole definition, so read it first and
 send it back unchanged except for the state:
 
@@ -187,28 +199,52 @@ Alarms (all on the alerts topic; one line each — what fired, first check):
   `/aws/lambda/developercards-notifier` for the traceback, then `notifier-secret` and core-vpc health.
 - `source-watcher-errors` — a source-watch run raised. Check `/aws/lambda/developercards-source-watcher`,
   `source-watch-secret` and the targets route (`POST /api/internal/source-watch/targets`).
-- `automation-tick-missing` — the notifier had no invocation for two hours (actions enabled only once the
-  schedules are). Check `developercards-automation-tick` is ENABLED, the scheduler role's
-  `developercards-automation-scheduler-invoke` policy, and the notifier's throttles (reserved concurrency 2).
+- `automation-tick-missing` — the notifier emitted no `AutomationTicks` heartbeat (`DeveloperCards`,
+  `Service = notifier`; one per tick invocation, whatever core answers) for two hours (actions enabled
+  only once the schedules are). Email deliveries do not emit it, so they cannot hide a stopped tick. Check
+  `developercards-automation-tick` is ENABLED, the scheduler role's `developercards-automation-scheduler-invoke`
+  policy, and the notifier's throttles (reserved concurrency 4).
 - `notification-failures` — the notifier could not deliver an email (`Service = notifier`). Check SES
   sending status and the configuration set, and the notifier log for the failure code.
 - `automation-notify-enqueue-failures` — core-vpc failed `SendMessage` to developercards-notify. Check the
   queue exists, `AUTOMATION_NOTIFY_QUEUE_URL` in core-vpc's environment and the grant
   developercards-core-vpc-notify-send.
+- `automation-step-failures` — core-vpc swallowed an automation failure (`AutomationStepFailures` ≥ 1 in an
+  hour): a tick step, run finalisation, publish evaluation/reconcile or a draft-QA after-commit hook. The
+  tick still answers 200, so this is the only signal. Search core-vpc's log for `tick_step_failed` and the
+  other `warn` events of that hour (the notifier's `tick_steps_failed` event names the tick's `failedSteps`).
+  A step failing every tick stops batch summaries or publishes; fix the cause and redeploy core-vpc.
 
-**Emergency stop** (runaway automation, a mail incident, a source-watch loop) — each step on its own
-takes effect at once; do all that apply:
+**Emergency stop** (runaway automation, a bad auto-accept or auto-publish, a mail incident, a
+source-watch loop). Do the steps that apply, in this order; each takes effect on its own:
 
+0. **Revoke the active eval gate** (instant: effective `live` → `dry_run` on the next request, no deploy).
+   Console → Automation → Overview → eval-gate card → *Revoke gate* (super_admin), or
+   `POST /api/v1/admin/automation/eval-gate/<gateId>/revoke`. Only the newest gate row counts (R18B K2):
+   a revoked or failed newest gate never falls back to an older passed one, so one revoke stops every new
+   auto-accept and auto-publish. Drafting, QA and emails continue as a dry run. This is the first step for
+   anything that auto-accepts or auto-publishes.
 1. Disable the three schedules with the recipe above: `developercards-source-watch`,
    `developercards-automation-tick`, `developercards-automation-digest` (and disable the tick-missing
-   alarm's actions).
+   alarm's actions first). This stops the source watch, the tick (reconcile, batch summaries, runner
+   checks) and the digest. It does **not** stop auto-accept or auto-publish: the runner's complete route
+   (`POST /api/v1/authoring/automation/runner/complete` → run finalisation) and AI QA results for drafts both finalise runs
+   and start publishes without any schedule. Use step 0 or 3 for that.
 2. Stop the email consumer: `aws lambda list-event-source-mappings --function-name developercards-notifier:prod --query 'EventSourceMappings[].UUID'`,
    then `aws lambda update-event-source-mapping --uuid <uuid> --no-enabled`. Queued emails stay in
    developercards-notify (4 days) and resume on `--enabled`; the mapping ignores `enabled` in Terraform.
+   Like step 1, this does not stop auto-publish.
 3. Stop the automation in core-vpc: set `AUTOMATION_MODE=off` in `src_C/env/prod.env.json` and deploy
-   core-vpc (`ENV=prod ./src_C/deploy.sh`).
+   core-vpc (`ENV=prod ./src_C/deploy.sh`). The only step that stops every server-side automation path
+   (it needs a deploy, so it is not instant).
+4. Stop the local runner on the owner's Mac: `tools/author-runner/scripts/uninstall.sh` (`DRY_RUN=1` first
+   prints what it would do). No new authoring runs are claimed; reinstall later with
+   `tools/author-runner/scripts/install.sh`.
 
-Undo in reverse order; re-enable the schedules only after core-vpc runs with the intended mode.
+Undo in reverse order; re-enable the schedules only after core-vpc runs with the intended mode, and restore
+`live` only by recording a new passed eval gate (a revoked gate stays revoked). To undo a card that was
+auto-accepted or auto-published, see "Rollback" in
+[docs/runbooks/automation-operations.md](../docs/runbooks/automation-operations.md).
 
 ### SES for automation emails (R18A A11)
 
