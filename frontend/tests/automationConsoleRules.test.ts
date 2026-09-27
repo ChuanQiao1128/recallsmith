@@ -65,8 +65,8 @@ describe('handled vs open decisions (frontend-console-1, K7)', () => {
       edited_accepted: 'Edited and accepted',
       rejected: 'Rejected',
     });
-    expect(isOpenDecision({ humanAction: null })).toBe(true);
-    expect(isOpenDecision({ humanAction: 'rejected' })).toBe(false);
+    expect(isOpenDecision({ state: 'human', humanAction: null })).toBe(true);
+    expect(isOpenDecision({ state: 'human', humanAction: 'rejected' })).toBe(false);
   });
 
   it('keeps the Decisions filters in the URL and ignores unknown codes', () => {

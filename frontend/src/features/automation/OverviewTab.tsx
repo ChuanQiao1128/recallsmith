@@ -18,6 +18,13 @@
 // with both halves, at least 100 blind decisions and at least 95% blind
 // agreement, and whether it is met (E05 frontend-console-34). Live quality (M2) shows the four numbers of
 // status.live; an older server without the block gets one line instead.
+//
+// Outside live (F04 frontend-console-35, the weekly digest's dry-run treatment,
+// R18E N6) the counts that tell a pending draft's verdict by elimination stay
+// blind: no routed-draft count or oldest routed date (the review-queue line
+// takes their place), no deck of a publish waiting for a person (a run has a
+// publish row only when a draft would be accepted), one 24-hour row for the
+// states a pending draft can be in, and no split by reason.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -32,6 +39,7 @@ import {
   QUEUED_EMAIL_SEARCH,
   RUNNER_STATE_LABELS,
   RUN_OUTCOME_LABELS,
+  automationCountsBlind,
   backlogLinkLabel,
   codeLabel,
   decisionReasonLabel,
@@ -73,6 +81,13 @@ function Stat({ label, value }: { label: string; value: string }) {
 /** The 24-hour row of state `human` counts handled and open decisions alike. */
 const ROUTED_TO_PERSON = 'Routed to a person';
 
+/** In place of the decks of the publishes waiting for a person while the counts are blind. */
+const BLIND_PUBLISHES_TEXT =
+  'Dry run: the decks show on the Runs tab once every draft of their run is decided, because a publish there tells that a draft would be accepted.';
+
+/** In place of the 24-hour split by reason while the counts are blind: only a routed decision has a reason. */
+const BLIND_REASONS_TEXT = 'Dry run: hidden while drafts may wait for you, because only a routed draft has a reason.';
+
 function barLabel(state: string, label: string): string {
   return state === 'human' ? ROUTED_TO_PERSON : label;
 }
@@ -108,7 +123,8 @@ export function OverviewTab({
 
   const serverNow = status ? Date.parse(status.serverTime) : NaN;
   const age = (iso: string | null) => (Number.isFinite(serverNow) ? formatAge(iso, serverNow) : formatTimestamp(iso));
-  const bars = status ? decisionStateBars(status.decisions24h.byState, BAR_MAX) : [];
+  const blind = automationCountsBlind(status ? status.mode.effective : null);
+  const bars = status ? decisionStateBars(status.decisions24h.byState, BAR_MAX, blind) : [];
   const reasons = status ? reasonRows(status.decisions24h.byReason) : [];
 
   return (
@@ -130,20 +146,24 @@ export function OverviewTab({
             <h2 className={H2_CLASS}>Open exceptions</h2>
             {status.backlog ? (
               <dl className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <dt className="text-xs text-slate-500">Drafts waiting for you</dt>
-                  <dd className="text-sm font-medium text-slate-900">
-                    <Link
-                      to={{ search: OPEN_EXCEPTIONS_SEARCH }}
-                      className="text-indigo-700 underline"
-                      aria-label={backlogLinkLabel(status.backlog.humanPending)}
-                      data-testid="automation-backlog-human-pending"
-                    >
-                      {status.backlog.humanPending}
-                    </Link>
-                  </dd>
-                </div>
-                <Stat label="Oldest waiting since" value={age(status.backlog.oldestHumanPendingAt)} />
+                {blind ? null : (
+                  <>
+                    <div>
+                      <dt className="text-xs text-slate-500">Drafts waiting for you</dt>
+                      <dd className="text-sm font-medium text-slate-900">
+                        <Link
+                          to={{ search: OPEN_EXCEPTIONS_SEARCH }}
+                          className="text-indigo-700 underline"
+                          aria-label={backlogLinkLabel(status.backlog.humanPending)}
+                          data-testid="automation-backlog-human-pending"
+                        >
+                          {status.backlog.humanPending}
+                        </Link>
+                      </dd>
+                    </div>
+                    <Stat label="Oldest waiting since" value={age(status.backlog.oldestHumanPendingAt)} />
+                  </>
+                )}
                 <div>
                   <dt className="text-xs text-slate-500">Publishes waiting for you</dt>
                   <dd className="text-sm font-medium text-slate-900">
@@ -164,7 +184,11 @@ export function OverviewTab({
               </dl>
             ) : null}
             {status.backlog && status.backlog.humanPublishes > 0 ? (
-              status.backlog.humanPublishItems && status.backlog.humanPublishItems.length > 0 ? (
+              blind ? (
+                <p className="mt-2 text-xs text-slate-600" data-testid="automation-backlog-publishes-blind">
+                  {BLIND_PUBLISHES_TEXT}
+                </p>
+              ) : status.backlog.humanPublishItems && status.backlog.humanPublishItems.length > 0 ? (
                 <ul className="mt-3 space-y-1 text-sm text-slate-700" aria-label="Publishes waiting for you">
                   {status.backlog.humanPublishItems.slice(0, HUMAN_PUBLISH_ITEMS_MAX).map((p, i) => (
                     <li key={`${p.deckId}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
@@ -184,7 +208,7 @@ export function OverviewTab({
                 </p>
               )
             ) : null}
-            {status.backlog && status.mode.effective === 'dry_run' ? (
+            {status.backlog && blind ? (
               <p className="mt-2 text-xs text-slate-600" data-testid="automation-backlog-dry-run">
                 Dry run: every pending draft also waits for you in the{' '}
                 <Link to="/review" className="text-indigo-700 underline">
@@ -329,7 +353,13 @@ export function OverviewTab({
                   </tr>
                 </thead>
                 <tbody>
-                  {reasons.length === 0 ? (
+                  {blind ? (
+                    <tr className="border-t border-slate-100">
+                      <td className={TD_CLASS} colSpan={2} data-testid="automation-reasons-blind">
+                        {BLIND_REASONS_TEXT}
+                      </td>
+                    </tr>
+                  ) : reasons.length === 0 ? (
                     <tr className="border-t border-slate-100">
                       <td className={TD_CLASS} colSpan={2}>
                         No decision with a reason in the last 24 hours.

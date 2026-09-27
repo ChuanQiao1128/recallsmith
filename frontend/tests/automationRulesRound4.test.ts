@@ -33,10 +33,10 @@ describe('AUTHOR_NOT_GATED (frontend-console-31, N1)', () => {
 
 describe('the verdict a list filter shows (frontend-console-30)', () => {
   it('is shown by any state or reason filter, not by a deck filter or none', () => {
-    expect(decisionListShowsVerdict({ state: 'would_accept', reason: '' })).toBe(true);
-    expect(decisionListShowsVerdict({ state: 'human', reason: '' })).toBe(true);
-    expect(decisionListShowsVerdict({ state: '', reason: 'QA_FLAGGED' })).toBe(true);
-    expect(decisionListShowsVerdict({ state: '', reason: '' })).toBe(false);
+    expect(decisionListShowsVerdict({ state: 'would_accept', reason: '', openOnly: false })).toBe(true);
+    expect(decisionListShowsVerdict({ state: 'human', reason: '', openOnly: false })).toBe(true);
+    expect(decisionListShowsVerdict({ state: '', reason: 'QA_FLAGGED', openOnly: false })).toBe(true);
+    expect(decisionListShowsVerdict({ state: '', reason: '', openOnly: false })).toBe(false);
   });
 });
 
