@@ -352,6 +352,7 @@ export function WebhooksPage() {
       decksHref="/"
       contentIntelligenceHref="/content-intelligence"
       webhooksHref="/admin/webhooks"
+      ledgerHref="/ledger"
       adminUsersHref="/admin/users"
       superAdmin
     >
