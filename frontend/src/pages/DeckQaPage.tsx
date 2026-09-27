@@ -1,10 +1,9 @@
 // src/pages/DeckQaPage.tsx
 //
 // The operator surface of the pre-publish AI QA gate (R18 contract §7).
-// The publish preview of §7.10 lives here, as this page's first panel, rather
-// than in the deck list's confirm dialog: fetching it there would add a hook and
-// a network call to the most pinned page in the console, so the deck list maps
-// the two gate refusals to a banner that links here instead.
+// The publish preview of §7.10 is this page's first panel. The deck list's
+// publish confirm dialog shows a summary of the same GET …/qa/status (loaded
+// lazily after the Publish click) and links here for the detail.
 //
 // The page previews the gate (GET …/qa/status), starts a run with the card count
 // and a cost estimate shown first, polls the run, shows findings grouped by card
@@ -27,23 +26,32 @@ import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
+import {
+  BUTTON_CLASS,
+  CARD_CLASS,
+  H1_CLASS,
+  H2_CLASS,
+  INPUT_CLASS,
+  PRIMARY_BUTTON_CLASS,
+} from '../components/console/consoleStyles';
 import { CONSOLE_NAME } from '../lib/brand';
 import { parseDeckId } from '../lib/parseDeckId';
 import { qaPageHref } from '../lib/qaGate';
 import {
   QA_CATEGORY_LABELS,
-  QA_DAILY_USD_CAP,
-  QA_MAX_CARDS,
   QA_POLL_INTERVAL_MS,
   QA_POLL_MAX_FAILURES,
-  QA_START_ERROR_MESSAGES,
   estimateQaCostUsd,
   formatUsd,
   groupFindingsByCard,
   isQaRunActive,
+  qaCapRemainingUsd,
   qaCardsToReview,
   qaItemErrorLabel,
+  qaLimits,
+  qaStartErrorMessage,
 } from '../lib/qaReview';
+import type { QaCardVerdict } from '../lib/qaReview';
 import type { ApiError } from '../types/api';
 import type { Card } from '../types/card';
 import type { Deck } from '../types/deck';
@@ -69,13 +77,12 @@ const SCOPE_OPTIONS: Array<{ value: QaScope; label: string }> = [
 const RUNS_PAGE_SIZE = 20;
 const NOTE_MAX = 500;
 
-const BUTTON_CLASS =
-  'text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed';
-const PRIMARY_BUTTON_CLASS =
-  'text-xs px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed';
-const INPUT_CLASS = 'w-full rounded-md border border-slate-300 px-3 py-2 text-sm';
-const CARD_CLASS = 'bg-white border border-slate-200 rounded-lg shadow-sm p-4';
-const H2_CLASS = 'text-sm font-semibold text-slate-900';
+const VERDICT_BADGES: Record<QaCardVerdict, { tone: 'success' | 'danger' | 'neutral' | 'warning'; label: string }> = {
+  passed: { tone: 'success', label: 'Passed' },
+  flagged: { tone: 'danger', label: 'Flagged' },
+  pending: { tone: 'neutral', label: 'Pending' },
+  not_reviewed: { tone: 'warning', label: 'Not reviewed' },
+};
 
 function toLoadError(error: ApiError | null, fallback: string): LoadError {
   return { code: error?.code ?? 'UNKNOWN', message: error?.message ?? fallback };
@@ -298,8 +305,10 @@ export function DeckQaPage() {
   const cardCount =
     scope === 'changed' ? (status ? qaCardsToReview(status) : 0) : scope === 'all' ? cards.length : selected.size;
   const estimate = estimateQaCostUsd(cardCount);
+  const limits = qaLimits(status);
+  const capRemaining = qaCapRemainingUsd(limits);
   const startDisabled =
-    !status?.enabled || cardCount === 0 || cardCount > QA_MAX_CARDS || starting || shownRunActive;
+    !status?.enabled || cardCount === 0 || cardCount > limits.maxCards || starting || shownRunActive;
 
   function showRun(runId: string) {
     if (deckId === null) return;
@@ -407,7 +416,7 @@ export function DeckQaPage() {
       adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
       <div>
-        <h1 className="text-xl font-semibold text-slate-800">AI QA</h1>
+        <h1 className={H1_CLASS}>AI QA</h1>
         {deck ? (
           <div className="text-xs text-slate-500 mt-0.5">
             {deck.title} · <span className="font-mono">{deck.slug}</span> ·{' '}
@@ -479,11 +488,22 @@ export function DeckQaPage() {
                   <p className="text-sm text-slate-700">
                     {status.changedCards} changed card(s), {status.reviewedCurrent} reviewed at their current content.
                   </p>
-                  {status.wouldBlock ? (
-                    <Callout tone="danger" title="Publishing is blocked">
+                  {status.wouldBlock || status.missing.length > 0 || status.openBlockers.length > 0 ? (
+                    <Callout
+                      tone={status.wouldBlock ? 'danger' : 'warning'}
+                      title={
+                        status.wouldBlock
+                          ? 'Publishing is blocked'
+                          : status.openBlockers.length > 0
+                            ? 'Open blockers (advisory — publishing is not blocked)'
+                            : 'Not reviewed yet (advisory — publishing is not blocked)'
+                      }
+                    >
                       {status.missing.length > 0 ? (
                         <div>
-                          <div className="font-medium">Not reviewed at their current content:</div>
+                          <div className="font-medium">
+                            Not reviewed at their current content ({qaCardsToReview(status)}):
+                          </div>
                           <ul className="list-disc ml-5">
                             {status.missing.map(m => (
                               <li key={m.cardId} className="font-mono text-xs">
@@ -495,7 +515,7 @@ export function DeckQaPage() {
                       ) : null}
                       {status.openBlockers.length > 0 ? (
                         <div className="mt-1">
-                          <div className="font-medium">Open blockers:</div>
+                          <div className="font-medium">Open blockers ({status.openBlockers.length}):</div>
                           <ul className="list-disc ml-5">
                             {status.openBlockers.map(b => (
                               <li key={b.findingId}>
@@ -564,24 +584,26 @@ export function DeckQaPage() {
               Estimated cost ≈ {formatUsd(estimate)} (estimate only; the provider bills separately).
             </p>
 
-            {cardCount > QA_MAX_CARDS ? (
+            {cardCount > limits.maxCards ? (
               <div className="mt-2">
                 <Callout tone="warning">
-                  One run reviews at most {QA_MAX_CARDS} cards. Narrow the scope.
+                  One run reviews at most {limits.maxCards} cards. Narrow the scope.
                 </Callout>
               </div>
             ) : null}
-            {estimate > QA_DAILY_USD_CAP ? (
+            {estimate > capRemaining ? (
               <div className="mt-2">
                 <Callout tone="warning">
-                  This estimate is above the daily AI QA cap of {formatUsd(QA_DAILY_USD_CAP)}.
+                  {limits.spentTodayUsd === null
+                    ? `This estimate is above the daily AI QA cap of ${formatUsd(limits.dailyUsdCap)}.`
+                    : `This estimate is above what is left of today's AI QA cap: ${formatUsd(capRemaining)} of ${formatUsd(limits.dailyUsdCap)}.`}
                 </Callout>
               </div>
             ) : null}
 
             {startError && !isNotReady(startError) ? (
               <div role="alert" className="mt-2 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
-                {QA_START_ERROR_MESSAGES[startError.code] ?? startError.message}
+                {qaStartErrorMessage(startError.code, startError.message, limits)}
               </div>
             ) : null}
 
@@ -684,12 +706,15 @@ export function DeckQaPage() {
                       {group.question ? <div className="text-sm text-slate-900">{group.question}</div> : null}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      {group.passes ? <Badge tone="success">Passed</Badge> : <Badge tone="danger">Flagged</Badge>}
+                      <Badge tone={VERDICT_BADGES[group.verdict].tone}>{VERDICT_BADGES[group.verdict].label}</Badge>
                       <Link to={cardEditHref(deckId, group.cardId)} className="text-xs text-indigo-600 hover:underline">
                         Edit card
                       </Link>
                     </div>
                   </div>
+                  {group.verdict === 'pending' ? (
+                    <p className="mt-1 text-xs text-slate-600">Waiting for review.</p>
+                  ) : null}
                   {group.itemStatus === 'error' || group.itemStatus === 'refused' || group.itemStatus === 'skipped' ? (
                     <p className="mt-1 text-xs text-amber-800">
                       {group.itemErrorCode ? qaItemErrorLabel(group.itemErrorCode) : `Review ${group.itemStatus}.`}
@@ -783,7 +808,9 @@ export function DeckQaPage() {
                       <th className="py-1 pr-3">Cards</th>
                       <th className="py-1 pr-3">Blockers/Majors/Minors</th>
                       <th className="py-1 pr-3">Cost</th>
-                      <th className="py-1" />
+                      <th className="py-1">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>

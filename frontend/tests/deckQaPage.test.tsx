@@ -144,6 +144,72 @@ describe('DeckQaPage', () => {
     expect(clear.textContent).toContain('Publishing is not blocked by AI QA.');
   });
 
+  it('lists open blockers and unreviewed cards in advisory mode without blocking', async () => {
+    qa.fetchQaStatus.mockResolvedValue(
+      ok(
+        qaStatus({
+          required: false,
+          changedCards: 3,
+          reviewedCurrent: 2,
+          missing: [{ cardId: 103, stableUid: 'aws-iam-roles-vs-users' }],
+          openBlockers: [
+            {
+              findingId: 501,
+              cardId: 101,
+              stableUid: 'aws-s3-storage-classes',
+              category: 'incorrect_answer',
+              message: 'Deep Archive is not a lifecycle target.',
+            },
+          ],
+          wouldBlock: false,
+        }),
+      ),
+    );
+    await openPage();
+
+    const gate = screen.getByTestId('qa-gate-status');
+    expect(within(gate).getByText('Open blockers (advisory — publishing is not blocked)')).toBeTruthy();
+    expect(within(gate).queryByText('Publishing is blocked')).toBeNull();
+    expect(gate.textContent).not.toContain('Publishing is not blocked by AI QA.');
+    expect(gate.textContent).toContain('Open blockers (1):');
+    expect(gate.textContent).toContain('aws-s3-storage-classes: Incorrect answer — Deep Archive is not a lifecycle target.');
+    expect(gate.textContent).toContain('Not reviewed at their current content (1):');
+    expect(gate.textContent).toContain('aws-iam-roles-vs-users');
+  });
+
+  it('shows Pending, not Passed, for a card still queued in a running run', async () => {
+    const run = qaRun({ status: 'running', effectiveStatus: 'running', cardsDone: 1 });
+    qa.listQaRuns.mockResolvedValue(runsPage([run]));
+    qa.fetchQaRun.mockResolvedValue(
+      detail({
+        run,
+        items: [qaItem(101, 'aws-s3-storage-classes'), qaItem(102, 'aws-s3-cloudfront-oac', { status: 'queued' })],
+        findings: [],
+      }),
+    );
+    await openPage();
+
+    const queued = await screen.findByTestId('qa-card-102');
+    expect(within(queued).getByText('Pending')).toBeTruthy();
+    expect(within(queued).queryByText('Passed')).toBeNull();
+    expect(queued.textContent).toContain('Waiting for review.');
+    expect(within(screen.getByTestId('qa-card-101')).getByText('Passed')).toBeTruthy();
+  });
+
+  it('uses the run limits the status reports instead of the built-in defaults', async () => {
+    qa.fetchQaStatus.mockResolvedValue(
+      ok(qaStatus({ changedCards: 3, reviewedCurrent: 0, maxCards: 2, dailyUsdCap: 1, spentTodayUsd: 0.95 })),
+    );
+    await openPage();
+
+    expect(screen.getByTestId('qa-card-count').textContent).toBe('3 card(s) will be reviewed.');
+    expect(startButton().disabled).toBe(true);
+    expect(screen.getByText('One run reviews at most 2 cards. Narrow the scope.')).toBeTruthy();
+    expect(
+      screen.getByText("This estimate is above what is left of today's AI QA cap: $0.05 of $1.00."),
+    ).toBeTruthy();
+  });
+
   it('shows the card count and cost estimate before starting', async () => {
     await openPage();
 
@@ -343,6 +409,8 @@ describe('DeckQaPage', () => {
     expect(within(passed).getByText('Passed')).toBeTruthy();
     expect(within(passed).getByText('Weak distractor')).toBeTruthy();
     expect(refusedCard.textContent).toContain('The model declined to review this card.');
+    expect(within(refusedCard).getByText('Not reviewed')).toBeTruthy();
+    expect(within(refusedCard).queryByText('Passed')).toBeNull();
 
     const pending = deferred<ApiResult<null>>();
     qa.resolveQaFinding.mockReturnValue(pending.promise);
