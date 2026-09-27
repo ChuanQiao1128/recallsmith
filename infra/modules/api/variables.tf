@@ -124,3 +124,9 @@ variable "zone_id" {
   default     = ""
   description = "Hosted zone that receives the api. alias records; \"\" creates none (the staging root writes its own)."
 }
+
+variable "console_extra_audiences" {
+  type        = list(string)
+  default     = []
+  description = "Extra console-pool app client ids the console JWT authorizer accepts (R18 J06: console-dev, used by the local MCP server)."
+}

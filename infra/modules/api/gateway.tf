@@ -117,7 +117,7 @@ resource "aws_apigatewayv2_authorizer" "console" {
   identity_sources                 = ["$request.header.Authorization"]
   name                             = "cognito-jwt"
   jwt_configuration {
-    audience = [var.console_client_id]
+    audience = concat([var.console_client_id], var.console_extra_audiences)
     issuer   = "https://${var.console_pool_endpoint}"
   }
 }
