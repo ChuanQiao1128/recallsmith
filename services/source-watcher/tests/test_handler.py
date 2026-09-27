@@ -393,7 +393,7 @@ class TestHandler:
         assert result["failed"] == 1
 
     def test_reports_are_split_into_batches(self, world, monkeypatch):
-        assert handler.REPORT_BATCH_SIZE == 100
+        assert handler.REPORT_BATCH_SIZE == 10  # D03: was 100, which never flushed early at WATCH_MAX_TARGETS = 60
         monkeypatch.setattr(handler, "REPORT_BATCH_SIZE", 2)
         urls = [f"https://h{i}.example.com/p" for i in range(5)]
         world.pages = {url: html_ok(b"<main>x</main>") for url in urls}
@@ -534,3 +534,166 @@ class TestHostilePages:
         with pytest.raises(MemoryError):
             handler.lambda_handler(EVENT, Context())
         assert [[o["targetId"] for o in r["observations"]] for r in world.posts(REPORT)] == [[0, 1]]
+
+
+def _emf_lines(out: str, name: str) -> list[dict]:
+    return [line for line in (json.loads(l) for l in out.splitlines() if l.startswith("{")) if name in line]
+
+
+class TestProductionShapedRuns:
+    """D03, cloud-security-resilience-8: at the production settings (WATCH_MAX_TARGETS = 60) one
+    hostile page never loses the run, and a run that dies has already reported what it finished."""
+
+    def _sixty(self, world) -> list[str]:
+        urls = [f"https://h{i}.example.com/p" for i in range(60)]
+        world.pages = {url: html_ok(b"<main>x</main>") for url in urls}
+        world.set_targets([target(i, url) for i, url in enumerate(urls)])
+        return urls
+
+    def test_run_killed_at_the_last_target_has_reported_the_rest(self, world):
+        assert settings.load_settings({}).watch_max_targets == 60
+        urls = self._sixty(world)
+
+        def killed(url: str, kwargs: dict) -> FetchResult:
+            raise MemoryError("simulated OOM")
+
+        world.pages[urls[59]] = killed
+        with pytest.raises(MemoryError):
+            handler.lambda_handler(EVENT, Context())
+        reported = [o["targetId"] for o in observations(world)]
+        assert reported == list(range(50))
+        assert all(len(r["observations"]) == handler.REPORT_BATCH_SIZE for r in world.posts(REPORT))
+
+    def test_page_that_raises_inside_the_parser_is_failed_parse(self, world, monkeypatch, capsys):
+        urls = self._sixty(world)
+        # `<![ ]>` makes CPython 3.12's html.parser raise AssertionError; the patched parser below
+        # raises whatever the interpreter does, so the test does not depend on the patch level.
+        world.pages[urls[58]] = html_ok(b"<html><![ ]>x</html>")
+        world.pages[urls[59]] = html_ok(b"<main>poison</main>")
+        real = handler.normalize_html
+
+        def parser(text: str, **kwargs: Any) -> str:
+            if "poison" in text:
+                raise AssertionError("expected name token")
+            return real(text, **kwargs)
+
+        monkeypatch.setattr(handler, "normalize_html", parser)
+        result = handler.lambda_handler(EVENT, Context())
+        by_id = {o["targetId"]: o for o in observations(world)}
+        assert sorted(by_id) == list(range(60))
+        assert (by_id[59]["status"], by_id[59]["errorCode"], by_id[59]["contentSha256"]) == ("failed", "PARSE", None)
+        assert by_id[59]["httpStatus"] == 200
+        assert by_id[58]["status"] in ("ok", "failed")
+        assert all(by_id[i]["status"] == "ok" for i in range(58))
+        assert result["checked"] == 60
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+        errors = {line["targetId"]: line for line in logs if line.get("event") == "parse_error"}
+        assert errors[59]["errorClass"] == "AssertionError" and errors[59]["level"] == "warn"
+        assert set(errors[59]) == {"level", "tag", "event", "targetId", "host", "errorClass"}
+
+    def test_feed_parse_error_of_any_class_is_isolated(self, world, monkeypatch):
+        url = "https://feeds.example.com/rss"
+        world.pages = {url: FetchResult("ok", http_status=200, body=b"<rss/>", media_type="application/rss+xml", bytes=6, requested=True),
+                       "https://docs.example.com/ok": html_ok(b"<main>x</main>")}
+
+        def broken(body: bytes, base_url: str) -> list:
+            raise RecursionError("deep")
+
+        monkeypatch.setattr(handler, "parse_rss", broken)
+        world.set_targets([target(1, url, kind="feed", feedFormat="rss"), target(2, "https://docs.example.com/ok")])
+        result = handler.lambda_handler(EVENT, Context())
+        by_id = {o["targetId"]: o for o in observations(world)}
+        assert (by_id[1]["status"], by_id[1]["errorCode"]) == ("failed", "PARSE") and by_id[2]["status"] == "ok"
+        assert result["failed"] == 1
+
+    def test_error_outside_the_parse_is_a_failed_target(self, world, capsys):
+        urls = self._sixty(world)
+
+        def broken(url: str, kwargs: dict) -> FetchResult:
+            raise ValueError("unexpected")
+
+        world.pages[urls[3]] = broken
+        result = handler.lambda_handler(EVENT, Context())
+        by_id = {o["targetId"]: o for o in observations(world)}
+        assert sorted(by_id) == list(range(60))
+        assert (by_id[3]["status"], by_id[3]["errorCode"], by_id[3]["httpStatus"]) == ("failed", "PARSE", None)
+        assert result["failed"] == 1
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+        (error,) = [line for line in logs if line.get("event") == "target_error"]
+        assert (error["targetId"], error["errorClass"]) == (3, "ValueError")
+
+    def test_page_that_exhausts_the_parse_budget_is_failed_and_the_run_reports(self, world, monkeypatch, capsys):
+        urls = self._sixty(world)
+        world.pages[urls[10]] = html_ok(b"<i>x</i>" * 30_000)
+        ticks = iter(range(10**7))
+        monkeypatch.setattr(normalize, "clock", lambda: float(next(ticks)))  # one second per read
+        result = handler.lambda_handler(EVENT, Context())
+        by_id = {o["targetId"]: o for o in observations(world)}
+        assert sorted(by_id) == list(range(60))
+        assert (by_id[10]["status"], by_id[10]["errorCode"]) == ("failed", "PARSE")
+        assert result["checked"] == 60 and result["failed"] == 1
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+        (limit,) = [line for line in logs if line.get("event") == "parse_limit"]
+        assert (limit["targetId"], limit["limit"]) == (10, "time budget")
+
+    def test_parse_budget_never_eats_the_final_report_time(self, world, monkeypatch):
+        monkeypatch.setattr(normalize, "clock", lambda: 1000.0)
+        prod = settings.load_settings({})
+        room = handler.REPORT_WORST_MS + handler.REPORT_RESERVE_MS
+        assert handler._Run(prod, Context(room + 3_000), 0.0).parse_deadline() == 1003.0
+        assert handler._Run(prod, Context(room - 1), 0.0).parse_deadline() == 1000.0
+        assert handler._Run(prod, Context(280_000), 0.0).parse_deadline() == 1000.0 + normalize.PARSE_TIME_BUDGET_SECONDS
+
+    def test_start_guard_covers_the_worst_case_of_one_target(self, world):
+        prod = settings.load_settings({})
+        hops = handler.MAX_REDIRECTS + 1
+        worst_ms = (
+            hops * 10_000  # robots.txt, every hop at its timeout
+            + hops * int(prod.watch_http_timeout_seconds * 1000)  # the page, every hop at its timeout
+            + 2 * int(prod.watch_host_interval_seconds * 1000)
+            + int(normalize.PARSE_TIME_BUDGET_SECONDS * 1000)  # one parse budget, shared by both html-headings parses
+            + handler.REPORT_WORST_MS
+            + handler.REPORT_RESERVE_MS
+        )
+        assert handler.min_remaining_ms(prod) == worst_ms == 128_000
+        self._sixty(world)
+        result = handler.lambda_handler(EVENT, Context(remaining_ms=worst_ms - 1))
+        assert world.fetches == [] and result["checked"] == 0
+        result = handler.lambda_handler(EVENT, Context(remaining_ms=worst_ms))
+        assert result["checked"] == 60
+
+
+class TestHeartbeat:
+    """D03, cloud-security-resilience-14 / M6: SourceWatchRuns = 1 once per source-watch invocation."""
+
+    def _runs(self, capsys) -> list[dict]:
+        return _emf_lines(capsys.readouterr().out, "SourceWatchRuns")
+
+    def test_heartbeat_once_per_invocation_whatever_the_outcome(self, world, capsys):
+        world.set_targets([], "off")
+        handler.lambda_handler(EVENT, Context())
+        (line,) = self._runs(capsys)
+        directive = line["_aws"]["CloudWatchMetrics"][0]
+        assert directive["Namespace"] == "DeveloperCards"
+        assert directive["Metrics"] == [{"Name": "SourceWatchRuns", "Unit": "Count"}]
+        assert directive["Dimensions"] == [["Service"]]
+        assert line["Service"] == "source-watcher" and line["SourceWatchRuns"] == 1
+
+        world.pages = {"https://docs.example.com/a": html_ok(b"<main>x</main>")}
+        world.set_targets([target(1, "https://docs.example.com/a")])
+        handler.lambda_handler(EVENT, Context())
+        assert len(self._runs(capsys)) == 1
+
+        world.targets_answer = 503
+        with pytest.raises(RuntimeError):
+            handler.lambda_handler(EVENT, Context())
+        assert len(self._runs(capsys)) == 1
+
+        world.ssm.values[SECRET_NAME] = "PLACEHOLDER-set-by-supervisor"
+        with pytest.raises(RuntimeError):
+            handler.lambda_handler(EVENT, Context())
+        assert len(self._runs(capsys)) == 1
+
+    def test_no_heartbeat_for_other_events(self, world, capsys):
+        handler.lambda_handler({"job": "tick"}, Context())
+        assert self._runs(capsys) == []
