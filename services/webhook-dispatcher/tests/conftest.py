@@ -66,7 +66,7 @@ def local_server() -> Iterator[Callable[[Responder], LocalServer]]:
         httpd.daemon_threads = True
         srv = LocalServer(port=httpd.server_address[1])
         state["srv"] = srv
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
         servers.append((httpd, srv))
         return srv
 
