@@ -379,7 +379,9 @@ is `CONFIG`. Reply mapping: `choices[0].message.content`; `finish_reason` `stop`
 `message.refusal` with no content → `refusal`; `usage.prompt_tokens` minus
 `prompt_tokens_details.cached_tokens` → input, the cached tokens → cache read (0.1 × the input price,
 matching the card's $0.55 cached input), `completion_tokens` → output; request id from
-`x-amzn-RequestId` (else the body `id`). Timeout 120 s, `max_retries=2` (429 and 500/502/503/504 and
+`x-amzn-RequestId` (else the body `id`); the reply's `model` → `response.model` (the served id, with
+`openai.` prepended when the reply omits it, so it reads like the configured `openai.gpt-5.5`; None
+when absent), which the eval harness records as `servedModel` (D03). Timeout 120 s, `max_retries=2` (429 and 500/502/503/504 and
 no-response errors are retried with 0.5 s, 1 s, … backoff, capped at 4 s); `with_options` narrows
 both per card like the other clients.
 

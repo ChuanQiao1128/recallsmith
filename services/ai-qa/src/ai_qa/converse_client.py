@@ -76,6 +76,9 @@ class ConverseResponse:
     _request_id: str | None
     stop_details: Any = None
     raw_stop_reason: str | None = field(default=None, repr=False)
+    # The model id the provider says served the reply (the anthropic Message's `model`), or None
+    # when the provider does not say (Converse replies carry no model id).
+    model: str | None = None
 
 
 def _field(block: Any, name: str) -> Any:

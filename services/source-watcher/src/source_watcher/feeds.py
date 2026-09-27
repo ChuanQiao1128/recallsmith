@@ -151,11 +151,12 @@ def slug(text: str) -> str:
     return _NON_ALNUM_RUN.sub("-", text.lower()).strip("-")
 
 
-def html_heading_items(page_url: str, html_text: str) -> list[FeedItem]:
-    """Every h2/h3 of the content root, as `<page url>#<id, else slug>`."""
+def html_heading_items(page_url: str, html_text: str, *, deadline: float | None = None) -> list[FeedItem]:
+    """Every h2/h3 of the content root, as `<page url>#<id, else slug>`. `deadline` (a value of
+    normalize.clock) bounds the parse, as in parse_document."""
     page, _fragment = urldefrag(page_url)
     raw: list[tuple[str | None, str | None, str | None]] = []
-    root: Element = content_root(parse_document(html_text))
+    root: Element = content_root(parse_document(html_text, deadline=deadline))
     for node in iter_elements(root):
         if node.tag not in HEADING_TAGS:
             continue

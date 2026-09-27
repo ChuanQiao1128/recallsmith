@@ -1,0 +1,6 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.observability.aws_cloudwatch_metric_alarm.source_watch_missing": "create"
+  }
+}
