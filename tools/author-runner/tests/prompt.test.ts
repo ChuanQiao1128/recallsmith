@@ -17,6 +17,10 @@ describe('queue-item prompt', () => {
     for (const lit of ['find_similar_cards', 'read_source', 'submit_draft', 'nothing_new', '"outcome"']) {
       expect(template).toContain(lit);
     }
+    // L6: the final-line vocabulary lets an agent that could not do the task say so instead of nothing_new.
+    expect(template).toContain('"done"|"nothing_new"|"blocked"');
+    expect(template).toContain('"reason":');
+    expect(template).toMatch(/finish with outcome `blocked`, never `nothing_new`/);
 
     const values: PromptValues = {
       url: 'https://docs.example.com/page',

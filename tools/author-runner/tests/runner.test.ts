@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { claudeArgs, killGroup } from '../src/claude';
 import type { RunnerConfig } from '../src/config';
-import { EXIT_FAILURE, EXIT_LOGIN_REQUIRED, EXIT_OK, runOnce } from '../src/runner';
+import { COMPLETE_ATTEMPTS, EXIT_FAILURE, EXIT_LOGIN_REQUIRED, EXIT_OK, isPermanentCompleteFailure, pendingCompleteDir, runOnce } from '../src/runner';
 import {
   envelope,
   makeHome,
@@ -65,6 +65,8 @@ interface ApiScript {
   leaseMs?: number;
   heartbeatStatus?: number;
   claimFails?: boolean;
+  /** The HTTP status of each `complete` call in turn (0 = the connection is dropped); 200 once used up. */
+  completeStatuses?: number[];
 }
 
 function handler(script: ApiScript) {
@@ -95,6 +97,10 @@ function handler(script: ApiScript) {
         script.leaseMs === undefined ? it : { ...it, leaseExpiresAt: new Date(Date.now() + script.leaseMs).toISOString() },
       );
       sendJson(res, 200, envelope({ mode: 'dry_run', effectiveMode: 'dry_run', items }));
+    } else if (req.url === `${ROUTE}complete` && (script.completeStatuses?.length ?? 0) > 0) {
+      const status = script.completeStatuses!.shift()!;
+      if (status === 0) res.socket?.destroy();
+      else sendJson(res, status, { success: false, data: null, error: { code: status === 409 ? 'RUN_NOT_RUNNING' : 'INTERNAL_ERROR', message: 'no' } });
     } else if (req.url === `${ROUTE}complete`) {
       sendJson(
         res,
@@ -234,7 +240,7 @@ describe('runOnce', () => {
     expect(meta.authorConfig).toMatchObject({
       model: 'claude-opus-5-5',
       skillVersion: 'author-cards@1.8.1',
-      mcpServerSha256: null,
+      mcpServerSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
       claudeVersion: '2.1.283 (Claude Code, test fake)',
       runnerVersion: '1.0.0',
     });
@@ -441,6 +447,148 @@ describe('runOnce', () => {
     });
   });
 
+  it('completes a blocked agent as failed with AGENT_BLOCKED and a missing outcome line as AGENT_NO_RESULT (L6, ai-agent-13)', async () => {
+    const a = await setup({ items: [item()] });
+    expect(await runOnce(a.config, { env: a.env('blocked'), log: a.log })).toBe(EXIT_OK);
+    expect(completeBody(a.api)).toMatchObject({
+      outcome: 'failed',
+      exitCode: 0,
+      numTurns: 7,
+      error: 'AGENT_BLOCKED: read_source refused the page: SOURCE_HOST_NOT_ALLOWED',
+      summary: 'could not read the source',
+    });
+    expect(a.api.requests.at(-1)!.body).toMatchObject({ state: 'error', lastRunOutcome: 'failed' });
+
+    const b = await setup({ items: [item()] });
+    await runOnce(b.config, { env: b.env('blocked_result'), log: b.log });
+    expect(completeBody(b.api)).toMatchObject({ outcome: 'failed', error: 'AGENT_BLOCKED: the developercards tools are missing' });
+
+    const c = await setup({ items: [item()] });
+    await runOnce(c.config, { env: c.env('no_outcome'), log: c.log });
+    expect(completeBody(c.api)).toMatchObject({
+      outcome: 'failed',
+      exitCode: 0,
+      error: 'AGENT_NO_RESULT: the final message does not end with the outcome JSON line',
+    });
+
+    const d = await setup({ items: [item()] });
+    await runOnce(d.config, { env: d.env('mcp_failed'), log: d.log });
+    expect(completeBody(d.api)).toMatchObject({ outcome: 'failed', error: 'the developercards MCP server did not start (failed)' });
+  });
+
+  it('fails a run whose system/init message shows an API key or is missing (ai-agent-14)', async () => {
+    const a = await setup({ items: [item()] });
+    await runOnce(a.config, { env: a.env('api_key'), log: a.log });
+    expect(completeBody(a.api)).toMatchObject({
+      outcome: 'failed',
+      exitCode: 0,
+      error: 'claude did not run on the subscription login: apiKeySource /login managed key',
+    });
+    const b = await setup({ items: [item()] });
+    await runOnce(b.config, { env: b.env('no_init'), log: b.log });
+    expect(completeBody(b.api)).toMatchObject({
+      outcome: 'failed',
+      error: 'claude did not run on the subscription login: no system/init message',
+    });
+    // The run record keeps what the init message said.
+    const c = await setup({ items: [item()] });
+    await runOnce(c.config, { env: c.env('done'), log: c.log });
+    const runId = String(completeBody(c.api).runId);
+    const meta = JSON.parse(readFileSync(join(c.config.logDir, 'runs', `${runId}.meta.json`), 'utf8')) as { usage: Record<string, unknown> };
+    expect(meta.usage).toEqual({ totalCostUsd: 1.25, models: ['claude-opus-5-5'], apiKeySource: 'none' });
+  });
+
+  it('runs nothing when the MCP server bundle is missing (ai-agent-13)', async () => {
+    const s = await setup({ items: [item()] });
+    rmSync(join(s.t.repo, 'tools', 'mcp-server', 'dist', 'index.js'));
+    expect(await runOnce(s.config, { env: s.env('done'), log: s.log })).toBe(EXIT_FAILURE);
+    expect(routes(s.api)).toEqual(['heartbeat(error)']);
+    expect(s.api.requests[0]!.body.lastError).toBe(
+      'author config: cannot read tools/mcp-server/dist/index.js in the repo root (build tools/mcp-server)',
+    );
+    expect(existsSync(s.t.recordFile)).toBe(false);
+  });
+
+  it('retries a failed complete, keeps it with the notes, and replays it before the next claim (automation-16)', async () => {
+    const claimed = item();
+    const s = await setup({ items: [claimed], completeStatuses: [503, 0, 500] });
+    const waits: number[] = [];
+    const sleep = async (ms: number) => {
+      waits.push(ms);
+    };
+    expect(await runOnce(s.config, { env: s.env('done'), log: s.log, sleep })).toBe(EXIT_OK);
+    // Three attempts with a growing, jittered backoff between them.
+    const completes = s.api.requests.filter((r) => r.url === `${ROUTE}complete`);
+    expect(completes).toHaveLength(COMPLETE_ATTEMPTS);
+    expect(waits).toHaveLength(COMPLETE_ATTEMPTS - 1);
+    expect(waits[0]).toBeGreaterThanOrEqual(1_000);
+    expect(waits[0]).toBeLessThanOrEqual(3_000);
+    expect(waits[1]).toBeGreaterThanOrEqual(2_000);
+    expect(waits[1]).toBeLessThanOrEqual(6_000);
+    const sent = completes[0]!.body;
+    expect(sent).toMatchObject({ runId: claimed.runId, outcome: 'done', summary: 'two new cards drafted' });
+    expect(s.events()).toContain('complete_failed');
+    expect(s.events()).toContain('complete_pending');
+    expect(s.api.requests.at(-1)!.body).toMatchObject({ state: 'error' });
+    expect(String(s.api.requests.at(-1)!.body.lastError)).toMatch(new RegExp(`^complete failed for ${String(claimed.runId)}: HTTP 500`));
+
+    // The request and the agent's notes are kept locally.
+    const file = join(pendingCompleteDir(s.config), `${String(claimed.runId)}.json`);
+    const kept = JSON.parse(readFileSync(file, 'utf8')) as { itemId: number; request: Record<string, unknown> };
+    expect(kept.itemId).toBe(42);
+    expect(kept.request).toEqual(sent);
+
+    // The next launch re-sends it before its first claim; the server applies it (or answers replayed).
+    s.api.requests.length = 0;
+    s.lines.length = 0;
+    expect(await runOnce(s.config, { env: s.env('done'), log: s.log, sleep })).toBe(EXIT_OK);
+    expect(routes(s.api)).toEqual(['heartbeat(running)', 'complete', 'claim', 'heartbeat(idle)']);
+    expect(s.api.requests[1]!.body).toEqual(sent);
+    expect(existsSync(file)).toBe(false);
+    expect(s.events()).toContain('complete_replayed');
+  });
+
+  it('keeps a kept complete after another transient failure and drops one the server refuses for good (automation-16)', async () => {
+    const claimed = item();
+    const s = await setup({ items: [claimed], completeStatuses: [500, 500, 500] });
+    const sleep = async () => {};
+    await runOnce(s.config, { env: s.env('nothing_new'), log: s.log, sleep });
+    const file = join(pendingCompleteDir(s.config), `${String(claimed.runId)}.json`);
+    expect(existsSync(file)).toBe(true);
+
+    // Still down on the next launch: the complete stays kept and the run reports the error; the claim still happens.
+    const down = await setup({ completeStatuses: [502] });
+    const config = { ...down.config, logDir: s.config.logDir, lockFile: s.config.lockFile };
+    expect(await runOnce(config, { env: down.env('done'), log: down.log, sleep })).toBe(EXIT_OK);
+    expect(routes(down.api)).toEqual(['heartbeat(running)', 'complete', 'claim', 'heartbeat(idle)']);
+    expect(existsSync(file)).toBe(true);
+
+    // The run was abandoned meanwhile and the server refuses the outcome (409): dropped, never re-sent.
+    const refused = await setup({ completeStatuses: [409] });
+    const config2 = { ...refused.config, logDir: s.config.logDir, lockFile: s.config.lockFile };
+    expect(await runOnce(config2, { env: refused.env('done'), log: refused.log, sleep })).toBe(EXIT_OK);
+    expect(routes(refused.api)).toEqual(['heartbeat(running)', 'complete', 'claim', 'heartbeat(idle)']);
+    expect(existsSync(file)).toBe(false);
+    expect(readdirSync(pendingCompleteDir(s.config))).toEqual([]);
+
+    // A client error is never retried or kept; a network error, 5xx, 401, 408 and 429 are.
+    expect(isPermanentCompleteFailure(new Error('HTTP 409 RUN_NOT_RUNNING: x'))).toBe(true);
+    expect(isPermanentCompleteFailure(new Error('HTTP 400 VALIDATION_ERROR: x'))).toBe(true);
+    for (const m of ['HTTP 500 INTERNAL_ERROR: x', 'HTTP 401: sign in', 'HTTP 429: slow down', 'HTTP 408: x', 'Network error calling /x: reset']) {
+      expect(isPermanentCompleteFailure(new Error(m))).toBe(false);
+    }
+  });
+
+  it('does not retry a complete the server refuses for good (automation-16)', async () => {
+    const claimed = item();
+    const s = await setup({ items: [claimed], completeStatuses: [409] });
+    const waits: number[] = [];
+    await runOnce(s.config, { env: s.env('done'), log: s.log, sleep: async (ms) => void waits.push(ms) });
+    expect(s.api.requests.filter((r) => r.url === `${ROUTE}complete`)).toHaveLength(1);
+    expect(waits).toEqual([]);
+    expect(existsSync(join(pendingCompleteDir(s.config), `${String(claimed.runId)}.json`))).toBe(false);
+  });
+
   it('runs nothing when the author configuration cannot be pinned (ai-agent-3)', async () => {
     const s = await setup({ items: [item()] });
     rmSync(join(s.t.repo, '.claude'), { recursive: true, force: true });
@@ -468,8 +616,8 @@ describe('runOnce', () => {
 
   it('logs locked and exits 0 when another run holds the lock', async () => {
     const s = await setup({ items: [item()] });
-    const { acquireLock } = await import('../src/lock');
-    const held = acquireLock(s.config.lockFile);
+    const { acquireLock, lockStaleMs } = await import('../src/lock');
+    const held = acquireLock(s.config.lockFile, lockStaleMs(s.config));
     expect(held).not.toBeNull();
     try {
       expect(await runOnce(s.config, { env: s.env('done'), log: s.log })).toBe(EXIT_OK);
