@@ -78,10 +78,30 @@ export interface ReadSourceInput {
   maxChunkChars?: number;
 }
 
-/** Where read_source runs and which credential file it must never read. */
+/**
+ * Where read_source runs and which credential file it must never read. `allowedHosts`, set
+ * inside an automation run, is the only set of https hosts it may fetch (redirects included).
+ */
 export interface IngestContext {
   repoRoot: string;
   tokenFile: string;
+  allowedHosts?: readonly string[];
+}
+
+/** Refuses an https URL whose host is not in the automation run's allowlist (ai-agent-1). */
+export function checkSourceHost(url: string, allowedHosts: readonly string[] | undefined): void {
+  if (allowedHosts === undefined) return;
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    throw new IngestError('source must be an https:// URL or a local file path');
+  }
+  if (!allowedHosts.includes(host)) {
+    throw new IngestError(
+      `SOURCE_HOST_NOT_ALLOWED: ${host} is not in DC_AUTOMATION_SOURCE_HOSTS; an automation run reads only ${allowedHosts.join(', ') || '(no host)'}`,
+    );
+  }
 }
 
 const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
@@ -127,6 +147,7 @@ export function buildIngestArgs(context: IngestContext, input: ReadSourceInput, 
     if (!source.startsWith('https://')) {
       throw new IngestError('source must be an https:// URL or a local file path');
     }
+    checkSourceHost(source, context.allowedHosts);
   } else {
     source = resolve(cwd, source);
     checkLocalSource(source, context.tokenFile);
@@ -147,7 +168,8 @@ export function buildIngestArgs(context: IngestContext, input: ReadSourceInput, 
 
 /**
  * process.env with ~/.local/bin appended to PATH, so a GUI-launched Claude Code still finds uv,
- * plus DC_REPO_ROOT and DC_TOKEN_FILE so dc-ingest applies the same source root and token-file refusal.
+ * plus DC_REPO_ROOT and DC_TOKEN_FILE so dc-ingest applies the same source root and token-file refusal,
+ * and, inside an automation run, DC_INGEST_ALLOWED_HOSTS so dc-ingest refuses a redirect to another host.
  */
 export function ingestEnv(context: IngestContext, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const home = env.HOME ?? homedir();
@@ -157,6 +179,7 @@ export function ingestEnv(context: IngestContext, env: NodeJS.ProcessEnv = proce
     PATH: path === '' ? `${home}/.local/bin` : `${path}:${home}/.local/bin`,
     DC_REPO_ROOT: context.repoRoot,
     DC_TOKEN_FILE: context.tokenFile,
+    ...(context.allowedHosts !== undefined ? { DC_INGEST_ALLOWED_HOSTS: context.allowedHosts.join(',') } : {}),
   };
 }
 
