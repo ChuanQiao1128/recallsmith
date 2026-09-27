@@ -9,7 +9,7 @@ opinion is off (`tests/test_second_opinion.py::test_prod_env_keeps_bedrock_and_t
 | Where | What |
 |---|---|
 | `src/ai_qa/settings.py:25-47` | `PROVIDERS` gains `bedrock-converse` (`CONVERSE_PROVIDER`); no `DEFAULT_MODELS` entry; `AI_QA_SECOND_*` key names and `SECOND_SCOPES` (`facts`, `all`) |
-| `src/ai_qa/settings.py:88-93` | `Settings.second_provider`, `second_model`, `second_scope`, `second_price_input_per_mtok`, `second_price_output_per_mtok` (all defaulted: off) |
+| `src/ai_qa/settings.py:89-93` | `Settings.second_provider`, `second_model`, `second_scope`, `second_price_input_per_mtok`, `second_price_output_per_mtok` (all defaulted: off) |
 | `src/ai_qa/settings.py:157-201` | `_model` (per-provider model rules; `bedrock-converse` requires a model and rejects `anthropic.`), `_optional_price`, `_second_opinion` (parses/validates the second-reviewer keys) |
 | `src/ai_qa/converse_client.py:156` | `ConverseClient` (`messages.create` → one `bedrock-runtime` `converse` call; `with_options`; `botocore_config`); `STOP_REASONS` at `:22`, request mapping `create` at `:131`, response mapping `to_response` |
 | `src/ai_qa/providers.py:37-42,54-55` | `make_client` builds `ConverseClient(region=AI_BEDROCK_REGION, timeout=120, max_retries=2)`; `structured_outputs_on` is always False for `bedrock-converse` |
