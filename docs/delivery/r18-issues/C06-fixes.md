@@ -86,7 +86,7 @@ Status: partially fixed (the evals side is fixed; server enforcement needs src_C
   and takes its complete `authorConfig`. That is the runner's `AuthorConfig`: `id`, `model`,
   `skillVersion`, the skill, prompt, CLAUDE-args and MCP-bundle SHA-256s, `claudeVersion`,
   `runnerVersion`.
-  - `draft_rows` (`:155-215`) copies the configuration onto each new-facts row as `authorConfig`.
+  - `draft_rows` (`:156-212`) copies the configuration onto each new-facts row as `authorConfig`.
   - It leaves out and reports a draft with no run record, an unreadable or foreign record, an
     incomplete config, a path-like run id, or a draft whose `agent.model`/`agent.skillVersion` is
     not its run's.
@@ -98,7 +98,7 @@ Status: partially fixed (the evals side is fixed; server enforcement needs src_C
     span more than one author model or skill version.
   - Different hashes or CLI versions under one model and skill are all listed in `authorConfigIds`,
     so the gate is bound to each of them.
-  - The Markdown has an "Author (new-facts stratum)" line (`:734-743`).
+  - The Markdown has an "Author (new-facts stratum)" line (`:734-742`).
 - `README.md:620-626` ("Author binding"): any change of the author configuration (a new
   `authorConfig` id) requires a new gate.
 - Not done here (outside `evals/` and `docs/delivery/`, and no L-item covers it):
@@ -158,7 +158,7 @@ Status: partially fixed (the evals side of L1 is fixed; the adapter, env, IAM an
   through ai-qa's `openai-mantle` client. It uses `AI_QA_AUTOMATION_REGION` (default us-east-1) and
   runs `--profile automation` as before. Tests use fakes only. The README has the probe per path
   and the data-location note.
-- **L3** (text only). The gate's "failed" Markdown line (`automation_gate.py:821-826`) and the README
+- **L3** (text only). The gate's "failed" Markdown line (`automation_gate.py:823-826`) and the README
   no longer say a failed report is never recorded. They say that a posted failed report is recorded
   as a failed evaluation which, as the newest, keeps `live` off. No route is called from evals.
 - L2, L4, L5, L6: not touched (no evals side).
