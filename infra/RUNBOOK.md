@@ -203,6 +203,8 @@ before the new watcher runs page within about three hours):
       `ActionsEnabled` of both with `describe-alarms`).
 
 The business-side checklist is in docs/runbooks/automation-operations.md, "Upgrading a running system".
+The R18E–R18G upgrade (core, then ai-qa before any live switch, the Mac tool rebuild and a new gate)
+is in the same file, "Upgrading to R18E–R18G".
 
 **Post-apply secret step** (supervisor, once after the A10 apply; A00 §1.3): the two callback
 secrets are created as `PLACEHOLDER-set-by-supervisor`. Set each to a random 32-byte hex value:
