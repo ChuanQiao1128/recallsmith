@@ -6,17 +6,29 @@
 // deciding it is sent as reviewMs, which feeds the Automation Ledger (§9.3
 // ai_draft_review). The lint panel runs the importer's own rules through
 // lib/draftReview.ts, the same set the MCP server's lint_card applies (§8.4).
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import { fetchDeckById, fetchDecks } from '../api/authoring';
 import { acceptDraft, fetchDraft, listDrafts, rejectDraft } from '../api/drafts';
+import { QueryKeys, useAppQueryClient } from '../api/queryClient';
 import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { CardForm } from '../components/CardForm';
 import type { CardFormValues } from '../components/CardForm';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
+import { useConfirm } from '../components/ui/ConfirmDialogContext';
+import {
+  BUTTON_CLASS,
+  CARD_CLASS,
+  H1_CLASS,
+  H2_CLASS,
+  INPUT_CLASS,
+  INPUT_INVALID_CLASS,
+  LABEL_CLASS,
+  PRIMARY_BUTTON_CLASS,
+} from '../components/console/consoleStyles';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   DRAFT_NOTE_MAX_LENGTH,
@@ -25,9 +37,12 @@ import {
   draftToFormValues,
   formValuesToDraftCard,
   lintDraftCard,
-  reviewDurationMs,
+  reviewClockMs,
+  setReviewClockVisible,
   sourceHostLabel,
+  startReviewClock,
 } from '../lib/draftReview';
+import type { ReviewClock } from '../lib/draftReview';
 import { parseDeckId } from '../lib/parseDeckId';
 import { qaPageHref } from '../lib/qaGate';
 import type { ApiError, ApiResult } from '../types/api';
@@ -58,14 +73,9 @@ const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
 ];
 const PAGE_SIZE = 50;
 
-const BUTTON_CLASS =
-  'text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed';
-const PRIMARY_BUTTON_CLASS =
-  'text-xs px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed';
-const INPUT_CLASS = 'w-full rounded-md border border-slate-300 px-3 py-2 text-sm';
-const LABEL_CLASS = 'block text-xs font-medium text-slate-700 mb-1';
-const CARD_CLASS = 'bg-white border border-slate-200 rounded-lg shadow-sm p-4';
-const H2_CLASS = 'text-sm font-semibold text-slate-900';
+function pageIsVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden';
+}
 
 function toLoadError(error: ApiError | null, fallback: string): LoadError {
   return { code: error?.code ?? 'UNKNOWN', message: error?.message ?? fallback };
@@ -98,6 +108,8 @@ export function ReviewQueuePage() {
   const draftIdParam = parseDeckId(searchParams.get('draftId'));
 
   const superAdmin = useMemo(() => isSuperAdmin(readSessionUser()), []);
+  const queryClient = useAppQueryClient();
+  const confirm = useConfirm();
 
   const [status, setStatus] = useState<StatusFilter>('pending');
   const [listNonce, setListNonce] = useState(0);
@@ -118,7 +130,10 @@ export function ReviewQueuePage() {
 
   const [deciding, setDeciding] = useState(false);
   const decidingRef = useRef(false);
-  const openedAtRef = useRef(0);
+  // Review time counts only while the tab is visible (see ReviewClock).
+  const clockRef = useRef<ReviewClock>(startReviewClock(0, false));
+  const editDirtyRef = useRef(false);
+  const outcomeRef = useRef<HTMLDivElement>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
 
@@ -194,7 +209,7 @@ export function ReviewQueuePage() {
         setDetail({ forDraftId: selectedId, error: toLoadError(res.error, 'Failed to load the draft.'), draft: null });
         return;
       }
-      openedAtRef.current = Date.now();
+      clockRef.current = startReviewClock(Date.now(), pageIsVisible());
       setDetail({ forDraftId: selectedId, error: null, draft: res.data });
     }
     void run();
@@ -202,6 +217,24 @@ export function ReviewQueuePage() {
       cancelled = true;
     };
   }, [selectedId, draftNonce]);
+
+  useEffect(() => {
+    function onVisibilityChange() {
+      clockRef.current = setReviewClockVisible(clockRef.current, pageIsVisible(), Date.now());
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  // After a decision the decision panel unmounts while the next draft loads,
+  // which would drop keyboard focus to <body>. Move it to the outcome instead.
+  useEffect(() => {
+    if (outcome) outcomeRef.current?.focus();
+  }, [outcome]);
+
+  const onEditDirtyChange = useCallback((dirty: boolean) => {
+    editDirtyRef.current = dirty;
+  }, []);
 
   const deck = deckState.forDeckId === deckId ? deckState.deck : null;
   const deckError = deckState.forDeckId === deckId ? deckState.error : null;
@@ -216,8 +249,22 @@ export function ReviewQueuePage() {
     isNotReady(listReady ? list.error : null) ||
     isNotReady(detailError);
 
-  function openDraft(id: number) {
+  async function openDraft(id: number) {
     if (deckId === null) return;
+    const switching = id !== selectedId;
+    if (switching && editingId !== null && editDirtyRef.current) {
+      const discard = await confirm({
+        title: 'Discard your edits?',
+        body: 'The draft you are editing has changes that have not been accepted. Opening another draft discards them.',
+        confirmLabel: 'Discard edits',
+        destructive: true,
+      });
+      if (!discard) return;
+    }
+    if (switching) {
+      editDirtyRef.current = false;
+      setEditingId(null);
+    }
     setOutcome(null);
     setDecisionError(null);
     setSearchParams({ deckId: String(deckId), draftId: String(id) });
@@ -229,15 +276,25 @@ export function ReviewQueuePage() {
 
   async function onLoadMore() {
     if (deckId === null || !list.nextCursor || loadingMore) return;
+    // The page belongs to the filter it was asked for. If the filter changed
+    // while it was in flight, the list now holds another filter's first page,
+    // and appending (or following its cursor) would mix the two.
+    const keyAtClick = listKey;
     setLoadingMore(true);
     const res = await listDrafts({ deckId, status, limit: PAGE_SIZE, cursor: list.nextCursor });
     setLoadingMore(false);
     if (!res.success || !res.data) {
-      setList(prev => ({ ...prev, error: toLoadError(res.error, 'Failed to load more drafts.') }));
+      setList(prev =>
+        prev.forKey !== keyAtClick ? prev : { ...prev, error: toLoadError(res.error, 'Failed to load more drafts.') },
+      );
       return;
     }
     const page = res.data;
-    setList(prev => ({ ...prev, error: null, items: [...prev.items, ...page.items], nextCursor: page.nextCursor }));
+    setList(prev =>
+      prev.forKey !== keyAtClick
+        ? prev
+        : { ...prev, error: null, items: [...prev.items, ...page.items], nextCursor: page.nextCursor },
+    );
   }
 
   /**
@@ -256,7 +313,7 @@ export function ReviewQueuePage() {
     setDeciding(true);
     setOutcome(null);
     setDecisionError(null);
-    const reviewMs = reviewDurationMs(openedAtRef.current, Date.now());
+    const reviewMs = reviewClockMs(clockRef.current, Date.now());
     const res = await send(reviewMs);
     decidingRef.current = false;
     setDeciding(false);
@@ -272,7 +329,15 @@ export function ReviewQueuePage() {
       return message;
     }
 
-    setOutcome(onDone(res.data));
+    const done = onDone(res.data);
+    if (done.kind === 'accepted') {
+      // Accepting creates a card: the deck's card list and its card count are
+      // now stale in the query cache (staleTime 30 s), so drop them.
+      void queryClient.invalidateQueries({ queryKey: QueryKeys.cards(done.deckId) });
+      void queryClient.invalidateQueries({ queryKey: QueryKeys.decks() });
+    }
+    setOutcome(done);
+    editDirtyRef.current = false;
     setEditingId(null);
     setRejectingId(null);
     // Mark it decided locally so the next pending draft opens at once, then
@@ -351,7 +416,7 @@ export function ReviewQueuePage() {
       adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
       <div>
-        <h1 className="text-xl font-semibold text-slate-800">Review queue</h1>
+        <h1 className={H1_CLASS}>Review queue</h1>
         {deck ? (
           <div className="text-xs text-slate-500 mt-0.5">
             {deck.title} · <span className="font-mono">{deck.slug}</span> ·{' '}
@@ -396,7 +461,7 @@ export function ReviewQueuePage() {
           ) : null}
 
           {outcome ? (
-            <div role="status">
+            <div role="status" ref={outcomeRef} tabIndex={-1} data-testid="review-outcome" className="focus:outline-none">
               <Callout tone="success">
                 {outcome.kind === 'accepted' ? (
                   <>
@@ -453,7 +518,7 @@ export function ReviewQueuePage() {
                   <li key={item.draftId}>
                     <button
                       type="button"
-                      onClick={() => openDraft(item.draftId)}
+                      onClick={() => void openDraft(item.draftId)}
                       aria-current={item.draftId === selectedId ? 'true' : undefined}
                       className={`w-full text-left rounded border px-3 py-2 text-sm hover:bg-slate-50 ${
                         item.draftId === selectedId ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200'
@@ -494,9 +559,14 @@ export function ReviewQueuePage() {
                         deck={deck}
                         initialValues={draftToFormValues(draft.card)}
                         mcq={draft.card.mcq ?? null}
+                        variant="draft"
+                        onDirtyChange={onEditDirtyChange}
                         submitLabel="Accept with edits"
                         onSubmit={values => onAcceptEdited(draft, values)}
-                        onCancel={() => setEditingId(null)}
+                        onCancel={() => {
+                          editDirtyRef.current = false;
+                          setEditingId(null);
+                        }}
                       />
                     ) : (
                       <section className={`${CARD_CLASS} space-y-3`} aria-label="Draft card">
@@ -642,8 +712,10 @@ export function ReviewQueuePage() {
                               </label>
                               <select
                                 id="review-reject-reason"
-                                className={INPUT_CLASS}
+                                className={rejectProblem ? INPUT_INVALID_CLASS : INPUT_CLASS}
                                 required
+                                aria-invalid={rejectProblem ? true : undefined}
+                                aria-describedby={rejectProblem ? 'review-reject-problem' : undefined}
                                 value={reason}
                                 onChange={e => setReason(e.target.value as DraftRejectReason | '')}
                               >
@@ -670,7 +742,11 @@ export function ReviewQueuePage() {
                                 onChange={e => setNote(e.target.value)}
                               />
                             </div>
-                            {rejectProblem ? <p className="text-sm text-red-700">{rejectProblem}</p> : null}
+                            {rejectProblem ? (
+                              <p id="review-reject-problem" role="alert" className="text-sm text-red-700">
+                                {rejectProblem}
+                              </p>
+                            ) : null}
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"

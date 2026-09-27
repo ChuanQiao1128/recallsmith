@@ -83,6 +83,14 @@ interface CardFormProps {
 
   /** Idle text of the submit button, replacing Create Card / Save Changes; the busy text is unchanged. */
   submitLabel?: string;
+
+  /**
+   * 'draft' is the review queue's "Accept with edits" form. The server assigns
+   * the order and the revision on accept, so those fields are hidden, and a
+   * draft must cite a source, so the Source URL and quote become required.
+   * Defaults to 'card'.
+   */
+  variant?: 'card' | 'draft';
 }
 
 interface InternalState {
@@ -229,6 +237,7 @@ function slugifyWhileTyping(input: string): string {
 
 export function CardForm(props: CardFormProps) {
   const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, onDirtyChange, submitLabel } = props;
+  const isDraft = props.variant === 'draft';
 
   const mcqRequiredCount = mcq ? mcq.options.filter(option => option.correct).length : 0;
 
@@ -344,6 +353,10 @@ export function CardForm(props: CardFormProps) {
     // and the server apply, so a refused source never reaches the network.
     const trimmedSourceUrl = (values.sourceUrl ?? '').trim();
     const trimmedSourceQuote = (values.sourceQuote ?? '').trim();
+    if (isDraft && (trimmedSourceUrl === '' || trimmedSourceQuote === '')) {
+      setState(prev => ({ ...prev, error: 'A draft needs a Source URL and a source quote.' }));
+      return;
+    }
     if (trimmedSourceUrl !== '' && !isValidSourceUrl(trimmedSourceUrl)) {
       setState(prev => ({
         ...prev,
@@ -542,6 +555,8 @@ export function CardForm(props: CardFormProps) {
             id="sourceUrl"
             inputMode="url"
             autoComplete="off"
+            required={isDraft}
+            aria-describedby={isDraft ? 'source-help' : undefined}
             value={values.sourceUrl ?? ''}
             onChange={e => handleChange('sourceUrl', e.target.value)}
           />
@@ -553,17 +568,22 @@ export function CardForm(props: CardFormProps) {
                        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             id="sourceQuote"
             rows={3}
+            required={isDraft}
+            aria-describedby={isDraft ? 'source-help' : undefined}
             value={values.sourceQuote ?? ''}
             onChange={e => handleChange('sourceQuote', e.target.value)}
           />
         </div>
-        <p className="text-xs text-slate-500">
-          Optional. The https page that supports the answer and the passage copied from it word for word (up to 1000 characters). Clear both to remove the source.
+        <p id="source-help" className="text-xs text-slate-500">
+          {isDraft
+            ? 'Required. The https page that supports the answer and the passage copied from it word for word (up to 1000 characters). A draft cannot be accepted without both.'
+            : 'Optional. The https page that supports the answer and the passage copied from it word for word (up to 1000 characters). Clear both to remove the source.'}
         </p>
       </div>
 
-      {/* Language + Difficulty + Order + Revision */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* Language + Difficulty + Order + Revision (a draft gets its order and
+          revision from the server on accept, so it shows only the first two) */}
+      <div className={`grid grid-cols-1 gap-4 ${isDraft ? 'md:grid-cols-2' : 'md:grid-cols-4'}`}>
         <div>
           <label htmlFor="codeLanguage" className="block text-sm font-medium text-slate-700 mb-1">Code Language</label>
           <select
@@ -615,31 +635,35 @@ export function CardForm(props: CardFormProps) {
           )}
         </div>
 
-        <div>
-          <label htmlFor="orderInDeck" className="block text-sm font-medium text-slate-700 mb-1">Order in Deck</label>
-          <input
-            id="orderInDeck"
-            type="number"
-            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
-                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-            value={values.orderInDeck}
-            onChange={e => handleChange('orderInDeck', Number(e.target.value))}
-          />
-          <p className="mt-1 text-xs text-slate-500">Leave gaps &mdash; 10, 20, 30 &mdash; so a later card can slot between two of these.</p>
-        </div>
+        {isDraft ? null : (
+          <>
+            <div>
+              <label htmlFor="orderInDeck" className="block text-sm font-medium text-slate-700 mb-1">Order in Deck</label>
+              <input
+                id="orderInDeck"
+                type="number"
+                className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                value={values.orderInDeck}
+                onChange={e => handleChange('orderInDeck', Number(e.target.value))}
+              />
+              <p className="mt-1 text-xs text-slate-500">Leave gaps &mdash; 10, 20, 30 &mdash; so a later card can slot between two of these.</p>
+            </div>
 
-        <div>
-          <label htmlFor="revision" className="block text-sm font-medium text-slate-700 mb-1">Revision</label>
-          <input
-            id="revision"
-            type="number"
-            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
-                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-            value={values.revision}
-            onChange={e => handleChange('revision', Number(e.target.value))}
-          />
-          <p className="mt-1 text-xs text-slate-500">Content revision number. Optional, but worth bumping as you edit.</p>
-        </div>
+            <div>
+              <label htmlFor="revision" className="block text-sm font-medium text-slate-700 mb-1">Revision</label>
+              <input
+                id="revision"
+                type="number"
+                className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                value={values.revision}
+                onChange={e => handleChange('revision', Number(e.target.value))}
+              />
+              <p className="mt-1 text-xs text-slate-500">Content revision number. Optional, but worth bumping as you edit.</p>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Code Snippet + Preview */}

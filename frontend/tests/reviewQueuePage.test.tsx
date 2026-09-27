@@ -9,12 +9,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { deferred, ok, refused } from './support/apiResult';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { draft, draftSummary, mcqDraftCard, qaDraftCard } from './support/draftFixtures';
 import { renderAt } from './support/routerProbe';
 import { ConsoleShell } from '../src/components/console/ConsoleShell';
+import { QueryKeys } from '../src/api/queryClient';
 import { documentTitleFor } from '../src/lib/brand';
 import type { ApiResult } from '../src/types/api';
 import type { Deck } from '../src/types/deck';
@@ -268,6 +270,151 @@ describe('ReviewQueuePage', () => {
     expect(notReady.textContent).toBe('The server has not run the review queue database migration.');
     expect(screen.getByText('The review queue is not set up yet')).toBeTruthy();
     expect(api.fetchDraft).not.toHaveBeenCalled();
+  });
+
+  it('invalidates the deck\'s cards and the deck list after an accept', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    api.acceptDraft.mockResolvedValue(
+      ok({ draftId: 41, cardId: 901, stableUid: 'sample-qa-topic-02', action: 'accepted' }),
+    );
+    renderAt(
+      <QueryClientProvider client={client}>
+        <ReviewQueuePage />
+      </QueryClientProvider>,
+      ['/review?deckId=7'],
+    );
+    await screen.findByRole('region', { name: 'Draft card' });
+    expect(invalidate).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    expect(await screen.findByText(/Accepted as card #901/)).toBeTruthy();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: QueryKeys.cards(7) });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: QueryKeys.decks() });
+  });
+
+  it('moves focus to the outcome after a decision instead of dropping it to the body', async () => {
+    api.acceptDraft.mockResolvedValue(
+      ok({ draftId: 41, cardId: 901, stableUid: 'sample-qa-topic-02', action: 'accepted' }),
+    );
+    await openReview();
+    const accept = screen.getByRole('button', { name: 'Accept' });
+    accept.focus();
+    await userEvent.click(accept);
+
+    const outcome = await screen.findByTestId('review-outcome');
+    await waitFor(() => expect(document.activeElement).toBe(outcome));
+    expect(outcome.getAttribute('role')).toBe('status');
+    expect(outcome.getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('drops a Load more page whose filter changed while it was in flight', async () => {
+    const stalePage = deferred<ReturnType<typeof ok>>();
+    api.listDrafts.mockImplementation(async (params: { status: string; cursor?: string }) => {
+      if (params.cursor) return stalePage.promise;
+      if (params.status === 'all') {
+        return ok({ items: [draftSummary({ draftId: 50, stableUid: 'all-first-page', status: 'accepted' })], nextCursor: null });
+      }
+      return ok({ items: [draftSummary()], nextCursor: 'pending-cursor' });
+    });
+    await openReview();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(api.listDrafts).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending', cursor: 'pending-cursor' }));
+    await userEvent.selectOptions(screen.getByLabelText('Status'), 'all');
+    const drafts = screen.getByRole('region', { name: 'Drafts' });
+    expect(await within(drafts).findByText('all-first-page')).toBeTruthy();
+
+    stalePage.resolve(
+      ok({ items: [draftSummary({ draftId: 60, stableUid: 'stale-pending-row' })], nextCursor: 'stale-cursor' }),
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(within(drafts).queryByText('stale-pending-row')).toBeNull();
+    expect(within(drafts).getByText('all-first-page')).toBeTruthy();
+    expect(within(drafts).queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
+  it('counts review time only while the tab is visible', async () => {
+    let visibility: DocumentVisibilityState = 'visible';
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
+    api.acceptDraft.mockResolvedValue(
+      ok({ draftId: 41, cardId: 901, stableUid: 'sample-qa-topic-02', action: 'accepted' }),
+    );
+    await openReview();
+
+    now = 11_000; // 10 s visible
+    visibility = 'hidden';
+    document.dispatchEvent(new Event('visibilitychange'));
+    now = 3_611_000; // an hour in a background tab
+    visibility = 'visible';
+    document.dispatchEvent(new Event('visibilitychange'));
+    now = 3_616_000; // 5 s more
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    expect(api.acceptDraft).toHaveBeenCalledWith(41, { reviewMs: 15_000 });
+  });
+
+  it('caps review time at 30 minutes', async () => {
+    api.acceptDraft.mockResolvedValue(
+      ok({ draftId: 41, cardId: 901, stableUid: 'sample-qa-topic-02', action: 'accepted' }),
+    );
+    await openReview();
+    now = 1_000 + 2 * 60 * 60_000;
+    await userEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    expect(api.acceptDraft).toHaveBeenCalledWith(41, { reviewMs: 30 * 60_000 });
+  });
+
+  it('edits a draft without order or revision fields and requires its source', async () => {
+    await openReview();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    expect(screen.queryByLabelText('Order in Deck')).toBeNull();
+    expect(screen.queryByLabelText('Revision')).toBeNull();
+    const quote = screen.getByLabelText('Source quote') as HTMLTextAreaElement;
+    expect(quote.required).toBe(true);
+    expect(screen.getByText(/^Required\. The https page/)).toBeTruthy();
+    expect(screen.queryByText(/Clear both to remove the source/)).toBeNull();
+
+    fireEvent.change(quote, { target: { value: '' } });
+    fireEvent.submit(quote.closest('form') as HTMLFormElement);
+    expect(await screen.findByText('A draft needs a Source URL and a source quote.')).toBeTruthy();
+    expect(api.acceptDraft).not.toHaveBeenCalled();
+  });
+
+  it('asks before opening another draft over unsaved edits', async () => {
+    api.listDrafts.mockResolvedValue(
+      ok({
+        items: [draftSummary(), draftSummary({ draftId: 42, stableUid: 'second-draft', question: 'Second question?' })],
+        nextCursor: null,
+      }),
+    );
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await openReview();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText(/question/i), { target: { value: 'An edited question?' } });
+
+    const drafts = screen.getByRole('region', { name: 'Drafts' });
+    await userEvent.click(within(drafts).getByText('second-draft'));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(api.fetchDraft).not.toHaveBeenCalledWith(42);
+    expect((screen.getByLabelText(/question/i) as HTMLTextAreaElement).value).toBe('An edited question?');
+
+    confirmSpy.mockReturnValue(true);
+    await userEvent.click(within(drafts).getByText('second-draft'));
+    await waitFor(() => expect(api.fetchDraft).toHaveBeenCalledWith(42));
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('switches drafts without asking when the edit form is untouched', async () => {
+    api.listDrafts.mockResolvedValue(
+      ok({ items: [draftSummary(), draftSummary({ draftId: 42, stableUid: 'second-draft' })], nextCursor: null }),
+    );
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await openReview();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.click(within(screen.getByRole('region', { name: 'Drafts' })).getByText('second-draft'));
+    await waitFor(() => expect(api.fetchDraft).toHaveBeenCalledWith(42));
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it('names the route Review queue and links it from the shell', () => {
