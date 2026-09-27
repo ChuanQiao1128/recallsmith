@@ -14,6 +14,8 @@ import {
   buildLedgerBars,
   formatHours,
   formatPercent,
+  ledgerAxisLabel,
+  ledgerLabelEvery,
   ledgerRangeProblem,
 } from '../src/lib/ledgerView';
 
@@ -81,8 +83,10 @@ describe('ledgerView', () => {
       'Baseline minutes',
       'Actual minutes',
       'Minutes saved',
+      'Live and inferred from history',
       'Defects caught before publish',
       'QA false positives',
+      'AI draft quality',
       'Failure rate',
       'Default baselines',
     ]);
@@ -92,6 +96,34 @@ describe('ledgerView', () => {
     expect(byTerm['Minutes saved']).toContain('Failures save nothing');
     expect(byTerm['Defects caught before publish']).toContain('MCQ gate');
     expect(byTerm['Default baselines']).toContain(DEFAULT_BASELINE_LABEL);
+  });
+
+  it('states the rules the server computes, not the first draft (automation-4)', () => {
+    const byTerm = Object.fromEntries(LEDGER_DEFINITIONS.map(d => [d.term, d.definition]));
+    // LedgerRoutes.cs clamps per (automation, source), not per run.
+    expect(byTerm['Minutes saved']).toContain(
+      'Per automation and source (live or inferred from history): max(0, Σ units × baseline − Σ actual minutes)',
+    );
+    expect(byTerm['Minutes saved']).toContain('actual minutes include review time on rejected drafts');
+    expect(byTerm['Minutes saved']).not.toContain('over successful and partial runs of max(0, units');
+    // Drafts.cs records every reject with defects_caught 0.
+    expect(byTerm['Defects caught before publish']).toContain('Exactly one of two things');
+    expect(byTerm['Defects caught before publish']).toContain('AI QA blocker or major finding resolved as fixed');
+    expect(byTerm['Defects caught before publish']).not.toContain('(b) an AI draft rejected');
+    expect(byTerm['Actual minutes']).toContain('every rejected AI draft');
+    expect(byTerm['AI draft quality']).toContain('Acceptance rate');
+    expect(byTerm['AI draft quality']).toContain('Edited-accept rate');
+    expect(byTerm['AI draft quality']).toContain('Defect rate');
+    expect(byTerm['Live and inferred from history']).toContain('backfill');
+  });
+
+  it('keeps chart axis labels short and spaced so they never overlap (frontend-console-17)', () => {
+    expect(ledgerAxisLabel('2026-06-30')).toBe('06-30');
+    expect(ledgerAxisLabel('not-a-date')).toBe('not-a-date');
+    // A 5-character label at 10 px fits one 40 px slot; a full ISO date does not.
+    expect(ledgerLabelEvery(40, 5, 10)).toBe(1);
+    expect(ledgerLabelEvery(40, 10, 10)).toBe(2);
+    expect(ledgerLabelEvery(20, 5, 10)).toBe(2);
   });
 
   it('labels every seeded automation', () => {

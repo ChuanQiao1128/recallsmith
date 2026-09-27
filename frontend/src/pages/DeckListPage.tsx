@@ -158,6 +158,11 @@ export function DeckListPage() {
 
   const [deletingSlug, setDeletingSlug] = useState<string | null>(null);
   const [publishingSlug, setPublishingSlug] = useState<string | null>(null);
+  // Set from the Publish click until the dialog answers: the QA preview can
+  // take up to QA_PREVIEW_TIMEOUT_MS, and without it the click looks dead and a
+  // second click opens a second preview and dialog.
+  const [checkingQaSlug, setCheckingQaSlug] = useState<string | null>(null);
+  const checkingQaRef = useRef<string | null>(null);
 
   // slug → deck id cache: the paginated contract does not guarantee ids, but
   // every row action needs one; resolved lazily via GET /authoring/decks?slug=.
@@ -458,14 +463,26 @@ export function DeckListPage() {
     //
     // The AI QA preview needs a deck id; a legacy row without one (and not yet
     // looked up) opens the dialog without it rather than adding a lookup here.
-    const knownId = row.id !== null && Number.isFinite(row.id) ? row.id : resolvedIdsRef.current.get(row.slug);
-    const qaLine = knownId === undefined ? null : await loadQaPublishPreview(knownId);
-    const ok = await confirm({
-      title: `Publish deck "${row.slug}"?`,
-      body: qaLine ? `${PUBLISH_BODY}\n\n${qaLine}` : PUBLISH_BODY,
-      confirmLabel: 'Publish',
-      ...(qaLine && knownId !== undefined ? { link: { href: qaPageHref(knownId), label: 'Open AI QA' } } : {}),
-    });
+    //
+    // The ref guard makes a second click during the preview a no-op: the
+    // disabled button follows a render later than that click may arrive.
+    if (checkingQaRef.current !== null) return;
+    checkingQaRef.current = row.slug;
+    setCheckingQaSlug(row.slug);
+    let ok: boolean;
+    try {
+      const knownId = row.id !== null && Number.isFinite(row.id) ? row.id : resolvedIdsRef.current.get(row.slug);
+      const qaLine = knownId === undefined ? null : await loadQaPublishPreview(knownId);
+      ok = await confirm({
+        title: `Publish deck "${row.slug}"?`,
+        body: qaLine ? `${PUBLISH_BODY}\n\n${qaLine}` : PUBLISH_BODY,
+        confirmLabel: 'Publish',
+        ...(qaLine && knownId !== undefined ? { link: { href: qaPageHref(knownId), label: 'Open AI QA' } } : {}),
+      });
+    } finally {
+      checkingQaRef.current = null;
+      setCheckingQaSlug(null);
+    }
     if (!ok) return;
 
     // The journey starts once the user has committed, so the time the dialog
@@ -757,6 +774,7 @@ export function DeckListPage() {
             emptyMessage={q.trim() ? 'No decks match your search.' : 'No decks match your filters.'}
             superAdmin={superAdmin}
             publishingSlug={publishingSlug}
+            checkingQaSlug={checkingQaSlug}
             deletingSlug={deletingSlug}
             onNavigate={(row, to) => void navigateWithDeckId(row, to)}
             onPublish={row => void handlePublish(row)}

@@ -97,18 +97,33 @@ describe('qaReview', () => {
       maxCards: QA_MAX_CARDS,
       dailyUsdCap: QA_DAILY_USD_CAP,
       spentTodayUsd: null,
+      reservedTodayUsd: null,
       fromServer: false,
     });
     const limits = qaLimits({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 1.5 });
-    expect(limits).toEqual({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 1.5, fromServer: true });
+    expect(limits).toEqual({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 1.5, reservedTodayUsd: null, fromServer: true });
     expect(qaCapRemainingUsd(limits)).toBeCloseTo(0.5, 10);
     expect(qaCapRemainingUsd(qaLimits({ maxCards: 50, dailyUsdCap: 2, spentTodayUsd: 9 }))).toBe(0);
     expect(qaStartErrorMessage('AI_QA_TOO_MANY_CARDS', 'x', limits)).toBe(
       'Too many cards for one run (the limit is 50). Narrow the scope.',
     );
-    expect(qaStartErrorMessage('AI_QA_TOO_MANY_CARDS', 'x', qaLimits(null))).toContain('the limit is 200');
+    // frontend-console-12: without server limits the page knows only its
+    // fallback, so the server's message (which names the real cap) is shown.
+    expect(
+      qaStartErrorMessage('AI_QA_TOO_MANY_CARDS', '150 cards exceed the per-run cap of 100', qaLimits(null)),
+    ).toBe('150 cards exceed the per-run cap of 100');
+    expect(qaStartErrorMessage('AI_QA_TOO_MANY_CARDS', '', qaLimits(null))).toBe(
+      QA_START_ERROR_MESSAGES.AI_QA_TOO_MANY_CARDS,
+    );
     expect(qaStartErrorMessage('AI_QA_DAILY_CAP', 'x', limits)).toBe(QA_START_ERROR_MESSAGES.AI_QA_DAILY_CAP);
     expect(qaStartErrorMessage('SOMETHING_NEW', 'Server text.', limits)).toBe('Server text.');
+  });
+
+  it('subtracts spend reserved by running runs from what is left of the cap (frontend-console-12)', () => {
+    const limits = qaLimits({ maxCards: 100, dailyUsdCap: 10, spentTodayUsd: 4, reservedTodayUsd: 3.5 });
+    expect(limits.reservedTodayUsd).toBe(3.5);
+    expect(qaCapRemainingUsd(limits)).toBeCloseTo(2.5, 10);
+    expect(qaCapRemainingUsd(qaLimits({ maxCards: 100, dailyUsdCap: 10, spentTodayUsd: 8, reservedTodayUsd: 5 }))).toBe(0);
   });
 
   it('passes a card with only minor findings', () => {

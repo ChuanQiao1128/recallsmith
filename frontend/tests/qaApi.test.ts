@@ -86,6 +86,7 @@ describe('src/api/qa', () => {
       maxCards: null,
       dailyUsdCap: null,
       spentTodayUsd: null,
+      reservedTodayUsd: null,
     });
   });
 
@@ -99,19 +100,23 @@ describe('src/api/qa', () => {
         missing: [],
         openBlockers: [],
         wouldBlock: false,
-        maxCards: '50',
-        dailyUsdCap: 2.5,
-        spentTodayUsd: 0,
+        // frontend-console-12: the cross-wave contract puts them under data.limits.
+        limits: { maxCards: '50', dailyUsdCap: 2.5, spentTodayUsd: 0, reservedTodayUsd: '0.4' },
       }),
     });
     const res = await api.fetchQaStatus(7);
-    expect(res.data).toMatchObject({ maxCards: 50, dailyUsdCap: 2.5, spentTodayUsd: 0 });
+    expect(res.data).toMatchObject({ maxCards: 50, dailyUsdCap: 2.5, spentTodayUsd: 0, reservedTodayUsd: 0.4 });
 
     httpMock.get.mockResolvedValue({
-      data: ok({ enabled: true, maxCards: 0, dailyUsdCap: 'x', spentTodayUsd: -1 }),
+      data: ok({ enabled: true, limits: { maxCards: 0, dailyUsdCap: 'x', spentTodayUsd: -1, reservedTodayUsd: null } }),
     });
     const bad = await api.fetchQaStatus(7);
-    expect(bad.data).toMatchObject({ maxCards: null, dailyUsdCap: null, spentTodayUsd: null });
+    expect(bad.data).toMatchObject({ maxCards: null, dailyUsdCap: null, spentTodayUsd: null, reservedTodayUsd: null });
+
+    // Only data.limits counts: stray top-level keys are not the contract.
+    httpMock.get.mockResolvedValue({ data: ok({ enabled: true, maxCards: 50, dailyUsdCap: 2.5 }) });
+    const stray = await api.fetchQaStatus(7);
+    expect(stray.data).toMatchObject({ maxCards: null, dailyUsdCap: null });
   });
 
   it('resolves a finding through POST /api/v1/authoring/qa/findings/:findingId/resolve', async () => {

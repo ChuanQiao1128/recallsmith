@@ -72,6 +72,8 @@ export interface DeckRowsTableProps {
   emptyMessage: string;
   superAdmin: boolean;
   publishingSlug: string | null;
+  /** The row whose Publish click is waiting on the AI QA preview, before the dialog opens. */
+  checkingQaSlug: string | null;
   deletingSlug: string | null;
   onNavigate: (row: ConsoleDeckRow, to: (id: number) => string) => void;
   onPublish: (row: ConsoleDeckRow) => void;
@@ -84,6 +86,7 @@ export function DeckRowsTable({
   emptyMessage,
   superAdmin,
   publishingSlug,
+  checkingQaSlug,
   deletingSlug,
   onNavigate,
   onPublish,
@@ -179,7 +182,7 @@ export function DeckRowsTable({
                             <span className="w-px h-4 bg-slate-200 mx-1"></span>
                             <button
                               type="button"
-                              disabled={publishingSlug === row.slug}
+                              disabled={publishingSlug === row.slug || checkingQaSlug === row.slug}
                               onClick={() => onPublish(row)}
                               className={`text-xs px-3 py-1.5 rounded-lg border ${
                                 row.status === 'needs_publish'
@@ -187,7 +190,11 @@ export function DeckRowsTable({
                                   : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
                               } disabled:opacity-60 disabled:cursor-not-allowed transition-colors`}
                             >
-                              {publishingSlug === row.slug ? 'Publishing…' : 'Publish'}
+                              {publishingSlug === row.slug
+                                ? 'Publishing…'
+                                : checkingQaSlug === row.slug
+                                  ? 'Checking AI QA…'
+                                  : 'Publish'}
                             </button>
                           </>
                         ) : null}

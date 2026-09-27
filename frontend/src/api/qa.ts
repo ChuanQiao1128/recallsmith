@@ -78,13 +78,16 @@ export type QaStatus = {
   openBlockers: Array<{ findingId: number; cardId: number; stableUid: string; category: string; message: string }>;
   wouldBlock: boolean;
   /**
-   * The server's run limits (AI_QA_MAX_CARDS, AI_QA_DAILY_USD_CAP) and today's
-   * spend, when the status response carries them; null otherwise, and the page
-   * falls back to the documented defaults in src/lib/qaReview.ts.
+   * The server's run limits (AI_QA_MAX_CARDS, AI_QA_DAILY_USD_CAP), today's
+   * spend and today's reserved (in-flight) spend, read from `data.limits`
+   * (the r18y cross-wave contract) when the status response carries it; null
+   * otherwise, and the page falls back to the labelled defaults in
+   * src/lib/qaReview.ts.
    */
   maxCards: number | null;
   dailyUsdCap: number | null;
   spentTodayUsd: number | null;
+  reservedTodayUsd: number | null;
 };
 
 export type QaStartResult = { runId: string; status: string; cardCount: number; chunkCount: number };
@@ -245,6 +248,9 @@ function normalizeStatus(data: unknown): QaStatus | null {
       message: toText(r.message),
     };
   });
+  // GET …/qa/status carries the limits under data.limits. A server from before
+  // that contract sends none, so every limit is null and the page falls back.
+  const limits = asRecord(raw.limits) ?? {};
   return {
     enabled: raw.enabled,
     required: raw.required === true,
@@ -253,9 +259,10 @@ function normalizeStatus(data: unknown): QaStatus | null {
     missing,
     openBlockers,
     wouldBlock: raw.wouldBlock === true,
-    maxCards: toPositiveOrNull(raw.maxCards),
-    dailyUsdCap: toPositiveOrNull(raw.dailyUsdCap),
-    spentTodayUsd: toNonNegativeOrNull(raw.spentTodayUsd),
+    maxCards: toPositiveOrNull(limits.maxCards),
+    dailyUsdCap: toPositiveOrNull(limits.dailyUsdCap),
+    spentTodayUsd: toNonNegativeOrNull(limits.spentTodayUsd),
+    reservedTodayUsd: toNonNegativeOrNull(limits.reservedTodayUsd),
   };
 }
 

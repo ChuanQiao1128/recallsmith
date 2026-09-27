@@ -17,23 +17,26 @@ import type { CardFormValues } from '../components/CardForm';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
 import {
-  BUTTON_CLASS,
   CARD_CLASS,
+  FIELD_ERROR_CLASS,
   H1_CLASS,
   H2_CLASS,
   INPUT_CLASS,
   INPUT_INVALID_CLASS,
   LABEL_CLASS,
-  PRIMARY_BUTTON_CLASS,
 } from '../components/console/consoleStyles';
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   DRAFT_NOTE_MAX_LENGTH,
   DRAFT_REJECT_REASONS,
   draftDecisionMessage,
+  draftLintAdvice,
+  draftListEmptyText,
   draftToFormValues,
   formValuesToDraftCard,
   lintDraftCard,
@@ -73,6 +76,10 @@ const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
 ];
 const PAGE_SIZE = 50;
 
+
+// A draft row is a selectable list item, not an action, so it keeps its own
+// look; it takes the same focus-visible ring ui/Button carries.
+const LIST_ITEM_FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2';
 function pageIsVisible(): boolean {
   return typeof document === 'undefined' || document.visibilityState !== 'hidden';
 }
@@ -130,7 +137,11 @@ export function ReviewQueuePage() {
   const decidingRef = useRef(false);
   // Review time counts only while the tab is visible (see ReviewClock).
   const clockRef = useRef<ReviewClock>(startReviewClock(0, false));
+  // Whether the open edit form holds unaccepted edits. The ref is read inside
+  // handlers that run before a re-render; the state drives the page-wide guard
+  // (header links, Back, reload), which covers every way out of the page.
   const editDirtyRef = useRef(false);
+  const [editDirty, setEditDirty] = useState(false);
   const outcomeRef = useRef<HTMLDivElement>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
@@ -232,7 +243,15 @@ export function ReviewQueuePage() {
 
   const onEditDirtyChange = useCallback((dirty: boolean) => {
     editDirtyRef.current = dirty;
+    setEditDirty(dirty);
   }, []);
+
+  function clearEditDirty() {
+    editDirtyRef.current = false;
+    setEditDirty(false);
+  }
+
+  const guard = useUnsavedChangesGuard(editingId !== null && editDirty);
 
   const deck = deckState.forDeckId === deckId ? deckState.deck : null;
   const deckError = deckState.forDeckId === deckId ? deckState.error : null;
@@ -260,15 +279,31 @@ export function ReviewQueuePage() {
       if (!discard) return;
     }
     if (switching) {
-      editDirtyRef.current = false;
+      clearEditDirty();
       setEditingId(null);
     }
     setOutcome(null);
     setDecisionError(null);
+    // Any discard was confirmed above, and reopening the draft being edited
+    // keeps the form: either way the page-wide guard must not ask again.
+    guard.allowNextNavigation();
     setSearchParams({ deckId: String(deckId), draftId: String(id) });
   }
 
-  function onStatusChange(next: StatusFilter) {
+  async function onStatusChange(next: StatusFilter) {
+    // With no draftId in the URL the open draft is the filter's first pending
+    // one, so changing the filter can swap it out from under an edit.
+    if (next !== status && draftIdParam === null && editingId !== null && editDirtyRef.current) {
+      const discard = await confirm({
+        title: 'Discard your edits?',
+        body: 'The draft you are editing has changes that have not been accepted. Changing the filter can close it and discard them.',
+        confirmLabel: 'Discard edits',
+        destructive: true,
+      });
+      if (!discard) return;
+      clearEditDirty();
+      setEditingId(null);
+    }
     setStatus(next);
   }
 
@@ -336,6 +371,7 @@ export function ReviewQueuePage() {
     }
     setOutcome(done);
     editDirtyRef.current = false;
+    setEditDirty(false);
     setEditingId(null);
     setRejectingId(null);
     // Mark it decided locally so the next pending draft opens at once, then
@@ -344,6 +380,8 @@ export function ReviewQueuePage() {
       ...prev,
       items: prev.items.map(item => (item.draftId === id ? { ...item, status: decided } : item)),
     }));
+    // The edit was just accepted, so this navigation discards nothing.
+    guard.allowNextNavigation();
     setSearchParams({ deckId: String(deckId) });
     setListNonce(n => n + 1);
     return null;
@@ -429,8 +467,10 @@ export function ReviewQueuePage() {
         <section className={CARD_CLASS} aria-label="Decks">
           <p className="text-sm text-slate-700">Choose a deck to review its AI drafts.</p>
           {decks.error && !isNotReady(decks.error) ? (
-            <div role="alert" className="text-sm text-red-700 mt-2">
-              {decks.error.message}
+            <div className="mt-2">
+              <Callout tone="danger" role="alert">
+                {decks.error.message}
+              </Callout>
             </div>
           ) : null}
           {!decks.loaded ? <p className="text-sm text-slate-500 mt-2">Loading decks…</p> : null}
@@ -447,9 +487,9 @@ export function ReviewQueuePage() {
       ) : (
         <>
           {deckError && !isNotReady(deckError) ? (
-            <div role="alert" className="text-sm text-red-700">
+            <Callout tone="danger" role="alert">
               {deckError.message}
-            </div>
+            </Callout>
           ) : null}
 
           {outcome ? (
@@ -470,9 +510,9 @@ export function ReviewQueuePage() {
           ) : null}
 
           {decisionError ? (
-            <div role="alert" className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
+            <Callout tone="danger" role="alert">
               {decisionError}
-            </div>
+            </Callout>
           ) : null}
 
           <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
@@ -485,7 +525,7 @@ export function ReviewQueuePage() {
                   id="review-status"
                   className={INPUT_CLASS}
                   value={status}
-                  onChange={e => onStatusChange(e.target.value as StatusFilter)}
+                  onChange={e => void onStatusChange(e.target.value as StatusFilter)}
                 >
                   {STATUS_OPTIONS.map(option => (
                     <option key={option.value} value={option.value}>
@@ -497,12 +537,12 @@ export function ReviewQueuePage() {
 
               {!listReady ? <p className="text-sm text-slate-500">Loading drafts…</p> : null}
               {listReady && list.error && !isNotReady(list.error) ? (
-                <div role="alert" className="text-sm text-red-700">
+                <Callout tone="danger" role="alert">
                   {list.error.message}
-                </div>
+                </Callout>
               ) : null}
               {listReady && !list.error && listItems.length === 0 ? (
-                <p className="text-sm text-slate-500">No drafts waiting for review.</p>
+                <p className="text-sm text-slate-500">{draftListEmptyText(status)}</p>
               ) : null}
 
               <ul className="space-y-1">
@@ -512,7 +552,7 @@ export function ReviewQueuePage() {
                       type="button"
                       onClick={() => void openDraft(item.draftId)}
                       aria-current={item.draftId === selectedId ? 'true' : undefined}
-                      className={`w-full text-left rounded border px-3 py-2 text-sm hover:bg-slate-50 ${
+                      className={`w-full text-left rounded border px-3 py-2 text-sm hover:bg-slate-50 ${LIST_ITEM_FOCUS} ${
                         item.draftId === selectedId ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200'
                       }`}
                     >
@@ -525,17 +565,17 @@ export function ReviewQueuePage() {
               </ul>
 
               {listReady && list.nextCursor ? (
-                <button type="button" className={BUTTON_CLASS} disabled={loadingMore} onClick={() => void onLoadMore()}>
+                <Button variant="outline" size="xs" disabled={loadingMore} onClick={() => void onLoadMore()}>
                   Load more
-                </button>
+                </Button>
               ) : null}
             </section>
 
             <div className="space-y-4">
               {detailError && !isNotReady(detailError) ? (
-                <div role="alert" className="text-sm text-red-700">
+                <Callout tone="danger" role="alert">
                   {detailError.message}
-                </div>
+                </Callout>
               ) : null}
 
               {selectedId !== null && !draft && !detailError ? (
@@ -556,7 +596,7 @@ export function ReviewQueuePage() {
                         submitLabel="Accept with edits"
                         onSubmit={values => onAcceptEdited(draft, values)}
                         onCancel={() => {
-                          editDirtyRef.current = false;
+                          clearEditDirty();
                           setEditingId(null);
                         }}
                       />
@@ -609,6 +649,20 @@ export function ReviewQueuePage() {
                         <blockquote className="border-l-4 border-amber-300 pl-3 text-sm text-slate-800">
                           <mark data-testid="review-source-quote">{draft.card.source.quote}</mark>
                         </blockquote>
+                        {draft.card.source.grounding ? (
+                          <div className="text-xs text-slate-600 flex flex-wrap items-center gap-2" data-testid="review-grounding">
+                            {draft.card.source.grounding.matched ? (
+                              <Badge tone="success">Quote found in the source</Badge>
+                            ) : (
+                              <Badge tone="warning">Quote not found in the source</Badge>
+                            )}
+                            <span>
+                              Chunk <span className="font-mono">{draft.card.source.grounding.chunkId}</span> of source{' '}
+                              <span className="font-mono">{draft.card.source.grounding.sourceId}</span> ·{' '}
+                              {draft.card.source.grounding.quoteChars} characters quoted
+                            </span>
+                          </div>
+                        ) : null}
                       </section>
 
                       <section className={`${CARD_CLASS} space-y-2`} aria-label="Similar cards">
@@ -667,33 +721,35 @@ export function ReviewQueuePage() {
                     editingId === draft.draftId ? null : (
                       <section className={`${CARD_CLASS} space-y-3`} aria-label="Decision">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <button
-                            type="button"
-                            className={PRIMARY_BUTTON_CLASS}
+                          <Button
+                            variant="primary"
+                            size="xs"
                             disabled={deciding || !lint.ok}
                             onClick={() => onAccept(draft)}
                           >
                             Accept
-                          </button>
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
                             disabled={deciding}
                             onClick={() => setEditingId(draft.draftId)}
                           >
                             Edit
-                          </button>
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
                             disabled={deciding}
                             onClick={() => beginReject(draft.draftId)}
                           >
                             Reject
-                          </button>
+                          </Button>
                         </div>
                         {!lint.ok ? (
-                          <p className="text-sm text-slate-600">Fix the lint issues with Edit, then Accept with edits.</p>
+                          <p className="text-sm text-slate-600" data-testid="review-lint-advice">
+                            {draftLintAdvice(lint.issues)}
+                          </p>
                         ) : null}
 
                         {rejectingId === draft.draftId ? (
@@ -735,27 +791,27 @@ export function ReviewQueuePage() {
                               />
                             </div>
                             {rejectProblem ? (
-                              <p id="review-reject-problem" role="alert" className="text-sm text-red-700">
+                              <p id="review-reject-problem" role="alert" className={FIELD_ERROR_CLASS}>
                                 {rejectProblem}
                               </p>
                             ) : null}
                             <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                className={PRIMARY_BUTTON_CLASS}
+                              <Button
+                                variant="primary"
+                                size="xs"
                                 disabled={deciding || !reason}
                                 onClick={() => onConfirmReject(draft)}
                               >
                                 Confirm reject
-                              </button>
-                              <button
-                                type="button"
-                                className={BUTTON_CLASS}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="xs"
                                 disabled={deciding}
                                 onClick={() => setRejectingId(null)}
                               >
                                 Cancel
-                              </button>
+                              </Button>
                             </div>
                           </div>
                         ) : null}

@@ -388,4 +388,15 @@ describe('WebhooksPage', () => {
   it('names the route Webhooks in the tab title', () => {
     expect(documentTitleFor('/admin/webhooks')).toBe('Webhooks · DeveloperCards Console');
   });
+
+  it('moves focus to the form and announces it when Edit is clicked (frontend-console-18)', async () => {
+    const user = userEvent.setup();
+    await mountLoaded();
+    const live = screen.getByTestId('webhooks-live');
+    await user.click(screen.getByRole('button', { name: 'Edit n8n' }));
+    const name = screen.getByLabelText('Name') as HTMLInputElement;
+    expect(name.value).toBe('n8n');
+    expect(document.activeElement).toBe(name);
+    await waitFor(() => expect(live.textContent).toBe('Editing subscription n8n.'));
+  });
 });

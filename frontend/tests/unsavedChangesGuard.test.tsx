@@ -146,7 +146,55 @@ afterEach(() => {
   signOut();
 });
 
+/** A page that stays mounted after its save, like the review queue: two in-page moves. */
+function StayingEditor() {
+  const guard = useUnsavedChangesGuard(true);
+  const navigate = useNavigate();
+  return (
+    <div>
+      <span>staying editor</span>
+      <button
+        type="button"
+        onClick={() => {
+          guard.allowNextNavigation();
+          navigate('/?step=saved');
+        }}
+      >
+        save and stay
+      </button>
+      <Link to="/?step=other">other view</Link>
+    </div>
+  );
+}
+
 describe('the unsaved-changes guard', () => {
+  it('lets exactly one navigation through after allowNextNavigation (frontend-console-19)', async () => {
+    const user = userEvent.setup();
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/',
+          element: (
+            <ConfirmDialogProvider>
+              <StayingEditor />
+            </ConfirmDialogProvider>
+          ),
+        },
+      ],
+      { initialEntries: ['/'] },
+    );
+    render(<RouterProvider router={router} />);
+
+    await user.click(screen.getByRole('button', { name: 'save and stay' }));
+    await waitFor(() => expect(router.state.location.search).toBe('?step=saved'));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+
+    // The page is still dirty and still mounted: the next move is guarded again.
+    await user.click(screen.getByRole('link', { name: 'other view' }));
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(router.state.location.search).toBe('?step=saved');
+  });
+
   it('lets a clean page navigate without asking', async () => {
     const user = userEvent.setup();
     renderRoutes(false);

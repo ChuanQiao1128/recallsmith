@@ -226,7 +226,10 @@ const B1: Record<string, Baseline> = {
 const B2_AFTER_MOUNT = ['mount', 'update'];
 const B2_AFTER_SEARCH = ['mount', 'update', 'update', 'update', 'update', 'update'];
 const B2_AFTER_FILTER = [...B2_AFTER_SEARCH, 'update'];
-const B2_FINAL = [...B2_AFTER_FILTER, 'update', 'update'];
+// Y07 (frontend-console-21) added one commit to the publish step: the row
+// shows "Checking AI QA…" from the click until the dialog answers. buildViewRows
+// (B3) is unchanged, because that state is not a dependency of the rows memo.
+const B2_FINAL = [...B2_AFTER_FILTER, 'update', 'update', 'update'];
 
 // B3: buildViewRows calls at the same four checkpoints.
 const B3_AFTER_MOUNT = 2;

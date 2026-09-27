@@ -482,4 +482,139 @@ describe('DeckQaPage', () => {
     );
     expect(screen.queryByRole('link', { name: 'AI QA' })).toBeNull();
   });
+
+  it('shows no advisory warning while AI QA is off, only the counts (frontend-console-15)', async () => {
+    qa.fetchQaStatus.mockResolvedValue(
+      ok(
+        qaStatus({
+          enabled: false,
+          changedCards: 3,
+          reviewedCurrent: 1,
+          missing: [{ cardId: 102, stableUid: 'aws-s3-cloudfront-oac' }],
+        }),
+      ),
+    );
+    await openPage();
+    const gate = screen.getByTestId('qa-gate-status');
+    expect(gate.textContent).toContain('AI QA is switched off on the server.');
+    expect(gate.textContent).not.toContain('advisory');
+    expect(within(gate).queryByText(/Not reviewed yet/)).toBeNull();
+    expect(screen.getByTestId('qa-gate-off-summary').textContent).toBe(
+      'AI QA is off — 2 card(s) have no review at their current content.',
+    );
+  });
+
+  it('drops a Load more page when the runs list was refreshed while it was in flight (frontend-console-16)', async () => {
+    const stale = deferred<ApiResult<{ items: ReturnType<typeof qaRun>[]; nextCursor: string | null }>>();
+    const run1 = qaRun({ runId: 'run-1' });
+    const run2 = qaRun({ runId: 'run-2', status: 'queued', effectiveStatus: 'queued', cardsDone: 0 });
+    let firstPages = 0;
+    qa.listQaRuns.mockImplementation(async (params: { cursor?: string }) => {
+      if (params.cursor) return stale.promise;
+      firstPages += 1;
+      return firstPages === 1 ? runsPage([run1], 'cursor-2') : runsPage([run2, run1], 'cursor-3');
+    });
+    qa.fetchQaRun.mockResolvedValue(detail({ run: run1 }));
+    await openPage();
+    await screen.findByRole('button', { name: 'View run run-1' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(qa.listQaRuns).toHaveBeenCalledWith({ deckId: QA_DECK_ID, limit: 20, cursor: 'cursor-2' }));
+    // A new run refetches the first page while Load more is still pending.
+    fireEvent.click(startButton());
+    await screen.findByRole('button', { name: 'View run run-2' });
+
+    stale.resolve(runsPage([qaRun({ runId: 'run-old' })], 'cursor-stale'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.queryByRole('button', { name: 'View run run-old' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /^View run / })).toHaveLength(2);
+    // The cursor is the fresh list's, not the stale page's.
+    qa.listQaRuns.mockClear();
+    const more = screen.getByRole('button', { name: 'Load more' }) as HTMLButtonElement;
+    await waitFor(() => expect(more.disabled).toBe(false));
+    fireEvent.click(more);
+    await waitFor(() => expect(qa.listQaRuns).toHaveBeenCalledWith({ deckId: QA_DECK_ID, limit: 20, cursor: 'cursor-3' }));
+  });
+
+  it('keeps keyboard focus and announces the result after Mark fixed (frontend-console-18)', async () => {
+    const run = qaRun({ blockerCount: 1, majorCount: 1 });
+    const first = qaFinding({ findingId: 501, cardId: 101, severity: 'blocker' });
+    const second = qaFinding({ findingId: 503, cardId: 101, severity: 'major', category: 'ambiguous_stem' });
+    qa.listQaRuns.mockResolvedValue(runsPage([run]));
+    qa.fetchQaRun.mockResolvedValue(detail({ run, items: [qaItem(101, 'aws-s3-storage-classes')], findings: [first, second] }));
+    await openPage();
+    const live = screen.getByTestId('qa-live');
+    expect(live.getAttribute('role')).toBe('status');
+    expect(live.textContent).toBe('');
+
+    // Two open findings: focus moves to the other one's note.
+    const fix = await screen.findByRole('button', { name: 'Mark finding 501 fixed' });
+    fix.focus();
+    qa.fetchQaRun.mockResolvedValue(
+      detail({
+        run,
+        items: [qaItem(101, 'aws-s3-storage-classes')],
+        findings: [{ ...first, resolution: 'fixed' }, second],
+      }),
+    );
+    fireEvent.click(fix);
+    await waitFor(() => expect(live.textContent).toBe('Finding 501 marked fixed.'));
+    expect(document.activeElement).toBe(screen.getByLabelText('Resolution note for finding 503'));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Mark finding 501 fixed' })).toBeNull());
+    expect(screen.getByTestId('qa-live')).toBe(live);
+
+    // The last open finding: focus moves to the card's heading, not <body>.
+    qa.fetchQaRun.mockResolvedValue(
+      detail({
+        run,
+        items: [qaItem(101, 'aws-s3-storage-classes')],
+        findings: [{ ...first, resolution: 'fixed' }, { ...second, resolution: 'dismissed' }],
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss finding 503' }));
+    await waitFor(() => expect(live.textContent).toBe('Finding 503 dismissed.'));
+    const heading = within(screen.getByTestId('qa-card-101')).getByRole('heading', { level: 3 });
+    expect(heading.textContent).toBe('aws-s3-storage-classes');
+    expect(document.activeElement).toBe(heading);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Dismiss finding 503' })).toBeNull());
+    expect(document.activeElement).toBe(within(screen.getByTestId('qa-card-101')).getByRole('heading', { level: 3 }));
+  });
+
+  it('announces when a watched run finishes (frontend-console-18)', async () => {
+    const running = qaRun({ status: 'running', effectiveStatus: 'running', cardsDone: 1 });
+    qa.listQaRuns.mockResolvedValue(runsPage([running]));
+    qa.fetchQaRun
+      .mockResolvedValueOnce(detail({ run: running }))
+      .mockResolvedValue(
+        detail({ run: qaRun({ status: 'done', effectiveStatus: 'done', blockerCount: 2, majorCount: 1, minorCount: 0 }) }),
+      );
+    await openPage();
+    const live = screen.getByTestId('qa-live');
+    await waitFor(() => expect(qa.fetchQaRun).toHaveBeenCalledTimes(1));
+    expect(live.textContent).toBe('');
+    await vi.advanceTimersByTimeAsync(QA_POLL_INTERVAL_MS);
+    await waitFor(() => expect(live.textContent).toBe('Run finished: 2 blocker(s), 1 major, 0 minor.'));
+  });
+
+  it("shows the server's run-size refusal when the page only knows its default limit (frontend-console-12)", async () => {
+    qa.startQaRun.mockResolvedValue(refused('AI_QA_TOO_MANY_CARDS', '150 cards exceed the per-run cap of 100'));
+    await openPage();
+    fireEvent.click(startButton());
+    const alert = await screen.findByText('150 cards exceed the per-run cap of 100');
+    expect(alert.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.queryByText(/the limit is 200/)).toBeNull();
+  });
+
+  it('reads the limits from data.limits, including spend reserved by running runs (frontend-console-12)', async () => {
+    qa.fetchQaStatus.mockResolvedValue(
+      ok(qaStatus({ changedCards: 3, reviewedCurrent: 0, maxCards: 100, dailyUsdCap: 1, spentTodayUsd: 0.5, reservedTodayUsd: 0.45 })),
+    );
+    await openPage();
+    expect(screen.getByTestId('qa-limits').textContent).toBe(
+      'Limits: 100 cards per run · $1.00 per day · $0.50 spent today · $0.45 reserved by running runs.',
+    );
+    expect(
+      screen.getByText("This estimate is above what is left of today's AI QA cap: $0.05 of $1.00."),
+    ).toBeTruthy();
+  });
 });

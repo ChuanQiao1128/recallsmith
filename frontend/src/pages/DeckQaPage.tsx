@@ -25,14 +25,13 @@ import type { QaFinding, QaRun, QaRunDetail, QaScope, QaStatus } from '../api/qa
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
 import {
-  BUTTON_CLASS,
   CARD_CLASS,
   H1_CLASS,
   H2_CLASS,
   INPUT_CLASS,
-  PRIMARY_BUTTON_CLASS,
 } from '../components/console/consoleStyles';
 import { CONSOLE_NAME } from '../lib/brand';
 import { parseDeckId } from '../lib/parseDeckId';
@@ -64,10 +63,22 @@ type DecksState = { loaded: boolean; error: LoadError | null; items: Deck[] };
 type DeckState = { forDeckId: number | null; error: LoadError | null; deck: Deck | null };
 type CardsState = { forDeckId: number | null; error: LoadError | null; cards: Card[] };
 type StatusState = { forDeckId: number | null; error: LoadError | null; status: QaStatus | null };
-type RunsState = { forDeckId: number | null; error: LoadError | null; items: QaRun[]; nextCursor: string | null };
+/**
+ * `generation` changes every time the list is replaced by a fresh first page
+ * (deck switch, a run turning terminal, a new run), so a Load more page that
+ * was requested against an older list can tell and be dropped.
+ */
+type RunsState = {
+  forDeckId: number | null;
+  generation: number;
+  error: LoadError | null;
+  items: QaRun[];
+  nextCursor: string | null;
+};
 type DetailState = { forRunId: string | null; error: LoadError | null; detail: QaRunDetail | null };
 type PollState = { forKey: string | null; stopped: boolean };
-type ResolveMessage = { tone: 'status' | 'alert'; text: string };
+/** A visible note under Findings; results are also written to the page's live region. */
+type ResolveMessage = { tone: 'info' | 'alert'; text: string };
 
 const SCOPE_OPTIONS: Array<{ value: QaScope; label: string }> = [
   { value: 'changed', label: 'Changed cards' },
@@ -106,6 +117,22 @@ function formatTime(value: string): string {
   return Number.isFinite(ms) ? new Date(ms).toLocaleString() : value;
 }
 
+function cardHeadingId(cardId: number): string {
+  return `qa-card-${cardId}-heading`;
+}
+
+function noteInputId(findingId: number): string {
+  return `qa-note-${findingId}`;
+}
+
+/** What the live region says when a watched run turns terminal. */
+function runFinishedAnnouncement(run: QaRun): string {
+  if (run.effectiveStatus === 'done') {
+    return `Run finished: ${run.blockerCount} blocker(s), ${run.majorCount} major, ${run.minorCount} minor.`;
+  }
+  return `Run ended with status ${run.effectiveStatus}.`;
+}
+
 function cardEditHref(deckId: number, cardId: number): string {
   return `/decks/cards/edit?deckId=${deckId}&cardId=${cardId}`;
 }
@@ -124,7 +151,13 @@ export function DeckQaPage() {
   const [deckState, setDeckState] = useState<DeckState>({ forDeckId: null, error: null, deck: null });
   const [cardsState, setCardsState] = useState<CardsState>({ forDeckId: null, error: null, cards: [] });
   const [statusState, setStatusState] = useState<StatusState>({ forDeckId: null, error: null, status: null });
-  const [runsState, setRunsState] = useState<RunsState>({ forDeckId: null, error: null, items: [], nextCursor: null });
+  const [runsState, setRunsState] = useState<RunsState>({
+    forDeckId: null,
+    generation: 0,
+    error: null,
+    items: [],
+    nextCursor: null,
+  });
   const [loadingMore, setLoadingMore] = useState(false);
   const [detailState, setDetailState] = useState<DetailState>({ forRunId: null, error: null, detail: null });
   const [poll, setPoll] = useState<PollState>({ forKey: null, stopped: false });
@@ -139,6 +172,9 @@ export function DeckQaPage() {
   const resolvingRef = useRef(new Set<number>());
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [resolveMessage, setResolveMessage] = useState<ResolveMessage | null>(null);
+  // The page's one persistent live region: a region mounted together with its
+  // text is not announced, so results are written into this one.
+  const [announcement, setAnnouncement] = useState('');
 
   // No deck: the picker's list.
   useEffect(() => {
@@ -206,10 +242,17 @@ export function DeckQaPage() {
     async function run() {
       const res = await listQaRuns({ deckId: deckId as number, limit: RUNS_PAGE_SIZE });
       if (cancelled) return;
-      setRunsState(
-        res.success && res.data
-          ? { forDeckId: deckId, error: null, items: res.data.items, nextCursor: res.data.nextCursor }
-          : { forDeckId: deckId, error: toLoadError(res.error, 'Failed to load past runs.'), items: [], nextCursor: null },
+      const page = res.success && res.data ? res.data : null;
+      setRunsState(prev =>
+        page
+          ? { forDeckId: deckId, generation: prev.generation + 1, error: null, items: page.items, nextCursor: page.nextCursor }
+          : {
+              forDeckId: deckId,
+              generation: prev.generation + 1,
+              error: toLoadError(res.error, 'Failed to load past runs.'),
+              items: [],
+              nextCursor: null,
+            },
       );
     }
     void run();
@@ -261,7 +304,8 @@ export function DeckQaPage() {
         return;
       }
       if (sawActive) {
-        // The run just turned terminal: refresh the gate and the list once.
+        // The run just turned terminal: say so, and refresh the gate and the list once.
+        setAnnouncement(runFinishedAnnouncement(detail.run));
         setStatusNonce(n => n + 1);
         setRunsNonce(n => n + 1);
       }
@@ -344,7 +388,13 @@ export function DeckQaPage() {
         const list = await listQaRuns({ deckId, limit: RUNS_PAGE_SIZE });
         if (list.success && list.data) {
           const page = list.data;
-          setRunsState({ forDeckId: deckId, error: null, items: page.items, nextCursor: page.nextCursor });
+          setRunsState(prev => ({
+            forDeckId: deckId,
+            generation: prev.generation + 1,
+            error: null,
+            items: page.items,
+            nextCursor: page.nextCursor,
+          }));
           const active = page.items.find(isQaRunActive);
           if (active) showRun(active.runId);
         }
@@ -356,20 +406,40 @@ export function DeckQaPage() {
 
   async function onLoadMore() {
     if (deckId === null || !runsState.nextCursor || loadingMore) return;
+    // The page belongs to the list it was asked for. If that list was replaced
+    // while the request was in flight (another deck, a run turned terminal, a
+    // new run), appending would mix two snapshots and follow a stale cursor.
+    const deckAtClick = deckId;
+    const generationAtClick = runsState.generation;
+    const stale = (prev: RunsState) => prev.forDeckId !== deckAtClick || prev.generation !== generationAtClick;
     setLoadingMore(true);
     const res = await listQaRuns({ deckId, limit: RUNS_PAGE_SIZE, cursor: runsState.nextCursor });
     setLoadingMore(false);
     if (!res.success || !res.data) {
-      setRunsState(prev => ({ ...prev, error: toLoadError(res.error, 'Failed to load more runs.') }));
+      setRunsState(prev => (stale(prev) ? prev : { ...prev, error: toLoadError(res.error, 'Failed to load more runs.') }));
       return;
     }
     const page = res.data;
-    setRunsState(prev => ({ ...prev, error: null, items: [...prev.items, ...page.items], nextCursor: page.nextCursor }));
+    setRunsState(prev =>
+      stale(prev) ? prev : { ...prev, error: null, items: [...prev.items, ...page.items], nextCursor: page.nextCursor },
+    );
   }
 
   function refreshRunAndGate() {
     setDetailNonce(n => n + 1);
     setStatusNonce(n => n + 1);
+  }
+
+  /**
+   * After a resolve the finding's buttons unmount (they render only while it is
+   * open), which would drop keyboard focus to <body>. Move it to the next open
+   * finding's note in the same card, else to the card's heading.
+   */
+  function moveFocusAfterResolve(finding: QaFinding) {
+    const group = groups.find(g => g.cardId === finding.cardId);
+    const next = group?.findings.find(f => f.findingId !== finding.findingId && f.resolution === 'open');
+    const target = document.getElementById(next ? noteInputId(next.findingId) : cardHeadingId(finding.cardId));
+    target?.focus();
   }
 
   async function onResolve(finding: QaFinding, resolution: 'fixed' | 'dismissed') {
@@ -388,12 +458,17 @@ export function DeckQaPage() {
         delete next[id];
         return next;
       });
+      setAnnouncement(`Finding ${id} ${resolution === 'fixed' ? 'marked fixed' : 'dismissed'}.`);
+      moveFocusAfterResolve(finding);
       refreshRunAndGate();
       return;
     }
     const code = res.error?.code ?? '';
     if (code === 'FINDING_ALREADY_RESOLVED') {
-      setResolveMessage({ tone: 'status', text: 'This finding was already resolved elsewhere.' });
+      const text = 'This finding was already resolved elsewhere.';
+      setResolveMessage({ tone: 'info', text });
+      setAnnouncement(`Finding ${id}: ${text}`);
+      moveFocusAfterResolve(finding);
       refreshRunAndGate();
       return;
     }
@@ -420,6 +495,10 @@ export function DeckQaPage() {
         ) : null}
       </div>
 
+      <div role="status" aria-live="polite" className="sr-only" data-testid="qa-live">
+        {announcement}
+      </div>
+
       {notReady ? (
         <Callout tone="warning" title="AI QA is not set up yet">
           <div data-testid="qa-not-ready">The server has not run the AI QA database migration.</div>
@@ -430,8 +509,10 @@ export function DeckQaPage() {
         <section className={CARD_CLASS} aria-label="Decks">
           <p className="text-sm text-slate-700">Choose a deck to review with AI QA.</p>
           {decks.error && !isNotReady(decks.error) ? (
-            <div role="alert" className="text-sm text-red-700 mt-2">
-              {decks.error.message}
+            <div className="mt-2">
+              <Callout tone="danger" role="alert">
+                {decks.error.message}
+              </Callout>
             </div>
           ) : null}
           {!decks.loaded ? <p className="text-sm text-slate-500 mt-2">Loading decks…</p> : null}
@@ -448,9 +529,9 @@ export function DeckQaPage() {
       ) : (
         <>
           {deckError ? (
-            <div role="alert" className="text-sm text-red-700">
+            <Callout tone="danger" role="alert">
               {deckError.message}
-            </div>
+            </Callout>
           ) : null}
 
           {/* ---------------- Publish gate ---------------- */}
@@ -460,9 +541,9 @@ export function DeckQaPage() {
             </h2>
             <div data-testid="qa-gate-status" className="mt-2 space-y-2">
               {statusError && !isNotReady(statusError) ? (
-                <div role="alert" className="text-sm text-red-700">
+                <Callout tone="danger" role="alert">
                   {statusError.message}
-                </div>
+                </Callout>
               ) : null}
               {!status && !statusError ? <p className="text-sm text-slate-500">Loading the publish gate…</p> : null}
               {status ? (
@@ -481,7 +562,19 @@ export function DeckQaPage() {
                   <p className="text-sm text-slate-700">
                     {status.changedCards} changed card(s), {status.reviewedCurrent} reviewed at their current content.
                   </p>
-                  {status.wouldBlock || status.missing.length > 0 || status.openBlockers.length > 0 ? (
+                  {!status.enabled ? (
+                    // Switched off: no run can start, so no advisory warning.
+                    // The counts stay as plain facts.
+                    status.missing.length > 0 || status.openBlockers.length > 0 ? (
+                      <p data-testid="qa-gate-off-summary" className="text-sm text-slate-700">
+                        AI QA is off — {qaCardsToReview(status)} card(s) have no review at their current content
+                        {status.openBlockers.length > 0
+                          ? `, and ${status.openBlockers.length} blocker(s) from earlier runs are still open`
+                          : ''}
+                        .
+                      </p>
+                    ) : null
+                  ) : status.wouldBlock || status.missing.length > 0 || status.openBlockers.length > 0 ? (
                     <Callout
                       tone={status.wouldBlock ? 'danger' : 'warning'}
                       title={
@@ -551,9 +644,9 @@ export function DeckQaPage() {
               <fieldset className="mt-2 max-h-64 overflow-y-auto border border-slate-200 rounded p-2">
                 <legend className="text-xs text-slate-500 px-1">Cards to review</legend>
                 {cardsState.forDeckId === deckId && cardsState.error ? (
-                  <div role="alert" className="text-sm text-red-700">
+                  <Callout tone="danger" role="alert">
                     {cardsState.error.message}
-                  </div>
+                  </Callout>
                 ) : null}
                 {cards.map(card => (
                   <label key={card.id} className="flex items-start gap-2 text-sm text-slate-700 py-0.5">
@@ -580,30 +673,40 @@ export function DeckQaPage() {
             {cardCount > limits.maxCards ? (
               <div className="mt-2">
                 <Callout tone="warning">
-                  One run reviews at most {limits.maxCards} cards. Narrow the scope.
+                  One run reviews at most {limits.maxCards} cards
+                  {limits.fromServer ? '' : ' (the default; the server did not report its limit)'}. Narrow the scope.
                 </Callout>
               </div>
             ) : null}
             {estimate > capRemaining ? (
               <div className="mt-2">
                 <Callout tone="warning">
-                  {limits.spentTodayUsd === null
-                    ? `This estimate is above the daily AI QA cap of ${formatUsd(limits.dailyUsdCap)}.`
+                  {limits.spentTodayUsd === null && limits.reservedTodayUsd === null
+                    ? `This estimate is above the daily AI QA cap of ${formatUsd(limits.dailyUsdCap)}${limits.fromServer ? '' : ' (the default; the server did not report its cap)'}.`
                     : `This estimate is above what is left of today's AI QA cap: ${formatUsd(capRemaining)} of ${formatUsd(limits.dailyUsdCap)}.`}
                 </Callout>
               </div>
             ) : null}
+            {limits.fromServer ? (
+              <p data-testid="qa-limits" className="mt-2 text-xs text-slate-500">
+                Limits: {limits.maxCards} cards per run · {formatUsd(limits.dailyUsdCap)} per day
+                {limits.spentTodayUsd !== null ? ` · ${formatUsd(limits.spentTodayUsd)} spent today` : ''}
+                {limits.reservedTodayUsd ? ` · ${formatUsd(limits.reservedTodayUsd)} reserved by running runs` : ''}.
+              </p>
+            ) : null}
 
             {startError && !isNotReady(startError) ? (
-              <div role="alert" className="mt-2 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
-                {qaStartErrorMessage(startError.code, startError.message, limits)}
+              <div className="mt-2">
+                <Callout tone="danger" role="alert">
+                  {qaStartErrorMessage(startError.code, startError.message, limits)}
+                </Callout>
               </div>
             ) : null}
 
             <div className="mt-3">
-              <button type="button" className={PRIMARY_BUTTON_CLASS} disabled={startDisabled} onClick={() => void onStart()}>
+              <Button variant="primary" size="xs" disabled={startDisabled} onClick={() => void onStart()}>
                 Start AI QA
-              </button>
+              </Button>
             </div>
           </section>
 
@@ -618,17 +721,19 @@ export function DeckQaPage() {
               </p>
             ) : null}
             {detailError && !isNotReady(detailError) && !pollStopped ? (
-              <div role="alert" className="mt-2 text-sm text-red-700">
-                {detailError.message}
+              <div className="mt-2">
+                <Callout tone="danger" role="alert">
+                  {detailError.message}
+                </Callout>
               </div>
             ) : null}
             {pollStopped ? (
               <div data-testid="qa-poll-stopped" className="mt-2">
                 <Callout tone="warning">
                   Progress is not refreshing.{' '}
-                  <button type="button" className={BUTTON_CLASS} onClick={() => setDetailNonce(n => n + 1)}>
+                  <Button variant="outline" size="xs" onClick={() => setDetailNonce(n => n + 1)}>
                     Refresh progress
-                  </button>
+                  </Button>
                 </Callout>
               </div>
             ) : null}
@@ -682,8 +787,16 @@ export function DeckQaPage() {
               Findings
             </h2>
             {resolveMessage ? (
-              <div role={resolveMessage.tone} className="mt-2 text-sm text-slate-800">
-                {resolveMessage.text}
+              <div className="mt-2" data-testid="qa-resolve-message">
+                {resolveMessage.tone === 'alert' ? (
+                  // An inserted alert is announced; the info note is announced
+                  // through the live region above instead.
+                  <Callout tone="danger" role="alert">
+                    {resolveMessage.text}
+                  </Callout>
+                ) : (
+                  <Callout tone="info">{resolveMessage.text}</Callout>
+                )}
               </div>
             ) : null}
             {!detail ? <p className="mt-2 text-sm text-slate-500">No run to show.</p> : null}
@@ -695,7 +808,13 @@ export function DeckQaPage() {
                 <div key={group.cardId} data-testid={`qa-card-${group.cardId}`} className="border border-slate-200 rounded p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <div className="font-mono text-xs text-slate-600">{group.stableUid}</div>
+                      <h3
+                        id={cardHeadingId(group.cardId)}
+                        tabIndex={-1}
+                        className="font-mono text-xs font-normal text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                      >
+                        {group.stableUid}
+                      </h3>
                       {group.question ? <div className="text-sm text-slate-900">{group.question}</div> : null}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -716,7 +835,7 @@ export function DeckQaPage() {
                   <ul className="mt-2 space-y-2">
                     {group.findings.map(finding => {
                       const busy = resolving.has(finding.findingId);
-                      const noteId = `qa-note-${finding.findingId}`;
+                      const noteId = noteInputId(finding.findingId);
                       return (
                         <li key={finding.findingId} className="text-sm text-slate-800 border-t border-slate-100 pt-2">
                           <div className="flex flex-wrap items-center gap-2">
@@ -746,24 +865,24 @@ export function DeckQaPage() {
                                   }
                                 />
                               </div>
-                              <button
-                                type="button"
-                                className={BUTTON_CLASS}
+                              <Button
+                                variant="outline"
+                                size="xs"
                                 aria-label={`Mark finding ${finding.findingId} fixed`}
                                 disabled={busy}
                                 onClick={() => void onResolve(finding, 'fixed')}
                               >
                                 Mark fixed
-                              </button>
-                              <button
-                                type="button"
-                                className={BUTTON_CLASS}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="xs"
                                 aria-label={`Dismiss finding ${finding.findingId}`}
                                 disabled={busy}
                                 onClick={() => void onResolve(finding, 'dismissed')}
                               >
                                 Dismiss
-                              </button>
+                              </Button>
                             </div>
                           ) : finding.resolutionNote ? (
                             <p className="mt-1 text-xs text-slate-500">Note: {finding.resolutionNote}</p>
@@ -783,8 +902,10 @@ export function DeckQaPage() {
               Past runs
             </h2>
             {runsError && !isNotReady(runsError) ? (
-              <div role="alert" className="mt-2 text-sm text-red-700">
-                {runsError.message}
+              <div className="mt-2">
+                <Callout tone="danger" role="alert">
+                  {runsError.message}
+                </Callout>
               </div>
             ) : null}
             {runsReady && runs.length === 0 && !runsError ? (
@@ -820,14 +941,14 @@ export function DeckQaPage() {
                         </td>
                         <td className="py-1 pr-3">{formatUsd(run.estimatedCostUsd)}</td>
                         <td className="py-1">
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          <Button
+                            variant="outline"
+                            size="xs"
                             aria-label={`View run ${run.runId}`}
                             onClick={() => showRun(run.runId)}
                           >
                             View
-                          </button>
+                          </Button>
                         </td>
                       </tr>
                     ))}
@@ -837,9 +958,9 @@ export function DeckQaPage() {
             ) : null}
             {runsState.nextCursor && runsReady ? (
               <div className="mt-2">
-                <button type="button" className={BUTTON_CLASS} disabled={loadingMore} onClick={() => void onLoadMore()}>
+                <Button variant="outline" size="xs" disabled={loadingMore} onClick={() => void onLoadMore()}>
                   Load more
-                </button>
+                </Button>
               </div>
             ) : null}
           </section>
