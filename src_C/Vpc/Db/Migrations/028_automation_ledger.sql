@@ -50,3 +50,13 @@ create table if not exists automation_events (
 );
 create index if not exists idx_automation_events_auto_time on automation_events(automation, occurred_at desc);
 create index if not exists idx_automation_events_time on automation_events(occurred_at desc);
+
+-- When live recording began (R18 X01, backend-design-2 / automation-3). The backfill heuristic counts only
+-- cards created before this instant, because from here on the live ledger records imports and accepted
+-- drafts itself. Written once, when this migration is applied; a re-run keeps the first value.
+create table if not exists automation_ledger_meta (
+  key text primary key,
+  value_ts timestamptz not null
+);
+insert into automation_ledger_meta(key, value_ts) values ('live_since', now())
+on conflict (key) do nothing;

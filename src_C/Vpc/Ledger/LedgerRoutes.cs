@@ -419,15 +419,28 @@ public static class LedgerRoutes
     or (c.job_id is not null and exists (select 1 from automation_events e where e.dedupe_key = 'publish:' || c.job_id))
     """;
 
-  private const string ImportCandidates = """
+  // Only history the live ledger cannot see: cards created before live recording began (the `live_since`
+  // instant migration 028 records; without it, the first live event), and never a card that is an accepted
+  // AI draft (those are ai_draft_review rows). Without this bound every live import of 5+ cards, and every
+  // burst of 5+ draft accepts into one deck, would be counted a second time as a backfilled bulk_import.
+  private static string ImportCandidates(bool hasDrafts) => $"""
     select 'backfill:cards:' || g.deck_id || ':' || (extract(epoch from g.minute) / 60)::bigint as dedupe_key,
            g.minute as occurred_at, g.deck_id as deck_id, g.units as units
     from (
       select cd.deck_id as deck_id, date_trunc('minute', cd.created_at) as minute, count(*)::int as units
       from cards cd
+      where cd.created_at < {LiveSince}
+      {(hasDrafts ? "and not exists (select 1 from ai_drafts ad where ad.accepted_card_id = cd.id)" : string.Empty)}
       group by cd.deck_id, date_trunc('minute', cd.created_at)
       having count(*) >= 5
     ) g
+    """;
+
+  private const string LiveSince = """
+    coalesce(
+      (select m.value_ts from automation_ledger_meta m where m.key = 'live_since'),
+      (select min(e.occurred_at) from automation_events e where e.source = 'live'),
+      'infinity'::timestamptz)
     """;
 
   private const string ImportPresent = "exists (select 1 from automation_events e where e.dedupe_key = c.dedupe_key)";
@@ -459,11 +472,14 @@ public static class LedgerRoutes
     try
     {
       long publishInserted, publishSkipped, importInserted, importSkipped;
+      // ai_drafts arrives with migration 030; the ledger itself needs only 028.
+      var hasDrafts = await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.ai_drafts') is not null", []) is true;
+      var importCandidates = ImportCandidates(hasDrafts);
 
       if (dryRun)
       {
         (publishInserted, publishSkipped) = await CountCandidatesAsync(conn, null, PublishCandidates, PublishPresent);
-        (importInserted, importSkipped) = await CountCandidatesAsync(conn, null, ImportCandidates, ImportPresent);
+        (importInserted, importSkipped) = await CountCandidatesAsync(conn, null, importCandidates, ImportPresent);
         return res.Ok(Counts(true, publishInserted, publishSkipped, importInserted, importSkipped));
       }
 
@@ -473,7 +489,7 @@ public static class LedgerRoutes
       await using (var tx = await conn.BeginTransactionAsync())
       {
         var (publishNew, publishPresent) = await CountCandidatesAsync(conn, tx, PublishCandidates, PublishPresent);
-        var (importNew, importPresent) = await CountCandidatesAsync(conn, tx, ImportCandidates, ImportPresent);
+        var (importNew, importPresent) = await CountCandidatesAsync(conn, tx, importCandidates, ImportPresent);
 
         publishInserted = await DbUtil.ExecuteAsync(conn, tx,
           $"""
@@ -489,7 +505,7 @@ public static class LedgerRoutes
           $"""
           insert into automation_events (automation, occurred_at, units, outcome, deck_id, source, dedupe_key, details)
           select 'bulk_import', c.occurred_at, c.units, 'success', c.deck_id, 'backfill', c.dedupe_key, $1::jsonb
-          from ({ImportCandidates}) c
+          from ({importCandidates}) c
           on conflict (dedupe_key) do nothing
           """,
           [JsonSerializer.Serialize(new { heuristic = BackfillHeuristic })]);

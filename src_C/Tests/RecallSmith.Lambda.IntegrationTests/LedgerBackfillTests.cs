@@ -211,6 +211,52 @@ public class LedgerBackfillTests
   }
 
   [Fact]
+  public async Task Backfill_SkipsLiveImportsAndAcceptedDrafts()
+  {
+    // backend-design-2 / automation-3: work the live ledger already recorded is never backfilled again.
+    var slug = $"it-x01-bf-{Guid.NewGuid():N}";
+    var deckId = Convert.ToInt64((await _db.QueryAsync(
+      "insert into decks (slug, title, author) values ($1,$2,$3) returning id", slug, "deck x01 bf", "tests"))[0]["id"], CultureInfo.InvariantCulture);
+
+    // A live import of 6 cards after live recording began, recorded live the way CardsImport does.
+    var liveMinute = new DateTimeOffset(DateTime.UtcNow.Year + 1, 1, 2, 3, 4, 0, TimeSpan.Zero);
+    for (var i = 0; i < 6; i++)
+    {
+      await _db.ScalarAsync(
+        "insert into cards (deck_id, stable_uid, question, order_in_deck, created_at) values ($1,$2,$3,$4,$5)",
+        deckId, $"live-{i}", $"q{i}", i + 1, liveMinute.AddSeconds(i).UtcDateTime);
+    }
+    await _db.ScalarAsync(
+      "insert into automation_events (automation, occurred_at, units, outcome, deck_id, source) values ('bulk_import', $1, 6, 'success', $2, 'live')",
+      liveMinute.AddSeconds(10).UtcDateTime, deckId);
+    var liveKey = $"backfill:cards:{deckId}:{liveMinute.ToUnixTimeSeconds() / 60}";
+
+    // Five accepted AI drafts in one minute of history: ai_draft_review rows, not a bulk import.
+    var draftMinute = new DateTimeOffset(2005, 8, 9, 10, 11, 0, TimeSpan.Zero);
+    var batch = Guid.NewGuid();
+    for (var i = 0; i < 5; i++)
+    {
+      var cardId = Convert.ToInt64(await _db.ScalarAsync(
+        "insert into cards (deck_id, stable_uid, question, order_in_deck, created_at) values ($1,$2,$3,$4,$5) returning id",
+        deckId, $"draft-{i}", $"d{i}", 100 + i, draftMinute.AddSeconds(i).UtcDateTime), CultureInfo.InvariantCulture);
+      await _db.ScalarAsync(
+        """
+        insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, status, card, submitted_by_sub, accepted_card_id)
+        values ($1, $2, $3, $4, 'accepted', '{}'::jsonb, 'it-x01', $5)
+        """,
+        deckId, batch, $"k{i}", $"draft-{i}", cardId);
+    }
+    var draftKey = $"backfill:cards:{deckId}:{draftMinute.ToUnixTimeSeconds() / 60}";
+
+    var resp = await BackfillAsync("{\"dryRun\":false}");
+    Assert.True(resp.StatusCode == 200, resp.Body);
+    Assert.Empty(await RowsAsync(liveKey));
+    Assert.Empty(await RowsAsync(draftKey));
+    Assert.Equal(0L, Convert.ToInt64(await _db.ScalarAsync(
+      "select count(*) from automation_events where source = 'backfill' and deck_id = $1", deckId), CultureInfo.InvariantCulture));
+  }
+
+  [Fact]
   public async Task Backfill_RequiresSuperAdmin()
   {
     var seed = await SeedAsync();
