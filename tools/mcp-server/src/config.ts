@@ -56,3 +56,27 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     repoRoot: (nonEmpty(env.DC_REPO_ROOT) ?? fileURLToPath(new URL('../../../', import.meta.url))).replace(/(.)\/+$/, '$1'),
   };
 }
+
+/**
+ * The hosts an automation run may read with read_source when the runner passes no
+ * DC_AUTOMATION_SOURCE_HOSTS: the documentation hosts the decks cite, the same list as the
+ * server's AUTOMATION_SOURCE_HOSTS default (A00 §4).
+ */
+export const DEFAULT_AUTOMATION_SOURCE_HOSTS: readonly string[] = [
+  'docs.aws.amazon.com',
+  'aws.amazon.com',
+  'platform.claude.com',
+  'docs.claude.com',
+  'docs.anthropic.com',
+  'www.anthropic.com',
+];
+
+/** A comma list of exact hosts: trimmed, lower-cased, empties and duplicates dropped, order kept. */
+export function parseHostList(raw: string | undefined): string[] {
+  const hosts: string[] = [];
+  for (const entry of (raw ?? '').split(',')) {
+    const host = entry.trim().toLowerCase();
+    if (host !== '' && !hosts.includes(host)) hosts.push(host);
+  }
+  return hosts;
+}

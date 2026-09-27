@@ -110,6 +110,7 @@ The same input always gives byte-identical output. There is no randomness and no
 ## Security notes
 
 - Only `https://` URLs are fetched. Other schemes are refused before any request. Redirects are followed only to `https://` targets.
+- When `DC_INGEST_ALLOWED_HOSTS` (a comma list of exact hosts, case-insensitive) is set, the start URL, every redirect target and the final URL must be on one of those hosts; anything else is an input error before the request. The MCP server sets it inside an automation run. Unset or blank means no host limit.
 - Requests use the stdlib `urllib` with a 20 s timeout and `User-Agent: developercards-ingest/1.8.0`.
 - Responses and local files are capped at 10 MB. A larger `Content-Length` is refused, and at most 10 MB + 1 byte is ever read.
 - Accepted content types: `text/html`, `application/xhtml+xml`, `application/pdf`, `text/markdown`, `text/x-markdown` and `text/plain`. `text/plain` counts as Markdown when the URL path ends in `.md` or `.markdown`.

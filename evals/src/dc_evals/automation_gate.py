@@ -1,8 +1,10 @@
 """`dc-evals automation-gate` (R18A, A00 §15): the offline auto-decision precision gate.
 
-It scores the owner's two runs of the exact automation reviewer (provider, model and prompt
-version of the AI_QA_AUTOMATION_* keys, no second reviewer): defect recall on seeded-v3 and
-auto-accept precision on the jury-labelled authored-v2 set, against the fixed thresholds below,
+It scores the owner's two runs of the exact automation reviewer (provider and model of the
+AI_QA_AUTOMATION_* keys, the automation profile's prompt version qa-v4-auto, no second reviewer):
+defect recall on seeded-v3 and auto-accept precision on the jury-labelled authored-v2 set, overall
+and per stratum (the new-facts stratum must meet the precision gate on its own), with the rows the
+jury could not label reported and bounded, against the fixed thresholds below,
 and writes the report the server records (A06, POST /api/v1/admin/automation/eval-gate), where
 core recomputes the checks from the counts. Nothing here calls a model or builds a client; the
 automation keys are read from the env JSON directly, never through ai_qa.settings.
@@ -16,13 +18,28 @@ import math
 from pathlib import Path
 from typing import Any
 
-from ai_qa.prompts import PROMPT_VERSION
+from ai_qa import prompts
 
 from .compare import vendor_of
-from .dataset import AUTHORED_V2, DATASETS, EVALS_ROOT, DatasetSpec, file_sha256, load_rows, spec_exists, spec_sha256
-from .jury import summary_path
+from .dataset import (
+    AUTHORED_V2,
+    DATASETS,
+    EVALS_ROOT,
+    STRATA,
+    STRATUM_NEW_FACTS,
+    DatasetSpec,
+    file_sha256,
+    load_rows,
+    read_jsonl,
+    spec_exists,
+    spec_sha256,
+    stratum_of,
+)
+from .drafts_import import RUNNER_AUTHOR_PATH
+from .jury import EXCLUDED_ALL_UNSURE, EXCLUDED_TIE, summary_path
 from .labels import labels_for
 from .report import _UNSAFE, read_run, unique_stem
+from .runner import AUTOMATION_PROFILE, AUTOMATION_PROMPT_VERSION
 from .score import (
     MIN_GATE_REPS,
     SHIPPING_ENV_PATH,
@@ -55,6 +72,14 @@ MIN_WOULD_ACCEPT_CARDS = 120
 # Defective-labelled items the automation would accept / defective-labelled items.
 DEFECT_ESCAPE_RATE_GATE = 0.20
 AUTHORED_UNSCORED_RATE_GATE = 0.05
+# R18B (B06). The new-facts stratum (drafts the production runner path wrote from announcements and
+# release notes) must reach AUTO_ACCEPT_PRECISION_GATE on its own, over at least this many distinct
+# would-accept cards; below that the sample is too small to say anything and the gate fails closed.
+NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE = AUTO_ACCEPT_PRECISION_GATE
+MIN_NEW_FACTS_WOULD_ACCEPT_CARDS = 30
+# Rows the jury could not label (a tie, or no decisive vote) are not in the run, so precision says
+# nothing about them. Their share of the labelled rows, overall and in every stratum, is bounded.
+JURY_EXCLUDED_RATE_GATE = 0.10
 REPORT_KIND = "automation-gate"
 
 # The automation reviewer's keys in services/ai-qa/env/prod.env.json (contract-only with A07).
@@ -71,7 +96,7 @@ AUTOMATION_ENV_KEYS = (
 AUTOMATION_PRICE_KEYS = (AUTOMATION_PRICE_INPUT_ENV, AUTOMATION_PRICE_OUTPUT_ENV)
 
 REPO_ROOT = EVALS_ROOT.parent
-REVIEWER_KEYS = ("provider", "model", "promptVersion", "secondProvider", "secondModel")
+REVIEWER_KEYS = ("provider", "model", "promptVersion", "secondProvider", "secondModel", "profile")
 THRESHOLDS = {
     "seededRecall": SEEDED_RECALL_GATE,
     "seededRecallCiLower": SEEDED_RECALL_CI_LOWER_GATE,
@@ -84,11 +109,26 @@ THRESHOLDS = {
     "defectEscapeRate": DEFECT_ESCAPE_RATE_GATE,
     "authoredUnscoredRate": AUTHORED_UNSCORED_RATE_GATE,
     "minReps": MIN_GATE_REPS,
+    "newFactsAutoAcceptPrecision": NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE,
+    "minNewFactsWouldAcceptCards": MIN_NEW_FACTS_WOULD_ACCEPT_CARDS,
+    "juryExcludedRate": JURY_EXCLUDED_RATE_GATE,
 }
 JURY_LABEL_NOTE = (
     "The authored-v2 labels are model-jury labels: a jury of models from vendors not under test labelled "
-    "every card against its cited source text, and no human labelled any card."
+    "every card against its cited source text, and no human labelled any card. That is the owner's decision "
+    "(the gate is fully automated); an optional owner-adjudicated sample is scored separately below."
 )
+STRATUM_NOTE = (
+    "Strata: docs = cards the single-shot `dc-evals author` wrote from established documentation pages "
+    "(no tools, no verifier, not the production path); new-facts = drafts the production path wrote (the "
+    "author-runner's queue-item prompt and CLAUDE args with the author-cards skill, its tools and verifier) "
+    "from announcement and release-notes pages, imported with `dc-evals import-drafts`."
+)
+# The optional owner sample (R18B, B06): data/adjudications-authored-v2.json next to the dataset, in
+# the adjudication file format of labels.py. For authored-v2 a verdict is about the card itself:
+# "valid" = the card is correct as written, "invalid" = it is defective.
+OWNER_SAMPLE_FORMAT = 1
+OWNER_VERDICTS = ("valid", "invalid")
 
 
 def _shown(path: Path, root: Path = REPO_ROOT) -> str:
@@ -131,6 +171,127 @@ def authored_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "unscoredRate": ratio(n - scored, n),
         "estimatedCostUsd": round(sum(float(r.get("estimatedCostUsd") or 0.0) for r in records), 6),
     }
+
+
+def _authored_rows(spec: DatasetSpec) -> list[dict[str, Any]]:
+    return read_jsonl(spec.path) if spec.path.is_file() else []
+
+
+def _labels(spec: DatasetSpec) -> list[dict[str, Any]]:
+    return read_jsonl(spec.labels_path) if spec.labels_path is not None and spec.labels_path.is_file() else []
+
+
+def conservative_precision(correct: int, would_accept: int, excluded_rows: int, reps: int) -> float:
+    """Precision if every row the jury excluded had been reviewed in every rep, accepted and wrong:
+    correct / (would-accept items + excluded rows x reps). A lower bound, for information."""
+    return ratio(correct, would_accept + excluded_rows * reps)
+
+
+def exclusion_metrics(labels: list[dict[str, Any]]) -> dict[str, Any]:
+    """How many jury rows were left out of the run, and why: ties and all-unsure rows (the jury
+    could not decide), and defective rows whose category is not a seeded class (not scorable)."""
+    tie = sum(1 for row in labels if row.get("excluded") == EXCLUDED_TIE)
+    unsure = sum(1 for row in labels if row.get("excluded") == EXCLUDED_ALL_UNSURE)
+    not_scorable = sum(1 for row in labels if row.get("label") is not None and not row.get("scorable"))
+    return {
+        "labelRows": len(labels),
+        "tie": tie,
+        "allUnsure": unsure,
+        "excludedRows": tie + unsure,
+        "excludedRate": ratio(tie + unsure, len(labels)),
+        "notScorable": not_scorable,
+    }
+
+
+def strata_metrics(
+    records: list[dict[str, Any]], rows: list[dict[str, Any]], labels: list[dict[str, Any]], reps: int
+) -> dict[str, dict[str, Any]]:
+    """authored_metrics, the jury exclusions and the conservative precision of every stratum."""
+    stratum_by_id = {row["id"]: stratum_of(row) for row in rows}
+    out: dict[str, dict[str, Any]] = {}
+    for stratum in STRATA:
+        mine = [r for r in records if stratum_by_id.get(r.get("id"), STRATA[0]) == stratum]
+        excluded = exclusion_metrics([row for row in labels if stratum_by_id.get(row.get("id"), STRATA[0]) == stratum])
+        metrics = authored_metrics(mine)
+        out[stratum] = {
+            "rows": sum(1 for row in rows if stratum_of(row) == stratum),
+            **metrics,
+            "juryExcluded": excluded,
+            "conservativeAutoAcceptPrecision": conservative_precision(
+                metrics["wouldAcceptCorrect"], metrics["wouldAccept"], excluded["excludedRows"], reps
+            ),
+        }
+    return out
+
+
+def _owner_sample_failure(data: Any, spec: DatasetSpec, ids: set[str]) -> str | None:
+    if not isinstance(data, dict) or data.get("format") != OWNER_SAMPLE_FORMAT or data.get("dataset") != spec.name:
+        return f"not a format-{OWNER_SAMPLE_FORMAT} adjudication file for {spec.name}"
+    if not spec.path.is_file() or data.get("datasetSha256") != file_sha256(spec.path):
+        return f"datasetSha256 does not match {spec.path.name}; the verdicts are for another file"
+    if not isinstance(data.get("labelSource"), str) or not isinstance(data.get("verdicts"), list):
+        return "needs labelSource and a verdicts list"
+    seen: set[str] = set()
+    for entry in data["verdicts"]:
+        row_id = entry.get("id") if isinstance(entry, dict) else None
+        if row_id not in ids:
+            return f"{row_id!r} is not a row of {spec.name}"
+        if row_id in seen:
+            return f"{row_id} is adjudicated twice"
+        seen.add(row_id)
+        if entry.get("verdict") not in OWNER_VERDICTS:
+            return f"{row_id}: verdict must be one of {', '.join(OWNER_VERDICTS)}"
+        if not isinstance(entry.get("adjudicator"), str) or not entry["adjudicator"].strip():
+            return f"{row_id}: adjudicator is required"
+        try:
+            dt.date.fromisoformat(str(entry.get("date")))
+        except ValueError:
+            return f"{row_id}: date must be YYYY-MM-DD"
+    return None
+
+
+def owner_sample_path(spec: DatasetSpec) -> Path:
+    return spec.path.with_name(f"adjudications-{spec.key}.json")
+
+
+def owner_sample(
+    path: Path, spec: DatasetSpec, records: list[dict[str, Any]], rows: list[dict[str, Any]],
+    labels: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """(the owner-adjudicated sample scored on its own, None) or (None, why the file is invalid);
+    (None, None) when there is no file. Owner precision = would-accept items of adjudicated cards
+    the owner judged valid / would-accept items of adjudicated cards; jury agreement = adjudicated
+    rows the jury labelled whose label matches the owner (correct = valid) / those rows."""
+    if not path.is_file():
+        return None, None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return None, "not JSON"
+    problem = _owner_sample_failure(data, spec, {row["id"] for row in rows})
+    if problem is not None:
+        return None, problem
+    verdicts = {entry["id"]: entry["verdict"] for entry in data["verdicts"]}
+    stratum_by_id = {row["id"]: stratum_of(row) for row in rows}
+    label_by_id = {row["id"]: row.get("label") for row in labels}
+    accepted = [r for r in records if r.get("id") in verdicts and is_would_accept(r)]
+    valid = sum(1 for r in accepted if verdicts[r["id"]] == "valid")
+    judged = [row_id for row_id in verdicts if label_by_id.get(row_id) is not None]
+    agree = sum(1 for row_id in judged if (label_by_id[row_id] == "correct") == (verdicts[row_id] == "valid"))
+    return {
+        "file": _shown(path, EVALS_ROOT),
+        "fileSha256": file_sha256(path),
+        "labelSource": data["labelSource"],
+        "adjudicated": len(verdicts),
+        "adjudicatedByStratum": {s: sum(1 for i in verdicts if stratum_by_id.get(i) == s) for s in STRATA},
+        "juryExcludedAdjudicated": sum(1 for row_id in verdicts if label_by_id.get(row_id) is None),
+        "wouldAccept": len(accepted),
+        "wouldAcceptValid": valid,
+        "wouldAcceptCards": len({r["id"] for r in accepted}),
+        "ownerAutoAcceptPrecision": ratio(valid, len(accepted)),
+        "juryLabelled": len(judged),
+        "juryOwnerAgreement": ratio(agree, len(judged)),
+    }, None
 
 
 def seeded_metrics(header: dict[str, Any], records: list[dict[str, Any]], spec: DatasetSpec) -> dict[str, Any]:
@@ -200,11 +361,25 @@ def _configuration_failures(runs: dict[str, dict[str, Any]], env: dict[str, Any]
             failures.append(f"{which} run: provider {provider!r} is not {AUTOMATION_PROVIDER_ENV} {want_provider!r}")
         if want_model is not None and model != want_model:
             failures.append(f"{which} run: model {model!r} is not {AUTOMATION_MODEL_ENV} {want_model!r}")
+        if header.get("profile") != AUTOMATION_PROFILE:
+            failures.append(
+                f"{which} run: profile {header.get('profile') or 'default'!r} is not {AUTOMATION_PROFILE!r} "
+                "(review with the run command's --profile automation)"
+            )
         version = header.get("promptVersion")
-        if version != PROMPT_VERSION:
-            failures.append(f"{which} run: promptVersion {version!r} is not the ai_qa PROMPT_VERSION {PROMPT_VERSION!r}")
+        if version != AUTOMATION_PROMPT_VERSION:
+            failures.append(
+                f"{which} run: promptVersion {version!r} is not the automation prompt version "
+                f"{AUTOMATION_PROMPT_VERSION!r}"
+            )
         if header.get("secondProvider") is not None or header.get("secondModel") is not None:
             failures.append(f"{which} run: a second reviewer is configured; the automation reviewer runs alone")
+    installed = getattr(prompts, "PROMPT_VERSION_AUTOMATION", AUTOMATION_PROMPT_VERSION)
+    if installed != AUTOMATION_PROMPT_VERSION:
+        failures.append(
+            f"ai_qa PROMPT_VERSION_AUTOMATION {installed!r} is not the automation prompt version "
+            f"{AUTOMATION_PROMPT_VERSION!r}"
+        )
     seeded, authored = runs["seeded"], runs["authored"]
     if any(seeded.get(key) != authored.get(key) for key in REVIEWER_KEYS):
         failures.append("the seeded and authored runs used different reviewers")
@@ -247,6 +422,43 @@ def _jury_failures(spec: DatasetSpec, reviewer_model: str | None) -> list[str]:
     return failures
 
 
+def _new_facts_failures(block: dict[str, Any], rows: list[dict[str, Any]]) -> list[str]:
+    """The new-facts stratum must exist, come from the runner path, be big enough to measure, and
+    reach the precision gate on its own."""
+    if not block["rows"]:
+        return [
+            "authored-v2 has no new-facts rows (dc-evals import-drafts); the gate needs the new-facts stratum"
+        ]
+    failures = []
+    off_path = sum(
+        1
+        for row in rows
+        if stratum_of(row) == STRATUM_NEW_FACTS and (row.get("authorPath") != RUNNER_AUTHOR_PATH or not row.get("runId"))
+    )
+    if off_path:
+        failures.append(f"{off_path} new-facts row(s) were not authored by the author-runner")
+    if block["wouldAcceptCards"] < MIN_NEW_FACTS_WOULD_ACCEPT_CARDS:
+        failures.append(
+            f"new-facts stratum: {block['wouldAcceptCards']} distinct would-accept cards, fewer than "
+            f"{MIN_NEW_FACTS_WOULD_ACCEPT_CARDS}; too few to measure its precision"
+        )
+    elif block["autoAcceptPrecision"] < NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE:
+        failures.append(
+            f"new-facts stratum auto-accept precision {block['autoAcceptPrecision']:.4f} < "
+            f"{NEW_FACTS_AUTO_ACCEPT_PRECISION_GATE:.2f}"
+        )
+    return failures
+
+
+def _excluded_failures(what: str, block: dict[str, Any]) -> list[str]:
+    if block["excludedRate"] <= JURY_EXCLUDED_RATE_GATE:
+        return []
+    return [
+        f"{what} excluded rate {block['excludedRate']:.4f} ({block['excludedRows']} of {block['labelRows']} rows: "
+        f"{block['tie']} tie, {block['allUnsure']} all unsure) > {JURY_EXCLUDED_RATE_GATE:.2f}"
+    ]
+
+
 def evaluate_gate(
     seeded_run: Path,
     authored_run: Path,
@@ -255,6 +467,7 @@ def evaluate_gate(
     seeded_spec: DatasetSpec = DATASETS["v3"],
     authored_spec: DatasetSpec = AUTHORED_V2,
     now: dt.datetime | None = None,
+    owner_sample_file: Path | None = None,
 ) -> dict[str, Any]:
     """The gate report (A00 §15.4 step 2). Raises ValueError when a run file is missing or has no
     run header; every other problem is a failure in the report, and every check runs."""
@@ -334,6 +547,21 @@ def evaluate_gate(
     if authored["unscoredRate"] > AUTHORED_UNSCORED_RATE_GATE:
         failures.append(f"authored unscored rate {authored['unscoredRate']:.4f} > {AUTHORED_UNSCORED_RATE_GATE:.2f}")
 
+    # strata (the new-facts stratum on its own) and the rows the jury could not label
+    authored_rows = _authored_rows(authored_spec)
+    labels = _labels(authored_spec)
+    reps = _reps(authored_header)
+    strata = strata_metrics(authored_records, authored_rows, labels, reps)
+    failures += _new_facts_failures(strata[STRATUM_NEW_FACTS], authored_rows)
+    excluded = exclusion_metrics(labels)
+    failures += _excluded_failures("jury", excluded)
+    for stratum, block in strata.items():
+        failures += _excluded_failures(f"{stratum} stratum: jury", block["juryExcluded"])
+    sample_file = owner_sample_file or owner_sample_path(authored_spec)
+    sample, problem = owner_sample(sample_file, authored_spec, authored_records, authored_rows, labels)
+    if problem is not None:
+        failures.append(f"owner sample {_shown(sample_file, EVALS_ROOT)}: {problem}")
+
     created = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC).replace(microsecond=0)
     labels_path = authored_spec.labels_path
     return {
@@ -367,12 +595,78 @@ def evaluate_gate(
             "labelsSha256": file_sha256(labels_path) if labels_path and labels_path.is_file() else None,
             "reps": _reps(authored_header),
             **authored,
+            "juryExcluded": excluded,
+            "conservativeAutoAcceptPrecision": conservative_precision(
+                authored["wouldAcceptCorrect"], authored["wouldAccept"], excluded["excludedRows"], reps
+            ),
+            "strata": strata,
+            "ownerSample": sample,
         },
     }
 
 
 def _ci(bounds: list[float]) -> str:
     return f"{bounds[0]:.4f}-{bounds[1]:.4f}"
+
+
+def _strata_lines(authored: dict[str, Any], thresholds: dict[str, Any]) -> list[str]:
+    lines = [
+        "### Per stratum",
+        "",
+        "| Stratum | Rows | Would accept (correct) | Distinct cards | Precision | 95% CI | Conservative | Gate |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for stratum, block in authored["strata"].items():
+        gate = (
+            f">= {thresholds['newFactsAutoAcceptPrecision']:.2f} on >= {thresholds['minNewFactsWouldAcceptCards']} cards"
+            if stratum == STRATUM_NEW_FACTS
+            else "overall only"
+        )
+        lines.append(
+            f"| {stratum} | {block['rows']} | {block['wouldAccept']} ({block['wouldAcceptCorrect']}) | "
+            f"{block['wouldAcceptCards']} | {block['autoAcceptPrecision']:.4f} | {_ci(block['autoAcceptPrecisionCi95'])} | "
+            f"{block['conservativeAutoAcceptPrecision']:.4f} | {gate} |"
+        )
+    return [*lines, "", STRATUM_NOTE, ""]
+
+
+def _excluded_lines(authored: dict[str, Any], thresholds: dict[str, Any]) -> list[str]:
+    lines = [
+        "### Rows the jury could not label",
+        "",
+        "Ties and rows without a decisive vote are left out of the run, so the precision above says nothing "
+        "about them; their share is bounded.",
+        "",
+        "| Scope | Labelled rows | Tie | All unsure | Excluded rate | Gate | Not scorable (information) |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    scopes = [("all", authored["juryExcluded"])] + [(s, b["juryExcluded"]) for s, b in authored["strata"].items()]
+    for scope, block in scopes:
+        lines.append(
+            f"| {scope} | {block['labelRows']} | {block['tie']} | {block['allUnsure']} | {block['excludedRate']:.4f} | "
+            f"<= {thresholds['juryExcludedRate']:.2f} | {block['notScorable']} |"
+        )
+    return [*lines, ""]
+
+
+def _owner_sample_lines(authored: dict[str, Any]) -> list[str]:
+    sample = authored["ownerSample"]
+    lines = ["### Owner-adjudicated sample", ""]
+    if sample is None:
+        return [*lines, "None: no owner adjudication file; every label above is a model-jury label.", ""]
+    return [
+        *lines,
+        f"`{sample['file']}` ({sample['labelSource']}), {sample['adjudicated']} cards adjudicated "
+        f"({', '.join(f'{s} {n}' for s, n in sample['adjudicatedByStratum'].items())}; "
+        f"{sample['juryExcludedAdjudicated']} the jury could not label). Scored on its own, next to the jury result:",
+        "",
+        "| Metric | Owner sample | Jury labels |",
+        "|---|---:|---:|",
+        f"| Auto-accept precision | {sample['ownerAutoAcceptPrecision']:.4f} ({sample['wouldAcceptValid']} of "
+        f"{sample['wouldAccept']}) | {authored['autoAcceptPrecision']:.4f} |",
+        f"| Jury-owner agreement ({sample['juryLabelled']} jury-labelled cards) | {sample['juryOwnerAgreement']:.4f} | |",
+        "",
+    ]
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -385,7 +679,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"# Automation gate: {reviewer['provider']} {reviewer['model']} {reviewer['promptVersion']} — {verdict}",
         "",
         f"- Created: {report['createdAt']}",
-        f"- Reviewer: {reviewer['provider']} {reviewer['model']}, prompt {reviewer['promptVersion']}, second "
+        f"- Reviewer: {reviewer['provider']} {reviewer['model']}, prompt {reviewer['promptVersion']} (profile "
+        f"{reviewer.get('profile') or 'default'}), second "
         f"reviewer {'off' if reviewer['secondProvider'] is None else reviewer['secondProvider']}",
         f"- Seeded run: `{seeded['report']}` (sha256 `{seeded['reportSha256']}`), dataset `{seeded['dataset']}`, "
         f"{seeded['reps']} rep(s)",
@@ -436,7 +731,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"{authored['defectEscapeRate']:.4f} | <= {thresholds['defectEscapeRate']:.2f} |",
         f"| Human route rate (information) | {authored['humanRouteRate']:.4f} | |",
         f"| Unscored rate | {authored['unscoredRate']:.4f} | <= {thresholds['authoredUnscoredRate']:.2f} |",
+        f"| Conservative precision (excluded rows counted as accepted and wrong; information) | "
+        f"{authored['conservativeAutoAcceptPrecision']:.4f} | |",
         "",
+        *_strata_lines(authored, thresholds),
+        *_excluded_lines(authored, thresholds),
+        *_owner_sample_lines(authored),
         JURY_LABEL_NOTE,
         "",
         "## Next step",

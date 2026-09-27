@@ -34,7 +34,7 @@ describe('status', () => {
       DC_TOKEN_FILE: t.tokenFile,
       DC_RUNNER_ID: 'test-runner',
       DC_RUNNER_CLAUDE_BIN: t.claudeBin,
-      FAKE_CLAUDE_RECORD: t.recordFile,
+      DC_TEST_FAKE_CLAUDE_RECORD: t.recordFile,
     };
 
     const missing = await status(env);

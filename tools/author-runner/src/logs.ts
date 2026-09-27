@@ -13,6 +13,7 @@ export type LogEvent =
   | 'item_done'
   | 'lease_short'
   | 'bad_item'
+  | 'author_config_error'
   | 'heartbeat_failed'
   | 'complete_failed'
   | 'api_error'
@@ -24,6 +25,8 @@ export interface LogFields {
   itemId?: number;
   outcome?: string;
   durationMs?: number;
+  authorConfigId?: string;
+  costUsd?: number;
   error?: string;
 }
 

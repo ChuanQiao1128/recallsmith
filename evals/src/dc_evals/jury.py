@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .dataset import AUTHORED, AUTHORED_LABELS_PATH, DEFECT_CLASSES, dump_line, read_jsonl
+from .dataset import AUTHORED, AUTHORED_LABELS_PATH, DEFECT_CLASSES, dump_line, read_jsonl, stratum_of
 
 JUROR_PROVIDERS = ("claude-cli", "bedrock-converse", "bedrock", "anthropic")
 DEFAULT_JURORS = (
@@ -288,6 +288,7 @@ def dataset_rows(authored: list[dict[str, Any]], labels: list[dict[str, Any]]) -
         rows.append(
             {
                 "id": row["id"],
+                "stratum": stratum_of(row),
                 "deckSlug": row["deckSlug"],
                 "sourceUid": row["card"].get("stableUid"),
                 "defect": label["defect"],

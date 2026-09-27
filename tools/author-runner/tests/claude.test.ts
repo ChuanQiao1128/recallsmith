@@ -5,6 +5,7 @@ import {
   SCRUBBED_ENV_NAMES,
   claudeArgs,
   claudeOutcome,
+  claudeUsage,
   claudeVersion,
   scrubEnv,
   type ClaudeRun,
@@ -65,6 +66,66 @@ describe('claude invocation', () => {
       'CLAUDE_CODE_USE_BEDROCK',
       'CLAUDE_CODE_USE_VERTEX',
     ]);
+  });
+
+  it('passes only allowlisted variables to claude (ai-agent-10)', () => {
+    const input: Record<string, string | undefined> = {
+      PATH: '/usr/bin:/bin',
+      HOME: '/Users/example',
+      USER: 'example',
+      LOGNAME: 'example',
+      SHELL: '/bin/zsh',
+      TMPDIR: '/tmp/',
+      LANG: 'en_AU.UTF-8',
+      LC_ALL: 'en_AU.UTF-8',
+      TERM: 'xterm',
+      TZ: 'Australia/Sydney',
+      CLAUDE_CONFIG_DIR: '/Users/example/.claude',
+      DC_TOKEN_FILE: '/Users/example/.config/developercards/mcp-tokens.json',
+      CLAUDE_CODE_USE_FOUNDRY: '1',
+      ANTHROPIC_FOUNDRY_API_KEY: 'PLACEHOLDER-not-a-secret',
+      ANTHROPIC_FOUNDRY_RESOURCE: 'placeholder',
+      ANTHROPIC_CUSTOM_HEADERS: 'X-Placeholder: not-a-secret',
+      ANTHROPIC_MODEL: 'placeholder',
+      CLAUDE_CODE_USE_SOMETHING_NEW: '1',
+      HTTPS_PROXY: 'http://127.0.0.1:9',
+      NODE_OPTIONS: '--require=/tmp/placeholder.js',
+      GOOGLE_APPLICATION_CREDENTIALS: '/tmp/placeholder.json',
+    };
+    expect(Object.keys(scrubEnv(input)).sort()).toEqual(
+      ['CLAUDE_CONFIG_DIR', 'DC_TOKEN_FILE', 'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'TMPDIR', 'TZ', 'USER'].sort(),
+    );
+  });
+
+  it('reads the cost and the provider signal from the claude result (ai-agent-10)', () => {
+    const out = (extra: Record<string, unknown>) => JSON.stringify({ type: 'result', is_error: false, num_turns: 1, result: 'x', ...extra });
+    expect(claudeUsage(out({ total_cost_usd: 0.5, modelUsage: { 'claude-opus-5-5': {}, 'claude-haiku-4-5-20251001': {} } }))).toEqual({
+      totalCostUsd: 0.5,
+      models: ['claude-haiku-4-5-20251001', 'claude-opus-5-5'],
+      apiKeySource: null,
+      providerSignal: null,
+    });
+    expect(claudeUsage(out({ apiKeySource: 'none' })).providerSignal).toBeNull();
+    expect(claudeUsage(out({ apiKeySource: 'ANTHROPIC_API_KEY' })).providerSignal).toBe('apiKeySource ANTHROPIC_API_KEY');
+    expect(claudeUsage(out({ modelUsage: { 'global.anthropic.claude-opus-5-5': {} } })).providerSignal).toBe(
+      'provider model global.anthropic.claude-opus-5-5',
+    );
+    expect(claudeUsage(out({ modelUsage: { 'claude-opus-5-5@20260101': {} } })).providerSignal).toBe('provider model claude-opus-5-5@20260101');
+    expect(claudeUsage('not json')).toEqual({ totalCostUsd: null, models: [], apiKeySource: null, providerSignal: null });
+    expect(claudeOutcome(exited(0), out({ apiKeySource: 'user' }), '')).toMatchObject({
+      outcome: 'failed',
+      error: 'claude did not run on the subscription login: apiKeySource user',
+    });
+  });
+
+  it('sends blank notes as no summary and trims the rest (K3)', () => {
+    const ok = (notes: string) =>
+      JSON.stringify({ type: 'result', is_error: false, num_turns: 1, result: JSON.stringify({ outcome: 'nothing_new', submitted: 0, notes }) });
+    expect(claudeOutcome(exited(0), ok('   '), '').summary).toBeNull();
+    expect(claudeOutcome(exited(0), ok(''), '').summary).toBeNull();
+    expect(claudeOutcome(exited(0), ok('  card s3-glacier-1 says 12 hours; the page says 3 to 5  '), '').summary).toBe(
+      'card s3-glacier-1 says 12 hours; the page says 3 to 5',
+    );
   });
 
   it('reads the version line of the fake claude and null for a missing binary', () => {
