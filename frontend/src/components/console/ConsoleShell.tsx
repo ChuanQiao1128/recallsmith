@@ -43,6 +43,8 @@ type Props = {
   ledgerHref?: string;
   // Not role-gated: the draft review routes decide who may act.
   reviewHref?: string;
+  // Not role-gated: the AI QA routes decide who may act.
+  qaHref?: string;
 
   children: React.ReactNode;
 };
@@ -62,6 +64,7 @@ export function ConsoleShell({
   webhooksHref,
   ledgerHref,
   reviewHref,
+  qaHref,
   children,
 }: Props) {
   // Sign-out is the shell's own affair now, through AuthContext, so no page has
@@ -129,6 +132,12 @@ export function ConsoleShell({
               {reviewHref ? (
                 <Link to={reviewHref} className={NAV_LINK_CLASS}>
                   Review queue
+                </Link>
+              ) : null}
+
+              {qaHref ? (
+                <Link to={qaHref} className={NAV_LINK_CLASS}>
+                  AI QA
                 </Link>
               ) : null}
 

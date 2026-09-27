@@ -32,6 +32,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/admin/webhooks': 'Webhooks',
   '/ledger': 'Automation ledger',
   '/review': 'Review queue',
+  '/decks/qa': 'AI QA',
 };
 
 /**

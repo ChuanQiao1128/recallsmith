@@ -51,6 +51,8 @@ export interface ErrorNotice {
   title: string;
   /** Server message or transport text. Null when neither said anything. */
   detail: string | null;
+  /** An in-app destination that resolves the failure. */
+  link?: { href: string; label: string };
 }
 
 /** Backstop for distinct keys, so a page cannot fill the viewport with red. */
@@ -112,12 +114,14 @@ export function reportBusinessFailure(
   key: string,
   title: string,
   message?: string | null,
+  link?: { href: string; label: string },
 ): ErrorNotice[] {
   return upsert(feed, {
     key,
     kind: 'business',
     title,
     detail: trimmed(message) ?? BUSINESS_DETAIL_FALLBACK,
+    ...(link ? { link } : {}),
   });
 }
 

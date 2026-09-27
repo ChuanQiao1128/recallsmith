@@ -14,6 +14,8 @@
 // main thread the way window.alert did, it cannot cover the control the user
 // was aiming at, and it stays until the operation is retried or dismissed.
 
+import { Link } from 'react-router-dom';
+
 import type { ErrorNotice } from '../../lib/errorFeed';
 import { KIND_HINT, KIND_LABEL } from '../../lib/errorFeed';
 
@@ -88,6 +90,15 @@ export function ErrorBanner({ notice, onDismiss, onRetry, retryLabel }: ErrorBan
           <p className={`text-xs mt-1 break-words ${tone.body}`}>{notice.detail}</p>
         ) : null}
         <p className={`text-xs mt-1 opacity-80 ${tone.body}`}>{KIND_HINT[notice.kind]}</p>
+
+        {notice.link ? (
+          <Link
+            to={notice.link.href}
+            className={`mt-2 inline-block text-xs font-semibold underline underline-offset-2 ${tone.action}`}
+          >
+            {notice.link.label}
+          </Link>
+        ) : null}
 
         {onRetry ? (
           <button

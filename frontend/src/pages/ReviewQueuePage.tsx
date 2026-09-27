@@ -29,6 +29,7 @@ import {
   sourceHostLabel,
 } from '../lib/draftReview';
 import { parseDeckId } from '../lib/parseDeckId';
+import { qaPageHref } from '../lib/qaGate';
 import type { ApiError, ApiResult } from '../types/api';
 import type { Deck } from '../types/deck';
 import type { Draft, DraftRejectReason, DraftStatus, DraftSummary } from '../types/draft';
@@ -346,6 +347,7 @@ export function ReviewQueuePage() {
       webhooksHref="/admin/webhooks"
       ledgerHref="/ledger"
       reviewHref={reviewHref}
+      qaHref={deckId === null ? '/decks/qa' : qaPageHref(deckId)}
       adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
       <div>
