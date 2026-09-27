@@ -267,6 +267,25 @@ public class AutomationLedgerTests
   }
 
   [Fact]
+  public async Task Record_DroppedWrite_EmitsLedgerWriteFailures()
+  {
+    // backend-design-10: a dropped best-effort write is alarmable, not only a warn line.
+    var key = $"it-x01-drop-{Guid.NewGuid():N}";
+    var dropped = await EmfCapture.StdoutAsync(() => RecordAsync(new AutomationEvent("bulk_import", 3, "success", DeckId: 987_654_321_097, DedupeKey: key)));
+    Assert.Equal(1, EmfCapture.GaugeSum(dropped, AutomationLedger.WriteFailuresMetric));
+    Assert.Equal("LedgerWriteFailures", AutomationLedger.WriteFailuresMetric);
+
+    var scratch = await ScratchAsync("x01_pre028_metric", 27);
+    await using var conn = new NpgsqlConnection(scratch);
+    await conn.OpenAsync();
+    var notReady = await EmfCapture.StdoutAsync(() => AutomationLedger.RecordAsync(conn, new AutomationEvent("publish_pipeline", 1, "success")));
+    Assert.Equal(1, EmfCapture.GaugeSum(notReady, AutomationLedger.WriteFailuresMetric));
+
+    var ok = await EmfCapture.StdoutAsync(() => RecordAsync(new AutomationEvent("publish_pipeline", 1, "success", DedupeKey: key + "-ok")));
+    Assert.Equal(0, EmfCapture.GaugeSum(ok, AutomationLedger.WriteFailuresMetric));
+  }
+
+  [Fact]
   public async Task Record_UnknownDeck_DoesNotThrow()
   {
     var key = $"it-j08-nodeck-{Guid.NewGuid():N}";

@@ -34,12 +34,12 @@ public class WebhookDeliveryReportTests
     return "v1=" + Convert.ToHexString(hash).ToLowerInvariant();
   }
 
-  private static JsonElement Event(string body, string? signature = null, long? timestampMs = null, string method = "POST")
+  private static JsonElement Event(string body, string? signature = null, long? timestampMs = null, string method = "POST", string path = ReportPath)
   {
     var ts = timestampMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     return JsonSerializer.SerializeToElement(new
     {
-      rawPath = ReportPath,
+      rawPath = path,
       requestContext = new
       {
         requestId = Guid.NewGuid().ToString(),
@@ -348,5 +348,41 @@ public class WebhookDeliveryReportTests
 
     var get = await WithSecretAsync(() => new RecallSmith.Lambda.VpcFunction().Handler(Event(body, method: "GET")));
     Assert.Equal(405, get.StatusCode);
+  }
+
+  [Fact]
+  public async Task InternalRoutes_MatchExactPathsOnly()
+  {
+    // cloud-security-resilience-2: a validly signed request whose path merely ENDS with an internal route
+    // (for example one sent through the unauthenticated /api/internal/webhooks/{proxy+} gateway route)
+    // must not reach that handler.
+    var (_, deliveryId) = await SeedAsync();
+    var body = Body(deliveryId, 1, "delivered", 204, null);
+
+    foreach (var path in new[]
+    {
+      "/api/internal/webhooks/x/api/internal/ai-qa/results",
+      "/api/internal/webhooks/x/api/internal/entitlements/apply",
+      "/api/internal/webhooks/x/api/internal/subscriptions/upsert",
+      "/api/internal/ai-qa/x/api/internal/webhooks/deliveries/report",
+      "/api/internal/webhooks/deliveries/report/extra",
+      "/api/internal/ai-qa/results/x",
+    })
+    {
+      var resp = await WithSecretAsync(() => new RecallSmith.Lambda.VpcFunction().Handler(Event(body, path: path)));
+      Assert.True(resp.StatusCode == 404, $"{path} returned {resp.StatusCode}: {resp.Body}");
+      Assert.Equal(RouteMetrics.UnmatchedRoute, RouteMetrics.RouteFor(path));
+    }
+
+    // Nothing was applied by the rejected paths.
+    Assert.Equal("queued", (string)(await RowAsync(deliveryId))["status"]!);
+
+    // The exact paths still route, and keep their own metric labels.
+    var exact = await WithSecretAsync(() => new RecallSmith.Lambda.VpcFunction().Handler(Event(body)));
+    Assert.True(exact.StatusCode == 200, exact.Body);
+    foreach (var route in new[] { ReportPath, "/api/internal/ai-qa/results", "/api/internal/entitlements/apply", "/api/internal/subscriptions/upsert" })
+    {
+      Assert.Equal(route, RouteMetrics.RouteFor(route));
+    }
   }
 }
