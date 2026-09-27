@@ -44,7 +44,6 @@ DEFAULT_JURORS = (
     "bedrock-converse:global.moonshotai.kimi-k3"
 )
 VERDICTS = ("correct", "defective", "unsure")
-DECISIVE = ("correct", "defective")
 BASES = ("source", "knowledge")
 MAX_TOKENS = 2048
 MAX_REASON_CHARS = 1000
