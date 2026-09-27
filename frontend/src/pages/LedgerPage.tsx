@@ -21,6 +21,18 @@ import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
+import {
+  BUTTON_CLASS,
+  CARD_CLASS,
+  H1_CLASS,
+  H2_CLASS,
+  INPUT_CLASS,
+  INPUT_INVALID_CLASS,
+  LABEL_CLASS,
+  PRIMARY_BUTTON_CLASS,
+  TD_CLASS,
+  TH_CLASS,
+} from '../components/console/consoleStyles';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
   DEFAULT_BASELINE_LABEL,
@@ -41,6 +53,8 @@ type LedgerState = { loading: boolean; error: LoadError | null; data: LedgerRepo
 type BaselinesState = { loading: boolean; error: LoadError | null; items: AutomationBaseline[] };
 type EventsState = {
   loading: boolean;
+  /** The automation filter the rows were loaded for; a mismatch means a refetch is on the way. */
+  forAutomation: string | null;
   error: LoadError | null;
   items: AutomationEventRow[];
   nextCursor: string | null;
@@ -58,20 +72,14 @@ type BaselineForm = {
 const GRANULARITIES: LedgerGranularity[] = ['day', 'week', 'month'];
 const EVENTS_PAGE_SIZE = 50;
 
-const BUTTON_CLASS =
-  'text-xs px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed';
-const INPUT_CLASS = 'w-full rounded-md border border-slate-300 px-3 py-2 text-sm';
-const LABEL_CLASS = 'block text-xs font-medium text-slate-700 mb-1';
-const CARD_CLASS = 'bg-white border border-slate-200 rounded-lg shadow-sm p-4';
-const H2_CLASS = 'text-sm font-semibold text-slate-900';
-const TH_CLASS = 'px-4 py-2 text-left font-semibold text-slate-600';
-const TD_CLASS = 'px-4 py-2';
-
-// Chart geometry, in viewBox units.
+// Chart geometry, in CSS pixels: the SVG is drawn at its natural size and the
+// wrapper scrolls, so a long daily range is never scaled down to unreadable.
 const BAR_SLOT = 40;
 const BAR_WIDTH = 28;
 const PLOT_HEIGHT = 160;
 const AXIS_LABEL_HEIGHT = 20;
+const AXIS_FONT_SIZE = 10;
+const CHART_TABLE_ID = 'ledger-chart-data';
 
 function toLoadError(error: ApiError | null, fallback: string): LoadError {
   return { code: error?.code ?? 'UNKNOWN', message: error?.message ?? fallback };
@@ -119,7 +127,16 @@ export function LedgerPage() {
 
   const [ledger, setLedger] = useState<LedgerState>({ loading: true, error: null, data: null });
   const [baselines, setBaselines] = useState<BaselinesState>({ loading: true, error: null, items: [] });
-  const [events, setEvents] = useState<EventsState>({ loading: true, error: null, items: [], nextCursor: null });
+  const [events, setEvents] = useState<EventsState>({
+    loading: true,
+    forAutomation: null,
+    error: null,
+    items: [],
+    nextCursor: null,
+  });
+  // The page's one persistent live region (a region mounted with its text is
+  // not announced).
+  const [announcement, setAnnouncement] = useState('');
   const [eventsAutomation, setEventsAutomation] = useState('');
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -176,13 +193,20 @@ export function LedgerPage() {
       if (!res.success || !res.data) {
         setEvents({
           loading: false,
+          forAutomation: eventsAutomation,
           error: toLoadError(res.error, 'Failed to load automation events.'),
           items: [],
           nextCursor: null,
         });
         return;
       }
-      setEvents({ loading: false, error: null, items: res.data.items, nextCursor: res.data.nextCursor });
+      setEvents({
+        loading: false,
+        forAutomation: eventsAutomation,
+        error: null,
+        items: res.data.items,
+        nextCursor: res.data.nextCursor,
+      });
     }
     void run();
     return () => {
@@ -198,8 +222,14 @@ export function LedgerPage() {
     setApplyNonce(n => n + 1);
   }
 
+  // The rows on screen belong to the previous automation filter while its refetch is in flight.
+  const eventsRefetching = !events.loading && events.forAutomation !== eventsAutomation;
+
   async function onLoadMore() {
-    if (!events.nextCursor || loadingMore) return;
+    if (!events.nextCursor || loadingMore || eventsRefetching) return;
+    // The page belongs to the filter it was asked for: a result that lands
+    // after the filter changed is dropped rather than appended to other rows.
+    const automationAtClick = eventsAutomation;
     setLoadingMore(true);
     const res = await fetchAutomationEvents({
       automation: eventsAutomation || undefined,
@@ -208,11 +238,19 @@ export function LedgerPage() {
     });
     setLoadingMore(false);
     if (!res.success || !res.data) {
-      setEvents(prev => ({ ...prev, error: toLoadError(res.error, 'Failed to load more events.') }));
+      setEvents(prev =>
+        prev.forAutomation !== automationAtClick
+          ? prev
+          : { ...prev, error: toLoadError(res.error, 'Failed to load more events.') },
+      );
       return;
     }
     const page = res.data;
-    setEvents(prev => ({ ...prev, error: null, items: [...prev.items, ...page.items], nextCursor: page.nextCursor }));
+    setEvents(prev =>
+      prev.forAutomation !== automationAtClick
+        ? prev
+        : { ...prev, error: null, items: [...prev.items, ...page.items], nextCursor: page.nextCursor },
+    );
   }
 
   function beginEdit(row: AutomationBaseline) {
@@ -242,6 +280,7 @@ export function LedgerPage() {
       setEditProblem(res.error?.message ?? 'Failed to save the baseline.');
       return;
     }
+    setAnnouncement(`Baseline saved for ${labelFor(editing.automation)}.`);
     setEditing(null);
     setBaselineNonce(n => n + 1);
   }
@@ -281,12 +320,16 @@ export function LedgerPage() {
       adminUsersHref={superAdmin ? '/admin/users' : undefined}
     >
       <div>
-        <h1 className="text-lg font-semibold text-slate-900">Automation ledger</h1>
+        <h1 className={H1_CLASS}>Automation ledger</h1>
         {report ? (
           <p className="text-xs text-slate-500 mt-0.5" data-testid="ledger-range">
             {report.from} – {report.to}, by {report.granularity}
           </p>
         ) : null}
+      </div>
+
+      <div role="status" aria-live="polite" className="sr-only" data-testid="ledger-live">
+        {announcement}
       </div>
 
       <section className={CARD_CLASS} aria-label="Filters">
@@ -298,7 +341,9 @@ export function LedgerPage() {
             <input
               id="ledger-from"
               type="date"
-              className={INPUT_CLASS}
+              className={rangeProblem ? INPUT_INVALID_CLASS : INPUT_CLASS}
+              aria-invalid={rangeProblem ? true : undefined}
+              aria-describedby={rangeProblem ? 'ledger-range-problem' : undefined}
               value={fromInput}
               onChange={e => setFromInput(e.target.value)}
             />
@@ -310,7 +355,9 @@ export function LedgerPage() {
             <input
               id="ledger-to"
               type="date"
-              className={INPUT_CLASS}
+              className={rangeProblem ? INPUT_INVALID_CLASS : INPUT_CLASS}
+              aria-invalid={rangeProblem ? true : undefined}
+              aria-describedby={rangeProblem ? 'ledger-range-problem' : undefined}
               value={toInput}
               onChange={e => setToInput(e.target.value)}
             />
@@ -332,17 +379,17 @@ export function LedgerPage() {
               ))}
             </select>
           </div>
-          <button type="button" className={BUTTON_CLASS} onClick={onApply}>
+          <button type="button" className={PRIMARY_BUTTON_CLASS} onClick={onApply}>
             Apply
           </button>
         </div>
         {rangeProblem ? (
-          <p className="mt-2 text-sm text-red-800" data-testid="ledger-range-problem">
+          <p id="ledger-range-problem" role="alert" className="mt-2 text-sm text-red-800" data-testid="ledger-range-problem">
             {rangeProblem}
           </p>
         ) : null}
         {validationError ? (
-          <p className="mt-2 text-sm text-red-800" data-testid="ledger-validation-error">
+          <p role="alert" className="mt-2 text-sm text-red-800" data-testid="ledger-validation-error">
             {validationError.message}
           </p>
         ) : null}
@@ -357,7 +404,7 @@ export function LedgerPage() {
       ) : null}
 
       {otherLedgerError ? (
-        <Callout tone="danger" title="Could not load the ledger">
+        <Callout tone="danger" title="Could not load the ledger" role="alert">
           {otherLedgerError.message}
         </Callout>
       ) : null}
@@ -427,47 +474,77 @@ export function LedgerPage() {
         ) : bars.length === 0 ? (
           <p className="mt-3 text-sm text-slate-500">No automation runs in this range.</p>
         ) : (
-          <div className="mt-3 overflow-x-auto">
-            <svg
-              role="img"
-              aria-label="Minutes saved per period"
-              viewBox={`0 0 ${chartWidth} ${PLOT_HEIGHT + AXIS_LABEL_HEIGHT}`}
-              className="w-full text-slate-500"
-              style={{ minWidth: `${Math.min(chartWidth, 960)}px`, maxHeight: '240px' }}
-            >
-              <line x1={0} y1={PLOT_HEIGHT} x2={chartWidth} y2={PLOT_HEIGHT} stroke="currentColor" strokeWidth={1} />
-              {bars.map((bar, i) => {
-                const height = maxSaved > 0 ? (bar.minutesSaved / maxSaved) * PLOT_HEIGHT : 0;
-                const x = i * BAR_SLOT + (BAR_SLOT - BAR_WIDTH) / 2;
-                return (
-                  <g key={bar.periodStart}>
-                    <rect
-                      data-testid="ledger-bar"
-                      x={x}
-                      y={PLOT_HEIGHT - height}
-                      width={BAR_WIDTH}
-                      height={height}
-                      className="text-indigo-600"
-                      fill="currentColor"
-                    >
-                      <title>{`${bar.periodStart}: ${formatHours(bar.minutesSaved)} saved, ${bar.defectsCaught} defects`}</title>
-                    </rect>
-                    {i % labelEvery === 0 ? (
-                      <text
-                        x={i * BAR_SLOT + BAR_SLOT / 2}
-                        y={PLOT_HEIGHT + 14}
-                        textAnchor="middle"
-                        fontSize={8}
+          <>
+            <div className="mt-3 overflow-x-auto" data-testid="ledger-chart-scroll">
+              <svg
+                role="img"
+                aria-label="Minutes saved per period"
+                aria-describedby={CHART_TABLE_ID}
+                width={chartWidth}
+                height={PLOT_HEIGHT + AXIS_LABEL_HEIGHT}
+                viewBox={`0 0 ${chartWidth} ${PLOT_HEIGHT + AXIS_LABEL_HEIGHT}`}
+                className="block max-w-none text-slate-500"
+              >
+                <line x1={0} y1={PLOT_HEIGHT} x2={chartWidth} y2={PLOT_HEIGHT} stroke="currentColor" strokeWidth={1} />
+                {bars.map((bar, i) => {
+                  const height = maxSaved > 0 ? (bar.minutesSaved / maxSaved) * PLOT_HEIGHT : 0;
+                  const x = i * BAR_SLOT + (BAR_SLOT - BAR_WIDTH) / 2;
+                  return (
+                    <g key={bar.periodStart}>
+                      <rect
+                        data-testid="ledger-bar"
+                        x={x}
+                        y={PLOT_HEIGHT - height}
+                        width={BAR_WIDTH}
+                        height={height}
+                        className="text-indigo-600"
                         fill="currentColor"
                       >
-                        {bar.periodStart}
-                      </text>
-                    ) : null}
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
+                        <title>{`${bar.periodStart}: ${formatHours(bar.minutesSaved)} saved, ${bar.defectsCaught} defects`}</title>
+                      </rect>
+                      {i % labelEvery === 0 ? (
+                        <text
+                          x={i * BAR_SLOT + BAR_SLOT / 2}
+                          y={PLOT_HEIGHT + 14}
+                          textAnchor="middle"
+                          fontSize={AXIS_FONT_SIZE}
+                          fill="currentColor"
+                        >
+                          {bar.periodStart}
+                        </text>
+                      ) : null}
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+            {/* The text alternative: every value the bars show, reachable by
+                keyboard and screen reader (the <title>s are hover-only). */}
+            <details className="mt-2 text-sm">
+              <summary className="cursor-pointer text-slate-600">Show the chart data as a table</summary>
+              <table id={CHART_TABLE_ID} className="mt-2 min-w-full text-sm" data-testid="ledger-chart-table">
+                <caption className="sr-only">Minutes saved and defects caught per period</caption>
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th scope="col" className={TH_CLASS}>Period start</th>
+                    <th scope="col" className={TH_CLASS}>Time saved</th>
+                    <th scope="col" className={TH_CLASS}>Minutes saved</th>
+                    <th scope="col" className={TH_CLASS}>Defects caught</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bars.map(bar => (
+                    <tr key={bar.periodStart} className="border-t border-slate-100">
+                      <th scope="row" className={`${TD_CLASS} text-left font-normal`}>{bar.periodStart}</th>
+                      <td className={TD_CLASS}>{formatHours(bar.minutesSaved)}</td>
+                      <td className={TD_CLASS}>{formatNumber(bar.minutesSaved)}</td>
+                      <td className={TD_CLASS}>{formatNumber(bar.defectsCaught)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
+          </>
         )}
       </section>
 
@@ -476,7 +553,7 @@ export function LedgerPage() {
         {!superAdmin ? <p className="mt-2 text-sm text-slate-600">Only a super_admin can change baselines.</p> : null}
         {baselines.error && !isNotReady(baselines.error) ? (
           <div className="mt-3">
-            <Callout tone="danger" title="Could not load baselines">
+            <Callout tone="danger" title="Could not load baselines" role="alert">
               {baselines.error.message}
             </Callout>
           </div>
@@ -541,7 +618,9 @@ export function LedgerPage() {
                 type="number"
                 step="0.01"
                 min={0}
-                className={INPUT_CLASS}
+                className={editProblem ? INPUT_INVALID_CLASS : INPUT_CLASS}
+                aria-invalid={editProblem ? true : undefined}
+                aria-describedby={editProblem ? 'ledger-baseline-problem' : undefined}
                 value={editing.minutes}
                 onChange={e => setEditing({ ...editing, minutes: e.target.value })}
               />
@@ -572,12 +651,12 @@ export function LedgerPage() {
               />
             </div>
             {editProblem ? (
-              <p className="text-sm text-red-800" data-testid="ledger-baseline-problem">
+              <p id="ledger-baseline-problem" role="alert" className="text-sm text-red-800" data-testid="ledger-baseline-problem">
                 {editProblem}
               </p>
             ) : null}
             <div className="flex items-center gap-2">
-              <button type="submit" className={BUTTON_CLASS} disabled={saving}>
+              <button type="submit" className={PRIMARY_BUTTON_CLASS} disabled={saving}>
                 Save baseline
               </button>
               <button
@@ -618,13 +697,22 @@ export function LedgerPage() {
         </div>
         {events.error && !isNotReady(events.error) ? (
           <div className="mt-3">
-            <Callout tone="danger" title="Could not load events">
+            <Callout tone="danger" title="Could not load events" role="alert">
               {events.error.message}
             </Callout>
           </div>
         ) : null}
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm" data-testid="ledger-events-table">
+        {eventsRefetching ? (
+          <p className="mt-3 text-sm text-slate-500" data-testid="ledger-events-refetching">
+            Loading events for the new filter…
+          </p>
+        ) : null}
+        <div className={`mt-3 overflow-x-auto ${eventsRefetching ? 'opacity-50' : ''}`}>
+          <table
+            className="min-w-full text-sm"
+            data-testid="ledger-events-table"
+            aria-busy={eventsRefetching ? true : undefined}
+          >
             <thead className="bg-slate-50">
               <tr>
                 <th className={TH_CLASS}>When</th>
@@ -671,7 +759,12 @@ export function LedgerPage() {
         </div>
         {events.nextCursor ? (
           <div className="mt-3">
-            <button type="button" className={BUTTON_CLASS} disabled={loadingMore} onClick={() => void onLoadMore()}>
+            <button
+              type="button"
+              className={BUTTON_CLASS}
+              disabled={loadingMore || eventsRefetching}
+              onClick={() => void onLoadMore()}
+            >
               Load more
             </button>
           </div>
